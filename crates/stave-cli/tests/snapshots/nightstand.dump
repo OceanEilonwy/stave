@@ -1,0 +1,140 @@
+Nightstand
+units: mm, resolution: 0.5mm
+all lengths in mm; boxes are drawn boxes as across, up, deep ranges from the ground part's left-bottom-front corner
+
+PARTS (12)
+part                         stock          cut L x W x T              across               up                   deep                 length/width/thickness
+side_l                       cherry_19      581 x 400 x 19             0..19                0..581               0..400               up/back/right
+    cut notch depth 8 on thickness end: where bottom meets it, local 60..79 x 0..394 x 11..19
+    cut notch depth 8 on thickness end: where divider meets it, local 412..431 x 0..394 x 11..19
+    cut notch depth 9 on thickness end: where back meets it, local 60..581 x 394..400 x 10..19
+    cut drill 3 x diameter 8 depth 15 on length end: end toward top
+side_r                       cherry_19      581 x 400 x 19             431..450             0..581               0..400               up/back/right
+    cut notch depth 8 on thickness start: where bottom meets it, local 60..79 x 0..394 x 0..8
+    cut notch depth 8 on thickness start: where divider meets it, local 412..431 x 0..394 x 0..8
+    cut notch depth 9 on thickness start: where back meets it, local 60..581 x 394..400 x 0..9
+    cut drill 3 x diameter 8 depth 15 on length end: end toward top
+top                          cherry_19      480 x 415 x 19             -15..465             581..600             -15..400             right/back/up
+    cut drill 3 x diameter 8 depth 15 on thickness start: where side_l meets it, local 15..34 x 15..415 x 0..0
+    cut drill 3 x diameter 8 depth 15 on thickness start: where side_r meets it, local 446..465 x 15..415 x 0..0
+bottom                       cherry_19      428 x 394 x 19             19..431              60..79               0..394               right/back/up
+    drawn 412 x 394 x 19, starting 8 x 0 x 0 into the cut size
+divider                      cherry_19      428 x 394 x 19             19..431              412..431             0..394               right/back/up
+    drawn 412 x 394 x 19, starting 8 x 0 x 0 into the cut size
+back                         ply_6          521 x 430 x 6              19..431              60..581              394..400             up/right/back
+    drawn 521 x 412 x 6, starting 0 x 9 x 0 into the cut size
+drawer.front                 cherry_19      408 x 146 x 19             21..429              433..579             0..19                right/up/back
+    cut drill 4 x diameter 3 depth 13 on thickness end: where drawer.sub_front meets it, local 16.7..391.3 x 13..136 x 19..19
+    cut drill 1 x diameter 4 depth through on thickness start: centred at local 204, 73, 0
+drawer.side[left]            maple_12       350 x 123 x 12             31.7..43.7           446..569             19..369              back/up/right
+    cut notch depth 6 on thickness end: where drawer.sub_front meets it, local 0..12 x 0..123 x 6..12
+    cut notch depth 6 on thickness end: where drawer.back meets it, local 338..350 x 0..123 x 6..12
+    cut notch depth 6 on thickness end: where drawer.bottom meets it, local 6..344 x 10..16 x 6..12
+drawer.side[right]           maple_12       350 x 123 x 12             406.3..418.3         446..569             19..369              back/up/right
+    cut notch depth 6 on thickness start: where drawer.sub_front meets it, local 0..12 x 0..123 x 0..6
+    cut notch depth 6 on thickness start: where drawer.back meets it, local 338..350 x 0..123 x 0..6
+    cut notch depth 6 on thickness start: where drawer.bottom meets it, local 6..344 x 10..16 x 0..6
+drawer.sub_front             maple_12       374.6 x 123 x 12           43.7..406.3          446..569             19..31               right/up/back
+    drawn 362.6 x 123 x 12, starting 6 x 0 x 0 into the cut size
+    cut notch depth 6 on thickness end: where drawer.bottom meets it, local 0..374.6 x 10..16 x 6..12
+    cut drill 4 x diameter 4.5 depth through on thickness start: where drawer.front meets it, local 0..374.6 x 0..123 x 0..0
+drawer.back                  maple_12       374.6 x 123 x 12           43.7..406.3          446..569             357..369             right/up/back
+    drawn 362.6 x 123 x 12, starting 6 x 0 x 0 into the cut size
+    cut notch depth 6 on thickness start: where drawer.bottom meets it, local 0..374.6 x 10..16 x 0..6
+drawer.bottom                ply_6          374.6 x 338 x 6            43.7..406.3          456..462             31..357              right/back/up
+    drawn 362.6 x 326 x 6, starting 6 x 6 x 0 into the cut size
+
+HARDWARE (3)
+drawer.slides[left]          side_mount_slide on drawer.side[left] (left face)
+    drawer member  25.35..31.7          485..530             19..369             
+    cabinet member 19..25.35            485..530             19..369             
+    length 350, clearance 12.7, travel 350
+drawer.slides[right]         side_mount_slide on drawer.side[right] (right face)
+    drawer member  418.3..424.65        485..530             19..369             
+    cabinet member 424.65..431          485..530             19..369             
+    length 350, clearance 12.7, travel 350
+drawer.pull                  knob             on drawer.front (front face)
+    box            210..240             491..521             -28..0              
+    one screw, 4
+
+JOINTS (6)
+shelf_dados                  dado
+    piece: bottom, into: side_l (butt across across)
+        adds 8 to the length start of bottom
+    piece: bottom, into: side_r (butt across across)
+        adds 8 to the length end of bottom
+    piece: divider, into: side_l (butt across across)
+        adds 8 to the length start of divider
+    piece: divider, into: side_r (butt across across)
+        adds 8 to the length end of divider
+back_rabbets                 rabbet
+    piece: back, into: side_l (butt across across)
+        adds 9 to the width start of back
+    piece: back, into: side_r (butt across across)
+        adds 9 to the width end of back
+top_dowels                   dowel
+    piece: side_l, into: top (butt across up)
+    piece: side_r, into: top (butt across up)
+drawer.box_dados             dado
+    piece: drawer.sub_front, into: drawer.side[left] (butt across across)
+        adds 6 to the length start of drawer.sub_front
+    piece: drawer.sub_front, into: drawer.side[right] (butt across across)
+        adds 6 to the length end of drawer.sub_front
+    piece: drawer.back, into: drawer.side[left] (butt across across)
+        adds 6 to the length start of drawer.back
+    piece: drawer.back, into: drawer.side[right] (butt across across)
+        adds 6 to the length end of drawer.back
+drawer.bottom_groove         groove
+    piece: drawer.bottom, into: drawer.side[left] (butt across across)
+        adds 6 to the length start of drawer.bottom
+    piece: drawer.bottom, into: drawer.side[right] (butt across across)
+        adds 6 to the length end of drawer.bottom
+    piece: drawer.bottom, into: drawer.sub_front (butt across deep)
+        adds 6 to the width start of drawer.bottom
+    piece: drawer.bottom, into: drawer.back (butt across deep)
+        adds 6 to the width end of drawer.bottom
+drawer.front_screws          screw, no glue
+    piece: drawer.sub_front, into: drawer.front (butt across deep)
+
+FASTENERS
+top_dowels                   6 x dowel_pin (8 x 30)
+drawer.front_screws          4 x wood_screw (4 x 25)
+
+REGIONS (4)
+inside                       19..431              79..581              0..394              
+bay[shelf]                   19..431              79..412              0..394              
+bay[drawer]                  19..431              431..581             0..394              
+drawer.face                  21..429              433..579             0..19               
+
+ASSEMBLIES (1)
+drawer                       Drawer (6 parts): travels 350 toward the front
+
+REQUIRES (24)
+drawer_room                                  holds
+shelf_room                                   holds
+drawer.slide_fits                            holds
+drawer.box_is_useful                         holds
+shelf_dados.not_too_deep                     holds
+shelf_dados.not_too_deep                     holds
+shelf_dados.not_too_deep                     holds
+shelf_dados.not_too_deep                     holds
+back_rabbets.not_too_deep                    holds
+back_rabbets.not_too_deep                    holds
+top_dowels.pin_fits_piece                    holds
+top_dowels.hole_stops                        holds
+top_dowels.pin_fits_piece                    holds
+top_dowels.hole_stops                        holds
+drawer.box_dados.not_too_deep                holds
+drawer.box_dados.not_too_deep                holds
+drawer.box_dados.not_too_deep                holds
+drawer.box_dados.not_too_deep                holds
+drawer.bottom_groove.panel_is_held           holds
+drawer.bottom_groove.panel_is_held           holds
+drawer.bottom_groove.panel_is_held           holds
+drawer.bottom_groove.panel_is_held           holds
+drawer.front_screws.stays_inside             holds
+drawer.front_screws.bites                    holds
+
+SCENES (2)
+rest                         As built
+drawer_open                  Drawer open: drawer open

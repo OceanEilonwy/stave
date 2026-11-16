@@ -1,0 +1,142 @@
+stave 1
+
+// The drawer comes from the clothing cabinet's casework library. A folder is
+// a module, so importing it gives this project casework.Drawer, the same
+// component the cabinet uses for its two drawers.
+import "../clothing_cabinet/casework"
+
+// A nightstand: a cherry carcass with one drawer on side-mount slides and an
+// open shelf below it. The drawer front is inset: it sits inside its opening,
+// flush with the front edges of the carcass, with an even gap all round.
+
+project "Nightstand" {
+  goal:       "A cherry nightstand with one drawer and an open shelf"
+  units:      mm
+  resolution: 0.5mm
+  style:      "shaker"
+}
+
+// ---- parameters ----
+param stand_width   = 450mm within 400mm..550mm
+param stand_height  = 600mm within 550mm..700mm     // floor to the top of the top
+param stand_depth   = 400mm within 380mm..450mm
+param drawer_height = 150mm within 120mm..200mm     // the drawer opening, top to divider
+param slide_length  = 350mm within [300mm, 350mm]
+param reveal        = 2mm locked                    // the gap round the inset drawer front
+let overhang  = 15mm                                // the top overhangs the front and both sides
+let toe_space = 60mm                                // floor to the underside of the bottom shelf
+
+// ---- checks ----
+require drawer_room : bay[drawer].deep >= slide_length + cherry_19.thickness "the slide and the inset front must fit in the opening"
+require shelf_room  : bay[shelf].up >= 180mm "the open shelf should take a book standing up"
+
+// ---- stock ----
+stock cherry_19 { species: cherry, form: solid, thickness: 19mm, max_width: 250mm }
+stock maple_12  { species: hard_maple, form: solid, thickness: 12mm, max_width: 150mm }
+stock ply_6     { species: birch, form: plywood, thickness: 6mm }
+
+// ---- the carcass ----
+
+/// The left side stands on the floor and everything else is placed from it.
+part side_l : cherry_19 {
+  length: stand_height - top.thickness
+  width:  stand_depth
+  place {
+    ground
+    orient(length: up, width: back)
+  }
+}
+
+/// The right side: the same board, the inside width away from the left one.
+part side_r : cherry_19 {
+  length: stand_height - top.thickness
+  width:  stand_depth
+  place {
+    orient(length: up, width: back)
+    against(side_l.right, gap: stand_width - 2 * cherry_19.thickness)
+    flush(side_l.bottom)
+    flush(side_l.front)
+  }
+}
+
+/// The top sits on the sides, held with dowels, and overhangs the front and both sides.
+part top : cherry_19 {
+  length: stand_width + 2 * overhang
+  width:  stand_depth + overhang
+  place {
+    against(side_l.top)
+    center(from: side_l.left, to: side_r.right)
+    flush(side_l.back)
+  }
+}
+
+/// The bottom shelf, housed in dados, raised off the floor.
+part bottom : cherry_19 {
+  length: fit
+  width:  stand_depth - back.thickness
+  place {
+    flush(side_l.bottom, inset: toe_space)
+    center(from: side_l.right, to: side_r.left)
+    flush(side_l.front)
+  }
+}
+
+/// The divider under the drawer, housed in dados like the bottom.
+part divider : cherry_19 {
+  length: fit
+  width:  stand_depth - back.thickness
+  place {
+    against(top.bottom, gap: drawer_height)
+    center(from: side_l.right, to: side_r.left)
+    flush(side_l.front)
+  }
+}
+
+/// The back runs from the bottom of the bottom shelf up to the top, in rabbets.
+part back : ply_6 {
+  length: between(bottom.bottom, top.bottom)
+  width:  fit
+  place {
+    orient(length: up, width: right)
+    against(top.bottom)
+    center(from: side_l.right, to: side_r.left)
+    flush(side_l.back)
+  }
+}
+
+// ---- joints ----
+joint shelf_dados  : dado([bottom, divider], into: [side_l, side_r], depth: 8mm)
+joint back_rabbets : rabbet(back, into: [side_l, side_r], depth: 9mm)
+joint top_dowels   : dowel([side_l, side_r], into: top, count: 3)
+
+// ---- the drawer ----
+
+/// The space inside the carcass: between the sides, the bottom, the top and the back.
+region inside = opening(
+  left:   side_l.right,
+  right:  side_r.left,
+  bottom: bottom.top,
+  top:    top.bottom,
+  front:  side_l.front,
+  back:   back.front,
+)
+
+/// The divider splits it in two: the open shelf below and the drawer's bay
+/// above. split labels the pieces from the bottom up.
+region bay[shelf, drawer] = split(inside, up, at: divider)
+
+assembly drawer : casework.Drawer {
+  opening:      bay[drawer]
+  mount:        inset(reveal: reveal)
+  front_stock:  cherry_19
+  box_stock:    maple_12
+  bottom_stock: ply_6
+  slide:        side_mount_slide(length: slide_length)
+  pull_kind:    knob(diameter: 30mm)
+  top_gap:      12mm
+}
+
+// ---- scenes ----
+scene drawer_open "Drawer open" {
+  pose drawer = open
+}
