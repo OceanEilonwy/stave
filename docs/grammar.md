@@ -1630,6 +1630,13 @@ ends a field, so lines are never joined or split) and normalises the rest:
   profile station, in the same block or argument list, line their values up
   one space after the longest key; a blank line or another kind of entry
   ends the run;
+- consecutive one-line items with the same keyword in the same scope (a
+  file, a component or a kind body), with no blank, comment or doc comment
+  line between them, pad their names so that the token after the name lines
+  up one space after the longest: the `=` or `:` of params, the `:` of
+  joints, kinds and requires, the `{` of stocks, the `=` of regions. A name
+  includes its array labels (`bay[drawers, doors]`). Nothing after that
+  token is aligned (not `within`, not `locked`), except trailing comments;
 - a comment at the end of a line keeps its column when there is room;
 - at most one blank line in a row, none at the start or end of a block or
   of the file.

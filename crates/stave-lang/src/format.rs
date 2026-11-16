@@ -22,7 +22,12 @@
 //!    (`name:`), a named argument or a profile station, in the same block or
 //!    argument list, line their values up one space after the longest key.
 //!    A blank line or another entry in the same block ends the run; comment
-//!    lines and the continuation lines of a value don't.
+//!    lines and the continuation lines of a value don't. Likewise,
+//!    consecutive one-line items with the same keyword in the same scope,
+//!    with no blank, comment or doc line between them, pad their names
+//!    (array labels included) so the token after the name lines up: the `=`
+//!    of params and regions, the `:` of joints and kinds, the `{` of
+//!    stocks. Nothing further along the line is aligned.
 //! 4. **Comments**: a comment at the end of a line keeps its column when
 //!    the code before it leaves room, so aligned comments stay aligned;
 //!    otherwise it moves to one space after the code.
@@ -128,6 +133,8 @@ struct Atom {
     token: SyntaxToken,
     /// Column in the input, in characters.
     column: usize,
+    /// Byte offset just past the atom in the input.
+    end: u32,
 }
 
 impl Atom {
@@ -182,6 +189,7 @@ fn lines(root: &SyntaxNode, text: &str) -> Vec<Line> {
         let WalkEvent::Enter(element) = event else {
             continue;
         };
+        let end: u32;
         let (kind, atom_text, parent, token, start) = match element {
             rowan::NodeOrToken::Node(node) => {
                 if node.kind() != SyntaxKind::STRING {
@@ -192,6 +200,7 @@ fn lines(root: &SyntaxNode, text: &str) -> Vec<Line> {
                     continue;
                 };
                 let start = usize::from(node.text_range().start());
+                end = node.text_range().end().into();
                 (
                     SyntaxKind::STRING,
                     node.text().to_string(),
@@ -215,6 +224,7 @@ fn lines(root: &SyntaxNode, text: &str) -> Vec<Line> {
                         continue;
                     }
                     kind => {
+                        end = token.text_range().end().into();
                         let parent = token.parent().map_or(SyntaxKind::ERROR, |p| p.kind());
                         (kind, token.text().to_owned(), parent, token, start)
                     }
@@ -227,6 +237,7 @@ fn lines(root: &SyntaxNode, text: &str) -> Vec<Line> {
             text: atom_text,
             parent,
             token,
+            end,
         };
         if let Some(newline) = atom.text.rfind('\n') {
             line_start = start + newline + 1;
@@ -293,6 +304,56 @@ fn key(line: &Line) -> Option<(usize, u32)> {
     Some((colon_index + 1, container.text_range().start().into()))
 }
 
+/// For a line that holds a whole one-line item: the number of leading atoms
+/// up to and including its name (and array labels), the item's scope and
+/// its kind. Such lines line up the token after the name.
+fn declaration(line: &Line) -> Option<(usize, u32, SyntaxKind)> {
+    if line.continuation {
+        return None;
+    }
+    let first = line.atoms.first()?;
+    let item = first.token.parent().filter(|node| node.kind().is_item())?;
+    let line_end = line.last_code()?.end;
+    if u32::from(item.text_range().end()) > line_end {
+        return None;
+    }
+    let belongs_to_name = |atom: &Atom| {
+        let parent = atom.token.parent();
+        let is_item = |node: &SyntaxNode| *node == item;
+        if parent.as_ref().is_some_and(is_item) {
+            return atom.kind == SyntaxKind::KW_PRIVATE || atom.kind.is_item_keyword();
+        }
+        if atom.parent == SyntaxKind::NAME
+            && parent
+                .and_then(|name| name.parent())
+                .as_ref()
+                .is_some_and(is_item)
+        {
+            return true;
+        }
+        // Array labels or count: `slides[left, right]`, `shelf[3]`.
+        atom.token
+            .parent_ancestors()
+            .find(|node| node.kind() == SyntaxKind::ARRAY_SPEC)
+            .and_then(|spec| spec.parent())
+            .as_ref()
+            .is_some_and(is_item)
+    };
+    let count = line
+        .atoms
+        .iter()
+        .take_while(|atom| belongs_to_name(atom))
+        .count();
+    // Something must follow the name on the line, and the name must be there.
+    line.atoms.get(count).filter(|atom| !atom.is_comment())?;
+    (count >= 2).then(|| {
+        let scope = item
+            .parent()
+            .map_or(0, |parent| parent.text_range().start().into());
+        (count, scope, item.kind())
+    })
+}
+
 /// The block or argument list a line's first atom belongs to.
 fn container(line: &Line) -> Option<u32> {
     let first = line.atoms.first()?;
@@ -348,12 +409,35 @@ fn alignment(lines: &[Line]) -> Vec<Option<(usize, usize)>> {
         }
     }
     runs.extend(open.into_values());
+    // Consecutive one-line items of the same kind in the same scope.
+    let mut current: Option<((u32, SyntaxKind), Vec<usize>)> = None;
+    for (index, line) in lines.iter().enumerate() {
+        match (declaration(line), current.as_mut()) {
+            (Some((_, scope, kind)), Some((key, run))) if *key == (scope, kind) => run.push(index),
+            (Some((_, scope, kind)), _) => {
+                if let Some((_, run)) = current.replace(((scope, kind), vec![index])) {
+                    runs.push(run);
+                }
+            }
+            (None, _) => {
+                if let Some((_, run)) = current.take() {
+                    runs.push(run);
+                }
+            }
+        }
+    }
+    if let Some((_, run)) = current {
+        runs.push(run);
+    }
+    let run_key = |line: &Line| {
+        key(line).or_else(|| declaration(line).map(|(count, scope, _)| (count, scope)))
+    };
     for run in runs {
         let keys: Vec<(usize, usize)> = run
             .iter()
             .filter_map(|&index| {
                 let line = lines.get(index)?;
-                let (count, _) = key(line)?;
+                let (count, _) = run_key(line)?;
                 Some((index, atoms_width(line.atoms.get(..count)?)))
             })
             .collect();
@@ -364,7 +448,7 @@ fn alignment(lines: &[Line]) -> Vec<Option<(usize, usize)>> {
             .unwrap_or(0);
         for (index, _) in keys {
             if let (Some(slot), Some(line)) = (result.get_mut(index), lines.get(index)) {
-                *slot = key(line).map(|(count, _)| (count, longest));
+                *slot = run_key(line).map(|(count, _)| (count, longest));
             }
         }
     }
@@ -529,12 +613,22 @@ mod tests {
     }
 
     #[test]
+    fn aligns_consecutive_one_line_declarations() {
+        assert_eq!(
+            format(
+                "stave 1\nparam cabinet_width = 900mm  within 600mm..1200mm\nparam reveal = 1.5mm locked\nparam opening : Region\nlet a = 1\nregion bay[drawers, doors] = split(o, up)\nregion door_bay[left, right] = split(bay[doors], across)\n\nstock oak_19 { species: white_oak }\n// breaks the run\nstock ply_6 { species: birch }\nstock maple_12 { species: hard_maple }\n/// doc\njoint a : dado(x)\njoint bbb : dado(y)\npart p : s {\n  length: 1mm\n}\npart quite_long : s { length: 1mm }\n"
+            ),
+            "stave 1\nparam cabinet_width = 900mm within 600mm..1200mm\nparam reveal        = 1.5mm locked\nparam opening       : Region\nlet a = 1\nregion bay[drawers, doors]   = split(o, up)\nregion door_bay[left, right] = split(bay[doors], across)\n\nstock oak_19 { species: white_oak }\n// breaks the run\nstock ply_6    { species: birch }\nstock maple_12 { species: hard_maple }\n/// doc\njoint a   : dado(x)\njoint bbb : dado(y)\npart p : s {\n  length: 1mm\n}\npart quite_long : s { length: 1mm }\n"
+        );
+    }
+
+    #[test]
     fn keeps_comments_and_their_columns() {
         assert_eq!(
             format(
-                "stave 1\n// head\nlet a = 1      // aligned\nlet bb  =  2   // aligned\nlet ccccccccccc = 3 // pushed\n/// doc\n   part x : s { length: 1mm } /* b */ // end\n"
+                "stave 1\n// head\nlet a = 1      // aligned\nparam bb  =  2   // aligned\nlet ccccccccccc = 3 // pushed\n/// doc\n   part x : s { length: 1mm } /* b */ // end\n"
             ),
-            "stave 1\n// head\nlet a = 1      // aligned\nlet bb = 2     // aligned\nlet ccccccccccc = 3 // pushed\n/// doc\npart x : s { length: 1mm } /* b */ // end\n"
+            "stave 1\n// head\nlet a = 1      // aligned\nparam bb = 2     // aligned\nlet ccccccccccc = 3 // pushed\n/// doc\npart x : s { length: 1mm } /* b */ // end\n"
         );
     }
 
