@@ -1549,8 +1549,15 @@ scene drawer_bench "Top drawer on the bench" {
   slide's `travel`), `closed`, an angle (hinges) or a length (slides). A slide
   travels along its piece's length, out through the front of its `in` region.
   A mirrored assembly has the mirror image of its source's motion.
-- Every scene is collision checked, and every motion is checked closed and
-  fully open (`error[motion]`).
+- Every scene is collision checked, and every motion is checked through its
+  whole travel, not only at its ends (`error[motion]`): a door is swung from
+  closed to `opening_angle` and a drawer slid from shut to `travel`, and the
+  message names the first angle or distance at which it hits something. Each
+  motion is checked from the rest position and from every scene's poses.
+- `explode: true` draws the scene with every part moved out from its rest
+  position along the direction its joint is assembled (the reverse of the
+  joint's last `insert` step), so the joinery shows. Exploding is a drawing
+  only: it is never collision checked.
 
 ---
 
@@ -1584,7 +1591,8 @@ errors in the same item.
 3. **Placement and sizes**: every axis set once, `fit` resolvable, no cycles.
 4. **Fit and geometry**: parts meet where joints say they do and overlap
    nowhere else (using cut sizes and cuts); slides have their clearance.
-5. **Motion**: every scene and every motion's end positions are collision free.
+5. **Motion**: every scene, and every motion through its whole travel, is
+   collision free.
 6. **Requires and ranges** (z3): every `require` holds, and layers 3 and 4 hold,
    for every value inside each `within` range.
 7. **Buildability**: an order of operations exists. See
