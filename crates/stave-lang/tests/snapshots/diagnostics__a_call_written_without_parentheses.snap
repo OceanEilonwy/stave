@@ -1,0 +1,38 @@
+---
+source: crates/stave-lang/tests/diagnostics.rs
+expression: "render(\"carcass.stave\",\n\"stave 1\\n\\\n         part shelf : oak {\\n\\\n         \\x20 length: between side_l\\n\\\n         \\x20 place {\\n\\\n         \\x20   on base.top\\n\\\n         \\x20   center base, across\\n\\\n         \\x20 }\\n\\\n         }\\n\\\n         kind k : joint {\\n\\\n         \\x20 cut crossing into {\\n\\\n         \\x20   notch(depth: 3mm)\\n\\\n         \\x20 }\\n\\\n         }\\n\\\n         recipe r : notch {\\n\\\n         \\x20 cut {\\n\\\n         \\x20   saw walls\\n\\\n         \\x20 }\\n\\\n         }\\n\")"
+---
+error[syntax]: expected end of line, found 'side_l'
+  --> carcass.stave:3:19
+   |
+ 3 |   length: between side_l
+   |                   ^^^^^^
+   = help: built-in functions are calls: write between(side_l)
+
+error[syntax]: expected end of line, found 'base'
+  --> carcass.stave:5:8
+   |
+ 5 |     on base.top
+   |        ^^^^
+   = help: placement terms are calls: write on(base.top)
+
+error[syntax]: expected end of line, found 'base'
+  --> carcass.stave:6:12
+   |
+ 6 |     center base, across
+   |            ^^^^
+   = help: placement terms are calls: write center(...)
+
+error[syntax]: expected '{', found 'into'
+  --> carcass.stave:10:16
+   |
+10 |   cut crossing into {
+   |                ^^^^
+   = help: face selectors are calls: write crossing(into)
+
+error[syntax]: expected end of line, found 'walls'
+  --> carcass.stave:16:9
+   |
+16 |     saw walls
+   |         ^^^^^
+   = help: steps are calls: write saw(walls)

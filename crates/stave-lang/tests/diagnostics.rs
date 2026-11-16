@@ -63,3 +63,42 @@ fn several_errors_in_one_file() {
          \x20 length: 1mm\n"
     ));
 }
+
+#[test]
+fn an_operator_at_the_start_of_a_line() {
+    insta::assert_snapshot!(render(
+        "cabinet.stave",
+        "stave 1\n\
+         param h = 10mm\n\
+         \x20 - 2mm\n\
+         part side : oak {\n\
+         \x20 length: cabinet_height\n\
+         \x20         - base.thickness\n\
+         }\n"
+    ));
+}
+
+#[test]
+fn a_call_written_without_parentheses() {
+    insta::assert_snapshot!(render(
+        "carcass.stave",
+        "stave 1\n\
+         part shelf : oak {\n\
+         \x20 length: between side_l\n\
+         \x20 place {\n\
+         \x20   on base.top\n\
+         \x20   center base, across\n\
+         \x20 }\n\
+         }\n\
+         kind k : joint {\n\
+         \x20 cut crossing into {\n\
+         \x20   notch(depth: 3mm)\n\
+         \x20 }\n\
+         }\n\
+         recipe r : notch {\n\
+         \x20 cut {\n\
+         \x20   saw walls\n\
+         \x20 }\n\
+         }\n"
+    ));
+}

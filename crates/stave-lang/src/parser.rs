@@ -107,6 +107,16 @@ enum CallKind {
 }
 
 impl CallKind {
+    /// The plural, for "... are calls" help lines.
+    fn plural(self) -> &'static str {
+        match self {
+            CallKind::Placement => "placement terms",
+            CallKind::Selector => "face selectors",
+            CallKind::Operation => "cut operations",
+            CallKind::Step => "steps",
+        }
+    }
+
     fn what(self) -> &'static str {
         match self {
             CallKind::Placement => "a placement term",
@@ -381,8 +391,101 @@ impl<'t> Parser<'t> {
         );
         let mut diagnostic =
             Diagnostic::error(Code::Syntax, message, Label::new(self.file, self.span(0)));
-        diagnostic.help = help.map(str::to_owned);
+        diagnostic.help = help
+            .map(str::to_owned)
+            .or_else(|| self.operator_at_line_start_help());
         self.report(diagnostic)
+    }
+
+    /// Help for a line that starts with a binary operator: the expression
+    /// on the line before ended at its newline.
+    fn operator_at_line_start_help(&self) -> Option<String> {
+        let binary = matches!(
+            self.current(),
+            PLUS | MINUS | STAR | SLASH | EQ2 | NEQ | LT | LE | GT | GE | AMP2 | PIPE2 | DOT2
+        );
+        (binary && self.at_line_start()).then(|| {
+            format!(
+                "a line can't start with an operator; end the previous line with '{}' to continue the expression",
+                self.nth_text(0)
+            )
+        })
+    }
+
+    /// `true` if the current token can start an expression.
+    fn at_expression_start(&self) -> bool {
+        matches!(
+            self.current(),
+            IDENT
+                | QUANTITY
+                | INT_NUMBER
+                | DECIMAL_NUMBER
+                | STRING_QUOTE
+                | L_BRACK
+                | L_PAREN
+                | MINUS
+                | BANG
+                | KW_TRUE
+                | KW_FALSE
+                | KW_FIT
+        )
+    }
+
+    /// Help for a call head written without parentheses (`on base.top`):
+    /// the previous token is the head and an expression follows on the same
+    /// line. In a block of calls any head counts; in an expression only a
+    /// built-in function does.
+    fn missing_parentheses_help(&self, context: Option<CallKind>) -> Option<String> {
+        if !self.at_expression_start() || self.at_line_start() {
+            return None;
+        }
+        let previous = self
+            .cursor
+            .checked_sub(1)
+            .and_then(|index| self.significant.get(index))
+            .and_then(|&index| self.tokens.get(index))?;
+        if previous.kind != IDENT {
+            return None;
+        }
+        let head = self.token_text(previous);
+        let what = match context {
+            Some(call) => call.plural(),
+            None if crate::BUILTIN_FUNCTIONS.contains(&head) => "built-in functions",
+            None => return None,
+        };
+        // The rest of the line, when it is a simple path, goes in the
+        // suggestion.
+        let mut n = 0;
+        let mut end = None;
+        loop {
+            let kind = self.nth(n);
+            let previous = n.checked_sub(1).map(|p| self.nth(p));
+            // A word may not follow a word or an index: `a b` is not a path.
+            let word_after_word = kind.is_word()
+                && previous.is_some_and(|previous| previous.is_word() || previous == R_BRACK);
+            match kind {
+                NEWLINE | EOF | R_BRACE | L_BRACE => break,
+                _ if word_after_word => {
+                    end = None;
+                    break;
+                }
+                DOT | L_BRACK | R_BRACK | STAR | INT_NUMBER => {}
+                kind if kind.is_word() => {}
+                _ => {
+                    end = None;
+                    break;
+                }
+            }
+            end = Some(self.span(n).end());
+            n += 1;
+        }
+        let arguments = end
+            .and_then(|end| {
+                self.text
+                    .get(usize::try_from(self.span(0).start()).ok()?..usize::try_from(end).ok()?)
+            })
+            .unwrap_or("...");
+        Some(format!("{what} are calls: write {head}({arguments})"))
     }
 
     fn expect_with_help(&mut self, kind: SyntaxKind, what: &str, help: &str) -> PResult {
@@ -535,7 +638,8 @@ impl<'t> Parser<'t> {
             _ if self.at_line_start() => {}
             _ => {
                 if result.is_ok() {
-                    self.expected(&["end of line"]);
+                    let help = self.missing_parentheses_help(None);
+                    self.expected_with_help(&["end of line"], help.as_deref());
                 }
                 self.skip_rest(stop_at_brace);
             }
@@ -724,7 +828,8 @@ impl<'t> Parser<'t> {
             // `to` and `in` may follow on the same line.
             let result = match result {
                 Ok(()) if scope != Scope::Patch && !p.at_item_end(scope) => {
-                    Err(p.expected(&["end of line"]))
+                    let help = p.missing_parentheses_help(None);
+                    Err(p.expected_with_help(&["end of line"], help.as_deref()))
                 }
                 other => other,
             };
@@ -1353,7 +1458,12 @@ impl<'t> Parser<'t> {
                     _ if p.at_line_start() => {}
                     _ => {
                         if result.is_ok() {
-                            p.expected(&["end of line"]);
+                            let context = match body {
+                                Body::Calls(call) => Some(call),
+                                _ => None,
+                            };
+                            let help = p.missing_parentheses_help(context);
+                            p.expected_with_help(&["end of line"], help.as_deref());
                         }
                         p.skip_rest(true);
                     }
@@ -1524,6 +1634,11 @@ impl<'t> Parser<'t> {
             return self.node(CUT, |p| {
                 p.bump();
                 p.call(CallKind::Selector)?;
+                if !p.at(L_BRACE)
+                    && let Some(help) = p.missing_parentheses_help(Some(CallKind::Selector))
+                {
+                    return Err(p.expected_with_help(&["'{'"], Some(&help)));
+                }
                 p.block(Body::Calls(CallKind::Operation), owner)
             });
         }

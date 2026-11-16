@@ -1,0 +1,17 @@
+---
+source: crates/stave-lang/tests/diagnostics.rs
+expression: "render(\"cabinet.stave\",\n\"stave 1\\n\\\n         param h = 10mm\\n\\\n         \\x20 - 2mm\\n\\\n         part side : oak {\\n\\\n         \\x20 length: cabinet_height\\n\\\n         \\x20         - base.thickness\\n\\\n         }\\n\")"
+---
+error[syntax]: expected a declaration, found '-'
+  --> cabinet.stave:3:3
+   |
+ 3 |   - 2mm
+   |   ^
+   = help: a line can't start with an operator; end the previous line with '-' to continue the expression
+
+error[syntax]: expected a field, found '-'
+  --> cabinet.stave:6:11
+   |
+ 6 |           - base.thickness
+   |           ^
+   = help: a line can't start with an operator; end the previous line with '-' to continue the expression

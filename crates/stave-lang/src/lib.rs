@@ -222,6 +222,13 @@ pub const LINE_CONTINUATION_TOKENS: &[&str] = &[
     "within", "DOC",
 ];
 
+/// Built-in functions (grammar, "Built-in functions"): looked up when a bare
+/// name is called.
+pub const BUILTIN_FUNCTIONS: &[&str] = &[
+    "between", "extent", "mid", "opening", "split", "cover", "overlay", "inset", "turned", "box",
+    "cylinder", "model", "ends", "pitch", "gap",
+];
+
 /// Current version written in the `stave <version>` header.
 pub const FORMAT_VERSION: u32 = 1;
 
@@ -335,6 +342,24 @@ mod tests {
                 "a newline after {kept:?} must be kept"
             );
         }
+    }
+
+    #[test]
+    fn builtin_functions_match_the_grammar() {
+        let table = between(
+            GRAMMAR,
+            "| Function | Returns | Meaning |\n|---|---|---|\n",
+            "\n\n",
+        );
+        let mut listed = Vec::new();
+        for row in table.lines() {
+            let cell = between(row, "| ", " |");
+            for call in cell.split("`, `") {
+                let call = call.trim_matches('`');
+                listed.push(&call[..call.find('(').unwrap()]);
+            }
+        }
+        assert_eq!(listed, BUILTIN_FUNCTIONS);
     }
 
     #[test]
