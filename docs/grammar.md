@@ -190,6 +190,12 @@ expressions and arguments are allowed, and none of them starts with an item
 keyword. The "next token is not `:`" condition leaves keywords used as argument
 names alone (`stock: oak_19,` at the start of a line inside a call).
 
+For the same reason a `}` closes every `(` and `[` opened inside its block,
+and the end of the file closes every one still open; each is reported as
+`error[unclosed-bracket]` in the same way (the note then says where the
+block or the file ends). No expression can contain a `}`, so this too never
+changes the meaning of a correct file.
+
 A missing `}` is recovered by the parser instead, because braces depend on
 context: a component body may contain items, but a part, joint or hardware
 body may not. When a body meets an entry it can't contain that starts with an
@@ -441,6 +447,8 @@ Rules:
   }
   ```
 
+- The same label twice in one declaration (`part side[left, left]`) is
+  `error[duplicate-name]`, reported by the parser.
 - An unindexed array name inside its own declaration means the element being
   declared; anywhere else an unindexed array name is `error[type-mismatch]`
   with the help "write `name[*]` for all of them".
@@ -1538,7 +1546,9 @@ Warnings and notes: `shadows-prelude`, `no-recipe`, `not-supported`,
 
 In messages, an item is written as in the source (`slides[left]`,
 `drawer[top].front`), and a length in the project's units with trailing zeros
-trimmed (`12.7mm`).
+trimmed (`12.7mm`). In a `syntax` message, `<token>` is the token's text in
+single quotes (`'shelf'`, `':'`), or `end of line`, `end of file`, `a string`
+or `a doc comment`.
 
 **The broken-design corpus.** Each folder in `tests/broken/` is a small project
 whose first line is `// expect: error[<code>] <message>`. The checker must
