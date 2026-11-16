@@ -1756,6 +1756,8 @@ name = "stave-app"
 version = "0.1.0"
 dependencies = [
  "insta",
+ "stave-check",
+ "stave-geom",
  "stave-lang",
  "stave-model",
  "stave-modules",
@@ -1763,6 +1765,15 @@ dependencies = [
  "stave-schema",
  "stave-solve",
  "thiserror",
+]
+
+[[package]]
+name = "stave-check"
+version = "0.1.0"
+dependencies = [
+ "stave-geom",
+ "stave-lang",
+ "stave-model",
 ]
 
 [[package]]

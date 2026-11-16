@@ -4,6 +4,7 @@
 //!
 //! ```text
 //! folder ──stave-modules──▶ ModuleSet ──stave-model──▶ Defs ──▶ Model ──stave-solve──▶ SolvedDesign
+//!        ──stave-check──▶ fit, overlap and scene diagnostics
 //! ```
 //!
 //! Checking runs in layers (grammar, "Checks and require"), per item: an
@@ -12,7 +13,9 @@
 //! further errors, while everything independent still resolves, is placed
 //! and reports its own problems. Only a folder without its project or
 //! library item, or modules that import each other, stop the pipeline
-//! early. A solved design is produced only when nothing failed.
+//! early. A solved design is produced only when nothing failed up to
+//! placement; the fit checks then run on it, and it is kept whatever they
+//! find.
 //! Diagnostics come back sorted by file and position, so the output is the
 //! same on every run.
 
@@ -110,5 +113,13 @@ fn run(modules: ModuleSet) -> Result<Opened, LoadError> {
     diagnostics.extend(instance_diagnostics);
     let (design, solve_diagnostics) = stave_solve::solve(&model);
     diagnostics.extend(solve_diagnostics);
+    // Fit and geometry (layer 4) and scene poses run only when nothing
+    // before them found an error, so one mistake is one error. The design
+    // is kept even when they find some, so a viewer can show the problem.
+    if let Some(design) = &design
+        && diagnostics.iter().all(|d| !d.is_error())
+    {
+        diagnostics.extend(stave_check::check(&model, design));
+    }
     finish(modules.sources, Some(model), design, diagnostics)
 }

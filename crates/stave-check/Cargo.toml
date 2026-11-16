@@ -1,0 +1,11 @@
+[package]
+name = "stave-check"
+description = "Fit and geometry checks of a solved .stave design: parts that overlap, joints whose parts don't touch, scenes that collide"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+stave-lang = { path = "../stave-lang" }
+stave-model = { path = "../stave-model" }
+stave-geom = { path = "../stave-geom" }

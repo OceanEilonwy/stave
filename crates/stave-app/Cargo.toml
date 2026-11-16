@@ -10,10 +10,12 @@ stave-lang = { path = "../stave-lang" }
 stave-modules = { path = "../stave-modules" }
 stave-model = { path = "../stave-model" }
 stave-solve = { path = "../stave-solve" }
+stave-check = { path = "../stave-check" }
 stave-scene = { path = "../stave-scene" }
 thiserror = "2"
 
 [dev-dependencies]
+stave-geom = { path = "../stave-geom" }
 insta = "1"
 stave-lang = { path = "../stave-lang" }
 stave-schema = { path = "../stave-schema" }

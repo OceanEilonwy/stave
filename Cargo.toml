@@ -7,6 +7,7 @@ members = [
   "crates/stave-model",
   "crates/stave-solve",
   "crates/stave-geom",
+  "crates/stave-check",
   "crates/stave-scene",
   "crates/stave-app",
   "crates/stave-cli",
