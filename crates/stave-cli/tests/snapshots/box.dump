@@ -1,0 +1,83 @@
+Box
+units: mm, resolution: 0.5mm
+all lengths in mm; boxes are drawn boxes as across, up, deep ranges from the ground part's left-bottom-front corner
+
+PARTS (6)
+part                         stock          cut L x W x T              across               up                   deep                 length/width/thickness
+end_l                        walnut_12      200 x 110 x 12             0..12                0..110               0..200               back/up/right
+    cut notch depth 6 on thickness end: where front meets it, local 0..12 x 0..110 x 6..12
+    cut notch depth 6 on thickness end: where back meets it, local 188..200 x 0..110 x 6..12
+    cut notch depth 6 on thickness end: where bottom meets it, local 6..194 x 6..12 x 6..12
+end_r                        walnut_12      200 x 110 x 12             288..300             0..110               0..200               back/up/right
+    cut notch depth 6 on thickness start: where front meets it, local 0..12 x 0..110 x 0..6
+    cut notch depth 6 on thickness start: where back meets it, local 188..200 x 0..110 x 0..6
+    cut notch depth 6 on thickness start: where bottom meets it, local 6..194 x 6..12 x 0..6
+front                        walnut_12      288 x 110 x 12             12..288              0..110               0..12                right/up/back
+    drawn 276 x 110 x 12, starting 6 x 0 x 0 into the cut size
+    cut notch depth 6 on thickness end: where bottom meets it, local 0..288 x 6..12 x 6..12
+back                         walnut_12      288 x 110 x 12             12..288              0..110               188..200             right/up/front
+    drawn 276 x 110 x 12, starting 6 x 0 x 0 into the cut size
+    cut notch depth 6 on thickness end: where bottom meets it, local 0..288 x 6..12 x 6..12
+    cut notch depth 1.5 on width end: recess local 34..74 x 108.5..110 x 0..12
+    cut notch depth 1.5 on width end: recess local 214..254 x 108.5..110 x 0..12
+bottom                       ply_6          288 x 188 x 6              12..288              6..12                12..188              right/back/up
+    drawn 276 x 176 x 6, starting 6 x 6 x 0 into the cut size
+lid.panel                    walnut_12      300 x 200 x 12             0..300               110..122             0..200               right/back/up
+    cut notch depth 1.5 on thickness start: recess local 40..80 x 188..200 x 0..1.5
+    cut notch depth 1.5 on thickness start: recess local 220..260 x 188..200 x 0..1.5
+    cut drill 1 x diameter 4 depth through on thickness end: centred at local 150, 35, 12
+
+HARDWARE (3)
+lid.hinges[left]             butt_hinge       on lid.panel (bottom face)
+    leaf           40..80               110..111.5           188..200            
+    fixed leaf     40..80               108.5..110           188..200            
+    opens 180deg, leaves housed in it and back
+lid.hinges[right]            butt_hinge       on lid.panel (bottom face)
+    leaf           220..260             110..111.5           188..200            
+    fixed leaf     220..260             108.5..110           188..200            
+    opens 180deg, leaves housed in it and back
+lid.lift_knob                knob             on lid.panel (top face)
+    box            140..160             122..144             25..45              
+    one screw, 4
+
+JOINTS (2)
+corners                      rabbet
+    piece: front, into: end_l (butt across across)
+        adds 6 to the length start of front
+    piece: front, into: end_r (butt across across)
+        adds 6 to the length end of front
+    piece: back, into: end_l (butt across across)
+        adds 6 to the length start of back
+    piece: back, into: end_r (butt across across)
+        adds 6 to the length end of back
+bottom_groove                groove, no glue
+    piece: bottom, into: front (butt across deep)
+        adds 6 to the width start of bottom
+    piece: bottom, into: back (butt across deep)
+        adds 6 to the width end of bottom
+    piece: bottom, into: end_l (butt across across)
+        adds 6 to the length start of bottom
+    piece: bottom, into: end_r (butt across across)
+        adds 6 to the length end of bottom
+
+REGIONS (1)
+outline                      0..300               0..110               0..200              
+
+ASSEMBLIES (1)
+lid                          Lid (1 parts): turns up to 180deg about the across line through (0, 110, 200), free side front, swinging up
+
+REQUIRES (10)
+hinge_room                                   holds
+useful                                       holds
+corners.not_too_deep                         holds
+corners.not_too_deep                         holds
+corners.not_too_deep                         holds
+corners.not_too_deep                         holds
+bottom_groove.panel_is_held                  holds
+bottom_groove.panel_is_held                  holds
+bottom_groove.panel_is_held                  holds
+bottom_groove.panel_is_held                  holds
+
+SCENES (2)
+rest                         As built
+lid_open                     Lid open: lid 100deg
