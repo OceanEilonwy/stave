@@ -204,11 +204,54 @@ impl fmt::Display for Name {
 /// A string literal.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StringLit {
-    /// The value with escapes resolved. `{name}` placeholders are kept as
-    /// written; a literal brace written as `\{` is stored as `\{`.
-    pub value: String,
+    /// The text and `{name}` parts in source order. Each part has its own span,
+    /// so names inside strings can be resolved, renamed and highlighted.
+    pub parts: Vec<StringPart>,
     /// Where the literal was written, quotes included.
     pub span: Span,
+}
+
+impl StringLit {
+    /// A literal made of plain text only.
+    pub fn text(text: impl Into<String>, span: Span) -> Self {
+        Self {
+            parts: vec![StringPart::Text {
+                text: text.into(),
+                span,
+            }],
+            span,
+        }
+    }
+
+    /// The parts that are `{name}` interpolations.
+    pub fn interpolations(&self) -> impl Iterator<Item = &StringPart> {
+        self.parts
+            .iter()
+            .filter(|part| matches!(part, StringPart::Interp { .. }))
+    }
+}
+
+/// One piece of a string literal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StringPart {
+    /// Literal text with escapes resolved (`\{` becomes `{`).
+    Text {
+        /// The resolved text.
+        text: String,
+        /// Where the text was written.
+        span: Span,
+    },
+    /// `{name}` or `{name.member}`: a value inserted into the text. Allowed
+    /// only in `note:`, `check:` and `require` messages; elsewhere the checker
+    /// reports `error[syntax]`.
+    Interp {
+        /// The name looked up in the surrounding kind, component or module.
+        root: Name,
+        /// Members after the root, in order (`{piece.thickness}`).
+        members: Vec<Name>,
+        /// Where the interpolation was written, braces included.
+        span: Span,
+    },
 }
 
 /// `///` doc comments attached to the node that follows them: one entry per
@@ -2233,10 +2276,7 @@ mod tests {
         assert_eq!(item.name().map(Ident::as_str), Some("side_r"));
 
         let library = ItemKind::Library(Library {
-            title: StringLit {
-                value: "Casework".to_owned(),
-                span: Span::default(),
-            },
+            title: StringLit::text("Casework", Span::default()),
             body: None,
         });
         assert_eq!(library.keyword(), "library");

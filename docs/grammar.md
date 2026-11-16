@@ -49,7 +49,8 @@ KEYWORD       = ? a WORD in the keyword list below ? ;
 IDENT         = ? a WORD that is not a KEYWORD ? ;
 NAME          = IDENT | KEYWORD ;                        (* any word; see "Names" *)
 
-STRING        = '"' , { str_char | escape } , '"' ;      (* str_char: any char except '"', "\" and LF *)
+STRING        = '"' , { str_char | escape | interp } , '"' ;  (* str_char: any char except '"', "\", "{" and LF *)
+interp        = "{" , NAME , { "." , NAME } , "}" ;      (* "{depth}", "{piece.thickness}"; see "Strings" *)
 escape        = "\" , ( '"' | "\" | "n" | "t" | "{" | "u{" , HEX , { HEX } , "}" ) ;
 
 INT           = DIGIT , { DIGIT | "_" } ;
@@ -153,6 +154,49 @@ A missing value is reported on its own line: `length:` followed by a newline is
 `error[missing-value]: 'length' has no value`, not a confusing error on the
 next field. The same holds after `=`.
 
+### Unclosed brackets
+
+Because newlines are dropped inside `( )` and `[ ]`, a forgotten closing
+bracket would otherwise swallow every line after it. One rule keeps the damage
+local:
+
+> When a line's first token is an **item keyword** and the next token is not
+> `:`, every `(` and `[` still open is closed before that line, and each one is
+> reported as `error[unclosed-bracket]`. Lexing and parsing continue normally.
+
+Item keywords are the words that start a declaration: `import`, `project`,
+`library`, `private`, `kind`, `recipe`, `stock`, `profile`, `component`,
+`scene`, `param`, `let`, `region`, `part`, `joint`, `hardware`, `assembly`,
+`require`, `patch`.
+
+```
+region front_opening = opening(
+  left: side_l.right,
+  top:  top.bottom              // the ")" is missing
+region bay[drawers, doors] = split(front_opening, up, at: divider)
+```
+
+```
+error[unclosed-bracket]: this "(" is never closed
+  --> carcass.stave:1:31
+   = note: the next declaration starts on line 4
+   = help: add ")" at the end of line 3
+```
+
+`bay` and everything after it parse and check as usual.
+
+The rule never changes the meaning of a correct file: inside brackets only
+expressions and arguments are allowed, and none of them starts with an item
+keyword. The "next token is not `:`" condition leaves keywords used as argument
+names alone (`stock: oak_19,` at the start of a line inside a call).
+
+A missing `}` is recovered by the parser instead, because braces depend on
+context: a component body may contain items, but a part, joint or hardware
+body may not. When a body meets an entry it can't contain that starts with an
+item keyword (`part` inside a part body), the body ends there with
+`error[missing-brace]`, and the item is parsed as the next item of the
+enclosing scope.
+
 ### Doc comments
 
 `///` starts a doc comment. Each line is one `DOC` token (the newline after it
@@ -164,8 +208,14 @@ comment is `error[syntax]`. Docs reach the inspector and the build manual.
 
 In the text of `note:`, `check:`, and a `require` message, `{name}` inserts a
 value: a param or role of the surrounding kind, or a param of the surrounding
-module or component. Lengths are formatted in the project's units. Write `\{`
-for a literal brace.
+module or component, optionally followed by members (`{piece.thickness}`).
+Lengths are formatted in the project's units. Write `\{` for a literal brace.
+
+The lexer splits every string into text and `interp` parts, each with its own
+span, so names inside strings are resolved, renamed, coloured and
+go-to-definition'd like any other name. In any other string (`goal:`, a scene
+title, an import source), an `interp` is `error[syntax]` with the help
+"write \{ for a literal brace".
 
 ---
 
@@ -1417,6 +1467,8 @@ shape of their messages are fixed, because tests and AI tools match on them.
 | 1 | `missing-value` | `'<name>' has no value` |
 | 1 | `reserved-word` | `'<word>' is a reserved word and can't be used as a name` |
 | 1 | `unknown-unit` | `unknown unit '<unit>' (expected one of mm, cm, m, in, ft, deg)` |
+| 1 | `unclosed-bracket` | `this "<bracket>" is never closed` |
+| 1 | `missing-brace` | `<the body of part 'side_l'> is missing its closing "}"` |
 | 2 | `unknown-name` | `unknown name '<name>'` |
 | 2 | `duplicate-name` | `'<name>' is declared twice` |
 | 2 | `ambiguous-name` | `'<name>' could be <this> or <that> here` |
@@ -1455,6 +1507,65 @@ trimmed (`12.7mm`).
 whose first line is `// expect: error[<code>] <message>`. The checker must
 produce a diagnostic with exactly that code and message (it may produce
 others).
+
+---
+
+## Tooling and editors
+
+The language is designed to be served by a language server (`stave-lsp`, built
+on `stave-app` like the CLI and the GTK app) and edited in any editor. These
+requirements bind the implementation.
+
+**A lossless syntax tree.** The parser produces a full-fidelity tree that keeps
+every byte of the source: whitespace, newlines, comments, doc comments and the
+pieces of erroneous code. Printing it gives back the file unchanged. The typed
+syntax tree (`ast`) is a view over it. The formatter, renames, quick fixes and
+patches edit this tree, so they never lose comments or layout.
+
+**Recovery points.** Every item starts with a keyword on a new line, every field
+ends at the end of its line, and blocks use braces. The parser resynchronises at
+these points ([Unclosed brackets](#unclosed-brackets) covers brackets), so one
+mistake produces one error and the rest of the file still parses, resolves and
+checks. A half-typed line while editing is the normal case, not an edge case.
+
+**Positions.** Spans are byte offsets into a file. Line and column, and the
+UTF-16 offsets the language server protocol uses, are computed at the edge
+(the CLI renderer, the language server), never stored in the tree.
+
+**Fast and slow diagnostics.** Checks are split by cost:
+
+| Tier | Layers | When |
+|---|---|---|
+| Fast | 1 syntax, 2 types and names | on every change, within one keystroke |
+| Slow | 3 placement and sizes, 4 fit, 5 motion, 6 requires and ranges (z3), 7 buildability | in the background after typing pauses; cancelled and restarted by the next change |
+
+Results are computed incrementally (query-based, as in rust-analyzer's `salsa`):
+a change to one file re-runs only what depends on it, and determinism makes
+every result cacheable.
+
+**Modules in an editor.** A module is every `.stave` file in its folder, so the
+server uses the text of open, unsaved editor buffers in place of their files on
+disk. The standard library is served as read-only documents (`stave-std:///joinery/dado.stave`),
+so go-to-definition works on `dado`, `side_mount_slide` and every built-in
+kind. Remote modules are never fetched by the server; an unfetched one is a
+diagnostic with a "fetch" code action.
+
+**What an editor gets:**
+
+| Feature | From |
+|---|---|
+| Diagnostics | the fast and slow tiers above, with codes from the [Diagnostics](#diagnostics) table |
+| Quick fixes | each diagnostic's `help:` line, as an edit when it is mechanical ("add `as hw`", "write `name[*]`", "add `)`") |
+| Completion | the position decides the vocabulary: placement terms at the start of a line in `place { }`; cut operations after `cut`; base kinds after `kind name :`; the declaration's field table in a field position; the expected type's words in an argument (`up`, `evenly`, `plywood`); a module's public items after `module.`; labels inside `[ ]` |
+| Signature help | the roles and params of the kind or component being called, with defaults |
+| Hover | doc comments, types, and values worked out in the project's units |
+| Inlay hints | computed values next to their source: `length: fit` shows `= 844mm`, `between(base, top)` its value, every size its cut length |
+| Go to definition, references, rename | every name resolves to exactly one declaration (including names inside strings and qualified names across modules) |
+| Document symbols, folding | items, and the blocks inside them |
+| Semantic colouring | the namespace of each word: item kinds (part, joint, param, region, ...), members, fixed-position call heads, enum words, units |
+| Formatting | `stave fmt`, applied to the lossless tree |
+| Code actions from AI | a checked patch from an AI or the suggestion engine is offered as a workspace edit |
+| Code lens | "show in 3D" on parts and assemblies, "show work card" on parts |
 
 ---
 

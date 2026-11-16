@@ -75,7 +75,7 @@ solving `examples/clothing_cabinet` matches the fixture's part list and sizes.
 |---|---|---|
 | Spec | `docs/grammar.md`, `crates/stave-lang/src/{ast,placement,units,lib}.rs`, `examples/`, `std/` | Grammar draft 3 from `docs/reviews/2026-11-16-language-review-2.md` |
 | Contracts | workspace `Cargo.toml`, crate skeletons, `crates/stave-model` (contract types + fixture) | Runs after Spec |
-| Parser | `crates/stave-lang` (lexer, parser, diagnostics, formatter) | Must not change `ast.rs` types without updating the spec |
+| Parser | `crates/stave-lang` (lexer, parser, diagnostics, formatter) | Lossless syntax tree (every byte kept; `ast` is a typed view over it), recovery per grammar "Unclosed brackets" and "Tooling and editors", string interpolation parts. Must not change `ast.rs` types without updating the spec |
 | Geometry | `crates/stave-geom`, `crates/stave-scene` | Builds from the fixture |
 | Output | `crates/stave-output` | Builds from the fixture plus a hand-built `WorkPlan` |
 | Viewer | `crates/stave-gtk` | Builds from the fixture through `stave-scene` |
