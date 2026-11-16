@@ -3,7 +3,8 @@
 use glam::{Mat4, Quat, Vec3};
 use stave_geom::{Aabb, Extent, Geometry, render};
 use stave_model::solved::{
-    AssemblyId, HardwareId, Motion, Part, PartId, PoseValue, SceneId, SceneItem, SolvedDesign,
+    AssemblyId, HardwareBase, HardwareId, Motion, Part, PartId, PoseValue, SceneId, SceneItem,
+    SolvedDesign,
 };
 use stave_schema::species::{Species, Srgb};
 use stave_schema::words::StockForm;
@@ -181,7 +182,8 @@ pub struct BuildOptions {
 pub struct SceneGraph {
     /// The project's title.
     pub title: String,
-    /// Parts first (in part order), then hardware.
+    /// Parts first (in part order), then hardware: each piece's member on
+    /// its piece, followed by its fixed member when it has one.
     pub nodes: Vec<Node>,
     /// The scenes; the first is the built-in `rest`.
     pub scenes: Vec<SceneEntry>,
@@ -307,6 +309,26 @@ impl SceneGraph {
                 material: Material::Metal,
                 assemblies: assemblies_of(hardware.assembly),
             });
+            // The member screwed to the carcass stays put when the assembly
+            // the hardware moves moves: it belongs to the assembly outside.
+            if let Some(geometry) = stave_geom::hardware_fixed(hardware) {
+                let outside = hardware
+                    .assembly
+                    .and_then(|id| design.assemblies.get(id.index()))
+                    .and_then(|assembly| assembly.parent);
+                let member = match hardware.base {
+                    HardwareBase::Hinge => "plate",
+                    HardwareBase::Slide => "cabinet member",
+                    HardwareBase::Pull => "fixed member",
+                };
+                nodes.push(Node {
+                    item: Item::Hardware(hardware.id),
+                    name: format!("{} {member}", hardware.name),
+                    geometry,
+                    material: Material::Metal,
+                    assemblies: assemblies_of(outside),
+                });
+            }
         }
         let motions: Vec<Option<RenderMotion>> = design
             .assemblies
@@ -352,7 +374,7 @@ impl SceneGraph {
         self.nodes.get(id.0)
     }
 
-    /// The node that draws an item.
+    /// The (first) node that draws an item.
     pub fn node_of(&self, item: Item) -> Option<NodeId> {
         self.nodes
             .iter()

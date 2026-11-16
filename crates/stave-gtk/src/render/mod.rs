@@ -746,6 +746,11 @@ impl Renderer {
         };
         self.queue
             .write_buffer(&self.globals, 0, bytemuck::bytes_of(&globals));
+        // Every node of the selected item is tinted (a hinge is two).
+        let selected = frame
+            .selection
+            .and_then(|id| scene.node(id))
+            .map(|node| node.item);
         let nodes: Vec<NodeData> = scene
             .node_ids()
             .filter_map(|id| {
@@ -767,7 +772,7 @@ impl Renderer {
                         ([r, g, b, 0.0], [0.0, 0.0, seed, 1.0])
                     }
                 };
-                let tint = if frame.selection == Some(id) {
+                let tint = if selected == Some(node.item) {
                     [ACCENT[0], ACCENT[1], ACCENT[2], 0.6]
                 } else {
                     [0.0; 4]

@@ -284,6 +284,7 @@ fn knob(orientation: Orientation, origin: Point, envelope: Envelope) -> Hardware
         envelope,
         pose,
         bounds: pose.world_box(envelope.size()),
+        fixed: None,
         data: HardwareData::Pull {
             centres: None,
             diameter: Some(mm(26)),

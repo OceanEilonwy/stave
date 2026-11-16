@@ -30,7 +30,8 @@
 //!   lathe meshes of their profile, with smooth normals except at shoulders
 //!   and sharp corners.
 //! - **Hardware** is its envelope: a box, or a cylinder standing off the
-//!   mount face.
+//!   mount face (a hinge's cup is sunk into it); hinges and slides also
+//!   have a member fixed to the carcass ([`hardware_fixed`]).
 //!
 //! Mirrored parts have left-handed frames. Every triangle is wound so its
 //! geometric normal agrees with the outward normal it was built from, so
@@ -330,14 +331,29 @@ fn centre_of(part: &Part) -> [f32; 2] {
     ]
 }
 
-/// The mesh of a piece of hardware: its envelope.
+/// The mesh of the member of a piece of hardware on its piece: the whole
+/// of a pull, a hinge's cup, a slide's drawer member.
 pub fn hardware(hardware: &Hardware) -> Geometry {
-    let frame = build::Frame::of_pose(&hardware.pose);
-    match hardware.envelope {
+    envelope(&hardware.envelope, &hardware.pose)
+}
+
+/// The mesh of the member fixed to the carcass (a hinge's plate, a slide's
+/// cabinet member), when the hardware has one.
+pub fn hardware_fixed(hardware: &Hardware) -> Option<Geometry> {
+    hardware
+        .fixed
+        .as_ref()
+        .map(|member| envelope(&member.envelope, &member.pose))
+}
+
+/// A box or a cylinder (along the local thickness) at a pose.
+fn envelope(envelope: &Envelope, pose: &stave_model::solved::Pose) -> Geometry {
+    let frame = build::Frame::of_pose(pose);
+    match *envelope {
         Envelope::Box { .. } => build::cuboid(
             &frame,
             glam::Vec3::ZERO,
-            render::size(hardware.envelope.size()),
+            render::size(envelope.size()),
             build::GrainAxes::LENGTH,
         ),
         Envelope::Cylinder { diameter, length } => {

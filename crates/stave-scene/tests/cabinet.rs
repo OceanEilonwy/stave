@@ -31,9 +31,11 @@ fn close(a: Vec3, b: Vec3) -> bool {
 #[test]
 fn every_part_and_hardware_has_a_node() {
     let (design, graph) = cabinet();
+    let fixed = design.hardware.iter().filter(|h| h.fixed.is_some()).count();
+    assert_eq!(fixed, 8, "four hinge plates and four slide cabinet members");
     assert_eq!(
         graph.nodes.len(),
-        design.parts.len() + design.hardware.len()
+        design.parts.len() + design.hardware.len() + fixed
     );
     assert_eq!(graph.scenes.first().map(|s| s.name.as_str()), Some("rest"));
     let stile = graph
@@ -128,6 +130,7 @@ fn the_open_scene_swings_doors_and_slides_drawers() {
     assert!(close(bottom.transform_point3(Vec3::ZERO), Vec3::ZERO));
     // The slides travel with it.
     let slide = posed.shown(node("drawer[top].slides[left]")).unwrap();
+    // (the drawer member)
     assert!(close(
         slide.transform_point3(Vec3::ZERO),
         Vec3::new(0.0, 0.0, 500.0)
@@ -143,9 +146,21 @@ fn the_open_scene_swings_doors_and_slides_drawers() {
     let reach = 448.25;
     let expected = pivot + Vec3::new(angle.cos(), 0.0, angle.sin()) * reach;
     assert!(close(door_l.transform_point3(latch_corner), expected));
-    // The hinges go with the door.
+    // The hinge cups go with the door; the plates stay on the side, and so
+    // do the slides' cabinet members.
     let hinge = posed.shown(node("door_l.hinges[upper]")).unwrap();
     assert_eq!(hinge, door_l);
+    for fixed in [
+        "door_l.hinges[upper] plate",
+        "door_r.hinges[lower] plate",
+        "drawer[top].slides[left] cabinet member",
+    ] {
+        assert_eq!(
+            posed.shown(node(fixed)).unwrap(),
+            glam::Mat4::IDENTITY,
+            "{fixed}"
+        );
+    }
 
     // The right door is its mirror image.
     let door_r = posed.shown(node("door_r.stile[latch]")).unwrap();
@@ -166,9 +181,11 @@ fn a_scene_can_show_one_assembly() {
     let posed = graph.pose(scene);
     for id in graph.node_ids() {
         let node = graph.node(id).unwrap();
+        // The slides' cabinet members are screwed to the carcass, not the
+        // drawer.
         assert_eq!(
             posed.shown(id).is_some(),
-            node.name.starts_with("drawer[top]."),
+            node.name.starts_with("drawer[top].") && !node.name.ends_with("cabinet member"),
             "{}",
             node.name
         );
