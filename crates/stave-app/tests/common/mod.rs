@@ -5,8 +5,8 @@
 use std::path::Path;
 
 use stave_app::Opened;
-use stave_lang::render_diagnostics;
 use stave_lang::units::Length;
+use stave_lang::{Diagnostic, render_diagnostics};
 use stave_model::solved::{Part, SolvedDesign};
 use stave_modules::MemoryFiles;
 
@@ -109,4 +109,100 @@ pub fn extent(part: &Part) -> [(Length, Length); 3] {
 /// `[across, up, deep]` ranges from millimetre strings.
 pub fn ranges(values: [(&str, &str); 3]) -> [(Length, Length); 3] {
     values.map(|(a, b)| (mm(a), mm(b)))
+}
+
+/// Opens [`HEADER`] followed by `body`, checks that it solves without any
+/// diagnostic, and that it has at least one `require` and every one holds:
+/// the way the spec tests assert evaluated values (`require r : 1-1/2in ==
+/// 38.1mm "..."`).
+pub fn holds(body: &str) {
+    let opened = open(body);
+    assert!(
+        opened.diagnostics.is_empty(),
+        "{}",
+        render_diagnostics(&opened.sources, &opened.diagnostics)
+    );
+    let design = design(&opened);
+    assert!(!design.requires.is_empty(), "no require to check");
+    for require in &design.requires {
+        assert!(
+            require.holds,
+            "'{}' fails: {}",
+            require.name, require.message
+        );
+    }
+}
+
+/// Exactly one diagnostic, with this code and message and a help line;
+/// returns it so a test can look at its line, help or notes.
+pub fn the_diagnostic<'o>(opened: &'o Opened, code: &str, message: &str) -> &'o Diagnostic {
+    only_error(opened, code, message);
+    let diagnostic = &opened.diagnostics[0];
+    assert!(
+        diagnostic.help.is_some(),
+        "every diagnostic has a help line: {}",
+        render_diagnostics(&opened.sources, &opened.diagnostics)
+    );
+    diagnostic
+}
+
+/// The 1-based line of a diagnostic's primary label, counted in the file
+/// the label is in.
+pub fn line(opened: &Opened, diagnostic: &Diagnostic) -> usize {
+    let label = diagnostic.primary().expect("a primary label");
+    let file = opened.sources.get(label.file).expect("the file");
+    file.line_column(label.span.start()).line
+}
+
+/// The 1-based line, within `body`, of a diagnostic in a design opened with
+/// [`open`] (which puts [`HEADER`] and a blank line before the body).
+pub fn body_line(opened: &Opened, diagnostic: &Diagnostic) -> usize {
+    line(opened, diagnostic) - HEADER.lines().count() - 1
+}
+
+/// The help line of the only diagnostic.
+pub fn help(opened: &Opened) -> String {
+    let [only] = opened.diagnostics.as_slice() else {
+        panic!(
+            "expected one diagnostic:\n{}",
+            render_diagnostics(&opened.sources, &opened.diagnostics)
+        );
+    };
+    only.help.clone().unwrap_or_default()
+}
+
+/// A region by name.
+pub fn region<'d>(design: &'d SolvedDesign, name: &str) -> &'d stave_model::solved::Region {
+    design
+        .regions
+        .iter()
+        .find(|r| r.name == name)
+        .unwrap_or_else(|| panic!("no region '{name}'"))
+}
+
+/// A box as `[across, up, deep]` ranges.
+pub fn bounds(world: &stave_model::solved::WorldBox) -> [(Length, Length); 3] {
+    [
+        (world.min().across, world.max().across),
+        (world.min().up, world.max().up),
+        (world.min().deep, world.max().deep),
+    ]
+}
+
+/// A joint by name.
+pub fn joint<'d>(design: &'d SolvedDesign, name: &str) -> &'d stave_model::solved::Joint {
+    design
+        .joints
+        .iter()
+        .find(|j| j.name == name)
+        .unwrap_or_else(|| panic!("no joint '{name}'"))
+}
+
+/// A piece of hardware by name.
+pub fn hardware<'d>(design: &'d SolvedDesign, name: &str) -> &'d stave_model::solved::Hardware {
+    design
+        .hardware
+        .iter()
+        .find(|h| h.name == name)
+        .unwrap_or_else(|| panic!("no hardware '{name}'"))
 }

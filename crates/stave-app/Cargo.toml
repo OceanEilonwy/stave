@@ -16,3 +16,4 @@ thiserror = "2"
 [dev-dependencies]
 insta = "1"
 stave-lang = { path = "../stave-lang" }
+stave-schema = { path = "../stave-schema" }
