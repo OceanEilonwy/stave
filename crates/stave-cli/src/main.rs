@@ -6,6 +6,8 @@
 //! stave dump --json examples/clothing_cabinet
 //! stave fmt examples/clothing_cabinet       # format in place
 //! stave fmt --check examples                # exit 1 if a file would change
+//! stave view examples/clothing_cabinet      # the 3D viewer (stave-gtk)
+//! stave export examples/clothing_cabinet --gltf cabinet.glb
 //! ```
 //!
 //! `check` runs the whole pipeline (through `stave-app`) on a module
@@ -56,6 +58,24 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Open the design in the 3D viewer. The viewer reloads when a file
+    /// changes.
+    View {
+        /// The project folder.
+        path: PathBuf,
+        /// The scene to start in.
+        #[arg(long)]
+        scene: Option<String>,
+    },
+    /// Write the design (everything as built) as a binary glTF file, for
+    /// any glTF viewer or Blender.
+    Export {
+        /// The project folder.
+        path: PathBuf,
+        /// The .glb file to write.
+        #[arg(long, value_name = "FILE")]
+        gltf: PathBuf,
+    },
     /// Lay out .stave files canonically, in place. Files with syntax errors
     /// are skipped.
     Fmt {
@@ -73,6 +93,8 @@ fn main() -> ExitCode {
         Command::Check { path } => check(&path),
         Command::Dump { path, json } => dump(&path, json),
         Command::Fmt { path, check } => fmt(&path, check),
+        Command::View { path, scene } => view(&path, scene.as_deref()),
+        Command::Export { path, gltf } => export(&path, &gltf),
     };
     match result {
         Ok(true) => ExitCode::SUCCESS,
@@ -222,6 +244,55 @@ fn dump(path: &Path, json: bool) -> Result<bool> {
     } else {
         write!(stdout, "{}", dump::table(design))?;
     }
+    Ok(true)
+}
+
+/// Runs the `stave-gtk` viewer that is installed next to this program.
+fn view(path: &Path, scene: Option<&str>) -> Result<bool> {
+    let me = std::env::current_exe().context("can't find where stave is installed")?;
+    let viewer = me.with_file_name(format!("stave-gtk{}", std::env::consts::EXE_SUFFIX));
+    if !viewer.is_file() {
+        bail!(
+            "the viewer isn't installed: expected '{}' next to stave (build it with `cargo build -p stave-gtk`)",
+            viewer.display()
+        );
+    }
+    let mut command = std::process::Command::new(&viewer);
+    command.arg(path);
+    if let Some(scene) = scene {
+        command.arg("--scene").arg(scene);
+    }
+    let status = command
+        .status()
+        .with_context(|| format!("can't start '{}'", viewer.display()))?;
+    Ok(status.success())
+}
+
+/// Writes the design as rest-pose binary glTF. `Ok(false)` when the design
+/// has errors.
+fn export(path: &Path, output: &Path) -> Result<bool> {
+    let opened = open(path)?;
+    let mut stderr = std::io::stderr().lock();
+    write!(
+        stderr,
+        "{}",
+        render_diagnostics(&opened.sources, &opened.diagnostics)
+    )?;
+    let Some(design) = &opened.design else {
+        if opened.error_count() == 0 {
+            bail!("'{}' is a library: it has nothing to place", path.display());
+        }
+        return Ok(false);
+    };
+    let scene = stave_app::view::scene(design);
+    let glb = scene.to_glb(&scene.rest())?;
+    std::fs::write(output, &glb).with_context(|| format!("can't write '{}'", output.display()))?;
+    writeln!(
+        stderr,
+        "wrote {} ({} parts and pieces of hardware)",
+        output.display(),
+        scene.nodes.len()
+    )?;
     Ok(true)
 }
 

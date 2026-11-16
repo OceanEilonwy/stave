@@ -1,6 +1,6 @@
 [package]
 name = "stave-cli"
-description = "The stave command: check, format and dump .stave projects"
+description = "The stave command: check, format, dump, view and export .stave projects"
 edition.workspace = true
 version.workspace = true
 license.workspace = true
@@ -18,4 +18,5 @@ stave-lang = { path = "../stave-lang" }
 stave-model = { path = "../stave-model" }
 
 [dev-dependencies]
+gltf = "1"
 serde_json = "1"

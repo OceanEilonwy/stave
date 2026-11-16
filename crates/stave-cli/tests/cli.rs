@@ -180,3 +180,72 @@ fn dump_refuses_a_library_and_reports_errors() {
     assert_eq!(output.status.code(), Some(1));
     assert!(output.stdout.is_empty());
 }
+
+#[test]
+fn export_writes_a_valid_gltf_of_the_cabinet() {
+    let output = scratch("export").join("cabinet.glb");
+    let result = stave(&[
+        "export",
+        workspace()
+            .join("examples/clothing_cabinet")
+            .to_str()
+            .unwrap(),
+        "--gltf",
+        output.to_str().unwrap(),
+    ]);
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let (document, buffers, _) = gltf::import(&output).expect("a valid glTF file");
+    // One node per part and piece of hardware, named as in the design.
+    let names: Vec<&str> = document.nodes().filter_map(|n| n.name()).collect();
+    assert_eq!(names.len(), 34 + 12);
+    for name in [
+        "base",
+        "side_r",
+        "door_l.stile[hinge]",
+        "drawer[top].pull",
+        "foot[back_left]",
+    ] {
+        assert!(names.contains(&name), "{name} missing");
+    }
+    // Wood by species and a metal for the hardware.
+    let materials: Vec<&str> = document.materials().filter_map(|m| m.name()).collect();
+    assert!(materials.contains(&"white oak"), "{materials:?}");
+    assert!(materials.contains(&"brushed metal"), "{materials:?}");
+    let metal = document
+        .materials()
+        .find(|m| m.name() == Some("brushed metal"))
+        .unwrap();
+    assert!(metal.pbr_metallic_roughness().metallic_factor() > 0.5);
+    // Positions are in metres: the top is 1.7 m up; the feet go below 0.
+    let mut low = f32::INFINITY;
+    let mut high = f32::NEG_INFINITY;
+    for mesh in document.meshes() {
+        for primitive in mesh.primitives() {
+            let reader = primitive.reader(|buffer| Some(&buffers[buffer.index()]));
+            for position in reader.read_positions().unwrap() {
+                low = low.min(position[1]);
+                high = high.max(position[1]);
+            }
+            assert!(reader.read_indices().is_some());
+        }
+    }
+    assert!((high - 1.7).abs() < 1e-4, "{high}");
+    assert!((low + 0.08).abs() < 1e-4, "{low}");
+}
+
+#[test]
+fn view_says_when_the_viewer_is_missing_or_starts_it() {
+    // The test binary's folder holds stave; stave-gtk is there only when the
+    // whole workspace was built. Either way the outcome is clear.
+    let result = stave(&["view", "/nonexistent/folder"]);
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert!(!result.status.success());
+    assert!(
+        stderr.contains("the viewer isn't installed") || stderr.contains("can't find the folder"),
+        "{stderr}"
+    );
+}
