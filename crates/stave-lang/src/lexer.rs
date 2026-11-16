@@ -721,6 +721,35 @@ fn line_of(text: &str, at: u32) -> usize {
         + 1
 }
 
+/// `true` for a token that can end a value: a name, a number, a quantity,
+/// a string's closing quote, `)` or `]`.
+fn ends_value(kind: SyntaxKind) -> bool {
+    matches!(
+        kind,
+        SyntaxKind::IDENT
+            | SyntaxKind::QUANTITY
+            | SyntaxKind::INT_NUMBER
+            | SyntaxKind::DECIMAL_NUMBER
+            | SyntaxKind::STRING_QUOTE
+            | SyntaxKind::R_PAREN
+            | SyntaxKind::R_BRACK
+    ) || kind.is_keyword()
+}
+
+/// `true` for a token that starts a value and can't continue one: a name,
+/// a number, a quantity, a string's opening quote or `!`.
+fn starts_value(kind: SyntaxKind) -> bool {
+    matches!(
+        kind,
+        SyntaxKind::IDENT
+            | SyntaxKind::QUANTITY
+            | SyntaxKind::INT_NUMBER
+            | SyntaxKind::DECIMAL_NUMBER
+            | SyntaxKind::STRING_QUOTE
+            | SyntaxKind::BANG
+    ) || kind.is_keyword()
+}
+
 /// Why open brackets are being closed early.
 #[derive(Clone, Copy)]
 enum CloseReason {
@@ -765,6 +794,47 @@ impl Cook<'_> {
         }
     }
 
+    /// The index in `out` of the first dropped newline after the brackets
+    /// in `closing` (innermost first) and before `end`, outside any bracket
+    /// opened after them, where the token before it ends a value and the
+    /// token after it starts one.
+    fn forgotten_at(&self, closing: &[Token], end: usize) -> Option<usize> {
+        let innermost = closing.first()?;
+        let start = self
+            .out
+            .iter()
+            .position(|token| token.span == innermost.span && token.kind == innermost.kind)?;
+        let significant = |token: &Token| !token.kind.is_trivia();
+        let mut depth = 0usize;
+        let mut last: Option<SyntaxKind> = None;
+        for index in start + 1..end {
+            let token = self.out.get(index)?;
+            match token.kind {
+                SyntaxKind::L_PAREN | SyntaxKind::L_BRACK | SyntaxKind::L_BRACE => depth += 1,
+                SyntaxKind::R_PAREN | SyntaxKind::R_BRACK | SyntaxKind::R_BRACE => {
+                    depth = depth.saturating_sub(1);
+                }
+                _ => {}
+            }
+            if depth == 0
+                && self.is_dropped_newline(token)
+                && last.is_some_and(ends_value)
+                && self
+                    .out
+                    .get(index + 1..end)?
+                    .iter()
+                    .find(|next| significant(next) && !self.is_dropped_newline(next))
+                    .is_some_and(|next| starts_value(next.kind))
+            {
+                return Some(index);
+            }
+            if significant(token) && !self.is_dropped_newline(token) {
+                last = Some(token.kind);
+            }
+        }
+        None
+    }
+
     /// Closes the open `(` and `[` that `reason` ends: all of them for an
     /// item or the end of the file, the ones inside the innermost block for
     /// a `}`.
@@ -791,10 +861,22 @@ impl Cook<'_> {
         if closing.is_empty() {
             return;
         }
-        let insert_at = self.last_significant.map_or(0, |index| index + 1);
-        let at = self
-            .last_significant
-            .and_then(|index| self.out.get(index))
+        let end = self.last_significant.map_or(0, |index| index + 1);
+        // Where the closers go: at the first line break after the brackets
+        // where one value ends a line and the next line starts another (two
+        // values are never side by side, so the bracket was forgotten
+        // there), or else after the last token before what closes them.
+        let moved = self.forgotten_at(&closing, end);
+        let insert_at = moved.unwrap_or(end);
+        let at = insert_at
+            .checked_sub(1)
+            .and_then(|index| {
+                self.out
+                    .get(..=index)?
+                    .iter()
+                    .rev()
+                    .find(|token| !token.kind.is_trivia())
+            })
             .map_or(0, |token| token.span.end());
         let last_line = line_of(self.text, at);
         for (offset, opener) in closing.iter().enumerate() {
@@ -843,7 +925,10 @@ impl Cook<'_> {
                 slot.kind = SyntaxKind::NEWLINE;
             }
         }
-        self.last_significant = Some(insert_at + closing.len() - 1);
+        self.last_significant = Some(match moved {
+            Some(_) => end + closing.len() - 1,
+            None => insert_at + closing.len() - 1,
+        });
     }
 }
 
@@ -887,7 +972,10 @@ fn cook(
                         .iter()
                         .any(|open| matches!(open.kind, SyntaxKind::L_PAREN | SyntaxKind::L_BRACK))
                 };
-                if at_line_start && kind.is_item_keyword() {
+                // A doc comment only ever comes before a declaration (or a
+                // kind's param, require or makes), so it ends brackets and
+                // lines like an item keyword.
+                if at_line_start && (kind.is_item_keyword() || kind == SyntaxKind::DOC) {
                     let next = raw
                         .get(index + 1..)
                         .unwrap_or(&[])

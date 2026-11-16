@@ -1064,7 +1064,58 @@ impl Solver<'_> {
     }
 
     /// Works out a `fit` size (grammar, "Sizes").
+    /// `fit` decided by the joints the part is the first role of (grammar,
+    /// "Sizes"). When one of the project's joints couldn't be worked out
+    /// (it, or something it depends on, has an error of its own), a size
+    /// nothing decides isn't reported: that joint may be the one that
+    /// decides it, so the one mistake stays one error.
     fn fit(&mut self, part: PartId, axis: PartAxis, span: Span) -> Solved<ExactLength> {
+        let before = self.diagnostics.len();
+        let result = self.decide_fit(part, axis, span);
+        if result.is_err() && self.joints_incomplete() {
+            let mut index = before;
+            while index < self.diagnostics.len() {
+                if self
+                    .diagnostics
+                    .get(index)
+                    .is_some_and(|d| d.code == Code::FitUndecided)
+                {
+                    self.diagnostics.remove(index);
+                } else {
+                    index += 1;
+                }
+            }
+            return Err(self.skip());
+        }
+        result
+    }
+
+    /// `true` when some joint of the project couldn't be worked out: an item
+    /// was left out for a syntax error, or a joint's binding failed.
+    fn joints_incomplete(&mut self) -> bool {
+        if self
+            .model
+            .defs
+            .broken
+            .values()
+            .any(|names| !names.is_empty())
+        {
+            return true;
+        }
+        (0..self.model.joints.len()).any(|index| {
+            let mirrored = self
+                .model
+                .joints
+                .get(index)
+                .is_some_and(|j| j.mirror_of.is_some());
+            !mirrored
+                && self
+                    .joint_binding(stave_model::ids::JointId::from_usize(index))
+                    .is_err()
+        })
+    }
+
+    fn decide_fit(&mut self, part: PartId, axis: PartAxis, span: Span) -> Solved<ExactLength> {
         let name = self.part_name(part);
         let Some(env) = self.part_env(part) else {
             return Err(Reported);

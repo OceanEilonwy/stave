@@ -140,7 +140,7 @@ is the only keyword that suppresses a following newline.
 
 Case 2 never drops the newline before a line whose first token is an **item
 keyword** (see [Unclosed brackets](#unclosed-brackets)) not followed by `:`,
-unless the line before ends with a doc comment. No expression continues with
+or a doc comment, unless the line before ends with a doc comment. No expression continues with
 a declaration, so this never changes the meaning of a correct file; it keeps
 a forgotten operand local: in `let a = 1 +` followed by `let b = 2`, the
 error is the missing value after `+`, and `b` is still declared.
@@ -168,8 +168,9 @@ bracket would otherwise swallow every line after it. One rule keeps the damage
 local:
 
 > When a line's first token is an **item keyword** and the next token is not
-> `:`, every `(` and `[` still open is closed before that line, and each one is
-> reported as `error[unclosed-bracket]`. Lexing and parsing continue normally.
+> `:`, or a doc comment, every `(` and `[` still open is closed before that
+> line, and each one is reported as `error[unclosed-bracket]`. Lexing and
+> parsing continue normally.
 
 Item keywords are the words that start a declaration: `import`, `project`,
 `library`, `private`, `kind`, `recipe`, `stock`, `profile`, `component`,
@@ -194,7 +195,7 @@ error[unclosed-bracket]: this "(" is never closed
 
 The rule never changes the meaning of a correct file: inside brackets only
 expressions and arguments are allowed, and none of them starts with an item
-keyword. The "next token is not `:`" condition leaves keywords used as argument
+keyword or contains a doc comment. The "next token is not `:`" condition leaves keywords used as argument
 names alone (`stock: oak_19,` at the start of a line inside a call).
 
 For the same reason a `}` closes every `(` and `[` opened inside its block,
@@ -202,6 +203,23 @@ and the end of the file closes every one still open; each is reported as
 `error[unclosed-bracket]` in the same way (the note then says where the
 block or the file ends). No expression can contain a `}`, so this too never
 changes the meaning of a correct file.
+
+A bracket closed by any of these three is closed at the line where it was
+most likely forgotten: the first line break after it (outside any bracket
+opened later) where one line ends with a value (a name, number, quantity,
+string, `)` or `]`) and the next starts with another (a name, number,
+quantity, string or `!`). Two values are never written side by side, so
+there the expression can't go on. When there is no such line break, the
+bracket is closed just before the line that closed it. So a `)` forgotten at
+the end of one placement term is one error, its help names that line, and
+the next term is still read:
+
+```
+place {
+  flush(base.left, inset: 10mm      // the ")" is missing
+  against(base.top)
+}
+```
 
 A missing `}` is recovered by the parser instead, because braces depend on
 context: a component body may contain items, but a part, joint or hardware

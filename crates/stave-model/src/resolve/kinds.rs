@@ -1091,6 +1091,9 @@ impl Resolver<'_> {
             &what,
             syntax.body.span,
         );
+        // Without a `tools:` list (already reported missing or misspelt),
+        // a step's `with:` isn't checked against it.
+        let tools_given = found.contains_key("tools");
         let tools = found
             .get("tools")
             .map(|f| kind_ids(&self.field_value(cx, f, fields::RECIPE_FIELDS)))
@@ -1134,7 +1137,12 @@ impl Resolver<'_> {
             match entry {
                 ast::RecipeEntry::Mark(block) => {
                     for step in &block.steps {
-                        if let Some(lowered) = self.lower_mark_step(cx, step, spec, &tools) {
+                        if let Some(lowered) = self.lower_mark_step(
+                            cx,
+                            step,
+                            spec,
+                            tools_given.then_some(tools.as_slice()),
+                        ) {
                             mark.push(lowered);
                         }
                     }
@@ -1142,7 +1150,12 @@ impl Resolver<'_> {
                 ast::RecipeEntry::Cut(block) => {
                     has_cut = true;
                     for step in &block.steps {
-                        if let Some(lowered) = self.lower_cut_step(cx, step, spec, &tools) {
+                        if let Some(lowered) = self.lower_cut_step(
+                            cx,
+                            step,
+                            spec,
+                            tools_given.then_some(tools.as_slice()),
+                        ) {
                             cut.push(lowered);
                         }
                     }
@@ -1235,12 +1248,12 @@ impl Resolver<'_> {
         }
     }
 
-    fn step_tool(&mut self, cx: &Cx, expr: &ast::Expr, tools: &[KindId]) -> Option<KindId> {
+    fn step_tool(&mut self, cx: &Cx, expr: &ast::Expr, tools: Option<&[KindId]>) -> Option<KindId> {
         let value = self.value(cx, expr, &Expect::ty(Ty::Tool).named("with"));
         let RExprKind::Symbol(Symbol::Def(DefId::Kind(id))) = value.kind else {
             return None;
         };
-        if !tools.contains(&id) {
+        if tools.is_some_and(|tools| !tools.contains(&id)) {
             self.error_help(
                 Code::TypeMismatch,
                 "'with' needs one of the recipe's tools",
@@ -1293,7 +1306,7 @@ impl Resolver<'_> {
         cx: &Cx,
         call: &ast::Call,
         spec: &stave_schema::operations::OperationSpec,
-        tools: &[KindId],
+        tools: Option<&[KindId]>,
     ) -> Option<MarkStepDef> {
         let head = call.head.as_str();
         let Some(step) = MarkingStep::from_word(head) else {
@@ -1344,7 +1357,7 @@ impl Resolver<'_> {
         cx: &Cx,
         call: &ast::Call,
         spec: &stave_schema::operations::OperationSpec,
-        tools: &[KindId],
+        tools: Option<&[KindId]>,
     ) -> Option<CutStepDef> {
         let head = call.head.as_str();
         let Some(step) = CuttingStep::from_word(head) else {

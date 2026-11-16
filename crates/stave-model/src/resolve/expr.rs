@@ -700,6 +700,11 @@ impl Resolver<'_> {
                 ty,
                 span,
             },
+            None if matches!(&base.ty, Ty::Assembly(component) if self.broken_in_component(*component, name)) =>
+            {
+                // An item of the component left out for a syntax error.
+                RExpr::error(span)
+            }
             None => {
                 let what = match &base.ty {
                     Ty::Assembly(component) => {
@@ -723,6 +728,20 @@ impl Resolver<'_> {
                 RExpr::error(span)
             }
         }
+    }
+
+    /// `true` if the component's item `name` was left out for a syntax
+    /// error.
+    pub(crate) fn broken_in_component(
+        &self,
+        component: crate::ids::ComponentId,
+        name: &str,
+    ) -> bool {
+        let component_name = self.def_name(DefId::Component(component));
+        self.origins
+            .get(&DefId::Component(component))
+            .and_then(|origin| self.broken.get(&origin.module))
+            .is_some_and(|names| names.contains(&format!("{component_name}.{name}")))
     }
 
     /// The readable members of a type, for suggestions.

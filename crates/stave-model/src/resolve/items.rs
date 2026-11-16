@@ -1346,6 +1346,11 @@ impl<'a> Resolver<'a> {
         let mut misspelt: Vec<String> = Vec::new();
         for field in &body.fields {
             let key = field.key.as_str();
+            // An argument for a param left out for a syntax error is
+            // skipped, not unknown.
+            if self.broken_in_component(component, key) {
+                continue;
+            }
             let Some((_, id, _)) = params.iter().find(|(n, _, _)| n == key) else {
                 let candidates: Vec<String> = params.iter().map(|(n, _, _)| n.clone()).collect();
                 misspelt.push(key.to_owned());

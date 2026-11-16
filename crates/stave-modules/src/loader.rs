@@ -378,7 +378,28 @@ impl<'a> Loader<'a> {
                 })
             })
             .collect();
+        // A project or library item with a syntax error is already
+        // reported: it is there, just broken.
+        let broken_header = files.iter().any(|file| {
+            let text = self.sources.get(file.file).map_or("", SourceFile::text);
+            file.broken.iter().any(|item| {
+                let start = usize::try_from(item.span.start()).unwrap_or(usize::MAX);
+                text.get(start..).is_some_and(|rest| {
+                    // Past doc comments and `private`, the item's keyword.
+                    let keyword = rest
+                        .lines()
+                        .map(str::trim_start)
+                        .find(|line| !line.is_empty() && !line.starts_with("///"))
+                        .unwrap_or_default();
+                    let keyword = keyword
+                        .strip_prefix("private")
+                        .map_or(keyword, str::trim_start);
+                    keyword.starts_with("project") || keyword.starts_with("library")
+                })
+            })
+        });
         match headers.as_slice() {
+            [] if broken_header => None,
             [] => {
                 let label = files
                     .first()
