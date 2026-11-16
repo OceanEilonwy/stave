@@ -1,0 +1,11 @@
+---
+source: crates/stave-lang/tests/diagnostics.rs
+expression: "broken(\"unclosed_bracket\")"
+---
+error[unclosed-bracket]: this "(" is never closed
+  --> tests/broken/unclosed_bracket/project.stave:31:33
+   |
+31 | region opening_between = opening(
+   |                                 ^
+   = note: the next declaration starts on line 38
+   = help: add ")" at the end of line 37

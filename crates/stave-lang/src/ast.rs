@@ -19,6 +19,11 @@
 //! Every node carries a [`Span`] (byte offsets into the source) so that
 //! errors can point at the exact text, which matters both for people and for
 //! feeding errors back to an AI.
+//!
+//! The tree is built from the lossless concrete syntax tree
+//! ([`crate::syntax`]) by [`crate::parse_file`]: it is an owned, typed view
+//! of the well-formed items, and its spans lead back to the source text the
+//! concrete tree keeps byte for byte.
 
 use std::fmt;
 use std::num::NonZeroU64;
@@ -1365,8 +1370,11 @@ pub enum ExprKind {
     Quantity(Quantity),
     /// Unitless: `3`, `0.5`
     Number(Number),
-    /// `"text"`, with escapes resolved.
-    String(String),
+    /// `"text"` or `"Halve {first}"`: text with escapes resolved, and the
+    /// `{name}` parts with their spans. Interpolation is allowed only in
+    /// `note:`, `check:` and `require` messages; the parser reports it
+    /// anywhere else.
+    String(StringLit),
     /// `true` or `false`
     Bool(bool),
     /// `fit`: the size is decided by the part's joints or its profile.

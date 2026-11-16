@@ -1,0 +1,10 @@
+---
+source: crates/stave-lang/tests/diagnostics.rs
+expression: "broken(\"missing_value\")"
+---
+error[missing-value]: 'length' has no value
+  --> tests/broken/missing_value/project.stave:14:3
+   |
+14 |   length:
+   |   ^^^^^^^
+   = help: write the value on the same line, or remove the line

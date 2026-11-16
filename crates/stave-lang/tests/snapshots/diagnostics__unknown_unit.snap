@@ -1,0 +1,10 @@
+---
+source: crates/stave-lang/tests/diagnostics.rs
+expression: "broken(\"unknown_unit\")"
+---
+error[unknown-unit]: unknown unit 'inch' (expected one of mm, cm, m, in, ft, deg)
+  --> tests/broken/unknown_unit/project.stave:13:13
+   |
+13 |   length: 24inch
+   |             ^^^^
+   = help: write 24in

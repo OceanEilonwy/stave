@@ -1,0 +1,10 @@
+---
+source: crates/stave-lang/tests/diagnostics.rs
+expression: "broken(\"reserved_word\")"
+---
+error[reserved-word]: 'joint' is a reserved word and can't be used as a name
+  --> tests/broken/reserved_word/project.stave:10:6
+   |
+10 | part joint : pine_19 {
+   |      ^^^^^
+   = help: choose another name, such as 'my_joint'

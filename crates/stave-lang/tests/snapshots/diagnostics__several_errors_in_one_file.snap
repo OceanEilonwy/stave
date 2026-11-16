@@ -1,0 +1,39 @@
+---
+source: crates/stave-lang/tests/diagnostics.rs
+expression: "render(\"carcass.stave\",\n\"stave 1\\n\\\n         \\n\\\n         region front_opening = opening(\\n\\\n         \\x20 left: side_l.right,\\n\\\n         \\x20 top:  top.bottom              // the \\\")\\\" is missing\\n\\\n         region bay[drawers, doors] = split(front_opening, up, at: divider)\\n\\\n         \\n\\\n         joint shelf_dados : dado(shelf, into: side) { depth: 9mm }\\n\\\n         project \\\"Goal {name}\\\" { units: mm }\\n\\\n         let x = \\\"never closed\\n\\\n         part p : s {\\n\\\n         \\x20 length: 1mm\\n\")"
+---
+error[unclosed-bracket]: this "(" is never closed
+  --> carcass.stave:3:31
+   |
+ 3 | region front_opening = opening(
+   |                               ^
+   = note: the next declaration starts on line 6
+   = help: add ")" at the end of line 5
+
+error[syntax]: expected end of line, found '{'
+  --> carcass.stave:8:45
+   |
+ 8 | joint shelf_dados : dado(shelf, into: side) { depth: 9mm }
+   |                                             ^
+   = help: a joint's settings go inside the parentheses
+
+error[syntax]: expected plain text, found '{name}'
+  --> carcass.stave:9:15
+   |
+ 9 | project "Goal {name}" { units: mm }
+   |               ^^^^^^
+   = help: write \{ for a literal brace; {name} works only in note:, check: and require messages
+
+error[syntax]: expected '"', found end of line
+  --> carcass.stave:10:22
+   |
+10 | let x = "never closed
+   |                      ^
+   = help: close the string with '"' on the same line
+
+error[missing-brace]: the body of part 'p' is missing its closing "}"
+  --> carcass.stave:11:12
+   |
+11 | part p : s {
+   |            ^ this block is never closed
+   = help: add "}" at the end of the file

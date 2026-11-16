@@ -1,0 +1,10 @@
+---
+source: crates/stave-lang/tests/diagnostics.rs
+expression: "broken(\"syntax_error\")"
+---
+error[syntax]: expected ':', found 'shelf'
+  --> tests/broken/syntax_error/project.stave:20:21
+   |
+20 | require wide_enough shelf.width >= 250mm "the shelf must hold a row of books"
+   |                     ^^^^^
+   = help: a require is written: require name : condition "message"

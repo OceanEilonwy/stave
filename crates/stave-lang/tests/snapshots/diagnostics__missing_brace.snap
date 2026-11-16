@@ -1,0 +1,11 @@
+---
+source: crates/stave-lang/tests/diagnostics.rs
+expression: "broken(\"missing_brace\")"
+---
+error[missing-brace]: the body of part 'shelf' is missing its closing "}"
+  --> tests/broken/missing_brace/project.stave:20:22
+   |
+20 | part shelf : pine_19 {
+   |                      ^ this block is never closed
+   = note: the next declaration starts on line 29
+   = help: add "}" before line 29

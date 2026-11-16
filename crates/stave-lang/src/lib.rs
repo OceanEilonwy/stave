@@ -1,10 +1,42 @@
-//! The `.stave` project format (grammar draft 3).
+//! The `.stave` project format (grammar draft 3): parser, formatter,
+//! diagnostics, and the typed syntax tree.
 //!
-//! - [`ast`]: the syntax tree produced by the parser. Every node carries a
-//!   [`ast::Span`] so errors can point at source text.
-//! - [`units`]: exact lengths, angles and fractions, and conversion from literals.
+//! - [`parse_file`] and [`parse_patch_file`] turn source text into a
+//!   [`Parse`]: the lossless concrete syntax tree ([`syntax`]), the typed
+//!   tree ([`ast`]) of every well-formed item, and the diagnostics.
+//! - [`diagnostics`] holds what every later stage reports with: [`FileId`],
+//!   [`SourceMap`], [`Diagnostic`] and the compiler-style
+//!   [`render_diagnostics`].
+//! - [`units`]: exact lengths, angles and fractions, and conversion from
+//!   literals.
 //! - [`placement`]: the typed placement vocabulary that `place { }` blocks
-//!   lower into after name resolution. It has no way to express a coordinate.
+//!   lower into after name resolution. It has no way to express a
+//!   coordinate.
+//!
+//! # Pipeline
+//!
+//! ```text
+//! text ──lexer──▶ tokens ──parser──▶ green tree (lossless) ──lower──▶ ast::File
+//!          └──────────── diagnostics ────────────┘
+//! ```
+//!
+//! The lexer applies the newline and unclosed-bracket rules, the parser
+//! (hand-written recursive descent) recovers at the grammar's recovery
+//! points, and lowering keeps only the items without errors. See the module
+//! docs of `lexer`, `parser` and `lower` for the details and the reasons.
+//!
+//! ```
+//! use stave_lang::{parse_file, render_diagnostics, SourceMap};
+//!
+//! let text = "stave 1\n\nlet overhang = 20mm\n";
+//! let mut sources = SourceMap::new();
+//! let file = sources.add("cabinet.stave", text).unwrap();
+//! let parse = parse_file(file, text);
+//! assert!(parse.diagnostics.is_empty());
+//! assert_eq!(parse.syntax().to_string(), text); // lossless
+//! assert_eq!(parse.ast.unwrap().items.len(), 1);
+//! print!("{}", render_diagnostics(&sources, &parse.diagnostics));
+//! ```
 //!
 //! `docs/grammar.md` is the specification. The word lists below are the
 //! grammar's; tests in this file read the document and fail if the two drift
@@ -14,8 +46,120 @@
 #![warn(missing_docs)]
 
 pub mod ast;
+pub mod diagnostics;
+mod lexer;
+mod lower;
+mod parser;
 pub mod placement;
+pub mod syntax;
 pub mod units;
+
+pub use diagnostics::{
+    Code, Diagnostic, FileId, Label, Severity, SourceMap, render_diagnostic, render_diagnostics,
+};
+pub use lower::BrokenItem;
+pub use syntax::{GreenNode, SyntaxKind, SyntaxNode, SyntaxToken};
+
+/// The result of parsing one file.
+#[derive(Debug, Clone)]
+pub struct Parse<T> {
+    /// The lossless concrete syntax tree. It is immutable and `Send + Sync`;
+    /// [`Parse::syntax`] gives a walkable view of it.
+    pub green: GreenNode,
+    /// The typed tree of the well-formed items, or `None` when the file has
+    /// no readable `stave <version>` header.
+    pub ast: Option<T>,
+    /// Every problem found, sorted by position.
+    pub diagnostics: Vec<Diagnostic>,
+    /// Items left out of [`Parse::ast`] because they contain an error.
+    pub broken: Vec<BrokenItem>,
+}
+
+impl<T> Parse<T> {
+    /// The root of the concrete syntax tree. Printing it gives back the
+    /// source text exactly.
+    pub fn syntax(&self) -> SyntaxNode {
+        SyntaxNode::new_root(self.green.clone())
+    }
+
+    /// `true` if any diagnostic is an error.
+    pub fn has_errors(&self) -> bool {
+        self.diagnostics.iter().any(Diagnostic::is_error)
+    }
+}
+
+/// Parses a design file: header, imports and items.
+pub fn parse_file(file: FileId, text: &str) -> Parse<ast::File> {
+    parse_with(file, text, parser::Entry::File, |lowering, root| {
+        lowering.file(root)
+    })
+}
+
+/// Parses a patch file: header and patches.
+pub fn parse_patch_file(file: FileId, text: &str) -> Parse<ast::PatchFile> {
+    parse_with(file, text, parser::Entry::PatchFile, |lowering, root| {
+        lowering.patch_file(root)
+    })
+}
+
+/// `true` if `text` is a patch file: its first declaration after the
+/// `stave` header is a `patch`.
+pub fn is_patch_source(text: &str) -> bool {
+    if u32::try_from(text.len()).is_err() {
+        return false;
+    }
+    lexer::lex(FileId::DETACHED, text)
+        .tokens
+        .iter()
+        .filter(|token| !token.kind.is_trivia() && token.kind != SyntaxKind::NEWLINE)
+        .nth(2)
+        .is_some_and(|token| token.kind == SyntaxKind::KW_PATCH)
+}
+
+fn parse_with<T>(
+    file: FileId,
+    text: &str,
+    entry: parser::Entry,
+    lower: impl FnOnce(&mut lower::Lowering, &SyntaxNode) -> Option<T>,
+) -> Parse<T> {
+    if u32::try_from(text.len()).is_err() {
+        let mut builder = rowan::GreenNodeBuilder::new();
+        builder.start_node(SyntaxKind::ERROR.into());
+        builder.finish_node();
+        return Parse {
+            green: builder.finish(),
+            ast: None,
+            diagnostics: vec![Diagnostic::error(
+                Code::Syntax,
+                format!(
+                    "expected a file of at most 4 GiB, found {} bytes",
+                    text.len()
+                ),
+                Label::new(file, ast::Span::default()),
+            )],
+            broken: Vec::new(),
+        };
+    }
+    let lexed = lexer::lex(file, text);
+    let (green, parse_diagnostics) = parser::parse(file, text, &lexed.tokens, entry);
+    let mut diagnostics = lexed.diagnostics;
+    diagnostics.extend(parse_diagnostics);
+    let root = SyntaxNode::new_root(green.clone());
+    let mut lowering = lower::Lowering::new(file, &diagnostics);
+    let ast = lower(&mut lowering, &root);
+    diagnostics.extend(lowering.diagnostics);
+    diagnostics.sort_by_key(|diagnostic| {
+        diagnostic
+            .primary()
+            .map(|label| (label.span.start(), label.span.end()))
+    });
+    Parse {
+        green,
+        ast,
+        diagnostics,
+        broken: lowering.broken,
+    }
+}
 
 /// Reserved words: the grammar's `KEYWORD`. A keyword can't name a new thing,
 /// but it may follow a `.` or precede a `:` (see [`ast::Name`]).
