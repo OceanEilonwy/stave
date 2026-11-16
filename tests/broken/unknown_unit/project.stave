@@ -1,0 +1,18 @@
+// expect: error[unknown-unit] unknown unit 'inch' (expected one of mm, cm, m, in, ft, deg)
+stave 1
+
+// Units are written right after the number, with their short names.
+
+project "Unknown unit" {
+  units: mm
+}
+
+stock pine_19 { species: pine, form: solid, thickness: 19mm }
+
+part shelf : pine_19 {
+  length: 24inch
+  width:  300mm
+  place {
+    ground
+  }
+}

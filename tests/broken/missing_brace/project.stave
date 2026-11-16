@@ -1,0 +1,37 @@
+// expect: error[missing-brace] the body of part 'shelf' is missing its closing "}"
+stave 1
+
+// The shelf's body is never closed, so it ends where the next part starts.
+
+project "Missing brace" {
+  units: mm
+}
+
+stock pine_19 { species: pine, form: solid, thickness: 19mm }
+
+part base : pine_19 {
+  length: 600mm
+  width:  300mm
+  place {
+    ground
+  }
+}
+
+part shelf : pine_19 {
+  length: 600mm
+  width:  300mm
+  place {
+    against(base.top, gap: 250mm)
+    flush(base.left)
+    flush(base.front)
+  }
+
+part top : pine_19 {
+  length: 600mm
+  width:  300mm
+  place {
+    against(base.top, gap: 500mm)
+    flush(base.left)
+    flush(base.front)
+  }
+}

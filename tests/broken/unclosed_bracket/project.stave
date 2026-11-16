@@ -1,0 +1,38 @@
+// expect: error[unclosed-bracket] this "(" is never closed
+stave 1
+
+// The ")" of the opening is missing. The region after it still parses.
+
+project "Unclosed bracket" {
+  units: mm
+}
+
+stock pine_19 { species: pine, form: solid, thickness: 19mm }
+
+part base : pine_19 {
+  length: 600mm
+  width:  300mm
+  place {
+    ground
+  }
+}
+
+part side[left, right] : pine_19 {
+  length: 400mm
+  width:  300mm
+  place {
+    orient(length: up, width: back)
+    against(base.top)
+    spaced(ends, from: base.left, to: base.right)
+    flush(base.front)
+  }
+}
+
+region opening_between = opening(
+  left:   side[left].right,
+  right:  side[right].left,
+  bottom: base.top,
+  top:    side[left].top,
+  front:  base.front,
+  back:   base.back
+region halves[lower, upper] = split(opening_between, up)
