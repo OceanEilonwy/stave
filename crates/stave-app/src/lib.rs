@@ -21,6 +21,8 @@
 
 use std::path::Path;
 
+pub mod view;
+
 use stave_lang::{Diagnostic, SourceMap};
 use stave_model::Model;
 use stave_model::solved::SolvedDesign;
