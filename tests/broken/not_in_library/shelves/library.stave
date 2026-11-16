@@ -1,0 +1,14 @@
+stave 1
+
+library "Shelves"
+
+stock oak_19 { species: white_oak, form: solid, thickness: 19mm }
+
+// A part needs placing in a project: inside a component it would be fine.
+part shelf : oak_19 {
+  length: 600mm
+  width:  250mm
+  place {
+    ground
+  }
+}

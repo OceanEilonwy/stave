@@ -1,0 +1,47 @@
+// expect: error[no-contact] hinge: lid meets none of the parts it should join
+stave 1
+
+project "Butt hinge that meets nothing" {
+  units: mm
+}
+
+stock pine_19 { species: pine, form: solid, thickness: 19mm }
+
+part base : pine_19 {
+  length: 600mm
+  width:  300mm
+  place {
+    ground
+  }
+}
+
+// The hinge is mounted on the lid's top face, which touches nothing: a
+// butt hinge's mount face must lie against a face of its 'on' part.
+stock pine_12 { species: pine, form: solid, thickness: 12mm }
+
+part back : pine_12 {
+  length: 600mm
+  width:  100mm
+  place {
+    orient(length: right, width: up)
+    against(base.top)
+    flush(base.left)
+    flush(base.back)
+  }
+}
+
+part lid : pine_12 {
+  length: 600mm
+  width:  300mm
+  place {
+    against(back.top)
+    flush(base.left)
+    flush(base.front)
+  }
+}
+
+hardware hinge : butt_hinge(lid, on: back, face: top) {
+  place {
+    center(lid, across)
+  }
+}

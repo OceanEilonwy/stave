@@ -1,0 +1,20 @@
+// expect: error[not-in-library] a library can't contain a part at the top level
+stave 1
+
+// The library next door declares a part at its top level.
+
+import "./shelves"
+
+project "Not in library" {
+  units: mm
+}
+
+stock pine_19 { species: pine, form: solid, thickness: 19mm }
+
+part base : pine_19 {
+  length: 600mm
+  width:  300mm
+  place {
+    ground
+  }
+}

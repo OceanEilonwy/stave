@@ -1,0 +1,20 @@
+// expect: error[unknown-module] can't find module './casework'
+stave 1
+
+// There is no casework folder next to this project.
+
+import "./casework"
+
+project "Unknown module" {
+  units: mm
+}
+
+stock pine_19 { species: pine, form: solid, thickness: 19mm }
+
+part base : pine_19 {
+  length: 600mm
+  width:  300mm
+  place {
+    ground
+  }
+}

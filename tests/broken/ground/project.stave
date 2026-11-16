@@ -1,0 +1,25 @@
+// expect: error[ground] 'base' and 'shelf' are both placed with 'ground'
+stave 1
+
+project "Two grounds" {
+  units: mm
+}
+
+stock pine_19 { species: pine, form: solid, thickness: 19mm }
+
+part base : pine_19 {
+  length: 600mm
+  width:  300mm
+  place {
+    ground
+  }
+}
+
+// Only one part of a project is the root everything is placed from.
+part shelf : pine_19 {
+  length: 600mm
+  width:  300mm
+  place {
+    ground
+  }
+}

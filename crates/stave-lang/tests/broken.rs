@@ -9,7 +9,7 @@
 
 use std::path::{Path, PathBuf};
 
-use stave_lang::{Code, Diagnostic, FileId, SourceMap, parse_file, render_diagnostics};
+use stave_lang::{Code, Diagnostic, FileId, Severity, SourceMap, parse_file, render_diagnostics};
 
 /// A checking stage: the layers whose codes it reports, and how to run it
 /// on one file.
@@ -25,8 +25,38 @@ const STAGES: &[Stage] = &[Stage {
 }];
 
 struct Expectation {
+    severity: Severity,
     code: Code,
     message: String,
+    /// `// pending: <reason>`: the check isn't built yet, so the design
+    /// must check clean until it is.
+    pending: Option<String>,
+}
+
+/// Reads the `// expect:` line (and the optional `// pending:` line) of a
+/// broken design.
+fn expectation(path: &Path, text: &str) -> Expectation {
+    let mut lines = text.lines();
+    let first = lines.next().unwrap_or("");
+    let (severity, rest) = if let Some(rest) = first.strip_prefix("// expect: error[") {
+        (Severity::Error, rest)
+    } else if let Some(rest) = first.strip_prefix("// expect: warning[") {
+        (Severity::Warning, rest)
+    } else {
+        panic!("{}: bad expect line", path.display())
+    };
+    let (code, message) = rest.split_once("] ").unwrap();
+    let code = Code::from_str_code(code).unwrap_or_else(|| panic!("unknown code {code}"));
+    let pending = lines
+        .next()
+        .and_then(|line| line.strip_prefix("// pending: "))
+        .map(str::to_owned);
+    Expectation {
+        severity,
+        code,
+        message: message.to_owned(),
+        pending,
+    }
 }
 
 fn corpus() -> Vec<(PathBuf, String, Expectation)> {
@@ -42,24 +72,12 @@ fn corpus() -> Vec<(PathBuf, String, Expectation)> {
         .map(|folder| {
             let path = folder.join("project.stave");
             let text = std::fs::read_to_string(&path).unwrap();
-            let first = text.lines().next().unwrap_or("");
-            let rest = first
-                .strip_prefix("// expect: error[")
-                .unwrap_or_else(|| panic!("{}: bad expect line", path.display()));
-            let (code, message) = rest.split_once("] ").unwrap();
-            let code = Code::from_str_code(code).unwrap_or_else(|| panic!("unknown code {code}"));
+            let expected = expectation(&path, &text);
             let name = format!(
                 "tests/broken/{}/project.stave",
                 folder.file_name().unwrap().to_string_lossy()
             );
-            (
-                PathBuf::from(name),
-                text.clone(),
-                Expectation {
-                    code,
-                    message: message.to_owned(),
-                },
-            )
+            (PathBuf::from(name), text, expected)
         })
         .collect()
 }
@@ -83,7 +101,7 @@ fn broken_designs_produce_their_expected_diagnostic() {
             }
         }
         let rendered = render_diagnostics(&sources, &diagnostics);
-        if expected.code.layer() <= implemented {
+        if expected.code.layer() <= implemented && expected.pending.is_none() {
             checked += 1;
             let [only] = diagnostics.as_slice() else {
                 panic!(
@@ -92,6 +110,12 @@ fn broken_designs_produce_their_expected_diagnostic() {
                 );
             };
             assert_eq!(only.code, expected.code, "{}:\n{rendered}", path.display());
+            assert_eq!(
+                only.severity,
+                expected.severity,
+                "{}:\n{rendered}",
+                path.display()
+            );
             assert_eq!(
                 only.message,
                 expected.message,
@@ -117,7 +141,7 @@ fn broken_designs_produce_their_expected_diagnostic() {
 fn the_rest_of_a_broken_file_still_parses() {
     let mut sources = SourceMap::new();
     for (path, text, expected) in corpus() {
-        if expected.code.layer() != 1 {
+        if expected.code.layer() != 1 || expected.pending.is_some() {
             continue;
         }
         let file = sources.add(path.to_string_lossy(), text.as_str()).unwrap();

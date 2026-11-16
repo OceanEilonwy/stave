@@ -1,0 +1,20 @@
+// expect: error[not-supported] importing from 'github:some-maker/stave-catalog/slides@v2.1.0' is not supported yet
+stave 1
+
+// Remote modules parse, but only local folders and std: resolve so far.
+
+import "github:some-maker/stave-catalog/slides@v2.1.0" as slides
+
+project "Not supported" {
+  units: mm
+}
+
+stock pine_19 { species: pine, form: solid, thickness: 19mm }
+
+part base : pine_19 {
+  length: 600mm
+  width:  300mm
+  place {
+    ground
+  }
+}

@@ -157,9 +157,12 @@ fn std_folders_are_the_embedded_modules() {
 
 #[test]
 fn broken_corpus_loads() {
+    // Each design is one module, plus the three standard ones, plus the
+    // local folders it imports (the designs for module errors have some).
     for folder in stave_folders(&repository().join("tests/broken")) {
         let set = ModuleSet::load(&folder).unwrap();
-        assert_eq!(set.modules.len(), 4, "{}", folder.display());
+        let local = stave_folders(&folder).len();
+        assert_eq!(set.modules.len(), 4 + local, "{}", folder.display());
     }
 }
 

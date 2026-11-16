@@ -1,4 +1,5 @@
 // expect: error[order] board: there is no valid order for its cuts
+// pending: the order of operations is layer 7 (buildability), not built yet
 stave 1
 
 // The board gets a dado and a hole. The two recipes chosen with 'methods:'

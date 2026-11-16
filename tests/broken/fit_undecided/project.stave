@@ -1,0 +1,40 @@
+// expect: error[fit-undecided] shelf: nothing decides its length
+stave 1
+
+project "Fit undecided" {
+  units: mm
+}
+
+stock pine_19 { species: pine, form: solid, thickness: 19mm }
+
+part base : pine_19 {
+  length: 600mm
+  width:  300mm
+  place {
+    ground
+  }
+}
+
+// The shelf is housed in one side only: nothing stops it on the right.
+part side : pine_19 {
+  length: 400mm
+  width:  300mm
+  place {
+    orient(length: up, width: back)
+    against(base.top)
+    flush(base.left)
+    flush(base.front)
+  }
+}
+
+part shelf : pine_19 {
+  length: fit
+  width:  300mm
+  place {
+    against(base.top, gap: 100mm)
+    center(base, across)
+    flush(base.front)
+  }
+}
+
+joint housing : dado(shelf, into: side)

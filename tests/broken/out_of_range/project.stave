@@ -1,0 +1,43 @@
+// expect: error[out-of-range] 'length' must be within [250mm, 300mm, 350mm, 400mm, 450mm, 500mm, 550mm, 600mm], found 320mm
+stave 1
+
+project "Out of range" {
+  units: mm
+}
+
+stock pine_19 { species: pine, form: solid, thickness: 19mm }
+
+part base : pine_19 {
+  length: 600mm
+  width:  300mm
+  place {
+    ground
+  }
+}
+
+// Side-mount slides are sold in 50mm steps; there is no 320mm slide.
+part side : pine_19 {
+  length: 200mm
+  width:  300mm
+  place {
+    orient(length: up, width: back)
+    against(base.top)
+    flush(base.left)
+    flush(base.front)
+  }
+}
+
+part drawer_side : pine_19 {
+  length: 300mm
+  width:  100mm
+  place {
+    orient(length: back, width: up)
+    against(base.top)
+    against(side.right, gap: 12.7mm)
+    flush(base.front)
+  }
+}
+
+region space = opening(left: side.right, right: base.right, bottom: base.top, top: side.top, front: base.front, back: base.back)
+
+hardware runner : side_mount_slide(drawer_side, in: space, length: 320mm)

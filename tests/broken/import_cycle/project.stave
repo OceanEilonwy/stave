@@ -1,0 +1,20 @@
+// expect: error[import-cycle] modules import each other: doors -> carcass -> doors
+stave 1
+
+// carcass imports doors, and doors imports carcass.
+
+import "./carcass"
+
+project "Import cycle" {
+  units: mm
+}
+
+stock pine_19 { species: pine, form: solid, thickness: 19mm }
+
+part base : pine_19 {
+  length: 600mm
+  width:  300mm
+  place {
+    ground
+  }
+}

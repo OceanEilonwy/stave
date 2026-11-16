@@ -1,0 +1,27 @@
+// expect: error[unknown-field] part 'shelf' has no field 'widht'
+stave 1
+
+project "Unknown field" {
+  units: mm
+}
+
+stock pine_19 { species: pine, form: solid, thickness: 19mm }
+
+part base : pine_19 {
+  length: 600mm
+  width:  300mm
+  place {
+    ground
+  }
+}
+
+// A misspelt field is one error: it is not also reported as missing.
+part shelf : pine_19 {
+  length: 600mm
+  widht:  300mm
+  place {
+    against(base.top, gap: 200mm)
+    flush(base.left)
+    flush(base.front)
+  }
+}

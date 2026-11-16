@@ -1,0 +1,21 @@
+// expect: warning[shadows-prelude] 'dado' hides the standard kind of the same name
+stave 1
+
+project "Shadows the prelude" {
+  units: mm
+}
+
+stock pine_19 { species: pine, form: solid, thickness: 19mm }
+
+part base : pine_19 {
+  length: 600mm
+  width:  300mm
+  place {
+    ground
+  }
+}
+
+// A local kind called dado: every dado(...) in this module now means it.
+kind dado : joint {
+  note: "my own housing"
+}

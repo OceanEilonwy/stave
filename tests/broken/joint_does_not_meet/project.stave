@@ -1,4 +1,5 @@
 // expect: error[no-contact] shelf_dado: shelf meets none of the parts it should join
+// pending: contact between a joint's parts is a layer 4 check (fit and geometry), not built yet; the solved design already records the parts that meet nothing
 stave 1
 
 // The shelf stops 20mm short of the side it is supposed to be housed in.

@@ -1,0 +1,26 @@
+// expect: error[missing-field] part 'shelf' is missing 'width'
+stave 1
+
+project "Missing field" {
+  units: mm
+}
+
+stock pine_19 { species: pine, form: solid, thickness: 19mm }
+
+part base : pine_19 {
+  length: 600mm
+  width:  300mm
+  place {
+    ground
+  }
+}
+
+// Pine boards have no fixed width, so the shelf must say how wide it is.
+part shelf : pine_19 {
+  length: 600mm
+  place {
+    against(base.top, gap: 200mm)
+    flush(base.left)
+    flush(base.front)
+  }
+}

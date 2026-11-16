@@ -1,0 +1,25 @@
+// expect: error[ambiguous-name] 'through' could be a length or the word 'through' here
+stave 1
+
+project "Ambiguous name" {
+  units: mm
+}
+
+stock pine_19 { species: pine, form: solid, thickness: 19mm }
+
+part base : pine_19 {
+  length: 600mm
+  width:  300mm
+  place {
+    ground
+  }
+}
+
+// A let called 'through' where a depth may be a length or the word 'through'.
+let through = 5mm
+
+kind slot_joint : joint {
+  cut crossing(into, piece) {
+    notch(depth: through)
+  }
+}

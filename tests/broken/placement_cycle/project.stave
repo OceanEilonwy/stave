@@ -1,0 +1,37 @@
+// expect: error[placement-cycle] upper and lower are placed against each other
+stave 1
+
+project "Placement cycle" {
+  units: mm
+}
+
+stock pine_19 { species: pine, form: solid, thickness: 19mm }
+
+part base : pine_19 {
+  length: 600mm
+  width:  300mm
+  place {
+    ground
+  }
+}
+
+// Each shelf stands on the other: neither can be placed first.
+part lower : pine_19 {
+  length: 600mm
+  width:  300mm
+  place {
+    against(upper.bottom)
+    flush(base.left)
+    flush(base.front)
+  }
+}
+
+part upper : pine_19 {
+  length: 600mm
+  width:  300mm
+  place {
+    against(lower.top)
+    flush(base.left)
+    flush(base.front)
+  }
+}

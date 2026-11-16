@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 use common::{extent, mm, part, ranges};
 use stave_lang::placement::{Axis, Direction, Face, PartAxis};
-use stave_lang::{Code, render_diagnostics};
+use stave_lang::{Code, Severity, render_diagnostics};
 use stave_model::solved::{
     Contact, CutKind, CutPlace, Depth, End, HardwareData, Motion, PartOrigin, Shape,
 };
@@ -76,8 +76,11 @@ fn every_example_and_standard_module_checks_clean() {
 }
 
 struct Expectation {
+    severity: Severity,
     code: Code,
     message: String,
+    /// `// pending: <reason>`: the check isn't built yet.
+    pending: Option<String>,
 }
 
 fn broken_designs() -> Vec<(PathBuf, Expectation)> {
@@ -92,68 +95,79 @@ fn broken_designs() -> Vec<(PathBuf, Expectation)> {
         .into_iter()
         .map(|folder| {
             let text = std::fs::read_to_string(folder.join("project.stave")).unwrap();
-            let first = text.lines().next().unwrap();
-            let rest = first.strip_prefix("// expect: error[").unwrap();
+            let mut lines = text.lines();
+            let first = lines.next().unwrap();
+            let (severity, rest) = match first.strip_prefix("// expect: error[") {
+                Some(rest) => (Severity::Error, rest),
+                None => (
+                    Severity::Warning,
+                    first.strip_prefix("// expect: warning[").unwrap(),
+                ),
+            };
             let (code, message) = rest.split_once("] ").unwrap();
             let code = Code::from_str_code(code).unwrap();
+            let pending = lines
+                .next()
+                .and_then(|line| line.strip_prefix("// pending: "))
+                .map(str::to_owned);
             (
                 folder,
                 Expectation {
+                    severity,
                     code,
                     message: message.to_owned(),
+                    pending,
                 },
             )
         })
         .collect()
 }
 
-/// The layers this pipeline runs: syntax, names and types, placement and
-/// sizes. Later layers (fit, motion, ranges, buildability) come with later
-/// stages; their broken designs must pass cleanly through these.
-const IMPLEMENTED_LAYERS: u8 = 3;
-
+/// Every broken design produces exactly its expected diagnostic, with a
+/// help line, and nothing else. A design marked `// pending:` is for a
+/// check that isn't built yet (fit, motion, ranges, buildability): until
+/// it is, the design must pass cleanly and solve.
 #[test]
 fn broken_designs_produce_exactly_their_expected_diagnostic() {
     let mut checked = 0;
     for (folder, expected) in broken_designs() {
         let opened = stave_app::open(&folder).unwrap();
         let rendered = render_diagnostics(&opened.sources, &opened.diagnostics);
-        if expected.code.layer() <= IMPLEMENTED_LAYERS {
-            checked += 1;
-            let [only] = opened.diagnostics.as_slice() else {
-                panic!(
-                    "{}: expected exactly one diagnostic, got:\n{rendered}",
-                    folder.display()
-                );
-            };
-            assert_eq!(
-                only.code,
-                expected.code,
-                "{}:\n{rendered}",
-                folder.display()
-            );
-            assert_eq!(
-                only.message,
-                expected.message,
-                "{}:\n{rendered}",
-                folder.display()
-            );
-            assert!(
-                only.help.is_some(),
-                "{}: every diagnostic has a help line",
-                folder.display()
-            );
-        } else {
+        if let Some(reason) = &expected.pending {
             assert!(
                 opened.diagnostics.is_empty(),
-                "{} expects a layer {} error, but layers 1 to {IMPLEMENTED_LAYERS} report:\n{rendered}",
+                "{} is pending ({reason}), but reports:\n{rendered}",
                 folder.display(),
-                expected.code.layer()
             );
             assert!(opened.design.is_some(), "{}: no design", folder.display());
+            continue;
         }
+        checked += 1;
+        let [only] = opened.diagnostics.as_slice() else {
+            panic!(
+                "{}: expected exactly one diagnostic, got:\n{rendered}",
+                folder.display()
+            );
+        };
+        assert_eq!(
+            (only.severity, only.code),
+            (expected.severity, expected.code),
+            "{}:\n{rendered}",
+            folder.display()
+        );
+        assert_eq!(
+            only.message,
+            expected.message,
+            "{}:\n{rendered}",
+            folder.display()
+        );
+        assert!(
+            only.help.is_some(),
+            "{}: every diagnostic has a help line",
+            folder.display()
+        );
     }
-    assert!(checked >= 11, "only {checked} broken designs checked");
+    assert!(checked >= 27, "only {checked} broken designs checked");
 }
 
 #[test]

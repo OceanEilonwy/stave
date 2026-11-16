@@ -1,4 +1,5 @@
 // expect: error[require-range] 'hanger_room' does not hold for every allowed value: room for coat hangers
+// pending: checking a require over a param's whole range needs z3 (layer 6), not built yet
 stave 1
 
 // The check holds at 560mm, but 'within' allows a depth down to 450mm, where

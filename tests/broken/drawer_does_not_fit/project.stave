@@ -1,4 +1,5 @@
 // expect: error[slide-gap] slides[left]: side[left] is 10mm from the opening, but the slide needs 12.7mm
+// pending: slide clearance is a layer 4 check (fit and geometry), not built yet
 stave 1
 
 // The drawer box is 5.4mm too wide: its sides leave 10mm for slides that

@@ -1,0 +1,27 @@
+// expect: error[type-mismatch] 'against' needs a face, found a mid-plane
+stave 1
+
+project "Type mismatch" {
+  units: mm
+}
+
+stock pine_19 { species: pine, form: solid, thickness: 19mm }
+
+part base : pine_19 {
+  length: 600mm
+  width:  300mm
+  place {
+    ground
+  }
+}
+
+// against takes a face; a mid-plane is for center(...).
+part shelf : pine_19 {
+  length: 600mm
+  width:  300mm
+  place {
+    against(mid(base, up))
+    flush(base.left)
+    flush(base.front)
+  }
+}

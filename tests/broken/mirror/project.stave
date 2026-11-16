@@ -1,0 +1,57 @@
+// expect: error[mirror] wall has no counterpart on the other side of the mirror
+stave 1
+
+project "Mirror without counterpart" {
+  units: mm
+}
+
+stock pine_19 { species: pine, form: solid, thickness: 19mm }
+
+part base : pine_19 {
+  length: 600mm
+  width:  300mm
+  place {
+    ground
+  }
+}
+
+// The flap is hinged on a wall at the left; the mirror image needs a wall
+// at the right to hang on, and there is none.
+stock pine_12 { species: pine, form: solid, thickness: 12mm }
+
+part wall : pine_19 {
+  length: 200mm
+  width:  300mm
+  place {
+    orient(length: up, width: back)
+    against(base.top)
+    flush(base.left)
+    flush(base.front)
+  }
+}
+
+component Flap {
+  param hinge_side : Part
+
+  part leaf : pine_12 {
+    length: 200mm
+    width:  100mm
+    place {
+      orient(length: up, width: right)
+      against(base.top)
+      against(hinge_side.right)
+      against(base.front)
+    }
+  }
+
+  hardware hinge : euro_hinge(leaf, on: hinge_side) {
+    place {
+      flush(leaf.bottom, inset: 20mm)
+    }
+  }
+}
+
+assembly flap_l : Flap {
+  hinge_side: wall
+}
+assembly flap_r = mirror(flap_l, about: mid(base, across))

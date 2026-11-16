@@ -1,0 +1,40 @@
+// expect: error[require] 'not_too_deep' fails: a dado deeper than half the board weakens it
+stave 1
+
+project "Failing require" {
+  units: mm
+}
+
+stock pine_19 { species: pine, form: solid, thickness: 19mm }
+
+part base : pine_19 {
+  length: 600mm
+  width:  300mm
+  place {
+    ground
+  }
+}
+
+// A 15mm dado in a 19mm side breaks the dado kind's own rule.
+part side : pine_19 {
+  length: 400mm
+  width:  300mm
+  place {
+    orient(length: up, width: back)
+    against(base.top)
+    flush(base.left)
+    flush(base.front)
+  }
+}
+
+part shelf : pine_19 {
+  length: 200mm
+  width:  300mm
+  place {
+    against(base.top, gap: 100mm)
+    against(side.right)
+    flush(base.front)
+  }
+}
+
+joint housing : dado(shelf, into: side, depth: 15mm)
