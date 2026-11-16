@@ -1854,6 +1854,9 @@ pub enum CutOperation {
     Tenon,
     /// `spigot(length:, diameter:)`: a round tenon.
     Spigot,
+    /// `round(diameter:, flats:, flats_angle:)`: a length of a square part
+    /// turned round where another part passes, optionally with two flats.
+    Round,
     /// `drill(diameter:, depth:, count:)`: round holes.
     Drill,
     /// `dovetail_socket(neck:, depth:, angle:)`
@@ -1866,12 +1869,13 @@ pub enum CutOperation {
 
 impl CutOperation {
     /// Every cut operation, in the order the grammar lists them.
-    pub const ALL: [CutOperation; 9] = [
+    pub const ALL: [CutOperation; 10] = [
         CutOperation::Notch,
         CutOperation::Slot,
         CutOperation::Pocket,
         CutOperation::Tenon,
         CutOperation::Spigot,
+        CutOperation::Round,
         CutOperation::Drill,
         CutOperation::DovetailSocket,
         CutOperation::DovetailTail,
@@ -1886,6 +1890,7 @@ impl CutOperation {
             CutOperation::Pocket => "pocket",
             CutOperation::Tenon => "tenon",
             CutOperation::Spigot => "spigot",
+            CutOperation::Round => "round",
             CutOperation::Drill => "drill",
             CutOperation::DovetailSocket => "dovetail_socket",
             CutOperation::DovetailTail => "dovetail_tail",
@@ -1910,9 +1915,11 @@ impl CutOperation {
             | CutOperation::Tenon
             | CutOperation::Spigot
             | CutOperation::Drill => true,
-            CutOperation::DovetailSocket | CutOperation::DovetailTail | CutOperation::Outline => {
-                false
-            }
+            // A round section is a cylinder, but its flats may sit at any angle.
+            CutOperation::Round
+            | CutOperation::DovetailSocket
+            | CutOperation::DovetailTail
+            | CutOperation::Outline => false,
         }
     }
 }
@@ -2150,7 +2157,7 @@ mod tests {
         for unit in Unit::ALL {
             assert_eq!(Unit::from_suffix(unit.suffix()), Some(unit));
         }
-        assert_eq!(Operation::all().count(), 10);
+        assert_eq!(Operation::all().count(), 11);
         assert_eq!(BaseKind::from_word("knob"), None);
         assert_eq!(TypeName::from_word("length"), None);
         assert_eq!(Operation::from_word("turning"), Some(Operation::Turning));

@@ -1,71 +1,128 @@
 stave 1
 
-/// Kanawa tsugi: a stepped scarf splice that joins two beams end to end,
-/// locked by a key driven across the middle of the joint.
+/// Kanawa tsugi: a stepped scarf splice that joins two beams end to end.
 ///
-/// Simplified: the small tip tenons (hozo) of the traditional joint are left
-/// out. The proportions are common starting points, not a tested pattern.
+/// The two halves are the same shape, one turned over. Each has a long sloping
+/// face with a step in the middle, and a small stub tenon at its tip that fits
+/// a hidden recess in the other half. Because the stubs are hidden, one half is
+/// laid down one stub length short of its place and slid along the beam until
+/// the stubs engage. A square draw pin (komisen) driven through the gap left at
+/// the step locks the joint.
+///
+/// Proportions follow common practice: the splice about three times the beam's
+/// height, the stubs about an eighth of it. Make a trial joint first.
 kind kanawa_tsugi : joint {
   roles {
     piece: Part
     into:  Part
   }
-  /// Overall length of the splice.
+  /// Length of the sloping faces, about three times the beam's height.
   param scarf = 3 * piece.width
   /// Height left at each tip.
   param tip = piece.width / 5
   /// Height of the step in the middle.
   param step = piece.width / 5
-  /// Thickness of the key.
-  param key_thickness = piece.thickness / 4
-  /// What the key is made from.
-  param key_stock : Stock = into.stock
+  /// Length of each stub tenon, and how far the halves slide to engage them.
+  param stub = piece.width / 8
+  /// Gap left at the step for the pin.
+  param pin_size = piece.thickness / 4
+  /// What the pin is made from: a hardwood.
+  param pin_stock : Stock = into.stock
+
   require same_section : piece.width == into.width && piece.thickness == into.thickness "both beams need the same section"
-  require room : scarf <= piece.length / 3 && scarf <= into.length / 3 "the splice is too long for these beams"
+  require room : scarf + stub <= piece.length / 3 && scarf + stub <= into.length / 3 "the splice is too long for these beams"
 
-  // The beams are drawn meeting end to end; each reaches half the splice past that point.
-  adds: [extend(piece, by: scarf / 2), extend(into, by: scarf / 2)]
+  // The beams are drawn meeting end to end; each reaches half the splice, plus
+  // its stub, past that point.
+  adds: [extend(piece, by: scarf / 2 + stub), extend(into, by: scarf / 2 + stub)]
 
-  // Seen from the side, everything above the stepped line is cut away.
+  // Seen from the side, everything above the stepped line is cut away. The
+  // first stub length at the tip is the stub tenon (shaped below).
   cut side(piece, normal: thickness, from: into) {
     outline(depth: through, marks: [
-      mark(along: 0mm,       across: tip),
-      mark(along: scarf / 2, across: (piece.width - step) / 2),
-      mark(along: scarf / 2, across: (piece.width + step) / 2),
-      mark(along: scarf,     across: piece.width),
-      mark(along: 0mm,       across: piece.width),
+      mark(along: stub,                 across: tip),
+      mark(along: stub + scarf / 2,     across: (piece.width - step) / 2),
+      mark(along: stub + scarf / 2,     across: (piece.width + step) / 2),
+      mark(along: stub + scarf,         across: piece.width),
+      mark(along: 0mm,                  across: piece.width),
+      mark(along: 0mm,                  across: tip),
+    ])
+    // Shape the stub: cut its outer third away from this face...
+    outline(depth: piece.thickness / 3, marks: [
+      mark(along: 0mm,  across: 0mm),
+      mark(along: stub, across: 0mm),
+      mark(along: stub, across: tip),
+      mark(along: 0mm,  across: tip),
+    ])
+    // ...and cut the hidden recess for the other half's stub, at the root.
+    outline(from_depth: piece.thickness / 3, depth: 2 * piece.thickness / 3, marks: [
+      mark(along: stub + scarf,         across: piece.width - tip),
+      mark(along: 2 * stub + scarf,     across: piece.width - tip),
+      mark(along: 2 * stub + scarf,     across: piece.width),
+      mark(along: stub + scarf,         across: piece.width),
+    ])
+  }
+  // The stub's other outer third, from the opposite face.
+  cut side(piece, normal: thickness, from: into, opposite: true) {
+    outline(depth: piece.thickness / 3, marks: [
+      mark(along: 0mm,  across: 0mm),
+      mark(along: stub, across: 0mm),
+      mark(along: stub, across: tip),
+      mark(along: 0mm,  across: tip),
     ])
   }
 
-  // The other beam gets the same shape turned over, with its step moved by the
-  // key's thickness, which leaves the slot the key is driven through.
+  // The other half: the same shape turned over, with its step moved by the
+  // pin's size, which leaves the gap the pin is driven through.
   cut side(into, normal: thickness, from: piece, flip: true) {
     outline(depth: through, marks: [
-      mark(along: 0mm,                       across: tip),
-      mark(along: scarf / 2 + key_thickness, across: (into.width - step) / 2),
-      mark(along: scarf / 2 + key_thickness, across: (into.width + step) / 2),
-      mark(along: scarf,                     across: into.width),
-      mark(along: 0mm,                       across: into.width),
+      mark(along: stub,                         across: tip),
+      mark(along: stub + scarf / 2 + pin_size,  across: (into.width - step) / 2),
+      mark(along: stub + scarf / 2 + pin_size,  across: (into.width + step) / 2),
+      mark(along: stub + scarf,                 across: into.width),
+      mark(along: 0mm,                          across: into.width),
+      mark(along: 0mm,                          across: tip),
+    ])
+    outline(depth: into.thickness / 3, marks: [
+      mark(along: 0mm,  across: 0mm),
+      mark(along: stub, across: 0mm),
+      mark(along: stub, across: tip),
+      mark(along: 0mm,  across: tip),
+    ])
+    outline(from_depth: into.thickness / 3, depth: 2 * into.thickness / 3, marks: [
+      mark(along: stub + scarf,         across: into.width - tip),
+      mark(along: 2 * stub + scarf,     across: into.width - tip),
+      mark(along: 2 * stub + scarf,     across: into.width),
+      mark(along: stub + scarf,         across: into.width),
+    ])
+  }
+  cut side(into, normal: thickness, from: piece, flip: true, opposite: true) {
+    outline(depth: into.thickness / 3, marks: [
+      mark(along: 0mm,  across: 0mm),
+      mark(along: stub, across: 0mm),
+      mark(along: stub, across: tip),
+      mark(along: 0mm,  across: tip),
     ])
   }
 
-  /// The joint makes its own key. It appears in the cut list and the build manual.
-  makes part key : key_stock {
+  /// The square draw pin (komisen). It appears in the cut list and the build manual.
+  makes part pin : pin_stock {
     length:    piece.thickness + 2 * 10mm     // stands 10mm proud on each face
     width:     step
-    thickness: key_thickness                  // planed down from key_stock
+    thickness: pin_size                       // planed down from pin_stock
     place {
       orient(length: thickness, width: width, of: piece)   // lies across the beams
-      center(crossing(piece, into))                        // in the middle of the splice
+      center(crossing(piece, into))                        // in the gap at the step
     }
   }
 
-  cut_first: [into, piece]                    // cut into first, then fit piece to it; the key comes last
+  cut_first: [into, piece]                    // cut into first, then fit piece to it; the pin comes last
 
   insert: [
-    push(piece, along: thickness),            // bring the beams together from the side
-    drive(key, along: length),                // knock the key through to pull the joint tight
+    push(piece, along: width),                // lay the beam down, one stub length short
+    push(piece, along: length, by: stub),     // slide it along until the stubs engage
+    drive(pin, along: length),                // drive the pin through the gap to draw the joint tight
   ]
 
-  note: "Mark both beams from the same story stick; plane the key to {key_thickness} and drive it through the slot"
+  note: "Mark both halves from the same story stick; lay {piece} down {stub} short of its place and slide it home before driving the pin"
 }

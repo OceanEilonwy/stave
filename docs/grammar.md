@@ -683,7 +683,6 @@ The condition is a `Bool` expression. See [Checks](#checks-and-require).
 | `uses` | a fastener kind value, or a list | no | fasteners the joint consumes |
 | `cut selector { }` | | no | material removed |
 | `makes part` | | no | a part the joint creates |
-| `schematic` | `Bool` | no (default `false`) | the cuts don't describe the whole joint: the fit between its parts isn't checked |
 | `note` | `Text` | no | one piece of advice for the build manual |
 
 Every joint kind also accepts two settings in its call that it doesn't
@@ -1067,10 +1066,18 @@ makes part key : key_stock {
 }
 ```
 
-**`schematic: true`** says the cuts don't remove everything the real joint
-does. The overlap check between this joint's parts is then skipped, with a
-`note[schematic]`. The same happens, with `warning[not-supported]`, for a joint
-that uses a cut operation the geometry can't make yet.
+**Fit and contact.** After every cut is made, the parts of a joint must fit
+exactly as drawn: surfaces may **touch**, but wood may not pass through wood.
+Two parts touch when their surfaces are within the **contact tolerance** of
+0.05mm; anything deeper is `error[overlap]`. So a tight joint (a round section
+bearing on four faces, a shelf pushed into a dado) is written at exact sizes
+and checks, while a joint whose cuts are too small or in the wrong place is
+caught. A joint that needs room to move says so with a param and makes its
+cuts that much larger (`clearance:` in `groove` lets a solid panel swell).
+
+There is no way to switch this check off. A joint that uses a cut operation the
+geometry can't make yet is `warning[not-supported]`, and the fit of its parts
+is checked once it can.
 
 #### Faces to cut
 
@@ -1087,12 +1094,16 @@ part can choose with `face_side:` and `face_edge:`.
 | Selector | The face | Measuring |
 |---|---|---|
 | `end(p, facing: q)` | the end of `p` nearest `q` | `width` and `thickness` across the end; depth runs along `p`'s length |
-| `side(p, normal: width \| thickness, from: q)` | the reference face (`normal: thickness`) or reference edge (`normal: width`) of `p` | `along` from the end nearest `q`; `across` from the reference edge (or reference face); `flip: true` measures `across` from the opposite edge |
+| `side(p, normal: width \| thickness, from: q)` | the reference face (`normal: thickness`) or reference edge (`normal: width`) of `p`; `opposite: true` takes the face opposite to it | `along` from the end nearest `q`; `across` from the reference edge (or reference face); `flip: true` measures `across` from the opposite edge |
 | `crossing(p, q)` | the face of `p` that `q` touches or enters. The **footprint** is the outline of `q`'s cut-size box on that face | within the footprint, in `q`'s own axes |
 
 When `p` and `q` cross right through each other, `crossing(p, q)` is `p`'s
 reference face if it is parallel to both lengths, otherwise `p`'s reference
-edge; `opposite: true` takes the face opposite to it.
+edge. `normal: width | thickness` names the face instead (the face across
+`p`'s width or thickness), for a cut that goes in from another face: a hole
+bored down through a stick that another stick passes through vertically is
+`crossing(first, lock, normal: thickness)`. `opposite: true` takes the face
+opposite to the chosen one.
 
 #### Cut operations
 
@@ -1101,16 +1112,17 @@ edge; `opposite: true` takes the face opposite to it.
 | Operation | On | Removes |
 |---|---|---|
 | `notch(depth:)` | crossing | the whole footprint, to `depth` (dados, rabbets, grooves, halvings) |
-| `slot(width:, depth:)` | crossing | a slot `width` wide, centred in the footprint and running its full length |
+| `slot(width:, depth:, angle:, from_centre:)` | crossing | a slot `width` wide through the footprint's centre and out past its edges. `angle` (default `0deg`) turns it in the face, measured from the entering part's length axis toward its width axis (or from its width axis toward its thickness axis when its length runs into the face). With `from_centre: true` it starts at the footprint's centre and runs out one side only, in the direction of `angle` |
 | `pocket(width:, thickness:, depth:)` | crossing, end, side | a rectangular mortise, centred; `width` and `thickness` are in the entering part's axes |
 | `tenon(length:, width:, thickness:)` | end | everything around a centred rectangular tenon |
 | `spigot(length:, diameter:)` | end | everything around a centred round tenon |
+| `round(diameter:, flats:, flats_angle:)` | crossing | turns the part round, to `diameter`, over the length where the other part passes (the footprint's extent along this part's length), leaving square sections either side. With `flats:` it keeps two flat faces that distance apart, their normal at `flats_angle` (default `0deg`) from the part's width axis toward its thickness axis |
 | `drill(diameter:, depth:, count:)` | crossing, end, side | `count` round holes (default 1), evenly spaced along the longer side of the footprint or end and centred across it |
 | `dovetail_socket(neck:, depth:, angle:)` | end | a dovetail socket, cut through the thickness |
 | `dovetail_tail(neck:, depth:, angle:)` | end | everything around a dovetail tail |
-| `outline(marks: [...], depth:)` | side | the shape marked out with `mark(along:, across:)` points, cut to `depth` |
+| `outline(marks: [...], depth:, from_depth:)` | side | the shape marked out with `mark(along:, across:)` points, cut from `from_depth` (default `0mm`, the face itself) to `depth` below the face. With `from_depth` greater than zero the cut is hidden inside the part: a recess for a hidden stub tenon |
 
-Turning a part to a profile (`shape: turned(profile)`) is the tenth operation,
+Turning a part to a profile (`shape: turned(profile)`) is the eleventh operation,
 `turning`. It isn't written in a `cut` block, but recipes are written for it
 like for the others.
 
@@ -1121,9 +1133,30 @@ Each step in `insert:` moves one part along or about one of its own axes
 
 | Step | Meaning |
 |---|---|
-| `push(p, along: axis)` | move `p` along its axis until seated |
+| `push(p, along: axis)` | move `p` along its axis from wherever it is free until seated |
+| `push(p, along: axis, by: d)` | move `p` exactly `d` along its axis into its seated position (a scarf laid one stub length short, then slid home) |
+| `push(p, along: axis, angle: a)` | move `p` along a direction turned by `a` from `axis` toward the next axis (`length` → `width` → `thickness` → `length`); `push(lock, along: width, angle: 45deg)` slides along the diagonal of its section |
 | `rotate(p, by: angle, about: axis)` | turn `p` in place, e.g. to lock a twist joint |
-| `drive(p, along: axis)` | knock in a part the joint makes (a key or wedge) |
+| `drive(p, along: axis)` | knock in a part the joint makes (a key, wedge or pin) |
+
+A step's axes are the moving part's axes **as placed in the finished joint**,
+even when an earlier step turns it, so every direction is fixed by the
+drawing and never depends on the order of steps.
+
+**How a sequence is checked: in reverse.** The checker starts from the
+finished joint, where every part is at its drawn position, and runs the steps
+backwards, last step first, each one in the opposite direction. That gives
+every step a definite start: a `by:` step moves exactly `d`; a step without
+`by:` moves until the part is clear of the others. Every move is **swept
+continuously**, not checked only at its ends: a slide is checked along its
+whole path and a turn through its whole angle. If any part would pass through
+another (beyond the contact tolerance) at any point, it is `error[order]`
+naming the step and the parts. The direction of each step (which way along or
+about the axis) is the one that is free; if neither is, that is the error.
+
+Reversing works because each step's start is the previous step's end: the
+assembled state is known, and disassembly is just the steps undone. It is also
+how the build manual's assembly pictures are drawn.
 
 ### Hardware
 
@@ -1209,8 +1242,8 @@ recipe notch_by_hand : notch {
 }
 ```
 
-The word after `recipe name :` is one of the ten operations: `notch`, `slot`,
-`pocket`, `tenon`, `spigot`, `drill`, `dovetail_socket`, `dovetail_tail`,
+The word after `recipe name :` is one of the eleven operations: `notch`, `slot`,
+`pocket`, `tenon`, `spigot`, `round`, `drill`, `dovetail_socket`, `dovetail_tail`,
 `outline`, `turning`.
 
 ### Tools
@@ -1253,6 +1286,7 @@ that a recipe's steps can refer to:
 | `pocket` | `walls`, `floor`, `waste`, `outline` | `width`, `thickness`, `depth` |
 | `tenon` | `cheeks`, `shoulders`, `waste` | `length`, `width`, `thickness` |
 | `spigot` | `shoulder`, `waste`, `centre` | `length`, `diameter` |
+| `round` | `shoulders`, `waste`, `centre`, `flat_faces` | `diameter`, `flats`, `length` |
 | `drill` | `centre` | `diameter`, `depth` |
 | `dovetail_socket` | `walls`, `floor`, `waste`, `outline` | `neck`, `depth`, `angle` |
 | `dovetail_tail` | `cheeks`, `shoulders`, `waste`, `outline` | `neck`, `depth`, `angle` |
@@ -1497,7 +1531,7 @@ shape of their messages are fixed, because tests and AI tools match on them.
 | 7 | `order` | `<part>: there is no valid order for its cuts` |
 
 Warnings and notes: `shadows-prelude`, `no-recipe`, `not-supported`,
-`model-mismatch`, `schematic`.
+`model-mismatch`.
 
 In messages, an item is written as in the source (`slides[left]`,
 `drawer[top].front`), and a length in the project's units with trailing zeros

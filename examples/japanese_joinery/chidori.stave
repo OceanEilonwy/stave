@@ -1,26 +1,39 @@
 stave 1
 
-/// Chidori: three square sticks crossing at right angles in one node, locked
-/// by giving the third stick a quarter turn.
+/// Chidori: three square sticks crossing at right angles in one node.
 ///
-/// Schematic: this exercises three named roles and a turn in the assembly
-/// sequence. It is not a tested cutting pattern; make a trial node in
-/// softwood before relying on these proportions.
+/// The first two sticks are halved over each other, and each is bored with a
+/// round hole where the lock passes, with an open slot running from the hole
+/// out to the node's corner on the diagonal. The lock is turned round where it
+/// passes through the node, leaving two flats. With its flats along the
+/// diagonal it slides into the node through the two slots; a quarter turn puts
+/// its full diameter across the slots and locks all three sticks.
+///
+/// This geometry is verified by tools/joint-sim/chidori.py: the assembled node
+/// has no wood passing through wood, every stick is locked, the quarter turn
+/// is clear at every degree, and the node comes apart in reverse. The round
+/// section bears on the holes, so cut the holes and the rounding accurately
+/// (within about 0.1mm) and make a trial node first.
 kind chidori : joint {
   roles {
     lock:   Part                      // the stick that turns to lock the node
-    first:  Part                      // the two sticks that cross first
-    second: Part
+    first:  Part                      // halved under the second, at the bottom of the node
+    second: Part                      // halved over the first, at the top of the node
   }
   /// The side of the square section all three sticks share.
   param size = lock.width
+  /// Diameter of the rounded section of the lock, and of the holes it turns in.
+  param round_diameter = size * 3 / 4
+  /// Distance across the lock's flats, which is also the width of the slots.
+  param flats = size * 9 / 20
+
   require square : lock.width == size && lock.thickness == size &&
                    first.width == size && first.thickness == size &&
                    second.width == size && second.thickness == size "all three sticks need the same square section"
+  require locks : flats < round_diameter "the flats must be closer together than the diameter, or the quarter turn won't lock"
 
-  schematic: true                     // the cuts below don't describe the whole node, so its fit isn't checked
-
-  // The first two sticks are halved over each other.
+  // The first two sticks are halved over each other: first keeps the bottom
+  // half of the node, second the top half.
   cut crossing(first, second) {
     notch(depth: size / 2)
   }
@@ -28,26 +41,30 @@ kind chidori : joint {
     notch(depth: size / 2)
   }
 
-  // Both get a slot that lets the third stick pass through edge-on.
-  cut crossing(first, lock) {
-    slot(width: size / 2, depth: through)
+  // Each is bored down through where the lock passes, and slotted from the
+  // hole out to the corner, on the diagonal of the lock's section.
+  cut crossing(first, lock, normal: thickness) {
+    drill(diameter: round_diameter, depth: through)
+    slot(width: flats, depth: through, angle: 45deg, from_centre: true)
   }
-  cut crossing(second, lock) {
-    slot(width: size / 2, depth: through)
+  cut crossing(second, lock, normal: thickness) {
+    drill(diameter: round_diameter, depth: through)
+    slot(width: flats, depth: through, angle: 45deg, from_centre: true)
   }
 
-  // The third stick is slotted where it passes, so it can turn once it's in.
+  // The lock is turned round through the node, keeping two flats. In the
+  // finished node the flats face along the slots, so the round faces block them.
   cut crossing(lock, first) {
-    slot(width: size / 2, depth: size / 2)
+    round(diameter: round_diameter, flats: flats, flats_angle: 45deg)
   }
 
-  cut_first: [first, second, lock]            // cut the crossing pair first, then fit the turning stick
+  cut_first: [first, second, lock]            // bore and slot the pair, then fit the lock to the holes
 
   insert: [
-    push(second, along: thickness),           // halve the first two sticks together
-    push(lock, along: length),                // push the third stick through, edge-on
+    push(second, along: thickness),           // lower the second stick onto the first
+    push(lock, along: width, angle: 45deg),   // slide the lock in along the diagonal, flats leading
     rotate(lock, by: 90deg, about: length),   // a quarter turn locks the node
   ]
 
-  note: "Assemble the halving, push {lock} through edge-on, then give it a quarter turn"
+  note: "Halve {first} and {second} together, slide {lock} in along the slots with its flats facing them, then give it a quarter turn"
 }

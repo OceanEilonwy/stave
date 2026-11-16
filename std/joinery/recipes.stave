@@ -182,6 +182,41 @@ recipe spigot_by_hand : spigot {
   check: "the tenon turns in a test hole drilled in scrap"
 }
 
+// ---- round: a length of a square stick turned round, with optional flats ----
+
+/// A rounded section turned between centres, with the flats planed after.
+recipe round_on_lathe : round {
+  tools: [pencil, square, lathe, parting_tool, calipers, chisel]
+  rank:  10
+  mark {
+    square_around(shoulders)
+  }
+  cut {
+    turn(shoulders, to: diameter, with: parting_tool)   // set the ends of the round section
+    turn(waste, to: diameter)
+    pare(flat_faces, to: flats, with: chisel)            // pare the flats after turning
+  }
+  check: "calipers set to the hole's bit just slip over the round, and a rule across the flats reads the slot width"
+}
+
+/// A rounded section made by hand: sawn shoulders, then chiselled and rasped round.
+recipe round_by_hand : round {
+  tools: [pencil, square, dividers, tenon_saw, chisel, rasp]
+  rank:  20
+  mark {
+    square_around(shoulders)
+    line(waste, with: dividers)          // scribe the circle on both shoulders
+    gauge(flats, on: flat_faces)
+  }
+  cut {
+    saw(shoulders, to: diameter)
+    pare(waste, to: diameter, with: chisel)
+    shave(waste, to: diameter, with: rasp)
+    pare(flat_faces, to: flats, with: chisel)
+  }
+  check: "the round turns snugly in a test hole bored in scrap, and the flats slide through a test slot"
+}
+
 // ---- drill: round holes ----
 
 /// A round hole with a drill and a depth stop.

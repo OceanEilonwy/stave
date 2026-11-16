@@ -169,8 +169,15 @@ the examples correct.
   simplification of a cup hinge's real path.
 - **An assembly body has no `place`**: a component places its own parts
   against the regions and parts it is handed.
-- **`schematic: true`** on a joint kind skips the overlap check between its
-  parts (used by `chidori`, whose cuts don't describe the whole node).
+- ~~**`schematic: true`**~~ was added here and then **removed** the same day:
+  chidori's geometry was designed properly and verified by simulation
+  (`tools/joint-sim/chidori.py`), and the features it needed were added
+  instead: the `round` cut operation, `crossing(..., normal:)`, `slot` with
+  `angle:` and `from_centre:`, `push` with `by:` and `angle:`, sequences
+  checked in reverse with continuous sweeps, and an explicit contact
+  tolerance. Kanawa tsugi was corrected to its traditional form (stub tenons
+  in hidden recesses via `outline(from_depth:)` and `side(..., opposite:)`,
+  a lengthwise slide, a draw pin). There is no way to switch the fit check off.
 - **A project without `tools:`** is assumed to have every tool.
 - **`check` in a recipe is a field** (`check: "..."`), like everything else.
 - **`style:` is `Text`**, because suggestion styles are not a closed list.
