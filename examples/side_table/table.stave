@@ -1,0 +1,139 @@
+stave 1
+
+// A side table: four square legs, four aprons joined to the legs with
+// mortise and tenon, a top screwed on from below through two cleats, and a
+// slatted lower shelf screwed down onto two stretchers.
+//
+// The top is the ground part: the legs hang from its corners, and the floor
+// is wherever the legs end.
+
+project "Side table" {
+  goal:       "A small oak side table with a lower shelf"
+  units:      mm
+  resolution: 0.5mm
+  style:      "shaker"
+}
+
+// ---- parameters ----
+param table_height = 600mm within 550mm..700mm
+param top_size     = 500mm within 400mm..600mm      // the top is square
+param shelf_height = 150mm within 100mm..200mm      // floor to the top of the stretchers
+let leg_inset = 25mm                                // from the edge of the top to the outside of a leg
+let setback   = 5mm                                 // aprons and stretchers sit this far in from the leg faces
+let slat_gap  = 15mm                                // between neighbouring slats
+
+// Five slats fill the space between the legs exactly.
+let slat_width = (top_size - 2 * (leg_inset + oak_45_sq.width) - 4 * slat_gap) / 5
+
+// ---- checks ----
+require knee_room    : table_height - apron_front.width - top.thickness >= 380mm "leave room under the aprons for your knees"
+require shelf_clear  : between(slat[0], apron_front) >= 200mm "leave room above the shelf for a stack of books"
+require slats_strong : slat_width >= 40mm "narrow slats bend; make the top bigger or the gaps smaller"
+
+// ---- stock ----
+stock oak_19    { species: white_oak, form: solid, thickness: 19mm, max_width: 200mm }
+stock oak_45_sq { species: white_oak, form: solid, thickness: 45mm, width: 45mm }
+
+// ---- the top and legs ----
+
+/// The top. It is wider than oak_19's max_width, so the cut list plans a glue-up.
+part top : oak_19 {
+  length: top_size
+  width:  top_size
+  place {
+    ground
+  }
+}
+
+/// corners() puts each leg in the corner its label names.
+part leg[front_left, front_right, back_left, back_right] : oak_45_sq {
+  length: table_height - top.thickness
+  place {
+    orient(length: up, width: right)
+    corners(top, inset: leg_inset)
+    against(top.bottom)
+  }
+}
+
+// ---- aprons: the frame under the top ----
+// Draw the front and the left apron; the back and the right are their mirror
+// images. The tenons are not drawn: the joint adds them to the cut length.
+
+part apron_front : oak_19 {
+  length: fit                                      // between the legs, plus the tenons
+  width:  90mm
+  place {
+    orient(length: right, width: up)
+    against(top.bottom)
+    center(top, across)
+    flush(leg[front_left].front, inset: setback)
+  }
+}
+
+part apron_left : oak_19 {
+  length: fit
+  width:  90mm
+  place {
+    orient(length: back, width: up)
+    against(top.bottom)
+    flush(leg[front_left].left, inset: setback)
+    center(top, deep)
+  }
+}
+
+part apron_back  = mirror(apron_front, about: mid(top, deep))
+part apron_right = mirror(apron_left, about: mid(top, across))
+
+/// The cleats are glued inside the front and back aprons, flush with their top
+/// edges; the top is screwed on through them.
+part cleat_front : oak_19 {
+  length: between(leg[front_left], leg[front_right])
+  width:  30mm
+  note:   "Glue to the inside of the apron, flush with its top edge; slot the screw holes across the grain so the top can move"
+  place {
+    against(top.bottom)
+    center(top, across)
+    against(apron_front.back)
+  }
+}
+
+part cleat_back = mirror(cleat_front, about: mid(top, deep))
+
+// ---- the slatted lower shelf ----
+
+part stretcher_front : oak_19 {
+  length: fit
+  width:  50mm
+  place {
+    orient(length: right, width: up)
+    flush(leg[front_left].bottom, inset: shelf_height - 50mm)
+    center(top, across)
+    flush(leg[front_left].front, inset: setback)
+  }
+}
+
+part stretcher_back = mirror(stretcher_front, about: mid(top, deep))
+
+/// Five slats rest on the stretchers, running front to back. gap() puts the
+/// first slat against the left legs and leaves slat_gap between neighbours.
+part slat[5] : oak_19 {
+  length: between(stretcher_front.front, stretcher_back.back)
+  width:  slat_width
+  place {
+    orient(length: back, width: right)
+    against(stretcher_front.top)
+    spaced(gap(slat_gap), from: leg[front_left].right, to: leg[front_right].left)
+    flush(stretcher_front.front)
+  }
+}
+
+// ---- joints ----
+joint apron_tenons     : mortise_tenon([apron_front, apron_back, apron_left, apron_right], into: leg[*], length: 25mm)
+joint stretcher_tenons : mortise_tenon([stretcher_front, stretcher_back], into: [leg[front_left], leg[front_right], leg[back_left], leg[back_right]], length: 25mm)
+joint top_screws       : screw([cleat_front, cleat_back], into: top, count: 3, glue: false)
+joint slat_screws      : screw(slat[*], into: [stretcher_front, stretcher_back], length: 40mm)
+
+// ---- scenes ----
+scene frame "Without the top" {
+  hide: top
+}

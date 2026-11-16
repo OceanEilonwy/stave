@@ -1,0 +1,187 @@
+Side table
+units: mm, resolution: 0.5mm
+all lengths in mm; boxes are drawn boxes as across, up, deep ranges from the ground part's left-bottom-front corner
+
+PARTS (18)
+part                         stock          cut L x W x T              across               up                   deep                 length/width/thickness
+top                          oak_19         500 x 500 x 19             0..500               0..19                0..500               right/back/up
+    cut drill 3 x diameter 3 depth 11 on thickness start: where cleat_front meets it, local 70..430 x 49..79 x 0..0
+    cut drill 3 x diameter 3 depth 11 on thickness start: where cleat_back meets it, local 70..430 x 421..451 x 0..0
+leg[front_left]              oak_45_sq      581 x 45 x 45              25..70               -581..0              25..70               up/right/back
+    cut pocket 70 x 6.333333 depth 27 on width end: where apron_front meets it, local 491..581 x 20..45 x 5..24
+    cut pocket 70 x 6.333333 depth 27 on thickness end: where apron_left meets it, local 491..581 x 5..24 x 20..45
+    cut pocket 30 x 6.333333 depth 27 on width end: where stretcher_front meets it, local 100..150 x 20..45 x 5..24
+leg[front_right]             oak_45_sq      581 x 45 x 45              430..475             -581..0              25..70               up/right/back
+    cut pocket 70 x 6.333333 depth 27 on width start: where apron_front meets it, local 491..581 x 0..25 x 5..24
+    cut pocket 70 x 6.333333 depth 27 on thickness end: where apron_right meets it, local 491..581 x 21..40 x 20..45
+    cut pocket 30 x 6.333333 depth 27 on width start: where stretcher_front meets it, local 100..150 x 0..25 x 5..24
+leg[back_left]               oak_45_sq      581 x 45 x 45              25..70               -581..0              430..475             up/right/back
+    cut pocket 70 x 6.333333 depth 27 on width end: where apron_back meets it, local 491..581 x 20..45 x 21..40
+    cut pocket 70 x 6.333333 depth 27 on thickness start: where apron_left meets it, local 491..581 x 5..24 x 0..25
+    cut pocket 30 x 6.333333 depth 27 on width end: where stretcher_back meets it, local 100..150 x 20..45 x 21..40
+leg[back_right]              oak_45_sq      581 x 45 x 45              430..475             -581..0              430..475             up/right/back
+    cut pocket 70 x 6.333333 depth 27 on width start: where apron_back meets it, local 491..581 x 0..25 x 21..40
+    cut pocket 70 x 6.333333 depth 27 on thickness start: where apron_right meets it, local 491..581 x 21..40 x 0..25
+    cut pocket 30 x 6.333333 depth 27 on width start: where stretcher_back meets it, local 100..150 x 0..25 x 21..40
+apron_front                  oak_19         410 x 90 x 19              70..430              -90..0               30..49               right/up/back
+    drawn 360 x 90 x 19, starting 25 x 0 x 0 into the cut size
+    cut tenon 25 x 70 x 6.333333 on length start: end toward leg[front_left]
+    cut tenon 25 x 70 x 6.333333 on length end: end toward leg[front_right]
+apron_left                   oak_19         410 x 90 x 19              30..49               -90..0               70..430              back/up/right
+    drawn 360 x 90 x 19, starting 25 x 0 x 0 into the cut size
+    cut tenon 25 x 70 x 6.333333 on length start: end toward leg[front_left]
+    cut tenon 25 x 70 x 6.333333 on length end: end toward leg[back_left]
+apron_back                   oak_19         410 x 90 x 19              70..430              -90..0               451..470             right/up/front
+    drawn 360 x 90 x 19, starting 25 x 0 x 0 into the cut size
+    cut tenon 25 x 70 x 6.333333 on length start: end toward leg[back_left]
+    cut tenon 25 x 70 x 6.333333 on length end: end toward leg[back_right]
+apron_right                  oak_19         410 x 90 x 19              451..470             -90..0               70..430              back/up/left
+    drawn 360 x 90 x 19, starting 25 x 0 x 0 into the cut size
+    cut tenon 25 x 70 x 6.333333 on length start: end toward leg[front_right]
+    cut tenon 25 x 70 x 6.333333 on length end: end toward leg[back_right]
+cleat_front                  oak_19         360 x 30 x 19              70..430              -19..0               49..79               right/back/up
+    cut drill 3 x diameter 4.5 depth through on thickness end: where top meets it, local 0..360 x 0..30 x 19..19
+cleat_back                   oak_19         360 x 30 x 19              70..430              -19..0               421..451             right/front/up
+    cut drill 3 x diameter 4.5 depth through on thickness end: where top meets it, local 0..360 x 0..30 x 19..19
+stretcher_front              oak_19         410 x 50 x 19              70..430              -481..-431           30..49               right/up/back
+    drawn 360 x 50 x 19, starting 25 x 0 x 0 into the cut size
+    cut tenon 25 x 30 x 6.333333 on length start: end toward leg[front_left]
+    cut tenon 25 x 30 x 6.333333 on length end: end toward leg[front_right]
+    cut drill 2 x diameter 3 depth 21 on width end: where slat[0] meets it, local 25..85 x 50..50 x 0..19
+    cut drill 2 x diameter 3 depth 21 on width end: where slat[1] meets it, local 100..160 x 50..50 x 0..19
+    cut drill 2 x diameter 3 depth 21 on width end: where slat[2] meets it, local 175..235 x 50..50 x 0..19
+    cut drill 2 x diameter 3 depth 21 on width end: where slat[3] meets it, local 250..310 x 50..50 x 0..19
+    cut drill 2 x diameter 3 depth 21 on width end: where slat[4] meets it, local 325..385 x 50..50 x 0..19
+stretcher_back               oak_19         410 x 50 x 19              70..430              -481..-431           451..470             right/up/front
+    drawn 360 x 50 x 19, starting 25 x 0 x 0 into the cut size
+    cut tenon 25 x 30 x 6.333333 on length start: end toward leg[back_left]
+    cut tenon 25 x 30 x 6.333333 on length end: end toward leg[back_right]
+    cut drill 2 x diameter 3 depth 21 on width end: where slat[0] meets it, local 25..85 x 50..50 x 0..19
+    cut drill 2 x diameter 3 depth 21 on width end: where slat[1] meets it, local 100..160 x 50..50 x 0..19
+    cut drill 2 x diameter 3 depth 21 on width end: where slat[2] meets it, local 175..235 x 50..50 x 0..19
+    cut drill 2 x diameter 3 depth 21 on width end: where slat[3] meets it, local 250..310 x 50..50 x 0..19
+    cut drill 2 x diameter 3 depth 21 on width end: where slat[4] meets it, local 325..385 x 50..50 x 0..19
+slat[0]                      oak_19         440 x 60 x 19              70..130              -431..-412           30..470              back/right/up
+    cut drill 2 x diameter 4.5 depth through on thickness start: where stretcher_front meets it, local 0..19 x 0..60 x 0..0
+    cut drill 2 x diameter 4.5 depth through on thickness start: where stretcher_back meets it, local 421..440 x 0..60 x 0..0
+slat[1]                      oak_19         440 x 60 x 19              145..205             -431..-412           30..470              back/right/up
+    cut drill 2 x diameter 4.5 depth through on thickness start: where stretcher_front meets it, local 0..19 x 0..60 x 0..0
+    cut drill 2 x diameter 4.5 depth through on thickness start: where stretcher_back meets it, local 421..440 x 0..60 x 0..0
+slat[2]                      oak_19         440 x 60 x 19              220..280             -431..-412           30..470              back/right/up
+    cut drill 2 x diameter 4.5 depth through on thickness start: where stretcher_front meets it, local 0..19 x 0..60 x 0..0
+    cut drill 2 x diameter 4.5 depth through on thickness start: where stretcher_back meets it, local 421..440 x 0..60 x 0..0
+slat[3]                      oak_19         440 x 60 x 19              295..355             -431..-412           30..470              back/right/up
+    cut drill 2 x diameter 4.5 depth through on thickness start: where stretcher_front meets it, local 0..19 x 0..60 x 0..0
+    cut drill 2 x diameter 4.5 depth through on thickness start: where stretcher_back meets it, local 421..440 x 0..60 x 0..0
+slat[4]                      oak_19         440 x 60 x 19              370..430             -431..-412           30..470              back/right/up
+    cut drill 2 x diameter 4.5 depth through on thickness start: where stretcher_front meets it, local 0..19 x 0..60 x 0..0
+    cut drill 2 x diameter 4.5 depth through on thickness start: where stretcher_back meets it, local 421..440 x 0..60 x 0..0
+
+HARDWARE (0)
+
+JOINTS (4)
+apron_tenons                 mortise_tenon
+    piece: apron_front, into: leg[front_left] (butt across across)
+        adds 25 to the length start of apron_front
+    piece: apron_front, into: leg[front_right] (butt across across)
+        adds 25 to the length end of apron_front
+    piece: apron_back, into: leg[back_left] (butt across across)
+        adds 25 to the length start of apron_back
+    piece: apron_back, into: leg[back_right] (butt across across)
+        adds 25 to the length end of apron_back
+    piece: apron_left, into: leg[front_left] (butt across deep)
+        adds 25 to the length start of apron_left
+    piece: apron_left, into: leg[back_left] (butt across deep)
+        adds 25 to the length end of apron_left
+    piece: apron_right, into: leg[front_right] (butt across deep)
+        adds 25 to the length start of apron_right
+    piece: apron_right, into: leg[back_right] (butt across deep)
+        adds 25 to the length end of apron_right
+stretcher_tenons             mortise_tenon
+    piece: stretcher_front, into: leg[front_left] (butt across across)
+        adds 25 to the length start of stretcher_front
+    piece: stretcher_front, into: leg[front_right] (butt across across)
+        adds 25 to the length end of stretcher_front
+    piece: stretcher_back, into: leg[back_left] (butt across across)
+        adds 25 to the length start of stretcher_back
+    piece: stretcher_back, into: leg[back_right] (butt across across)
+        adds 25 to the length end of stretcher_back
+top_screws                   screw, no glue
+    piece: cleat_front, into: top (butt across up)
+    piece: cleat_back, into: top (butt across up)
+slat_screws                  screw
+    piece: slat[0], into: stretcher_front (butt across up)
+    piece: slat[0], into: stretcher_back (butt across up)
+    piece: slat[1], into: stretcher_front (butt across up)
+    piece: slat[1], into: stretcher_back (butt across up)
+    piece: slat[2], into: stretcher_front (butt across up)
+    piece: slat[2], into: stretcher_back (butt across up)
+    piece: slat[3], into: stretcher_front (butt across up)
+    piece: slat[3], into: stretcher_back (butt across up)
+    piece: slat[4], into: stretcher_front (butt across up)
+    piece: slat[4], into: stretcher_back (butt across up)
+
+FASTENERS
+top_screws                   6 x wood_screw (4 x 30)
+slat_screws                  20 x wood_screw (4 x 40)
+
+REGIONS (0)
+
+ASSEMBLIES (0)
+
+REQUIRES (51)
+knee_room                                    holds
+shelf_clear                                  holds
+slats_strong                                 holds
+apron_tenons.has_width                       holds
+apron_tenons.mortise_stops                   holds
+apron_tenons.has_width                       holds
+apron_tenons.mortise_stops                   holds
+apron_tenons.has_width                       holds
+apron_tenons.mortise_stops                   holds
+apron_tenons.has_width                       holds
+apron_tenons.mortise_stops                   holds
+apron_tenons.has_width                       holds
+apron_tenons.mortise_stops                   holds
+apron_tenons.has_width                       holds
+apron_tenons.mortise_stops                   holds
+apron_tenons.has_width                       holds
+apron_tenons.mortise_stops                   holds
+apron_tenons.has_width                       holds
+apron_tenons.mortise_stops                   holds
+stretcher_tenons.has_width                   holds
+stretcher_tenons.mortise_stops               holds
+stretcher_tenons.has_width                   holds
+stretcher_tenons.mortise_stops               holds
+stretcher_tenons.has_width                   holds
+stretcher_tenons.mortise_stops               holds
+stretcher_tenons.has_width                   holds
+stretcher_tenons.mortise_stops               holds
+top_screws.stays_inside                      holds
+top_screws.bites                             holds
+top_screws.stays_inside                      holds
+top_screws.bites                             holds
+slat_screws.stays_inside                     holds
+slat_screws.bites                            holds
+slat_screws.stays_inside                     holds
+slat_screws.bites                            holds
+slat_screws.stays_inside                     holds
+slat_screws.bites                            holds
+slat_screws.stays_inside                     holds
+slat_screws.bites                            holds
+slat_screws.stays_inside                     holds
+slat_screws.bites                            holds
+slat_screws.stays_inside                     holds
+slat_screws.bites                            holds
+slat_screws.stays_inside                     holds
+slat_screws.bites                            holds
+slat_screws.stays_inside                     holds
+slat_screws.bites                            holds
+slat_screws.stays_inside                     holds
+slat_screws.bites                            holds
+slat_screws.stays_inside                     holds
+slat_screws.bites                            holds
+
+SCENES (2)
+rest                         As built
+frame                        Without the top
