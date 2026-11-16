@@ -1,0 +1,11 @@
+stave 1
+
+// std:joinery — the standard joints. They are written in the same format as
+// any third-party joint library, and are in the prelude: projects use them
+// without an import or a prefix (dado(...), not joinery.dado(...)).
+//
+// Written so far: dado, rabbet, and recipes for notches and holes
+// (recipes.stave). Still to write in this format: groove, dowel,
+// mortise_tenon, round_tenon, half_lap, socket, screw, cope_and_stick.
+
+library "Joinery"

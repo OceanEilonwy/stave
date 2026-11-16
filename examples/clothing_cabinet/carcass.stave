@@ -1,0 +1,117 @@
+stave 1
+
+// The box: base, sides, top, back, divider, shelf, rod, feet, and the
+// openings that the doors and drawers fill.
+
+let foot_tenon        = 19mm
+let foot_tenon_length = 16mm
+
+part base : oak_19 {
+  length: cabinet_width
+  width:  cabinet_depth
+  grain:  length
+  place {
+    ground
+  }
+}
+
+part side_l : oak_19 {
+  length: cabinet_height - base.thickness - top.thickness
+  width:  cabinet_depth          // wider than oak_19's max_width: the cut list plans a glue-up
+  place {
+    orient(length: up, width: back)
+    on(base.top)
+    flush(base.left)
+    flush(base.back)
+  }
+}
+
+part side_r = mirror(side_l, about: mid(base, across))
+
+part top : oak_19 {
+  length: cabinet_width + 2 * overhang
+  width:  cabinet_depth + overhang
+  place {
+    on(side_l.top)
+    center(base, across)
+    flush(base.back)
+  }
+}
+
+part back : ply_6 {
+  length: fit
+  width:  fit
+  place {
+    inside(back_rabbets)
+  }
+}
+
+/// Separates the hanging space from the drawers.
+part divider : oak_19 {
+  length: fit                    // between the sides; dado depth is added by the joint
+  width:  cabinet_depth - back.thickness
+  place {
+    against(base.top, gap: drawer_zone)
+    center(base, across)
+    flush(side_l.front)
+  }
+}
+
+part shelf : oak_19 {
+  length: fit
+  width:  cabinet_depth - back.thickness
+  place {
+    against(top.bottom, gap: 160mm)
+    center(base, across)
+    flush(side_l.front)
+  }
+}
+
+part rod : oak_dowel_28 {
+  length: fit
+  place {
+    against(shelf.bottom, gap: 50mm)
+    center(base, across)
+    center(between: side_l.front, back.front)
+  }
+}
+
+part foot[front_left, front_right, back_left, back_right] : oak_75_sq {
+  length: fit                    // from the profile
+  shape:  turn(bun_foot)
+  place {
+    orient(length: down)         // station 0, the tenon, at the top
+    corners(base, inset: 60mm)
+    against(base.bottom)
+  }
+}
+
+profile bun_foot {
+  measure: diameter
+  at 0mm:                  foot_tenon
+  at foot_tenon_length:    foot_tenon
+  at foot_tenon_length:    70mm          // shoulder
+  at 50mm:                 70mm
+  at 96mm:                 40mm
+  smooth: catmull_rom
+}
+
+// ---- joints ----
+joint shelf_dados  : dado([divider, shelf], into: [side_l, side_r]) { depth: 9mm }
+joint back_rabbets : rabbet(back, into: [side_l, side_r]) { depth: 9mm }
+joint base_dowels  : dowel(base, into: [side_l, side_r]) { diameter: 10mm, count: 4 }
+joint top_dowels   : dowel(top, into: [side_l, side_r]) { diameter: 10mm, count: 4 }
+joint rod_sockets  : socket(rod, into: [side_l, side_r]) { depth: 9mm }
+joint foot_tenons  : round_tenon(foot[*], into: base) { diameter: foot_tenon, length: foot_tenon_length }
+
+// ---- openings ----
+region front_opening = opening(
+  left:   side_l.right,
+  right:  side_r.left,
+  bottom: base.top,
+  top:    top.bottom,
+  face:   side_l.front,
+)
+region bay[drawers, doors]     = split(front_opening, up, at: divider)
+region drawer_bay[bottom, top] = split(bay[drawers], up)
+region door_bay[left, right]   = split(bay[doors], across)

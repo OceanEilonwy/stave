@@ -1,0 +1,809 @@
+<title>Stave Viewport</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: GNOME-style app shell. Header bar, 3D stage, inspector column; the column drops below the stage on phones. */
+:root {
+  --bg: #f3f1ee;
+  --panel: #ffffff;
+  --stage: #e7e3dd;
+  --fg: #1f1c18;
+  --muted: #6b655c;
+  --line: #dcd6ce;
+  --accent: #2f6fd6;
+  --accent-soft: rgba(47, 111, 214, 0.12);
+  --bad: #c6262e;
+  --bad-soft: rgba(198, 38, 46, 0.10);
+  --warn: #9a6a00;
+  --warn-soft: rgba(229, 165, 10, 0.16);
+  --chip: rgba(255, 255, 255, 0.86);
+  --sans: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --mono: 'JetBrains Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #222120; --panel: #2b2a28; --stage: #181716; --fg: #efebe5; --muted: #a39d93; --line: #3b3936;
+    --accent: #78aeff; --accent-soft: rgba(120, 174, 255, 0.16); --bad: #ff6b6b; --bad-soft: rgba(255, 107, 107, 0.14);
+    --warn: #f2c14e; --warn-soft: rgba(242, 193, 78, 0.14); --chip: rgba(43, 42, 40, 0.88);
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #222120; --panel: #2b2a28; --stage: #181716; --fg: #efebe5; --muted: #a39d93; --line: #3b3936;
+  --accent: #78aeff; --accent-soft: rgba(120, 174, 255, 0.16); --bad: #ff6b6b; --bad-soft: rgba(255, 107, 107, 0.14);
+  --warn: #f2c14e; --warn-soft: rgba(242, 193, 78, 0.14); --chip: rgba(43, 42, 40, 0.88);
+  color-scheme: dark;
+}
+html, body { height: 100%; }
+body {
+  background: var(--bg); color: var(--fg); font-family: var(--sans); font-size: 13px; line-height: 1.45;
+  display: flex; flex-direction: column; overflow: hidden;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 0 16px;
+}
+button { font: inherit; color: inherit; }
+button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+kbd { font-family: var(--mono); font-size: 10.5px; padding: 1px 5px; border: 1px solid var(--line); border-radius: 4px; color: var(--muted); background: var(--panel); }
+
+.bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; padding-block: 12px; }
+.ident { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+.mark { font-weight: 600; font-size: 15px; letter-spacing: -0.01em; }
+.file { font-family: var(--mono); font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.modes { display: flex; flex-wrap: wrap; border: 1px solid var(--line); border-radius: 9px; overflow: hidden; background: var(--panel); margin-inline: auto; }
+.modes button { border: 0; background: transparent; padding: 6px 12px; display: flex; gap: 7px; align-items: center; cursor: pointer; border-right: 1px solid var(--line); }
+.modes button:last-child { border-right: 0; }
+.modes button[aria-pressed="true"] { background: var(--accent-soft); color: var(--fg); font-weight: 600; box-shadow: inset 0 -2px 0 var(--accent); }
+.modes button kbd { padding: 0 4px; }
+.pill { border: 1px solid var(--bad); background: var(--bad-soft); border-radius: 999px; padding: 5px 12px; display: flex; align-items: center; gap: 8px; cursor: pointer; white-space: nowrap; }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--bad); flex: none; }
+
+main { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 12px; }
+#stage { position: relative; border-radius: 12px; overflow: hidden; background: var(--stage); min-height: 0; border: 1px solid var(--line); }
+#stage canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
+.ov { position: absolute; z-index: 2; }
+.scenes { left: 12px; top: 12px; display: flex; flex-wrap: wrap; gap: 6px; max-width: calc(100% - 24px); }
+.chip { border: 1px solid var(--line); background: var(--chip); backdrop-filter: blur(6px); border-radius: 999px; padding: 5px 12px; cursor: pointer; }
+.chip[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); font-weight: 600; }
+.focuschip { top: 52px; left: 12px; display: flex; align-items: center; gap: 8px; background: var(--chip); border: 1px solid var(--accent); border-radius: 8px; padding: 5px 6px 5px 10px; backdrop-filter: blur(6px); }
+.focuschip b { font-family: var(--mono); font-weight: 500; }
+.focuschip button { border: 0; background: var(--accent-soft); border-radius: 6px; padding: 2px 8px; cursor: pointer; }
+.benchnote { top: 52px; left: 12px; background: var(--chip); border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; max-width: calc(100% - 24px); backdrop-filter: blur(6px); }
+.hint { left: 12px; bottom: 12px; color: var(--muted); font-size: 11.5px; background: var(--chip); border-radius: 6px; padding: 3px 8px; max-width: calc(100% - 24px); }
+.sliderbox { right: 12px; bottom: 12px; display: flex; align-items: center; gap: 10px; background: var(--chip); border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; backdrop-filter: blur(6px); }
+.sliderbox input { width: 160px; accent-color: var(--accent); }
+.sliderbox output { font-family: var(--mono); font-size: 11.5px; min-width: 54px; text-align: right; font-variant-numeric: tabular-nums; }
+.callout { left: 0; top: 0; pointer-events: none; display: flex; align-items: center; gap: 0; transform: translate(-5px, -50%); }
+.callout .cdot { width: 10px; height: 10px; border-radius: 50%; background: var(--bad); box-shadow: 0 0 0 3px var(--bad-soft); flex: none; }
+.callout .lead { width: 26px; height: 1.5px; background: var(--bad); }
+.callout .label { background: var(--panel); border: 1px solid var(--bad); color: var(--fg); border-radius: 7px; padding: 4px 9px; white-space: nowrap; font-size: 12px; box-shadow: 0 2px 10px rgba(0,0,0,0.12); }
+.callout .label code { font-family: var(--mono); font-size: 11.5px; }
+
+aside { overflow: auto; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px; }
+.card h2 { margin: 0 0 10px; font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); display: flex; align-items: center; gap: 8px; }
+.count { background: var(--bad-soft); color: var(--fg); border-radius: 999px; padding: 0 7px; letter-spacing: 0; }
+.muted { color: var(--muted); margin: 0; }
+.crumb { font-family: var(--mono); font-size: 11px; color: var(--muted); overflow-wrap: anywhere; }
+.pname { font-family: var(--mono); font-size: 15px; font-weight: 500; margin: 2px 0 10px; overflow-wrap: anywhere; }
+dl { display: grid; grid-template-columns: 64px minmax(0, 1fr); gap: 6px 10px; margin: 0; }
+dt { color: var(--muted); }
+dd { margin: 0; overflow-wrap: anywhere; }
+.num { font-family: var(--mono); font-size: 12px; font-variant-numeric: tabular-nums; }
+.err { margin-top: 12px; border: 1px solid var(--bad); background: var(--bad-soft); border-radius: 8px; padding: 8px 10px; }
+.err strong { color: var(--bad); font-family: var(--mono); font-size: 11.5px; display: block; margin-bottom: 2px; }
+.actions { margin-top: 12px; display: flex; gap: 8px; }
+.btn { border: 1px solid var(--line); background: var(--panel); border-radius: 8px; padding: 5px 10px; cursor: pointer; display: inline-flex; gap: 8px; align-items: center; }
+.btn:hover, .chip:hover, .modes button:hover { background: var(--accent-soft); }
+.legend { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.legend li { display: flex; align-items: center; gap: 8px; }
+.sw { width: 14px; height: 14px; border-radius: 4px; flex: none; }
+.problems { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.prob { width: 100%; text-align: left; border: 1px solid var(--line); background: transparent; border-radius: 8px; padding: 8px 10px; cursor: pointer; display: grid; gap: 2px; }
+.prob:hover { background: var(--accent-soft); }
+.sev { font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; }
+.sev.bad { color: var(--bad); }
+.sev.warn { color: var(--warn); }
+.prob code, .card code { font-family: var(--mono); font-size: 11.5px; }
+.ploc { font-family: var(--mono); font-size: 11px; color: var(--muted); }
+.keys ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.keys li { display: flex; justify-content: space-between; gap: 10px; }
+.keys li span { color: var(--muted); }
+.nogl { position: absolute; inset: 0; display: grid; place-items: center; padding: 24px; text-align: center; color: var(--muted); }
+
+@media (max-width: 820px) {
+  body { overflow: auto; height: auto; min-height: 100%; }
+  main { grid-template-columns: minmax(0, 1fr); }
+  #stage { height: 62vh; min-height: 360px; }
+  .modes { margin-inline: 0; }
+  .sliderbox { left: 12px; right: 12px; bottom: 44px; }
+  .sliderbox input { flex: 1; width: auto; min-width: 0; }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<header class="bar">
+  <div class="ident"><span class="mark">stave</span><span class="file">clothing_cabinet.stave</span></div>
+  <div class="modes" role="group" aria-label="View mode">
+    <button data-mode="wood" aria-pressed="true"><kbd>1</kbd>Wood</button>
+    <button data-mode="xray" aria-pressed="false"><kbd>2</kbd>X-ray</button>
+    <button data-mode="exploded" aria-pressed="false"><kbd>3</kbd>Exploded</button>
+    <button data-mode="section" aria-pressed="false"><kbd>4</kbd>Section</button>
+    <button data-mode="shop" aria-pressed="false"><kbd>5</kbd>Shop drawing</button>
+  </div>
+  <button class="pill" id="pill" title="Show the first problem"><span class="dot"></span>1 error · 1 warning</button>
+</header>
+
+<main>
+  <div id="stage">
+    <div class="ov scenes" role="group" aria-label="Scene">
+      <button class="chip" data-scene="assembled" aria-pressed="true">Assembled</button>
+      <button class="chip" data-scene="open" aria-pressed="false">All open</button>
+      <button class="chip" data-scene="bench" aria-pressed="false">Drawer bench</button>
+    </div>
+    <div class="ov focuschip" id="focusChip" hidden>Focus <b id="focusName"></b><button id="exitFocus">Esc to exit</button></div>
+    <div class="ov benchnote" id="benchNote" hidden><code>drawer[top]</code> on its own, still checked against its opening</div>
+    <div class="ov callout" id="callout" hidden><span class="cdot"></span><span class="lead"></span><span class="label"><code>drawer[top]</code> box is 1.5mm too wide</span></div>
+    <div class="ov sliderbox" id="sliderBox" hidden>
+      <label for="slider" id="sliderLabel">Explode</label>
+      <input type="range" id="slider" min="0" max="1" step="0.005" value="0.7">
+      <output id="sliderOut" for="slider"></output>
+    </div>
+    <div class="ov hint" id="hint">Drag to orbit · Scroll to zoom · Right-drag to pan · Click a part · F to focus</div>
+  </div>
+
+  <aside>
+    <section class="card">
+      <h2>Inspector</h2>
+      <p class="muted" id="selEmpty">Click a part to see its stock, size and grain. Double-click to focus on its assembly.</p>
+      <div id="sel" hidden>
+        <div class="crumb" id="selPath"></div>
+        <div class="pname" id="selName"></div>
+        <dl>
+          <dt>Stock</dt><dd id="selStock"></dd>
+          <dt>Size</dt><dd id="selSize" class="num"></dd>
+          <dt id="selGrainK">Grain</dt><dd id="selGrain"></dd>
+        </dl>
+        <div class="err" id="selErr" hidden><strong>error[fit]</strong>Box is 1.5mm wider than its opening allows: 838.1mm, max 836.6mm (862mm opening − 2 × 12.7mm slide clearance).</div>
+        <div class="actions"><button class="btn" id="focusBtn">Focus on assembly <kbd>F</kbd></button></div>
+      </div>
+    </section>
+
+    <section class="card" id="legendCard" hidden>
+      <h2>Joints</h2>
+      <ul class="legend" id="legend"></ul>
+    </section>
+
+    <section class="card">
+      <h2>Problems <span class="count">2</span></h2>
+      <ul class="problems">
+        <li><button class="prob" data-p="0"><span class="sev bad">Error</span><span><code>drawer[top]</code> box is 1.5mm too wide for its opening</span><span class="ploc">clothing_cabinet.stave:88</span></button></li>
+        <li><button class="prob" data-p="1"><span class="sev warn">Warning</span><span><code>door_r</code> hits the <code>drawer[top]</code> pull past 95° with the drawer open</span><span class="ploc">clothing_cabinet.stave:63</span></button></li>
+      </ul>
+    </section>
+
+    <section class="card keys">
+      <h2>Keys</h2>
+      <ul>
+        <li><span>View modes</span><span><kbd>1</kbd> – <kbd>5</kbd></span></li>
+        <li><span>Focus on selection</span><kbd>F</kbd></li>
+        <li><span>Step out of focus</span><kbd>Esc</kbd></li>
+        <li><span>Scenes</span><span><kbd>Q</kbd> <kbd>W</kbd> <kbd>E</kbd></span></li>
+      </ul>
+    </section>
+  </aside>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/controls/OrbitControls.js"></script>
+<script>
+(() => {
+  const T = window.THREE;
+  const $ = id => document.getElementById(id);
+  const stageEl = $('stage');
+  const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  let renderer;
+  try {
+    renderer = new T.WebGLRenderer({ antialias: true });
+  } catch (e) {
+    stageEl.insertAdjacentHTML('beforeend', '<div class="nogl">This prototype needs WebGL, which this browser has turned off.</div>');
+    return;
+  }
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  renderer.outputEncoding = T.sRGBEncoding;
+  renderer.toneMapping = T.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.05;
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = T.PCFSoftShadowMap;
+  renderer.localClippingEnabled = true;
+  stageEl.prepend(renderer.domElement);
+
+  const scene = new T.Scene();
+  const camera = new T.PerspectiveCamera(32, 1, 10, 30000);
+  camera.position.set(2300, 1700, 3200);
+  const controls = new T.OrbitControls(camera, renderer.domElement);
+  controls.target.set(0, 880, 0);
+  controls.enableDamping = true;
+  controls.dampingFactor = 0.08;
+  controls.maxPolarAngle = Math.PI * 0.495;
+  controls.minDistance = 500;
+  controls.maxDistance = 9000;
+
+  // ---------- lights ----------
+  scene.add(new T.HemisphereLight(0xfffaf2, 0xb3a088, 0.75));
+  const key = new T.DirectionalLight(0xfff3e2, 1.15);
+  key.position.set(-1700, 3300, 2500);
+  key.castShadow = true;
+  key.shadow.mapSize.set(2048, 2048);
+  Object.assign(key.shadow.camera, { left: -1800, right: 1800, top: 2600, bottom: -900, near: 200, far: 9000 });
+  key.shadow.bias = -0.0004;
+  key.shadow.radius = 5;
+  key.target.position.set(0, 800, 0);
+  scene.add(key, key.target);
+  const fill = new T.DirectionalLight(0xe6edfb, 0.35);
+  fill.position.set(2600, 1300, 900);
+  scene.add(fill);
+
+  const ground = new T.Mesh(new T.PlaneGeometry(14000, 14000), new T.ShadowMaterial({ opacity: 0.2 }));
+  ground.rotation.x = -Math.PI / 2;
+  ground.receiveShadow = true;
+  scene.add(ground);
+
+  // ---------- procedural wood ----------
+  function rng(seed) { let s = seed % 2147483647; if (s <= 0) s += 2147483646; return () => (s = (s * 16807) % 2147483647) / 2147483647; }
+  const r0 = rng(7);
+
+  function canvas512() { const c = document.createElement('canvas'); c.width = c.height = 512; return c; }
+
+  function grainCanvas(base, dark, vertical, seed) {
+    const c = canvas512(), g = c.getContext('2d'), r = rng(seed);
+    g.fillStyle = base; g.fillRect(0, 0, 512, 512);
+    if (vertical) { g.translate(512, 0); g.rotate(Math.PI / 2); }
+    g.fillStyle = dark;
+    for (let i = 0; i < 10; i++) {
+      const y = r() * 512, h = 20 + r() * 70;
+      g.globalAlpha = 0.03 + r() * 0.06;
+      for (const off of [-512, 0, 512]) g.fillRect(0, y + off, 512, h);
+    }
+    g.strokeStyle = dark;
+    for (let i = 0; i < 170; i++) {
+      const y = r() * 512, amp = 1 + r() * 5, k = 1 + Math.floor(r() * 3), ph = r() * 6.283;
+      g.globalAlpha = 0.04 + r() * 0.16;
+      g.lineWidth = 0.4 + r() * 1.8;
+      for (const off of [-512, 0, 512]) {
+        g.beginPath();
+        for (let x = 0; x <= 512; x += 8) {
+          const yy = y + off + Math.sin((x / 512) * k * 6.283 + ph) * amp;
+          if (x === 0) g.moveTo(x, yy); else g.lineTo(x, yy);
+        }
+        g.stroke();
+      }
+    }
+    for (let i = 0; i < 1800; i++) { g.globalAlpha = 0.05 + r() * 0.12; g.fillRect(r() * 512, r() * 512, 1 + r() * 6, 0.6 + r() * 0.7); }
+    g.globalAlpha = 1;
+    return c;
+  }
+
+  function endCanvas(base, dark, seed) {
+    const c = canvas512(), g = c.getContext('2d'), r = rng(seed);
+    g.fillStyle = base; g.fillRect(0, 0, 512, 512);
+    g.globalAlpha = 0.22; g.fillStyle = dark; g.fillRect(0, 0, 512, 512);
+    g.strokeStyle = dark;
+    let rad = 10;
+    while (rad < 1500) {
+      g.globalAlpha = 0.14 + r() * 0.26; g.lineWidth = 0.8 + r() * 2.4;
+      g.beginPath(); g.arc(-300, 900, rad, 0, 6.283); g.stroke();
+      rad += 5 + r() * 12;
+    }
+    g.globalAlpha = 0.07; g.lineWidth = 1;
+    for (let i = 0; i < 40; i++) {
+      const a = -1.3 + r() * 1.25;
+      g.beginPath(); g.moveTo(-300, 900); g.lineTo(-300 + Math.cos(a) * 2200, 900 + Math.sin(a) * 2200); g.stroke();
+    }
+    g.fillStyle = dark;
+    for (let i = 0; i < 2400; i++) { g.globalAlpha = 0.12 + r() * 0.2; g.fillRect(r() * 512, r() * 512, 1.2, 1.2); }
+    g.globalAlpha = 1;
+    return c;
+  }
+
+  function plyCanvas(vertical) {
+    const c = canvas512(), g = c.getContext('2d'), n = 5, step = 512 / n;
+    const tones = ['#e8d6ae', '#cfb17d'];
+    for (let i = 0; i < n; i++) {
+      g.fillStyle = tones[i % 2];
+      if (vertical) g.fillRect(i * step, 0, step, 512); else g.fillRect(0, i * step, 512, step);
+    }
+    g.fillStyle = '#7d6440'; g.globalAlpha = 0.55;
+    for (let i = 1; i < n; i++) { if (vertical) g.fillRect(i * step - 1.5, 0, 3, 512); else g.fillRect(0, i * step - 1.5, 512, 3); }
+    g.globalAlpha = 1;
+    return c;
+  }
+
+  const maxAniso = renderer.capabilities.getMaxAnisotropy();
+  function tex(c) {
+    const t = new T.CanvasTexture(c);
+    t.wrapS = t.wrapT = T.RepeatWrapping;
+    t.encoding = T.sRGBEncoding;
+    t.anisotropy = maxAniso;
+    return t;
+  }
+  function species(base, dark, seed) {
+    return { faceH: tex(grainCanvas(base, dark, false, seed)), faceV: tex(grainCanvas(base, dark, true, seed + 11)), end: tex(endCanvas(base, dark, seed + 23)) };
+  }
+  const TEX = {
+    oak: species('#c49a64', '#6b4722', 3),
+    maple: species('#e2cca0', '#a1814f', 41),
+    birch: species('#e4d0a6', '#a88d5e', 77),
+    ply: { H: tex(plyCanvas(false)), V: tex(plyCanvas(true)) },
+  };
+
+  // Section caps: back faces seen through the cut are drawn hatched.
+  const cutU = { uCut: { value: 0 }, uCutA: { value: new T.Color(0xb3261e) }, uCutB: { value: new T.Color(0xf3dcd6) } };
+  function patch(m) {
+    m.onBeforeCompile = sh => {
+      sh.uniforms.uCut = cutU.uCut; sh.uniforms.uCutA = cutU.uCutA; sh.uniforms.uCutB = cutU.uCutB;
+      sh.fragmentShader = sh.fragmentShader
+        .replace('#include <common>', '#include <common>\nuniform float uCut;\nuniform vec3 uCutA;\nuniform vec3 uCutB;')
+        .replace('#include <dithering_fragment>', '#include <dithering_fragment>\nif (uCut > 0.5 && !gl_FrontFacing) { float s = step(0.5, fract((gl_FragCoord.x + gl_FragCoord.y) / 10.0)); gl_FragColor = vec4(mix(uCutA, uCutB, s), 1.0); }');
+    };
+    m.customProgramCacheKey = () => 'stave-cut';
+    return m;
+  }
+  const woodMat = map => patch(new T.MeshStandardMaterial({ map, roughness: 0.74, metalness: 0, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 }));
+  const metalMat = () => patch(new T.MeshStandardMaterial({ color: 0xc4c7cc, metalness: 0.55, roughness: 0.3, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 }));
+  const shopMat = new T.MeshBasicMaterial({ color: 0xffffff, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1, toneMapped: false });
+  const shopGhost = new T.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.15, depthWrite: false, toneMapped: false });
+
+  // ---------- model ----------
+  const parts = [], hws = [], joints = [], groups = [];
+  const SCALE = 320;
+  const FACE_N = ['x', 'x', 'y', 'y', 'z', 'z'];
+  const FACE_UV = [['z', 'y'], ['z', 'y'], ['x', 'z'], ['x', 'z'], ['x', 'y'], ['x', 'y']];
+  const fmt = n => (Number.isInteger(n) ? String(n) : n.toFixed(1));
+  const dimsOf = s => [...s].sort((a, b) => b - a).map(fmt).join(' × ') + ' mm';
+
+  function G(label, parent, at = [0, 0, 0], explode = [0, 0, 0]) {
+    const g = new T.Group();
+    g.position.set(...at);
+    g.userData = { label, base: g.position.clone(), ex: new T.Vector3(...explode) };
+    parent.add(g); groups.push(g);
+    return g;
+  }
+
+  function addEdges(mesh, angle) {
+    const e = new T.LineSegments(new T.EdgesGeometry(mesh.geometry, angle), new T.LineBasicMaterial({ color: 0x2b1d10, transparent: true, opacity: 0.32 }));
+    mesh.add(e);
+    mesh.userData.edges = e;
+  }
+
+  function finish(mesh, o) {
+    mesh.position.set(...o.at);
+    mesh.castShadow = mesh.receiveShadow = true;
+    Object.assign(mesh.userData, {
+      name: o.name, stock: o.stock, dims: o.dims || dimsOf(o.size),
+      grain: o.grainText || (o.ply ? 'Plywood; face veneer runs along the length' : 'Runs along the length'),
+      kind: o.kind || 'part', sub: !!o.sub, error: !!o.error,
+      base: mesh.position.clone(), ex: new T.Vector3(...(o.explode || [0, 0, 0])),
+    });
+    addEdges(mesh, o.edgeAngle || 25);
+    o.parent.add(mesh);
+    (mesh.userData.kind === 'hardware' ? hws : parts).push(mesh);
+    return mesh;
+  }
+
+  function board(o) {
+    const [sx, sy, sz] = o.size, S = { x: sx, y: sy, z: sz };
+    const geo = new T.BoxGeometry(sx, sy, sz);
+    const thick = o.ply ? ['x', 'y', 'z'].reduce((a, b) => (S[b] < S[a] ? b : a)) : null;
+    const cache = {};
+    const mat = k => cache[k] || (cache[k] = woodMat(k === 'plyH' ? TEX.ply.H : k === 'plyV' ? TEX.ply.V : TEX[o.sp][k]));
+    const mats = [], uvs = [];
+    FACE_N.forEach((n, i) => {
+      const [u, v] = FACE_UV[i];
+      const ru = S[u] / SCALE, rv = S[v] / SCALE, ou = r0(), ov = r0();
+      if (o.ply && n !== thick) {
+        if (v === thick) { mats.push(mat('plyH')); uvs.push([ru, 1, ou, 0]); }
+        else { mats.push(mat('plyV')); uvs.push([1, rv, 0, ov]); }
+        return;
+      }
+      if (!o.ply && n === o.grain) { mats.push(mat('end')); uvs.push([ru, rv, ou, ov]); return; }
+      mats.push(mat(u === o.grain ? 'faceH' : 'faceV'));
+      uvs.push([ru, rv, ou, ov]);
+    });
+    const uv = geo.attributes.uv;
+    for (let f = 0; f < 6; f++) {
+      const [ru, rv, ou, ov] = uvs[f];
+      for (let k = 0; k < 4; k++) { const i = f * 4 + k; uv.setXY(i, uv.getX(i) * ru + ou, uv.getY(i) * rv + ov); }
+    }
+    uv.needsUpdate = true;
+    const mesh = new T.Mesh(geo, mats);
+    mesh.userData.mats = mats;
+    mesh.userData.matList = Object.values(cache);
+    return finish(mesh, o);
+  }
+
+  function turned(o, geo) {
+    const uv = geo.attributes.uv;
+    for (let i = 0; i < uv.count; i++) uv.setXY(i, uv.getX(i) * o.ru, uv.getY(i) * o.rv);
+    uv.needsUpdate = true;
+    const m = woodMat(TEX[o.sp].faceV);
+    const mesh = new T.Mesh(geo, m);
+    mesh.userData.mats = m;
+    mesh.userData.matList = [m];
+    return finish(mesh, o);
+  }
+
+  function hw(o, geo) {
+    const m = metalMat();
+    const mesh = new T.Mesh(geo, m);
+    mesh.userData.mats = m;
+    mesh.userData.matList = [m];
+    return finish(mesh, { ...o, kind: 'hardware', edgeAngle: 35 });
+  }
+
+  const JOINTS = {
+    dado: { label: 'Dado', color: 0x3b82f6 },
+    rabbet: { label: 'Rabbet', color: 0x14b8a6 },
+    dowel: { label: 'Dowel', color: 0xf59e0b },
+    mt: { label: 'Mortise and tenon', color: 0xd946ef },
+    round: { label: 'Round tenon', color: 0x84cc16 },
+  };
+  function joint(kind, geo, at, parent, explode) {
+    const c = JOINTS[kind].color;
+    const m = new T.Mesh(geo, new T.MeshStandardMaterial({ color: c, emissive: c, emissiveIntensity: 0.35, roughness: 0.5 }));
+    m.position.set(...at);
+    m.userData = { kind: 'joint', base: m.position.clone(), ex: new T.Vector3(...(explode || [0, 0, 0])) };
+    m.visible = false;
+    parent.add(m); joints.push(m);
+    return m;
+  }
+
+  const OAK = 'White oak, 19mm', MAPLE = 'Hard maple, 12mm', PLY = 'Birch plywood, 6mm';
+  const root = G('Cabinet', scene);
+  const carcass = G('carcass', root);
+  const feetG = G('feet', root, [0, 0, 0], [0, -230, 0]);
+  const doorsG = G('doors', root);
+  const doorL = G('door_l', doorsG, [-450, 0, 281], [-170, 0, 540]);
+  const doorR = G('door_r', doorsG, [450, 0, 281], [170, 0, 540]);
+  const drawersG = G('drawers', root);
+  const dTop = G('drawer[top]', drawersG, [0, 0, 0], [0, 0, 800]);
+  const dBot = G('drawer[bottom]', drawersG, [0, 0, 0], [0, 0, 500]);
+
+  // carcass
+  board({ name: 'base', size: [900, 19, 560], at: [0, 89.5, 0], grain: 'x', sp: 'oak', stock: OAK, parent: carcass });
+  for (const s of [-1, 1]) {
+    board({ name: s < 0 ? 'side_l' : 'side_r', size: [19, 1660, 560], at: [s * 440.5, 929, 0], grain: 'y', sp: 'oak', stock: OAK, parent: carcass, explode: [s * 330, 0, 0] });
+    joint('dado', new T.BoxGeometry(9, 19.4, 554), [s * 435.5, 608.5, 3], carcass, [s * 330, 0, 0]);
+    joint('dado', new T.BoxGeometry(9, 19.4, 554), [s * 435.5, 1600, 3], carcass, [s * 330, 0, 0]);
+    joint('rabbet', new T.BoxGeometry(9, 1660, 6.4), [s * 435.5, 929, -277], carcass, [s * 330, 0, 0]);
+    for (const z of [-200, -70, 70, 200]) joint('dowel', new T.CylinderGeometry(5, 5, 40, 12), [s * 440.5, 99, z], carcass, [s * 330, 0, 0]);
+    for (const y of [1657, 712]) hw({ name: 'hinge plate', stock: '110° Euro hinge mounting plate', dims: '50 × 36 mm', at: [s * 427, y, 238], parent: carcass, explode: [s * 330, 0, 0] }, new T.BoxGeometry(8, 50, 36));
+  }
+  board({ name: 'top', size: [940, 19, 580], at: [0, 1768.5, 10], grain: 'x', sp: 'oak', stock: OAK, parent: carcass, explode: [0, 330, 0] });
+  board({ name: 'back', size: [880, 1660, 6], at: [0, 929, -277], grain: 'y', sp: 'birch', ply: true, stock: PLY, parent: carcass, explode: [0, 0, -440] });
+  board({ name: 'divider', size: [862, 19, 554], at: [0, 608.5, 3], grain: 'x', sp: 'oak', stock: OAK, parent: carcass, explode: [0, 0, 210] });
+  board({ name: 'shelf', size: [862, 19, 554], at: [0, 1600, 3], grain: 'x', sp: 'oak', stock: OAK, parent: carcass, explode: [0, 0, 210] });
+  turned({ name: 'rod', at: [0, 1520, 40], sp: 'oak', stock: 'White oak dowel, 28mm', dims: 'Ø28 × 862 mm', grainText: 'Runs along the rod', parent: carcass, explode: [0, 0, 280], ru: 0.3, rv: 2.7 },
+    new T.CylinderGeometry(14, 14, 862, 28).rotateZ(Math.PI / 2));
+
+  // feet
+  const profile = [[0, 0], [24, 0], [31, 5], [34.5, 16], [35, 30], [33, 46], [28, 60], [22, 70], [20, 80]].map(p => new T.Vector2(p[0], p[1]));
+  for (const [lbl, x, z] of [['front_left', -390, 220], ['front_right', 390, 220], ['back_left', -390, -220], ['back_right', 390, -220]]) {
+    turned({ name: `foot[${lbl}]`, at: [x, 0, z], sp: 'oak', stock: 'White oak, 75mm square blank', dims: 'Ø70 × 80 mm, turned', grainText: 'Turned; runs along the axis', parent: feetG, ru: 1, rv: 0.3, edgeAngle: 40 },
+      new T.LatheGeometry(profile, 40));
+    joint('round', new T.CylinderGeometry(10, 10, 16, 16), [x, 88, z], feetG);
+  }
+
+  // doors
+  function door(g, s) {
+    const W = 448.5, y0 = 612, y1 = 1757, H = y1 - y0, cy = (y0 + y1) / 2, z = 9.5;
+    board({ name: 'stile_outer', size: [60, H, 19], at: [s * 30, cy, z], grain: 'y', sp: 'oak', stock: OAK, parent: g, explode: [-s * 100, 0, 0] });
+    const inner = board({ name: 'stile_inner', size: [60, H, 19], at: [s * (W - 30), cy, z], grain: 'y', sp: 'oak', stock: OAK, parent: g, explode: [s * 100, 0, 0] });
+    for (const [nm, yy, ey] of [['rail_top', y1 - 30, 100], ['rail_bottom', y0 + 30, -100]]) {
+      board({ name: nm, size: [W - 120, 60, 19], at: [s * W / 2, yy, z], grain: 'x', sp: 'oak', stock: OAK, parent: g, explode: [0, ey, 0] });
+      for (const xx of [44, W - 44]) joint('mt', new T.BoxGeometry(32, 40, 6.4), [s * xx, yy, z], g, [0, ey, 0]);
+    }
+    const panel = board({ name: 'panel', size: [W - 104, H - 104, 10], at: [s * W / 2, cy, 8.5], grain: 'y', sp: 'oak', stock: 'White oak, 12mm raised panel', parent: g, explode: [0, 0, 130] });
+    const field = board({ name: 'panel', size: [W - 170, H - 170, 4], at: [s * W / 2, cy, 15.5], grain: 'y', sp: 'oak', stock: 'White oak, 12mm raised panel', parent: g, explode: [0, 0, 130], sub: true });
+    field.userData.main = panel;
+    hw({ name: 'knob', stock: 'Brass knob', dims: 'Ø26 mm', at: [s * (W - 30), 1150, 30], parent: g, explode: [s * 100, 0, 70] }, new T.SphereGeometry(13, 20, 14));
+    for (const yy of [y1 - 100, y0 + 100]) hw({ name: 'hinge cup', stock: '110° Euro hinge, 35mm cup', dims: 'Ø35 mm', at: [s * 22, yy, -2], parent: g, explode: [-s * 100, 0, -40] }, new T.CylinderGeometry(17.5, 17.5, 4, 24).rotateX(Math.PI / 2));
+    return inner;
+  }
+  door(doorL, 1);
+  const doorRInner = door(doorR, -1);
+
+  // drawers
+  function drawer(g, y0, err) {
+    const fh = 246, fy = y0 + fh / 2, bw = 838.1, bh = 180, by = y0 + 20 + bh / 2, zc = 31;
+    board({ name: 'front', size: [896, fh, 19], at: [0, fy, 290.5], grain: 'x', sp: 'oak', stock: OAK, parent: g, explode: [0, 0, 170] });
+    const sl = board({ name: 'side_l', size: [12, bh, 500], at: [-(bw / 2 - 6), by, zc], grain: 'z', sp: 'maple', stock: MAPLE, parent: g, explode: [-150, 0, 0], error: err });
+    board({ name: 'side_r', size: [12, bh, 500], at: [bw / 2 - 6, by, zc], grain: 'z', sp: 'maple', stock: MAPLE, parent: g, explode: [150, 0, 0], error: err });
+    board({ name: 'sub_front', size: [bw - 24, bh, 12], at: [0, by, 275], grain: 'x', sp: 'maple', stock: MAPLE, parent: g, explode: [0, 0, 80], error: err });
+    board({ name: 'back', size: [bw - 24, bh - 20, 12], at: [0, by + 10, -213], grain: 'x', sp: 'maple', stock: MAPLE, parent: g, explode: [0, 0, -150], error: err });
+    board({ name: 'bottom', size: [bw - 12, 6, 488], at: [0, by - bh / 2 + 12, zc], grain: 'x', sp: 'birch', ply: true, stock: PLY, parent: g, explode: [0, -120, 0], error: err });
+    hw({ name: 'pull', stock: 'Steel bar pull, 160mm centres', dims: 'Ø12 × 180 mm', at: [0, fy, 318], parent: g, explode: [0, 0, 290] }, new T.CylinderGeometry(6, 6, 180, 16).rotateZ(Math.PI / 2));
+    for (const xx of [-80, 80]) hw({ name: 'pull', stock: 'Steel bar pull, 160mm centres', dims: 'Ø12 × 180 mm', at: [xx, fy, 309], parent: g, explode: [0, 0, 290] }, new T.CylinderGeometry(5, 5, 18, 12).rotateX(Math.PI / 2));
+    for (const s of [-1, 1]) {
+      hw({ name: 'slide, drawer member', stock: 'Side-mount slide, 500mm, needs 12.7mm a side', dims: '500 mm', at: [s * (bw / 2 + 2.5), by, zc], parent: g, explode: [s * 150, 0, 0] }, new T.BoxGeometry(5, 40, 480));
+      hw({ name: 'slide, cabinet member', stock: 'Side-mount slide, 500mm, needs 12.7mm a side', dims: '500 mm', at: [s * 428, by, zc], parent: carcass, explode: [s * 330, 0, 0] }, new T.BoxGeometry(6, 40, 480));
+      joint('dado', new T.BoxGeometry(6.4, bh, 12.4), [s * (bw / 2 - 9), by, 275], g, [s * 150, 0, 0]);
+      joint('dado', new T.BoxGeometry(6.4, bh - 20, 12.4), [s * (bw / 2 - 9), by + 10, -213], g, [s * 150, 0, 0]);
+    }
+    return { side: sl, anchor: new T.Vector3(bw / 2, by + bh / 2, 281) };
+  }
+  const topDrawer = drawer(dTop, 351, true);
+  drawer(dBot, 102, false);
+
+  const partCount = parts.filter(p => p.userData.kind === 'part' && !p.userData.sub).length;
+  $('hint').textContent = `${partCount} parts · ` + $('hint').textContent;
+
+  // legend
+  $('legend').innerHTML = Object.values(JOINTS).map(j => `<li><span class="sw" style="background:#${j.color.toString(16).padStart(6, '0')}"></span>${j.label}</li>`).join('');
+
+  // ---------- state ----------
+  const ASSEMBLIES = [doorL, doorR, dTop, dBot, feetG];
+  let mode = 'wood', sel = null, focus = null, solo = null, sceneName = 'assembled';
+  let exV = 0.7, secV = 0.5, exT = 0;
+  const SCENES = { assembled: { door: 0, top: 0, bot: 0 }, open: { door: 105, top: 380, bot: 0 }, bench: { door: 0, top: 0, bot: 0 } };
+  const cur = { door: 0, top: 0, bot: 0 }, tgt = { ...SCENES.assembled };
+  const cutPlane = new T.Plane(new T.Vector3(-1, 0, 0), 0);
+  const ACC = new T.Color(), BAD = new T.Color(), STAGE = new T.Color(), BLACK = new T.Color(0, 0, 0);
+  const WOODLINE = new T.Color(0x2b1d10), SHOPLINE = new T.Color(0x111111), PAPER = new T.Color(0xfbfaf7);
+
+  const isDesc = (o, g) => { for (let p = o; p; p = p.parent) if (p === g) return true; return false; };
+  const asmOf = m => ASSEMBLIES.find(a => isDesc(m, a)) || m;
+  const pathOf = m => { const n = []; for (let p = m.parent; p && p !== scene; p = p.parent) n.unshift(p.userData.label); return n.join(' › '); };
+
+  function readTheme() {
+    const cs = getComputedStyle(document.documentElement);
+    ACC.set(cs.getPropertyValue('--accent').trim() || '#2f6fd6');
+    BAD.set(cs.getPropertyValue('--bad').trim() || '#c6262e');
+    STAGE.set(cs.getPropertyValue('--stage').trim() || '#e7e3dd');
+  }
+
+  function applyLook() {
+    const shop = mode === 'shop', xray = mode === 'xray', sec = mode === 'section';
+    cutU.uCut.value = sec ? 1 : 0;
+    const clip = sec ? [cutPlane] : [];
+    for (const m of [...parts, ...hws]) {
+      m.visible = !solo || isDesc(m, solo);
+      const ghost = !!focus && !isDesc(m, focus);
+      const selected = !!sel && (m === sel || m.userData.main === sel);
+      const err = m.userData.error && !shop;
+      if (shop) {
+        m.material = ghost ? shopGhost : shopMat;
+      } else {
+        m.material = m.userData.mats;
+        for (const mat of m.userData.matList) {
+          const tr = ghost || xray;
+          mat.transparent = tr;
+          mat.opacity = ghost ? (xray ? 0.04 : 0.1) : xray ? (m.userData.kind === 'hardware' ? 0.35 : 0.12) : 1;
+          mat.depthWrite = !tr;
+          mat.side = sec ? T.DoubleSide : T.FrontSide;
+          mat.clippingPlanes = clip;
+          mat.emissive.copy(selected ? ACC : err ? BAD : BLACK);
+          mat.emissiveIntensity = selected ? 0.35 : err ? 0.32 : 0;
+          mat.needsUpdate = true;
+        }
+      }
+      m.castShadow = !shop && !xray && !ghost;
+      const e = m.userData.edges.material;
+      e.color.copy(selected ? ACC : err ? BAD : shop ? SHOPLINE : WOODLINE);
+      e.opacity = ghost ? 0.08 : selected || err ? 1 : shop ? 0.9 : xray ? 0.5 : 0.32;
+      e.clippingPlanes = clip;
+      e.needsUpdate = true;
+    }
+    for (const j of joints) {
+      j.visible = xray && (!solo || isDesc(j, solo));
+      const ghost = !!focus && !isDesc(j, focus);
+      j.material.transparent = ghost;
+      j.material.opacity = ghost ? 0.12 : 1;
+    }
+    ground.visible = !shop;
+    renderer.setClearColor(shop ? PAPER : STAGE, 1);
+  }
+
+  // ---------- inspector ----------
+  function select(m) {
+    sel = m ? (m.userData.main || m) : null;
+    $('selEmpty').hidden = !!sel;
+    $('sel').hidden = !sel;
+    if (sel) {
+      const u = sel.userData;
+      $('selPath').textContent = pathOf(sel);
+      $('selName').textContent = u.name;
+      $('selStock').textContent = u.kind === 'hardware' ? u.stock + ' (bought, not cut)' : u.stock;
+      $('selSize').textContent = u.dims;
+      $('selGrainK').hidden = $('selGrain').hidden = u.kind === 'hardware';
+      $('selGrain').textContent = u.grain;
+      $('selErr').hidden = !u.error;
+    }
+    applyLook();
+  }
+
+  // ---------- camera tween ----------
+  let tween = null;
+  function flyTo(pos, target) {
+    if (reduceMotion) { camera.position.copy(pos); controls.target.copy(target); return; }
+    tween = { p0: camera.position.clone(), t0: controls.target.clone(), p1: pos, t1: target, s: 0 };
+  }
+  controls.addEventListener('start', () => { tween = null; });
+  function frame(obj, pad = 1.7) {
+    root.updateMatrixWorld(true);
+    const box = new T.Box3().setFromObject(obj), c = box.getCenter(new T.Vector3()), size = box.getSize(new T.Vector3());
+    const dist = (Math.max(size.x, size.y, size.z) / 2) / Math.tan((camera.fov * Math.PI) / 360) * pad;
+    const dir = camera.position.clone().sub(controls.target).normalize();
+    flyTo(c.clone().addScaledVector(dir, Math.max(dist, 700)), c);
+  }
+
+  // ---------- focus, scenes, modes ----------
+  function setFocus(obj) {
+    focus = obj;
+    $('focusChip').hidden = !focus;
+    if (focus) { $('focusName').textContent = focus.userData.label || focus.userData.name; frame(focus); }
+    applyLook();
+  }
+
+  function setScene(name) {
+    sceneName = name;
+    Object.assign(tgt, SCENES[name]);
+    solo = name === 'bench' ? dTop : null;
+    $('benchNote').hidden = name !== 'bench';
+    document.querySelectorAll('[data-scene]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.scene === name)));
+    if (name === 'bench') { focus = null; $('focusChip').hidden = true; frame(dTop, 1.9); }
+    else if (name === 'open') flyTo(new T.Vector3(1700, 1500, 3300), new T.Vector3(0, 850, 120));
+    else flyTo(new T.Vector3(2300, 1700, 3200), new T.Vector3(0, 880, 0));
+    applyLook();
+  }
+
+  function setMode(m) {
+    const prev = mode;
+    mode = m;
+    document.querySelectorAll('[data-mode]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.mode === m)));
+    $('legendCard').hidden = m !== 'xray';
+    const slider = m === 'exploded' || m === 'section';
+    $('sliderBox').hidden = !slider;
+    if (slider) {
+      $('sliderLabel').textContent = m === 'exploded' ? 'Explode' : 'Cut at';
+      $('slider').value = m === 'exploded' ? exV : secV;
+      updateSliderOut();
+    }
+    if (m === 'section' && prev !== 'section' && !focus && !solo) flyTo(new T.Vector3(2700, 1150, 1100), new T.Vector3(0, 850, 0));
+    if (m === 'exploded' && prev !== 'exploded' && !focus && !solo) flyTo(new T.Vector3(3300, 2300, 4300), new T.Vector3(0, 900, 150));
+    applyLook();
+  }
+
+  function updateSliderOut() {
+    const v = Number($('slider').value);
+    $('sliderOut').textContent = mode === 'section' ? `x ${Math.round(-450 + v * 900)}mm` : `${Math.round(v * 100)}%`;
+  }
+
+  document.querySelectorAll('[data-mode]').forEach(b => b.addEventListener('click', () => setMode(b.dataset.mode)));
+  document.querySelectorAll('[data-scene]').forEach(b => b.addEventListener('click', () => setScene(b.dataset.scene)));
+  $('slider').addEventListener('input', () => {
+    const v = Number($('slider').value);
+    if (mode === 'exploded') exV = v; else secV = v;
+    updateSliderOut();
+  });
+  $('exitFocus').addEventListener('click', () => setFocus(null));
+  $('focusBtn').addEventListener('click', () => { if (sel) setFocus(asmOf(sel)); });
+
+  function showProblem(i) {
+    if (i === 0) {
+      if (sceneName !== 'bench') setScene(sceneName);
+      select(topDrawer.side);
+      if (sceneName !== 'bench') setFocus(dTop);
+    } else {
+      setScene('open');
+      setFocus(null);
+      select(doorRInner);
+    }
+  }
+  document.querySelectorAll('[data-p]').forEach(b => b.addEventListener('click', () => showProblem(Number(b.dataset.p))));
+  $('pill').addEventListener('click', () => showProblem(0));
+
+  window.addEventListener('keydown', e => {
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    const k = e.key;
+    const modes = { 1: 'wood', 2: 'xray', 3: 'exploded', 4: 'section', 5: 'shop' };
+    if (modes[k]) { setMode(modes[k]); e.preventDefault(); }
+    else if (k === 'f' || k === 'F') { if (sel) setFocus(asmOf(sel)); }
+    else if (k === 'Escape') { if (focus) setFocus(null); else if (sel) select(null); }
+    else if (k === 'q' || k === 'Q') setScene('assembled');
+    else if (k === 'w' || k === 'W') setScene('open');
+    else if (k === 'e' || k === 'E') setScene('bench');
+  });
+
+  // ---------- picking ----------
+  const ray = new T.Raycaster(), ndc = new T.Vector2();
+  let down = null;
+  function pick(ev) {
+    const r = renderer.domElement.getBoundingClientRect();
+    ndc.set(((ev.clientX - r.left) / r.width) * 2 - 1, -((ev.clientY - r.top) / r.height) * 2 + 1);
+    ray.setFromCamera(ndc, camera);
+    const cands = [...parts, ...hws].filter(m => m.visible && !(focus && !isDesc(m, focus)));
+    const hits = ray.intersectObjects(cands, false);
+    return hits.find(h => mode !== 'section' || h.point.x <= cutPlane.constant + 0.5);
+  }
+  renderer.domElement.addEventListener('pointerdown', e => { down = { x: e.clientX, y: e.clientY }; });
+  renderer.domElement.addEventListener('pointerup', e => {
+    if (!down || Math.hypot(e.clientX - down.x, e.clientY - down.y) > 5) return;
+    const h = pick(e);
+    select(h ? h.object : null);
+  });
+  renderer.domElement.addEventListener('dblclick', e => {
+    const h = pick(e);
+    if (h) { select(h.object); setFocus(asmOf(sel)); }
+  });
+
+  // ---------- resize, theme ----------
+  function resize() {
+    const r = stageEl.getBoundingClientRect();
+    if (!r.width || !r.height) return;
+    renderer.setSize(r.width, r.height, false);
+    camera.aspect = r.width / r.height;
+    camera.updateProjectionMatrix();
+  }
+  new ResizeObserver(resize).observe(stageEl);
+  resize();
+  const onTheme = () => { readTheme(); applyLook(); };
+  matchMedia('(prefers-color-scheme: dark)').addEventListener('change', onTheme);
+  new MutationObserver(onTheme).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+  readTheme();
+  applyLook();
+
+  // ---------- loop ----------
+  const movers = [...groups, ...parts, ...hws, ...joints];
+  const callout = $('callout'), anchorW = new T.Vector3();
+  let last = performance.now();
+  function tick(now) {
+    const dt = Math.min(0.05, (now - last) / 1000);
+    last = now;
+    const k = reduceMotion ? 1 : 1 - Math.exp(-dt * 7);
+    cur.door += (tgt.door - cur.door) * k;
+    cur.top += (tgt.top - cur.top) * k;
+    cur.bot += (tgt.bot - cur.bot) * k;
+    exT += ((mode === 'exploded' ? exV : 0) - exT) * k;
+
+    for (const o of movers) o.position.copy(o.userData.base).addScaledVector(o.userData.ex, exT);
+    dTop.position.z += cur.top;
+    dBot.position.z += cur.bot;
+    doorL.rotation.y = (-cur.door * Math.PI) / 180;
+    doorR.rotation.y = (cur.door * Math.PI) / 180;
+    cutPlane.constant = -450 + secV * 900;
+
+    if (tween) {
+      tween.s = Math.min(1, tween.s + dt / 0.8);
+      const e = tween.s < 0.5 ? 2 * tween.s * tween.s : 1 - Math.pow(-2 * tween.s + 2, 2) / 2;
+      camera.position.lerpVectors(tween.p0, tween.p1, e);
+      controls.target.lerpVectors(tween.t0, tween.t1, e);
+      if (tween.s >= 1) tween = null;
+    }
+    controls.update();
+
+    const showCallout = mode !== 'shop' && (!focus || isDesc(dTop, focus));
+    if (showCallout) {
+      dTop.updateMatrixWorld(true);
+      anchorW.copy(topDrawer.anchor);
+      dTop.localToWorld(anchorW);
+      if (mode === 'section' && anchorW.x > cutPlane.constant) anchorW.x = cutPlane.constant;
+      anchorW.project(camera);
+      const r = stageEl.getBoundingClientRect();
+      const inView = anchorW.z < 1 && Math.abs(anchorW.x) < 1.05 && Math.abs(anchorW.y) < 1.05;
+      callout.hidden = !inView;
+      if (inView) {
+        const x = (anchorW.x * 0.5 + 0.5) * r.width, y = (-anchorW.y * 0.5 + 0.5) * r.height;
+        callout.style.transform = `translate(${Math.round(x - 5)}px, ${Math.round(y)}px) translateY(-50%)`;
+      }
+    } else callout.hidden = true;
+
+    renderer.render(scene, camera);
+    requestAnimationFrame(tick);
+  }
+  requestAnimationFrame(tick);
+})();
+</script>

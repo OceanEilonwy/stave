@@ -1,0 +1,93 @@
+stave 1
+
+import "../japanese_joinery" as japanese
+
+// Practice pieces for three Japanese joints, laid out side by side on the bench.
+// Proves the joint library works from a project: every joint here comes from
+// another module and is used qualified, as japanese.*
+
+project "Japanese joint samples" {
+  goal:       "Practice pieces for ari tsugi, kanawa tsugi and chidori"
+  units:      mm
+  resolution: 0.5mm
+}
+
+stock hinoki_105 { species: hinoki, form: solid, thickness: 105mm, width: 105mm }
+stock hinoki_30  { species: hinoki, form: solid, thickness: 30mm, width: 30mm }
+
+// ---- kanawa tsugi: two beams spliced end to end ----
+part beam_a : hinoki_105 {
+  length: 600mm
+  place {
+    ground
+  }
+}
+
+part beam_b : hinoki_105 {
+  length: 600mm
+  place {
+    against(beam_a.right)
+    flush(beam_a.bottom)
+    flush(beam_a.front)
+  }
+}
+
+joint splice : japanese.kanawa_tsugi(beam_b, into: beam_a)
+
+// ---- ari tsugi: a dovetailed end joint, behind the splice ----
+part beam_c : hinoki_105 {
+  length: 600mm
+  place {
+    flush(beam_a.left)
+    flush(beam_a.bottom)
+    against(beam_a.back, gap: 200mm)
+  }
+}
+
+part beam_d : hinoki_105 {
+  length: 600mm
+  place {
+    against(beam_c.right)
+    flush(beam_c.bottom)
+    flush(beam_c.front)
+  }
+}
+
+joint end_dovetail : japanese.ari_tsugi(beam_d, into: beam_c) { angle: 12deg }
+
+// ---- chidori: three sticks meeting in one node, behind that ----
+part stick_z : hinoki_30 {
+  length: 300mm
+  place {
+    orient(length: up)
+    flush(beam_a.bottom)
+    flush(beam_a.left, inset: 135mm)
+    against(beam_c.back, gap: 300mm)
+  }
+}
+
+part stick_x : hinoki_30 {
+  length: 300mm
+  place {
+    center(stick_z, up)
+    center(stick_z, across)
+    center(stick_z, deep)
+  }
+}
+
+part stick_y : hinoki_30 {
+  length: 300mm
+  place {
+    orient(length: back)
+    center(stick_z, up)
+    center(stick_z, across)
+    center(stick_z, deep)
+  }
+}
+
+joint node : japanese.chidori(stick_z, into: [stick_x, stick_y])
+
+// ---- scenes ----
+scene apart "Pieces apart" {
+  explode: true
+}

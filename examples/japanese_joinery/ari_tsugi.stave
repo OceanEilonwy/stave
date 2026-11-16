@@ -1,0 +1,35 @@
+stave 1
+
+/// Ari tsugi: a dovetailed end joint. The tail on one beam drops into a
+/// socket in the end of the other from above.
+kind ari_tsugi : joint {
+  roles {
+    part: Part                       // carries the tail
+    into: Part                       // carries the socket
+  }
+  params {
+    neck:  Length = part.width / 3
+    depth: Length = part.width / 2
+    angle: Angle  = 10deg
+  }
+  require same_section : part.width == into.width && part.thickness == into.thickness "both beams need the same section"
+  require fits : depth <= into.length / 4 "the dovetail is too deep for this beam"
+
+  insert: [slide(part, along: width)]   // for a beam on edge, width is its height: it drops in
+  cut_first: part                       // cut the tail first, then mark and cut the socket from it
+  adds:   length(part, depth)           // the beams are drawn meeting end to end; the tail reaches past
+
+  cut end(into, facing: part) {
+    dovetail_socket(neck: neck, depth: depth, angle: angle)
+  }
+  cut end(part, facing: into) {
+    dovetail_tail(neck: neck, depth: depth, angle: angle)
+  }
+
+  steps {
+    "Set a bevel gauge to {angle} and mark the tail on the end of {part}"
+    "Saw the tail cheeks and cut away the waste"
+    "Transfer the tail to the end of {into}, then saw and chisel the socket"
+    "Drop {part} into {into} from above"
+  }
+}

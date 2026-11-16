@@ -1,0 +1,54 @@
+stave 1
+
+/// Chidori: three square sticks crossing at right angles in one node, locked
+/// by giving the third stick a quarter turn.
+///
+/// Schematic: this exercises a three-part joint and a turn in the assembly
+/// sequence. It is not a tested cutting pattern; make a trial node in
+/// softwood before relying on these proportions.
+kind chidori : joint {
+  roles {
+    part: Part                        // the stick that turns to lock the node
+    into: [Part, Part]                // the two sticks that cross first
+  }
+  params {
+    size: Length = part.width
+  }
+  require square : part.width == size && part.thickness == size && into[0].width == size && into[0].thickness == size && into[1].width == size && into[1].thickness == size "all three sticks need the same square section"
+
+  // The first two sticks are halved over each other.
+  cut crossing(into[0], into[1]) {
+    notch(depth: size / 2)
+  }
+  cut crossing(into[1], into[0]) {
+    notch(depth: size / 2)
+  }
+
+  // Both get a slot that lets the third stick pass through edge-on.
+  cut crossing(into[0], part) {
+    slot(width: size / 2, depth: through)
+  }
+  cut crossing(into[1], part) {
+    slot(width: size / 2, depth: through)
+  }
+
+  // The third stick is slotted where it passes, so it can turn once it's in.
+  cut crossing(part, into[0]) {
+    slot(width: size / 2, depth: size / 2)
+  }
+
+  cut_first: into                             // cut the crossing pair first, then fit the turning stick
+
+  insert: [
+    slide(into[1], along: thickness),         // halve the first two sticks together
+    slide(part, along: length),               // push the third stick through, edge-on
+    rotate(part, by: 90deg, about: length),   // a quarter turn locks the node
+  ]
+
+  steps {
+    "Halve {into} over each other at the middle"
+    "Cut the slots in {into} and in {part}"
+    "Assemble the halving, then push {part} through the node edge-on"
+    "Give {part} a quarter turn to lock the node"
+  }
+}

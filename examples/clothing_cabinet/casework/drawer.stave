@@ -1,0 +1,81 @@
+stave 1
+
+/// A drawer on side-mount slides: an applied front on a box with a groove-fit bottom.
+/// The box width follows the opening, so a wider cabinet gives wider drawers.
+component Drawer(
+  opening:      Region,
+  mount:        Mount,
+  front_stock:  Stock,
+  box_stock:    Stock,
+  bottom_stock: Stock,
+  slide:        HardwareKind,
+  box_height:   Length = 180mm,
+  pull_kind:    HardwareKind = bar_pull(centres: 160mm),
+) {
+  region face = cover(opening, mount)
+
+  part front : front_stock {
+    length: face.width
+    width:  face.height
+    place {
+      orient(length: right, width: up)
+      flush(face.left)
+      flush(face.bottom)
+      flush(face.back)
+    }
+  }
+
+  part side[left, right] : box_stock {
+    length: slide.length
+    width:  box_height
+    place {
+      orient(length: back, width: up)
+      spaced(ends, from: opening.left, to: opening.right, inset: slide.clearance)
+      against(opening.bottom, gap: 20mm)
+      against(front.back)
+    }
+  }
+
+  part sub_front : box_stock {
+    length: fit                          // between the sides; dado depth is added by the joint
+    width:  box_height
+    place {
+      orient(length: right, width: up)
+      center(opening, across)
+      flush(side[left].bottom)
+      against(front.back)
+    }
+  }
+
+  part back : box_stock {
+    length: fit
+    width:  box_height - 20mm
+    place {
+      orient(length: right, width: up)
+      center(opening, across)
+      flush(side[left].top)
+      flush(side[left].back)
+    }
+  }
+
+  part bottom : bottom_stock {
+    length: fit
+    width:  fit
+    place {
+      inside(bottom_groove)
+    }
+  }
+
+  joint box_dados     : dado([sub_front, back], into: side[*]) { depth: 6mm }
+  joint bottom_groove : groove(bottom, into: [side[*], sub_front, back]) { depth: 6mm }
+  joint front_screws  : screw(front, into: sub_front) { count: 4 }
+
+  hardware slides[left, right] : slide(side[*], in: opening)
+
+  hardware pull : pull_kind(front) {
+    place {
+      center(front, across)
+      center(front, up)
+    }
+  }
+}

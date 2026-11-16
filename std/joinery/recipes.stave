@@ -1,0 +1,61 @@
+stave 1
+
+// Recipes: how to make each cut operation, for the work cards.
+// Stave picks the first recipe in this file whose tools the project has,
+// unless a joint names one with `method:`.
+
+/// A dado or rabbet, cut by hand.
+recipe notch_by_hand : notch {
+  tools: [marking_knife, square, marking_gauge, tenon_saw, chisel, router_plane]
+  mark {
+    knife(walls)                         // square a line across the face at each wall
+    gauge(depth, on: open_edges)         // gauge the depth on every edge the notch runs out at
+    hatch(waste)
+  }
+  cut {
+    saw(walls, to: depth, keep: outside) // kerf on the waste side of each line
+    chop(waste, bevel: down)             // work in from the open edges
+    pare(floor, with: router_plane, depth: depth)
+  }
+  check "the mating part pushes in by hand and leaves no gap at the shoulders"
+}
+
+/// A dado or rabbet, cut with a router against a clamped guide or an edge fence.
+recipe notch_by_router : notch {
+  tools: [square, tape, router, straight_bit, clamps]
+  needs: [flat_face]                     // the router base rides on the face being cut
+  mark {
+    pencil(walls)
+    hatch(waste)
+  }
+  cut {
+    rout(waste, depth: depth, passes: 2, guide: walls)
+  }
+  check "the mating part pushes in by hand and leaves no gap at the shoulders"
+}
+
+/// A round hole with a drill press or a drill in a guide.
+recipe drill_with_stop : drill {
+  tools: [square, awl, drill, depth_stop]
+  needs: [flat_face, square_stock]       // bore before the part is shaped
+  mark {
+    centre(centre)                       // crossing lines, then an awl dimple
+  }
+  cut {
+    drill(centre, diameter: diameter, depth: depth)
+  }
+  check "the hole is square to the face"
+}
+
+/// A round hole bored by hand, with tape on the bit as a depth flag.
+recipe bore_by_hand : drill {
+  tools: [square, awl, brace, auger_bit]
+  needs: [square_stock]
+  mark {
+    centre(centre)
+  }
+  cut {
+    bore(centre, diameter: diameter, depth: depth, flag: tape)
+  }
+  check "the hole is square to the face"
+}

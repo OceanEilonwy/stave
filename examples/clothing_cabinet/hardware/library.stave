@@ -1,0 +1,8 @@
+stave 1
+
+// Shop hardware, used from a project as hardware.*
+// Each kind has an exact envelope for the checks and an optional .glb model
+// for the viewport. Put the model files in ./models; until they exist, Stave
+// draws each envelope as a labelled box and every check still runs.
+
+library "Shop hardware"

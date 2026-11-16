@@ -1,0 +1,23 @@
+stave 1
+
+/// A rabbet: a step cut along the edge of a board, for example to house a
+/// cabinet back so its edges don't show from the side.
+kind rabbet : joint {
+  params {
+    depth: Length = into.thickness / 2
+  }
+  require not_too_deep : depth <= into.thickness * 2 / 3 "a rabbet this deep leaves too little of the board"
+
+  insert: [slide(part, along: thickness)]  // drops in from behind
+  cut_first: into                          // cut the rabbet first, then fit the panel to it
+  adds:   length(part, depth)
+
+  cut crossing(into, part) {
+    notch(depth: depth)
+  }
+
+  steps {
+    "Cut a {depth} rabbet along the edge of {into}"
+    "Fit {part} into the rabbets and fasten it"
+  }
+}

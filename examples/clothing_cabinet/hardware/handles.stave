@@ -1,0 +1,13 @@
+stave 1
+
+kind brass_knob_26 : knob {
+  diameter: 26mm
+  envelope: cylinder(diameter: 26mm, length: 30mm)
+  model:    model("./models/brass_knob_26.glb", align: node("mount"))
+}
+
+kind bar_pull_160 : pull {
+  centres:  160mm
+  envelope: box(length: 192mm, height: 12mm, thickness: 35mm)
+  model:    model("./models/bar_pull_160.glb", align: bounds)
+}

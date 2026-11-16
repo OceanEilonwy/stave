@@ -1,0 +1,696 @@
+<title>Stave Work Card</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: workshop work card. Steps on the left, the part (3D, then dimensioned drawings) in the middle, what to do now on the right. */
+:root {
+  --bg: #f3f1ee;
+  --panel: #ffffff;
+  --stage: #e7e3dd;
+  --fg: #1f1c18;
+  --muted: #6b655c;
+  --line: #dcd6ce;
+  --accent: #2f6fd6;
+  --accent-soft: rgba(47, 111, 214, 0.12);
+  --good: #26a269;
+  --wood: #ead5ae;
+  --wood-cut: #c9a978;
+  --pencil: #3d3731;
+  --chip: rgba(255, 255, 255, 0.86);
+  --sans: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --mono: 'JetBrains Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #222120; --panel: #2b2a28; --stage: #181716; --fg: #efebe5; --muted: #a39d93; --line: #3b3936;
+    --accent: #78aeff; --accent-soft: rgba(120, 174, 255, 0.16); --good: #57e389;
+    --wood: #5d4a33; --wood-cut: #3f3122; --pencil: #e8e2d8; --chip: rgba(43, 42, 40, 0.88);
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #222120; --panel: #2b2a28; --stage: #181716; --fg: #efebe5; --muted: #a39d93; --line: #3b3936;
+  --accent: #78aeff; --accent-soft: rgba(120, 174, 255, 0.16); --good: #57e389;
+  --wood: #5d4a33; --wood-cut: #3f3122; --pencil: #e8e2d8; --chip: rgba(43, 42, 40, 0.88);
+  color-scheme: dark;
+}
+html, body { height: 100%; }
+body {
+  background: var(--bg); color: var(--fg); font-family: var(--sans); font-size: 13px; line-height: 1.5;
+  display: flex; flex-direction: column; overflow: hidden;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 0 16px;
+}
+button { font: inherit; color: inherit; }
+button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+kbd { font-family: var(--mono); font-size: 10.5px; padding: 1px 5px; border: 1px solid var(--line); border-radius: 4px; color: var(--muted); background: var(--panel); }
+code { font-family: var(--mono); font-size: 12px; }
+
+.bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; padding-block: 12px; }
+.ident { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+.mark { font-weight: 600; font-size: 15px; }
+.file { font-family: var(--mono); font-size: 12px; color: var(--muted); white-space: nowrap; }
+.seg { display: flex; border: 1px solid var(--line); border-radius: 9px; overflow: hidden; background: var(--panel); }
+.seg button { border: 0; background: transparent; padding: 6px 12px; cursor: pointer; border-right: 1px solid var(--line); }
+.seg button:last-child { border-right: 0; }
+.seg button[aria-pressed="true"] { background: var(--accent-soft); font-weight: 600; box-shadow: inset 0 -2px 0 var(--accent); }
+.spacer { flex: 1; }
+.nav { display: flex; align-items: center; gap: 8px; }
+.btn { border: 1px solid var(--line); background: var(--panel); border-radius: 8px; padding: 6px 12px; cursor: pointer; display: inline-flex; gap: 8px; align-items: center; }
+.btn:hover, .seg button:hover { background: var(--accent-soft); }
+.btn:disabled { opacity: 0.45; cursor: default; }
+.btn.primary { border-color: var(--accent); }
+.count { font-family: var(--mono); font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; min-width: 52px; text-align: center; }
+
+main { flex: 1; min-height: 0; display: grid; grid-template-columns: 230px minmax(0, 1fr) 320px; gap: 12px; }
+.col { min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px; }
+.card h2 { margin: 0 0 10px; font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+
+.steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+.steps button { width: 100%; text-align: left; border: 0; background: transparent; border-radius: 8px; padding: 7px 8px; cursor: pointer; display: grid; grid-template-columns: 24px minmax(0, 1fr); gap: 8px; align-items: start; }
+.steps button:hover { background: var(--accent-soft); }
+.steps button[aria-current="step"] { background: var(--accent-soft); box-shadow: inset 2px 0 0 var(--accent); }
+.num { width: 22px; height: 22px; border-radius: 50%; border: 1px solid var(--line); display: grid; place-items: center; font-family: var(--mono); font-size: 11px; color: var(--muted); }
+.done .num { background: var(--good); border-color: var(--good); color: var(--panel); }
+[aria-current="step"] .num { border-color: var(--accent); color: var(--fg); font-weight: 600; }
+.st-title { display: block; font-weight: 500; }
+.st-kind { display: block; font-size: 11px; color: var(--muted); }
+
+#stage { position: relative; height: 46vh; min-height: 300px; border-radius: 12px; overflow: hidden; background: var(--stage); border: 1px solid var(--line); flex: none; }
+#stage canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
+.ov { position: absolute; z-index: 2; }
+.legend { left: 12px; bottom: 12px; display: flex; flex-wrap: wrap; gap: 6px 12px; background: var(--chip); border-radius: 8px; padding: 6px 10px; font-size: 11.5px; color: var(--muted); max-width: calc(100% - 24px); }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.sw { width: 14px; height: 3px; border-radius: 2px; display: inline-block; }
+.pairnote { left: 12px; top: 12px; background: var(--chip); border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; max-width: calc(100% - 24px); }
+.beforebtn { right: 12px; top: 12px; }
+.nogl { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); padding: 24px; text-align: center; }
+
+.drawings { display: grid; gap: 14px; }
+.dw-title { font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); margin: 0 0 4px; }
+.dw-row { display: grid; grid-template-columns: minmax(0, 2.4fr) minmax(0, 1fr); gap: 14px; }
+.scroll-x { overflow-x: auto; }
+svg.dw { width: 100%; height: auto; display: block; min-width: 520px; }
+svg.dw.small { min-width: 220px; }
+.dw text { font-family: var(--mono); font-size: 13px; fill: var(--muted); }
+.dw .lbl { font-family: var(--sans); font-size: 12.5px; }
+.dw .outline { fill: var(--wood); stroke: var(--fg); stroke-width: 1.2; }
+.dw .mk { stroke: var(--pencil); stroke-width: 1.4; fill: none; }
+.dw .hatch { fill: url(#hatch); stroke: var(--pencil); stroke-width: 1.2; }
+.dw .cutfill { fill: var(--wood-cut); stroke: var(--fg); stroke-width: 1.2; }
+.dw .dim line, .dw .dim path { stroke: var(--muted); stroke-width: 1; fill: none; }
+.dw .now.mk, .dw .now .mk { stroke: var(--accent); stroke-width: 2; }
+.dw .now.hatch { fill: url(#hatchNow); stroke: var(--accent); stroke-width: 2; }
+.dw .now.cutfill { stroke: var(--accent); stroke-width: 2.2; }
+.dw .now text, .dw text.now { fill: var(--accent); font-weight: 600; }
+.dw .now.dim line, .dw .now.dim path { stroke: var(--accent); stroke-width: 1.5; }
+
+.kind { display: inline-block; font-size: 11px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; color: var(--accent); margin-bottom: 4px; }
+.now-title { font-size: 18px; font-weight: 600; margin: 0 0 10px; line-height: 1.3; text-wrap: balance; }
+.body p { margin: 0 0 10px; }
+.tools { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 12px; }
+.tool { border: 1px solid var(--line); border-radius: 999px; padding: 2px 10px; font-size: 12px; }
+.check { border: 1px solid var(--good); border-radius: 8px; padding: 8px 10px; background: color-mix(in srgb, var(--good) 10%, transparent); }
+.check strong { display: block; font-size: 11px; letter-spacing: 0.05em; text-transform: uppercase; color: var(--good); }
+.settings { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.settings li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 10px; padding: 6px 8px; border-radius: 8px; border: 1px solid transparent; }
+.settings li.on { border-color: var(--accent); background: var(--accent-soft); }
+.settings li.off { opacity: 0.45; }
+.settings .v { font-family: var(--mono); font-size: 12px; font-variant-numeric: tabular-nums; }
+.settings .n { grid-column: 1 / -1; font-size: 11.5px; color: var(--muted); }
+.partfacts { display: grid; grid-template-columns: 70px minmax(0, 1fr); gap: 4px 10px; margin: 0; }
+.partfacts dt { color: var(--muted); }
+.partfacts dd { margin: 0; }
+
+@media (max-width: 1100px) {
+  body { overflow: auto; height: auto; min-height: 100%; }
+  main { grid-template-columns: minmax(0, 1fr); }
+  .col { overflow: visible; }
+  .steps { grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); }
+  .dw-row { grid-template-columns: minmax(0, 1fr); }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<header class="bar">
+  <div class="ident"><span class="mark">Work card</span><span class="file">clothing_cabinet / side_l</span></div>
+  <div class="seg" role="group" aria-label="Tools you have">
+    <button data-tools="hand" aria-pressed="true">Hand tools</button>
+    <button data-tools="power" aria-pressed="false">Power tools</button>
+  </div>
+  <div class="spacer"></div>
+  <div class="nav">
+    <button class="btn" id="prev" aria-label="Previous step"><kbd>←</kbd> Back</button>
+    <span class="count" id="count"></span>
+    <button class="btn primary" id="next" aria-label="Next step">Next <kbd>→</kbd></button>
+  </div>
+</header>
+
+<main>
+  <div class="col">
+    <section class="card">
+      <h2>Steps</h2>
+      <ol class="steps" id="steps"></ol>
+    </section>
+    <section class="card">
+      <h2>Part</h2>
+      <dl class="partfacts">
+        <dt>Part</dt><dd><code>side_l</code></dd>
+        <dt>Stock</dt><dd>White oak, 19mm, glued up</dd>
+        <dt>Size</dt><dd><code>1662 × 560 × 19</code></dd>
+        <dt>Joints</dt><dd>2 dados, rabbet, rod socket, 8 dowel holes</dd>
+      </dl>
+    </section>
+  </div>
+
+  <div class="col">
+    <div id="stage">
+      <div class="ov pairnote" id="pairNote" hidden>Marked together with <code>side_r</code>, back edges touching, bottom ends flush</div>
+      <button class="ov btn beforebtn" id="beforeBtn" hidden>Show before <kbd>B</kbd></button>
+      <div class="ov legend">
+        <span><i class="sw" style="background:var(--accent)"></i>This step</span>
+        <span><i class="sw" style="background:var(--pencil)"></i>Earlier marks</span>
+        <span>Hatched = waste</span>
+      </div>
+    </div>
+    <section class="card drawings">
+      <div>
+        <p class="dw-title">Reference face (inside), measured from the bottom end and the front edge</p>
+        <div class="scroll-x" id="topView"></div>
+      </div>
+      <div class="dw-row">
+        <div>
+          <p class="dw-title">Bottom end</p>
+          <div class="scroll-x" id="endView"></div>
+        </div>
+        <div>
+          <p class="dw-title">Dado section ×5</p>
+          <div class="scroll-x" id="detailView"></div>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <div class="col">
+    <section class="card">
+      <span class="kind" id="nowKind"></span>
+      <h1 class="now-title" id="nowTitle"></h1>
+      <div class="body" id="nowBody"></div>
+      <div class="tools" id="nowTools"></div>
+      <div class="check" id="nowCheck"><strong>Check</strong><span></span></div>
+    </section>
+    <section class="card">
+      <h2>Tool settings</h2>
+      <ul class="settings" id="settings"></ul>
+    </section>
+  </div>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/controls/OrbitControls.js"></script>
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  // ---------- the part ----------
+  const L = 1662, W = 560, T = 19, DEPTH = 9, RAB = 6;
+  const DADOS = [[500, 519], [1483, 1502]];
+  const SOCKET = { along: 1419, fromFront: 277, d: 28 };
+  const DOWELS = [70, 210, 350, 490];
+
+  // ---------- steps ----------
+  const STEPS = [
+    { kind: 'Stock', title: 'Start with the stock', focus: ['board'], cam: 'overview',
+      hand: { text: ['Glue up the panel from three or four boards, plane it flat to 19mm, then cut it to 1662 × 560mm.', 'Check both ends are square to the front edge.'], tools: ['Hand plane', 'Panel saw', 'Square', 'Tape'] },
+      power: { text: ['Glue up the panel from three or four boards, plane or sand it flat to 19mm, then cut it to 1662 × 560mm.', 'Check both ends are square to the front edge.'], tools: ['Track saw or table saw', 'Square', 'Tape'] },
+      check: 'Diagonals of the panel agree within 1mm.' },
+    { kind: 'Mark', title: 'Mark the reference face and edge', focus: ['refs'], cam: 'refs',
+      both: { text: ['The inside face is the reference face: mark it with a loop. Mark the front edge with a V pointing at the reference face.', 'Every measurement on this card is taken from the reference face, the front edge or the bottom end. The outside face stays clean.'], tools: ['Pencil'] },
+      check: 'Both marks are near the middle of the board, where they will not be cut away.' },
+    { kind: 'Mark', title: 'Pair it with side_r', focus: ['pair'], cam: 'pair', pair: true,
+      both: { text: ['Lay side_r next to it, inside face up, back edges together and bottom ends flush. Clamp the two boards together.', 'Marking both at once is what makes the shelves come out level.'], tools: ['Clamps'] },
+      check: 'Bottom ends are flush: run a straightedge across both.' },
+    { kind: 'Mark', title: 'Mark the dados across both boards', focus: ['dadoLines'], cam: 'pair', pair: true,
+      both: { text: ['From the bottom end, mark 500mm and 519mm for the divider, then 1483mm and 1502mm for the shelf. Use a story stick so both pairs come from one setting.', 'Square knife lines across both boards at each mark, then hatch the waste between each pair.'], tools: ['Marking knife', 'Square', 'Story stick'] },
+      check: 'Hold the divider between the first pair of lines: it should just fit.' },
+    { kind: 'Mark', title: 'Gauge the depths and the rabbet', focus: ['gauge'], cam: 'gauge', pair: true, settings: ['gauge9', 'gauge6'],
+      both: { text: ['Set the marking gauge to 9mm. From the reference face, gauge the dado depth on the front edge between each pair of knife lines, and the rabbet depth along the back edge.', 'Reset the gauge to 6mm and gauge the rabbet width along the reference face, from the back edge. Hatch the rabbet waste.'], tools: ['Marking gauge'] },
+      check: 'Gauge lines meet the knife lines cleanly at the corners.' },
+    { kind: 'Mark', title: 'Mark the holes', focus: ['holes'], cam: 'overview', pair: true,
+      both: { text: ['Rod socket: 1419mm from the bottom end and 277mm from the front edge. Mark the centre with crossing lines.', 'Dowel holes: on both ends, 70, 210, 350 and 490mm from the front edge, centred on the thickness.'], tools: ['Pencil', 'Square', 'Awl'] },
+      check: 'The socket centre is halfway between the front edge and the back panel.' },
+    { kind: 'Cut', title: 'Cut the rabbet', focus: ['rabbetCut'], cam: 'gauge', cut: 'rabbet', settings: ['router9', 'rebate'],
+      hand: { text: ['Saw down the shoulder line on the reference face to the depth line, keeping the kerf on the waste side.', 'Plane the rabbet with a rebate plane, working down to both gauge lines.'], tools: ['Tenon saw', 'Rebate plane'] },
+      power: { text: ['Router with a straight bit and an edge fence, set 9mm deep and 6mm wide.', 'Take a light first pass along the back edge, then cut to full depth.'], tools: ['Router', 'Edge fence'] },
+      check: 'The back panel drops in and sits flush with the back edge.' },
+    { kind: 'Cut', title: 'Cut the dados', focus: ['dadoCut'], cam: 'dado', cut: 'dado', settings: ['router9', 'routerplane'],
+      hand: { text: ['Saw on the waste side of each knife line, down to the gauge lines.', 'Chop out most of the waste with a chisel, bevel down, working in from the front edge. Finish the bottom flat with a router plane set to 9mm.'], tools: ['Tenon saw', 'Chisel 12mm', 'Router plane'] },
+      power: { text: ['Clamp a straight guide across the board for each wall of the dado.', 'Router with a 12mm straight bit, two passes to reach 9mm, moving the guide once to cut the full 19mm width.'], tools: ['Router', '12mm straight bit', 'Clamped guide'] },
+      check: 'The divider and shelf push in with hand pressure and leave no gaps at the shoulders.' },
+    { kind: 'Cut', title: 'Bore the rod socket', focus: ['socketCut'], cam: 'socket', cut: 'socket', settings: ['forstner'],
+      hand: { text: ['Brace with a 28mm auger bit. Wrap tape around the bit at 9mm as a depth flag and bore straight down on the centre mark.'], tools: ['Brace', '28mm auger bit'] },
+      power: { text: ['Drill press, or a drill in a guide, with a 28mm Forstner bit and the depth stop at 9mm.'], tools: ['Drill press', '28mm Forstner bit'] },
+      check: 'The end of the rod seats fully in the socket.' },
+    { kind: 'Cut', title: 'Drill the dowel holes', focus: ['dowelCut'], cam: 'ends', cut: 'dowels', settings: ['dowel'],
+      both: { text: ['Clamp a dowel jig on each end in turn. Drill the four holes with a 10mm brad point bit, with a depth stop at 25mm.'], tools: ['Dowel jig', '10mm brad point bit', 'Depth stop'] },
+      check: 'Holes are square to the end: a dowel pushed in stands upright.' },
+    { kind: 'Check', title: 'Dry fit and move on', focus: ['check'], cam: 'overview',
+      both: { text: ['Dry fit the divider and the shelf, and test the back panel in the rabbet. Don’t glue yet.', 'side_r is already marked: repeat the cutting steps on it.'], tools: [] },
+      check: 'Every joint closes by hand. Number the joints so they go back together the same way.' },
+  ];
+
+  const SETTINGS = [
+    { id: 'gauge9', label: 'Marking gauge', v: '9mm', n: 'Dado depth and rabbet depth, both boards', tools: 'both' },
+    { id: 'gauge6', label: 'Marking gauge', v: '6mm', n: 'Rabbet width', tools: 'both' },
+    { id: 'rebate', label: 'Rebate plane depth stop', v: '9mm', n: 'Rabbet', tools: 'hand' },
+    { id: 'routerplane', label: 'Router plane', v: '9mm', n: 'Dado bottoms', tools: 'hand' },
+    { id: 'router9', label: 'Router depth', v: '9mm', n: 'Rabbet and dados', tools: 'power' },
+    { id: 'forstner', label: 'Forstner or auger bit', v: '28mm, stop at 9mm', n: 'Rod socket', tools: 'both' },
+    { id: 'dowel', label: 'Dowel jig and bit', v: '10mm, stop at 25mm', n: '8 holes, both ends', tools: 'both' },
+  ];
+
+  let step = 0, toolMode = 'hand', showBefore = false;
+  const CUT_AT = { rabbet: 6, dado: 7, socket: 8, dowels: 9 };
+  const cutDone = name => (showBefore ? step - 1 : step) >= CUT_AT[name];
+
+  // ---------- drawings (SVG) ----------
+  const S = 0.54, X = x => 50 + x * S, Y = zf => 60 + (W - zf) * S;
+  const attrs = (o) => Object.entries(o).map(([k, v]) => `${k}="${v}"`).join(' ');
+  function dimH(x0, x1, y, label, tag) {
+    const a = X(x0), b = X(x1);
+    return `<g class="dim" ${tag}><line x1="${a}" y1="${y}" x2="${b}" y2="${y}"/><line x1="${a}" y1="${y - 6}" x2="${a}" y2="${y + 6}"/><line x1="${b}" y1="${y - 6}" x2="${b}" y2="${y + 6}"/><text x="${(a + b) / 2}" y="${y - 6}" text-anchor="middle">${label}</text></g>`;
+  }
+  function dimV(z0, z1, x, label, tag) {
+    const a = Y(z0), b = Y(z1);
+    return `<g class="dim" ${tag}><line x1="${x}" y1="${a}" x2="${x}" y2="${b}"/><line x1="${x - 6}" y1="${a}" x2="${x + 6}" y2="${a}"/><line x1="${x - 6}" y1="${b}" x2="${x + 6}" y2="${b}"/><text x="${x - 8}" y="${(a + b) / 2}" text-anchor="middle" transform="rotate(-90 ${x - 8} ${(a + b) / 2})">${label}</text></g>`;
+  }
+  const defs = `<defs>
+    <pattern id="hatch" width="8" height="8" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="8" height="8" fill="var(--wood)"/><line x1="0" y1="0" x2="0" y2="8" stroke="var(--pencil)" stroke-width="1.3"/></pattern>
+    <pattern id="hatchNow" width="8" height="8" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="8" height="8" fill="var(--wood)"/><line x1="0" y1="0" x2="0" y2="8" stroke="var(--accent)" stroke-width="1.6"/></pattern>
+  </defs>`;
+
+  function topViewSVG() {
+    const t = (key, from, extra = '') => `data-key="${key}" data-from="${from}" ${extra}`;
+    let s = `<svg class="dw" viewBox="0 0 1010 480" role="img" aria-label="Reference face of side_l with the dados, rabbet and rod socket dimensioned">${defs}`;
+    s += `<rect class="outline" x="${X(0)}" y="${Y(W)}" width="${L * S}" height="${W * S}"/>`;
+    s += dimH(0, L, 30, '1662', t('board', 0));
+    s += dimV(0, W, 1000, '560', t('board', 0));
+    s += `<g ${t('refs', 1)}><path class="mk" d="M ${X(980)} ${Y(70)} c 18 -26 40 -26 30 0 s -34 24 -10 6 s 30 -18 38 -8"/><text class="lbl" x="${X(1060)}" y="${Y(64)}">reference face</text>`;
+    s += `<path class="mk" d="M ${X(990)} ${Y(0) + 10} l 8 12 l 8 -12"/><text class="lbl" x="${X(1030)}" y="${Y(0) + 22}">front edge</text></g>`;
+    for (const [a, b] of DADOS) {
+      s += `<rect class="hatch" ${t('dadoLines', 3, 'data-cut="dado" data-cutkey="dadoCut"')} x="${X(a)}" y="${Y(W - RAB)}" width="${(b - a) * S}" height="${(W - RAB) * S}"/>`;
+      s += `<text ${t('dadoLines', 3)} x="${X((a + b) / 2)}" y="52" text-anchor="middle">19</text>`;
+    }
+    s += `<rect class="hatch" ${t('gauge', 4, 'data-cut="rabbet" data-cutkey="rabbetCut"')} x="${X(0)}" y="${Y(W)}" width="${L * S}" height="${RAB * S}"/>`;
+    s += `<g ${t('gauge', 4)}><text x="${X(L) + 8}" y="${Y(W - 3) + 4}">6</text></g>`;
+    const cx = X(SOCKET.along), cy = Y(SOCKET.fromFront), r = (SOCKET.d / 2) * S;
+    s += `<g ${t('holes', 5, 'data-cutkey="socketCut"')}><circle class="mk" cx="${cx}" cy="${cy}" r="${r}"/><line class="mk" x1="${cx - 14}" y1="${cy}" x2="${cx + 14}" y2="${cy}"/><line class="mk" x1="${cx}" y1="${cy - 14}" x2="${cx}" y2="${cy + 14}"/></g>`;
+    s += `<circle class="cutfill" data-key="holes" data-from="8" data-cutshow="socket" data-cutkey="socketCut" cx="${cx}" cy="${cy}" r="${r}"/>`;
+    s += dimH(0, 500, 392, '500', t('dadoLines', 3));
+    s += dimH(0, SOCKET.along, 422, '1419', t('holes', 5));
+    s += dimH(0, 1483, 452, '1483', t('dadoLines', 3));
+    s += dimV(0, SOCKET.fromFront, 975, '277', t('holes', 5));
+    return s + '</svg>';
+  }
+
+  function endViewSVG() {
+    const E = 1.5, ex = zf => 60 + zf * E, y0 = 30, y1 = y0 + T * E, yd = y0 + DEPTH * E;
+    const t = (key, from, extra = '') => `data-key="${key}" data-from="${from}" ${extra}`;
+    let s = `<svg class="dw" viewBox="0 0 1000 130" role="img" aria-label="Bottom end of side_l with the dowel holes and the rabbet">${defs}`;
+    s += `<rect class="outline" data-cuthide="rabbet" x="${ex(0)}" y="${y0}" width="${W * E}" height="${T * E}"/>`;
+    s += `<polygon class="outline" data-cutshow="rabbet" points="${ex(0)},${y0} ${ex(W - RAB)},${y0} ${ex(W - RAB)},${yd} ${ex(W)},${yd} ${ex(W)},${y1} ${ex(0)},${y1}"/>`;
+    s += `<g ${t('gauge', 4, 'data-cutkey="rabbetCut"')}><line class="mk" x1="${ex(W - RAB)}" y1="${y0}" x2="${ex(W - RAB)}" y2="${yd}"/><line class="mk" x1="${ex(W - RAB)}" y1="${yd}" x2="${ex(W)}" y2="${yd}"/><text x="${ex(W - 3)}" y="${y0 - 8}" text-anchor="middle">6 × 9</text></g>`;
+    for (const zf of DOWELS) {
+      s += `<g ${t('holes', 5, 'data-cutkey="dowelCut"')}><line class="mk" x1="${ex(zf) - 9}" y1="${(y0 + y1) / 2}" x2="${ex(zf) + 9}" y2="${(y0 + y1) / 2}"/><line class="mk" x1="${ex(zf)}" y1="${y0 + 3}" x2="${ex(zf)}" y2="${y1 - 3}"/></g>`;
+      s += `<circle class="cutfill" data-key="holes" data-from="9" data-cutshow="dowels" data-cutkey="dowelCut" cx="${ex(zf)}" cy="${(y0 + y1) / 2}" r="${5 * E}"/>`;
+    }
+    const dh = (a, b, y, label) => `<line x1="${ex(a)}" y1="${y}" x2="${ex(b)}" y2="${y}"/><line x1="${ex(a)}" y1="${y - 5}" x2="${ex(a)}" y2="${y + 5}"/><line x1="${ex(b)}" y1="${y - 5}" x2="${ex(b)}" y2="${y + 5}"/><text x="${(ex(a) + ex(b)) / 2}" y="${y - 5}" text-anchor="middle">${label}</text>`;
+    s += `<g class="dim" ${t('holes', 5)}>${dh(0, 70, 100, '70')}${dh(70, 210, 100, '140')}${dh(210, 350, 100, '140')}${dh(350, 490, 100, '140')}</g>`;
+    s += `<g class="dim" ${t('board', 0)}><line x1="40" y1="${y0}" x2="40" y2="${y1}"/><text x="30" y="${(y0 + y1) / 2 + 4}" text-anchor="end">19</text></g>`;
+    s += `<text class="lbl" x="${ex(0)}" y="122">front edge</text><text class="lbl" x="${ex(W)}" y="122" text-anchor="end">back edge</text>`;
+    return s + '</svg>';
+  }
+
+  function detailSVG() {
+    const k = 5, x0 = 40, wv = 280, y0 = 40, y1 = y0 + T * k, dl = x0 + 92, dr = dl + 19 * k, yd = y0 + DEPTH * k;
+    const t = (key, from, extra = '') => `data-key="${key}" data-from="${from}" ${extra}`;
+    let s = `<svg class="dw small" viewBox="0 0 360 170" role="img" aria-label="Section through a dado, five times full size">${defs}`;
+    s += `<rect class="outline" data-cuthide="dado" x="${x0}" y="${y0}" width="${wv}" height="${T * k}"/>`;
+    s += `<polygon class="outline" data-cutshow="dado" points="${x0},${y0} ${dl},${y0} ${dl},${yd} ${dr},${yd} ${dr},${y0} ${x0 + wv},${y0} ${x0 + wv},${y1} ${x0},${y1}"/>`;
+    s += `<g ${t('dadoLines', 3, 'data-cutkey="dadoCut"')}><line class="mk" x1="${dl}" y1="${y0 - 10}" x2="${dl}" y2="${y0 + 4}"/><line class="mk" x1="${dr}" y1="${y0 - 10}" x2="${dr}" y2="${y0 + 4}"/><text x="${(dl + dr) / 2}" y="${y0 - 14}" text-anchor="middle">19</text></g>`;
+    s += `<g ${t('gauge', 4, 'data-cutkey="dadoCut"')}><line class="mk" x1="${dl}" y1="${yd}" x2="${dr}" y2="${yd}" stroke-dasharray="5 4"/><text x="${dr + 10}" y="${(y0 + yd) / 2 + 4}">9</text></g>`;
+    s += `<g class="dim" ${t('board', 0)}><line x1="${x0 + wv + 14}" y1="${y0}" x2="${x0 + wv + 14}" y2="${y1}"/><text x="${x0 + wv + 20}" y="${(y0 + y1) / 2 + 4}">19</text></g>`;
+    return s + '</svg>';
+  }
+
+  $('topView').innerHTML = topViewSVG();
+  $('endView').innerHTML = endViewSVG();
+  $('detailView').innerHTML = detailSVG();
+
+  function updateDrawings() {
+    const focus = STEPS[step].focus;
+    document.querySelectorAll('svg.dw [data-from], svg.dw [data-cutshow], svg.dw [data-cuthide]').forEach(el => {
+      const from = el.dataset.from === undefined ? 0 : Number(el.dataset.from);
+      let vis = step >= from;
+      if (el.dataset.cutshow) vis = cutDone(el.dataset.cutshow) && (el.dataset.from === undefined || step >= from);
+      if (el.dataset.cuthide) vis = !cutDone(el.dataset.cuthide);
+      el.style.display = vis ? '' : 'none';
+      const isCut = el.dataset.cut && cutDone(el.dataset.cut);
+      if (el.dataset.cut) el.setAttribute('class', isCut ? 'cutfill' : 'hatch');
+      const now = focus.includes(el.dataset.key) || (el.dataset.cutkey && focus.includes(el.dataset.cutkey));
+      el.classList.toggle('now', !!now);
+    });
+  }
+
+  // ---------- 3D ----------
+  const T3 = window.THREE;
+  const stageEl = $('stage');
+  let renderer;
+  try { renderer = new T3.WebGLRenderer({ antialias: true }); }
+  catch (e) { stageEl.insertAdjacentHTML('beforeend', '<div class="nogl">The 3D view needs WebGL, which this browser has turned off. The drawings below show every step.</div>'); renderer = null; }
+
+  let api = { update() {} };
+  if (renderer) api = build3D();
+
+  function build3D() {
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    renderer.outputEncoding = T3.sRGBEncoding;
+    renderer.toneMapping = T3.ACESFilmicToneMapping;
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = T3.PCFSoftShadowMap;
+    stageEl.prepend(renderer.domElement);
+
+    const scene = new T3.Scene();
+    const camera = new T3.PerspectiveCamera(30, 1, 5, 20000);
+    camera.position.set(1500, 1300, 1700);
+    const controls = new T3.OrbitControls(camera, renderer.domElement);
+    controls.target.set(831, 0, -150);
+    controls.enableDamping = true;
+    controls.maxPolarAngle = Math.PI * 0.49;
+
+    scene.add(new T3.HemisphereLight(0xfffaf2, 0xb3a088, 0.8));
+    const key = new T3.DirectionalLight(0xfff3e2, 1.0);
+    key.position.set(300, 2200, 1400);
+    key.castShadow = true;
+    key.shadow.mapSize.set(2048, 2048);
+    Object.assign(key.shadow.camera, { left: -400, right: 2200, top: 1400, bottom: -1400, near: 100, far: 6000 });
+    key.target.position.set(831, 0, -280);
+    scene.add(key, key.target);
+    const ground = new T3.Mesh(new T3.PlaneGeometry(10000, 10000), new T3.ShadowMaterial({ opacity: 0.18 }));
+    ground.rotation.x = -Math.PI / 2; ground.position.y = -0.5; ground.receiveShadow = true;
+    scene.add(ground);
+
+    // procedural oak
+    function rng(seed) { let s = seed; return () => (s = (s * 16807) % 2147483647) / 2147483647; }
+    function canvas() { const c = document.createElement('canvas'); c.width = c.height = 512; return c; }
+    function grain(seed) {
+      const c = canvas(), g = c.getContext('2d'), r = rng(seed);
+      g.fillStyle = '#c9a06a'; g.fillRect(0, 0, 512, 512); g.strokeStyle = '#6e4a24'; g.fillStyle = '#6e4a24';
+      for (let i = 0; i < 160; i++) {
+        const y = r() * 512, amp = 1 + r() * 5, k = 1 + Math.floor(r() * 3), ph = r() * 6.28;
+        g.globalAlpha = 0.04 + r() * 0.15; g.lineWidth = 0.4 + r() * 1.8;
+        for (const off of [-512, 0, 512]) { g.beginPath(); for (let x = 0; x <= 512; x += 8) { const yy = y + off + Math.sin((x / 512) * k * 6.283 + ph) * amp; x ? g.lineTo(x, yy) : g.moveTo(x, yy); } g.stroke(); }
+      }
+      for (let i = 0; i < 1500; i++) { g.globalAlpha = 0.05 + r() * 0.1; g.fillRect(r() * 512, r() * 512, 1 + r() * 6, 0.7); }
+      g.globalAlpha = 1; return c;
+    }
+    function endgrain(seed) {
+      const c = canvas(), g = c.getContext('2d'), r = rng(seed);
+      g.fillStyle = '#a77f4d'; g.fillRect(0, 0, 512, 512); g.strokeStyle = '#5e3e1c';
+      for (let rad = 10; rad < 1500; rad += 5 + r() * 12) { g.globalAlpha = 0.15 + r() * 0.25; g.lineWidth = 0.8 + r() * 2; g.beginPath(); g.arc(-300, 900, rad, 0, 6.283); g.stroke(); }
+      g.globalAlpha = 1; return c;
+    }
+    function hatchCanvas(color) {
+      const c = document.createElement('canvas'); c.width = c.height = 64; const g = c.getContext('2d');
+      g.strokeStyle = color; g.lineWidth = 3;
+      for (let i = -64; i < 128; i += 16) { g.beginPath(); g.moveTo(i, 64); g.lineTo(i + 64, 0); g.stroke(); }
+      return c;
+    }
+    function symbolCanvas(draw) { const c = document.createElement('canvas'); c.width = 256; c.height = 160; const g = c.getContext('2d'); g.lineCap = 'round'; g.lineJoin = 'round'; draw(g); return c; }
+    const aniso = renderer.capabilities.getMaxAnisotropy();
+    const tex = (c, srgb = true) => { const t = new T3.CanvasTexture(c); t.wrapS = t.wrapT = T3.RepeatWrapping; if (srgb) t.encoding = T3.sRGBEncoding; t.anisotropy = aniso; return t; };
+    const FACE = tex(grain(5)), END = tex(endgrain(9));
+
+    const woodMat = (map) => new T3.MeshStandardMaterial({ map, roughness: 0.75, metalness: 0 });
+    function slab(x0, x1, z0, z1, t, parent, opacity = 1) {
+      const sx = x1 - x0, sz = z1 - z0;
+      const geo = new T3.BoxGeometry(sx, t, sz);
+      const uv = geo.attributes.uv, S = 320;
+      // faces: +x, -x (end grain), +y, -y, +z, -z (grain along x)
+      const scale = [[sz / S, t / S], [sz / S, t / S], [sx / S, sz / S], [sx / S, sz / S], [sx / S, t / S], [sx / S, t / S]];
+      for (let f = 0; f < 6; f++) for (let k = 0; k < 4; k++) { const i = f * 4 + k; uv.setXY(i, uv.getX(i) * scale[f][0] + x0 / S, uv.getY(i) * scale[f][1]); }
+      const fm = woodMat(FACE), em = woodMat(END);
+      if (opacity < 1) for (const m of [fm, em]) { m.transparent = true; m.opacity = opacity; m.depthWrite = false; }
+      const mesh = new T3.Mesh(geo, [em, em, fm, fm, fm, fm]);
+      mesh.position.set((x0 + x1) / 2, t / 2, (z0 + z1) / 2);
+      mesh.castShadow = opacity === 1; mesh.receiveShadow = true;
+      const e = new T3.LineSegments(new T3.EdgesGeometry(geo), new T3.LineBasicMaterial({ color: 0x2b1d10, transparent: true, opacity: opacity < 1 ? 0.2 : 0.4 }));
+      mesh.add(e);
+      parent.add(mesh);
+      return mesh;
+    }
+
+    // side_l: front edge toward the viewer (z = +280), back edge at z = -280, bottom end at x = 0
+    const ZF = 280, ZB = -280, zOf = fromFront => ZF - fromFront;
+    const boardG = new T3.Group(); scene.add(boardG);
+    function rebuildBoard() {
+      while (boardG.children.length) { const c = boardG.children[0]; boardG.remove(c); c.geometry.dispose(); }
+      const rab = cutDone('rabbet'), dado = cutDone('dado');
+      const z0 = rab ? ZB + RAB : ZB;
+      const xs = dado ? [0, 500, 519, 1483, 1502, L] : [0, L];
+      for (let i = 0; i < xs.length - 1; i++) slab(xs[i], xs[i + 1], z0, ZF, dado && (i === 1 || i === 3) ? T - DEPTH : T, boardG);
+      if (rab) slab(0, L, ZB, ZB + RAB, T - DEPTH, boardG);
+      holesG.visible = true;
+      socketHole.visible = cutDone('socket');
+      dowelHoles.forEach(h => { h.visible = cutDone('dowels'); });
+    }
+
+    // side_r, clamped alongside: back edges touching
+    const pairG = new T3.Group(); scene.add(pairG);
+    slab(0, L, ZB - W, ZB, T, pairG, 0.55);
+
+    // holes (shown once cut)
+    const holesG = new T3.Group(); scene.add(holesG);
+    const holeMat = new T3.MeshBasicMaterial({ color: 0x2a1c10 });
+    const socketHole = new T3.Mesh(new T3.CircleGeometry(SOCKET.d / 2, 40), holeMat);
+    socketHole.rotation.x = -Math.PI / 2; socketHole.position.set(SOCKET.along, T + 0.08, zOf(SOCKET.fromFront));
+    holesG.add(socketHole);
+    const dowelHoles = [];
+    for (const zf of DOWELS) for (const end of [0, L]) {
+      const h = new T3.Mesh(new T3.CircleGeometry(5, 24), holeMat);
+      h.rotation.y = end === 0 ? -Math.PI / 2 : Math.PI / 2;
+      h.position.set(end === 0 ? -0.08 : L + 0.08, T / 2, zOf(zf));
+      holesG.add(h); dowelHoles.push(h);
+    }
+
+    // marks
+    const PENCIL = new T3.Color(), ACCENT = new T3.Color();
+    const markMats = [];
+    const markMat = () => { const m = new T3.MeshBasicMaterial({ transparent: true, opacity: 0.95, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4, side: T3.DoubleSide, toneMapped: false }); markMats.push(m); return m; };
+    const marks = [];   // { obj, key, from, cut, onPair }
+    function addMark(obj, key, from, cut, onPair = false) { obj.renderOrder = 2; scene.add(obj); marks.push({ obj, key, from, cut, onPair }); }
+    const LINE = 3;
+    function lineTop(x0, z0, x1, z1, key, from, cut, onPair, y = T) {
+      const len = Math.hypot(x1 - x0, z1 - z0);
+      const m = new T3.Mesh(new T3.PlaneGeometry(len, LINE), markMat());
+      m.rotation.x = -Math.PI / 2; m.rotation.z = -Math.atan2(z1 - z0, x1 - x0);
+      m.position.set((x0 + x1) / 2, y + 0.1, (z0 + z1) / 2);
+      addMark(m, key, from, cut, onPair);
+    }
+    function lineEdge(x0, x1, y, z, key, from, cut) {
+      const m = new T3.Mesh(new T3.PlaneGeometry(x1 - x0, LINE), markMat());
+      m.position.set((x0 + x1) / 2, y, z + (z > 0 ? 0.1 : -0.1));
+      addMark(m, key, from, cut);
+    }
+    function crossEnd(x, z, key, from, cut) {
+      for (const [w, h] of [[24, LINE], [LINE, 12]]) {
+        const m = new T3.Mesh(new T3.PlaneGeometry(w, h), markMat());
+        m.rotation.y = Math.PI / 2;
+        m.position.set(x === 0 ? -0.1 : L + 0.1, T / 2, z);
+        addMark(m, key, from, cut);
+      }
+    }
+    const hatchTex = { pencil: null, accent: null };
+    function hatchTop(x0, x1, z0, z1, key, from, cut, onPair) {
+      const mat = markMat(); mat.userData.hatch = true;
+      const m = new T3.Mesh(new T3.PlaneGeometry(x1 - x0, z1 - z0), mat);
+      const uv = m.geometry.attributes.uv; for (let i = 0; i < uv.count; i++) uv.setXY(i, uv.getX(i) * (x1 - x0) / 40, uv.getY(i) * (z1 - z0) / 40); uv.needsUpdate = true;
+      m.rotation.x = -Math.PI / 2; m.position.set((x0 + x1) / 2, T + 0.05, (z0 + z1) / 2);
+      addMark(m, key, from, cut, onPair);
+    }
+    function symbol(c, w, h, pos, rot, key, from) {
+      const mat = markMat(); mat.userData.symbol = tex(c, false);
+      const m = new T3.Mesh(new T3.PlaneGeometry(w, h), mat);
+      m.position.copy(pos); if (rot) m.rotation.set(...rot);
+      addMark(m, key, from, null);
+    }
+
+    // reference marks
+    symbol(symbolCanvas(g => { g.lineWidth = 12; g.strokeStyle = '#fff'; g.beginPath(); g.moveTo(30, 110); g.bezierCurveTo(70, 20, 130, 20, 110, 90); g.bezierCurveTo(95, 140, 60, 110, 110, 70); g.bezierCurveTo(150, 40, 200, 60, 226, 70); g.stroke(); }),
+      150, 94, new T3.Vector3(1000, T + 0.1, 190), [-Math.PI / 2, 0, 0], 'refs', 1);
+    symbol(symbolCanvas(g => { g.lineWidth = 16; g.strokeStyle = '#fff'; g.beginPath(); g.moveTo(70, 20); g.lineTo(128, 140); g.lineTo(186, 20); g.stroke(); }),
+      40, 25, new T3.Vector3(1000, T / 2, ZF + 0.12), null, 'refs', 1);
+
+    // dado knife lines and waste, across both boards
+    for (const [a, b] of DADOS) for (const x of [a, b]) {
+      lineTop(x, ZB, x, ZF, 'dadoLines', 3, 'dado');
+      lineTop(x, ZB - W, x, ZB, 'dadoLines', 3, null, true);
+    }
+    for (const [a, b] of DADOS) { hatchTop(a, b, ZB + RAB, ZF, 'dadoLines', 3, 'dado'); hatchTop(a, b, ZB - W, ZB - RAB, 'dadoLines', 3, null, true); }
+    // gauge lines: dado depth on the front edge, rabbet depth on the back edge, rabbet width on the face
+    for (const [a, b] of DADOS) lineEdge(a, b, T - DEPTH, ZF, 'gauge', 4, 'dado');
+    lineEdge(0, L, T - DEPTH, ZB, 'gauge', 4, 'rabbet');
+    lineTop(0, ZB + RAB, L, ZB + RAB, 'gauge', 4, 'rabbet');
+    lineTop(0, ZB - RAB, L, ZB - RAB, 'gauge', 4, null, true);
+    hatchTop(0, L, ZB, ZB + RAB, 'gauge', 4, 'rabbet');
+    // holes
+    const sz = zOf(SOCKET.fromFront);
+    lineTop(SOCKET.along - 30, sz, SOCKET.along + 30, sz, 'holes', 5, 'socket');
+    lineTop(SOCKET.along, sz - 30, SOCKET.along, sz + 30, 'holes', 5, 'socket');
+    const ring = new T3.Mesh(new T3.RingGeometry(SOCKET.d / 2 - 1.5, SOCKET.d / 2 + 1.5, 48), markMat());
+    ring.rotation.x = -Math.PI / 2; ring.position.set(SOCKET.along, T + 0.1, sz); addMark(ring, 'holes', 5, 'socket');
+    for (const zf of DOWELS) { crossEnd(0, zOf(zf), 'holes', 5, 'dowels'); crossEnd(L, zOf(zf), 'holes', 5, 'dowels'); }
+
+    // camera framing per step
+    const CAMS = {
+      overview: { p: [1550, 1350, 1650], t: [831, 0, -200] },
+      refs: { p: [1250, 520, 950], t: [1000, 10, 200] },
+      pair: { p: [1450, 1700, 1300], t: [831, 0, -300] },
+      gauge: { p: [-260, 420, 560], t: [420, 8, 0] },
+      dado: { p: [880, 380, 760], t: [520, 6, 120] },
+      socket: { p: [1700, 420, 520], t: [1419, 10, 0] },
+      ends: { p: [-620, 300, 560], t: [0, 10, 0] },
+    };
+    let tween = null;
+    controls.addEventListener('start', () => { tween = null; });
+    function flyTo(name) {
+      const c = CAMS[name]; const p1 = new T3.Vector3(...c.p), t1 = new T3.Vector3(...c.t);
+      if (reduceMotion) { camera.position.copy(p1); controls.target.copy(t1); return; }
+      tween = { p0: camera.position.clone(), t0: controls.target.clone(), p1, t1, s: 0 };
+    }
+
+    function readTheme() {
+      const cs = getComputedStyle(document.documentElement);
+      PENCIL.set(cs.getPropertyValue('--pencil').trim() || '#3d3731');
+      ACCENT.set(cs.getPropertyValue('--accent').trim() || '#2f6fd6');
+      renderer.setClearColor(new T3.Color(cs.getPropertyValue('--stage').trim() || '#e7e3dd'), 1);
+      // marks are drawn on wood in both themes, so pencil stays dark on the board
+      PENCIL.set('#2e2924');
+      hatchTex.pencil = tex(hatchCanvas('#2e2924'), false);
+      hatchTex.accent = tex(hatchCanvas('#' + ACCENT.getHexString()), false);
+    }
+
+    function update(prevCam) {
+      const focus = STEPS[step].focus;
+      rebuildBoard();
+      const pairVis = !!STEPS[step].pair;
+      pairG.visible = pairVis;
+      for (const mk of marks) {
+        let vis = step >= mk.from;
+        if (mk.cut && cutDone(mk.cut)) vis = false;
+        if (mk.onPair && !pairVis) vis = false;
+        mk.obj.visible = vis;
+        const now = focus.includes(mk.key) || (mk.cut && focus.includes(mk.cut + 'Cut'));
+        const m = mk.obj.material;
+        if (m.userData.symbol) { m.map = m.userData.symbol; m.color.copy(now ? ACCENT : PENCIL); }
+        else if (m.userData.hatch) { m.map = now ? hatchTex.accent : hatchTex.pencil; m.color.set(0xffffff); m.opacity = 0.7; }
+        else m.color.copy(now ? ACCENT : PENCIL);
+        m.needsUpdate = true;
+      }
+      if (STEPS[step].cam !== prevCam) flyTo(STEPS[step].cam);
+    }
+
+    function resize() {
+      const r = stageEl.getBoundingClientRect(); if (!r.width || !r.height) return;
+      renderer.setSize(r.width, r.height, false); camera.aspect = r.width / r.height; camera.updateProjectionMatrix();
+    }
+    new ResizeObserver(resize).observe(stageEl); resize();
+    readTheme();
+    const onTheme = () => { readTheme(); update(STEPS[step].cam); };
+    matchMedia('(prefers-color-scheme: dark)').addEventListener('change', onTheme);
+    new MutationObserver(onTheme).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+
+    let last = performance.now();
+    (function tick(now) {
+      const dt = Math.min(0.05, (now - last) / 1000); last = now;
+      if (tween) {
+        tween.s = Math.min(1, tween.s + dt / 0.8);
+        const e = tween.s < 0.5 ? 2 * tween.s * tween.s : 1 - Math.pow(-2 * tween.s + 2, 2) / 2;
+        camera.position.lerpVectors(tween.p0, tween.p1, e); controls.target.lerpVectors(tween.t0, tween.t1, e);
+        if (tween.s >= 1) tween = null;
+      }
+      controls.update();
+      renderer.render(scene, camera);
+      requestAnimationFrame(tick);
+    })(last);
+
+    const c0 = CAMS.overview; camera.position.set(...c0.p); controls.target.set(...c0.t);
+    return { update };
+  }
+
+  // ---------- panels ----------
+  const esc = s => s.replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+  const codeify = s => esc(s).replace(/\b(side_l|side_r)\b/g, '<code>$1</code>');
+  $('steps').innerHTML = STEPS.map((s, i) => `<li><button data-step="${i}"><span class="num">${i + 1}</span><span><span class="st-title">${codeify(s.title)}</span><span class="st-kind">${s.kind}</span></span></button></li>`).join('');
+  document.querySelectorAll('[data-step]').forEach(b => b.addEventListener('click', () => go(Number(b.dataset.step))));
+
+  function renderPanels() {
+    const s = STEPS[step], body = s.both || s[toolMode];
+    $('nowKind').textContent = `Step ${step + 1} · ${s.kind}`;
+    $('nowTitle').innerHTML = codeify(s.title);
+    $('nowBody').innerHTML = body.text.map(p => `<p>${codeify(p)}</p>`).join('');
+    $('nowTools').innerHTML = body.tools.map(t => `<span class="tool">${esc(t)}</span>`).join('');
+    $('nowTools').hidden = !body.tools.length;
+    $('nowCheck').querySelector('span').textContent = s.check;
+    $('count').textContent = `${step + 1} / ${STEPS.length}`;
+    $('prev').disabled = step === 0;
+    $('next').disabled = step === STEPS.length - 1;
+    $('pairNote').hidden = !s.pair;
+    $('beforeBtn').hidden = !s.cut;
+    $('beforeBtn').innerHTML = (showBefore ? 'Show after' : 'Show before') + ' <kbd>B</kbd>';
+    document.querySelectorAll('[data-step]').forEach(b => {
+      const i = Number(b.dataset.step);
+      if (i === step) b.setAttribute('aria-current', 'step'); else b.removeAttribute('aria-current');
+      b.classList.toggle('done', i < step);
+    });
+    const used = new Set(s.settings || []);
+    $('settings').innerHTML = SETTINGS.filter(x => x.tools === 'both' || x.tools === toolMode).map(x =>
+      `<li class="${used.has(x.id) ? 'on' : step > 0 && !used.has(x.id) ? 'off' : ''}"><span>${esc(x.label)}</span><span class="v">${esc(x.v)}</span><span class="n">${esc(x.n)}</span></li>`).join('');
+  }
+
+  let prevCam = null;
+  function go(i) {
+    step = Math.max(0, Math.min(STEPS.length - 1, i));
+    showBefore = false;
+    refresh();
+  }
+  function refresh() {
+    renderPanels();
+    updateDrawings();
+    api.update(prevCam);
+    prevCam = STEPS[step].cam;
+  }
+
+  $('prev').addEventListener('click', () => go(step - 1));
+  $('next').addEventListener('click', () => go(step + 1));
+  $('beforeBtn').addEventListener('click', () => { showBefore = !showBefore; refresh(); });
+  document.querySelectorAll('[data-tools]').forEach(b => b.addEventListener('click', () => {
+    toolMode = b.dataset.tools;
+    document.querySelectorAll('[data-tools]').forEach(x => x.setAttribute('aria-pressed', String(x === b)));
+    renderPanels();
+  }));
+  window.addEventListener('keydown', e => {
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    if (e.key === 'ArrowRight') { go(step + 1); e.preventDefault(); }
+    else if (e.key === 'ArrowLeft') { go(step - 1); e.preventDefault(); }
+    else if ((e.key === 'b' || e.key === 'B') && STEPS[step].cut) { showBefore = !showBefore; refresh(); }
+  });
+
+  refresh();
+})();
+</script>

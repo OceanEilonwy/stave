@@ -1,0 +1,40 @@
+stave 1
+
+// The project module: every .stave file in this folder shares these names.
+// carcass.stave, doors.stave and drawers.stave use them without importing.
+
+project "Clothing cabinet" {
+  goal:       "Heirloom quality clothing cabinet with two hinged doors and two drawers at the bottom"
+  units:      mm
+  resolution: 0.5mm        // the cut list rounds to this and says where it rounded
+  style:      shaker       // hint for suggestions
+  tools:      [marking_knife, square, tape, marking_gauge, tenon_saw, chisel,
+               router_plane, router, straight_bit, clamps, drill, depth_stop,
+               dowel_jig, lathe]   // work cards use recipes for these tools
+}
+
+// ---- parameters: the knobs ----
+param cabinet_width  = 900mm  within 600mm..1200mm
+param cabinet_height = 1700mm within 1200mm..2100mm    // bottom of the base to top of the top, without feet
+param cabinet_depth  = 560mm  within 450mm..650mm
+param drawer_zone    = 500mm  within 300mm..700mm      // height of the drawer section
+param slide_length   = 500mm  within [350mm, 400mm, 450mm, 500mm]
+param reveal         = 1.5mm  locked                   // gap between neighbouring fronts
+
+let overhang = 20mm
+
+// ---- checks that must stay true ----
+require hanger_room : cabinet_depth - back.thickness >= 540mm "room for coat hangers"
+require overall_height : extent([base, side_l, top], up) == cabinet_height "overall height matches cabinet_height"
+
+// ---- scenes ----
+scene all_open "All open" {
+  pose door_l = open
+  pose door_r = open
+  pose drawer[top] = open
+}
+
+scene drawer_bench "Top drawer on the bench" {
+  show:    drawer[top]
+  explode: true
+}

@@ -1,0 +1,13 @@
+stave 1
+
+// Three Japanese joints, written to prove that joint kinds are pluggable:
+// nothing here needs code in Stave itself.
+//
+//   ari_tsugi     simple: one cut per beam, one assembly step
+//   kanawa_tsugi  complex: marked-out outlines, a key the joint makes, two steps
+//   chidori       complex: three parts in one node and a quarter turn to lock
+//
+// These are samples for the format. Check a joinery reference (and make a
+// trial piece) before cutting good timber from them.
+
+library "Japanese joinery samples"

@@ -1,0 +1,66 @@
+stave 1
+
+/// A frame-and-panel door: two stiles, two rails and a floating panel.
+component FramePanelDoor(
+  opening:     Region,
+  hinge_side:  Part,
+  mount:       Mount,
+  frame:       Stock,
+  panel_stock: Stock,
+  stile_width: Length = 60mm,
+  rail_width:  Length = 60mm,
+  joinery:     JointKind = cope_and_stick,
+  hinge_kind:  HardwareKind = euro_hinge(opening_angle: 110deg),
+  knob_kind:   HardwareKind = knob(diameter: 26mm),
+) {
+  region door = cover(opening, mount)
+
+  part stile[hinge, latch] : frame {
+    length: door.height
+    width:  stile_width
+    place {
+      orient(length: up, width: right)
+      spaced(ends, from: door.left, to: door.right)
+      flush(door.bottom)
+      flush(door.front)
+    }
+  }
+
+  part rail[bottom, top] : frame {
+    length: fit                          // between the stiles; tenons are added by the joint
+    width:  rail_width
+    place {
+      orient(length: right, width: up)
+      spaced(ends, from: door.bottom, to: door.top)
+      center(door, across)
+      flush(door.front)
+    }
+  }
+
+  part panel : panel_stock {
+    length: fit
+    width:  fit
+    place {
+      inside(panel_groove)
+    }
+  }
+
+  joint frame_joints : joinery(rail[*], into: stile[*])
+  joint panel_groove : groove(panel, into: [stile[*], rail[*]]) {
+    depth: 10mm
+    glue:  panel_stock.form == plywood   // solid panels must float
+  }
+
+  hardware hinges[lower, upper] : hinge_kind(stile[hinge], on: hinge_side) {
+    place {
+      spaced(ends, from: door.bottom, to: door.top, inset: 100mm)
+    }
+  }
+
+  hardware handle : knob_kind(stile[latch]) {
+    place {
+      center(stile[latch], across)
+      against(rail[bottom].top, gap: 450mm)
+    }
+  }
+}

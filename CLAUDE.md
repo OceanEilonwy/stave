@@ -1,0 +1,88 @@
+# Stave
+
+Stave is a woodworking CAD tool for beginners: a `.stave` text file describes a
+project (parameters, stock, parts, joints, hardware, relationships), and Stave
+checks it like a compiler, renders it in 3D, and produces a cut list and a PDF
+build plan with a drawn work card for every part. Licence: AGPL-3.0-or-later.
+
+## Sources of truth
+
+- `docs/grammar.md` — the language spec. Code follows the spec; if the spec is
+  wrong or ambiguous, fix the spec in the same change and say so.
+- `docs/plan.md` — the current build push: scope, simplifications, crate
+  ownership, interfaces and definition of done.
+- `docs/reviews/` — design reviews and how they were resolved.
+- `examples/`, `std/` — `.stave` files that are also the test corpus. Every one
+  must parse and check once those stages exist.
+
+## Guiding principles (they settle disagreements)
+
+1. Super simple for a beginner.
+2. Woodworking concepts, not geometry, in the language and UI.
+3. Relationships only, never coordinates, in the language. (Internal solved
+   positions are fine; they are never written to a `.stave` file.)
+4. Errors are type errors: compiler-style diagnostics with file, span, message
+   and a concrete help line.
+5. Exact, always: lengths are `units::Length` (i64 nanometres); evaluation uses
+   exact `units::Rational`; values are rounded once, in the cut list.
+6. Store intent, compute results: positions, meshes, cut lists and the order of
+   operations are derived, never stored.
+7. Bring your own AI: patches use the same grammar.
+8. Text is the source of truth.
+9. Headless first: all behaviour lives in crates below `stave-gtk`.
+
+## Rust standards
+
+Code must be idiomatic, performant and correct, and use the type system to make
+invalid states unrepresentable.
+
+- Edition 2024. `cargo fmt` clean; `cargo clippy --all-targets -- -D warnings`
+  clean; tests pass. Run all three before every commit.
+- **Correctness by construction:**
+  - Newtypes for ids and quantities (`PartId`, `Length`, `Angle`); never pass a
+    raw `u32`, `i64` or `f64` where a domain type exists.
+  - Enums over strings and booleans. Closed vocabularies (faces, directions,
+    units, cut operations) are enums.
+  - Separate types for separate stages (syntax tree → resolved model → solved
+    design) so a later stage cannot receive unchecked data.
+  - Constructors that validate (`fn new(..) -> Result<Self, _>`) and private
+    fields when an invariant must hold; non-empty collections as types when
+    emptiness is invalid.
+  - `match` exhaustively; avoid `_ =>` on domain enums so new variants are
+    caught by the compiler.
+- **No panics in library code:** no `unwrap`, `expect`, `panic!`, indexing that
+  can fail, or lossy `as` casts outside tests. Use `TryFrom`, checked
+  arithmetic and `?`. Library crates use `thiserror`; binaries use `anyhow`.
+- **Floats** (`f32`/`f64`) only at the geometry and rendering boundary
+  (`stave-geom`, `stave-scene`, `stave-gtk`, drawings in `stave-output`).
+  Convert from exact values in one place.
+- **Determinism:** outputs (diagnostics order, cut lists, PDFs, plans) must be
+  identical run to run. Use `BTreeMap`/sorted `Vec`s where order is observable.
+- **Performance:** no needless clones or allocation in hot paths; prefer
+  borrowing; index by id rather than searching by name after resolution.
+- Every public item has a doc comment. Every feature has tests, preferably
+  driven by `.stave` corpus files; diagnostics get snapshot tests.
+- Full words in names (`length`, not `len`; `connection`, not `conn`).
+
+## Crate boundaries
+
+Dependency order (a crate depends only on crates above it):
+`stave-lang` → `stave-schema` → `stave-modules` → `stave-model` → `stave-solve`
+→ `stave-geom` → `stave-check` → `stave-workplan` → `stave-scene` →
+`stave-output` → `stave-app` → `stave-cli`, `stave-gtk`.
+
+- Only `stave-gtk` may depend on GTK, libadwaita or wgpu.
+- `stave-gtk` contains no business logic: handlers call into `stave-app`.
+
+## Working in this repo
+
+- Commands: `cargo fmt`, `cargo clippy --all-targets -- -D warnings`,
+  `cargo test`. When several agents build in parallel, each sets its own
+  `CARGO_TARGET_DIR=target/<lane>` to avoid lock contention.
+- z3 is built from source by the `z3` crate's static-link feature (no system
+  libz3 is installed). The first build takes several minutes.
+- Commit when a unit of work is complete and green, staging only the paths you
+  own (`git add <paths>`, never `git add -A` while others work). If
+  `.git/index.lock` exists, wait and retry. Never rewrite history.
+- User-facing text (diagnostics, PDF, UI) is plain, specific English and uses
+  woodworking words a beginner can look up.

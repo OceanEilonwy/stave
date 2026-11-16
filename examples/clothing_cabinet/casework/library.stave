@@ -1,0 +1,7 @@
+stave 1
+
+// A library module: reusable components, used from a project as casework.*
+// Libraries can't place parts at the top level; their components do that
+// when a project instantiates them.
+
+library "Casework"

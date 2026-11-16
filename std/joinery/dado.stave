@@ -1,0 +1,23 @@
+stave 1
+
+/// A dado: a flat-bottomed groove across a board that houses the end of
+/// another, such as a shelf in a cabinet side.
+kind dado : joint {
+  params {
+    depth: Length = into.thickness / 3
+  }
+  require not_too_deep : depth <= into.thickness / 2 "a dado deeper than half the board weakens it"
+
+  insert: [slide(part, along: width)]      // slides in from the front
+  cut_first: into                          // cut the dado first, then fit the shelf to it
+  adds:   length(part, depth)              // the shelf is cut longer by the depth at each end
+
+  cut crossing(into, part) {
+    notch(depth: depth)
+  }
+
+  steps {
+    "Cut a {depth} deep dado across {into} where {part} sits"
+    "Test the fit, then glue {part} into the dados"
+  }
+}

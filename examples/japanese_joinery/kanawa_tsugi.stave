@@ -1,0 +1,69 @@
+stave 1
+
+/// Kanawa tsugi: a stepped scarf splice that joins two beams end to end,
+/// locked by a key driven across the middle of the joint.
+///
+/// Simplified: the small tip tenons (hozo) of the traditional joint are left
+/// out. The proportions are common starting points, not a tested pattern.
+kind kanawa_tsugi : joint {
+  roles {
+    part: Part
+    into: Part
+  }
+  params {
+    scarf:     Length = 3 * part.width        // overall length of the splice
+    tip:       Length = part.width / 5        // height left at each tip
+    step:      Length = part.width / 5        // height of the step in the middle
+    key:       Length = part.thickness / 4    // thickness of the key
+    key_stock: Stock  = into.stock
+  }
+  require same_section : part.width == into.width && part.thickness == into.thickness "both beams need the same section"
+  require room : scarf <= part.length / 3 && scarf <= into.length / 3 "the splice is too long for these beams"
+
+  // The beams are drawn meeting end to end; each reaches half the splice past that point.
+  adds: [length(part, scarf / 2), length(into, scarf / 2)]
+
+  // Seen from the side, everything above the stepped line is cut away.
+  cut side(part, normal: thickness, from: into) {
+    outline(depth: through, marks: [
+      mark(along: 0mm,       across: tip),
+      mark(along: scarf / 2, across: (part.width - step) / 2),
+      mark(along: scarf / 2, across: (part.width + step) / 2),
+      mark(along: scarf,     across: part.width),
+      mark(along: 0mm,       across: part.width),
+    ])
+  }
+
+  // The other beam gets the same shape turned over, with its step moved by the
+  // key's thickness, which leaves the slot the key is driven through.
+  cut side(into, normal: thickness, from: part, flip: true) {
+    outline(depth: through, marks: [
+      mark(along: 0mm,             across: tip),
+      mark(along: scarf / 2 + key, across: (into.width - step) / 2),
+      mark(along: scarf / 2 + key, across: (into.width + step) / 2),
+      mark(along: scarf,           across: into.width),
+      mark(along: 0mm,             across: into.width),
+    ])
+  }
+
+  // The joint makes its own key. It appears in the cut list and the manual.
+  makes part key : key_stock {
+    length:    part.thickness + 2 * 10mm      // stands 10mm proud on each face
+    width:     step
+    thickness: key                            // planed down from key_stock
+  }
+
+  cut_first: into                             // cut into first, then fit part to it
+
+  insert: [
+    slide(part, along: thickness),            // bring the beams together from the side
+    drive(key, along: length),                // knock the key through to pull the joint tight
+  ]
+
+  steps {
+    "Mark the stepped scarf on both beams from the same story stick"
+    "Saw the scarf faces and chisel the steps; on {into} the step sits {key} further from the end"
+    "Slide {part} into {into} from the side"
+    "Plane the key to {key} thick and drive it through the slot"
+  }
+}

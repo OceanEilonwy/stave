@@ -1,0 +1,18 @@
+stave 1
+
+import "./casework"
+import "./hardware"
+
+// Two frame-and-panel doors on Euro hinges. door_r is the mirror image of
+// door_l, so it hinges on the right and its overlay swaps sides.
+
+assembly door_l : casework.FramePanelDoor {
+  opening:     door_bay[left]
+  hinge_side:  side_l
+  mount:       overlay(left: 18mm, right: 18mm, top: -reveal, bottom: 8mm, meeting: -reveal / 2)
+  frame:       oak_19
+  panel_stock: oak_12
+  knob_kind:   hardware.brass_knob_26
+}
+
+assembly door_r = mirror(door_l, about: mid(base, across))
