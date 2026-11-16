@@ -1,0 +1,102 @@
+stave 1
+
+// A small stool: a solid seat on four turned legs, braced by four rungs cut
+// from dowel. The legs are turned on the lathe to a profile; each one has a
+// round tenon at the top that is glued into a hole in the seat.
+
+project "Stool" {
+  goal:       "A low ash stool with turned legs and dowel rungs"
+  units:      mm
+  resolution: 0.5mm
+  tools:      [pencil, square, tape, awl, calipers, drill, depth_stop, clamps,
+               lathe, roughing_gouge, spindle_gouge, parting_tool]
+}
+
+// ---- parameters ----
+param seat_height = 450mm within 400mm..500mm      // floor to the top of the seat
+param seat_size   = 320mm within [280mm, 320mm, 360mm]
+let leg_length   = seat_height - ash_30.thickness
+let leg_inset    = 30mm                            // from the edge of the seat to the outside of a leg
+let leg_diameter = 40mm                            // the widest part of the leg, where the rungs go in
+let low_rung     = 150mm                           // floor to the centre of the front and back rungs
+let high_rung    = 185mm                           // floor to the centre of the side rungs
+
+// ---- checks ----
+require rungs_miss : high_rung - low_rung >= ash_dowel_22.diameter + 10mm "the rung holes in a leg must not run into each other"
+require legs_fit   : seat_size >= 2 * (leg_inset + leg_diameter) + 100mm "the legs crowd each other on a small seat"
+
+// ---- stock ----
+stock ash_30       { species: ash, form: solid, thickness: 30mm, max_width: 200mm }
+stock ash_45_sq    { species: ash, form: solid, thickness: 45mm, width: 45mm }
+stock ash_dowel_22 { species: ash, form: dowel, diameter: 22mm }
+
+// ---- the seat ----
+
+/// The seat is the ground part; the legs hang from it.
+part seat : ash_30 {
+  length: seat_size
+  width:  seat_size
+  place {
+    ground
+  }
+}
+
+// ---- legs ----
+
+/// The leg's shape from the top (station 0, under the seat) to the foot.
+/// It swells to its full diameter where the rungs go in (from 120mm to
+/// 230mm above the floor), so their holes start on the full round, then
+/// tapers to the foot. The last station is the leg's length, so a taller
+/// seat_height gives longer legs.
+profile leg_shape {
+  measure:               diameter
+  smooth:                true
+  at 0mm:                34mm
+  at leg_length - 230mm: leg_diameter
+  at leg_length - 120mm: leg_diameter
+  at leg_length:         30mm
+}
+
+part leg[front_left, front_right, back_left, back_right] : ash_45_sq {
+  length: fit                          // from the profile; the round tenon is added by the joint
+  shape:  turned(leg_shape)
+  place {
+    orient(length: down)               // station 0 at the top, against the seat
+    corners(seat, inset: leg_inset)
+    against(seat.bottom)
+  }
+}
+
+// ---- rungs ----
+// The rungs are drawn between the legs; each end goes into a socket in a
+// leg, and the joint adds the socket depth to the cut length.
+
+/// The front and back rungs, centred on the legs.
+part rung[front, back] : ash_dowel_22 {
+  length: fit
+  place {
+    center(seat, across)
+    spaced(ends(inset: leg_inset + (leg_diameter - ash_dowel_22.diameter) / 2), from: seat.front, to: seat.back)
+    flush(leg[front_left].bottom, inset: low_rung - ash_dowel_22.diameter / 2)
+  }
+}
+
+/// The side rungs sit higher, so their holes miss the front and back ones.
+part side_rung[left, right] : ash_dowel_22 {
+  length: fit
+  place {
+    orient(length: back)
+    spaced(ends(inset: leg_inset + (leg_diameter - ash_dowel_22.diameter) / 2), from: seat.left, to: seat.right)
+    flush(leg[front_left].bottom, inset: high_rung - ash_dowel_22.diameter / 2)
+    center(seat, deep)
+  }
+}
+
+// ---- joints ----
+joint leg_tenons   : round_tenon(leg[*], into: seat, diameter: 22mm, length: 20mm)
+joint rung_sockets : socket([rung[*], side_rung[*]], into: leg[*], depth: 15mm)
+
+// ---- scenes ----
+scene underside "Legs and rungs" {
+  hide: seat
+}
