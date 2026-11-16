@@ -11,3 +11,6 @@ stave-modules = { path = "../stave-modules" }
 stave-model = { path = "../stave-model" }
 stave-solve = { path = "../stave-solve" }
 thiserror = "2"
+
+[dev-dependencies]
+stave-lang = { path = "../stave-lang" }

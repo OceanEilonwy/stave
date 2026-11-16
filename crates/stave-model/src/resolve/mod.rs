@@ -253,7 +253,20 @@ impl<'a> Resolver<'a> {
         file: FileId,
         span: Span,
     ) {
-        self.report(Diagnostic::error(code, message, Label::new(file, span)));
+        let help = match code {
+            Code::UnitMismatch => {
+                "lengths go with lengths and angles with angles; a plain number scales them, as in 2 * 19mm"
+            }
+            Code::TypeMismatch => "check what this name refers to and what the field needs",
+            Code::UnknownName => "declare it in this module, or check its spelling",
+            Code::DuplicateName => "rename one of them",
+            Code::UnknownField => {
+                "check the field's name against the declaration's table in the grammar"
+            }
+            Code::MissingField => "add the missing entry",
+            _ => "see the grammar for what is allowed here",
+        };
+        self.report(Diagnostic::error(code, message, Label::new(file, span)).with_help(help));
     }
 
     pub(crate) fn error_help(

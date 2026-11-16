@@ -272,6 +272,19 @@ impl Solver<'_> {
             }
             settings.push((setting.name.clone(), value));
         }
+        // A setting must be within its param's `within`.
+        if let Some(ctx) = self.module_ctx(DefId::Kind(kind)) {
+            for (name, value) in &settings {
+                if let Some(param) = kind_def.params.iter().find(|p| p.decl.name == *name) {
+                    let span = call
+                        .named
+                        .iter()
+                        .find(|s| s.name == *name)
+                        .map_or(call.span, |s| s.value.span);
+                    self.check_domain(param, value, env.file, span, name, ctx)?;
+                }
+            }
+        }
         let mut bound = Vec::new();
         for (index, role) in roles.into_iter().enumerate() {
             let Some(role_def) = kind_def.roles.get(index) else {

@@ -73,7 +73,14 @@ pub(crate) fn build(solver: &mut Solver<'_>) -> Option<SolvedDesign> {
     let errors_before = solver.diagnostics.iter().filter(|d| d.is_error()).count();
     let part_count = solver.model.parts.len();
 
-    // 1. Every part's orientation, sizes and position; every region.
+    // 1. Every param and let (so domains are checked even when unused),
+    //    every part's orientation, sizes and position, every region.
+    for index in 0..solver.model.params.len() {
+        let _ = solver.param_value(stave_model::ids::ParamId::from_usize(index));
+    }
+    for index in 0..solver.model.lets.len() {
+        let _ = solver.let_value(stave_model::ids::LetId::from_usize(index));
+    }
     for index in 0..part_count {
         let part = PartId::from_usize(index);
         let _ = solver.drawn_box(part);

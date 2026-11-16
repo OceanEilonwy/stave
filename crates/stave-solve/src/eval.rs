@@ -474,7 +474,21 @@ impl Solver<'_> {
                         kind: None,
                         array: None,
                     };
-                    self.eval(default, &env)
+                    let value = self.eval(default, &env);
+                    if let (Ok(value), stave_model::defs::Scope::Module(_)) =
+                        (&value, def.decl.scope)
+                    {
+                        let domain_ctx = env.ctx;
+                        self.check_domain(
+                            def,
+                            value,
+                            def.decl.file,
+                            default.span,
+                            &inst.name,
+                            domain_ctx,
+                        )?;
+                    }
+                    value
                 }
                 None => Err(Reported),
             },
@@ -513,7 +527,11 @@ impl Solver<'_> {
                         };
                         let value = self.eval(&arg, &env);
                         if let Ok(value) = &value {
-                            self.check_domain(def, value, file, arg.span, &inst.name)?;
+                            let domain_ctx = Ctx {
+                                instance: inst.instance,
+                                element: None,
+                            };
+                            self.check_domain(def, value, file, arg.span, &inst.name, domain_ctx)?;
                         }
                         value
                     }
@@ -531,23 +549,22 @@ impl Solver<'_> {
         result
     }
 
-    /// `out-of-range` for an argument outside its param's `within`.
-    fn check_domain(
+    /// `out-of-range` for a value outside its param's `within`. The domain
+    /// is evaluated in `domain_ctx`, where the param is declared.
+    pub(crate) fn check_domain(
         &mut self,
         def: &stave_model::defs::ParamDef,
         value: &Value,
         file: FileId,
         span: Span,
         name: &str,
+        domain_ctx: Ctx,
     ) -> Solved<()> {
         let Some(domain) = &def.domain else {
             return Ok(());
         };
         let module_env = Env {
-            ctx: Ctx {
-                instance: InstanceId::from_usize(0),
-                element: None,
-            },
+            ctx: domain_ctx,
             file: def.decl.file,
             kind: None,
             array: None,
@@ -586,7 +603,7 @@ impl Solver<'_> {
         ))
     }
 
-    fn let_value(&mut self, binding: stave_model::ids::LetId) -> Solved<Value> {
+    pub(crate) fn let_value(&mut self, binding: stave_model::ids::LetId) -> Solved<Value> {
         match self.lets.get(binding.index()) {
             Some(Memo::Done(value)) => return Ok(value.clone()),
             Some(Memo::Failed) => return Err(Reported),

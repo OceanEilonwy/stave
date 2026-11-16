@@ -124,3 +124,59 @@ fn the_whole_repository_is_formatted() {
         String::from_utf8_lossy(&output.stdout)
     );
 }
+
+#[test]
+fn check_runs_the_whole_pipeline() {
+    let output = stave(&["check", "tests/broken/axis_not_set"]);
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.starts_with("error[axis-not-set]: shelf: position along 'deep' is not set\n"),
+        "{stderr}"
+    );
+}
+
+/// The solved cabinet, checked by hand once (see the report of the change
+/// that added it) and kept as a snapshot. Set `STAVE_UPDATE_SNAPSHOTS=1` to
+/// rewrite it after an intended change, then check the difference by hand.
+#[test]
+fn dump_of_the_clothing_cabinet_matches_its_snapshot() {
+    let output = stave(&["dump", "examples/clothing_cabinet"]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stderr.is_empty());
+    let dump = String::from_utf8(output.stdout).unwrap();
+    let snapshot = workspace().join("crates/stave-cli/tests/snapshots/clothing_cabinet.dump");
+    if std::env::var_os("STAVE_UPDATE_SNAPSHOTS").is_some() {
+        std::fs::write(&snapshot, &dump).unwrap();
+    }
+    let expected = std::fs::read_to_string(&snapshot).unwrap();
+    assert!(
+        dump == expected,
+        "the dump changed; diff it against {}",
+        snapshot.display()
+    );
+}
+
+#[test]
+fn dump_writes_json() {
+    let output = stave(&["dump", "--json", "examples/clothing_cabinet"]);
+    assert!(output.status.success());
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["parts"].as_array().unwrap().len(), 34);
+    assert_eq!(json["parts"][0]["name"], "base");
+    assert_eq!(json["parts"][0]["cut"]["length"], 900_000_000);
+    assert_eq!(json["project"]["units"], "mm");
+}
+
+#[test]
+fn dump_refuses_a_library_and_reports_errors() {
+    let output = stave(&["dump", "std/joinery"]);
+    assert_eq!(output.status.code(), Some(2));
+    let output = stave(&["dump", "tests/broken/unknown_name"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+}

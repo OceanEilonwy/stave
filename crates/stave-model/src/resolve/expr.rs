@@ -196,11 +196,7 @@ impl Resolver<'_> {
             self.report(
                 Diagnostic::error(
                     Code::TypeMismatch,
-                    format!(
-                        "'{name}' is an array of {}, not one {}",
-                        plural(inner),
-                        inner
-                    ),
+                    format!("'{name}' is an array of {}", plural(inner)),
                     Label::new(cx.file, expr.span),
                 )
                 .with_help(format!(
@@ -341,11 +337,21 @@ impl Resolver<'_> {
                         ty,
                     ),
                     None => {
-                        self.error(
+                        let help = match op {
+                            BinaryOp::Add | BinaryOp::Sub => format!(
+                                "only values of the same kind can be {}: write both as {}",
+                                if *op == BinaryOp::Add { "added" } else { "subtracted" },
+                                lhs.ty
+                            ),
+                            BinaryOp::Mul | BinaryOp::Div => "a length or angle can be multiplied or divided by a plain number, and divided by another length or angle".to_owned(),
+                            _ => "compare values of the same kind: two lengths, two angles or two numbers".to_owned(),
+                        };
+                        self.error_help(
                             Code::UnitMismatch,
                             format!("can't {} {} and {}", verb(*op), lhs.ty, rhs.ty),
                             cx.file,
                             span,
+                            help,
                         );
                         RExpr::error(span)
                     }
@@ -591,6 +597,11 @@ impl Resolver<'_> {
             }
         }
         let base = self.raw(cx, base, &Expect::any());
+        let base = if matches!(base.ty, Ty::Array(_)) {
+            self.reject_bare_array(cx, base)
+        } else {
+            base
+        };
         if base.kind == RExprKind::Error {
             return RExpr::error(span);
         }
@@ -759,6 +770,7 @@ impl Resolver<'_> {
                 Some(ArrayShape::Labels(labels)) => {
                     let label = match &at.kind {
                         ExprKind::Name(ident) => Some(ident.as_str().to_owned()),
+                        ExprKind::Number(ast::Number::Integer(n)) => Some(n.to_string()),
                         _ => None,
                     };
                     match label
