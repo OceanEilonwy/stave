@@ -1,0 +1,26 @@
+// expect: error[duplicate-name] 'shelf' is declared twice
+stave 1
+
+project "Duplicate name" {
+  units: mm
+}
+
+stock pine_19 { species: pine, form: solid, thickness: 19mm }
+
+part shelf : pine_19 {
+  length: 600mm
+  width:  300mm
+  place {
+    ground
+  }
+}
+
+part shelf : pine_19 {
+  length: 600mm
+  width:  300mm
+  place {
+    against(shelf.top, gap: 250mm)
+    flush(shelf.left)
+    flush(shelf.front)
+  }
+}

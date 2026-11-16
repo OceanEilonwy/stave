@@ -1,0 +1,15 @@
+stave 1
+
+/// A fluted wooden dowel pin.
+kind dowel_pin : fastener {
+  param diameter = 8mm
+  param length = 30mm
+  envelope: cylinder(diameter: diameter, length: length)
+}
+
+/// A countersunk wood screw.
+kind wood_screw : fastener {
+  param diameter = 4mm
+  param length = 30mm
+  envelope: cylinder(diameter: diameter, length: length)
+}

@@ -1,61 +1,352 @@
 stave 1
 
-// Recipes: how to make each cut operation, for the work cards.
-// Stave picks the first recipe in this file whose tools the project has,
-// unless a joint names one with `method:`.
+// Recipes: how to make each cut operation with a given set of tools. Work
+// cards are built from these.
+//
+// For every cut, Stave keeps the recipes whose tools the project lists, then
+// takes the first one named in the joint's or the project's `methods:`, and
+// otherwise the one with the lowest `rank:`. Power-tool recipes here have
+// rank 10 and hand-tool recipes rank 20.
 
-/// A dado or rabbet, cut by hand.
-recipe notch_by_hand : notch {
-  tools: [marking_knife, square, marking_gauge, tenon_saw, chisel, router_plane]
-  mark {
-    knife(walls)                         // square a line across the face at each wall
-    gauge(depth, on: open_edges)         // gauge the depth on every edge the notch runs out at
-    hatch(waste)
-  }
-  cut {
-    saw(walls, to: depth, keep: outside) // kerf on the waste side of each line
-    chop(waste, bevel: down)             // work in from the open edges
-    pare(floor, with: router_plane, depth: depth)
-  }
-  check "the mating part pushes in by hand and leaves no gap at the shoulders"
-}
+// ---- notch: dados, rabbets, grooves, halvings ----
 
-/// A dado or rabbet, cut with a router against a clamped guide or an edge fence.
+/// A housing cut with a router against a clamped guide or an edge fence.
 recipe notch_by_router : notch {
-  tools: [square, tape, router, straight_bit, clamps]
+  tools: [pencil, square, tape, router, straight_bit, clamps]
+  rank:  10
   needs: [flat_face]                     // the router base rides on the face being cut
   mark {
     pencil(walls)
     hatch(waste)
   }
   cut {
-    rout(waste, depth: depth, passes: 2, guide: walls)
+    rout(waste, to: depth, passes: 2, guide: walls)
   }
-  check "the mating part pushes in by hand and leaves no gap at the shoulders"
+  check: "the mating part pushes in by hand and leaves no gap at the shoulders"
 }
 
-/// A round hole with a drill press or a drill in a guide.
+/// A housing cut by hand: saw the walls, chop the waste, level the floor.
+recipe notch_by_hand : notch {
+  tools: [marking_knife, square, marking_gauge, tenon_saw, chisel, mallet, router_plane]
+  rank:  20
+  mark {
+    knife(walls)                         // square a line across the face at each wall
+    gauge(depth, on: open_edges)         // gauge the depth on every edge the notch runs out at
+    hatch(waste)
+  }
+  cut {
+    saw(walls, to: depth)                // kerf on the waste side of each line
+    chop(waste, with: chisel)            // work in from the open edges
+    pare(floor, to: depth, with: router_plane)
+  }
+  check: "the mating part pushes in by hand and leaves no gap at the shoulders"
+}
+
+// ---- slot: a narrow housing centred where two parts cross ----
+
+/// A slot cut with a router and an edge guide.
+recipe slot_by_router : slot {
+  tools: [pencil, square, tape, router, straight_bit, clamps]
+  rank:  10
+  needs: [flat_face]
+  mark {
+    pencil(walls)
+    hatch(waste)
+  }
+  cut {
+    rout(waste, to: depth, passes: 3, guide: walls)
+  }
+  check: "the slot is the same width along its whole length"
+}
+
+/// A slot cut by hand.
+recipe slot_by_hand : slot {
+  tools: [marking_knife, square, marking_gauge, tenon_saw, chisel, mallet]
+  rank:  20
+  mark {
+    gauge(width, on: walls)              // both walls from the reference edge
+    knife(walls)
+    gauge(depth, on: open_edges)
+    hatch(waste)
+  }
+  cut {
+    saw(walls, to: depth)
+    chop(waste, to: depth)
+    pare(floor, to: depth)
+  }
+  check: "the slot is the same width along its whole length"
+}
+
+// ---- pocket: mortises ----
+
+/// A mortise cut with a plunge router, with its corners squared by chisel.
+recipe pocket_by_router : pocket {
+  tools: [pencil, square, marking_gauge, router, straight_bit, clamps, chisel]
+  rank:  10
+  needs: [flat_face]
+  mark {
+    gauge(thickness, on: walls)          // both long walls from the reference face
+    pencil(outline)
+    hatch(waste)
+  }
+  cut {
+    rout(waste, to: depth, passes: 3, guide: walls)
+    pare(walls, with: chisel)            // square the round corners the bit leaves
+  }
+  check: "the tenon pushes in by hand and its shoulders close all round"
+}
+
+/// A mortise chopped by hand.
+recipe pocket_by_hand : pocket {
+  tools: [marking_knife, square, mortise_gauge, mortise_chisel, mallet, chisel]
+  rank:  20
+  mark {
+    gauge(thickness, on: walls, with: mortise_gauge)
+    knife(outline)
+    hatch(waste)
+  }
+  cut {
+    chop(waste, to: depth, with: mortise_chisel)
+    pare(walls, with: chisel)
+  }
+  check: "the tenon pushes in by hand and its shoulders close all round"
+}
+
+// ---- tenon ----
+
+/// A tenon cut on the table saw with a dado stack.
+recipe tenon_by_table_saw : tenon {
+  tools: [pencil, square, marking_gauge, table_saw, dado_stack, shoulder_plane]
+  rank:  10
+  needs: [square_stock]                  // the part rides against the fence and the mitre gauge
+  mark {
+    gauge(length, on: shoulders)
+    pencil(cheeks)
+    hatch(waste)
+  }
+  cut {
+    saw(waste, to: shoulders, passes: 2, with: table_saw)
+    plane(cheeks, to: thickness, with: shoulder_plane)
+  }
+  check: "the tenon pushes into its mortise by hand and the shoulders close all round"
+}
+
+/// A tenon sawn by hand.
+recipe tenon_by_hand : tenon {
+  tools: [marking_knife, square, marking_gauge, tenon_saw, chisel]
+  rank:  20
+  mark {
+    knife(shoulders)
+    square_around(shoulders)
+    gauge(thickness, on: cheeks)
+    hatch(waste)
+  }
+  cut {
+    saw(cheeks, to: shoulders)
+    saw(shoulders, to: cheeks)
+    pare(cheeks, to: thickness)
+  }
+  check: "the tenon pushes into its mortise by hand and the shoulders close all round"
+}
+
+// ---- spigot: round tenons ----
+
+/// A round tenon turned on the lathe.
+recipe spigot_on_lathe : spigot {
+  tools: [pencil, lathe, parting_tool, calipers]
+  rank:  10
+  mark {
+    pencil(shoulder)
+  }
+  cut {
+    turn(waste, to: diameter, with: parting_tool)
+    turn(shoulder, with: parting_tool)
+  }
+  check: "calipers set to the hole's drill bit just slip over the tenon"
+}
+
+/// A round tenon sawn and rasped by hand.
+recipe spigot_by_hand : spigot {
+  tools: [pencil, square, dividers, tenon_saw, chisel, rasp]
+  rank:  20
+  mark {
+    centre_mark(centre)
+    line(waste, with: dividers)          // scribe the tenon's circle on the end
+    square_around(shoulder)
+  }
+  cut {
+    saw(shoulder, to: diameter)
+    pare(waste, to: diameter, with: chisel)
+    shave(waste, to: diameter, with: rasp)
+  }
+  check: "the tenon turns in a test hole drilled in scrap"
+}
+
+// ---- drill: round holes ----
+
+/// A round hole with a drill and a depth stop.
 recipe drill_with_stop : drill {
   tools: [square, awl, drill, depth_stop]
-  needs: [flat_face, square_stock]       // bore before the part is shaped
+  rank:  10
+  needs: [flat_face]                     // the drill is square to a flat face
   mark {
-    centre(centre)                       // crossing lines, then an awl dimple
+    centre_mark(centre)                  // crossing lines, then an awl dimple
   }
   cut {
-    drill(centre, diameter: diameter, depth: depth)
+    bore(centre, diameter: diameter, to: depth, with: drill)
   }
-  check "the hole is square to the face"
+  check: "the hole is square to the face and stops at the right depth"
 }
 
-/// A round hole bored by hand, with tape on the bit as a depth flag.
+/// A round hole bored by hand with a brace, with tape on the bit as a depth flag.
 recipe bore_by_hand : drill {
-  tools: [square, awl, brace, auger_bit]
-  needs: [square_stock]
+  tools: [square, awl, brace, auger_bit, tape]
+  rank:  20
   mark {
-    centre(centre)
+    centre_mark(centre)
   }
   cut {
-    bore(centre, diameter: diameter, depth: depth, flag: tape)
+    bore(centre, diameter: diameter, to: depth, with: brace)
   }
-  check "the hole is square to the face"
+  check: "the hole is square to the face and stops at the right depth"
+}
+
+// ---- dovetails ----
+
+/// A dovetail socket roughed out with a router and pared to the lines.
+recipe dovetail_socket_by_router : dovetail_socket {
+  tools: [marking_knife, square, marking_gauge, router, straight_bit, clamps, chisel]
+  rank:  10
+  needs: [flat_face]
+  mark {
+    transfer(outline)                    // trace the finished tail onto the socket
+    gauge(depth, on: floor)
+    hatch(waste)
+  }
+  cut {
+    rout(waste, to: depth, passes: 3)
+    pare(walls, with: chisel)
+  }
+  check: "the tail drops in under light hand pressure with no gaps at the walls"
+}
+
+/// A dovetail socket sawn and chopped by hand.
+recipe dovetail_socket_by_hand : dovetail_socket {
+  tools: [marking_knife, square, marking_gauge, dovetail_saw, chisel, mallet]
+  rank:  20
+  mark {
+    transfer(outline)
+    gauge(depth, on: floor)
+    hatch(waste)
+  }
+  cut {
+    saw(walls, to: depth, with: dovetail_saw)
+    chop(waste, to: depth)
+    pare(floor, to: depth)
+  }
+  check: "the tail drops in under light hand pressure with no gaps at the walls"
+}
+
+/// A dovetail tail sawn on the bandsaw and pared to the lines.
+recipe dovetail_tail_by_bandsaw : dovetail_tail {
+  tools: [marking_knife, square, marking_gauge, sliding_bevel, bandsaw, chisel]
+  rank:  10
+  mark {
+    gauge(depth, on: shoulders)
+    line(cheeks, with: sliding_bevel)    // set the bevel to the joint's angle
+    hatch(waste)
+  }
+  cut {
+    saw(cheeks, to: shoulders, with: bandsaw)
+    saw(shoulders, to: cheeks, with: bandsaw)
+    pare(cheeks, with: chisel)
+  }
+  check: "the cheeks are flat and square to the face"
+}
+
+/// A dovetail tail sawn by hand.
+recipe dovetail_tail_by_hand : dovetail_tail {
+  tools: [marking_knife, square, marking_gauge, sliding_bevel, dovetail_saw, chisel]
+  rank:  20
+  mark {
+    gauge(depth, on: shoulders)
+    line(cheeks, with: sliding_bevel)
+    hatch(waste)
+  }
+  cut {
+    saw(cheeks, to: shoulders, with: dovetail_saw)
+    saw(shoulders, to: cheeks, with: dovetail_saw)
+    pare(cheeks, with: chisel)
+  }
+  check: "the cheeks are flat and square to the face"
+}
+
+// ---- outline: a marked-out shape ----
+
+/// A marked-out shape sawn on the bandsaw and cleaned up to the line.
+recipe outline_by_bandsaw : outline {
+  tools: [marking_knife, square, tape, bandsaw, chisel, block_plane]
+  rank:  10
+  mark {
+    knife(outline)
+    hatch(waste)
+  }
+  cut {
+    saw(outline, with: bandsaw)
+    pare(outline, with: chisel)
+    plane(outline, with: block_plane)
+  }
+  check: "the cut faces are flat, square to the face and split the knife lines"
+}
+
+/// A marked-out shape sawn by hand and pared to the line.
+recipe outline_by_hand : outline {
+  tools: [marking_knife, square, tape, tenon_saw, chisel, mallet]
+  rank:  20
+  mark {
+    knife(outline)
+    square_around(outline)
+    hatch(waste)
+  }
+  cut {
+    saw(outline)
+    chop(waste)
+    pare(outline)
+  }
+  check: "the cut faces are flat, square to the face and split the knife lines"
+}
+
+// ---- turning: a part turned to a profile ----
+
+/// A part turned between centres on the lathe.
+recipe turning_on_lathe : turning {
+  tools: [pencil, awl, lathe, roughing_gouge, spindle_gouge, parting_tool, calipers]
+  rank:  10
+  needs: [square_stock]                  // mount a square blank; do any drilling first
+  mark {
+    centre_mark(centre)                  // both ends, for the lathe centres
+    template(shape)                      // a printed 1:1 profile to hold behind the work
+  }
+  cut {
+    turn(blank, to: largest, with: roughing_gouge)
+    turn(stations, with: parting_tool)   // a calipered groove at each station
+    turn(shape, with: spindle_gouge)
+  }
+  check: "the part matches the printed profile at every station"
+}
+
+/// A round part shaped by hand with a spokeshave and a rasp.
+recipe turning_by_hand : turning {
+  tools: [pencil, block_plane, spokeshave, rasp, calipers]
+  rank:  20
+  mark {
+    template(shape)
+    pencil(stations)
+  }
+  cut {
+    plane(blank, to: largest, with: block_plane)   // square to octagon to round
+    shave(shape, with: spokeshave)
+    shave(shape, with: rasp)
+  }
+  check: "the part matches the printed profile at every station"
 }

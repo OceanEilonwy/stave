@@ -1,0 +1,44 @@
+stave 1
+
+// ---- measuring and marking ----
+kind pencil        : tool { title: "pencil" }
+kind marking_knife : tool { title: "marking knife" }
+kind square        : tool { title: "try square" }
+kind tape          : tool { title: "tape measure" }
+kind marking_gauge : tool { title: "marking gauge" }
+kind mortise_gauge : tool { title: "mortise gauge" }
+kind sliding_bevel : tool { title: "sliding bevel" }
+kind dividers      : tool { title: "dividers" }
+kind calipers      : tool { title: "calipers" }
+kind awl           : tool { title: "awl" }
+
+// ---- hand tools ----
+kind tenon_saw      : tool { title: "tenon saw" }
+kind dovetail_saw   : tool { title: "dovetail saw" }
+kind chisel         : tool { title: "bench chisel" }
+kind mortise_chisel : tool { title: "mortise chisel" }
+kind mallet         : tool { title: "mallet" }
+kind router_plane   : tool { title: "router plane" }
+kind shoulder_plane : tool { title: "shoulder plane" }
+kind block_plane    : tool { title: "block plane" }
+kind spokeshave     : tool { title: "spokeshave" }
+kind rasp           : tool { title: "rasp" }
+kind brace          : tool { title: "brace" }
+kind auger_bit      : tool { title: "auger bit" }
+kind screwdriver    : tool { title: "screwdriver" }
+kind clamps         : tool { title: "clamps" }
+
+// ---- power tools and what goes in them ----
+kind drill        : tool { title: "drill", powered: true }
+kind depth_stop   : tool { title: "drill depth stop" }
+kind router       : tool { title: "router", powered: true }
+kind straight_bit : tool { title: "straight router bit" }
+kind table_saw    : tool { title: "table saw", powered: true }
+kind dado_stack   : tool { title: "dado stack" }
+kind bandsaw      : tool { title: "bandsaw", powered: true }
+
+// ---- turning ----
+kind lathe          : tool { title: "lathe", powered: true }
+kind roughing_gouge : tool { title: "roughing gouge" }
+kind spindle_gouge  : tool { title: "spindle gouge" }
+kind parting_tool   : tool { title: "parting tool" }

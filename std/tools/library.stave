@@ -1,0 +1,10 @@
+stave 1
+
+// std:tools — every tool the standard recipes use. Tools are in the prelude,
+// so a project lists them by name: tools: [square, chisel, router].
+// A library that needs another tool declares it the same way.
+
+library "Tools" {
+  about:   "The tools that the standard recipes use"
+  license: "AGPL-3.0-or-later"
+}

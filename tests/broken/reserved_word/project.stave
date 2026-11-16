@@ -1,0 +1,16 @@
+// expect: error[reserved-word] 'joint' is a reserved word and can't be used as a name
+stave 1
+
+project "Reserved word" {
+  units: mm
+}
+
+stock pine_19 { species: pine, form: solid, thickness: 19mm }
+
+part joint : pine_19 {
+  length: 600mm
+  width:  300mm
+  place {
+    ground
+  }
+}

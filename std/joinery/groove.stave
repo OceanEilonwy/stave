@@ -1,0 +1,21 @@
+stave 1
+
+/// A groove: a housing along the grain that holds the edge of a panel, such as
+/// a door panel in its frame or a drawer bottom in the drawer box.
+kind groove : joint {
+  /// How deep the groove is cut.
+  param depth = 8mm
+  /// Room left at the bottom of the groove so a solid panel can swell.
+  param clearance = 0mm
+  require panel_is_held : clearance < depth "the panel must reach into the groove"
+
+  insert:    [push(piece, along: length)]
+  cut_first: into                                  // cut the groove first, then size the panel to it
+  adds:      extend(piece, by: depth - clearance)  // the panel reaches into every groove it meets
+
+  cut crossing(into, piece) {
+    notch(depth: depth)
+  }
+
+  note: "Slide {piece} into its grooves while the frame goes together; a solid panel is not glued"
+}

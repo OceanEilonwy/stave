@@ -1,0 +1,24 @@
+stave 1
+
+/// A round tenon: a pin turned or cut on the end of a part, glued into a
+/// matching hole. Used for turned feet, legs and rails.
+kind round_tenon : joint {
+  /// Diameter of the tenon and of its hole.
+  param diameter = 19mm
+  /// How far the tenon reaches into the other part.
+  param length = into.thickness * 2 / 3
+  require hole_stops : length <= into.thickness - 3mm "the hole for the tenon would come through the other side"
+
+  insert:    [push(piece, along: length)]
+  cut_first: into                            // drill the hole first, then fit the tenon to it
+  adds:      extend(piece, by: length)       // the tenon is extra length on the piece
+
+  cut end(piece, facing: into) {
+    spigot(diameter: diameter, length: length)
+  }
+  cut crossing(into, piece) {
+    drill(diameter: diameter, depth: length)
+  }
+
+  note: "The tenon should push in by hand; cut a glue groove along it so trapped glue can escape"
+}

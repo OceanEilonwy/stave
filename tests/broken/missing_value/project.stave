@@ -1,0 +1,19 @@
+// expect: error[missing-value] 'length' has no value
+stave 1
+
+// A newline ends a field, so the error is on the line that has it and not on
+// the next one.
+
+project "Missing value" {
+  units: mm
+}
+
+stock pine_19 { species: pine, form: solid, thickness: 19mm }
+
+part shelf : pine_19 {
+  length:
+  width:  300mm
+  place {
+    ground
+  }
+}

@@ -1,0 +1,22 @@
+stave 1
+
+/// A half lap: two parts that cross, each notched to half its thickness so
+/// their faces end up flush.
+kind half_lap : joint {
+  roles {
+    piece: Part
+    into:  Part
+  }
+  require same_thickness : piece.thickness == into.thickness "both parts need the same thickness for flush faces"
+
+  insert: [push(piece, along: thickness)]
+
+  cut crossing(into, piece) {
+    notch(depth: into.thickness / 2)
+  }
+  cut crossing(piece, into, opposite: true) {
+    notch(depth: piece.thickness / 2)
+  }
+
+  note: "Mark both notches from the parts themselves, not from a ruler"
+}

@@ -1,0 +1,13 @@
+stave 1
+
+// std:hardware — parametric hardware families. Each one is a kind with params,
+// so `side_mount_slide(length: 450mm)` is a kind value a project can pass to a
+// component, and `side_mount_slide(drawer_side, in: opening)` mounts one.
+//
+// Sizes are typical catalog values. A shop library can declare exact products
+// the same way (see examples/clothing_cabinet/hardware).
+
+library "Hardware" {
+  about:   "Slides, hinges, pulls and fasteners"
+  license: "AGPL-3.0-or-later"
+}

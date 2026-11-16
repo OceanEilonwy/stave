@@ -1,0 +1,19 @@
+stave 1
+
+/// A socket: a round hole that takes the whole end of a round part, such as a
+/// clothes rod between two cabinet sides.
+kind socket : joint {
+  /// How deep the hole is.
+  param depth = into.thickness / 2
+  require not_too_deep : depth <= into.thickness / 2 "a socket deeper than half the board weakens it"
+
+  insert:    [push(piece, along: length)]
+  cut_first: into
+  adds:      extend(piece, by: depth)        // the rod is cut longer by the depth at each end
+
+  cut crossing(into, piece) {
+    drill(diameter: piece.diameter, depth: depth)
+  }
+
+  note: "A rod between two sockets goes in while the case is glued up, not afterwards"
+}

@@ -1,27 +1,33 @@
 stave 1
 
-/// A drawer on side-mount slides: an applied front on a box with a groove-fit bottom.
-/// The box width follows the opening, so a wider cabinet gives wider drawers.
-component Drawer(
-  opening:      Region,
-  mount:        Mount,
-  front_stock:  Stock,
-  box_stock:    Stock,
-  bottom_stock: Stock,
-  slide:        HardwareKind,
-  box_height:   Length = 180mm,
-  pull_kind:    HardwareKind = bar_pull(centres: 160mm),
-) {
-  region face = cover(opening, mount)
+/// A drawer on side-mount slides: an applied front on a box with a grooved-in bottom.
+/// The box follows the opening, so a wider or taller opening gives a bigger drawer.
+component Drawer {
+  param opening      : Region
+  param mount        : Mount
+  param front_stock  : Stock
+  param box_stock    : Stock
+  param bottom_stock : Stock
+  param slide        : SlideKind
+  param pull_kind    : PullKind = bar_pull(centres: 160mm)
+  param bottom_gap   = 15mm              // under the box, above the bottom of the opening
+  param top_gap      = 15mm              // above the box
+  param box_height   = opening.up - bottom_gap - top_gap
+
+  require slide_fits : slide.length <= opening.deep "the slide is longer than the opening is deep"
+  require box_is_useful : box_height >= 60mm "the drawer box is too shallow; make the opening taller"
+
+  /// The space the drawer front fills, in front of its opening.
+  region face = cover(opening, mount, thickness: front_stock.thickness)
 
   part front : front_stock {
-    length: face.width
-    width:  face.height
+    length: face.across
+    width:  face.up
     place {
       orient(length: right, width: up)
       flush(face.left)
       flush(face.bottom)
-      flush(face.back)
+      flush(face.front)
     }
   }
 
@@ -30,14 +36,14 @@ component Drawer(
     width:  box_height
     place {
       orient(length: back, width: up)
-      spaced(ends, from: opening.left, to: opening.right, inset: slide.clearance)
-      against(opening.bottom, gap: 20mm)
+      spaced(ends(inset: slide.clearance), from: opening.left, to: opening.right)
+      flush(opening.bottom, inset: bottom_gap)
       against(front.back)
     }
   }
 
   part sub_front : box_stock {
-    length: fit                          // between the sides; dado depth is added by the joint
+    length: fit                          // between the sides; the dado depth is added by the joint
     width:  box_height
     place {
       orient(length: right, width: up)
@@ -49,28 +55,30 @@ component Drawer(
 
   part back : box_stock {
     length: fit
-    width:  box_height - 20mm
+    width:  box_height
     place {
       orient(length: right, width: up)
       center(opening, across)
-      flush(side[left].top)
+      flush(side[left].bottom)
       flush(side[left].back)
     }
   }
 
   part bottom : bottom_stock {
-    length: fit
-    width:  fit
+    length: fit                          // between the sides, plus what sits in the grooves
+    width:  fit                          // between sub_front and back, plus what sits in the grooves
     place {
-      inside(bottom_groove)
+      center(opening, across)
+      flush(side[left].bottom, inset: 10mm)
+      center(from: sub_front.back, to: back.front)
     }
   }
 
-  joint box_dados     : dado([sub_front, back], into: side[*]) { depth: 6mm }
-  joint bottom_groove : groove(bottom, into: [side[*], sub_front, back]) { depth: 6mm }
-  joint front_screws  : screw(front, into: sub_front) { count: 4 }
+  joint box_dados     : dado([sub_front, back], into: side[*], depth: 6mm)
+  joint bottom_groove : groove(bottom, into: [side[*], sub_front, back], depth: 6mm)
+  joint front_screws  : screw(sub_front, into: front, count: 4, length: 25mm, glue: false)
 
-  hardware slides[left, right] : slide(side[*], in: opening)
+  hardware slides[left, right] : slide(side[same], in: opening)
 
   hardware pull : pull_kind(front) {
     place {

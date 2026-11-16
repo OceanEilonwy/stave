@@ -1,0 +1,12 @@
+stave 1
+
+/// A concealed cup hinge for an overlay or inset door. The cup is bored into
+/// the back of the door; the plate screws to the cabinet side.
+kind euro_hinge : hinge {
+  /// How far the door opens.
+  param opening_angle = 110deg within [95deg, 110deg, 125deg, 155deg, 165deg]
+  cup_diameter: 35mm
+  cup_depth:    12.5mm
+  cup_inset:    4mm                      // from the door's edge to the edge of the cup
+  envelope:     box(length: 50mm, width: 65mm, thickness: 20mm)
+}

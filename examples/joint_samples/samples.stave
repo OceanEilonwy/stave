@@ -10,6 +10,9 @@ project "Japanese joint samples" {
   goal:       "Practice pieces for ari tsugi, kanawa tsugi and chidori"
   units:      mm
   resolution: 0.5mm
+  tools:      [japanese.sumitsubo, pencil, marking_knife, square, tape, marking_gauge,
+               sliding_bevel, tenon_saw, dovetail_saw, chisel, mallet, router_plane]
+  methods:    [japanese.outline_with_sumitsubo]    // prefer the ink line wherever an outline is cut
 }
 
 stock hinoki_105 { species: hinoki, form: solid, thickness: 105mm, width: 105mm }
@@ -17,14 +20,14 @@ stock hinoki_30  { species: hinoki, form: solid, thickness: 30mm, width: 30mm }
 
 // ---- kanawa tsugi: two beams spliced end to end ----
 part beam_a : hinoki_105 {
-  length: 600mm
+  length: 1200mm
   place {
     ground
   }
 }
 
 part beam_b : hinoki_105 {
-  length: 600mm
+  length: 1200mm
   place {
     against(beam_a.right)
     flush(beam_a.bottom)
@@ -53,13 +56,13 @@ part beam_d : hinoki_105 {
   }
 }
 
-joint end_dovetail : japanese.ari_tsugi(beam_d, into: beam_c) { angle: 12deg }
+joint end_dovetail : japanese.ari_tsugi(beam_d, into: beam_c, angle: 12deg)
 
 // ---- chidori: three sticks meeting in one node, behind that ----
 part stick_z : hinoki_30 {
   length: 300mm
   place {
-    orient(length: up)
+    orient(length: up, width: back)
     flush(beam_a.bottom)
     flush(beam_a.left, inset: 135mm)
     against(beam_c.back, gap: 300mm)
@@ -78,14 +81,14 @@ part stick_x : hinoki_30 {
 part stick_y : hinoki_30 {
   length: 300mm
   place {
-    orient(length: back)
+    orient(length: back, width: right)
     center(stick_z, up)
     center(stick_z, across)
     center(stick_z, deep)
   }
 }
 
-joint node : japanese.chidori(stick_z, into: [stick_x, stick_y])
+joint node : japanese.chidori(stick_z, first: stick_x, second: stick_y)
 
 // ---- scenes ----
 scene apart "Pieces apart" {

@@ -1,0 +1,66 @@
+// expect: error[slide-gap] slides[left]: side[left] is 10mm from the opening, but the slide needs 12.7mm
+stave 1
+
+// The drawer box is 5.4mm too wide: its sides leave 10mm for slides that
+// need 12.7mm on each side.
+
+project "Drawer that does not fit" {
+  units: mm
+}
+
+stock pine_19  { species: pine, form: solid, thickness: 19mm }
+stock maple_12 { species: hard_maple, form: solid, thickness: 12mm }
+
+part base : pine_19 {
+  length: 500mm
+  width:  450mm
+  place {
+    ground
+  }
+}
+
+part wall[left, right] : pine_19 {
+  length: 200mm
+  width:  450mm
+  place {
+    orient(length: up, width: back)
+    against(base.top)
+    spaced(ends, from: base.left, to: base.right)
+    flush(base.front)
+  }
+}
+
+region drawer_opening = opening(
+  left:   wall[left].right,
+  right:  wall[right].left,
+  bottom: base.top,
+  top:    wall[left].top,
+  front:  base.front,
+  back:   base.back,
+)
+
+part side[left, right] : maple_12 {
+  length: 400mm
+  width:  150mm
+  place {
+    orient(length: back, width: up)
+    spaced(ends(inset: 10mm), from: drawer_opening.left, to: drawer_opening.right)
+    flush(drawer_opening.bottom, inset: 15mm)
+    flush(drawer_opening.front)
+  }
+}
+
+part sub_front : maple_12 {
+  length: fit
+  width:  150mm
+  place {
+    orient(length: right, width: up)
+    center(drawer_opening, across)
+    flush(side[left].bottom)
+    flush(side[left].front)
+  }
+}
+
+joint box_dados : dado(sub_front, into: side[*], depth: 6mm)
+
+hardware slides[left, right] : side_mount_slide(side[same], in: drawer_opening, length: 400mm)

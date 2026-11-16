@@ -1,0 +1,26 @@
+stave 1
+
+/// Screws through one part into another. The piece gets clearance holes, the
+/// other part gets pilot holes.
+kind screw : joint {
+  /// Shank diameter of the screws.
+  param diameter = 4mm
+  /// Length of the screws.
+  param length = 30mm
+  /// Screws per connection.
+  param count = 2
+  require stays_inside : length <= piece.thickness + into.thickness - 3mm "the screw would come out the other side"
+  require bites : length >= piece.thickness + 8mm "the screw is too short to hold"
+
+  insert: [push(piece, along: thickness)]
+  uses:   wood_screw(diameter: diameter, length: length, count: count)
+
+  cut crossing(piece, into) {
+    drill(diameter: diameter + 0.5mm, depth: through, count: count)
+  }
+  cut crossing(into, piece) {
+    drill(diameter: diameter * 3 / 4, depth: length - piece.thickness, count: count)
+  }
+
+  note: "Clamp the parts together and drill the pilot holes through the clearance holes"
+}

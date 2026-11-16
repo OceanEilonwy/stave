@@ -1,0 +1,25 @@
+stave 1
+
+/// Cope and stick, simplified to its working parts: a stub tenon on each end
+/// of a rail that sits in the panel groove of a stile. Used for frame-and-panel
+/// doors.
+kind cope_and_stick : joint {
+  /// Length of the stub tenon; the same as the depth of the panel groove.
+  param depth = 10mm
+  /// Thickness of the stub tenon; the same as the width of the panel groove.
+  param tongue = 6mm
+  require tongue_fits : tongue <= piece.thickness / 2 "the stub tenon is too thick for this frame"
+
+  insert:    [push(piece, along: length)]
+  cut_first: into                            // cut the groove in the stile first, then fit the stub tenon
+  adds:      extend(piece, by: depth)
+
+  cut end(piece, facing: into) {
+    tenon(length: depth, width: piece.width, thickness: tongue)
+  }
+  cut crossing(into, piece) {
+    pocket(width: piece.width, thickness: tongue, depth: depth)
+  }
+
+  note: "Cut the rails to length before cutting the stub tenons; check the frame for square when clamping"
+}

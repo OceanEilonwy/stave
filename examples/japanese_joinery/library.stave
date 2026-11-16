@@ -5,9 +5,34 @@ stave 1
 //
 //   ari_tsugi     simple: one cut per beam, one assembly step
 //   kanawa_tsugi  complex: marked-out outlines, a key the joint makes, two steps
-//   chidori       complex: three parts in one node and a quarter turn to lock
+//   chidori       complex: three named roles in one node and a quarter turn to lock
 //
 // These are samples for the format. Check a joinery reference (and make a
 // trial piece) before cutting good timber from them.
 
-library "Japanese joinery samples"
+library "Japanese joinery samples" {
+  about: "Sample joint kinds: ari tsugi, kanawa tsugi and chidori"
+}
+
+/// An ink line: snaps a long, straight line along a beam.
+kind sumitsubo : tool {
+  title: "sumitsubo (ink line)"
+}
+
+/// A marked-out shape laid out with an ink line and sawn by hand. A library
+/// can add its own way of marking: `with:` names the tool on any step.
+recipe outline_with_sumitsubo : outline {
+  tools: [sumitsubo, square, marking_knife, tenon_saw, chisel, mallet]
+  rank:  5
+  mark {
+    line(outline, with: sumitsubo)
+    square_around(outline)
+    hatch(waste)
+  }
+  cut {
+    saw(outline)
+    chop(waste)
+    pare(outline)
+  }
+  check: "the cut faces are flat and split the ink lines"
+}

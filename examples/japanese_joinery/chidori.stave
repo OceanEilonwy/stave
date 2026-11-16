@@ -3,52 +3,51 @@ stave 1
 /// Chidori: three square sticks crossing at right angles in one node, locked
 /// by giving the third stick a quarter turn.
 ///
-/// Schematic: this exercises a three-part joint and a turn in the assembly
+/// Schematic: this exercises three named roles and a turn in the assembly
 /// sequence. It is not a tested cutting pattern; make a trial node in
 /// softwood before relying on these proportions.
 kind chidori : joint {
   roles {
-    part: Part                        // the stick that turns to lock the node
-    into: [Part, Part]                // the two sticks that cross first
+    lock:   Part                      // the stick that turns to lock the node
+    first:  Part                      // the two sticks that cross first
+    second: Part
   }
-  params {
-    size: Length = part.width
-  }
-  require square : part.width == size && part.thickness == size && into[0].width == size && into[0].thickness == size && into[1].width == size && into[1].thickness == size "all three sticks need the same square section"
+  /// The side of the square section all three sticks share.
+  param size = lock.width
+  require square : lock.width == size && lock.thickness == size &&
+                   first.width == size && first.thickness == size &&
+                   second.width == size && second.thickness == size "all three sticks need the same square section"
+
+  schematic: true                     // the cuts below don't describe the whole node, so its fit isn't checked
 
   // The first two sticks are halved over each other.
-  cut crossing(into[0], into[1]) {
+  cut crossing(first, second) {
     notch(depth: size / 2)
   }
-  cut crossing(into[1], into[0]) {
+  cut crossing(second, first, opposite: true) {
     notch(depth: size / 2)
   }
 
   // Both get a slot that lets the third stick pass through edge-on.
-  cut crossing(into[0], part) {
+  cut crossing(first, lock) {
     slot(width: size / 2, depth: through)
   }
-  cut crossing(into[1], part) {
+  cut crossing(second, lock) {
     slot(width: size / 2, depth: through)
   }
 
   // The third stick is slotted where it passes, so it can turn once it's in.
-  cut crossing(part, into[0]) {
+  cut crossing(lock, first) {
     slot(width: size / 2, depth: size / 2)
   }
 
-  cut_first: into                             // cut the crossing pair first, then fit the turning stick
+  cut_first: [first, second, lock]            // cut the crossing pair first, then fit the turning stick
 
   insert: [
-    slide(into[1], along: thickness),         // halve the first two sticks together
-    slide(part, along: length),               // push the third stick through, edge-on
-    rotate(part, by: 90deg, about: length),   // a quarter turn locks the node
+    push(second, along: thickness),           // halve the first two sticks together
+    push(lock, along: length),                // push the third stick through, edge-on
+    rotate(lock, by: 90deg, about: length),   // a quarter turn locks the node
   ]
 
-  steps {
-    "Halve {into} over each other at the middle"
-    "Cut the slots in {into} and in {part}"
-    "Assemble the halving, then push {part} through the node edge-on"
-    "Give {part} a quarter turn to lock the node"
-  }
+  note: "Assemble the halving, push {lock} through edge-on, then give it a quarter turn"
 }

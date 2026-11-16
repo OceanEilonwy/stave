@@ -1,0 +1,30 @@
+// expect: error[axis-set-twice] shelf: position along 'across' is set twice
+stave 1
+
+// flush(base.left) and center(base, across) both say where the shelf sits
+// from left to right.
+
+project "Axis set twice" {
+  units: mm
+}
+
+stock pine_19 { species: pine, form: solid, thickness: 19mm }
+
+part base : pine_19 {
+  length: 600mm
+  width:  300mm
+  place {
+    ground
+  }
+}
+
+part shelf : pine_19 {
+  length: 400mm
+  width:  300mm
+  place {
+    against(base.top, gap: 200mm)
+    flush(base.left)
+    center(base, across)
+    flush(base.front)
+  }
+}

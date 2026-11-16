@@ -1,0 +1,26 @@
+stave 1
+
+/// A dowel joint: matching holes in both parts, with glued wooden pins. The
+/// end or edge of the piece butts against a face of the other part.
+kind dowel : joint {
+  /// Diameter of the pins and their holes.
+  param diameter = 8mm
+  /// Pins per connection.
+  param count = 2
+  /// Depth of the hole in each part; a pin is twice this long.
+  param depth = 15mm
+  require pin_fits_piece : diameter <= piece.thickness / 2 "the dowel is too thick for this board"
+  require hole_stops : depth <= into.thickness - 3mm "the dowel hole would come through the other side"
+
+  insert: [push(piece, along: length)]
+  uses:   dowel_pin(diameter: diameter, length: 2 * depth, count: count)
+
+  cut end(piece, facing: into) {
+    drill(diameter: diameter, depth: depth, count: count)
+  }
+  cut crossing(into, piece) {
+    drill(diameter: diameter, depth: depth, count: count)
+  }
+
+  note: "Drill both sets of holes from the same reference edge so they line up"
+}

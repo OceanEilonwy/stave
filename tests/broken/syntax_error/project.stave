@@ -1,0 +1,20 @@
+// expect: error[syntax] expected ':', found 'shelf'
+stave 1
+
+// The ':' between the name of the check and its condition is missing.
+
+project "Syntax error" {
+  units: mm
+}
+
+stock pine_19 { species: pine, form: solid, thickness: 19mm }
+
+part shelf : pine_19 {
+  length: 600mm
+  width:  300mm
+  place {
+    ground
+  }
+}
+
+require wide_enough shelf.width >= 250mm "the shelf must hold a row of books"

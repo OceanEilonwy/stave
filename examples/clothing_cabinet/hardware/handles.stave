@@ -1,13 +1,20 @@
 stave 1
 
-kind brass_knob_26 : knob {
-  diameter: 26mm
-  envelope: cylinder(diameter: 26mm, length: 30mm)
-  model:    model("./models/brass_knob_26.glb", align: node("mount"))
+// Exact products from the shop's catalog. A kind may also carry a 3D model
+// for the viewport, for example
+//   model: model("./models/brass_knob_26.glb", align: node("mount"))
+// Checks never use the model, only the envelope.
+
+/// A 26mm turned brass knob.
+kind brass_knob_26 : pull {
+  diameter:       26mm
+  screw_diameter: 4mm
+  envelope:       cylinder(diameter: 26mm, length: 30mm)
 }
 
+/// A bar pull with its screws 160mm apart.
 kind bar_pull_160 : pull {
-  centres:  160mm
-  envelope: box(length: 192mm, height: 12mm, thickness: 35mm)
-  model:    model("./models/bar_pull_160.glb", align: bounds)
+  centres:        160mm
+  screw_diameter: 4mm
+  envelope:       box(length: 192mm, width: 12mm, thickness: 35mm)
 }

@@ -1,0 +1,71 @@
+// expect: error[order] board: there is no valid order for its cuts
+stave 1
+
+// The board gets a dado and a hole. The two recipes chosen with 'methods:'
+// each insist on coming after the other, so no order of work exists.
+
+project "No valid build order" {
+  units:   mm
+  tools:   [pencil, square, tenon_saw, chisel, drill]
+  methods: [notch_after_holes, hole_after_notches]
+}
+
+recipe notch_after_holes : notch {
+  tools: [pencil, square, tenon_saw, chisel]
+  needs: [after(drill)]
+  mark {
+    pencil(walls)
+  }
+  cut {
+    saw(walls, to: depth)
+    chop(waste, to: depth)
+  }
+  check: "the upright pushes in by hand"
+}
+
+recipe hole_after_notches : drill {
+  tools: [pencil, square, drill]
+  needs: [after(notch)]
+  mark {
+    centre_mark(centre)
+  }
+  cut {
+    bore(centre, diameter: diameter, to: depth, with: drill)
+  }
+  check: "the hole is square to the face"
+}
+
+stock pine_19  { species: pine, form: solid, thickness: 19mm }
+stock dowel_20 { species: beech, form: dowel, diameter: 20mm }
+
+part board : pine_19 {
+  length: 600mm
+  width:  300mm
+  place {
+    ground
+  }
+}
+
+part upright : pine_19 {
+  length: 400mm
+  width:  300mm
+  place {
+    orient(length: up, width: back)
+    against(board.top)
+    center(board, across)
+    flush(board.front)
+  }
+}
+
+part peg : dowel_20 {
+  length: 100mm
+  place {
+    orient(length: up)
+    against(board.top)
+    flush(board.left, inset: 50mm)
+    center(board, deep)
+  }
+}
+
+joint upright_dado : dado(upright, into: board, depth: 6mm)
+joint peg_socket   : socket(peg, into: board, depth: 9mm)

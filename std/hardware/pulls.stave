@@ -1,0 +1,21 @@
+stave 1
+
+/// A round knob held by one screw from behind.
+kind knob : pull {
+  /// Diameter of the knob.
+  param diameter = 30mm
+  /// How far the knob stands off the face.
+  param projection = 28mm
+  screw_diameter: 4mm
+  envelope:       cylinder(diameter: diameter, length: projection)
+}
+
+/// A bar pull held by two screws from behind.
+kind bar_pull : pull {
+  /// Distance between the two screw holes.
+  param centres = 128mm
+  /// How far the pull stands off the face.
+  param projection = 35mm
+  screw_diameter: 4mm
+  envelope:       box(length: centres + 32mm, width: 12mm, thickness: projection)
+}

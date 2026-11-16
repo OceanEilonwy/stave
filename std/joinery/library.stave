@@ -1,11 +1,17 @@
 stave 1
 
-// std:joinery — the standard joints. They are written in the same format as
-// any third-party joint library, and are in the prelude: projects use them
-// without an import or a prefix (dado(...), not joinery.dado(...)).
+// std:joinery — the standard joints and the recipes that cut them. They are
+// written in the same format as any third-party joint library, and are in the
+// prelude: projects use them without an import or a prefix (dado(...), not
+// joinery.dado(...)).
 //
-// Written so far: dado, rabbet, and recipes for notches and holes
-// (recipes.stave). Still to write in this format: groove, dowel,
-// mortise_tenon, round_tenon, half_lap, socket, screw, cope_and_stick.
+// Joints:  dado, rabbet, groove, dowel, round_tenon, socket, screw,
+//          cope_and_stick, mortise_tenon, half_lap
+// Recipes: one or more for every cut operation and for turning, in
+//          recipes.stave. Power-tool recipes rank before hand-tool recipes,
+//          so a project gets the power method only if it lists those tools.
 
-library "Joinery"
+library "Joinery" {
+  about:   "The standard joints and the recipes that cut them"
+  license: "AGPL-3.0-or-later"
+}

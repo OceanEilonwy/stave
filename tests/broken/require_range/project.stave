@@ -1,0 +1,23 @@
+// expect: error[require-range] 'hanger_room' does not hold for every allowed value: room for coat hangers
+stave 1
+
+// The check holds at 560mm, but 'within' allows a depth down to 450mm, where
+// it fails. A require must hold over the whole declared range.
+
+project "Require failing over a range" {
+  units: mm
+}
+
+param cabinet_depth = 560mm within 450mm..650mm
+
+stock pine_19 { species: pine, form: solid, thickness: 19mm }
+
+part base : pine_19 {
+  length: 900mm
+  width:  cabinet_depth
+  place {
+    ground
+  }
+}
+
+require hanger_room : base.width - 6mm >= 540mm "room for coat hangers"

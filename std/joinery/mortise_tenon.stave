@@ -1,0 +1,28 @@
+stave 1
+
+/// A mortise and tenon: a tongue on the end of one part in a matching pocket
+/// in the other. The strongest way to join a rail to a leg or stile.
+kind mortise_tenon : joint {
+  /// Thickness of the tenon; a third of the piece is the usual rule.
+  param thickness = piece.thickness / 3
+  /// Shoulder left at each edge of the tenon.
+  param shoulder = 10mm
+  /// Length of the tenon.
+  param length = 30mm
+  /// Extra depth in the mortise so the shoulders close before the tenon bottoms out.
+  param relief = 2mm
+  require has_width : piece.width > 2 * shoulder "the shoulders leave no tenon"
+
+  insert:    [push(piece, along: length)]
+  cut_first: into                            // cut the mortise first, then fit the tenon to it
+  adds:      extend(piece, by: length)
+
+  cut end(piece, facing: into) {
+    tenon(length: length, width: piece.width - 2 * shoulder, thickness: thickness)
+  }
+  cut crossing(into, piece) {
+    pocket(width: piece.width - 2 * shoulder, thickness: thickness, depth: length + relief)
+  }
+
+  note: "Pare the tenon cheeks until it pushes in by hand; never force a tenon"
+}

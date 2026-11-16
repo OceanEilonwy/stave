@@ -1,0 +1,16 @@
+// expect: error[unit-mismatch] can't add a length and an angle
+stave 1
+
+project "Unit mismatch" {
+  units: mm
+}
+
+stock pine_19 { species: pine, form: solid, thickness: 19mm }
+
+part shelf : pine_19 {
+  length: 600mm + 10deg
+  width:  300mm
+  place {
+    ground
+  }
+}

@@ -1,22 +1,25 @@
 stave 1
 
 /// A frame-and-panel door: two stiles, two rails and a floating panel.
-component FramePanelDoor(
-  opening:     Region,
-  hinge_side:  Part,
-  mount:       Mount,
-  frame:       Stock,
-  panel_stock: Stock,
-  stile_width: Length = 60mm,
-  rail_width:  Length = 60mm,
-  joinery:     JointKind = cope_and_stick,
-  hinge_kind:  HardwareKind = euro_hinge(opening_angle: 110deg),
-  knob_kind:   HardwareKind = knob(diameter: 26mm),
-) {
-  region door = cover(opening, mount)
+component FramePanelDoor {
+  param opening     : Region
+  param hinge_side  : Part               // the cabinet side the hinges screw to
+  param mount       : Mount
+  param frame       : Stock
+  param panel_stock : Stock
+  param stile_width = 60mm
+  param rail_width  = 60mm
+  param joinery     : JointKind = cope_and_stick
+  param hinge_kind  : HingeKind = euro_hinge(opening_angle: 110deg)
+  param knob_kind   : PullKind = knob(diameter: 26mm)
+
+  require stile_holds_cup : stile_width >= hinge_kind.cup_diameter + 2 * hinge_kind.cup_inset "the stile is too narrow for the hinge cup"
+
+  /// The space the closed door fills, in front of its opening.
+  region door = cover(opening, mount, thickness: frame.thickness)
 
   part stile[hinge, latch] : frame {
-    length: door.height
+    length: door.up
     width:  stile_width
     place {
       orient(length: up, width: right)
@@ -27,7 +30,7 @@ component FramePanelDoor(
   }
 
   part rail[bottom, top] : frame {
-    length: fit                          // between the stiles; tenons are added by the joint
+    length: fit                          // between the stiles; the stub tenons are added by the joint
     width:  rail_width
     place {
       orient(length: right, width: up)
@@ -38,29 +41,30 @@ component FramePanelDoor(
   }
 
   part panel : panel_stock {
-    length: fit
-    width:  fit
+    length: fit                          // between the rails, plus what sits in the grooves
+    width:  fit                          // between the stiles, plus what sits in the grooves
     place {
-      inside(panel_groove)
+      orient(length: up, width: right)
+      center(door, up)
+      center(door, across)
+      center(door, deep)
     }
   }
 
   joint frame_joints : joinery(rail[*], into: stile[*])
-  joint panel_groove : groove(panel, into: [stile[*], rail[*]]) {
-    depth: 10mm
-    glue:  panel_stock.form == plywood   // solid panels must float
-  }
+  // A solid panel must float: no glue, and room in the grooves to swell.
+  joint panel_groove : groove(panel, into: [stile[*], rail[*]], depth: 10mm, clearance: 2mm, glue: false)
 
   hardware hinges[lower, upper] : hinge_kind(stile[hinge], on: hinge_side) {
     place {
-      spaced(ends, from: door.bottom, to: door.top, inset: 100mm)
+      spaced(ends(inset: 100mm), from: door.bottom, to: door.top)
     }
   }
 
   hardware handle : knob_kind(stile[latch]) {
     place {
       center(stile[latch], across)
-      against(rail[bottom].top, gap: 450mm)
+      center(stile[latch], up)
     }
   }
 }

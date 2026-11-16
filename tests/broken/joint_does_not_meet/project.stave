@@ -1,0 +1,41 @@
+// expect: error[no-contact] shelf_dado: shelf meets none of the parts it should join
+stave 1
+
+// The shelf stops 20mm short of the side it is supposed to be housed in.
+
+project "Joint whose parts do not meet" {
+  units: mm
+}
+
+stock pine_19 { species: pine, form: solid, thickness: 19mm }
+
+part base : pine_19 {
+  length: 600mm
+  width:  300mm
+  place {
+    ground
+  }
+}
+
+part side : pine_19 {
+  length: 400mm
+  width:  300mm
+  place {
+    orient(length: up, width: back)
+    against(base.top)
+    flush(base.left)
+    flush(base.front)
+  }
+}
+
+part shelf : pine_19 {
+  length: 300mm
+  width:  300mm
+  place {
+    against(base.top, gap: 200mm)
+    against(side.right, gap: 20mm)
+    flush(base.front)
+  }
+}
+
+joint shelf_dado : dado(shelf, into: side, depth: 6mm)
