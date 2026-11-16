@@ -46,6 +46,12 @@ pub fn length_from_nm(nm: f64) -> Option<Length> {
     integer_from_f64(nm.round()).map(Length::from_nm)
 }
 
+/// An angle in radians, rounded down to the micro-degree; `None` when it
+/// isn't finite.
+pub fn angle_from_radians_floor(radians: f64) -> Option<Angle> {
+    integer_from_f64((radians.to_degrees() * 1_000_000.0).floor()).map(Angle::from_microdeg)
+}
+
 /// The `i64` an integral `f64` holds, decoded from its bits (exact, with
 /// no cast); `None` when it isn't finite or doesn't fit.
 fn integer_from_f64(value: f64) -> Option<i64> {

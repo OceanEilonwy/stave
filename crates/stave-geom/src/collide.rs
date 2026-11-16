@@ -110,6 +110,15 @@ pub struct WorldSolid {
 }
 
 impl WorldSolid {
+    /// A solid of boxes only.
+    pub fn from_boxes(boxes: Vec<WorldBox>) -> WorldSolid {
+        WorldSolid {
+            boxes,
+            rods: Vec::new(),
+            holes: Vec::new(),
+        }
+    }
+
     /// A part's cut solid, placed.
     pub fn of_part(part: &Part, solid: &Solid) -> WorldSolid {
         let pose = &part.pose;
@@ -241,7 +250,7 @@ fn world_rod(pose: &Pose, rod: &Rod) -> WorldRod {
     }
 }
 
-fn translate_box(b: &WorldBox, by: Point) -> WorldBox {
+pub(crate) fn translate_box(b: &WorldBox, by: Point) -> WorldBox {
     let shift = |p: Point| {
         let mut out = p;
         for axis in Axis::ALL {
@@ -726,7 +735,7 @@ impl Placement {
         }
     }
 
-    fn matrix(&self) -> DMat4 {
+    pub(crate) fn matrix(&self) -> DMat4 {
         match self {
             Placement::Exact(offset) => DMat4::from_translation(point_vector(*offset)),
             Placement::Turned(matrix) => *matrix,
@@ -744,7 +753,7 @@ fn direction_offset(direction: Direction, amount: Length) -> Point {
 }
 
 /// World coordinates as an `f64` vector (across, up, deep), nanometres.
-fn point_vector(point: Point) -> DVec3 {
+pub(crate) fn point_vector(point: Point) -> DVec3 {
     DVec3::new(
         render::nm(point.across),
         render::nm(point.up),
@@ -766,7 +775,7 @@ fn axis_vector(axis: Axis) -> DVec3 {
     v
 }
 
-fn direction_vector(direction: Direction) -> DVec3 {
+pub(crate) fn direction_vector(direction: Direction) -> DVec3 {
     let v = axis_vector(direction.axis());
     if direction.is_positive() { v } else { -v }
 }

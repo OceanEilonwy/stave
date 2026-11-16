@@ -45,6 +45,7 @@ pub mod collide;
 mod mesh;
 pub mod render;
 pub mod solid;
+pub mod sweep;
 
 use glam::{Mat4, Vec3};
 use stave_model::solved::{Envelope, Hardware, Part, Shape, Size3};

@@ -1,0 +1,242 @@
+//! Motion sweeps (layer 5): every assembly with a motion is moved through
+//! its whole travel, from rest and from each scene's poses, and the first
+//! thing it hits is reported with the angle or distance where it hits.
+//!
+//! The moving assembly starts closed; everything else stands where the
+//! scene puts it. Each assembly is reported once: the first start (rest,
+//! then the scenes in order) at which it hits something, with its first
+//! contact. An assembly inside another that moves, or with an item already
+//! reported at rest or at a scene's poses, is left out.
+
+use stave_geom::collide::{Placement, boxes_overlap, placed_bounds, union};
+use stave_geom::sweep::{SlideHit, slide_contact, slide_reach, turn_contact, turn_reach};
+use stave_lang::units::Angle;
+use stave_lang::{Code, Severity};
+use stave_model::solved::{AssemblyId, HardwareBase, Motion, WorldBox};
+
+use crate::names::length_text;
+use crate::{Checker, Item};
+
+/// Where a motion first hits something.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Reach {
+    /// A slide, this far out.
+    Distance(SlideHit),
+    /// A hinge, opened this far.
+    Angle(Angle),
+}
+
+impl Reach {
+    /// What decides which hit comes first: the distance or angle, then
+    /// parts before hardware (a drawer side rather than the slide on it).
+    fn key(&self, a: Item, b: Item) -> (i64, bool, bool, Item, Item) {
+        let amount = match self {
+            Reach::Distance(hit) => hit.distance.nm(),
+            Reach::Angle(angle) => angle.microdeg(),
+        };
+        let hardware = |item: Item| !matches!(item, Item::Part(_));
+        (amount, hardware(a), hardware(b), a, b)
+    }
+}
+
+/// An angle rounded down to a tenth of a degree: `87.3deg`.
+fn angle_text(angle: Angle) -> String {
+    let tenth = 100_000;
+    Angle::from_microdeg(angle.microdeg().div_euclid(tenth) * tenth).to_string()
+}
+
+impl Checker<'_> {
+    /// The hinge or slide of an assembly that gives it its motion.
+    fn motion_hardware(&self, assembly: AssemblyId) -> Option<stave_model::solved::HardwareId> {
+        let found = self.design.assemblies.get(assembly.index())?;
+        found.hardware.iter().copied().find(|id| {
+            self.design.hardware.get(id.index()).is_some_and(|h| {
+                matches!(h.base, HardwareBase::Hinge | HardwareBase::Slide)
+                    && h.assembly == Some(assembly)
+            })
+        })
+    }
+
+    pub(crate) fn sweeps(&mut self) {
+        let mut found = Vec::new();
+        for assembly in &self.design.assemblies {
+            let Some(motion) = assembly.motion else {
+                continue;
+            };
+            // Inside another assembly that moves: its path isn't a sweep
+            // about one fixed line.
+            let mut parent = assembly.parent;
+            let mut nested = false;
+            while let Some(id) = parent {
+                let Some(outer) = self.design.assemblies.get(id.index()) else {
+                    break;
+                };
+                nested |= outer.motion.is_some();
+                parent = outer.parent;
+            }
+            if nested {
+                continue;
+            }
+            let moving: Vec<usize> = (0..self.bodies.len())
+                .filter(|&i| {
+                    self.bodies
+                        .get(i)
+                        .is_some_and(|b| b.chain.contains(&assembly.id))
+                })
+                .collect();
+            let blocked = moving.iter().any(|&i| {
+                self.bodies.get(i).is_some_and(|b| {
+                    self.failed.contains(&b.item) || self.posed_failed.contains(&b.item)
+                })
+            });
+            if moving.is_empty() || blocked {
+                continue;
+            }
+            for scene_index in 0..self.design.scenes.len() {
+                let (moves, placements) = self.scene_moves(scene_index);
+                if scene_index > 0 && moves.iter().all(Vec::is_empty) {
+                    continue;
+                }
+                if let Some(hit) = self.first_hit(assembly.id, &motion, &moving, &placements) {
+                    found.push((assembly.id, motion, scene_index, hit));
+                    break;
+                }
+            }
+        }
+        for (assembly, motion, scene_index, (reach, a, b)) in found {
+            self.report_sweep(assembly, &motion, scene_index, reach, a, b);
+        }
+    }
+
+    /// The first contact of an assembly's motion with everything else at
+    /// `placements`: how far, and the moving and the fixed item.
+    fn first_hit(
+        &self,
+        assembly: AssemblyId,
+        motion: &Motion,
+        moving: &[usize],
+        placements: &[Placement],
+    ) -> Option<(Reach, Item, Item)> {
+        let reach_of = |index: usize| -> Option<WorldBox> {
+            let body = self.bodies.get(index)?;
+            match *motion {
+                Motion::Travel { toward, travel } => slide_reach(&body.solid, toward, travel),
+                Motion::Turn { pivot, .. } => turn_reach(&body.solid, &pivot),
+            }
+        };
+        let reach = moving
+            .iter()
+            .filter_map(|&i| reach_of(i))
+            .reduce(|a, b| union(&a, &b))?;
+        let mut best: Option<(Reach, Item, Item)> = None;
+        for (j, fixed) in self.bodies.iter().enumerate() {
+            if fixed.chain.contains(&assembly)
+                || self.failed.contains(&fixed.item)
+                || self.posed_failed.contains(&fixed.item)
+            {
+                continue;
+            }
+            let Some(placement) = placements.get(j).copied() else {
+                continue;
+            };
+            if !boxes_overlap(&placed_bounds(&fixed.bounds, &placement), &reach) {
+                continue;
+            }
+            for &i in moving {
+                let Some(body) = self.bodies.get(i) else {
+                    continue;
+                };
+                if self.exempt(body.item, fixed.item) {
+                    continue;
+                }
+                let hit = match *motion {
+                    Motion::Travel { toward, travel } => {
+                        slide_contact(&body.solid, &fixed.solid, &placement, toward, travel)
+                            .map(Reach::Distance)
+                    }
+                    Motion::Turn {
+                        pivot,
+                        opening_angle,
+                    } => turn_contact(&body.solid, &fixed.solid, &placement, &pivot, opening_angle)
+                        .map(Reach::Angle),
+                };
+                if let Some(hit) = hit
+                    && best.is_none_or(|(b, x, y)| hit.key(body.item, fixed.item) < b.key(x, y))
+                {
+                    best = Some((hit, body.item, fixed.item));
+                }
+            }
+        }
+        best
+    }
+
+    fn report_sweep(
+        &mut self,
+        assembly: AssemblyId,
+        motion: &Motion,
+        scene_index: usize,
+        reach: Reach,
+        a: Item,
+        b: Item,
+    ) {
+        let name = self.assembly_name(assembly);
+        let (a_name, b_name) = (self.item_name(a), self.item_name(b));
+        let (message, mut notes, help) = match (reach, *motion) {
+            (Reach::Angle(angle), Motion::Turn { opening_angle, .. }) => {
+                let at = angle_text(angle);
+                (
+                    format!("{a_name} hits {b_name} when {name} is opened past {at}"),
+                    vec![format!("the hinges open to {opening_angle}")],
+                    if angle.microdeg() < 1_000_000 {
+                        format!(
+                            "{name} turns into {b_name} as soon as it opens; hinge it on the other edge, or move {b_name} out of its way"
+                        )
+                    } else {
+                        format!(
+                            "open {name} no further than {at} (a smaller opening_angle), or move {b_name} out of its way"
+                        )
+                    },
+                )
+            }
+            (Reach::Distance(hit), Motion::Travel { travel, .. }) => {
+                let at = length_text(hit.distance);
+                (
+                    format!("{a_name} hits {b_name} when {name} is pulled out past {at}"),
+                    vec![format!("the slides travel {}", length_text(travel))],
+                    match hit.shrink {
+                        Some((amount, axis)) => format!(
+                            "{a_name} reaches {} into the way of {b_name}, measured {}; make it that much smaller there, or move {b_name} out of its way",
+                            length_text(amount),
+                            axis.word()
+                        ),
+                        None => format!("move {b_name} out of the way of {name}"),
+                    },
+                )
+            }
+            // A reach always matches its motion.
+            (Reach::Angle(_), Motion::Travel { .. })
+            | (Reach::Distance(_), Motion::Turn { .. }) => {
+                return;
+            }
+        };
+        if scene_index > 0
+            && let Some(scene) = self.design.scenes.get(scene_index)
+        {
+            notes.push(format!(
+                "with everything else as scene '{}' poses it",
+                scene.name
+            ));
+        }
+        let place = self
+            .motion_hardware(assembly)
+            .and_then(|hardware| self.hardware_place(hardware));
+        self.report(
+            Severity::Error,
+            Code::Motion,
+            message,
+            place,
+            notes,
+            Some(help),
+        );
+    }
+}

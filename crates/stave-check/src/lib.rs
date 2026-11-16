@@ -41,6 +41,7 @@
 #![warn(missing_docs)]
 
 mod explain;
+mod motion;
 mod names;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -70,6 +71,7 @@ pub fn check(model: &Model, design: &SolvedDesign) -> Vec<Diagnostic> {
     checker.slide_gaps();
     checker.rest();
     checker.scenes();
+    checker.sweeps();
     checker.finish()
 }
 
@@ -107,6 +109,8 @@ struct Checker<'a> {
     overrun: BTreeSet<PartId>,
     /// Items with an error at rest.
     failed: BTreeSet<Item>,
+    /// Items with an error at a scene's poses.
+    posed_failed: BTreeSet<Item>,
     /// Slides reported for their gap: their members are left out of the
     /// overlap checks, which would only report the same mistake again.
     misfit_slides: BTreeSet<HardwareId>,
@@ -178,6 +182,7 @@ impl<'a> Checker<'a> {
             uncut: BTreeSet::new(),
             overrun: BTreeSet::new(),
             failed: BTreeSet::new(),
+            posed_failed: BTreeSet::new(),
             misfit_slides: BTreeSet::new(),
             diagnostics: Vec::new(),
         }
@@ -656,51 +661,60 @@ impl<'a> Checker<'a> {
     // 5. Scene poses
     // -----------------------------------------------------------------------
 
+    /// Per body, in one scene: the poses that move it (outermost first) and
+    /// its placement. Index 0 is the built-in `rest`.
+    fn scene_moves(&self, scene_index: usize) -> (Vec<Moves>, Vec<Placement>) {
+        let Some(scene) = self.design.scenes.get(scene_index) else {
+            return (Vec::new(), Vec::new());
+        };
+        let pose_of = |assembly: AssemblyId| {
+            scene
+                .poses
+                .iter()
+                .find(|pose| pose.assembly == assembly)
+                .map(|pose| pose.value)
+                .filter(|value| !matches!(value, PoseValue::Closed))
+        };
+        let moves: Vec<Moves> = self
+            .bodies
+            .iter()
+            .map(|body| {
+                body.chain
+                    .iter()
+                    .filter_map(|assembly| {
+                        let value = pose_of(*assembly)?;
+                        self.design
+                            .assemblies
+                            .get(assembly.index())?
+                            .motion
+                            .map(|_| (*assembly, value))
+                    })
+                    .collect()
+            })
+            .collect();
+        let placements = moves
+            .iter()
+            .map(|chain: &Moves| {
+                let motions: Vec<_> = chain
+                    .iter()
+                    .filter_map(|(assembly, value)| {
+                        let motion = self.design.assemblies.get(assembly.index())?.motion?;
+                        Some((motion, *value))
+                    })
+                    .collect();
+                Placement::of_motions(&motions)
+            })
+            .collect();
+        (moves, placements)
+    }
+
     fn scenes(&mut self) {
         let mut reported: BTreeSet<(Item, Item)> = BTreeSet::new();
-        for (scene_index, scene) in self.design.scenes.iter().enumerate().skip(1) {
-            let pose_of = |assembly: AssemblyId| {
-                scene
-                    .poses
-                    .iter()
-                    .find(|pose| pose.assembly == assembly)
-                    .map(|pose| pose.value)
-                    .filter(|value| !matches!(value, PoseValue::Closed))
-            };
-            // Per body: the poses that move it, and its placement.
-            let moves: Vec<Vec<(AssemblyId, PoseValue)>> = self
-                .bodies
-                .iter()
-                .map(|body| {
-                    body.chain
-                        .iter()
-                        .filter_map(|assembly| {
-                            let value = pose_of(*assembly)?;
-                            self.design
-                                .assemblies
-                                .get(assembly.index())?
-                                .motion
-                                .map(|_| (*assembly, value))
-                        })
-                        .collect()
-                })
-                .collect();
+        for (scene_index, _) in self.design.scenes.iter().enumerate().skip(1) {
+            let (moves, placements) = self.scene_moves(scene_index);
             if moves.iter().all(Vec::is_empty) {
                 continue;
             }
-            let placements: Vec<Placement> = moves
-                .iter()
-                .map(|chain| {
-                    let motions: Vec<_> = chain
-                        .iter()
-                        .filter_map(|(assembly, value)| {
-                            let motion = self.design.assemblies.get(assembly.index())?.motion?;
-                            Some((motion, *value))
-                        })
-                        .collect();
-                    Placement::of_motions(&motions)
-                })
-                .collect();
             let boxes: Vec<WorldBox> = self
                 .bodies
                 .iter()
@@ -718,7 +732,7 @@ impl<'a> Checker<'a> {
                 if ma == mb
                     || self.failed.contains(&a.item)
                     || self.failed.contains(&b.item)
-                    || reported.contains(&(a.item, b.item))
+                    || reported.contains(&ordered_items(a.item, b.item))
                     || self.exempt(a.item, b.item)
                 {
                     continue;
@@ -740,6 +754,8 @@ impl<'a> Checker<'a> {
             }
             for (first, second, moved, other_moves, found) in clashes {
                 reported.insert(ordered_items(first, second));
+                self.posed_failed.insert(first);
+                self.posed_failed.insert(second);
                 self.motion(scene_index, first, second, &moved, &other_moves, &found);
             }
         }
@@ -864,6 +880,9 @@ impl<'a> Checker<'a> {
         merged
     }
 }
+
+/// The poses that move a body in a scene, outermost assembly first.
+type Moves = Vec<(AssemblyId, PoseValue)>;
 
 /// A cut's source, for grouping warnings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
