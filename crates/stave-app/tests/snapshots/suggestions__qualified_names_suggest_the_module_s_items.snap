@@ -1,0 +1,10 @@
+---
+source: crates/stave-app/tests/suggestions.rs
+expression: render(&opened)
+---
+error[unknown-name]: unknown name 'parts.widht'
+  --> /project/project.stave:20:9
+   |
+20 | let a = parts.widht
+   |         ^^^^^^^^^^^
+   = help: did you mean 'width'?

@@ -194,6 +194,16 @@ impl Solver<'_> {
             }
         }
         match grounded.as_slice() {
+            [] if self
+                .model
+                .defs
+                .broken
+                .get(&self.model.root)
+                .is_some_and(|names| !names.is_empty()) =>
+            {
+                // The ground part may be one with a syntax error.
+                Err(self.skip())
+            }
             [] => {
                 self.report(
                     Diagnostic::error(
@@ -256,6 +266,9 @@ impl Solver<'_> {
         let Some(inst) = self.model.parts.get(part.index()).cloned() else {
             return Err(Reported);
         };
+        if self.poisoned(DefId::Part(inst.def)) {
+            return Err(self.skip());
+        }
         if let Some(source) = inst.mirror_of {
             let Some(assembly) = inst.assembly else {
                 return Err(Reported);
@@ -546,6 +559,11 @@ impl Solver<'_> {
     }
 
     fn compute_part_terms(&mut self, part: PartId) -> Solved<Terms> {
+        if let Some(inst) = self.model.parts.get(part.index())
+            && self.poisoned(DefId::Part(inst.def))
+        {
+            return Err(self.skip());
+        }
         let Some(body) = self.part_body(part).cloned() else {
             return Err(Reported);
         };
@@ -1475,6 +1493,10 @@ impl Solver<'_> {
         inst: &stave_model::instance::RegionInst,
         def: &stave_model::defs::RegionDef,
     ) -> Solved<RegionValue> {
+        if self.poisoned(DefId::Region(inst.def)) {
+            let _ = region;
+            return Err(self.skip());
+        }
         if let Some(source) = inst.mirror_of {
             let Some(assembly) = inst.assembly else {
                 return Err(Reported);

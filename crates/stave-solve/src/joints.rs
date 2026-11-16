@@ -27,6 +27,8 @@ use crate::{Frame, Memo, Reported, Solved, Solver};
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct Binding {
     pub kind: KindId,
+    /// The kind's name as written where it was named.
+    pub name: String,
     pub roles: Vec<Value>,
     pub settings: Vec<(String, Value)>,
     pub glue: bool,
@@ -192,8 +194,12 @@ impl Solver<'_> {
         };
         let KindValue {
             kind,
+            name: kind_name,
             settings: given,
         } = kind_value;
+        if self.model.defs.is_poisoned(DefId::Kind(kind)) {
+            return Err(self.skip());
+        }
         let Some(kind_def) = self.model.defs.kind(kind).cloned() else {
             return Err(Reported);
         };
@@ -209,7 +215,7 @@ impl Solver<'_> {
                 None => {
                     return Err(self.error(
                         Code::TypeMismatch,
-                        format!("the kind '{}' has no roles", kind_def.decl.name),
+                        format!("the kind '{}' has no roles", kind_name),
                         env.file,
                         positional.span,
                         "a kind value takes its settings by name",
@@ -252,13 +258,18 @@ impl Solver<'_> {
             if kind_def.param(&setting.name).is_none() {
                 return Err(self.error(
                     Code::UnknownField,
-                    format!(
-                        "the kind '{}' has no field '{}'",
-                        kind_def.decl.name, setting.name
-                    ),
+                    format!("the kind '{}' has no field '{}'", kind_name, setting.name),
                     env.file,
                     setting.name_span,
-                    "name one of the kind's roles or params",
+                    stave_model::suggest::did_you_mean(
+                        &setting.name,
+                        kind_def
+                            .params
+                            .iter()
+                            .map(|p| p.decl.name.as_str())
+                            .chain(kind_def.roles.iter().map(|r| r.name.as_str())),
+                    )
+                    .unwrap_or_else(|| "name one of the kind's roles or params".to_owned()),
                 ));
             }
             if settings.iter().any(|(n, _)| *n == setting.name) {
@@ -325,6 +336,7 @@ impl Solver<'_> {
             bound.push(value);
         }
         Ok(Binding {
+            name: kind_name,
             kind,
             roles: bound,
             settings,
@@ -348,6 +360,9 @@ impl Solver<'_> {
         let Some(def) = self.model.defs.joint(inst.def).cloned() else {
             return Err(Reported);
         };
+        if self.poisoned(DefId::Joint(inst.def)) {
+            return Err(self.skip());
+        }
         if let Some(slot) = self.joints.get_mut(joint.index()) {
             *slot = Memo::Busy;
         }
@@ -838,7 +853,7 @@ impl Solver<'_> {
                 } else {
                     face
                 };
-                let local = gp.local_box(&gq.cut_box)?;
+                let local = gp.local_box(&gq.cut_box.intersection(&gp.cut_box))?;
                 let footprint = local_box(&local)?;
                 Ok((
                     p,

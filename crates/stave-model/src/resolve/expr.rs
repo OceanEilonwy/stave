@@ -523,27 +523,37 @@ impl Resolver<'_> {
                     span,
                 }
             }
-            None => {
-                let mut diagnostic = Diagnostic::error(
+            None if self.is_broken(cx, text) => RExpr::error(span),
+            None if self.import(cx, text).is_some() => {
+                self.error_help(
                     Code::UnknownName,
                     format!("unknown name '{text}'"),
-                    Label::new(cx.file, span),
+                    cx.file,
+                    span,
+                    format!("'{text}' is a module; name one of its items: {text}.<name>"),
                 );
-                if self.import(cx, text).is_some() {
-                    diagnostic = diagnostic.with_help(format!(
-                        "'{text}' is a module; name one of its items: {text}.<name>"
-                    ));
-                } else if let Some(set) = WordSet::ALL.iter().find(|s| s.contains(text)) {
-                    let _ = set;
-                    if let Some(wanted) = &expect.ty {
-                        diagnostic = diagnostic.with_help(format!("this needs {wanted} here"));
-                    }
-                } else {
-                    diagnostic = diagnostic.with_help(format!(
-                        "declare '{text}' in this module, or check its spelling"
-                    ));
+                RExpr::error(span)
+            }
+            None => {
+                let mut candidates = self.names_in_scope(cx);
+                for set in &expect.words {
+                    candidates.extend(set.words().into_iter().map(str::to_owned));
                 }
-                self.report(diagnostic);
+                let fallback = match &expect.ty {
+                    Some(wanted) if WordSet::ALL.iter().any(|s| s.contains(text)) => {
+                        format!("this needs {wanted} here")
+                    }
+                    _ => format!("declare '{text}' in this module, or check its spelling"),
+                };
+                self.unknown(
+                    Code::UnknownName,
+                    format!("unknown name '{text}'"),
+                    cx.file,
+                    span,
+                    text,
+                    candidates,
+                    fallback,
+                );
                 RExpr::error(span)
             }
         }
@@ -569,6 +579,32 @@ impl Resolver<'_> {
                                 ty,
                                 span,
                             }
+                        }
+                        Err(false)
+                            if self
+                                .broken
+                                .get(&module)
+                                .is_some_and(|names| names.contains(member.as_str())) =>
+                        {
+                            RExpr::error(span)
+                        }
+                        Err(false) => {
+                            let candidates = self.public_names(module);
+                            let fallback = format!(
+                                "module '{}' has no public item called '{}'",
+                                self.module_name(module),
+                                member.as_str()
+                            );
+                            self.unknown(
+                                Code::UnknownName,
+                                format!("unknown name '{}.{}'", root.as_str(), member.as_str()),
+                                cx.file,
+                                span,
+                                member.as_str(),
+                                candidates,
+                                fallback,
+                            );
+                            RExpr::error(span)
                         }
                         Err(private) => {
                             let mut diagnostic = Diagnostic::error(
@@ -665,16 +701,67 @@ impl Resolver<'_> {
                     }
                     other => other.to_string(),
                 };
-                self.report(
-                    Diagnostic::error(
-                        Code::UnknownField,
-                        format!("{what} has no field '{name}'"),
-                        Label::new(cx.file, member.span()),
-                    )
-                    .with_help(member_help(&base.ty)),
+                let candidates = self.member_names(&base.ty);
+                self.unknown(
+                    Code::UnknownField,
+                    format!("{what} has no field '{name}'"),
+                    cx.file,
+                    member.span(),
+                    name,
+                    candidates,
+                    member_help(&base.ty),
                 );
                 RExpr::error(span)
             }
+        }
+    }
+
+    /// The readable members of a type, for suggestions.
+    fn member_names(&self, ty: &Ty) -> Vec<String> {
+        let faces = Face::ALL.iter().map(|f| f.word().to_owned());
+        match ty {
+            Ty::Part => ["length", "width", "thickness", "diameter", "stock"]
+                .iter()
+                .map(|s| (*s).to_owned())
+                .chain(faces)
+                .collect(),
+            Ty::Region => Axis::ALL
+                .iter()
+                .map(|a| a.word().to_owned())
+                .chain(faces)
+                .collect(),
+            Ty::Stock => [
+                "species",
+                "form",
+                "thickness",
+                "diameter",
+                "width",
+                "max_width",
+                "max_length",
+            ]
+            .iter()
+            .map(|s| (*s).to_owned())
+            .collect(),
+            Ty::Profile => vec!["length".to_owned()],
+            Ty::Assembly(component) => self
+                .component_names
+                .get(component.index())
+                .map(|names| names.keys().cloned().collect())
+                .unwrap_or_default(),
+            Ty::Kind(KindTy {
+                kind: Some(kind), ..
+            }) => match self.origins.get(&DefId::Kind(*kind)).map(|o| o.syntax) {
+                Some(super::Syntax::Kind(syntax)) => super::kinds::kind_params(syntax)
+                    .iter()
+                    .map(|p| p.name.as_str().to_owned())
+                    .chain(syntax.body.entries.iter().filter_map(|e| match e {
+                        ast::KindEntry::Field(f) => Some(f.key.as_str().to_owned()),
+                        _ => None,
+                    }))
+                    .collect(),
+                _ => Vec::new(),
+            },
+            _ => Vec::new(),
         }
     }
 
@@ -780,11 +867,13 @@ impl Resolver<'_> {
                         Some(position) => (Index::Label(position), element),
                         None => {
                             let written = label.unwrap_or_else(|| "this".into());
-                            self.error_help(
+                            self.unknown(
                                 Code::UnknownName,
                                 format!("unknown name '{written}'"),
                                 cx.file,
                                 at.span,
+                                &written,
+                                labels.iter(),
                                 format!(
                                     "'{}' is indexed by its labels: {}",
                                     self.expr_name(&base),
@@ -962,12 +1051,12 @@ impl Resolver<'_> {
             format!(
                 "'{}' is a role of '{}'; a kind value has no roles",
                 name.as_str(),
-                syntax.name.as_str()
+                self.kind_display(id, cx.file)
             )
         } else {
             format!(
                 "the kind '{}' has no field '{}'",
-                syntax.name.as_str(),
+                self.kind_display(id, cx.file),
                 name.as_str()
             )
         };
@@ -979,7 +1068,25 @@ impl Resolver<'_> {
                 .collect::<Vec<_>>()
                 .join(", ")
         );
-        self.error_help(Code::UnknownField, message, cx.file, name.span(), help);
+        let mut candidates: Vec<String> =
+            params.iter().map(|p| p.name.as_str().to_owned()).collect();
+        candidates.extend(
+            super::kinds::role_specs(syntax)
+                .into_iter()
+                .map(|(role, _, _)| role),
+        );
+        if syntax.base.value == BaseKind::Joint {
+            candidates.extend(["glue".to_owned(), "methods".to_owned()]);
+        }
+        self.unknown(
+            Code::UnknownField,
+            message,
+            cx.file,
+            name.span(),
+            name.as_str(),
+            candidates,
+            help,
+        );
         None
     }
 
@@ -993,6 +1100,7 @@ impl Resolver<'_> {
     ) -> RExpr {
         let parameters = builtin.parameters();
         let mut settings: Vec<Setting> = Vec::new();
+        let mut misspelt: Vec<String> = Vec::new();
         let mut positional = parameters.iter().filter(|p| p.positional);
         for arg in args {
             let parameter = match &arg.name {
@@ -1022,11 +1130,14 @@ impl Resolver<'_> {
                 {
                     Some(parameter) => parameter,
                     None => {
-                        self.error_help(
+                        misspelt.push(name.as_str().to_owned());
+                        self.unknown(
                             Code::UnknownField,
                             format!("'{}' has no field '{}'", builtin.word(), name.as_str()),
                             cx.file,
                             name.span(),
+                            name.as_str(),
+                            parameters.iter().filter(|p| !p.positional).map(|p| p.name),
                             format!("{} takes {}", builtin.word(), signature(builtin)),
                         );
                         continue;
@@ -1061,7 +1172,10 @@ impl Resolver<'_> {
             });
         }
         for parameter in parameters.iter().filter(|p| p.required) {
-            if !settings.iter().any(|s| s.name == parameter.name) {
+            let misspelling = misspelt
+                .iter()
+                .any(|m| !crate::suggest::closest(m, [parameter.name]).is_empty());
+            if !settings.iter().any(|s| s.name == parameter.name) && !misspelling {
                 self.error_help(
                     Code::MissingField,
                     format!("'{}' is missing '{}'", builtin.word(), parameter.name),

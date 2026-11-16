@@ -116,11 +116,13 @@ impl<'a> Resolver<'a> {
                         } else {
                             format!("'{head}' takes {}", named.join(", "))
                         };
-                        self.error_help(
+                        self.unknown(
                             Code::UnknownField,
                             format!("'{head}' has no field '{}'", name.as_str()),
                             cx.file,
                             name.span(),
+                            name.as_str(),
+                            named.iter().copied(),
                             help,
                         );
                     } else if out.named.iter().any(|(n, _)| n.as_str() == name.as_str()) {
@@ -150,15 +152,19 @@ impl<'a> Resolver<'a> {
         whole: Span,
     ) -> BTreeMap<&'f str, &'f ast::Field> {
         let mut found: BTreeMap<&'f str, &'f ast::Field> = BTreeMap::new();
+        let mut misspelt: Vec<&str> = Vec::new();
         for field in fields_in {
             let name = field.key.as_str();
             if fields::find(table, name).is_none() {
                 let known: Vec<&str> = table.iter().map(|s| s.name).collect();
-                self.error_help(
+                misspelt.push(name);
+                self.unknown(
                     Code::UnknownField,
                     format!("{what} has no field '{name}'"),
                     cx.file,
                     field.key.span(),
+                    name,
+                    known.iter().copied(),
                     format!("the fields are: {}", known.join(", ")),
                 );
                 continue;
@@ -181,7 +187,13 @@ impl<'a> Resolver<'a> {
             found.insert(name, field);
         }
         for spec in table {
-            if spec.requirement == Requirement::Required && !found.contains_key(spec.name) {
+            let misspelling = misspelt
+                .iter()
+                .any(|m| !crate::suggest::closest(m, [spec.name]).is_empty());
+            if spec.requirement == Requirement::Required
+                && !found.contains_key(spec.name)
+                && !misspelling
+            {
                 self.error_help(
                     Code::MissingField,
                     format!("{what} is missing '{}'", spec.name),
@@ -356,11 +368,13 @@ impl<'a> Resolver<'a> {
         let declared = param.spec.ty().map(|name| match ast::TypeName::from_word(name.as_str()) {
             Some(ty) => Ty::from_type_name(ty),
             None => {
-                self.error_help(
+                self.unknown(
                     Code::UnknownName,
                     format!("unknown name '{}'", name.as_str()),
                     cx.file,
                     name.span(),
+                    name.as_str(),
+                    ast::TypeName::ALL.map(ast::TypeName::word),
                     "a param's type is one of Length, Angle, Ratio, Count, Bool, Text, Part, Parts, Stock, Region, Profile, Anchor, Axis, Direction, Mount, Shape, Envelope, Model, Spacing, JointKind, HardwareKind, SlideKind, HingeKind, PullKind, FastenerKind, Tool, Recipe",
                 );
                 Ty::Unknown
@@ -814,11 +828,13 @@ impl<'a> Resolver<'a> {
         for call in &place.terms {
             let head = call.head.as_str();
             let Some(term) = PlacementTerm::from_word(head) else {
-                self.error_help(
+                self.unknown(
                     Code::UnknownName,
                     format!("unknown name '{head}'"),
                     cx.file,
                     call.head.span(),
+                    head,
+                    PlacementTerm::ALL.map(PlacementTerm::word),
                     "a placement term is one of ground, against, flush, center, spaced, corners, orient",
                 );
                 continue;
@@ -1033,6 +1049,7 @@ impl<'a> Resolver<'a> {
         };
         let mut positional = None;
         let mut named: Vec<Setting> = Vec::new();
+        let mut misspelt: Vec<String> = Vec::new();
         for arg in &call.args {
             match &arg.name {
                 None => {
@@ -1051,7 +1068,12 @@ impl<'a> Resolver<'a> {
                         None if known.is_some() => {
                             self.error(
                                 Code::TypeMismatch,
-                                format!("the kind '{}' has no roles", call.kind.root.as_str()),
+                                format!(
+                                    "the kind '{}' has no roles",
+                                    known
+                                        .map(|k| self.kind_display(k, cx.file))
+                                        .unwrap_or_default()
+                                ),
                                 cx.file,
                                 arg.span,
                             );
@@ -1083,7 +1105,10 @@ impl<'a> Resolver<'a> {
                             Some(kind_ty) if known.is_some() => {
                                 match self.setting_ty(cx, kind_ty, name) {
                                     Some(ty) => Expect::ty(ty).named(name.as_str()),
-                                    None => continue,
+                                    None => {
+                                        misspelt.push(name.as_str().to_owned());
+                                        continue;
+                                    }
                                 }
                             }
                             _ => {
@@ -1104,10 +1129,17 @@ impl<'a> Resolver<'a> {
                 }
             }
         }
+        // A misspelt argument already reported as unknown is not missing too.
+        let misspelling = |wanted: &str| {
+            misspelt
+                .iter()
+                .any(|m| !crate::suggest::closest(m, [wanted]).is_empty())
+        };
         if let Some(id) = known {
             for (index, (role, _, _)) in roles.iter().enumerate() {
-                let given =
-                    (index == 0 && positional.is_some()) || named.iter().any(|s| &s.name == role);
+                let given = (index == 0 && positional.is_some())
+                    || named.iter().any(|s| &s.name == role)
+                    || misspelling(role);
                 if !given {
                     self.error_help(
                         Code::MissingField,
@@ -1119,7 +1151,7 @@ impl<'a> Resolver<'a> {
                 }
             }
             for missing in self.required_kind_params(id) {
-                if !named.iter().any(|s| s.name == missing) {
+                if !named.iter().any(|s| s.name == missing) && !misspelling(&missing) {
                     self.error_help(
                         Code::MissingField,
                         format!("{what} is missing '{missing}'"),
@@ -1241,14 +1273,19 @@ impl<'a> Resolver<'a> {
         let component_name = self.def_name(DefId::Component(component));
         let mut args: Vec<(crate::ids::ParamDefId, RExpr)> = Vec::new();
         let mut seen: BTreeMap<String, Span> = BTreeMap::new();
+        let mut misspelt: Vec<String> = Vec::new();
         for field in &body.fields {
             let key = field.key.as_str();
             let Some((_, id, _)) = params.iter().find(|(n, _, _)| n == key) else {
-                self.error_help(
+                let candidates: Vec<String> = params.iter().map(|(n, _, _)| n.clone()).collect();
+                misspelt.push(key.to_owned());
+                self.unknown(
                     Code::UnknownField,
                     format!("the component '{component_name}' has no field '{key}'"),
                     cx.file,
                     field.key.span(),
+                    key,
+                    candidates,
                     format!(
                         "its params are: {}",
                         params
@@ -1281,7 +1318,10 @@ impl<'a> Resolver<'a> {
             args.push((*id, value));
         }
         for (param, _, has_default) in &params {
-            if !has_default && !seen.contains_key(param) {
+            let misspelling = misspelt
+                .iter()
+                .any(|m| !crate::suggest::closest(m, [param.as_str()]).is_empty());
+            if !has_default && !seen.contains_key(param) && !misspelling {
                 self.error_help(
                     Code::MissingField,
                     format!("assembly '{name}' is missing '{param}'"),

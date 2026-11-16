@@ -1,0 +1,66 @@
+---
+source: crates/stave-app/tests/suggestions.rs
+expression: render(&opened)
+---
+error[unknown-name]: unknown name 'pine_18'
+  --> /project/project.stave:18:14
+   |
+18 | part shelf : pine_18 {
+   |              ^^^^^^^
+   = help: did you mean 'pine_12' or 'pine_19'?
+
+error[unknown-field]: part 'shelf' has no field 'widht'
+  --> /project/project.stave:20:3
+   |
+20 |   widht:  100mm
+   |   ^^^^^
+   = help: did you mean 'width'?
+
+error[unknown-name]: unknown name 'aginst'
+  --> /project/project.stave:22:5
+   |
+22 |     aginst(base.tp)
+   |     ^^^^^^
+   = help: did you mean 'against'?
+
+error[unknown-name]: unknown name 'rihgt'
+  --> /project/project.stave:36:14
+   |
+36 | let a = rail[rihgt].length
+   |              ^^^^^
+   = help: did you mean 'right'?
+
+error[unknown-field]: the kind 'side_mount_slide' has no field 'lenght'
+  --> /project/project.stave:37:26
+   |
+37 | let b = side_mount_slide(lenght: 450mm)
+   |                          ^^^^^^
+   = help: did you mean 'length'?
+
+error[unknown-field]: the kind 'dado' has no field 'int'
+  --> /project/project.stave:38:34
+   |
+38 | joint housing : dado(rail[left], int: base, depth: 5mm)
+   |                                  ^^^
+   = help: did you mean 'into'?
+
+error[unknown-field]: the component 'Box' has no field 'hieght'
+  --> /project/project.stave:43:3
+   |
+43 |   hieght: 60mm
+   |   ^^^^^^
+   = help: did you mean 'height'?
+
+error[unknown-field]: 'opening' has no field 'rigth'
+  --> /project/project.stave:45:41
+   |
+45 | region space = opening(left: base.left, rigth: base.right, bottom: base.bottom, top: base.top, front: base.front, back: base.back)
+   |                                         ^^^^^
+   = help: did you mean 'right'?
+
+error[unknown-name]: unknown name 'completely_unrelated'
+  --> /project/project.stave:46:16
+   |
+46 | let far_away = completely_unrelated + 1mm
+   |                ^^^^^^^^^^^^^^^^^^^^
+   = help: declare 'completely_unrelated' in this module, or check its spelling

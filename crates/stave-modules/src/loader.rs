@@ -319,6 +319,7 @@ impl<'a> Loader<'a> {
                     path,
                     ast: parse.ast,
                     imports: Vec::new(),
+                    broken: parse.broken,
                 });
             }
         }

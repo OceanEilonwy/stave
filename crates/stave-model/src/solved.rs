@@ -777,13 +777,14 @@ pub enum CutPlace {
         /// The end of that axis `across` starts at.
         across_from: End,
     },
-    /// `crossing(p, q)`: within the footprint of `other`'s cut box on the
-    /// face. The footprint is the other part's cut box in this part's local
-    /// coordinates (not clipped).
+    /// `crossing(p, q)`: where `other` meets this part. The footprint is the
+    /// region the two cut boxes share, in this part's local coordinates:
+    /// the volume a housing cut removes at most, or the contact face (flat
+    /// along the face's axis) for parts that only touch.
     Crossing {
         /// The part that touches or enters.
         other: PartId,
-        /// Its cut box in this part's frame.
+        /// The region both cut boxes share, in this part's frame.
         footprint: LocalBox,
     },
     /// A hardware cut, centred at a point on the face.

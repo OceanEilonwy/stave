@@ -115,6 +115,9 @@ pub(crate) struct Solver<'m> {
     >,
     pub(crate) extensions: Vec<Vec<joints::Extend>>,
     pub(crate) reported_cycles: Vec<Frame>,
+    /// Something was skipped because an item it depends on has an error
+    /// reported by an earlier layer.
+    pub(crate) skipped: bool,
 }
 
 impl<'m> Solver<'m> {
@@ -136,7 +139,19 @@ impl<'m> Solver<'m> {
             mirror_planes: HashMap::new(),
             extensions: vec![Vec::new(); model.parts.len()],
             reported_cycles: Vec::new(),
+            skipped: false,
         }
+    }
+
+    /// Skips something that depends on an item with an earlier error.
+    pub(crate) fn skip(&mut self) -> Reported {
+        self.skipped = true;
+        Reported
+    }
+
+    /// `true` if a declaration had a name or type error.
+    pub(crate) fn poisoned(&self, def: DefId) -> bool {
+        self.model.defs.is_poisoned(def)
     }
 
     pub(crate) fn report(&mut self, diagnostic: Diagnostic) {

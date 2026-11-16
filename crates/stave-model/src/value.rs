@@ -85,6 +85,23 @@ impl ExactBox {
         self
     }
 
+    /// The part of this box that `other` covers. Where they don't overlap
+    /// along an axis, the result is the flat plane between them on that
+    /// axis (touching boxes give their contact face).
+    pub fn intersection(&self, other: &ExactBox) -> ExactBox {
+        let mut result = *self;
+        for axis in Axis::ALL {
+            let low = self.min(axis).max(other.min(axis));
+            let high = self.max(axis).min(other.max(axis));
+            result = if low <= high {
+                result.with(axis, low, high)
+            } else {
+                result.with(axis, high, high)
+            };
+        }
+        result
+    }
+
     /// `true` if the two boxes share volume or touch over an area (not
     /// only along an edge or at a corner).
     pub fn meets(&self, other: &ExactBox) -> bool {
@@ -241,6 +258,8 @@ pub struct RegionValue {
 pub struct KindValue {
     /// The kind.
     pub kind: KindId,
+    /// Its name as written where it was named (`hw.brass_knob_26`).
+    pub name: String,
     /// Settings by name, in the order given.
     pub settings: Vec<(String, Value)>,
 }

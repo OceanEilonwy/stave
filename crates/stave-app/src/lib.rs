@@ -6,9 +6,13 @@
 //! folder ──stave-modules──▶ ModuleSet ──stave-model──▶ Defs ──▶ Model ──stave-solve──▶ SolvedDesign
 //! ```
 //!
-//! Checking runs in layers (grammar, "Checks and require"): syntax and
-//! module errors stop before names are resolved, name and type errors stop
-//! before anything is placed. Within a layer every problem is reported.
+//! Checking runs in layers (grammar, "Checks and require"), per item: an
+//! item with a syntax error is left out, an item with a name or type error
+//! is "poisoned", and anything that depends on either is skipped without
+//! further errors, while everything independent still resolves, is placed
+//! and reports its own problems. Only a folder without its project or
+//! library item, or modules that import each other, stop the pipeline
+//! early. A solved design is produced only when nothing failed.
 //! Diagnostics come back sorted by file and position, so the output is the
 //! same on every run.
 
@@ -76,7 +80,6 @@ fn run(modules: ModuleSet) -> Result<Opened, LoadError> {
         .module(modules.root)
         .map_or(0, |module| module.files.len());
     let mut diagnostics = modules.diagnostics.clone();
-    let has_errors = |diagnostics: &[Diagnostic]| diagnostics.iter().any(Diagnostic::is_error);
     let finish = |sources: SourceMap, model, design, mut diagnostics: Vec<Diagnostic>| {
         sort(&mut diagnostics);
         Ok(Opened {
@@ -87,19 +90,22 @@ fn run(modules: ModuleSet) -> Result<Opened, LoadError> {
             root_files,
         })
     };
-    if has_errors(&diagnostics) {
+    // Only problems that make the whole project meaningless stop here: a
+    // folder without its project or library item, or modules importing
+    // each other. Every other error poisons just the item it is in.
+    let root_has_header = modules
+        .module(modules.root)
+        .is_some_and(|module| module.header.is_some());
+    let cycle = diagnostics
+        .iter()
+        .any(|d| d.code == stave_lang::Code::ImportCycle);
+    if !root_has_header || cycle {
         return finish(modules.sources, None, None, diagnostics);
     }
     let (defs, resolve_diagnostics) = stave_model::resolve(&modules);
     diagnostics.extend(resolve_diagnostics);
-    if has_errors(&diagnostics) {
-        return finish(modules.sources, None, None, diagnostics);
-    }
     let (model, instance_diagnostics) = stave_model::instance::instantiate(defs, modules.root);
     diagnostics.extend(instance_diagnostics);
-    if has_errors(&diagnostics) {
-        return finish(modules.sources, Some(model), None, diagnostics);
-    }
     let (design, solve_diagnostics) = stave_solve::solve(&model);
     diagnostics.extend(solve_diagnostics);
     finish(modules.sources, Some(model), design, diagnostics)

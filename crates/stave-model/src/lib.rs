@@ -24,6 +24,7 @@ pub mod ids;
 pub mod instance;
 mod resolve;
 pub mod solved;
+pub mod suggest;
 pub mod types;
 pub mod value;
 

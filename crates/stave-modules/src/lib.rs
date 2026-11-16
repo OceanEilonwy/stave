@@ -147,6 +147,10 @@ pub struct ModuleFile {
     /// The imports that resolved to a module and have a usable, unique name,
     /// in source order. An import that closes a cycle is still listed.
     pub imports: Vec<FileImport>,
+    /// Items left out of [`ModuleFile::ast`] because of a syntax error.
+    /// Later stages skip uses of their names instead of reporting them
+    /// as unknown.
+    pub broken: Vec<stave_lang::BrokenItem>,
 }
 
 /// An import that resolved to a module.

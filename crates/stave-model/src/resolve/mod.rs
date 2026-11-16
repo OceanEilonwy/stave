@@ -137,6 +137,12 @@ pub(crate) struct Resolver<'a> {
     /// Lowered param defaults and let values, kept when lowered early.
     early_params: HashMap<ParamDefId, (Ty, Option<RExpr>)>,
     early_lets: HashMap<LetDefId, RExpr>,
+    /// Per file: module and imports, for [`Defs::files`].
+    files: BTreeMap<FileId, crate::defs::FileScope>,
+    /// Names of items with syntax errors, per module.
+    broken: BTreeMap<ModuleId, std::collections::BTreeSet<String>>,
+    /// Declarations with a name or type error.
+    poisoned: std::collections::BTreeSet<DefId>,
     early_kind_params: HashMap<(KindId, usize), (Ty, Option<RExpr>)>,
     assembly_components: HashMap<AssemblyDefId, Lazy<Option<ComponentId>>>,
 }
@@ -233,6 +239,9 @@ impl<'a> Resolver<'a> {
             kind_param_types: HashMap::new(),
             early_params: HashMap::new(),
             early_lets: HashMap::new(),
+            files: BTreeMap::new(),
+            broken: BTreeMap::new(),
+            poisoned: std::collections::BTreeSet::new(),
             early_kind_params: HashMap::new(),
             assembly_components: HashMap::new(),
         }
@@ -288,6 +297,9 @@ impl<'a> Resolver<'a> {
         let defs = Defs {
             modules: out.modules,
             prelude: self.modules.prelude.clone(),
+            files: std::mem::take(&mut self.files),
+            poisoned: std::mem::take(&mut self.poisoned),
+            broken: std::mem::take(&mut self.broken),
             params: take(out.params),
             lets: take(out.lets),
             regions: take(out.regions),
@@ -385,7 +397,22 @@ impl<'a> Resolver<'a> {
                 for import in &file.imports {
                     file_imports.insert(import.name.clone(), import.module);
                 }
+                self.files.insert(
+                    file.file,
+                    crate::defs::FileScope {
+                        module: Some(module.id),
+                        imports: file_imports.clone(),
+                    },
+                );
                 self.imports.insert(file.file, file_imports);
+                for broken in &file.broken {
+                    if let Some(name) = &broken.name {
+                        self.broken
+                            .entry(module.id)
+                            .or_default()
+                            .insert(name.clone());
+                    }
+                }
                 let Some(ast) = &file.ast else { continue };
                 for item in &ast.items {
                     self.collect_item(module.id, file.file, item, is_library);
@@ -840,7 +867,9 @@ impl<'a> Resolver<'a> {
             return Ty::Unknown;
         };
         self.types.insert(def, Lazy::Busy);
+        let before = self.error_count();
         let (ty, default) = self.lower_param_spec(&cx, param);
+        self.poison_if(def, before);
         self.types.insert(def, Lazy::Done(ty.clone()));
         self.early_params.insert(id, (ty.clone(), default));
         ty
@@ -863,7 +892,9 @@ impl<'a> Resolver<'a> {
             return Ty::Unknown;
         };
         self.types.insert(def, Lazy::Busy);
+        let before = self.error_count();
         let value = self.value(&cx, &binding.value, &expr::Expect::any());
+        self.poison_if(def, before);
         let ty = value.ty.clone();
         self.types.insert(def, Lazy::Done(ty.clone()));
         self.early_lets.insert(id, value);
@@ -898,7 +929,9 @@ impl<'a> Resolver<'a> {
             array: None,
         };
         self.kind_param_types.insert((kind, index), Lazy::Busy);
+        let before = self.error_count();
         let (ty, default) = self.lower_param_spec(&cx, param);
+        self.poison_if(DefId::Kind(kind), before);
         self.kind_param_types
             .insert((kind, index), Lazy::Done(ty.clone()));
         self.early_kind_params
@@ -1059,7 +1092,124 @@ impl<'a> Resolver<'a> {
         }
     }
 
+    /// Reports an unknown name or field, suggesting the closest candidates
+    /// when one is close enough, and `fallback` otherwise.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn unknown<S: AsRef<str>>(
+        &mut self,
+        code: Code,
+        message: impl Into<String>,
+        file: FileId,
+        span: Span,
+        word: &str,
+        candidates: impl IntoIterator<Item = S>,
+        fallback: impl Into<String>,
+    ) {
+        let help =
+            crate::suggest::did_you_mean(word, candidates).unwrap_or_else(|| fallback.into());
+        self.report(Diagnostic::error(code, message, Label::new(file, span)).with_help(help));
+    }
+
+    /// Every name a bare word could mean here: items in scope, import
+    /// names and the prelude.
+    pub(crate) fn names_in_scope(&self, cx: &Cx) -> Vec<String> {
+        let mut names: Vec<String> = Vec::new();
+        match cx.body {
+            Body::Kind(kind) => {
+                if let Some(table) = self.kind_names.get(&kind) {
+                    names.extend(table.keys().cloned());
+                }
+            }
+            Body::Component(component) => {
+                if let Some(table) = self.component_names.get(component.index()) {
+                    names.extend(table.keys().cloned());
+                }
+            }
+            Body::Module => {}
+        }
+        if let Some(table) = self.module_names.get(cx.module.index()) {
+            names.extend(table.keys().cloned());
+        }
+        if let Some(imports) = self.imports.get(&cx.file) {
+            names.extend(imports.keys().cloned());
+        }
+        names.extend(self.prelude.keys().cloned());
+        names
+    }
+
+    /// The public item names of a module.
+    pub(crate) fn public_names(&self, module: ModuleId) -> Vec<String> {
+        self.module_names
+            .get(module.index())
+            .map(|table| {
+                table
+                    .iter()
+                    .filter(|(_, e)| !e.private)
+                    .map(|(n, _)| n.clone())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// A kind's name as `file` writes it (see [`Defs::kind_display`]).
+    pub(crate) fn kind_display(&self, kind: KindId, file: FileId) -> String {
+        let def = DefId::Kind(kind);
+        let name = self.def_name(def);
+        let Some(module) = self.origins.get(&def).map(|o| o.module) else {
+            return name;
+        };
+        let own = self.files.get(&file).and_then(|f| f.module) == Some(module);
+        if own || self.modules.prelude.contains(&module) {
+            return name;
+        }
+        match self
+            .imports
+            .get(&file)
+            .and_then(|i| i.iter().find(|(_, m)| **m == module))
+        {
+            Some((alias, _)) => format!("{alias}.{name}"),
+            None => format!("{}.{name}", self.module_name(module)),
+        }
+    }
+
+    /// The number of errors reported so far.
+    pub(crate) fn error_count(&self) -> usize {
+        self.diagnostics.iter().filter(|d| d.is_error()).count()
+    }
+
+    /// Marks a declaration poisoned if errors were reported since `before`.
+    pub(crate) fn poison_if(&mut self, def: DefId, before: usize) {
+        if self.error_count() > before {
+            self.poisoned.insert(def);
+        }
+    }
+
+    /// `true` if `name` is an item of this scope left out for a syntax
+    /// error: its uses are skipped silently.
+    pub(crate) fn is_broken(&self, cx: &Cx, name: &str) -> bool {
+        let Some(names) = self.broken.get(&cx.module) else {
+            return false;
+        };
+        let in_component = match cx.body {
+            Body::Component(component) => {
+                self.component_names.get(component.index()).is_some()
+                    && names.contains(&format!(
+                        "{}.{name}",
+                        self.def_name(DefId::Component(component))
+                    ))
+            }
+            Body::Module | Body::Kind(_) => false,
+        };
+        in_component || names.contains(name)
+    }
+
     fn lower_def(&mut self, def: DefId) {
+        let before = self.error_count();
+        self.lower_def_inner(def);
+        self.poison_if(def, before);
+    }
+
+    fn lower_def_inner(&mut self, def: DefId) {
         let Some(origin) = self.origins.get(&def).copied() else {
             return;
         };

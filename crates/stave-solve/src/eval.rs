@@ -389,6 +389,7 @@ impl Solver<'_> {
                 } else {
                     Value::Kind(KindValue {
                         kind: id,
+                        name: self.model.defs.kind_display(id, Some(env.file)),
                         settings: Vec::new(),
                     })
                 });
@@ -454,6 +455,9 @@ impl Solver<'_> {
         let Some(def) = self.model.defs.param(inst.def) else {
             return Err(Reported);
         };
+        if self.poisoned(DefId::Param(inst.def)) {
+            return Err(self.skip());
+        }
         if let Some(slot) = self.params.get_mut(param.index()) {
             *slot = Memo::Busy;
         }
@@ -617,6 +621,9 @@ impl Solver<'_> {
         let Some(def) = self.model.defs.let_def(inst.def) else {
             return Err(Reported);
         };
+        if self.poisoned(DefId::Let(inst.def)) {
+            return Err(self.skip());
+        }
         if let Some(slot) = self.lets.get_mut(binding.index()) {
             *slot = Memo::Busy;
         }
@@ -650,6 +657,9 @@ impl Solver<'_> {
         file: FileId,
         span: Span,
     ) -> Solved<Value> {
+        if self.poisoned(DefId::Kind(kind_env.kind)) {
+            return Err(self.skip());
+        }
         if let Some(Some(value)) = kind_env.params.borrow().get(index) {
             return Ok(value.clone());
         }
@@ -681,7 +691,11 @@ impl Solver<'_> {
                 None => {
                     return Err(self.error(
                         Code::MissingField,
-                        format!("kind '{}' is missing '{}'", kind.decl.name, param.decl.name),
+                        format!(
+                            "kind '{}' is missing '{}'",
+                            self.model.defs.kind_display(kind_env.kind, Some(file)),
+                            param.decl.name
+                        ),
                         file,
                         span,
                         format!("give it a value: {}: ...", param.decl.name),
@@ -703,6 +717,9 @@ impl Solver<'_> {
         file: FileId,
         span: Span,
     ) -> Solved<Value> {
+        if self.poisoned(DefId::Kind(kind_value.kind)) {
+            return Err(self.skip());
+        }
         if let Some(value) = kind_value.setting(name) {
             return Ok(value.clone());
         }
@@ -734,13 +751,20 @@ impl Solver<'_> {
         if name == "screw_diameter" && kind.base == stave_lang::ast::BaseKind::Pull {
             return Ok(Value::Length(mm(DEFAULT_SCREW_DIAMETER_NM)));
         }
-        let kind_name = kind.decl.name.clone();
+        let kind_name = self.model.defs.kind_display(kind_value.kind, Some(file));
         Err(self.error(
             Code::UnknownField,
             format!("the kind '{kind_name}' has no field '{name}'"),
             file,
             span,
-            "a kind value can be read for its params and fields",
+            stave_model::suggest::did_you_mean(
+                name,
+                kind.params
+                    .iter()
+                    .map(|p| p.decl.name.as_str())
+                    .chain(kind.fields.iter().map(|f| f.name.as_str())),
+            )
+            .unwrap_or_else(|| "a kind value can be read for its params and fields".to_owned()),
         ))
     }
 
@@ -979,6 +1003,9 @@ impl Solver<'_> {
         field: StockField,
         span: Span,
     ) -> Solved<Value> {
+        if self.poisoned(DefId::Stock(stock)) {
+            return Err(self.skip());
+        }
         let Some(def) = self.model.defs.stock(stock) else {
             return Err(Reported);
         };
@@ -1085,6 +1112,9 @@ impl Solver<'_> {
         &mut self,
         profile: stave_model::ids::ProfileId,
     ) -> Solved<Vec<(ExactLength, ExactLength)>> {
+        if self.poisoned(DefId::Profile(profile)) {
+            return Err(self.skip());
+        }
         let Some(def) = self.model.defs.profile(profile).cloned() else {
             return Err(Reported);
         };

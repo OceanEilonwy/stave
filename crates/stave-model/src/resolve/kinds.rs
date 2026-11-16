@@ -234,11 +234,13 @@ impl Resolver<'_> {
                                     .chain(spec.optional)
                                     .map(|s| s.name)
                                     .collect();
-                                self.error_help(
+                                self.unknown(
                                     Code::UnknownField,
                                     format!("a {} kind has no field '{key}'", base_kind.word()),
                                     cx.file,
                                     field.key.span(),
+                                    key,
+                                    names.iter().copied(),
                                     format!("its entries are: {}", names.join(", ")),
                                 );
                                 continue;
@@ -430,11 +432,15 @@ impl Resolver<'_> {
                 None
             }
             None => {
-                self.error(
+                let candidates = self.names_in_scope(cx);
+                self.unknown(
                     Code::UnknownName,
                     format!("unknown name '{}'", ident.as_str()),
                     cx.file,
                     expr.span,
+                    ident.as_str(),
+                    candidates,
+                    "name one of the kind's roles or the parts it makes",
                 );
                 None
             }
@@ -512,11 +518,13 @@ impl Resolver<'_> {
                     let is_extend =
                         matches!(&callee.kind, ExprKind::Name(n) if n.as_str() == EXTEND);
                     if !is_extend {
-                        self.error_help(
+                        self.unknown(
                             Code::UnknownName,
                             format!("unknown name '{}'", callee_text(callee)),
                             cx.file,
                             callee.span,
+                            &callee_text(callee),
+                            [EXTEND],
                             "'adds' takes extend(role, by: d)",
                         );
                         continue;
@@ -586,11 +594,13 @@ impl Resolver<'_> {
             }
             _ => {
                 let names: Vec<&str> = fields::JOINT_KIND.iter().map(|s| s.name).collect();
-                self.error_help(
+                self.unknown(
                     Code::UnknownField,
                     format!("a joint kind has no field '{key}'"),
                     cx.file,
                     field.key.span(),
+                    key,
+                    names.iter().copied(),
                     format!("its fields are: {}, plus roles, param, require, cut and makes part ({what})", names.join(", ")),
                 );
             }
@@ -611,11 +621,13 @@ impl Resolver<'_> {
         };
         let head = callee_text(callee);
         let Some(kind) = AssemblyStepKind::from_word(&head) else {
-            self.error_help(
+            self.unknown(
                 Code::UnknownName,
                 format!("unknown name '{head}'"),
                 cx.file,
                 callee.span,
+                &head,
+                AssemblyStepKind::ALL.map(AssemblyStepKind::word),
                 "an assembly step is push, rotate or drive",
             );
             return None;
@@ -669,11 +681,13 @@ impl Resolver<'_> {
         span: Span,
     ) -> Option<SelectorDef> {
         let Some(selector) = Selector::from_word(head.as_str()) else {
-            self.error_help(
+            self.unknown(
                 Code::UnknownName,
                 format!("unknown name '{}'", head.as_str()),
                 cx.file,
                 head.span(),
+                head.as_str(),
+                Selector::ALL.map(Selector::word),
                 "a face selector is end, side or crossing",
             );
             return None;
@@ -735,13 +749,7 @@ impl Resolver<'_> {
         for call in &cut.operations {
             let head = call.head.as_str();
             let Some(op) = CutOperation::from_word(head) else {
-                self.error_help(
-                    Code::UnknownName,
-                    format!("unknown name '{head}'"),
-                    cx.file,
-                    call.head.span(),
-                    "a cut operation is one of notch, slot, pocket, tenon, spigot, round, drill, dovetail_socket, dovetail_tail, outline",
-                );
+                self.unknown(Code::UnknownName, format!("unknown name '{head}'"), cx.file, call.head.span(), head, CutOperation::ALL.map(CutOperation::word), "a cut operation is one of notch, slot, pocket, tenon, spigot, round, drill, dovetail_socket, dovetail_tail, outline");
                 continue;
             };
             let spec = cut_operation(op);
@@ -819,11 +827,14 @@ impl Resolver<'_> {
                 continue;
             };
             if callee_text(callee) != MARK {
-                self.error(
+                self.unknown(
                     Code::UnknownName,
                     format!("unknown name '{}'", callee_text(callee)),
                     cx.file,
                     callee.span,
+                    &callee_text(callee),
+                    [MARK],
+                    "an outline's marks are mark(along:, across:)",
                 );
                 continue;
             }
@@ -889,11 +900,13 @@ impl Resolver<'_> {
     fn lower_made_term(&mut self, cx: &Cx, _kind: KindId, call: &ast::Call) -> Option<MadeTerm> {
         let head = call.head.as_str();
         let Some(term) = MadePartTerm::from_word(head) else {
-            self.error_help(
+            self.unknown(
                 Code::UnknownName,
                 format!("unknown name '{head}'"),
                 cx.file,
                 call.head.span(),
+                head,
+                MadePartTerm::ALL.map(MadePartTerm::word),
                 "a made part is placed with orient, center, against or flush",
             );
             return None;
@@ -988,13 +1001,7 @@ impl Resolver<'_> {
         let op = match Operation::from_word(syntax.operation.as_str()) {
             Some(op) => op,
             None => {
-                self.error_help(
-                    Code::UnknownName,
-                    format!("unknown name '{}'", syntax.operation.as_str()),
-                    cx.file,
-                    syntax.operation.span(),
-                    "a recipe is for one of notch, slot, pocket, tenon, spigot, round, drill, dovetail_socket, dovetail_tail, outline, turning",
-                );
+                self.unknown(Code::UnknownName, format!("unknown name '{}'", syntax.operation.as_str()), cx.file, syntax.operation.span(), syntax.operation.as_str(), Operation::all().map(Operation::word), "a recipe is for one of notch, slot, pocket, tenon, spigot, round, drill, dovetail_socket, dovetail_tail, outline, turning");
                 Operation::Cut(CutOperation::Notch)
             }
         };
@@ -1110,11 +1117,13 @@ impl Resolver<'_> {
             }
         };
         let Some(kind) = NeedKind::from_word(&head) else {
-            self.error_help(
+            self.unknown(
                 Code::UnknownName,
                 format!("unknown name '{head}'"),
                 cx.file,
                 span,
+                &head,
+                NeedKind::ALL.map(NeedKind::word),
                 "a need is flat_face, square_stock, before(operation) or after(operation)",
             );
             return None;
@@ -1143,11 +1152,14 @@ impl Resolver<'_> {
                 operation: Some(op),
             }),
             None => {
-                self.error(
+                self.unknown(
                     Code::UnknownName,
                     format!("unknown name '{}'", op_name.as_str()),
                     cx.file,
                     *op_span,
+                    op_name.as_str(),
+                    Operation::all().map(Operation::word),
+                    "name an operation, such as before(drill)",
                 );
                 None
             }
@@ -1190,11 +1202,13 @@ impl Resolver<'_> {
         if allowed.contains(&ident.as_str()) {
             Some(ident.as_str().to_owned())
         } else {
-            self.error_help(
+            self.unknown(
                 Code::UnknownName,
                 format!("unknown name '{}'", ident.as_str()),
                 cx.file,
                 ident.span(),
+                ident.as_str(),
+                allowed.iter().copied(),
                 format!("here '{what}' is one of: {}", allowed.join(", ")),
             );
             None
@@ -1214,7 +1228,7 @@ impl Resolver<'_> {
     ) -> Option<MarkStepDef> {
         let head = call.head.as_str();
         let Some(step) = MarkingStep::from_word(head) else {
-            self.error_help(Code::UnknownName, format!("unknown name '{head}'"), cx.file, call.head.span(), "a marking step is knife, pencil, line, gauge, square_around, centre_mark, transfer, hatch or template");
+            self.unknown(Code::UnknownName, format!("unknown name '{head}'"), cx.file, call.head.span(), head, MarkingStep::ALL.map(MarkingStep::word), "a marking step is knife, pencil, line, gauge, square_around, centre_mark, transfer, hatch or template");
             return None;
         };
         let named: &[&str] = if step.takes_measurement() {
@@ -1265,11 +1279,13 @@ impl Resolver<'_> {
     ) -> Option<CutStepDef> {
         let head = call.head.as_str();
         let Some(step) = CuttingStep::from_word(head) else {
-            self.error_help(
+            self.unknown(
                 Code::UnknownName,
                 format!("unknown name '{head}'"),
                 cx.file,
                 call.head.span(),
+                head,
+                CuttingStep::ALL.map(CuttingStep::word),
                 "a cutting step is saw, chop, pare, plane, rout, bore, turn or shave",
             );
             return None;

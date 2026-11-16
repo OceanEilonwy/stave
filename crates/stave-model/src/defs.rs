@@ -1019,6 +1019,15 @@ pub struct LibraryDef {
     pub license: Option<String>,
 }
 
+/// What a file sees besides its module: its imports.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct FileScope {
+    /// The module the file belongs to.
+    pub module: Option<ModuleId>,
+    /// Import names and the modules they name.
+    pub imports: std::collections::BTreeMap<String, ModuleId>,
+}
+
 /// One module's resolved items.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ModuleDefs {
@@ -1041,6 +1050,15 @@ pub struct Defs {
     pub modules: Vec<ModuleDefs>,
     /// The standard modules whose public items are the prelude.
     pub prelude: Vec<ModuleId>,
+    /// Per file: its module and what it imports under which name.
+    pub files: std::collections::BTreeMap<FileId, FileScope>,
+    /// Declarations that had a name or type error: anything that depends
+    /// on them is skipped without further errors.
+    pub poisoned: std::collections::BTreeSet<DefId>,
+    /// Names of items left out because of a syntax error, per module
+    /// (`Component.item` for items inside a component). Uses of them are
+    /// skipped without an `unknown-name`.
+    pub broken: std::collections::BTreeMap<ModuleId, std::collections::BTreeSet<String>>,
     /// `param`s of modules and components.
     pub params: Vec<ParamDef>,
     /// `let`s.
@@ -1140,6 +1158,42 @@ impl Defs {
             | DefId::Component(_)
             | DefId::Scene(_) => None,
         }
+    }
+
+    /// A kind's name as a file writes it: bare for kinds of the file's own
+    /// module and of the prelude, `alias.name` for a kind the file imports
+    /// (under the name it imports it), and `folder.name` otherwise.
+    pub fn kind_display(&self, kind: KindId, file: Option<FileId>) -> String {
+        let Some(def) = self.kind(kind) else {
+            return String::new();
+        };
+        let Scope::Module(module) = def.decl.scope else {
+            return def.decl.name.clone();
+        };
+        let scope = file.and_then(|f| self.files.get(&f));
+        if scope.is_some_and(|s| s.module == Some(module)) {
+            return def.decl.name.clone();
+        }
+        if let Some((alias, _)) = scope.and_then(|s| s.imports.iter().find(|(_, m)| **m == module))
+        {
+            return format!("{alias}.{}", def.decl.name);
+        }
+        if self.prelude.contains(&module)
+            || scope.is_none() && self.modules.first().map(|m| m.id) == Some(module)
+        {
+            return def.decl.name.clone();
+        }
+        let folder = self
+            .modules
+            .get(module.index())
+            .map(|m| m.name.as_str())
+            .unwrap_or("");
+        format!("{folder}.{}", def.decl.name)
+    }
+
+    /// `true` if the declaration had a name or type error.
+    pub fn is_poisoned(&self, def: DefId) -> bool {
+        self.poisoned.contains(&def)
     }
 
     /// The project item of the module, if it is a project module.

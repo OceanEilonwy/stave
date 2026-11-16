@@ -830,3 +830,88 @@ fn values_outside_within_are_out_of_range() {
         "'length' must be within [250mm, 300mm, 350mm, 400mm, 450mm, 500mm, 550mm, 600mm], found 320mm",
     );
 }
+
+// ---------------------------------------------------------------------------
+// Checking per item
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_name_error_poisons_only_its_item() {
+    // `typo` has an unknown stock; `leaning` depends on it and is skipped
+    // silently; `floating` is unrelated and still reports its own error.
+    let opened = open(
+        "part typo : pine_18 {
+  length: 100mm
+  width:  100mm
+  place {
+    against(base.top)
+    flush(base.left)
+    flush(base.front)
+  }
+}
+part leaning : pine_19 {
+  length: 100mm
+  width:  100mm
+  place {
+    against(typo.top)
+    flush(typo.left)
+    flush(typo.front)
+  }
+}
+part floating : pine_19 {
+  length: 100mm
+  width:  100mm
+  place {
+    against(base.top, gap: 200mm)
+    flush(base.left)
+  }
+}",
+    );
+    assert_eq!(
+        diagnostics(&opened),
+        [
+            "unknown-name: unknown name 'pine_18'",
+            "axis-not-set: floating: position along 'deep' is not set",
+        ]
+    );
+    assert!(opened.design.is_none());
+}
+
+#[test]
+fn a_syntax_error_leaves_out_only_its_item() {
+    let opened = open(
+        "part broken : pine_19 {
+  length:
+  width:  100mm
+  place {
+    against(base.top)
+    flush(base.left)
+    flush(base.front)
+  }
+}
+part uses_broken : pine_19 {
+  length: broken.length
+  width:  100mm
+  place {
+    against(broken.top)
+    flush(base.left)
+    flush(base.front)
+  }
+}
+part floating : pine_19 {
+  length: 100mm
+  width:  100mm
+  place {
+    against(base.top, gap: 200mm)
+    flush(base.left)
+  }
+}",
+    );
+    assert_eq!(
+        diagnostics(&opened),
+        [
+            "missing-value: 'length' has no value",
+            "axis-not-set: floating: position along 'deep' is not set",
+        ]
+    );
+}

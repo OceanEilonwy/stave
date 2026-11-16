@@ -72,6 +72,8 @@ pub(crate) enum MotionExact {
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct Placed {
     pub kind: KindId,
+    /// The kind's name as written where it was named.
+    pub kind_name: String,
     pub base: BaseKind,
     pub piece: PartId,
     pub mount_face: Face,
@@ -199,6 +201,11 @@ impl Solver<'_> {
     }
 
     fn compute_hardware(&mut self, hardware: HardwareId) -> Solved<Placed> {
+        if let Some(inst) = self.model.hardware.get(hardware.index())
+            && self.poisoned(DefId::Hardware(inst.def))
+        {
+            return Err(self.skip());
+        }
         let Some(inst) = self.model.hardware.get(hardware.index()).cloned() else {
             return Err(Reported);
         };
@@ -223,7 +230,7 @@ impl Solver<'_> {
         let Some(kind) = self.model.defs.kind(binding.kind).cloned() else {
             return Err(Reported);
         };
-        let kind_name = kind.decl.name.clone();
+        let kind_name = binding.name.clone();
         if !kind.base.is_mounted_hardware() {
             return Err(self.error(
                 Code::TypeMismatch,
@@ -577,6 +584,7 @@ impl Solver<'_> {
         };
         Ok(Placed {
             kind: binding.kind,
+            kind_name: binding.name.clone(),
             base: kind.base,
             piece,
             mount_face,

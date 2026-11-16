@@ -104,10 +104,6 @@ pub(crate) fn build(solver: &mut Solver<'_>) -> Option<SolvedDesign> {
             solver.work_joint(joint).ok()
         });
     }
-    if solver.diagnostics.iter().filter(|d| d.is_error()).count() > errors_before {
-        return None;
-    }
-
     // 3. Geometry of every declared part with what joints add.
     let mut geoms = GeomTable::default();
     for index in 0..part_count {
@@ -189,6 +185,10 @@ pub(crate) fn build(solver: &mut Solver<'_>) -> Option<SolvedDesign> {
         let Some(def) = solver.model.defs.require(inst.def).cloned() else {
             continue;
         };
+        if solver.poisoned(DefId::Require(inst.def)) {
+            solver.skipped = true;
+            continue;
+        }
         let env = Env {
             ctx: inst.ctx,
             file: def.decl.file,
@@ -223,7 +223,10 @@ pub(crate) fn build(solver: &mut Solver<'_>) -> Option<SolvedDesign> {
         }
     }
 
-    if solver.diagnostics.iter().filter(|d| d.is_error()).count() > errors_before {
+    // An item with an error was skipped along with everything depending on
+    // it; the design is written only when nothing failed.
+    if solver.diagnostics.iter().filter(|d| d.is_error()).count() > errors_before || solver.skipped
+    {
         return None;
     }
 
@@ -521,7 +524,7 @@ impl Solver<'_> {
         Ok(Joint {
             id: joint,
             name: inst.name.clone(),
-            kind: self.kind_name(kind_id),
+            kind: work.binding.name.clone(),
             assembly: inst.assembly,
             glue: work.binding.glue,
             methods,
@@ -1161,7 +1164,7 @@ impl Solver<'_> {
             out.push(Hardware {
                 id: inst.id,
                 name: inst.name.clone(),
-                kind: self.kind_name(hw.kind),
+                kind: hw.kind_name.clone(),
                 base,
                 assembly: inst.assembly,
                 piece: hw.piece,
@@ -1425,6 +1428,7 @@ impl Solver<'_> {
                     };
                     let kind_value = stave_model::value::KindValue {
                         kind: *tool,
+                        name: self.kind_name(*tool),
                         settings: Vec::new(),
                     };
                     let title = match kind.field("title") {
