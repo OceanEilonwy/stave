@@ -213,6 +213,25 @@ fn a_closing_brace_closes_brackets_left_open_inside_its_block() {
 }
 
 #[test]
+fn a_bracket_is_closed_where_two_values_meet_across_a_line_break() {
+    // Line 4 ends with a value and line 5 starts with one: the `(` of line
+    // 4 was forgotten there, so `against(...)` is still read as a term.
+    let parse = parse_text(
+        "stave 1\npart p : s {\n  place {\n    flush(a.left, inset: 10mm\n    against(b.top)\n  }\n}\nlet after = 1\n",
+    );
+    let diagnostic = only(&parse);
+    assert_eq!(diagnostic.message, "this \"(\" is never closed");
+    assert_eq!(
+        diagnostic.help.as_deref(),
+        Some("add \")\" at the end of line 4")
+    );
+    assert_eq!(item_names(parse.ast.as_ref().unwrap()), ["after"]);
+    // A forgotten comma is not a forgotten bracket: the `)` comes later.
+    let comma = parse_text("stave 1\nlet a = f(x: 1\n  y: 2)\n");
+    assert_eq!(messages(&comma), ["syntax: expected ',' or ')', found 'y'"]);
+}
+
+#[test]
 fn the_end_of_the_file_closes_brackets_still_open() {
     let parse = parse_text("stave 1\nlet a = [1, 2,\n");
     let diagnostic = only(&parse);
