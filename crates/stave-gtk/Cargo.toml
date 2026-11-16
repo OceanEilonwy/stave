@@ -1,0 +1,28 @@
+[package]
+name = "stave-gtk"
+description = "The Stave viewer: a libadwaita window showing a design in 3D"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "stave-gtk"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+async-channel = "2"
+bytemuck = { version = "1", features = ["derive"] }
+clap = { version = "4", features = ["derive"] }
+glam = "0.30"
+gtk = { package = "gtk4", version = "0.11", features = ["v4_16"] }
+adw = { package = "libadwaita", version = "0.9", features = ["v1_6"] }
+notify = "8"
+png = "0.18"
+pollster = "0.4"
+stave-app = { path = "../stave-app" }
+stave-geom = { path = "../stave-geom" }
+stave-lang = { path = "../stave-lang" }
+stave-model = { path = "../stave-model" }
+stave-scene = { path = "../stave-scene" }
+wgpu = "30"

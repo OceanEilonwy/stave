@@ -10,6 +10,7 @@ members = [
   "crates/stave-scene",
   "crates/stave-app",
   "crates/stave-cli",
+  "crates/stave-gtk",
 ]
 
 [workspace.package]
