@@ -1,0 +1,11 @@
+[package]
+name = "stave-modules"
+description = "Discovers, loads and parses the modules a .stave project needs"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+build = "build.rs"
+
+[dependencies]
+stave-lang = { path = "../stave-lang" }
+thiserror = "2"

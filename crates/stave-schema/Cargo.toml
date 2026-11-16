@@ -1,0 +1,9 @@
+[package]
+name = "stave-schema"
+description = "The built-in catalog of the .stave language: kinds, fields, operations, species and functions"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+stave-lang = { path = "../stave-lang" }

@@ -586,6 +586,11 @@ pub struct Kind {
 
 /// The grammar's `base_kind`: what a `kind` declares.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize),
+    serde(rename_all = "snake_case")
+)]
 pub enum BaseKind {
     /// A joint between parts.
     Joint,
@@ -1851,6 +1856,11 @@ impl TypeName {
 
 /// A cut operation: what may be written inside a `cut selector { }` block.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize),
+    serde(rename_all = "snake_case")
+)]
 pub enum CutOperation {
     /// `notch(depth:)`: the whole footprint, to a depth.
     Notch,
@@ -1935,6 +1945,11 @@ impl CutOperation {
 /// What a recipe can be written for: a cut operation, or turning a part to a
 /// profile.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize),
+    serde(rename_all = "snake_case")
+)]
 pub enum Operation {
     /// One of the cut operations.
     Cut(CutOperation),

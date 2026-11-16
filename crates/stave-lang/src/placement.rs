@@ -45,6 +45,11 @@ pub struct AssemblyId(pub u32);
 
 /// World axes, named from the viewer's point of view standing at the front.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize),
+    serde(rename_all = "snake_case")
+)]
 pub enum Axis {
     /// Floor to ceiling.
     Up,
@@ -93,6 +98,11 @@ impl Axis {
 /// A part's own axes. Joint kinds use these, because a joint doesn't know how
 /// its parts are placed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize),
+    serde(rename_all = "snake_case")
+)]
 pub enum PartAxis {
     /// Along the part's length.
     Length,
@@ -125,6 +135,11 @@ impl PartAxis {
 /// for parts that aren't symmetric end to end (a turned foot with its tenon
 /// at one end).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize),
+    serde(rename_all = "snake_case")
+)]
 pub enum Direction {
     /// Toward the ceiling.
     Up,
@@ -215,6 +230,11 @@ impl Direction {
 /// Faces of a part, region or hardware envelope, named by the world direction
 /// they face once placed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize),
+    serde(rename_all = "snake_case")
+)]
 pub enum Face {
     /// Faces up.
     Top,
@@ -289,6 +309,11 @@ impl Face {
 
 /// The four corners of a part's footprint, as the labels `corners(...)` binds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize),
+    serde(rename_all = "snake_case")
+)]
 pub enum Corner {
     /// `front_left`
     FrontLeft,

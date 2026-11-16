@@ -1,0 +1,13 @@
+[package]
+name = "stave-app"
+description = "Headless Stave application: open a project folder and run the pipeline"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+stave-lang = { path = "../stave-lang" }
+stave-modules = { path = "../stave-modules" }
+stave-model = { path = "../stave-model" }
+stave-solve = { path = "../stave-solve" }
+thiserror = "2"

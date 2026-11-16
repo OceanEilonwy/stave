@@ -1,0 +1,12 @@
+[package]
+name = "stave-solve"
+description = "Places every part, region and piece of hardware of a resolved .stave model and resolves its joints"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+stave-lang = { path = "../stave-lang" }
+stave-schema = { path = "../stave-schema" }
+stave-model = { path = "../stave-model" }
+thiserror = "2"

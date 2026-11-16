@@ -375,6 +375,14 @@ impl Diagnostic {
         }
     }
 
+    /// A warning with a primary location.
+    pub fn warning(code: Code, message: impl Into<String>, primary: Label) -> Self {
+        Self {
+            severity: Severity::Warning,
+            ..Self::error(code, message, primary)
+        }
+    }
+
     /// Adds a help line.
     #[must_use]
     pub fn with_help(mut self, help: impl Into<String>) -> Self {

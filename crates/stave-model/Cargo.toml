@@ -1,0 +1,13 @@
+[package]
+name = "stave-model"
+description = "Resolved model of a .stave design (names, types, instances) and the solved-design contract"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+stave-lang = { path = "../stave-lang", features = ["serde"] }
+stave-schema = { path = "../stave-schema" }
+stave-modules = { path = "../stave-modules" }
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"

@@ -262,10 +262,12 @@ impl fmt::Display for Rational {
 
 /// A length as a whole number of nanometres: what the solved design stores.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize), serde(transparent))]
 pub struct Length(i64);
 
 /// An angle as a whole number of micro-degrees: what the solved design stores.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize), serde(transparent))]
 pub struct Angle(i64);
 
 impl Length {
