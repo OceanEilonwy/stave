@@ -141,7 +141,13 @@ fn check_runs_the_whole_pipeline() {
 /// rewrite it after an intended change, then check the difference by hand.
 #[test]
 fn dump_of_the_clothing_cabinet_matches_its_snapshot() {
-    let output = stave(&["dump", "examples/clothing_cabinet"]);
+    dump_matches_its_snapshot("clothing_cabinet");
+}
+
+/// `stave dump examples/<example>` is the same as
+/// `snapshots/<example>.dump`, which was checked by hand when it was added.
+fn dump_matches_its_snapshot(example: &str) {
+    let output = stave(&["dump", &format!("examples/{example}")]);
     assert!(
         output.status.success(),
         "{}",
@@ -149,7 +155,9 @@ fn dump_of_the_clothing_cabinet_matches_its_snapshot() {
     );
     assert!(output.stderr.is_empty());
     let dump = String::from_utf8(output.stdout).unwrap();
-    let snapshot = workspace().join("crates/stave-cli/tests/snapshots/clothing_cabinet.dump");
+    let snapshot = workspace()
+        .join("crates/stave-cli/tests/snapshots")
+        .join(format!("{example}.dump"));
     if std::env::var_os("STAVE_UPDATE_SNAPSHOTS").is_some() {
         std::fs::write(&snapshot, &dump).unwrap();
     }
@@ -159,6 +167,36 @@ fn dump_of_the_clothing_cabinet_matches_its_snapshot() {
         "the dump changed; diff it against {}",
         snapshot.display()
     );
+}
+
+#[test]
+fn dump_of_the_box_matches_its_snapshot() {
+    dump_matches_its_snapshot("box");
+}
+
+#[test]
+fn dump_of_the_side_table_matches_its_snapshot() {
+    dump_matches_its_snapshot("side_table");
+}
+
+#[test]
+fn dump_of_the_bookshelf_matches_its_snapshot() {
+    dump_matches_its_snapshot("bookshelf");
+}
+
+#[test]
+fn dump_of_the_stool_matches_its_snapshot() {
+    dump_matches_its_snapshot("stool");
+}
+
+#[test]
+fn dump_of_the_nightstand_matches_its_snapshot() {
+    dump_matches_its_snapshot("nightstand");
+}
+
+#[test]
+fn dump_of_the_wall_shelf_matches_its_snapshot() {
+    dump_matches_its_snapshot("wall_shelf");
 }
 
 #[test]

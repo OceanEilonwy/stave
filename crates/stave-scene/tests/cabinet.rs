@@ -200,3 +200,72 @@ fn the_joint_samples_build() {
     let glb = graph.to_glb(&graph.rest()).unwrap();
     assert_eq!(&glb[0..4], b"glTF");
 }
+
+#[test]
+fn the_box_lid_lifts_on_its_butt_hinges() {
+    let design = solve("box");
+    let graph = SceneGraph::build(&design, BuildOptions::default());
+    let scene = graph.scene_named("lid_open").unwrap();
+    let posed = graph.pose(scene);
+    let node = |name: &str| {
+        graph
+            .node_ids()
+            .find(|id| graph.node(*id).unwrap().name == name)
+            .unwrap_or_else(|| panic!("no node '{name}'"))
+    };
+    // The lid turns 100° about the hinge pins, at the top of the back's back
+    // face: (x, 110, -200) in the render frame, where +z is the front.
+    let lid = posed.shown(node("lid.panel")).unwrap();
+    let pivot = Vec3::new(150.0, 110.0, -200.0);
+    assert!(close(lid.transform_point3(pivot), pivot));
+    // Its front top edge swings up and back over the box.
+    let angle = 100_f32.to_radians();
+    let front_top = Vec3::new(150.0, 122.0, 0.0);
+    let (dy, dz) = (12.0, 200.0);
+    let expected = pivot
+        + Vec3::new(
+            0.0,
+            dy * angle.cos() + dz * angle.sin(),
+            -dy * angle.sin() + dz * angle.cos(),
+        );
+    assert!(
+        close(lid.transform_point3(front_top), expected),
+        "{:?} != {expected:?}",
+        lid.transform_point3(front_top)
+    );
+    // The leaves in the lid and the knob go with it; the leaves in the back
+    // and the body stay.
+    assert_eq!(posed.shown(node("lid.hinges[left]")).unwrap(), lid);
+    assert_eq!(posed.shown(node("lid.lift_knob")).unwrap(), lid);
+    for still in ["lid.hinges[left] fixed leaf", "back", "front"] {
+        assert_eq!(
+            posed.shown(node(still)).unwrap(),
+            glam::Mat4::IDENTITY,
+            "{still}"
+        );
+    }
+}
+
+#[test]
+fn every_example_builds_and_poses_every_scene() {
+    for example in [
+        "bookshelf",
+        "box",
+        "nightstand",
+        "side_table",
+        "stool",
+        "wall_shelf",
+    ] {
+        let design = solve(example);
+        let graph = SceneGraph::build(&design, BuildOptions::default());
+        assert!(
+            graph.nodes.len() >= design.parts.len(),
+            "{example}: every part has a node"
+        );
+        for scene in &design.scenes {
+            let entry = graph.scene_named(&scene.name).unwrap();
+            let posed = graph.pose(entry);
+            assert!(graph.bounds(&posed).is_some(), "{example}: {}", scene.name);
+        }
+    }
+}

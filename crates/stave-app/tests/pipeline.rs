@@ -46,7 +46,7 @@ fn module_folders() -> Vec<PathBuf> {
 fn every_example_and_standard_module_checks_clean() {
     let folders = module_folders();
     assert!(folders.len() >= 8, "the corpus went missing");
-    let mut projects = 0;
+    let mut projects = Vec::new();
     for folder in folders {
         let opened = stave_app::open(&folder).unwrap();
         assert!(
@@ -56,12 +56,22 @@ fn every_example_and_standard_module_checks_clean() {
             render_diagnostics(&opened.sources, &opened.diagnostics)
         );
         if opened.design.is_some() {
-            projects += 1;
+            projects.push(folder.file_name().unwrap().to_string_lossy().into_owned());
         }
     }
     assert_eq!(
-        projects, 2,
-        "the cabinet and the joint samples are projects"
+        projects,
+        [
+            "bookshelf",
+            "box",
+            "clothing_cabinet",
+            "joint_samples",
+            "nightstand",
+            "side_table",
+            "stool",
+            "wall_shelf",
+        ],
+        "every example project solves with no diagnostics"
     );
 }
 
