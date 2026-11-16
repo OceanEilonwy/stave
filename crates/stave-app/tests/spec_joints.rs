@@ -916,3 +916,15 @@ fn recipe_fields_are_typed() {
         "recipe 'r' has no field 'colour'",
     );
 }
+
+#[test]
+fn roles_params_and_made_parts_of_a_kind_share_one_namespace() {
+    let opened = open(
+        "kind k : joint {\n  roles {\n    piece: Part\n    into:  Part\n  }\n  param piece = 1mm\n}",
+    );
+    let diagnostic = the_diagnostic(&opened, "duplicate-name", "'piece' is declared twice");
+    assert_eq!(
+        diagnostic.help.as_deref(),
+        Some("roles, params and made parts of a kind share one namespace")
+    );
+}

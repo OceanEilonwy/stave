@@ -359,3 +359,87 @@ fn star_flattens_inside_a_list() {
     let design = design(&opened);
     assert_eq!(design.scenes[1].show.as_ref().map(Vec::len), Some(5));
 }
+
+#[test]
+fn a_file_in_another_format_version_is_not_supported() {
+    let opened = open_files(&[(
+        "project.stave",
+        &common::HEADER.replacen("stave 1", "stave 2", 1),
+    )]);
+    let diagnostic = common::the_diagnostic(
+        &opened,
+        "not-supported",
+        "format version 2 is not supported yet",
+    );
+    assert_eq!(common::line(&opened, diagnostic), 1);
+    assert_eq!(
+        diagnostic.help.as_deref(),
+        Some("this version of Stave reads files that start with 'stave 1'")
+    );
+}
+
+#[test]
+fn an_import_applies_to_the_file_it_is_written_in() {
+    let library = "stave 1\n\nlibrary \"Parts\"\n\nlet width = 120mm\n";
+    let importing = format!(
+        "stave 1\n\nimport \"./parts\"\n{}\nlet a = parts.width\n",
+        &common::HEADER["stave 1\n".len()..]
+    );
+    let opened = open_files(&[
+        ("a.stave", &importing),
+        ("b.stave", "stave 1\n\nlet b = parts.width\n"),
+        ("parts/library.stave", library),
+    ]);
+    only_error(&opened, "unknown-name", "unknown name 'parts'");
+    let diagnostic = &opened.diagnostics[0];
+    let file = opened
+        .sources
+        .get(diagnostic.primary().unwrap().file)
+        .unwrap();
+    assert!(file.path().ends_with("b.stave"), "{}", file.path());
+}
+
+#[test]
+fn a_library_component_can_not_reach_the_parts_of_the_module_using_it() {
+    // Placement stays inside a module: what a component needs from outside
+    // arrives through its params.
+    let library = "stave 1\n\nlibrary \"Boxes\"\n\nstock ply_6 { species: birch, form: plywood, thickness: 6mm }\n\ncomponent Tray {\n  part bottom : ply_6 {\n    length: 80mm\n    width:  80mm\n    place {\n      against(base.top)\n      flush(base.left)\n      flush(base.front)\n    }\n  }\n}\n";
+    let project = format!(
+        "stave 1\n\nimport \"./boxes\"\n{}\nassembly tray : boxes.Tray {{ }}\n",
+        &common::HEADER["stave 1\n".len()..]
+    );
+    let opened = open_files(&[
+        ("project.stave", &project),
+        ("boxes/library.stave", library),
+    ]);
+    let found = diagnostics(&opened);
+    assert!(
+        !found.is_empty()
+            && found
+                .iter()
+                .all(|d| d == "unknown-name: unknown name 'base'"),
+        "{found:?}"
+    );
+}
+
+#[test]
+fn the_prelude_provides_every_item_the_grammar_lists() {
+    // The "Provides" column of the prelude table, read from the grammar.
+    let grammar = include_str!("../../../docs/grammar.md");
+    let mut names = Vec::new();
+    for row in grammar.lines().filter(|line| line.starts_with("| `std:")) {
+        let provides = row.split('|').nth(3).unwrap();
+        for (index, piece) in provides.split('`').enumerate() {
+            if index % 2 == 1 && piece.chars().all(|c| c.is_ascii_lowercase() || c == '_') {
+                names.push(piece.to_owned());
+            }
+        }
+    }
+    assert!(names.len() >= 20, "{names:?}");
+    let body: String = names
+        .iter()
+        .map(|name| format!("let uses_{name} = {name}\n"))
+        .collect();
+    let opened = open(&body);
+    assert!(opened.diagnostics.is_empty(), "{:?}", diagnostics(&opened));
+}
