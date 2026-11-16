@@ -1,0 +1,1412 @@
+//! Lowering declarations other than kinds and recipes.
+
+use std::collections::BTreeMap;
+
+use stave_lang::ast::BaseKind;
+use stave_lang::ast::{self, ExprKind, Span};
+use stave_lang::{Code, Diagnostic, Label};
+use stave_modules::{Module, ModuleHeader};
+use stave_schema::fields::{self, FieldSpec, Requirement};
+use stave_schema::kinds::RoleType;
+use stave_schema::placement::PlacementTerm;
+use stave_schema::words::{Grain, OutputUnit, StockForm, WordSet};
+
+use super::expr::Expect;
+use super::{Cx, Origin, Resolver, Syntax};
+use crate::defs::{
+    ArrayDef, AssemblyDef, AssemblyKind, DefId, Domain, HardwareDef, JointDef, KindCallDef,
+    LibraryDef, MirrorDef, PartBodyDef, PartDef, PartKind, PlaceTerm, PlaceTermKind, PoseDef,
+    ProfileDef, ProjectDef, RExpr, RExprKind, RegionDef, RequireDef, SceneDef, Setting, Size,
+    StockDef, Symbol, Word,
+};
+use crate::ids::{KindId, RecipeId};
+use crate::types::{KindTy, Ty};
+
+/// The arguments of a call fixed by position, split and checked.
+pub(crate) struct CallArgs<'c> {
+    pub positional: Vec<&'c ast::Expr>,
+    pub named: Vec<(&'c ast::Name, &'c ast::Expr)>,
+}
+
+impl CallArgs<'_> {
+    pub fn get(&self, name: &str) -> Option<&ast::Expr> {
+        self.named
+            .iter()
+            .find(|(n, _)| n.as_str() == name)
+            .map(|(_, e)| *e)
+    }
+}
+
+/// Converts a `path` (as in `pose drawer[top] = open`) to an expression.
+pub(crate) fn path_expr(path: &ast::Path) -> ast::Expr {
+    let mut expr = ast::Expr {
+        kind: ExprKind::Name(path.root.clone()),
+        span: path.root.span(),
+    };
+    for segment in &path.segments {
+        let (kind, end) = match segment {
+            ast::PathSegment::Member(name) => (
+                ExprKind::Member {
+                    base: Box::new(expr.clone()),
+                    member: name.clone(),
+                },
+                name.span(),
+            ),
+            ast::PathSegment::Index(index) => {
+                let end = match index {
+                    ast::Index::All(span) | ast::Index::Same(span) => *span,
+                    ast::Index::At(at) => at.span,
+                };
+                (
+                    ExprKind::Index {
+                        base: Box::new(expr.clone()),
+                        index: index.clone(),
+                    },
+                    end,
+                )
+            }
+        };
+        expr = ast::Expr {
+            span: expr.span.to(end),
+            kind,
+        };
+    }
+    expr
+}
+
+impl<'a> Resolver<'a> {
+    /// Splits call arguments, reporting unknown names, duplicates and too
+    /// many positional arguments.
+    pub(crate) fn split_args<'c>(
+        &mut self,
+        cx: &Cx,
+        head: &str,
+        args: &'c [ast::Arg],
+        named: &[&str],
+        positional_max: usize,
+    ) -> CallArgs<'c> {
+        let mut out = CallArgs {
+            positional: Vec::new(),
+            named: Vec::new(),
+        };
+        for arg in args {
+            match &arg.name {
+                None => {
+                    if out.positional.len() < positional_max {
+                        out.positional.push(&arg.value);
+                    } else {
+                        let help = if named.is_empty() {
+                            format!("'{head}' takes {positional_max} argument(s)")
+                        } else {
+                            format!("name it: '{head}' takes {}", named.join(":, ") + ":")
+                        };
+                        self.error_help(
+                            Code::TypeMismatch,
+                            format!("'{head}' takes no more arguments without a name"),
+                            cx.file,
+                            arg.span,
+                            help,
+                        );
+                    }
+                }
+                Some(name) => {
+                    if !named.contains(&name.as_str()) {
+                        let help = if named.is_empty() {
+                            format!("'{head}' takes no named arguments")
+                        } else {
+                            format!("'{head}' takes {}", named.join(", "))
+                        };
+                        self.error_help(
+                            Code::UnknownField,
+                            format!("'{head}' has no field '{}'", name.as_str()),
+                            cx.file,
+                            name.span(),
+                            help,
+                        );
+                    } else if out.named.iter().any(|(n, _)| n.as_str() == name.as_str()) {
+                        self.error(
+                            Code::DuplicateName,
+                            format!("'{}' is declared twice", name.as_str()),
+                            cx.file,
+                            name.span(),
+                        );
+                    } else {
+                        out.named.push((name, &arg.value));
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// Checks fields against a table: unknown fields and duplicates are
+    /// reported, and missing required ones. Returns the fields by name.
+    pub(crate) fn field_table<'f>(
+        &mut self,
+        cx: &Cx,
+        fields_in: impl IntoIterator<Item = &'f ast::Field>,
+        table: &'static [FieldSpec],
+        what: &str,
+        whole: Span,
+    ) -> BTreeMap<&'f str, &'f ast::Field> {
+        let mut found: BTreeMap<&'f str, &'f ast::Field> = BTreeMap::new();
+        for field in fields_in {
+            let name = field.key.as_str();
+            if fields::find(table, name).is_none() {
+                let known: Vec<&str> = table.iter().map(|s| s.name).collect();
+                self.error_help(
+                    Code::UnknownField,
+                    format!("{what} has no field '{name}'"),
+                    cx.file,
+                    field.key.span(),
+                    format!("the fields are: {}", known.join(", ")),
+                );
+                continue;
+            }
+            if let Some(first) = found.get(name) {
+                self.report(
+                    Diagnostic::error(
+                        Code::DuplicateName,
+                        format!("'{name}' is declared twice"),
+                        Label::new(cx.file, field.key.span()),
+                    )
+                    .with_label(Label::with_message(
+                        cx.file,
+                        first.key.span(),
+                        "first written here",
+                    )),
+                );
+                continue;
+            }
+            found.insert(name, field);
+        }
+        for spec in table {
+            if spec.requirement == Requirement::Required && !found.contains_key(spec.name) {
+                self.error_help(
+                    Code::MissingField,
+                    format!("{what} is missing '{}'", spec.name),
+                    cx.file,
+                    whole,
+                    format!("add {}: ...", spec.name),
+                );
+            }
+        }
+        found
+    }
+
+    pub(crate) fn field_value(
+        &mut self,
+        cx: &Cx,
+        field: &ast::Field,
+        spec_table: &'static [FieldSpec],
+    ) -> RExpr {
+        let expect = fields::find(spec_table, field.key.as_str())
+            .map(|spec| Expect::value_type(spec.ty))
+            .unwrap_or_default()
+            .named(field.key.as_str());
+        self.value(cx, &field.value, &expect)
+    }
+
+    fn word_field(&mut self, cx: &Cx, field: &ast::Field, set: WordSet) -> Option<Word> {
+        let value = self.value(
+            cx,
+            &field.value,
+            &Expect::ty(Ty::Word(set)).named(field.key.as_str()),
+        );
+        match value.kind {
+            RExprKind::Word(word) => Some(word),
+            RExprKind::Error => None,
+            _ => {
+                self.error_help(
+                    Code::TypeMismatch,
+                    format!(
+                        "'{}' needs {}, found {}",
+                        field.key.as_str(),
+                        set.description(),
+                        value.ty
+                    ),
+                    cx.file,
+                    value.span,
+                    format!("write one of: {}", set.words().join(", ")),
+                );
+                None
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Project and library
+    // -----------------------------------------------------------------------
+
+    pub(super) fn lower_header(
+        &mut self,
+        module: &'a Module,
+    ) -> (Option<ProjectDef>, Option<LibraryDef>) {
+        let Some(header) = &module.header else {
+            return (None, None);
+        };
+        let (file, index, is_project) = match header {
+            ModuleHeader::Project { file, item } => (*file, *item, true),
+            ModuleHeader::Library { file, item } => (*file, *item, false),
+        };
+        let Some(item) = module
+            .files
+            .iter()
+            .find(|f| f.file == file)
+            .and_then(|f| f.ast.as_ref())
+            .and_then(|ast| ast.items.get(index))
+        else {
+            return (None, None);
+        };
+        let cx = Cx {
+            module: module.id,
+            file,
+            body: super::Body::Module,
+            array: None,
+        };
+        match (&item.kind, is_project) {
+            (ast::ItemKind::Project(project), true) => {
+                let title = self.text(&cx, &project.title).literal();
+                let found = self.field_table(
+                    &cx,
+                    &project.body.fields,
+                    fields::PROJECT,
+                    "the project",
+                    project.body.span,
+                );
+                let goal = found
+                    .get("goal")
+                    .and_then(|f| self.plain_text(&cx, &f.value, "goal"));
+                let style = found
+                    .get("style")
+                    .and_then(|f| self.plain_text(&cx, &f.value, "style"));
+                let units = match found.get("units") {
+                    Some(field) => match self.word_field(&cx, field, WordSet::OutputUnit) {
+                        Some(Word::OutputUnit(unit)) => unit,
+                        _ => OutputUnit::Millimetre,
+                    },
+                    None => OutputUnit::Millimetre,
+                };
+                let resolution = found
+                    .get("resolution")
+                    .map(|f| self.field_value(&cx, f, fields::PROJECT));
+                let tools = found.get("tools").map(|f| {
+                    let value = self.field_value(&cx, f, fields::PROJECT);
+                    kind_ids(&value)
+                });
+                let methods = found
+                    .get("methods")
+                    .map(|f| {
+                        let value = self.field_value(&cx, f, fields::PROJECT);
+                        recipe_ids(&value)
+                    })
+                    .unwrap_or_default();
+                (
+                    Some(ProjectDef {
+                        title,
+                        goal,
+                        units,
+                        resolution,
+                        style,
+                        tools,
+                        methods,
+                        file,
+                        span: item.span,
+                    }),
+                    None,
+                )
+            }
+            (ast::ItemKind::Library(library), false) => {
+                let title = self.text(&cx, &library.title).literal();
+                let (mut about, mut license) = (None, None);
+                if let Some(body) = &library.body {
+                    let found = self.field_table(
+                        &cx,
+                        &body.fields,
+                        fields::LIBRARY,
+                        "the library",
+                        body.span,
+                    );
+                    about = found
+                        .get("about")
+                        .and_then(|f| self.plain_text(&cx, &f.value, "about"));
+                    license = found
+                        .get("license")
+                        .and_then(|f| self.plain_text(&cx, &f.value, "license"));
+                }
+                (
+                    None,
+                    Some(LibraryDef {
+                        title,
+                        about,
+                        license,
+                    }),
+                )
+            }
+            _ => (None, None),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Params, lets, requires
+    // -----------------------------------------------------------------------
+
+    /// The type and default of a param (module, component or kind).
+    pub(crate) fn lower_param_spec(&mut self, cx: &Cx, param: &ast::Param) -> (Ty, Option<RExpr>) {
+        let declared = param.spec.ty().map(|name| match ast::TypeName::from_word(name.as_str()) {
+            Some(ty) => Ty::from_type_name(ty),
+            None => {
+                self.error_help(
+                    Code::UnknownName,
+                    format!("unknown name '{}'", name.as_str()),
+                    cx.file,
+                    name.span(),
+                    "a param's type is one of Length, Angle, Ratio, Count, Bool, Text, Part, Parts, Stock, Region, Profile, Anchor, Axis, Direction, Mount, Shape, Envelope, Model, Spacing, JointKind, HardwareKind, SlideKind, HingeKind, PullKind, FastenerKind, Tool, Recipe",
+                );
+                Ty::Unknown
+            }
+        });
+        let default = param.spec.default().map(|default| {
+            let expect = match &declared {
+                Some(ty) => Expect::ty(ty.clone()).named(param.name.as_str()),
+                None => Expect::any(),
+            };
+            self.value(cx, default, &expect)
+        });
+        let ty = match (declared, &default) {
+            (Some(ty), _) => ty,
+            (None, Some(default)) => default.ty.clone(),
+            (None, None) => Ty::Unknown,
+        };
+        (ty, default)
+    }
+
+    pub(crate) fn lower_domain(&mut self, cx: &Cx, domain: &ast::Domain, ty: &Ty) -> Domain {
+        let expect = Expect::ty(ty.clone()).named("within");
+        match domain {
+            ast::Domain::Range { lo, hi, span } => {
+                if !matches!(
+                    ty,
+                    Ty::Length | Ty::Angle | Ty::Ratio | Ty::Count | Ty::Unknown
+                ) {
+                    self.error(
+                        Code::TypeMismatch,
+                        format!("'within' needs a range of numbers, found a range for {ty}"),
+                        cx.file,
+                        *span,
+                    );
+                }
+                Domain::Range {
+                    low: self.value(cx, lo, &expect),
+                    high: self.value(cx, hi, &expect),
+                    span: *span,
+                }
+            }
+            ast::Domain::OneOf { values, span } => Domain::OneOf {
+                values: values.iter().map(|v| self.value(cx, v, &expect)).collect(),
+                span: *span,
+            },
+        }
+    }
+
+    pub(super) fn lower_require(
+        &mut self,
+        cx: &Cx,
+        def: DefId,
+        syntax: &ast::Require,
+        origin: Origin<'_>,
+    ) -> RequireDef {
+        let condition = self.value(
+            cx,
+            &syntax.condition,
+            &Expect::ty(Ty::Bool).named(syntax.name.as_str()),
+        );
+        let message = self.text(cx, &syntax.message);
+        RequireDef {
+            decl: self.decl(def, &syntax.name, origin),
+            condition,
+            message,
+        }
+    }
+
+    pub(crate) fn lower_array(
+        &mut self,
+        cx: &Cx,
+        array: Option<&ast::ArraySpec>,
+    ) -> Option<ArrayDef> {
+        Some(match array? {
+            ast::ArraySpec::Labels(labels) => ArrayDef::Labels(
+                labels
+                    .as_slice()
+                    .iter()
+                    .map(|l| (l.as_str().to_owned(), l.span()))
+                    .collect(),
+            ),
+            ast::ArraySpec::Count(count) => {
+                let outer = Cx { array: None, ..*cx };
+                ArrayDef::Count(self.value(&outer, count, &Expect::ty(Ty::Count).named("count")))
+            }
+        })
+    }
+
+    // -----------------------------------------------------------------------
+    // Regions, stocks, profiles
+    // -----------------------------------------------------------------------
+
+    pub(super) fn lower_region(
+        &mut self,
+        cx: &Cx,
+        def: DefId,
+        syntax: &ast::Region,
+        origin: Origin<'_>,
+    ) -> RegionDef {
+        let array = self.lower_array(cx, syntax.array.as_ref());
+        let value = self.value(
+            cx,
+            &syntax.value,
+            &Expect::any().named(syntax.name.as_str()),
+        );
+        match (&value.ty, array.is_some()) {
+            (Ty::Region | Ty::Unknown, false) | (Ty::Regions | Ty::Unknown, true) => {}
+            (Ty::Regions, false) => self.error_help(
+                Code::TypeMismatch,
+                format!("'{}' needs a region, found regions", syntax.name.as_str()),
+                cx.file,
+                value.span,
+                format!(
+                    "declare an array to hold them: region {}[a, b] = ...",
+                    syntax.name.as_str()
+                ),
+            ),
+            (Ty::Region, true) => self.error_help(
+                Code::TypeMismatch,
+                format!("'{}' needs regions, found a region", syntax.name.as_str()),
+                cx.file,
+                value.span,
+                "only split(...) gives several regions",
+            ),
+            (other, _) => self.error(
+                Code::TypeMismatch,
+                format!("'{}' needs a region, found {other}", syntax.name.as_str()),
+                cx.file,
+                value.span,
+            ),
+        }
+        RegionDef {
+            decl: self.decl(def, &syntax.name, origin),
+            array,
+            value,
+        }
+    }
+
+    pub(super) fn lower_stock(
+        &mut self,
+        cx: &Cx,
+        def: DefId,
+        syntax: &ast::Stock,
+        origin: Origin<'_>,
+    ) -> StockDef {
+        let what = format!("stock '{}'", syntax.name.as_str());
+        let found = self.field_table(
+            cx,
+            &syntax.body.fields,
+            fields::STOCK,
+            &what,
+            syntax.body.span,
+        );
+        let species = match found
+            .get("species")
+            .and_then(|f| self.word_field(cx, f, WordSet::Species))
+        {
+            Some(Word::Species(species)) => species,
+            _ => stave_schema::species::Species::Pine,
+        };
+        let form = match found
+            .get("form")
+            .and_then(|f| self.word_field(cx, f, WordSet::StockForm))
+        {
+            Some(Word::StockForm(form)) => form,
+            _ => StockForm::Solid,
+        };
+        let mut length = |name: &str| {
+            found
+                .get(name)
+                .map(|field| self.field_value(cx, field, fields::STOCK))
+        };
+        let thickness = length("thickness");
+        let diameter = length("diameter");
+        let width = length("width");
+        let max_width = length("max_width");
+        let max_length = length("max_length");
+        if found.contains_key("form") {
+            if form == StockForm::Dowel {
+                if diameter.is_none() {
+                    self.error_help(
+                        Code::MissingField,
+                        format!("{what} is missing 'diameter'"),
+                        cx.file,
+                        syntax.body.span,
+                        "dowel stock is sized by diameter: ...",
+                    );
+                }
+            } else {
+                if thickness.is_none() {
+                    self.error_help(
+                        Code::MissingField,
+                        format!("{what} is missing 'thickness'"),
+                        cx.file,
+                        syntax.body.span,
+                        "add thickness: ...",
+                    );
+                }
+                if let Some(diameter) = &diameter {
+                    self.error_help(
+                        Code::UnknownField,
+                        format!("{what} has no field 'diameter'"),
+                        cx.file,
+                        diameter.span,
+                        "only dowel stock has a diameter",
+                    );
+                }
+            }
+        }
+        StockDef {
+            decl: self.decl(def, &syntax.name, origin),
+            species,
+            form,
+            thickness,
+            diameter,
+            width,
+            max_width,
+            max_length,
+        }
+    }
+
+    pub(super) fn lower_profile(
+        &mut self,
+        cx: &Cx,
+        def: DefId,
+        syntax: &ast::Profile,
+        origin: Origin<'_>,
+    ) -> ProfileDef {
+        let what = format!("profile '{}'", syntax.name.as_str());
+        let field_list: Vec<&ast::Field> = syntax
+            .entries
+            .iter()
+            .filter_map(|e| match e {
+                ast::ProfileEntry::Field(f) => Some(f),
+                ast::ProfileEntry::Station { .. } => None,
+            })
+            .collect();
+        let found = self.field_table(cx, field_list, fields::PROFILE, &what, syntax.span);
+        let measure = match found
+            .get("measure")
+            .and_then(|f| self.word_field(cx, f, WordSet::Measure))
+        {
+            Some(Word::Measure(m)) => m,
+            _ => stave_schema::words::Measure::Diameter,
+        };
+        let smooth = match found
+            .get("smooth")
+            .map(|f| self.field_value(cx, f, fields::PROFILE))
+        {
+            Some(RExpr {
+                kind: RExprKind::Bool(b),
+                ..
+            }) => b,
+            _ => false,
+        };
+        let mut stations = Vec::new();
+        for entry in &syntax.entries {
+            if let ast::ProfileEntry::Station { at, value, .. } = entry {
+                let at = self.value(cx, at, &Expect::ty(Ty::Length).named("at"));
+                let value = self.value(cx, value, &Expect::ty(Ty::Length).named("station"));
+                stations.push((at, value));
+            }
+        }
+        if stations.len() < 2 {
+            self.error_help(
+                Code::MissingField,
+                format!("{what} is missing 'at'"),
+                cx.file,
+                syntax.span,
+                "a profile needs two or more stations: at <distance>: <size>",
+            );
+        }
+        ProfileDef {
+            decl: self.decl(def, &syntax.name, origin),
+            measure,
+            smooth,
+            stations,
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Parts
+    // -----------------------------------------------------------------------
+
+    pub(super) fn lower_part(
+        &mut self,
+        cx: &Cx,
+        def: DefId,
+        syntax: &ast::Part,
+        origin: Origin<'_>,
+    ) -> PartDef {
+        let array = self.lower_array(cx, syntax.array.as_ref());
+        let what = format!("part '{}'", syntax.name.as_str());
+        let kind = match &syntax.def {
+            ast::PartDef::FromStock { stock, body } => {
+                let (mut lowered, place) = self.lower_part_body(cx, stock, body, &what);
+                match place {
+                    Some(place) => {
+                        lowered.place = self.lower_place(cx, place, false);
+                        lowered.place_span = Some(place.span);
+                    }
+                    None => self.error_help(
+                        Code::MissingField,
+                        format!("{what} is missing 'place'"),
+                        cx.file,
+                        body.span,
+                        "add place { ... } with one term per axis",
+                    ),
+                }
+                PartKind::FromStock(Box::new(lowered))
+            }
+            ast::PartDef::Mirror(mirror) => {
+                PartKind::Mirror(self.lower_mirror(cx, mirror, Ty::Part))
+            }
+        };
+        PartDef {
+            decl: self.decl(def, &syntax.name, origin),
+            array,
+            kind,
+        }
+    }
+
+    pub(crate) fn lower_mirror(
+        &mut self,
+        cx: &Cx,
+        mirror: &ast::Mirror,
+        source_ty: Ty,
+    ) -> MirrorDef {
+        let expect = match source_ty {
+            Ty::Part => Expect::ty(Ty::Part).named("mirror"),
+            _ => Expect::any().named("mirror"),
+        };
+        let source = self.value(cx, &mirror.source, &expect);
+        if source_ty != Ty::Part && !matches!(source.ty, Ty::Assembly(_) | Ty::Unknown) {
+            self.error(
+                Code::TypeMismatch,
+                format!("'mirror' needs an assembly, found {}", source.ty),
+                cx.file,
+                source.span,
+            );
+        }
+        let about = self.value(cx, &mirror.about, &Expect::ty(Ty::Anchor).named("about"));
+        MirrorDef {
+            source,
+            about,
+            span: mirror.span,
+        }
+    }
+
+    /// The fields of a part body; the `place` block is returned unlowered.
+    pub(crate) fn lower_part_body<'b>(
+        &mut self,
+        cx: &Cx,
+        stock: &ast::Ref,
+        body: &'b ast::PartBody,
+        what: &str,
+    ) -> (PartBodyDef, Option<&'b ast::PlaceBlock>) {
+        let stock_expr = self.reference(cx, stock, &Expect::ty(Ty::Stock).named("stock"));
+        let found = self.field_table(cx, body.fields(), fields::PART, what, body.span);
+        let size = |this: &mut Self, field: &ast::Field| -> Size {
+            let value = this.field_value(cx, field, fields::PART);
+            match value.kind {
+                RExprKind::Fit => Size::Fit(value.span),
+                _ => Size::Expr(value),
+            }
+        };
+        let length = match found.get("length") {
+            Some(field) => size(self, field),
+            None => Size::Expr(RExpr::error(body.span)),
+        };
+        let width = found.get("width").map(|field| size(self, field));
+        if width.is_none() && !self.stock_gives_width(&stock_expr) {
+            self.error_help(
+                Code::MissingField,
+                format!("{what} is missing 'width'"),
+                cx.file,
+                body.span,
+                "add width: ..., or cut it from stock with a fixed width",
+            );
+        }
+        let thickness = found
+            .get("thickness")
+            .map(|f| self.field_value(cx, f, fields::PART));
+        let grain = match found
+            .get("grain")
+            .and_then(|f| self.word_field(cx, f, WordSet::Grain))
+        {
+            Some(Word::Grain(grain)) => grain,
+            _ => Grain::Length,
+        };
+        let shape = found
+            .get("shape")
+            .map(|f| self.field_value(cx, f, fields::PART));
+        let face = |this: &mut Self, name: &str| {
+            let field = found.get(name)?;
+            match this.word_field(cx, field, WordSet::Face) {
+                Some(Word::Face(face)) => Some((face, field.value.span)),
+                _ => None,
+            }
+        };
+        let face_side = face(self, "face_side");
+        let face_edge = face(self, "face_edge");
+        let note = found.get("note").and_then(|field| match &field.value.kind {
+            ExprKind::String(string) => Some(self.text(cx, string)),
+            _ => {
+                self.plain_text(cx, &field.value, "note");
+                None
+            }
+        });
+        (
+            PartBodyDef {
+                stock: stock_expr,
+                length,
+                width,
+                thickness,
+                grain,
+                shape,
+                face_side,
+                face_edge,
+                note,
+                place: Vec::new(),
+                place_span: None,
+                span: body.span,
+            },
+            body.place(),
+        )
+    }
+
+    fn stock_gives_width(&self, stock: &RExpr) -> bool {
+        let RExprKind::Symbol(Symbol::Def(def @ DefId::Stock(_))) = &stock.kind else {
+            // A stock passed in as a param, or an error: decided when solved.
+            return true;
+        };
+        let Some(Syntax::Stock(syntax)) = self.origins.get(def).map(|o| o.syntax) else {
+            return true;
+        };
+        let is_dowel = syntax.body.field("form").is_some_and(
+            |field| matches!(&field.value.kind, ExprKind::Name(name) if name.as_str() == "dowel"),
+        );
+        is_dowel || syntax.body.field("width").is_some()
+    }
+
+    /// Lowers the terms of a `place { }` block of a part or hardware.
+    pub(crate) fn lower_place(
+        &mut self,
+        cx: &Cx,
+        place: &ast::PlaceBlock,
+        hardware: bool,
+    ) -> Vec<PlaceTerm> {
+        let mut terms = Vec::new();
+        for call in &place.terms {
+            let head = call.head.as_str();
+            let Some(term) = PlacementTerm::from_word(head) else {
+                self.error_help(
+                    Code::UnknownName,
+                    format!("unknown name '{head}'"),
+                    cx.file,
+                    call.head.span(),
+                    "a placement term is one of ground, against, flush, center, spaced, corners, orient",
+                );
+                continue;
+            };
+            if hardware && !term.applies_to_hardware() {
+                self.error_help(
+                    Code::TypeMismatch,
+                    format!("'{head}' doesn't apply to hardware"),
+                    cx.file,
+                    call.span,
+                    "hardware is placed on a face of its piece with center, flush, against or spaced",
+                );
+                continue;
+            }
+            let length = |name: &'static str| Expect::ty(Ty::Length).named(name);
+            let anchor = |name: &'static str| Expect::ty(Ty::Anchor).named(name);
+            let kind = match term {
+                PlacementTerm::Ground => {
+                    self.split_args(cx, head, &call.args, &[], 0);
+                    PlaceTermKind::Ground
+                }
+                PlacementTerm::Against | PlacementTerm::Flush => {
+                    let extra = if term == PlacementTerm::Against {
+                        "gap"
+                    } else {
+                        "inset"
+                    };
+                    let args = self.split_args(cx, head, &call.args, &[extra], 1);
+                    let Some(face) = args.positional.first() else {
+                        self.missing_argument(cx, head, "a face", call.span);
+                        continue;
+                    };
+                    let face = self.value(cx, face, &anchor("face"));
+                    let offset = args.get(extra).map(|e| self.value(cx, e, &length(extra)));
+                    if term == PlacementTerm::Against {
+                        PlaceTermKind::Against { face, gap: offset }
+                    } else {
+                        PlaceTermKind::Flush {
+                            face,
+                            inset: offset,
+                        }
+                    }
+                }
+                PlacementTerm::Center => {
+                    let args = self.split_args(cx, head, &call.args, &["from", "to"], 2);
+                    if args.positional.is_empty() {
+                        let (Some(from), Some(to)) = (args.get("from"), args.get("to")) else {
+                            self.missing_argument(
+                                cx,
+                                head,
+                                "an item and an axis, or from: and to:",
+                                call.span,
+                            );
+                            continue;
+                        };
+                        PlaceTermKind::CenterBetween {
+                            from: self.value(cx, from, &anchor("from")),
+                            to: self.value(cx, to, &anchor("to")),
+                        }
+                    } else {
+                        let [item, axis] = args.positional.as_slice() else {
+                            self.missing_argument(cx, head, "an item and an axis", call.span);
+                            continue;
+                        };
+                        let item = self.value(cx, item, &Expect::any().named("center"));
+                        if !matches!(item.ty, Ty::Part | Ty::Region | Ty::Unknown) {
+                            self.error(
+                                Code::TypeMismatch,
+                                format!("'center' needs a part or a region, found {}", item.ty),
+                                cx.file,
+                                item.span,
+                            );
+                        }
+                        let axis = self.value(
+                            cx,
+                            axis,
+                            &Expect::ty(Ty::Word(WordSet::Axis)).named("axis"),
+                        );
+                        PlaceTermKind::CenterOn { item, axis }
+                    }
+                }
+                PlacementTerm::Spaced => {
+                    let args = self.split_args(cx, head, &call.args, &["from", "to"], 1);
+                    let (Some(spacing), Some(from), Some(to)) =
+                        (args.positional.first(), args.get("from"), args.get("to"))
+                    else {
+                        self.missing_argument(cx, head, "a spacing, from: and to:", call.span);
+                        continue;
+                    };
+                    PlaceTermKind::Spaced {
+                        spacing: self.value(
+                            cx,
+                            spacing,
+                            &Expect::ty(Ty::Spacing)
+                                .with_words(&[WordSet::Spacing])
+                                .named("spacing"),
+                        ),
+                        from: self.value(cx, from, &anchor("from")),
+                        to: self.value(cx, to, &anchor("to")),
+                    }
+                }
+                PlacementTerm::Corners => {
+                    let args = self.split_args(cx, head, &call.args, &["inset"], 1);
+                    let Some(part) = args.positional.first() else {
+                        self.missing_argument(cx, head, "a part", call.span);
+                        continue;
+                    };
+                    PlaceTermKind::Corners {
+                        part: self.value(cx, part, &Expect::ty(Ty::Part).named("corners")),
+                        inset: args
+                            .get("inset")
+                            .map(|e| self.value(cx, e, &length("inset"))),
+                    }
+                }
+                PlacementTerm::Orient => {
+                    let args = self.split_args(cx, head, &call.args, &["length", "width"], 0);
+                    let direction =
+                        |name: &'static str| Expect::ty(Ty::Word(WordSet::Direction)).named(name);
+                    let Some(length) = args.get("length") else {
+                        self.missing_argument(cx, head, "length:", call.span);
+                        continue;
+                    };
+                    PlaceTermKind::Orient {
+                        length: self.value(cx, length, &direction("length")),
+                        width: args
+                            .get("width")
+                            .map(|e| self.value(cx, e, &direction("width"))),
+                    }
+                }
+            };
+            terms.push(PlaceTerm {
+                kind,
+                span: call.span,
+            });
+        }
+        terms
+    }
+
+    pub(crate) fn missing_argument(&mut self, cx: &Cx, head: &str, what: &str, span: Span) {
+        self.error_help(
+            Code::MissingField,
+            format!("'{head}' is missing {what}"),
+            cx.file,
+            span,
+            format!("write {head}(...) with {what}"),
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Joints, hardware and assemblies
+    // -----------------------------------------------------------------------
+
+    pub(super) fn lower_joint(
+        &mut self,
+        cx: &Cx,
+        def: DefId,
+        syntax: &ast::Joint,
+        origin: Origin<'_>,
+    ) -> JointDef {
+        let array = self.lower_array(cx, syntax.array.as_ref());
+        let what = format!("joint '{}'", syntax.name.as_str());
+        let call = self.lower_kind_call(cx, &syntax.call, Some(BaseKind::Joint), &what);
+        JointDef {
+            decl: self.decl(def, &syntax.name, origin),
+            array,
+            call,
+        }
+    }
+
+    pub(super) fn lower_hardware(
+        &mut self,
+        cx: &Cx,
+        def: DefId,
+        syntax: &ast::Hardware,
+        origin: Origin<'_>,
+    ) -> HardwareDef {
+        let array = self.lower_array(cx, syntax.array.as_ref());
+        let what = format!("hardware '{}'", syntax.name.as_str());
+        let call = self.lower_kind_call(cx, &syntax.call, None, &what);
+        let place_block = syntax.body.as_ref().and_then(|b| b.place.as_ref());
+        let place = place_block
+            .map(|p| self.lower_place(cx, p, true))
+            .unwrap_or_default();
+        HardwareDef {
+            decl: self.decl(def, &syntax.name, origin),
+            array,
+            call,
+            place,
+            place_span: place_block.map(|p| p.span),
+        }
+    }
+
+    /// A kind call of a joint (`base` = joint) or hardware (`base` = None).
+    fn lower_kind_call(
+        &mut self,
+        cx: &Cx,
+        call: &ast::KindCall,
+        base: Option<BaseKind>,
+        what: &str,
+    ) -> KindCallDef {
+        let expect = Expect::ty(Ty::Kind(KindTy { base, kind: None }))
+            .named(what.split(' ').next().unwrap_or("kind"));
+        let kind = self.reference(cx, &call.kind, &expect);
+        let kind_ty = match &kind.ty {
+            Ty::Kind(kind_ty) => Some(*kind_ty),
+            _ => None,
+        };
+        let known = kind_ty.and_then(|k| k.kind);
+        let roles: Vec<(String, RoleType, Span)> = match known {
+            Some(id) => self.kind_role_specs(id),
+            None => Vec::new(),
+        };
+        let mut positional = None;
+        let mut named: Vec<Setting> = Vec::new();
+        for arg in &call.args {
+            match &arg.name {
+                None => {
+                    if positional.is_some() {
+                        self.error_help(
+                            Code::TypeMismatch,
+                            "a kind call takes at most one argument without a name",
+                            cx.file,
+                            arg.span,
+                            "name every other role and setting: into: ..., depth: ...",
+                        );
+                        continue;
+                    }
+                    let expect = match roles.first() {
+                        Some((name, ty, _)) => role_expect(*ty).named(name.clone()),
+                        None if known.is_some() => {
+                            self.error(
+                                Code::TypeMismatch,
+                                format!("the kind '{}' has no roles", call.kind.root.as_str()),
+                                cx.file,
+                                arg.span,
+                            );
+                            continue;
+                        }
+                        None => Expect::any(),
+                    };
+                    positional = Some(self.value(cx, &arg.value, &expect));
+                }
+                Some(name) => {
+                    if named.iter().any(|s| s.name == name.as_str())
+                        || (roles.first().is_some_and(|(r, _, _)| r == name.as_str())
+                            && positional.is_some())
+                    {
+                        self.error(
+                            Code::DuplicateName,
+                            format!("'{}' is declared twice", name.as_str()),
+                            cx.file,
+                            name.span(),
+                        );
+                        continue;
+                    }
+                    let expect = if let Some((_, ty, _)) =
+                        roles.iter().find(|(r, _, _)| r == name.as_str())
+                    {
+                        role_expect(*ty).named(name.as_str())
+                    } else {
+                        match kind_ty {
+                            Some(kind_ty) if known.is_some() => {
+                                match self.setting_ty(cx, kind_ty, name) {
+                                    Some(ty) => Expect::ty(ty).named(name.as_str()),
+                                    None => continue,
+                                }
+                            }
+                            _ => {
+                                if name.as_str() == stave_schema::kinds::FACE_SETTING {
+                                    Expect::ty(Ty::Word(WordSet::Face)).named("face")
+                                } else {
+                                    Expect::any().named(name.as_str())
+                                }
+                            }
+                        }
+                    };
+                    let value = self.value(cx, &arg.value, &expect);
+                    named.push(Setting {
+                        name: name.as_str().to_owned(),
+                        name_span: name.span(),
+                        value,
+                    });
+                }
+            }
+        }
+        if let Some(id) = known {
+            for (index, (role, _, _)) in roles.iter().enumerate() {
+                let given =
+                    (index == 0 && positional.is_some()) || named.iter().any(|s| &s.name == role);
+                if !given {
+                    self.error_help(
+                        Code::MissingField,
+                        format!("{what} is missing '{role}'"),
+                        cx.file,
+                        call.span,
+                        format!("name the part for '{role}' in the call: {role}: ..."),
+                    );
+                }
+            }
+            for missing in self.required_kind_params(id) {
+                if !named.iter().any(|s| s.name == missing) {
+                    self.error_help(
+                        Code::MissingField,
+                        format!("{what} is missing '{missing}'"),
+                        cx.file,
+                        call.span,
+                        format!("give it in the call: {missing}: ..."),
+                    );
+                }
+            }
+        }
+        KindCallDef {
+            kind,
+            positional,
+            named,
+            span: call.span,
+        }
+    }
+
+    fn kind_role_specs(&self, kind: KindId) -> Vec<(String, RoleType, Span)> {
+        match self.origins.get(&DefId::Kind(kind)).map(|o| o.syntax) {
+            Some(Syntax::Kind(syntax)) => super::kinds::role_specs(syntax),
+            _ => Vec::new(),
+        }
+    }
+
+    fn required_kind_params(&self, kind: KindId) -> Vec<String> {
+        match self.origins.get(&DefId::Kind(kind)).map(|o| o.syntax) {
+            Some(Syntax::Kind(syntax)) => super::kinds::kind_params(syntax)
+                .into_iter()
+                .filter(|p| p.spec.default().is_none())
+                .filter(|p| {
+                    // A hardware entry declared as a param but also written as a field.
+                    syntax.body.field(p.name.as_str()).is_none()
+                })
+                .map(|p| p.name.as_str().to_owned())
+                .collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    pub(super) fn lower_assembly(
+        &mut self,
+        cx: &Cx,
+        def: DefId,
+        syntax: &ast::Assembly,
+        origin: Origin<'_>,
+    ) -> AssemblyDef {
+        let array = self.lower_array(cx, syntax.array.as_ref());
+        let kind = match &syntax.def {
+            ast::AssemblyDef::Instance { component, body } => {
+                let symbol = self.lookup_ref(cx, component);
+                let component_id = match symbol {
+                    Some(Symbol::Def(DefId::Component(id))) => Some(id),
+                    Some(other) => {
+                        let found = self.symbol_ty(other);
+                        self.error(
+                            Code::TypeMismatch,
+                            format!(
+                                "'{}' needs a component, found {found}",
+                                syntax.name.as_str()
+                            ),
+                            cx.file,
+                            component.span,
+                        );
+                        None
+                    }
+                    None => {
+                        // Report through the normal path for a good message.
+                        self.reference(cx, component, &Expect::any());
+                        None
+                    }
+                };
+                match component_id {
+                    Some(id) => {
+                        let args = self.lower_assembly_args(cx, id, body, syntax.name.as_str());
+                        AssemblyKind::Instance {
+                            component: id,
+                            args,
+                        }
+                    }
+                    None => AssemblyKind::Invalid,
+                }
+            }
+            ast::AssemblyDef::Mirror(mirror) => {
+                AssemblyKind::Mirror(self.lower_mirror(cx, mirror, Ty::Unknown))
+            }
+        };
+        AssemblyDef {
+            decl: self.decl(def, &syntax.name, origin),
+            array,
+            kind,
+        }
+    }
+
+    fn lower_assembly_args(
+        &mut self,
+        cx: &Cx,
+        component: crate::ids::ComponentId,
+        body: &ast::FieldBlock,
+        name: &str,
+    ) -> Vec<(crate::ids::ParamDefId, RExpr)> {
+        let params: Vec<(String, crate::ids::ParamDefId, bool)> = self
+            .component_items
+            .get(component.index())
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|item| match item {
+                DefId::Param(id) => {
+                    let has_default = matches!(
+                        self.origins.get(&item).map(|o| o.syntax),
+                        Some(Syntax::Param(p)) if p.spec.default().is_some()
+                    );
+                    Some((self.def_name(item), id, has_default))
+                }
+                _ => None,
+            })
+            .collect();
+        let component_name = self.def_name(DefId::Component(component));
+        let mut args: Vec<(crate::ids::ParamDefId, RExpr)> = Vec::new();
+        let mut seen: BTreeMap<String, Span> = BTreeMap::new();
+        for field in &body.fields {
+            let key = field.key.as_str();
+            let Some((_, id, _)) = params.iter().find(|(n, _, _)| n == key) else {
+                self.error_help(
+                    Code::UnknownField,
+                    format!("the component '{component_name}' has no field '{key}'"),
+                    cx.file,
+                    field.key.span(),
+                    format!(
+                        "its params are: {}",
+                        params
+                            .iter()
+                            .map(|(n, _, _)| n.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
+                );
+                continue;
+            };
+            if let Some(first) = seen.get(key) {
+                self.report(
+                    Diagnostic::error(
+                        Code::DuplicateName,
+                        format!("'{key}' is declared twice"),
+                        Label::new(cx.file, field.key.span()),
+                    )
+                    .with_label(Label::with_message(
+                        cx.file,
+                        *first,
+                        "first written here",
+                    )),
+                );
+                continue;
+            }
+            seen.insert(key.to_owned(), field.key.span());
+            let ty = self.symbol_ty(Symbol::Def(DefId::Param(*id)));
+            let value = self.value(cx, &field.value, &Expect::ty(ty).named(key));
+            args.push((*id, value));
+        }
+        for (param, _, has_default) in &params {
+            if !has_default && !seen.contains_key(param) {
+                self.error_help(
+                    Code::MissingField,
+                    format!("assembly '{name}' is missing '{param}'"),
+                    cx.file,
+                    body.span,
+                    format!("the component '{component_name}' needs it: {param}: ..."),
+                );
+            }
+        }
+        args
+    }
+
+    // -----------------------------------------------------------------------
+    // Scenes
+    // -----------------------------------------------------------------------
+
+    pub(super) fn lower_scene(
+        &mut self,
+        cx: &Cx,
+        def: DefId,
+        syntax: &ast::Scene,
+        origin: Origin<'_>,
+    ) -> SceneDef {
+        let title = syntax.title.as_ref().map(|t| self.text(cx, t).literal());
+        let what = format!("scene '{}'", syntax.name.as_str());
+        let field_list: Vec<&ast::Field> = syntax
+            .entries
+            .iter()
+            .filter_map(|e| match e {
+                ast::SceneEntry::Field(f) => Some(f),
+                ast::SceneEntry::Pose { .. } => None,
+            })
+            .collect();
+        let found = self.field_table(cx, field_list, fields::SCENE, &what, syntax.span);
+        let mut poses = Vec::new();
+        for entry in &syntax.entries {
+            if let ast::SceneEntry::Pose {
+                target,
+                value,
+                span,
+            } = entry
+            {
+                let target_expr = path_expr(target);
+                let target = self.value(cx, &target_expr, &Expect::any().named("pose"));
+                if !matches!(target.ty, Ty::Assembly(_) | Ty::Unknown) {
+                    self.error_help(
+                        Code::TypeMismatch,
+                        format!("'pose' needs an assembly, found {}", target.ty),
+                        cx.file,
+                        target.span,
+                        "only assemblies with hinges or slides move",
+                    );
+                }
+                let value = self.value(
+                    cx,
+                    value,
+                    &Expect::any().with_words(&[WordSet::Motion]).named("pose"),
+                );
+                if !matches!(
+                    value.ty,
+                    Ty::Word(WordSet::Motion) | Ty::Angle | Ty::Length | Ty::Unknown
+                ) {
+                    self.error(
+                        Code::TypeMismatch,
+                        format!(
+                            "'pose' needs open, closed, an angle or a length, found {}",
+                            value.ty
+                        ),
+                        cx.file,
+                        value.span,
+                    );
+                }
+                poses.push(PoseDef {
+                    target,
+                    value,
+                    span: *span,
+                });
+            }
+        }
+        let show = found
+            .get("show")
+            .map(|f| self.value(cx, &f.value, &Expect::any().named("show")));
+        let hide = found
+            .get("hide")
+            .map(|f| self.value(cx, &f.value, &Expect::any().named("hide")));
+        let explode = found
+            .get("explode")
+            .map(|f| self.field_value(cx, f, fields::SCENE));
+        let section = found
+            .get("section")
+            .map(|f| self.field_value(cx, f, fields::SCENE));
+        SceneDef {
+            decl: self.decl(def, &syntax.name, origin),
+            title,
+            poses,
+            show,
+            hide,
+            explode,
+            section,
+        }
+    }
+}
+
+pub(crate) fn role_expect(ty: RoleType) -> Expect {
+    match ty {
+        RoleType::Part => Expect::ty(Ty::Part),
+        RoleType::Parts => Expect::ty(Ty::Parts),
+        RoleType::Region => Expect::ty(Ty::Region),
+    }
+}
+
+/// The kinds named in a list expression (tools).
+pub(crate) fn kind_ids(expr: &RExpr) -> Vec<KindId> {
+    match &expr.kind {
+        RExprKind::List(items) => items.iter().flat_map(kind_ids).collect(),
+        RExprKind::Symbol(Symbol::Def(DefId::Kind(id))) => vec![*id],
+        _ => Vec::new(),
+    }
+}
+
+/// The recipes named in a list expression.
+pub(crate) fn recipe_ids(expr: &RExpr) -> Vec<RecipeId> {
+    match &expr.kind {
+        RExprKind::List(items) => items.iter().flat_map(recipe_ids).collect(),
+        RExprKind::Symbol(Symbol::Def(DefId::Recipe(id))) => vec![*id],
+        _ => Vec::new(),
+    }
+}
