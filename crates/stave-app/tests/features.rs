@@ -2,7 +2,7 @@
 
 mod common;
 
-use common::{design, diagnostics, extent, mm, only_error, open, open_files, part, ranges};
+use common::{design, diagnostics, extent, mm, only_error, open, open_files, part, ranges, solved};
 use stave_lang::placement::Direction;
 use stave_model::solved::{Contact, CutKind, Depth, PartOrigin};
 
@@ -280,7 +280,7 @@ assembly tall : Box {
   height: 80mm + gap
 }",
     );
-    let design = design(&opened);
+    let design = solved(&opened);
     // Inside the component, `gap` is the component's (10mm); the argument
     // is evaluated where the assembly is written (1mm).
     assert_eq!(extent(part(design, "small.wall"))[1], (mm("29"), mm("79")));

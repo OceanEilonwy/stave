@@ -1,0 +1,29 @@
+// expect: error[overlap] peg[5] and base overlap
+stave 1
+
+// Six pegs 120mm apart, centre to centre, on a 600mm rail: the last one
+// would end 20mm past the end of the rail.
+
+project "Pitch runs past the end" {
+  units: mm
+}
+
+stock pine_19 { species: pine, form: solid, thickness: 19mm }
+
+part base : pine_19 {
+  length: 600mm
+  width:  100mm
+  place {
+    ground
+  }
+}
+
+part peg[6] : pine_19 {
+  length: 20mm
+  width:  20mm
+  place {
+    against(base.top)
+    spaced(pitch(120mm), from: base.left, to: base.right)
+    flush(base.front)
+  }
+}

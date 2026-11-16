@@ -1,0 +1,43 @@
+// expect: error[no-contact] lap: rail meets none of the parts it should join
+stave 1
+
+// A half lap between a post and a rail that was placed 20mm in front of the
+// post instead of across it: the two parts never touch.
+
+project "Joint whose parts are apart" {
+  units: mm
+}
+
+stock pine_45 { species: pine, form: solid, thickness: 45mm }
+
+part base : pine_45 {
+  length: 600mm
+  width:  300mm
+  place {
+    ground
+  }
+}
+
+part post : pine_45 {
+  length: 400mm
+  width:  45mm
+  place {
+    orient(length: up, width: right)
+    against(base.top)
+    center(base, across)
+    flush(base.back)
+  }
+}
+
+part rail : pine_45 {
+  length: 500mm
+  width:  45mm
+  place {
+    orient(length: right, width: up)
+    flush(base.top, inset: -200mm)
+    center(base, across)
+    against(post.front, gap: 20mm)
+  }
+}
+
+joint lap : half_lap(rail, into: post)

@@ -228,7 +228,7 @@ and `broken/<folder>` for a design in `tests/broken/`.
 | Spacing `ends` and `ends(inset:)` | `app/spec_placement::spaced_ends_puts_the_first_and_last_element_flush_with_the_anchors`, `app/features::spaced_pitch_and_gap` | covered |
 | Spacing `pitch(d)` and `gap(d)` | `app/features::spaced_pitch_and_gap` | covered |
 | With `from` after `to`, elements still run from `from` | `app/features::spaced_pitch_and_gap` | covered |
-| With `pitch` or `gap`, an element past `to` is `overlap` | — | pending: overlap is a layer 4 check |
+| With `pitch` or `gap`, an element past `to` is `overlap` | `broken/pitch_runs_past_end`, `app/fit::a_pitch_that_runs_past_the_end` | covered |
 | `corners(part, inset:)`: exactly the four corner labels | `app/features::corners_place_the_four_labels`, `app/spec_placement::corners_needs_the_four_corner_labels`, `lang/placement::corners_are_two_flush_terms` | covered |
 | `orient`: length and width perpendicular | `app/features::orient_turns_a_part_and_needs_perpendicular_directions`, `lang/placement::orientation_must_be_perpendicular` | covered |
 | `width:` may be left out only for a round part; it then runs right, or back | `app/spec_placement::orient_needs_a_width_unless_the_part_is_round`, `lang/placement::a_round_part_needs_only_its_length` | covered |
@@ -300,7 +300,7 @@ and `broken/<folder>` for a design in `tests/broken/`.
 | A kind with a `Parts` role has exactly two roles and applies to the pairs that meet | `app/spec_joints::a_kind_with_a_parts_role_has_exactly_two_roles`, `app/spec_joints::a_joint_applies_to_the_pairs_that_meet` | covered |
 | A kind with three or more `Part` roles is one connection | `app/spec_joints::a_kind_with_three_part_roles_is_one_connection` | covered |
 | Parts meet when their boxes touch over an area or overlap (butt, cross) | `model/value::boxes_meet_when_they_touch_over_an_area`, `app/features::extend_follows_the_contact_and_fit_comes_from_joints`, `app/spec_joints::extend_on_parts_that_cross_is_a_type_mismatch` | covered |
-| Every listed part must meet a counterpart (`no-contact`) | `app/spec_joints::a_joint_applies_to_the_pairs_that_meet`, `broken/joint_does_not_meet` | partial: unmatched parts are recorded; reporting them is a layer 4 check |
+| Every listed part must meet a counterpart (`no-contact`) | `app/spec_joints::a_joint_applies_to_the_pairs_that_meet`, `broken/joint_does_not_meet`, `broken/joint_parts_apart`, `app/fit::a_joint_whose_parts_never_touch` | covered |
 | Everything in a kind is evaluated per pair | `app/features::joint_kinds_are_evaluated_per_pair`, `app/spec_joints::a_kind_require_is_checked_per_pair_and_reported_at_the_joint` | covered |
 | A failing kind `require` is an error on the joint's line | `app/features::a_failing_kind_require_is_reported_at_the_joint`, `app/spec_joints::a_kind_require_is_checked_per_pair_and_reported_at_the_joint`, `broken/require` | covered |
 
@@ -319,8 +319,8 @@ and `broken/<folder>` for a design in `tests/broken/`.
 | `cut_first:` a role or a list of roles; made parts last | `app/spec_joints::cut_first_orders_the_roles_of_each_pair` | covered |
 | `makes part`: once per pair, named `<joint>.<name>`, placed relative to the joint's parts | `app/spec_joints::a_made_part_is_named_after_its_joint_and_made_once_per_pair` | covered |
 | The made part's place terms (`orient ... of:`, `center(selector)`, `against`/`flush` on a selector) | `app/spec_joints::a_made_part_is_named_after_its_joint_and_made_once_per_pair`, `schema/placement::made_part_terms_and_steps_match_the_grammar` | partial: `orient ... of:` and `center(selector)` are asserted; the other terms only resolve |
-| Parts of a joint fit exactly as drawn after every cut (touch, never pass through) | — | pending: fit and contact are layer 4 (stave-geom cuts and collisions) |
-| A cut the geometry can't make yet is `warning[not-supported]` | — | pending: geometry cuts are a later step |
+| Parts of a joint fit exactly as drawn after every cut (touch, never pass through) | `broken/tenon_too_long`, `broken/shelf_misses_dado`, `app/fit::every_tenon_and_shelf_of_the_examples_sits_in_its_housing`, `geom/collide::within_the_tolerance_is_touching`, `geom/collide::a_rod_in_its_hole_fits_and_a_longer_one_does_not` | covered |
+| A cut the geometry can't make yet is `warning[not-supported]` | `broken/dovetail_not_cut`, `app/fit::a_dovetail_is_drawn_uncut_and_left_out_of_the_fit_check` | covered |
 | Face selectors `end`, `side` and `crossing` | `app/spec_joints::a_cut_selector_is_end_side_or_crossing`, `app/spec_joints::operations_record_their_measurements`, `schema/operations::selectors_and_face_removal_match_the_grammar` | covered |
 | `side` names the face across the width or thickness; `opposite:`, `flip:` | `app/spec_joints::side_names_the_face_across_the_width_or_thickness`, `app/spec_joints::operations_record_their_measurements` | covered |
 | Reference face and edge default to the ones facing up, right or front | `app/pipeline::the_clothing_cabinet_is_where_the_design_says`, `app/spec_declarations::face_side_and_face_edge_are_face_words` | covered |
@@ -335,14 +335,14 @@ and `broken/<folder>` for a design in `tests/broken/`.
 
 | Rule | Tests | Status |
 |---|---|---|
-| A slide checks the gap to its opening (`slide-gap`) | `broken/drawer_does_not_fit` | pending: slide clearance is a layer 4 check |
+| A slide checks the gap to its opening (`slide-gap`) | `broken/drawer_does_not_fit`, `app/fit::a_drawer_too_wide_for_its_slides` | covered |
 | A slide gives its assembly a travel toward the front | `app/pipeline::the_clothing_cabinet_is_where_the_design_says` | covered |
 | A cup hinge bores its cup; it turns about the long edge opposite the mount face nearer `on` | `app/spec_joints::a_cup_hinge_bores_its_cup_in_the_mount_face`, `app/pipeline::the_clothing_cabinet_is_where_the_design_says` | covered |
 | A butt hinge cuts two leaf mortises and turns about its pin edge | `app/features::butt_hinge_leaves_are_housed_in_both_parts_at_the_flush_edge` | covered |
 | A pull bores one screw hole, or two `centres` apart | `app/spec_joints::a_pull_bores_one_hole_or_two_holes_centres_apart` | covered |
 | Fasteners are only used through `uses:`; tools are listed in `tools:` | `app/spec_joints::a_joint_needs_a_joint_kind_and_hardware_a_hardware_kind`, `app/spec_joints::uses_lists_fasteners_per_pair_with_a_count` | covered |
 | Envelopes are a box or a cylinder | `app/spec_joints::an_envelope_is_a_box_or_a_cylinder`, `app/view::a_knob_stands_off_its_face` | covered |
-| An envelope overlapping anything but its own parts is `overlap` | — | pending: overlap is a layer 4 check |
+| An envelope overlapping anything but its own parts is `overlap` | `broken/knob_hits_top`, `app/fit::a_knob_in_the_way_of_another_part`, `app/fit::the_examples_check_clean_with_their_cuts_made` | covered |
 | Models are for looks only; a missing model is drawn as its envelope | `app/spec_joints::a_model_is_for_looks_only` | covered |
 | `align: bounds` mismatch over 0.5mm is `model-mismatch` | — | pending: reading glTF models is a later step |
 
@@ -390,7 +390,7 @@ and `broken/<folder>` for a design in `tests/broken/`.
 | `pose` names an assembly: open, closed, an angle or a length | `app/spec_declarations::poses_are_open_closed_an_angle_or_a_length`, `app/spec_declarations::only_an_assembly_can_be_posed` | covered |
 | A mirrored assembly has the mirror image of its source's motion | `app/pipeline::the_clothing_cabinet_is_where_the_design_says` | covered |
 | Hinges of an assembly share one pivot, slides one direction (`motion`) | — | pending: motion checks are layer 5 |
-| Every scene is collision checked, and every motion closed and fully open | — | pending: motion checks are layer 5 |
+| Every scene is collision checked, and every motion closed and fully open | `broken/scene_pose_clash`, `app/fit::a_lid_that_hits_the_wall_in_a_scene`, `geom/collide::a_turned_door_hits_what_is_in_its_way` | partial: every scene is checked at its poses; sweeping each motion through its travel is a later step (plan.md, steps 3 and 4) |
 
 ### Checks and require
 
@@ -479,17 +479,17 @@ One row per code of the grammar's Diagnostics table and its warnings.
 | `not-in-library` | 2 | covered | `broken/not_in_library` | `app/spec_names::every_kind_of_placed_item_is_not_in_a_library` |
 | `import-cycle` | 2 | covered | `broken/import_cycle` | `modules/memory::cycle_between_two_modules`, `modules/memory::self_import_is_a_cycle` |
 | `unknown-module` | 2 | covered | `broken/unknown_module` | `modules/memory::missing_folder_is_unknown_module`, `modules/memory::unknown_std_module` |
-| `not-supported` | 2, 4 | partial: the error for remote imports and other format versions is covered; the geometry warning comes with geometry cuts | `broken/not_supported` | `modules/memory::remote_source_is_not_supported`, `app/spec_names::a_file_in_another_format_version_is_not_supported` |
+| `not-supported` | 2, 4 | covered | `broken/not_supported`, `broken/dovetail_not_cut` | `modules/memory::remote_source_is_not_supported`, `app/spec_names::a_file_in_another_format_version_is_not_supported`, `app/fit::a_dovetail_is_drawn_uncut_and_left_out_of_the_fit_check` |
 | `ground` | 3 | covered | `broken/ground` | `app/features::exactly_one_part_is_ground`, `app/spec_placement::ground_is_never_inside_a_component` |
 | `axis-not-set` | 3 | covered | `broken/axis_not_set` | `app/features::every_axis_is_set_exactly_once`, `app/spec_placement::the_mount_face_fixes_the_axis_it_is_normal_to` |
 | `axis-set-twice` | 3 | covered | `broken/axis_set_twice` | `app/features::every_axis_is_set_exactly_once`, `app/spec_placement::a_slide_is_fixed_entirely_by_its_base` |
 | `placement-cycle` | 3 | covered | `broken/placement_cycle` | `app/features::parts_placed_against_each_other_are_a_cycle`, `app/spec_placement::a_longer_placement_cycle_lists_every_part` |
 | `fit-undecided` | 3 | covered | `broken/fit_undecided` | `app/features::fit_without_a_joined_part_on_one_side_is_undecided`, `app/spec_placement::fit_against_says_which_side_has_no_joined_part` |
 | `mirror` | 3 | covered | `broken/mirror` | `app/features::a_mirror_without_a_counterpart_is_an_error` |
-| `no-contact` | 4 | partial: reported for a butt hinge whose mount face meets nothing; between a joint's parts it is a layer 4 check, not built yet | `broken/butt_hinge_meets_nothing`, `broken/joint_does_not_meet` | `app/features::a_butt_hinge_needs_its_parts_to_meet_at_the_mount_face` |
-| `overlap` | 4 | pending: fit and collision checks are layer 4 (stave-geom), not built yet | — | — |
-| `slide-gap` | 4 | pending: slide clearance is a layer 4 check, not built yet | `broken/drawer_does_not_fit` | — |
-| `motion` | 5 | pending: motion checks are layer 5, not built yet | — | — |
+| `no-contact` | 4 | covered | `broken/butt_hinge_meets_nothing`, `broken/joint_does_not_meet`, `broken/joint_parts_apart` | `app/features::a_butt_hinge_needs_its_parts_to_meet_at_the_mount_face`, `app/fit::a_joint_whose_parts_never_touch` |
+| `overlap` | 4 | covered | `broken/tenon_too_long`, `broken/shelf_misses_dado`, `broken/knob_hits_top`, `broken/pitch_runs_past_end` | `app/fit::a_tenon_that_bottoms_out_in_its_mortise`, `app/fit::a_shelf_thicker_than_its_dado`, `app/fit::a_knob_in_the_way_of_another_part`, `app/fit::a_pitch_that_runs_past_the_end`, `geom/collide::the_depth_is_the_thinnest_side_of_what_they_share` |
+| `slide-gap` | 4 | covered | `broken/drawer_does_not_fit` | `app/fit::a_drawer_too_wide_for_its_slides` |
+| `motion` | 5 | partial: reported for a scene whose poses make parts collide; sweeping each motion through its travel is a later step | `broken/scene_pose_clash` | `app/fit::a_lid_that_hits_the_wall_in_a_scene` |
 | `require` | 6 | covered | `broken/require` | `app/spec_declarations::a_failing_require_is_reported_on_its_line_with_its_message`, `app/features::a_failing_kind_require_is_reported_at_the_joint` |
 | `require-range` | 6 | pending: checking over a param's whole range needs z3, not built yet | `broken/require_range` | — |
 | `range` | 6 | pending: range checks need z3, not built yet | — | — |

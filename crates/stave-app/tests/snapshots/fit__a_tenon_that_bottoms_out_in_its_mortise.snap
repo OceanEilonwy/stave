@@ -1,0 +1,11 @@
+---
+source: crates/stave-app/tests/fit.rs
+expression: "rendered(\"tests/broken/tenon_too_long\")"
+---
+error[overlap]: rail and leg overlap
+  --> tests/broken/tenon_too_long/project.stave:51:20
+   |
+51 | joint rail_tenon : my_tenon(rail, into: leg)
+   |                    ^^^^^^^^^^^^^^^^^^^^^^^^^
+   = note: they share 3 × 40 × 6.333mm (across × up × deep) at the left end of rail
+   = help: the tenon on rail goes 3mm past the bottom of its mortise in leg; make the mortise 3mm deeper, or the tenon 3mm shorter

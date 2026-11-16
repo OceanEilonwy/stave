@@ -50,7 +50,10 @@ fn every_example_and_standard_module_checks_clean() {
     for folder in folders {
         let opened = stave_app::open(&folder).unwrap();
         assert!(
-            opened.diagnostics.is_empty(),
+            opened
+                .diagnostics
+                .iter()
+                .all(common::is_geometry_not_supported),
             "{}:\n{}",
             folder.display(),
             render_diagnostics(&opened.sources, &opened.diagnostics)

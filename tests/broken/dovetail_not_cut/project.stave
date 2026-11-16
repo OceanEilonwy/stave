@@ -1,0 +1,48 @@
+// expect: warning[not-supported] cutting a dovetail socket and a dovetail tail is not supported yet
+stave 1
+
+// Dovetails are angled cuts, which the geometry can't make yet: both beams
+// are drawn uncut, and the tail that reaches into the other beam is not
+// reported as an overlap.
+
+project "Dovetail not cut" {
+  units: mm
+}
+
+stock pine_90 { species: pine, form: solid, thickness: 90mm, width: 90mm }
+
+part beam_a : pine_90 {
+  length: 500mm
+  place {
+    ground
+  }
+}
+
+part beam_b : pine_90 {
+  length: 500mm
+  place {
+    against(beam_a.right)
+    flush(beam_a.bottom)
+    flush(beam_a.front)
+  }
+}
+
+/// A dovetailed end joint.
+kind end_dovetail : joint {
+  param neck  = piece.width / 3
+  param depth = piece.width / 2
+  param angle = 10deg
+
+  insert:    [push(piece, along: thickness)]
+  cut_first: piece
+  adds:      extend(piece, by: depth)
+
+  cut end(into, facing: piece) {
+    dovetail_socket(neck: neck, depth: depth, angle: angle)
+  }
+  cut end(piece, facing: into) {
+    dovetail_tail(neck: neck, depth: depth, angle: angle)
+  }
+}
+
+joint splice : end_dovetail(beam_b, into: beam_a)

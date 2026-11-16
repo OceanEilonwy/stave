@@ -1,0 +1,11 @@
+---
+source: crates/stave-app/tests/fit.rs
+expression: "rendered(\"tests/broken/pitch_runs_past_end\")"
+---
+error[overlap]: peg[5] and base overlap
+  --> tests/broken/pitch_runs_past_end/project.stave:21:6
+   |
+21 | part peg[6] : pine_19 {
+   |      ^^^
+   = note: with pitch(120mm), peg[5] ends 20mm past base.right
+   = help: use pitch(116mm) or less, or fewer elements

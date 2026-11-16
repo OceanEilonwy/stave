@@ -1,0 +1,48 @@
+// expect: error[overlap] handle and top overlap
+stave 1
+
+// A 50mm knob centred on a front only 40mm high: it reaches 5mm above the
+// front, into the top that overhangs it.
+
+project "Knob hits the top" {
+  units: mm
+}
+
+stock pine_19 { species: pine, form: solid, thickness: 19mm }
+
+part base : pine_19 {
+  length: 400mm
+  width:  300mm
+  place {
+    ground
+  }
+}
+
+part front : pine_19 {
+  length: 400mm
+  width:  40mm
+  place {
+    orient(length: right, width: up)
+    against(base.top)
+    flush(base.left)
+    flush(base.front)
+  }
+}
+
+/// The top overhangs the front by 30mm.
+part top : pine_19 {
+  length: 400mm
+  width:  330mm
+  place {
+    against(front.top)
+    flush(base.left)
+    flush(base.back)
+  }
+}
+
+hardware handle : knob(front, diameter: 50mm, projection: 25mm) {
+  place {
+    center(front, across)
+    center(front, up)
+  }
+}

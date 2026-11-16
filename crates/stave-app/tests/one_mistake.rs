@@ -309,7 +309,10 @@ fn one_mistake_in_any_example_is_exactly_one_error_on_its_line() {
         // The files of this example and of the folders it may import.
         let clean = open(&files, &example);
         assert!(
-            clean.diagnostics.is_empty(),
+            clean
+                .diagnostics
+                .iter()
+                .all(common::is_geometry_not_supported),
             "{} isn't clean to start with",
             example.display()
         );

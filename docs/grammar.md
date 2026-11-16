@@ -1206,12 +1206,12 @@ opposite to the chosen one.
 | Operation | On | Removes |
 |---|---|---|
 | `notch(depth:)` | crossing | the whole footprint, to `depth` (dados, rabbets, grooves, halvings) |
-| `slot(width:, depth:, angle:, from_centre:)` | crossing | a slot `width` wide through the footprint's centre and out past its edges. `angle` (default `0deg`) turns it in the face, measured from the entering part's length axis toward its width axis (or from its width axis toward its thickness axis when its length runs into the face). With `from_centre: true` it starts at the footprint's centre and runs out one side only, in the direction of `angle` |
+| `slot(width:, depth:, angle:, from_centre:)` | crossing | a slot `width` wide through the footprint's centre and out past its edges, to the faces of the part. `angle` (default `0deg`) turns it in the face, measured from the entering part's length axis toward its width axis (or from its width axis toward its thickness axis when its length runs into the face). With `from_centre: true` it starts at the footprint's centre and runs out one side only, in the direction of `angle` |
 | `pocket(width:, thickness:, depth:)` | crossing, end, side | a rectangular mortise, centred; `width` and `thickness` are in the entering part's axes |
 | `tenon(length:, width:, thickness:)` | end | everything around a centred rectangular tenon |
 | `spigot(length:, diameter:)` | end | everything around a centred round tenon |
 | `round(diameter:, flats:, flats_angle:)` | crossing | turns the part round, to `diameter`, over the length where the other part passes (the footprint's extent along this part's length), leaving square sections either side. With `flats:` it keeps two flat faces that distance apart, their normal at `flats_angle` (default `0deg`) from the part's width axis toward its thickness axis |
-| `drill(diameter:, depth:, count:)` | crossing, end, side | `count` round holes (default 1), evenly spaced along the longer side of the footprint or end and centred across it |
+| `drill(diameter:, depth:, count:)` | crossing, end, side | `count` round holes (default 1), evenly spaced along the longer side of the footprint or end (equal gaps, including before the first and after the last, as `spaced(evenly)`) and centred across it |
 | `dovetail_socket(neck:, depth:, angle:)` | end | a dovetail socket, cut through the thickness |
 | `dovetail_tail(neck:, depth:, angle:)` | end | everything around a dovetail tail |
 | `outline(marks: [...], depth:, from_depth:)` | side | the shape marked out with `mark(along:, across:)` points, cut from `from_depth` (default `0mm`, the face itself) to `depth` below the face. With `from_depth` greater than zero the cut is hidden inside the part: a recess for a hidden stub tenon |
@@ -1641,6 +1641,13 @@ shape of their messages are fixed, because tests and AI tools match on them.
 
 Warnings and notes: `shadows-prelude`, `no-recipe`, `not-supported`,
 `model-mismatch`.
+
+In an `overlap` message the parts of one joint pair are named in the
+joint's role order (`rail and leg`), a piece of hardware before a part, and
+otherwise in declaration order. In a `motion` message for a scene, `<open>`
+is the pose: `open`, `open 90deg` (a hinge turned to an angle) or
+`out 200mm` (a slide travelled a length); when two assemblies move, both are
+named (`door_l is open and drawer[top] is out 200mm`).
 
 In messages, an item is written as in the source (`slides[left]`,
 `drawer[top].front`), and a length in the project's units with trailing zeros

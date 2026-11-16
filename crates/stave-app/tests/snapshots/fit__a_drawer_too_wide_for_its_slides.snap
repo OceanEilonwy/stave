@@ -1,0 +1,11 @@
+---
+source: crates/stave-app/tests/fit.rs
+expression: "rendered(\"tests/broken/drawer_does_not_fit\")"
+---
+error[slide-gap]: slides[left]: side[left] is 10mm from the opening, but the slide needs 12.7mm
+  --> tests/broken/drawer_does_not_fit/project.stave:66:32
+   |
+66 | hardware slides[left, right] : side_mount_slide(side[same], in: drawer_opening, length: 400mm)
+   |                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = note: the same line also causes: slides[right]: side[right] is 10mm from the opening, but the slide needs 12.7mm
+   = help: make the drawer 2.7mm narrower on this side, so side[left] is 12.7mm from the side of the opening

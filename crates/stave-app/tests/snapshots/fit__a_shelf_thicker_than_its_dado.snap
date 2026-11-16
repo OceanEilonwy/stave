@@ -1,0 +1,12 @@
+---
+source: crates/stave-app/tests/fit.rs
+expression: "rendered(\"tests/broken/shelf_misses_dado\")"
+---
+error[overlap]: shelf and side_l overlap
+  --> tests/broken/shelf_misses_dado/project.stave:58:21
+   |
+58 | joint shelf_dados : ply_dado(shelf, into: [side_l, side_r])
+   |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = note: they share 6 × 0.5 × 300mm (across × up × deep) at the left end of shelf
+   = note: the same line also causes: shelf and side_r overlap
+   = help: shelf is 1mm thicker than its dado in side_l; make the dado 1mm wider, or shelf 1mm thinner

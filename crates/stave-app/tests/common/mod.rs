@@ -44,6 +44,15 @@ pub fn open(body: &str) -> Opened {
     open_files(&[("project.stave", &format!("{HEADER}\n{body}"))])
 }
 
+/// `true` for the one kind of diagnostic a clean example may have: a
+/// `not-supported` warning for a cut the geometry can't make yet (the
+/// Japanese joints' dovetails, outlines and angled slots).
+pub fn is_geometry_not_supported(diagnostic: &stave_lang::Diagnostic) -> bool {
+    diagnostic.severity == stave_lang::Severity::Warning
+        && diagnostic.code == stave_lang::Code::NotSupported
+        && diagnostic.message.starts_with("cutting ")
+}
+
 /// The diagnostics as `code: message`.
 pub fn diagnostics(opened: &Opened) -> Vec<String> {
     opened
@@ -57,6 +66,26 @@ pub fn diagnostics(opened: &Opened) -> Vec<String> {
 pub fn design(opened: &Opened) -> &SolvedDesign {
     match &opened.design {
         Some(design) if opened.diagnostics.iter().all(|d| !d.is_error()) => design,
+        _ => panic!(
+            "no design:\n{}",
+            render_diagnostics(&opened.sources, &opened.diagnostics)
+        ),
+    }
+}
+
+/// The solved design of a test about placement or joints (layers 2 and
+/// 3), whose made-up parts may well pass through each other or not touch:
+/// errors of the fit checks (`overlap`, `no-contact`, `motion`) are
+/// allowed, any other error panics.
+pub fn solved(opened: &Opened) -> &SolvedDesign {
+    let fit = |d: &stave_lang::Diagnostic| {
+        matches!(
+            d.code,
+            stave_lang::Code::Overlap | stave_lang::Code::NoContact | stave_lang::Code::Motion
+        )
+    };
+    match &opened.design {
+        Some(design) if opened.diagnostics.iter().all(|d| !d.is_error() || fit(d)) => design,
         _ => panic!(
             "no design:\n{}",
             render_diagnostics(&opened.sources, &opened.diagnostics)

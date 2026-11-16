@@ -1,0 +1,82 @@
+// expect: error[motion] lid.panel hits wall when lid is open 90deg
+stave 1
+
+// A box pushed against a wall: its lid turns on hinges at the back edge,
+// so standing it upright swings its thickness into the wall.
+
+project "Lid hits the wall" {
+  units: mm
+}
+
+stock pine_12 { species: pine, form: solid, thickness: 12mm }
+stock pine_19 { species: pine, form: solid, thickness: 19mm }
+
+part base : pine_12 {
+  length: 300mm
+  width:  200mm
+  place {
+    ground
+  }
+}
+
+part back : pine_12 {
+  length: 300mm
+  width:  100mm
+  place {
+    orient(length: right, width: up)
+    against(base.top)
+    flush(base.left)
+    flush(base.back)
+  }
+}
+
+/// The wall the box stands against.
+part wall : pine_19 {
+  length: 600mm
+  width:  500mm
+  place {
+    orient(length: right, width: up)
+    flush(base.bottom)
+    center(base, across)
+    against(back.back)
+  }
+}
+
+region outline = opening(
+  left:   base.left,
+  right:  base.right,
+  bottom: base.bottom,
+  top:    back.top,
+  front:  base.front,
+  back:   base.back,
+)
+
+component Lid {
+  param outline  : Region
+  param hinge_on : Part
+
+  part panel : pine_12 {
+    length: outline.across
+    width:  outline.deep
+    place {
+      against(outline.top)
+      flush(outline.left)
+      flush(outline.front)
+    }
+  }
+
+  hardware hinges[left, right] : butt_hinge(panel, on: hinge_on, face: bottom, length: 30mm) {
+    place {
+      spaced(ends(inset: 30mm), from: panel.left, to: panel.right)
+    }
+  }
+}
+
+assembly lid : Lid {
+  outline:  outline
+  hinge_on: back
+}
+
+scene upright "Lid upright" {
+  pose lid = 90deg
+}

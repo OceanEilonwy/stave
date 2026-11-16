@@ -7,7 +7,7 @@ mod common;
 
 use common::{
     bounds, design, diagnostics, extent, hardware, holds, mm, only_error, open, part, ranges,
-    region, the_diagnostic,
+    region, solved, the_diagnostic,
 };
 use stave_lang::placement::{Direction, Face};
 use stave_model::solved::PartOrigin;
@@ -82,7 +82,7 @@ fn flush_with_inset_moves_into_the_anchors_part() {
         "    flush(base.top, inset: 4mm)\n    flush(base.left, inset: 10mm)\n    flush(base.back, inset: 20mm)",
     ));
     assert_eq!(
-        extent(part(design(&opened), "block")),
+        extent(part(solved(&opened), "block")),
         ranges([("10", "110"), ("-4", "15"), ("230", "280")])
     );
 }
@@ -318,7 +318,7 @@ fn joints_never_position_parts() {
             "    against(base.top, gap: 100mm)\n    against(side.right, gap: 20mm)\n    flush(base.front)"
         )
     ));
-    let design = design(&opened);
+    let design = solved(&opened);
     assert_eq!(extent(part(design, "block"))[0], (mm("39"), mm("139")));
     let block_id = part(design, "block").id;
     assert!(

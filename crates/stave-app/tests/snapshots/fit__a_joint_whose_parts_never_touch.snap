@@ -1,0 +1,11 @@
+---
+source: crates/stave-app/tests/fit.rs
+expression: "rendered(\"tests/broken/joint_parts_apart\")"
+---
+error[no-contact]: lap: rail meets none of the parts it should join
+  --> tests/broken/joint_parts_apart/project.stave:43:13
+   |
+43 | joint lap : half_lap(rail, into: post)
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = note: the same line also causes: lap: post meets none of the parts it should join
+   = help: place rail so it touches a part it joins in 'lap', or take it out of the joint

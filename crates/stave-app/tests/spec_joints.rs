@@ -7,7 +7,7 @@
 mod common;
 
 use common::{
-    body_line, design, diagnostics, extent, holds, joint, mm, only_error, open, part,
+    body_line, design, diagnostics, extent, holds, joint, mm, only_error, open, part, solved,
     the_diagnostic,
 };
 use stave_lang::placement::PartAxis;
@@ -140,7 +140,7 @@ fn every_joint_accepts_glue_and_methods() {
     let opened = with_parts(
         "joint a : dado(shelf, into: side)\njoint b : dado(shelf, into: side, glue: false, methods: [notch_by_hand])",
     );
-    let design = design(&opened);
+    let design = solved(&opened);
     assert!(joint(design, "a").glue, "glue defaults to true");
     assert!(joint(design, "a").methods.is_empty());
     assert!(!joint(design, "b").glue);
@@ -286,7 +286,7 @@ part cleat : pine_19 {
 }
 joint housings : dado(shelf[*], into: [side[*], cleat])",
     );
-    let design = design(&opened);
+    let design = solved(&opened);
     let housings = joint(design, "housings");
     assert_eq!(housings.pairs.len(), 4);
     assert!(
@@ -329,7 +329,7 @@ fn extensions_of_two_joints_at_the_same_end_add_up() {
     let opened = with_parts(
         "kind k : joint {\n  adds: extend(piece, by: 3mm)\n}\njoint one : k(shelf, into: side)\njoint two : k(shelf, into: side)",
     );
-    let shelf = part(design(&opened), "shelf");
+    let shelf = part(solved(&opened), "shelf");
     assert_eq!(shelf.cut.length, mm("206"));
     assert_eq!(shelf.drawn_offset.length, mm("6"));
 }
@@ -339,7 +339,7 @@ fn adds_takes_a_list_of_extends() {
     let opened = with_parts(
         "kind k : joint {\n  adds: [extend(piece, by: 3mm), extend(into, by: 2mm)]\n}\njoint j : k(shelf, into: side)",
     );
-    let design = design(&opened);
+    let design = solved(&opened);
     assert_eq!(part(design, "shelf").cut.length, mm("203"));
     // The side butts against the shelf's end with its face: it grows in
     // its thickness, toward the shelf.
@@ -485,7 +485,7 @@ kind keyed : joint {
 }
 joint keys : keyed(rail[*], into: post)",
     );
-    let design = design(&opened);
+    let design = solved(&opened);
     let made: Vec<&str> = design.made_parts().map(|p| p.name.as_str()).collect();
     assert_eq!(made.len(), 2, "{made:?}");
     assert!(
@@ -748,7 +748,7 @@ fn a_pull_bores_one_hole_or_two_holes_centres_apart() {
     let opened = open(&format!(
         "{front}\nhardware a : knob(front) {place}\nhardware b : bar_pull(front, centres: 96mm) {place}"
     ));
-    let cuts = &part(design(&opened), "front").cuts;
+    let cuts = &part(solved(&opened), "front").cuts;
     let holes: Vec<Option<stave_lang::units::Length>> = cuts
         .iter()
         .filter_map(|c| match (&c.place, &c.kind) {
