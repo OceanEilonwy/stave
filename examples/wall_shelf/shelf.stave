@@ -1,0 +1,95 @@
+stave 1
+
+// A wall shelf: one board on two L-shaped brackets. This is the smallest
+// complete Stave project, so every line is explained.
+//
+// A .stave file describes what you want to build, not where things are.
+// You never type coordinates. You say "this sits on that" and Stave works
+// out the positions, the cut sizes and the joints.
+//
+// Try it:
+//   stave check examples/wall_shelf      look for mistakes
+//   stave view  examples/wall_shelf      see it in 3D
+//   stave dump  examples/wall_shelf      print every part's size and position
+
+// Every project starts with a project block. A folder is a project, and
+// every .stave file in the folder shares the names declared here.
+project "Wall shelf" {
+  goal:  "A pine shelf on two brackets, screwed to the wall"
+  units: mm                            // sizes are printed in millimetres
+}
+
+// ---- parameters: the numbers you are most likely to change ----
+// "within" gives the range the design must keep working for.
+param shelf_length = 600mm within 400mm..900mm
+param shelf_depth  = 150mm within 120mm..200mm
+
+// A let is a named value: write a number once and use its name everywhere.
+let bracket_inset = 60mm               // from each end of the shelf to the outside of a bracket
+let drop          = 200mm              // how far the brackets reach down the wall
+
+// ---- stock: the wood you buy ----
+// A stock says what the boards are made of and how thick they are. Parts are
+// cut from a stock.
+stock pine_19 { species: pine, form: solid, thickness: 19mm }
+// Strips sold 19mm thick and 40mm wide: parts cut from it are 40mm wide.
+stock pine_strip { species: pine, form: solid, thickness: 19mm, width: 40mm }
+
+// ---- parts ----
+
+// The shelf board. Exactly one part in a project is placed with "ground":
+// it is where Stave starts, and everything else is placed from it.
+part shelf : pine_19 {
+  length: shelf_length                 // along the grain, left to right
+  width:  shelf_depth                  // front to back
+  place {
+    ground                             // a board with no orient() lies flat
+  }
+}
+
+// Each bracket is two strips: an arm under the shelf and an upright that is
+// screwed to the wall. "[left, right]" makes two parts from one declaration,
+// called arm[left] and arm[right].
+part arm[left, right] : pine_strip {
+  length: shelf_depth - 10mm           // a little short of the front edge, so it hides
+  place {
+    // Stand the strip on edge: its length runs from front to back and its
+    // width runs up. Its thickness then runs left to right.
+    orient(length: back, width: up)
+    // Each placement line fixes one direction (up, across or deep).
+    against(shelf.bottom)              // up: its top touches the underside of the shelf
+    flush(shelf.back)                  // deep: its back lines up with the shelf's back (the wall)
+    // across: the first arm bracket_inset in from the left end, the last
+    // one bracket_inset in from the right end.
+    spaced(ends(inset: bracket_inset), from: shelf.left, to: shelf.right)
+  }
+}
+
+// The uprights run down the wall from the back of the arms. upright[left]
+// goes with arm[left]: inside an array, [same] means the element with the
+// same label.
+part upright[left, right] : pine_strip {
+  length: drop
+  note:   "Drill two countersunk holes through the upright and screw it to a wall stud"
+  place {
+    orient(length: up, width: back)
+    flush(arm[same].top)               // up: level with the top of its arm
+    flush(arm[same].back)              // deep: against the wall
+    flush(arm[same].left)              // across: in line with its arm
+  }
+}
+
+// ---- joints ----
+// Where an arm and its upright cross, each is cut away to half its
+// thickness so they lock together flush: a half lap. One joint per bracket.
+joint corner[left, right] : half_lap(upright[same], into: arm[same])
+
+// Two screws down through the shelf into the top edge of each arm. The joint
+// drills the clearance holes in the shelf and the pilot holes in the arms;
+// they show up on each part's work card.
+joint shelf_screws : screw(shelf, into: arm[*], length: 40mm, count: 2, glue: false)
+
+// ---- checks ----
+// A require is a rule that must stay true for every allowed parameter
+// value. If you made the shelf too deep for its brackets, Stave would say so.
+require arm_supports : arm[left].length >= shelf_depth * 3 / 4 "the brackets should hold up most of the shelf's depth"

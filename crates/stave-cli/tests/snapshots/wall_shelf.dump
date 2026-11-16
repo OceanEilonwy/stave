@@ -1,0 +1,49 @@
+Wall shelf
+units: mm, resolution: 0.5mm
+all lengths in mm; boxes are drawn boxes as across, up, deep ranges from the ground part's left-bottom-front corner
+
+PARTS (5)
+part                         stock          cut L x W x T              across               up                   deep                 length/width/thickness
+shelf                        pine_19        600 x 150 x 19             0..600               0..19                0..150               right/back/up
+    cut drill 2 x diameter 4.5 depth through on thickness start: where arm[left] meets it, local 60..79 x 10..150 x 0..0
+    cut drill 2 x diameter 4.5 depth through on thickness start: where arm[right] meets it, local 521..540 x 10..150 x 0..0
+arm[left]                    pine_strip     140 x 40 x 19              60..79               -40..0               10..150              back/up/right
+    cut notch depth 9.5 on thickness end: where upright[left] meets it, local 100..140 x 0..40 x 0..19
+    cut drill 2 x diameter 3 depth 21 on width end: where shelf meets it, local 0..140 x 40..40 x 0..19
+arm[right]                   pine_strip     140 x 40 x 19              521..540             -40..0               10..150              back/up/right
+    cut notch depth 9.5 on thickness end: where upright[right] meets it, local 100..140 x 0..40 x 0..19
+    cut drill 2 x diameter 3 depth 21 on width end: where shelf meets it, local 0..140 x 40..40 x 0..19
+upright[left]                pine_strip     200 x 40 x 19              60..79               -200..0              110..150             up/back/right
+    cut notch depth 9.5 on thickness start: where arm[left] meets it, local 160..200 x 0..40 x 0..19
+upright[right]               pine_strip     200 x 40 x 19              521..540             -200..0              110..150             up/back/right
+    cut notch depth 9.5 on thickness start: where arm[right] meets it, local 160..200 x 0..40 x 0..19
+
+HARDWARE (0)
+
+JOINTS (3)
+corner[left]                 half_lap
+    piece: upright[left], into: arm[left] (cross)
+corner[right]                half_lap
+    piece: upright[right], into: arm[right] (cross)
+shelf_screws                 screw, no glue
+    piece: shelf, into: arm[left] (butt across up)
+    piece: shelf, into: arm[right] (butt across up)
+
+FASTENERS
+shelf_screws                 4 x wood_screw (4 x 40)
+
+REGIONS (0)
+
+ASSEMBLIES (0)
+
+REQUIRES (7)
+arm_supports                                 holds
+corner[left].same_thickness                  holds
+corner[right].same_thickness                 holds
+shelf_screws.stays_inside                    holds
+shelf_screws.bites                           holds
+shelf_screws.stays_inside                    holds
+shelf_screws.bites                           holds
+
+SCENES (1)
+rest                         As built
