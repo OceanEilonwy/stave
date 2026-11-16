@@ -259,6 +259,34 @@ mod tests {
     }
 
     #[test]
+    fn features_and_measurements_never_share_a_name() {
+        let table = between(
+            GRAMMAR,
+            "| Operation | Features | Measurements |\n|---|---|---|\n",
+            "\n\n",
+        );
+        let words = |cell: &str| -> Vec<String> {
+            cell.split(',')
+                .map(|word| word.trim().trim_matches('`').to_owned())
+                .filter(|word| !word.is_empty())
+                .collect()
+        };
+        for row in table.lines() {
+            let cells: Vec<_> = row.split('|').map(str::trim).collect();
+            let [_, operation, features, measurements, _] = cells.as_slice() else {
+                panic!("malformed features row: {row}");
+            };
+            let measurements = words(measurements);
+            for feature in words(features) {
+                assert!(
+                    !measurements.contains(&feature),
+                    "{operation}: '{feature}' is both a feature and a measurement"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn placement_words_match_the_grammar() {
         let axes = between(
             GRAMMAR,

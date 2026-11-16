@@ -1277,7 +1277,10 @@ to another recipe if the order can't be satisfied.
 ### Features
 
 Each operation names the parts of its geometry (features) and its measurements
-that a recipe's steps can refer to:
+that a recipe's steps can refer to. A feature is a place on the part (a step
+marks, saws or pares it); a measurement is a number (a step sets a tool to it).
+**An operation's features and measurements never share a name**, so in a step
+like `gauge(flats, on: flat_faces)` every word has one meaning:
 
 | Operation | Features | Measurements |
 |---|---|---|
