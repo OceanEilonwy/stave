@@ -961,3 +961,306 @@ fn a_misspelt_field_is_one_error_not_two() {
         "a slide kind has no field 'lenght'",
     );
 }
+
+// ---------------------------------------------------------------------------
+// Butt hinges
+// ---------------------------------------------------------------------------
+
+/// A box back standing at the back of the base, and a lid on it hinged with
+/// two butt hinges housed in the lid's underside and the back's top edge.
+const BUTT_HINGED_LID: &str = "
+part back : pine_12 {
+  length: 600mm
+  width:  100mm
+  place {
+    orient(length: right, width: up)
+    against(base.top)
+    flush(base.left)
+    flush(base.back)
+  }
+}
+component Lid {
+  param on    : Part
+  param under : Part
+  part panel : pine_12 {
+    length: under.length
+    width:  under.width
+    place {
+      against(on.top)
+      flush(under.left)
+      flush(under.front)
+    }
+  }
+  hardware hinge[left, right] : butt_hinge(panel, on: on, face: bottom) {
+    place {
+      spaced(ends(inset: 50mm), from: panel.left, to: panel.right)
+    }
+  }
+}
+assembly lid : Lid {
+  on:    back
+  under: base
+}
+";
+
+#[test]
+fn butt_hinge_leaves_are_housed_in_both_parts_at_the_flush_edge() {
+    let opened = open(BUTT_HINGED_LID);
+    let design = design(&opened);
+    // The back is 12 thick at deep 288..300; the lid sits on it at 119.
+    // A 40mm hinge has 12mm leaves, 1.5mm thick; the lid's back edge is
+    // flush with the back's back face, so the pin is there.
+    let hinge = design
+        .hardware
+        .iter()
+        .find(|h| h.name == "lid.hinge[left]")
+        .unwrap();
+    assert!(hinge.is_butt_hinge());
+    let bounds = |b: &stave_model::solved::WorldBox| {
+        [
+            (b.min().across, b.max().across),
+            (b.min().up, b.max().up),
+            (b.min().deep, b.max().deep),
+        ]
+    };
+    assert_eq!(
+        bounds(&hinge.bounds),
+        ranges([("50", "90"), ("119", "120.5"), ("288", "300")])
+    );
+    let fixed = hinge.fixed.as_ref().unwrap();
+    assert_eq!(
+        bounds(&fixed.bounds),
+        ranges([("50", "90"), ("117.5", "119"), ("288", "300")])
+    );
+    let back = part(design, "back");
+    assert!(
+        matches!(hinge.data, stave_model::solved::HardwareData::ButtHinge { on, .. } if on == back.id)
+    );
+    // A mortise as deep as a leaf in each part, where the leaf lies.
+    let recesses = |name: &str| -> Vec<(stave_model::solved::LocalBox, Depth)> {
+        part(design, name)
+            .cuts
+            .iter()
+            .filter_map(|cut| match (&cut.place, &cut.kind) {
+                (stave_model::solved::CutPlace::Recess { footprint }, CutKind::Notch { depth }) => {
+                    Some((*footprint, *depth))
+                }
+                _ => None,
+            })
+            .collect()
+    };
+    let in_back = recesses("back");
+    assert_eq!(in_back.len(), 2);
+    let (footprint, depth) = in_back[0];
+    assert_eq!(depth, Depth::Length(mm("1.5")));
+    // The back's frame: length right, width up from 19, thickness back.
+    assert_eq!(
+        (footprint.min.length, footprint.max.length),
+        (mm("50"), mm("90"))
+    );
+    assert_eq!(
+        (footprint.min.width, footprint.max.width),
+        (mm("98.5"), mm("100"))
+    );
+    assert_eq!(recesses("lid.panel").len(), 2);
+    // The lid turns about its pin edge, lifting its front.
+    let lid = design.assemblies.iter().find(|a| a.name == "lid").unwrap();
+    let Some(stave_model::solved::Motion::Turn { pivot, .. }) = lid.motion else {
+        panic!("the lid has no turn: {:?}", lid.motion);
+    };
+    assert_eq!(
+        (pivot.through.up, pivot.through.deep),
+        (mm("119"), mm("300"))
+    );
+    assert_eq!(pivot.free_side, Direction::Front);
+    assert_eq!(pivot.swing_toward, Direction::Up);
+}
+
+#[test]
+fn a_mirrored_butt_hinged_door_cuts_its_mortise_in_the_other_side() {
+    let opened = open(
+        "part wall[left, right] : pine_19 {\n  length: 200mm\n  width: 300mm\n  place {\n    orient(length: up, width: back)\n    against(base.top)\n    spaced(ends, from: base.left, to: base.right)\n    flush(base.front)\n  }\n}
+component Flap {
+  param hinge_side : Part
+  part leaf : pine_12 {
+    length: 200mm
+    width:  100mm
+    place {
+      orient(length: up, width: right)
+      against(base.top)
+      against(hinge_side.right)
+      flush(base.front)
+    }
+  }
+  hardware hinge : butt_hinge(leaf, on: hinge_side, face: left) {
+    place {
+      flush(leaf.bottom, inset: 20mm)
+    }
+  }
+}
+assembly flap_l : Flap {
+  hinge_side: wall[left]
+}
+assembly flap_r = mirror(flap_l, about: mid(base, across))",
+    );
+    let design = design(&opened);
+    let recess = |name: &str| {
+        part(design, name)
+            .cuts
+            .iter()
+            .find_map(|cut| match cut.place {
+                stave_model::solved::CutPlace::Recess { footprint } => Some(footprint),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("{name} has no recess"))
+    };
+    // The door's edge is flush with the wall's front, so the pin is at the
+    // front and the leaves reach 12mm back. The wall's thickness runs right,
+    // so the left wall's mortise is at its right face and the right wall's
+    // at its left face.
+    let left = recess("wall[left]");
+    assert_eq!(
+        (left.min.thickness, left.max.thickness),
+        (mm("17.5"), mm("19"))
+    );
+    assert_eq!((left.min.width, left.max.width), (mm("0"), mm("12")));
+    let right = recess("wall[right]");
+    assert_eq!(
+        (right.min.thickness, right.max.thickness),
+        (mm("0"), mm("1.5"))
+    );
+    assert_eq!((right.min.length, right.max.length), (mm("20"), mm("60")));
+    let mirrored = design
+        .hardware
+        .iter()
+        .find(|h| h.name == "flap_r.hinge")
+        .unwrap();
+    let wall_right = part(design, "wall[right]").id;
+    assert!(
+        matches!(mirrored.data, stave_model::solved::HardwareData::ButtHinge { on, .. } if on == wall_right)
+    );
+    recess("flap_r.leaf");
+}
+
+#[test]
+fn a_hinge_kind_is_a_cup_hinge_or_a_butt_hinge() {
+    let neither = open("kind flap_hinge : hinge {\n  opening_angle: 90deg\n}");
+    only_error(
+        &neither,
+        "missing-field",
+        "kind 'flap_hinge' is missing 'leaf'",
+    );
+    let both = open(
+        "kind odd_hinge : hinge {\n  opening_angle: 90deg\n  cup_diameter:  35mm\n  leaf:          box(length: 40mm, width: 12mm, thickness: 1.5mm)\n}",
+    );
+    only_error(
+        &both,
+        "type-mismatch",
+        "kind 'odd_hinge' has both a leaf and a cup; a hinge is a cup hinge or a butt hinge",
+    );
+    let half_cup = open(
+        "kind odd_hinge : hinge {\n  opening_angle: 90deg\n  cup_diameter:  35mm\n  cup_depth:     13mm\n  cup_inset:     5mm\n  plate_setback: 37mm\n}",
+    );
+    only_error(
+        &half_cup,
+        "missing-field",
+        "kind 'odd_hinge' is missing 'plate'",
+    );
+}
+
+#[test]
+fn a_butt_hinge_needs_its_parts_to_meet_at_the_mount_face() {
+    // face: top houses the leaf in the lid's top, which touches nothing.
+    let opened = open(&BUTT_HINGED_LID.replace("face: bottom", "face: top"));
+    assert_eq!(
+        diagnostics(&opened),
+        [
+            "no-contact: lid.hinge[left]: lid.panel meets none of the parts it should join",
+            "no-contact: lid.hinge[right]: lid.panel meets none of the parts it should join",
+        ]
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Built-in functions
+// ---------------------------------------------------------------------------
+
+#[test]
+fn extent_along_another_parts_axis() {
+    // A shelf screwed down into the top edge of a 120mm bracket: the screw
+    // bites into the bracket's width, not its thickness.
+    let opened = open(
+        "part bracket : pine_19 {
+  length: 300mm
+  width:  120mm
+  place {
+    orient(length: back, width: up)
+    against(base.bottom)
+    flush(base.left)
+    flush(base.front)
+  }
+}
+let bite = extent(bracket, thickness, of: base)
+require deep_enough : bite == 120mm \"the bracket is 120mm tall under the base\"
+joint screws : screw(base, into: bracket, length: 50mm)",
+    );
+    let design = design(&opened);
+    assert!(
+        design.requires.iter().all(|r| r.holds),
+        "{:?}",
+        design.requires
+    );
+    // Into a face, the same screw would come out the other side.
+    let flat = open(
+        "part cleat : pine_19 {
+  length: 300mm
+  width:  60mm
+  place {
+    against(base.bottom)
+    flush(base.left)
+    flush(base.front)
+  }
+}
+joint screws : screw(base, into: cleat, length: 50mm)",
+    );
+    assert_eq!(
+        diagnostics(&flat),
+        ["require: 'stays_inside' fails: the screw would come out the other side"]
+    );
+}
+
+#[test]
+fn between_parts_that_overlap_says_so() {
+    let opened = open(
+        "part block : pine_19 {
+  length: 100mm
+  width:  50mm
+  place {
+    center(base, up)
+    flush(base.left)
+    flush(base.front)
+  }
+}
+let gap = between(base, block)",
+    );
+    only_error(
+        &opened,
+        "type-mismatch",
+        "'between' needs parts apart along exactly one axis, but base and block touch or overlap",
+    );
+}
+
+#[test]
+fn hardware_named_after_its_kind_is_explained() {
+    let opened = open(&format!(
+        "{}\nhardware knob : knob(block) {{\n  place {{\n    center(block, across)\n    center(block, up)\n  }}\n}}",
+        block(
+            "    orient(length: right, width: up)\n    against(base.top)\n    flush(base.left)\n    flush(base.front)"
+        )
+    ));
+    only_error(
+        &opened,
+        "type-mismatch",
+        "'knob' here is this hardware itself, not a kind",
+    );
+}

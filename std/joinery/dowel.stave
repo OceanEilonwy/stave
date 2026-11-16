@@ -10,7 +10,7 @@ kind dowel : joint {
   /// Depth of the hole in each part; a pin is twice this long.
   param depth = 15mm
   require pin_fits_piece : diameter <= piece.thickness / 2 "the dowel is too thick for this board"
-  require hole_stops     : depth <= into.thickness - 3mm "the dowel hole would come through the other side"
+  require hole_stops     : depth <= extent(into, length, of: piece) - 3mm "the dowel hole would come through the other side"
 
   insert: [push(piece, along: length)]
   uses:   dowel_pin(diameter: diameter, length: 2 * depth, count: count)

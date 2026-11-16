@@ -6,7 +6,7 @@ use std::path::Path;
 
 use stave_lang::units::Length;
 use stave_lang::{Diagnostic, Severity, SourceMap};
-use stave_model::solved::{Envelope, HardwareBase, Part, SolvedDesign};
+use stave_model::solved::{Envelope, HardwareBase, HardwareData, Part, SolvedDesign};
 pub use stave_scene::{BuildOptions, Extent, Item, SceneGraph};
 
 use crate::Opened;
@@ -168,14 +168,22 @@ pub fn describe(design: &SolvedDesign, item: Item) -> Option<Description> {
                     width,
                     thickness,
                 } => format!("box {}", size_text(length, width, thickness)),
+                // A hinge's cup is sunk into the door; everything else
+                // stands off its face.
                 Envelope::Cylinder { diameter, length } => format!(
-                    "cylinder {} mm across, {} mm long",
+                    "cylinder {} mm across, {} mm {}",
                     millimetres(diameter),
-                    millimetres(length)
+                    millimetres(length),
+                    if hardware.base == HardwareBase::Hinge {
+                        "deep"
+                    } else {
+                        "long"
+                    }
                 ),
             };
             let (moving_label, fixed_label) = match hardware.base {
                 HardwareBase::Slide => ("Drawer member", "Cabinet member"),
+                HardwareBase::Hinge if hardware.is_butt_hinge() => ("Leaf", "Fixed leaf"),
                 HardwareBase::Hinge => ("Cup", "Plate"),
                 HardwareBase::Pull => ("Envelope", "Fixed member"),
             };
@@ -202,7 +210,20 @@ pub fn describe(design: &SolvedDesign, item: Item) -> Option<Description> {
                 .into_iter()
                 .chain(hardware.fixed.as_ref().map(|member| Row {
                     label: fixed_label,
-                    value: format!("{}, fixed to the carcass", shape(&member.envelope)),
+                    value: if hardware.is_butt_hinge() {
+                        format!(
+                            "{}, housed in {}",
+                            shape(&member.envelope),
+                            match hardware.data {
+                                HardwareData::ButtHinge { on, .. } => design
+                                    .part(on)
+                                    .map_or_else(|| "?".to_owned(), |p| p.name.clone()),
+                                _ => "?".to_owned(),
+                            }
+                        )
+                    } else {
+                        format!("{}, fixed to the carcass", shape(&member.envelope))
+                    },
                 }))
                 .chain([Row {
                     label: "Assembly",

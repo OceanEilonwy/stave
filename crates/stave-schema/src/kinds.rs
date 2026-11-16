@@ -156,6 +156,23 @@ const SLIDE: BaseSpec = BaseSpec {
     open_axes: Some(OpenAxes::None),
 };
 
+/// The entries of a cup hinge: required when the kind has any of them.
+const CUP_HINGE: Requirement = Requirement::Conditional("a cup hinge");
+/// The entry of a butt hinge.
+const BUTT_HINGE: Requirement = Requirement::Conditional("a butt hinge");
+
+/// The entries only a cup hinge has; a hinge kind has these or [`BUTT_HINGE_ENTRIES`].
+pub const CUP_HINGE_ENTRIES: [&str; 5] = [
+    "cup_diameter",
+    "cup_depth",
+    "cup_inset",
+    "plate_setback",
+    "plate",
+];
+
+/// The entries only a butt hinge has.
+pub const BUTT_HINGE_ENTRIES: [&str; 1] = ["leaf"];
+
 const HINGE: BaseSpec = BaseSpec {
     base: BaseKind::Hinge,
     roles: &[
@@ -170,11 +187,12 @@ const HINGE: BaseSpec = BaseSpec {
     ],
     required: &[
         entry("opening_angle", Type(TypeName::Angle), Required),
-        entry("cup_diameter", LENGTH, Required),
-        entry("cup_depth", LENGTH, Required),
-        entry("cup_inset", LENGTH, Required),
-        entry("plate_setback", LENGTH, Required),
-        entry("plate", Type(TypeName::Envelope), Required),
+        entry("cup_diameter", LENGTH, CUP_HINGE),
+        entry("cup_depth", LENGTH, CUP_HINGE),
+        entry("cup_inset", LENGTH, CUP_HINGE),
+        entry("plate_setback", LENGTH, CUP_HINGE),
+        entry("plate", Type(TypeName::Envelope), CUP_HINGE),
+        entry("leaf", Type(TypeName::Envelope), BUTT_HINGE),
     ],
     optional: &HARDWARE_OPTIONAL,
     mount: Some(MountRule::Face(Face::Back)),

@@ -11,7 +11,8 @@ kind mortise_tenon : joint {
   param length = 30mm
   /// Extra depth in the mortise so the shoulders close before the tenon bottoms out.
   param relief = 2mm
-  require has_width : piece.width > 2 * shoulder "the shoulders leave no tenon"
+  require has_width     : piece.width > 2 * shoulder "the shoulders leave no tenon"
+  require mortise_stops : length + relief <= extent(into, length, of: piece) - 3mm "the mortise would come through the other side"
 
   insert:    [push(piece, along: length)]
   cut_first: into                            // cut the mortise first, then fit the tenon to it

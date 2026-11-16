@@ -1157,6 +1157,16 @@ impl Resolver<'_> {
             if builtin == Builtin::Model && parameter.name == "align" {
                 expect = Expect::any().with_words(&[WordSet::Bounds]).named("align");
             }
+            // `extent(into, thickness, of: piece)`: with `of:`, the axis is
+            // one of that part's own axes.
+            if builtin == Builtin::Extent
+                && parameter.name == "axis"
+                && args
+                    .iter()
+                    .any(|a| a.name.as_ref().is_some_and(|n| n.as_str() == "of"))
+            {
+                expect = Expect::ty(Ty::Word(WordSet::PartAxis)).named("axis");
+            }
             let value = match parameter.ty {
                 ValueType::Items => {
                     let value = self.value(cx, &arg.value, &Expect::any().named(parameter.name));

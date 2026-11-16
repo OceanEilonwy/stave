@@ -11,7 +11,8 @@ use crate::words::WordSet;
 pub enum Builtin {
     /// `between(a, b)`: a length.
     Between,
-    /// `extent(items, axis)`: a length.
+    /// `extent(items, axis)`: a length. With `of: part`, the axis is one
+    /// of that part's own axes (`length`, `width`, `thickness`).
     Extent,
     /// `mid(item, axis)`: an anchor.
     Mid,
@@ -147,7 +148,11 @@ impl Builtin {
                 LIST
             }
             Builtin::Extent => {
-                const LIST: &[Parameter] = &[positional("items", ITEM), positional("axis", AXIS)];
+                const LIST: &[Parameter] = &[
+                    positional("items", ITEM),
+                    positional("axis", AXIS),
+                    named("of", Type(TypeName::Part), false),
+                ];
                 LIST
             }
             Builtin::Mid => {

@@ -86,6 +86,9 @@ struct GpuMesh {
     indices: wgpu::Buffer,
     index_count: u32,
     edges: Option<(wgpu::Buffer, u32)>,
+    /// Hardware: drawn over wood it is flush with or sunk into (a hinge
+    /// cup or leaf, until cuts are drawn).
+    metal: bool,
 }
 
 struct Target {
@@ -112,6 +115,9 @@ pub struct Renderer {
     shadow_group: wgpu::BindGroup,
     shadow_view: wgpu::TextureView,
     mesh_pipeline: wgpu::RenderPipeline,
+    /// Like `mesh_pipeline` without the depth bias that pushes wood back, so
+    /// hardware wins where it lies in the same plane as wood.
+    metal_pipeline: wgpu::RenderPipeline,
     edge_pipeline: wgpu::RenderPipeline,
     floor_pipeline: wgpu::RenderPipeline,
     shadow_pipeline: wgpu::RenderPipeline,
@@ -324,39 +330,50 @@ impl Renderer {
         })];
         let mesh_buffers = [Some(vertex_layout())];
         let edge_buffers = [Some(edge_layout())];
-        let mesh_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("meshes"),
-            layout: Some(&main_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("mesh_vertex"),
-                compilation_options: Default::default(),
-                buffers: &mesh_buffers,
-            },
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                front_face: wgpu::FrontFace::Ccw,
-                cull_mode: Some(wgpu::Face::Back),
-                ..Default::default()
-            },
-            depth_stencil: Some(depth(
-                true,
-                wgpu::DepthBiasState {
-                    constant: 2,
-                    slope_scale: 1.0,
-                    clamp: 0.0,
+        let mesh_pipeline_with = |label: &'static str, bias: wgpu::DepthBiasState| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(label),
+                layout: Some(&main_layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some("mesh_vertex"),
+                    compilation_options: Default::default(),
+                    buffers: &mesh_buffers,
                 },
-            )),
-            multisample,
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("mesh_fragment"),
-                compilation_options: Default::default(),
-                targets: &opaque,
-            }),
-            multiview_mask: None,
-            cache: None,
-        });
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    front_face: wgpu::FrontFace::Ccw,
+                    cull_mode: Some(wgpu::Face::Back),
+                    ..Default::default()
+                },
+                depth_stencil: Some(depth(true, bias)),
+                multisample,
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some("mesh_fragment"),
+                    compilation_options: Default::default(),
+                    targets: &opaque,
+                }),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+        let metal_pipeline = mesh_pipeline_with(
+            "hardware",
+            wgpu::DepthBiasState {
+                constant: -2,
+                slope_scale: -1.0,
+                clamp: 0.0,
+            },
+        );
+        let mesh_pipeline = mesh_pipeline_with(
+            "meshes",
+            wgpu::DepthBiasState {
+                constant: 2,
+                slope_scale: 1.0,
+                clamp: 0.0,
+            },
+        );
         let edge_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("outlines"),
             layout: Some(&main_layout),
@@ -441,6 +458,7 @@ impl Renderer {
             shadow_group,
             shadow_view,
             mesh_pipeline,
+            metal_pipeline,
             edge_pipeline,
             floor_pipeline,
             shadow_pipeline,
@@ -492,6 +510,7 @@ impl Renderer {
                     indices,
                     index_count: u32::try_from(mesh.indices.len()).unwrap_or(u32::MAX),
                     edges,
+                    metal: matches!(node.material, Material::Metal),
                 }
             })
             .collect();
@@ -643,11 +662,13 @@ impl Renderer {
             });
             pass.set_bind_group(0, &self.scene_group, &[]);
             pass.set_bind_group(1, &self.shadow_group, &[]);
-            pass.set_pipeline(&self.mesh_pipeline);
-            for (index, mesh) in &visible {
-                pass.set_vertex_buffer(0, mesh.vertices.slice(..));
-                pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
-                pass.draw_indexed(0..mesh.index_count, 0, *index..*index + 1);
+            for (pipeline, metal) in [(&self.mesh_pipeline, false), (&self.metal_pipeline, true)] {
+                pass.set_pipeline(pipeline);
+                for (index, mesh) in visible.iter().filter(|(_, mesh)| mesh.metal == metal) {
+                    pass.set_vertex_buffer(0, mesh.vertices.slice(..));
+                    pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
+                    pass.draw_indexed(0..mesh.index_count, 0, *index..*index + 1);
+                }
             }
             pass.set_pipeline(&self.floor_pipeline);
             pass.draw(0..6, 0..1);

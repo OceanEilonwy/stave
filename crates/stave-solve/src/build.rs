@@ -11,15 +11,15 @@ use stave_model::ids::{AssemblyId, HardwareId, JointId, PartId, RegionId, SceneI
 use stave_model::instance::Ctx;
 use stave_model::solved::{
     self, Assembly, Cut, CutKind, CutPlace, CutSource, Depth, FastenerUse, Hardware, HardwareBase,
-    HardwareData, Joint, JointPair, LocalPoint, Motion, PartOrigin, Pivot, Point, PoseValue,
-    ProjectInfo, Region, RequireResult, RoleBinding, Scene, SceneItem, ScenePose, Shape, Size3,
-    SolvedDesign, Station, Stock, Tool,
+    HardwareData, Joint, JointPair, LocalBox, LocalPoint, Motion, PartOrigin, Pivot, Point,
+    PoseValue, ProjectInfo, Region, RequireResult, RoleBinding, Scene, SceneItem, ScenePose, Shape,
+    Size3, SolvedDesign, Station, Stock, Tool,
 };
 use stave_model::value::{Envelope as ExactEnvelope, ExactBox, Value};
 use stave_schema::words::{Grain, MotionWord, StockForm};
 
 use crate::eval::Env;
-use crate::hardware::{Data, MotionExact, Placed, world_index};
+use crate::hardware::{Data, MotionExact, Placed, Recess, world_index};
 use crate::joints::{GeomTable, JointWork, PartGeom, local_slot, round_length};
 use crate::place::reflect;
 use crate::{Reported, Solved, Solver};
@@ -175,6 +175,14 @@ pub(crate) fn build(solver: &mut Solver<'_>) -> Option<SolvedDesign> {
             {
                 list.push(cut);
             }
+            for recess in &hw.recesses {
+                if let (Some(geom), Some(list)) =
+                    (geoms.get(recess.part), cuts.get_mut(recess.part.index()))
+                    && let Ok(cut) = recess_cut(geom, recess, hardware)
+                {
+                    list.push(cut);
+                }
+            }
             if let Some(entry) = placed.get_mut(index) {
                 *entry = Some(hw);
             }
@@ -310,6 +318,33 @@ fn bore_cut(
             diameter: round_length(bore.diameter)?,
             depth,
             count: bore.count,
+        },
+    })
+}
+
+/// The notch a recess cuts: the member's region, from the face it is cut into.
+fn recess_cut(geom: &PartGeom, recess: &Recess, hardware: HardwareId) -> Solved<Cut> {
+    let face = geom.face_toward(recess.face.axis(), recess.face.is_positive());
+    let local = geom.local_box(&recess.bounds)?;
+    let [length, width, thickness] = local;
+    let corner = |pick: fn(&(ExactLength, ExactLength)) -> ExactLength| -> Solved<LocalPoint> {
+        Ok(LocalPoint {
+            length: round_length(pick(&length))?,
+            width: round_length(pick(&width))?,
+            thickness: round_length(pick(&thickness))?,
+        })
+    };
+    Ok(Cut {
+        source: CutSource::Hardware { hardware },
+        face,
+        place: CutPlace::Recess {
+            footprint: LocalBox {
+                min: corner(|p| p.0)?,
+                max: corner(|p| p.1)?,
+            },
+        },
+        kind: CutKind::Notch {
+            depth: Depth::Length(round_length(recess.depth)?),
         },
     })
 }
@@ -648,6 +683,7 @@ impl Solver<'_> {
                             other: *part_map.get(&other).unwrap_or(&other),
                             footprint,
                         },
+                        recess @ CutPlace::Recess { .. } => recess,
                         mount @ CutPlace::Mount { .. } => mount,
                     };
                     cut
@@ -753,6 +789,16 @@ impl Solver<'_> {
                 },
             };
             let data = match source_placed.data.clone() {
+                Data::ButtHinge { opening_angle, on } => {
+                    let on = match part_map.get(&on) {
+                        Some(mapped) => *mapped,
+                        None => match self.rebind_part(on, axis, plane, assembly) {
+                            Ok(found) => found,
+                            Err(_) => continue,
+                        },
+                    };
+                    Data::ButtHinge { opening_angle, on }
+                }
                 Data::Hinge {
                     opening_angle,
                     cup_diameter,
@@ -835,6 +881,47 @@ impl Solver<'_> {
                 },
                 None => None,
             };
+            // Recesses: the one in the piece came with the mirrored part's
+            // cuts; one in a part outside the assembly is cut in the part
+            // that occupies the reflected place.
+            let mut recesses = Vec::new();
+            let mut unbound = false;
+            for recess in &source_placed.recesses {
+                let (part, outside) = match part_map.get(&recess.part) {
+                    Some(mapped) => (*mapped, false),
+                    None => match self.rebind_part(recess.part, axis, plane, assembly) {
+                        Ok(found) => (found, true),
+                        Err(_) => {
+                            unbound = true;
+                            break;
+                        }
+                    },
+                };
+                let Ok(recess_bounds) = reflect_box(&recess.bounds, axis, plane) else {
+                    unbound = true;
+                    break;
+                };
+                let reflected_recess = Recess {
+                    part,
+                    face: if recess.face.axis() == axis {
+                        recess.face.opposite()
+                    } else {
+                        recess.face
+                    },
+                    bounds: recess_bounds,
+                    depth: recess.depth,
+                };
+                if outside
+                    && let (Some(geom), Some(list)) = (geoms.get(part), cuts.get_mut(part.index()))
+                    && let Ok(cut) = recess_cut(geom, &reflected_recess, hardware)
+                {
+                    list.push(cut);
+                }
+                recesses.push(reflected_recess);
+            }
+            if unbound {
+                continue;
+            }
             let reflected = Placed {
                 piece,
                 mount_face,
@@ -843,6 +930,7 @@ impl Solver<'_> {
                 orientation: source_placed.orientation.mirrored(axis),
                 data,
                 bore: None,
+                recesses,
                 motion: reflected_motion,
                 ..source_placed
             };
@@ -1157,6 +1245,10 @@ impl Solver<'_> {
                     clearance: round_length(*clearance)?,
                     travel: round_length(*travel)?,
                     opening: *opening,
+                },
+                Data::ButtHinge { opening_angle, on } => HardwareData::ButtHinge {
+                    opening_angle: opening_angle.to_nearest_angle().ok_or(Reported)?,
+                    on: *on,
                 },
                 Data::Hinge {
                     opening_angle,

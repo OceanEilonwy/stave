@@ -7,7 +7,7 @@ kind round_tenon : joint {
   param diameter = 19mm
   /// How far the tenon reaches into the other part.
   param length = into.thickness * 2 / 3
-  require hole_stops : length <= into.thickness - 3mm "the hole for the tenon would come through the other side"
+  require hole_stops : length <= extent(into, length, of: piece) - 3mm "the hole for the tenon would come through the other side"
 
   insert:    [push(piece, along: length)]
   cut_first: into                            // drill the hole first, then fit the tenon to it

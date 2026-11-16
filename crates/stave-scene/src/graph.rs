@@ -317,6 +317,7 @@ impl SceneGraph {
                     .and_then(|id| design.assemblies.get(id.index()))
                     .and_then(|assembly| assembly.parent);
                 let member = match hardware.base {
+                    HardwareBase::Hinge if hardware.is_butt_hinge() => "fixed leaf",
                     HardwareBase::Hinge => "plate",
                     HardwareBase::Slide => "cabinet member",
                     HardwareBase::Pull => "fixed member",

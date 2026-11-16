@@ -1186,8 +1186,16 @@ impl Solver<'_> {
                     return Err(Reported);
                 };
                 let items = self.eval(items, env)?;
-                let Value::Word(Word::Axis(axis)) = self.eval(axis, env)? else {
-                    return Err(Reported);
+                let axis = match (self.eval(axis, env)?, Self::arg(args, "of")) {
+                    (Value::Word(Word::Axis(axis)), None) => axis,
+                    // An axis of another part: the world axis it runs along.
+                    (Value::Word(Word::PartAxis(part_axis)), Some(of)) => {
+                        let Value::Part(of) = self.eval(of, env)? else {
+                            return Err(Reported);
+                        };
+                        self.part_orientation(of)?.direction(part_axis).axis()
+                    }
+                    _ => return Err(Reported),
                 };
                 let parts = items.parts().ok_or_else(|| {
                     self.eval_error(
@@ -1375,9 +1383,28 @@ impl Solver<'_> {
                 }
                 match apart.as_slice() {
                     [distance] => Ok(*distance),
-                    _ => {
+                    [] => {
                         let (name_a, name_b) = (self.part_name(*a), self.part_name(*b));
-                        Err(self.eval_error(env, span, format!("'between' needs parts apart along exactly one axis, but {name_a} and {name_b} are apart along {}", apart.len()), "measure between two parallel faces instead: between(a.top, b.bottom)"))
+                        Err(self.eval_error(
+                            env,
+                            span,
+                            format!(
+                                "'between' needs parts apart along exactly one axis, but {name_a} and {name_b} touch or overlap"
+                            ),
+                            "check where the two parts are placed, or measure between two parallel faces: between(a.top, b.bottom)",
+                        ))
+                    }
+                    several => {
+                        let (name_a, name_b) = (self.part_name(*a), self.part_name(*b));
+                        Err(self.eval_error(
+                            env,
+                            span,
+                            format!(
+                                "'between' needs parts apart along exactly one axis, but {name_a} and {name_b} are apart along {} axes",
+                                several.len()
+                            ),
+                            "measure between two parallel faces instead: between(a.top, b.bottom)",
+                        ))
                     }
                 }
             }

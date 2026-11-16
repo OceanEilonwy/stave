@@ -26,6 +26,10 @@ pub(crate) enum Data {
         travel: ExactLength,
         opening: RegionId,
     },
+    ButtHinge {
+        opening_angle: ExactAngle,
+        on: PartId,
+    },
     Hinge {
         opening_angle: ExactAngle,
         cup_diameter: ExactLength,
@@ -50,6 +54,31 @@ pub(crate) struct Bore {
     pub depth: Option<ExactLength>,
     pub count: u32,
     pub centres: Option<ExactLength>,
+}
+
+/// A mortise hardware is housed in (a butt hinge's leaf): a notch the size
+/// of the member, cut into one face of a part.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Recess {
+    pub part: PartId,
+    /// The world face of the part the notch is cut into.
+    pub face: Face,
+    /// The region the member fills, in world coordinates.
+    pub bounds: ExactBox,
+    pub depth: ExactLength,
+}
+
+/// Which kind of hinge a hinge kind is.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum HingeStyle {
+    /// A cup bored into the piece and a plate on `on`.
+    Cup {
+        diameter: ExactLength,
+        depth: ExactLength,
+        inset: ExactLength,
+    },
+    /// Two leaves on a pin, each housed in a mortise.
+    Butt { leaf: Envelope },
 }
 
 /// The motion a piece of hardware gives its assembly.
@@ -96,6 +125,8 @@ pub(crate) struct Placed {
     pub fixed: Option<Member>,
     pub data: Data,
     pub bore: Option<Bore>,
+    /// Mortises the hardware is housed in.
+    pub recesses: Vec<Recess>,
     pub motion: Option<MotionExact>,
     pub model: Option<ModelRef>,
 }
@@ -263,22 +294,45 @@ impl Solver<'_> {
         };
         let piece_box = self.drawn_box(piece)?;
         let piece_orientation = self.part_orientation(piece)?;
-        // A hinge's member on the piece is its cup, sunk into the mount
-        // face; every other base declares its envelope.
-        let hinge_cup = if kind.base == BaseKind::Hinge {
-            let diameter =
-                self.required_length(&binding, "cup_diameter", &env, span, &kind_name)?;
-            let depth = self.required_length(&binding, "cup_depth", &env, span, &kind_name)?;
-            let inset = self.required_length(&binding, "cup_inset", &env, span, &kind_name)?;
-            Some((diameter, depth, inset))
+        // A hinge's member on the piece is its cup or its leaf, sunk into
+        // the mount face; every other base declares its envelope.
+        let hinge_style = if kind.base == BaseKind::Hinge {
+            match self.hardware_entry(&binding, "leaf", &env, span)? {
+                Some(Value::Envelope(leaf @ Envelope::Box { .. })) => {
+                    Some(HingeStyle::Butt { leaf })
+                }
+                Some(Value::Envelope(Envelope::Cylinder { .. })) => {
+                    return Err(self.error(
+                        Code::TypeMismatch,
+                        format!("kind '{kind_name}': a hinge's leaf is a box"),
+                        env.file,
+                        span,
+                        "write leaf: box(length: ..., width: ..., thickness: ...)",
+                    ));
+                }
+                _ => Some(HingeStyle::Cup {
+                    diameter: self.required_length(
+                        &binding,
+                        "cup_diameter",
+                        &env,
+                        span,
+                        &kind_name,
+                    )?,
+                    depth: self.required_length(&binding, "cup_depth", &env, span, &kind_name)?,
+                    inset: self.required_length(&binding, "cup_inset", &env, span, &kind_name)?,
+                }),
+            }
         } else {
             None
         };
-        let envelope = match hinge_cup {
-            Some((diameter, depth, _)) => Envelope::Cylinder {
+        let envelope = match hinge_style {
+            Some(HingeStyle::Cup {
+                diameter, depth, ..
+            }) => Envelope::Cylinder {
                 diameter,
                 length: depth,
             },
+            Some(HingeStyle::Butt { leaf }) => leaf,
             None => match self.hardware_entry(&binding, "envelope", &env, span)? {
                 Some(Value::Envelope(envelope)) => envelope,
                 _ => {
@@ -322,9 +376,9 @@ impl Solver<'_> {
             (None, None) => return Err(Reported),
         };
         // The envelope's frame on the face: its thickness stands off the
-        // face, except a hinge cup's, which runs into the piece.
+        // face, except a hinge cup's or leaf's, which runs into the piece.
         let mount_direction = mount_face.direction();
-        let thickness_direction = if hinge_cup.is_some() {
+        let thickness_direction = if hinge_style.is_some() {
             mount_direction.opposite()
         } else {
             mount_direction
@@ -388,9 +442,26 @@ impl Solver<'_> {
                 let (low_edge, high_edge) = (piece_box.min(width_axis), piece_box.max(width_axis));
                 let low_distance = abs(on_centre.checked_sub(low_edge).ok_or(Reported)?)?;
                 let high_distance = abs(on_centre.checked_sub(high_edge).ok_or(Reported)?)?;
-                // The cup is `cup_inset` in from the edge nearer `on`.
-                let inset = hinge_cup.map_or(ExactLength::ZERO, |(_, _, inset)| inset);
-                let low = if low_distance <= high_distance {
+                let nearer_low = low_distance <= high_distance;
+                // A cup is `cup_inset` in from the edge nearer `on`. A butt
+                // hinge's leaves start at the pin edge: the one where the
+                // piece is flush with a face of `on`.
+                let (inset, at_low) = match hinge_style {
+                    Some(HingeStyle::Cup { inset, .. }) => (inset, nearer_low),
+                    Some(HingeStyle::Butt { .. }) => {
+                        let flush = |edge: ExactLength| {
+                            edge == on_box.min(width_axis) || edge == on_box.max(width_axis)
+                        };
+                        let at_low = match (flush(low_edge), flush(high_edge)) {
+                            (true, false) => true,
+                            (false, true) => false,
+                            (true, true) | (false, false) => nearer_low,
+                        };
+                        (ExactLength::ZERO, at_low)
+                    }
+                    None => (ExactLength::ZERO, nearer_low),
+                };
+                let low = if at_low {
                     width_direction = positive_direction(width_axis);
                     low_edge.checked_add(inset).ok_or(Reported)?
                 } else {
@@ -497,6 +568,7 @@ impl Solver<'_> {
             }
         }
         let mut fixed = None;
+        let mut recesses = Vec::new();
         let mut envelope = envelope;
         let mut bounds = bounds;
         let (data, bore, motion) = match kind.base {
@@ -574,78 +646,151 @@ impl Solver<'_> {
                         ));
                     }
                 };
-                let (cup_diameter, cup_depth, cup_inset) = hinge_cup.ok_or(Reported)?;
-                // The door's edge nearer `on`: the cup is measured from it
-                // and the door turns about it.
+                // The door's edge nearer `on` (a butt hinge's pin edge): the
+                // cup or leaf is measured from it and the door turns about it.
                 let edge = if width_direction.is_positive() {
                     piece_box.min(width_axis)
                 } else {
                     piece_box.max(width_axis)
                 };
-                let offset = cup_inset.checked_add(half(cup_diameter)?).ok_or(Reported)?;
-                let cup_centre = if width_direction.is_positive() {
-                    edge.checked_add(offset)
-                } else {
-                    edge.checked_sub(offset)
-                }
-                .ok_or(Reported)?;
-                let mut bore_centre = centre;
-                if let Some(slot) = bore_centre.get_mut(world_index(width_axis)) {
-                    *slot = cup_centre;
-                }
-                let opposite_face = mount_face.opposite();
-                let opposite_position = if opposite_face.is_positive() {
-                    piece_box.max(face_axis)
-                } else {
-                    piece_box.min(face_axis)
-                };
-                let mut through = [ExactLength::ZERO; 3];
-                for axis in Axis::ALL {
-                    if let Some(slot) = through.get_mut(world_index(axis)) {
-                        *slot = if axis == face_axis {
-                            opposite_position
-                        } else if axis == width_axis {
-                            edge
-                        } else {
-                            piece_box.min(axis)
-                        };
+                if let Some(HingeStyle::Butt { leaf }) = hinge_style {
+                    let leaf = self.butt_hinge(
+                        &name,
+                        piece,
+                        on,
+                        mount_face,
+                        face_position,
+                        bounds,
+                        &env,
+                        span,
+                        leaf,
+                    )?;
+                    let mut through = [ExactLength::ZERO; 3];
+                    for axis in Axis::ALL {
+                        if let Some(slot) = through.get_mut(world_index(axis)) {
+                            *slot = if axis == face_axis {
+                                face_position
+                            } else if axis == width_axis {
+                                edge
+                            } else {
+                                piece_box.min(axis)
+                            };
+                        }
                     }
+                    let (fixed_bounds, depth) = leaf;
+                    fixed = Some(Member {
+                        envelope,
+                        bounds: fixed_bounds,
+                        orientation: Orientation::new(
+                            length_direction,
+                            width_direction,
+                            mount_direction,
+                        )
+                        .map_err(|_| Reported)?,
+                    });
+                    recesses = vec![
+                        Recess {
+                            part: piece,
+                            face: mount_face,
+                            bounds,
+                            depth,
+                        },
+                        Recess {
+                            part: on,
+                            face: mount_face.opposite(),
+                            bounds: fixed_bounds,
+                            depth,
+                        },
+                    ];
+                    let motion = MotionExact::Turn {
+                        axis: length_axis,
+                        through,
+                        free_side: width_direction,
+                        swing_toward: mount_face.opposite().direction(),
+                        angle,
+                    };
+                    (
+                        Data::ButtHinge {
+                            opening_angle: angle,
+                            on,
+                        },
+                        None,
+                        Some(motion),
+                    )
+                } else {
+                    let Some(HingeStyle::Cup {
+                        diameter: cup_diameter,
+                        depth: cup_depth,
+                        inset: cup_inset,
+                    }) = hinge_style
+                    else {
+                        return Err(Reported);
+                    };
+                    let offset = cup_inset.checked_add(half(cup_diameter)?).ok_or(Reported)?;
+                    let cup_centre = if width_direction.is_positive() {
+                        edge.checked_add(offset)
+                    } else {
+                        edge.checked_sub(offset)
+                    }
+                    .ok_or(Reported)?;
+                    let mut bore_centre = centre;
+                    if let Some(slot) = bore_centre.get_mut(world_index(width_axis)) {
+                        *slot = cup_centre;
+                    }
+                    let opposite_face = mount_face.opposite();
+                    let opposite_position = if opposite_face.is_positive() {
+                        piece_box.max(face_axis)
+                    } else {
+                        piece_box.min(face_axis)
+                    };
+                    let mut through = [ExactLength::ZERO; 3];
+                    for axis in Axis::ALL {
+                        if let Some(slot) = through.get_mut(world_index(axis)) {
+                            *slot = if axis == face_axis {
+                                opposite_position
+                            } else if axis == width_axis {
+                                edge
+                            } else {
+                                piece_box.min(axis)
+                            };
+                        }
+                    }
+                    fixed = Some(self.hinge_plate(
+                        &binding,
+                        &env,
+                        span,
+                        &kind_name,
+                        on,
+                        HingeFrame {
+                            length_direction,
+                            length_centre: centre_of(length_axis)?,
+                            toward_door_middle: width_direction,
+                            mount_direction,
+                        },
+                    )?);
+                    let data = Data::Hinge {
+                        opening_angle: angle,
+                        cup_diameter,
+                        cup_depth,
+                        cup_inset,
+                        on,
+                    };
+                    let bore = Bore {
+                        centre: bore_centre,
+                        diameter: cup_diameter,
+                        depth: Some(cup_depth),
+                        count: 1,
+                        centres: None,
+                    };
+                    let motion = MotionExact::Turn {
+                        axis: length_axis,
+                        through,
+                        free_side: width_direction,
+                        swing_toward: opposite_face.direction(),
+                        angle,
+                    };
+                    (data, Some(bore), Some(motion))
                 }
-                fixed = Some(self.hinge_plate(
-                    &binding,
-                    &env,
-                    span,
-                    &kind_name,
-                    on,
-                    HingeFrame {
-                        length_direction,
-                        length_centre: centre_of(length_axis)?,
-                        toward_door_middle: width_direction,
-                        mount_direction,
-                    },
-                )?);
-                let data = Data::Hinge {
-                    opening_angle: angle,
-                    cup_diameter,
-                    cup_depth,
-                    cup_inset,
-                    on,
-                };
-                let bore = Bore {
-                    centre: bore_centre,
-                    diameter: cup_diameter,
-                    depth: Some(cup_depth),
-                    count: 1,
-                    centres: None,
-                };
-                let motion = MotionExact::Turn {
-                    axis: length_axis,
-                    through,
-                    free_side: width_direction,
-                    swing_toward: opposite_face.direction(),
-                    angle,
-                };
-                (data, Some(bore), Some(motion))
             }
             BaseKind::Pull | BaseKind::Joint | BaseKind::Fastener | BaseKind::Tool => {
                 let centres = self.hardware_length(&binding, "centres", &env, span)?;
@@ -683,9 +828,57 @@ impl Solver<'_> {
             fixed,
             data,
             bore,
+            recesses,
             motion,
             model,
         })
+    }
+
+    /// A butt hinge's second leaf: the moving leaf (`leaf_bounds`, sunk
+    /// into the piece's mount face) reflected through the mount face's
+    /// plane into `on`, which must lie against that face. Returns the
+    /// fixed leaf's bounds and the depth of both mortises.
+    #[allow(clippy::too_many_arguments)]
+    fn butt_hinge(
+        &mut self,
+        name: &str,
+        piece: PartId,
+        on: PartId,
+        mount_face: Face,
+        face_position: ExactLength,
+        leaf_bounds: ExactBox,
+        env: &Env<'_>,
+        span: Span,
+        leaf: Envelope,
+    ) -> Solved<(ExactBox, ExactLength)> {
+        let Envelope::Box { thickness, .. } = leaf else {
+            return Err(Reported);
+        };
+        let face_axis = mount_face.axis();
+        let on_box = self.drawn_box(on)?;
+        if on_box.min(face_axis) != face_position && on_box.max(face_axis) != face_position {
+            let (piece_name, on_name) = (self.part_name(piece), self.part_name(on));
+            return Err(self.error(
+                Code::NoContact,
+                format!("{name}: {piece_name} meets none of the parts it should join"),
+                env.file,
+                span,
+                format!(
+                    "a butt hinge's leaves meet where the {} face of {piece_name} lies against {on_name}; place them together, or name the face that does with face: ...",
+                    mount_face.word()
+                ),
+            ));
+        }
+        let twice = face_position
+            .checked_mul(Rational::from(2i64))
+            .ok_or(Reported)?;
+        let low = twice
+            .checked_sub(leaf_bounds.max(face_axis))
+            .ok_or(Reported)?;
+        let high = twice
+            .checked_sub(leaf_bounds.min(face_axis))
+            .ok_or(Reported)?;
+        Ok((leaf_bounds.with(face_axis, low, high), thickness))
     }
 
     /// A hinge's mounting plate: on the face of `on` that looks toward the

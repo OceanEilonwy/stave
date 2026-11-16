@@ -9,7 +9,10 @@ kind screw : joint {
   param length = 30mm
   /// Screws per connection.
   param count = 2
-  require stays_inside : length <= piece.thickness + into.thickness - 3mm "the screw would come out the other side"
+  /// How much of the other part lies in the screw's path: its thickness
+  /// for a screw into a face, its width for a screw into an edge.
+  param bite = extent(into, thickness, of: piece)
+  require stays_inside : length <= piece.thickness + bite - 3mm "the screw would come out the other side"
   require bites        : length >= piece.thickness + 8mm "the screw is too short to hold"
 
   insert: [push(piece, along: thickness)]

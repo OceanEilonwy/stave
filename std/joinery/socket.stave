@@ -5,7 +5,7 @@ stave 1
 kind socket : joint {
   /// How deep the hole is.
   param depth = into.thickness / 2
-  require not_too_deep : depth <= into.thickness / 2 "a socket deeper than half the board weakens it"
+  require not_too_deep : depth <= extent(into, length, of: piece) / 2 "a socket deeper than half the board weakens it"
 
   insert:    [push(piece, along: length)]
   cut_first: into

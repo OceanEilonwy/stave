@@ -1016,7 +1016,13 @@ impl<'a> Resolver<'a> {
     ) -> JointDef {
         let array = self.lower_array(cx, syntax.array.as_ref());
         let what = format!("joint '{}'", syntax.name.as_str());
-        let call = self.lower_kind_call(cx, &syntax.call, Some(BaseKind::Joint), &what);
+        let call = self.lower_kind_call(
+            cx,
+            &syntax.call,
+            Some(BaseKind::Joint),
+            &what,
+            syntax.name.as_str(),
+        );
         JointDef {
             decl: self.decl(def, &syntax.name, origin),
             array,
@@ -1033,7 +1039,7 @@ impl<'a> Resolver<'a> {
     ) -> HardwareDef {
         let array = self.lower_array(cx, syntax.array.as_ref());
         let what = format!("hardware '{}'", syntax.name.as_str());
-        let call = self.lower_kind_call(cx, &syntax.call, None, &what);
+        let call = self.lower_kind_call(cx, &syntax.call, None, &what, syntax.name.as_str());
         let place_block = syntax.body.as_ref().and_then(|b| b.place.as_ref());
         let place = place_block
             .map(|p| self.lower_place(cx, p, true))
@@ -1054,10 +1060,30 @@ impl<'a> Resolver<'a> {
         call: &ast::KindCall,
         base: Option<BaseKind>,
         what: &str,
+        declared: &str,
     ) -> KindCallDef {
-        let expect = Expect::ty(Ty::Kind(KindTy { base, kind: None }))
-            .named(what.split(' ').next().unwrap_or("kind"));
-        let kind = self.reference(cx, &call.kind, &expect);
+        let item = what.split(' ').next().unwrap_or("kind");
+        let expect = Expect::ty(Ty::Kind(KindTy { base, kind: None })).named(item);
+        // `hardware knob : knob(...)`: the declaration's own name hides the
+        // kind it means to use, so say that rather than a type mismatch.
+        let kind = if call.kind.rest.is_empty() && call.kind.root.as_str() == declared {
+            self.error_help(
+                Code::TypeMismatch,
+                format!("'{declared}' here is this {item} itself, not a kind"),
+                cx.file,
+                call.kind.span,
+                format!(
+                    "the {item} is also called '{declared}', which hides the kind '{declared}'; give the {item} another name"
+                ),
+            );
+            RExpr {
+                kind: RExprKind::Error,
+                ty: Ty::Unknown,
+                span: call.kind.span,
+            }
+        } else {
+            self.reference(cx, &call.kind, &expect)
+        };
         let kind_ty = match &kind.ty {
             Ty::Kind(kind_ty) => Some(*kind_ty),
             _ => None,

@@ -512,7 +512,7 @@ without an import or a prefix:
 | Module | Folder | Provides |
 |---|---|---|
 | `std:joinery` | `std/joinery` | joint kinds (`dado`, `rabbet`, `groove`, `dowel`, `round_tenon`, `socket`, `screw`, `cope_and_stick`, `mortise_tenon`, `half_lap`) and the standard recipes |
-| `std:hardware` | `std/hardware` | hardware kinds (`side_mount_slide`, `euro_hinge`, `knob`, `bar_pull`) and fasteners (`dowel_pin`, `wood_screw`) |
+| `std:hardware` | `std/hardware` | hardware kinds (`side_mount_slide`, `euro_hinge`, `butt_hinge`, `knob`, `bar_pull`) and fasteners (`dowel_pin`, `wood_screw`) |
 | `std:tools` | `std/tools` | tool kinds (`square`, `chisel`, `router`, `drill`, `lathe`, ...) |
 
 Beginners write `dado(...)`, not `joinery.dado(...)`. Anything from outside
@@ -708,10 +708,16 @@ All entries are readable (`slide.clearance`, `hinge_kind.cup_diameter`).
 | Base | Roles (fixed) | Required | Optional |
 |---|---|---|---|
 | `slide` | `piece: Part` (the drawer side), `in: Region` (the opening) | `length`, `clearance`, `travel`: `Length`; `envelope`: `Envelope` | `model`, `moving`, `license` |
-| `hinge` | `piece: Part` (the door stile), `on: Part` (the cabinet side) | `opening_angle`: `Angle`; `cup_diameter`, `cup_depth`, `cup_inset`, `plate_setback`: `Length`; `plate`: `Envelope` (a box) | `model`, `moving`, `license` |
+| `hinge` | `piece: Part` (the door stile, the lid), `on: Part` (the cabinet side, the box) | `opening_angle`: `Angle`; and either, for a cup hinge, `cup_diameter`, `cup_depth`, `cup_inset`, `plate_setback`: `Length`; `plate`: `Envelope` (a box); or, for a butt hinge, `leaf`: `Envelope` (a box) | `model`, `moving`, `license` |
 | `pull` | `piece: Part` | `envelope` | `centres`, `diameter`, `screw_diameter` (default `4mm`): `Length`; `model`, `license` |
 | `fastener` | none | `diameter`, `length`: `Length` | `envelope`, `model`, `license` |
 | `tool` | none | | `title`: `Text`; `powered`: `Bool` (default `false`) |
+
+A hinge kind is a **cup hinge** (it has the `cup_` entries, `plate_setback`
+and `plate`) or a **butt hinge** (it has `leaf`), never both. A hinge kind
+with neither is `error[missing-field]` naming `leaf`; a cup hinge missing one
+of its entries is `error[missing-field]` naming it; one with both is
+`error[type-mismatch]`.
 
 `model` is a `Model`, `moving` and `license` are `Text`. Hardware kinds accept
 `param` and `require` entries; they can't have `roles`, `cut`, `makes` or the
@@ -822,7 +828,7 @@ call accepts `face:` (a face word) to name it; left out, the base kind decides:
 | Base | Mount face (default) | Fixed by the base | Set by `place { }` |
 |---|---|---|---|
 | `slide` | the `left` or `right` face of `piece`, whichever is nearer the same-named face of the `in` region | everything: the slide runs along the piece's length, front ends level, centred on the piece's width | nothing; a `place` is `error[axis-set-twice]` |
-| `hinge` | the `back` face of `piece` | the cup sits `cup_inset` in from the long edge of the mount face that is nearer `on`; the plate sits on the inside face of `on` | the one axis along the piece's length (the cup's) |
+| `hinge` | the `back` face of `piece` | a cup hinge: the cup sits `cup_inset` in from the long edge of the mount face that is nearer `on`; the plate sits on the inside face of `on`. A butt hinge: the leaves start at the pin edge (see below) | the one axis along the piece's length (the cup's or the leaves') |
 | `pull` | the `front` face of `piece` | nothing | the two axes of the mount face |
 
 The mount face fixes the axis it is normal to. The terms are the same as for
@@ -852,6 +858,19 @@ door or drawer, one is screwed to the carcass and stays put.
   screw line; 37mm on 32mm-system cabinets). Neither member reaches into
   `on`'s thickness or past its outer face. The cup moves with the door; the
   plate stays.
+- A **butt hinge** is two **leaves**, each the `leaf` box: its `length`
+  runs along the pin (the piece's length), its `width` from the pin to the
+  leaf's edge, its `thickness` is the leaf's. The mount face of `piece` must
+  lie against a face of `on` (a lid's underside on the top edge of the box's
+  back, a door's edge against the cabinet side). The **pin edge** is the long
+  edge of the mount face where the piece's neighbouring face lies in the same
+  plane as a face of `on`: the side where the two parts are flush and the
+  knuckle shows. If neither edge (or both) is flush, it is the edge nearer the
+  middle of `on`. One leaf is housed in a mortise in the mount face, the other
+  in a mortise in the face of `on` it closes against, each as deep as the leaf
+  is thick, both reaching `width` in from the pin edge; so the parts close
+  face to face. Each mortise is a `notch` cut by the hinge. The leaf in
+  `piece` moves with it; the leaf in `on` stays.
 - A **slide** with a box envelope is two members, each half the envelope's
   thickness: the **drawer member** against the piece, which travels with
   the drawer, and the **cabinet member** against the `in` region's side,
@@ -1232,11 +1251,14 @@ What each base does:
   facing side of the `in` region equals `clearance` (`error[slide-gap]`), and
   gives the assembly it is in a motion: it travels toward the front by up to
   `travel`.
-- **`hinge`** — bores its cup: one `drill(diameter: cup_diameter, depth:
-  cup_depth)` in the mount face. It gives the assembly a motion: it turns by up
-  to `opening_angle` about the long edge of `piece` that is on the face
-  opposite the mount face and nearer `on` (for an overlay door: its outer
-  front corner). A hinge has no `envelope:`: its cup and `plate` are its
+- **`hinge`** — a cup hinge bores its cup: one `drill(diameter: cup_diameter,
+  depth: cup_depth)` in the mount face. It gives the assembly a motion: it
+  turns by up to `opening_angle` about the long edge of `piece` that is on the
+  face opposite the mount face and nearer `on` (for an overlay door: its outer
+  front corner). A butt hinge cuts its two leaf mortises (`notch(depth:` the
+  leaf's thickness`)`, one in `piece` and one in `on`) and turns about its pin
+  edge, the free side swinging away from the mount face (a lid lifts). A
+  hinge has no `envelope:`: its cup and `plate`, or its two leaves, are its
   envelope (see [Hardware placement](#hardware-placement)).
 - **`pull`** — bores its screw holes through the piece: one hole of
   `screw_diameter` in the middle of the envelope, or two holes `centres` apart
@@ -1451,7 +1473,7 @@ These are looked up when a bare name is called (see [Names](#names), rule 3).
 | Function | Returns | Meaning |
 |---|---|---|
 | `between(a, b)` | `Length` | the clear distance between two parts, or between two parallel anchors. Two parts must be apart along exactly one axis |
-| `extent(items, axis)` | `Length` | overall drawn size of a list of parts along a world axis |
+| `extent(items, axis)` | `Length` | overall drawn size of a list of parts along a world axis. With `of: part`, `axis` is one of that part's own axes (`length`, `width`, `thickness`), meaning the world axis it runs along once placed. In a joint kind this measures the other part along this one's direction: `extent(into, thickness, of: piece)` is how much of `into` a screw driven through `piece`'s thickness can bite into (its thickness for a face, its width for an edge) |
 | `mid(item, axis)` | `Anchor` | the mid-plane of a part or region |
 | `opening(...)`, `split(...)`, `cover(...)` | `Region` | see [Regions](#regions) |
 | `overlay(...)`, `inset(reveal:)` | `Mount` | see [Regions](#regions) |

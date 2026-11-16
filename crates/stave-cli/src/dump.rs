@@ -12,7 +12,7 @@ use stave_lang::placement::Axis;
 use stave_lang::units::Length;
 use stave_model::solved::{
     Contact, CutKind, CutPlace, Depth, End, HardwareBase, HardwareData, LocalFace, Motion,
-    Orientation, Point, Shape, SolvedDesign, WorldBox,
+    Orientation, Point, PoseValue, Shape, SolvedDesign, WorldBox,
 };
 
 /// A length in millimetres without the unit: `19`, `1104.75`.
@@ -226,6 +226,15 @@ pub fn table(design: &SolvedDesign) -> String {
                     mm(footprint.min.thickness),
                     mm(footprint.max.thickness)
                 ),
+                CutPlace::Recess { footprint } => format!(
+                    "recess local {}..{} x {}..{} x {}..{}",
+                    mm(footprint.min.length),
+                    mm(footprint.max.length),
+                    mm(footprint.min.width),
+                    mm(footprint.max.width),
+                    mm(footprint.min.thickness),
+                    mm(footprint.max.thickness)
+                ),
                 CutPlace::Mount { centre, .. } => format!(
                     "centred at local {}, {}, {}",
                     mm(centre.length),
@@ -256,6 +265,12 @@ pub fn table(design: &SolvedDesign) -> String {
                 mm(*clearance),
                 mm(*travel)
             ),
+            HardwareData::ButtHinge { opening_angle, on } => {
+                format!(
+                    "opens {opening_angle}, leaves housed in it and {}",
+                    name(*on)
+                )
+            }
             HardwareData::Hinge {
                 opening_angle,
                 cup_diameter,
@@ -283,10 +298,11 @@ pub fn table(design: &SolvedDesign) -> String {
             name(hardware.piece),
             hardware.mount_face.word()
         );
-        let (moving, fixed) = match hardware.base {
-            HardwareBase::Hinge => ("cup", "plate"),
-            HardwareBase::Slide => ("drawer member", "cabinet member"),
-            HardwareBase::Pull => ("box", "fixed"),
+        let (moving, fixed) = match (hardware.base, &hardware.data) {
+            (HardwareBase::Hinge, HardwareData::ButtHinge { .. }) => ("leaf", "fixed leaf"),
+            (HardwareBase::Hinge, _) => ("cup", "plate"),
+            (HardwareBase::Slide, _) => ("drawer member", "cabinet member"),
+            (HardwareBase::Pull, _) => ("box", "fixed"),
         };
         let _ = writeln!(out, "    {moving:<15}{}", extent(&hardware.bounds));
         if let Some(member) = &hardware.fixed {
@@ -411,7 +427,13 @@ pub fn table(design: &SolvedDesign) -> String {
                     .assemblies
                     .get(p.assembly.index())
                     .map_or("", |a| a.name.as_str());
-                format!("{assembly} {:?}", p.value).to_lowercase()
+                let value = match p.value {
+                    PoseValue::Closed => "closed".to_owned(),
+                    PoseValue::Open => "open".to_owned(),
+                    PoseValue::Angle(angle) => angle.to_string(),
+                    PoseValue::Travel(travel) => format!("{} out", mm(travel)),
+                };
+                format!("{assembly} {value}")
             })
             .collect();
         let _ = writeln!(

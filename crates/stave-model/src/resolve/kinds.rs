@@ -7,7 +7,10 @@ use stave_lang::ast::{self, ExprKind, Span};
 use stave_lang::placement::PartAxis;
 use stave_lang::{Code, Diagnostic, Label};
 use stave_schema::fields::{self, Requirement};
-use stave_schema::kinds::{JOINT_DEFAULT_ROLES, RESERVED_JOINT_SETTINGS, RoleType, base};
+use stave_schema::kinds::{
+    BUTT_HINGE_ENTRIES, CUP_HINGE_ENTRIES, JOINT_DEFAULT_ROLES, RESERVED_JOINT_SETTINGS, RoleType,
+    base,
+};
 use stave_schema::operations::{ArgumentDefault, MARK, Selector, cut_operation, operation};
 use stave_schema::placement::{AssemblyStepKind, EXTEND, MadePartTerm};
 use stave_schema::recipes::{CuttingStep, MarkingStep, NeedKind};
@@ -289,6 +292,55 @@ impl Resolver<'_> {
                         syntax.body.span,
                         format!("write {}: ... or declare param {}", spec.name, spec.name),
                     );
+                }
+            }
+            if base_kind == BaseKind::Hinge {
+                let written = |name: &str| {
+                    kind_fields.iter().any(|f| f.name == name)
+                        || params.iter().any(|p| p.decl.name == name)
+                };
+                let cup: Vec<&str> = CUP_HINGE_ENTRIES
+                    .into_iter()
+                    .filter(|name| written(name))
+                    .collect();
+                let butt = BUTT_HINGE_ENTRIES.into_iter().any(written);
+                if butt && !cup.is_empty() {
+                    self.error_help(
+                        Code::TypeMismatch,
+                        format!(
+                            "{what} has both a leaf and a cup; a hinge is a cup hinge or a butt hinge"
+                        ),
+                        cx.file,
+                        syntax.body.span,
+                        format!(
+                            "remove 'leaf' for a cup hinge, or {} for a butt hinge",
+                            cup.iter()
+                                .map(|name| format!("'{name}'"))
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        ),
+                    );
+                } else if !butt && cup.is_empty() {
+                    self.error_help(
+                        Code::MissingField,
+                        format!("{what} is missing 'leaf'"),
+                        cx.file,
+                        syntax.body.span,
+                        "a butt hinge needs leaf: box(...); a cup hinge needs cup_diameter, cup_depth, cup_inset, plate_setback and plate",
+                    );
+                } else if !butt {
+                    for name in CUP_HINGE_ENTRIES
+                        .into_iter()
+                        .filter(|name| !cup.contains(name))
+                    {
+                        self.error_help(
+                            Code::MissingField,
+                            format!("{what} is missing '{name}'"),
+                            cx.file,
+                            syntax.body.span,
+                            format!("write {name}: ... or declare param {name}; a cup hinge needs all of its cup entries"),
+                        );
+                    }
                 }
             }
             for param in &params {

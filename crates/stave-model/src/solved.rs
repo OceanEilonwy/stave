@@ -56,14 +56,15 @@
 //! runs along the piece's length, local `thickness` stands off the mount
 //! face (outward), local `width` takes the remaining axis. A cylinder's own
 //! axis is the local `thickness`; its diameter spans `length` and `width`.
-//! A hinge's cup is the exception: it is sunk into the mount face, so its
-//! `thickness` runs into the piece.
+//! A hinge's cup and a butt hinge's leaf are the exception: they are sunk
+//! into the mount face, so their `thickness` runs into the piece.
 //!
 //! **Hardware members.** A hinge and a slide each have a member on the
 //! piece, which moves with the piece's assembly ([`Hardware::envelope`]: a
-//! hinge's cup, a slide's drawer member) and a member fixed to the carcass,
-//! which stays put ([`Hardware::fixed`]: a hinge's mounting plate on the
-//! inside face of `on`, a slide's cabinet member).
+//! hinge's cup or leaf, a slide's drawer member) and a member fixed to the
+//! carcass, which stays put ([`Hardware::fixed`]: a cup hinge's mounting
+//! plate on the inside face of `on`, a butt hinge's other leaf sunk into
+//! `on`, a slide's cabinet member).
 
 use std::fmt;
 
@@ -626,7 +627,7 @@ pub enum CutSource {
         /// The pair.
         pair: usize,
     },
-    /// A hinge cup or the screw holes of a pull.
+    /// A hinge cup, a hinge leaf's mortise or the screw holes of a pull.
     Hardware {
         /// The hardware.
         hardware: HardwareId,
@@ -793,6 +794,12 @@ pub enum CutPlace {
         /// The part that touches or enters.
         other: PartId,
         /// The region both cut boxes share, in this part's frame.
+        footprint: LocalBox,
+    },
+    /// A hardware recess, such as a butt hinge's leaf mortise: the region
+    /// the hardware fills, in this part's local coordinates.
+    Recess {
+        /// The region the hardware fills.
         footprint: LocalBox,
     },
     /// A hardware cut, centred at a point on the face.
@@ -1058,7 +1065,14 @@ pub enum HardwareData {
         /// The region it runs in.
         opening: RegionId,
     },
-    /// A hinge.
+    /// A butt hinge: two leaves on a pin, each housed in a mortise.
+    ButtHinge {
+        /// How far it opens.
+        opening_angle: Angle,
+        /// The part its fixed leaf is housed in.
+        on: PartId,
+    },
+    /// A cup hinge.
     Hinge {
         /// How far it opens.
         opening_angle: Angle,
@@ -1125,6 +1139,13 @@ pub struct Hardware {
     pub data: HardwareData,
     /// A model, when the kind has one.
     pub model: Option<Model>,
+}
+
+impl Hardware {
+    /// `true` for a butt hinge: two leaves, each housed in a mortise.
+    pub fn is_butt_hinge(&self) -> bool {
+        matches!(self.data, HardwareData::ButtHinge { .. })
+    }
 }
 
 /// A member of a piece of hardware fixed to the carcass.

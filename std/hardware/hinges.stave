@@ -16,3 +16,18 @@ kind euro_hinge : hinge {
   cup_depth:    13mm
   plate:        box(length: 50mm, width: 36mm, thickness: 11mm)
 }
+
+/// A brass butt hinge: two leaves on a pin, for box lids and small doors.
+/// Each leaf is housed in a shallow mortise, one in the lid or door and one
+/// in the box or cabinet, so the parts close face to face and only the
+/// knuckle shows. Sizes are typical for solid brass box hinges.
+kind butt_hinge : hinge {
+  /// Length of the hinge along its pin.
+  param length = 40mm within [25mm, 30mm, 40mm, 50mm, 65mm, 75mm]
+  /// Width of one leaf, from the pin to its edge; no more than the
+  /// thickness of the board it is housed in.
+  param leaf_width = length * 3 / 10
+  /// How far it opens.
+  param opening_angle = 180deg within 90deg..180deg
+  leaf: box(length: length, width: leaf_width, thickness: 1.5mm)
+}
