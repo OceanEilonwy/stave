@@ -1610,9 +1610,29 @@ diagnostic with a "fetch" code action.
 | Go to definition, references, rename | every name resolves to exactly one declaration (including names inside strings and qualified names across modules) |
 | Document symbols, folding | items, and the blocks inside them |
 | Semantic colouring | the namespace of each word: item kinds (part, joint, param, region, ...), members, fixed-position call heads, enum words, units |
-| Formatting | `stave fmt`, applied to the lossless tree |
+| Formatting | `stave fmt`, applied to the lossless tree (see "Layout" below) |
 | Code actions from AI | a checked patch from an AI or the suggestion engine is offered as a workspace edit |
 | Code lens | "show in 3D" on parts and assemblies, "show work card" on parts |
+
+**Layout.** `stave fmt` keeps every comment and every line break (a newline
+ends a field, so lines are never joined or split) and normalises the rest:
+
+- two spaces of indentation per open `{`; a line that continues an expression
+  is indented one step past the line that opened its bracket when the
+  bracket ends that line, otherwise just after the bracket, and outside
+  brackets it lines up with the value after the line's first `:` or `=`;
+- one space between tokens, except none inside `( )` and `[ ]`, before `,`,
+  around `.` and `..`, after a prefix `-` or `!`, before the `(` of a call
+  or the `[` of an index or array, and before the `:` of a field, argument,
+  role or station; a declaration's `:` has a space on each side
+  (`part side_l : oak_19`);
+- consecutive lines that each start with a field, a named argument or a
+  profile station, in the same block or argument list, line their values up
+  one space after the longest key; a blank line or another kind of entry
+  ends the run;
+- a comment at the end of a line keeps its column when there is room;
+- at most one blank line in a row, none at the start or end of a block or
+  of the file.
 
 ---
 

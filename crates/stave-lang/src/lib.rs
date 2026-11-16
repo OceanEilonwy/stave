@@ -4,6 +4,7 @@
 //! - [`parse_file`] and [`parse_patch_file`] turn source text into a
 //!   [`Parse`]: the lossless concrete syntax tree ([`syntax`]), the typed
 //!   tree ([`ast`]) of every well-formed item, and the diagnostics.
+//! - [`format_file`] lays a file out canonically ([`format`]).
 //! - [`diagnostics`] holds what every later stage reports with: [`FileId`],
 //!   [`SourceMap`], [`Diagnostic`] and the compiler-style
 //!   [`render_diagnostics`].
@@ -47,6 +48,7 @@
 
 pub mod ast;
 pub mod diagnostics;
+pub mod format;
 mod lexer;
 mod lower;
 mod parser;
@@ -57,6 +59,7 @@ pub mod units;
 pub use diagnostics::{
     Code, Diagnostic, FileId, Label, Severity, SourceMap, render_diagnostic, render_diagnostics,
 };
+pub use format::{FormatError, format_file};
 pub use lower::BrokenItem;
 pub use syntax::{GreenNode, SyntaxKind, SyntaxNode, SyntaxToken};
 

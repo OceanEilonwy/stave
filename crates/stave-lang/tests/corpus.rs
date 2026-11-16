@@ -1,9 +1,9 @@
-//! Every `.stave` file in `examples/` and `std/` parses cleanly and the tree
-//! is lossless.
+//! Every `.stave` file in `examples/` and `std/` parses cleanly, the tree is
+//! lossless, and the formatter is idempotent and keeps the meaning.
 
 use std::path::{Path, PathBuf};
 
-use stave_lang::{SourceMap, parse_file, render_diagnostics};
+use stave_lang::{SourceMap, format_file, parse_file, render_diagnostics};
 
 fn workspace() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -47,6 +47,22 @@ fn corpus() -> Vec<(String, String)> {
         .collect()
 }
 
+/// The `Debug` text of a tree with every span blanked, so trees parsed from
+/// differently laid out text can be compared.
+pub fn without_spans(debug: &str) -> String {
+    let mut out = String::with_capacity(debug.len());
+    let mut rest = debug;
+    while let Some(start) = rest.find("Span { start: ") {
+        out.push_str(&rest[..start]);
+        let after = &rest[start..];
+        let end = after.find('}').expect("end of span") + 1;
+        out.push_str("Span");
+        rest = &after[end..];
+    }
+    out.push_str(rest);
+    out
+}
+
 #[test]
 fn every_corpus_file_parses_without_diagnostics() {
     for (name, text) in corpus() {
@@ -70,5 +86,29 @@ fn the_tree_is_lossless() {
         let mut sources = SourceMap::new();
         let file = sources.add(&name, text.as_str()).unwrap();
         assert_eq!(parse_file(file, &text).syntax().to_string(), text, "{name}");
+    }
+}
+
+#[test]
+fn formatting_is_idempotent_and_keeps_the_meaning() {
+    for (name, text) in corpus() {
+        let mut sources = SourceMap::new();
+        let file = sources.add(&name, text.as_str()).unwrap();
+        let formatted = format_file(file, &text).unwrap_or_else(|error| panic!("{name}: {error}"));
+        let again = format_file(file, &formatted).unwrap_or_else(|error| panic!("{name}: {error}"));
+        assert_eq!(again, formatted, "{name}: formatting twice changed it");
+
+        let before = parse_file(file, &text);
+        let after = parse_file(file, &formatted);
+        assert!(
+            after.diagnostics.is_empty(),
+            "{name}: {:?}",
+            after.diagnostics
+        );
+        assert_eq!(
+            without_spans(&format!("{:?}", after.ast)),
+            without_spans(&format!("{:?}", before.ast)),
+            "{name}: formatting changed the meaning"
+        );
     }
 }
