@@ -42,6 +42,7 @@
 
 mod build;
 pub mod render;
+pub mod solid;
 
 use glam::{Mat4, Vec3};
 use stave_model::solved::{Envelope, Hardware, Part, Shape, Size3};
