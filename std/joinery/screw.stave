@@ -10,7 +10,7 @@ kind screw : joint {
   /// Screws per connection.
   param count = 2
   require stays_inside : length <= piece.thickness + into.thickness - 3mm "the screw would come out the other side"
-  require bites : length >= piece.thickness + 8mm "the screw is too short to hold"
+  require bites        : length >= piece.thickness + 8mm "the screw is too short to hold"
 
   insert: [push(piece, along: thickness)]
   uses:   wood_screw(diameter: diameter, length: length, count: count)

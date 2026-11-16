@@ -8,7 +8,8 @@
 //!
 //! A directory is searched recursively for `.stave` files, in sorted order so
 //! output is the same on every run. Exit codes: 0 when everything is fine, 1
-//! when a file has errors or (with `fmt --check`) is not formatted, 2 when
+//! when `check` finds errors or `fmt --check` finds a file to reformat (`fmt`
+//! skips files with syntax errors, which are `check`'s business), 2 when
 //! the command itself fails (a missing path, an unreadable file).
 
 use std::io::Write as _;
@@ -40,7 +41,8 @@ enum Command {
         /// A .stave file, or a folder to search recursively.
         path: PathBuf,
     },
-    /// Lay out .stave files canonically, in place.
+    /// Lay out .stave files canonically, in place. Files with syntax errors
+    /// are skipped.
     Fmt {
         /// A .stave file, or a folder to search recursively.
         path: PathBuf,
@@ -147,7 +149,8 @@ fn check(path: &Path) -> Result<bool> {
 }
 
 /// Formats every file, or with `check_only` reports the ones that would
-/// change. `Ok(true)` when every file is (now) formatted.
+/// change. `Ok(true)` when every file that parses is (now) formatted; files
+/// with syntax errors are skipped with a note.
 fn fmt(path: &Path, check_only: bool) -> Result<bool> {
     let files = stave_files(path)?;
     let mut sources = SourceMap::new();
@@ -170,9 +173,15 @@ fn fmt(path: &Path, check_only: bool) -> Result<bool> {
                 }
             }
             Err(FormatError::Syntax(diagnostics)) => {
-                write!(stderr, "{}", render_diagnostics(&sources, &diagnostics))?;
-                writeln!(stderr, "not formatted: {} has errors", path.display())?;
-                all_fine = false;
+                // Layout is fmt's job; errors are check's. A file that
+                // doesn't parse is left alone and doesn't fail the run.
+                let errors = diagnostics.iter().filter(|d| d.is_error()).count();
+                writeln!(
+                    stderr,
+                    "skipped {}: {errors} syntax {} (see stave check)",
+                    path.display(),
+                    plural(errors, "error", "errors")
+                )?;
             }
             Err(error @ FormatError::WouldChangeMeaning) => {
                 writeln!(stderr, "not formatted: {}: {error}", path.display())?;

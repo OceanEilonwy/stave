@@ -14,7 +14,7 @@ kind ari_tsugi : joint {
   /// Slope of the tail's cheeks.
   param angle = 10deg
   require same_section : piece.width == into.width && piece.thickness == into.thickness "both beams need the same section"
-  require fits : depth <= into.length / 4 "the dovetail is too deep for this beam"
+  require fits         : depth <= into.length / 4 "the dovetail is too deep for this beam"
 
   // The tail is drawn on the wide face and cut square through the thickness,
   // so the beam goes in along its thickness: from above, for a beam lying flat.

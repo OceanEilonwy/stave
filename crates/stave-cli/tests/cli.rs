@@ -92,21 +92,35 @@ fn fmt_formats_in_place_and_checks() {
 }
 
 #[test]
-fn fmt_leaves_files_with_errors_alone() {
+fn fmt_skips_files_with_errors() {
     let folder = scratch("fmt-errors");
     let broken = folder.join("broken.stave");
     std::fs::write(&broken, "stave 1\nlet a =\n").unwrap();
-    let output = stave(&["fmt", &broken.to_string_lossy()]);
-    assert_eq!(output.status.code(), Some(1));
+    let output = stave(&["fmt", "--check", &broken.to_string_lossy()]);
+    assert!(output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("error[missing-value]: 'a' has no value"),
-        "{stderr}"
+    assert_eq!(
+        stderr,
+        format!(
+            "skipped {}: 1 syntax error (see stave check)\n",
+            broken.display()
+        )
     );
-    assert!(stderr.contains("has errors"), "{stderr}");
+    let output = stave(&["fmt", &broken.to_string_lossy()]);
+    assert!(output.status.success());
     assert_eq!(
         std::fs::read_to_string(&broken).unwrap(),
         "stave 1\nlet a =\n"
     );
     let _ = std::fs::remove_dir_all(&folder);
+}
+
+#[test]
+fn the_whole_repository_is_formatted() {
+    let output = stave(&["fmt", "--check", "."]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
 }

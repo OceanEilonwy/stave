@@ -112,3 +112,34 @@ fn formatting_is_idempotent_and_keeps_the_meaning() {
         );
     }
 }
+
+#[test]
+fn every_corpus_file_is_already_formatted() {
+    let mut files = corpus();
+    let broken = workspace().join("tests/broken");
+    let mut folders: Vec<PathBuf> = std::fs::read_dir(&broken)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect();
+    folders.sort();
+    for folder in folders {
+        let path = folder.join("project.stave");
+        files.push((
+            path.display().to_string(),
+            std::fs::read_to_string(&path).unwrap(),
+        ));
+    }
+    for (name, text) in files {
+        let mut sources = SourceMap::new();
+        let file = sources.add(&name, text.as_str()).unwrap();
+        match format_file(file, &text) {
+            Ok(formatted) => assert!(
+                formatted == text,
+                "{name} is not formatted; run `stave fmt {name}`"
+            ),
+            // Broken designs with syntax errors can't be formatted.
+            Err(stave_lang::FormatError::Syntax(_)) => assert!(name.contains("tests/broken")),
+            Err(error) => panic!("{name}: {error}"),
+        }
+    }
+}

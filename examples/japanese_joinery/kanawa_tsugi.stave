@@ -30,7 +30,7 @@ kind kanawa_tsugi : joint {
   param pin_stock : Stock = into.stock
 
   require same_section : piece.width == into.width && piece.thickness == into.thickness "both beams need the same section"
-  require room : scarf + stub <= piece.length / 3 && scarf + stub <= into.length / 3 "the splice is too long for these beams"
+  require room         : scarf + stub <= piece.length / 3 && scarf + stub <= into.length / 3 "the splice is too long for these beams"
 
   // The beams are drawn meeting end to end; each reaches half the splice, plus
   // its stub, past that point.
@@ -40,35 +40,35 @@ kind kanawa_tsugi : joint {
   // first stub length at the tip is the stub tenon (shaped below).
   cut side(piece, normal: thickness, from: into) {
     outline(depth: through, marks: [
-      mark(along: stub,                 across: tip),
-      mark(along: stub + scarf / 2,     across: (piece.width - step) / 2),
-      mark(along: stub + scarf / 2,     across: (piece.width + step) / 2),
-      mark(along: stub + scarf,         across: piece.width),
-      mark(along: 0mm,                  across: piece.width),
-      mark(along: 0mm,                  across: tip),
+      mark(along: stub, across: tip),
+      mark(along: stub + scarf / 2, across: (piece.width - step) / 2),
+      mark(along: stub + scarf / 2, across: (piece.width + step) / 2),
+      mark(along: stub + scarf, across: piece.width),
+      mark(along: 0mm, across: piece.width),
+      mark(along: 0mm, across: tip),
     ])
     // Shape the stub: cut its outer third away from this face...
     outline(depth: piece.thickness / 3, marks: [
-      mark(along: 0mm,  across: 0mm),
+      mark(along: 0mm, across: 0mm),
       mark(along: stub, across: 0mm),
       mark(along: stub, across: tip),
-      mark(along: 0mm,  across: tip),
+      mark(along: 0mm, across: tip),
     ])
     // ...and cut the hidden recess for the other half's stub, at the root.
     outline(from_depth: piece.thickness / 3, depth: 2 * piece.thickness / 3, marks: [
-      mark(along: stub + scarf,         across: piece.width - tip),
-      mark(along: 2 * stub + scarf,     across: piece.width - tip),
-      mark(along: 2 * stub + scarf,     across: piece.width),
-      mark(along: stub + scarf,         across: piece.width),
+      mark(along: stub + scarf, across: piece.width - tip),
+      mark(along: 2 * stub + scarf, across: piece.width - tip),
+      mark(along: 2 * stub + scarf, across: piece.width),
+      mark(along: stub + scarf, across: piece.width),
     ])
   }
   // The stub's other outer third, from the opposite face.
   cut side(piece, normal: thickness, from: into, opposite: true) {
     outline(depth: piece.thickness / 3, marks: [
-      mark(along: 0mm,  across: 0mm),
+      mark(along: 0mm, across: 0mm),
       mark(along: stub, across: 0mm),
       mark(along: stub, across: tip),
-      mark(along: 0mm,  across: tip),
+      mark(along: 0mm, across: tip),
     ])
   }
 
@@ -76,32 +76,32 @@ kind kanawa_tsugi : joint {
   // pin's size, which leaves the gap the pin is driven through.
   cut side(into, normal: thickness, from: piece, flip: true) {
     outline(depth: through, marks: [
-      mark(along: stub,                         across: tip),
-      mark(along: stub + scarf / 2 + pin_size,  across: (into.width - step) / 2),
-      mark(along: stub + scarf / 2 + pin_size,  across: (into.width + step) / 2),
-      mark(along: stub + scarf,                 across: into.width),
-      mark(along: 0mm,                          across: into.width),
-      mark(along: 0mm,                          across: tip),
+      mark(along: stub, across: tip),
+      mark(along: stub + scarf / 2 + pin_size, across: (into.width - step) / 2),
+      mark(along: stub + scarf / 2 + pin_size, across: (into.width + step) / 2),
+      mark(along: stub + scarf, across: into.width),
+      mark(along: 0mm, across: into.width),
+      mark(along: 0mm, across: tip),
     ])
     outline(depth: into.thickness / 3, marks: [
-      mark(along: 0mm,  across: 0mm),
+      mark(along: 0mm, across: 0mm),
       mark(along: stub, across: 0mm),
       mark(along: stub, across: tip),
-      mark(along: 0mm,  across: tip),
+      mark(along: 0mm, across: tip),
     ])
     outline(from_depth: into.thickness / 3, depth: 2 * into.thickness / 3, marks: [
-      mark(along: stub + scarf,         across: into.width - tip),
-      mark(along: 2 * stub + scarf,     across: into.width - tip),
-      mark(along: 2 * stub + scarf,     across: into.width),
-      mark(along: stub + scarf,         across: into.width),
+      mark(along: stub + scarf, across: into.width - tip),
+      mark(along: 2 * stub + scarf, across: into.width - tip),
+      mark(along: 2 * stub + scarf, across: into.width),
+      mark(along: stub + scarf, across: into.width),
     ])
   }
   cut side(into, normal: thickness, from: piece, flip: true, opposite: true) {
     outline(depth: into.thickness / 3, marks: [
-      mark(along: 0mm,  across: 0mm),
+      mark(along: 0mm, across: 0mm),
       mark(along: stub, across: 0mm),
       mark(along: stub, across: tip),
-      mark(along: 0mm,  across: tip),
+      mark(along: 0mm, across: tip),
     ])
   }
 

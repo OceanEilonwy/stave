@@ -14,7 +14,7 @@ component Drawer {
   param top_gap      = 15mm              // above the box
   param box_height   = opening.up - bottom_gap - top_gap
 
-  require slide_fits : slide.length <= opening.deep "the slide is longer than the opening is deep"
+  require slide_fits    : slide.length <= opening.deep "the slide is longer than the opening is deep"
   require box_is_useful : box_height >= 60mm "the drawer box is too shallow; make the opening taller"
 
   /// The space the drawer front fills, in front of its opening.
