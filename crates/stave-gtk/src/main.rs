@@ -3,6 +3,7 @@
 //! ```text
 //! stave-gtk examples/clothing_cabinet
 //! stave-gtk examples/clothing_cabinet --screenshot cabinet.png --scene all_open --size 1600x1000
+//! stave-gtk examples/wall_shelf --screenshot back.png --turn 180     (seen from behind)
 //! ```
 //!
 //! Without `--screenshot` it opens a libadwaita window. With it, it renders
@@ -43,6 +44,15 @@ struct Arguments {
     /// The screenshot's size in pixels.
     #[arg(long, value_name = "WIDTHxHEIGHT", default_value = "1600x1000", value_parser = parse_size)]
     size: (u32, u32),
+    /// Turn the screenshot's camera this many degrees about the up axis
+    /// from the default view (positive toward the right; 180 shows the back).
+    #[arg(
+        long,
+        value_name = "DEGREES",
+        default_value_t = 0.0,
+        allow_negative_numbers = true
+    )]
+    turn: f32,
 }
 
 fn parse_size(text: &str) -> Result<(u32, u32)> {
@@ -64,6 +74,7 @@ fn main() -> ExitCode {
             output,
             arguments.scene.as_deref(),
             arguments.size,
+            arguments.turn,
         ),
         None => ui::run(ui::Options {
             folder: arguments.folder,

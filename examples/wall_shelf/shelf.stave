@@ -3,6 +3,13 @@ stave 1
 // A wall shelf: one board on two L-shaped brackets. This is the smallest
 // complete Stave project, so every line is explained.
 //
+// The wall itself is not part of the design: it is behind the shelf, at the
+// shelf's back face. The uprights hang down against it and are screwed to
+// it, and the arms reach forward from them under the shelf. With no wall to
+// draw, the viewer stands the shelf on the floor at the foot of the uprights;
+// turn the view to look along it from one end and the L of each bracket is
+// plain to see.
+//
 // A .stave file describes what you want to build, not where things are.
 // You never type coordinates. You say "this sits on that" and Stave works
 // out the positions, the cut sizes and the joints.

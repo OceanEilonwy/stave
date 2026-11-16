@@ -1,4 +1,5 @@
-//! `--screenshot`: one frame, offscreen, with the default framing.
+//! `--screenshot`: one frame, offscreen, framed on the whole design from
+//! the default direction, optionally turned with `--turn`.
 
 use std::path::Path;
 
@@ -8,12 +9,15 @@ use stave_scene::{Orbit, SceneGraph};
 
 use crate::render::{Frame, Image, Renderer, write_png};
 
-/// Renders a scene of a design to an image.
+/// Renders a scene of a design to an image, seen from the default
+/// direction turned `turn_degrees` about the up axis (positive toward the
+/// right; 180 looks at the back).
 pub fn render_scene(
     renderer: &mut Renderer,
     scene: &SceneGraph,
     scene_name: Option<&str>,
     (width, height): (u32, u32),
+    turn_degrees: f32,
 ) -> Result<Image> {
     let posed = match scene_name {
         None => scene.rest(),
@@ -31,10 +35,16 @@ pub fn render_scene(
     let aspect = width as f32 / height as f32;
     let bounds = scene.bounds(&posed).context("the scene shows nothing")?;
     renderer.upload(scene);
+    let default = Orbit::framing(bounds, aspect);
+    let orbit = Orbit {
+        yaw: (default.yaw + turn_degrees.to_radians()).rem_euclid(std::f32::consts::TAU),
+        ..default
+    }
+    .framed(bounds, aspect);
     renderer.render(&Frame {
         scene,
         posed: &posed,
-        orbit: Orbit::framing(bounds, aspect),
+        orbit,
         selection: None,
         width,
         height,
@@ -42,7 +52,13 @@ pub fn render_scene(
 }
 
 /// Opens a project, renders it and writes a PNG.
-pub fn run(folder: &Path, output: &Path, scene_name: Option<&str>, size: (u32, u32)) -> Result<()> {
+pub fn run(
+    folder: &Path,
+    output: &Path,
+    scene_name: Option<&str>,
+    size: (u32, u32),
+    turn_degrees: f32,
+) -> Result<()> {
     let opened =
         stave_app::open(folder).with_context(|| format!("can't open '{}'", folder.display()))?;
     eprint!(
@@ -58,7 +74,7 @@ pub fn run(folder: &Path, output: &Path, scene_name: Option<&str>, size: (u32, u
     };
     let scene = stave_app::view::scene(design);
     let mut renderer = Renderer::new()?;
-    let image = render_scene(&mut renderer, &scene, scene_name, size)?;
+    let image = render_scene(&mut renderer, &scene, scene_name, size, turn_degrees)?;
     write_png(&image, output)?;
     eprintln!(
         "wrote {} ({}x{}, {})",
@@ -91,7 +107,7 @@ mod tests {
         let opened = stave_app::open(&folder).unwrap();
         let scene = stave_app::view::scene(opened.design.as_ref().unwrap());
         for scene_name in [None, Some("all_open")] {
-            let image = render_scene(&mut renderer, &scene, scene_name, (320, 200)).unwrap();
+            let image = render_scene(&mut renderer, &scene, scene_name, (320, 200), 0.0).unwrap();
             assert_eq!(image.rgba.len(), 320 * 200 * 4);
             let pixel = |x: usize, y: usize| {
                 let at = (y * 320 + x) * 4;
@@ -104,6 +120,14 @@ mod tests {
             let middle = pixel(160, 100);
             assert!(middle[0] > middle[2] + 30, "{middle:?}");
         }
-        assert!(render_scene(&mut renderer, &scene, Some("no_such_scene"), (64, 64)).is_err());
+        assert!(render_scene(&mut renderer, &scene, Some("no_such_scene"), (64, 64), 0.0).is_err());
+        // Turned to look at the back, the cabinet is still framed (wood in
+        // the middle) but the picture differs: the back is plywood, no doors.
+        let front = render_scene(&mut renderer, &scene, None, (320, 200), 0.0).unwrap();
+        let back = render_scene(&mut renderer, &scene, None, (320, 200), 180.0).unwrap();
+        assert_ne!(front.rgba, back.rgba);
+        let at = (100 * 320 + 160) * 4;
+        let middle = [back.rgba[at], back.rgba[at + 1], back.rgba[at + 2]];
+        assert!(middle[0] > middle[2] + 30, "{middle:?}");
     }
 }
