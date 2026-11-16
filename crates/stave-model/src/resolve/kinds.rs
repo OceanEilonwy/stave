@@ -282,8 +282,10 @@ impl Resolver<'_> {
                 }
             }
             for param in &params {
-                if let Some(spec) = base(base_kind).entry(&param.decl.name) {
-                    if let Some(wanted) = Ty::from_value_type(spec.ty) {
+                if let Some(spec) = base(base_kind).entry(&param.decl.name)
+                    && let Some(wanted) = Ty::from_value_type(spec.ty)
+                {
+                    {
                         if !param.ty.fits(&wanted) {
                             self.error(
                                 Code::TypeMismatch,

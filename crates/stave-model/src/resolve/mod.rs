@@ -274,6 +274,7 @@ impl<'a> Resolver<'a> {
         let out = std::mem::take(&mut self.out);
         let defs = Defs {
             modules: out.modules,
+            prelude: self.modules.prelude.clone(),
             params: take(out.params),
             lets: take(out.lets),
             regions: take(out.regions),
@@ -355,9 +356,7 @@ impl<'a> Resolver<'a> {
                     first.span,
                     "first declared here",
                 ))
-                .with_help(format!(
-                    "rename one of them; names are shared by every file of a module"
-                )),
+                .with_help("rename one of them; names are shared by every file of a module"),
             );
             return;
         }

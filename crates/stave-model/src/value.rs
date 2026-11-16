@@ -565,7 +565,7 @@ pub fn unary(op: UnaryOp, operand: &Value) -> Result<Value, ValueError> {
         (UnaryOp::Neg, Value::Ratio(n)) => n.checked_neg().map(Value::Ratio).ok_or(overflow),
         (_, other) => Err(ValueError::Mismatch {
             verb: if op == UnaryOp::Not {
-                "negate"
+                "invert"
             } else {
                 "negate"
             },

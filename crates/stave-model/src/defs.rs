@@ -1039,6 +1039,8 @@ pub struct ModuleDefs {
 pub struct Defs {
     /// Per module, indexed by [`ModuleId`].
     pub modules: Vec<ModuleDefs>,
+    /// The standard modules whose public items are the prelude.
+    pub prelude: Vec<ModuleId>,
     /// `param`s of modules and components.
     pub params: Vec<ParamDef>,
     /// `let`s.

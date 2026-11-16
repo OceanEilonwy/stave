@@ -12,7 +12,7 @@ use stave_schema::kinds::base;
 use stave_schema::species::Species;
 use stave_schema::words::{Grain, Measure, MotionWord, OutputUnit, StockForm, WordSet};
 
-use super::{ArrayShape, Body, Cx, Resolver};
+use super::{ArrayShape, Cx, Resolver};
 use crate::defs::{
     DefId, Index, Member, RExpr, RExprKind, Setting, StockField, Symbol, Text, TextPart, Word,
 };
@@ -549,9 +549,12 @@ impl Resolver<'_> {
 
     fn member(&mut self, cx: &Cx, base: &ast::Expr, member: &ast::Name, span: Span) -> RExpr {
         // `module.item`: a qualified name.
-        if let ExprKind::Name(root) = &base.kind {
-            if self.lookup(cx, root.as_str()).is_none() {
-                if let Some(module) = self.import(cx, root.as_str()) {
+        if let ExprKind::Name(root) = &base.kind
+            && self.lookup(cx, root.as_str()).is_none()
+            && let Some(module) = self.import(cx, root.as_str())
+        {
+            {
+                {
                     return match self.public_item(module, member.as_str()) {
                         Ok(def) => {
                             let ty = self.symbol_ty(Symbol::Def(def));
@@ -927,13 +930,13 @@ impl Resolver<'_> {
         if let Some(index) = params.iter().position(|p| p.name.as_str() == name.as_str()) {
             return Some(self.kind_param_ty(id, index));
         }
-        if syntax.base.value == BaseKind::Joint {
-            if let Some(spec) = stave_schema::fields::find(
+        if syntax.base.value == BaseKind::Joint
+            && let Some(spec) = stave_schema::fields::find(
                 stave_schema::fields::JOINT_IMPLICIT_SETTINGS,
                 name.as_str(),
-            ) {
-                return Ty::from_value_type(spec.ty);
-            }
+            )
+        {
+            return Ty::from_value_type(spec.ty);
         }
         if syntax.base.value.is_mounted_hardware()
             && name.as_str() == stave_schema::kinds::FACE_SETTING
@@ -1108,14 +1111,6 @@ impl Resolver<'_> {
             };
         }
         self.value(cx, &expr, expect)
-    }
-
-    /// Whether the body is a kind body.
-    pub(crate) fn in_kind(cx: &Cx) -> Option<crate::ids::KindId> {
-        match cx.body {
-            Body::Kind(kind) => Some(kind),
-            Body::Module | Body::Component(_) => None,
-        }
     }
 }
 
