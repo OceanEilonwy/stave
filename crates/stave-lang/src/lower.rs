@@ -87,8 +87,9 @@ fn docs(node: &SyntaxNode) -> Docs {
         .filter_map(|element| element.into_token())
         .filter(|token| token.kind() == SyntaxKind::DOC)
         .map(|token| {
+            // Trailing spaces and tabs are layout, which `stave fmt` removes.
             let text = token.text().strip_prefix("///").unwrap_or(token.text());
-            text.strip_prefix(' ').unwrap_or(text).to_owned()
+            text.strip_prefix(' ').unwrap_or(text).trim_end().to_owned()
         })
         .collect()
 }

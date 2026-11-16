@@ -1833,12 +1833,19 @@ impl<'t> Parser<'t> {
         let checkpoint = self.checkpoint();
         self.unary()?;
         let mut left_is_comparison = false;
+        // Each operator wraps the expression so far in one more node, so a
+        // long chain nests as deep as a long run of brackets.
+        let mut chain: u32 = 0;
         loop {
             let Some(power) = BinaryPower::of(self.current()) else {
                 return Ok(());
             };
             if power <= min {
                 return Ok(());
+            }
+            chain += 1;
+            if self.depth.saturating_add(chain) >= MAX_DEPTH {
+                return Err(self.too_deep());
             }
             let comparison = power == BinaryPower::Compare;
             // Comparisons don't chain: `a < b < c` stops after `a < b`.
@@ -1856,12 +1863,18 @@ impl<'t> Parser<'t> {
         }
     }
 
+    /// `expected a simpler expression`: the expression nests deeper than
+    /// [`MAX_DEPTH`].
+    fn too_deep(&mut self) -> Reported {
+        self.expected_with_help(
+            &["a simpler expression"],
+            Some("split the expression with let"),
+        )
+    }
+
     fn unary(&mut self) -> PResult {
         if self.depth >= MAX_DEPTH {
-            return Err(self.expected_with_help(
-                &["a simpler expression"],
-                Some("split the expression with let"),
-            ));
+            return Err(self.too_deep());
         }
         self.depth += 1;
         let result = if self.at(MINUS) || self.at(BANG) {
@@ -1879,7 +1892,14 @@ impl<'t> Parser<'t> {
     fn postfix(&mut self) -> PResult {
         let checkpoint = self.checkpoint();
         self.primary()?;
+        let mut chain: u32 = 0;
         loop {
+            if matches!(self.current(), DOT | L_BRACK | L_PAREN) {
+                chain += 1;
+                if self.depth.saturating_add(chain) >= MAX_DEPTH {
+                    return Err(self.too_deep());
+                }
+            }
             match self.current() {
                 DOT => self.node_at(checkpoint, MEMBER_EXPR, |p| {
                     p.bump();
