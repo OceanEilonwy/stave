@@ -13,15 +13,15 @@ use crate::Opened;
 
 /// The scene graph a viewer draws.
 ///
-/// Boards are drawn with their drawn boxes: until cuts are applied (a
-/// later step), the extensions joints add (tongues, tenons) would overlap
-/// the parts they enter and flicker against their faces. The selection
-/// panel still shows the cut size.
+/// Every part is drawn as cut, with its cuts made: tenons sit inside
+/// their mortises, shelves in their dados, and the joinery shows wherever
+/// it is visible. Parts that fit meet face to face without overlapping, so
+/// nothing flickers.
 pub fn scene(design: &SolvedDesign) -> SceneGraph {
     SceneGraph::build(
         design,
         BuildOptions {
-            extent: Extent::Drawn,
+            extent: Extent::Cut,
         },
     )
 }

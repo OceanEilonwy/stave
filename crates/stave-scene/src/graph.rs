@@ -1,6 +1,7 @@
 //! Nodes, materials and scene poses.
 
 use glam::{Mat4, Quat, Vec3};
+use stave_geom::solid::Solid;
 use stave_geom::{Aabb, Extent, Geometry, render};
 use stave_model::solved::{
     AssemblyId, HardwareBase, HardwareId, Motion, Part, PartId, PoseValue, SceneId, SceneItem,
@@ -291,7 +292,10 @@ impl SceneGraph {
         };
         let mut nodes = Vec::with_capacity(design.parts.len() + design.hardware.len());
         for part in &design.parts {
-            let geometry = stave_geom::part(part, options.extent);
+            let geometry = match options.extent {
+                Extent::Cut => stave_geom::cut_part(part, &Solid::of(part, design)),
+                Extent::Drawn => stave_geom::part(part, Extent::Drawn),
+            };
             let material = Material::Wood(wood(part));
             nodes.push(Node {
                 item: Item::Part(part.id),
