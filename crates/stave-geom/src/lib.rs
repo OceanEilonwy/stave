@@ -41,6 +41,7 @@
 #![warn(missing_docs)]
 
 mod build;
+pub mod collide;
 pub mod render;
 pub mod solid;
 

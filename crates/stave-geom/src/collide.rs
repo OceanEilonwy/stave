@@ -1,0 +1,1026 @@
+//! Collision tests between cut solids in world coordinates: where wood
+//! passes through wood, and whether two parts touch.
+//!
+//! Two surfaces **touch** when they are within [`CONTACT_TOLERANCE`]
+//! (grammar, "Fit and contact"); wood that goes deeper than that into
+//! other wood is an [`Overlap`]. The depth of an overlap is how far one
+//! solid would have to move to clear the other: for two boxes, the
+//! smallest side of the box they share.
+//!
+//! Boxes are exact: every part is axis-aligned at rest and after a slide's
+//! travel, so a board's blocks are whole-nanometre world boxes and box
+//! against box is integer arithmetic. Round shapes (rods, holes, round
+//! envelopes) are tested in `f64` nanometres, converted in
+//! [`render`](crate::render). A hole clears what lies inside it: a rod
+//! inside a hole of the other part (a round tenon in its hole, a rung in
+//! its socket) is cut back to where the hole doesn't hold it, and a block
+//! lying wholly inside a hole is cut back the same way.
+//!
+//! A solid turned by a hinge is no longer axis-aligned. [`overlaps_placed`]
+//! then tests oriented boxes with the separating axis test: each block and
+//! each rod (as the square prism around it) of one solid against those of
+//! the other. Holes are left out there, which only ever finds more wood
+//! than there is.
+
+use glam::{DMat4, DVec3};
+use stave_lang::placement::{Axis, Direction, PartAxis};
+use stave_lang::units::Length;
+use stave_model::solved::{Envelope, Motion, Part, Point, Pose, PoseValue, WorldBox};
+
+use crate::render;
+use crate::solid::{Rod, Solid, across};
+
+/// Surfaces this close touch; anything deeper overlaps (0.05mm).
+pub const CONTACT_TOLERANCE: Length = Length::from_nm(50_000);
+
+/// A cylinder along a world axis.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WorldRod {
+    /// The axis it runs along.
+    pub axis: Axis,
+    /// Its centre on the two other axes, in [`Axis::others`] order.
+    pub centre: [Length; 2],
+    /// Its diameter.
+    pub diameter: Length,
+    /// Its low end along `axis`.
+    pub start: Length,
+    /// Its high end along `axis`.
+    pub end: Length,
+}
+
+impl WorldRod {
+    /// The box around it.
+    pub fn bounds(&self) -> WorldBox {
+        let [first, second] = self.axis.others();
+        let half = self.diameter.nm().div_euclid(2);
+        let rest = self.diameter.nm().saturating_sub(half);
+        let point = |axis_value: Length, a: i64, b: i64| {
+            Point::default()
+                .with(self.axis, axis_value)
+                .with(
+                    first,
+                    Length::from_nm(self.centre[0].nm().saturating_add(a)),
+                )
+                .with(
+                    second,
+                    Length::from_nm(self.centre[1].nm().saturating_add(b)),
+                )
+        };
+        WorldBox::new(point(self.start, -half, -half), point(self.end, rest, rest))
+    }
+
+    fn radius(&self) -> f64 {
+        render::nm(self.diameter) / 2.0
+    }
+
+    /// The centre's coordinate along one of the other axes.
+    fn centre_on(&self, axis: Axis) -> Option<f64> {
+        let [first, second] = self.axis.others();
+        if axis == first {
+            Some(render::nm(self.centre[0]))
+        } else if axis == second {
+            Some(render::nm(self.centre[1]))
+        } else {
+            None
+        }
+    }
+
+    fn translated(&self, by: Point) -> WorldRod {
+        let [first, second] = self.axis.others();
+        let shift = |value: Length, axis: Axis| {
+            Length::from_nm(value.nm().saturating_add(by.get(axis).nm()))
+        };
+        WorldRod {
+            axis: self.axis,
+            centre: [shift(self.centre[0], first), shift(self.centre[1], second)],
+            diameter: self.diameter,
+            start: shift(self.start, self.axis),
+            end: shift(self.end, self.axis),
+        }
+    }
+}
+
+/// A solid in world coordinates: boxes and rods of wood (or of a hardware
+/// envelope), less the holes drilled in it.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct WorldSolid {
+    boxes: Vec<WorldBox>,
+    rods: Vec<WorldRod>,
+    holes: Vec<WorldRod>,
+}
+
+impl WorldSolid {
+    /// A part's cut solid, placed.
+    pub fn of_part(part: &Part, solid: &Solid) -> WorldSolid {
+        let pose = &part.pose;
+        let boxes = solid
+            .blocks()
+            .iter()
+            .map(|block| pose.world_box_at(block.min(), size_between(block.min(), block.max())))
+            .collect();
+        let centre = [
+            Length::from_nm(part.cut.width.nm().div_euclid(2)),
+            Length::from_nm(part.cut.thickness.nm().div_euclid(2)),
+        ];
+        let rods = solid
+            .all_rods(centre)
+            .iter()
+            .map(|rod| world_rod(pose, rod))
+            .collect();
+        let holes = solid
+            .holes()
+            .iter()
+            .map(|rod| world_rod(pose, rod))
+            .collect();
+        WorldSolid { boxes, rods, holes }
+    }
+
+    /// A hardware envelope (a box, or a cylinder along its local
+    /// thickness) at a pose.
+    pub fn of_envelope(envelope: &Envelope, pose: &Pose) -> WorldSolid {
+        match *envelope {
+            Envelope::Box { .. } => WorldSolid {
+                boxes: vec![pose.world_box(envelope.size())],
+                rods: Vec::new(),
+                holes: Vec::new(),
+            },
+            Envelope::Cylinder { diameter, length } => {
+                let half = Length::from_nm(diameter.nm().div_euclid(2));
+                let rod = Rod {
+                    axis: PartAxis::Thickness,
+                    centre: [half, half],
+                    diameter,
+                    start: Length::ZERO,
+                    end: length,
+                    flats: None,
+                };
+                WorldSolid {
+                    boxes: Vec::new(),
+                    rods: vec![world_rod(pose, &rod)],
+                    holes: Vec::new(),
+                }
+            }
+        }
+    }
+
+    /// The box around all of it; `None` when it has no wood.
+    pub fn bounds(&self) -> Option<WorldBox> {
+        self.boxes
+            .iter()
+            .copied()
+            .chain(self.rods.iter().map(WorldRod::bounds))
+            .reduce(|a, b| union(&a, &b))
+    }
+
+    /// The same solid moved by an exact offset.
+    pub fn translated(&self, by: Point) -> WorldSolid {
+        WorldSolid {
+            boxes: self.boxes.iter().map(|b| translate_box(b, by)).collect(),
+            rods: self.rods.iter().map(|r| r.translated(by)).collect(),
+            holes: self.holes.iter().map(|r| r.translated(by)).collect(),
+        }
+    }
+
+    /// The boxes of wood.
+    pub fn boxes(&self) -> &[WorldBox] {
+        &self.boxes
+    }
+
+    /// The rods of wood.
+    pub fn rods(&self) -> &[WorldRod] {
+        &self.rods
+    }
+
+    /// The holes.
+    pub fn holes(&self) -> &[WorldRod] {
+        &self.holes
+    }
+}
+
+fn size_between(
+    min: stave_model::solved::Size3,
+    max: stave_model::solved::Size3,
+) -> stave_model::solved::Size3 {
+    let mut size = stave_model::solved::Size3::default();
+    for axis in PartAxis::ALL {
+        size = size.with(
+            axis,
+            Length::from_nm(max.get(axis).nm().saturating_sub(min.get(axis).nm())),
+        );
+    }
+    size
+}
+
+/// A world coordinate of a local one along a part axis.
+fn world_coordinate(pose: &Pose, axis: PartAxis, local: Length) -> (Axis, Length) {
+    let direction = pose.orientation.direction(axis);
+    let world = direction.axis();
+    let origin = pose.origin.get(world).nm();
+    let value = if direction.is_positive() {
+        origin.saturating_add(local.nm())
+    } else {
+        origin.saturating_sub(local.nm())
+    };
+    (world, Length::from_nm(value))
+}
+
+fn world_rod(pose: &Pose, rod: &Rod) -> WorldRod {
+    let (axis, a) = world_coordinate(pose, rod.axis, rod.start);
+    let (_, b) = world_coordinate(pose, rod.axis, rod.end);
+    let [first, second] = across(rod.axis);
+    let (w1, c1) = world_coordinate(pose, first, rod.centre[0]);
+    let (_, c2) = world_coordinate(pose, second, rod.centre[1]);
+    let [o1, _] = axis.others();
+    let centre = if w1 == o1 { [c1, c2] } else { [c2, c1] };
+    WorldRod {
+        axis,
+        centre,
+        diameter: rod.diameter,
+        start: a.min(b),
+        end: a.max(b),
+    }
+}
+
+fn translate_box(b: &WorldBox, by: Point) -> WorldBox {
+    let shift = |p: Point| {
+        let mut out = p;
+        for axis in Axis::ALL {
+            out = out.with(
+                axis,
+                Length::from_nm(p.get(axis).nm().saturating_add(by.get(axis).nm())),
+            );
+        }
+        out
+    };
+    WorldBox::new(shift(b.min()), shift(b.max()))
+}
+
+/// The box around two boxes.
+pub fn union(a: &WorldBox, b: &WorldBox) -> WorldBox {
+    let mut min = a.min();
+    let mut max = a.max();
+    for axis in Axis::ALL {
+        min = min.with(axis, min.get(axis).min(b.min().get(axis)));
+        max = max.with(axis, max.get(axis).max(b.max().get(axis)));
+    }
+    WorldBox::new(min, max)
+}
+
+/// The box two boxes share, when it has a volume.
+pub fn intersection(a: &WorldBox, b: &WorldBox) -> Option<WorldBox> {
+    let mut min = a.min();
+    let mut max = a.max();
+    for axis in Axis::ALL {
+        min = min.with(axis, min.get(axis).max(b.min().get(axis)));
+        max = max.with(axis, max.get(axis).min(b.max().get(axis)));
+        if min.get(axis) >= max.get(axis) {
+            return None;
+        }
+    }
+    Some(WorldBox::new(min, max))
+}
+
+/// Do two boxes overlap by more than the contact tolerance along every
+/// axis (the broad phase's test)?
+pub fn boxes_overlap(a: &WorldBox, b: &WorldBox) -> bool {
+    Axis::ALL.into_iter().all(|axis| {
+        let low = a.min().get(axis).max(b.min().get(axis));
+        let high = a.max().get(axis).min(b.max().get(axis));
+        high.nm().saturating_sub(low.nm()) > CONTACT_TOLERANCE.nm()
+    })
+}
+
+/// Wood of one solid inside wood of another.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Overlap {
+    /// How far one would have to move to clear the other.
+    pub depth: Length,
+    /// The world axis along which that move is shortest.
+    pub axis: Axis,
+    /// The box around the shared wood.
+    pub region: WorldBox,
+}
+
+/// The smallest side of a box, and its axis.
+fn thinnest(region: &WorldBox) -> (Length, Axis) {
+    Axis::ALL
+        .into_iter()
+        .map(|axis| (region.size(axis), axis))
+        .min_by_key(|(size, axis)| (*size, *axis))
+        .unwrap_or((Length::ZERO, Axis::Up))
+}
+
+/// A piece of a rod left to test, with how deep it can at most go when a
+/// hole only partly holds it.
+#[derive(Debug, Clone, Copy)]
+struct RodPiece {
+    rod: WorldRod,
+    cap: Option<f64>,
+}
+
+/// A rod cut back to where `holes` don't hold it.
+fn clip(rod: &WorldRod, holes: &[WorldRod]) -> Vec<RodPiece> {
+    let mut pieces = vec![RodPiece {
+        rod: *rod,
+        cap: None,
+    }];
+    let tolerance = render::nm(CONTACT_TOLERANCE);
+    for hole in holes.iter().filter(|h| h.axis == rod.axis) {
+        let (Some(a), Some(b)) = (
+            rod.centre_on(rod.axis.others()[0]),
+            rod.centre_on(rod.axis.others()[1]),
+        ) else {
+            continue;
+        };
+        let (Some(c), Some(d)) = (
+            hole.centre_on(rod.axis.others()[0]),
+            hole.centre_on(rod.axis.others()[1]),
+        ) else {
+            continue;
+        };
+        let offset = ((a - c).powi(2) + (b - d).powi(2)).sqrt();
+        let held = offset + rod.radius() <= hole.radius() + tolerance;
+        let protrudes = offset + rod.radius() - hole.radius();
+        if !held && offset >= rod.radius() + hole.radius() {
+            continue;
+        }
+        let mut next = Vec::new();
+        for piece in pieces {
+            let (s, e) = (piece.rod.start, piece.rod.end);
+            let (hs, he) = (hole.start.max(s), hole.end.min(e));
+            if hs >= he {
+                next.push(piece);
+                continue;
+            }
+            let part = |from: Length, to: Length, cap: Option<f64>| RodPiece {
+                rod: WorldRod {
+                    start: from,
+                    end: to,
+                    ..piece.rod
+                },
+                cap,
+            };
+            if s < hs {
+                next.push(part(s, hs, piece.cap));
+            }
+            if !held {
+                let cap = Some(piece.cap.map_or(protrudes, |c| c.min(protrudes)));
+                next.push(part(hs, he, cap));
+            }
+            if he < e {
+                next.push(part(he, e, piece.cap));
+            }
+        }
+        pieces = next;
+    }
+    pieces
+}
+
+/// A box cut back to where `holes` don't hold it: a hole whose disc holds
+/// the box's whole cross-section clears the box over the hole's length.
+fn clear(region: WorldBox, holes: &[WorldRod]) -> Vec<WorldBox> {
+    let tolerance = render::nm(CONTACT_TOLERANCE);
+    let mut pieces = vec![region];
+    for hole in holes {
+        let [first, second] = hole.axis.others();
+        let mut next = Vec::new();
+        for piece in pieces {
+            let (Some(cx), Some(cy)) = (hole.centre_on(first), hole.centre_on(second)) else {
+                next.push(piece);
+                continue;
+            };
+            let reach = (hole.radius() + tolerance).powi(2);
+            let corners_inside = [piece.min(), piece.max()].iter().all(|p| {
+                [piece.min(), piece.max()].iter().all(|q| {
+                    let x = render::nm(p.get(first)) - cx;
+                    let y = render::nm(q.get(second)) - cy;
+                    x * x + y * y <= reach
+                })
+            });
+            let (s, e) = (piece.min().get(hole.axis), piece.max().get(hole.axis));
+            let (hs, he) = (hole.start.max(s), hole.end.min(e));
+            if !corners_inside || hs >= he {
+                next.push(piece);
+                continue;
+            }
+            if s < hs {
+                next.push(WorldBox::new(piece.min(), piece.max().with(hole.axis, hs)));
+            }
+            if he < e {
+                next.push(WorldBox::new(piece.min().with(hole.axis, he), piece.max()));
+            }
+        }
+        pieces = next;
+    }
+    pieces
+}
+
+/// How far a disc goes into a rectangle on the plane across an axis:
+/// the depth and the axis along which it is shortest to push it out.
+fn disc_into_rectangle(
+    centre: [f64; 2],
+    radius: f64,
+    low: [f64; 2],
+    high: [f64; 2],
+    axes: [Axis; 2],
+) -> (f64, Axis) {
+    let inside = (0..2).all(|i| centre[i] >= low[i] && centre[i] <= high[i]);
+    if inside {
+        // Push out through the nearest side.
+        let mut best = (f64::INFINITY, axes[0]);
+        for i in 0..2 {
+            for distance in [centre[i] - low[i], high[i] - centre[i]] {
+                if distance + radius < best.0 {
+                    best = (distance + radius, axes[i]);
+                }
+            }
+        }
+        best
+    } else {
+        let nearest = [0, 1].map(|i| centre[i].clamp(low[i], high[i]));
+        let dx = centre[0] - nearest[0];
+        let dy = centre[1] - nearest[1];
+        let distance = (dx * dx + dy * dy).sqrt();
+        let axis = if dx.abs() >= dy.abs() {
+            axes[0]
+        } else {
+            axes[1]
+        };
+        (radius - distance, axis)
+    }
+}
+
+fn rod_box(piece: &RodPiece, other: &WorldBox) -> Option<Overlap> {
+    let rod = &piece.rod;
+    let low = rod.start.max(other.min().get(rod.axis));
+    let high = rod.end.min(other.max().get(rod.axis));
+    if low >= high {
+        return None;
+    }
+    let along = render::nm(high) - render::nm(low);
+    let axes = rod.axis.others();
+    let centre = axes.map(|axis| rod.centre_on(axis).unwrap_or(0.0));
+    let (across, across_axis) = disc_into_rectangle(
+        centre,
+        rod.radius(),
+        axes.map(|axis| render::nm(other.min().get(axis))),
+        axes.map(|axis| render::nm(other.max().get(axis))),
+        axes,
+    );
+    let (mut depth, mut axis) = if along <= across {
+        (along, rod.axis)
+    } else {
+        (across, across_axis)
+    };
+    if let Some(cap) = piece.cap
+        && cap < depth
+    {
+        depth = cap;
+        axis = across_axis;
+    }
+    let region = intersection(&rod.bounds(), other)?;
+    finish(depth, axis, region)
+}
+
+fn rod_rod(a: &RodPiece, b: &RodPiece) -> Option<Overlap> {
+    let (ra, rb) = (&a.rod, &b.rod);
+    let region = intersection(&ra.bounds(), &rb.bounds())?;
+    let (mut depth, axis) = if ra.axis == rb.axis {
+        let along = render::nm(ra.end.min(rb.end)) - render::nm(ra.start.max(rb.start));
+        let axes = ra.axis.others();
+        let delta = axes.map(|x| ra.centre_on(x).unwrap_or(0.0) - rb.centre_on(x).unwrap_or(0.0));
+        let distance = (delta[0] * delta[0] + delta[1] * delta[1]).sqrt();
+        let across = ra.radius() + rb.radius() - distance;
+        let across_axis = if delta[0].abs() >= delta[1].abs() {
+            axes[0]
+        } else {
+            axes[1]
+        };
+        if along <= across {
+            (along, ra.axis)
+        } else {
+            (across, across_axis)
+        }
+    } else {
+        let third = ra.axis.third(rb.axis)?;
+        let gap = (ra.centre_on(third).unwrap_or(0.0) - rb.centre_on(third).unwrap_or(0.0)).abs();
+        let mut best = (ra.radius() + rb.radius() - gap, third);
+        // Along each rod, against the other's width.
+        for (rod, other) in [(ra, rb), (rb, ra)] {
+            let middle = other.centre_on(rod.axis).unwrap_or(0.0);
+            let low = render::nm(rod.start).max(middle - other.radius());
+            let high = render::nm(rod.end).min(middle + other.radius());
+            if high - low < best.0 {
+                best = (high - low, rod.axis);
+            }
+        }
+        best
+    };
+    for cap in [a.cap, b.cap].into_iter().flatten() {
+        if cap < depth {
+            depth = cap;
+        }
+    }
+    finish(depth, axis, region)
+}
+
+fn finish(depth: f64, axis: Axis, region: WorldBox) -> Option<Overlap> {
+    let depth = render::length_from_nm(depth);
+    (depth > CONTACT_TOLERANCE).then_some(Overlap {
+        depth,
+        axis,
+        region,
+    })
+}
+
+/// Every place where wood of `a` goes deeper than the contact tolerance
+/// into wood of `b`, both at rest (or moved exactly). Pieces come in a
+/// fixed order: `a`'s boxes, then its rods, each against `b`'s boxes, then
+/// its rods.
+pub fn overlaps(a: &WorldSolid, b: &WorldSolid) -> Vec<Overlap> {
+    let mut found = Vec::new();
+    let holes: Vec<WorldRod> = a.holes.iter().chain(&b.holes).copied().collect();
+    let b_rods: Vec<RodPiece> = b.rods.iter().flat_map(|r| clip(r, &a.holes)).collect();
+    for box_a in &a.boxes {
+        for box_b in &b.boxes {
+            if let Some(shared) = intersection(box_a, box_b) {
+                for piece in clear(shared, &holes) {
+                    let (depth, axis) = thinnest(&piece);
+                    if depth > CONTACT_TOLERANCE {
+                        found.push(Overlap {
+                            depth,
+                            axis,
+                            region: piece,
+                        });
+                    }
+                }
+            }
+        }
+        for piece in &b_rods {
+            found.extend(rod_box(piece, box_a));
+        }
+    }
+    for rod in &a.rods {
+        for piece in clip(rod, &b.holes) {
+            for box_b in &b.boxes {
+                found.extend(rod_box(&piece, box_b));
+            }
+            for other in &b_rods {
+                found.extend(rod_rod(&piece, other));
+            }
+        }
+    }
+    found
+}
+
+/// Do `a` and `b` touch (come within the contact tolerance of each other)
+/// anywhere? Holes are ignored: a rod in a hole of its own size touches.
+pub fn touches(a: &WorldSolid, b: &WorldSolid) -> bool {
+    let tolerance = render::nm(CONTACT_TOLERANCE);
+    let a_shapes: Vec<Shape> = a
+        .boxes
+        .iter()
+        .map(|b| Shape::Box(*b))
+        .chain(a.rods.iter().map(|r| Shape::Rod(*r)))
+        .collect();
+    let b_shapes: Vec<Shape> = b
+        .boxes
+        .iter()
+        .map(|b| Shape::Box(*b))
+        .chain(b.rods.iter().map(|r| Shape::Rod(*r)))
+        .collect();
+    a_shapes
+        .iter()
+        .any(|x| b_shapes.iter().any(|y| distance(x, y) <= tolerance))
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Shape {
+    Box(WorldBox),
+    Rod(WorldRod),
+}
+
+/// The gap between two ranges (0 when they overlap).
+fn gap(a: (f64, f64), b: (f64, f64)) -> f64 {
+    (b.0 - a.1).max(a.0 - b.1).max(0.0)
+}
+
+fn box_range(b: &WorldBox, axis: Axis) -> (f64, f64) {
+    (render::nm(b.min().get(axis)), render::nm(b.max().get(axis)))
+}
+
+/// The distance between two shapes (0 when they overlap).
+fn distance(a: &Shape, b: &Shape) -> f64 {
+    match (a, b) {
+        (Shape::Box(x), Shape::Box(y)) => Axis::ALL
+            .into_iter()
+            .map(|axis| gap(box_range(x, axis), box_range(y, axis)).powi(2))
+            .sum::<f64>()
+            .sqrt(),
+        (Shape::Rod(rod), Shape::Box(other)) | (Shape::Box(other), Shape::Rod(rod)) => {
+            let along = gap(
+                (render::nm(rod.start), render::nm(rod.end)),
+                box_range(other, rod.axis),
+            );
+            let axes = rod.axis.others();
+            let centre = axes.map(|axis| rod.centre_on(axis).unwrap_or(0.0));
+            let nearest = [0, 1].map(|i| {
+                let (low, high) = box_range(other, axes[i]);
+                centre[i].clamp(low, high)
+            });
+            let flat = ((centre[0] - nearest[0]).powi(2) + (centre[1] - nearest[1]).powi(2)).sqrt()
+                - rod.radius();
+            (along.powi(2) + flat.max(0.0).powi(2)).sqrt()
+        }
+        (Shape::Rod(x), Shape::Rod(y)) if x.axis == y.axis => {
+            let along = gap(
+                (render::nm(x.start), render::nm(x.end)),
+                (render::nm(y.start), render::nm(y.end)),
+            );
+            let axes = x.axis.others();
+            let delta = axes
+                .map(|axis| x.centre_on(axis).unwrap_or(0.0) - y.centre_on(axis).unwrap_or(0.0));
+            let flat = (delta[0].powi(2) + delta[1].powi(2)).sqrt() - x.radius() - y.radius();
+            (along.powi(2) + flat.max(0.0).powi(2)).sqrt()
+        }
+        (Shape::Rod(x), Shape::Rod(y)) => {
+            distance(&Shape::Box(x.bounds()), &Shape::Box(y.bounds()))
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Moved solids
+// ---------------------------------------------------------------------------
+
+/// Where a solid is in a scene, relative to rest: moved exactly by slides,
+/// or turned by a hinge (then only as exact as `f64`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Placement {
+    /// Moved by an exact offset (zero at rest).
+    Exact(Point),
+    /// Turned (and perhaps moved): world nanometres to world nanometres.
+    Turned(DMat4),
+}
+
+impl Placement {
+    /// At rest.
+    pub const REST: Placement = Placement::Exact(Point {
+        across: Length::ZERO,
+        up: Length::ZERO,
+        deep: Length::ZERO,
+    });
+
+    /// The placement after a chain of motions, outermost first (a drawer
+    /// inside a cabinet that itself moves), each at its pose value.
+    pub fn of_motions(motions: &[(Motion, PoseValue)]) -> Placement {
+        let mut offset = Point::default();
+        let mut matrix = DMat4::IDENTITY;
+        let mut turned = false;
+        for (motion, value) in motions {
+            match *motion {
+                Motion::Travel { toward, travel } => {
+                    let amount = match *value {
+                        PoseValue::Open => travel,
+                        PoseValue::Travel(length) => length,
+                        PoseValue::Closed | PoseValue::Angle(_) => Length::ZERO,
+                    };
+                    let step = direction_offset(toward, amount);
+                    for axis in Axis::ALL {
+                        offset = offset.with(
+                            axis,
+                            Length::from_nm(
+                                offset.get(axis).nm().saturating_add(step.get(axis).nm()),
+                            ),
+                        );
+                    }
+                    matrix *= DMat4::from_translation(point_vector(step));
+                }
+                Motion::Turn {
+                    pivot,
+                    opening_angle,
+                } => {
+                    let angle = match *value {
+                        PoseValue::Open => opening_angle,
+                        PoseValue::Angle(angle) => angle,
+                        PoseValue::Closed | PoseValue::Travel(_) => continue,
+                    };
+                    if angle.microdeg() == 0 {
+                        continue;
+                    }
+                    turned = true;
+                    let free = direction_vector(pivot.free_side);
+                    let swing = direction_vector(pivot.swing_toward);
+                    let axis = free.cross(swing).normalize_or(axis_vector(pivot.axis));
+                    let through = point_vector(pivot.through);
+                    matrix *= DMat4::from_translation(through)
+                        * DMat4::from_axis_angle(axis, render::radians_f64(angle))
+                        * DMat4::from_translation(-through);
+                }
+            }
+        }
+        if turned {
+            Placement::Turned(matrix)
+        } else {
+            Placement::Exact(offset)
+        }
+    }
+
+    fn matrix(&self) -> DMat4 {
+        match self {
+            Placement::Exact(offset) => DMat4::from_translation(point_vector(*offset)),
+            Placement::Turned(matrix) => *matrix,
+        }
+    }
+}
+
+fn direction_offset(direction: Direction, amount: Length) -> Point {
+    let value = if direction.is_positive() {
+        amount
+    } else {
+        Length::from_nm(amount.nm().saturating_neg())
+    };
+    Point::default().with(direction.axis(), value)
+}
+
+/// World coordinates as an `f64` vector (across, up, deep), nanometres.
+fn point_vector(point: Point) -> DVec3 {
+    DVec3::new(
+        render::nm(point.across),
+        render::nm(point.up),
+        render::nm(point.deep),
+    )
+}
+
+fn axis_index(axis: Axis) -> usize {
+    match axis {
+        Axis::Across => 0,
+        Axis::Up => 1,
+        Axis::Deep => 2,
+    }
+}
+
+fn axis_vector(axis: Axis) -> DVec3 {
+    let mut v = DVec3::ZERO;
+    v[axis_index(axis)] = 1.0;
+    v
+}
+
+fn direction_vector(direction: Direction) -> DVec3 {
+    let v = axis_vector(direction.axis());
+    if direction.is_positive() { v } else { -v }
+}
+
+/// An oriented box: centre, three unit axes, half sizes.
+#[derive(Debug, Clone, Copy)]
+struct Oriented {
+    centre: DVec3,
+    axes: [DVec3; 3],
+    half: [f64; 3],
+}
+
+impl Oriented {
+    fn of(region: &WorldBox, matrix: &DMat4) -> Oriented {
+        let low = point_vector(region.min());
+        let high = point_vector(region.max());
+        let centre = matrix.transform_point3((low + high) / 2.0);
+        let size = high - low;
+        Oriented {
+            centre,
+            axes: [DVec3::X, DVec3::Y, DVec3::Z].map(|a| matrix.transform_vector3(a)),
+            half: [size.x / 2.0, size.y / 2.0, size.z / 2.0],
+        }
+    }
+
+    fn reach(&self, direction: DVec3) -> f64 {
+        (0..3)
+            .map(|i| self.half[i] * self.axes[i].dot(direction).abs())
+            .sum()
+    }
+
+    fn bounds(&self) -> (DVec3, DVec3) {
+        let reach = DVec3::new(
+            self.reach(DVec3::X),
+            self.reach(DVec3::Y),
+            self.reach(DVec3::Z),
+        );
+        (self.centre - reach, self.centre + reach)
+    }
+}
+
+/// The separating axis test: the smallest overlap of the two boxes'
+/// shadows over the fifteen candidate axes, with that axis.
+fn separation(a: &Oriented, b: &Oriented) -> (f64, DVec3) {
+    let mut candidates: Vec<DVec3> = a.axes.iter().chain(&b.axes).copied().collect();
+    for x in &a.axes {
+        for y in &b.axes {
+            let cross = x.cross(*y);
+            if cross.length_squared() > 1e-12 {
+                candidates.push(cross.normalize());
+            }
+        }
+    }
+    let between = b.centre - a.centre;
+    let mut best = (f64::INFINITY, DVec3::X);
+    for axis in candidates {
+        let overlap = a.reach(axis) + b.reach(axis) - between.dot(axis).abs();
+        if overlap < best.0 {
+            best = (overlap, axis);
+        }
+    }
+    best
+}
+
+fn nearest_axis(direction: DVec3) -> Axis {
+    let a = direction.abs();
+    if a.x >= a.y && a.x >= a.z {
+        Axis::Across
+    } else if a.y >= a.z {
+        Axis::Up
+    } else {
+        Axis::Deep
+    }
+}
+
+/// The box around a world box moved by a placement, rounded outward to the
+/// nanometre.
+pub fn placed_bounds(region: &WorldBox, placement: &Placement) -> WorldBox {
+    match placement {
+        Placement::Exact(offset) => translate_box(region, *offset),
+        Placement::Turned(matrix) => {
+            let (low, high) = Oriented::of(region, matrix).bounds();
+            let corner = |v: DVec3, round: fn(f64) -> f64| Point {
+                across: render::length_from_nm(round(v.x)),
+                up: render::length_from_nm(round(v.y)),
+                deep: render::length_from_nm(round(v.z)),
+            };
+            WorldBox::new(corner(low, f64::floor), corner(high, f64::ceil))
+        }
+    }
+}
+
+/// Every place where wood of `a` goes into wood of `b` when each is moved
+/// by its placement. Exact when neither is turned.
+pub fn overlaps_placed(
+    a: &WorldSolid,
+    a_placement: &Placement,
+    b: &WorldSolid,
+    b_placement: &Placement,
+) -> Vec<Overlap> {
+    if let (Placement::Exact(da), Placement::Exact(db)) = (a_placement, b_placement) {
+        return overlaps(&a.translated(*da), &b.translated(*db));
+    }
+    let (ma, mb) = (a_placement.matrix(), b_placement.matrix());
+    let boxes = |solid: &WorldSolid, matrix: &DMat4| -> Vec<Oriented> {
+        solid
+            .boxes
+            .iter()
+            .copied()
+            .chain(solid.rods.iter().map(WorldRod::bounds))
+            .map(|region| Oriented::of(&region, matrix))
+            .collect()
+    };
+    let (oa, ob) = (boxes(a, &ma), boxes(b, &mb));
+    let mut found = Vec::new();
+    for x in &oa {
+        for y in &ob {
+            let (depth, axis) = separation(x, y);
+            let (xl, xh) = x.bounds();
+            let (yl, yh) = y.bounds();
+            let (low, high) = (xl.max(yl), xh.min(yh));
+            let corner = |v: DVec3| Point {
+                across: render::length_from_nm(v.x),
+                up: render::length_from_nm(v.y),
+                deep: render::length_from_nm(v.z),
+            };
+            found.extend(finish(
+                depth,
+                nearest_axis(axis),
+                WorldBox::new(corner(low), corner(high)),
+            ));
+        }
+    }
+    found
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn mm(value: i64) -> Length {
+        Length::from_mm(value)
+    }
+
+    fn point(across: i64, up: i64, deep: i64) -> Point {
+        Point {
+            across: mm(across),
+            up: mm(up),
+            deep: mm(deep),
+        }
+    }
+
+    fn block(a: Point, b: Point) -> WorldSolid {
+        WorldSolid {
+            boxes: vec![WorldBox::new(a, b)],
+            ..WorldSolid::default()
+        }
+    }
+
+    #[test]
+    fn boxes_that_touch_do_not_overlap() {
+        let a = block(point(0, 0, 0), point(10, 10, 10));
+        let b = block(point(10, 0, 0), point(20, 10, 10));
+        assert!(overlaps(&a, &b).is_empty());
+        assert!(touches(&a, &b));
+        let apart = block(point(11, 0, 0), point(20, 10, 10));
+        assert!(!touches(&a, &apart));
+    }
+
+    #[test]
+    fn the_depth_is_the_thinnest_side_of_what_they_share() {
+        let a = block(point(0, 0, 0), point(10, 10, 10));
+        let b = block(point(7, 2, 0), point(20, 8, 10));
+        let found = overlaps(&a, &b);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].depth, mm(3));
+        assert_eq!(found[0].axis, Axis::Across);
+    }
+
+    #[test]
+    fn within_the_tolerance_is_touching() {
+        let a = block(point(0, 0, 0), point(10, 10, 10));
+        let mut b = block(point(10, 0, 0), point(20, 10, 10));
+        b = b.translated(Point::default().with(Axis::Across, Length::from_nm(-50_000)));
+        assert!(overlaps(&a, &b).is_empty());
+        b = b.translated(Point::default().with(Axis::Across, Length::from_nm(-1)));
+        assert_eq!(overlaps(&a, &b).len(), 1);
+    }
+
+    fn rod(axis: Axis, centre: [i64; 2], diameter: i64, start: i64, end: i64) -> WorldRod {
+        WorldRod {
+            axis,
+            centre: centre.map(mm),
+            diameter: mm(diameter),
+            start: mm(start),
+            end: mm(end),
+        }
+    }
+
+    #[test]
+    fn a_rod_in_its_hole_fits_and_a_longer_one_does_not() {
+        // A seat block with a 22mm hole 20mm deep from its bottom face.
+        let seat = WorldSolid {
+            boxes: vec![WorldBox::new(point(0, 0, 0), point(100, 30, 100))],
+            rods: Vec::new(),
+            holes: vec![rod(Axis::Up, [50, 50], 22, 0, 20)],
+        };
+        let tenon = WorldSolid {
+            rods: vec![rod(Axis::Up, [50, 50], 22, -50, 20)],
+            ..WorldSolid::default()
+        };
+        assert!(overlaps(&tenon, &seat).is_empty());
+        assert!(overlaps(&seat, &tenon).is_empty());
+        assert!(touches(&tenon, &seat));
+        let long = WorldSolid {
+            rods: vec![rod(Axis::Up, [50, 50], 22, -50, 23)],
+            ..WorldSolid::default()
+        };
+        let found = overlaps(&long, &seat);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].depth, mm(3));
+        assert_eq!(found[0].axis, Axis::Up);
+        let fat = WorldSolid {
+            rods: vec![rod(Axis::Up, [50, 50], 24, -50, 20)],
+            ..WorldSolid::default()
+        };
+        let found = overlaps(&fat, &seat);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].depth, mm(1));
+    }
+
+    #[test]
+    fn a_turned_door_hits_what_is_in_its_way() {
+        use stave_lang::units::Angle;
+        use stave_model::solved::Pivot;
+        // A door 500mm wide hinged at its left edge, swinging out toward
+        // the front, and a post 100mm in front of its hinge.
+        let door = block(point(0, 0, 0), point(500, 700, 19));
+        let post = block(point(5, 0, -150), point(15, 700, -100));
+        let motion = Motion::Turn {
+            pivot: Pivot {
+                axis: Axis::Up,
+                through: point(0, 0, 0),
+                free_side: Direction::Right,
+                swing_toward: Direction::Front,
+            },
+            opening_angle: Angle::from_deg(110),
+        };
+        let shut = Placement::of_motions(&[(motion, PoseValue::Closed)]);
+        assert_eq!(shut, Placement::REST);
+        assert!(overlaps_placed(&door, &shut, &post, &Placement::REST).is_empty());
+        let square = Placement::of_motions(&[(motion, PoseValue::Angle(Angle::from_deg(90)))]);
+        assert!(!overlaps_placed(&door, &square, &post, &Placement::REST).is_empty());
+        let ajar = Placement::of_motions(&[(motion, PoseValue::Angle(Angle::from_deg(10)))]);
+        assert!(overlaps_placed(&door, &ajar, &post, &Placement::REST).is_empty());
+    }
+}

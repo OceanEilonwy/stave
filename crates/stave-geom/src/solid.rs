@@ -353,17 +353,15 @@ pub enum Unsupported {
 }
 
 impl Unsupported {
-    /// What can't be done, for a `not-supported` warning: "cutting a
-    /// dovetail tail".
+    /// What can't be cut, with an article: "a dovetail tail", "a slot at
+    /// an angle", "a notch in a round or turned part". A `not-supported`
+    /// warning reads "cutting <this> is not supported yet".
     pub fn description(&self) -> String {
         match self {
-            Unsupported::Angled(operation) => format!("cutting {}", operation_noun(*operation)),
-            Unsupported::AngledSlot => "cutting a slot at an angle".to_owned(),
+            Unsupported::Angled(operation) => operation_noun(*operation).to_owned(),
+            Unsupported::AngledSlot => "a slot at an angle".to_owned(),
             Unsupported::OnRoundPart(operation) => {
-                format!(
-                    "cutting {} in a round or turned part",
-                    operation_noun(*operation)
-                )
+                format!("{} in a round or turned part", operation_noun(*operation))
             }
         }
     }
