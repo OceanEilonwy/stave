@@ -6,6 +6,8 @@ members = [
   "crates/stave-modules",
   "crates/stave-model",
   "crates/stave-solve",
+  "crates/stave-geom",
+  "crates/stave-scene",
   "crates/stave-app",
   "crates/stave-cli",
 ]

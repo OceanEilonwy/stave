@@ -1,0 +1,20 @@
+[package]
+name = "stave-scene"
+description = "Render-ready scene graph of a solved Stave design: nodes, materials, poses, camera and picking"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+glam = "0.30"
+serde_json = "1"
+stave-geom = { path = "../stave-geom" }
+stave-lang = { path = "../stave-lang" }
+stave-model = { path = "../stave-model" }
+stave-schema = { path = "../stave-schema" }
+thiserror = "2"
+
+[dev-dependencies]
+stave-model = { path = "../stave-model" }
+stave-modules = { path = "../stave-modules" }
+stave-solve = { path = "../stave-solve" }
