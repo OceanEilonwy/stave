@@ -296,11 +296,13 @@ item_tag      = "kind" | "recipe" | "param" | "let" | "region" | "stock" | "part
 
 Notes for the parser:
 
-- **One token of lookahead decides every entry.** In a `kind` body, `roles`,
-  `cut` and `makes` followed by `:` are fields; otherwise they start their own
-  entry. The same holds for `mark` and `cut` in a `recipe` body. In a profile,
-  `at` always starts a station. An argument is named when a `NAME` is directly
-  followed by `:`.
+- **Two tokens of lookahead decide everything.** At the start of a block
+  entry, a word directly followed by `:` is always a field name, even when it
+  is a keyword or a contextual word (`cut: ...` is a field, `cut end(...) { }`
+  is a cut). An argument is named when a `NAME` is directly followed by `:`.
+  An `array` holds labels when an `IDENT` is directly followed by `,`.
+  `[same]` is the elementwise index only when `same` is directly followed by
+  `]`.
 - Positional arguments come before named ones; a positional argument after a
   named one is `error[syntax]`.
 - A `block(part_entry)` and a `block(place)` hold at most one `place`; a second
@@ -350,7 +352,10 @@ Rules:
    where a depth may be a length or the word `through`.
 5. **Members** never clash with items: `drawer[top].top` is the `top` face of
    the element labelled `top`.
-6. A module name can't be a keyword or contain characters outside `IDENT`; such
+6. **Names are resolved where they are written.** The body of a component or
+   kind sees the module it is declared in (and the prelude), never the module
+   that uses it. What a user passes in arrives through params and roles.
+7. A module name can't be a keyword or contain characters outside `IDENT`; such
    a folder needs `as`: `import "./hardware" as hw`,
    `import "./my-shop" as shop`. Without it: `error[reserved-word]`. A module
    name can't equal an item name in the importing module
@@ -766,7 +771,9 @@ hardware.
 
 An envelope lies on the mount face like this: its `thickness` (or a cylinder's
 `length`) stands off the face; its `length` runs along the piece's length; its
-`width` along the remaining axis. Fasteners and tools are never placed.
+`width` along the remaining axis. A hinge's envelope starts at the long edge
+its cup is measured from and reaches `width` away from it, toward the middle
+of the door. Fasteners and tools are never placed.
 
 ### Mirroring
 
@@ -851,7 +858,7 @@ region door = cover(opening, mount, thickness: frame.thickness)
 |---|---|
 | `opening(left:, right:, bottom:, top:, front:, back:)` | the box bounded by six anchors, one per side. All six are required |
 | `split(region, axis, at: part)` | two regions, on either side of the part along `axis`, each ending at the part's face |
-| `split(region, axis)` | as many equal regions as the declaration has elements, with nothing between them |
+| `split(region, axis)` | as many equal regions as the declaration has elements (so the region being declared must be an array), with nothing between them |
 | `cover(region, mount, thickness: d)` | the space a door or drawer front fills: the region's front face, grown or shrunk at each edge as the mount says, `d` deep |
 
 `split` labels its pieces in the direction of its axis: for `up` the first
@@ -1331,7 +1338,8 @@ functions: placement terms, face selectors, cut operations, `mark(...)` inside
 
 A scene is a named view of the same design: motion states and visibility.
 Scenes never change the design. Every project also has the built-in scene
-`rest` ("As built"), with everything in its rest position.
+`rest` ("As built"), with everything in its rest position; declaring a scene
+called `rest` is `error[duplicate-name]`.
 
 ```
 scene all_open "All open" {
@@ -1353,7 +1361,9 @@ scene drawer_bench "Top drawer on the bench" {
   share one pivot line and all slides one direction (`error[motion]`
   otherwise); an assembly with both hinges and slides has no motion.
 - `pose` names the assembly and sets `open` (the hinge's `opening_angle`, the
-  slide's `travel`), `closed`, an angle (hinges) or a length (slides).
+  slide's `travel`), `closed`, an angle (hinges) or a length (slides). A slide
+  travels along its piece's length, out through the front of its `in` region.
+  A mirrored assembly has the mirror image of its source's motion.
 - Every scene is collision checked, and every motion is checked closed and
   fully open (`error[motion]`).
 

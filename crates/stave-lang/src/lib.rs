@@ -307,4 +307,73 @@ mod tests {
             );
         }
     }
+
+    /// Codes in the "Diagnostics" table, e.g. `syntax`, `axis-not-set`.
+    fn diagnostic_codes() -> Vec<&'static str> {
+        let table = between(
+            GRAMMAR,
+            "| Layer | Code | Message |\n|---|---|---|\n",
+            "\n\n",
+        );
+        table
+            .lines()
+            .map(|row| {
+                let cells: Vec<_> = row.split('|').map(str::trim).collect();
+                cells[2].trim_matches('`')
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_broken_corpus_expects_documented_diagnostics() {
+        let codes = diagnostic_codes();
+        assert!(codes.contains(&"syntax") && codes.contains(&"order"));
+
+        let corpus = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/broken");
+        let mut expected = Vec::new();
+        for entry in std::fs::read_dir(&corpus).unwrap() {
+            let folder = entry.unwrap().path();
+            let source = std::fs::read_to_string(folder.join("project.stave"))
+                .unwrap_or_else(|error| panic!("{}: {error}", folder.display()));
+            let first = source.lines().next().unwrap();
+            let rest = first.strip_prefix("// expect: error[").unwrap_or_else(|| {
+                panic!(
+                    "{}: first line must be `// expect: error[code] message`",
+                    folder.display()
+                )
+            });
+            let (code, message) = rest.split_once("] ").unwrap();
+            assert!(
+                codes.contains(&code),
+                "{}: '{code}' is not in the Diagnostics table",
+                folder.display()
+            );
+            assert!(!message.trim().is_empty(), "{}", folder.display());
+            assert!(source.contains("\nstave 1\n"), "{}", folder.display());
+            assert!(source.contains("\nproject \""), "{}", folder.display());
+            expected.push(code.to_owned());
+        }
+        expected.sort_unstable();
+        assert!(
+            expected.len() >= 10,
+            "the corpus needs at least ten broken designs"
+        );
+        for required in [
+            "syntax",
+            "missing-value",
+            "reserved-word",
+            "unknown-name",
+            "unit-mismatch",
+            "axis-set-twice",
+            "axis-not-set",
+            "require-range",
+            "slide-gap",
+            "order",
+        ] {
+            assert!(
+                expected.iter().any(|code| code == required),
+                "no broken design expects '{required}'"
+            );
+        }
+    }
 }
