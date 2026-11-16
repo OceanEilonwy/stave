@@ -142,11 +142,16 @@ impl Lowering {
         if !self.has_error(span, &[]) {
             let found =
                 item_keyword(node).map_or_else(String::new, |keyword| keyword.text().to_owned());
-            self.diagnostics.push(Diagnostic::error(
-                Code::Syntax,
-                format!("expected a complete declaration, found '{found}'"),
-                Label::new(self.file, span),
-            ));
+            self.diagnostics.push(
+                Diagnostic::error(
+                    Code::Syntax,
+                    format!("expected a complete declaration, found '{found}'"),
+                    Label::new(self.file, span),
+                )
+                .with_help(
+                    "finish the declaration: its name, then ':' or '=' and the rest of the line",
+                ),
+            );
         }
         self.broken.push(BrokenItem { tag, name, span });
     }

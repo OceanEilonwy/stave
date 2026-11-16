@@ -398,6 +398,12 @@ impl Builder {
             ArrayDef::Labels(labels) => labels.into_iter().map(|(label, _)| label).collect(),
             ArrayDef::Count(count) => match self.const_count(&count, ctx) {
                 Some(n) => (0..n).map(|i| i.to_string()).collect(),
+                // The count already has its own name or type error.
+                None if matches!(count.kind, RExprKind::Error)
+                    || self.model.defs.is_poisoned(def) =>
+                {
+                    Vec::new()
+                }
                 None => {
                     let name = self
                         .model
@@ -416,7 +422,7 @@ impl Builder {
                             ),
                             Label::new(file, count.span),
                         )
-                        .with_help("write a count, or a param with a default (and a within list)"),
+                        .with_help("write a count, a let, or a param whose within is a list of counts, such as param shelves = 3 within [2, 3, 4]"),
                     );
                     Vec::new()
                 }
@@ -459,7 +465,13 @@ impl Builder {
                 match param.source {
                     ParamSource::Default => {
                         let DefId::Param(id) = def else { return None };
-                        let default = self.model.defs.param(*id)?.default.as_ref()?;
+                        let param_def = self.model.defs.param(*id)?;
+                        // A count over a continuous range can't be tried
+                        // value by value; it needs a within list.
+                        if matches!(param_def.domain, Some(crate::defs::Domain::Range { .. })) {
+                            return None;
+                        }
+                        let default = param_def.default.as_ref()?;
                         let ctx = Ctx {
                             instance: param.instance,
                             element: None,

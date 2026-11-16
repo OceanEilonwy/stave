@@ -140,11 +140,12 @@ impl<'a> Resolver<'a> {
                             help,
                         );
                     } else if out.named.iter().any(|(n, _)| n.as_str() == name.as_str()) {
-                        self.error(
+                        self.error_help(
                             Code::DuplicateName,
                             format!("'{}' is declared twice", name.as_str()),
                             cx.file,
                             name.span(),
+                            format!("give '{}' once; remove one of them", name.as_str()),
                         );
                     } else {
                         out.named.push((name, &arg.value));
@@ -194,7 +195,8 @@ impl<'a> Resolver<'a> {
                         cx.file,
                         first.key.span(),
                         "first written here",
-                    )),
+                    ))
+                    .with_help(format!("write '{name}' once; remove one of them")),
                 );
                 continue;
             }
@@ -993,14 +995,24 @@ impl<'a> Resolver<'a> {
         terms
     }
 
+    /// `'<head>' is missing '<name>'` for a named argument (`what` is
+    /// written `name:`), or `'<head>' is missing <what>` for a positional one
+    /// (`what` is `a part`).
     pub(crate) fn missing_argument(&mut self, cx: &Cx, head: &str, what: &str, span: Span) {
-        self.error_help(
-            Code::MissingField,
-            format!("'{head}' is missing {what}"),
-            cx.file,
-            span,
-            format!("write {head}(...) with {what}"),
-        );
+        let single = what
+            .strip_suffix(':')
+            .filter(|name| name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'));
+        let (message, help) = match single {
+            Some(name) => (
+                format!("'{head}' is missing '{name}'"),
+                format!("write {head}(..., {name}: ...)"),
+            ),
+            None => (
+                format!("'{head}' is missing {what}"),
+                format!("write {head}(...) with {what}"),
+            ),
+        };
+        self.error_help(Code::MissingField, message, cx.file, span, help);
     }
 
     // -----------------------------------------------------------------------
@@ -1096,17 +1108,25 @@ impl<'a> Resolver<'a> {
         let mut positional = None;
         let mut named: Vec<Setting> = Vec::new();
         let mut misspelt: Vec<String> = Vec::new();
+        let mut extra_positional = false;
         for arg in &call.args {
             match &arg.name {
                 None => {
                     if positional.is_some() {
+                        let help = match roles.get(1) {
+                            Some((role, _, _)) => {
+                                format!("name every other role and setting: {role}: ...")
+                            }
+                            None => "name every setting: depth: ...".to_owned(),
+                        };
                         self.error_help(
                             Code::TypeMismatch,
                             "a kind call takes at most one argument without a name",
                             cx.file,
                             arg.span,
-                            "name every other role and setting: into: ..., depth: ...",
+                            help,
                         );
+                        extra_positional = true;
                         continue;
                     }
                     let expect = match roles.first() {
@@ -1134,11 +1154,12 @@ impl<'a> Resolver<'a> {
                         || (roles.first().is_some_and(|(r, _, _)| r == name.as_str())
                             && positional.is_some())
                     {
-                        self.error(
+                        self.error_help(
                             Code::DuplicateName,
                             format!("'{}' is declared twice", name.as_str()),
                             cx.file,
                             name.span(),
+                            format!("give '{}' once; remove one of them", name.as_str()),
                         );
                         continue;
                     }
@@ -1183,9 +1204,12 @@ impl<'a> Resolver<'a> {
         };
         if let Some(id) = known {
             for (index, (role, _, _)) in roles.iter().enumerate() {
+                // An extra argument without a name was most likely meant
+                // for a role, and is already reported.
                 let given = (index == 0 && positional.is_some())
                     || named.iter().any(|s| &s.name == role)
-                    || misspelling(role);
+                    || misspelling(role)
+                    || extra_positional;
                 if !given {
                     self.error_help(
                         Code::MissingField,
@@ -1350,11 +1374,8 @@ impl<'a> Resolver<'a> {
                         format!("'{key}' is declared twice"),
                         Label::new(cx.file, field.key.span()),
                     )
-                    .with_label(Label::with_message(
-                        cx.file,
-                        *first,
-                        "first written here",
-                    )),
+                    .with_label(Label::with_message(cx.file, *first, "first written here"))
+                    .with_help(format!("write '{key}' once; remove one of them")),
                 );
                 continue;
             }

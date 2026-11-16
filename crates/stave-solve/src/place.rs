@@ -923,7 +923,33 @@ impl Solver<'_> {
         };
         match axis {
             PartAxis::Length => match &body.length {
-                Size::Expr(expr) => self.eval_length(expr, &env),
+                Size::Expr(expr) => {
+                    let length = self.eval_length(expr, &env)?;
+                    if let Some(profile) = profile {
+                        let turned = self.profile_length(profile)?;
+                        if length != turned {
+                            let name = self.part_name(part);
+                            let profile_name = self
+                                .model
+                                .defs
+                                .profile(profile)
+                                .map(|p| p.decl.name.clone())
+                                .unwrap_or_default();
+                            return Err(self.error(
+                                Code::TypeMismatch,
+                                format!(
+                                    "{name}: its length is {}, but its profile '{profile_name}' is {} long",
+                                    stave_model::value::format_length(length),
+                                    stave_model::value::format_length(turned)
+                                ),
+                                env.file,
+                                expr.span,
+                                "a turned part is as long as its profile: write length: fit",
+                            ));
+                        }
+                    }
+                    Ok(length)
+                }
                 Size::Fit(span) => match profile {
                     Some(profile) => self.profile_length(profile),
                     None => self.fit(part, PartAxis::Length, *span),
@@ -959,7 +985,36 @@ impl Solver<'_> {
                     return Ok(largest);
                 }
                 match &body.thickness {
-                    Some(expr) => self.eval_length(expr, &env),
+                    Some(expr) => {
+                        let thickness = self.eval_length(expr, &env)?;
+                        let stock = self.part_stock(part)?;
+                        if let Some(stock_thickness) =
+                            self.stock_length(stock, StockField::Thickness)?
+                            && thickness > stock_thickness
+                        {
+                            let name = self.part_name(part);
+                            let stock_name = self
+                                .model
+                                .defs
+                                .stock(stock)
+                                .map(|s| s.decl.name.clone())
+                                .unwrap_or_default();
+                            return Err(self.error(
+                                Code::TypeMismatch,
+                                format!(
+                                    "{name}: its thickness works out as {}, which is more than its stock's {}",
+                                    stave_model::value::format_length(thickness),
+                                    stave_model::value::format_length(stock_thickness)
+                                ),
+                                env.file,
+                                expr.span,
+                                format!(
+                                    "a part can be planed thinner than its stock '{stock_name}', never thicker; choose thicker stock"
+                                ),
+                            ));
+                        }
+                        Ok(thickness)
+                    }
                     None => {
                         let stock = self.part_stock(part)?;
                         self.stock_length(stock, StockField::Thickness)?
@@ -1043,9 +1098,9 @@ impl Solver<'_> {
             extents.push((low, add(low, size)?));
         }
         let (low_side, high_side) = match world {
-            Axis::Across => ("left", "right"),
+            Axis::Across => ("to the left of", "to the right of"),
             Axis::Up => ("below", "above"),
-            Axis::Deep => ("in front", "behind"),
+            Axis::Deep => ("in front of", "behind"),
         };
         let nearest_below = |at: ExactLength| {
             extents

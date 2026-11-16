@@ -138,6 +138,13 @@ Nothing else drops a newline. In particular a newline after `:`, `=` or `{` and
 before `}` is kept; the grammar's block rule accepts newlines there. `within`
 is the only keyword that suppresses a following newline.
 
+Case 2 never drops the newline before a line whose first token is an **item
+keyword** (see [Unclosed brackets](#unclosed-brackets)) not followed by `:`,
+unless the line before ends with a doc comment. No expression continues with
+a declaration, so this never changes the meaning of a correct file; it keeps
+a forgotten operand local: in `let a = 1 +` followed by `let b = 2`, the
+error is the missing value after `+`, and `b` is still declared.
+
 So a long expression continues onto the next line when the line ends with an
 operator, a comma or an open bracket, and a field always ends at the end of
 its line:
@@ -241,7 +248,7 @@ block(X)      = "{" , { sep } , [ X , { sep , { sep } , X } ] , { sep } , "}" ;
 file          = { NL } , header , { NL , { NL } , import } , { NL , { NL } , item } , { NL } ;
 patch_file    = { NL } , header , { NL , { NL } , patch } , { NL } ;
                 (* every import, item and patch starts on a new line; imports come first *)
-header        = "stave" , INT ;
+header        = "stave" , INT ;                          (* the format version: 1; any other is error[not-supported] *)
 import        = "import" , STRING , [ "as" , IDENT ] ;  (* applies to this file only *)
 
 (* ---------- Items ---------- *)
@@ -420,8 +427,9 @@ Rules:
 ### Arrays
 
 - `part shelf[3]` declares a counted array: `shelf[0]`, `shelf[1]`, `shelf[2]`.
-  The count is a constant, or a param with a `within` list, so the checker can
-  try every count.
+  The count is a constant (a count, or a `let` or `param` without a range), or
+  a param with a `within` list, so the checker can try every count. A param
+  with a continuous range (`within 2..6`) is `error[type-mismatch]`.
 - `assembly drawer[bottom, top] : Drawer { ... }` declares a labelled array:
   `drawer[bottom]`, `drawer[top]`. Two or more names in a declaration are
   labels; anything else is a count. A single label isn't allowed (just name
@@ -599,8 +607,11 @@ in a `kind`.
 - A param **without a default must be supplied**: as a field of the `assembly`
   body (component params) or as an argument of the kind call (kind params). A
   param at the top level of a module must have a default.
-- A default may refer to params declared **before** it, to items of the
-  module, and (in a kind) to roles: `param depth = into.thickness / 3`.
+- A default may refer to the other params of its scope, to items of the
+  module, and (in a kind) to roles: `param depth = into.thickness / 3`. Order
+  doesn't matter, as everywhere else (a module's files have no order either);
+  a value worked out from itself, directly or through others, is
+  `error[type-mismatch]`.
 - `within` gives the allowed values. For a module param it is the range the
   design must work over (see [Checks](#checks-and-require)). For a component
   or kind param it limits what a user may pass: an argument outside it is
@@ -621,7 +632,7 @@ A named value. Not a knob: it has no range and can't be passed in.
 | `diameter` | `Length` | `dowel` only, required | yes | diameter of round stock |
 | `width` | `Length` | no | yes | stock sold at a fixed width (a square blank, a strip). Parts cut from it take this width |
 | `max_width` | `Length` | no | yes | the widest board you can get; wider parts are planned as glue-ups |
-| `max_length` | `Length` | no | yes | the longest board you can get; a longer part is an error |
+| `max_length` | `Length` | no | yes | the longest board you can get; a part whose cut length is longer is `error[type-mismatch]` |
 
 ### `part name : stock { }` and `makes part name : stock { }`
 
@@ -629,9 +640,9 @@ A named value. Not a knob: it has no range and can't be passed in.
 |---|---|---|---|---|
 | `length` | `Length` or `fit` | yes | yes | along the grain, by default |
 | `width` | `Length` or `fit` | yes, unless the stock has `width:` or is a `dowel` | yes | |
-| `thickness` | `Length` | no (default: the stock's) | yes | thinner than the stock; the cut list notes the planing |
+| `thickness` | `Length` | no (default: the stock's) | yes | thinner than the stock; the cut list notes the planing. Thicker than the stock is `error[type-mismatch]` |
 | `grain` | `length` \| `width` | no (default `length`) | no | which way the grain runs |
-| `shape` | `Shape` | no | no | `turned(profile)`; the part's length is then the profile's |
+| `shape` | `Shape` | no | no | `turned(profile)`; the part's length is then the profile's: write `length: fit` (any other length is `error[type-mismatch]`) |
 | `face_side` | face word | no | no | the reference face; see [Faces to cut](#faces-to-cut) |
 | `face_edge` | face word | no | no | the reference edge |
 | `note` | `Text` | no | no | printed on the part's work card |
@@ -657,7 +668,7 @@ be given. Readable through the assembly: every item of the component
 |---|---|---|---|
 | `measure` | `diameter` \| `radius` | yes | what the station values are |
 | `smooth` | `Bool` | no (default `false`) | `false`: straight lines between stations. `true`: one smooth curve through the stations |
-| `at <station>: <value>` | `Length`: `Length` | two or more | the size at a distance from the start of the part. Stations must not decrease |
+| `at <station>: <value>` | `Length`: `Length` | two or more | the size at a distance from the start of the part. Stations must not decrease (`error[type-mismatch]`, whether or not a part uses the profile) |
 
 Two stations at the same distance make a **shoulder**: a sharp step. With
 `smooth: true`, a shoulder splits the curve, and a segment between two stations
@@ -1586,7 +1597,7 @@ shape of their messages are fixed, because tests and AI tools match on them.
 | 2 | `not-in-library` | `a library can't contain a <part> at the top level` |
 | 2 | `import-cycle` | `modules import each other: <a> -> <b> -> <a>` |
 | 2 | `unknown-module` | `can't find module '<source>'` |
-| 2, 4 | `not-supported` | `<what> is not supported yet` (an error for remote imports, a warning for geometry) |
+| 2, 4 | `not-supported` | `<what> is not supported yet` (an error for remote imports and for a format version other than 1, a warning for geometry) |
 | 3 | `ground` | `no part is placed with 'ground'`, `'<a>' and '<b>' are both placed with 'ground'`, or `'<a>' is placed with 'ground' inside a component` |
 | 3 | `axis-not-set` | `<item>: position along '<axis>' is not set` |
 | 3 | `axis-set-twice` | `<item>: position along '<axis>' is set twice` |
@@ -1612,9 +1623,14 @@ single quotes (`'shelf'`, `':'`), or `end of line`, `end of file`, `a string`
 or `a doc comment`.
 
 **The broken-design corpus.** Each folder in `tests/broken/` is a small project
-whose first line is `// expect: error[<code>] <message>`. The checker must
+whose first line is `// expect: error[<code>] <message>` (or
+`// expect: warning[<code>] <message>` for a warning). The checker must
 produce a diagnostic with exactly that code and message (it may produce
-others).
+others). A design for a check that isn't built yet says so on its second
+line, `// pending: <reason>`; until the check lands it must check without any
+diagnostic, and the line comes off when it does. `docs/test-coverage.md` maps
+every rule of this document and every code above to the tests that pin it
+down.
 
 ---
 
@@ -1742,8 +1758,11 @@ replaces a term with `flush` or `against` on the face the part was dropped on.
 - Arithmetic: `length ± length`, `length × ratio`, `ratio × length`,
   `length ÷ ratio`, `length ÷ length → ratio`, `ratio ± × ÷ ratio`, the same
   for angles, unary `-`. Comparisons need the same type on both sides and give
-  a `Bool`; `&&`, `||` and `!` take `Bool`s. Anything else (`count ÷ length`,
-  `length + angle`, `count - length`) is `error[unit-mismatch]`.
+  a `Bool`; `&&`, `||` and `!` take `Bool`s (anything else is
+  `error[type-mismatch]`: `'&&' needs true or false, found a length`). Anything
+  else (`count ÷ length`, `length + angle`, `count - length`) is
+  `error[unit-mismatch]`. Dividing by zero is `error[type-mismatch]`
+  (`division by zero`).
 - An integer literal is a `Count`; a `Count` can be used wherever a `Ratio` is
   expected.
 

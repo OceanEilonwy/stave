@@ -215,11 +215,8 @@ impl Resolver<'_> {
                                 format!("'{key}' is declared twice"),
                                 Label::new(cx.file, field.key.span()),
                             )
-                            .with_label(Label::with_message(
-                                cx.file,
-                                *first,
-                                "first written here",
-                            )),
+                            .with_label(Label::with_message(cx.file, *first, "first written here"))
+                            .with_help(format!("write '{key}' once; remove one of them")),
                         );
                         continue;
                     }
@@ -775,7 +772,19 @@ impl Resolver<'_> {
         };
         let other = self.joint_member(cx, other_expr, head.as_str())?;
         let normal = match parsed.get("normal") {
-            Some(e) => self.part_axis(cx, e, "normal"),
+            Some(e) => match self.part_axis(cx, e, "normal") {
+                Some(PartAxis::Length) => {
+                    self.error_help(
+                        Code::TypeMismatch,
+                        "'normal' needs width or thickness, found length".to_owned(),
+                        cx.file,
+                        e.span,
+                        "name the face across the part's width (normal: width) or its thickness (normal: thickness); the ends are cut with end(...)",
+                    );
+                    return None;
+                }
+                axis => axis,
+            },
             None => None,
         };
         if selector == Selector::Side && normal.is_none() && parsed.get("normal").is_none() {

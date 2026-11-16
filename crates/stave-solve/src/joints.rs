@@ -662,6 +662,64 @@ impl Solver<'_> {
         })
     }
 
+    /// A part's cut length must not be more than its stock's `max_length`
+    /// (grammar, "stock"). Mirror images are left to their source, so one
+    /// mistake is one error.
+    pub(crate) fn check_max_length(&mut self, part: PartId, geom: &PartGeom) -> Solved<()> {
+        if self.mirror_source(part)?.is_some()
+            || self
+                .model
+                .parts
+                .get(part.index())
+                .is_some_and(|p| p.mirror_of.is_some())
+        {
+            return Ok(());
+        }
+        let stock = self.part_stock(part)?;
+        let Some(max_length) =
+            self.stock_length(stock, stave_model::defs::StockField::MaxLength)?
+        else {
+            return Ok(());
+        };
+        let slot = local_slot(PartAxis::Length);
+        let cut_length = [&geom.drawn, &geom.start, &geom.end]
+            .iter()
+            .filter_map(|sizes| sizes.get(slot).copied())
+            .try_fold(ExactLength::ZERO, |sum, size| sum.checked_add(size))
+            .ok_or(Reported)?;
+        if cut_length <= max_length {
+            return Ok(());
+        }
+        let name = self.part_name(part);
+        let stock_name = self
+            .model
+            .defs
+            .stock(stock)
+            .map(|s| s.decl.name.clone())
+            .unwrap_or_default();
+        let (file, span) = match (self.part_body(part).cloned(), self.part_env(part)) {
+            (Some(body), Some(env)) => match &body.length {
+                stave_model::defs::Size::Expr(expr) => (env.file, expr.span),
+                stave_model::defs::Size::Fit(span) => (env.file, *span),
+            },
+            _ => (self.project_file, self.project_span),
+        };
+        Err(self.error(
+            Code::TypeMismatch,
+            format!(
+                "{name}: its cut length works out as {}, which is more than its stock's max_length of {}",
+                stave_model::value::format_length(cut_length),
+                stave_model::value::format_length(max_length)
+            ),
+            file,
+            span,
+            format!(
+                "stock '{stock_name}' comes no longer than {}; make the part shorter or choose longer stock",
+                stave_model::value::format_length(max_length)
+            ),
+        ))
+    }
+
     /// The reference face and edge (grammar, "Faces to cut").
     fn reference_faces(
         &mut self,

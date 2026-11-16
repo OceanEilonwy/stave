@@ -290,7 +290,14 @@ impl RawLexer<'_> {
         match error {
             LiteralError::UnknownUnit { magnitude, unit } => {
                 let unit_start = start + magnitude.len();
-                let help = suggest_unit(&unit).map(|unit| format!("write {magnitude}{unit}"));
+                let help = Some(suggest_unit(&unit).map_or_else(
+                    || {
+                        format!(
+                            "write {magnitude} with one of mm, cm, m, in, ft or deg right after it"
+                        )
+                    },
+                    |unit| format!("write {magnitude}{unit}"),
+                ));
                 self.error(
                     Code::UnknownUnit,
                     format!("unknown unit '{unit}' (expected one of mm, cm, m, in, ft, deg)"),
@@ -744,6 +751,20 @@ impl Cook<'_> {
                 .is_some_and(|rest| rest.starts_with('\n'))
     }
 
+    /// Turns the newlines dropped since the last significant token back
+    /// into line ends.
+    fn keep_newlines_since_last_token(&mut self) {
+        let from = self.last_significant.map_or(0, |index| index + 1);
+        for index in from..self.out.len() {
+            if let Some(token) = self.out.get(index).copied()
+                && self.is_dropped_newline(&token)
+                && let Some(slot) = self.out.get_mut(index)
+            {
+                slot.kind = SyntaxKind::NEWLINE;
+            }
+        }
+    }
+
     /// Closes the open `(` and `[` that `reason` ends: all of them for an
     /// item or the end of the file, the ones inside the innermost block for
     /// a `}`.
@@ -866,7 +887,7 @@ fn cook(
                         .iter()
                         .any(|open| matches!(open.kind, SyntaxKind::L_PAREN | SyntaxKind::L_BRACK))
                 };
-                if at_line_start && kind.is_item_keyword() && has_open_bracket() {
+                if at_line_start && kind.is_item_keyword() {
                     let next = raw
                         .get(index + 1..)
                         .unwrap_or(&[])
@@ -874,7 +895,14 @@ fn cook(
                         .find(|next| !next.kind.is_trivia() && next.kind != SyntaxKind::NEWLINE)
                         .map(|next| next.kind);
                     if next != Some(SyntaxKind::COLON) {
-                        cook.close_brackets(CloseReason::Item(token.span.start()), diagnostics);
+                        if has_open_bracket() {
+                            cook.close_brackets(CloseReason::Item(token.span.start()), diagnostics);
+                        } else if previous.is_some_and(|p| p != SyntaxKind::DOC) {
+                            // No expression continues with a declaration: a
+                            // line ending in an operator doesn't swallow the
+                            // next item (grammar, "Newlines").
+                            cook.keep_newlines_since_last_token();
+                        }
                     }
                 }
                 match kind {

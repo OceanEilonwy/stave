@@ -314,6 +314,24 @@ impl<'a> Loader<'a> {
             } else {
                 let parse = parse_file(file, text);
                 self.diagnostics.extend(parse.diagnostics);
+                if let Some((version, header_span)) = parse
+                    .ast
+                    .as_ref()
+                    .map(|ast| (ast.header.version, ast.header.span))
+                    && version != stave_lang::FORMAT_VERSION
+                {
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            Code::NotSupported,
+                            format!("format version {version} is not supported yet"),
+                            Label::new(file, header_span),
+                        )
+                        .with_help(format!(
+                            "this version of Stave reads files that start with 'stave {}'",
+                            stave_lang::FORMAT_VERSION
+                        )),
+                    );
+                }
                 files.push(ModuleFile {
                     file,
                     path,

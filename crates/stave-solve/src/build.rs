@@ -105,6 +105,18 @@ pub(crate) fn build(solver: &mut Solver<'_>) -> Option<SolvedDesign> {
     for index in 0..solver.model.regions.len() {
         let _ = solver.region_value(RegionId::from_usize(index));
     }
+    // Every profile of the project, used or not, so stations that go
+    // backwards are reported once, at the profile.
+    for index in 0..solver.model.defs.profiles.len() {
+        let profile = stave_model::ids::ProfileId::from_usize(index);
+        let in_project = solver.model.defs.profile(profile).is_some_and(|def| {
+            solver.module_ctx(DefId::Profile(profile)).is_some()
+                && def.decl.scope == stave_model::defs::Scope::Module(solver.model.root)
+        });
+        if in_project {
+            let _ = solver.profile_stations(profile);
+        }
+    }
 
     // 2. Joints, pass A: pairs, requires, extensions.
     let mut work: Vec<Option<JointWork>> = Vec::new();
@@ -126,6 +138,7 @@ pub(crate) fn build(solver: &mut Solver<'_>) -> Option<SolvedDesign> {
     for index in 0..part_count {
         let part = PartId::from_usize(index);
         if let Ok(geom) = solver.part_geom(part) {
+            let _ = solver.check_max_length(part, &geom);
             geoms.set(part, geom);
         }
     }
@@ -1419,6 +1432,11 @@ impl Solver<'_> {
             .module_instance(self.model.root)
             .ok_or(Reported)?;
         for scene in self.model.scenes.clone() {
+            // A scene with a name or type error is already reported.
+            if self.poisoned(DefId::Scene(scene)) {
+                self.skipped = true;
+                continue;
+            }
             let Some(def) = self.model.defs.scene(scene).cloned() else {
                 continue;
             };

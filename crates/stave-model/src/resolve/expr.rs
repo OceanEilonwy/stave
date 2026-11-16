@@ -296,7 +296,7 @@ impl Resolver<'_> {
             ExprKind::Call { callee, args } => self.call(cx, callee, args, span, expect),
             ExprKind::Unary { op, operand } => {
                 let operand_expect = match op {
-                    UnaryOp::Not => Expect::ty(Ty::Bool),
+                    UnaryOp::Not => Expect::ty(Ty::Bool).named("!"),
                     UnaryOp::Neg => Expect::any(),
                 };
                 let operand = self.value(cx, operand, &operand_expect);
@@ -322,7 +322,7 @@ impl Resolver<'_> {
             }
             ExprKind::Binary { op, lhs, rhs } => {
                 let side_expect = match op {
-                    BinaryOp::And | BinaryOp::Or => Expect::ty(Ty::Bool),
+                    BinaryOp::And | BinaryOp::Or => Expect::ty(Ty::Bool).named(op.symbol()),
                     _ => Expect::any(),
                 };
                 let lhs = self.value(cx, lhs, &side_expect);
@@ -535,12 +535,21 @@ impl Resolver<'_> {
                 RExpr::error(span)
             }
             None => {
-                let mut candidates = self.names_in_scope(cx);
+                // Where only a closed list of words fits, suggest only them.
+                let only_words = match &expect.ty {
+                    Some(Ty::Word(set)) => Some(*set),
+                    _ => None,
+                };
+                let mut candidates = match only_words {
+                    Some(set) => set.words().into_iter().map(str::to_owned).collect(),
+                    None => self.names_in_scope(cx),
+                };
                 for set in &expect.words {
                     candidates.extend(set.words().into_iter().map(str::to_owned));
                 }
-                let fallback = match &expect.ty {
-                    Some(wanted) if WordSet::ALL.iter().any(|s| s.contains(text)) => {
+                let fallback = match (&expect.ty, only_words) {
+                    (_, Some(set)) => format!("write one of: {}", set.words().join(", ")),
+                    (Some(wanted), None) if WordSet::ALL.iter().any(|s| s.contains(text)) => {
                         format!("this needs {wanted} here")
                     }
                     _ => format!("declare '{text}' in this module, or check its spelling"),

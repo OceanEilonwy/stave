@@ -132,14 +132,17 @@ fn parse_with<T>(
         return Parse {
             green: builder.finish(),
             ast: None,
-            diagnostics: vec![Diagnostic::error(
-                Code::Syntax,
-                format!(
-                    "expected a file of at most 4 GiB, found {} bytes",
-                    text.len()
-                ),
-                Label::new(file, ast::Span::default()),
-            )],
+            diagnostics: vec![
+                Diagnostic::error(
+                    Code::Syntax,
+                    format!(
+                        "expected a file of at most 4 GiB, found {} bytes",
+                        text.len()
+                    ),
+                    Label::new(file, ast::Span::default()),
+                )
+                .with_help("split the design into several files in its folder"),
+            ],
             broken: Vec::new(),
         };
     }
@@ -536,15 +539,25 @@ mod tests {
             let source = std::fs::read_to_string(folder.join("project.stave"))
                 .unwrap_or_else(|error| panic!("{}: {error}", folder.display()));
             let first = source.lines().next().unwrap();
-            let rest = first.strip_prefix("// expect: error[").unwrap_or_else(|| {
-                panic!(
-                    "{}: first line must be `// expect: error[code] message`",
-                    folder.display()
-                )
-            });
+            let rest = first
+                .strip_prefix("// expect: error[")
+                .or_else(|| first.strip_prefix("// expect: warning["))
+                .unwrap_or_else(|| {
+                    panic!(
+                        "{}: first line must be `// expect: error[code] message`",
+                        folder.display()
+                    )
+                });
+            if let Some(second) = source.lines().nth(1)
+                && let Some(reason) = second.strip_prefix("// pending: ")
+            {
+                assert!(!reason.trim().is_empty(), "{}", folder.display());
+            }
             let (code, message) = rest.split_once("] ").unwrap();
+            // Warnings are listed after the table; `Code::ALL` is the table
+            // and that list (see `codes_match_the_grammar_table`).
             assert!(
-                codes.contains(&code),
+                codes.contains(&code) || crate::Code::from_str_code(code).is_some(),
                 "{}: '{code}' is not in the Diagnostics table",
                 folder.display()
             );

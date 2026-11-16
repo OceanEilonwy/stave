@@ -391,9 +391,11 @@ impl<'t> Parser<'t> {
         );
         let mut diagnostic =
             Diagnostic::error(Code::Syntax, message, Label::new(self.file, self.span(0)));
-        diagnostic.help = help
-            .map(str::to_owned)
-            .or_else(|| self.operator_at_line_start_help());
+        diagnostic.help = Some(
+            help.map(str::to_owned)
+                .or_else(|| self.operator_at_line_start_help())
+                .unwrap_or_else(|| default_help(expectations)),
+        );
         self.report(diagnostic)
     }
 
@@ -2001,6 +2003,26 @@ impl<'t> Parser<'t> {
             .with_help("write \\{ for a literal brace; {name} works only in note:, check: and require messages");
             self.diagnostics.push(diagnostic);
         }
+    }
+}
+
+/// The help line of a syntax error that has no more specific one: what
+/// to write instead, worked out from what was expected. Every diagnostic
+/// has a help line (grammar, "Diagnostics").
+fn default_help(expectations: &[&str]) -> String {
+    let first = expectations.first().copied().unwrap_or_default();
+    match first {
+        "a declaration" | "an item keyword" => {
+            "a declaration starts on its own line with a keyword such as part, joint, region or let"
+                .to_owned()
+        }
+        "a field" => "a field is written name: value, one to a line".to_owned(),
+        "a name" => "write a name: letters, digits and _, starting with a letter or _".to_owned(),
+        "an expression" => "write a value here, such as 19mm, a name or a call".to_owned(),
+        "a role" => "a role is written name: Part or name: Parts".to_owned(),
+        "a type" => "write a type, such as Length, Count or Part".to_owned(),
+        _ if first.ends_with("in quotes") => format!("write {first}"),
+        _ => format!("write {} here", expectations.join(" or ")),
     }
 }
 
