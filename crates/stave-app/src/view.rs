@@ -162,7 +162,7 @@ pub fn describe(design: &SolvedDesign, item: Item) -> Option<Description> {
                 HardwareBase::Hinge => "Hinge",
                 HardwareBase::Pull => "Pull",
             };
-            let envelope = match hardware.envelope {
+            let shape = |envelope: &Envelope| match *envelope {
                 Envelope::Box {
                     length,
                     width,
@@ -174,13 +174,18 @@ pub fn describe(design: &SolvedDesign, item: Item) -> Option<Description> {
                     millimetres(length)
                 ),
             };
+            let (moving_label, fixed_label) = match hardware.base {
+                HardwareBase::Slide => ("Drawer member", "Cabinet member"),
+                HardwareBase::Hinge => ("Cup", "Plate"),
+                HardwareBase::Pull => ("Envelope", "Fixed member"),
+            };
             let piece = design
                 .part(hardware.piece)
                 .map_or_else(|| "?".to_owned(), |p| p.name.clone());
             Some(Description {
                 name: hardware.name.clone(),
                 kind,
-                rows: vec![
+                rows: [
                     Row {
                         label: "Kind",
                         value: hardware.kind.clone(),
@@ -190,14 +195,20 @@ pub fn describe(design: &SolvedDesign, item: Item) -> Option<Description> {
                         value: format!("{piece}, {} face", hardware.mount_face.word()),
                     },
                     Row {
-                        label: "Envelope",
-                        value: envelope,
+                        label: moving_label,
+                        value: shape(&hardware.envelope),
                     },
-                    Row {
-                        label: "Assembly",
-                        value: assembly_path(design, hardware.assembly),
-                    },
-                ],
+                ]
+                .into_iter()
+                .chain(hardware.fixed.as_ref().map(|member| Row {
+                    label: fixed_label,
+                    value: format!("{}, fixed to the carcass", shape(&member.envelope)),
+                }))
+                .chain([Row {
+                    label: "Assembly",
+                    value: assembly_path(design, hardware.assembly),
+                }])
+                .collect(),
             })
         }
     }

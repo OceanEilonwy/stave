@@ -1,12 +1,18 @@
 stave 1
 
-/// A concealed cup hinge for an overlay or inset door. The cup is bored into
-/// the back of the door; the plate screws to the cabinet side.
+/// A concealed 35mm cup hinge for an overlay door (the common European
+/// clip-on kind). The cup is bored into the back of the door's hinge stile;
+/// the mounting plate screws to the inside face of the cabinet side, on the
+/// 37mm screw line of 32mm-system cabinets. Numbers are typical catalog
+/// values for a full-overlay 110° hinge on a cruciform plate.
 kind euro_hinge : hinge {
   /// How far the door opens.
   param opening_angle = 110deg within [95deg, 110deg, 125deg, 155deg, 165deg]
+  /// From the door's edge to the rim of the cup (the boring distance).
+  param cup_inset = 5mm within [3mm, 4mm, 5mm, 6mm, 7mm]
+  /// From the cabinet's front edge back to the plate's screw line.
+  param plate_setback = 37mm within [37mm, 52mm]
   cup_diameter: 35mm
-  cup_depth:    12.5mm
-  cup_inset:    4mm                      // from the door's edge to the edge of the cup
-  envelope:     box(length: 50mm, width: 65mm, thickness: 20mm)
+  cup_depth:    13mm
+  plate:        box(length: 50mm, width: 36mm, thickness: 11mm)
 }

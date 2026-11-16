@@ -201,7 +201,10 @@ fn export_writes_a_valid_gltf_of_the_cabinet() {
     let (document, buffers, _) = gltf::import(&output).expect("a valid glTF file");
     // One node per part and piece of hardware, named as in the design.
     let names: Vec<&str> = document.nodes().filter_map(|n| n.name()).collect();
-    assert_eq!(names.len(), 34 + 12);
+    // ...plus one node for each hinge plate and slide cabinet member.
+    assert_eq!(names.len(), 34 + 12 + 4 + 4);
+    assert!(names.contains(&"door_l.hinges[lower] plate"));
+    assert!(names.contains(&"drawer[top].slides[left] cabinet member"));
     for name in [
         "base",
         "side_r",

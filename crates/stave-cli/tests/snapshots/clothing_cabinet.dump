@@ -56,8 +56,8 @@ door_l.stile[hinge]          oak_19         1149.5 x 60 x 19           1..61    
     cut pocket 60 x 6 depth 10 on width end: where door_l.rail[bottom] meets it, local 0..60 x 50..60 x 0..19
     cut pocket 60 x 6 depth 10 on width end: where door_l.rail[top] meets it, local 1089.5..1149.5 x 50..60 x 0..19
     cut notch depth 10 on width end: where door_l.panel meets it, local 52..1097.5 x 52..60 x 6.5..12.5
-    cut drill 1 x diameter 35 depth 12.5 on thickness end: centred at local 125, 21.5, 19
-    cut drill 1 x diameter 35 depth 12.5 on thickness end: centred at local 1024.5, 21.5, 19
+    cut drill 1 x diameter 35 depth 13 on thickness end: centred at local 117.5, 22.5, 19
+    cut drill 1 x diameter 35 depth 13 on thickness end: centred at local 1032, 22.5, 19
 door_l.stile[latch]          oak_19         1149.5 x 60 x 19           389.25..449.25       530..1679.5          -19..0               up/right/back
     cut pocket 60 x 6 depth 10 on width start: where door_l.rail[bottom] meets it, local 0..60 x 0..10 x 0..19
     cut pocket 60 x 6 depth 10 on width start: where door_l.rail[top] meets it, local 1089.5..1149.5 x 0..10 x 0..19
@@ -119,8 +119,8 @@ door_r.stile[hinge]          oak_19         1149.5 x 60 x 19           839..899 
     cut pocket 60 x 6 depth 10 on width end: where door_r.rail[bottom] meets it, local 0..60 x 50..60 x 0..19
     cut pocket 60 x 6 depth 10 on width end: where door_r.rail[top] meets it, local 1089.5..1149.5 x 50..60 x 0..19
     cut notch depth 10 on width end: where door_r.panel meets it, local 52..1097.5 x 52..60 x 6.5..12.5
-    cut drill 1 x diameter 35 depth 12.5 on thickness end: centred at local 125, 21.5, 19
-    cut drill 1 x diameter 35 depth 12.5 on thickness end: centred at local 1024.5, 21.5, 19
+    cut drill 1 x diameter 35 depth 13 on thickness end: centred at local 117.5, 22.5, 19
+    cut drill 1 x diameter 35 depth 13 on thickness end: centred at local 1032, 22.5, 19
 door_r.stile[latch]          oak_19         1149.5 x 60 x 19           450.75..510.75       530..1679.5          -19..0               up/left/back
     cut pocket 60 x 6 depth 10 on width start: where door_r.rail[bottom] meets it, local 0..60 x 0..10 x 0..19
     cut pocket 60 x 6 depth 10 on width start: where door_r.rail[top] meets it, local 1089.5..1149.5 x 0..10 x 0..19
@@ -141,40 +141,48 @@ door_r.panel                 oak_6          1045.5 x 344.25 x 6        510.75..8
 
 HARDWARE (12)
 door_l.hinges[lower]         euro_hinge       on door_l.stile[hinge] (back face)
-    box 1..66                630..680             0..20               
+    cup            6..41                630..665             -13..0              
+    plate          19..30               622.5..672.5         19..55              
     opens 110deg, cup 35, on side_l
 door_l.hinges[upper]         euro_hinge       on door_l.stile[hinge] (back face)
-    box 1..66                1529.5..1579.5       0..20               
+    cup            6..41                1544.5..1579.5       -13..0              
+    plate          19..30               1537..1587           19..55              
     opens 110deg, cup 35, on side_l
 door_l.handle                hw.brass_knob_26 on door_l.stile[latch] (front face)
-    box 406.25..432.25       1091.75..1117.75     -49..-19            
+    box            406.25..432.25       1091.75..1117.75     -49..-19            
     one screw, 4
 drawer[bottom].slides[left]  side_mount_slide on drawer[bottom].side[left] (left face)
-    box 19..31.7             121.5..166.5         0..500              
+    drawer member  25.35..31.7          121.5..166.5         0..500              
+    cabinet member 19..25.35            121.5..166.5         0..500              
     length 500, clearance 12.7, travel 500
 drawer[bottom].slides[right] side_mount_slide on drawer[bottom].side[right] (right face)
-    box 868.3..881           121.5..166.5         0..500              
+    drawer member  868.3..874.65        121.5..166.5         0..500              
+    cabinet member 874.65..881          121.5..166.5         0..500              
     length 500, clearance 12.7, travel 500
 drawer[bottom].pull          hw.bar_pull_160  on drawer[bottom].front (front face)
-    box 354..546             133.625..145.625     -54..-19            
+    box            354..546             133.625..145.625     -54..-19            
     screws 160 apart, 4
 drawer[top].slides[left]     side_mount_slide on drawer[top].side[left] (left face)
-    box 19..31.7             371.5..416.5         0..500              
+    drawer member  25.35..31.7          371.5..416.5         0..500              
+    cabinet member 19..25.35            371.5..416.5         0..500              
     length 500, clearance 12.7, travel 500
 drawer[top].slides[right]    side_mount_slide on drawer[top].side[right] (right face)
-    box 868.3..881           371.5..416.5         0..500              
+    drawer member  868.3..874.65        371.5..416.5         0..500              
+    cabinet member 874.65..881          371.5..416.5         0..500              
     length 500, clearance 12.7, travel 500
 drawer[top].pull             hw.bar_pull_160  on drawer[top].front (front face)
-    box 354..546             392.375..404.375     -54..-19            
+    box            354..546             392.375..404.375     -54..-19            
     screws 160 apart, 4
 door_r.hinges[lower]         euro_hinge       on door_r.stile[hinge] (back face)
-    box 834..899             630..680             0..20               
+    cup            859..894             630..665             -13..0              
+    plate          870..881             622.5..672.5         19..55              
     opens 110deg, cup 35, on side_r
 door_r.hinges[upper]         euro_hinge       on door_r.stile[hinge] (back face)
-    box 834..899             1529.5..1579.5       0..20               
+    cup            859..894             1544.5..1579.5       -13..0              
+    plate          870..881             1537..1587           19..55              
     opens 110deg, cup 35, on side_r
 door_r.handle                hw.brass_knob_26 on door_r.stile[latch] (front face)
-    box 467.75..493.75       1091.75..1117.75     -49..-19            
+    box            467.75..493.75       1091.75..1117.75     -49..-19            
     one screw, 4
 
 JOINTS (16)

@@ -708,7 +708,7 @@ All entries are readable (`slide.clearance`, `hinge_kind.cup_diameter`).
 | Base | Roles (fixed) | Required | Optional |
 |---|---|---|---|
 | `slide` | `piece: Part` (the drawer side), `in: Region` (the opening) | `length`, `clearance`, `travel`: `Length`; `envelope`: `Envelope` | `model`, `moving`, `license` |
-| `hinge` | `piece: Part` (the door stile), `on: Part` (the cabinet side) | `opening_angle`: `Angle`; `cup_diameter`, `cup_depth`, `cup_inset`: `Length`; `envelope` | `model`, `moving`, `license` |
+| `hinge` | `piece: Part` (the door stile), `on: Part` (the cabinet side) | `opening_angle`: `Angle`; `cup_diameter`, `cup_depth`, `cup_inset`, `plate_setback`: `Length`; `plate`: `Envelope` (a box) | `model`, `moving`, `license` |
 | `pull` | `piece: Part` | `envelope` | `centres`, `diameter`, `screw_diameter` (default `4mm`): `Length`; `model`, `license` |
 | `fastener` | none | `diameter`, `length`: `Length` | `envelope`, `model`, `license` |
 | `tool` | none | | `title`: `Text`; `powered`: `Bool` (default `false`) |
@@ -822,7 +822,7 @@ call accepts `face:` (a face word) to name it; left out, the base kind decides:
 | Base | Mount face (default) | Fixed by the base | Set by `place { }` |
 |---|---|---|---|
 | `slide` | the `left` or `right` face of `piece`, whichever is nearer the same-named face of the `in` region | everything: the slide runs along the piece's length, front ends level, centred on the piece's width | nothing; a `place` is `error[axis-set-twice]` |
-| `hinge` | the `back` face of `piece` | the cup sits `cup_inset` in from the long edge of the mount face that is nearer `on` | the one axis along the piece's length |
+| `hinge` | the `back` face of `piece` | the cup sits `cup_inset` in from the long edge of the mount face that is nearer `on`; the plate sits on the inside face of `on` | the one axis along the piece's length (the cup's) |
 | `pull` | the `front` face of `piece` | nothing | the two axes of the mount face |
 
 The mount face fixes the axis it is normal to. The terms are the same as for
@@ -832,12 +832,30 @@ hardware.
 
 An envelope lies on the mount face like this: its `thickness` (or a cylinder's
 `length`) stands off the face; its `length` runs along the piece's length; its
-`width` along the remaining axis. A hinge's envelope starts at the long edge
-its cup is measured from and reaches `width` away from it, toward the middle
-of the door; that edge is the one nearer the middle of `on` along that axis.
-A slide's "front ends level" means its envelope starts at the piece's front
-end (the low end of the piece's length when the length doesn't run front to
-back). Fasteners and tools are never placed.
+`width` along the remaining axis. A slide's "front ends level" means its
+envelope starts at the piece's front end (the low end of the piece's length
+when the length doesn't run front to back). Fasteners and tools are never
+placed.
+
+**Members.** Hinges and slides are two pieces of metal: one moves with the
+door or drawer, one is screwed to the carcass and stays put.
+
+- A **hinge** is its **cup** and its **plate**. The cup is a cylinder,
+  `cup_diameter` across and `cup_depth` deep, sunk into the mount face (the
+  back of the stile), its rim `cup_inset` in from the stile's long edge
+  nearer the middle of `on`; `place { }` positions the cup along the
+  piece's length. The plate is the `plate` box, screwed to the face of `on`
+  that looks toward the middle of the door (the inside of the cabinet side):
+  its `thickness` stands off that face, its `length` runs along the door's
+  length centred on the cup, and its `width` runs back from the face of
+  `on` the door closes against, its middle `plate_setback` back from it (the
+  screw line; 37mm on 32mm-system cabinets). Neither member reaches into
+  `on`'s thickness or past its outer face. The cup moves with the door; the
+  plate stays.
+- A **slide** with a box envelope is two members, each half the envelope's
+  thickness: the **drawer member** against the piece, which travels with
+  the drawer, and the **cabinet member** against the `in` region's side,
+  which stays.
 
 ### Mirroring
 
@@ -1218,7 +1236,8 @@ What each base does:
   cup_depth)` in the mount face. It gives the assembly a motion: it turns by up
   to `opening_angle` about the long edge of `piece` that is on the face
   opposite the mount face and nearer `on` (for an overlay door: its outer
-  front corner).
+  front corner). A hinge has no `envelope:`: its cup and `plate` are its
+  envelope (see [Hardware placement](#hardware-placement)).
 - **`pull`** — bores its screw holes through the piece: one hole of
   `screw_diameter` in the middle of the envelope, or two holes `centres` apart
   along its length when `centres` is given.
@@ -1227,8 +1246,8 @@ What each base does:
 
 **Envelopes** are what fit and collision checks use: `box(length:, width:,
 thickness:)` or `cylinder(diameter:, length:)`. An envelope may overlap the
-hardware's own role parts (a hinge reaches into its door and its cabinet
-side); overlapping anything else is `error[overlap]`.
+hardware's own role parts (a hinge's cup is sunk into its door); overlapping
+anything else is `error[overlap]`.
 
 **Models are for looks only.**
 

@@ -68,6 +68,16 @@ pub(crate) enum MotionExact {
     },
 }
 
+/// The member of a piece of hardware that is fixed to the carcass and stays
+/// put when the assembly moves: a hinge's mounting plate, a slide's cabinet
+/// member.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Member {
+    pub envelope: Envelope,
+    pub bounds: ExactBox,
+    pub orientation: Orientation,
+}
+
 /// A placed piece of hardware.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct Placed {
@@ -77,9 +87,13 @@ pub(crate) struct Placed {
     pub base: BaseKind,
     pub piece: PartId,
     pub mount_face: Face,
+    /// The member on the piece (it moves with the piece's assembly): a
+    /// hinge's cup, a slide's drawer member, the whole of a pull.
     pub envelope: Envelope,
     pub bounds: ExactBox,
     pub orientation: Orientation,
+    /// The member fixed to the carcass, for hinges and slides.
+    pub fixed: Option<Member>,
     pub data: Data,
     pub bore: Option<Bore>,
     pub motion: Option<MotionExact>,
@@ -249,17 +263,34 @@ impl Solver<'_> {
         };
         let piece_box = self.drawn_box(piece)?;
         let piece_orientation = self.part_orientation(piece)?;
-        let envelope = match self.hardware_entry(&binding, "envelope", &env, span)? {
-            Some(Value::Envelope(envelope)) => envelope,
-            _ => {
-                return Err(self.error(
-                    Code::MissingField,
-                    format!("kind '{kind_name}' is missing 'envelope'"),
-                    env.file,
-                    span,
-                    "give the kind envelope: box(...) or cylinder(...)",
-                ));
-            }
+        // A hinge's member on the piece is its cup, sunk into the mount
+        // face; every other base declares its envelope.
+        let hinge_cup = if kind.base == BaseKind::Hinge {
+            let diameter =
+                self.required_length(&binding, "cup_diameter", &env, span, &kind_name)?;
+            let depth = self.required_length(&binding, "cup_depth", &env, span, &kind_name)?;
+            let inset = self.required_length(&binding, "cup_inset", &env, span, &kind_name)?;
+            Some((diameter, depth, inset))
+        } else {
+            None
+        };
+        let envelope = match hinge_cup {
+            Some((diameter, depth, _)) => Envelope::Cylinder {
+                diameter,
+                length: depth,
+            },
+            None => match self.hardware_entry(&binding, "envelope", &env, span)? {
+                Some(Value::Envelope(envelope)) => envelope,
+                _ => {
+                    return Err(self.error(
+                        Code::MissingField,
+                        format!("kind '{kind_name}' is missing 'envelope'"),
+                        env.file,
+                        span,
+                        "give the kind envelope: box(...) or cylinder(...)",
+                    ));
+                }
+            },
         };
         let model = match self.hardware_entry(&binding, "model", &env, span)? {
             Some(Value::Model(model)) => Some(model),
@@ -290,8 +321,14 @@ impl Solver<'_> {
             }
             (None, None) => return Err(Reported),
         };
-        // The envelope's frame on the face.
-        let thickness_direction = mount_face.direction();
+        // The envelope's frame on the face: its thickness stands off the
+        // face, except a hinge cup's, which runs into the piece.
+        let mount_direction = mount_face.direction();
+        let thickness_direction = if hinge_cup.is_some() {
+            mount_direction.opposite()
+        } else {
+            mount_direction
+        };
         let piece_length = piece_orientation.direction(PartAxis::Length);
         let length_direction = if piece_length.axis() == thickness_direction.axis() {
             piece_orientation.direction(PartAxis::Width)
@@ -317,7 +354,7 @@ impl Solver<'_> {
         } else {
             piece_box.min(face_axis)
         };
-        let face_low = if mount_face.is_positive() {
+        let face_low = if thickness_direction.is_positive() {
             face_position
         } else {
             face_position.checked_sub(env_thickness).ok_or(Reported)?
@@ -351,12 +388,17 @@ impl Solver<'_> {
                 let (low_edge, high_edge) = (piece_box.min(width_axis), piece_box.max(width_axis));
                 let low_distance = abs(on_centre.checked_sub(low_edge).ok_or(Reported)?)?;
                 let high_distance = abs(on_centre.checked_sub(high_edge).ok_or(Reported)?)?;
+                // The cup is `cup_inset` in from the edge nearer `on`.
+                let inset = hinge_cup.map_or(ExactLength::ZERO, |(_, _, inset)| inset);
                 let low = if low_distance <= high_distance {
                     width_direction = positive_direction(width_axis);
-                    low_edge
+                    low_edge.checked_add(inset).ok_or(Reported)?
                 } else {
                     width_direction = positive_direction(width_axis).opposite();
-                    high_edge.checked_sub(env_width).ok_or(Reported)?
+                    high_edge
+                        .checked_sub(inset)
+                        .and_then(|edge| edge.checked_sub(env_width))
+                        .ok_or(Reported)?
                 };
                 if let Some(slot) = lows.get_mut(world_index(width_axis)) {
                     *slot = Some(low);
@@ -454,8 +496,45 @@ impl Solver<'_> {
                 };
             }
         }
+        let mut fixed = None;
+        let mut envelope = envelope;
+        let mut bounds = bounds;
         let (data, bore, motion) = match kind.base {
             BaseKind::Slide => {
+                // Two members, each half the thickness: the drawer member
+                // against the piece, the cabinet member outside it.
+                if let Envelope::Box {
+                    length,
+                    width,
+                    thickness,
+                } = envelope
+                {
+                    let half_thickness = half(thickness)?;
+                    let middle =
+                        midpoint(bounds.min(face_axis), bounds.max(face_axis)).ok_or(Reported)?;
+                    let (near, far) = if mount_direction.is_positive() {
+                        (
+                            (bounds.min(face_axis), middle),
+                            (middle, bounds.max(face_axis)),
+                        )
+                    } else {
+                        (
+                            (middle, bounds.max(face_axis)),
+                            (bounds.min(face_axis), middle),
+                        )
+                    };
+                    envelope = Envelope::Box {
+                        length,
+                        width,
+                        thickness: half_thickness,
+                    };
+                    fixed = Some(Member {
+                        envelope,
+                        bounds: bounds.with(face_axis, far.0, far.1),
+                        orientation,
+                    });
+                    bounds = bounds.with(face_axis, near.0, near.1);
+                }
                 let Some(Value::Region(opening)) = binding.roles.get(1).cloned() else {
                     return Err(Reported);
                 };
@@ -495,16 +574,13 @@ impl Solver<'_> {
                         ));
                     }
                 };
-                let cup_diameter =
-                    self.required_length(&binding, "cup_diameter", &env, span, &kind_name)?;
-                let cup_depth =
-                    self.required_length(&binding, "cup_depth", &env, span, &kind_name)?;
-                let cup_inset =
-                    self.required_length(&binding, "cup_inset", &env, span, &kind_name)?;
+                let (cup_diameter, cup_depth, cup_inset) = hinge_cup.ok_or(Reported)?;
+                // The door's edge nearer `on`: the cup is measured from it
+                // and the door turns about it.
                 let edge = if width_direction.is_positive() {
-                    bounds.min(width_axis)
+                    piece_box.min(width_axis)
                 } else {
-                    bounds.max(width_axis)
+                    piece_box.max(width_axis)
                 };
                 let offset = cup_inset.checked_add(half(cup_diameter)?).ok_or(Reported)?;
                 let cup_centre = if width_direction.is_positive() {
@@ -535,6 +611,19 @@ impl Solver<'_> {
                         };
                     }
                 }
+                fixed = Some(self.hinge_plate(
+                    &binding,
+                    &env,
+                    span,
+                    &kind_name,
+                    on,
+                    HingeFrame {
+                        length_direction,
+                        length_centre: centre_of(length_axis)?,
+                        toward_door_middle: width_direction,
+                        mount_direction,
+                    },
+                )?);
                 let data = Data::Hinge {
                     opening_angle: angle,
                     cup_diameter,
@@ -591,10 +680,118 @@ impl Solver<'_> {
             envelope,
             bounds,
             orientation,
+            fixed,
             data,
             bore,
             motion,
             model,
+        })
+    }
+
+    /// A hinge's mounting plate: on the face of `on` that looks toward the
+    /// middle of the door, centred on the cup along the door's length, its
+    /// middle `plate_setback` back from the face of `on` the door closes
+    /// against.
+    fn hinge_plate(
+        &mut self,
+        binding: &Binding,
+        env: &Env<'_>,
+        span: Span,
+        kind_name: &str,
+        on: PartId,
+        frame: HingeFrame,
+    ) -> Solved<Member> {
+        let setback = self.required_length(binding, "plate_setback", env, span, kind_name)?;
+        let envelope = match self.hardware_entry(binding, "plate", env, span)? {
+            Some(Value::Envelope(envelope @ Envelope::Box { .. })) => envelope,
+            Some(Value::Envelope(Envelope::Cylinder { .. })) => {
+                return Err(self.error(
+                    Code::TypeMismatch,
+                    format!("kind '{kind_name}': a hinge's plate is a box"),
+                    env.file,
+                    span,
+                    "write plate: box(length: ..., width: ..., thickness: ...)",
+                ));
+            }
+            _ => {
+                return Err(self.error(
+                    Code::MissingField,
+                    format!("kind '{kind_name}' is missing 'plate'"),
+                    env.file,
+                    span,
+                    "give the kind plate: box(length: ..., width: ..., thickness: ...)",
+                ));
+            }
+        };
+        let Envelope::Box {
+            length,
+            width,
+            thickness,
+        } = envelope
+        else {
+            return Err(Reported);
+        };
+        let on_box = self.drawn_box(on)?;
+        let HingeFrame {
+            length_direction,
+            length_centre,
+            toward_door_middle,
+            mount_direction,
+        } = frame;
+        let span_from = |start: ExactLength, size: ExactLength, positive: bool| {
+            if positive {
+                start.checked_add(size).map(|end| (start, end))
+            } else {
+                start.checked_sub(size).map(|end| (end, start))
+            }
+        };
+        // Across the door: standing off the inside face of `on`.
+        let inside_axis = toward_door_middle.axis();
+        let inside_face = if toward_door_middle.is_positive() {
+            on_box.max(inside_axis)
+        } else {
+            on_box.min(inside_axis)
+        };
+        let across =
+            span_from(inside_face, thickness, toward_door_middle.is_positive()).ok_or(Reported)?;
+        // Along the door's length: centred on the cup.
+        let along = (
+            length_centre.checked_sub(half(length)?).ok_or(Reported)?,
+            length_centre.checked_add(half(length)?).ok_or(Reported)?,
+        );
+        // Back from the face of `on` the door closes against.
+        let depth_axis = mount_direction.axis();
+        let closing_face = if mount_direction.is_positive() {
+            on_box.min(depth_axis)
+        } else {
+            on_box.max(depth_axis)
+        };
+        let middle = if mount_direction.is_positive() {
+            closing_face.checked_add(setback)
+        } else {
+            closing_face.checked_sub(setback)
+        }
+        .ok_or(Reported)?;
+        let back = (
+            middle.checked_sub(half(width)?).ok_or(Reported)?,
+            middle.checked_add(half(width)?).ok_or(Reported)?,
+        );
+        let mut extents = [(ExactLength::ZERO, ExactLength::ZERO); 3];
+        for (axis, extent) in [
+            (inside_axis, across),
+            (length_direction.axis(), along),
+            (depth_axis, back),
+        ] {
+            if let Some(slot) = extents.get_mut(world_index(axis)) {
+                *slot = extent;
+            }
+        }
+        let [x, y, z] = extents;
+        Ok(Member {
+            envelope,
+            bounds: ExactBox::new(x, y, z),
+            orientation: Orientation::new(length_direction, mount_direction, toward_door_middle)
+                .map_err(|_| Reported)?,
         })
     }
 
@@ -607,6 +804,17 @@ impl Solver<'_> {
             _ => 1,
         }
     }
+}
+
+/// Where a hinge's plate goes, from the placed cup.
+struct HingeFrame {
+    length_direction: Direction,
+    /// The cup's centre along the door's length.
+    length_centre: ExactLength,
+    /// From the hinge edge toward the middle of the door.
+    toward_door_middle: Direction,
+    /// The mount face's outward direction (out of the door's back).
+    mount_direction: Direction,
 }
 
 fn half(value: ExactLength) -> Solved<ExactLength> {

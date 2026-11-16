@@ -56,6 +56,14 @@
 //! runs along the piece's length, local `thickness` stands off the mount
 //! face (outward), local `width` takes the remaining axis. A cylinder's own
 //! axis is the local `thickness`; its diameter spans `length` and `width`.
+//! A hinge's cup is the exception: it is sunk into the mount face, so its
+//! `thickness` runs into the piece.
+//!
+//! **Hardware members.** A hinge and a slide each have a member on the
+//! piece, which moves with the piece's assembly ([`Hardware::envelope`]: a
+//! hinge's cup, a slide's drawer member) and a member fixed to the carcass,
+//! which stays put ([`Hardware::fixed`]: a hinge's mounting plate on the
+//! inside face of `on`, a slide's cabinet member).
 
 use std::fmt;
 
@@ -1101,16 +1109,33 @@ pub struct Hardware {
     /// The world face of the piece it is mounted on.
     #[serde(serialize_with = "serialize_face")]
     pub mount_face: Face,
-    /// The envelope.
+    /// The member on the piece: the whole of a pull, a hinge's cup (sunk
+    /// into the mount face), a slide's drawer member. It moves with the
+    /// piece's assembly.
     pub envelope: Envelope,
-    /// The envelope's local origin and frame.
+    /// Its local origin and frame.
     pub pose: Pose,
-    /// The envelope's world box.
+    /// Its world box.
     pub bounds: WorldBox,
+    /// The member fixed to the carcass, which stays put when the assembly
+    /// moves: a hinge's mounting plate, a slide's cabinet member. `None`
+    /// for pulls.
+    pub fixed: Option<HardwareMember>,
     /// Catalog data.
     pub data: HardwareData,
     /// A model, when the kind has one.
     pub model: Option<Model>,
+}
+
+/// A member of a piece of hardware fixed to the carcass.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct HardwareMember {
+    /// Its shape.
+    pub envelope: Envelope,
+    /// Its local origin and frame.
+    pub pose: Pose,
+    /// Its world box.
+    pub bounds: WorldBox,
 }
 
 /// The line a hinged assembly turns about.

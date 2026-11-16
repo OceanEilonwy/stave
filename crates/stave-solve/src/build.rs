@@ -61,6 +61,23 @@ fn reflect_box(bounds: &ExactBox, axis: Axis, plane: ExactLength) -> Solved<Exac
     Ok(bounds.with(axis, low, high))
 }
 
+/// The world position of a box's local corner (0, 0, 0) in a frame.
+fn pose_origin(bounds: &ExactBox, orientation: &solved::Orientation) -> [ExactLength; 3] {
+    let mut origin = [ExactLength::ZERO; 3];
+    for axis in PartAxis::ALL {
+        let direction = orientation.direction(axis);
+        let world = direction.axis();
+        if let Some(slot) = origin.get_mut(world_index(world)) {
+            *slot = if direction.is_positive() {
+                bounds.min(world)
+            } else {
+                bounds.max(world)
+            };
+        }
+    }
+    origin
+}
+
 fn reflect_direction(direction: Direction, axis: Axis) -> Direction {
     if direction.axis() == axis {
         direction.opposite()
@@ -807,10 +824,22 @@ impl Solver<'_> {
             } else {
                 source_placed.mount_face
             };
+            let fixed = match &source_placed.fixed {
+                Some(member) => match reflect_box(&member.bounds, axis, plane) {
+                    Ok(bounds) => Some(crate::hardware::Member {
+                        envelope: member.envelope,
+                        bounds,
+                        orientation: member.orientation.mirrored(axis),
+                    }),
+                    Err(_) => continue,
+                },
+                None => None,
+            };
             let reflected = Placed {
                 piece,
                 mount_face,
                 bounds,
+                fixed,
                 orientation: source_placed.orientation.mirrored(axis),
                 data,
                 bore: None,
@@ -1105,27 +1134,18 @@ impl Solver<'_> {
                 return Err(Reported);
             };
             let base = HardwareBase::from_base(hw.base).ok_or(Reported)?;
-            let size = match hw.envelope {
-                ExactEnvelope::Box {
-                    length,
-                    width,
-                    thickness,
-                } => [length, width, thickness],
-                ExactEnvelope::Cylinder { diameter, length } => [diameter, diameter, length],
+            let origin = pose_origin(&hw.bounds, &hw.orientation);
+            let fixed = match &hw.fixed {
+                Some(member) => Some(solved::HardwareMember {
+                    envelope: exact_envelope(&member.envelope)?,
+                    pose: solved::Pose {
+                        origin: point(pose_origin(&member.bounds, &member.orientation))?,
+                        orientation: member.orientation,
+                    },
+                    bounds: world_box(&member.bounds)?,
+                }),
+                None => None,
             };
-            let _ = size;
-            let mut origin = [ExactLength::ZERO; 3];
-            for axis in PartAxis::ALL {
-                let direction = hw.orientation.direction(axis);
-                let world = direction.axis();
-                if let Some(slot) = origin.get_mut(world_index(world)) {
-                    *slot = if direction.is_positive() {
-                        hw.bounds.min(world)
-                    } else {
-                        hw.bounds.max(world)
-                    };
-                }
-            }
             let data = match &hw.data {
                 Data::Slide {
                     length,
@@ -1175,6 +1195,7 @@ impl Solver<'_> {
                     orientation: hw.orientation,
                 },
                 bounds: world_box(&hw.bounds)?,
+                fixed,
                 data,
                 model: hw.model.as_ref().map(|m| solved::Model {
                     source: m.source.clone(),

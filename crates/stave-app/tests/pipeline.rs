@@ -371,24 +371,64 @@ fn the_clothing_cabinet_is_where_the_design_says() {
 
     // Hardware.
     let hardware = |name: &str| design.hardware.iter().find(|h| h.name == name).unwrap();
+    // A slide is two members in the 12.7mm gap: the drawer member against
+    // the drawer side (31.7), the cabinet member against the opening's side
+    // (19).
     let slide = hardware("drawer[bottom].slides[left]");
     assert_eq!(slide.mount_face, Face::Left);
     assert_eq!(
         (slide.bounds.min().across, slide.bounds.max().across),
-        (mm("19"), mm("31.7"))
+        (mm("25.35"), mm("31.7"))
     );
+    let cabinet_member = slide.fixed.unwrap().bounds;
+    assert_eq!(
+        (cabinet_member.min().across, cabinet_member.max().across),
+        (mm("19"), mm("25.35"))
+    );
+    // A hinge: the cup (35 across, 13 deep) sunk into the back of the hinge
+    // stile (across 1..61, deep -19..0), its rim 5 in from the stile's edge
+    // at 1; 100 above the door's bottom (530).
     let hinge = hardware("door_l.hinges[lower]");
     assert_eq!(hinge.mount_face, Face::Back);
     assert_eq!(
         (
             hinge.bounds.min().up,
             hinge.bounds.min().across,
+            hinge.bounds.max().across,
+            hinge.bounds.min().deep,
             hinge.bounds.max().deep
         ),
-        (mm("630"), mm("1"), mm("20"))
+        (mm("630"), mm("6"), mm("41"), mm("-13"), mm("0"))
+    );
+    // Its plate (50 x 36 x 11) on the inside face of side_l (19), centred on
+    // the cup (647.5) and on the 37mm screw line back from side_l's front:
+    // never in side_l (across 0..19).
+    let plate = hinge.fixed.unwrap().bounds;
+    assert_eq!(
+        (
+            plate.min().across,
+            plate.max().across,
+            plate.min().up,
+            plate.max().up,
+            plate.min().deep,
+            plate.max().deep
+        ),
+        (
+            mm("19"),
+            mm("30"),
+            mm("622.5"),
+            mm("672.5"),
+            mm("19"),
+            mm("55")
+        )
     );
     let side_r_id = side_r.id;
     let mirrored_hinge = hardware("door_r.hinges[upper]");
+    let mirrored_plate = mirrored_hinge.fixed.unwrap().bounds;
+    assert_eq!(
+        (mirrored_plate.min().across, mirrored_plate.max().across),
+        (mm("870"), mm("881"))
+    );
     assert!(
         matches!(mirrored_hinge.data, HardwareData::Hinge { on, .. } if on == side_r_id),
         "re-bound to side_r"
@@ -462,7 +502,7 @@ fn the_clothing_cabinet_is_where_the_design_says() {
         .iter()
         .find(|c| matches!(c.kind, CutKind::Drill { diameter, .. } if diameter == mm("35")))
         .unwrap();
-    assert!(matches!(cup.place, CutPlace::Mount { centre, .. } if centre.width == mm("21.5")));
+    assert!(matches!(cup.place, CutPlace::Mount { centre, .. } if centre.width == mm("22.5")));
 
     // Requires hold and scenes are there.
     assert!(design.requires.iter().all(|r| r.holds));

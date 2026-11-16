@@ -11,8 +11,8 @@ use std::fmt::Write as _;
 use stave_lang::placement::Axis;
 use stave_lang::units::Length;
 use stave_model::solved::{
-    Contact, CutKind, CutPlace, Depth, End, HardwareData, LocalFace, Motion, Orientation, Point,
-    Shape, SolvedDesign, WorldBox,
+    Contact, CutKind, CutPlace, Depth, End, HardwareBase, HardwareData, LocalFace, Motion,
+    Orientation, Point, Shape, SolvedDesign, WorldBox,
 };
 
 /// A length in millimetres without the unit: `19`, `1104.75`.
@@ -283,7 +283,15 @@ pub fn table(design: &SolvedDesign) -> String {
             name(hardware.piece),
             hardware.mount_face.word()
         );
-        let _ = writeln!(out, "    box {}", extent(&hardware.bounds));
+        let (moving, fixed) = match hardware.base {
+            HardwareBase::Hinge => ("cup", "plate"),
+            HardwareBase::Slide => ("drawer member", "cabinet member"),
+            HardwareBase::Pull => ("box", "fixed"),
+        };
+        let _ = writeln!(out, "    {moving:<15}{}", extent(&hardware.bounds));
+        if let Some(member) = &hardware.fixed {
+            let _ = writeln!(out, "    {fixed:<15}{}", extent(&member.bounds));
+        }
         let _ = writeln!(out, "    {detail}");
     }
     let _ = writeln!(out);
