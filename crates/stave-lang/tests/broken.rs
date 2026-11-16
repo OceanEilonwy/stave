@@ -1,12 +1,11 @@
 //! The broken-design corpus (`tests/broken/`): every folder is a small
 //! project whose first line is `// expect: error[<code>] <message>`.
 //!
-//! The harness runs every stage that exists so far over each project and
-//! checks the expectation for the codes those stages own. Today that is
-//! layer 1, syntax: the parser must produce exactly the expected diagnostic
-//! and nothing else. A project that expects a later layer's code must parse
-//! without any diagnostic. When a later stage lands, add it to [`STAGES`]
-//! (or move this harness to the crate that runs the whole pipeline).
+//! This harness checks layer 1, syntax, with the parser alone: the parser
+//! must produce exactly the expected diagnostic and nothing else, and a
+//! project that expects a later layer's code must parse without any
+//! diagnostic. The same corpus runs through the whole pipeline (layers 1 to
+//! 3) in `crates/stave-app/tests/pipeline.rs`.
 
 use std::path::{Path, PathBuf};
 

@@ -787,11 +787,15 @@ which axis a term fixes: `flush(base.left)` fixes `across`.
 | `gap(d)` | the first element flush with `from`, then a fixed gap `d` between elements |
 
 With `pitch` and `gap`, an element that passes `to` is `error[overlap]`.
+"Flush with `from`" means the element's edge nearest `from` lies in `from`'s
+plane. When `from` lies after `to` along the axis, the elements run from
+`from` toward `to` all the same (the first element at `from`).
 
 **`orient`.** Both `length:` and `width:` are required and must be
 perpendicular (`error[type-mismatch]` otherwise). `width:` may be left out only
-for a round part (dowel stock, or a `turned` shape). Without an `orient` term
-the part lies flat: `orient(length: right, width: back)`.
+for a round part (dowel stock, or a `turned` shape); its width then runs
+`right`, or `back` when the length runs `left` or `right`. Without an `orient`
+term the part lies flat: `orient(length: right, width: back)`.
 
 ### Placement rules (checked)
 
@@ -830,7 +834,10 @@ An envelope lies on the mount face like this: its `thickness` (or a cylinder's
 `length`) stands off the face; its `length` runs along the piece's length; its
 `width` along the remaining axis. A hinge's envelope starts at the long edge
 its cup is measured from and reaches `width` away from it, toward the middle
-of the door. Fasteners and tools are never placed.
+of the door; that edge is the one nearer the middle of `on` along that axis.
+A slide's "front ends level" means its envelope starts at the piece's front
+end (the low end of the piece's length when the length doesn't run front to
+back). Fasteners and tools are never placed.
 
 ### Mirroring
 
@@ -843,9 +850,13 @@ Mirroring is defined on **results**, not on text:
 
 - The source is solved first. The mirror image is its geometry reflected
   through the `about` plane: every part, cut, made part and piece of hardware.
-- A mirrored **part** is a new part with the same stock and sizes, the
-  reflected position and the mirror-image cuts. Joints name it like any other
-  part (`into: [side_l, side_r]`).
+- A mirrored **part** is a new part with the same stock and sizes and the
+  reflected position. Joints name it like any other part
+  (`into: [side_l, side_r]`), and its cuts and what joints add to it come from
+  the joints that name it, exactly as for any part; in a symmetric design
+  they are the mirror image of its source's. Its frame (its own length,
+  width and thickness, and its reference face and edge) is its source's,
+  reflected.
 - A mirrored **assembly** has the same item names as its source
   (`door_r.stile[hinge]` is the image of `door_l.stile[hinge]`; labels keep
   their names even when `left` ends up on the right). Each joint and piece of
@@ -887,7 +898,11 @@ With `against(...)` or `flush(...)`, one end is known and the size reaches to
 the nearest joined part beyond it. Joined parts that straddle the centre are
 ignored, so a door panel grooved into four frame members gets its length from
 the rails and its width from the stiles. If a side has no joined part, it is
-`error[fit-undecided]`, saying which side.
+`error[fit-undecided]`, saying which side. The joined parts are every part
+named in the other roles of the joint, whether or not they meet it. The part
+stays where its term puts it: with `center(...)` it is centred on the term's
+centre, so it fills its gap exactly only when that centre is the middle of
+the gap (`center(from: a.right, to: b.left)` makes sure of it).
 
 When no joint decides a size, measure it: `length: between(base, top)`.
 
@@ -931,7 +946,7 @@ label is the lowest piece, for `across` the leftmost, for `deep` the front one.
 `meeting:` replaces the value on every edge that the opening **shares with a
 neighbouring region of the same `split`**, when that split has no part between
 its pieces (between two doors, between two drawers). So one mount works for
-every front in a row.
+every front in a row. Without `meeting:`, every edge takes its own value.
 
 ---
 
@@ -1035,7 +1050,8 @@ the counterpart. The contact decides the direction, so the same kind extends a
 shelf in its length and a back panel in its width. `extend` on a pair that
 crosses is `error[type-mismatch]`. A list extends several roles:
 `adds: [extend(piece, by: d), extend(into, by: d)]`. A turned part is extended
-at its end diameter; the joint's cuts then shape the extension.
+at its end diameter; the joint's cuts then shape the extension. When two
+joints extend the same end of a part, the extensions add up.
 
 **`uses:`** — a fastener kind value, with `count:` saying how many each pair
 takes (default 1): `uses: dowel_pin(diameter: diameter, length: 2 * depth,
@@ -1060,7 +1076,11 @@ pair. It is declared like any part, appears in the cut list as
 | `center(selector, axis)` | centred there along one axis of the `of` part |
 | `against(selector)`, `against(selector, gap: d)`, `flush(selector)`, `flush(selector, inset: d)` | as for parts, against the face the selector names |
 
-Each axis must be fixed exactly once, as everywhere else.
+Each axis must be fixed exactly once, as everywhere else. The place a
+selector names is a plane and a footprint: for parts that butt, the plane
+is where their drawn boxes touch; for parts that cross, it is the middle of
+their overlap along the face's axis. Along the face, `center` centres on the
+overlap of the two parts' cut boxes.
 
 ```
 makes part key : key_stock {
@@ -1526,7 +1546,7 @@ shape of their messages are fixed, because tests and AI tools match on them.
 | 2 | `import-cycle` | `modules import each other: <a> -> <b> -> <a>` |
 | 2 | `unknown-module` | `can't find module '<source>'` |
 | 2, 4 | `not-supported` | `<what> is not supported yet` (an error for remote imports, a warning for geometry) |
-| 3 | `ground` | `no part is placed with 'ground'`, or `'<a>' and '<b>' are both placed with 'ground'` |
+| 3 | `ground` | `no part is placed with 'ground'`, `'<a>' and '<b>' are both placed with 'ground'`, or `'<a>' is placed with 'ground' inside a component` |
 | 3 | `axis-not-set` | `<item>: position along '<axis>' is not set` |
 | 3 | `axis-set-twice` | `<item>: position along '<axis>' is set twice` |
 | 3 | `placement-cycle` | `<a> and <b> are placed against each other` |
