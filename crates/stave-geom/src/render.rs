@@ -25,16 +25,55 @@ pub fn radians(angle: Angle) -> f32 {
 }
 
 /// A length in nanometres, for collision tests.
+///
+/// Exact for every length below 2^53 nm (about 9000 km), so for anything
+/// a design holds; beyond that the nearest `f64` is returned. Built from
+/// the two 32-bit halves, each converted losslessly, so no integer is ever
+/// truncated: only the final sum rounds, and only past 2^53.
 pub fn nm(length: Length) -> f64 {
-    // Exact for any length below 2^53 nm (about 9000 km).
-    length.nm() as f64
+    let value = length.nm();
+    // `value >> 32` always fits an i32; the low half always fits a u32.
+    let high = i32::try_from(value >> 32).unwrap_or(if value < 0 { i32::MIN } else { i32::MAX });
+    let low = u32::try_from(value & 0xFFFF_FFFF).unwrap_or(0);
+    f64::from(high) * 4_294_967_296.0 + f64::from(low)
 }
 
 /// A distance in nanometres back to a length, rounded to the nearest
-/// nanometre (saturating far outside any design).
-pub fn length_from_nm(nm: f64) -> Length {
-    // The only float-to-integer cast: rounding a measured distance once.
-    Length::from_nm(nm.round() as i64)
+/// nanometre. `None` for a value that isn't finite or lies outside what a
+/// [`Length`] holds (about ±9.2e18 nm); a collision test never makes one,
+/// and callers treat it as nothing found rather than guess.
+pub fn length_from_nm(nm: f64) -> Option<Length> {
+    integer_from_f64(nm.round()).map(Length::from_nm)
+}
+
+/// The `i64` an integral `f64` holds, decoded from its bits (exact, with
+/// no cast); `None` when it isn't finite or doesn't fit.
+fn integer_from_f64(value: f64) -> Option<i64> {
+    if !value.is_finite() {
+        return None;
+    }
+    if value == 0.0 {
+        return Some(0);
+    }
+    let bits = value.to_bits();
+    let negative = bits >> 63 == 1;
+    let exponent = i64::try_from((bits >> 52) & 0x7FF).ok()? - 1075;
+    let mantissa = u128::from((bits & ((1u64 << 52) - 1)) | (1u64 << 52));
+    let magnitude = if exponent >= 0 {
+        if exponent > 64 {
+            return None;
+        }
+        mantissa.checked_shl(u32::try_from(exponent).ok()?)?
+    } else {
+        // An integral value: the bits shifted out are zero.
+        mantissa >> u32::try_from(-exponent).ok()?.min(127)
+    };
+    if negative {
+        let magnitude = i128::try_from(magnitude).ok()?;
+        i64::try_from(-magnitude).ok()
+    } else {
+        i64::try_from(magnitude).ok()
+    }
 }
 
 /// An angle in radians, for collision tests.
@@ -77,6 +116,34 @@ pub fn size(size: Size3) -> Vec3 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nanometres_go_to_floats_and_back_exactly() {
+        for nm in [
+            0,
+            1,
+            -1,
+            50_000,
+            2_000_000_000,
+            -1_234_567_891,
+            1 << 52,
+            -(1 << 52),
+        ] {
+            let length = Length::from_nm(nm);
+            assert_eq!(super::nm(length), nm as f64);
+            assert_eq!(length_from_nm(super::nm(length)), Some(length));
+        }
+        assert_eq!(length_from_nm(2.4), Some(Length::from_nm(2)));
+        assert_eq!(length_from_nm(-2.6), Some(Length::from_nm(-3)));
+        assert_eq!(length_from_nm(f64::NAN), None);
+        assert_eq!(length_from_nm(f64::INFINITY), None);
+        assert_eq!(length_from_nm(1e19), None);
+        assert_eq!(length_from_nm(-9.3e18), None);
+        assert_eq!(
+            length_from_nm(-9_223_372_036_854_775_808.0),
+            Some(Length::from_nm(i64::MIN))
+        );
+    }
 
     #[test]
     fn deep_runs_toward_minus_z() {

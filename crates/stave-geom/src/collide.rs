@@ -525,7 +525,7 @@ fn rod_rod(a: &RodPiece, b: &RodPiece) -> Option<Overlap> {
 }
 
 fn finish(depth: f64, axis: Axis, region: WorldBox) -> Option<Overlap> {
-    let depth = render::length_from_nm(depth);
+    let depth = render::length_from_nm(depth)?;
     (depth > CONTACT_TOLERANCE).then_some(Overlap {
         depth,
         axis,
@@ -849,12 +849,19 @@ pub fn placed_bounds(region: &WorldBox, placement: &Placement) -> WorldBox {
         Placement::Exact(offset) => translate_box(region, *offset),
         Placement::Turned(matrix) => {
             let (low, high) = Oriented::of(region, matrix).bounds();
-            let corner = |v: DVec3, round: fn(f64) -> f64| Point {
-                across: render::length_from_nm(round(v.x)),
-                up: render::length_from_nm(round(v.y)),
-                deep: render::length_from_nm(round(v.z)),
+            let corner = |v: DVec3, round: fn(f64) -> f64| {
+                Some(Point {
+                    across: render::length_from_nm(round(v.x))?,
+                    up: render::length_from_nm(round(v.y))?,
+                    deep: render::length_from_nm(round(v.z))?,
+                })
             };
-            WorldBox::new(corner(low, f64::floor), corner(high, f64::ceil))
+            match (corner(low, f64::floor), corner(high, f64::ceil)) {
+                (Some(a), Some(b)) => WorldBox::new(a, b),
+                // Never for a design's coordinates; the unmoved box is the
+                // best that can be said.
+                _ => *region,
+            }
         }
     }
 }
@@ -888,16 +895,16 @@ pub fn overlaps_placed(
             let (xl, xh) = x.bounds();
             let (yl, yh) = y.bounds();
             let (low, high) = (xl.max(yl), xh.min(yh));
-            let corner = |v: DVec3| Point {
-                across: render::length_from_nm(v.x),
-                up: render::length_from_nm(v.y),
-                deep: render::length_from_nm(v.z),
+            let corner = |v: DVec3| {
+                Some(Point {
+                    across: render::length_from_nm(v.x)?,
+                    up: render::length_from_nm(v.y)?,
+                    deep: render::length_from_nm(v.z)?,
+                })
             };
-            found.extend(finish(
-                depth,
-                nearest_axis(axis),
-                WorldBox::new(corner(low), corner(high)),
-            ));
+            if let (Some(a), Some(b)) = (corner(low), corner(high)) {
+                found.extend(finish(depth, nearest_axis(axis), WorldBox::new(a, b)));
+            }
         }
     }
     found
