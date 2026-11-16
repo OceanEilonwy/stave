@@ -6,7 +6,7 @@
 
 use stave_lang::ast::Span;
 use stave_lang::placement::{Axis, Corner, Direction, Face, PartAxis};
-use stave_lang::units::{ExactLength, Rational};
+use stave_lang::units::{ExactLength, Length, Rational};
 use stave_lang::{Code, Diagnostic, FileId, Label};
 use stave_model::defs::{
     DefId, PartBodyDef, PartKind, PlaceTerm, PlaceTermKind, RExpr, RExprKind, Size, StockField,
@@ -131,6 +131,8 @@ pub(crate) struct Siblings {
     pub index: usize,
     /// Every element's size along the axis.
     pub sizes: Vec<ExactLength>,
+    /// The part being placed (`None` for hardware).
+    pub part: Option<PartId>,
 }
 
 fn add(a: ExactLength, b: ExactLength) -> Solved<ExactLength> {
@@ -1349,6 +1351,77 @@ impl Solver<'_> {
         }
     }
 
+    /// Records an element spaced with `pitch` or `gap` whose far edge
+    /// lies past the `to` anchor; layer 4 reports it.
+    #[allow(clippy::too_many_arguments)]
+    fn note_overrun(
+        &mut self,
+        part: PartId,
+        to: &stave_model::value::AnchorValue,
+        spacing: Spacing,
+        low: ExactLength,
+        own: ExactLength,
+        forward: bool,
+        siblings: &Siblings,
+        span: ExactLength,
+    ) -> Solved<()> {
+        let fixed = match spacing {
+            Spacing::Pitch(pitch) => {
+                stave_model::solved::FixedSpacing::Pitch(crate::joints::round_length(pitch)?)
+            }
+            Spacing::Gap(gap) => {
+                stave_model::solved::FixedSpacing::Gap(crate::joints::round_length(gap)?)
+            }
+            Spacing::Evenly | Spacing::Ends(_) => return Ok(()),
+        };
+        let past = if forward {
+            sub(add(low, own)?, to.position)?
+        } else {
+            sub(to.position, low)?
+        };
+        if past <= ExactLength::ZERO {
+            return Ok(());
+        }
+        let n = siblings.sizes.len();
+        let largest = if n <= 1 {
+            None
+        } else {
+            let first = siblings.sizes.first().copied().unwrap_or(own);
+            let last = siblings.sizes.last().copied().unwrap_or(own);
+            let room = match spacing {
+                Spacing::Pitch(_) => sub(sub(span, divide(first, 2)?)?, divide(last, 2)?)?,
+                _ => {
+                    let total = siblings
+                        .sizes
+                        .iter()
+                        .try_fold(ExactLength::ZERO, |acc, s| add(acc, *s))?;
+                    sub(span, total)?
+                }
+            };
+            let value = divide(room, n - 1)?;
+            // Rounded down, so the value it suggests always fits.
+            let nm = value.value().floor();
+            (value > ExactLength::ZERO)
+                .then(|| i64::try_from(nm).ok().map(Length::from_nm))
+                .flatten()
+        };
+        let item = match to.owner {
+            stave_model::value::AnchorOwner::Part(id) => stave_model::solved::AnchorItem::Part(id),
+            stave_model::value::AnchorOwner::Region(id) => {
+                stave_model::solved::AnchorItem::Region(id)
+            }
+        };
+        self.overruns.push(stave_model::solved::Overrun {
+            part,
+            to: item,
+            face: to.face,
+            spacing: fixed,
+            past: crate::joints::round_length(past)?,
+            largest,
+        });
+        Ok(())
+    }
+
     /// The low end along `axis` of an item of size `size` placed by `term`.
     pub(crate) fn term_low(
         &mut self,
@@ -1424,11 +1497,16 @@ impl Solver<'_> {
                     }
                     Spacing::Gap(gap) => add(scale(gap, index)?, before)?,
                 };
-                if forward {
-                    add(a, offset)
+                let low = if forward {
+                    add(a, offset)?
                 } else {
-                    sub(sub(a, offset)?, own)
+                    sub(sub(a, offset)?, own)?
+                };
+                if let Some(part) = siblings.part {
+                    let to = self.eval_anchor(to, env)?;
+                    self.note_overrun(part, &to, spacing, low, own, forward, siblings, span)?;
                 }
+                Ok(low)
             }
         }
     }
@@ -1526,7 +1604,11 @@ impl Solver<'_> {
         for sibling in all {
             sizes.push(self.size_along(sibling, axis)?);
         }
-        Ok(Siblings { index, sizes })
+        Ok(Siblings {
+            index,
+            sizes,
+            part: Some(part),
+        })
     }
 
     /// A part's drawn box in world coordinates.

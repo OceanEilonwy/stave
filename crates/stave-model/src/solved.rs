@@ -422,6 +422,9 @@ pub struct SolvedDesign {
     /// Every `require` of the project and its components, at the current
     /// values.
     pub requires: Vec<RequireResult>,
+    /// Elements spaced with `pitch` or `gap` that run past their `to`
+    /// anchor (the fit check reports them as `overlap`).
+    pub overruns: Vec<Overrun>,
 }
 
 impl SolvedDesign {
@@ -822,6 +825,46 @@ pub struct Cut {
     pub place: CutPlace,
     /// What is removed.
     pub kind: CutKind,
+}
+
+/// What an anchor plane belongs to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AnchorItem {
+    /// A part.
+    Part(PartId),
+    /// A region.
+    Region(RegionId),
+}
+
+/// A fixed spacing: `pitch(d)` or `gap(d)`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FixedSpacing {
+    /// Centre to centre.
+    Pitch(Length),
+    /// Between neighbours.
+    Gap(Length),
+}
+
+/// An element spaced with `pitch` or `gap` that runs past its `to`
+/// anchor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct Overrun {
+    /// The element.
+    pub part: PartId,
+    /// What the `to` anchor belongs to.
+    pub to: AnchorItem,
+    /// The anchor's face, when it is one.
+    #[serde(serialize_with = "serialize_optional_face")]
+    pub face: Option<Face>,
+    /// The spacing.
+    pub spacing: FixedSpacing,
+    /// How far the element's far edge lies past the anchor.
+    pub past: Length,
+    /// The largest pitch or gap at which every element fits; `None` when
+    /// none does (one element, or elements wider than the space).
+    pub largest: Option<Length>,
 }
 
 // ---------------------------------------------------------------------------
@@ -1328,6 +1371,16 @@ fn serialize_part_axis<S: serde::Serializer>(
 
 fn serialize_face<S: serde::Serializer>(value: &Face, serializer: S) -> Result<S::Ok, S::Error> {
     serializer.serialize_str(value.word())
+}
+
+fn serialize_optional_face<S: serde::Serializer>(
+    value: &Option<Face>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    match value {
+        Some(face) => serializer.serialize_str(face.word()),
+        None => serializer.serialize_none(),
+    }
 }
 
 fn serialize_direction<S: serde::Serializer>(

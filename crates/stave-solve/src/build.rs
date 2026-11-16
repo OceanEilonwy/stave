@@ -289,6 +289,12 @@ pub(crate) fn build(solver: &mut Solver<'_>) -> Option<SolvedDesign> {
         assemblies,
         scenes,
         requires,
+        overruns: {
+            let mut overruns = solver.overruns.clone();
+            overruns.sort_by_key(|o| o.part);
+            overruns.dedup();
+            overruns
+        },
     })
 }
 

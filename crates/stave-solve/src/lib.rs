@@ -118,6 +118,8 @@ pub(crate) struct Solver<'m> {
     /// Something was skipped because an item it depends on has an error
     /// reported by an earlier layer.
     pub(crate) skipped: bool,
+    /// Spaced elements that run past their `to` anchor.
+    pub(crate) overruns: Vec<stave_model::solved::Overrun>,
 }
 
 impl<'m> Solver<'m> {
@@ -140,6 +142,7 @@ impl<'m> Solver<'m> {
             extensions: vec![Vec::new(); model.parts.len()],
             reported_cycles: Vec::new(),
             skipped: false,
+            overruns: Vec::new(),
         }
     }
 

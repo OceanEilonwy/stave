@@ -526,6 +526,7 @@ impl Solver<'_> {
                     let siblings = Siblings {
                         index: inst.ctx.element.unwrap_or(0),
                         sizes: vec![size_along(axis); count],
+                        part: None,
                     };
                     let low =
                         self.term_low(&term, axis, size_along(axis), &env, Some(&siblings))?;
