@@ -1,0 +1,101 @@
+Bookshelf
+units: mm, resolution: 0.5mm
+all lengths in mm; boxes are drawn boxes as across, up, deep ranges from the ground part's left-bottom-front corner
+
+PARTS (9)
+part                         stock          cut L x W x T              across               up                   deep                 length/width/thickness
+side_l                       pine_19        1200 x 280 x 19            0..19                0..1200              0..280               up/back/right
+    cut notch depth 9 on thickness end: where top meets it, local 1181..1200 x 0..274 x 10..19
+    cut notch depth 9 on thickness end: where bottom meets it, local 70..89 x 0..274 x 10..19
+    cut notch depth 9 on thickness end: where shelf[0] meets it, local 347.75..366.75 x 0..274 x 10..19
+    cut notch depth 9 on thickness end: where shelf[1] meets it, local 625.5..644.5 x 0..274 x 10..19
+    cut notch depth 9 on thickness end: where shelf[2] meets it, local 903.25..922.25 x 0..274 x 10..19
+    cut notch depth 9 on thickness end: where back meets it, local 70..1200 x 274..280 x 10..19
+    cut drill 2 x diameter 8 depth 15 on thickness end: where kick meets it, local 0..70 x 20..39 x 19..19
+side_r                       pine_19        1200 x 280 x 19            781..800             0..1200              0..280               up/back/right
+    cut notch depth 9 on thickness start: where top meets it, local 1181..1200 x 0..274 x 0..9
+    cut notch depth 9 on thickness start: where bottom meets it, local 70..89 x 0..274 x 0..9
+    cut notch depth 9 on thickness start: where shelf[0] meets it, local 347.75..366.75 x 0..274 x 0..9
+    cut notch depth 9 on thickness start: where shelf[1] meets it, local 625.5..644.5 x 0..274 x 0..9
+    cut notch depth 9 on thickness start: where shelf[2] meets it, local 903.25..922.25 x 0..274 x 0..9
+    cut notch depth 9 on thickness start: where back meets it, local 70..1200 x 274..280 x 0..9
+    cut drill 2 x diameter 8 depth 15 on thickness start: where kick meets it, local 0..70 x 20..39 x 0..0
+top                          pine_19        780 x 274 x 19             19..781              1181..1200           0..274               right/back/up
+    drawn 762 x 274 x 19, starting 9 x 0 x 0 into the cut size
+bottom                       pine_19        780 x 274 x 19             19..781              70..89               0..274               right/back/up
+    drawn 762 x 274 x 19, starting 9 x 0 x 0 into the cut size
+shelf[0]                     pine_19        780 x 274 x 19             19..781              347.75..366.75       0..274               right/back/up
+    drawn 762 x 274 x 19, starting 9 x 0 x 0 into the cut size
+shelf[1]                     pine_19        780 x 274 x 19             19..781              625.5..644.5         0..274               right/back/up
+    drawn 762 x 274 x 19, starting 9 x 0 x 0 into the cut size
+shelf[2]                     pine_19        780 x 274 x 19             19..781              903.25..922.25       0..274               right/back/up
+    drawn 762 x 274 x 19, starting 9 x 0 x 0 into the cut size
+back                         ply_6          1130 x 780 x 6             19..781              70..1200             274..280             up/right/back
+    drawn 1130 x 762 x 6, starting 0 x 9 x 0 into the cut size
+kick                         pine_19        762 x 70 x 19              19..781              0..70                20..39               right/up/back
+    cut drill 2 x diameter 8 depth 15 on length start: end toward side_l
+    cut drill 2 x diameter 8 depth 15 on length end: end toward side_r
+
+HARDWARE (0)
+
+JOINTS (4)
+top_rabbets                  rabbet
+    piece: top, into: side_l (butt across across)
+        adds 9 to the length start of top
+    piece: top, into: side_r (butt across across)
+        adds 9 to the length end of top
+shelf_dados                  dado
+    piece: bottom, into: side_l (butt across across)
+        adds 9 to the length start of bottom
+    piece: bottom, into: side_r (butt across across)
+        adds 9 to the length end of bottom
+    piece: shelf[0], into: side_l (butt across across)
+        adds 9 to the length start of shelf[0]
+    piece: shelf[0], into: side_r (butt across across)
+        adds 9 to the length end of shelf[0]
+    piece: shelf[1], into: side_l (butt across across)
+        adds 9 to the length start of shelf[1]
+    piece: shelf[1], into: side_r (butt across across)
+        adds 9 to the length end of shelf[1]
+    piece: shelf[2], into: side_l (butt across across)
+        adds 9 to the length start of shelf[2]
+    piece: shelf[2], into: side_r (butt across across)
+        adds 9 to the length end of shelf[2]
+back_rabbets                 rabbet
+    piece: back, into: side_l (butt across across)
+        adds 9 to the width start of back
+    piece: back, into: side_r (butt across across)
+        adds 9 to the width end of back
+kick_dowels                  dowel
+    piece: kick, into: side_l (butt across across)
+    piece: kick, into: side_r (butt across across)
+
+FASTENERS
+kick_dowels                  4 x dowel_pin (8 x 30)
+
+REGIONS (0)
+
+ASSEMBLIES (0)
+
+REQUIRES (18)
+book_room                                    holds
+shelf_span                                   holds
+top_rabbets.not_too_deep                     holds
+top_rabbets.not_too_deep                     holds
+shelf_dados.not_too_deep                     holds
+shelf_dados.not_too_deep                     holds
+shelf_dados.not_too_deep                     holds
+shelf_dados.not_too_deep                     holds
+shelf_dados.not_too_deep                     holds
+shelf_dados.not_too_deep                     holds
+shelf_dados.not_too_deep                     holds
+shelf_dados.not_too_deep                     holds
+back_rabbets.not_too_deep                    holds
+back_rabbets.not_too_deep                    holds
+kick_dowels.pin_fits_piece                   holds
+kick_dowels.hole_stops                       holds
+kick_dowels.pin_fits_piece                   holds
+kick_dowels.hole_stops                       holds
+
+SCENES (1)
+rest                         As built

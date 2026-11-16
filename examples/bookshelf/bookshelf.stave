@@ -1,0 +1,120 @@
+stave 1
+
+// A bookshelf: two sides, a top in rabbets, a bottom and three shelves in
+// dados, a plywood back in rabbets and a kick board under the bottom.
+//
+// The sides stand on the floor. The bottom shelf is raised on the kick board
+// so the books clear a skirting board and the vacuum cleaner.
+
+project "Bookshelf" {
+  goal:       "A pine bookshelf with three fixed shelves and a plywood back"
+  units:      mm
+  resolution: 0.5mm
+  tools:      [pencil, square, tape, marking_gauge, router, straight_bit, clamps,
+               drill, depth_stop, awl, tenon_saw, chisel]
+}
+
+// ---- parameters ----
+param case_height = 1200mm within 1000mm..1800mm
+param case_width  = 800mm within 600mm..880mm      // longer shelves sag under books
+param case_depth  = 280mm within 240mm..350mm
+param kick_height = 70mm locked                    // matches the room's skirting board
+let dado_depth = 9mm
+
+// ---- checks ----
+require book_room  : between(bottom, shelf[0]) >= 180mm "each opening should take a paperback standing up"
+require shelf_span : case_width - 2 * pine_19.thickness <= 860mm "pine shelves longer than this sag under books"
+
+// ---- stock ----
+stock pine_19 { species: pine, form: solid, thickness: 19mm, max_width: 300mm }
+stock ply_6   { species: birch, form: plywood, thickness: 6mm }
+
+// ---- the case ----
+
+/// The left side stands on the floor; everything else is placed from it.
+part side_l : pine_19 {
+  length: case_height
+  width:  case_depth
+  place {
+    ground
+    orient(length: up, width: back)
+  }
+}
+
+/// The right side: the same board, the inside width away from the left one.
+part side_r : pine_19 {
+  length: case_height
+  width:  case_depth
+  place {
+    orient(length: up, width: back)
+    against(side_l.right, gap: case_width - 2 * pine_19.thickness)
+    flush(side_l.bottom)
+    flush(side_l.front)
+  }
+}
+
+/// The top sits in a rabbet across the top of each side, flush with their ends.
+part top : pine_19 {
+  length: fit                          // between the sides; the rabbets are added by the joint
+  width:  case_depth - back.thickness
+  place {
+    flush(side_l.top)
+    center(from: side_l.right, to: side_r.left)
+    flush(side_l.front)
+  }
+}
+
+/// The bottom shelf, housed in a dado. It sits on the kick board.
+part bottom : pine_19 {
+  length: fit
+  width:  case_depth - back.thickness
+  place {
+    against(kick.top)
+    center(from: side_l.right, to: side_r.left)
+    flush(side_l.front)
+  }
+}
+
+/// Three shelves, spaced evenly between the bottom and the top: the four
+/// openings come out the same height.
+part shelf[3] : pine_19 {
+  length: fit
+  width:  case_depth - back.thickness
+  place {
+    spaced(evenly, from: bottom.top, to: top.bottom)
+    center(from: side_l.right, to: side_r.left)
+    flush(side_l.front)
+  }
+}
+
+/// The back stiffens the case and keeps it square. It runs from the bottom
+/// of the bottom shelf to the top of the top, housed in a rabbet in each side.
+part back : ply_6 {
+  length: between(bottom.bottom, top.top)
+  width:  fit
+  place {
+    orient(length: up, width: right)
+    flush(top.top)
+    center(from: side_l.right, to: side_r.left)
+    flush(side_l.back)
+  }
+}
+
+/// The kick board fills the space under the bottom shelf, set back a little
+/// so your toes don't hit it.
+part kick : pine_19 {
+  length: fit
+  width:  kick_height
+  place {
+    orient(length: right, width: up)
+    flush(side_l.bottom)
+    center(from: side_l.right, to: side_r.left)
+    flush(side_l.front, inset: 20mm)
+  }
+}
+
+// ---- joints ----
+joint top_rabbets  : rabbet(top, into: [side_l, side_r], depth: dado_depth)
+joint shelf_dados  : dado([bottom, shelf[*]], into: [side_l, side_r], depth: dado_depth)
+joint back_rabbets : rabbet(back, into: [side_l, side_r], depth: dado_depth)
+joint kick_dowels  : dowel(kick, into: [side_l, side_r], count: 2)
