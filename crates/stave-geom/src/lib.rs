@@ -22,10 +22,10 @@
 //!
 //! # What is drawn
 //!
-//! - **Boards** are boxes. Cuts are not applied yet (a later step). The
-//!   box is either the cut box (what is cut from stock, joint extensions
-//!   included) or the drawn box (the sizes as written), chosen with
-//!   [`Extent`].
+//! - **Boards** with their cuts made ([`cut_part`] of a [`solid::Solid`]):
+//!   the boundary of the solid's blocks, with holes, round tenons and round
+//!   sections. [`part`] draws the plain cut box or drawn box ([`Extent`])
+//!   without cuts.
 //! - **Round stock** is a cylinder along the length; **turned parts** are
 //!   lathe meshes of their profile, with smooth normals except at shoulders
 //!   and sharp corners.
@@ -42,6 +42,7 @@
 
 mod build;
 pub mod collide;
+mod mesh;
 pub mod render;
 pub mod solid;
 
@@ -232,9 +233,10 @@ pub struct Geometry {
 /// Which of a part's two boxes to build a board from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum Extent {
-    /// The cut box: the part as cut from stock, with what joints add (a
-    /// tenon, the tongue in a dado). Until cuts are applied, these
-    /// extensions overlap the neighbouring parts.
+    /// The part as cut from stock, with what joints add (a tenon, the
+    /// tongue in a dado). [`part`] draws the cut box; a scene graph built
+    /// with this extent draws every part with its cuts made
+    /// ([`cut_part`]), so tenons sit in their mortises.
     #[default]
     Cut,
     /// The drawn box: the sizes as written, so parts meet face to face.
@@ -308,6 +310,17 @@ pub fn part(part: &Part, extent: Extent) -> Geometry {
             build::lathe(&frame, centre_of(part), &profile, corners, grain)
         }
     }
+}
+
+/// The mesh of a part with its cuts made: tenons, mortises, dados,
+/// rabbets, grooves, holes and round tenons show. `solid` is
+/// [`solid::Solid::of`] the same part.
+pub fn cut_part(part: &Part, solid: &solid::Solid) -> Geometry {
+    let grain = match part.grain {
+        Grain::Length => build::GrainAxes::LENGTH,
+        Grain::Width => build::GrainAxes::WIDTH,
+    };
+    mesh::cut_part(part, solid, grain)
 }
 
 /// Lengthens a profile to cover `0 ..= length` with cylinders of its end

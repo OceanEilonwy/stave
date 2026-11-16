@@ -57,12 +57,29 @@ impl Frame {
         }
     }
 
-    fn point(&self, local: Vec3) -> Vec3 {
+    /// The same frame with `axis` first and the two axes across it after,
+    /// in [`crate::solid::across`] order. The handedness may change; every
+    /// builder winds triangles by their normals, so that doesn't matter.
+    pub fn first(&self, axis: stave_lang::placement::PartAxis) -> Frame {
+        use stave_lang::placement::PartAxis;
+        let [l, w, t] = self.axes;
+        let axes = match axis {
+            PartAxis::Length => [l, w, t],
+            PartAxis::Width => [w, l, t],
+            PartAxis::Thickness => [t, l, w],
+        };
+        Frame {
+            origin: self.origin,
+            axes,
+        }
+    }
+
+    pub(crate) fn point(&self, local: Vec3) -> Vec3 {
         let [a, b, c] = self.axes;
         self.origin + a * local.x + b * local.y + c * local.z
     }
 
-    fn vector(&self, local: Vec3) -> Vec3 {
+    pub(crate) fn vector(&self, local: Vec3) -> Vec3 {
         let [a, b, c] = self.axes;
         a * local.x + b * local.y + c * local.z
     }
@@ -80,7 +97,7 @@ impl GrainAxes {
     /// Grain along the second axis.
     pub const WIDTH: GrainAxes = GrainAxes { along_width: true };
 
-    fn apply(self, local: Vec3) -> [f32; 3] {
+    pub(crate) fn apply(self, local: Vec3) -> [f32; 3] {
         if self.along_width {
             [local.y, local.x, local.z]
         } else {
@@ -91,13 +108,13 @@ impl GrainAxes {
 
 /// A mesh under construction.
 #[derive(Default)]
-struct Builder {
+pub(crate) struct Builder {
     mesh: Mesh,
     edges: Edges,
 }
 
 impl Builder {
-    fn vertex(&mut self, position: Vec3, normal: Vec3, grain: [f32; 3]) -> u32 {
+    pub(crate) fn vertex(&mut self, position: Vec3, normal: Vec3, grain: [f32; 3]) -> u32 {
         let index = u32::try_from(self.mesh.vertices.len()).unwrap_or(u32::MAX);
         self.mesh.vertices.push(Vertex {
             position: position.to_array(),
@@ -114,7 +131,7 @@ impl Builder {
 
     /// Adds a triangle, wound so its geometric normal agrees with its
     /// vertices' normals; degenerate triangles are dropped.
-    fn triangle(&mut self, a: u32, b: u32, c: u32) {
+    pub(crate) fn triangle(&mut self, a: u32, b: u32, c: u32) {
         let (Some((pa, na)), Some((pb, nb)), Some((pc, nc))) =
             (self.position(a), self.position(b), self.position(c))
         else {
@@ -131,11 +148,11 @@ impl Builder {
         }
     }
 
-    fn edge(&mut self, from: Vec3, to: Vec3) {
+    pub(crate) fn edge(&mut self, from: Vec3, to: Vec3) {
         self.edges.segments.push([from.to_array(), to.to_array()]);
     }
 
-    fn finish(self) -> Geometry {
+    pub(crate) fn finish(self) -> Geometry {
         let bounds = self.mesh.bounds().unwrap_or(Aabb {
             min: Vec3::ZERO,
             max: Vec3::ZERO,

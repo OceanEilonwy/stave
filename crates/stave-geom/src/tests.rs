@@ -344,3 +344,178 @@ fn rays_enter_boxes() {
     );
     assert_eq!(bounds.ray_entry(Vec3::ZERO, Vec3::X), Some(0.0));
 }
+
+// ---------------------------------------------------------------------------
+// Cut solids
+// ---------------------------------------------------------------------------
+
+use stave_model::solved::{
+    Cut, CutKind, CutPlace, CutSource, Depth, LocalBox, LocalPoint, ProjectInfo, SolvedDesign,
+};
+use stave_schema::words::OutputUnit;
+
+/// A design holding only `part`, for the parts a cut is measured against.
+fn design_of(part: &Part) -> SolvedDesign {
+    SolvedDesign {
+        project: ProjectInfo {
+            title: "test".into(),
+            goal: None,
+            units: OutputUnit::Millimetre,
+            resolution: Length::from_nm(500_000),
+            style: None,
+            tools: None,
+            methods: Vec::new(),
+        },
+        parts: vec![part.clone()],
+        hardware: Vec::new(),
+        fasteners: Vec::new(),
+        joints: Vec::new(),
+        regions: Vec::new(),
+        assemblies: Vec::new(),
+        scenes: Vec::new(),
+        requires: Vec::new(),
+        overruns: Vec::new(),
+    }
+}
+
+fn local_point(length: i64, width: i64, thickness: i64) -> LocalPoint {
+    LocalPoint {
+        length: mm(length),
+        width: mm(width),
+        thickness: mm(thickness),
+    }
+}
+
+fn hardware_cut(face: LocalFace, place: CutPlace, kind: CutKind) -> Cut {
+    Cut {
+        source: CutSource::Hardware {
+            hardware: HardwareId::from_usize(0),
+        },
+        face,
+        place,
+        kind,
+    }
+}
+
+fn face(axis: PartAxis, end: End) -> LocalFace {
+    LocalFace { axis, end }
+}
+
+/// A 100 × 50 × 20 board with the given cuts; its mesh encloses exactly
+/// the solid's blocks.
+fn cut_board(orientation: Orientation, cuts: Vec<Cut>) -> Geometry {
+    let mut board = part(orientation, point(0, 0, 0), size(100, 50, 20), Shape::Board);
+    board.cuts = cuts;
+    let solid = solid::Solid::of(&board, &design_of(&board));
+    let geometry = cut_part(&board, &solid);
+    let expected = (solid.blocks().volume() as f64) * 1e-18;
+    let volume = f64::from(geometry.mesh.signed_volume());
+    assert!(
+        (volume - expected).abs() <= expected * 1e-5,
+        "volume {volume} != {expected}"
+    );
+    geometry
+}
+
+#[test]
+fn a_plain_cut_board_is_twelve_triangles_and_edges() {
+    let geometry = cut_board(frame(Direction::Right, Direction::Back), Vec::new());
+    assert_eq!(geometry.mesh.triangle_count(), 12);
+    assert_eq!(geometry.edges.segments.len(), 12);
+    assert_outward(&geometry.mesh);
+}
+
+#[test]
+fn a_dado_outlines_only_where_the_surface_bends() {
+    // A housing straight across the width, in the top face.
+    let dado = hardware_cut(
+        face(PartAxis::Thickness, End::End),
+        CutPlace::Recess {
+            footprint: LocalBox {
+                min: local_point(40, 0, 14),
+                max: local_point(60, 50, 20),
+            },
+        },
+        CutKind::Notch {
+            depth: Depth::Length(mm(6)),
+        },
+    );
+    for orientation in [
+        frame(Direction::Right, Direction::Back),
+        frame(Direction::Right, Direction::Back).mirrored(Axis::Across),
+    ] {
+        let geometry = cut_board(orientation, vec![dado.clone()]);
+        assert_outward(&geometry.mesh);
+        // The cross-section is an eight-sided outline swept across the
+        // width: eight long edges and eight at each end, no seams.
+        assert_eq!(geometry.edges.segments.len(), 24);
+    }
+}
+
+#[test]
+fn a_tenon_and_a_mortise_keep_their_volume() {
+    let tenon = hardware_cut(
+        face(PartAxis::Length, End::End),
+        CutPlace::End {
+            toward: PartId::from_usize(0),
+        },
+        CutKind::Tenon {
+            length: mm(30),
+            width: mm(30),
+            thickness: mm(8),
+        },
+    );
+    let pocket = hardware_cut(
+        face(PartAxis::Thickness, End::End),
+        CutPlace::Recess {
+            footprint: LocalBox {
+                min: local_point(10, 10, 0),
+                max: local_point(40, 40, 20),
+            },
+        },
+        CutKind::Pocket {
+            width: mm(20),
+            thickness: mm(10),
+            depth: Depth::Length(mm(12)),
+        },
+    );
+    let geometry = cut_board(frame(Direction::Up, Direction::Back), vec![tenon, pocket]);
+    assert_outward(&geometry.mesh);
+}
+
+#[test]
+fn a_hole_opens_in_its_face() {
+    let mut board = part(
+        frame(Direction::Right, Direction::Back),
+        point(0, 0, 0),
+        size(100, 50, 20),
+        Shape::Board,
+    );
+    board.cuts = vec![hardware_cut(
+        face(PartAxis::Thickness, End::End),
+        CutPlace::Mount {
+            centre: local_point(50, 25, 20),
+            centres: None,
+        },
+        CutKind::Drill {
+            diameter: mm(10),
+            depth: Depth::Length(mm(8)),
+            count: 1,
+        },
+    )];
+    let solid = solid::Solid::of(&board, &design_of(&board));
+    let geometry = cut_part(&board, &solid);
+    assert_outward(&geometry.mesh);
+    // The box less the hole's prism (a polygon of LATHE_SEGMENTS sides).
+    let sides = f64::from(LATHE_SEGMENTS);
+    let polygon = sides / 2.0 * 25.0 * (std::f64::consts::TAU / sides).sin();
+    let expected = 100.0 * 50.0 * 20.0 - polygon * 8.0;
+    let volume = f64::from(geometry.mesh.signed_volume());
+    assert!((volume - expected).abs() < 0.5, "{volume} != {expected}");
+    // The opening is outlined: a ring of LATHE_SEGMENTS segments on top of
+    // the box's twelve edges.
+    assert_eq!(
+        geometry.edges.segments.len(),
+        12 + usize::from(LATHE_SEGMENTS)
+    );
+}
