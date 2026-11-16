@@ -1,0 +1,15 @@
+[package]
+name = "stave-cli"
+description = "The stave command: check and format .stave projects"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "stave"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+stave-lang = { path = "../stave-lang" }

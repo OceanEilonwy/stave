@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/stave-lang"]
+members = ["crates/stave-cli", "crates/stave-lang"]
 
 [workspace.package]
 edition = "2024"
