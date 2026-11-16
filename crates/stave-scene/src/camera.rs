@@ -25,7 +25,7 @@ const DEFAULT_YAW: f32 = 0.58;
 const DEFAULT_PITCH: f32 = 0.30;
 
 /// Room left around a framed design, as a fraction of its size.
-const FRAME_MARGIN: f32 = 1.08;
+const FRAME_MARGIN: f32 = 1.12;
 
 /// A ray in the render frame.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -63,17 +63,31 @@ impl Orbit {
         .framed(bounds, aspect)
     }
 
-    /// The same direction, moved to show the whole box.
+    /// The same direction, moved to show the whole box: the target at its
+    /// centre and the camera just far enough back for every corner to be
+    /// in view.
     pub fn framed(self, bounds: Aabb, aspect: f32) -> Orbit {
-        let radius = (bounds.size().length() * 0.5).max(1.0);
-        let vertical = FIELD_OF_VIEW * 0.5;
-        let horizontal = (vertical.tan() * aspect.max(0.05)).atan();
-        let half_angle = vertical.min(horizontal);
-        let distance =
-            (radius * FRAME_MARGIN / half_angle.sin()).clamp(DISTANCE_RANGE.0, DISTANCE_RANGE.1);
+        let tan_vertical = (FIELD_OF_VIEW * 0.5).tan();
+        let tan_horizontal = tan_vertical * aspect.max(0.05);
+        let target = bounds.centre();
+        let backward = self.backward();
+        let (right, up) = Orbit { target, ..self }.screen_axes();
+        // A corner at depth `z` toward the camera fits when the camera is
+        // at least `z + |x| / tan` back, across and up.
+        let needed = bounds
+            .corners()
+            .iter()
+            .map(|corner| {
+                let offset = *corner - target;
+                let toward = offset.dot(backward);
+                let across = offset.dot(right).abs() * FRAME_MARGIN / tan_horizontal;
+                let upward = offset.dot(up).abs() * FRAME_MARGIN / tan_vertical;
+                toward + across.max(upward)
+            })
+            .fold(0.0_f32, f32::max);
         Orbit {
-            target: bounds.centre(),
-            distance,
+            target,
+            distance: needed.clamp(DISTANCE_RANGE.0, DISTANCE_RANGE.1),
             ..self
         }
     }
