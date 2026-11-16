@@ -271,8 +271,16 @@ impl Resolver<'_> {
         }
         if base_kind != BaseKind::Joint {
             for spec in base(base_kind).required {
+                let misspelt = syntax.body.entries.iter().any(|entry| match entry {
+                    ast::KindEntry::Field(field) => {
+                        base(base_kind).entry(field.key.as_str()).is_none()
+                            && !crate::suggest::closest(field.key.as_str(), [spec.name]).is_empty()
+                    }
+                    _ => false,
+                });
                 let written = kind_fields.iter().any(|f| f.name == spec.name)
-                    || params.iter().any(|p| p.decl.name == spec.name);
+                    || params.iter().any(|p| p.decl.name == spec.name)
+                    || misspelt;
                 if spec.requirement == Requirement::Required && !written {
                     self.error_help(
                         Code::MissingField,

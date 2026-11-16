@@ -37,6 +37,20 @@ impl CallArgs<'_> {
     }
 }
 
+/// `true` if one of `fields` is not in `table` and is a misspelling of
+/// `wanted`: it is already reported as unknown, with a suggestion, so
+/// `wanted` must not also be reported missing.
+pub(crate) fn misspells<'f>(
+    fields: impl IntoIterator<Item = &'f ast::Field>,
+    table: &'static [FieldSpec],
+    wanted: &str,
+) -> bool {
+    fields.into_iter().any(|field| {
+        let key = field.key.as_str();
+        fields::find(table, key).is_none() && !crate::suggest::closest(key, [wanted]).is_empty()
+    })
+}
+
 /// Converts a `path` (as in `pose drawer[top] = open`) to an expression.
 pub(crate) fn path_expr(path: &ast::Path) -> ast::Expr {
     let mut expr = ast::Expr {
@@ -554,7 +568,8 @@ impl<'a> Resolver<'a> {
         let max_length = length("max_length");
         if found.contains_key("form") {
             if form == StockForm::Dowel {
-                if diameter.is_none() {
+                if diameter.is_none() && !misspells(&syntax.body.fields, fields::STOCK, "diameter")
+                {
                     self.error_help(
                         Code::MissingField,
                         format!("{what} is missing 'diameter'"),
@@ -564,7 +579,9 @@ impl<'a> Resolver<'a> {
                     );
                 }
             } else {
-                if thickness.is_none() {
+                if thickness.is_none()
+                    && !misspells(&syntax.body.fields, fields::STOCK, "thickness")
+                {
                     self.error_help(
                         Code::MissingField,
                         format!("{what} is missing 'thickness'"),
@@ -746,7 +763,10 @@ impl<'a> Resolver<'a> {
             None => Size::Expr(RExpr::error(body.span)),
         };
         let width = found.get("width").map(|field| size(self, field));
-        if width.is_none() && !self.stock_gives_width(&stock_expr) {
+        if width.is_none()
+            && !self.stock_gives_width(&stock_expr)
+            && !misspells(body.fields(), fields::PART, "width")
+        {
             self.error_help(
                 Code::MissingField,
                 format!("{what} is missing 'width'"),

@@ -915,3 +915,49 @@ part floating : pine_19 {
         ]
     );
 }
+
+#[test]
+fn a_misspelt_field_is_one_error_not_two() {
+    // The unknown field's help names the field; it is not also missing.
+    let part = open(
+        "part shelf : pine_19 {\n  length: 100mm\n  widht:  100mm\n  place {\n    against(base.top)\n    flush(base.left)\n    flush(base.front)\n  }\n}",
+    );
+    only_error(&part, "unknown-field", "part 'shelf' has no field 'widht'");
+    assert_eq!(
+        part.diagnostics[0].help.as_deref(),
+        Some("did you mean 'width'?")
+    );
+    let required = open(
+        "part shelf : pine_19 {\n  lenght: 100mm\n  width:  100mm\n  place {\n    against(base.top)\n    flush(base.left)\n    flush(base.front)\n  }\n}",
+    );
+    only_error(
+        &required,
+        "unknown-field",
+        "part 'shelf' has no field 'lenght'",
+    );
+    let stock = open("stock ash_20 { species: ash, form: solid, thicknes: 20mm }");
+    only_error(
+        &stock,
+        "unknown-field",
+        "stock 'ash_20' has no field 'thicknes'",
+    );
+    let param =
+        open("component Box {\n  param height : Length\n}\nassembly b : Box {\n  hieght: 2mm\n}");
+    only_error(
+        &param,
+        "unknown-field",
+        "the component 'Box' has no field 'hieght'",
+    );
+    let role = open(&format!(
+        "{LEFT_SIDE}\npart shelf : pine_19 {{\n  length: 200mm\n  width: 300mm\n  place {{\n    against(base.top, gap: 100mm)\n    against(side.right)\n    flush(base.front)\n  }}\n}}\njoint housing : dado(shelf, int: side)"
+    ));
+    only_error(&role, "unknown-field", "the kind 'dado' has no field 'int'");
+    let entry = open(
+        "kind runner : slide {\n  lenght: 500mm\n  clearance: 12.7mm\n  travel: 500mm\n  envelope: box(length: 500mm, width: 45mm, thickness: 12.7mm)\n}",
+    );
+    only_error(
+        &entry,
+        "unknown-field",
+        "a slide kind has no field 'lenght'",
+    );
+}
