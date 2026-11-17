@@ -215,8 +215,49 @@ pub struct SceneEntry {
     hide: Vec<SceneItem>,
     /// The scene asks for the parts to be pulled apart (not drawn yet).
     pub explode: bool,
-    /// The scene asks for a section view (not drawn yet).
-    pub section: bool,
+    /// The scene's section: what it cuts away.
+    pub section: Option<Section>,
+}
+
+/// A plane that cuts the view: everything on the side `normal` points to
+/// (`normal · p > offset`, render frame) is cut away, and the wood it cuts
+/// through is drawn flat. A scene's `section:` across `up` cuts away what
+/// is above it, across `deep` what is in front of it, across `across` what
+/// is to its right.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Section {
+    /// Unit normal, pointing to the side cut away.
+    pub normal: Vec3,
+    /// Millimetres along `normal`.
+    pub offset: f32,
+}
+
+impl Section {
+    /// The section of a scene's plane.
+    pub fn of_plane(plane: &stave_model::solved::Plane) -> Section {
+        use stave_lang::placement::Axis;
+        let at = render::mm(plane.position);
+        match plane.axis {
+            Axis::Up => Section {
+                normal: Vec3::Y,
+                offset: at,
+            },
+            Axis::Across => Section {
+                normal: Vec3::X,
+                offset: at,
+            },
+            // The render frame's z points to the front: deep d is z = -d.
+            Axis::Deep => Section {
+                normal: Vec3::Z,
+                offset: -at,
+            },
+        }
+    }
+
+    /// `true` when a point is cut away.
+    pub fn cuts(&self, point: Vec3) -> bool {
+        self.normal.dot(point) > self.offset
+    }
 }
 
 /// Options for building a scene graph.
@@ -462,7 +503,7 @@ impl SceneGraph {
                 show: scene.show.clone(),
                 hide: scene.hide.clone(),
                 explode: scene.explode,
-                section: scene.section.is_some(),
+                section: scene.section.as_ref().map(Section::of_plane),
             })
             .collect();
         let exploded = Exploded::of(design);

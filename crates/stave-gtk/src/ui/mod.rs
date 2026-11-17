@@ -783,6 +783,11 @@ impl Window {
             orbit,
             selection: *selection,
             highlight: highlight.as_ref(),
+            section: shown
+                .scene
+                .scenes
+                .get(shown.scene_index)
+                .and_then(|entry| entry.section),
             width,
             height,
         };

@@ -10,7 +10,7 @@ use std::num::NonZeroU64;
 
 use anyhow::{Context as _, Result, anyhow, bail};
 use glam::{Mat4, Vec3};
-use stave_scene::{Aabb, Highlight, Material, NodeId, Orbit, Posed, SceneGraph};
+use stave_scene::{Aabb, Highlight, Material, NodeId, Orbit, Posed, SceneGraph, Section};
 use wgpu::util::DeviceExt as _;
 
 const COLOUR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
@@ -46,6 +46,8 @@ struct Globals {
     key_direction: [f32; 4],
     fill_direction: [f32; 4],
     floor: [f32; 4],
+    /// xyz: the section's unit normal (zero: no section); w: its offset.
+    section: [f32; 4],
 }
 
 #[repr(C)]
@@ -81,6 +83,9 @@ pub struct Frame<'a> {
     /// A problem to show: its nodes tinted red and its shared volumes drawn
     /// as red boxes on top of everything.
     pub highlight: Option<&'a Highlight>,
+    /// A plane cutting the view: what lies beyond it isn't drawn, and the
+    /// wood it cuts through is drawn flat.
+    pub section: Option<Section>,
     /// Pixels across.
     pub width: u32,
     /// Pixels down.
@@ -125,6 +130,9 @@ pub struct Renderer {
     /// small depth bias only lets outlines, drawn on the surfaces they
     /// outline, win against those surfaces.
     mesh_pipeline: wgpu::RenderPipeline,
+    /// The same, drawing back faces too: through a section's cut they are
+    /// the inside of the wood, drawn flat as the cut face.
+    section_pipeline: wgpu::RenderPipeline,
     edge_pipeline: wgpu::RenderPipeline,
     floor_pipeline: wgpu::RenderPipeline,
     shadow_pipeline: wgpu::RenderPipeline,
@@ -343,42 +351,42 @@ impl Renderer {
         })];
         let mesh_buffers = [Some(vertex_layout())];
         let edge_buffers = [Some(edge_layout())];
-        let mesh_pipeline_with = |label: &'static str, bias: wgpu::DepthBiasState| {
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some(label),
-                layout: Some(&main_layout),
-                vertex: wgpu::VertexState {
-                    module: &shader,
-                    entry_point: Some("mesh_vertex"),
-                    compilation_options: Default::default(),
-                    buffers: &mesh_buffers,
-                },
-                primitive: wgpu::PrimitiveState {
-                    topology: wgpu::PrimitiveTopology::TriangleList,
-                    front_face: wgpu::FrontFace::Ccw,
-                    cull_mode: Some(wgpu::Face::Back),
-                    ..Default::default()
-                },
-                depth_stencil: Some(depth(true, bias)),
-                multisample,
-                fragment: Some(wgpu::FragmentState {
-                    module: &shader,
-                    entry_point: Some("mesh_fragment"),
-                    compilation_options: Default::default(),
-                    targets: &opaque,
-                }),
-                multiview_mask: None,
-                cache: None,
-            })
+        let mesh_pipeline_with =
+            |label: &'static str, bias: wgpu::DepthBiasState, cull_mode: Option<wgpu::Face>| {
+                device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                    label: Some(label),
+                    layout: Some(&main_layout),
+                    vertex: wgpu::VertexState {
+                        module: &shader,
+                        entry_point: Some("mesh_vertex"),
+                        compilation_options: Default::default(),
+                        buffers: &mesh_buffers,
+                    },
+                    primitive: wgpu::PrimitiveState {
+                        topology: wgpu::PrimitiveTopology::TriangleList,
+                        front_face: wgpu::FrontFace::Ccw,
+                        cull_mode,
+                        ..Default::default()
+                    },
+                    depth_stencil: Some(depth(true, bias)),
+                    multisample,
+                    fragment: Some(wgpu::FragmentState {
+                        module: &shader,
+                        entry_point: Some("mesh_fragment"),
+                        compilation_options: Default::default(),
+                        targets: &opaque,
+                    }),
+                    multiview_mask: None,
+                    cache: None,
+                })
+            };
+        let mesh_bias = wgpu::DepthBiasState {
+            constant: 2,
+            slope_scale: 1.0,
+            clamp: 0.0,
         };
-        let mesh_pipeline = mesh_pipeline_with(
-            "meshes",
-            wgpu::DepthBiasState {
-                constant: 2,
-                slope_scale: 1.0,
-                clamp: 0.0,
-            },
-        );
+        let mesh_pipeline = mesh_pipeline_with("meshes", mesh_bias, Some(wgpu::Face::Back));
+        let section_pipeline = mesh_pipeline_with("meshes in a section", mesh_bias, None);
         let edge_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("outlines"),
             layout: Some(&main_layout),
@@ -506,6 +514,7 @@ impl Renderer {
             shadow_group,
             shadow_view,
             mesh_pipeline,
+            section_pipeline,
             edge_pipeline,
             floor_pipeline,
             shadow_pipeline,
@@ -714,7 +723,11 @@ impl Renderer {
             });
             pass.set_bind_group(0, &self.scene_group, &[]);
             pass.set_bind_group(1, &self.shadow_group, &[]);
-            pass.set_pipeline(&self.mesh_pipeline);
+            pass.set_pipeline(if frame.section.is_some() {
+                &self.section_pipeline
+            } else {
+                &self.mesh_pipeline
+            });
             for (index, mesh) in &visible {
                 pass.set_vertex_buffer(0, mesh.vertices.slice(..));
                 pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
@@ -874,6 +887,9 @@ impl Renderer {
             key_direction: key.extend(0.0).to_array(),
             fill_direction: fill.extend(0.0).to_array(),
             floor: [centre.x, floor_y, centre.z, radius * 2.4],
+            section: frame.section.map_or([0.0; 4], |section| {
+                section.normal.extend(section.offset).to_array()
+            }),
         };
         self.queue
             .write_buffer(&self.globals, 0, bytemuck::bytes_of(&globals));

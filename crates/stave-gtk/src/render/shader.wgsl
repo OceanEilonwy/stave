@@ -12,7 +12,16 @@ struct Globals {
     fill_direction: vec4<f32>,
     // x, z: centre of the floor; y: its height; w: half its size.
     floor: vec4<f32>,
+    // xyz: a section's unit normal, toward the side cut away (zero: none);
+    // w: its offset.
+    section: vec4<f32>,
 };
+
+// Is a point cut away by the section?
+fn cut_away(world: vec3<f32>) -> bool {
+    let normal = globals.section.xyz;
+    return dot(normal, normal) > 0.5 && dot(normal, world) > globals.section.w;
+}
 
 struct Node {
     model: mat4x4<f32>,
@@ -141,10 +150,18 @@ fn metal(base: vec3<f32>, grain: vec3<f32>) -> vec3<f32> {
 
 @fragment
 fn mesh_fragment(in: MeshOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
+    if (cut_away(in.world)) {
+        discard;
+    }
     let node = nodes[in.node];
     var normal = normalize(in.normal);
     if (!front) {
         normal = -normal;
+        // Seen through a section's cut: the inside of the wood, drawn as
+        // the flat cut face, facing the way the section looks.
+        if (dot(globals.section.xyz, globals.section.xyz) > 0.5) {
+            normal = globals.section.xyz;
+        }
     }
     let is_metal = node.params.w > 0.5;
     let radius = ring_radius(in.grain, node.params);
@@ -189,6 +206,7 @@ fn shadow_vertex(in: MeshIn, @builtin(instance_index) node: u32) -> @builtin(pos
 struct EdgeOut {
     @builtin(position) clip: vec4<f32>,
     @location(0) @interpolate(flat) node: u32,
+    @location(1) world: vec3<f32>,
 };
 
 @vertex
@@ -199,11 +217,15 @@ fn edge_vertex(@location(0) position: vec3<f32>, @builtin(instance_index) node: 
     var out: EdgeOut;
     out.clip = globals.view_projection * world;
     out.node = node;
+    out.world = world.xyz;
     return out;
 }
 
 @fragment
 fn edge_fragment(in: EdgeOut) -> @location(0) vec4<f32> {
+    if (cut_away(in.world)) {
+        discard;
+    }
     let node = nodes[in.node];
     let ink = vec4<f32>(0.022, 0.012, 0.005, 0.42);
     let selected = vec4<f32>(node.tint.rgb * 0.6, 1.0);

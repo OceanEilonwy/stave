@@ -6,6 +6,8 @@
 //! stave-gtk examples/wall_shelf --screenshot back.png --turn 180     (seen from behind)
 //! stave-gtk examples/side_table --screenshot apart.png --explode 1   (pulled apart)
 //! stave-gtk tests/broken/door_hits_side --screenshot hit.png --diagnostic 0
+//! stave-gtk examples/clothing_cabinet --screenshot hinge.png --open door_l=45 \
+//!     --frame 'door_l.hinges[lower]' --pitch 90 --section up=660   (a hinge from above)
 //! ```
 //!
 //! Without `--screenshot` it opens a libadwaita window. With it, it renders
@@ -66,6 +68,44 @@ struct Arguments {
     /// order `stave check` prints them. Works for the window too.
     #[arg(long, value_name = "N")]
     diagnostic: Option<usize>,
+    /// Look from this many degrees above the horizontal (90: straight
+    /// down) for the screenshot.
+    #[arg(long, value_name = "DEGREES", allow_negative_numbers = true)]
+    pitch: Option<f32>,
+    /// Frame the screenshot close on the items whose names start with this
+    /// (`door_l.hinges[lower]`: the hinge's cup, plate and arm, and links).
+    #[arg(long, value_name = "NAME")]
+    frame: Option<String>,
+    /// Open an assembly for the screenshot: degrees for a door, millimetres
+    /// for a drawer (`door_l=45`). May be given more than once.
+    #[arg(long, value_name = "ASSEMBLY=AMOUNT", value_parser = parse_open)]
+    open: Vec<(String, f32)>,
+    /// Hide the items whose names start with this from the screenshot. May
+    /// be given more than once.
+    #[arg(long, value_name = "NAME")]
+    hide: Vec<String>,
+    /// Cut the screenshot at a plane and leave out what is above it
+    /// (`up=660`), to its right (`across=...`) or in front of it
+    /// (`deep=...`), in millimetres. Default: the scene's own section.
+    #[arg(long, value_name = "AXIS=MM", value_parser = parse_section)]
+    section: Option<(stave_lang::placement::Axis, f32)>,
+}
+
+fn parse_open(text: &str) -> Result<(String, f32)> {
+    let Some((name, amount)) = text.split_once('=') else {
+        bail!("write it as ASSEMBLY=AMOUNT, for example door_l=45");
+    };
+    Ok((name.trim().to_owned(), amount.trim().parse()?))
+}
+
+fn parse_section(text: &str) -> Result<(stave_lang::placement::Axis, f32)> {
+    let Some((axis, at)) = text.split_once('=') else {
+        bail!("write it as AXIS=MM, for example up=660");
+    };
+    let Some(axis) = stave_lang::placement::Axis::from_word(axis.trim()) else {
+        bail!("the axis is up, across or deep");
+    };
+    Ok((axis, at.trim().parse()?))
 }
 
 fn parse_amount(text: &str) -> Result<f32> {
@@ -97,6 +137,11 @@ fn main() -> ExitCode {
                 scene: arguments.scene.clone(),
                 explode: arguments.explode,
                 turn: arguments.turn,
+                pitch: arguments.pitch,
+                frame: arguments.frame.clone(),
+                open: arguments.open.clone(),
+                hide: arguments.hide.clone(),
+                section: arguments.section,
             },
             arguments.diagnostic,
             arguments.size,

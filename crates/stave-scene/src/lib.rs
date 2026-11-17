@@ -26,7 +26,7 @@ mod pick;
 pub use camera::{Orbit, Ray};
 pub use graph::{
     BuildOptions, Highlight, Item, LinkFollower, Material, MotionRange, Node, NodeId, Posed,
-    SceneEntry, SceneGraph, Wood,
+    SceneEntry, SceneGraph, Section, Wood,
 };
 pub use pick::Hit;
 pub use stave_geom::{Aabb, Extent, Geometry};
