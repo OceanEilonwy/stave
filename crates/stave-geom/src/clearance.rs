@@ -43,6 +43,9 @@ pub struct Closest {
     /// Where along the travel: radians for a swing, nanometres for a
     /// slide.
     pub at: f64,
+    /// For a swing, the two nearest points there (world nanometres): on
+    /// the moving assembly as moved, and on the fixed solid.
+    pub points: Option<(DVec3, DVec3)>,
 }
 
 /// How an assembly moves.
@@ -178,6 +181,7 @@ fn slide(
         fixed: index,
         gap: Length::from_nm(i64::try_from(isqrt(squared)).unwrap_or(i64::MAX)),
         at: render::nm(Length::from_nm(at)),
+        points: None,
     })
 }
 
@@ -219,6 +223,12 @@ const EDGES: [(usize, usize); 12] = [
 
 /// The distance between two segments.
 fn segment_distance(p1: DVec3, q1: DVec3, p2: DVec3, q2: DVec3) -> f64 {
+    let (a, b) = segment_points(p1, q1, p2, q2);
+    a.distance(b)
+}
+
+/// The nearest points of two segments.
+fn segment_points(p1: DVec3, q1: DVec3, p2: DVec3, q2: DVec3) -> (DVec3, DVec3) {
     let d1 = q1 - p1;
     let d2 = q2 - p2;
     let r = p1 - p2;
@@ -252,7 +262,7 @@ fn segment_distance(p1: DVec3, q1: DVec3, p2: DVec3, q2: DVec3) -> f64 {
             (s, t)
         }
     };
-    ((p1 + d1 * s) - (p2 + d2 * t)).length()
+    (p1 + d1 * s, p2 + d2 * t)
 }
 
 /// A box as its corners and its frame: centre, unit axes, half sizes.
@@ -324,6 +334,46 @@ impl Placed {
         candidates
             .iter()
             .all(|axis| reach(self, *axis) + reach(other, *axis) > between.dot(*axis).abs())
+    }
+
+    /// The nearest point of the box to a point.
+    fn nearest_to(&self, point: DVec3) -> DVec3 {
+        let offset = point - self.centre;
+        (0..3).fold(self.centre, |at, i| {
+            at + self.axes[i] * offset.dot(self.axes[i]).clamp(-self.half[i], self.half[i])
+        })
+    }
+
+    /// The distance between the boxes and the nearest point on each (this
+    /// one's first).
+    fn nearest(&self, other: &Placed) -> (f64, DVec3, DVec3) {
+        let mut best = (f64::INFINITY, self.centre, other.centre);
+        let mut consider = |a: DVec3, b: DVec3| {
+            let d = a.distance(b);
+            if d < best.0 {
+                best = (d, a, b);
+            }
+        };
+        for corner in &self.corners {
+            consider(*corner, other.nearest_to(*corner));
+        }
+        for corner in &other.corners {
+            consider(self.nearest_to(*corner), *corner);
+        }
+        for (a, b) in EDGES {
+            for (c, d) in EDGES {
+                if let (Some(p1), Some(q1), Some(p2), Some(q2)) = (
+                    self.corners.get(a),
+                    self.corners.get(b),
+                    other.corners.get(c),
+                    other.corners.get(d),
+                ) {
+                    let (x, y) = segment_points(*p1, *q1, *p2, *q2);
+                    consider(x, y);
+                }
+            }
+        }
+        best
     }
 
     /// The distance between the boxes (0 when they overlap).
@@ -526,10 +576,20 @@ fn swing(
         }
     }
     let (gap, index, at) = best?;
+    let points = pose(at).and_then(|matrix| {
+        let placed: Vec<Placed> = moving.iter().map(|b| Placed::of(b, &matrix)).collect();
+        fixed_placed
+            .get(index)?
+            .iter()
+            .flat_map(|f| placed.iter().map(move |m| m.nearest(f)))
+            .min_by(|a, b| a.0.total_cmp(&b.0))
+            .map(|(_, on_moving, on_fixed)| (on_moving, on_fixed))
+    });
     Some(Closest {
         fixed: index,
         gap: render::length_from_nm(gap.floor())?,
         at,
+        points,
     })
 }
 

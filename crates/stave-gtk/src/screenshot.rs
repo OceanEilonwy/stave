@@ -171,6 +171,9 @@ pub struct View<'a> {
     pub flat: bool,
     /// Look straight down on this box, flat (a plan); overrides `frame`.
     pub plan: Option<Aabb>,
+    /// Look from this yaw and pitch (radians) instead of `turn` and
+    /// `pitch`.
+    pub look: Option<(f32, f32)>,
     /// How each node looks (focus mode).
     pub looks: Option<&'a [Look]>,
     /// The overlay (focus mode).
@@ -189,6 +192,7 @@ impl<'a> View<'a> {
             section: section_of(shot, scene),
             flat: shot.flat,
             plan: None,
+            look: None,
             looks: None,
             overlay: None,
             tint_cut_faces: !shot.no_tint,
@@ -308,7 +312,12 @@ pub fn render_focus(
     } else {
         None
     };
+    // A hinge is seen from inside the cabinet unless the shot turns.
+    let look = focus
+        .view()
+        .filter(|_| shot.turn == 0.0 && shot.pitch.is_none());
     let view = View {
+        look,
         section: plan.map(|p| p.section).or_else(|| section_of(shot, scene)),
         plan: plan.map(|p| p.bounds),
         looks: Some(&frame.looks),
@@ -365,9 +374,13 @@ fn render_bounds(
         Some(plan) => Orbit::plan(plan, aspect, view.turn.to_radians()),
         None => {
             let default = Orbit::framing(bounds, aspect);
+            let (yaw, pitch) = view.look.unwrap_or((
+                (default.yaw + view.turn.to_radians()).rem_euclid(std::f32::consts::TAU),
+                view.pitch.map_or(default.pitch, f32::to_radians),
+            ));
             Orbit {
-                yaw: (default.yaw + view.turn.to_radians()).rem_euclid(std::f32::consts::TAU),
-                pitch: view.pitch.map_or(default.pitch, f32::to_radians),
+                yaw,
+                pitch,
                 projection: if view.flat {
                     Projection::Flat
                 } else {

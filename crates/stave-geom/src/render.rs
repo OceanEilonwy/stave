@@ -37,6 +37,22 @@ fn gpu(value: f64) -> f32 {
     narrowed
 }
 
+/// An `f64` the collision tests work in (radians, a fraction) for the
+/// GPU, narrowed to the nearest `f32` the one way Stave narrows floats.
+pub fn narrow(value: f64) -> f32 {
+    gpu(value)
+}
+
+/// World nanometres (as the collision tests and [`crate::clearance`] use)
+/// to a point in the render frame.
+pub fn point_of_nm(point: glam::DVec3) -> Vec3 {
+    Vec3::new(
+        gpu(point.x * 1e-6),
+        gpu(point.y * 1e-6),
+        -gpu(point.z * 1e-6),
+    )
+}
+
 /// A length in nanometres, for collision tests.
 ///
 /// Exact for every length below 2^53 nm (about 9000 km), so for anything

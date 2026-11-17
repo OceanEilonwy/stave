@@ -268,9 +268,9 @@ fn focus_on_a_socket_plays_the_rung_in() {
     );
     assert!(plain.looks.iter().all(|look| *look == Look::Normal));
     assert_eq!(plain.status, "rung[front] is 15 mm from home");
-    // Framed close on the socket, not the whole stool.
+    // Framed on the rung and its leg, not the whole stool.
     let zone = found.zone().unwrap();
-    assert!(zone.size().max_element() < 200.0, "{zone:?}");
+    assert!(zone.size().max_element() < 300.0, "{zone:?}");
 }
 
 #[test]
@@ -377,6 +377,23 @@ fn focus_on_a_cup_hinge_names_its_members_and_measures_its_swing() {
     numbers.sort_unstable();
     assert_eq!(numbers, [1, 2, 3, 4]);
     assert!(frame.overlay.lines.len() > 10);
+    // Where it comes closest to the side is marked with the gap.
+    let notes: Vec<&str> = frame
+        .overlay
+        .notes
+        .iter()
+        .map(|n| n.text.as_str())
+        .collect();
+    assert_eq!(notes, ["3.5 mm"]);
+    assert_eq!(
+        frame
+            .overlay
+            .lines
+            .iter()
+            .filter(|l| l.kind == stave_scene::LineKind::Gap)
+            .count(),
+        1
+    );
     // The hinge, its door stile and the side are drawn; the rest fade.
     let design = opened.design.as_ref().unwrap();
     let top = graph.node_of(Item::Part(part(design, "top").id)).unwrap();
@@ -426,6 +443,9 @@ fn the_smallest_gap_over_a_swing_is_within_the_bound() {
     // The door's top edge passes under the top's overhang 1.5mm below it,
     // all the way round.
     assert_eq!(gap, Length::from_nm(1_500_000));
+    let found = closest_for(&moving, std::slice::from_ref(&top), &motion).unwrap();
+    let (on_door, on_top) = found.points.unwrap();
+    assert!((on_door.distance(on_top) - 1_500_000.0).abs() < 1_000.0);
     assert!((0.0..=110.0_f64.to_radians() + 1e-9).contains(&at));
     // A drawer slides out past the dividers above and below it, exactly.
     let drawer = design

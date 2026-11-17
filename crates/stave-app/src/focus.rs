@@ -20,7 +20,7 @@
 //! doc comments, a kind's `insert:` steps as written, and a hardware kind's
 //! documented `member`s.
 
-use stave_geom::clearance::{Closest, closest_for};
+use stave_geom::clearance::closest_for;
 use stave_geom::collide::{CONTACT_TOLERANCE, WorldSolid, overlaps, touches};
 use stave_geom::sequence::{Member, pair_members, pair_steps, trace};
 use stave_geom::solid::Solid;
@@ -33,7 +33,8 @@ use stave_model::solved::{
     JointId, Motion, Part, PartId, SolvedDesign, StepAmount, StepKind,
 };
 use stave_scene::focus::{
-    Anchor, MotionPlay, Plan, Play, StepPlay, amount_text, edge_point, key_poses,
+    Anchor, GapMark, MotionPlay, Plan, Play, StepPlay, amount_text, edge_point, hinge_view,
+    key_poses,
 };
 use stave_scene::{Aabb, Item, Look, MotionRange, NodeId, Overlay, Posed, SceneEntry, SceneGraph};
 use stave_schema::kinds::MemberName;
@@ -251,6 +252,9 @@ pub struct Focus {
     plan: Option<Plan>,
     /// What to frame in the 3D view.
     zone: Option<Aabb>,
+    /// The direction to look from in 3D (yaw and pitch), when focus has
+    /// a better one than the viewer's: a hinge from inside the cabinet.
+    view: Option<(f32, f32)>,
 }
 
 /// One frame of focus mode.
@@ -570,6 +574,7 @@ fn joint_focus(
         focus_nodes: part_nodes(graph, &members),
         xray_nodes: part_nodes(graph, &receiving),
         zone: graph.joint_zone(&moving, &receiving),
+        view: None,
         play,
         plan: None,
     })
@@ -716,6 +721,7 @@ fn hardware_focus(
     let mut key_pose_rows = Vec::new();
     let mut closest = None;
     let mut plan = None;
+    let mut view = None;
     let play = match moving_assembly(design, graph, hardware) {
         Some((assembly, range)) => {
             let motion = design
@@ -744,31 +750,33 @@ fn hardware_focus(
                 .filter(|p| !inside.contains(&p.id))
                 .collect();
             let fixed: Vec<WorldSolid> = fixed_parts.iter().map(|p| solid(p)).collect();
+            let mut gap_mark = None;
             if let Some(motion) = &motion {
                 // To the part the hinge is on (the side), then to anything.
-                if let Some(on) = on
-                    && let Some(index) = fixed_parts.iter().position(|p| p.id == on)
+                let side = on.and_then(|on| fixed_parts.iter().position(|p| p.id == on));
+                if let Some(index) = side
                     && let Some(side) = fixed.get(index)
-                    && let Some(Closest { gap, .. }) =
-                        closest_for(&moving, std::slice::from_ref(side), motion)
+                    && let Some(found) = closest_for(&moving, std::slice::from_ref(side), motion)
                 {
                     rows.push(Row {
                         label: "Closest to the side",
-                        value: gap_text(gap),
+                        value: gap_text(found.gap),
                     });
+                    gap_mark = GapMark::new(graph, assembly, &found, gap_text(found.gap));
                 }
-                if let Some(Closest {
-                    fixed: index, gap, ..
-                }) = closest_for(&moving, &fixed, motion)
-                    && let Some(part) = fixed_parts.get(index)
+                if let Some(found) = closest_for(&moving, &fixed, motion)
+                    && let Some(part) = fixed_parts.get(found.fixed)
                 {
                     if Some(part.id) != on {
                         rows.push(Row {
                             label: "Closest to anything",
-                            value: format!("{}: {}", part.name, gap_text(gap)),
+                            value: format!("{}: {}", part.name, gap_text(found.gap)),
                         });
+                        if gap_mark.is_none() {
+                            gap_mark = GapMark::new(graph, assembly, &found, gap_text(found.gap));
+                        }
                     }
-                    closest = Some((part.name.clone(), gap));
+                    closest = Some((part.name.clone(), found.gap));
                 }
             }
             // The motion check's verdict.
@@ -806,12 +814,17 @@ fn hardware_focus(
             if range.turns {
                 let arm = hardware.mechanism.as_ref().map(|m| m.arm.bounds);
                 plan = Plan::of(graph, &hardware_nodes, &path, arm);
+                view = motion
+                    .as_ref()
+                    .and_then(Motion::swing)
+                    .map(|(free, _)| hinge_view(free));
             }
             Play::Motion(MotionPlay {
                 assembly,
                 range,
                 path,
                 anchors,
+                gap: gap_mark,
             })
         }
         None => Play::Still,
@@ -839,6 +852,7 @@ fn hardware_focus(
         zone: plan
             .map(|p| p.bounds)
             .or_else(|| graph.bounds_of(&graph.rest(), &hardware_nodes)),
+        view,
         play,
         plan,
     })
@@ -899,6 +913,12 @@ impl Focus {
     /// hardware and the path its door or drawer follows.
     pub fn zone(&self) -> Option<Aabb> {
         self.zone
+    }
+
+    /// The direction to look from in 3D (an orbit's yaw and pitch), when
+    /// focus has one: a hinge is seen from inside the cabinet.
+    pub fn view(&self) -> Option<(f32, f32)> {
+        self.view
     }
 
     /// A flat view from above, for a hinge.

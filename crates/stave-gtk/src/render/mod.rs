@@ -1146,6 +1146,39 @@ const PATH_COLOUR: [f32; 4] = [0.0284, 0.1590, 0.6724, 0.95];
 const HOME_COLOUR: [f32; 4] = [0.05, 0.03, 0.02, 0.85];
 const LABEL_FILL: [f32; 4] = [0.0284, 0.1590, 0.6724, 1.0];
 const LABEL_INK: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
+/// The closest approach, in a warm orange, its note dark on pale.
+const GAP_COLOUR: [f32; 4] = [0.82, 0.25, 0.02, 1.0];
+const NOTE_FILL: [f32; 4] = [0.98, 0.95, 0.90, 0.92];
+const NOTE_INK: [f32; 4] = [0.45, 0.10, 0.0, 1.0];
+
+/// Polylines on a glyph's grid.
+type Strokes = Vec<Vec<(f32, f32)>>;
+
+/// A character of a note: its width (a digit is 1 wide, 2 high) and its
+/// strokes. Characters without a glyph are a space.
+fn glyph(character: char) -> (f32, Strokes) {
+    let owned = |strokes: &[&[(f32, f32)]]| strokes.iter().map(|s| s.to_vec()).collect();
+    match character {
+        '0'..='9' => {
+            let digit = u8::try_from(u32::from(character) - u32::from('0')).unwrap_or(0);
+            (1.0, owned(digit_strokes(digit)))
+        }
+        '.' => (0.4, owned(&[&[(0.15, 0.0), (0.15, 0.25)]])),
+        'm' => (
+            1.3,
+            owned(&[
+                &[(0.0, 0.0), (0.0, 1.3)],
+                &[(0.0, 1.1), (0.3, 1.3), (0.65, 1.1), (0.65, 0.0)],
+                &[(0.65, 1.1), (0.95, 1.3), (1.3, 1.1), (1.3, 0.0)],
+            ]),
+        ),
+        '°' => (
+            0.6,
+            owned(&[&[(0.0, 1.6), (0.3, 2.0), (0.6, 1.6), (0.3, 1.2), (0.0, 1.6)]]),
+        ),
+        _ => (0.6, Vec::new()),
+    }
+}
 
 /// Strokes of a digit in a box 1 wide and 2 high, from the bottom left.
 fn digit_strokes(digit: u8) -> &'static [&'static [(f32, f32)]] {
@@ -1245,6 +1278,7 @@ fn overlay_triangles(
         let (pixels, colour) = match line.kind {
             LineKind::Path => (3.0, PATH_COLOUR),
             LineKind::Home => (2.0, HOME_COLOUR),
+            LineKind::Gap => (2.5, GAP_COLOUR),
         };
         segment(&mut out, a, b, pixels, colour);
     }
@@ -1306,6 +1340,47 @@ fn overlay_triangles(
                     }
                 }
             }
+        }
+    }
+    for note in &overlay.notes {
+        let Some(at) = project(note.at) else {
+            continue;
+        };
+        let size = 6.5_f32;
+        let gap = 0.45;
+        let glyphs: Vec<(f32, Strokes)> = note.text.chars().map(glyph).collect();
+        let width: f32 = glyphs.iter().map(|(w, _)| w + gap).sum::<f32>() - gap;
+        // A pale pill to the right of and above the point, then the text.
+        let origin = at + glam::Vec2::new(10.0, 8.0) * per_pixel;
+        let pad = glam::Vec2::new(5.0, 4.0);
+        let low = origin - pad * per_pixel;
+        let high = origin + (glam::Vec2::new(width, 2.0) * size + pad) * per_pixel;
+        for corner in [
+            low,
+            glam::Vec2::new(high.x, low.y),
+            high,
+            low,
+            high,
+            glam::Vec2::new(low.x, high.y),
+        ] {
+            out.push(OverlayVertex {
+                position: corner.to_array(),
+                colour: NOTE_FILL,
+            });
+        }
+        let mut left = 0.0;
+        for (advance, strokes) in &glyphs {
+            for stroke in strokes {
+                for pair in stroke.windows(2) {
+                    if let [a, b] = pair {
+                        let place = |(x, y): (f32, f32)| {
+                            origin + glam::Vec2::new(left + x, y) * size * per_pixel
+                        };
+                        segment(&mut out, place(*a), place(*b), 1.9, NOTE_INK);
+                    }
+                }
+            }
+            left += advance + gap;
         }
     }
     out

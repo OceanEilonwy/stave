@@ -33,6 +33,8 @@ pub enum LineKind {
     Path,
     /// Where a part ends up when its joint is together (dashed).
     Home,
+    /// Between a moving part and the fixed part it comes closest to.
+    Gap,
 }
 
 /// One straight piece of an overlay line, in the render frame.
@@ -55,6 +57,16 @@ pub struct Label {
     pub number: u8,
 }
 
+/// A short text drawn at a point: a measurement ("3.5 mm"). Only digits,
+/// `.`, `°`, spaces and the letters of `mm` are drawn.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Note {
+    /// Where, in the render frame.
+    pub at: Vec3,
+    /// The text.
+    pub text: String,
+}
+
 /// Lines and labels drawn over the view, on top of everything.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Overlay {
@@ -62,6 +74,8 @@ pub struct Overlay {
     pub lines: Vec<OverlayLine>,
     /// The labels.
     pub labels: Vec<Label>,
+    /// The notes.
+    pub notes: Vec<Note>,
 }
 
 impl Overlay {
@@ -172,7 +186,7 @@ impl SceneGraph {
 
     /// The box to frame a joint in: where the moving parts meet the
     /// receiving ones at rest, grown so the parts around it show (by 1.2
-    /// times its largest size, at least 60mm), but no bigger than the
+    /// times its largest size, at least 90mm), but no bigger than the
     /// parts themselves.
     pub fn joint_zone(&self, moving: &[PartId], receiving: &[PartId]) -> Option<Aabb> {
         let rest = self.rest();
@@ -190,7 +204,7 @@ impl SceneGraph {
         if (high - low).min_element() < -1.0 {
             return Some(all);
         }
-        let grow = ((high - low).max_element() * 1.2).max(60.0);
+        let grow = ((high - low).max_element() * 1.2).max(90.0);
         Some(Aabb {
             min: (low - Vec3::splat(grow)).max(all.min),
             max: (high + Vec3::splat(grow)).min(all.max),
@@ -261,6 +275,42 @@ pub struct MotionPlay {
     pub path: Vec<Vec3>,
     /// Numbered labels.
     pub anchors: Vec<(u8, Anchor)>,
+    /// Where it comes closest to a fixed part, marked with the gap.
+    pub gap: Option<GapMark>,
+}
+
+/// The closest approach of a motion, drawn as a line from the point on
+/// the fixed part to the point on the moving part (wherever it is), with
+/// the smallest gap written by the fixed point.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GapMark {
+    /// The point on the fixed part (render frame).
+    pub fixed: Vec3,
+    /// The point on the moving part, at rest (render frame).
+    pub moving: Vec3,
+    /// "3.5 mm".
+    pub text: String,
+}
+
+impl GapMark {
+    /// The mark for a closest approach of an assembly's motion found by
+    /// [`stave_geom::clearance`]; `None` when it has no points.
+    pub fn new(
+        graph: &SceneGraph,
+        assembly: AssemblyId,
+        closest: &stave_geom::clearance::Closest,
+        text: String,
+    ) -> Option<GapMark> {
+        let (on_moving, on_fixed) = closest.points?;
+        let posed = graph.motion_transform(assembly, render::narrow(closest.at))?;
+        Some(GapMark {
+            fixed: render::point_of_nm(on_fixed),
+            moving: posed
+                .inverse()
+                .transform_point3(render::point_of_nm(on_moving)),
+            text,
+        })
+    }
 }
 
 /// One posed frame of a [`Play`].
@@ -441,6 +491,19 @@ impl MotionPlay {
         let posed = graph.pose_with(scene, &[(self.assembly, amount)], 0.0);
         let mut overlay = Overlay::default();
         overlay.add_path(&self.path);
+        if let Some(gap) = &self.gap
+            && let Some(transform) = graph.motion_transform(self.assembly, amount)
+        {
+            overlay.lines.push(OverlayLine {
+                from: gap.fixed,
+                to: transform.transform_point3(gap.moving),
+                kind: LineKind::Gap,
+            });
+            overlay.notes.push(Note {
+                at: gap.fixed,
+                text: gap.text.clone(),
+            });
+        }
         for (number, anchor) in &self.anchors {
             let at = match anchor {
                 Anchor::Box(region, toward) => {
@@ -523,6 +586,16 @@ pub fn edge_point(
             door.centre() + toward * (door.size().dot(toward.abs()) * 0.5)
         }
     }
+}
+
+/// The direction to look at a hinge from in 3D, as an orbit's yaw and
+/// pitch (radians): from inside the cabinet, where its plate is screwed,
+/// and a little in front and above, so the plate, arm, links and cup all
+/// show. `free` is the direction from the hinge edge toward the middle of
+/// the door.
+pub fn hinge_view(free: Direction) -> (f32, f32) {
+    let toward = render::direction(free) + Vec3::Z * 0.45;
+    (toward.x.atan2(toward.z), 25.0_f32.to_radians())
 }
 
 /// A flat view from above, cut just over the hardware's highest point and

@@ -634,7 +634,16 @@ impl Window {
             .as_ref()
             .and_then(|f| f.focus.zone())
             .zip(state.orbit);
+        let view = state.focus.as_ref().and_then(|f| f.focus.view());
         if let Some((zone, orbit)) = framed {
+            let orbit = match view {
+                Some((yaw, pitch)) => Orbit {
+                    yaw,
+                    pitch,
+                    ..orbit
+                },
+                None => orbit,
+            };
             state.orbit = Some(orbit.framed(zone, aspect));
         }
         state.updating_controls = true;

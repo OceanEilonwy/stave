@@ -26,8 +26,8 @@ mod pick;
 
 pub use camera::{Orbit, Projection, Ray};
 pub use focus::{
-    Anchor, Label, LineKind, Look, MotionPlay, Overlay, OverlayLine, Plan, Play, PlayFrame,
-    StepPlay,
+    Anchor, GapMark, Label, LineKind, Look, MotionPlay, Note, Overlay, OverlayLine, Plan, Play,
+    PlayFrame, StepPlay,
 };
 pub use graph::{
     BuildOptions, Highlight, Item, LinkFollower, Material, MotionRange, Node, NodeId, Posed,
