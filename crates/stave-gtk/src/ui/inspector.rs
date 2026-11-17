@@ -8,6 +8,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use adw::prelude::*;
+use stave_app::apart::{Stage, Step};
 use stave_app::focus::Target;
 use stave_app::inspect::{Inspection, Snippet, TokenClass};
 use stave_app::problems::Details;
@@ -29,6 +30,7 @@ pub struct Inspector {
     /// Focus mode's panel.
     pub focus: FocusPanel,
     problem: gtk::Box,
+    apart: gtk::Box,
     callbacks: Rc<RefCell<Callbacks>>,
 }
 
@@ -36,6 +38,7 @@ pub struct Inspector {
 struct Callbacks {
     on_focus: Option<TargetCallback>,
     on_source: Option<SourceCallback>,
+    on_export: Option<Rc<dyn Fn()>>,
 }
 
 fn label(text: &str, classes: &[&str]) -> gtk::Label {
@@ -88,8 +91,15 @@ impl Inspector {
         root.add_named(&scrolled(&details), Some("details"));
         root.add_named(&scrolled(&focus_box), Some("focus"));
         root.add_named(&scrolled(&problem), Some("problem"));
+        let apart = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .spacing(14)
+            .css_classes(["stave-inspector"])
+            .build();
+        root.add_named(&scrolled(&apart), Some("apart"));
         root.set_visible_child_name("empty");
         Inspector {
+            apart,
             root,
             details,
             focus,
@@ -106,6 +116,99 @@ impl Inspector {
     /// Calls `callback` when the file:line link is clicked.
     pub fn connect_source(&self, callback: impl Fn(SourceLocation) + 'static) {
         self.callbacks.borrow_mut().on_source = Some(Rc::new(callback));
+    }
+
+    /// Calls `callback` when "Save this view as glTF" is asked for.
+    pub fn connect_export(&self, callback: impl Fn() + 'static) {
+        self.callbacks.borrow_mut().on_export = Some(Rc::new(callback));
+    }
+
+    /// Shows "How it comes apart" (Exploded.dc.html): each stage's moves,
+    /// numbered by stage, and "Save this view as glTF".
+    pub fn show_apart(&self, steps: &[Step]) {
+        clear(&self.apart);
+        let head = gtk::Box::new(gtk::Orientation::Vertical, 4);
+        head.append(&label(
+            "PULLED APART",
+            &["stave-eyebrow", "stave-eyebrow-bold"],
+        ));
+        head.append(&label(
+            "How it comes apart",
+            &["stave-inspector-title", "stave-problem-title"],
+        ));
+        head.append(&label(
+            "Each move is the reverse of how that joint goes together.",
+            &["stave-description"],
+        ));
+        self.apart.append(&head);
+        let list = card();
+        if steps.is_empty() {
+            let line = gtk::Box::builder().css_classes(["stave-card-row"]).build();
+            line.append(&label(
+                "Nothing here comes apart: no part is joined to another.",
+                &[],
+            ));
+            list.append(&line);
+        }
+        for step in steps {
+            let line = gtk::Box::builder()
+                .spacing(10)
+                .css_classes(["stave-card-row"])
+                .build();
+            let number = gtk::Label::builder()
+                .label(step.stage.number().to_string())
+                .valign(gtk::Align::Start)
+                .css_classes([
+                    "stave-number",
+                    match step.stage {
+                        Stage::Assemblies => "first",
+                        Stage::Parts => "second",
+                    },
+                ])
+                .build();
+            line.append(&number);
+            let text = gtk::Label::builder()
+                .use_markup(true)
+                .label(format!(
+                    "<b>{}</b> {}",
+                    gtk::glib::markup_escape_text(&step.lead),
+                    gtk::glib::markup_escape_text(&step.text)
+                ))
+                .xalign(0.0)
+                .hexpand(true)
+                .wrap(true)
+                .wrap_mode(gtk::pango::WrapMode::WordChar)
+                .build();
+            line.append(&text);
+            list.append(&line);
+        }
+        list.update_property(&[gtk::accessible::Property::Label("How it comes apart")]);
+        self.apart.append(&list);
+        let save = card();
+        let line = gtk::Box::builder()
+            .spacing(10)
+            .css_classes(["stave-card-row"])
+            .build();
+        let words = label("Save this view as glTF", &[]);
+        words.set_hexpand(true);
+        line.append(&words);
+        let export = gtk::Button::builder()
+            .label("Export…")
+            .css_classes(["flat", "stave-link"])
+            .valign(gtk::Align::Center)
+            .tooltip_text("Save the parts as they are shown, pulled apart, as a glTF file")
+            .build();
+        let callbacks = self.callbacks.clone();
+        export.connect_clicked(move |_| {
+            let callback = callbacks.borrow().on_export.clone();
+            if let Some(callback) = callback {
+                callback();
+            }
+        });
+        line.append(&export);
+        save.append(&line);
+        self.apart.append(&save);
+        self.root.set_visible_child_name("apart");
     }
 
     /// Shows focus mode's panel (it fills itself).

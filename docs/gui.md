@@ -175,6 +175,22 @@ PDF doesn't exist yet, and the button says so honestly.
   scene menu drop their words and the subtitle goes; below 600 sp the
   title, the open button and forward go too.
 
+## Nothing to draw
+
+When there is nothing to draw the view's area shows `EmptyView` on the
+stage colour, never a blank area: an icon, a title, what it means and,
+where it helps, "Open a Project…" (`win.open`). The words come from
+`stave_app::empty::of(&session)`: checking, a folder that can't be read,
+a design whose errors stop it solving, a library of kinds with no parts
+("Nothing to show: this folder is a library of kinds and components, with
+no parts to place"), or a project without parts yet. (AdwStatusPage drew
+nothing in this layout; the page is the window's own.)
+
+Light and dark come from AdwStyleManager's colour scheme only: the old
+GTK 3 `gtk-application-prefer-dark-theme` switch that some desktops write
+into settings.ini is turned off before libadwaita starts, so runs are
+free of its warning.
+
 ## The 3D view's controls
 
 - **View toolbar** (top left, `ViewToolbar`): "Pull apart" is a toggle;
@@ -185,6 +201,18 @@ PDF doesn't exist yet, and the button says so honestly.
   first, then parts) and redraws the toolbar; the toggle stays on at 0
   until it is switched off. The status bar says "Pulled apart · 60%" while
   nothing is selected. Hidden in focus mode and while a problem is posed.
+- **How it comes apart** (Exploded.dc.html): while Pull apart is on and
+  nothing is selected, the inspector lists the moves of
+  `stave_app::apart::steps`, read off the scene's poses at 0, ½ and 1 so
+  the words say what the picture does: stage 1 the assemblies moving out
+  whole ("Drawers slide forward on their slides until they clear the
+  carcass", "Doors come forward off their hinges. Cups go with the door,
+  plates stay on the side"), stage 2 the parts coming out of their
+  joints, per kind of assembly and then the carcass ("Carcass comes
+  apart: back slides out of its rabbet, divider and shelf slide out of
+  their dados, foot[4] drop out of their round tenon joints"). "Save this
+  view as glTF" asks where and writes the view as posed
+  (`apart::save_glb`, the same file `stave export` writes).
 - **Camera buttons** (top right, `CameraToolbar`): fit is `win.frame`
   (the selection, or everything); front looks from the front, a little
   above, framing everything; turn swings the view half way round.
@@ -235,6 +263,11 @@ options, from above, playing) and lays the 3D view's area out by kind
   leg[front_left]"), Tint cut faces and Fade other parts; HOW IT GOES
   TOGETHER with the link to the kind (`std:joinery/socket`, to its line)
   and its `insert:` steps one a line.
+- The side panel shows the kind's doc comment's first paragraph (two
+  sentences at most, `Focus::summary`) with the rest under "More"; member
+  rows are two lines at most (the whole caption is their tooltip), so the
+  rows below them show without scrolling at 1440×900; the panel scrolls
+  when the window is shorter.
 - **Hardware** (Hinge.dc.html): the area becomes a page (`.stave-stage.page`):
   a line saying what the view looks at ("**Looking down** on the hinge,
   through the cabinet top · back ↑ · front ↓", or "In 3D around ..."), the
@@ -259,6 +292,4 @@ options, from above, playing) and lays the 3D view's area out by kind
   `Command::GoToSource`; back and forward already walk through it. "Show
   in text" in a problem's details and the joint kind's link in focus mode
   send `GoToSource` (the kind's link may name a `std/...` file).
-- **Pulled apart panel**: Exploded.dc.html's side panel ("How it comes
-  apart", the staged moves in words) isn't built.
 - **Cut list**: the `cut-list` page is a "Cut list is coming" status page.

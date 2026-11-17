@@ -26,6 +26,8 @@ pub struct FocusPanel {
     eyebrow: gtk::Label,
     heading: gtk::Label,
     description: gtk::Label,
+    more: gtk::Expander,
+    more_text: gtk::Label,
     /// Leaves focus mode.
     pub done: gtk::Button,
     members: gtk::Box,
@@ -130,6 +132,14 @@ impl FocusPanel {
         head.append(&top);
         head.append(&heading);
         head.append(&description);
+        let more_text = label(&["stave-description"]);
+        let more = gtk::Expander::builder()
+            .label("More")
+            .child(&more_text)
+            .css_classes(["stave-more"])
+            .visible(false)
+            .build();
+        head.append(&more);
 
         let members = card();
         let rows = card();
@@ -187,6 +197,8 @@ impl FocusPanel {
             eyebrow,
             heading,
             description,
+            more,
+            more_text,
             done,
             members,
             rows,
@@ -231,15 +243,21 @@ impl FocusPanel {
         self.eyebrow
             .set_label(if joint { "JOINT" } else { "HARDWARE" });
         self.heading.set_label(&focus.heading);
-        self.description
-            .set_label(focus.description.as_deref().unwrap_or(&focus.title));
+        // The first paragraph (two sentences at most), the rest under More.
+        let full = focus.description.as_deref().unwrap_or(&focus.title);
+        let summary = focus.summary.as_deref().unwrap_or(full);
+        self.description.set_label(summary);
         self.description.set_tooltip_text(Some(&focus.title));
+        let rest = full.strip_prefix(summary).unwrap_or(full).trim();
+        self.more_text.set_label(rest);
+        self.more.set_expanded(false);
+        self.more.set_visible(!rest.is_empty() && summary != full);
 
         // A hardware kind's members, numbered as on the drawing.
         for member in &focus.members {
             let line = gtk::Box::builder()
                 .spacing(10)
-                .css_classes(["stave-card-row"])
+                .css_classes(["stave-card-row", "compact"])
                 .build();
             let number = gtk::Label::builder()
                 .label(member.number.to_string())
@@ -263,6 +281,9 @@ impl FocusPanel {
                 .hexpand(true)
                 .wrap(true)
                 .wrap_mode(gtk::pango::WrapMode::WordChar)
+                .lines(2)
+                .ellipsize(gtk::pango::EllipsizeMode::End)
+                .tooltip_text(&member.caption)
                 .build();
             line.append(&text);
             self.members.append(&line);

@@ -260,3 +260,76 @@ impl PlanSwitch {
         }
     }
 }
+
+/// What the 3D view's area shows when there is nothing to draw (still
+/// checking, a library folder, a design that doesn't solve): an icon, a
+/// title, what it means, and "Open a Project…" where that helps. Never a
+/// blank area.
+pub struct EmptyView {
+    /// The page, on the stage colour.
+    pub root: gtk::Box,
+    title: gtk::Label,
+    description: gtk::Label,
+    /// Opens another project folder (`win.open`).
+    pub open: gtk::Button,
+}
+
+impl EmptyView {
+    /// The page, saying "Checking…".
+    pub fn new() -> EmptyView {
+        let icon = PathIcon::new(icons::PARTS, 48);
+        icon.add_css_class("stave-empty-icon");
+        let title = gtk::Label::builder()
+            .label("Checking…")
+            .wrap(true)
+            .justify(gtk::Justification::Center)
+            .css_classes(["stave-empty-title"])
+            .build();
+        let description = gtk::Label::builder()
+            .wrap(true)
+            .justify(gtk::Justification::Center)
+            .max_width_chars(48)
+            .css_classes(["stave-empty-description"])
+            .visible(false)
+            .build();
+        let open = gtk::Button::builder()
+            .label("Open a Project…")
+            .action_name("win.open")
+            .halign(gtk::Align::Center)
+            .css_classes(["pill", "suggested-action"])
+            .visible(false)
+            .build();
+        let column = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .spacing(12)
+            .valign(gtk::Align::Center)
+            .halign(gtk::Align::Center)
+            .vexpand(true)
+            .margin_start(24)
+            .margin_end(24)
+            .build();
+        column.append(&icon);
+        column.append(&title);
+        column.append(&description);
+        column.append(&open);
+        let root = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .css_classes(["stave-stage", "stave-empty"])
+            .build();
+        root.append(&column);
+        EmptyView {
+            root,
+            title,
+            description,
+            open,
+        }
+    }
+
+    /// Says why there is nothing to draw.
+    pub fn show(&self, title: &str, description: &str, offers_open: bool) {
+        self.title.set_label(title);
+        self.description.set_label(description);
+        self.description.set_visible(!description.is_empty());
+        self.open.set_visible(offers_open);
+    }
+}

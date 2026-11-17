@@ -239,6 +239,10 @@ pub struct Focus {
     /// The kind's doc comment: its first sentence for a joint, all of it
     /// for hardware.
     pub description: Option<String>,
+    /// What the panel shows before "More": the doc comment's first
+    /// paragraph, at most two sentences. The same as `description` when
+    /// that is short.
+    pub summary: Option<String>,
     /// Labelled values: Goes in, Receives it, the cuts, Fit; or Opens to,
     /// Closest to, Swing check.
     pub rows: Vec<Row>,
@@ -289,6 +293,33 @@ pub struct Frame {
 fn first_sentence(text: &str) -> String {
     let end = text.find(". ").map_or(text.len(), |index| index + 1);
     text.get(..end).unwrap_or(text).trim().to_owned()
+}
+
+/// A kind's doc comment's first paragraph, at most two sentences.
+fn summary_text(kind: &KindDef) -> Option<String> {
+    let paragraph: Vec<&str> = kind
+        .decl
+        .docs
+        .iter()
+        .map(|line| line.trim())
+        .skip_while(|line| line.is_empty())
+        .take_while(|line| !line.is_empty())
+        .collect();
+    let text = paragraph.join(" ");
+    let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if text.is_empty() {
+        return None;
+    }
+    let mut end = text.len();
+    let mut found = 0;
+    for (index, _) in text.match_indices(". ") {
+        found += 1;
+        if found == 2 {
+            end = index + 1;
+            break;
+        }
+    }
+    Some(text.get(..end).unwrap_or(&text).trim().to_owned())
 }
 
 /// A kind's doc comments as one paragraph.
@@ -576,6 +607,7 @@ fn joint_focus(
         context: format!("{} · Joint focus · {title}", design.project.title),
         title,
         heading,
+        summary: description.clone(),
         description,
         rows,
         insert,
@@ -914,6 +946,7 @@ fn hardware_focus(
         title,
         heading: heading.to_owned(),
         description: kind.and_then(doc_text),
+        summary: kind.and_then(summary_text),
         rows,
         insert: None,
         receives: None,

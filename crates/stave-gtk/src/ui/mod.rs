@@ -40,7 +40,7 @@ use stave_app::check::{self, Checked, Watcher};
 use stave_app::focus::{self, Focus, Target};
 use stave_app::inspect;
 use stave_app::session::{
-    Build, Command, Event, Explode, ProblemIndex, Selection, Session, Sidebar, Tone, Verdict, View,
+    Build, Command, Event, Explode, ProblemIndex, Selection, Session, Sidebar, Tone, View,
 };
 use stave_app::view::{self, Highlight};
 use stave_model::solved::AssemblyId;
@@ -158,6 +158,17 @@ pub fn run(options: Options) -> Result<()> {
     if !folder.is_dir() {
         bail!("'{}' is not a folder", folder.display());
     }
+    gtk::init().context("can't start GTK (is there a display?)")?;
+    // Some desktops (KDE among them) write the old GTK 3 dark-theme switch
+    // into settings.ini; libadwaita warns about it and ignores it. Light
+    // and dark come from AdwStyleManager's colour scheme alone (the style
+    // menu, or the system's preference through the settings portal), so
+    // the old switch is turned off before libadwaita starts.
+    if let Some(settings) = gtk::Settings::default()
+        && settings.is_gtk_application_prefer_dark_theme()
+    {
+        settings.set_gtk_application_prefer_dark_theme(false);
+    }
     adw::init().context("can't start GTK (is there a display?)")?;
     let application = adw::Application::builder()
         .application_id("org.stave.Viewer")
@@ -274,7 +285,7 @@ struct Widgets {
     problems: ProblemsSidebar,
     inspector: Inspector,
     view_stack: gtk::Stack,
-    status_page: adw::StatusPage,
+    empty: view_tools::EmptyView,
     viewport: Viewport,
     motion: MotionBar,
     stage: gtk::Box,
@@ -447,26 +458,12 @@ impl Window {
         };
         let widgets = &self.widgets;
         widgets.problems.show(latest.clone());
-        let Some(shown) = shown.filter(|c| c.drawable().is_some()) else {
-            // Nothing solved yet: say why.
-            let (title, description) = match latest.as_ref() {
-                Some(latest) if latest.summary.errors > 0 => (
-                    "Nothing to show yet",
-                    format!(
-                        "The design has {}. The status pill lists them.",
-                        plural(latest.summary.errors, "error", "errors")
-                    ),
-                ),
-                Some(_) => (
-                    "Nothing to show",
-                    "This folder is a library: it has nothing to place.".to_owned(),
-                ),
-                None => match self.session.borrow().check_status().verdict() {
-                    Some(Verdict::CantOpen(message)) => ("Can't open the folder", message.clone()),
-                    _ => ("Checking…", String::new()),
-                },
-            };
-            self.show_status(title, &description);
+        let empty = stave_app::empty::of(&self.session.borrow());
+        if let Some(empty) = empty {
+            self.show_empty(&empty.title, &empty.description, empty.offers_open);
+            return;
+        }
+        let Some(shown) = shown else {
             return;
         };
         if showing_older {
@@ -676,6 +673,9 @@ impl Window {
         }
         match &problem {
             Some((_, details)) => widgets.inspector.show_problem(details),
+            None if inspection.is_none() && selection.is_none() && self.pulled_apart() => {
+                self.show_apart_panel();
+            }
             None => widgets.inspector.show(inspection.as_ref()),
         }
         // Pose a problem where it happens, or offer to open the selection.
@@ -1310,10 +1310,12 @@ impl Window {
     /// The 3D view's area behind its cards takes the stage colour, so a
     /// page laid out around the view (hardware focus) matches it.
     fn show_backdrop(&self, dark: bool) {
-        if dark {
-            self.widgets.stage.add_css_class("dark");
-        } else {
-            self.widgets.stage.remove_css_class("dark");
+        for page in [&self.widgets.stage, &self.widgets.empty.root] {
+            if dark {
+                page.add_css_class("dark");
+            } else {
+                page.remove_css_class("dark");
+            }
         }
     }
 
@@ -1413,6 +1415,75 @@ impl Window {
         });
     }
 
+    /// Whether "Pull apart" is on.
+    fn pulled_apart(&self) -> bool {
+        self.state.borrow().pull_apart || self.session.borrow().explode().get() > 0.0
+    }
+
+    /// The inspector's "How it comes apart", read off the scene's exploded
+    /// poses.
+    fn show_apart_panel(&self) {
+        let steps = {
+            let session = self.session.borrow();
+            match (session.drawable(), session.scene_entry()) {
+                (Some((design, graph)), Some(entry)) => {
+                    stave_app::apart::steps(design, graph, entry)
+                }
+                _ => Vec::new(),
+            }
+        };
+        self.widgets.inspector.show_apart(&steps);
+    }
+
+    /// Saves the view as posed as a glTF file, asking where.
+    fn export_view(self: &Rc<Self>) {
+        let name = {
+            let session = self.session.borrow();
+            let title = session
+                .drawable()
+                .map_or_else(|| "design".to_owned(), |(d, _)| d.project.title.clone());
+            let slug: String = title
+                .to_lowercase()
+                .chars()
+                .map(|c| if c.is_alphanumeric() { c } else { '_' })
+                .collect();
+            format!("{slug}_apart.glb")
+        };
+        let dialog = gtk::FileDialog::builder()
+            .title("Save this view as glTF")
+            .initial_name(name)
+            .modal(true)
+            .build();
+        let window = self.clone();
+        dialog.save(
+            Some(&self.widgets.window),
+            gio::Cancellable::NONE,
+            move |result| {
+                let Ok(file) = result else { return };
+                let Some(path) = file.path() else { return };
+                let saved = {
+                    let session = window.session.borrow();
+                    let state = window.state.borrow();
+                    match (session.drawable(), state.posed.as_ref()) {
+                        (Some((_, graph)), Some(posed)) => {
+                            stave_app::apart::save_glb(graph, posed, &path)
+                                .map_err(|error| error.to_string())
+                        }
+                        _ => Err("there is nothing to save yet".to_owned()),
+                    }
+                };
+                let title = match saved {
+                    Ok(()) => format!("Saved {}", path.display()),
+                    Err(error) => format!("Couldn't save the view: {error}"),
+                };
+                window
+                    .widgets
+                    .toasts
+                    .add_toast(adw::Toast::builder().title(title).timeout(4).build());
+            },
+        );
+    }
+
     fn explode_changed(self: &Rc<Self>) {
         self.show_view_toolbar();
         let explode = self.session.borrow().explode().get();
@@ -1426,6 +1497,11 @@ impl Window {
             } else {
                 String::new()
             });
+            if self.pulled_apart() {
+                self.show_apart_panel();
+            } else {
+                self.widgets.inspector.show(None);
+            }
         }
         self.repose();
         self.request_render();
@@ -1622,8 +1698,12 @@ impl Window {
     }
 
     fn show_status(&self, title: &str, description: &str) {
-        self.widgets.status_page.set_title(title);
-        self.widgets.status_page.set_description(Some(description));
+        self.show_empty(title, description, false);
+    }
+
+    /// Shows the 3D view's empty state instead of the view.
+    fn show_empty(&self, title: &str, description: &str, offers_open: bool) {
+        self.widgets.empty.show(title, description, offers_open);
         self.widgets.view_stack.set_visible_child_name("status");
         self.capture_if_asked();
     }
@@ -1910,6 +1990,12 @@ impl Window {
         widgets.inspector.connect_focus(move |target| {
             if let Some(window) = window.upgrade() {
                 window.dispatch(Command::Focus(target));
+            }
+        });
+        let window = Rc::downgrade(self);
+        widgets.inspector.connect_export(move || {
+            if let Some(window) = window.upgrade() {
+                window.export_view();
             }
         });
         let window = Rc::downgrade(self);
@@ -2271,10 +2357,6 @@ fn settle_for_screenshot() {
     }
 }
 
-fn plural(count: usize, one: &str, many: &str) -> String {
-    format!("{count} {}", if count == 1 { one } else { many })
-}
-
 fn main_menu() -> gio::Menu {
     let menu = gio::Menu::new();
     let project = gio::Menu::new();
@@ -2347,13 +2429,10 @@ fn build_widgets(application: &adw::Application, options: &Options) -> Widgets {
     stage.append(&figure);
     stage.append(&pictures.root);
     stage.append(&swing_card.root);
-    let status_page = adw::StatusPage::builder()
-        .title("Checking…")
-        .css_classes(["stave-viewport"])
-        .build();
+    let empty = view_tools::EmptyView::new();
     let view_stack = gtk::Stack::new();
     view_stack.add_named(&stage, Some("view"));
-    view_stack.add_named(&status_page, Some("status"));
+    view_stack.add_named(&empty.root, Some("status"));
     view_stack.set_visible_child_name("status");
 
     let inspector = Inspector::new();
@@ -2466,7 +2545,7 @@ fn build_widgets(application: &adw::Application, options: &Options) -> Widgets {
         problems,
         inspector,
         view_stack,
-        status_page,
+        empty,
         viewport,
         motion,
         stage,

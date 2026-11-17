@@ -120,8 +120,11 @@ the system or the main menu, the 3D backdrop with them.
   whole (drawers forward, doors off their hinges), the second pulls parts
   apart along the reverse of their joints' last insert step. The 3D
   view's toolbar has "Pull apart": on, it grows a play button and a
-  "together … apart" slider. The camera buttons fit the view, look at
-  the front and turn to the back.
+  "together … apart" slider, and the inspector says how it comes apart,
+  stage by stage, read off the exploded poses, with "Save this view as
+  glTF". The camera buttons fit the view, look at the front and turn to
+  the back. A library folder, or a design that doesn't solve, says so in
+  the view instead of leaving it blank.
 - **Cup hinges** are drawn as their mechanism: the steel cup with its
   rim and boss pins in the door, the plate, arm and arm pins on the side,
   and the two links, which turn about their arm pins as the door opens.
@@ -222,9 +225,8 @@ through the window itself is not automated.
 ## Not done yet
 
 - **Window**: the Files view (the editor) and the Cut list view are
-  placeholders with their slots ready (`docs/gui.md`). The Pulled apart
-  side panel ("How it comes apart", Exploded.dc.html) isn't built; a
-  problem's ways to fix it are its help line split at "or", and "Show in
+  placeholders with their slots ready (`docs/gui.md`). A problem's ways
+  to fix it are its help line split at "or", and "Show in
   text" goes to the problem's own line, not to each fix's.
 - **Build plan and cut list**: `stave build`, the work plan (recipes,
   order of operations, tool settings), the PDF and the CSV cut list

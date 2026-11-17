@@ -67,6 +67,8 @@ button.stave-build { min-width: 36px; min-height: 34px; padding: 0; border-radiu
 .stave-placeholder { font-size: 13px; }
 
 .stave-stage.page { padding: 16px; border-spacing: 14px; }
+.stave-empty-title { font-size: 20px; font-weight: 700; }
+.stave-empty-description { font-size: 14px; }
 .stave-stage.page .stave-figure { border-radius: 14px; }
 .stave-toolbar { padding: 4px; border-radius: 12px; border-spacing: 4px; }
 .stave-toolbar button.stave-tool { min-height: 32px; padding: 0 12px; border-radius: 8px; font-size: 13px; font-weight: 600; }
@@ -120,6 +122,10 @@ button.stave-problem-row.depth2 { margin-left: 44px; }
 .stave-code.stave-diagnostic { padding: 14px; font-size: 11.5px; }
 .stave-number { min-width: 22px; min-height: 22px; border-radius: 11px; font-size: 12px; font-weight: 700; }
 .stave-card > .stave-card-row.stave-toggle-row { padding: 10px 14px; }
+.stave-card > .stave-card-row.compact { padding: 8px 14px; }
+.stave-card > .stave-card-row.compact .stave-number { min-width: 20px; min-height: 20px; border-radius: 10px; font-size: 11px; }
+expander.stave-more title { font-size: 13px; font-weight: 600; }
+expander.stave-more title > arrow { min-width: 12px; min-height: 12px; }
 "#;
 
 /// The colours, from libadwaita's named colours, so the light and dark
@@ -163,6 +169,9 @@ button.stave-build.building:disabled { background: alpha(@accent_bg_color, 0.45)
 
 .stave-stage { background: #e8e5df; }
 .stave-stage.dark { background: #242428; }
+.stave-empty { color: #3d3846; }
+.stave-empty.dark { color: alpha(white, 0.9); }
+.stave-empty-icon, .stave-empty-description { opacity: 0.75; }
 .stave-toolbar, .stave-plan-switch { background: alpha(@view_bg_color, 0.92); color: @view_fg_color; box-shadow: 0 1px 6px alpha(black, 0.1); }
 .stave-camera { background: alpha(@view_bg_color, 0.88); color: @view_fg_color; }
 .stave-toolbar button.stave-tool, .stave-plan-switch button { background: transparent; color: inherit; }
@@ -202,6 +211,7 @@ button.stave-problem-row.selected { background: @view_bg_color; color: @view_fg_
 .stave-eyebrow.stave-problem-eyebrow.error { color: @error_color; }
 .stave-eyebrow.stave-problem-eyebrow.warning { color: @warning_color; }
 .stave-number { background: alpha(@accent_bg_color, 0.2); color: @accent_color; }
+.stave-number.second { background: alpha(currentColor, 0.1); color: alpha(currentColor, 0.85); }
 .stave-card .stave-value.good { color: @success_color; }
 .stave-card .stave-value.bad { color: @error_color; }
 "#;
