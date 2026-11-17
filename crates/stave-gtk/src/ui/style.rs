@@ -84,7 +84,6 @@ button.stave-tab.active { font-weight: 600; }
 .stave-crumbs { min-height: 30px; padding: 0 16px; font-size: 12px; }
 .stave-crumb.current { font-weight: 600; }
 textview.stave-editor { font-family: "JetBrains Mono", "Adwaita Mono", monospace; font-size: 13px; }
-.stave-gutter { font-family: "JetBrains Mono", "Adwaita Mono", monospace; font-size: 13px; }
 .stave-editor-footer { min-height: 28px; padding: 0 16px; font-size: 12px; }
 .stave-lens { font-family: "Adwaita Sans", "Inter", sans-serif; font-size: 11.5px; border-spacing: 2px; }
 button.stave-lens-link { min-height: 0; min-width: 0; padding: 0 2px; font-weight: normal; border-radius: 4px; }
@@ -227,7 +226,6 @@ button.stave-tab.active { background: @view_bg_color; color: @view_fg_color; box
 .stave-mode { background: alpha(currentColor, 0.08); }
 .stave-crumbs { color: alpha(currentColor, 0.7); box-shadow: inset 0 -1px alpha(currentColor, 0.07); }
 .stave-crumb.current { color: @view_fg_color; }
-textview.stave-editor, textview.stave-editor > text, .stave-gutter { background: @view_bg_color; color: @view_fg_color; }
 .stave-editor-footer { color: alpha(currentColor, 0.7); box-shadow: inset 0 1px alpha(currentColor, 0.07); }
 .stave-lens { color: alpha(currentColor, 0.7); }
 button.stave-lens-link { color: @accent_color; background: none; }
