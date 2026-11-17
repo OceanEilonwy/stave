@@ -264,54 +264,61 @@ impl Inspector {
         });
         heading.append(&link);
         section.append(&heading);
-        let mut markup = String::new();
-        for (index, line) in source.lines.iter().enumerate() {
-            if index > 0 {
-                markup.push('\n');
-            }
-            for token in line {
-                let text = gtk::glib::markup_escape_text(&token.text);
-                let colour = match token.class {
-                    TokenClass::Plain => None,
-                    TokenClass::Keyword => Some(CODE.keyword),
-                    TokenClass::Type | TokenClass::Function => Some(CODE.name),
-                    TokenClass::Number => Some(CODE.number),
-                    TokenClass::Text => Some(CODE.text),
-                    TokenClass::Comment => Some(CODE.comment),
-                };
-                match colour {
-                    Some(colour) => {
-                        markup.push_str(&format!("<span foreground=\"{colour}\">{text}</span>"));
-                    }
-                    None => markup.push_str(&text),
-                }
-            }
-        }
-        if source.cut_short {
-            markup.push_str("\n…");
-        }
-        let code = gtk::Label::builder()
-            .use_markup(true)
-            .label(&markup)
-            .xalign(0.0)
-            .build();
-        let attributes = gtk::pango::AttrList::new();
-        attributes.insert(gtk::pango::AttrFloat::new_line_height(1.6));
-        code.set_attributes(Some(&attributes));
-        let frame = gtk::ScrolledWindow::builder()
-            .vscrollbar_policy(gtk::PolicyType::Never)
-            .hscrollbar_policy(gtk::PolicyType::External)
-            .propagate_natural_height(true)
-            .child(&code)
+        // One label per line, each ending in "…" where it doesn't fit, so
+        // no letter is ever cut in half.
+        let code = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .spacing(4)
             .css_classes(["stave-code"])
             .build();
-        section.append(&frame);
+        let mut lines: Vec<String> = source.lines.iter().map(|line| line_markup(line)).collect();
+        if source.cut_short {
+            lines.push("…".to_owned());
+        }
+        for markup in lines {
+            code.append(
+                &gtk::Label::builder()
+                    .use_markup(true)
+                    .label(if markup.is_empty() {
+                        " "
+                    } else {
+                        markup.as_str()
+                    })
+                    .xalign(0.0)
+                    .ellipsize(gtk::pango::EllipsizeMode::End)
+                    .build(),
+            );
+        }
+        section.append(&code);
         section.append(&label(
             "The text is the source of truth. Positions are worked out from these relationships; none are stored.",
             &["stave-footnote"],
         ));
         section
     }
+}
+
+/// One line of a snippet as Pango markup, coloured by token.
+fn line_markup(line: &[stave_app::inspect::Token]) -> String {
+    let mut markup = String::new();
+    for token in line {
+        let text = gtk::glib::markup_escape_text(&token.text);
+        let colour = match token.class {
+            TokenClass::Plain => None,
+            TokenClass::Keyword => Some(CODE.keyword),
+            TokenClass::Type | TokenClass::Function => Some(CODE.name),
+            TokenClass::Number => Some(CODE.number),
+            TokenClass::Text => Some(CODE.text),
+            TokenClass::Comment => Some(CODE.comment),
+        };
+        match colour {
+            Some(colour) => {
+                markup.push_str(&format!("<span foreground=\"{colour}\">{text}</span>"));
+            }
+            None => markup.push_str(&text),
+        }
+    }
+    markup
 }
 
 /// A rounded card holding rows.

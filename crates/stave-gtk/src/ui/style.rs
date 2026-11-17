@@ -67,90 +67,44 @@ button.stave-build { min-width: 36px; min-height: 34px; padding: 0; border-radiu
 .stave-placeholder { font-size: 13px; }
 "#;
 
-/// The light colours (Main.dc.html).
-const LIGHT: &str = r#"
-window.stave-window { background: #fafafb; color: #222226; }
-.stave-header { background: #ffffff; box-shadow: inset 0 -1px #dededf; color: #222226; }
-.stave-header button.stave-icon-button:disabled { color: #9a9996; }
-.stave-header button.stave-sidebar-toggle:checked { background: #ececee; }
-.stave-title .subtitle { color: #5e5c64; }
-.stave-switcher { background: #ececee; }
-.stave-switcher > toggle { color: #3d3846; background: transparent; }
-.stave-switcher > toggle:checked { background: #ffffff; color: #222226; box-shadow: 0 1px 2px rgba(0,0,0,0.12); }
-menubutton.stave-scene > button { background: #ececee; color: #222226; }
-menubutton.stave-scene .dim { color: #5e5c64; }
-button.stave-pill.clean { background: #e0f2e8; color: #145c3a; }
-button.stave-pill.warnings { background: #fdf0d5; color: #8a5100; }
-button.stave-pill.errors { background: #fbe3e4; color: #a51d2d; }
-button.stave-pill.unknown { background: #ececee; color: #5e5c64; }
-button.stave-build { background: #1c71d8; color: #ffffff; }
-button.stave-build:hover { background: #1a65c2; }
-button.stave-build:disabled { background: #ececee; color: #77767b; }
-button.stave-build.building:disabled { background: #a7c6ef; color: #ffffff; }
+/// The colours, from libadwaita's named colours, so the light and dark
+/// styles (Main.dc.html, MainDark.dc.html) both come from this one sheet
+/// and follow the style manager the moment it changes. Only the code
+/// block is dark in both styles, as the design has it.
+const COLOURS: &str = r#"
+.stave-header { background: @headerbar_bg_color; color: @headerbar_fg_color; box-shadow: inset 0 -1px @headerbar_shade_color; }
+.stave-header button.stave-icon-button:disabled { color: alpha(currentColor, 0.45); }
+.stave-header button.stave-sidebar-toggle:checked { background: alpha(currentColor, 0.1); }
+.stave-title .subtitle, .dim { color: alpha(currentColor, 0.7); }
+menubutton.stave-scene > button { background: alpha(currentColor, 0.08); }
+menubutton.stave-scene > button:hover { background: alpha(currentColor, 0.12); }
+button.stave-pill.clean { background: alpha(@success_color, 0.15); color: @success_color; }
+button.stave-pill.warnings { background: alpha(@warning_color, 0.18); color: @warning_color; }
+button.stave-pill.errors { background: alpha(@error_color, 0.14); color: @error_color; }
+button.stave-pill.unknown { background: alpha(currentColor, 0.08); color: alpha(currentColor, 0.7); }
+button.stave-build { background: @accent_bg_color; color: @accent_fg_color; }
+button.stave-build:hover { background: mix(@accent_bg_color, @accent_fg_color, 0.1); }
+button.stave-build:disabled { background: alpha(currentColor, 0.08); color: alpha(@headerbar_fg_color, 0.45); }
+button.stave-build.building:disabled { background: alpha(@accent_bg_color, 0.45); color: @accent_fg_color; }
 
-.stave-sidebar { background: #ebebed; box-shadow: inset -1px 0 #dededf; }
-.stave-sidebar entry.stave-search { background: #ffffff; color: #222226; }
-.stave-tree > row:hover { background: rgba(0,0,0,0.05); }
-.stave-tree > row:selected { background: #1c71d8; color: #ffffff; }
-.stave-tree > row:selected .stave-detail { color: rgba(255,255,255,0.9); }
-.stave-tree .stave-detail, .stave-tree .stave-heading { color: #5e5c64; }
+.stave-sidebar { background: @sidebar_bg_color; color: @sidebar_fg_color; box-shadow: inset -1px 0 @sidebar_shade_color; }
+.stave-sidebar entry.stave-search { background: @view_bg_color; color: @view_fg_color; }
+.stave-tree > row:hover { background: alpha(currentColor, 0.06); }
+.stave-tree > row:selected { background: @accent_bg_color; color: @accent_fg_color; }
+.stave-tree > row:selected .stave-detail { color: alpha(@accent_fg_color, 0.9); }
+.stave-tree .stave-detail, .stave-tree .stave-heading { color: alpha(currentColor, 0.7); }
 
-.stave-viewport { background: #e8e5df; }
-.stave-inspector-panel { background: #fafafb; box-shadow: inset 1px 0 #dededf; }
-.stave-eyebrow, .stave-description, .stave-section, .stave-footnote, .stave-key { color: #5e5c64; }
-.stave-card { background: #ffffff; box-shadow: 0 0 0 1px rgba(0,0,0,0.08); }
-.stave-card > .stave-card-row { border-bottom: 1px solid #ededef; }
-.stave-card > button.stave-card-row { background: transparent; color: #222226; }
-.stave-card > button.stave-card-row:hover { background: rgba(0,0,0,0.04); }
-.stave-link { color: #1c71d8; }
+.stave-inspector-panel { background: @window_bg_color; color: @window_fg_color; box-shadow: inset 1px 0 @headerbar_shade_color; }
+.stave-eyebrow, .stave-description, .stave-section, .stave-footnote, .stave-key { color: alpha(currentColor, 0.7); }
+.stave-card { background: @card_bg_color; color: @card_fg_color; box-shadow: 0 0 0 1px @card_shade_color; }
+.stave-card > .stave-card-row { border-bottom: 1px solid alpha(currentColor, 0.08); }
+.stave-card > button.stave-card-row { background: transparent; color: inherit; }
+.stave-card > button.stave-card-row:hover { background: alpha(currentColor, 0.05); }
+.stave-link { color: @accent_color; }
 .stave-code { background: #1e1e24; color: #e7e5ea; }
 
-.stave-statusbar { background: #ffffff; box-shadow: inset 0 1px #dededf; color: #5e5c64; }
-.stave-floating { background: rgba(255,255,255,0.92); box-shadow: 0 2px 10px rgba(0,0,0,0.12); color: #222226; }
-.stave-floating .stave-key { color: #5e5c64; }
-"#;
-
-/// The dark colours (MainDark.dc.html).
-const DARK: &str = r#"
-window.stave-window { background: #222226; color: #f6f5f4; }
-.stave-header { background: #303034; box-shadow: inset 0 -1px #141416; color: #f6f5f4; }
-.stave-header button.stave-icon-button:disabled { color: #77767b; }
-.stave-header button.stave-sidebar-toggle:checked { background: #3a3a3f; }
-.stave-title .subtitle { color: #c0bfc4; }
-.stave-switcher { background: #3a3a3f; }
-.stave-switcher > toggle { color: #deddda; background: transparent; }
-.stave-switcher > toggle:checked { background: #303034; color: #f6f5f4; box-shadow: 0 1px 2px rgba(0,0,0,0.12); }
-menubutton.stave-scene > button { background: #3a3a3f; color: #f6f5f4; }
-menubutton.stave-scene .dim { color: #c0bfc4; }
-button.stave-pill.clean { background: #1f3a2b; color: #8ff0a4; }
-button.stave-pill.warnings { background: #45361a; color: #ffc96b; }
-button.stave-pill.errors { background: #4a2226; color: #ff8f96; }
-button.stave-pill.unknown { background: #3a3a3f; color: #c0bfc4; }
-button.stave-build { background: #1c71d8; color: #ffffff; }
-button.stave-build:hover { background: #2a7de1; }
-button.stave-build:disabled { background: #3a3a3f; color: #77767b; }
-button.stave-build.building:disabled { background: #2c4f7c; color: #ffffff; }
-
-.stave-sidebar { background: #2a2a2e; box-shadow: inset -1px 0 #141416; }
-.stave-sidebar entry.stave-search { background: #303034; color: #f6f5f4; }
-.stave-tree > row:hover { background: rgba(255,255,255,0.05); }
-.stave-tree > row:selected { background: #1c71d8; color: #ffffff; }
-.stave-tree > row:selected .stave-detail { color: rgba(255,255,255,0.9); }
-.stave-tree .stave-detail, .stave-tree .stave-heading { color: #c0bfc4; }
-
-.stave-viewport { background: #242428; }
-.stave-inspector-panel { background: #222226; box-shadow: inset 1px 0 #141416; }
-.stave-eyebrow, .stave-description, .stave-section, .stave-footnote, .stave-key { color: #c0bfc4; }
-.stave-card { background: #303034; box-shadow: 0 0 0 1px rgba(0,0,0,0.3); }
-.stave-card > .stave-card-row { border-bottom: 1px solid #3d3d42; }
-.stave-card > button.stave-card-row { background: transparent; color: #f6f5f4; }
-.stave-card > button.stave-card-row:hover { background: rgba(255,255,255,0.05); }
-.stave-link { color: #78aeed; }
-.stave-code { background: #2a2a2e; color: #e7e5ea; }
-
-.stave-statusbar { background: #303034; box-shadow: inset 0 1px #141416; color: #c0bfc4; }
-.stave-floating { background: rgba(48,48,52,0.94); box-shadow: 0 2px 10px rgba(0,0,0,0.3); color: #f6f5f4; }
-.stave-floating .stave-key { color: #c0bfc4; }
+.stave-statusbar { background: @headerbar_bg_color; color: alpha(@headerbar_fg_color, 0.7); box-shadow: inset 0 1px @headerbar_shade_color; }
+.stave-floating { background: alpha(@view_bg_color, 0.94); color: @view_fg_color; box-shadow: 0 2px 10px alpha(black, 0.15); }
 "#;
 
 /// The snippet's colours: keyword, type or call, number, string, comment.
@@ -193,29 +147,15 @@ pub fn status_dot(tone: stave_app::session::Tone) -> gdk::RGBA {
     )
 }
 
-/// Installs the window's style for `display`, and keeps the colours in
-/// step with the light or dark style.
+/// Installs the window's style for `display`. Every colour is one of
+/// libadwaita's named colours, so nothing needs swapping when the style
+/// turns light or dark.
 pub fn install(display: &gdk::Display) {
-    let shared = gtk::CssProvider::new();
-    shared.load_from_string(SHARED);
+    let provider = gtk::CssProvider::new();
+    provider.load_from_string(&format!("{SHARED}{COLOURS}"));
     gtk::style_context_add_provider_for_display(
         display,
-        &shared,
-        gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
-    );
-    let colours = gtk::CssProvider::new();
-    let manager = adw::StyleManager::default();
-    let load = {
-        let colours = colours.clone();
-        move |manager: &adw::StyleManager| {
-            colours.load_from_string(if manager.is_dark() { DARK } else { LIGHT });
-        }
-    };
-    load(&manager);
-    manager.connect_dark_notify(load);
-    gtk::style_context_add_provider_for_display(
-        display,
-        &colours,
+        &provider,
         gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
     );
 }

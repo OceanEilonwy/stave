@@ -36,6 +36,15 @@ the problems list), `--scene NAME`, `--explode AMOUNT`, `--size WxH`.
 Screenshot only: `--checking` holds a second check running (the pill's
 spinner), `--building` presses the build button and holds its check.
 
+To check that "Follow system" follows the system, set the preference where
+libadwaita reads it (`ADW_DEBUG_COLOR_SCHEME` stands in for the desktop's
+settings portal, which otherwise answers with this desktop's own choice):
+
+```
+ADW_DEBUG_COLOR_SCHEME=prefer-light tools/window-shot light.png examples/clothing_cabinet --theme system
+ADW_DEBUG_COLOR_SCHEME=prefer-dark  tools/window-shot dark.png  examples/clothing_cabinet --theme system
+```
+
 ## Layers
 
 All behaviour lives in `stave-app`; `stave-gtk` only lays out widgets and
@@ -49,7 +58,7 @@ forwards what people do.
 | `stave-app` | `focus`, `view` | Focus mode, problems as rows, posing at a contact (unchanged). |
 | `stave-gtk` | `ui/mod.rs` | The window: owns the `Session`, dispatches commands, redraws on events, runs checks on a worker thread, and keeps what only the 3D view needs (camera, renderer, focus mode's scrub, the "Open it" slider). |
 | `stave-gtk` | `ui/header.rs`, `tree.rs`, `inspector.rs`, `chrome.rs` | The title bar; the parts sidebar; the inspector; the status bar, motion bar, problems list and placeholder pages. |
-| `stave-gtk` | `ui/icons.rs`, `style.rs` | The design's icons drawn from SVG path data in the text colour; the CSS, light and dark. |
+| `stave-gtk` | `ui/icons.rs`, `style.rs` | The design's icons drawn from SVG path data in the text colour; one stylesheet whose colours are all libadwaita's named colours (`@headerbar_bg_color`, `@sidebar_bg_color`, `@card_bg_color`, `@accent_bg_color`, `@success_color`, ...), so light and dark both come from it and follow the style manager the moment it changes; only the code block is dark in both. |
 
 ## The session contract
 
@@ -147,7 +156,8 @@ PDF doesn't exist yet, and the button says so honestly.
   that sends `Command::GoToSource`.
 - **3D view**: click to select (`Command::Select`), F frames, Escape
   leaves focus or clears the selection. The backdrop follows the style
-  (#e8e5df light, #242428 dark). The floating motion bar opens the
+  (#e8e5df light, #242428 dark, chosen when each frame is drawn and
+  redrawn when the style changes). The floating motion bar opens the
   selection's door or drawer, or swings a selected problem's motion.
 - **Narrow windows**: below 1100 sp the parts sidebar folds away (the
   sidebar button shows it over the view); below 860 sp the inspector
