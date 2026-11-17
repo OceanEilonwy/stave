@@ -1,272 +1,357 @@
-//! The focus panel: one joint or piece of hardware, in words, with its
-//! controls. Everything it shows comes from `stave_app::focus::Focus`;
-//! this module only lays it out.
+//! Focus mode's side panel (JointFocus.dc.html, Hinge.dc.html): for a
+//! joint, its name and description, Goes in / Receives it / the cut / Fit,
+//! the X-ray, Tint cut faces and Fade other parts toggles, and its insert
+//! steps as written with a link to the kind; for hardware, "How a cup
+//! hinge works", its numbered members and Opens to / Closest to the side /
+//! Swing check. Everything it shows comes from `stave_app::focus::Focus`;
+//! this module only lays it out. The step player, the swing slider and the
+//! small pictures are in the 3D view's area (`focus_stage`).
 
 use std::cell::RefCell;
+use std::rc::Rc;
 
 use adw::prelude::*;
-use gtk::gdk;
 use stave_app::focus::Focus;
+use stave_app::session::SourceLocation;
+
+use super::icons::{self, PathIcon};
+use super::style::CODE;
+
+type SourceCallback = Rc<dyn Fn(SourceLocation)>;
 
 /// The focus panel's widgets.
 pub struct FocusPanel {
     /// The panel, ready to put in the side panel.
     pub root: gtk::Box,
-    about: adw::PreferencesGroup,
+    eyebrow: gtk::Label,
+    heading: gtk::Label,
     description: gtk::Label,
-    rows: RefCell<Vec<gtk::Widget>>,
     /// Leaves focus mode.
     pub done: gtk::Button,
-    /// Plays the joint going together, or the door opening.
-    pub play: gtk::ToggleButton,
-    /// Scrubs from 0 to 1: apart to together, or closed to open.
-    pub scrub: gtk::Scale,
-    scrub_label: gtk::Label,
-    step: gtk::Label,
-    status: gtk::Label,
+    members: gtk::Box,
+    rows: gtk::Box,
+    show_section: gtk::Box,
     /// Draws the receiving part see-through.
-    pub xray: adw::SwitchRow,
+    pub xray: gtk::CheckButton,
+    xray_label: gtk::Label,
     /// Tints the faces cuts made.
-    pub tint: adw::SwitchRow,
+    pub tint: gtk::CheckButton,
     /// Fades the other parts.
-    pub fade: adw::SwitchRow,
-    /// Shows the hinge from above, flat, through a section.
-    pub from_above: gtk::ToggleButton,
-    view_row: adw::ActionRow,
-    members: adw::PreferencesGroup,
-    member_rows: RefCell<Vec<gtk::Widget>>,
-    pictures: adw::PreferencesGroup,
-    picture_box: gtk::Box,
-    insert: adw::PreferencesGroup,
-    insert_text: gtk::Label,
-    insert_source: gtk::Label,
+    pub fade: gtk::CheckButton,
+    insert_section: gtk::Box,
+    insert_link: gtk::Button,
+    insert_code: gtk::Label,
+    insert_location: Rc<RefCell<Option<SourceLocation>>>,
+    on_source: Rc<RefCell<Option<SourceCallback>>>,
 }
 
 fn label(classes: &[&str]) -> gtk::Label {
     gtk::Label::builder()
-        .wrap(true)
         .xalign(0.0)
-        .selectable(true)
-        .css_classes(classes.iter().map(|c| (*c).to_owned()).collect::<Vec<_>>())
+        .wrap(true)
+        .wrap_mode(gtk::pango::WrapMode::WordChar)
+        .css_classes(classes.to_vec())
         .build()
 }
 
-fn boxed(child: &impl IsA<gtk::Widget>) -> adw::PreferencesRow {
-    let holder = gtk::Box::new(gtk::Orientation::Vertical, 4);
-    holder.set_margin_top(8);
-    holder.set_margin_bottom(8);
-    holder.set_margin_start(12);
-    holder.set_margin_end(12);
-    holder.append(child);
-    adw::PreferencesRow::builder()
-        .child(&holder)
-        .activatable(false)
+fn card() -> gtk::Box {
+    gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .css_classes(["stave-card"])
+        .overflow(gtk::Overflow::Hidden)
         .build()
+}
+
+fn clear(container: &gtk::Box) {
+    while let Some(child) = container.first_child() {
+        container.remove(&child);
+    }
+}
+
+/// A toggle row: bold title, dim words, a check box at the end.
+fn toggle_row(title: &str, words: &str) -> (gtk::Box, gtk::CheckButton, gtk::Label) {
+    let text = gtk::Label::builder()
+        .use_markup(true)
+        .xalign(0.0)
+        .hexpand(true)
+        .wrap(true)
+        .build();
+    set_toggle_text(&text, title, words);
+    let check = gtk::CheckButton::builder()
+        .active(true)
+        .valign(gtk::Align::Center)
+        .build();
+    check.update_property(&[gtk::accessible::Property::Label(title)]);
+    let row = gtk::Box::builder()
+        .spacing(10)
+        .css_classes(["stave-card-row", "stave-toggle-row"])
+        .build();
+    row.append(&text);
+    row.append(&check);
+    // Clicking anywhere on the row toggles it.
+    let click = gtk::GestureClick::new();
+    let target = check.clone();
+    click.connect_released(move |_, _, _, _| target.set_active(!target.is_active()));
+    text.add_controller(click);
+    (row, check, text)
+}
+
+fn set_toggle_text(text: &gtk::Label, title: &str, words: &str) {
+    let escape = |t: &str| gtk::glib::markup_escape_text(t).to_string();
+    text.set_markup(&if words.is_empty() {
+        format!("<b>{}</b>", escape(title))
+    } else {
+        format!(
+            "<b>{}</b> <span alpha=\"70%\">{}</span>",
+            escape(title),
+            escape(words)
+        )
+    });
 }
 
 impl FocusPanel {
     /// An empty, hidden panel.
     pub fn new() -> FocusPanel {
-        let root = gtk::Box::new(gtk::Orientation::Vertical, 18);
-        root.set_visible(false);
-        let about = adw::PreferencesGroup::builder().title("Focus").build();
+        let eyebrow = label(&["stave-eyebrow", "stave-eyebrow-bold"]);
+        eyebrow.set_hexpand(true);
         let done = gtk::Button::builder()
-            .label("Done")
-            .tooltip_text("Leave focus mode")
+            .child(&PathIcon::new(icons::CLOSE, 12))
+            .tooltip_text("Leave focus mode (Esc)")
+            .css_classes(["flat", "circular", "stave-close"])
             .valign(gtk::Align::Center)
             .build();
-        about.set_header_suffix(Some(&done));
-        let description = label(&[]);
-        about.add(&boxed(&description));
+        done.update_property(&[gtk::accessible::Property::Label("Leave focus mode")]);
+        let top = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        top.append(&eyebrow);
+        top.append(&done);
+        let heading = label(&["stave-inspector-title"]);
+        let description = label(&["stave-description"]);
+        let head = gtk::Box::new(gtk::Orientation::Vertical, 4);
+        head.append(&top);
+        head.append(&heading);
+        head.append(&description);
 
-        let controls = adw::PreferencesGroup::new();
-        let play = gtk::ToggleButton::builder()
-            .icon_name("media-playback-start-symbolic")
-            .tooltip_text("Play")
+        let members = card();
+        let rows = card();
+
+        let (xray_row, xray, xray_label) = toggle_row("X-ray", "see into the part");
+        let (tint_row, tint, _) = toggle_row("Tint cut faces", "holes, mortises, dados");
+        let (fade_row, fade, _) = toggle_row("Fade other parts", "");
+        let toggles = card();
+        toggles.append(&xray_row);
+        toggles.append(&tint_row);
+        toggles.append(&fade_row);
+        let show_title = label(&["stave-section"]);
+        show_title.set_label("SHOW");
+        let show_section = gtk::Box::new(gtk::Orientation::Vertical, 8);
+        show_section.append(&show_title);
+        show_section.append(&toggles);
+
+        let insert_link = gtk::Button::builder()
+            .css_classes(["flat", "stave-link"])
+            .tooltip_text("Show the joint's kind in the text")
             .valign(gtk::Align::Center)
             .build();
-        let scrub = gtk::Scale::with_range(gtk::Orientation::Horizontal, 0.0, 1.0, 0.01);
-        scrub.set_hexpand(true);
-        scrub.set_draw_value(false);
-        let line = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-        line.append(&play);
-        line.append(&scrub);
-        let scrub_label = label(&["dim-label"]);
-        let step = label(&[]);
-        let status = label(&["dim-label"]);
-        let stack = gtk::Box::new(gtk::Orientation::Vertical, 4);
-        stack.append(&scrub_label);
-        stack.append(&line);
-        stack.append(&step);
-        stack.append(&status);
-        controls.add(&boxed(&stack));
+        let insert_head = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        let insert_title = label(&["stave-section"]);
+        insert_title.set_label("HOW IT GOES TOGETHER");
+        insert_title.set_hexpand(true);
+        insert_title.set_wrap(false);
+        insert_title.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        insert_head.append(&insert_title);
+        insert_head.append(&insert_link);
+        let insert_code = gtk::Label::builder()
+            .use_markup(true)
+            .xalign(0.0)
+            .wrap(true)
+            .selectable(true)
+            .css_classes(["stave-code"])
+            .build();
+        let insert_note = label(&["stave-footnote"]);
+        insert_note.set_label("The animation plays the joint’s own insert steps, the same ones the assembly check runs backwards. What you see is what was checked.");
+        let insert_section = gtk::Box::new(gtk::Orientation::Vertical, 8);
+        insert_section.append(&insert_head);
+        insert_section.append(&insert_code);
+        insert_section.append(&insert_note);
 
-        let display = adw::PreferencesGroup::builder().title("Show").build();
-        let switch = |title: &str, subtitle: &str| {
-            adw::SwitchRow::builder()
-                .title(title)
-                .subtitle(subtitle)
-                .active(true)
-                .build()
-        };
-        let xray = switch("X-ray", "see through the part that receives it");
-        let tint = switch("Tint cut faces", "faces a cut made are darker");
-        let fade = switch("Fade other parts", "everything else as a pale ghost");
-        display.add(&xray);
-        display.add(&tint);
-        display.add(&fade);
-        let from_above = gtk::ToggleButton::builder()
-            .label("From above")
-            .tooltip_text("Look straight down, flat, through a cut across it")
-            .valign(gtk::Align::Center)
-            .build();
-        let view_row = adw::ActionRow::builder()
-            .title("View")
-            .subtitle("in 3D, or flat from above")
-            .build();
-        view_row.add_suffix(&from_above);
-        display.add(&view_row);
-
-        let members = adw::PreferencesGroup::builder()
-            .title("Its parts")
-            .visible(false)
-            .build();
-        let pictures = adw::PreferencesGroup::builder()
-            .title("At a glance")
-            .visible(false)
-            .build();
-        let picture_box = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-        picture_box.set_homogeneous(true);
-        pictures.add(&boxed(&picture_box));
-        let insert = adw::PreferencesGroup::builder()
-            .title("How the joint is written")
-            .visible(false)
-            .build();
-        let insert_text = label(&["monospace"]);
-        let insert_source = label(&["dim-label"]);
-        let insert_box = gtk::Box::new(gtk::Orientation::Vertical, 4);
-        insert_box.append(&insert_text);
-        insert_box.append(&insert_source);
-        insert.add(&boxed(&insert_box));
-
-        root.append(&about);
-        root.append(&controls);
+        let root = gtk::Box::new(gtk::Orientation::Vertical, 16);
+        root.set_visible(false);
+        root.append(&head);
         root.append(&members);
-        root.append(&pictures);
-        root.append(&display);
-        root.append(&insert);
-        FocusPanel {
+        root.append(&rows);
+        root.append(&show_section);
+        root.append(&insert_section);
+
+        let panel = FocusPanel {
             root,
-            about,
+            eyebrow,
+            heading,
             description,
-            rows: RefCell::new(Vec::new()),
             done,
-            play,
-            scrub,
-            scrub_label,
-            step,
-            status,
+            members,
+            rows,
+            show_section,
             xray,
+            xray_label,
             tint,
             fade,
-            from_above,
-            view_row,
-            members,
-            member_rows: RefCell::new(Vec::new()),
-            pictures,
-            picture_box,
-            insert,
-            insert_text,
-            insert_source,
-        }
+            insert_section,
+            insert_link,
+            insert_code,
+            insert_location: Rc::new(RefCell::new(None)),
+            on_source: Rc::new(RefCell::new(None)),
+        };
+        let location = panel.insert_location.clone();
+        let callback = panel.on_source.clone();
+        panel.insert_link.connect_clicked(move |_| {
+            let location = location.borrow().clone();
+            let callback = callback.borrow().clone();
+            if let (Some(location), Some(callback)) = (location, callback) {
+                callback(location);
+            }
+        });
+        panel
+    }
+
+    /// Calls `callback` when the link to the joint's kind is clicked.
+    pub fn connect_source(&self, callback: impl Fn(SourceLocation) + 'static) {
+        self.on_source.replace(Some(Rc::new(callback)));
     }
 
     /// Shows a focus, or hides the panel (`None`).
     pub fn show(&self, focus: Option<&Focus>) {
-        for row in self.rows.take() {
-            self.about.remove(&row);
-        }
-        for row in self.member_rows.take() {
-            self.members.remove(&row);
-        }
+        clear(&self.members);
+        clear(&self.rows);
         let Some(focus) = focus else {
             self.root.set_visible(false);
             return;
         };
         self.root.set_visible(true);
-        self.about.set_title(&focus.heading);
-        self.about.set_description(Some(&focus.title));
+        let joint = focus.assembles();
+        self.eyebrow
+            .set_label(if joint { "JOINT" } else { "HARDWARE" });
+        self.heading.set_label(&focus.heading);
         self.description
-            .set_label(focus.description.as_deref().unwrap_or(""));
-        let mut rows = Vec::new();
-        for entry in &focus.rows {
-            let row = adw::ActionRow::builder()
-                .title(entry.label)
-                .subtitle(&entry.value)
-                .use_markup(false)
-                .subtitle_selectable(true)
-                .build();
-            row.add_css_class("property");
-            self.about.add(&row);
-            rows.push(row.upcast());
-        }
-        self.rows.replace(rows);
-        let mut member_rows = Vec::new();
+            .set_label(focus.description.as_deref().unwrap_or(&focus.title));
+        self.description.set_tooltip_text(Some(&focus.title));
+
+        // A hardware kind's members, numbered as on the drawing.
         for member in &focus.members {
-            let row = adw::ActionRow::builder()
-                .title(format!("{}  {}", member.number, member.name))
-                .subtitle(&member.caption)
-                .use_markup(false)
-                .subtitle_lines(0)
+            let line = gtk::Box::builder()
+                .spacing(10)
+                .css_classes(["stave-card-row"])
                 .build();
-            self.members.add(&row);
-            member_rows.push(row.upcast());
+            let number = gtk::Label::builder()
+                .label(member.number.to_string())
+                .css_classes(["stave-number"])
+                .valign(gtk::Align::Start)
+                .build();
+            line.append(&number);
+            let name = member_title(member.name);
+            let text = gtk::Label::builder()
+                .use_markup(true)
+                .label(if member.caption.is_empty() {
+                    format!("<b>{}</b>", gtk::glib::markup_escape_text(&name))
+                } else {
+                    format!(
+                        "<b>{}</b> · {}",
+                        gtk::glib::markup_escape_text(&name),
+                        gtk::glib::markup_escape_text(&member.caption)
+                    )
+                })
+                .xalign(0.0)
+                .hexpand(true)
+                .wrap(true)
+                .wrap_mode(gtk::pango::WrapMode::WordChar)
+                .build();
+            line.append(&text);
+            self.members.append(&line);
         }
         self.members.set_visible(!focus.members.is_empty());
-        self.member_rows.replace(member_rows);
-        self.scrub_label.set_label(if focus.assembles() {
-            "apart → together"
-        } else {
-            "closed → fully open"
-        });
-        self.view_row.set_visible(focus.plan().is_some());
-        self.from_above.set_active(false);
-        match &focus.insert {
-            Some(insert) => {
-                self.insert.set_visible(true);
-                self.insert_text.set_label(&insert.text);
-                self.insert_source
-                    .set_label(&format!("defined in {}", insert.source));
-            }
-            None => self.insert.set_visible(false),
-        }
-    }
 
-    /// Shows where focus mode is: the step and how far from home.
-    pub fn show_frame(&self, step: Option<&str>, status: &str) {
-        self.step.set_visible(step.is_some());
-        self.step.set_label(step.unwrap_or(""));
-        self.status.set_label(status);
-    }
-
-    /// Shows small pictures with their captions.
-    pub fn show_pictures(&self, pictures: Vec<(gdk::Texture, String)>) {
-        while let Some(child) = self.picture_box.first_child() {
-            self.picture_box.remove(&child);
-        }
-        self.pictures.set_visible(!pictures.is_empty());
-        for (texture, caption) in pictures {
-            let cell = gtk::Box::new(gtk::Orientation::Vertical, 2);
-            let picture = gtk::Picture::for_paintable(&texture);
-            picture.set_can_shrink(true);
-            cell.append(&picture);
-            cell.append(
+        // Goes in, Receives it, the cut, Fit; or Opens to, Closest, Swing check.
+        for entry in &focus.rows {
+            let line = gtk::Box::builder()
+                .spacing(12)
+                .css_classes(["stave-card-row"])
+                .build();
+            line.append(
                 &gtk::Label::builder()
-                    .label(caption)
-                    .css_classes(["caption", "dim-label"])
+                    .label(entry.label)
+                    .xalign(0.0)
+                    .valign(gtk::Align::Start)
+                    .css_classes(["stave-key"])
                     .build(),
             );
-            self.picture_box.append(&cell);
+            let value = gtk::Label::builder()
+                .label(&entry.value)
+                .xalign(1.0)
+                .hexpand(true)
+                .wrap(true)
+                .justify(gtk::Justification::Right)
+                .css_classes(["stave-value"])
+                .build();
+            if matches!(entry.label, "Fit" | "Swing check" | "Slide check") {
+                value.add_css_class(
+                    if entry.value.starts_with("touches") || entry.value.starts_with("clear") {
+                        "good"
+                    } else {
+                        "bad"
+                    },
+                );
+            }
+            line.append(&value);
+            self.rows.append(&line);
+        }
+        self.rows.set_visible(!focus.rows.is_empty());
+
+        self.show_section.set_visible(joint);
+        let receives = focus.receives.as_deref().unwrap_or("the part");
+        set_toggle_text(&self.xray_label, "X-ray", &format!("see into {receives}"));
+
+        match &focus.insert {
+            Some(insert) => {
+                self.insert_section.set_visible(true);
+                self.insert_link.set_label(&insert.link);
+                self.insert_link.set_visible(insert.location.is_some());
+                self.insert_location.replace(insert.location.clone());
+                self.insert_code.set_markup(&insert_markup(&insert.steps));
+                self.insert_code
+                    .update_property(&[gtk::accessible::Property::Label(&insert.text)]);
+            }
+            None => self.insert_section.set_visible(false),
         }
     }
+}
+
+/// A member's name for the list: `cabinet_member` → "Cabinet member".
+fn member_title(name: &str) -> String {
+    let spaced = name.replace('_', " ");
+    let mut chars = spaced.chars();
+    chars.next().map_or_else(String::new, |first| {
+        first.to_uppercase().chain(chars).collect()
+    })
+}
+
+/// `insert: [ push(piece, along: length), ]` laid out one step a line, as
+/// `stave fmt` writes it, coloured.
+fn insert_markup(steps: &[String]) -> String {
+    let escape = |t: &str| gtk::glib::markup_escape_text(t).to_string();
+    let mut out = format!("<span foreground=\"{}\">insert</span>: [", CODE.keyword);
+    for step in steps {
+        let (call, rest) = step.split_once('(').unwrap_or((step.as_str(), ""));
+        out.push_str(&format!(
+            "\n  <span foreground=\"{}\">{}</span>{}{},",
+            CODE.name,
+            escape(call),
+            if rest.is_empty() && !step.contains('(') {
+                ""
+            } else {
+                "("
+            },
+            escape(rest)
+        ));
+    }
+    out.push_str("\n]");
+    out
 }

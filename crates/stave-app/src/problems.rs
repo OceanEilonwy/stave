@@ -711,9 +711,10 @@ pub fn details(checked: &Checked, index: ProblemIndex) -> Option<Details> {
         category,
         title,
         explanation,
-        text: render_diagnostic(&checked.opened.sources, diagnostic)
-            .trim_end()
-            .to_owned(),
+        text: relative_paths(
+            render_diagnostic(&checked.opened.sources, diagnostic).trim_end(),
+            &checked.folder,
+        ),
         fixes,
         location,
         motion,
@@ -731,6 +732,14 @@ fn capitalised(text: &str) -> String {
     chars.next().map_or_else(String::new, |first| {
         first.to_uppercase().chain(chars).collect()
     })
+}
+
+/// The rendered text with the project folder's own files named relative
+/// to it (`project.stave:82:10`), as `stave check .` prints them from
+/// inside the folder.
+fn relative_paths(text: &str, folder: &Path) -> String {
+    let prefix = format!("{}/", folder.display());
+    text.replace(&format!(" {prefix}"), " ")
 }
 
 /// A message as a sentence: a capital first letter (unless it starts with

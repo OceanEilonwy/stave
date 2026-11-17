@@ -65,6 +65,61 @@ button.stave-build { min-width: 36px; min-height: 34px; padding: 0; border-radiu
 
 .stave-floating { border-radius: 12px; padding: 8px 14px; font-size: 13px; border-spacing: 12px; }
 .stave-placeholder { font-size: 13px; }
+
+.stave-stage.page { padding: 16px; border-spacing: 14px; }
+.stave-stage.page .stave-figure { border-radius: 14px; }
+.stave-toolbar { padding: 4px; border-radius: 12px; border-spacing: 4px; }
+.stave-toolbar button.stave-tool { min-height: 32px; padding: 0 12px; border-radius: 8px; font-size: 13px; font-weight: 600; }
+.stave-toolbar button.stave-tool box { border-spacing: 6px; }
+.stave-toolbar .stave-tool-separator { min-width: 1px; margin: 6px 0; }
+.stave-toolbar button.stave-tool-play { min-width: 32px; min-height: 32px; padding: 0; }
+.stave-tool-slider { padding: 4px 10px 2px 2px; }
+.stave-tool-end { font-size: 11px; }
+.stave-camera { padding: 4px; border-radius: 10px; }
+.stave-camera button { min-width: 32px; min-height: 32px; padding: 0; border-radius: 7px; }
+.stave-contact-key { padding: 6px 12px; border-radius: 14px; font-size: 12px; font-weight: 600; }
+.stave-plan-switch { padding: 3px; border-radius: 10px; }
+.stave-plan-switch button { min-width: 34px; min-height: 30px; padding: 0; border-radius: 7px; }
+.stave-focus-card { padding: 12px 16px; border-radius: 14px; font-size: 13px; }
+.stave-focus-card.stave-problem-card { padding: 14px 18px 12px 18px; }
+button.stave-play { min-width: 40px; min-height: 40px; padding: 0; }
+.stave-card-dim { font-size: 12px; }
+.stave-card-value { font-family: "JetBrains Mono", "Adwaita Mono", monospace; font-size: 13px; font-weight: 500; }
+.stave-card-blocked { font-size: 12px; font-weight: 600; }
+.stave-card-name { font-size: 13px; font-weight: 600; }
+.stave-focus-caption { font-size: 13px; }
+.stave-focus-caption .stave-card-dim { font-size: 13px; }
+.stave-pictures button.stave-picture { padding: 10px; border-radius: 12px; font-weight: normal; }
+.stave-picture-caption { font-size: 12px; }
+
+.stave-problems-head { padding: 2px 4px; }
+.stave-problems-title { font-size: 15px; font-weight: 700; }
+button.stave-close { min-width: 28px; min-height: 28px; padding: 0; }
+.stave-filters button.stave-filter { min-height: 28px; padding: 0 10px; border-radius: 14px; font-size: 12px; font-weight: 600; }
+.stave-problems-lead { padding: 0 6px; font-size: 12px; }
+.stave-problems-tree { font-size: 13px; }
+.stave-problems-tree .stave-heading { padding: 12px 8px 4px 8px; font-size: 12px; font-weight: 700; letter-spacing: 0.02em; }
+.stave-problems-tree .stave-heading.first { padding-top: 8px; }
+.stave-problem-assembly { padding: 5px 8px; font-weight: 600; }
+.stave-problem-assembly.depth1 { padding-left: 22px; }
+.stave-problem-assembly.depth2 { padding-left: 36px; }
+.stave-problem-assembly .stave-detail { font-size: 12px; font-weight: 500; }
+.stave-problem-part { padding: 5px 8px 5px 20px; }
+.stave-problem-part.depth1 { padding-left: 30px; }
+.stave-problem-part.depth2 { padding-left: 44px; }
+.stave-problem-part .stave-detail { font-size: 12px; }
+button.stave-problem-row { min-height: 28px; padding: 0 8px; margin: 1px 3px 1px 30px; border-radius: 6px; font-size: 12.5px; font-weight: normal; }
+button.stave-problem-row.depth2 { margin-left: 44px; }
+.stave-problems-tree { padding: 0 0 4px 0; }
+.stave-problem-kind { font-weight: 600; }
+.stave-problem-places { font-family: "JetBrains Mono", "Adwaita Mono", monospace; font-size: 11.5px; }
+.stave-badge { min-width: 18px; min-height: 18px; padding: 0 5px; border-radius: 9px; font-size: 11px; font-weight: 700; }
+.stave-problems-about { padding: 12px; border-radius: 10px; font-size: 12px; }
+.stave-eyebrow.stave-eyebrow-bold, .stave-eyebrow.stave-problem-eyebrow { font-weight: 700; letter-spacing: 0.02em; }
+.stave-problem-title { font-size: 19px; }
+.stave-code.stave-diagnostic { padding: 14px; font-size: 11.5px; }
+.stave-number { min-width: 22px; min-height: 22px; border-radius: 11px; font-size: 12px; font-weight: 700; }
+.stave-card > .stave-card-row.stave-toggle-row { padding: 10px 14px; }
 "#;
 
 /// The colours, from libadwaita's named colours, so the light and dark
@@ -105,6 +160,50 @@ button.stave-build.building:disabled { background: alpha(@accent_bg_color, 0.45)
 
 .stave-statusbar { background: @headerbar_bg_color; color: alpha(@headerbar_fg_color, 0.7); box-shadow: inset 0 1px @headerbar_shade_color; }
 .stave-floating { background: alpha(@view_bg_color, 0.94); color: @view_fg_color; box-shadow: 0 2px 10px alpha(black, 0.15); }
+
+.stave-stage { background: #e8e5df; }
+.stave-stage.dark { background: #242428; }
+.stave-toolbar, .stave-plan-switch { background: alpha(@view_bg_color, 0.92); color: @view_fg_color; box-shadow: 0 1px 6px alpha(black, 0.1); }
+.stave-camera { background: alpha(@view_bg_color, 0.88); color: @view_fg_color; }
+.stave-toolbar button.stave-tool, .stave-plan-switch button { background: transparent; color: inherit; }
+.stave-toolbar button.stave-tool:hover, .stave-plan-switch button:hover { background: alpha(currentColor, 0.07); }
+.stave-toolbar button.stave-tool:checked, .stave-plan-switch button:checked { background: alpha(@accent_bg_color, 0.2); color: @accent_color; }
+.stave-toolbar .stave-tool-separator { background: alpha(currentColor, 0.15); }
+.stave-toolbar button.stave-tool-play { color: @accent_color; }
+.stave-slider { color: @accent_bg_color; }
+.stave-tool-end, .stave-card-dim { color: alpha(currentColor, 0.7); }
+.stave-contact-key { background: alpha(@view_bg_color, 0.9); color: @error_color; }
+.stave-focus-card { background: alpha(@view_bg_color, 0.95); color: @view_fg_color; box-shadow: 0 4px 16px alpha(black, 0.12); }
+button.stave-play { background: @accent_bg_color; color: @accent_fg_color; }
+button.stave-play:hover { background: mix(@accent_bg_color, @accent_fg_color, 0.1); }
+.stave-card-value.blocked, .stave-card-blocked { color: @error_color; }
+.stave-focus-caption { color: #3d3846; }
+.stave-stage.dark .stave-focus-caption { color: alpha(white, 0.85); }
+.stave-pictures button.stave-picture { background: alpha(@view_bg_color, 0.45); color: @view_fg_color; }
+.stave-pictures button.stave-picture:hover { background: alpha(@view_bg_color, 0.7); }
+.stave-pictures button.stave-picture.current { background: @view_bg_color; box-shadow: 0 0 0 2px @accent_bg_color; }
+
+.stave-filters button.stave-filter { background: transparent; color: inherit; box-shadow: none; }
+.stave-filters button.stave-filter:hover { background: alpha(currentColor, 0.07); }
+.stave-filters button.stave-filter:checked { background: @view_bg_color; color: @view_fg_color; box-shadow: 0 0 0 1px alpha(black, 0.1); }
+.stave-filters button.stave-filter.errors { color: @error_color; }
+.stave-problems-lead, .stave-problems-tree .stave-detail, .stave-problems-tree .stave-heading { color: alpha(currentColor, 0.7); }
+button.stave-problem-row { background: transparent; color: inherit; }
+button.stave-problem-row:hover { background: alpha(currentColor, 0.06); }
+button.stave-problem-row.selected { background: @view_bg_color; color: @view_fg_color; box-shadow: 0 0 0 2px @accent_bg_color; }
+.stave-problem-icon.error { color: @error_color; }
+.stave-problem-icon.warning { color: @warning_color; }
+.stave-problem-icon.note { color: alpha(currentColor, 0.7); }
+.stave-problem-places { color: @accent_color; }
+.stave-badge.error { background: @error_bg_color; color: @error_fg_color; }
+.stave-badge.warning { background: @warning_bg_color; color: @warning_fg_color; }
+.stave-badge.note { background: alpha(currentColor, 0.15); }
+.stave-problems-about { background: alpha(currentColor, 0.05); color: alpha(currentColor, 0.75); }
+.stave-eyebrow.stave-problem-eyebrow.error { color: @error_color; }
+.stave-eyebrow.stave-problem-eyebrow.warning { color: @warning_color; }
+.stave-number { background: alpha(@accent_bg_color, 0.2); color: @accent_color; }
+.stave-card .stave-value.good { color: @success_color; }
+.stave-card .stave-value.bad { color: @error_color; }
 "#;
 
 /// The snippet's colours: keyword, type or call, number, string, comment.
@@ -117,8 +216,12 @@ pub struct CodeColours {
     pub number: &'static str,
     /// Strings.
     pub text: &'static str,
-    /// Comments.
+    /// Comments, and a diagnostic's arrows and gutter.
     pub comment: &'static str,
+    /// An error's `error[code]` and carets.
+    pub error: &'static str,
+    /// A warning's `warning[code]`.
+    pub warning: &'static str,
 }
 
 /// The snippet's colours on its dark background (both styles).
@@ -127,7 +230,9 @@ pub const CODE: CodeColours = CodeColours {
     name: "#8fd0ff",
     number: "#ffcf80",
     text: "#8ff0a4",
-    comment: "#9a9996",
+    comment: "#8b8a93",
+    error: "#ff7b85",
+    warning: "#ffcf80",
 };
 
 /// The dot in the status bar: green, amber, red or grey.

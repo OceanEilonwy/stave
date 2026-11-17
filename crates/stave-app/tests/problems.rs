@@ -166,14 +166,14 @@ fn a_motion_problem_has_its_details_and_its_card() {
         details.explanation,
         "door.panel hits wall when door is opened past 0.6deg. The hinges open to 110deg."
     );
-    // Exactly what `stave check` prints (the CLI names the file by the
-    // path it was given; the window by the folder's own path).
+    // Exactly what `stave check .` prints from inside the folder.
     assert!(
         details
             .text
             .starts_with("error[motion]: door.panel hits wall when door is opened past 0.6deg\n")
     );
     assert!(details.text.contains("82 | assembly door : Door {"));
+    assert!(details.text.contains("  --> project.stave:82:10\n"));
     assert!(
         details
             .text
