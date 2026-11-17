@@ -120,21 +120,17 @@ fn cut_kind(kind: &CutKind) -> String {
         CutKind::DovetailSocket {
             neck,
             depth: d,
-            angle,
+            slope,
         } => format!(
-            "dovetail socket neck {} depth {} angle {angle}",
+            "dovetail socket neck {} depth {} {slope}",
             mm(*neck),
             mm(*d)
         ),
         CutKind::DovetailTail {
             neck,
             depth: d,
-            angle,
-        } => format!(
-            "dovetail tail neck {} depth {} angle {angle}",
-            mm(*neck),
-            mm(*d)
-        ),
+            slope,
+        } => format!("dovetail tail neck {} depth {} {slope}", mm(*neck), mm(*d)),
         CutKind::Outline {
             marks,
             depth: d,

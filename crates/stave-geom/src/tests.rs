@@ -689,6 +689,17 @@ fn dovetail_pair(
     socket: stave_lang::units::Angle,
     tail: stave_lang::units::Angle,
 ) -> (SolvedDesign, solid::Solid, solid::Solid) {
+    dovetail_pair_sloped(
+        stave_model::solved::Slope::Angle(socket),
+        stave_model::solved::Slope::Angle(tail),
+    )
+}
+
+/// [`dovetail_pair`], with the slopes given either way.
+fn dovetail_pair_sloped(
+    socket: stave_model::solved::Slope,
+    tail: stave_model::solved::Slope,
+) -> (SolvedDesign, solid::Solid, solid::Solid) {
     let orientation = frame(Direction::Right, Direction::Back);
     let mut beam_a = part(orientation, point(0, 0, 0), size(100, 60, 40), Shape::Board);
     let mut beam_b = part(
@@ -708,7 +719,7 @@ fn dovetail_pair(
         kind: CutKind::DovetailSocket {
             neck: mm(20),
             depth: mm(30),
-            angle: socket,
+            slope: socket,
         },
     }];
     beam_b.cuts = vec![Cut {
@@ -718,7 +729,7 @@ fn dovetail_pair(
         kind: CutKind::DovetailTail {
             neck: mm(20),
             depth: mm(30),
-            angle: tail,
+            slope: tail,
         },
     }];
     let mut design = design_of(&beam_a);
@@ -818,4 +829,29 @@ fn a_dovetail_at_90_degrees_is_a_mistake() {
     );
     assert_eq!(socket.misshapen().len(), 1);
     assert_eq!(socket.misshapen()[0].error, solid::ShapeError::TooSteep);
+}
+
+#[test]
+fn a_slope_1_in_8_is_exact() {
+    // 30 deep at 1 in 8: each side spreads exactly 3.75mm, no rounding.
+    let one_in_eight =
+        stave_model::solved::Slope::Ratio(stave_lang::units::Rational::new(1, 8).unwrap());
+    let (design, socket, tail) = dovetail_pair_sloped(one_in_eight, one_in_eight);
+    let prism = &socket.prisms()[0];
+    let mut widths: Vec<i64> = Vec::new();
+    for at in [mm(70), mm(100)] {
+        let mut across: Vec<i64> = prism
+            .outline()
+            .points()
+            .iter()
+            .filter(|p| p.first == at)
+            .map(|p| p.second.nm())
+            .collect();
+        across.sort_unstable();
+        widths.push(across[1] - across[0]);
+    }
+    // Neck 20 at the end (100), 20 + 2 × 3.75 at the bottom (70).
+    assert_eq!(widths, vec![27_500_000, 20_000_000]);
+    let found = collide::overlaps(&world(&design, 0, &socket), &world(&design, 1, &tail));
+    assert_eq!(found, vec![]);
 }

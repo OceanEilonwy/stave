@@ -36,6 +36,7 @@ pub const MICRODEG_PER_DEG: i64 = 1_000_000;
 /// Used for unitless ratios and counts, and inside [`ExactLength`] and
 /// [`ExactAngle`] during evaluation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct Rational {
     numerator: i128,
     denominator: i128,

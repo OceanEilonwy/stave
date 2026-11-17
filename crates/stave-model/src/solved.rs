@@ -73,7 +73,7 @@ use std::fmt;
 use serde::Serialize;
 use stave_lang::ast::{BaseKind, CutOperation};
 use stave_lang::placement::{Axis, Direction, Face, PartAxis};
-use stave_lang::units::{Angle, Length};
+use stave_lang::units::{Angle, Length, Rational};
 use stave_schema::species::Species;
 use stave_schema::words::{Grain, Measure, OutputUnit, StockForm};
 
@@ -650,6 +650,30 @@ pub enum Depth {
     Through,
 }
 
+/// How steeply a dovetail's sides slope away from straight.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Slope {
+    /// `angle: 10deg`: the angle from straight.
+    Angle(Angle),
+    /// `slope: 1 in 8`: across for every one along, exactly (the ratio
+    /// `1/8`, always positive).
+    Ratio(Rational),
+}
+
+impl fmt::Display for Slope {
+    /// `angle 10deg` or `slope 1 in 8` (a ratio's numerator and
+    /// denominator, in lowest terms).
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Slope::Angle(angle) => write!(f, "angle {angle}"),
+            Slope::Ratio(ratio) => {
+                write!(f, "slope {} in {}", ratio.numerator(), ratio.denominator())
+            }
+        }
+    }
+}
+
 /// A point of an `outline`, measured on the face.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct Mark {
@@ -728,8 +752,8 @@ pub enum CutKind {
         neck: Length,
         /// Depth.
         depth: Length,
-        /// Slope.
-        angle: Angle,
+        /// How steeply its sides slope.
+        slope: Slope,
     },
     /// Everything around a dovetail tail.
     DovetailTail {
@@ -737,8 +761,8 @@ pub enum CutKind {
         neck: Length,
         /// Depth.
         depth: Length,
-        /// Slope.
-        angle: Angle,
+        /// How steeply its sides slope.
+        slope: Slope,
     },
     /// A marked-out shape.
     Outline {

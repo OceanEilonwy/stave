@@ -29,7 +29,9 @@
 //! irrational number (a dovetail's offset `depth × tan(angle)`, the
 //! corners of a slot turned by an angle), it is computed once from the
 //! exact angle and length and rounded to the nanometre when the prism is
-//! built, the same rule as a hole's position.
+//! built, the same rule as a hole's position. A dovetail given as a slope
+//! `1 in n` spreads by `depth / n`, exact whenever that is a whole number
+//! of nanometres.
 //!
 //! Simplifications (recorded here, as the plan asks): the `flats` of a
 //! `round` are kept on its rod for drawing but collision tests use the full
@@ -42,7 +44,8 @@ use stave_lang::ast::CutOperation;
 use stave_lang::placement::PartAxis;
 use stave_lang::units::{Angle, Length};
 use stave_model::solved::{
-    Cut, CutKind, CutPlace, Depth, End, LocalBox, LocalFace, Mark, Part, Shape, Size3, SolvedDesign,
+    Cut, CutKind, CutPlace, Depth, End, LocalBox, LocalFace, Mark, Part, Shape, Size3, Slope,
+    SolvedDesign,
 };
 
 pub use crate::prism::{ConvexPolygon, DepthRange, Point2, Polygon, PolygonError, Prism};
@@ -818,13 +821,13 @@ impl Solid {
                     self.blocks.subtract(&block);
                 }
             }
-            CutKind::DovetailSocket { neck, depth, angle } => {
-                let dovetail = Dovetail::of(part, cut, design, *neck, *depth, *angle);
+            CutKind::DovetailSocket { neck, depth, slope } => {
+                let dovetail = Dovetail::of(part, cut, design, *neck, *depth, *slope);
                 let (axis, polygon, range) = dovetail.socket()?;
                 self.add_prism(axis, polygon, range)?;
             }
-            CutKind::DovetailTail { neck, depth, angle } => {
-                let dovetail = Dovetail::of(part, cut, design, *neck, *depth, *angle);
+            CutKind::DovetailTail { neck, depth, slope } => {
+                let dovetail = Dovetail::of(part, cut, design, *neck, *depth, *slope);
                 for (axis, polygon, range) in dovetail.wedges()? {
                     self.add_prism(axis, polygon, range)?;
                 }
@@ -1146,8 +1149,10 @@ struct Dovetail {
     /// The neck's sides on the width axis.
     neck_low: Length,
     neck_high: Length,
-    /// How far each side spreads over the depth: `depth × tan(angle)`,
-    /// rounded to the nanometre; `None` when the angle is too steep.
+    /// How far each side spreads over the depth: `depth × tan(angle)`
+    /// rounded to the nanometre, or `depth × ratio` for a slope `1 in n`
+    /// (exact when it is a whole number of nanometres); `None` when the
+    /// angle is too steep.
     offset: Option<Length>,
     /// The part's size on the width axis and through it.
     width: Length,
@@ -1164,7 +1169,7 @@ impl Dovetail {
         design: &SolvedDesign,
         neck: Length,
         depth: Length,
-        angle: Angle,
+        slope: Slope,
     ) -> Dovetail {
         let depth_axis = cut.face.axis;
         let [first, second] = across(depth_axis);
@@ -1200,7 +1205,17 @@ impl Dovetail {
         };
         let width = size.get(width_axis);
         let neck_low = centred_low(half(width), neck);
-        let spread = render::nm(minus(high, low)) * render::radians_f64(angle).tan();
+        let run = minus(high, low);
+        let offset = match slope {
+            Slope::Angle(angle) => {
+                let spread = render::nm(run) * render::radians_f64(angle).tan();
+                render::length_from_nm(spread).filter(|_| spread.is_finite() && spread >= 0.0)
+            }
+            Slope::Ratio(ratio) => run
+                .to_exact()
+                .checked_mul(ratio)
+                .and_then(|spread| spread.to_nearest_length()),
+        };
         Dovetail {
             depth_axis,
             through,
@@ -1208,7 +1223,7 @@ impl Dovetail {
             inner,
             neck_low,
             neck_high: plus(neck_low, neck),
-            offset: render::length_from_nm(spread).filter(|_| spread.is_finite() && spread >= 0.0),
+            offset,
             width,
             thickness: size.get(through),
         }

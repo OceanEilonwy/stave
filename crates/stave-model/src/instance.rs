@@ -453,7 +453,7 @@ impl Builder {
                     BinaryOp::Add => a.checked_add(b),
                     BinaryOp::Sub => a.checked_sub(b),
                     BinaryOp::Mul => a.checked_mul(b),
-                    BinaryOp::Div => a.checked_div(b),
+                    BinaryOp::Div | BinaryOp::In => a.checked_div(b),
                     _ => None,
                 }
             }

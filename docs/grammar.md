@@ -101,7 +101,7 @@ grammar position only:
 | `roles`, `cut`, `makes`, `member` | at the start of an entry in a `kind` body, when not followed by `:` |
 | `mark`, `cut` | at the start of an entry in a `recipe` body, when not followed by `:` |
 | `same` | as the whole content of an index: `drawer_bay[same]` |
-| `to`, `in` | after the item of a patch's `add`, and in `rename ... to` |
+| `to`, `in` | after the item of a patch's `add`, and in `rename ... to`; `in` also between two numbers, a slope: `1 in 8` |
 | `replace`, `unset`, `rename` | at the start of a patch operation |
 
 ### Quantities
@@ -360,8 +360,9 @@ args          = arg , { "," , arg } , [ "," ] ;
 arg           = [ NAME , ":" ] , expr ;                  (* named when a NAME is directly followed by ":" *)
 list          = "[" , [ expr , { "," , expr } , [ "," ] ] , "]" ;
 
-primary       = QUANTITY | NUMBER | STRING | "true" | "false" | "fit"
+primary       = slope | QUANTITY | NUMBER | STRING | "true" | "false" | "fit"
               | IDENT | list | "(" , expr , ")" ;
+slope         = NUMBER , "in" , NUMBER ;                 (* a Ratio: 1 in 8 is 1/8 *)
 
 (* ---------- Patches (AI and suggestion output) ---------- *)
 patch         = "patch" , STRING , block(patch_op) ;
@@ -1280,8 +1281,8 @@ opposite to the chosen one.
 | `spigot(length:, diameter:)` | end | everything around a centred round tenon |
 | `round(diameter:, flats:, flats_angle:)` | crossing | turns the part round, to `diameter`, over the length where the other part passes (the footprint's extent along this part's length), leaving square sections either side. With `flats:` it keeps two flat faces that distance apart, their normal at `flats_angle` (default `0deg`) from the part's width axis toward its thickness axis |
 | `drill(diameter:, depth:, count:)` | crossing, end, side | `count` round holes (default 1), evenly spaced along the longer side of the footprint or end (equal gaps, including before the first and after the last, as `spaced(evenly)`) and centred across it |
-| `dovetail_socket(neck:, depth:, angle:)` | end | a dovetail socket: `neck` wide at the end, `depth` deep, widening by `depth × tan(angle)` each side to its bottom, cut straight through the part (see "Angled cuts") |
-| `dovetail_tail(neck:, depth:, angle:)` | end | everything around a dovetail tail: over the last `depth` of the part, the wood either side of a tail `neck` wide at its shoulder and wider by `depth × tan(angle)` each side at the end, cut straight through the part |
+| `dovetail_socket(neck:, depth:, angle:, slope:)` | end | a dovetail socket: `neck` wide at the end, `depth` deep, widening by its spread each side to its bottom, cut straight through the part (see "Angled cuts") |
+| `dovetail_tail(neck:, depth:, angle:, slope:)` | end | everything around a dovetail tail: over the last `depth` of the part, the wood either side of a tail `neck` wide at its shoulder and wider by its spread each side at the end, cut straight through the part |
 | `outline(marks: [...], depth:, from_depth:)` | side | the shape marked out with `mark(along:, across:)` points, in order round the shape, cut from `from_depth` (default `0mm`, the face itself) to `depth` below the face. With `from_depth` greater than zero the cut is hidden inside the part: a recess for a hidden stub tenon |
 
 **Angled cuts.** `dovetail_socket`, `dovetail_tail`, `outline` and a `slot`
@@ -1302,24 +1303,31 @@ between two depths. They are cut, drawn and checked like every other cut.
   lie across the entering part's width (along the axis of this part that the
   entering part's width lies along; this part's own width when that one runs
   into the end), and it is cut straight through the part's third axis. It is
-  `neck` wide at the end and `neck + 2 × depth × tan(angle)` wide at its
-  bottom, `depth` in: wider inside than at its mouth, so the tail goes in
-  only along the axis it is cut through.
+  `neck` wide at the end and `neck + 2 × spread` wide at its bottom, `depth`
+  in: wider inside than at its mouth, so the tail goes in only along the
+  axis it is cut through.
 - **`dovetail_tail`**: on the end of the part, centred across its own width
   and cut straight through its third axis. The tail is `neck` wide at its
-  shoulder, `depth` from the end, and widens by `depth × tan(angle)` each
-  side to the end; what is cut away is the wood either side of it. A tail and
-  a socket with the same `neck`, `depth` and `angle` fill each other exactly.
-  Where the tail is wider than the part, the part's own edge is its side.
+  shoulder, `depth` from the end, and widens by the spread each side to the
+  end; what is cut away is the wood either side of it. A tail and a socket
+  with the same `neck`, `depth` and slope fill each other exactly. Where the
+  tail is wider than the part, the part's own edge is its side.
+- **A dovetail's slope** is given one of two ways, never both
+  (`error[type-mismatch]`) and never neither (`error[missing-field]`):
+  `angle: 10deg`, from straight, for a spread of `depth × tan(angle)` each
+  side; or `slope: 1 in 8`, the way dovetail markers are sold, for a spread
+  of `depth / 8`. A slope is a `Ratio` more than 0 (`1 in 8` is `1/8`);
+  `0 in 8` is `error[type-mismatch]`.
 - **A `slot` at an angle**: the rectangle `width` wide through the
   footprint's centre (from it, with `from_centre: true`), turned in the face
   by `angle`, out past the part's edges.
 
-The marks are exact. Where a shape needs a number that is not a whole number
-of nanometres (a dovetail's `depth × tan(angle)`, the corners of a slot
-turned by an angle), it is worked out once from the exact angle and length
-and rounded to the nanometre, like a hole's position. A dovetail's `angle`
-must be less than 90deg (`error[type-mismatch]`).
+The marks are exact, and so is a spread given as a slope. Where a shape needs
+a number that is not a whole number of nanometres (a dovetail's
+`depth × tan(angle)`, a `depth / n` that falls between two nanometres, the
+corners of a slot turned by an angle), it is worked out once from the exact
+values and rounded to the nanometre, like a hole's position. A dovetail's
+`angle` must be less than 90deg (`error[type-mismatch]`).
 
 Turning a part to a profile (`shape: turned(profile)`) is the eleventh operation,
 `turning`. It isn't written in a `cut` block, but recipes are written for it
@@ -1502,8 +1510,8 @@ like `gauge(flats, on: flat_faces)` every word has one meaning:
 | `spigot` | `shoulder`, `waste`, `centre` | `length`, `diameter` |
 | `round` | `shoulders`, `waste`, `centre`, `flat_faces` | `diameter`, `flats`, `length` |
 | `drill` | `centre` | `diameter`, `depth` |
-| `dovetail_socket` | `walls`, `floor`, `waste`, `outline` | `neck`, `depth`, `angle` |
-| `dovetail_tail` | `cheeks`, `shoulders`, `waste`, `outline` | `neck`, `depth`, `angle` |
+| `dovetail_socket` | `walls`, `floor`, `waste`, `outline` | `neck`, `depth`, `angle`, `slope` |
+| `dovetail_tail` | `cheeks`, `shoulders`, `waste`, `outline` | `neck`, `depth`, `angle`, `slope` |
 | `outline` | `outline`, `waste` | `depth` |
 | `turning` | `shape`, `stations`, `blank`, `centre` | `length`, `largest` |
 
@@ -1945,7 +1953,7 @@ The complete list of types. A `param` may name any of them.
 |---|---|
 | `Length` | `19mm`, `3/4in`, `between(a, b)` |
 | `Angle` | `110deg` |
-| `Ratio` | `0.5`, `2 / 3` |
+| `Ratio` | `0.5`, `2 / 3`, `1 in 8` |
 | `Count` | `4` |
 | `Bool` | `true`, `false`, comparisons |
 | `Text` | `"..."` |
