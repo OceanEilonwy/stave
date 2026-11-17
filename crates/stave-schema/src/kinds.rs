@@ -173,6 +173,89 @@ pub const CUP_HINGE_ENTRIES: [&str; 5] = [
 /// The entries only a butt hinge has.
 pub const BUTT_HINGE_ENTRIES: [&str; 1] = ["leaf"];
 
+/// A named piece of a hardware kind, declared with `member name` and a doc
+/// comment (grammar, "Hardware members"). The words are a closed
+/// vocabulary per base: a viewer knows which mesh each one is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum MemberName {
+    /// A cup hinge's steel cup, sunk in the door, with the boss its arm
+    /// and links turn on.
+    Cup,
+    /// A cup hinge's mounting plate, screwed to the cabinet side.
+    Plate,
+    /// A cup hinge's arm, clipped onto the plate.
+    Arm,
+    /// A cup hinge's two links between the arm and the cup's boss.
+    Links,
+    /// A butt hinge's two leaves.
+    Leaves,
+    /// A butt hinge's pin, the line it turns about.
+    Pin,
+    /// A slide's member screwed to the drawer.
+    DrawerMember,
+    /// A slide's member screwed to the cabinet.
+    CabinetMember,
+}
+
+impl MemberName {
+    /// Every member word.
+    pub const ALL: [MemberName; 8] = [
+        MemberName::Cup,
+        MemberName::Plate,
+        MemberName::Arm,
+        MemberName::Links,
+        MemberName::Leaves,
+        MemberName::Pin,
+        MemberName::DrawerMember,
+        MemberName::CabinetMember,
+    ];
+
+    /// The word as written: `cup`, `drawer_member`.
+    pub fn word(self) -> &'static str {
+        match self {
+            MemberName::Cup => "cup",
+            MemberName::Plate => "plate",
+            MemberName::Arm => "arm",
+            MemberName::Links => "links",
+            MemberName::Leaves => "leaves",
+            MemberName::Pin => "pin",
+            MemberName::DrawerMember => "drawer_member",
+            MemberName::CabinetMember => "cabinet_member",
+        }
+    }
+
+    /// The member a word names.
+    pub fn from_word(word: &str) -> Option<MemberName> {
+        MemberName::ALL.into_iter().find(|m| m.word() == word)
+    }
+}
+
+/// The members a cup hinge may declare, in the order a viewer numbers
+/// them: from the cabinet side to the door.
+pub const CUP_HINGE_MEMBERS: [MemberName; 4] = [
+    MemberName::Plate,
+    MemberName::Arm,
+    MemberName::Links,
+    MemberName::Cup,
+];
+
+/// The members a butt hinge may declare.
+pub const BUTT_HINGE_MEMBERS: [MemberName; 2] = [MemberName::Leaves, MemberName::Pin];
+
+/// The members a slide may declare.
+pub const SLIDE_MEMBERS: [MemberName; 2] = [MemberName::CabinetMember, MemberName::DrawerMember];
+
+/// The members a kind of this base may declare; `cup` tells a cup hinge
+/// from a butt hinge. Pulls, fasteners, tools and joints have none.
+pub fn members_of(base: BaseKind, cup: bool) -> &'static [MemberName] {
+    match base {
+        BaseKind::Hinge if cup => &CUP_HINGE_MEMBERS,
+        BaseKind::Hinge => &BUTT_HINGE_MEMBERS,
+        BaseKind::Slide => &SLIDE_MEMBERS,
+        BaseKind::Pull | BaseKind::Fastener | BaseKind::Tool | BaseKind::Joint => &[],
+    }
+}
+
 /// The optional entries of a hinge: a cup hinge's catalogue overlay data,
 /// and the entries every piece of hardware may have.
 const HINGE_OPTIONAL: [FieldSpec; 6] = [

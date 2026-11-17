@@ -1,0 +1,32 @@
+// expect: error[unknown-field] a cup hinge has no member 'cupp'
+stave 1
+
+project "Misnamed member" {
+  units: mm
+}
+
+stock oak_19 { species: white_oak, form: solid, thickness: 19mm }
+
+/// A cup hinge whose last member is misspelt: a cup hinge's members are
+/// plate, arm, links and cup.
+kind small_hinge : hinge {
+  opening_angle: 110deg
+  cup_diameter:  35mm
+  cup_depth:     12.8mm
+  cup_inset:     5mm
+  plate_setback: 37mm
+  plate:         box(length: 50mm, width: 36mm, thickness: 11mm)
+
+  /// The plate, on the side.
+  member plate
+  /// The cup, in the door.
+  member cupp
+}
+
+part base : oak_19 {
+  length: 400mm
+  width:  300mm
+  place {
+    ground
+  }
+}

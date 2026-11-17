@@ -277,6 +277,7 @@ fn knob(orientation: Orientation, origin: Point, envelope: Envelope) -> Hardware
         id: HardwareId::from_usize(0),
         name: "handle".into(),
         kind: "knob".into(),
+        kind_id: stave_model::solved::KindId::from_usize(0),
         base: HardwareBase::Pull,
         assembly: None,
         piece: PartId::from_usize(0),

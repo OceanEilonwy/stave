@@ -341,6 +341,7 @@ and `broken/<folder>` for a design in `tests/broken/`.
 | A cup hinge's overlay is `base_overlay + cup_inset - plate_height`, give or take `overlay_adjustment` (`hinge-overlay`) | `broken/hinge_overlay`, `app/fit::a_door_too_far_out_for_its_cup_hinges` | covered |
 | A cup hinge opens at most 110deg | `app/fit::a_cup_hinge_opens_at_most_110_degrees` | covered |
 | A butt hinge cuts two leaf mortises and turns about its pin edge | `app/features::butt_hinge_leaves_are_housed_in_both_parts_at_the_flush_edge` | covered |
+| A hinge or slide kind names its members with `member` and a doc comment; the words are fixed per base; a misnamed member is `unknown-field`, a repeated one `duplicate-name` | `lang/parser::contextual_words_in_their_positions`, `app/spec_declarations::hardware_members_are_named_and_documented`, `app/spec_declarations::the_standard_hinges_and_slides_document_their_members`, `app/spec_declarations::a_misnamed_member_is_an_unknown_field`, `app/spec_declarations::a_pull_has_no_members_and_a_member_is_written_once`, `broken/misnamed_member` | covered |
 | A pull bores one screw hole, or two `centres` apart | `app/spec_joints::a_pull_bores_one_hole_or_two_holes_centres_apart` | covered |
 | Fasteners are only used through `uses:`; tools are listed in `tools:` | `app/spec_joints::a_joint_needs_a_joint_kind_and_hardware_a_hardware_kind`, `app/spec_joints::uses_lists_fasteners_per_pair_with_a_count` | covered |
 | Envelopes are a box or a cylinder | `app/spec_joints::an_envelope_is_a_box_or_a_cylinder`, `app/view::a_knob_stands_off_its_face` | covered |
@@ -476,7 +477,7 @@ One row per code of the grammar's Diagnostics table and its warnings.
 | `ambiguous-name` | 2 | covered | `broken/ambiguous_name` | `app/features::a_word_and_an_item_both_accepted_are_ambiguous` |
 | `unit-mismatch` | 2 | covered | `broken/unit_mismatch` | `app/spec_values::a_length_plus_an_angle_is_a_unit_mismatch`, `app/spec_values::a_bare_number_is_never_a_length` |
 | `type-mismatch` | 2 | covered | `broken/type_mismatch` | `app/spec_placement::against_and_flush_take_a_face_not_a_mid_plane`, `app/spec_values::logical_operators_take_bools` |
-| `unknown-field` | 2 | covered | `broken/unknown_field` | `app/features::a_misspelt_field_is_one_error_not_two`, `app/spec_declarations::an_unknown_project_field_lists_the_fields` |
+| `unknown-field` | 2 | covered | `broken/unknown_field`, `broken/misnamed_member` | `app/features::a_misspelt_field_is_one_error_not_two`, `app/spec_declarations::an_unknown_project_field_lists_the_fields`, `app/spec_declarations::a_misnamed_member_is_an_unknown_field` |
 | `missing-field` | 2 | covered | `broken/missing_field` | `app/spec_declarations::a_part_needs_length_width_and_place`, `app/spec_joints::a_role_that_is_not_given_is_a_missing_field` |
 | `out-of-range` | 2 | covered | `broken/out_of_range` | `app/features::values_outside_within_are_out_of_range`, `app/spec_values::a_module_params_default_must_lie_within_its_range` |
 | `not-in-library` | 2 | covered | `broken/not_in_library` | `app/spec_names::every_kind_of_placed_item_is_not_in_a_library` |

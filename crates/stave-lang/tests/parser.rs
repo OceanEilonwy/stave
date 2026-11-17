@@ -394,6 +394,9 @@ fn contextual_words_in_their_positions() {
          \x20 cut: 4\n\
          \x20 makes part key : s { length: 1mm }\n\
          \x20 makes: 5\n\
+         \x20 /// The cup.\n\
+         \x20 member cup\n\
+         \x20 member: 6\n\
          }\n\
          recipe r : notch {\n\
          \x20 mark { knife(walls) }\n\
@@ -415,11 +418,21 @@ fn contextual_words_in_their_positions() {
             KindEntry::Roles(_) => "roles",
             KindEntry::Cut(_) => "cut",
             KindEntry::Makes(_) => "makes",
+            KindEntry::Member(member) => {
+                assert_eq!(member.docs, ["The cup."]);
+                assert_eq!(member.node.name.as_str(), "cup");
+                "member"
+            }
             KindEntry::Field(field) => field.key.as_str(),
             KindEntry::Param(_) | KindEntry::Require(_) => "other",
         })
         .collect();
-    assert_eq!(entries, ["roles", "roles", "cut", "cut", "makes", "makes"]);
+    assert_eq!(
+        entries,
+        [
+            "roles", "roles", "cut", "cut", "makes", "makes", "member", "member"
+        ]
+    );
     let ItemKind::Recipe(recipe) = &file.items[3].kind else {
         panic!()
     };

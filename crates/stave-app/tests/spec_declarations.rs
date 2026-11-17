@@ -694,3 +694,114 @@ fn an_array_of_assemblies_takes_its_arguments_per_element() {
         "component Box {\n  param w : Length\n}\nassembly box[a, b] : Box {\n  w: 1mm\n}\nrequire r : box[a].w == 1mm && box[b].w == 1mm \"each element\"",
     );
 }
+
+// ---------------------------------------------------------------------------
+// Hardware members
+// ---------------------------------------------------------------------------
+
+/// A slide kind with extra entries.
+fn slide_kind(entries: &str) -> String {
+    format!(
+        "kind small_slide : slide {{\n  length:    300mm\n  clearance: 12.7mm\n  travel:    300mm\n  envelope:  box(length: 300mm, width: 45mm, thickness: 12.7mm)\n{entries}\n}}"
+    )
+}
+
+#[test]
+fn hardware_members_are_named_and_documented() {
+    let opened = open(&slide_kind(
+        "  /// Screwed to the cabinet.\n  /// It stays put.\n  member cabinet_member\n  member drawer_member",
+    ));
+    assert!(
+        diagnostics(&opened).is_empty(),
+        "{:?}",
+        diagnostics(&opened)
+    );
+    let model = opened.model.as_ref().unwrap();
+    let kind = model
+        .defs
+        .kinds
+        .iter()
+        .find(|k| k.decl.name == "small_slide")
+        .unwrap();
+    let members: Vec<(&str, Vec<String>)> = kind
+        .members
+        .iter()
+        .map(|m| (m.name.word(), m.docs.clone()))
+        .collect();
+    assert_eq!(
+        members,
+        [
+            (
+                "cabinet_member",
+                vec![
+                    "Screwed to the cabinet.".to_owned(),
+                    "It stays put.".to_owned()
+                ]
+            ),
+            ("drawer_member", Vec::new()),
+        ]
+    );
+}
+
+#[test]
+fn the_standard_hinges_and_slides_document_their_members() {
+    let opened = open("");
+    let model = opened.model.as_ref().unwrap();
+    let members = |name: &str| -> Vec<&'static str> {
+        let kind = model
+            .defs
+            .kinds
+            .iter()
+            .find(|k| k.decl.name == name)
+            .unwrap();
+        assert!(kind.members.iter().all(|m| !m.docs.is_empty()), "{name}");
+        kind.members.iter().map(|m| m.name.word()).collect()
+    };
+    assert_eq!(members("euro_hinge"), ["plate", "arm", "links", "cup"]);
+    assert_eq!(members("butt_hinge"), ["leaves", "pin"]);
+    assert_eq!(
+        members("side_mount_slide"),
+        ["cabinet_member", "drawer_member"]
+    );
+}
+
+#[test]
+fn a_misnamed_member_is_an_unknown_field() {
+    let opened = open(&slide_kind("  member drawer_membr"));
+    let diagnostic = the_diagnostic(
+        &opened,
+        "unknown-field",
+        "a slide kind has no member 'drawer_membr'",
+    );
+    assert_eq!(
+        diagnostic.help.as_deref(),
+        Some("did you mean 'drawer_member'?")
+    );
+    // A cup hinge's member on a slide is not near any slide member.
+    let opened = open(&slide_kind("  member cup"));
+    let diagnostic = the_diagnostic(&opened, "unknown-field", "a slide kind has no member 'cup'");
+    assert_eq!(
+        diagnostic.help.as_deref(),
+        Some("a slide kind's members are cabinet_member and drawer_member")
+    );
+}
+
+#[test]
+fn a_pull_has_no_members_and_a_member_is_written_once() {
+    let opened = open(
+        "kind small_knob : pull {\n  envelope: cylinder(diameter: 20mm, length: 20mm)\n  member knob\n}",
+    );
+    let diagnostic = the_diagnostic(&opened, "unknown-field", "a pull kind has no member 'knob'");
+    assert_eq!(
+        diagnostic.help.as_deref(),
+        Some("only hinge and slide kinds name their members")
+    );
+    let opened = open(&slide_kind(
+        "  member drawer_member\n  member drawer_member",
+    ));
+    the_diagnostic(
+        &opened,
+        "duplicate-name",
+        "'drawer_member' is declared twice",
+    );
+}

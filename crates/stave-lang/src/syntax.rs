@@ -249,6 +249,8 @@ syntax_kinds! {
     CUT,
     /// `makes part name : stock { ... }` in a kind
     MAKES,
+    /// `member name` in a hardware kind
+    MEMBER,
     /// `mark { steps }` or `cut { steps }` in a recipe
     STEP_BLOCK,
     /// `at station: value` in a profile

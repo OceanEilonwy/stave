@@ -27,6 +27,20 @@ kind euro_hinge : hinge {
   // How far the arm's side screw moves the door either way.
   overlay_adjustment: 2mm
   plate:              box(length: 50mm, width: 36mm, thickness: 11mm)
+
+  /// The mounting plate: screwed to the inside of the cabinet side, it
+  /// holds the hinge on the side and never moves.
+  member plate
+  /// The arm: it clips onto the plate and reaches out to the door; its
+  /// screws set how far the door overlays the side.
+  member arm
+  /// The two links: steel bars pinned to the arm at one end and to the cup
+  /// at the other. As the door opens they fold out, pushing the door
+  /// forward and away from the side so its edge doesn't hit it.
+  member links
+  /// The cup: a steel cup pressed into a 35mm hole bored in the back of
+  /// the door. The boss in its middle is where the links are pinned.
+  member cup
 }
 
 /// A brass butt hinge: two leaves on a pin, for box lids and small doors.
@@ -42,4 +56,10 @@ kind butt_hinge : hinge {
   /// How far it opens.
   param opening_angle = 180deg within 90deg..180deg
   leaf: box(length: length, width: leaf_width, thickness: 1.5mm)
+
+  /// The two leaves: one housed in the lid or door, one in the box or
+  /// cabinet. Each sits flush in its own shallow mortise.
+  member leaves
+  /// The pin through the knuckle: the line the lid or door turns about.
+  member pin
 }

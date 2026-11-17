@@ -77,7 +77,7 @@ use stave_lang::units::{Angle, Length};
 use stave_schema::species::Species;
 use stave_schema::words::{Grain, Measure, OutputUnit, StockForm};
 
-pub use crate::ids::{AssemblyId, HardwareId, JointId, PartId, RegionId, SceneId};
+pub use crate::ids::{AssemblyId, HardwareId, JointId, KindId, PartId, RegionId, SceneId};
 pub use crate::linkage::{Branch, Link, Linkage, LinkageError, LinkageFrame, PlanePoint};
 
 // ---------------------------------------------------------------------------
@@ -1009,6 +1009,10 @@ pub struct Joint {
     pub name: String,
     /// The kind's name, qualified when it isn't from the prelude.
     pub kind: String,
+    /// The kind's definition in the resolved model (its doc comments and
+    /// `insert:` steps, for a viewer).
+    #[serde(skip)]
+    pub kind_id: KindId,
     /// The assembly it belongs to.
     pub assembly: Option<AssemblyId>,
     /// `glue:` (default true).
@@ -1193,6 +1197,10 @@ pub struct Hardware {
     pub name: String,
     /// The kind's name.
     pub kind: String,
+    /// The kind's definition in the resolved model (its doc comments and
+    /// members, for a viewer).
+    #[serde(skip)]
+    pub kind_id: KindId,
     /// Slide, hinge or pull.
     pub base: HardwareBase,
     /// The assembly it belongs to.

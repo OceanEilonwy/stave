@@ -553,6 +553,16 @@ fn kind(node: &SyntaxNode) -> Option<Kind> {
                     span,
                 })
             }
+            SyntaxKind::MEMBER => {
+                let (docs, span) = documented(&entry);
+                KindEntry::Member(Documented {
+                    docs,
+                    node: KindMember {
+                        name: ident(&child(&entry, SyntaxKind::NAME)?)?,
+                    },
+                    span,
+                })
+            }
             SyntaxKind::ROLES => {
                 let roles_block = child(&entry, SyntaxKind::BLOCK)?;
                 let mut roles = Vec::new();

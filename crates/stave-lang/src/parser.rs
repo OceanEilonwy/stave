@@ -1620,9 +1620,12 @@ impl<'t> Parser<'t> {
         if documented == IDENT && self.nth_text(n) == "makes" && self.nth(n + 1) != COLON {
             return self.makes();
         }
+        if documented == IDENT && self.nth_text(n) == "member" && self.nth(n + 1) != COLON {
+            return self.member();
+        }
         if n > 0 {
             return Err(self.expected_with_help(
-                &["'param'", "'require'", "'makes'"],
+                &["'param'", "'require'", "'makes'", "'member'"],
                 Some("doc comments go right before a declaration; use // for other comments"),
             ));
         }
@@ -1660,6 +1663,17 @@ impl<'t> Parser<'t> {
             p.expect(COLON, "':'")?;
             p.reference()?;
             p.block(Body::Part, &owner)
+        })
+    }
+
+    /// `{ DOC } member name`
+    fn member(&mut self) -> PResult {
+        self.node(MEMBER, |p| {
+            while p.at(DOC) {
+                p.bump();
+            }
+            p.bump();
+            p.declared_name()
         })
     }
 

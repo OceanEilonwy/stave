@@ -98,7 +98,7 @@ grammar position only:
 | `as` | after the string of an `import` |
 | `mirror`, `about` | directly after the `=` of a `part` or `assembly`, and as that call's named argument |
 | `joint`, `slide`, `hinge`, `pull`, `fastener`, `tool` | as the base kind after `kind name :` (`joint` is also a keyword) |
-| `roles`, `cut`, `makes` | at the start of an entry in a `kind` body, when not followed by `:` |
+| `roles`, `cut`, `makes`, `member` | at the start of an entry in a `kind` body, when not followed by `:` |
 | `mark`, `cut` | at the start of an entry in a `recipe` body, when not followed by `:` |
 | `same` | as the whole content of an index: `drawer_bay[same]` |
 | `to`, `in` | after the item of a patch's `add`, and in `rename ... to` |
@@ -280,8 +280,9 @@ library       = "library" , STRING , [ block(field) ] ;
 
 kind          = "kind" , IDENT , ":" , base_kind , block(kind_entry) ;
 base_kind     = "joint" | "slide" | "hinge" | "pull" | "fastener" | "tool" ;
-kind_entry    = { DOC } , ( param | require | makes )
+kind_entry    = { DOC } , ( param | require | makes | member )
               | roles | cut | field ;
+member        = "member" , IDENT ;                       (* a hardware kind's named piece: member cup *)
 roles         = "roles" , block(role) ;
 role          = NAME , ":" , IDENT ;                     (* piece: Part   into: Parts *)
 cut           = "cut" , call , block(call) ;             (* cut end(piece, facing: into) { tenon(...) } *)
@@ -769,8 +770,41 @@ take `overlay_adjustment` (`error[hinge-overlay]` otherwise, with the
 `cup_inset` or `plate_height` that fits).
 
 `model` is a `Model`, `moving` and `license` are `Text`. Hardware kinds accept
-`param` and `require` entries; they can't have `roles`, `cut`, `makes` or the
-joint fields. See [Hardware](#hardware).
+`param`, `require` and `member` entries; they can't have `roles`, `cut`,
+`makes` or the joint fields. See [Hardware](#hardware).
+
+#### Hardware members
+
+A hinge or slide kind may name its moving and fixed pieces, each with a
+doc comment a beginner can read. A viewer numbers them, labels them on the
+drawing and shows the doc comment as the caption, in the order written:
+
+```
+kind euro_hinge : hinge {
+  ...
+  /// The mounting plate: screwed to the inside of the cabinet side, it
+  /// holds the hinge on the side and never moves.
+  member plate
+  /// The cup: a steel cup pressed into a 35mm hole bored in the back of
+  /// the door. The boss in its middle is where the links are pinned.
+  member cup
+}
+```
+
+The words are fixed per base, because Stave knows which piece each one is
+(the mechanism itself, the linkage's pins, stays catalogue data and is never
+written in a file):
+
+| Base | Members |
+|---|---|
+| cup hinge | `plate`, `arm`, `links`, `cup` |
+| butt hinge | `leaves`, `pin` |
+| `slide` | `cabinet_member`, `drawer_member` |
+
+Members are optional, each at most once (`error[duplicate-name]`). Any other
+word is `error[unknown-field]`: `a cup hinge has no member 'cupp'`, with the
+nearest member word as help; pulls, fasteners, tools and joints have no
+members (`a pull kind has no member 'knob'`).
 
 ### `recipe name : operation { }`
 

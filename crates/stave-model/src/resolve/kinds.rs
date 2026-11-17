@@ -8,8 +8,8 @@ use stave_lang::placement::PartAxis;
 use stave_lang::{Code, Diagnostic, Label};
 use stave_schema::fields::{self, Requirement};
 use stave_schema::kinds::{
-    BUTT_HINGE_ENTRIES, CUP_HINGE_ENTRIES, JOINT_DEFAULT_ROLES, RESERVED_JOINT_SETTINGS, RoleType,
-    base,
+    BUTT_HINGE_ENTRIES, CUP_HINGE_ENTRIES, JOINT_DEFAULT_ROLES, MemberName,
+    RESERVED_JOINT_SETTINGS, RoleType, base, members_of,
 };
 use stave_schema::operations::{ArgumentDefault, MARK, Selector, cut_operation, operation};
 use stave_schema::placement::{AssemblyStepKind, EXTEND, MadePartTerm};
@@ -22,8 +22,8 @@ use super::items::kind_ids;
 use super::{Body, Cx, Origin, Resolver};
 use crate::defs::{
     CutDef, CutStepDef, DefId, ExtendDef, JointKindDef, JointMember, KindDef, MadePartDef,
-    MadeTerm, MadeTermKind, MarkStepDef, Need, OperationDef, ParamDef, RExpr, RExprKind, RecipeDef,
-    RequireDef, RoleDef, SelectorDef, Setting, StepDef, Symbol, UseDef, Word,
+    MadeTerm, MadeTermKind, MarkStepDef, MemberDef, Need, OperationDef, ParamDef, RExpr, RExprKind,
+    RecipeDef, RequireDef, RoleDef, SelectorDef, Setting, StepDef, Symbol, UseDef, Word,
 };
 use crate::ids::KindId;
 use crate::types::Ty;
@@ -81,6 +81,15 @@ pub(crate) fn made_parts(syntax: &ast::Kind) -> Vec<&ast::MadePart> {
             _ => None,
         })
         .collect()
+}
+
+/// Words joined for a sentence: `a, b and c`.
+fn and_list(words: &[&str]) -> String {
+    match words {
+        [] => String::new(),
+        [one] => (*one).to_owned(),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+    }
 }
 
 /// A list expression's elements, or the expression itself.
@@ -144,9 +153,11 @@ impl Resolver<'_> {
         let mut kind_fields: Vec<Setting> = Vec::new();
         let mut joint = (base_kind == BaseKind::Joint).then(JointKindDef::default);
         let mut seen_fields: BTreeMap<String, Span> = BTreeMap::new();
+        let mut written_members: Vec<&ast::Documented<ast::KindMember>> = Vec::new();
         for entry in &syntax.body.entries {
             match entry {
                 ast::KindEntry::Param(_) => {}
+                ast::KindEntry::Member(member) => written_members.push(member),
                 ast::KindEntry::Require(require) => {
                     let condition = self.value(
                         &cx,
@@ -357,6 +368,10 @@ impl Resolver<'_> {
                 }
             }
         }
+        let cup = CUP_HINGE_ENTRIES.into_iter().any(|name| {
+            kind_fields.iter().any(|f| f.name == name) || params.iter().any(|p| p.decl.name == name)
+        });
+        let members = self.lower_members(&cx, base_kind, cup, &written_members);
         KindDef {
             decl: self.decl(DefId::Kind(id), &syntax.name, origin),
             base: base_kind,
@@ -365,7 +380,76 @@ impl Resolver<'_> {
             requires,
             fields: kind_fields,
             joint,
+            members,
         }
+    }
+
+    /// A hardware kind's `member` entries: each a member word of its base,
+    /// once.
+    fn lower_members(
+        &mut self,
+        cx: &Cx,
+        base_kind: BaseKind,
+        cup: bool,
+        written: &[&ast::Documented<ast::KindMember>],
+    ) -> Vec<MemberDef> {
+        let allowed = members_of(base_kind, cup);
+        let what = match base_kind {
+            BaseKind::Hinge if cup => "a cup hinge".to_owned(),
+            BaseKind::Hinge => "a butt hinge".to_owned(),
+            other => format!("a {} kind", other.word()),
+        };
+        let mut members: Vec<MemberDef> = Vec::new();
+        for member in written {
+            let word = member.node.name.as_str();
+            let span = member.node.name.span();
+            let Some(name) = MemberName::from_word(word).filter(|name| allowed.contains(name))
+            else {
+                if allowed.is_empty() {
+                    self.error_help(
+                        Code::UnknownField,
+                        format!("{what} has no member '{word}'"),
+                        cx.file,
+                        span,
+                        "only hinge and slide kinds name their members",
+                    );
+                } else {
+                    let words: Vec<&str> = allowed.iter().map(|m| m.word()).collect();
+                    self.unknown(
+                        Code::UnknownField,
+                        format!("{what} has no member '{word}'"),
+                        cx.file,
+                        span,
+                        word,
+                        words.iter().copied(),
+                        format!("{what}'s members are {}", and_list(&words)),
+                    );
+                }
+                continue;
+            };
+            if let Some(first) = members.iter().find(|m| m.name == name) {
+                self.report(
+                    Diagnostic::error(
+                        Code::DuplicateName,
+                        format!("'{word}' is declared twice"),
+                        Label::new(cx.file, span),
+                    )
+                    .with_label(Label::with_message(
+                        cx.file,
+                        first.span,
+                        "first written here",
+                    ))
+                    .with_help(format!("write 'member {word}' once; remove one of them")),
+                );
+                continue;
+            }
+            members.push(MemberDef {
+                name,
+                span,
+                docs: member.docs.clone(),
+            });
+        }
+        members
     }
 
     /// Duplicate role, param and made-part names; reserved setting names;

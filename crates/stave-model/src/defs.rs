@@ -727,6 +727,21 @@ pub struct KindDef {
     pub fields: Vec<Setting>,
     /// The joint entries, for a joint kind.
     pub joint: Option<JointKindDef>,
+    /// The named, documented members of a hardware kind (`member cup`),
+    /// in source order.
+    pub members: Vec<MemberDef>,
+}
+
+/// `member cup` in a hardware kind: a named piece, with the doc comments
+/// written above it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MemberDef {
+    /// Which member.
+    pub name: stave_schema::kinds::MemberName,
+    /// Where its name is written.
+    pub span: Span,
+    /// Its doc comments, one line each.
+    pub docs: Vec<String>,
 }
 
 impl KindDef {

@@ -8,4 +8,11 @@ kind side_mount_slide : slide {
   clearance: 12.7mm
   travel:    length                      // full extension: the drawer comes all the way out
   envelope:  box(length: length, width: 45mm, thickness: 12.7mm)
+
+  /// The cabinet member: screwed to the inside of the cabinet side; it
+  /// stays put.
+  member cabinet_member
+  /// The drawer member: screwed to the side of the drawer box; it runs out
+  /// on ball bearings inside the cabinet member.
+  member drawer_member
 }

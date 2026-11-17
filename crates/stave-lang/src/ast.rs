@@ -662,6 +662,7 @@ impl KindBody {
             | KindEntry::Param(_)
             | KindEntry::Require(_)
             | KindEntry::Makes(_)
+            | KindEntry::Member(_)
             | KindEntry::Roles(_)
             | KindEntry::Cut(_) => None,
         })
@@ -688,12 +689,22 @@ pub enum KindEntry {
     Require(Documented<Require>),
     /// `makes part key : key_stock { ... }`
     Makes(Documented<MadePart>),
+    /// `member cup`: a named, documented piece of a hardware kind.
+    Member(Documented<KindMember>),
     /// `roles { piece: Part, into: Part }`
     Roles(RolesBlock),
     /// `cut end(piece, facing: into) { tenon(...) }`
     Cut(Cut),
     /// `insert: ...`, `adds: ...`, `envelope: ...`
     Field(Field),
+}
+
+/// `member cup`: one named piece of a hardware kind (a cup hinge's cup,
+/// plate, arm and links), documented by the doc comments above it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct KindMember {
+    /// The member's name: one of its base's member words.
+    pub name: Ident,
 }
 
 /// `roles { lock: Part, first: Part, second: Part }`
