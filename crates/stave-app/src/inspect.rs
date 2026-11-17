@@ -377,7 +377,8 @@ pub fn parts_tree(design: &SolvedDesign) -> PartsTree {
                     PartOrigin::Mirror { source } => Some(source),
                     PartOrigin::Declared
                     | PartOrigin::MirroredAssembly { .. }
-                    | PartOrigin::Made { .. } => None,
+                    | PartOrigin::Made { .. }
+                    | PartOrigin::Boards { .. } => None,
                 };
                 Single {
                     item: Item::Part(part.id),
@@ -789,7 +790,7 @@ fn inspect_part(checked: &Checked, design: &SolvedDesign, id: PartId) -> Option<
     let kind = match part.origin {
         PartOrigin::Declared => "PART",
         PartOrigin::Mirror { .. } | PartOrigin::MirroredAssembly { .. } => "MIRROR IMAGE",
-        PartOrigin::Made { .. } => "MADE PART",
+        PartOrigin::Made { .. } | PartOrigin::Boards { .. } => "MADE PART",
     };
     let model = checked.opened.model.as_ref();
     let description = model.and_then(|m| part_decl(m, id)).and_then(docs);

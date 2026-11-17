@@ -129,22 +129,15 @@ fn the_filters_count_and_choose_by_severity() {
     assert!(problems::tree(&checked, Filter::Warnings).is_empty());
     let errors = problems::tree(&checked, Filter::Errors);
     assert_eq!(errors, problems::tree(&checked, Filter::All));
-    // The examples have warnings only (cuts not drawn yet).
-    let cabinet = checked_with_warnings();
-    let tree = problems::tree(&cabinet, Filter::Errors);
+    // A design with a warning and no errors (its knob's model doesn't
+    // match the kind). The examples have no warnings any more, now that
+    // every cut is made.
+    let warned = broken("model_mismatch");
+    assert_eq!(warned.summary.errors, 0);
+    let tree = problems::tree(&warned, Filter::Errors);
     assert!(tree.is_empty());
     assert!(tree.counts.warnings > 0);
-    assert!(!problems::tree(&cabinet, Filter::Warnings).is_empty());
-}
-
-fn checked_with_warnings() -> Checked {
-    for name in ["joint_samples", "japanese_joinery", "box", "nightstand"] {
-        let found = checked(&workspace().join("examples").join(name));
-        if found.summary.warnings > 0 {
-            return found;
-        }
-    }
-    panic!("no example has a warning");
+    assert!(!problems::tree(&warned, Filter::Warnings).is_empty());
 }
 
 #[test]
