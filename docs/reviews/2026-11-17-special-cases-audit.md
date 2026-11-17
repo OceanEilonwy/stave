@@ -233,7 +233,7 @@ replaces it; **JUSTIFIED** says why it stays.
 | CH5 | `lib.rs:663-672` | `exempt`: hardware never clashes with its own `piece` or `on` | S18 | GENERALISE (A): delete |
 | CH6 | `lib.rs:653-658` | `exempt`: a slide already reported for its gap clashes with nothing | Avoids a second error for one mistake | GENERALISE (H): "hardware whose `require` or `adjust` failed is left out of the overlap check", for any kind |
 | CH7 | `lib.rs:660-662` | `exempt`: two members of one piece of hardware never clash | A product's own parts | JUSTIFIED as a general rule, pending gap 2 |
-| CH8 | `lib.rs:673-677` | `exempt`: pairs whose cut can't be made yet; parts already reported for spacing | `not-supported`; one error per mistake | JUSTIFIED: not about a kind |
+| CH8 | `lib.rs:673-677` | `exempt`: pairs whose cut can't be made yet; parts already reported for spacing | `not-supported`; one error per mistake | Split: the spacing arm is JUSTIFIED (one error per mistake); the can't-cut arm is GENERALISE: delete once angled cuts are made (work pack stage 2a) |
 | CH9 | `motion.rs:47-100` | `Sweeper::{Turn, Linkage, Travel}` | M8 | GENERALISE (D) |
 | CH10 | `motion.rs:112-120` | `motion_hardware`: the first `Hinge` or `Slide` | S20 | GENERALISE (C: the hardware that has a drive) |
 | CH11 | `motion.rs:433-437` | A hit before 30° on a `Motion::Linkage` gets the gap help | Cup hinges swing their edge out | GENERALISE (D): ask the mechanism whether the hit is on the hinge-edge side, not which variant it is |
@@ -709,9 +709,11 @@ data.
    spec (allow `tenon` on `crossing` for parts that butt edge to edge; a
    kind with a single `Parts` role is one connection across all of them).
    `chigiri` and `suitsuki_zan` use `outline` and `dovetail_socket`, which
-   the geometry cannot cut yet: they ship as kinds that check and warn
-   `not-supported`, as `ari_tsugi` does, and no example uses them (the
-   examples keep their two expected warnings).
+   the geometry cannot cut yet. Resolved by adding stage 2a to the work
+   pack: those cuts and angled slots become exact prisms (a polygon on a
+   face, cut straight down), drawn and checked like every other cut. The
+   can't-cut exemption (CH8) goes with them, and the examples' two
+   `not-supported` warnings disappear.
 8. **An assembly inside a moving assembly** is still not swept. Unchanged
    by this push; said in the spec's version 1 limits.
 9. **A cut's everyday name (CH13, AP6).** "Dado", "rabbet" and "groove"

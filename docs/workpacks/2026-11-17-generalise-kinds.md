@@ -32,7 +32,7 @@ Each one is green and committable on its own.
   CARGO_TARGET_DIR=target/generalise cargo clippy --workspace --all-targets -- -D warnings
   CARGO_TARGET_DIR=target/generalise cargo test --workspace
   target/generalise/debug/stave fmt --check .
-  target/generalise/debug/stave check examples     # 0 errors, 2 not-supported warnings
+  target/generalise/debug/stave check examples     # 0 errors, 2 not-supported warnings (0 warnings after stage 2a)
   ```
 
 - **Commits.** Stage only the paths you own (`git add <paths>`, never
@@ -56,7 +56,9 @@ Each one is green and committable on its own.
 1. Every example behaves as it does now: the seven dump snapshots in
    `crates/stave-cli/tests/snapshots/` are byte-identical except for the
    changes each stage lists; `stave check examples` gives 0 errors and the
-   same 2 `not-supported` warnings.
+   same 2 `not-supported` warnings until stage 2a, which cuts them
+   (the `kanawa_tsugi` outline and the `ari_tsugi` dovetail in
+   `examples/joint_samples`) and leaves 0 warnings.
 2. `app/focus::no_cup_hinge_puts_steel_in_wood` passes through the generic
    path (stage 3 says how).
 3. Adding a 165° cup hinge needs one new kind in `std/hardware` and no
@@ -273,6 +275,124 @@ exact lines.
 
 **Done when** the gate is green and `rg '"(cup_|plate|leaf|centres|screw_)'
 crates/stave-{solve,model,check,geom}/src` finds only `legacy.rs`.
+
+## Stage 2a. Angled cuts: dovetails, outlines and angled slots — size L
+
+**Goal.** `dovetail_socket`, `dovetail_tail`, `outline` and a `slot`
+turned by an angle are cut for real, drawn, and checked like every other
+cut. Today they are left uncut (`Solid::skipped`) and the parts they join
+are left out of the overlap check (`stave-check/src/lib.rs:673-677`,
+audit CH8). That is an exemption, so it goes before stage 3 builds the one
+collision model, and before stage 7 needs it for `chigiri` and
+`suitsuki_zan`. Joint kinds are already clean (audit: no core crate names
+a joint kind), so this stage adds one general solid primitive and no
+joint-specific code.
+
+**One primitive: the prism.** Every one of these cuts is a flat shape
+marked on a face and cut straight down from it, so each is a polygon in
+the face's plane, extruded along the face's axis between two depths:
+
+- `outline`: the marks, as written (non-convex allowed).
+- `dovetail_socket`: the trapezoid, `neck` wide at the end, widening by
+  `depth * tan(angle)` each side, cut through the thickness.
+- `dovetail_tail`: the cut box minus the two wedge-shaped prisms either
+  side of the tail.
+- an angled `slot`: its rectangle turned in the face (replaces
+  `AngledSlot`; the chidori's slots are then cut, which removes one of
+  STATUS.md's "more wood than there is" simplifications).
+
+**Spec (first).** "Cut operations" (grammar.md ~1275-1285): say how each
+of the three is shaped, exactly enough to draw it, including which way a
+dovetail's angle widens and that an `outline`'s marks must not cross
+themselves (`error[type-mismatch]`, "the outline crosses itself between
+mark 3 and mark 4"). Remove the "geometry can't make yet" sentence
+(~1239) for these operations; `not-supported` stays for cuts on round
+or turned parts. Optional (decision table): accept a slope as a ratio,
+`slope: 1 in 8`, the way dovetail markers are sold, as an exact
+alternative to `angle:`.
+
+**Exactness.** Polygon vertices are exact `Local` points in nanometres.
+`outline` marks are exact already. A dovetail's offset `depth *
+tan(angle)` is irrational for most angles; it is computed once, from the
+exact `Angle` and `Length`, and rounded to the nanometre when the prism is
+built (the same rule as a hole's position, solid.rs module docs). A
+`slope: 1 in n` is exact, with no rounding. Rotated slot corners round
+the same way.
+
+**Files.** `stave-geom/src/solid.rs` (the prism, the shapes above, delete
+`Unsupported::{Angled, AngledSlot}` and `AngledSlot`),
+`stave-geom/src/collide.rs` (block against prism, prism against prism),
+`stave-geom/src/mesh_cut.rs` (cut prisms out of the mesh),
+`stave-geom/src/sequence.rs` (assembly sequences test prisms instead of
+`AngledSlot` in floats), `stave-geom/src/sweep.rs` (prism pieces are
+convex polygons for the planar sweep), `stave-check/src/lib.rs` (delete
+the can't-cut exemption), `docs/grammar.md`, `docs/STATUS.md`.
+
+**New types.** `Polygon` (private fields, `Polygon::new(Vec<Point2>) ->
+Result<Polygon, PolygonError>`: at least three points, no repeated point,
+does not cross itself, positive area, wound counter-clockwise after
+normalising); `ConvexPolygon` (the same, also convex, for collision
+pieces); `Prism { face_axis: PartAxis, outline: Polygon, pieces:
+NonEmpty<ConvexPolygon>, depth: DepthRange }` where `DepthRange::new(from,
+to)` requires `from < to`; `PolygonError` (thiserror) with one variant
+per rule, each mapped to a diagnostic with a help line.
+
+**Collision.** Each prism is split once into convex pieces. The split is
+exact and deterministic: ear-clipping triangulation in a fixed vertex
+order, then merging neighbouring triangles while the result stays convex
+(Hertel-Mehlhorn). Tests:
+- Two shapes extruded along the same axis (the common case: both cut from
+  the same face, or a box) reduce to 2D: convex polygon clipping in exact
+  integers times the overlap of their depth ranges.
+- Otherwise, a separating-axis test on the two convex solids with exact
+  `i128` arithmetic and checked operations. A 4 m part is about 2^42 nm,
+  so the triple products stay within `i128`; an overflow is an error, not
+  a panic.
+- The overlap's volume and the message's numbers convert to floats at the
+  boundary only, as now.
+
+**Mesh.** Walls from the polygon's edges, caps from the same triangulation,
+subtracted from the part's mesh with the existing cut code. The mesh must
+be watertight (the test added in `fe8b2d2` covers every example).
+
+**Delete.** `AngledSlot`, `Unsupported::Angled`, `Unsupported::AngledSlot`,
+the can't-cut branch of `exempt` (`stave-check/src/lib.rs:673-677`), the
+float-only angled-slot test in `sequence.rs`.
+
+**Dump changes to explain.** `joint_samples`: the `splice`
+(`kanawa_tsugi`) and `end_dovetail` (`ari_tsugi`) parts lose their
+`skipped` entries and gain their cut solids. The chidori's lock and
+slots get cut solids. If a real overlap shows up in an example (the
+check could not see one before), fix the kind's numbers in the same
+commit and say what was wrong. Never add an exemption.
+
+**Gate change.** `stave check examples` becomes 0 errors and 0 warnings.
+Update the gate line and acceptance item 1 in this stage's commit.
+
+**Tests.**
+- Unit (`stave-geom`): `a_polygon_that_crosses_itself_is_rejected`,
+  `an_l_shaped_outline_splits_into_two_convex_pieces`,
+  `convex_split_is_the_same_every_run`,
+  `a_dovetail_tail_fills_its_socket_exactly` (tail and socket from one
+  joint overlap by zero volume and touch over their sloped faces),
+  `a_tail_one_degree_wider_overlaps_its_socket`,
+  `a_slope_1_in_8_is_exact`, `an_angled_slot_is_cut`.
+- Corpus: `examples/joint_samples` checks with no warnings; new broken
+  designs `tests/broken/dovetail_too_wide` (a tail angle that doesn't match
+  its socket: `error[overlap]` with the sloped faces named) and
+  `tests/broken/outline_crosses_itself`.
+- Mesh: the watertight test passes on `kanawa_tsugi` and `ari_tsugi`.
+
+**Risks.** Real overlaps the old exemption hid may surface in
+`kanawa_tsugi` or the chidori; they are fixed in the kind, with the dump
+change explained. Separating-axis tests near zero volume (faces that only
+touch) must count touching as contact, not overlap. Exact integers make
+that a clean comparison with zero, so no tolerance is involved. Cuts on round
+or turned parts stay `not-supported`; nothing in the examples uses one.
+
+**Done when** the gate is green with 0 warnings, `rg
+'AngledSlot|Unsupported::Angled' crates` finds nothing, and
+`stave-check` has no exemption for an uncut cut.
 
 ## Stage 3. One collision model (A, B) — size L
 
@@ -571,9 +691,9 @@ rewritten to assert the boards (count, equal widths, seams); new
 `a_list_combines_edge_joints`, `tongue_and_groove_needs_no_glue`,
 `a_sheet_wider_than_max_width_is_an_error`, `a_longer_part_names_an_end_joint`,
 `a_spline_is_a_made_part_per_seam`. Corpus `tests/designs/unglued_top`
-(tongue and groove with battens). `chigiri` and `suitsuki_zan` parse,
-check and warn `not-supported` in a test of their own; no example uses
-them.
+(tongue and groove with battens). `chigiri` and `suitsuki_zan` are cut for real (they use `outline` and
+`dovetail_socket`, made in stage 2a); corpus `tests/designs/chigiri_top`
+and `tests/designs/batten_top` check with no warnings.
 
 **Risks.** `stave-workplan` and `stave-output` are not written, so "in the
 cut list" means "in `SolvedDesign`" for now. Cuts that other joints make
@@ -685,11 +805,12 @@ three sit on `stave-geom::glb` and `stave-app`. Hand-off H4.
 - `crates/stave-geom`: `hinge.rs`; `steel_in_wood`, `SteelInWood`,
   `mechanism_contact`, `MechanismHit`, `MechanismMember`, `HingePart`,
   `Mechanism`, `MEMBERS`, `LinkageSweep`, `linkage_contact`,
-  `linkage_reach`, `LinkagePath`, `hardware_fixed`, `hardware_links`.
+  `linkage_reach`, `LinkagePath`, `hardware_fixed`, `hardware_links`;
+  `AngledSlot`, `Unsupported::{Angled, AngledSlot}` (stage 2a).
 - `crates/stave-check`: `hinges.rs` (`hinge_overlays`, `mechanisms`,
   `MAX_INSET_NM`, `MAX_PLATE_NM`), `slide_gaps`, `misfit_slides`, the
   own-parts arm of `exempt`, `Sweeper`'s three variants, `motion_hardware`,
-  `cavity_noun`'s word list.
+  `cavity_noun`'s word list, the can't-cut arm of `exempt` (stage 2a).
 - `crates/stave-scene`: `LinkFollower`, the member labels in `graph.rs`.
 - `tools/hinge-sim/linkage.py`, `tools/hinge-sim/fit.py`,
   `tools/joint-sim/chidori.py`.
@@ -706,4 +827,5 @@ three sit on `stave-geom::glb` and `stave-app`. Hand-off H4.
 | 4 | Move a butt hinge's pivot out to its knuckle (gap 3)? | Yes, as its own commit with the dump change explained |
 | 6 | New codes `adjust` and `mechanism`; `slide-gap` and `hinge-overlay` removed | Yes |
 | 7 | Equal board widths; sheets and length stay errors | Yes |
+| 2a | Accept `slope: 1 in n` as an exact alternative to a dovetail's `angle:` | Yes |
 | 8 | The `CLAUDE.md` text of rule J | As drafted in the audit |
