@@ -1559,8 +1559,12 @@ scene drawer_bench "Top drawer on the bench" {
   motion is checked from the rest position and from every scene's poses.
 - `explode: true` draws the scene with every part moved out from its rest
   position along the direction its joint is assembled (the reverse of the
-  joint's last `insert` step), so the joinery shows. Exploding is a drawing
-  only: it is never collision checked.
+  joint's last `insert` step), so the joinery shows. A part that would
+  leave two of its pairs in opposite directions (a rail tenoned into two
+  stiles) stays, and the parts it joins move away from it instead; a
+  part's moves in different directions add up, a part coming out of a
+  part that moves goes with it, and hardware goes with its part.
+  Exploding is a drawing only: it is never collision checked.
 
 ---
 

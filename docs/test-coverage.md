@@ -391,6 +391,7 @@ and `broken/<folder>` for a design in `tests/broken/`.
 | A mirrored assembly has the mirror image of its source's motion | `app/pipeline::the_clothing_cabinet_is_where_the_design_says` | covered |
 | Hinges of an assembly share one pivot, slides one direction (`motion`) | — | pending: motion checks are layer 5 |
 | Every scene is collision checked, and every motion closed and fully open | `broken/scene_pose_clash`, `broken/door_hits_side`, `broken/doors_hit_each_other`, `broken/knob_hits_door`, `broken/drawer_hits_divider`, `broken/lid_hits_back`, `app/fit::every_motion_of_the_examples_is_clear_through_its_travel`, `geom/sweep::a_door_first_hits_a_post_at_the_angle_it_reaches_it`, `geom/sweep::a_drawer_hits_what_is_in_front_of_it` | covered |
+| `explode: true` draws parts moved out along the reverse of their joint's last insert step; never collision checked | `app/explode::an_exploded_side_table_pulls_the_legs_off_the_aprons`, `app/explode::hardware_explodes_with_its_part_and_scenes_say_when_they_explode` | covered |
 
 ### Checks and require
 
