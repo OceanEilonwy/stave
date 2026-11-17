@@ -53,6 +53,7 @@ mod mesh_cut;
 mod mesh_drill;
 mod mesh_prism;
 mod piece;
+pub mod planar;
 mod prism;
 pub mod render;
 mod sample;

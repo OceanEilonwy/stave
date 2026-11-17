@@ -1433,6 +1433,85 @@ anything else is `error[overlap]`.
 - `moving:` names the node that moves with the hardware's motion.
 - A missing model is drawn as its envelope with a label.
 
+#### How a mechanism is solved
+
+A hardware kind's `mechanism { }` (pivots, slots, rails, couples and one
+drive, in the kind's frame with the hardware closed) is solved the same way
+for every kind, in closed form: no iteration, no guessing. The general
+solver is built and tested on its own; until hardware kinds are wired to it
+(work pack stage 4), a cup hinge's linkage is solved by the four-bar code,
+which takes the same steps and gives the same poses.
+
+**The words.** A member is **held** (`with:` a role whose part stays put),
+**free** (the mechanism places it; the driven member is free even when it
+is `with:` the moving part) or **carried** (`with:` another member, one
+rigid piece with it). The declared pose is the drive at its `from`; at a
+value `v` the driven member has turned, or travelled, by `v - from`. A
+positive turn carries `across` toward `depth`. A `slot a, b from P to Q`
+has `a`'s pin at `P` when closed and lets it run to `Q`. A member's
+**travel** is how far it has moved along its rail from its closed place,
+measured against the held members; `couple a to b: r` makes `a`'s travel
+`r` times `b`'s (a full-extension slide: the middle member travels half
+the drawer member's travel).
+
+**One freedom.** Three for each free member, less two for each `pivot` or
+`rail`, less one for each `slot` or `couple`, must come to exactly one,
+which the drive takes (`error[mechanism]` otherwise, giving the count). An
+entry between two pieces of one rigid member, or between two held members,
+is `error[mechanism]`.
+
+**The steps.** Starting from the held members and the drive, the solver
+repeats, until every member is placed, the first of these that applies:
+
+1. **Couple**: a couple with one side's travel known gives the other's.
+2. **Hang**: a member whose angle is known (the driven member of a turn),
+   pinned to a placed member, is placed (a butt hinge).
+3. **Rail**: a member whose travel is known, on a rail along a placed
+   member that does not turn, is placed (a slide).
+4. **Hung on two**: a member whose angle is known, held by two of: a link
+   pinned to a placed member, a slot in or over a placed member, a member
+   on a rail along a placed member. Its offset lies on a circle and a
+   circle, or a circle and a line (a cup hinge's cup, hung on its two
+   links from the arm).
+5. **Two links** (a dyad): a point where two unplaced members meet, or the
+   pin of a slot in a placed member on an unplaced link, lies on two paths,
+   each a circle (a link pinned to a placed member) or a line (a rail along
+   a placed member, or the slot): circle and circle, or circle and line (a
+   slider-crank's rod and slider).
+6. **Slot in a link**: a link pinned to a placed member, its slot over a
+   pin on a placed member (a lid stay).
+
+When no step applies and members are left, that is `error[mechanism]`:
+"this mechanism can't be solved one step at a time from its drive",
+naming the members left over. An entry still unused when every member is
+placed holds the mechanism still: `error[mechanism]`. Two straight paths
+for one point (a pin on a rail running in a slot) are not solved in
+version 1.
+
+**The branch.** Two circles, or a circle and a line, cross in two points.
+The one the closed pose is on is chosen exactly, in integers, from the
+declared points (which side of the line between the two centres, or which
+way along the line); a closed pose exactly on a dead point is
+`error[motion]`. The mechanism keeps that branch by continuity over the
+whole range.
+
+**Dead points.** The drive is run through its whole range, every 0.05deg
+or 0.05mm, in floating point at the geometry boundary. At every sample
+each two-answer step must stay at least 0.1mm from a dead point: two
+circles' centres 0.1mm inside the sum of their radii and outside their
+difference, a line 0.1mm inside its circle. A step that comes closer, or
+whose paths no longer meet, is `error[motion]` at the hardware, naming the
+step's members and the first drive value where it happens ("`rod` and
+`slider` lock at 41.6deg"). A step that would jump to its other branch
+between two samples is `error[motion]` ("flip over at"), and so is a pin
+that runs past an end of its slot ("`lid`'s pin reaches the end of its slot
+in `stay` at <value>"). The first step from the drive of a cup hinge is also
+checked exactly, in integers, as today.
+
+**Version 1 limits.** Planar, one freedom, the steps above. A travelling
+drive and a couple act on rails that do not turn. An assembly inside a
+moving assembly is not swept.
+
 ---
 
 ## Work cards and recipes
