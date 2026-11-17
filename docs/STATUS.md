@@ -99,8 +99,10 @@ the system or the main menu, the 3D backdrop with them.
 - **Files view** (FilesMode.dc.html; `docs/gui.md`, "The Files view"):
   the project's files by folder and the read-only standard library with
   "Go to file or name", tabs, breadcrumbs and an editor that edits the
-  real files: `.stave` colours from the navigation layer's semantic
-  tokens, line numbers, wavy underlines with a card for each problem,
+  real files (a GtkSourceView 5): `.stave` colours from the navigation
+  layer's semantic tokens, line numbers, the cursor's line with its blue
+  bar, bracket matching, two-space auto-indent, smart Home/End, undo,
+  Ctrl+F search in the text, wavy underlines with a card for each problem,
   F12 / Ctrl+click to follow a name (across files, imports and the
   standard library, through the back and forward history), Alt+F12 to
   peek at a definition under the line, Shift+F12 to list every use with
@@ -285,6 +287,5 @@ through the window itself is not automated.
 - **Modules**: remote sources (`github:`, `https:`) and the lockfile.
 - **Editors and AI**: the language server (`stave-lsp`, on `stave-ide`),
   completion, signature help, rename, quick fixes, inlay hints, smart
-  edits and patches. The editor is a plain GtkTextView because
-  GtkSourceView 5 isn't installed here; the navigation layer rebuilds its
+  edits and patches. The navigation layer rebuilds its
   index on each pause in typing rather than per file (a few milliseconds).

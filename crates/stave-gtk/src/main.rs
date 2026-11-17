@@ -85,6 +85,13 @@ struct Arguments {
     /// In the Files view, follow the name under the cursor (F12).
     #[arg(long)]
     follow: bool,
+    /// In the Files view, undo once (after --type, if given).
+    #[arg(long)]
+    undo: bool,
+    /// In the Files view, find this text in the file from the cursor
+    /// (Ctrl+F), with every match highlighted.
+    #[arg(long, value_name = "TEXT")]
+    search: Option<String>,
     /// In the Files view, show the text alone (no 3D view beside it).
     #[arg(long)]
     text_only: bool,
@@ -294,6 +301,8 @@ fn main() -> ExitCode {
                 uses: arguments.uses,
                 typing: arguments.typing,
                 follow: arguments.follow,
+                undo: arguments.undo,
+                search: arguments.search,
             },
             text_only: arguments.text_only,
             camera: ui::StartCamera {

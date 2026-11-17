@@ -75,6 +75,10 @@ pub struct Wish {
     pub typing: Option<String>,
     /// Follow the name under the cursor to its declaration (F12).
     pub follow: bool,
+    /// Undo once, after any typing.
+    pub undo: bool,
+    /// Find this text in the file (Ctrl+F), from the cursor.
+    pub search: Option<String>,
 }
 
 type LinkCallback = Rc<dyn Fn(CursorName)>;
@@ -578,8 +582,13 @@ impl FilesPage {
         &self.paned
     }
 
-    /// Puts the keyboard in the search field.
+    /// Ctrl+F: in the text, opens its search bar; anywhere else, puts the
+    /// keyboard in "Go to file or name".
     pub fn focus_search(&self) {
+        if self.editor.has_focus() {
+            self.editor.start_search();
+            return;
+        }
         self.root.set_show_sidebar(true);
         self.search.grab_focus();
     }
@@ -802,6 +811,7 @@ impl FilesPage {
                 gtk::gdk::Key::F12 => page.follow_at_cursor(),
                 gtk::gdk::Key::Escape if page.editor.has_card() => page.editor.hide_card(),
                 gtk::gdk::Key::Escape if page.editor.has_peek() => page.editor.set_peek(None),
+                gtk::gdk::Key::Escape if page.editor.has_search() => page.editor.close_search(),
                 gtk::gdk::Key::Escape if page.uses.reveals_child() => {
                     page.uses.set_reveal_child(false);
                 }
@@ -850,7 +860,7 @@ impl FilesPage {
 
         // Scrolling and resizing move the overlays with the text.
         let page = Rc::downgrade(self);
-        self.editor.root.vadjustment().connect_changed(move |_| {
+        self.editor.vadjustment().connect_changed(move |_| {
             if let Some(page) = page.upgrade() {
                 page.settle_overlays();
             }
@@ -1241,7 +1251,6 @@ impl FilesPage {
         let Some((_, buffer)) = self.active_tab() else {
             return;
         };
-        self.editor.mark_cursor_line(&buffer);
         let cursor_iter = buffer.iter_at_mark(&buffer.get_insert());
         self.line
             .set_label(&format!("Line {}", cursor_iter.line().saturating_add(1)));
@@ -1952,8 +1961,20 @@ impl FilesPage {
             if let Some(text) = &wish.typing {
                 let (_, buffer) = page.active_tab().unzip();
                 if let Some(buffer) = buffer {
-                    buffer.insert_interactive_at_cursor(text, true);
+                    // A key at a time, so undo groups it as it groups typing.
+                    let mut key = [0; 4];
+                    for character in text.chars() {
+                        buffer.insert_interactive_at_cursor(character.encode_utf8(&mut key), true);
+                    }
                 }
+            }
+            if wish.undo
+                && let Some((_, buffer)) = page.active_tab()
+            {
+                buffer.undo();
+            }
+            if let Some(text) = &wish.search {
+                page.editor.find(text);
             }
             if wish.follow {
                 page.follow_at_cursor();
