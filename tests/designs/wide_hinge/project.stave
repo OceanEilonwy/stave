@@ -1,0 +1,75 @@
+stave 1
+
+// A cabinet door on two wide-angle cup hinges that let it open to 165deg,
+// clear of a pull-out shelf behind it. The hinges are a kind in
+// std:hardware like any other: nothing about how far a hinge opens, or how
+// its links move, is built into Stave.
+
+project "Wide hinge" {
+  units: mm
+}
+
+stock ply_18 { species: birch, form: plywood, thickness: 18mm }
+
+part base : ply_18 {
+  length: 600mm
+  width:  400mm
+  place {
+    ground
+  }
+}
+
+part side_l : ply_18 {
+  length: 700mm
+  width:  400mm
+  place {
+    orient(length: up, width: back)
+    against(base.top)
+    flush(base.left)
+    flush(base.back)
+  }
+}
+
+part side_r = mirror(side_l, about: mid(base, across))
+
+region bay = opening(
+  left:   side_l.right,
+  right:  side_r.left,
+  bottom: base.top,
+  top:    side_l.top,
+  front:  base.front,
+  back:   base.back,
+)
+
+component Door {
+  param opening    : Region
+  param hinge_side : Part
+
+  region face = cover(opening, overlay(left: 17.5mm, right: 17.5mm), thickness: ply_18.thickness)
+
+  part panel : ply_18 {
+    length: face.up
+    width:  face.across
+    place {
+      orient(length: up, width: right)
+      flush(face.left)
+      flush(face.bottom)
+      flush(face.front)
+    }
+  }
+
+  hardware hinges[bottom, top] : wide_hinge_165(panel, on: hinge_side) {
+    place {
+      spaced(ends(inset: 80mm), from: panel.bottom, to: panel.top)
+    }
+  }
+}
+
+assembly door : Door {
+  opening:    bay
+  hinge_side: side_l
+}
+
+scene wide_open "Wide open" {
+  pose door = open
+}

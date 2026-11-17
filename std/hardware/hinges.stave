@@ -118,6 +118,120 @@ kind euro_hinge : hinge {
   cut bore: crossing(piece, cup) { drill(diameter: 35mm, depth: 12.8mm) }
 }
 
+/// A wide-angle concealed cup hinge: the door opens to 165°, clear of
+/// pull-out shelves and drawers behind it. Mounted like euro_hinge: the
+/// cup bored into the back of the door's hinge stile, the plate on the
+/// inside of the cabinet side. Its links are cranked: each bends down into
+/// the deep cup, so that as the door swings wide they pass through the bore
+/// and not through the wood between the bore and the door's edge.
+/// PLACEHOLDER PINS: the pins, elbows and arm are fitted to Stave's own
+/// checks (a 17.5mm overlay on an 18mm door), not to a maker's catalogue;
+/// fit them to one with the refit test (crates/stave-app/tests/
+/// oracle_hinge.rs, refit_the_cup_hinge) and name it here before this kind
+/// is sold as a product.
+kind wide_hinge_165 : hinge {
+  roles {
+    piece: Part                      // the door's hinge stile
+    on:    Part                      // the cabinet side
+  }
+  /// How far the door opens; the arm's limiter stops it here.
+  param opening_angle = 165deg within 90deg..165deg
+  /// From the door's edge to the rim of the cup (the boring distance).
+  param cup_inset = 5mm within [5mm]
+  /// From the cabinet's front edge back to the plate's screw line.
+  param plate_setback = 37mm within [37mm]
+  cup_diameter: 35mm
+  cup_depth:    12.8mm
+
+  // On the back of the stile, the cup's centre cup_inset and half the cup
+  // in from the edge nearer the side. The design says where along it.
+  mount {
+    face:   back
+    across: from(edge(piece, nearer: on), inset: cup_inset + 35mm / 2)
+    along:  open
+  }
+
+  /// The cup: a steel cup pressed into a 35mm hole bored in the back of
+  /// the door. The boss in its middle is where the links are pinned.
+  member cup {
+    with:  piece
+    shape: cylinder(diameter: 35mm, depth: 0mm..12.8mm)
+  }
+  /// The mounting plate: screwed to the inside of the cabinet side.
+  member plate {
+    with:  on
+    shape: box(along: 50mm, across: 0mm..11mm, depth: 36mm)
+    mount {
+      across: from(face(on, toward: piece))
+      depth:  from(face(on, toward: piece), inset: plate_setback)
+    }
+  }
+  /// The arm: it clips onto the plate and reaches out to the door, its
+  /// knuckle carrying the arm's two pins inside the cup.
+  member arm {
+    with:          on
+    shape body:    box(along: 16mm, across: -2.90mm..14.30mm, depth: -(plate_setback + 18mm)..0mm)
+    shape knuckle: box(along: 16mm, across: 11.10mm..14.30mm, depth: 0mm..9.95mm)
+  }
+  /// The inner link: a solid steel bar, bent down into the cup.
+  member inner_link {
+    shape arm_end: bar(
+      from:      point(across: 12.62mm, depth: 6.87mm),
+      to:        point(across: -2.61mm, depth: 11.01mm),
+      thickness: 1.50mm,
+      along:     9mm,
+    )
+    shape cup_end: bar(
+      from:      point(across: -2.61mm, depth: 11.01mm),
+      to:        point(across: -11.63mm, depth: 1.10mm),
+      thickness: 1.50mm,
+      along:     9mm,
+    )
+  }
+  /// The outer link: a strap whose two sides pass either side of the inner
+  /// link, bent down into the cup like it.
+  member outer_link {
+    shape near_arm_end: bar(
+      from:      point(across: 12.78mm, depth: 8.45mm),
+      to:        point(across: -7.62mm, depth: 10.20mm),
+      thickness: 1.50mm,
+      along:     5.50mm..7mm,
+    )
+    shape near_cup_end: bar(
+      from:      point(across: -7.62mm, depth: 10.20mm),
+      to:        point(across: -11.09mm, depth: 2.13mm),
+      thickness: 1.50mm,
+      along:     5.50mm..7mm,
+    )
+    shape far_arm_end:  bar(
+      from:      point(across: 12.78mm, depth: 8.45mm),
+      to:        point(across: -7.62mm, depth: 10.20mm),
+      thickness: 1.50mm,
+      along:     -7mm..-5.50mm,
+    )
+    shape far_cup_end:  bar(
+      from:      point(across: -7.62mm, depth: 10.20mm),
+      to:        point(across: -11.09mm, depth: 2.13mm),
+      thickness: 1.50mm,
+      along:     -7mm..-5.50mm,
+    )
+  }
+
+  // A four-bar linkage, as euro_hinge's: the cup hangs on the two links
+  // from the arm.
+  mechanism {
+    pivot arm, inner_link at point(across: 12.62mm, depth: 6.87mm)
+    pivot cup, inner_link at point(across: -11.63mm, depth: 1.10mm)
+    pivot arm, outer_link at point(across: 12.78mm, depth: 8.45mm)
+    pivot cup, outer_link at point(across: -11.09mm, depth: 2.13mm)
+    drive: turn(cup, from: 0deg, to: opening_angle)
+    stop:  opening_angle "the arm's limiter stops the door here"
+  }
+
+  // The 35mm hole the cup is pressed into, cup_depth deep.
+  cut bore: crossing(piece, cup) { drill(diameter: 35mm, depth: 12.8mm) }
+}
+
 /// A brass butt hinge: two leaves on a pin, for box lids and small doors.
 /// Each leaf is housed in a shallow mortise, one in the lid or door and one
 /// in the box or cabinet, so the parts close face to face and only the

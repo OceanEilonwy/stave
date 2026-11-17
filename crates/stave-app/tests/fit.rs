@@ -179,6 +179,91 @@ fn a_cup_hinge_opens_at_most_110_degrees() {
     );
 }
 
+/// Work pack stage 5: a 165° hinge is one new kind in `std:hardware` and
+/// no Rust. Its corpus design checks clean; its door opens to 165deg on
+/// the kind's own linkage; no member it moves goes into any wood over the
+/// whole swing (the same depth test as `focus::no_cup_hinge_puts_steel_in_
+/// wood`); and a pose of 170deg is refused with the kind's stop message.
+#[test]
+fn a_165_degree_hinge_is_only_a_kind() {
+    use stave_geom::collide::{CONTACT_TOLERANCE, Placement};
+    use stave_geom::mechanism::MechanismPath;
+    use stave_geom::sweep::{Mover, Path, deepest_overlap};
+    use stave_lang::units::Angle;
+    use stave_model::mechanism::DriveValue;
+    use stave_model::solved::{BodyCarrier, PoseValue};
+
+    let folder = workspace().join("tests/designs/wide_hinge");
+    let opened = stave_app::open(&folder).unwrap();
+    assert!(
+        opened.diagnostics.is_empty(),
+        "{}",
+        render_diagnostics(&opened.sources, &opened.diagnostics)
+    );
+    let design = common::design(&opened);
+    let door = design.assemblies.iter().find(|a| a.name == "door").unwrap();
+    let mechanism = door.mechanism.as_ref().unwrap();
+    // Both hinges move the door alike, on the kind's linkage, to 165deg.
+    assert_eq!(mechanism.hardware().len(), 2);
+    assert_eq!(
+        mechanism.drive().extent(),
+        DriveValue::Turn(Angle::from_deg(165))
+    );
+    let posed = MechanismPath::new(mechanism).unwrap();
+    assert!((posed.amount(PoseValue::Open) - Angle::from_deg(165).to_radians_f64()).abs() < 1e-12);
+    assert_eq!(
+        door.motion.and_then(|m| m.opening_angle()),
+        Some(Angle::from_deg(165))
+    );
+
+    // No steel in wood anywhere in the swing: every member the mechanism
+    // moves, and every member on the door, against every part.
+    let path = Path::new(mechanism).unwrap();
+    let inside =
+        |part_assembly: Option<stave_model::solved::AssemblyId>| part_assembly == Some(door.id);
+    let mut checked = 0;
+    for hardware in &design.hardware {
+        for member in &hardware.members {
+            let mover = match member.carrier {
+                BodyCarrier::Link(link) => Mover::Member(&path, link),
+                BodyCarrier::Part(part) if inside(design.part(part).unwrap().assembly) => {
+                    Mover::Rigid(&path)
+                }
+                BodyCarrier::Part(_) | BodyCarrier::Region(_) => Mover::Fixed(Placement::REST),
+            };
+            let steel = WorldSolid::of_body(member);
+            for part in &design.parts {
+                let wood = WorldSolid::of_part(part, &Solid::of(part, design));
+                let part_mover = if inside(part.assembly) {
+                    Mover::Rigid(&path)
+                } else {
+                    Mover::Fixed(Placement::REST)
+                };
+                let found = deepest_overlap(&steel, mover, &wood, part_mover, 2000);
+                assert!(
+                    found.is_none_or(|depth| depth.depth <= CONTACT_TOLERANCE),
+                    "{}'s {} in {}: {found:?}",
+                    hardware.name,
+                    member.name,
+                    part.name
+                );
+                checked += 1;
+            }
+        }
+    }
+    assert!(checked > 0);
+
+    // Asked to open further than its stop, the kind says why not.
+    let text = std::fs::read_to_string(folder.join("project.stave"))
+        .unwrap()
+        .replace("pose door = open", "pose door = 170deg");
+    let opened = common::open_files(&[("project.stave", &text)]);
+    assert_eq!(
+        common::diagnostics(&opened),
+        ["motion: door can't open 170deg: the arm's limiter stops the door here"]
+    );
+}
+
 #[test]
 fn two_doors_on_one_divider_hit_each_other() {
     insta::assert_snapshot!(rendered("tests/broken/doors_hit_each_other"));
