@@ -484,10 +484,10 @@ impl Window {
                 .zip(state.orbit)
                 .and_then(|(shown, orbit)| {
                     let ray = orbit.ray(
-                        x as f32,
-                        y as f32,
-                        viewport.width() as f32,
-                        viewport.height() as f32,
+                        crate::convert::f32_of(x),
+                        crate::convert::f32_of(y),
+                        crate::convert::f32_of_int(viewport.width()),
+                        crate::convert::f32_of_int(viewport.height()),
                     );
                     shown.scene.pick(&shown.posed, ray)
                 })
@@ -876,7 +876,7 @@ impl Window {
             let window = self.clone();
             pan_drag.connect_drag_update(move |_, x, y| {
                 let (dx, dy) = window.drag_step(x, y);
-                let height = window.widgets.viewport.height() as f32;
+                let height = crate::convert::f32_of_int(window.widgets.viewport.height());
                 window.update_orbit(|orbit| orbit.panned(dx, dy, height));
             });
             viewport.add_controller(pan_drag);
@@ -885,7 +885,7 @@ impl Window {
         let scroll = gtk::EventControllerScroll::new(gtk::EventControllerScrollFlags::VERTICAL);
         let window = self.clone();
         scroll.connect_scroll(move |_, _, dy| {
-            window.update_orbit(|orbit| orbit.zoomed(-dy as f32));
+            window.update_orbit(|orbit| orbit.zoomed(crate::convert::f32_of(-dy)));
             glib::Propagation::Stop
         });
         viewport.add_controller(scroll);
@@ -950,7 +950,10 @@ impl Window {
         let mut state = self.state.borrow_mut();
         let (done_x, done_y) = state.drag_applied;
         state.drag_applied = (x, y);
-        ((x - done_x) as f32, (y - done_y) as f32)
+        (
+            crate::convert::f32_of(x - done_x),
+            crate::convert::f32_of(y - done_y),
+        )
     }
 
     // ---- watching ----
@@ -1131,10 +1134,7 @@ fn build_widgets(application: &adw::Application, folder: &Path) -> Widgets {
     }
 }
 
-/// A control's `f64` value as the `f32` the scene works in; values are
-/// far inside `f32`'s range, so only precision beyond a screen's is lost.
+/// A control's `f64` value as the `f32` the scene works in.
 fn narrow(value: f64) -> f32 {
-    #[allow(clippy::cast_possible_truncation)]
-    let narrowed = value as f32;
-    narrowed
+    crate::convert::f32_of(value)
 }

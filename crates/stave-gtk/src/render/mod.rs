@@ -140,7 +140,7 @@ fn vertex_layout() -> wgpu::VertexBufferLayout<'static> {
     const ATTRIBUTES: [wgpu::VertexAttribute; 3] =
         wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x3];
     wgpu::VertexBufferLayout {
-        array_stride: std::mem::size_of::<stave_geom::Vertex>() as u64,
+        array_stride: crate::convert::bytes(std::mem::size_of::<stave_geom::Vertex>()),
         step_mode: wgpu::VertexStepMode::Vertex,
         attributes: &ATTRIBUTES,
     }
@@ -158,7 +158,7 @@ fn edge_layout() -> wgpu::VertexBufferLayout<'static> {
 fn node_buffer(device: &wgpu::Device, capacity: u64) -> wgpu::Buffer {
     device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("nodes"),
-        size: capacity.max(1) * std::mem::size_of::<NodeData>() as u64,
+        size: capacity.max(1) * crate::convert::bytes(std::mem::size_of::<NodeData>()),
         usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     })
@@ -222,7 +222,9 @@ impl Renderer {
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: false,
-                        min_binding_size: NonZeroU64::new(std::mem::size_of::<Globals>() as u64),
+                        min_binding_size: NonZeroU64::new(crate::convert::bytes(
+                            std::mem::size_of::<Globals>(),
+                        )),
                     },
                     count: None,
                 },
@@ -261,7 +263,7 @@ impl Renderer {
         });
         let globals = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("globals"),
-            size: std::mem::size_of::<Globals>() as u64,
+            size: crate::convert::bytes(std::mem::size_of::<Globals>()),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -849,7 +851,7 @@ impl Renderer {
     }
 
     fn write_uniforms(&self, frame: &Frame<'_>, width: u32, height: u32) {
-        let aspect = width as f32 / height as f32;
+        let aspect = crate::convert::f32_of_u32(width) / crate::convert::f32_of_u32(height);
         let scene = frame.scene;
         let rest = scene.rest();
         let bounds = scene.bounds(frame.posed).or_else(|| scene.bounds(&rest));
@@ -890,7 +892,7 @@ impl Renderer {
                     .get(id.index())
                     .copied()
                     .unwrap_or(Mat4::IDENTITY);
-                let seed = (id.index() % 97) as f32 * 1.618;
+                let seed = crate::convert::f32_of_index(id.index() % 97) * 1.618;
                 let (colour, params) = match node.material {
                     Material::Wood(wood) => (
                         [wood.colour[0], wood.colour[1], wood.colour[2], wood.figure],
@@ -905,7 +907,7 @@ impl Renderer {
                 let tint = if selected == Some(node.item) {
                     [ACCENT[0], ACCENT[1], ACCENT[2], 0.6]
                 } else if in_problem {
-                    [PROBLEM[0], PROBLEM[1], PROBLEM[2], 0.5]
+                    [PROBLEM[0], PROBLEM[1], PROBLEM[2], 0.18]
                 } else {
                     [0.0; 4]
                 };

@@ -250,7 +250,7 @@ fn volume_vertex(@location(0) position: vec3<f32>) -> @builtin(position) vec4<f3
 
 @fragment
 fn volume_fragment() -> @location(0) vec4<f32> {
-    return vec4<f32>(0.85, 0.02, 0.02, 0.38);
+    return vec4<f32>(0.95, 0.0, 0.0, 0.62);
 }
 
 @fragment

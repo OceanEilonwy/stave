@@ -43,8 +43,12 @@ mod imp {
 
         fn snapshot(&self, snapshot: &gtk::Snapshot) {
             let widget = self.obj();
-            let bounds =
-                gtk::graphene::Rect::new(0.0, 0.0, widget.width() as f32, widget.height() as f32);
+            let bounds = gtk::graphene::Rect::new(
+                0.0,
+                0.0,
+                crate::convert::f32_of_int(widget.width()),
+                crate::convert::f32_of_int(widget.height()),
+            );
             if let Some(frame) = self.frame.borrow().as_ref() {
                 snapshot.append_texture(frame, &bounds);
             }
@@ -80,11 +84,8 @@ impl Viewport {
     /// The widget's size in device pixels.
     pub fn device_size(&self) -> (u32, u32) {
         let scale = self.scale();
-        let pixels = |logical: i32| -> u32 {
-            let value = (f64::from(logical.max(1)) * scale).round();
-            // Widget sizes are small positive numbers.
-            value.clamp(1.0, 16384.0) as u32
-        };
+        let pixels =
+            |logical: i32| -> u32 { crate::convert::pixels(f64::from(logical.max(1)) * scale) };
         (pixels(self.width()), pixels(self.height()))
     }
 

@@ -67,7 +67,7 @@ pub fn angle_from_radians_floor(radians: f64) -> Option<Angle> {
 
 /// The `i64` an integral `f64` holds, decoded from its bits (exact, with
 /// no cast); `None` when it isn't finite or doesn't fit.
-fn integer_from_f64(value: f64) -> Option<i64> {
+pub fn integer_from_f64(value: f64) -> Option<i64> {
     if !value.is_finite() {
         return None;
     }

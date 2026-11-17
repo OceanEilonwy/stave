@@ -14,6 +14,7 @@
 
 #![forbid(unsafe_code)]
 
+mod convert;
 mod render;
 mod screenshot;
 mod ui;
