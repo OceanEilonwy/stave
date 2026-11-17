@@ -36,6 +36,18 @@ pub struct Ray {
     pub direction: Vec3,
 }
 
+/// How the camera projects: in perspective, or flat (orthographic), the
+/// way a drawing shows a plan or an elevation: sizes don't shrink with
+/// distance, so parallel edges stay parallel and lengths can be compared.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Projection {
+    /// A natural view, gently foreshortened.
+    #[default]
+    Perspective,
+    /// A flat view: as wide as the perspective view is at the target.
+    Flat,
+}
+
 /// Where the camera is: it looks at `target` from `distance` away, from
 /// the direction given by `yaw` (about the up axis, 0 = straight in front,
 /// positive toward the right) and `pitch` (positive = from above).
@@ -49,6 +61,8 @@ pub struct Orbit {
     pub pitch: f32,
     /// Millimetres from the target.
     pub distance: f32,
+    /// Perspective or flat.
+    pub projection: Projection,
 }
 
 impl Orbit {
@@ -59,6 +73,21 @@ impl Orbit {
             yaw: DEFAULT_YAW,
             pitch: DEFAULT_PITCH,
             distance: 1.0,
+            projection: Projection::Perspective,
+        }
+        .framed(bounds, aspect)
+    }
+
+    /// A flat view straight down onto the box, its `yaw` the same as a
+    /// view from the front turned that far (0: the front at the bottom of
+    /// the picture), framed to show it all: a plan.
+    pub fn plan(bounds: Aabb, aspect: f32, yaw: f32) -> Orbit {
+        Orbit {
+            target: bounds.centre(),
+            yaw,
+            pitch: std::f32::consts::FRAC_PI_2,
+            distance: 1.0,
+            projection: Projection::Flat,
         }
         .framed(bounds, aspect)
     }
@@ -82,7 +111,12 @@ impl Orbit {
                 let toward = offset.dot(backward);
                 let across = offset.dot(right).abs() * FRAME_MARGIN / tan_horizontal;
                 let upward = offset.dot(up).abs() * FRAME_MARGIN / tan_vertical;
-                toward + across.max(upward)
+                match self.projection {
+                    Projection::Perspective => toward + across.max(upward),
+                    // A flat view is as wide as the perspective one at the
+                    // target: depth doesn't shrink anything.
+                    Projection::Flat => across.max(upward),
+                }
             })
             .fold(0.0_f32, f32::max);
         Orbit {
@@ -107,10 +141,12 @@ impl Orbit {
         self.target + self.backward() * self.distance
     }
 
-    /// The camera's right and up directions on screen.
+    /// The camera's right and up directions on screen. Right is level
+    /// and set by the yaw alone, so looking straight down still knows
+    /// which way is which.
     fn screen_axes(&self) -> (Vec3, Vec3) {
         let backward = self.backward();
-        let right = Vec3::Y.cross(backward).normalize_or(Vec3::X);
+        let right = Vec3::new(self.yaw.cos(), 0.0, -self.yaw.sin());
         let up = backward.cross(right).normalize_or(Vec3::Y);
         (right, up)
     }
@@ -158,7 +194,23 @@ impl Orbit {
     pub fn projection(&self, aspect: f32) -> Mat4 {
         let near = (self.distance * 0.01).max(1.0);
         let far = self.distance * 50.0 + 10_000.0;
-        Mat4::perspective_rh(FIELD_OF_VIEW, aspect.max(0.01), near, far)
+        match self.projection {
+            Projection::Perspective => {
+                Mat4::perspective_rh(FIELD_OF_VIEW, aspect.max(0.01), near, far)
+            }
+            Projection::Flat => {
+                let half_height = self.distance * (FIELD_OF_VIEW * 0.5).tan();
+                let half_width = half_height * aspect.max(0.01);
+                Mat4::orthographic_rh(
+                    -half_width,
+                    half_width,
+                    -half_height,
+                    half_height,
+                    near,
+                    far,
+                )
+            }
+        }
     }
 
     /// World to clip space.
@@ -247,5 +299,28 @@ mod tests {
         assert!((panned.target - orbit.target).dot(right) < 0.0);
         assert!(orbit.zoomed(1.0).distance < orbit.distance);
         assert!(orbit.zoomed(-1.0).distance > orbit.distance);
+    }
+
+    #[test]
+    fn a_plan_looks_straight_down_flat_with_the_front_at_the_bottom() {
+        let bounds = cabinet_bounds();
+        let orbit = Orbit::plan(bounds, 1.6, 0.0);
+        assert_eq!(orbit.projection, Projection::Flat);
+        let clip = orbit.view_projection(1.6);
+        for corner in bounds.corners() {
+            let p = clip.project_point3(corner);
+            assert!(p.x.abs() <= 1.0 && p.y.abs() <= 1.0, "{corner} at {p}");
+            assert!((0.0..=1.0).contains(&p.z));
+        }
+        // The front (+z) is at the bottom of the picture, the right on the
+        // right, and height doesn't move anything on screen.
+        let front = clip.project_point3(Vec3::new(0.0, 0.0, 50.0));
+        let back = clip.project_point3(Vec3::new(0.0, 0.0, -500.0));
+        assert!(front.y < back.y);
+        let right = clip.project_point3(Vec3::new(900.0, 0.0, 0.0));
+        let left = clip.project_point3(Vec3::new(0.0, 0.0, 0.0));
+        assert!(right.x > left.x);
+        let high = clip.project_point3(Vec3::new(0.0, 1500.0, 0.0));
+        assert!((high.x - left.x).abs() < 1e-5 && (high.y - left.y).abs() < 1e-5);
     }
 }

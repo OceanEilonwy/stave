@@ -20,10 +20,15 @@
 
 pub mod camera;
 pub mod export;
+pub mod focus;
 mod graph;
 mod pick;
 
-pub use camera::{Orbit, Ray};
+pub use camera::{Orbit, Projection, Ray};
+pub use focus::{
+    Anchor, Label, LineKind, Look, MotionPlay, Overlay, OverlayLine, Plan, Play, PlayFrame,
+    StepPlay,
+};
 pub use graph::{
     BuildOptions, Highlight, Item, LinkFollower, Material, MotionRange, Node, NodeId, Posed,
     SceneEntry, SceneGraph, Section, Wood,

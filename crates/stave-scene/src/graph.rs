@@ -538,6 +538,13 @@ impl SceneGraph {
         })
     }
 
+    /// Where an assembly's motion moves it at an amount (radians or
+    /// millimetres), from rest; `None` when it doesn't move.
+    pub fn motion_transform(&self, assembly: AssemblyId, amount: f32) -> Option<Mat4> {
+        let motion = self.motions.get(assembly.index()).copied().flatten()?;
+        Some(motion.transform(amount))
+    }
+
     /// The amount (radians or millimetres) a pose value means for an
     /// assembly's motion.
     pub fn amount(&self, assembly: AssemblyId, value: PoseValue) -> Option<f32> {
