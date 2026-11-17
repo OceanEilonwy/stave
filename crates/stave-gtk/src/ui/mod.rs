@@ -383,6 +383,13 @@ impl Window {
         window.install_actions(options.theme);
         window.connect_events();
         window.watch();
+        // The keyboard starts in the 3D view, not in the first focusable
+        // widget GTK finds, which can be a problem's selectable `stave
+        // check` text in the inspector (it would show a text cursor).
+        gtk::prelude::GtkWindowExt::set_focus(
+            &window.widgets.window,
+            Some(window.widgets.viewport.upcast_ref::<gtk::Widget>()),
+        );
         window.widgets.window.present();
         window.show_folder();
         window.dispatch(Command::Check);

@@ -346,4 +346,9 @@ pub fn install(display: &gdk::Display) {
         &provider,
         gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
     );
+    // A selectable label (a problem's `stave check` text, focus mode's
+    // insert line) would otherwise select all its text whenever it takes
+    // the keyboard focus, so it looks highlighted for no reason. It can
+    // still be selected with the mouse to copy.
+    gtk::Settings::for_display(display).set_gtk_label_select_on_focus(false);
 }
