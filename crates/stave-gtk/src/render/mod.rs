@@ -17,6 +17,9 @@ use wgpu::util::DeviceExt as _;
 
 const COLOUR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
+/// The selection mask: red where the selection is seen, green wherever it
+/// covers.
+const MASK_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rg8Unorm;
 const SAMPLES: u32 = 4;
 const SHADOW_SIZE: u32 = 2048;
 
@@ -40,6 +43,18 @@ impl Backdrop {
         }
     }
 
+    /// The selection outline on it, linear, and how strongly it shows
+    /// where the selection is hidden: the accent, a little deeper on the
+    /// light stage, so it stands out against the stage and the wood.
+    fn outline(self) -> [f32; 4] {
+        match self {
+            // #1f5fcc
+            Backdrop::Light => [0.0137, 0.1144, 0.6038, 0.3],
+            // #2f6fd6
+            Backdrop::Dark => [0.0284, 0.1590, 0.6724, 0.35],
+        }
+    }
+
     /// Its colour, linear.
     fn colour(self) -> wgpu::Color {
         match self {
@@ -59,8 +74,9 @@ impl Backdrop {
     }
 }
 
-/// The selection accent (#2f6fd6), linear.
-const ACCENT: [f32; 3] = [0.0284, 0.1590, 0.6724];
+/// What a selected part's base colour is washed with: a light accent
+/// (#6f9ff0), linear, so the part reads as selected without going dark.
+const SELECTED_WASH: [f32; 3] = [0.159, 0.3467, 0.8714];
 
 /// The problem red (#d6302f), linear, for parts in a problem.
 const PROBLEM: [f32; 3] = [0.6724, 0.0296, 0.0284];
@@ -83,6 +99,9 @@ struct Globals {
     section: [f32; 4],
     /// rgb: the ground shadow's colour, linear; a: its strength.
     shadow: [f32; 4],
+    /// rgb: the selection outline's colour, linear; a: its strength where
+    /// the selection is hidden.
+    outline: [f32; 4],
 }
 
 #[repr(C)]
@@ -95,6 +114,8 @@ struct NodeData {
     /// x: opacity; y: how far faded toward a pale grey (a ghost); z: how
     /// much darker faces cut by a joint are; w: outline strength.
     style: [f32; 4],
+    /// rgb: the selection wash's colour; a: 1 when selected.
+    selected: [f32; 4],
 }
 
 /// A vertex of the overlay: a point on screen (normalised device
@@ -161,6 +182,11 @@ struct Target {
     padded_row: u32,
     msaa: wgpu::TextureView,
     depth: wgpu::TextureView,
+    /// The selection mask, multisampled; its resolved copy is bound for
+    /// the outline pass by `mask_group`.
+    mask: wgpu::TextureView,
+    mask_resolved: wgpu::TextureView,
+    mask_group: wgpu::BindGroup,
     resolved: wgpu::Texture,
     resolved_view: wgpu::TextureView,
     readback: wgpu::Buffer,
@@ -205,6 +231,14 @@ pub struct Renderer {
     translucent_section_pipeline: wgpu::RenderPipeline,
     /// The overlay: triangles on screen, on top of everything.
     overlay_pipeline: wgpu::RenderPipeline,
+    /// The selection mask: where the selection covers (no depth test),
+    /// and where it is seen (tested against the scene's depth, with the
+    /// meshes' bias so its own faces pass).
+    mask_covered_pipeline: wgpu::RenderPipeline,
+    mask_seen_pipeline: wgpu::RenderPipeline,
+    mask_layout: wgpu::BindGroupLayout,
+    /// The selection outline: a full-screen pass over the mask.
+    outline_pipeline: wgpu::RenderPipeline,
     meshes: Vec<GpuMesh>,
     target: Option<Target>,
 }
@@ -643,7 +677,106 @@ impl Renderer {
             multiview_mask: None,
             cache: None,
         });
+        let mask_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("selection mask"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            }],
+        });
+        let outline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("outline"),
+            bind_group_layouts: &[Some(&scene_layout), Some(&mask_layout)],
+            immediate_size: 0,
+        });
+        let mask_pipeline =
+            |label: &'static str, compare: wgpu::CompareFunction, channel: wgpu::ColorWrites| {
+                device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                    label: Some(label),
+                    layout: Some(&main_layout),
+                    vertex: wgpu::VertexState {
+                        module: &shader,
+                        entry_point: Some("mesh_vertex"),
+                        compilation_options: Default::default(),
+                        buffers: &mesh_buffers,
+                    },
+                    // Both faces: a mirrored part or a section's cut face
+                    // counts as much as any other.
+                    primitive: wgpu::PrimitiveState {
+                        topology: wgpu::PrimitiveTopology::TriangleList,
+                        cull_mode: None,
+                        ..Default::default()
+                    },
+                    depth_stencil: Some(wgpu::DepthStencilState {
+                        format: DEPTH_FORMAT,
+                        depth_write_enabled: Some(false),
+                        depth_compare: Some(compare),
+                        stencil: wgpu::StencilState::default(),
+                        bias: mesh_bias,
+                    }),
+                    multisample,
+                    fragment: Some(wgpu::FragmentState {
+                        module: &shader,
+                        entry_point: Some("mask_fragment"),
+                        compilation_options: Default::default(),
+                        targets: &[Some(wgpu::ColorTargetState {
+                            format: MASK_FORMAT,
+                            blend: None,
+                            write_mask: channel,
+                        })],
+                    }),
+                    multiview_mask: None,
+                    cache: None,
+                })
+            };
+        let mask_covered_pipeline = mask_pipeline(
+            "selection mask, covered",
+            wgpu::CompareFunction::Always,
+            wgpu::ColorWrites::GREEN,
+        );
+        let mask_seen_pipeline = mask_pipeline(
+            "selection mask, seen",
+            wgpu::CompareFunction::LessEqual,
+            wgpu::ColorWrites::RED,
+        );
+        let outline_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("selection outline"),
+            layout: Some(&outline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("outline_vertex"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: Some(false),
+                depth_compare: Some(wgpu::CompareFunction::Always),
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample,
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("outline_fragment"),
+                compilation_options: Default::default(),
+                targets: &blended,
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
         Ok(Renderer {
+            mask_covered_pipeline,
+            mask_seen_pipeline,
+            mask_layout,
+            outline_pipeline,
             translucent_pipeline,
             translucent_section_pipeline,
             overlay_pipeline,
@@ -768,6 +901,28 @@ impl Renderer {
                 wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
             );
             let resolved_view = resolved.create_view(&wgpu::TextureViewDescriptor::default());
+            let mask = texture(
+                "selection mask",
+                SAMPLES,
+                MASK_FORMAT,
+                wgpu::TextureUsages::RENDER_ATTACHMENT,
+            )
+            .create_view(&wgpu::TextureViewDescriptor::default());
+            let mask_resolved = texture(
+                "selection mask, resolved",
+                1,
+                MASK_FORMAT,
+                wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            )
+            .create_view(&wgpu::TextureViewDescriptor::default());
+            let mask_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("selection mask"),
+                layout: &self.mask_layout,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&mask_resolved),
+                }],
+            });
             let padded_row = (width * 4).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
             let readback = self.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("readback"),
@@ -781,6 +936,9 @@ impl Renderer {
                 padded_row,
                 msaa,
                 depth,
+                mask,
+                mask_resolved,
+                mask_group,
                 resolved,
                 resolved_view,
                 readback,
@@ -852,6 +1010,27 @@ impl Renderer {
             })
             .collect();
         translucent.sort_by(|a, b| b.0.total_cmp(&a.0));
+        // Every shown node of a selected item is outlined (a hinge is
+        // two), solid or see-through.
+        let selected_items: Vec<stave_scene::Item> = frame
+            .selection
+            .iter()
+            .filter_map(|id| frame.scene.node(*id))
+            .map(|node| node.item)
+            .collect();
+        let outlined: Vec<(u32, &GpuMesh)> = frame
+            .scene
+            .node_ids()
+            .zip(&self.meshes)
+            .filter(|(id, _)| {
+                frame.posed.shown(*id).is_some()
+                    && frame
+                        .scene
+                        .node(*id)
+                        .is_some_and(|node| selected_items.contains(&node.item))
+            })
+            .filter_map(|(id, mesh)| Some((u32::try_from(id.index()).ok()?, mesh)))
+            .collect();
         let overlay = frame
             .overlay
             .map(|overlay| overlay_triangles(overlay, frame, width, height))
@@ -904,17 +1083,17 @@ impl Renderer {
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &target.msaa,
                     depth_slice: None,
-                    resolve_target: Some(&target.resolved_view),
+                    resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(frame.backdrop.colour()),
-                        store: wgpu::StoreOp::Discard,
+                        store: wgpu::StoreOp::Store,
                     },
                 })],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                     view: &target.depth,
                     depth_ops: Some(wgpu::Operations {
                         load: wgpu::LoadOp::Clear(1.0),
-                        store: wgpu::StoreOp::Discard,
+                        store: wgpu::StoreOp::Store,
                     }),
                     stencil_ops: None,
                 }),
@@ -962,6 +1141,76 @@ impl Renderer {
                     }
                 }
             }
+        }
+        if !outlined.is_empty() {
+            // The selection mask, tested against the depth just drawn.
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("selection mask"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &target.mask,
+                    depth_slice: None,
+                    resolve_target: Some(&target.mask_resolved),
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Discard,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &target.depth,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Discard,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_bind_group(0, &self.scene_group, &[]);
+            pass.set_bind_group(1, &self.shadow_group, &[]);
+            for pipeline in [&self.mask_covered_pipeline, &self.mask_seen_pipeline] {
+                pass.set_pipeline(pipeline);
+                for (index, mesh) in &outlined {
+                    pass.set_vertex_buffer(0, mesh.vertices.slice(..));
+                    pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
+                    pass.draw_indexed(0..mesh.index_count, 0, *index..*index + 1);
+                }
+            }
+        }
+        {
+            // On top: the selection's outline, a problem's shared wood and
+            // the overlay.
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("on top"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &target.msaa,
+                    depth_slice: None,
+                    resolve_target: Some(&target.resolved_view),
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Discard,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &target.depth,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Discard,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_bind_group(0, &self.scene_group, &[]);
+            if !outlined.is_empty() {
+                pass.set_pipeline(&self.outline_pipeline);
+                pass.set_bind_group(1, &target.mask_group, &[]);
+                pass.draw(0..3, 0..1);
+            }
+            pass.set_bind_group(1, &self.shadow_group, &[]);
             if let Some((faces, face_count, lines, line_count)) = &volumes {
                 pass.set_pipeline(&self.volume_pipeline);
                 pass.set_vertex_buffer(0, faces.slice(..));
@@ -1116,6 +1365,7 @@ impl Renderer {
                 section.normal.extend(section.offset).to_array()
             }),
             shadow: frame.backdrop.shadow(),
+            outline: frame.backdrop.outline(),
         };
         self.queue
             .write_buffer(&self.globals, 0, bytemuck::bytes_of(&globals));
@@ -1158,10 +1408,16 @@ impl Renderer {
                     Look::XRay => [0.38, 0.1, cut_tint * 1.4, 0.9],
                 };
                 let in_problem = frame.highlight.is_some_and(|h| h.nodes.contains(&id));
-                let tint = if selected.contains(&node.item) {
-                    [ACCENT[0], ACCENT[1], ACCENT[2], 0.6]
-                } else if in_problem {
+                let is_selected = selected.contains(&node.item);
+                // Selected wins over a problem's red: the outline and the
+                // flat wash say which part is meant.
+                let tint = if in_problem && !is_selected {
                     [PROBLEM[0], PROBLEM[1], PROBLEM[2], 0.18]
+                } else {
+                    [0.0; 4]
+                };
+                let selected = if is_selected {
+                    [SELECTED_WASH[0], SELECTED_WASH[1], SELECTED_WASH[2], 1.0]
                 } else {
                     [0.0; 4]
                 };
@@ -1171,6 +1427,7 @@ impl Renderer {
                     params,
                     tint,
                     style,
+                    selected,
                 })
             })
             .collect();

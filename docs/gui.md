@@ -37,7 +37,15 @@ system|light|dark`, `--view parts|cut-list|files`, `--select NAME` (a
 part, piece of hardware or assembly), `--focus NAME` (a joint or a piece
 of hardware) with `--plan` (from above), `--in-3d` and `--step AMOUNT`
 (0 to 1), `--diagnostic N` (select the Nth problem), `--problems` (open
-the problems list), `--scene NAME`, `--explode AMOUNT`, `--size WxH`.
+the problems list), `--scene NAME`, `--explode AMOUNT`, `--size WxH`,
+and for the camera `--turn DEGREES` and `--pitch DEGREES` (as for
+`--screenshot`), `--frame-selection` (framed on the selection, as F does)
+and `--zoom FACTOR` (that many times closer once framed):
+
+```
+tools/window-shot close.png examples/clothing_cabinet --select 'door_r.stile[latch]' --zoom 3.5 --turn 15
+```
+
 Screenshot only: `--checking` holds a second check running (the pill's
 spinner), `--building` presses the build button and holds its check.
 
@@ -250,6 +258,19 @@ free of its warning.
 
 ## The 3D view's controls
 
+- **The selection** (`render::Renderer`): every node of the selected
+  item (every item of a selected assembly) is drawn in one flat colour,
+  its wood's base colour washed with a light accent, so neither the grain
+  nor the darker cut faces streak it, and still lit, so its form reads.
+  Round it goes an accent outline a constant few pixels wide at any zoom:
+  the selected nodes are drawn into a mask (where they are seen, tested
+  against the scene's depth, and where they cover at all), and a
+  full-screen pass draws the accent where the mask changes. That traces
+  the outside, holes seen through, parts in front and see-through parts
+  alike, needs no closed or consistently wound meshes (mirrored parts),
+  and draws over the part's own edges; where the selection is hidden
+  behind other parts the outline is faint. Focus mode selects nothing in
+  the view; a problem's parts keep their red tint and red shared wood.
 - **View toolbar** (top left, `ViewToolbar`): "Pull apart" is a toggle;
   on, it sets `Command::SetExplode(1)` and grows a play button and the
   "together … apart" slider (`Slider`, 12 px handle, thin ring); the
