@@ -52,16 +52,6 @@ impl Frame {
         Frame { origin, axes }
     }
 
-    /// The same frame turned so the thickness comes first, then the
-    /// length and the width (a cyclic turn, so handedness is kept).
-    pub fn thickness_first(&self) -> Frame {
-        let [l, w, t] = self.axes;
-        Frame {
-            origin: self.origin,
-            axes: [t, l, w],
-        }
-    }
-
     /// The same frame with `axis` first and the two axes across it after,
     /// in [`crate::solid::across`] order. The handedness may change; every
     /// builder winds triangles by their normals, so that doesn't matter.

@@ -1,0 +1,194 @@
+// expect: error[motion] door.hinges[bottom]'s outer_link hits door.panel when door is opened past 106.6deg
+stave 1
+
+// A door on cup hinges whose outer link is pinned in the cup 1.5mm deeper
+// into the door than the catalogue hinge's. The kind's members and cut
+// are otherwise `euro_hinge`'s, and the door overlays the side by the
+// hinge's 17.5mm. At rest the link lies in the cup's bore; near the end
+// of the door's swing it runs into the wood beside the bore. Nothing names
+// the link in the checker: the sweep that swings doors finds it, as it
+// finds any body in the way.
+
+project "Hinge link in wood" {
+  units: mm
+}
+
+stock ply_18 { species: birch, form: plywood, thickness: 18mm }
+
+part base : ply_18 {
+  length: 600mm
+  width:  400mm
+  place {
+    ground
+  }
+}
+
+part side_l : ply_18 {
+  length: 700mm
+  width:  400mm
+  place {
+    orient(length: up, width: back)
+    against(base.top)
+    flush(base.left)
+    flush(base.back)
+  }
+}
+
+part side_r = mirror(side_l, about: mid(base, across))
+
+region bay = opening(
+  left:   side_l.right,
+  right:  side_r.left,
+  bottom: base.top,
+  top:    side_l.top,
+  front:  base.front,
+  back:   base.back,
+)
+
+component Door {
+  param opening    : Region
+  param hinge_side : Part
+
+  region face = cover(opening, overlay(left: 17.5mm, right: 17.5mm), thickness: ply_18.thickness)
+
+  part panel : ply_18 {
+    length: face.up
+    width:  face.across
+    place {
+      orient(length: up, width: right)
+      flush(face.left)
+      flush(face.bottom)
+      flush(face.front)
+    }
+  }
+
+  hardware hinges[bottom, top] : bent_hinge(panel, on: hinge_side) {
+    place {
+      spaced(ends(inset: 80mm), from: panel.bottom, to: panel.top)
+    }
+  }
+}
+
+assembly door : Door {
+  opening:    bay
+  hinge_side: side_l
+}
+
+/// `euro_hinge` with its outer link's pin in the cup moved 1.5mm deeper
+/// into the cup. A concealed 35mm cup hinge for an overlay door (the common European
+/// clip-on kind). The cup is bored into the back of the door's hinge stile;
+/// the mounting plate screws to the inside face of the cabinet side, on the
+/// 37mm screw line of 32mm-system cabinets. The hinge is a four-bar
+/// linkage: an arm on the plate, two links, and the boss in the cup, so the
+/// door moves forward and out as it turns and clears the side it covers.
+/// Numbers are catalogue values for a full-overlay 110° hinge on a 0mm
+/// plate (Hettich Sensys 8645i).
+kind bent_hinge : hinge {
+  roles {
+    piece: Part                      // the door's hinge stile
+    on:    Part                      // the cabinet side
+  }
+  /// How far the door opens; a clip-on limiter stops it sooner.
+  param opening_angle = 110deg within 85deg..110deg
+  /// From the door's edge to the rim of the cup (the boring distance).
+  param cup_inset = 5mm within [3mm, 4mm, 4.5mm, 5mm, 6mm, 7mm]
+  /// From the cabinet's front edge back to the plate's screw line.
+  param plate_setback = 37mm within [37mm, 52mm]
+  /// How far the mounting plate lifts the arm off the side (the catalogue's
+  /// distance): a taller plate gives a smaller overlay.
+  param plate_height = 0mm within [0mm, 1.5mm, 3mm, 6mm, 9mm]
+  cup_diameter:       35mm
+  cup_depth:          12.8mm
+  // The overlay with the cup at the door's very edge on a 0mm plate (the
+  // catalogue's base): the door overlays the side by
+  // base_overlay + cup_inset - plate_height.
+  base_overlay:       12.5mm
+  // How far the arm's side screw moves the door either way.
+  overlay_adjustment: 2mm
+
+  // On the back of the stile, the cup's centre cup_inset and half the cup
+  // in from the edge nearer the side. The design says where along it.
+  mount {
+    face:   back
+    across: from(edge(piece, nearer: on), inset: cup_inset + 35mm / 2)
+    along:  open
+  }
+
+  /// The mounting plate: screwed to the inside of the cabinet side, it
+  /// holds the hinge on the side and never moves.
+  member plate {
+    with:  on
+    // 11mm thick, standing off the side's inside face; 36mm wide, its
+    // middle plate_setback back from the side's front edge (the screw
+    // line); 50mm long, centred on the cup.
+    shape: box(along: 50mm, across: 0mm..11mm, depth: 36mm)
+    mount {
+      across: from(face(on, toward: piece))
+      depth:  from(face(on, toward: piece), inset: plate_setback)
+    }
+  }
+  /// The arm: it clips onto the plate and reaches out to the door; its
+  /// screws set how far the door overlays the side.
+  member arm {
+    with:          on
+    // From the back of the plate to the back of the door, and the knuckle
+    // that reaches into the cup and carries the arm's two pins. The plate
+    // is 36mm wide, centred plate_setback back from the side's front edge.
+    shape body:    box(along: 16mm, across: -2.90mm..15.00mm, depth: -(plate_setback + 18mm)..0mm)
+    shape knuckle: box(along: 16mm, across: 8.00mm..15.00mm, depth: 0mm..12.40mm)
+  }
+  /// The two links: steel bars pinned to the arm at one end and to the cup
+  /// at the other. As the door opens they fold out, pushing the door
+  /// forward and away from the side so its edge doesn't hit it.
+  member links
+  /// The cup: a steel cup pressed into a 35mm hole bored in the back of
+  /// the door. The boss in its middle is where the links are pinned.
+  member cup {
+    with:  piece
+    // cup_diameter by cup_depth: a shape may use the kind's params, not
+    // its fields.
+    shape: cylinder(diameter: 35mm, depth: 0mm..12.8mm)
+  }
+  /// The inner link: a solid steel bar, deeper in the cup when the door is
+  /// closed.
+  member inner_link {
+    shape: bar(
+      from:      point(across: 13.50mm, depth: 10.90mm),
+      to:        point(across: -8.80mm, depth: 7.33mm),
+      thickness: 1.50mm,
+      along:     9mm,
+    )
+  }
+  /// The outer link: a strap whose two sides pass either side of the inner
+  /// link.
+  member outer_link {
+    shape near: bar(
+      from:      point(across: 13.28mm, depth: 3.56mm),
+      to:        point(across: -9.54mm, depth: 2.89mm),
+      thickness: 1.50mm,
+      along:     5.50mm..7mm,
+    )
+    shape far:  bar(
+      from:      point(across: 13.28mm, depth: 3.56mm),
+      to:        point(across: -9.54mm, depth: 2.89mm),
+      thickness: 1.50mm,
+      along:     -7mm..-5.50mm,
+    )
+  }
+
+  // A four-bar linkage: the cup hangs on the two links from the arm. The
+  // pins are the catalogue hinge's, fitted in
+  // docs/hardware/cup-hinge-linkage.md.
+  mechanism {
+    pivot arm, inner_link at point(across: 13.50mm, depth: 10.90mm)
+    pivot cup, inner_link at point(across: -8.80mm, depth: 7.33mm)
+    pivot arm, outer_link at point(across: 13.28mm, depth: 3.56mm)
+    pivot cup, outer_link at point(across: -9.54mm, depth: 2.89mm)
+    pin_diameter: 3mm
+    drive:        turn(cup, from: 0deg, to: opening_angle)
+    stop:         opening_angle "the limiter in the arm stops the door here"
+  }
+
+  // The 35mm hole the cup is pressed into, cup_depth deep.
+  cut bore: crossing(piece, cup) { drill(diameter: 35mm, depth: 12.8mm) }
+}

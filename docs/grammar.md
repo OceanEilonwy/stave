@@ -856,7 +856,9 @@ body may have **any name**, and is what a `mechanism` moves:
 
 `with:` names a role (the member moves with that part: `piece`, `on`) or
 another member with a body (it rides on that member). A member with no
-`with:` is placed by the mechanism, as a link is. A member with a body has
+`with:` is placed by the mechanism, as a link is; in a kind whose
+mechanism doesn't place it (or that has none) nothing moves it, which is
+`error[missing-field]` at the member. A member with a body has
 at least one shape (`error[missing-field]` otherwise); two shapes of one
 member have different names (`error[duplicate-name]`), and a member with
 more than one names them all. A member's own `mount { }` places it on some
@@ -865,7 +867,8 @@ axes of the frame from something other than the kind's origin (see
 
 *Being replaced:* a member **without** a body (`member plate`) is a word
 from the fixed table below, kept for the viewer's list until every member
-has a body. A member with a body whose name is in the table is that entry
+has a body. It has no shape, so it is neither drawn nor checked; a member
+that is drawn or checked has a body and at least one shape. A member with a body whose name is in the table is that entry
 of the list too. The words, per base:
 
 | Base | Members |
@@ -1065,15 +1068,12 @@ is `from(anchor, inset: d)`:
   }
 ```
 
-**Which members are checked** is being replaced: until every member's
-shapes are checked (see [Hardware](#hardware)), the overlap and motion
-checks see, by name, a hinge's `cup` or `leaf` and its `plate` or
-`fixed_leaf` and the two shapes of its `arm`; a slide's `drawer_member` and
-`cabinet_member`; a pull's `knob` or `bar`. A cup hinge's arm, knuckle and
-links must stay out of the wood of the door and of `on` at every angle as
-the door opens; only the cup's bore is taken out of the door (its rim lies
-on the face and removes no wood). The hinge stops at its widest angle on a
-limiter inside the arm, steel on steel; nothing is excused as a stop.
+**Every member's shapes are checked**, like any part (see [One collision
+model](#one-collision-model)): a cup hinge's arm, knuckle and links must
+stay out of the wood of the door and of `on` at rest and at every angle as
+the door opens, and the door's wood has room for them only where the kind's
+`cut` bored it. The hinge stops at its widest angle on a limiter inside the
+arm, steel on steel; nothing is excused as a stop.
 
 **Contact.** Every part a piece of hardware joins must meet it: of the
 members a role's part carries (`with:` that role), at least one touches or
@@ -1306,8 +1306,10 @@ joints extend the same end of a part, the extensions add up.
 
 **`uses:`** — a fastener kind value, with `count:` saying how many each pair
 takes (default 1): `uses: dowel_pin(diameter: diameter, length: 2 * depth,
-count: count)`. Fasteners appear in the hardware list. They are never placed
-and take no part in collision checks.
+count: count)`. Fasteners appear in the hardware list. They are counted, never
+placed, take no part in collision checks, and are the only thing not
+modelled, for joints and hardware alike (see [One collision
+model](#one-collision-model)).
 
 **`cut_first:`** — a role, or a list of roles in order. The listed roles are
 cut in that order, each before the roles after it; roles not listed come after
@@ -1588,10 +1590,48 @@ only ever used through a `uses:`, and `tool` kinds are listed in a
 project's `tools:` and a recipe's `tools:`.
 
 **Envelopes.** Outside a member, `box(length:, width:, thickness:)` and
-`cylinder(diameter:, length:)` are envelopes: a fastener's size. The members
-the checks see (see [Hardware placement](#hardware-placement)) may overlap
-the hardware's own role parts (a hinge's cup is sunk into its door);
-overlapping anything else is `error[overlap]`.
+`cylinder(diameter:, length:)` are envelopes: a fastener's size.
+
+#### One collision model
+
+Every solid in the design is a **body**: every part with its cuts made, and
+every shape of every hardware member, wood or steel. Each body is posed by
+the motions: a member moves with the part or region it is `with:` (or with
+the member it rides on), and a member the mechanism places (a link) moves
+as the mechanism moves it. One overlap check covers every body at rest and
+at every scene's poses, and one sweep covers every motion (see
+[Scenes](#scenes)). Two bodies may touch (within the 0.05mm contact
+tolerance); they may share room only where a cut has made it: a bore, a
+mortise, a pilot hole. A piece of hardware makes its own room with its
+`cut`s, as a joint does: a cup sits in its door because the kind bores the
+hole, and a kind without that cut overlaps its own door (`error[overlap]`).
+There is no way to switch the check off and no pair is let off; two rules
+hold for every kind alike:
+
+- **A kind's own members are not checked against each other.** Stave
+  checks a design, not a product: how a hinge's links fold inside its arm
+  is the maker's drawing, not the design's. Members of two different
+  pieces of hardware are checked against each other like anything else.
+- **Fasteners named in `uses:` are counted, not placed, and not modelled**
+  (see `uses:`). A screw that is a member (a knob's screw) is a shape like
+  any other, and the kind drills its hole, so it fits and touches.
+
+Only declared shapes are drawn, and everything drawn is checked: a member
+without a body is neither (see [Hardware members](#hardware-members)).
+Diagnostics name a member as `<hardware>'s <member>`: `error[overlap]` at
+rest and at a scene's poses, `error[motion]` in a sweep
+(`door_l.hinges[upper]'s inner_link hits door_l.stile when door_l is
+opened past 98.2deg`).
+
+**Sweeps see cuts.** In the plane a hinge turns in, a part's wood is its
+boxes less its cuts wherever that takes away no more than the cut does: a
+round hole whose axis lies in the plane (a cup's bore) is taken out as its
+narrowest chord over the width, along the hinge's axis, that the other body
+shares with it. Box cuts are already out of the boxes. Other holes and
+angled cuts are left as wood there: a contact may be reported that a finer
+model would clear, never the reverse. A slide's travel and a turn about one
+fixed line are swept exactly; a linkage, and every member its mechanism
+moves, by conservative advancement to the contact tolerance.
 
 **Models are for looks only.**
 
@@ -2004,14 +2044,16 @@ scene drawer_bench "Top drawer on the bench" {
   travels along its piece's length, out through the front of its `in` region.
   A mirrored assembly has the mirror image of its source's motion.
 - Every scene is collision checked, and every motion is checked through its
-  whole travel, not only at its ends (`error[motion]`): a door is swung from
-  closed to `opening_angle` and a drawer slid from shut to `travel`, and the
-  message names the first angle or distance at which it hits something. Each
-  motion is checked from the rest position and from every scene's poses. A
-  door on cup hinges follows its linkage (it turns and moves at once), and
-  the hinges' own arms and links are checked against the door and the side
-  too; the first contact is found to within the 0.05mm contact tolerance,
-  never stepped over. A door on butt hinges turns about its pin.
+  whole travel, not only at its ends (`error[motion]`): every body that
+  moves (a door, the hardware on it, a link its hinge's mechanism turns) is
+  swept from closed to `opening_angle`, or from shut to `travel`, against
+  every body that moves differently, and the message names the first angle
+  or distance at which they hit (see [One collision
+  model](#one-collision-model)). Each motion is checked from the rest
+  position and from every scene's poses; the first contact is found to
+  within the 0.05mm contact tolerance, never stepped over. A door on cup
+  hinges follows its linkage (it turns and moves at once); a door on butt
+  hinges turns about its pin.
 - `explode: true` draws the scene with every part moved out from its rest
   position along the direction its joint is assembled (the reverse of the
   joint's last `insert` step), so the joinery shows. Assemblies move out

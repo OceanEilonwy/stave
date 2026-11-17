@@ -234,6 +234,7 @@ impl Input<'_> {
                     frame: *frame_box,
                     world: bounds,
                     cylinder: None,
+                    outline: None,
                 }],
             },
             Thickness::Across,

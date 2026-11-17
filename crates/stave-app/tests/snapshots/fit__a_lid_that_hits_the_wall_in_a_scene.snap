@@ -9,5 +9,5 @@ error[motion]: lid.panel hits wall when lid is open 90deg
    |   ^^^^^^^^^^^^^^^^
    = note: in scene 'upright'
    = note: lid.panel goes 12mm into wall there
-   = note: the same line also causes: lid.hinges[left] hits wall when lid is open 90deg; lid.hinges[right] hits wall when lid is open 90deg
+   = note: the same line also causes: lid.hinges[left]'s leaf hits wall when lid is open 90deg; lid.hinges[right]'s leaf hits wall when lid is open 90deg
    = help: pose lid less far open in 'upright', or move wall out of its way

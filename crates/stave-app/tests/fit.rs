@@ -144,7 +144,8 @@ fn a_door_too_far_out_for_its_cup_hinges() {
 /// at 110deg. Now a kind that copies `euro_hinge`'s mechanism word for
 /// word and asks it to open 125deg is stopped by the mechanism itself: its
 /// links don't lock before 180deg, but past 112.1deg its inner link runs
-/// into the door, which is why the kind's stop is at 110deg.
+/// into the door, which is why the kind's stop is at 110deg. The motion
+/// sweep that swings doors finds it, as it finds any body in the way.
 #[test]
 fn a_cup_hinge_opens_at_most_110_degrees() {
     let library = std::fs::read_to_string(workspace().join("std/hardware/hinges.stave")).unwrap();
@@ -173,7 +174,7 @@ fn a_cup_hinge_opens_at_most_110_degrees() {
     let messages = common::diagnostics(&opened);
     assert!(
         messages.iter().any(|m| m
-            == "motion: the inner link of door.hinges[bottom] hits door.panel when door is opened past 112.1deg"),
+            == "motion: door.hinges[bottom]'s inner_link hits door.panel when door is opened past 112.1deg"),
         "{messages:?}"
     );
 }
@@ -333,5 +334,98 @@ joint seat : flatten(rail, into: post)",
     assert_eq!(
         note,
         &["seat: rail is drawn uncut there, and its fit is checked as drawn".to_owned()]
+    );
+}
+
+/// Every message of a design, with the notes a merged diagnostic carries
+/// (the other mistakes its line causes).
+fn messages_and_notes(opened: &stave_app::Opened) -> Vec<String> {
+    opened
+        .diagnostics
+        .iter()
+        .flat_map(|d| std::iter::once(d.message.clone()).chain(d.notes.iter().cloned()))
+        .collect()
+}
+
+/// A cup is checked against its own door like any body: it sits in the
+/// door only because its kind bores the hole. `broken/hinge_link_in_wood`
+/// with the catalogue hinge's pins is a clean design; take the kind's
+/// `cut bore:` out and the cup (and the arm's knuckle that reaches into
+/// it) overlap the door.
+#[test]
+fn a_cup_sits_in_its_bore_and_nowhere_else() {
+    let design =
+        std::fs::read_to_string(workspace().join("tests/broken/hinge_link_in_wood/project.stave"))
+            .unwrap()
+            .replace("depth: 2.89mm", "depth: 1.39mm");
+    let bored = common::open_files(&[("project.stave", &design)]);
+    assert!(
+        bored.diagnostics.is_empty(),
+        "{:?}",
+        common::diagnostics(&bored)
+    );
+    let cut = "  cut bore: crossing(piece, cup) { drill(diameter: 35mm, depth: 12.8mm) }\n";
+    assert!(design.contains(cut));
+    let unbored = common::open_files(&[("project.stave", &design.replace(cut, ""))]);
+    let messages = messages_and_notes(&unbored);
+    assert!(
+        messages
+            .iter()
+            .any(|m| m.contains("door.hinges[bottom]'s cup and door.panel overlap")),
+        "{messages:?}"
+    );
+    assert!(
+        unbored
+            .diagnostics
+            .iter()
+            .all(|d| d.code == stave_lang::Code::Overlap),
+        "{messages:?}"
+    );
+}
+
+/// A butt hinge's leaf is a body like any other: the box example's lid is
+/// clean, and with a copy of `butt_hinge` that cuts no mortises its leaves
+/// overlap the lid and the back they should be housed in.
+#[test]
+fn a_leaf_without_its_mortise_overlaps() {
+    let read = |name: &str| std::fs::read_to_string(workspace().join(name)).unwrap();
+    let library = read("std/hardware/hinges.stave");
+    let start = library.find("kind butt_hinge : hinge {").unwrap();
+    let length = library[start..].find("\n}\n").unwrap() + 3;
+    let butt_hinge = &library[start..start + length];
+    let mortises = "  cut mortise: crossing(piece, leaf) { notch(depth: 1.5mm) }\n  cut mortise: crossing(on, fixed_leaf) { notch(depth: 1.5mm) }\n";
+    assert!(butt_hinge.contains(mortises));
+    let bare = butt_hinge
+        .replace("kind butt_hinge", "kind bare_butt_hinge")
+        .replace(mortises, "");
+    let lid = read("examples/box/lid.stave");
+    let housed = common::open_files(&[
+        ("box.stave", &read("examples/box/box.stave")),
+        ("lid.stave", &lid),
+    ]);
+    assert!(
+        housed.diagnostics.is_empty(),
+        "{:?}",
+        common::diagnostics(&housed)
+    );
+    let unhoused = common::open_files(&[
+        ("box.stave", &read("examples/box/box.stave")),
+        (
+            "lid.stave",
+            &(lid.replace("butt_hinge(length: 40mm)", "bare_butt_hinge(length: 40mm)")
+                + "\n"
+                + &bare),
+        ),
+    ]);
+    let messages = messages_and_notes(&unhoused);
+    assert!(
+        messages
+            .iter()
+            .any(|m| m.contains("'s leaf and lid.panel overlap")),
+        "{messages:?}"
+    );
+    assert!(
+        messages.iter().any(|m| m.contains("'s fixed_leaf and")),
+        "{messages:?}"
     );
 }

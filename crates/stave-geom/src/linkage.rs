@@ -227,6 +227,34 @@ impl LinkagePath {
         Some(DVec2::from_angle(theta).rotate(rest) + self.offset(theta)?)
     }
 
+    /// A link's motion at `theta`, in the plane: its turn about its arm pin
+    /// as `(cos, sin)`, then the offset that keeps that pin in place.
+    pub fn link_motion(&self, link: usize, theta: f64) -> Option<(DVec2, DVec2)> {
+        let ground = *self.ground.get(link)?;
+        let coupler = *self.coupler.get(link)?;
+        if theta == 0.0 {
+            return Some((DVec2::X, DVec2::ZERO));
+        }
+        let now = DVec2::from_angle(theta).rotate(coupler) + self.offset(theta)? - ground;
+        let rotation = DVec2::from_angle((coupler - ground).angle_to(now));
+        Some((rotation, ground - rotation.rotate(ground)))
+    }
+
+    /// A link's arm pin, in the plane.
+    pub fn ground_pin_of(&self, link: usize) -> Option<DVec2> {
+        self.ground.get(link).copied()
+    }
+
+    /// The fastest a point of a link `radius` from its arm pin moves, in
+    /// nanometres per radian of opening, given
+    /// [`LinkagePath::offset_speed`]: the link turns as fast as its boss
+    /// pin moves over its length.
+    pub fn link_speed(&self, link: usize, radius: f64, offset_speed: f64) -> Option<f64> {
+        let coupler = self.coupler.get(link)?;
+        let length = *self.lengths.get(link)?;
+        (length > 0.0).then(|| radius * (coupler.length() + offset_speed) / length)
+    }
+
     /// The boss's turn and offset at `theta`, in the plane.
     pub fn plane_pose(&self, theta: f64) -> Option<(DVec2, DVec2)> {
         Some((DVec2::from_angle(theta), self.offset(theta)?))

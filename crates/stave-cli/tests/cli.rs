@@ -237,19 +237,22 @@ fn export_writes_a_valid_gltf_of_the_cabinet() {
         String::from_utf8_lossy(&result.stderr)
     );
     let (document, buffers, _) = gltf::import(&output).expect("a valid glTF file");
-    // One node per part and piece of hardware, named as in the design.
+    // One node per part, named as in the design, and one per member of
+    // each piece of hardware, named `<hardware> <member>`: five for each of
+    // the four cup hinges (plate, arm, cup and two links), and two for each
+    // of the four slides and the four handles (a bar or knob and its
+    // screws).
     let names: Vec<&str> = document.nodes().filter_map(|n| n.name()).collect();
-    // ...plus one node for each hinge plate (with its arm) and slide
-    // cabinet member, and two for each cup hinge's links.
-    assert_eq!(names.len(), 34 + 12 + 4 + 4 + 8);
-    assert!(names.contains(&"door_l.hinges[lower] plate and arm"));
-    assert!(names.contains(&"door_l.hinges[lower] outer link"));
-    assert!(names.contains(&"drawer[top].slides[left] cabinet member"));
+    assert_eq!(names.len(), 34 + 4 * 5 + 4 * 2 + 4 * 2);
+    assert!(names.contains(&"door_l.hinges[lower] plate"));
+    assert!(names.contains(&"door_l.hinges[lower] arm"));
+    assert!(names.contains(&"door_l.hinges[lower] outer_link"));
+    assert!(names.contains(&"drawer[top].slides[left] cabinet_member"));
     for name in [
         "base",
         "side_r",
         "door_l.stile[hinge]",
-        "drawer[top].pull",
+        "drawer[top].pull bar",
         "foot[back_left]",
     ] {
         assert!(names.contains(&name), "{name} missing");

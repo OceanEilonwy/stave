@@ -39,10 +39,16 @@ fn every_part_and_hardware_has_a_node() {
         .filter(|h| h.mechanism.is_some())
         .count();
     assert_eq!(links, 8, "two links on each of the four cup hinges");
-    assert_eq!(
-        graph.nodes.len(),
-        design.parts.len() + design.hardware.len() + fixed + links
-    );
+    // One node for each part and one for each member of each piece of
+    // hardware, named `<hardware> <member>`.
+    let members: usize = design.hardware.iter().map(|h| h.members.len()).sum();
+    assert_eq!(graph.nodes.len(), design.parts.len() + members);
+    for hardware in &design.hardware {
+        for member in &hardware.members {
+            let name = format!("{} {}", hardware.name, member.name);
+            assert!(graph.nodes.iter().any(|node| node.name == name), "{name}");
+        }
+    }
     assert_eq!(graph.scenes.first().map(|s| s.name.as_str()), Some("rest"));
     let stile = graph
         .nodes
@@ -101,7 +107,10 @@ fn picking_from_the_front() {
     assert_eq!(pick(30.0, 1100.0).as_deref(), Some("door_l.stile[hinge]"));
     assert_eq!(pick(700.0, 1100.0).as_deref(), Some("door_r.panel"));
     assert_eq!(pick(200.0, 150.0).as_deref(), Some("drawer[bottom].front"));
-    assert_eq!(pick(450.0, 139.0).as_deref(), Some("drawer[bottom].pull"));
+    assert_eq!(
+        pick(450.0, 139.0).as_deref(),
+        Some("drawer[bottom].pull bar")
+    );
     assert_eq!(pick(450.0, 1690.0).as_deref(), Some("top"));
     assert_eq!(pick(95.0, -40.0).as_deref(), Some("foot[front_left]"));
     assert_eq!(pick(1200.0, 500.0), None);
@@ -135,7 +144,9 @@ fn the_open_scene_swings_doors_and_slides_drawers() {
     let bottom = posed.shown(node("drawer[bottom].front")).unwrap();
     assert!(close(bottom.transform_point3(Vec3::ZERO), Vec3::ZERO));
     // The slides travel with it.
-    let slide = posed.shown(node("drawer[top].slides[left]")).unwrap();
+    let slide = posed
+        .shown(node("drawer[top].slides[left] drawer_member"))
+        .unwrap();
     // (the drawer member)
     assert!(close(
         slide.transform_point3(Vec3::ZERO),
@@ -164,12 +175,14 @@ fn the_open_scene_swings_doors_and_slides_drawers() {
     );
     // The hinge cups go with the door; the plates stay on the side, and so
     // do the slides' cabinet members.
-    let hinge = posed.shown(node("door_l.hinges[upper]")).unwrap();
+    let hinge = posed.shown(node("door_l.hinges[upper] cup")).unwrap();
     assert_eq!(hinge, door_l);
     for fixed in [
-        "door_l.hinges[upper] plate and arm",
-        "door_r.hinges[lower] plate and arm",
-        "drawer[top].slides[left] cabinet member",
+        "door_l.hinges[upper] plate",
+        "door_l.hinges[upper] arm",
+        "door_r.hinges[lower] plate",
+        "door_r.hinges[lower] arm",
+        "drawer[top].slides[left] cabinet_member",
     ] {
         assert_eq!(
             posed.shown(node(fixed)).unwrap(),
@@ -208,7 +221,7 @@ fn a_scene_can_show_one_assembly() {
         // drawer.
         assert_eq!(
             posed.shown(id).is_some(),
-            node.name.starts_with("drawer[top].") && !node.name.ends_with("cabinet member"),
+            node.name.starts_with("drawer[top].") && !node.name.ends_with("cabinet_member"),
             "{}",
             node.name
         );
@@ -258,9 +271,9 @@ fn the_box_lid_lifts_on_its_butt_hinges() {
     );
     // The leaves in the lid and the knob go with it; the leaves in the back
     // and the body stay.
-    assert_eq!(posed.shown(node("lid.hinges[left]")).unwrap(), lid);
-    assert_eq!(posed.shown(node("lid.lift_knob")).unwrap(), lid);
-    for still in ["lid.hinges[left] fixed leaf", "back", "front"] {
+    assert_eq!(posed.shown(node("lid.hinges[left] leaf")).unwrap(), lid);
+    assert_eq!(posed.shown(node("lid.lift_knob knob")).unwrap(), lid);
+    for still in ["lid.hinges[left] fixed_leaf", "back", "front"] {
         assert_eq!(
             posed.shown(node(still)).unwrap(),
             glam::Mat4::IDENTITY,
@@ -317,10 +330,10 @@ fn the_hinge_links_follow_the_door() {
             .find(|id| graph.node(*id).is_some_and(|n| n.name == name))
             .unwrap()
     };
-    let cup = node("door_l.hinges[lower]");
+    let cup = node("door_l.hinges[lower] cup");
     let links = [
-        node("door_l.hinges[lower] inner link"),
-        node("door_l.hinges[lower] outer link"),
+        node("door_l.hinges[lower] inner_link"),
+        node("door_l.hinges[lower] outer_link"),
     ];
     let rest = graph.scenes.first().unwrap();
     for degrees in [0.0f32, 15.0, 45.0, 90.0, 110.0] {

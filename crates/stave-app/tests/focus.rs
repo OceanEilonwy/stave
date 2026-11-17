@@ -751,67 +751,98 @@ fn angled_cut_meshes_are_watertight() {
     }
 }
 
-/// Every cup hinge of the examples, swept through its whole opening:
-/// no member of its mechanism (arm, knuckle, links) is ever in wood,
-/// the door's (less only its cup's bore) or the side's.
+/// Every piece of hardware with a mechanism in the examples (the cup
+/// hinges), through the generic path: every member of it, against every
+/// part of the design, swept through its assembly's whole motion, is never
+/// deeper in wood than the contact tolerance; and the checker, which
+/// sweeps every body the same way, reports no `motion` or `overlap` naming
+/// one of its members. Nothing here asks what kind or base the hardware
+/// is (before the one collision model it called a sweep written for cup
+/// hinges only); `broken/hinge_link_in_wood` proves the generic path can
+/// fail.
 #[test]
 fn no_cup_hinge_puts_steel_in_wood() {
+    use stave_geom::collide::{CONTACT_TOLERANCE, Placement};
+    use stave_geom::sweep::{Mover, Path, deepest_overlap};
+    use stave_model::solved::BodyCarrier;
+    let mut checked = 0;
     for folder in [
         "examples/clothing_cabinet",
         "examples/nightstand",
         "examples/box",
     ] {
         let opened = stave_app::open(&workspace().join(folder)).unwrap();
-        let Some(design) = opened.design.as_ref() else {
+        let (Some(model), Some(design)) = (opened.model.as_ref(), opened.design.as_ref()) else {
             continue;
         };
-        for hardware in &design.hardware {
-            let (Some(mechanism), stave_model::solved::HardwareData::Hinge { on, .. }) =
-                (&hardware.mechanism, hardware.data)
-            else {
-                continue;
-            };
-            let solid = |id| {
-                let p = design.part(id).unwrap();
-                WorldSolid::of_part(p, &Solid::of(p, design))
-            };
-            let sweep = stave_geom::sweep::LinkageSweep::new(&mechanism.linkage);
-            let found = stave_geom::sweep::steel_in_wood(
-                hardware,
-                &solid(hardware.piece),
-                &solid(on),
-                &sweep,
-                2000,
-            );
-            for hit in &found {
-                eprintln!(
-                    "{} {:?} in {:?}: {:.2} mm deep at {:.1}°, {:.1} mm³",
-                    hardware.name,
-                    hit.member,
-                    hit.part,
-                    hit.depth / 1e6,
-                    hit.angle.to_degrees(),
-                    hit.volume / 1e18
-                );
+        // Moves with an assembly when that assembly or one it is inside is
+        // the one that moves.
+        let inside = |mut assembly: Option<stave_model::solved::AssemblyId>, target| {
+            while let Some(id) = assembly {
+                if id == target {
+                    return true;
+                }
+                assembly = design.assemblies.get(id.index()).and_then(|a| a.parent);
             }
-            assert!(
-                found.iter().all(|h| h.depth <= 50_000.0),
-                "{}: steel in wood {found:?}",
-                hardware.name
-            );
-            // And by the swing check's own sweep (conservative advancement,
-            // never stepping past a contact): no member ever touches wood.
-            assert_eq!(
-                stave_geom::sweep::mechanism_contact(
-                    hardware,
-                    &solid(hardware.piece),
-                    &solid(on),
-                    &sweep
-                ),
-                None,
-                "{}",
-                hardware.name
-            );
+            false
+        };
+        for hardware in &design.hardware {
+            let mechanism = hardware
+                .members
+                .iter()
+                .any(|m| matches!(m.carrier, BodyCarrier::Link(_)));
+            if !mechanism {
+                continue;
+            }
+            let assembly = hardware.assembly.unwrap();
+            let motion = design.assemblies[assembly.index()].motion.unwrap();
+            let path = Path::new(&motion);
+            for member in &hardware.members {
+                let carried = match member.carrier {
+                    BodyCarrier::Part(part) => design.part(part).unwrap().assembly,
+                    BodyCarrier::Region(region) => design.regions[region.index()].assembly,
+                    BodyCarrier::Link(_) => Some(assembly),
+                };
+                let mover = match member.carrier {
+                    BodyCarrier::Link(link) => Mover::Member(&path, link),
+                    BodyCarrier::Part(_) | BodyCarrier::Region(_) if inside(carried, assembly) => {
+                        Mover::Rigid(&path)
+                    }
+                    BodyCarrier::Part(_) | BodyCarrier::Region(_) => Mover::Fixed(Placement::REST),
+                };
+                let steel = WorldSolid::of_body(member);
+                for part in &design.parts {
+                    let wood = WorldSolid::of_part(part, &Solid::of(part, design));
+                    let part_mover = if inside(part.assembly, assembly) {
+                        Mover::Rigid(&path)
+                    } else {
+                        Mover::Fixed(Placement::REST)
+                    };
+                    let found = deepest_overlap(&steel, mover, &wood, part_mover, 2000);
+                    assert!(
+                        found.is_none_or(|depth| depth.depth <= CONTACT_TOLERANCE),
+                        "{}'s {} in {}: {found:?}",
+                        hardware.name,
+                        member.name,
+                        part.name
+                    );
+                    checked += 1;
+                }
+            }
+            let named: Vec<String> = stave_check::check(model, design)
+                .into_iter()
+                .filter(|d| matches!(d.code, stave_lang::Code::Motion | stave_lang::Code::Overlap))
+                .map(|d| d.message)
+                .filter(|message| {
+                    hardware
+                        .members
+                        .iter()
+                        .any(|m| message.contains(&format!("{}'s {}", hardware.name, m.name)))
+                })
+                .collect();
+            assert!(named.is_empty(), "{named:?}");
         }
     }
+    // The cabinet's and the nightstand's doors hang on cup hinges.
+    assert!(checked > 0);
 }

@@ -17,7 +17,7 @@ use stave_model::defs::{
 };
 use stave_model::ids::{HardwareId, KindId, PartId, RegionId};
 use stave_model::instance::ItemSlot;
-use stave_model::solved::{CutKind, LinkBar, Linkage, LinkageFrame, PlanePoint, Point};
+use stave_model::solved::{CutKind, LinkBar, LinkIndex, Linkage, LinkageFrame, PlanePoint, Point};
 use stave_model::value::{ExactBox, ModelRef, Value};
 
 use crate::eval::{Env, KindEnv, midpoint};
@@ -30,6 +30,8 @@ use crate::{Memo, Reported, Solved, Solver};
 /// A cup hinge's arm and links, beside its linkage (which is its motion).
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct Mechanism {
+    /// The two links' members, in the linkage's order.
+    pub link_bodies: [BodyId; 2],
     pub arm: Member,
     pub knuckle: Member,
     pub links: [LinkBar; 2],
@@ -129,6 +131,34 @@ impl Frame {
         }
     }
 
+    /// A point in the frame, in the world.
+    pub fn world_point(
+        &self,
+        along: ExactLength,
+        across: ExactLength,
+        depth: ExactLength,
+    ) -> Solved<[ExactLength; 3]> {
+        let mut out = [ExactLength::ZERO; 3];
+        for (axis, value) in [
+            (FrameAxis::Along, along),
+            (FrameAxis::Across, across),
+            (FrameAxis::Depth, depth),
+        ] {
+            let direction = self.direction(axis);
+            let origin = self.origin_on(direction.axis());
+            let world = if direction.is_positive() {
+                origin.checked_add(value)
+            } else {
+                origin.checked_sub(value)
+            }
+            .ok_or(Reported)?;
+            if let Some(slot) = out.get_mut(world_index(direction.axis())) {
+                *slot = world;
+            }
+        }
+        Ok(out)
+    }
+
     /// A box in the frame, in the world.
     pub fn world_box(&self, frame_box: &FrameBox) -> Solved<ExactBox> {
         let mut extents = [(ExactLength::ZERO, ExactLength::ZERO); 3];
@@ -187,7 +217,7 @@ impl FrameBox {
 }
 
 /// One shape of a placed member, at rest.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct PlacedShape {
     /// Its box in the kind's frame, after the member's own mount.
     pub frame: FrameBox,
@@ -195,6 +225,97 @@ pub(crate) struct PlacedShape {
     pub world: ExactBox,
     /// The frame axis a cylinder's axis runs along.
     pub cylinder: Option<FrameAxis>,
+    /// A prism's or a bar's outline on the across/depth plane, after the
+    /// member's own mount.
+    pub outline: Option<Outline>,
+}
+
+/// The outline of a prism or a bar on the kind's across/depth plane, each
+/// point `[across, depth]`; it is extruded along `along`.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum Outline {
+    /// A convex outline, its corners in order around it.
+    Prism(Vec<[ExactLength; 2]>),
+    /// A bar between two centres, `thickness` wide.
+    Bar {
+        from: [ExactLength; 2],
+        to: [ExactLength; 2],
+        thickness: ExactLength,
+    },
+}
+
+impl Outline {
+    /// Moved by `across` and `depth` in the frame.
+    fn moved(&self, across: ExactLength, depth: ExactLength) -> Solved<Outline> {
+        let shift = |[a, d]: [ExactLength; 2]| -> Solved<[ExactLength; 2]> {
+            Ok([
+                a.checked_add(across).ok_or(Reported)?,
+                d.checked_add(depth).ok_or(Reported)?,
+            ])
+        };
+        Ok(match self {
+            Outline::Prism(points) => Outline::Prism(
+                points
+                    .iter()
+                    .map(|point| shift(*point))
+                    .collect::<Solved<Vec<_>>>()?,
+            ),
+            Outline::Bar {
+                from,
+                to,
+                thickness,
+            } => Outline::Bar {
+                from: shift(*from)?,
+                to: shift(*to)?,
+                thickness: *thickness,
+            },
+        })
+    }
+}
+
+/// A member's shape at rest in the world, exact.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum WorldShape {
+    Box(ExactBox),
+    /// A cylinder along `axis`, filling `bounds` across it.
+    Cylinder {
+        axis: Axis,
+        bounds: ExactBox,
+    },
+    /// A convex outline across `axis`, extruded over `bounds` along it;
+    /// each point is a world point (its coordinate on `axis` carries no
+    /// meaning).
+    Prism {
+        axis: Axis,
+        points: Vec<[ExactLength; 3]>,
+        bounds: ExactBox,
+    },
+    /// A bar across `axis` between two world points, over `bounds` along
+    /// it.
+    Bar {
+        axis: Axis,
+        from: [ExactLength; 3],
+        to: [ExactLength; 3],
+        thickness: ExactLength,
+        bounds: ExactBox,
+    },
+}
+
+/// What moves a placed member.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MemberCarrier {
+    Part(PartId),
+    Region(RegionId),
+    Link(stave_model::solved::LinkIndex),
+}
+
+/// A member with a body, at rest in the world.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct PlacedMember {
+    pub body: BodyId,
+    pub name: String,
+    pub carrier: MemberCarrier,
+    pub shapes: Vec<WorldShape>,
 }
 
 /// A member with a body, placed at rest.
@@ -241,6 +362,8 @@ pub(crate) struct Placed {
     pub model: Option<ModelRef>,
     /// The old contract.
     pub legacy: Legacy,
+    /// Its members with a body, in its kind's order.
+    pub members: Vec<PlacedMember>,
 }
 
 pub(crate) fn world_index(axis: Axis) -> usize {
@@ -259,8 +382,9 @@ fn positive_direction(axis: Axis) -> Direction {
     }
 }
 
-/// Each shape of a member in the kind's frame, with the axis of a cylinder.
-type FrameShapes = Vec<(FrameBox, Option<FrameAxis>)>;
+/// Each shape of a member in the kind's frame, with the axis of a cylinder
+/// and the outline of a prism or a bar.
+type FrameShapes = Vec<(FrameBox, Option<FrameAxis>, Option<Outline>)>;
 
 /// The world plane an anchor names, and which way is into the part it
 /// belongs to.
@@ -457,7 +581,7 @@ impl Solver<'_> {
             .filter(|(id, _)| {
                 kind.bodies.get(id.index()).map(|body| body.with) == Some(Carrier::Role(piece_role))
             })
-            .flat_map(|(_, boxes)| boxes.iter().map(|(b, _)| *b))
+            .flat_map(|(_, boxes)| boxes.iter().map(|(b, _, _)| *b))
             .reduce(|a, b| a.union(&b));
         for world in Axis::ALL {
             let term = terms.axis(world).cloned();
@@ -535,8 +659,23 @@ impl Solver<'_> {
                 offsets.push((placement.axis, frame.coordinate(placement.axis, at)?));
             }
             let mut shapes = Vec::new();
-            for (frame_box, cylinder) in boxes {
+            for (frame_box, cylinder, outline) in boxes {
                 let mut moved = *frame_box;
+                let offset_on = |axis: FrameAxis| {
+                    offsets
+                        .iter()
+                        .filter(|(on, _)| *on == axis)
+                        .map(|(_, by)| *by)
+                        .try_fold(ExactLength::ZERO, |sum, by| sum.checked_add(by))
+                        .ok_or(Reported)
+                };
+                let outline = match outline {
+                    Some(outline) => Some(
+                        outline
+                            .moved(offset_on(FrameAxis::Across)?, offset_on(FrameAxis::Depth)?)?,
+                    ),
+                    None => None,
+                };
                 for (axis, offset) in &offsets {
                     let (low, high) = moved.range(*axis);
                     moved = moved.with(
@@ -551,6 +690,7 @@ impl Solver<'_> {
                     frame: moved,
                     world: frame.world_box(&moved)?,
                     cylinder: *cylinder,
+                    outline,
                 });
             }
             bodies.push(PlacedBody { body: *id, shapes });
@@ -591,6 +731,8 @@ impl Solver<'_> {
         } else {
             (self.legacy_motion(&input, &piece_box)?, None)
         };
+        let links = mechanism.as_ref().map(|mechanism| mechanism.link_bodies);
+        let members = self.placed_members(&kind, &roles, &bodies, &frame, links)?;
         Ok(Placed {
             kind: binding.kind,
             kind_name: binding.name.clone(),
@@ -605,7 +747,47 @@ impl Solver<'_> {
             mechanism,
             model,
             legacy,
+            members,
         })
+    }
+
+    /// Every member with a body at rest in the world, with what moves it.
+    fn placed_members(
+        &mut self,
+        kind: &KindDef,
+        roles: &[(String, RoleBound)],
+        bodies: &[PlacedBody],
+        frame: &Frame,
+        links: Option<[BodyId; 2]>,
+    ) -> Solved<Vec<PlacedMember>> {
+        let mut members = Vec::with_capacity(bodies.len());
+        for placed in bodies {
+            let body = kind.bodies.get(placed.body.index()).ok_or(Reported)?;
+            let Some(carrier) = member_carrier(kind, roles, placed.body, links) else {
+                return Err(self.error(
+                    Code::MissingField,
+                    format!(
+                        "member '{}' has no 'with:' and nothing in its kind moves it",
+                        body.name.as_str()
+                    ),
+                    kind.decl.file,
+                    body.span,
+                    "give it with: a role or another member, or pin it in the kind's mechanism",
+                ));
+            };
+            let shapes = placed
+                .shapes
+                .iter()
+                .map(|shape| world_shape(shape, frame))
+                .collect::<Solved<Vec<_>>>()?;
+            members.push(PlacedMember {
+                body: placed.body,
+                name: body.name.as_str().to_owned(),
+                carrier,
+                shapes,
+            });
+        }
+        Ok(members)
     }
 
     /// The fasteners a kind's `uses:` names, for one piece of hardware.
@@ -896,14 +1078,15 @@ impl Solver<'_> {
         }
     }
 
-    /// A shape's box in the kind's frame, and the axis of a cylinder.
+    /// A shape's box in the kind's frame, the axis of a cylinder and the
+    /// outline of a prism or a bar.
     fn shape_box(
         &mut self,
         shape: &ShapeDef,
         env: &Env<'_>,
-    ) -> Solved<(FrameBox, Option<FrameAxis>)> {
+    ) -> Solved<(FrameBox, Option<FrameAxis>, Option<Outline>)> {
         match shape {
-            ShapeDef::Box { .. } => Ok((self.frame_box(shape, env)?, None)),
+            ShapeDef::Box { .. } => Ok((self.frame_box(shape, env)?, None, None)),
             ShapeDef::Cylinder {
                 diameter,
                 extent,
@@ -936,7 +1119,7 @@ impl Solver<'_> {
                         around(centre.depth)?
                     },
                 };
-                Ok((frame_box, Some(*axis)))
+                Ok((frame_box, Some(*axis), None))
             }
             ShapeDef::Prism { points, along } => {
                 let mut points_out = Vec::new();
@@ -951,6 +1134,8 @@ impl Solver<'_> {
                         _ => Err(Reported),
                     }
                 };
+                let outline =
+                    Outline::Prism(points_out.iter().map(|p| [p.across, p.depth]).collect());
                 Ok((
                     FrameBox {
                         along,
@@ -958,6 +1143,7 @@ impl Solver<'_> {
                         depth: bounds(|p| p.depth)?,
                     },
                     None,
+                    Some(outline),
                 ))
             }
             ShapeDef::Bar {
@@ -984,6 +1170,11 @@ impl Solver<'_> {
                         depth: span(from.depth, to.depth)?,
                     },
                     None,
+                    Some(Outline::Bar {
+                        from: [from.across, from.depth],
+                        to: [to.across, to.depth],
+                        thickness: grow,
+                    }),
                 ))
             }
         }
@@ -1176,6 +1367,7 @@ impl Solver<'_> {
             .max()
             .unwrap_or(Length::ZERO);
         let mechanism = Mechanism {
+            link_bodies: cup_kind.link_bodies,
             arm: input.boxed(frame.world_box(&cup_kind.arm)?, &cup_kind.arm)?,
             knuckle: input.boxed(frame.world_box(&cup_kind.knuckle)?, &cup_kind.knuckle)?,
             links: cup_kind.links,
@@ -1405,6 +1597,7 @@ impl Solver<'_> {
         Ok(Some(CupKind {
             mechanism,
             links: link_bars,
+            link_bodies: [first.link, second.link],
             arm,
             knuckle,
             pin_diameter: pin_diameter.to_nearest_length().ok_or(Reported)?,
@@ -1615,11 +1808,84 @@ struct CupFrame {
 struct CupKind {
     mechanism: crate::mechanism::Mechanism,
     links: [LinkBar; 2],
+    /// The two links' members, in the linkage's order.
+    link_bodies: [BodyId; 2],
     /// The held member's first box: the arm's body.
     arm: FrameBox,
     /// Its second box: the knuckle that reaches into the cup.
     knuckle: FrameBox,
     pin_diameter: Length,
+}
+
+/// What moves a member: the part or region of the role it is `with:`
+/// (following the members it rides on), or the link of the linkage it is.
+/// `None` for a member nothing moves.
+fn member_carrier(
+    kind: &KindDef,
+    roles: &[(String, RoleBound)],
+    body: BodyId,
+    links: Option<[BodyId; 2]>,
+) -> Option<MemberCarrier> {
+    let mut current = body;
+    // A member rides on at most every other member.
+    for _ in 0..=kind.bodies.len() {
+        match kind.bodies.get(current.index())?.with {
+            Carrier::Role(role) => {
+                return roles.get(role.index()).map(|(_, bound)| match *bound {
+                    RoleBound::Part(part) => MemberCarrier::Part(part),
+                    RoleBound::Region(region) => MemberCarrier::Region(region),
+                });
+            }
+            Carrier::Body(other) => current = other,
+            Carrier::Mechanism => {
+                let [first, second] = links?;
+                return if current == first {
+                    Some(MemberCarrier::Link(LinkIndex::First))
+                } else if current == second {
+                    Some(MemberCarrier::Link(LinkIndex::Second))
+                } else {
+                    None
+                };
+            }
+        }
+    }
+    None
+}
+
+/// A placed shape in the world, exactly.
+fn world_shape(shape: &PlacedShape, frame: &Frame) -> Solved<WorldShape> {
+    let along = frame.along.axis();
+    let low = shape.frame.along.0;
+    let point = |[across, depth]: [ExactLength; 2]| frame.world_point(low, across, depth);
+    Ok(match (&shape.outline, shape.cylinder) {
+        (Some(Outline::Prism(points)), _) => WorldShape::Prism {
+            axis: along,
+            points: points
+                .iter()
+                .map(|p| point(*p))
+                .collect::<Solved<Vec<_>>>()?,
+            bounds: shape.world,
+        },
+        (
+            Some(Outline::Bar {
+                from,
+                to,
+                thickness,
+            }),
+            _,
+        ) => WorldShape::Bar {
+            axis: along,
+            from: point(*from)?,
+            to: point(*to)?,
+            thickness: *thickness,
+            bounds: shape.world,
+        },
+        (None, Some(axis)) => WorldShape::Cylinder {
+            axis: frame.direction(axis).axis(),
+            bounds: shape.world,
+        },
+        (None, None) => WorldShape::Box(shape.world),
+    })
 }
 
 /// `true` when two boxes touch over an area or overlap.

@@ -2,8 +2,8 @@ use glam::Vec3;
 use stave_lang::placement::{Axis, Direction, PartAxis};
 use stave_lang::units::Length;
 use stave_model::solved::{
-    End, Envelope, Hardware, HardwareBase, HardwareData, HardwareId, LocalFace, Orientation, Part,
-    PartId, PartOrigin, Point, Pose, Shape, Size3, Station, Stock, WorldBox,
+    Body, BodyCarrier, BodyRef, End, HardwareId, LocalFace, MemberShape, Orientation, Part, PartId,
+    PartOrigin, Point, Pose, Shape, Size3, Station, Stock, WorldBox,
 };
 use stave_schema::species::Species;
 use stave_schema::words::{Grain, Measure, StockForm};
@@ -268,69 +268,71 @@ fn a_dowel_is_a_cylinder() {
     assert!((geometry.mesh.signed_volume() / volume - 1.0).abs() < 0.01);
 }
 
-fn knob(orientation: Orientation, origin: Point, envelope: Envelope) -> Hardware {
-    let pose = Pose {
-        origin,
-        orientation,
-    };
-    Hardware {
-        id: HardwareId::from_usize(0),
-        name: "handle".into(),
-        kind: "knob".into(),
-        kind_id: stave_model::solved::KindId::from_usize(0),
-        base: HardwareBase::Pull,
-        assembly: None,
-        piece: PartId::from_usize(0),
-        mount_face: stave_lang::placement::Face::Front,
-        envelope,
-        pose,
-        bounds: pose.world_box(envelope.size()),
-        fixed: None,
-        data: HardwareData::Pull {
-            centres: None,
-            diameter: Some(mm(26)),
-            screw_diameter: mm(4),
+/// A member of a knob with these shapes.
+fn knob_member(shapes: Vec<MemberShape>) -> Body {
+    Body::new(
+        BodyRef {
+            hardware: HardwareId::from_usize(0),
+            body: stave_model::solved::BodyId::new(0).unwrap(),
         },
-        mechanism: None,
-        model: None,
-        roles: Vec::new(),
-        entries: std::collections::BTreeMap::new(),
-        fasteners: Vec::new(),
-    }
+        "knob".into(),
+        BodyCarrier::Part(PartId::from_usize(0)),
+        shapes,
+    )
+    .unwrap()
 }
 
+/// A member is drawn as exactly its shapes: a cylinder, a box, a bar and
+/// a prism each fill their bounds, wound outward.
 #[test]
-fn hardware_envelopes_fill_their_bounds() {
-    // A knob on a door's front face: thickness stands off toward the front.
-    let standing_off = Orientation::new(Direction::Up, Direction::Right, Direction::Front).unwrap();
-    let cylinder = knob(
-        standing_off,
-        point(406, 1091, -19),
-        Envelope::Cylinder {
-            diameter: mm(26),
-            length: mm(30),
-        },
-    );
-    let geometry = hardware(&cylinder);
-    assert_close(geometry.bounds, expected(cylinder.bounds));
+fn member_shapes_fill_their_bounds() {
+    // A knob on a door's front face, standing off toward the front.
+    let knob = knob_member(vec![MemberShape::Cylinder {
+        axis: Axis::Deep,
+        centre: [mm(406), mm(1091)],
+        diameter: mm(26),
+        start: mm(-49),
+        end: mm(-19),
+    }]);
+    let geometry = body(&knob);
     assert_outward(&geometry.mesh);
-    // The axis stands off the face: along +z, from -(-19) = 19 to 49.
+    // Front is -deep, which the render frame's z points along.
     assert!((geometry.bounds.min.z - 19.0).abs() < 1e-3);
     assert!((geometry.bounds.max.z - 49.0).abs() < 1e-3);
+    let volume = std::f32::consts::PI * 13.0 * 13.0 * 30.0;
+    assert!((geometry.mesh.signed_volume() / volume - 1.0).abs() < 0.01);
 
-    let mirrored = knob(
-        standing_off.mirrored(Axis::Across),
-        point(406, 1091, -19),
-        Envelope::Box {
-            length: mm(50),
-            width: mm(65),
-            thickness: mm(20),
-        },
-    );
-    let geometry = hardware(&mirrored);
-    assert_close(geometry.bounds, expected(mirrored.bounds));
+    let region = WorldBox::new(point(0, 0, 0), point(50, 65, 20));
+    let plate = knob_member(vec![MemberShape::Box(region)]);
+    let geometry = body(&plate);
+    assert_close(geometry.bounds, expected(region));
     assert_outward(&geometry.mesh);
     assert_normals_leave_centre(&geometry);
+
+    // A 1.5mm bar from (0, 0) to (20, 0) across the up axis, 9mm long:
+    // 21.5mm by 1.5mm by 9mm.
+    let bar = knob_member(vec![MemberShape::Bar {
+        axis: Axis::Up,
+        from: [mm(0), mm(0)],
+        to: [mm(20), mm(0)],
+        thickness: Length::from_nm(1_500_000),
+        start: mm(0),
+        end: mm(9),
+    }]);
+    let geometry = body(&bar);
+    assert_outward(&geometry.mesh);
+    assert!((geometry.mesh.signed_volume() - 21.5 * 1.5 * 9.0).abs() < 1e-2);
+
+    // A right triangle 10mm by 10mm, 5mm long.
+    let wedge = knob_member(vec![MemberShape::Prism {
+        axis: Axis::Across,
+        points: vec![[mm(0), mm(0)], [mm(10), mm(0)], [mm(0), mm(10)]],
+        start: mm(0),
+        end: mm(5),
+    }]);
+    let geometry = body(&wedge);
+    assert_outward(&geometry.mesh);
+    assert!((geometry.mesh.signed_volume() - 250.0).abs() < 1e-2);
 }
 
 #[test]

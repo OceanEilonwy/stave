@@ -30,7 +30,7 @@ pub use focus::{
     PlayFrame, StepPlay,
 };
 pub use graph::{
-    BuildOptions, Highlight, Item, LinkFollower, Material, MotionRange, Node, NodeId, Posed,
+    BuildOptions, Highlight, Item, Material, MemberFollower, MotionRange, Node, NodeId, Posed,
     SceneEntry, SceneGraph, Section, Wood,
 };
 pub use pick::Hit;

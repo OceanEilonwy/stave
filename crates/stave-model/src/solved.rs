@@ -1265,6 +1265,148 @@ pub struct Hardware {
     pub entries: BTreeMap<EntryName, EntryValue>,
     /// The fasteners its kind's `uses:` names: counted, never placed.
     pub fasteners: Vec<HardwareFastener>,
+    /// Its members with a body, in its kind's order: every shape the
+    /// checks see and the viewer draws (grammar, "One collision model").
+    pub members: Vec<Body>,
+}
+
+/// A member of one piece of hardware: which piece, and which of its kind's
+/// members.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
+pub struct BodyRef {
+    /// The piece of hardware.
+    pub hardware: HardwareId,
+    /// The member, among its kind's members with a body.
+    pub body: BodyId,
+}
+
+/// One of the two links of a four-bar linkage, in the order of
+/// [`Linkage::links`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LinkIndex {
+    /// The first link.
+    First,
+    /// The second link.
+    Second,
+}
+
+impl LinkIndex {
+    /// Both links, in order.
+    pub const BOTH: [LinkIndex; 2] = [LinkIndex::First, LinkIndex::Second];
+
+    /// Its index in [`Linkage::links`].
+    pub fn index(self) -> usize {
+        match self {
+            LinkIndex::First => 0,
+            LinkIndex::Second => 1,
+        }
+    }
+}
+
+/// What moves a member.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case", tag = "kind", content = "id")]
+pub enum BodyCarrier {
+    /// It moves with this part (`with:` a role bound to a part, or riding
+    /// on a member that does).
+    Part(PartId),
+    /// It moves with the assembly this region belongs to (`with:` a role
+    /// bound to a region).
+    Region(RegionId),
+    /// The hardware's mechanism turns it as its assembly opens: this link
+    /// of the linkage its assembly moves on.
+    Link(LinkIndex),
+}
+
+/// One convex shape of a member, at rest, in world coordinates.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case", tag = "kind")]
+pub enum MemberShape {
+    /// A box.
+    Box(WorldBox),
+    /// A cylinder along a world axis.
+    Cylinder {
+        /// The axis it runs along.
+        #[serde(serialize_with = "serialize_axis")]
+        axis: Axis,
+        /// Its centre on the two other axes, in [`Axis::others`] order.
+        centre: [Length; 2],
+        /// Its diameter.
+        diameter: Length,
+        /// Its low end along `axis`.
+        start: Length,
+        /// Its high end along `axis`.
+        end: Length,
+    },
+    /// A convex outline on the plane across a world axis, extruded along it.
+    Prism {
+        /// The axis it is extruded along.
+        #[serde(serialize_with = "serialize_axis")]
+        axis: Axis,
+        /// The outline's corners in order around it, each on the two other
+        /// axes in [`Axis::others`] order.
+        points: Vec<[Length; 2]>,
+        /// Its low end along `axis`.
+        start: Length,
+        /// Its high end along `axis`.
+        end: Length,
+    },
+    /// A straight bar on the plane across a world axis: `thickness` wide,
+    /// reaching half its thickness past each end's centre, extruded along
+    /// the axis.
+    Bar {
+        /// The axis it is extruded along.
+        #[serde(serialize_with = "serialize_axis")]
+        axis: Axis,
+        /// One end's centre, on the two other axes in [`Axis::others`]
+        /// order.
+        from: [Length; 2],
+        /// The other end's centre.
+        to: [Length; 2],
+        /// How thick it is.
+        thickness: Length,
+        /// Its low end along `axis`.
+        start: Length,
+        /// Its high end along `axis`.
+        end: Length,
+    },
+}
+
+/// A member of a piece of hardware with its shapes: a body of the design
+/// (grammar, "One collision model").
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Body {
+    /// Which member of which piece of hardware.
+    pub id: BodyRef,
+    /// The member's name in its kind: `cup`, `inner_link`.
+    pub name: String,
+    /// What moves it.
+    pub carrier: BodyCarrier,
+    /// Its shapes, in its kind's order; never empty.
+    shapes: Vec<MemberShape>,
+}
+
+impl Body {
+    /// A member with its shapes; `None` when it has none.
+    pub fn new(
+        id: BodyRef,
+        name: String,
+        carrier: BodyCarrier,
+        shapes: Vec<MemberShape>,
+    ) -> Option<Body> {
+        (!shapes.is_empty()).then_some(Body {
+            id,
+            name,
+            carrier,
+            shapes,
+        })
+    }
+
+    /// Its shapes, in its kind's order (at least one).
+    pub fn shapes(&self) -> &[MemberShape] {
+        &self.shapes
+    }
 }
 
 /// Fasteners a piece of hardware consumes (its kind's `uses:`).

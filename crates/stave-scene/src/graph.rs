@@ -6,8 +6,8 @@ use stave_geom::solid::Solid;
 use stave_geom::{Aabb, Extent, Geometry, render};
 use stave_lang::placement::PartAxis;
 use stave_model::solved::{
-    AssemblyId, HardwareBase, HardwareData, HardwareId, Motion, Part, PartId, PoseValue, SceneId,
-    SceneItem, SolvedDesign, StepKind,
+    AssemblyId, BodyCarrier, BodyRef, HardwareId, LinkIndex, Motion, Part, PartId, PoseValue,
+    SceneId, SceneItem, SolvedDesign, StepKind,
 };
 use stave_schema::species::{Species, Srgb};
 use stave_schema::words::StockForm;
@@ -84,30 +84,33 @@ pub struct Node {
     pub material: Material,
     /// The assemblies it is inside, outermost first.
     pub assemblies: Vec<AssemblyId>,
-    /// A cup hinge's link: it turns about its arm pin as the hinge's
-    /// assembly opens, on top of what its own assemblies do.
-    pub follows: Option<LinkFollower>,
+    /// A member its hardware's mechanism turns (a link): it follows its
+    /// own assembly's linkage, on top of what its other assemblies do.
+    pub follows: Option<MemberFollower>,
+    /// For a hardware member: which member, and what moves it.
+    pub member: Option<(BodyRef, BodyCarrier)>,
 }
 
-/// How a cup hinge's link moves: with the linkage of its hinge, at the
-/// amount its door's assembly is opened.
+/// How a member its hardware's mechanism turns moves: as its link of the
+/// linkage its assembly moves on, at the amount that assembly is opened.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct LinkFollower {
-    /// The assembly the hinge opens (the door).
+pub struct MemberFollower {
+    /// The assembly whose linkage turns it (the door).
     pub assembly: AssemblyId,
-    /// The hinge's linkage.
+    /// That assembly's linkage.
     path: LinkagePath,
-    /// Which link (0 or 1).
-    link: usize,
+    /// Which link it is.
+    link: LinkIndex,
 }
 
-impl LinkFollower {
-    /// The link's transform with its assembly opened by `amount` radians.
+impl MemberFollower {
+    /// The member's transform with its assembly opened by `amount`
+    /// radians.
     fn transform(&self, amount: f32) -> Mat4 {
         let theta = f64::from(amount).clamp(0.0, self.path.opening());
         self.path
             .pose(theta)
-            .and_then(|pose| pose.links.get(self.link).copied())
+            .and_then(|pose| pose.links.get(self.link.index()).copied())
             .map_or(Mat4::IDENTITY, render::transform)
     }
 }
@@ -272,8 +275,8 @@ pub struct BuildOptions {
 pub struct SceneGraph {
     /// The project's title.
     pub title: String,
-    /// Parts first (in part order), then hardware: each piece's member on
-    /// its piece, followed by its fixed member when it has one.
+    /// Parts first (in part order), then hardware: each piece's members,
+    /// in its kind's order.
     pub nodes: Vec<Node>,
     /// The scenes; the first is the built-in `rest`.
     pub scenes: Vec<SceneEntry>,
@@ -418,66 +421,45 @@ impl SceneGraph {
                 material,
                 assemblies: assemblies_of(part.assembly),
                 follows: None,
+                member: None,
             });
         }
+        // Every member of every piece of hardware, drawn as its shapes and
+        // named `<hardware> <member>`.
         for hardware in &design.hardware {
-            nodes.push(Node {
-                item: Item::Hardware(hardware.id),
-                name: hardware.name.clone(),
-                geometry: stave_geom::hardware(hardware),
-                material: Material::Metal,
-                assemblies: assemblies_of(hardware.assembly),
-                follows: None,
-            });
-            // The member screwed to the carcass stays put when the assembly
-            // the hardware moves moves: it belongs to the assembly outside.
-            if let Some(geometry) = stave_geom::hardware_fixed(hardware) {
-                let outside = hardware
-                    .assembly
-                    .and_then(|id| design.assemblies.get(id.index()))
-                    .and_then(|assembly| assembly.parent);
-                let member = match hardware.base {
-                    HardwareBase::Hinge if hardware.is_butt_hinge() => "fixed leaf",
-                    HardwareBase::Hinge if hardware.mechanism.is_some() => "plate and arm",
-                    HardwareBase::Hinge => "plate",
-                    HardwareBase::Slide => "cabinet member",
-                    HardwareBase::Pull => "fixed member",
+            for member in &hardware.members {
+                let (assembly, follows) = match member.carrier {
+                    BodyCarrier::Part(part) => (design.part(part).and_then(|p| p.assembly), None),
+                    BodyCarrier::Region(region) => (
+                        design.regions.get(region.index()).and_then(|r| r.assembly),
+                        None,
+                    ),
+                    // A link stays with what is outside its assembly and
+                    // follows the assembly's linkage.
+                    BodyCarrier::Link(link) => {
+                        let own = hardware
+                            .assembly
+                            .and_then(|id| design.assemblies.get(id.index()));
+                        let follows = own.and_then(|assembly| match assembly.motion {
+                            Some(Motion::Linkage { linkage }) => Some(MemberFollower {
+                                assembly: assembly.id,
+                                path: LinkagePath::new(&linkage),
+                                link,
+                            }),
+                            Some(Motion::Turn { .. } | Motion::Travel { .. }) | None => None,
+                        });
+                        (own.and_then(|assembly| assembly.parent), follows)
+                    }
                 };
                 nodes.push(Node {
                     item: Item::Hardware(hardware.id),
-                    name: format!("{} {member}", hardware.name),
-                    geometry,
+                    name: format!("{} {}", hardware.name, member.name),
+                    geometry: stave_geom::body(member),
                     material: Material::Metal,
-                    assemblies: assemblies_of(outside),
-                    follows: None,
+                    assemblies: assemblies_of(assembly),
+                    follows,
+                    member: Some((member.id, member.carrier)),
                 });
-                // A cup hinge's links: each turns about its pin in the arm as
-                // the door opens.
-                if let (Some(links), Some(mechanism), Some(assembly)) = (
-                    stave_geom::hardware_links(hardware),
-                    hardware.mechanism.as_ref(),
-                    hardware.assembly,
-                ) {
-                    let path = LinkagePath::new(&mechanism.linkage);
-                    for (link, (geometry, label)) in links
-                        .into_iter()
-                        .zip(["inner link", "outer link"])
-                        .enumerate()
-                    {
-                        nodes.push(Node {
-                            item: Item::Hardware(hardware.id),
-                            name: format!("{} {label}", hardware.name),
-                            geometry,
-                            material: Material::Metal,
-                            assemblies: assemblies_of(outside),
-                            follows: Some(LinkFollower {
-                                assembly,
-                                path,
-                                link,
-                            }),
-                        });
-                    }
-                }
             }
         }
         let motions: Vec<Option<RenderMotion>> = design
@@ -1024,28 +1006,32 @@ impl Exploded {
                 let Some(hardware) = design.hardware.get(id.index()) else {
                     return (Vec3::ZERO, Vec3::ZERO);
                 };
-                // The member on the piece goes with the piece; the fixed
-                // member with the part it is fixed to: a hinge's `on`, the
-                // side a slide's cabinet member is against.
-                if node.name == hardware.name {
-                    return of_part(hardware.piece);
-                }
-                let fixed_to = match hardware.data {
-                    HardwareData::Hinge { on, .. } | HardwareData::ButtHinge { on, .. } => Some(on),
-                    HardwareData::Slide { .. } => hardware.fixed.as_ref().and_then(|member| {
-                        design
-                            .parts
-                            .iter()
-                            .filter(|p| {
-                                hardware
-                                    .assembly
-                                    .and_then(|a| design.assemblies.get(a.index()))
-                                    .is_none_or(|a| !a.parts.contains(&p.id))
-                            })
-                            .find(|p| touching(&p.cut_box(), &member.bounds))
-                            .map(|p| p.id)
-                    }),
-                    HardwareData::Pull { .. } => None,
+                // A member goes with the part it is `with:`; a link with
+                // the piece; a member `with:` a region with the part
+                // outside its assembly that it lies against (the side a
+                // slide's cabinet member is screwed to).
+                let fixed_to = match node.member.map(|(_, carrier)| carrier) {
+                    Some(BodyCarrier::Part(part)) => Some(part),
+                    Some(BodyCarrier::Link(_)) | None => Some(hardware.piece),
+                    Some(BodyCarrier::Region(_)) => {
+                        let bounds = node.member.and_then(|(member, _)| {
+                            let body = hardware.members.iter().find(|m| m.id == member)?;
+                            stave_geom::collide::WorldSolid::of_body(body).bounds()
+                        });
+                        bounds.and_then(|bounds| {
+                            design
+                                .parts
+                                .iter()
+                                .filter(|p| {
+                                    hardware
+                                        .assembly
+                                        .and_then(|a| design.assemblies.get(a.index()))
+                                        .is_none_or(|a| !a.parts.contains(&p.id))
+                                })
+                                .find(|p| touching(&p.cut_box(), &bounds))
+                                .map(|p| p.id)
+                        })
+                    }
                 };
                 fixed_to.map_or((Vec3::ZERO, Vec3::ZERO), of_part)
             }

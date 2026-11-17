@@ -57,16 +57,25 @@ fn hardware_explodes_with_its_part_and_scenes_say_when_they_explode() {
     let design = opened.design.as_ref().unwrap();
     let bench = graph.scene_named("drawer_bench").unwrap();
     assert!(bench.explode);
-    for hardware in &design.hardware {
-        let node = graph.node_of(Item::Hardware(hardware.id)).unwrap();
-        let piece = graph.node_of(Item::Part(hardware.piece)).unwrap();
+    // Every member goes with the part it is `with:` (a hinge's cup with
+    // the door, its plate with the side).
+    let mut members = 0;
+    for node in graph.node_ids() {
+        let Some((_, stave_model::solved::BodyCarrier::Part(part))) =
+            graph.node(node).and_then(|n| n.member)
+        else {
+            continue;
+        };
+        let carrier = graph.node_of(Item::Part(part)).unwrap();
         assert_eq!(
             graph.explode_offset(node),
-            graph.explode_offset(piece),
+            graph.explode_offset(carrier),
             "{}",
-            hardware.name
+            graph.node(node).unwrap().name
         );
+        members += 1;
     }
+    assert!(members >= design.hardware.len());
 }
 
 #[test]
@@ -164,7 +173,7 @@ fn assemblies_move_out_whole_first_drawers_forward_doors_off_their_hinges() {
         .find(|id| {
             graph
                 .node(*id)
-                .is_some_and(|n| n.name == "drawer[top].slides[left] cabinet member")
+                .is_some_and(|n| n.name == "drawer[top].slides[left] cabinet_member")
         })
         .unwrap();
     assert!(

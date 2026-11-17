@@ -18,8 +18,11 @@ use stave_model::solved::{
 use stave_model::value::{Envelope as ExactEnvelope, ExactBox, Value};
 use stave_schema::words::{Grain, MotionWord, StockForm};
 
-use crate::eval::Env;
-use crate::hardware::{HardwareCut, MotionExact, Placed, RoleBound, world_index};
+use crate::eval::{Env, midpoint};
+use crate::hardware::{
+    HardwareCut, MemberCarrier, MotionExact, Placed, PlacedMember, RoleBound, WorldShape,
+    world_index,
+};
 use crate::joints::{GeomTable, JointWork, PartGeom, local_slot, round_length};
 use crate::legacy::Data;
 use crate::place::reflect;
@@ -55,6 +58,196 @@ fn world_box(bounds: &ExactBox) -> Solved<solved::WorldBox> {
         bounds.max(Axis::Deep),
     ])?;
     Ok(solved::WorldBox::new(low, high))
+}
+
+/// A world point reflected across the plane at `plane` on `axis`.
+fn reflect_point(
+    point: [ExactLength; 3],
+    axis: Axis,
+    plane: ExactLength,
+) -> Solved<[ExactLength; 3]> {
+    let mut out = point;
+    if let Some(slot) = out.get_mut(world_index(axis)) {
+        let twice = plane.checked_add(plane).ok_or(Reported)?;
+        *slot = twice.checked_sub(*slot).ok_or(Reported)?;
+    }
+    Ok(out)
+}
+
+/// A piece of hardware's members reflected, each carried by what the
+/// reflected roles bind (the links stay links).
+fn reflect_members(
+    members: &[PlacedMember],
+    source_roles: &[(String, RoleBound)],
+    roles: &[(String, RoleBound)],
+    axis: Axis,
+    plane: ExactLength,
+) -> Solved<Vec<PlacedMember>> {
+    let rebound = |carrier: MemberCarrier| -> Solved<MemberCarrier> {
+        let was = match carrier {
+            MemberCarrier::Part(part) => RoleBound::Part(part),
+            MemberCarrier::Region(region) => RoleBound::Region(region),
+            MemberCarrier::Link(_) => return Ok(carrier),
+        };
+        let index = source_roles
+            .iter()
+            .position(|(_, bound)| *bound == was)
+            .ok_or(Reported)?;
+        match roles.get(index).map(|(_, bound)| *bound) {
+            Some(RoleBound::Part(part)) => Ok(MemberCarrier::Part(part)),
+            Some(RoleBound::Region(region)) => Ok(MemberCarrier::Region(region)),
+            None => Err(Reported),
+        }
+    };
+    let shape = |shape: &WorldShape| -> Solved<WorldShape> {
+        Ok(match shape {
+            WorldShape::Box(bounds) => WorldShape::Box(reflect_box(bounds, axis, plane)?),
+            WorldShape::Cylinder {
+                axis: along,
+                bounds,
+            } => WorldShape::Cylinder {
+                axis: *along,
+                bounds: reflect_box(bounds, axis, plane)?,
+            },
+            WorldShape::Prism {
+                axis: along,
+                points,
+                bounds,
+            } => WorldShape::Prism {
+                axis: *along,
+                points: points
+                    .iter()
+                    .map(|point| reflect_point(*point, axis, plane))
+                    .collect::<Solved<Vec<_>>>()?,
+                bounds: reflect_box(bounds, axis, plane)?,
+            },
+            WorldShape::Bar {
+                axis: along,
+                from,
+                to,
+                thickness,
+                bounds,
+            } => WorldShape::Bar {
+                axis: *along,
+                from: reflect_point(*from, axis, plane)?,
+                to: reflect_point(*to, axis, plane)?,
+                thickness: *thickness,
+                bounds: reflect_box(bounds, axis, plane)?,
+            },
+        })
+    };
+    members
+        .iter()
+        .map(|member| {
+            Ok(PlacedMember {
+                carrier: rebound(member.carrier)?,
+                shapes: member
+                    .shapes
+                    .iter()
+                    .map(shape)
+                    .collect::<Solved<Vec<_>>>()?,
+                ..member.clone()
+            })
+        })
+        .collect()
+}
+
+/// A member's shape in the solved design, to the nearest nanometre.
+fn member_shape(shape: &WorldShape) -> Solved<solved::MemberShape> {
+    let pair = |axis: Axis, point: [ExactLength; 3]| -> Solved<[Length; 2]> {
+        let [first, second] = axis.others();
+        let at = |on: Axis| point.get(world_index(on)).copied().ok_or(Reported);
+        Ok([round_length(at(first)?)?, round_length(at(second)?)?])
+    };
+    let ends = |axis: Axis, bounds: &ExactBox| -> Solved<(Length, Length)> {
+        Ok((
+            round_length(bounds.min(axis))?,
+            round_length(bounds.max(axis))?,
+        ))
+    };
+    Ok(match shape {
+        WorldShape::Box(bounds) => solved::MemberShape::Box(world_box(bounds)?),
+        WorldShape::Cylinder { axis, bounds } => {
+            let [first, second] = axis.others();
+            let centre = |on: Axis| -> Solved<Length> {
+                round_length(midpoint(bounds.min(on), bounds.max(on)).ok_or(Reported)?)
+            };
+            let diameter = bounds
+                .max(first)
+                .checked_sub(bounds.min(first))
+                .ok_or(Reported)?;
+            let (start, end) = ends(*axis, bounds)?;
+            solved::MemberShape::Cylinder {
+                axis: *axis,
+                centre: [centre(first)?, centre(second)?],
+                diameter: round_length(diameter)?,
+                start,
+                end,
+            }
+        }
+        WorldShape::Prism {
+            axis,
+            points,
+            bounds,
+        } => {
+            let (start, end) = ends(*axis, bounds)?;
+            solved::MemberShape::Prism {
+                axis: *axis,
+                points: points
+                    .iter()
+                    .map(|point| pair(*axis, *point))
+                    .collect::<Solved<Vec<_>>>()?,
+                start,
+                end,
+            }
+        }
+        WorldShape::Bar {
+            axis,
+            from,
+            to,
+            thickness,
+            bounds,
+        } => {
+            let (start, end) = ends(*axis, bounds)?;
+            solved::MemberShape::Bar {
+                axis: *axis,
+                from: pair(*axis, *from)?,
+                to: pair(*axis, *to)?,
+                thickness: round_length(*thickness)?,
+                start,
+                end,
+            }
+        }
+    })
+}
+
+/// A piece of hardware's members in the solved design.
+fn members(hardware: HardwareId, placed: &[PlacedMember]) -> Solved<Vec<solved::Body>> {
+    placed
+        .iter()
+        .map(|member| {
+            let carrier = match member.carrier {
+                MemberCarrier::Part(part) => solved::BodyCarrier::Part(part),
+                MemberCarrier::Region(region) => solved::BodyCarrier::Region(region),
+                MemberCarrier::Link(link) => solved::BodyCarrier::Link(link),
+            };
+            let shapes = member
+                .shapes
+                .iter()
+                .map(member_shape)
+                .collect::<Solved<Vec<_>>>()?;
+            solved::Body::new(
+                solved::BodyRef {
+                    hardware,
+                    body: member.body,
+                },
+                member.name.clone(),
+                carrier,
+                shapes,
+            )
+            .ok_or(Reported)
+        })
+        .collect()
 }
 
 fn reflect_box(bounds: &ExactBox, axis: Axis, plane: ExactLength) -> Solved<ExactBox> {
@@ -913,6 +1106,15 @@ impl Solver<'_> {
             if unbound {
                 continue;
             }
+            let Ok(members) = reflect_members(
+                &source_placed.members,
+                &source_placed.roles,
+                &roles,
+                axis,
+                plane,
+            ) else {
+                continue;
+            };
             let reflected = Placed {
                 piece,
                 mount_face,
@@ -925,6 +1127,7 @@ impl Solver<'_> {
                     fixed,
                     data,
                 },
+                members,
                 ..source_placed
             };
             if let Some(entry) = placed.get_mut(hardware.index()) {
@@ -1328,6 +1531,7 @@ impl Solver<'_> {
                     })
                     .collect(),
                 fasteners: hw.fasteners.clone(),
+                members: members(inst.id, &hw.members)?,
                 entries: hw
                     .entries
                     .iter()

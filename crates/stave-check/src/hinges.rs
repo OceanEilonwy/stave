@@ -1,16 +1,15 @@
-//! Cup hinges: the overlay the catalogue allows (layer 4), and the hinge's
-//! own arm and links against the door and the side as the door opens
-//! (layer 5).
+//! Cup hinges: the overlay the catalogue allows (layer 4). The hinge's own
+//! arm and links are bodies like any other, checked by the overlap check
+//! and the sweeps (grammar, "One collision model").
 
 use std::collections::BTreeMap;
 
-use stave_geom::sweep::{HingePart, LinkageSweep, MechanismMember, mechanism_contact};
-use stave_lang::units::{Angle, Length};
+use stave_lang::units::Length;
 use stave_lang::{Code, Severity};
-use stave_model::solved::{HardwareData, HardwareId, Motion, PoseValue};
+use stave_model::solved::{HardwareData, HardwareId};
 
 use crate::names::length_text;
-use crate::{Checker, Contact, ContactMotion, Item};
+use crate::{Checker, Contact, Item};
 
 /// The farthest a cup is bored from the door's edge (7mm in the catalogues;
 /// a little more still leaves wood outside a 35mm cup in a 60mm stile).
@@ -120,18 +119,13 @@ impl Checker<'_> {
                 notes.push(format!("the same for {}", others.join(", ")));
             }
             for id in &list {
-                self.failed.insert(Item::Hardware(*id));
-                self.failed.insert(Item::Fixed(*id));
+                for member in self.members_of(*id) {
+                    self.failed.insert(member);
+                }
             }
-            self.next_contact = Some(Contact::of(
-                &[
-                    Item::Hardware(first.id),
-                    Item::Fixed(first.id),
-                    Item::Part(first.piece),
-                    Item::Part(on),
-                ],
-                &[],
-            ));
+            let mut items = self.members_of(first.id);
+            items.extend([Item::Part(first.piece), Item::Part(on)]);
+            self.next_contact = Some(Contact::of(&items, &[]));
             self.report(
                 Severity::Error,
                 Code::HingeOverlay,
@@ -144,116 +138,6 @@ impl Checker<'_> {
                 self.hardware_place(first.id),
                 notes,
                 Some(help),
-            );
-        }
-    }
-
-    /// `error[motion]`: a cup hinge's own arm or links running into the
-    /// wood of its door (outside the cup) or of the side as the door opens.
-    /// One error per assembly (its first hinge that hits; the others are a
-    /// note).
-    pub(crate) fn mechanisms(&mut self) {
-        let mut found = Vec::new();
-        for assembly in &self.design.assemblies {
-            let Some(Motion::Linkage { .. }) = assembly.motion else {
-                continue;
-            };
-            let mut hits = Vec::new();
-            for id in &assembly.hardware {
-                let Some(hardware) = self.design.hardware.get(id.index()) else {
-                    continue;
-                };
-                let (Some(mechanism), HardwareData::Hinge { on, .. }) =
-                    (&hardware.mechanism, hardware.data)
-                else {
-                    continue;
-                };
-                if hardware.assembly != Some(assembly.id) {
-                    continue;
-                }
-                let blocked = [
-                    Item::Hardware(*id),
-                    Item::Fixed(*id),
-                    Item::Part(hardware.piece),
-                    Item::Part(on),
-                ]
-                .iter()
-                .any(|item| self.failed.contains(item) || self.posed_failed.contains(item));
-                if blocked {
-                    continue;
-                }
-                let solid_of = |part| {
-                    self.bodies
-                        .iter()
-                        .find(|b| b.item == Item::Part(part))
-                        .map(|b| &b.solid)
-                };
-                let (Some(piece), Some(on_solid)) = (solid_of(hardware.piece), solid_of(on)) else {
-                    continue;
-                };
-                let sweep = LinkageSweep::new(&mechanism.linkage);
-                if let Some(hit) = mechanism_contact(hardware, piece, on_solid, &sweep) {
-                    let part = match hit.part {
-                        HingePart::Piece => hardware.piece,
-                        HingePart::On => on,
-                    };
-                    hits.push((
-                        *id,
-                        part,
-                        hit.member,
-                        hit.angle,
-                        mechanism.linkage.opening_angle(),
-                    ));
-                }
-            }
-            if let Some(first) = hits.first().copied() {
-                let others: Vec<HardwareId> = hits.iter().skip(1).map(|h| h.0).collect();
-                found.push((assembly.id, first, others));
-            }
-        }
-        for (assembly, (hardware, part, member, angle, opening), others) in found {
-            let name = self.assembly_name(assembly);
-            let hardware_name = self.item_name(Item::Hardware(hardware));
-            let member_name = match member {
-                MechanismMember::Arm => "the arm",
-                MechanismMember::Knuckle => "the knuckle",
-                MechanismMember::InnerLink => "the inner link",
-                MechanismMember::OuterLink => "the outer link",
-            };
-            let part_name = self.part_name(part);
-            let tenth = 100_000;
-            let at = Angle::from_microdeg(angle.microdeg().div_euclid(tenth) * tenth);
-            let mut notes = vec![format!("the hinges open to {opening}")];
-            if !others.is_empty() {
-                let names: Vec<String> = others
-                    .iter()
-                    .map(|h| self.item_name(Item::Hardware(*h)))
-                    .collect();
-                notes.push(format!("the same for {}", names.join(", ")));
-            }
-            let mut contact = Contact::of(&[Item::Hardware(hardware), Item::Part(part)], &[]);
-            contact.motion = Some(ContactMotion {
-                assembly,
-                at: PoseValue::Angle(angle),
-                shown: PoseValue::Angle(Angle::from_microdeg(
-                    angle
-                        .microdeg()
-                        .saturating_add(2_000_000)
-                        .min(opening.microdeg()),
-                )),
-            });
-            self.next_contact = Some(contact);
-            self.report(
-                Severity::Error,
-                Code::Motion,
-                format!(
-                    "{member_name} of {hardware_name} hits {part_name} when {name} is opened past {at}"
-                ),
-                self.hardware_place(hardware),
-                notes,
-                Some(format!(
-                    "the hinge's arm and links need room behind the door and inside the cup: check the door's thickness and the hinge's cup_inset against its catalogue, or open {name} no further than {at}"
-                )),
             );
         }
     }

@@ -9,12 +9,14 @@
 //!
 //! Boxes are exact: every part is axis-aligned at rest and after a slide's
 //! travel, so a board's blocks are whole-nanometre world boxes and box
-//! against box is integer arithmetic. Round shapes (rods, holes, round
-//! envelopes) are tested in `f64` nanometres, converted in
+//! against box is integer arithmetic. Round shapes (rods, holes, a
+//! member's cylinders) and a member's prisms and bars ([`WorldPrism`],
+//! tested in their plane) are tested in `f64` nanometres, converted in
 //! [`render`](crate::render). A hole clears what lies inside it: a rod
 //! inside a hole of the other part (a round tenon in its hole, a rung in
-//! its socket) is cut back to where the hole doesn't hold it, and a block
-//! lying wholly inside a hole is cut back the same way.
+//! its socket, a knob's screw) is cut back to where the hole doesn't hold
+//! it, and a block or prism lying wholly inside a hole is cut back the
+//! same way (a cup hinge's knuckle and links in the cup's bore).
 //!
 //! Angled cuts ([`WorldCut`], the slanted pieces of a part's
 //! [`Prism`](crate::solid::Prism)s) are taken out of the wood two boxes
@@ -26,16 +28,21 @@
 //! there is), and so is a part's contact with others where no box of it
 //! meets a cut.
 //!
-//! A solid turned by a hinge is no longer axis-aligned. [`overlaps_placed`]
-//! then tests oriented boxes with the separating axis test: each block and
-//! each rod (as the square prism around it) of one solid against those of
-//! the other. Holes and angled cuts are left out there, which only ever
-//! finds more wood than there is.
+//! A solid turned by a hinge is no longer axis-aligned. When both solids
+//! turn about one world axis (or only move), [`overlaps_placed`] tests
+//! their pieces in the plane across it, each part's boxes less the holes
+//! whose axis lies in that plane ([`crate::plane`], grammar, "Sweeps see
+//! cuts"). Otherwise it tests oriented boxes with the separating axis
+//! test: each block, rod and prism (as the box around it) of one solid
+//! against those of the other. Angled cuts, and holes in the second case,
+//! are left out there, which only ever finds more wood than there is.
 
 use glam::{DMat4, DVec3};
 use stave_lang::placement::{Axis, Direction, PartAxis};
 use stave_lang::units::Length;
-use stave_model::solved::{Envelope, Motion, Part, Point, Pose, PoseValue, WorldBox};
+use stave_model::solved::{
+    Body, LinkIndex, MemberShape, Motion, Part, Point, Pose, PoseValue, WorldBox,
+};
 
 pub use crate::piece::WorldCut;
 use crate::piece::{self, Piece};
@@ -112,12 +119,129 @@ impl WorldRod {
     }
 }
 
-/// A solid in world coordinates: boxes and rods of wood (or of a hardware
-/// envelope), less the holes drilled in it and the angled cuts.
+/// A convex outline on the plane across a world axis, extruded along it:
+/// a hardware member's prism or bar.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorldPrism {
+    /// The axis it is extruded along.
+    pub axis: Axis,
+    /// Its corners in order around it, each on the two other axes in
+    /// [`Axis::others`] order.
+    pub corners: Vec<[Length; 2]>,
+    /// Its low end along `axis`.
+    pub start: Length,
+    /// Its high end along `axis`.
+    pub end: Length,
+}
+
+impl WorldPrism {
+    /// A bar between two centres, `thickness` wide, reaching half its
+    /// thickness past each, as its four corners (rounded to the
+    /// nanometre).
+    pub(crate) fn bar(
+        axis: Axis,
+        from: [Length; 2],
+        to: [Length; 2],
+        thickness: Length,
+        start: Length,
+        end: Length,
+    ) -> WorldPrism {
+        let point = |[a, b]: [Length; 2]| glam::DVec2::new(render::nm(a), render::nm(b));
+        let (from, to) = (point(from), point(to));
+        let direction = (to - from).normalize_or_zero();
+        let half = render::nm(thickness) / 2.0;
+        let across = direction.perp() * half;
+        let (a, b) = (from - direction * half, to + direction * half);
+        let corners = [a - across, b - across, b + across, a + across]
+            .iter()
+            .filter_map(|corner| {
+                Some([
+                    render::length_from_nm(corner.x)?,
+                    render::length_from_nm(corner.y)?,
+                ])
+            })
+            .collect();
+        WorldPrism {
+            axis,
+            corners,
+            start,
+            end,
+        }
+    }
+
+    /// The outline on its plane, counter-clockwise, `f64` nanometres.
+    fn outline(&self) -> Vec<glam::DVec2> {
+        crate::plane::hull(
+            self.corners
+                .iter()
+                .map(|[a, b]| glam::DVec2::new(render::nm(*a), render::nm(*b)))
+                .collect(),
+        )
+    }
+
+    /// Its corners at both ends, world nanometres.
+    pub(crate) fn corners_3d(&self) -> Vec<DVec3> {
+        let [first, second] = self.axis.others();
+        [self.start, self.end]
+            .iter()
+            .flat_map(|at| {
+                self.corners.iter().map(move |[a, b]| {
+                    point_vector(
+                        Point::default()
+                            .with(self.axis, *at)
+                            .with(first, *a)
+                            .with(second, *b),
+                    )
+                })
+            })
+            .collect()
+    }
+
+    /// The box around it.
+    pub fn bounds(&self) -> Option<WorldBox> {
+        let [first, second] = self.axis.others();
+        let range = |index: usize| {
+            let values = self.corners.iter().filter_map(|c| c.get(index).copied());
+            Some((values.clone().min()?, values.max()?))
+        };
+        let ((a_low, a_high), (b_low, b_high)) = (range(0)?, range(1)?);
+        Some(WorldBox::new(
+            Point::default()
+                .with(self.axis, self.start)
+                .with(first, a_low)
+                .with(second, b_low),
+            Point::default()
+                .with(self.axis, self.end)
+                .with(first, a_high)
+                .with(second, b_high),
+        ))
+    }
+
+    fn translated(&self, by: Point) -> WorldPrism {
+        let [first, second] = self.axis.others();
+        let shift = |value: Length, axis: Axis| {
+            Length::from_nm(value.nm().saturating_add(by.get(axis).nm()))
+        };
+        WorldPrism {
+            axis: self.axis,
+            corners: self
+                .corners
+                .iter()
+                .map(|[a, b]| [shift(*a, first), shift(*b, second)])
+                .collect(),
+            start: shift(self.start, self.axis),
+            end: shift(self.end, self.axis),
+        }
+    }
+}
+
+/// A solid in world coordinates: boxes, rods and prisms of wood or steel,
+/// less the holes drilled in it and the angled cuts.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct WorldSolid {
     boxes: Vec<WorldBox>,
     rods: Vec<WorldRod>,
+    prisms: Vec<WorldPrism>,
     holes: Vec<WorldRod>,
     cuts: Vec<WorldCut>,
 }
@@ -127,10 +251,69 @@ impl WorldSolid {
     pub fn from_boxes(boxes: Vec<WorldBox>) -> WorldSolid {
         WorldSolid {
             boxes,
-            rods: Vec::new(),
-            holes: Vec::new(),
-            cuts: Vec::new(),
+            ..WorldSolid::default()
         }
+    }
+
+    /// A solid of one prism, for tests.
+    #[cfg(test)]
+    pub(crate) fn with_prism(prism: WorldPrism) -> WorldSolid {
+        WorldSolid {
+            prisms: vec![prism],
+            ..WorldSolid::default()
+        }
+    }
+
+    /// The same solid with a hole drilled in it, for tests.
+    #[cfg(test)]
+    pub(crate) fn with_hole(mut self, hole: WorldRod) -> WorldSolid {
+        self.holes.push(hole);
+        self
+    }
+
+    /// A hardware member's shapes, at rest.
+    pub fn of_body(body: &Body) -> WorldSolid {
+        let mut solid = WorldSolid::default();
+        for shape in body.shapes() {
+            match shape {
+                MemberShape::Box(region) => solid.boxes.push(*region),
+                MemberShape::Cylinder {
+                    axis,
+                    centre,
+                    diameter,
+                    start,
+                    end,
+                } => solid.rods.push(WorldRod {
+                    axis: *axis,
+                    centre: *centre,
+                    diameter: *diameter,
+                    start: *start,
+                    end: *end,
+                }),
+                MemberShape::Prism {
+                    axis,
+                    points,
+                    start,
+                    end,
+                } => solid.prisms.push(WorldPrism {
+                    axis: *axis,
+                    corners: points.clone(),
+                    start: *start,
+                    end: *end,
+                }),
+                MemberShape::Bar {
+                    axis,
+                    from,
+                    to,
+                    thickness,
+                    start,
+                    end,
+                } => solid
+                    .prisms
+                    .push(WorldPrism::bar(*axis, *from, *to, *thickness, *start, *end)),
+            }
+        }
+        solid
     }
 
     /// A part's cut solid, placed.
@@ -182,38 +365,9 @@ impl WorldSolid {
         WorldSolid {
             boxes,
             rods,
+            prisms: Vec::new(),
             holes,
             cuts,
-        }
-    }
-
-    /// A hardware envelope (a box, or a cylinder along its local
-    /// thickness) at a pose.
-    pub fn of_envelope(envelope: &Envelope, pose: &Pose) -> WorldSolid {
-        match *envelope {
-            Envelope::Box { .. } => WorldSolid {
-                boxes: vec![pose.world_box(envelope.size())],
-                rods: Vec::new(),
-                holes: Vec::new(),
-                cuts: Vec::new(),
-            },
-            Envelope::Cylinder { diameter, length } => {
-                let half = Length::from_nm(diameter.nm().div_euclid(2));
-                let rod = Rod {
-                    axis: PartAxis::Thickness,
-                    centre: [half, half],
-                    diameter,
-                    start: Length::ZERO,
-                    end: length,
-                    flats: None,
-                };
-                WorldSolid {
-                    boxes: Vec::new(),
-                    rods: vec![world_rod(pose, &rod)],
-                    holes: Vec::new(),
-                    cuts: Vec::new(),
-                }
-            }
         }
     }
 
@@ -223,6 +377,7 @@ impl WorldSolid {
             .iter()
             .copied()
             .chain(self.rods.iter().map(WorldRod::bounds))
+            .chain(self.prisms.iter().filter_map(WorldPrism::bounds))
             .reduce(|a, b| union(&a, &b))
     }
 
@@ -231,6 +386,7 @@ impl WorldSolid {
         WorldSolid {
             boxes: self.boxes.iter().map(|b| translate_box(b, by)).collect(),
             rods: self.rods.iter().map(|r| r.translated(by)).collect(),
+            prisms: self.prisms.iter().map(|p| p.translated(by)).collect(),
             holes: self.holes.iter().map(|r| r.translated(by)).collect(),
             cuts: self.cuts.iter().map(|c| c.translated(by)).collect(),
         }
@@ -244,6 +400,11 @@ impl WorldSolid {
     /// The rods of wood.
     pub fn rods(&self) -> &[WorldRod] {
         &self.rods
+    }
+
+    /// The prisms (a member's prisms and bars).
+    pub fn prisms(&self) -> &[WorldPrism] {
+        &self.prisms
     }
 
     /// The holes.
@@ -652,25 +813,108 @@ pub fn overlaps(a: &WorldSolid, b: &WorldSolid) -> Vec<Overlap> {
             }
         }
     }
+    // Prisms: against boxes less the holes, against the boxes around rods,
+    // and against each other.
+    for (prisms, other) in [(&a.prisms, b), (&b.prisms, a)] {
+        for prism in prisms {
+            for region in &other.boxes {
+                found.extend(prism_box(prism, region, &holes));
+            }
+            for rod in &other.rods {
+                found.extend(prism_box(prism, &rod.bounds(), &[]));
+            }
+        }
+    }
+    for x in &a.prisms {
+        for y in &b.prisms {
+            found.extend(prism_prism(x, y));
+        }
+    }
     found
+}
+
+/// How far a prism goes into a box, less what `holes` clear of the box
+/// they share.
+fn prism_box(prism: &WorldPrism, region: &WorldBox, holes: &[WorldRod]) -> Vec<Overlap> {
+    let Some(shared) = prism.bounds().and_then(|b| intersection(&b, region)) else {
+        return Vec::new();
+    };
+    let outline = prism.outline();
+    let [first, second] = prism.axis.others();
+    clear(shared, holes)
+        .into_iter()
+        .filter_map(|piece| {
+            let low = |axis: Axis| render::nm(piece.min().get(axis));
+            let high = |axis: Axis| render::nm(piece.max().get(axis));
+            let rectangle = [
+                glam::DVec2::new(low(first), low(second)),
+                glam::DVec2::new(high(first), low(second)),
+                glam::DVec2::new(high(first), high(second)),
+                glam::DVec2::new(low(first), high(second)),
+            ];
+            if !crate::plane::intersect(&outline, &rectangle) {
+                return None;
+            }
+            let (across, normal) = crate::plane::overlap_depth(&outline, &rectangle);
+            let along = high(prism.axis) - low(prism.axis);
+            let (depth, axis) = if along <= across {
+                (along, prism.axis)
+            } else if normal.x.abs() >= normal.y.abs() {
+                (across, first)
+            } else {
+                (across, second)
+            };
+            finish(depth, axis, piece)
+        })
+        .collect()
+}
+
+/// How far two prisms overlap: exactly in their plane when they share an
+/// axis, else as the boxes around them.
+fn prism_prism(x: &WorldPrism, y: &WorldPrism) -> Option<Overlap> {
+    let region = intersection(&x.bounds()?, &y.bounds()?)?;
+    if x.axis != y.axis {
+        let (depth, axis) = thinnest(&region);
+        return finish(render::nm(depth), axis, region);
+    }
+    let (a, b) = (x.outline(), y.outline());
+    if !crate::plane::intersect(&a, &b) {
+        return None;
+    }
+    let (across, normal) = crate::plane::overlap_depth(&a, &b);
+    let along = render::nm(region.size(x.axis));
+    let [first, second] = x.axis.others();
+    let (depth, axis) = if along <= across {
+        (along, x.axis)
+    } else if normal.x.abs() >= normal.y.abs() {
+        (across, first)
+    } else {
+        (across, second)
+    };
+    finish(depth, axis, region)
 }
 
 /// Do `a` and `b` touch (come within the contact tolerance of each other)
 /// anywhere? Holes are ignored: a rod in a hole of its own size touches.
 pub fn touches(a: &WorldSolid, b: &WorldSolid) -> bool {
     let tolerance = render::nm(CONTACT_TOLERANCE);
-    let a_shapes: Vec<Shape> = a
-        .boxes
-        .iter()
-        .map(|b| Shape::Box(*b))
-        .chain(a.rods.iter().map(|r| Shape::Rod(*r)))
-        .collect();
-    let b_shapes: Vec<Shape> = b
-        .boxes
-        .iter()
-        .map(|b| Shape::Box(*b))
-        .chain(b.rods.iter().map(|r| Shape::Rod(*r)))
-        .collect();
+    // A prism counts as the box around it.
+    let shapes = |solid: &WorldSolid| -> Vec<Shape> {
+        solid
+            .boxes
+            .iter()
+            .map(|b| Shape::Box(*b))
+            .chain(solid.rods.iter().map(|r| Shape::Rod(*r)))
+            .chain(
+                solid
+                    .prisms
+                    .iter()
+                    .filter_map(WorldPrism::bounds)
+                    .map(Shape::Box),
+            )
+            .collect()
+    };
+    let (a_shapes, b_shapes) = (shapes(a), shapes(b));
     a_shapes.iter().any(|x| {
         b_shapes
             .iter()
@@ -799,10 +1043,19 @@ impl Placement {
     /// The placement after a chain of motions, outermost first (a drawer
     /// inside a cabinet that itself moves), each at its pose value.
     pub fn of_motions(motions: &[(Motion, PoseValue)]) -> Placement {
+        Placement::of_member(motions, None)
+    }
+
+    /// The placement of a member after a chain of motions, outermost
+    /// first: with `link`, the member is that link of the linkage the last
+    /// motion moves on, and turns about its pin as the linkage opens
+    /// instead of moving with the door.
+    pub fn of_member(motions: &[(Motion, PoseValue)], link: Option<LinkIndex>) -> Placement {
         let mut offset = Point::default();
         let mut matrix = DMat4::IDENTITY;
         let mut turned = false;
-        for (motion, value) in motions {
+        let last = motions.len().saturating_sub(1);
+        for (index, (motion, value)) in motions.iter().enumerate() {
             match *motion {
                 Motion::Travel { toward, travel } => {
                     let amount = match *value {
@@ -856,9 +1109,15 @@ impl Placement {
                     // it (a pose wider than the hinge opens), the door stays
                     // where the hinge stops.
                     let theta = render::radians_f64(angle).min(path.opening());
-                    if let Some(coupler) = path.coupler(theta) {
+                    let moved = match link.filter(|_| index == last) {
+                        Some(link) => path
+                            .pose(theta)
+                            .and_then(|pose| pose.links.get(link.index()).copied()),
+                        None => path.coupler(theta),
+                    };
+                    if let Some(moved) = moved {
                         turned = true;
-                        matrix *= coupler;
+                        matrix *= moved;
                     }
                 }
             }
@@ -1010,6 +1269,76 @@ pub fn placed_bounds(region: &WorldBox, placement: &Placement) -> WorldBox {
     }
 }
 
+/// The world axis both placements turn about (either may only move), when
+/// there is one: the motions then lie in the plane across it.
+fn common_turn_axis(a: &DMat4, b: &DMat4) -> Option<Axis> {
+    let keeps = |matrix: &DMat4, axis: Axis| {
+        let unit = axis_vector(axis);
+        (matrix.transform_vector3(unit) - unit).length() < 1e-9
+    };
+    Axis::ALL
+        .into_iter()
+        .find(|axis| keeps(a, *axis) && keeps(b, *axis))
+}
+
+/// The overlaps of two solids moved in the plane across `axis`: their
+/// pieces there, each solid's boxes less its holes (grammar, "Sweeps see
+/// cuts").
+fn overlaps_in_plane(
+    a: &WorldSolid,
+    ma: &DMat4,
+    b: &WorldSolid,
+    mb: &DMat4,
+    axis: Axis,
+) -> Vec<Overlap> {
+    let plane = crate::plane::Plane::across(axis);
+    let [first, second] = axis.others();
+    let mut found = Vec::new();
+    for (p, q) in crate::plane::piece_pairs(&plane, a, ma, b, mb) {
+        let Some((depth, normal)) = crate::plane::piece_depth(&p, &q) else {
+            continue;
+        };
+        let range = |piece: &crate::plane::Piece, pick: fn(glam::DVec2) -> f64| {
+            piece
+                .corners
+                .iter()
+                .map(|c| pick(*c))
+                .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), v| {
+                    (lo.min(v), hi.max(v))
+                })
+        };
+        let shared = |pick: fn(glam::DVec2) -> f64| {
+            let (x, y) = (range(&p, pick), range(&q, pick));
+            (x.0.max(y.0), x.1.min(y.1))
+        };
+        let (x, y) = (shared(|c| c.x), shared(|c| c.y));
+        let corner = |a: f64, b: f64, c: f64| -> Option<Point> {
+            Some(
+                Point::default()
+                    .with(first, render::length_from_nm(a)?)
+                    .with(second, render::length_from_nm(b)?)
+                    .with(axis, render::length_from_nm(c)?),
+            )
+        };
+        let (Some(low), Some(high)) = (
+            corner(x.0, y.0, p.low.max(q.low)),
+            corner(x.1, y.1, p.high.min(q.high)),
+        ) else {
+            continue;
+        };
+        let along = p.shared(&q);
+        let shortest = if depth >= along {
+            axis
+        } else if normal.x.abs() >= normal.y.abs() {
+            first
+        } else {
+            second
+        };
+        found.extend(finish(depth, shortest, WorldBox::new(low, high)));
+    }
+    found
+}
+
 /// Every place where wood of `a` goes into wood of `b` when each is moved
 /// by its placement. Exact when neither is turned.
 pub fn overlaps_placed(
@@ -1022,12 +1351,16 @@ pub fn overlaps_placed(
         return overlaps(&a.translated(*da), &b.translated(*db));
     }
     let (ma, mb) = (a_placement.matrix(), b_placement.matrix());
+    if let Some(axis) = common_turn_axis(&ma, &mb) {
+        return overlaps_in_plane(a, &ma, b, &mb, axis);
+    }
     let boxes = |solid: &WorldSolid, matrix: &DMat4| -> Vec<Oriented> {
         solid
             .boxes
             .iter()
             .copied()
             .chain(solid.rods.iter().map(WorldRod::bounds))
+            .chain(solid.prisms.iter().filter_map(WorldPrism::bounds))
             .map(|region| Oriented::of(&region, matrix))
             .collect()
     };
@@ -1125,6 +1458,7 @@ mod tests {
             rods: Vec::new(),
             holes: vec![rod(Axis::Up, [50, 50], 22, 0, 20)],
             cuts: Vec::new(),
+            prisms: Vec::new(),
         };
         let tenon = WorldSolid {
             rods: vec![rod(Axis::Up, [50, 50], 22, -50, 20)],

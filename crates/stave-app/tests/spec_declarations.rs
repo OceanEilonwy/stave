@@ -879,6 +879,7 @@ fn hung_door(mechanism: &str) -> String {
   mechanism {{
 {mechanism}
   }}
+  cut bore: crossing(piece, cup) {{ drill(diameter: 35mm, depth: 12.8mm) }}
 }}
 part side : pine_19 {{
   length: 400mm
@@ -1030,12 +1031,21 @@ fn a_pivot_names_two_declared_members() {
 /// with no `mechanism` turns about the edge its mount measures from (a
 /// butt hinge's pin); it has no linkage. (It used to be a cup hinge with no
 /// motion and a not-supported warning: whether a hinge is a cup hinge is
-/// no longer decided by its entries.)
+/// no longer decided by its entries.) With no mechanism to place them, the
+/// links ride on the door (`with: piece`).
 #[test]
 fn a_hinge_kind_without_a_mechanism_turns_about_its_edge() {
     let opened = open(&format!(
         "{}\ncomponent Door {{\n  part panel : pine_19 {{\n    length: 300mm\n    width:  200mm\n    place {{\n      orient(length: up, width: right)\n      against(base.top)\n      against(side.right)\n      against(base.front)\n    }}\n  }}\n}}",
-        hung_door(FOUR_PINS).replace(&format!("  mechanism {{\n{FOUR_PINS}\n  }}\n"), "")
+        without_mechanism()
+            .replace(
+                "member inner_link {",
+                "member inner_link {\n    with: piece"
+            )
+            .replace(
+                "member outer_link {",
+                "member outer_link {\n    with: piece"
+            )
     ));
     assert!(
         diagnostics(&opened).is_empty(),
@@ -1046,5 +1056,23 @@ fn a_hinge_kind_without_a_mechanism_turns_about_its_edge() {
         common::hardware(design(&opened), "hinge")
             .mechanism
             .is_none()
+    );
+}
+
+/// `hung_door` with its `mechanism` block taken out.
+fn without_mechanism() -> String {
+    hung_door(FOUR_PINS).replace(&format!("  mechanism {{\n{FOUR_PINS}\n  }}\n"), "")
+}
+
+/// A member with no `with:` is placed by the mechanism; in a kind with no
+/// mechanism nothing moves it, which is `error[missing-field]` at the
+/// member.
+#[test]
+fn a_member_nothing_moves_is_a_missing_field() {
+    let opened = open(&without_mechanism());
+    the_diagnostic(
+        &opened,
+        "missing-field",
+        "member 'inner_link' has no 'with:' and nothing in its kind moves it",
     );
 }
