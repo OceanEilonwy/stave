@@ -204,12 +204,14 @@ impl Inspector {
 
     /// A "Show in text" link to a place in the text.
     fn source_link(&self, location: SourceLocation) -> gtk::Button {
-        let link = gtk::Button::builder()
-            .label("Show in text")
-            .css_classes(["flat", "stave-link"])
-            .valign(gtk::Align::Center)
-            .tooltip_text("Show where to change it, in the Files view")
-            .build();
+        let link = super::style::as_link(
+            gtk::Button::builder()
+                .label("Show in text")
+                .css_classes(["flat", "stave-link"])
+                .valign(gtk::Align::Center)
+                .tooltip_text("Show where to change it, in the Files view")
+                .build(),
+        );
         let callbacks = self.callbacks.clone();
         link.connect_clicked(move |_| {
             let callback = callbacks.borrow().on_source.clone();
@@ -377,11 +379,13 @@ impl Inspector {
                 .css_classes(["stave-section"])
                 .build(),
         );
-        let link = gtk::Button::builder()
-            .label(&source.label)
-            .css_classes(["flat", "stave-link"])
-            .tooltip_text("Show it in the Files view")
-            .build();
+        let link = super::style::as_link(
+            gtk::Button::builder()
+                .label(&source.label)
+                .css_classes(["flat", "stave-link"])
+                .tooltip_text("Show it in the Files view")
+                .build(),
+        );
         let location = source.location.clone();
         let callbacks = self.callbacks.clone();
         link.connect_clicked(move |_| {

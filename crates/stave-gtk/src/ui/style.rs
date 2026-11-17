@@ -326,6 +326,15 @@ pub const CODE: CodeColours = CodeColours {
 
 /// The code blocks' backgrounds as `COLOURS` writes them: light style,
 /// dark style.
+/// Gives a button drawn as a link (the `stave-link` and `stave-lens-link`
+/// classes) the hand cursor, so it reads as clickable; inside the text
+/// view it would otherwise keep the text cursor.
+pub fn as_link(button: gtk::Button) -> gtk::Button {
+    use gtk::prelude::WidgetExt;
+    button.set_cursor_from_name(Some("pointer"));
+    button
+}
+
 #[cfg(test)]
 const CODE_BACKGROUNDS: [&str; 2] = ["#1e1e24", "#121216"];
 
