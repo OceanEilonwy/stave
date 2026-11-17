@@ -240,3 +240,20 @@ fn floor_fragment(in: FloorOut) -> @location(0) vec4<f32> {
     let fade = 1.0 - smoothstep(0.5, 1.0, away);
     return vec4<f32>(0.10, 0.07, 0.04, shadow * 0.30 * fade);
 }
+
+// ---- a problem's shared volumes: red, on top of everything ----
+
+@vertex
+fn volume_vertex(@location(0) position: vec3<f32>) -> @builtin(position) vec4<f32> {
+    return globals.view_projection * vec4<f32>(position, 1.0);
+}
+
+@fragment
+fn volume_fragment() -> @location(0) vec4<f32> {
+    return vec4<f32>(0.85, 0.02, 0.02, 0.38);
+}
+
+@fragment
+fn volume_edge_fragment() -> @location(0) vec4<f32> {
+    return vec4<f32>(0.45, 0.0, 0.0, 0.95);
+}

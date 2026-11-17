@@ -4,6 +4,8 @@
 //! stave-gtk examples/clothing_cabinet
 //! stave-gtk examples/clothing_cabinet --screenshot cabinet.png --scene all_open --size 1600x1000
 //! stave-gtk examples/wall_shelf --screenshot back.png --turn 180     (seen from behind)
+//! stave-gtk examples/side_table --screenshot apart.png --explode 1   (pulled apart)
+//! stave-gtk tests/broken/door_hits_side --screenshot hit.png --diagnostic 0
 //! ```
 //!
 //! Without `--screenshot` it opens a libadwaita window. With it, it renders
@@ -53,6 +55,24 @@ struct Arguments {
         allow_negative_numbers = true
     )]
     turn: f32,
+    /// Pull the parts apart along their joints, from 0 (as built) to 1
+    /// (fully exploded); default: the scene's own. Works for the window
+    /// too.
+    #[arg(long, value_name = "AMOUNT", value_parser = parse_amount)]
+    explode: Option<f32>,
+    /// Pose the design where a problem happens, with its parts tinted red
+    /// and the shared wood drawn red: the problem's index, from 0, in the
+    /// order `stave check` prints them. Works for the window too.
+    #[arg(long, value_name = "N")]
+    diagnostic: Option<usize>,
+}
+
+fn parse_amount(text: &str) -> Result<f32> {
+    let amount: f32 = text.trim().parse()?;
+    if !(0.0..=1.0).contains(&amount) {
+        bail!("the amount must be between 0 and 1");
+    }
+    Ok(amount)
 }
 
 fn parse_size(text: &str) -> Result<(u32, u32)> {
@@ -72,15 +92,21 @@ fn main() -> ExitCode {
         Some(output) => screenshot::run(
             &arguments.folder,
             output,
-            arguments.scene.as_deref(),
+            &screenshot::Shot {
+                scene: arguments.scene.clone(),
+                explode: arguments.explode,
+                turn: arguments.turn,
+            },
+            arguments.diagnostic,
             arguments.size,
-            arguments.turn,
         ),
         None => ui::run(ui::Options {
             folder: arguments.folder,
             scene: arguments.scene,
             select: arguments.select,
             window_screenshot: arguments.window_screenshot,
+            problem: arguments.diagnostic,
+            explode: arguments.explode,
         }),
     };
     match result {

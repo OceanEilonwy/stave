@@ -1,11 +1,28 @@
-//! The side panel: the selected part or hardware, and the project's
-//! problems.
+//! The side panel: the selected part or hardware, the project's problems
+//! (a problem the checks can show is a button that poses the design where
+//! it happens), the shown problem's motion slider, and the explode control.
 
 use std::cell::RefCell;
+use std::rc::Rc;
 
 use adw::prelude::*;
 use stave_app::view::{Description, Problem};
 use stave_lang::Severity;
+
+/// Called with a problem's index when its row is activated.
+type ProblemCallback = Rc<dyn Fn(usize)>;
+
+/// A shown problem's motion slider: its full range, where it starts, and
+/// its unit ("degrees" or "millimetres").
+#[derive(Debug, Clone, Copy)]
+pub struct MotionSlider<'a> {
+    /// Fully open.
+    pub full: f64,
+    /// Where the slider starts.
+    pub value: f64,
+    /// What the numbers are.
+    pub unit: &'a str,
+}
 
 /// The side panel's widgets.
 pub struct Panel {
@@ -15,6 +32,20 @@ pub struct Panel {
     selection_rows: RefCell<Vec<gtk::Widget>>,
     problems: adw::PreferencesGroup,
     problem_rows: RefCell<Vec<gtk::Widget>>,
+    /// Called with a problem's index when its row is activated.
+    on_problem: RefCell<Option<ProblemCallback>>,
+    /// The problem being shown: its message, motion slider and close button.
+    shown: adw::PreferencesGroup,
+    shown_message: gtk::Label,
+    /// Scrubs the shown problem's motion (degrees or millimetres).
+    pub motion: gtk::Scale,
+    motion_row: adw::PreferencesRow,
+    /// Stops showing the problem.
+    pub close: gtk::Button,
+    /// How far apart the parts are pulled, 0 to 1.
+    pub explode: gtk::Scale,
+    /// Eases the explode control to fully apart, or back together.
+    pub animate: gtk::ToggleButton,
 }
 
 fn property_row(title: &str, value: &str) -> adw::ActionRow {
@@ -47,7 +78,73 @@ impl Panel {
             .margin_start(12)
             .margin_end(12)
             .build();
+        let shown = adw::PreferencesGroup::builder()
+            .title("Shown problem")
+            .visible(false)
+            .build();
+        let shown_message = gtk::Label::builder()
+            .wrap(true)
+            .xalign(0.0)
+            .selectable(true)
+            .build();
+        let close = gtk::Button::builder()
+            .label("Done")
+            .tooltip_text("Stop showing the problem")
+            .valign(gtk::Align::Center)
+            .build();
+        shown.set_header_suffix(Some(&close));
+        shown.add(&shown_message);
+        let motion = gtk::Scale::with_range(gtk::Orientation::Horizontal, 0.0, 1.0, 0.1);
+        motion.set_hexpand(true);
+        motion.set_draw_value(true);
+        motion.set_value_pos(gtk::PositionType::Right);
+        let motion_box = gtk::Box::new(gtk::Orientation::Vertical, 4);
+        motion_box.set_margin_top(8);
+        motion_box.set_margin_bottom(8);
+        motion_box.set_margin_start(12);
+        motion_box.set_margin_end(12);
+        motion_box.append(
+            &gtk::Label::builder()
+                .label("Move it: closed to fully open")
+                .xalign(0.0)
+                .css_classes(["dim-label"])
+                .build(),
+        );
+        motion_box.append(&motion);
+        let motion_row = adw::PreferencesRow::builder()
+            .child(&motion_box)
+            .activatable(false)
+            .build();
+        shown.add(&motion_row);
+
+        let view = adw::PreferencesGroup::builder()
+            .title("Exploded view")
+            .build();
+        let explode = gtk::Scale::with_range(gtk::Orientation::Horizontal, 0.0, 1.0, 0.01);
+        explode.set_hexpand(true);
+        explode.set_draw_value(false);
+        let animate = gtk::ToggleButton::builder()
+            .label("Pull apart")
+            .tooltip_text("Pull the parts apart along their joints, or put them back")
+            .valign(gtk::Align::Center)
+            .build();
+        let explode_box = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        explode_box.set_margin_top(8);
+        explode_box.set_margin_bottom(8);
+        explode_box.set_margin_start(12);
+        explode_box.set_margin_end(12);
+        explode_box.append(&explode);
+        explode_box.append(&animate);
+        view.add(
+            &adw::PreferencesRow::builder()
+                .child(&explode_box)
+                .activatable(false)
+                .build(),
+        );
+
+        content.append(&shown);
         content.append(&problems);
+        content.append(&view);
         content.append(&selection);
         content.append(&keys_group());
         let clamp = adw::Clamp::builder()
@@ -64,6 +161,40 @@ impl Panel {
             selection_rows: RefCell::new(Vec::new()),
             problems,
             problem_rows: RefCell::new(Vec::new()),
+            on_problem: RefCell::new(None),
+            shown,
+            shown_message,
+            motion,
+            motion_row,
+            close,
+            explode,
+            animate,
+        }
+    }
+
+    /// Calls `callback` with a problem's index when its row is activated.
+    pub fn connect_problem(&self, callback: impl Fn(usize) + 'static) {
+        self.on_problem.replace(Some(Rc::new(callback)));
+    }
+
+    /// Shows which problem is posed, with a motion slider from 0 to `full`
+    /// (degrees or millimetres) at `value` when it has a motion; `None`
+    /// hides the group.
+    pub fn show_problem(&self, message: Option<&str>, motion: Option<MotionSlider<'_>>) {
+        let Some(message) = message else {
+            self.shown.set_visible(false);
+            return;
+        };
+        self.shown.set_visible(true);
+        self.shown_message.set_label(message);
+        match motion {
+            Some(slider) => {
+                self.motion_row.set_visible(true);
+                self.motion.set_range(0.0, slider.full.max(0.1));
+                self.motion.set_value(slider.value);
+                self.motion.set_tooltip_text(Some(slider.unit));
+            }
+            None => self.motion_row.set_visible(false),
         }
     }
 
@@ -145,6 +276,18 @@ impl Panel {
             let image = gtk::Image::from_icon_name(icon);
             image.add_css_class(style);
             row.add_prefix(&image);
+            if problem.contact.is_some() {
+                row.set_activatable(true);
+                row.set_tooltip_text(Some("Show where it happens"));
+                row.add_suffix(&gtk::Image::from_icon_name("find-location-symbolic"));
+                let callback = self.on_problem.borrow().clone();
+                let index = rows.len();
+                row.connect_activated(move |_| {
+                    if let Some(callback) = &callback {
+                        callback(index);
+                    }
+                });
+            }
             self.problems.add(&row);
             rows.push(row.upcast());
         }
@@ -163,6 +306,7 @@ fn keys_group() -> adw::PreferencesGroup {
         ("Select", "click a part"),
         ("Frame", "F: the selection, or everything"),
         ("Clear selection", "Escape"),
+        ("Show a problem", "click it in the list"),
     ] {
         let row = adw::ActionRow::builder()
             .title(what)

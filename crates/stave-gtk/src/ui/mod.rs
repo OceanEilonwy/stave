@@ -3,6 +3,12 @@
 //! project's problems. The folder is watched; saving a file reloads the
 //! design.
 //!
+//! Clicking a problem the checks can show poses the design where it
+//! happens (`view::pose_at_contact`), tints its parts red and draws the
+//! shared wood in red (`view::highlight`); a slider moves its motion. The
+//! explode control pulls any scene apart (`SceneGraph::pose_with`), and
+//! "Pull apart" eases it there and back.
+//!
 //! Everything about the design comes from `stave-app` (loading,
 //! descriptions, problems) and `stave-scene` (poses, camera, picking);
 //! this module only wires widgets to them.
@@ -19,7 +25,8 @@ use adw::prelude::*;
 use anyhow::{Context as _, Result, bail};
 use gtk::{gdk, gio, glib};
 use notify::Watcher as _;
-use stave_app::view::{self, Item};
+use stave_app::Contact;
+use stave_app::view::{self, Highlight, Item, Problem};
 use stave_model::solved::SolvedDesign;
 use stave_scene::{NodeId, Orbit, Posed, SceneGraph};
 
@@ -35,6 +42,21 @@ const RELOAD_DELAY: Duration = Duration::from_millis(250);
 /// is a click, not a drag.
 const CLICK_SLOP: f64 = 4.0;
 
+/// How fast "Pull apart" moves the explode control: the whole way in about
+/// 0.7 seconds.
+const EXPLODE_PER_SECOND: f64 = 1.4;
+
+/// A problem posed in the view.
+struct ShownProblem {
+    contact: Contact,
+    highlight: Highlight,
+    /// The motion's amount set by the slider (radians or millimetres);
+    /// `None` for where the shared wood was measured.
+    amount: Option<f32>,
+    /// The slider works in degrees (a hinge) rather than millimetres.
+    turns: bool,
+}
+
 /// How to open the window.
 pub struct Options {
     /// The project folder.
@@ -45,6 +67,10 @@ pub struct Options {
     pub select: Option<String>,
     /// Save the window to this PNG once drawn, then close.
     pub window_screenshot: Option<PathBuf>,
+    /// The problem to start showing (its index in the problems list).
+    pub problem: Option<usize>,
+    /// The explode amount to start with.
+    pub explode: Option<f32>,
 }
 
 /// Opens the window and runs until it is closed.
@@ -54,6 +80,8 @@ pub fn run(options: Options) -> Result<()> {
         scene,
         select,
         window_screenshot,
+        problem,
+        explode,
     } = options;
     let folder = folder
         .canonicalize()
@@ -70,8 +98,12 @@ pub fn run(options: Options) -> Result<()> {
         Window::open(
             application,
             folder.clone(),
-            scene.clone(),
-            select.clone(),
+            Wanted {
+                scene: scene.clone(),
+                selection: select.clone(),
+                problem,
+                explode,
+            },
             window_screenshot.clone(),
         );
     });
@@ -80,6 +112,14 @@ pub fn run(options: Options) -> Result<()> {
         bail!("the viewer stopped with an error");
     }
     Ok(())
+}
+
+/// What the command line asks the window to start with.
+struct Wanted {
+    scene: Option<String>,
+    selection: Option<String>,
+    problem: Option<usize>,
+    explode: Option<f32>,
 }
 
 /// The window's widgets.
@@ -111,6 +151,9 @@ struct State {
     wanted_scene: Option<String>,
     /// The item asked for on the command line, until the first load.
     wanted_selection: Option<String>,
+    /// The problem and explode amount asked for, until the first load.
+    wanted_problem: Option<usize>,
+    wanted_explode: Option<f32>,
     /// Where to save the window once drawn.
     window_screenshot: Option<PathBuf>,
     shown: Option<Shown>,
@@ -125,6 +168,16 @@ struct State {
     /// Ignore scene menu changes made while filling it.
     filling_scenes: bool,
     loads: usize,
+    /// The problems of the last load, in the panel's order.
+    problems: Vec<Problem>,
+    /// The problem posed in the view, if any.
+    problem: Option<ShownProblem>,
+    /// How far apart the parts are pulled, 0 to 1.
+    explode: f32,
+    /// Where "Pull apart" is easing the explode control to.
+    explode_target: Option<f32>,
+    /// Ignore slider changes made by the window itself.
+    updating_controls: bool,
 }
 
 struct Window {
@@ -141,8 +194,7 @@ impl Window {
     fn open(
         application: &adw::Application,
         folder: PathBuf,
-        wanted_scene: Option<String>,
-        wanted_selection: Option<String>,
+        wanted: Wanted,
         window_screenshot: Option<PathBuf>,
     ) {
         let widgets = build_widgets(application, &folder);
@@ -151,8 +203,10 @@ impl Window {
             widgets,
             state: RefCell::new(State {
                 folder,
-                wanted_scene,
-                wanted_selection,
+                wanted_scene: wanted.scene,
+                wanted_selection: wanted.selection,
+                wanted_problem: wanted.problem,
+                wanted_explode: wanted.explode,
                 window_screenshot,
                 shown: None,
                 orbit: None,
@@ -163,6 +217,11 @@ impl Window {
                 drag_applied: (0.0, 0.0),
                 filling_scenes: false,
                 loads: 0,
+                problems: Vec::new(),
+                problem: None,
+                explode: 0.0,
+                explode_target: None,
+                updating_controls: false,
             }),
             watcher: RefCell::new(None),
         });
@@ -208,6 +267,13 @@ impl Window {
         let folder = self.state.borrow().folder.clone();
         let problems = view::problems(&opened, &folder);
         widgets.panel.show_problems(&problems);
+        {
+            // A reload renumbers the problems: stop showing the old one.
+            let mut state = self.state.borrow_mut();
+            state.problems = problems.clone();
+            state.problem = None;
+        }
+        widgets.panel.show_problem(None, None);
         let errors = opened.error_count();
         match (opened.design, scene) {
             (Some(design), Some(scene)) => {
@@ -300,13 +366,20 @@ impl Window {
             let shown = state.shown.as_ref()?;
             Some(shown.scene.node(state.selection?)?.name.clone())
         });
+        let first_load = state.shown.is_none();
         let scene_index = previous_scene
             .and_then(|name| scene.scenes.iter().position(|s| s.name == name))
             .unwrap_or(0);
-        let posed = scene
-            .scenes
-            .get(scene_index)
-            .map_or_else(|| scene.rest(), |entry| scene.pose(entry));
+        if first_load {
+            state.explode = scene
+                .scenes
+                .get(scene_index)
+                .map_or(0.0, |entry| if entry.explode { 1.0 } else { 0.0 });
+        }
+        let posed = scene.scenes.get(scene_index).map_or_else(
+            || scene.rest(),
+            |entry| scene.pose_with(entry, &[], state.explode),
+        );
         state.selection = previous_selection.and_then(|name| {
             scene
                 .node_ids()
@@ -335,6 +408,19 @@ impl Window {
             .scenes
             .set_selected(u32::try_from(scene_index).unwrap_or(0));
         self.state.borrow_mut().filling_scenes = false;
+        let (problem, explode) = {
+            let mut state = self.state.borrow_mut();
+            (state.wanted_problem.take(), state.wanted_explode.take())
+        };
+        if let Some(explode) = explode {
+            let mut state = self.state.borrow_mut();
+            state.explode = explode.clamp(0.0, 1.0);
+            Self::repose(&mut state);
+        }
+        self.sync_explode_control();
+        if let Some(index) = problem {
+            self.show_problem(index);
+        }
         self.update_panel();
         if let Err(message) = &self.state.borrow().renderer {
             self.show_status("Can't draw in 3D", message);
@@ -345,7 +431,7 @@ impl Window {
     // ---- camera and selection ----
 
     fn aspect(state: &State) -> f32 {
-        state.size.0 as f32 / state.size.1.max(1) as f32
+        crate::render::aspect(state.size.0, state.size.1)
     }
 
     /// A camera that shows everything shown in the current scene.
@@ -421,14 +507,225 @@ impl Window {
         if state.filling_scenes {
             return;
         }
-        if let Some(shown) = state.shown.as_mut()
-            && let Some(entry) = shown.scene.scenes.get(index)
-        {
-            shown.posed = shown.scene.pose(entry);
+        state.problem = None;
+        state.explode_target = None;
+        let explode = state
+            .shown
+            .as_ref()
+            .and_then(|shown| shown.scene.scenes.get(index))
+            .map(|entry| if entry.explode { 1.0 } else { 0.0 });
+        if let Some(shown) = state.shown.as_mut() {
             shown.scene_index = index;
         }
+        if let Some(explode) = explode {
+            state.explode = explode;
+        }
+        Self::repose(&mut state);
+        drop(state);
+        self.widgets.panel.show_problem(None, None);
+        self.sync_explode_control();
+        self.request_render();
+    }
+
+    /// Poses the design for what the window shows: a problem at its
+    /// contact, or the current scene pulled apart by the explode amount.
+    fn repose(state: &mut State) {
+        let State {
+            shown,
+            problem,
+            explode,
+            ..
+        } = state;
+        let Some(shown) = shown.as_mut() else {
+            return;
+        };
+        match problem {
+            Some(problem) => {
+                if let Some(posed) =
+                    view::pose_at_contact(&shown.scene, &problem.contact, problem.amount)
+                {
+                    shown.posed = posed;
+                }
+            }
+            None => {
+                if let Some(entry) = shown.scene.scenes.get(shown.scene_index) {
+                    shown.posed = shown.scene.pose_with(entry, &[], *explode);
+                }
+            }
+        }
+    }
+
+    /// Shows the slider and toggle at the window's explode amount.
+    fn sync_explode_control(&self) {
+        let explode = {
+            let mut state = self.state.borrow_mut();
+            state.updating_controls = true;
+            state.explode
+        };
+        let panel = &self.widgets.panel;
+        panel.explode.set_value(f64::from(explode));
+        panel.animate.set_active(explode >= 0.5);
+        self.state.borrow_mut().updating_controls = false;
+    }
+
+    // ---- problems ----
+
+    /// Poses the design where problem `index` happens.
+    fn show_problem(self: &Rc<Self>, index: usize) {
+        let mut state = self.state.borrow_mut();
+        let Some(problem) = state.problems.get(index).cloned() else {
+            return;
+        };
+        let (Some(contact), Some(shown)) = (problem.contact, state.shown.as_ref()) else {
+            return;
+        };
+        let highlight = view::highlight(&shown.scene, &contact);
+        let range = view::contact_motion_range(&shown.scene, &contact);
+        let shown_amount = contact
+            .motion
+            .and_then(|motion| shown.scene.amount(motion.assembly, motion.shown));
+        let turns = range.is_some_and(|r| r.turns);
+        let slider = range.zip(shown_amount).map(|(range, amount)| {
+            let (full, value) = if range.turns {
+                (range.full.to_degrees(), amount.to_degrees())
+            } else {
+                (range.full, amount)
+            };
+            panel::MotionSlider {
+                full: f64::from(full),
+                value: f64::from(value),
+                unit: if range.turns {
+                    "degrees"
+                } else {
+                    "millimetres"
+                },
+            }
+        });
+        state.explode_target = None;
+        state.problem = Some(ShownProblem {
+            contact,
+            highlight,
+            amount: None,
+            turns,
+        });
+        Self::repose(&mut state);
+        // Frame the parts involved.
+        let aspect = Self::aspect(&state);
+        let framed = state.shown.as_ref().and_then(|shown| {
+            let nodes = &state.problem.as_ref()?.highlight.nodes;
+            let bounds = shown.scene.bounds_of(&shown.posed, nodes)?;
+            Some(state.orbit?.framed(bounds, aspect))
+        });
+        if framed.is_some() {
+            state.orbit = framed;
+        }
+        state.updating_controls = true;
+        drop(state);
+        self.widgets
+            .panel
+            .show_problem(Some(&problem.message), slider);
+        self.state.borrow_mut().updating_controls = false;
+        self.request_render();
+    }
+
+    /// The motion slider moved: degrees or millimetres.
+    fn scrub(self: &Rc<Self>, value: f64) {
+        let mut state = self.state.borrow_mut();
+        if state.updating_controls {
+            return;
+        }
+        let Some(problem) = state.problem.as_mut() else {
+            return;
+        };
+        let value = narrow(value);
+        problem.amount = Some(if problem.turns {
+            value.to_radians()
+        } else {
+            value
+        });
+        Self::repose(&mut state);
         drop(state);
         self.request_render();
+    }
+
+    fn clear_problem(self: &Rc<Self>) {
+        let mut state = self.state.borrow_mut();
+        state.problem = None;
+        Self::repose(&mut state);
+        drop(state);
+        self.widgets.panel.show_problem(None, None);
+        self.request_render();
+    }
+
+    // ---- exploded view ----
+
+    /// The explode slider moved.
+    fn set_explode(self: &Rc<Self>, value: f64) {
+        let mut state = self.state.borrow_mut();
+        if state.updating_controls {
+            return;
+        }
+        state.explode = narrow(value).clamp(0.0, 1.0);
+        state.explode_target = None;
+        state.problem = None;
+        Self::repose(&mut state);
+        drop(state);
+        self.widgets.panel.show_problem(None, None);
+        self.request_render();
+    }
+
+    /// "Pull apart" toggled: eases the explode amount to 1 or 0.
+    fn animate_explode(self: &Rc<Self>, apart: bool) {
+        {
+            let mut state = self.state.borrow_mut();
+            if state.updating_controls {
+                return;
+            }
+            let already = state.explode_target.is_some();
+            state.explode_target = Some(if apart { 1.0 } else { 0.0 });
+            state.problem = None;
+            if already {
+                return;
+            }
+        }
+        self.widgets.panel.show_problem(None, None);
+        let window = self.clone();
+        let last: std::cell::Cell<Option<i64>> = std::cell::Cell::new(None);
+        self.widgets.viewport.add_tick_callback(move |_, clock| {
+            let now = clock.frame_time();
+            let seconds = last.get().map_or(0.0, |before| {
+                // Microseconds between frames; a frame is never days.
+                f64::from(i32::try_from(now - before).unwrap_or(0)) / 1e6
+            });
+            last.set(Some(now));
+            let mut state = window.state.borrow_mut();
+            let Some(target) = state.explode_target else {
+                return glib::ControlFlow::Break;
+            };
+            let step = narrow(seconds * EXPLODE_PER_SECOND);
+            let current = state.explode;
+            let next = if target > current {
+                (current + step).min(target)
+            } else {
+                (current - step).max(target)
+            };
+            state.explode = next;
+            let done = (next - target).abs() < 1e-4;
+            if done {
+                state.explode_target = None;
+            }
+            Self::repose(&mut state);
+            state.updating_controls = true;
+            drop(state);
+            window.widgets.panel.explode.set_value(f64::from(next));
+            window.state.borrow_mut().updating_controls = false;
+            window.request_render();
+            if done {
+                glib::ControlFlow::Break
+            } else {
+                glib::ControlFlow::Continue
+            }
+        });
     }
 
     fn update_orbit(self: &Rc<Self>, change: impl FnOnce(Orbit) -> Orbit) {
@@ -465,16 +762,27 @@ impl Window {
             orbit,
             selection,
             renderer,
+            problem,
             ..
         } = &mut *state;
         let (Some(shown), Some(orbit), Ok(renderer)) = (shown.as_ref(), *orbit, renderer) else {
             return;
         };
+        // The shared wood is drawn only where it was measured; moved by the
+        // slider, the parts stay tinted.
+        let highlight = problem.as_ref().map(|problem| match problem.amount {
+            None => problem.highlight.clone(),
+            Some(_) => Highlight {
+                nodes: problem.highlight.nodes.clone(),
+                volumes: Vec::new(),
+            },
+        });
         let frame = Frame {
             scene: &shown.scene,
             posed: &shown.posed,
             orbit,
             selection: *selection,
+            highlight: highlight.as_ref(),
             width,
             height,
         };
@@ -608,6 +916,33 @@ impl Window {
                 window.set_scene(index);
             }
         });
+
+        let window = Rc::downgrade(self);
+        widgets.panel.connect_problem(move |index| {
+            if let Some(window) = window.upgrade() {
+                window.show_problem(index);
+            }
+        });
+        let window = self.clone();
+        widgets
+            .panel
+            .motion
+            .connect_value_changed(move |scale| window.scrub(scale.value()));
+        let window = self.clone();
+        widgets
+            .panel
+            .close
+            .connect_clicked(move |_| window.clear_problem());
+        let window = self.clone();
+        widgets
+            .panel
+            .explode
+            .connect_value_changed(move |scale| window.set_explode(scale.value()));
+        let window = self.clone();
+        widgets
+            .panel
+            .animate
+            .connect_toggled(move |button| window.animate_explode(button.is_active()));
     }
 
     /// The part of a drag not applied yet.
@@ -794,4 +1129,12 @@ fn build_widgets(application: &adw::Application, folder: &Path) -> Widgets {
         split,
         panel,
     }
+}
+
+/// A control's `f64` value as the `f32` the scene works in; values are
+/// far inside `f32`'s range, so only precision beyond a screen's is lost.
+fn narrow(value: f64) -> f32 {
+    #[allow(clippy::cast_possible_truncation)]
+    let narrowed = value as f32;
+    narrowed
 }

@@ -10,7 +10,7 @@ use std::num::NonZeroU64;
 
 use anyhow::{Context as _, Result, anyhow, bail};
 use glam::{Mat4, Vec3};
-use stave_scene::{Material, NodeId, Orbit, Posed, SceneGraph};
+use stave_scene::{Aabb, Highlight, Material, NodeId, Orbit, Posed, SceneGraph};
 use wgpu::util::DeviceExt as _;
 
 const COLOUR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
@@ -28,6 +28,9 @@ const BACKGROUND: wgpu::Color = wgpu::Color {
 
 /// The selection accent (#2f6fd6), linear.
 const ACCENT: [f32; 3] = [0.0284, 0.1590, 0.6724];
+
+/// The problem red (#d6302f), linear, for parts in a problem.
+const PROBLEM: [f32; 3] = [0.6724, 0.0296, 0.0284];
 
 /// Toward the key light: front, left and above, like a window.
 const KEY_TOWARD: Vec3 = Vec3::new(-0.42, 0.78, 0.47);
@@ -75,6 +78,9 @@ pub struct Frame<'a> {
     pub orbit: Orbit,
     /// The selected node, drawn tinted.
     pub selection: Option<NodeId>,
+    /// A problem to show: its nodes tinted red and its shared volumes drawn
+    /// as red boxes on top of everything.
+    pub highlight: Option<&'a Highlight>,
     /// Pixels across.
     pub width: u32,
     /// Pixels down.
@@ -122,6 +128,10 @@ pub struct Renderer {
     edge_pipeline: wgpu::RenderPipeline,
     floor_pipeline: wgpu::RenderPipeline,
     shadow_pipeline: wgpu::RenderPipeline,
+    /// A problem's shared volumes: translucent faces and outlines, drawn
+    /// last without a depth test so wood never hides them.
+    volume_pipeline: wgpu::RenderPipeline,
+    volume_edge_pipeline: wgpu::RenderPipeline,
     meshes: Vec<GpuMesh>,
     target: Option<Target>,
 }
@@ -439,6 +449,49 @@ impl Renderer {
             multiview_mask: None,
             cache: None,
         });
+        let overlay =
+            |label: &'static str, topology: wgpu::PrimitiveTopology, fragment: &'static str| {
+                device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                    label: Some(label),
+                    layout: Some(&main_layout),
+                    vertex: wgpu::VertexState {
+                        module: &shader,
+                        entry_point: Some("volume_vertex"),
+                        compilation_options: Default::default(),
+                        buffers: &edge_buffers,
+                    },
+                    primitive: wgpu::PrimitiveState {
+                        topology,
+                        ..Default::default()
+                    },
+                    depth_stencil: Some(wgpu::DepthStencilState {
+                        format: DEPTH_FORMAT,
+                        depth_write_enabled: Some(false),
+                        depth_compare: Some(wgpu::CompareFunction::Always),
+                        stencil: wgpu::StencilState::default(),
+                        bias: wgpu::DepthBiasState::default(),
+                    }),
+                    multisample,
+                    fragment: Some(wgpu::FragmentState {
+                        module: &shader,
+                        entry_point: Some(fragment),
+                        compilation_options: Default::default(),
+                        targets: &blended,
+                    }),
+                    multiview_mask: None,
+                    cache: None,
+                })
+            };
+        let volume_pipeline = overlay(
+            "volumes",
+            wgpu::PrimitiveTopology::TriangleList,
+            "volume_fragment",
+        );
+        let volume_edge_pipeline = overlay(
+            "volume outlines",
+            wgpu::PrimitiveTopology::LineList,
+            "volume_edge_fragment",
+        );
         Ok(Renderer {
             device,
             queue,
@@ -454,6 +507,8 @@ impl Renderer {
             edge_pipeline,
             floor_pipeline,
             shadow_pipeline,
+            volume_pipeline,
+            volume_edge_pipeline,
             meshes: Vec::new(),
             target: None,
         })
@@ -596,6 +651,10 @@ impl Renderer {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("frame"),
             });
+        let volumes = frame
+            .highlight
+            .filter(|h| !h.volumes.is_empty())
+            .map(|h| self.volume_buffers(&h.volumes));
         let visible: Vec<(u32, &GpuMesh)> = frame
             .scene
             .node_ids()
@@ -668,6 +727,14 @@ impl Renderer {
                     pass.draw(0..*count, *index..*index + 1);
                 }
             }
+            if let Some((faces, face_count, lines, line_count)) = &volumes {
+                pass.set_pipeline(&self.volume_pipeline);
+                pass.set_vertex_buffer(0, faces.slice(..));
+                pass.draw(0..*face_count, 0..1);
+                pass.set_pipeline(&self.volume_edge_pipeline);
+                pass.set_vertex_buffer(0, lines.slice(..));
+                pass.draw(0..*line_count, 0..1);
+            }
         }
         encoder.copy_texture_to_buffer(
             wgpu::TexelCopyTextureInfo {
@@ -729,6 +796,58 @@ impl Renderer {
         })
     }
 
+    /// Vertex buffers of boxes: their faces (triangles) and edges (lines).
+    fn volume_buffers(&self, boxes: &[Aabb]) -> (wgpu::Buffer, u32, wgpu::Buffer, u32) {
+        let mut faces: Vec<[f32; 3]> = Vec::new();
+        let mut lines: Vec<[f32; 3]> = Vec::new();
+        for b in boxes {
+            let c = b.corners().map(|v| v.to_array());
+            // Corner index bits: x = 1, y = 2, z = 4.
+            for quad in [
+                [0, 2, 3, 1],
+                [4, 5, 7, 6],
+                [0, 1, 5, 4],
+                [2, 6, 7, 3],
+                [0, 4, 6, 2],
+                [1, 3, 7, 5],
+            ] {
+                let [a, b2, c2, d] = quad.map(|i| c[i]);
+                faces.extend([a, b2, c2, a, c2, d]);
+            }
+            for (from, to) in [
+                (0, 1),
+                (2, 3),
+                (4, 5),
+                (6, 7),
+                (0, 2),
+                (1, 3),
+                (4, 6),
+                (5, 7),
+                (0, 4),
+                (1, 5),
+                (2, 6),
+                (3, 7),
+            ] {
+                lines.extend([c[from], c[to]]);
+            }
+        }
+        let buffer = |label, data: &[[f32; 3]]| {
+            self.device
+                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some(label),
+                    contents: bytemuck::cast_slice(data),
+                    usage: wgpu::BufferUsages::VERTEX,
+                })
+        };
+        let count = |data: &[[f32; 3]]| u32::try_from(data.len()).unwrap_or(u32::MAX);
+        (
+            buffer("volume faces", &faces),
+            count(&faces),
+            buffer("volume outlines", &lines),
+            count(&lines),
+        )
+    }
+
     fn write_uniforms(&self, frame: &Frame<'_>, width: u32, height: u32) {
         let aspect = width as f32 / height as f32;
         let scene = frame.scene;
@@ -782,8 +901,11 @@ impl Renderer {
                         ([r, g, b, 0.0], [0.0, 0.0, seed, 1.0])
                     }
                 };
+                let in_problem = frame.highlight.is_some_and(|h| h.nodes.contains(&id));
                 let tint = if selected == Some(node.item) {
                     [ACCENT[0], ACCENT[1], ACCENT[2], 0.6]
+                } else if in_problem {
+                    [PROBLEM[0], PROBLEM[1], PROBLEM[2], 0.5]
                 } else {
                     [0.0; 4]
                 };
@@ -812,4 +934,11 @@ pub fn write_png(image: &Image, path: &std::path::Path) -> Result<()> {
     writer.write_image_data(&image.rgba)?;
     writer.finish()?;
     Ok(())
+}
+
+/// A view's width over its height, for projections. Sizes beyond 65535
+/// pixels (never a view's) count as 65535.
+pub fn aspect(width: u32, height: u32) -> f32 {
+    let pixels = |n: u32| f32::from(u16::try_from(n.max(1)).unwrap_or(u16::MAX));
+    pixels(width) / pixels(height)
 }
