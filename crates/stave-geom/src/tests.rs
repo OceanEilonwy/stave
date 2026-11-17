@@ -519,3 +519,134 @@ fn a_hole_opens_in_its_face() {
         12 + usize::from(LATHE_SEGMENTS)
     );
 }
+
+/// Twice the area of the part of a rectangle `[0, w] × [0, h]` (sampled
+/// on a fine grid) inside a region, in mm².
+fn sampled_area(w: f64, h: f64, inside: impl Fn(f64, f64) -> bool) -> f64 {
+    let step = 0.05;
+    let mut count = 0u64;
+    let mut x = step / 2.0;
+    while x < w {
+        let mut y = step / 2.0;
+        while y < h {
+            if inside(x, y) {
+                count += 1;
+            }
+            y += step;
+        }
+        x += step;
+    }
+    count as f64 * step * step
+}
+
+#[test]
+fn a_slot_at_an_angle_is_drawn_cut() {
+    // A 100 × 50 × 20 board, and a stick standing through its middle; a
+    // slot 10mm wide runs from the middle out on the diagonal, through.
+    let mut board = part(
+        frame(Direction::Right, Direction::Back),
+        point(0, 0, 0),
+        size(100, 50, 20),
+        Shape::Board,
+    );
+    let mut stick = part(
+        frame(Direction::Up, Direction::Back),
+        point(35, -100, 10),
+        size(300, 30, 30),
+        Shape::Board,
+    );
+    stick.id = PartId::from_usize(1);
+    board.cuts = vec![Cut {
+        source: CutSource::Hardware {
+            hardware: HardwareId::from_usize(0),
+        },
+        face: face(PartAxis::Thickness, End::End),
+        place: CutPlace::Crossing {
+            other: stick.id,
+            footprint: LocalBox {
+                min: local_point(35, 10, 0),
+                max: local_point(65, 40, 20),
+            },
+        },
+        kind: CutKind::Slot {
+            width: mm(10),
+            depth: Depth::Through,
+            angle: stave_lang::units::Angle::from_deg(45),
+            from_centre: true,
+        },
+    }];
+    let mut design = design_of(&board);
+    design.parts.push(stick);
+    for orientation in [
+        frame(Direction::Right, Direction::Back),
+        frame(Direction::Right, Direction::Back).mirrored(Axis::Across),
+    ] {
+        board.pose.orientation = orientation;
+        let solid = solid::Solid::of(&board, &design);
+        assert_eq!(solid.slots().len(), 1);
+        let geometry = cut_part(&board, &solid);
+        assert_outward(&geometry.mesh);
+        let band = mesh_cut::Band::of(&solid.slots()[0]);
+        let cut = sampled_area(100.0, 50.0, |x, y| {
+            band.holds(Vec3::new(x as f32, y as f32, 10.0))
+        });
+        let expected = (100.0 * 50.0 - cut) * 20.0;
+        let volume = f64::from(geometry.mesh.signed_volume());
+        assert!(
+            (volume - expected).abs() < expected * 0.002,
+            "{volume} != {expected}"
+        );
+        assert!(cut > 300.0, "the slot cuts {cut}mm²");
+    }
+}
+
+#[test]
+fn a_round_section_keeps_its_flats() {
+    let mut stick = part(
+        frame(Direction::Up, Direction::Back),
+        point(0, 0, 0),
+        size(300, 30, 30),
+        Shape::Board,
+    );
+    let mut other = part(
+        frame(Direction::Right, Direction::Back),
+        point(-100, 135, 0),
+        size(300, 30, 30),
+        Shape::Board,
+    );
+    other.id = PartId::from_usize(1);
+    stick.cuts = vec![Cut {
+        source: CutSource::Hardware {
+            hardware: HardwareId::from_usize(0),
+        },
+        face: face(PartAxis::Width, End::Start),
+        place: CutPlace::Crossing {
+            other: other.id,
+            footprint: LocalBox {
+                min: local_point(135, 0, 0),
+                max: local_point(165, 30, 30),
+            },
+        },
+        kind: CutKind::Round {
+            diameter: Length::from_nm(22_500_000),
+            flats: Some(Length::from_nm(13_500_000)),
+            flats_angle: stave_lang::units::Angle::from_deg(45),
+        },
+    }];
+    let mut design = design_of(&stick);
+    design.parts.push(other);
+    let solid = solid::Solid::of(&stick, &design);
+    let geometry = cut_part(&stick, &solid);
+    assert_outward(&geometry.mesh);
+    let angle = std::f64::consts::FRAC_PI_4;
+    let section = sampled_area(30.0, 30.0, |x, y| {
+        let (dx, dy) = (x - 15.0, y - 15.0);
+        dx * dx + dy * dy <= 11.25 * 11.25 && (dx * angle.cos() + dy * angle.sin()).abs() <= 6.75
+    });
+    let expected = 270.0 * 30.0 * 30.0 + section * 30.0;
+    let volume = f64::from(geometry.mesh.signed_volume());
+    assert!(
+        (volume - expected).abs() < 30.0 * section * 0.01,
+        "{volume} != {expected}"
+    );
+}

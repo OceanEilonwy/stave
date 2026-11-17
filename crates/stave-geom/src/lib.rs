@@ -43,6 +43,7 @@
 mod build;
 pub mod collide;
 mod mesh;
+mod mesh_cut;
 pub mod render;
 mod sample;
 pub mod sequence;

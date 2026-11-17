@@ -22,12 +22,20 @@
 //! stops inside the part, and the opening as an outline circle. When other
 //! grid lines split the square (two holes that overlap, a cut edge across a
 //! hole), the face is drawn uncut there and the hole is not drawn; the
-//! solid itself is unaffected.
+//! solid itself is unaffected. A hole opens on every face its square
+//! reaches through (a notch floor too), and its wall is drawn only where
+//! it passes through wood.
+//!
+//! # Slots turned by an angle
+//!
+//! Faces are clipped to the outside of the slot and its walls drawn
+//! through each wood cell ([`mesh_cut`]).
 //!
 //! # Round features
 //!
-//! Round tenons and round sections on a board are lathe cylinders; their
-//! flats are not drawn (the full round is). Round stock and turned parts
+//! Round tenons and round sections on a board are lathe cylinders; a
+//! round section with flats is drawn as the prism of its outline
+//! ([`mesh_cut`]). Round stock and turned parts
 //! are lathe meshes of their profile; holes in them are not drawn (what
 //! fills them hides them).
 
@@ -39,6 +47,7 @@ use stave_lang::units::Length;
 use stave_model::solved::Part;
 
 use crate::build::{self, Builder, Frame, GrainAxes, ProfilePoint};
+use crate::mesh_cut::{self, Band};
 use crate::solid::{Rod, Solid, across};
 use crate::{Aabb, Edges, Geometry, Mesh, render};
 
@@ -63,7 +72,13 @@ pub fn cut_part(part: &Part, solid: &Solid, grain: GrainAxes) -> Geometry {
         pieces.push(board(&frame, solid, grain));
     }
     for rod in solid.rods() {
-        pieces.push(rod_mesh(&frame, rod, grain));
+        if rod.flats.is_some() {
+            let mut builder = Builder::default();
+            mesh_cut::flatted_rod(&mut builder, &frame, grain, rod, segments());
+            pieces.push(builder.finish());
+        } else {
+            pieces.push(rod_mesh(&frame, rod, grain));
+        }
     }
     if let Some(profile) = solid.profile() {
         let mut points: Vec<ProfilePoint> = profile
@@ -180,6 +195,7 @@ impl Grid {
 
 fn board(frame: &Frame, solid: &Solid, grain: GrainAxes) -> Geometry {
     let holes: Vec<HoleShape> = solid.holes().iter().map(HoleShape::of).collect();
+    let bands: Vec<Band> = solid.slots().iter().map(Band::of).collect();
     let mut lines: [Vec<i64>; 3] = Default::default();
     for block in solid.blocks().iter() {
         for axis in PartAxis::ALL {
@@ -246,25 +262,42 @@ fn board(frame: &Frame, solid: &Solid, grain: GrainAxes) -> Geometry {
         if u1 != u0 + 1 || v1 != v0 + 1 {
             continue;
         }
-        for (plane, high) in [(hole.rod.start.nm(), false), (hole.rod.end.nm(), true)] {
-            let Some(p) = grid.find(a, plane) else {
+        // Every plane across the hole within its range where its square
+        // goes from wood to air is an opening.
+        let (start, end) = (hole.rod.start.nm(), hole.rod.end.nm());
+        for p in 0..grid.lines[a].len() {
+            let plane = grid.line(a, p);
+            if plane < start || plane > end {
                 continue;
-            };
-            // Wood on the hole's side of the plane, air on the other.
-            let mut inside = [0isize; 3];
-            let mut outside = [0isize; 3];
+            }
             let pi = isize::try_from(p).unwrap_or(0);
-            inside[a] = if high { pi - 1 } else { pi };
-            outside[a] = if high { pi } else { pi - 1 };
-            for (axis, cell) in [(u_axis, u0), (v_axis, v0)] {
-                let value = isize::try_from(cell).unwrap_or(0);
-                inside[axis] = value;
-                outside[axis] = value;
+            for high in [false, true] {
+                let mut inside = [0isize; 3];
+                let mut outside = [0isize; 3];
+                inside[a] = if high { pi - 1 } else { pi };
+                outside[a] = if high { pi } else { pi - 1 };
+                for (axis, cell) in [(u_axis, u0), (v_axis, v0)] {
+                    let value = isize::try_from(cell).unwrap_or(0);
+                    inside[axis] = value;
+                    outside[axis] = value;
+                }
+                // The inside cell must lie within the hole's range.
+                let Ok(inside_index) = usize::try_from(inside[a]) else {
+                    continue;
+                };
+                let (inside_low, inside_high) =
+                    (grid.line(a, inside_index), grid.line(a, inside_index + 1));
+                if inside_high <= start || inside_low >= end {
+                    continue;
+                }
+                if grid.is_wood(inside) && !grid.is_wood(outside) {
+                    openings.push(([a, p, u0, v0], index, high));
+                }
             }
-            if grid.is_wood(inside) && !grid.is_wood(outside) {
-                openings.push(([a, p, u0, v0], index, high));
-                drawn_holes[index] = true;
-            }
+        }
+        // Its square is one cell on its faces, so it is drawn.
+        if let Some(drawn) = drawn_holes.get_mut(index) {
+            *drawn = true;
         }
     }
 
@@ -317,6 +350,16 @@ fn board(frame: &Frame, solid: &Solid, grain: GrainAxes) -> Geometry {
                         c[v] = grid.line(v, j);
                         local(c[0], c[1], c[2])
                     };
+                    let polygon = vec![
+                        corner(i0, j0),
+                        corner(i1, j0),
+                        corner(i1, j1),
+                        corner(i0, j1),
+                    ];
+                    if mesh_cut::cuts(&bands, a, &polygon) {
+                        mesh_cut::face(&mut builder, frame, grain, &bands, a, polygon, normal);
+                        continue;
+                    }
                     if i1 == i0 + 1 && j1 == j0 + 1 {
                         let quad = [
                             corner(i0, j0),
@@ -407,13 +450,93 @@ fn board(frame: &Frame, solid: &Solid, grain: GrainAxes) -> Geometry {
         let Some(hole) = holes.get(*index) else {
             continue;
         };
-        opening(&mut builder, frame, grain, hole, key[0], *high);
+        let place = Opening {
+            key: *key,
+            high: *high,
+        };
+        opening(&mut builder, frame, grain, hole, place, &grid, &bands);
     }
     for (index, hole) in holes.iter().enumerate() {
-        if drawn_holes.get(index).copied().unwrap_or(false) {
-            let open_start = openings.iter().any(|(_, i, high)| *i == index && !high);
-            let open_end = openings.iter().any(|(_, i, high)| *i == index && *high);
-            wall(&mut builder, frame, grain, hole, open_start, open_end);
+        if !drawn_holes.get(index).copied().unwrap_or(false) {
+            continue;
+        }
+        let a = slot(hole.rod.axis);
+        let [u_axis, v_axis] = across(hole.rod.axis).map(slot);
+        let (Some(u0), Some(v0)) = (
+            grid.find(u_axis, hole.square[0].0),
+            grid.find(v_axis, hole.square[1].0),
+        ) else {
+            continue;
+        };
+        let (start, end) = (hole.rod.start.nm(), hole.rod.end.nm());
+        let cell = |k: isize| {
+            let mut c = [0isize; 3];
+            c[a] = k;
+            c[u_axis] = isize::try_from(u0).unwrap_or(0);
+            c[v_axis] = isize::try_from(v0).unwrap_or(0);
+            c
+        };
+        for k in 0..grid.cells(a) {
+            let (cell_low, cell_high) = (grid.line(a, k), grid.line(a, k + 1));
+            let ki = isize::try_from(k).unwrap_or(0);
+            let (low, high) = (cell_low.max(start), cell_high.min(end));
+            if low >= high || !grid.is_wood(cell(ki)) {
+                continue;
+            }
+            // The hole stops in wood here: a bottom facing into it.
+            let stops_low = low == start && (start > cell_low || grid.is_wood(cell(ki - 1)));
+            let stops_high = high == end && (end < cell_high || grid.is_wood(cell(ki + 1)));
+            wall(
+                &mut builder,
+                frame,
+                grain,
+                hole,
+                (mm_nm(low), mm_nm(high)),
+                (stops_low, stops_high),
+                &bands,
+            );
+        }
+    }
+    // The walls of slots turned by an angle, through every wood cell.
+    for band in &bands {
+        let hole_discs: Vec<(Vec3, f32)> = holes
+            .iter()
+            .filter(|h| slot(h.rod.axis) == band.face)
+            .map(|h| {
+                (
+                    mesh_cut::flat_centre(&h.rod),
+                    render::mm(h.rod.diameter) * 0.5,
+                )
+            })
+            .collect();
+        for z in 0..grid.cells(2) {
+            for y in 0..grid.cells(1) {
+                for x in 0..grid.cells(0) {
+                    let at = [x, y, z].map(|i| isize::try_from(i).unwrap_or(0));
+                    if !grid.is_wood(at) {
+                        continue;
+                    }
+                    let low = local(grid.line(0, x), grid.line(1, y), grid.line(2, z));
+                    let high = local(
+                        grid.line(0, x + 1),
+                        grid.line(1, y + 1),
+                        grid.line(2, z + 1),
+                    );
+                    let mut below = at;
+                    below[band.face] -= 1;
+                    let mut above = at;
+                    above[band.face] += 1;
+                    mesh_cut::walls(
+                        &mut builder,
+                        frame,
+                        grain,
+                        band,
+                        (low, high),
+                        &hole_discs,
+                        (!grid.is_wood(below), !grid.is_wood(above)),
+                    );
+                }
+            }
         }
     }
     builder.finish()
@@ -487,27 +610,32 @@ fn angle_of(step: u16) -> f32 {
     TAU * f32::from(step) / f32::from(segments())
 }
 
-/// The face cell of a hole's square, minus its circle, and the opening's
-/// outline.
+/// Where a hole opens: (face axis, plane index, cell u, cell v), and
+/// which way it faces.
+#[derive(Debug, Clone, Copy)]
+struct Opening {
+    key: [usize; 4],
+    high: bool,
+}
+
+/// The face cell of a hole's square, minus its circle (and any slot), and
+/// the opening's outline.
 fn opening(
     builder: &mut Builder,
     frame: &Frame,
     grain: GrainAxes,
     hole: &HoleShape,
-    a: usize,
-    high: bool,
+    place: Opening,
+    grid: &Grid,
+    bands: &[Band],
 ) {
     let rod = &hole.rod;
-    let along = if high {
-        render::mm(rod.end)
-    } else {
-        render::mm(rod.start)
-    };
+    let a = place.key[0];
+    let along = mm_nm(grid.line(a, place.key[1]));
     let radius = render::mm(rod.diameter) * 0.5;
     let [u, v] = across(rod.axis).map(slot);
     let mut normal = Vec3::ZERO;
-    normal[a] = if high { 1.0 } else { -1.0 };
-    let world_normal = frame.vector(normal);
+    normal[a] = if place.high { 1.0 } else { -1.0 };
     let corner_local = |hi_u: bool, hi_v: bool| {
         let mut point = Vec3::ZERO;
         point[a] = along;
@@ -523,19 +651,19 @@ fn opening(
         });
         point
     };
-    let vertex = |builder: &mut Builder, l: Vec3| {
-        builder.vertex(frame.point(l), world_normal, grain.apply(l))
-    };
     let corners = [
-        vertex(builder, corner_local(true, true)),
-        vertex(builder, corner_local(false, true)),
-        vertex(builder, corner_local(false, false)),
-        vertex(builder, corner_local(true, false)),
+        corner_local(true, true),
+        corner_local(false, true),
+        corner_local(false, false),
+        corner_local(true, false),
     ];
     let quarter = segments() / 4;
-    let ring: Vec<u32> = (0..=segments())
-        .map(|step| vertex(builder, circle_point(rod, along, angle_of(step), radius)))
+    let ring: Vec<Vec3> = (0..=segments())
+        .map(|step| circle_point(rod, along, angle_of(step), radius))
         .collect();
+    let emit = |builder: &mut Builder, polygon: Vec<Vec3>| {
+        mesh_cut::face(builder, frame, grain, bands, a, polygon, normal);
+    };
     for step in 0..segments() {
         let quadrant = usize::from(step / quarter.max(1)).min(3);
         if let (Some(&a0), Some(&a1), Some(&corner)) = (
@@ -543,39 +671,43 @@ fn opening(
             ring.get(usize::from(step) + 1),
             corners.get(quadrant),
         ) {
-            builder.triangle(a0, a1, corner);
+            emit(builder, vec![a0, a1, corner]);
         }
     }
-    // At each axis-extreme point of the circle, the triangle to the two
-    // corners either side of it.
     for q in 0..4u16 {
         let at = usize::from(q * quarter);
         let before = corners.get(usize::from((q + 3) % 4));
         let after = corners.get(usize::from(q));
         if let (Some(&point), Some(&b), Some(&c)) = (ring.get(at), before, after) {
-            builder.triangle(point, b, c);
+            emit(builder, vec![point, b, c]);
         }
     }
     for step in 0..segments() {
-        let from = frame.point(circle_point(rod, along, angle_of(step), radius));
-        let to = frame.point(circle_point(rod, along, angle_of(step + 1), radius));
-        builder.edge(from, to);
+        let (from, to) = (
+            circle_point(rod, along, angle_of(step), radius),
+            circle_point(rod, along, angle_of(step + 1), radius),
+        );
+        if mesh_cut::in_any(bands, a, (from + to) * 0.5) {
+            continue;
+        }
+        builder.edge(frame.point(from), frame.point(to));
     }
 }
 
-/// A hole's wall (facing into the hole) and its bottom where it stops
-/// inside the part.
+/// A hole's wall (facing into the hole) over `range` along its axis, less
+/// what a slot opens, and a bottom at either end where it stops in wood.
 fn wall(
     builder: &mut Builder,
     frame: &Frame,
     grain: GrainAxes,
     hole: &HoleShape,
-    open_start: bool,
-    open_end: bool,
+    range: (f32, f32),
+    stops: (bool, bool),
+    bands: &[Band],
 ) {
     let rod = &hole.rod;
     let radius = render::mm(rod.diameter) * 0.5;
-    let (start, end) = (render::mm(rod.start), render::mm(rod.end));
+    let (start, end) = range;
     let a = slot(rod.axis);
     let [u, v] = across(rod.axis).map(slot);
     let inward = |angle: f32| {
@@ -586,6 +718,10 @@ fn wall(
     };
     for step in 0..segments() {
         let (t0, t1) = (angle_of(step), angle_of(step + 1));
+        let middle = circle_point(rod, (start + end) * 0.5, (t0 + t1) * 0.5, radius);
+        if mesh_cut::in_any(bands, a, middle) {
+            continue;
+        }
         let mut corner = |along: f32, angle: f32| {
             let l = circle_point(rod, along, angle, radius);
             builder.vertex(frame.point(l), frame.vector(inward(angle)), grain.apply(l))
@@ -600,8 +736,8 @@ fn wall(
         builder.triangle(quad[0], quad[2], quad[3]);
     }
     // A bottom where the hole stops: facing back toward the opening.
-    for (along, open, toward_high) in [(start, open_start, true), (end, open_end, false)] {
-        if open || (open_start && open_end) {
+    for (along, stop, toward_high) in [(start, stops.0, true), (end, stops.1, false)] {
+        if !stop {
             continue;
         }
         let mut normal = Vec3::ZERO;
