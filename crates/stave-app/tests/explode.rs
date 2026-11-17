@@ -82,9 +82,9 @@ fn a_problem_poses_the_design_where_it_hits_and_shows_the_shared_wood() {
     assert!(range.turns);
     let shown = graph.amount(motion.assembly, motion.shown).unwrap();
     assert!(
-        // It first touches the wall at 2.5deg (its hinge edge swings out);
-        // it is shown 2deg past that.
-        (shown.to_degrees() - 4.5).abs() < 0.2,
+        // It first touches the wall at 0.6deg (its hinge edge swings
+        // out); it is shown 2deg past that.
+        (shown.to_degrees() - 2.6).abs() < 0.2,
         "{}",
         shown.to_degrees()
     );

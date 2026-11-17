@@ -1,9 +1,9 @@
-// expect: error[motion] door.panel hits wall when door is opened past 2.5deg
+// expect: error[motion] door.panel hits wall when door is opened past 0.6deg
 stave 1
 
 // The cabinet stands against a wall that reaches as far forward as the
 // door, and the door covers the side it is hinged on almost to the wall
-// (0.5mm clear). A cup hinge doesn't turn the door about its edge: it
+// (0.2mm clear). A cup hinge doesn't turn the door about its edge: it
 // pushes the door out and swings its hinge edge sideways by about a
 // millimetre as it opens, into the wall.
 
@@ -59,7 +59,7 @@ component Door {
   param opening    : Region
   param hinge_side : Part
 
-  region face = cover(opening, overlay(left: 17.5mm, right: 17.5mm), thickness: ply_18.thickness)
+  region face = cover(opening, overlay(left: 17.8mm, right: 17.8mm), thickness: ply_18.thickness)
 
   part panel : ply_18 {
     length: face.up

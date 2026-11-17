@@ -658,7 +658,7 @@ mod tests {
             )
             .unwrap();
             assert!(panel.contains("1. plate: The mounting plate"), "{panel}");
-            assert!(panel.contains("Closest to the side: 3.5 mm"), "{panel}");
+            assert!(panel.contains("Closest to the side: 2.9 mm"), "{panel}");
             images.push(image.rgba);
         }
         for (i, a) in images.iter().enumerate() {

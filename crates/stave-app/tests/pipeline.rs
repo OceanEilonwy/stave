@@ -574,10 +574,10 @@ fn the_cabinet_doors_move_on_their_hinges_linkage() {
     let corner = glam::DVec3::new(1e6, 647.5e6, -19e6);
     let expected = [
         (0, 1.0, -19.0),
-        (30, 3.03, -30.02),
-        (60, 2.99, -21.05),
-        (90, 4.79, -10.01),
-        (110, 8.04, -3.58),
+        (30, 6.89, -33.02),
+        (60, 5.07, -21.78),
+        (90, 6.54, -9.73),
+        (110, 9.97, -2.95),
     ];
     for (degrees, across, deep) in expected {
         let theta = f64::from(degrees).to_radians();

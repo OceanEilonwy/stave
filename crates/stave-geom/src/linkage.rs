@@ -282,17 +282,17 @@ mod tests {
             }
         }
         // At 90deg the door's front hinge corner (the frame's origin) is
-        // 3.79mm further across and 8.99mm further back than closed, as
+        // 5.54mm further across and 9.27mm further back than closed, as
         // tools/hinge-sim/linkage.py has it; its back corner, which rested
         // on the cabinet's front (deep 19mm here), is 10mm in front of it:
         // the door was pushed out as it turned.
         let door = path.coupler(90f64.to_radians()).unwrap();
         let corner = door.transform_point3(DVec3::ZERO);
-        assert!((corner.x / 1e6 - 3.79).abs() < 0.02, "{corner}");
-        assert!((corner.z / 1e6 - 8.99).abs() < 0.02, "{corner}");
+        assert!((corner.x / 1e6 - 5.54).abs() < 0.02, "{corner}");
+        assert!((corner.z / 1e6 - 9.27).abs() < 0.02, "{corner}");
         let back = door.transform_point3(DVec3::new(0.0, 0.0, 19e6));
-        assert!((back.z / 1e6 - 8.99).abs() < 0.02, "{back}");
-        assert!((back.x / 1e6 - 22.79).abs() < 0.02, "{back}");
+        assert!((back.z / 1e6 - 9.27).abs() < 0.02, "{back}");
+        assert!((back.x / 1e6 - 24.54).abs() < 0.02, "{back}");
         // The offset changes no faster than the bound the sweeps use.
         let speed = path.offset_speed();
         for k in 0..1100 {

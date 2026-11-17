@@ -35,7 +35,8 @@ Checks (exit code 0 when all pass):
   6. nothing passes through wood from 0 to 110 degrees, for doors 16 to 22mm
      thick, boring distances 3 to 7mm and the side screw anywhere in its
      +-2mm: door against side, door against arm, links against side and door
-     (outside the cup), arm against door (outside the cup);
+     (only the cup's bore is taken out of the door: no allowance for its rim),
+     arm and knuckle against door (outside the bore);
   7. the door moves forward and out: the front edge path for the example
      cabinet (19mm door, 18mm overlay, C = 5) at 0, 30, 60, 90, 110 degrees.
 
@@ -49,19 +50,17 @@ import sys
 import numpy as np
 
 # ---- the mechanism (mm, relative to the cup: x from its centre, y from the door's back face)
-ARM_PINS = np.array([[11.99, 10.81], [10.87, 2.24]])   # inner link, outer link
-BOSS_PINS = np.array([[-10.33, 7.75], [-11.47, 1.51]])
+ARM_PINS = np.array([[13.50, 10.90], [13.28, 3.56]])   # inner link, outer link
+BOSS_PINS = np.array([[-8.80, 7.33], [-9.54, 1.39]])
 LINK_THICKNESS = 1.5        # across each link, in the plane
 LINK_HALF_WIDTH = (4.5, 7.0)  # how far each link reaches from the middle, along the pins
-ARM_X = (-2.9, 13.8)        # the arm's sides, relative to the cup's centre (behind the door)
-KNUCKLE_X = (8.0, 13.8)     # the arm's front end, which reaches into the cup
+ARM_X = (-2.9, 15.0)        # the arm's sides, relative to the cup's centre (behind the door)
+KNUCKLE_X = (8.0, 15.0)     # the arm's front end, which reaches into the cup
 ARM_HALF_WIDTH = 8.0
 ARM_FRONT = 12.4            # how far the arm reaches into the cup
 ARM_BACK = -55.0            # the back of the plate (37mm setback, 36mm plate)
 CUP_RADIUS = 17.5
 CUP_DEPTH = 12.8
-RIM_RADIUS = 20.0           # the cup's steel rim (40mm across), lying on the door's back face around the bore
-RIM_DEPTH = 1.5             # how far the links may rest into the rim's shadow: the hinge's stop
 def chord(half_width: float, radius: float = CUP_RADIUS) -> float:
     """The cup's half-width across the door, half_width off its centre line."""
     return float(np.sqrt(radius**2 - half_width**2))
@@ -198,15 +197,15 @@ def main() -> int:
     # 6. nothing passes through wood
     worst_clear = np.inf
     theta = ANGLES[: I110 + 1]
-    for screw in (-2.0, 0.0, 2.0):
+    for screw in (-2.0, -1.0, 0.0, 0.5, 1.0, 2.0):
         cup_x = CUP_X + screw
         arm, boss = design(cup_x)
         offset, margin, _ = solve(arm, boss, ANGLES)
         offset = offset[: I110 + 1]
         b = [rot(boss[i], theta) + offset for i in (0, 1)]
-        for c in (3.0, 5.0, 7.0):
+        for c in (3.0, 4.0, 5.0, 6.0, 7.0):
             overlay = c + BASE_OVERLAY - screw
-            for t in (16.0, 19.0, 22.0):
+            for t in (16.0, 18.0, 19.0, 20.0, 22.0):
                 def in_side(p):
                     # depth inside the side's wood (x in [-19, 0], y <= 0), > 0 means in
                     return np.minimum(np.minimum(-p[:, 0], -p[:, 1]), p[:, 0] + SIDE)
@@ -214,10 +213,10 @@ def main() -> int:
                 def in_door(p, half_width):
                     q = unrot(p - offset, theta)
                     inside = np.minimum(np.minimum(q[:, 1], t - q[:, 1]), q[:, 0] + overlay)
+                    # Only the cup's bore is taken out of the door: its rim lies
+                    # on the face and removes no wood, so nothing is set aside.
                     in_cup = np.minimum(chord(half_width) - np.abs(q[:, 0] - cup_x), CUP_DEPTH - q[:, 1])
-                    # Resting on the cup's rim is the hinge's stop: steel on steel.
-                    on_rim = np.minimum(chord(half_width, RIM_RADIUS) - np.abs(q[:, 0] - cup_x), RIM_DEPTH - q[:, 1])
-                    return np.minimum(inside, -np.maximum(in_cup, on_rim))
+                    return np.minimum(inside, -in_cup)
 
                 def in_arm(p):
                     lo, hi = cup_x + ARM_X[0], cup_x + ARM_X[1]
@@ -234,10 +233,22 @@ def main() -> int:
                     direction = b[i] - arm[i]
                     normal = np.stack([-direction[:, 1], direction[:, 0]], 1)
                     normal /= np.linalg.norm(normal, axis=1)[:, None]
-                    for u in np.linspace(0, 1, 21):
+                    length = np.linalg.norm(direction, axis=1)
+                    ext = LINK_THICKNESS / 2.0 / length
+                    for u in np.linspace(0, 1, 201):
                         for side in (-0.5, 0.5):
-                            p = arm[i] + direction * u + normal * (side * LINK_THICKNESS)
+                            p = arm[i] + direction * (u * (1 + 2 * ext) - ext)[:, None] + normal * (side * LINK_THICKNESS)
                             depth = max(depth, in_side(p).max(), in_door(p, LINK_HALF_WIDTH[i]).max())
+                    # the bore's edges at the door's face inside the bar (a
+                    # wood corner can poke into a bar between samples)
+                    unit = direction / length[:, None]
+                    for x in (cup_x - chord(LINK_HALF_WIDTH[i]), cup_x + chord(LINK_HALF_WIDTH[i])):
+                        rel = door_point([x, 0.0], theta, offset) - arm[i]
+                        along = (rel * unit).sum(1)
+                        across = (rel * normal).sum(1)
+                        half = LINK_THICKNESS / 2.0
+                        inside = np.minimum(np.minimum(along + half, length + half - along), half - np.abs(across))
+                        depth = max(depth, inside.max())
                 # the arm against the door: its body behind the door, its
                 # knuckle in the cup when closed
                 for (lo, hi), (bottom, top) in (

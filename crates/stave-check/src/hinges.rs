@@ -216,6 +216,7 @@ impl Checker<'_> {
             let hardware_name = self.item_name(Item::Hardware(hardware));
             let member_name = match member {
                 MechanismMember::Arm => "the arm",
+                MechanismMember::Knuckle => "the knuckle",
                 MechanismMember::InnerLink => "the inner link",
                 MechanismMember::OuterLink => "the outer link",
             };

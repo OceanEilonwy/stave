@@ -1,4 +1,4 @@
-// expect: error[motion] door_r.panel hits door_l.handle when door_r is opened past 108.6deg
+// expect: error[motion] door_r.panel hits door_l.handle when door_r is opened past 106.8deg
 stave 1
 
 // Two bays side by side, each door hinged on its left. The left door's knob
@@ -86,7 +86,7 @@ component Door {
     }
   }
 
-  hardware handle : knob(panel, diameter: 30mm, projection: 30mm) {
+  hardware handle : knob(panel, diameter: 30mm, projection: 40mm) {
     place {
       center(panel, up)
       flush(panel.right, inset: 5mm)

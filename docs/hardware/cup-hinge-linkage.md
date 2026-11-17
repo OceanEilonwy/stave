@@ -3,7 +3,8 @@
 How Stave moves a door on concealed 35mm cup hinges, where the numbers come
 from, and how they are checked. The mechanism's data is
 `crates/stave-schema/src/hinges.rs` (`CUP_HINGE_110`); the check is
-`tools/hinge-sim/linkage.py` (run it: exit code 0 when every target is met).
+`tools/hinge-sim/linkage.py` (run it: exit code 0 when every target is met)
+and the fit that found the pins is `tools/hinge-sim/fit.py`.
 
 ## What a cup hinge is
 
@@ -77,20 +78,20 @@ overlay table is met exactly by construction.
 
 | Pin | x (from the cup's centre) | y (from the door's back) |
 |---|---|---|
-| Inner link, in the arm | 11.99 | 10.81 |
-| Inner link, in the boss | −10.33 | 7.75 |
-| Outer link, in the arm | 10.87 | 2.24 |
-| Outer link, in the boss | −11.47 | 1.51 |
+| Inner link, in the arm | 13.50 | 10.90 |
+| Inner link, in the boss | −8.80 | 7.33 |
+| Outer link, in the arm | 13.28 | 3.56 |
+| Outer link, in the boss | −9.54 | 1.39 |
 
-The links are 22.53mm and 22.35mm pin to pin. Closed, they lie across the
+The links are 22.58mm and 22.92mm pin to pin. Closed, they lie across the
 cup, from the knuckle (deep in the cup, on the cabinet's side) to the boss
 pins near the cup's rim on the door's edge side. The inner link is a solid
 bar 9mm wide; the outer link is a strap 14mm wide whose two flanges pass
-either side of it, so although the links cross in plan view from 57° on, they
+either side of it, so although the links cross in plan view from 42° on, they
 never meet (as in the real hinge, where the outer link straddles the inner).
 The arm is 16mm wide; its body runs from the back of the plate to the door's
 back face, 2.1mm off the side's face at the middle screw setting (so it stays
-off the side at −2mm); its knuckle, 5.8mm wide, reaches 12.4mm into the cup
+off the side at −2mm); its knuckle, 7mm wide, reaches 12.4mm into the cup
 and carries the arm pins. Links and pins are 1.5mm and Ø3mm.
 
 At rest the two link lines meet 65mm outside the door's hinge edge, a little
@@ -102,23 +103,35 @@ turns that instant centre moves in.
 
 A four-bar has eight numbers (two pins on each member). They were found by
 differential evolution with feasibility rules (constraints first, then the
-fit), then refined by a simplex search, over:
+fit; `tools/hinge-sim/fit.py`), over:
 
 - pins: boss pins inside the cup (1.5mm clear of its wall, at least 0.6mm
-  in from its mouth), arm pins inside the knuckle;
+  in from its mouth), arm pins inside the knuckle (1.5mm clear of its
+  sides);
 - assembling from 0° to 125° at least 1mm of reach from a dead point;
-- nothing passing through wood from 0° to 110° (door against side and arm;
-  links against side and door outside the cup; knuckle against the cup's
-  wall as the door leaves), with the door resting on the side's front edge
-  with no gap;
-- the fit: the minimum reveal table (weighted to 18–20mm doors) and the
-  protrusion at 110°.
+- **no steel in wood**, from 0° to 110°, for doors 16 to 22mm thick, boring
+  distances 3 to 7mm and the side screw anywhere in ±2mm: only the cup's
+  bore is taken out of the door. Both faces of each link (sampled along it,
+  including half its thickness past each pin) and the bore's edges at the
+  door's face (wood corners that could poke into a bar between samples)
+  are tested, and steel must keep 0.1mm off the wood; the door may rest on
+  the side's front edge (wood on wood, touching);
+- the fit: the minimum reveal table (18–20mm doors) and the protrusion at
+  110°.
 
-A direct optimisation over the catalogue's constraints alone failed until the
-links were allowed to cross in plan view: of 150,000 random four-bars that
-assemble over 110°, only about 300 keep a door resting on the side's edge out
-of the side, and nearly all of those cross. That matches how the real hinge
-is built.
+**Why it was refitted.** An earlier fit allowed the links to rest up to
+1.5mm deep in the wood around the cup ("the rim's shadow", called the
+hinge's stop) and sampled each link at only 21 points. A cup's rim lies on
+the door's face and removes no wood, so that was steel through wood: in the
+example cabinet both links went into the door's stile from 98° (the outer
+link) to 110°, 0.80mm deep (inner link, 5.8mm³) and 0.74mm (outer link,
+13.4mm³) at 110°, measured by `stave_geom::sweep::steel_in_wood` with
+only the bore removed. Stave's check carried the same exemption, so it
+didn't say. The exemption is gone from both; the real stop is a limiter
+inside the arm (steel on steel), not modelled as a shape, and the opening
+is checked free of wood all the way to it. The knuckle was widened from
+5.8mm to 7mm so the arm pins can sit nearer the cup's far wall, which
+keeps the links inside the cup's mouth as they fold out.
 
 ## How well it fits
 
@@ -126,17 +139,16 @@ is built.
 
 - closed is exact (offset 0 at 0°); in Stave the door's pose at 0° is the
   identity, no float involved;
-- the links reach a dead point only past 130° (2.1mm of margin at 110°);
+- the links reach a dead point only past 130° (1.0mm of margin at 110°);
 - overlay = C + 12.5mm for C = 3–7mm (by construction);
-- minimum reveal (edge radius 1mm) for 18–20mm doors within 0.36mm of the
-  table (19mm door, C = 5: 1.0mm against 0.8mm); thinner doors swing out a
+- minimum reveal (edge radius 1mm) for 18–20mm doors within 0.25mm of the
+  table (20mm door, C = 3: 0.8mm against 1.1mm); thinner doors swing out a
   little more than the table (15mm: 0.6 against 0.2), thicker ones less
-  (24mm, C = 5: 2.2 against 3.0);
-- door protrusion at 110° (C = 3): 6.7mm against 8.5mm;
-- nothing goes into wood for doors 16–22mm, C = 3–7mm and the side screw
-  anywhere in ±2mm. The links come to rest on the cup's rim (a 40mm steel
-  rim on the 35mm cup, within 1.5mm of the door's face) near full opening:
-  that is the hinge's stop.
+  (24mm, C = 5: 1.1 against 3.0);
+- door protrusion at 110° (C = 3): 8.6mm against 8.5mm;
+- no steel goes into wood for doors 16–22mm (checked at 16, 18, 19, 20 and
+  22), C = 3–7mm (every millimetre) and the side screw at −2, −1, 0, +0.5,
+  +1 and +2mm, every 0.05° from 0° to 110°.
 
 The example cabinet's left door (19mm, 18mm overlay, C = 5, so the side
 screw at +0.5mm), its front hinge corner (`x`, `y` as above; world across =
@@ -145,15 +157,15 @@ screw at +0.5mm), its front hinge corner (`x`, `y` as above; world across =
 | Opened | Front hinge corner | Back hinge corner |
 |---|---|---|
 | 0° | (−18.00, 19.00) | (−18.00, 0.00) |
-| 30° | (−15.97, 30.02) | (−6.47, 13.57) |
-| 60° | (−16.01, 21.05) | (0.44, 11.55) |
-| 90° | (−14.21, 10.01) | (4.79, 10.01) |
-| 110° | (−10.96, 3.58) | (6.90, 10.08) |
+| 30° | (−12.11, 33.02) | (−2.61, 16.57) |
+| 60° | (−13.93, 21.78) | (2.53, 12.28) |
+| 90° | (−12.46, 9.73) | (6.54, 9.73) |
+| 110° | (−9.03, 2.95) | (8.83, 9.45) |
 
-The door's back corner, which rests on the side's front edge, is 13.6mm in
-front of it by 30° and 10mm at 90°; the door's hinge stile is 0.84mm clear of
-the side by 1°, 8.3mm by 10°, and comes closest again at 110°, its front
-corner 3.58mm in front of the side's edge.
+The door's back corner, which rests on the side's front edge, is 16.6mm in
+front of it by 30° and 9.7mm at 90°; the door comes closest to the side
+again at 110°, its front corner 2.95mm in front of the side's edge (Stave's
+focus mode: "closest at 110°: 2.9 mm").
 
 ## In Stave
 
@@ -172,6 +184,8 @@ corner 3.58mm in front of the side's edge.
   point moves, used by the sweeps (`stave-geom::sweep::linkage_contact`, by
   conservative advancement then bisection) and by the viewer.
 - `stave-check`: the door swept on the linkage against everything; the
-  hinge's own arm and links against its door and side
-  (`sweep::mechanism_contact`); `hinge-overlay` against the kind's
+  hinge's own arm, knuckle and links against its door (less only the
+  cup's bore) and side, from 0° (`sweep::mechanism_contact`; a member
+  already in wood when closed is caught at 0°), and measured
+  (`sweep::steel_in_wood`) by a test over every example's cup hinges; `hinge-overlay` against the kind's
   `base_overlay`, `plate_height` and `overlay_adjustment`.

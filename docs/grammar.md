@@ -948,10 +948,11 @@ door or drawer, one is screwed to the carcass and stays put.
   pins are where the built-in mechanism puts them relative to the cup, so a
   side screw setting (see `overlay_adjustment`) moves the arm on the plate.
   The cup moves with the door; the plate and arm stay; each link turns
-  about its pin in the arm. The arm and links must stay out of the wood of
-  the door (outside the cup) and of `on` as the door opens: a link resting
-  on the cup's rim (a 40mm steel rim on a 35mm cup) is the hinge's stop,
-  not a collision.
+  about its pin in the arm. The arm, its knuckle and the links must stay
+  out of the wood of the door and of `on` at every angle as the door
+  opens; only the cup's bore is taken out of the door (its rim lies on the
+  face and removes no wood). The hinge stops at its widest angle on a
+  limiter inside the arm, steel on steel; nothing is excused as a stop.
 - A **butt hinge** is two **leaves**, each the `leaf` box: its `length`
   runs along the pin (the piece's length), its `width` from the pin to the
   leaf's edge, its `thickness` is the leaf's. The mount face of `piece` must

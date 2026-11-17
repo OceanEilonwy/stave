@@ -1,4 +1,4 @@
-// expect: error[motion] door_r.panel hits door_l.panel when door_r is opened past 71deg
+// expect: error[motion] door_r.panel hits door_l.panel when door_r is opened past 71.5deg
 stave 1
 
 // Two doors hung on the same middle divider, hinged to open 110 degrees:

@@ -69,8 +69,9 @@ pub struct CupMechanism {
     /// The pins' diameter.
     pub pin_diameter: i64,
     /// The widest angle the hinge opens to, in micro-degrees: the
-    /// mechanism is checked free of wood up to here (its links come to
-    /// rest on the cup's rim, the hinge's stop).
+    /// mechanism is checked free of wood up to here (only the cup's bore
+    /// is taken out of the door), and a limiter in the arm stops it
+    /// there, steel on steel.
     pub max_opening: i64,
 }
 
@@ -83,31 +84,31 @@ pub const CUP_HINGE_110: CupMechanism = CupMechanism {
     links: [
         CupLink {
             arm: CupPoint {
-                x: 1199 * HUNDREDTH,
-                y: 1081 * HUNDREDTH,
+                x: 1350 * HUNDREDTH,
+                y: 1090 * HUNDREDTH,
             },
             boss: CupPoint {
-                x: -1033 * HUNDREDTH,
-                y: 775 * HUNDREDTH,
+                x: -880 * HUNDREDTH,
+                y: 733 * HUNDREDTH,
             },
             width: 900 * HUNDREDTH,
             slot: 0,
         },
         CupLink {
             arm: CupPoint {
-                x: 1087 * HUNDREDTH,
-                y: 224 * HUNDREDTH,
+                x: 1328 * HUNDREDTH,
+                y: 356 * HUNDREDTH,
             },
             boss: CupPoint {
-                x: -1147 * HUNDREDTH,
-                y: 151 * HUNDREDTH,
+                x: -954 * HUNDREDTH,
+                y: 139 * HUNDREDTH,
             },
             width: 1400 * HUNDREDTH,
             slot: 1100 * HUNDREDTH,
         },
     ],
-    arm_x: (-290 * HUNDREDTH, 1380 * HUNDREDTH),
-    knuckle_x: (800 * HUNDREDTH, 1380 * HUNDREDTH),
+    arm_x: (-290 * HUNDREDTH, 1500 * HUNDREDTH),
+    knuckle_x: (800 * HUNDREDTH, 1500 * HUNDREDTH),
     knuckle_front: 1240 * HUNDREDTH,
     arm_width: 1600 * HUNDREDTH,
     link_thickness: 150 * HUNDREDTH,

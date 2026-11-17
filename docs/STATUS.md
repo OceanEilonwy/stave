@@ -36,7 +36,7 @@ a line and a concrete help line for every problem:
 5. **Motion**: every scene's poses are collision checked; every door and
    drawer is swept through its whole travel from rest and from every scene
    and reported at the first angle or distance it hits something
-   ("door_r.panel hits door_l.panel when door_r is opened past 71deg");
+   ("door_r.panel hits door_l.panel when door_r is opened past 71.5deg");
    a door that binds as soon as it opens is told the gap that clears it.
    Slides are exact; butt hinges turn about their pin in closed form; cup
    hinges are four-bar linkages (an arm, two links, the boss in the cup:
@@ -189,8 +189,8 @@ the window calls.
   Every cup hinge moves on the one built-in 110° full-overlay linkage:
   half-overlay, inset and wide-angle (155°, 165°) hinges have other
   mechanisms, not modelled (a door that needs one is `hinge-overlay`, an
-  opening over 110° `out-of-range`). The links come to rest on the cup's
-  rim at 110°, the stop; nothing models the soft-close damper or the
+  opening over 110° `out-of-range`). The hinge stops at 110° on its
+  limiter (steel on steel, not modelled as a shape); nothing models the soft-close damper or the
   spring.
 - **Hardware models**: `.glb` models are not read (`model-mismatch`).
 - **Focus mode**: the PDF work cards that will reuse flat views don't

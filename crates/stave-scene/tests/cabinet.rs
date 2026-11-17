@@ -144,14 +144,14 @@ fn the_open_scene_swings_doors_and_slides_drawers() {
 
     // The left door opens 110° on its cup hinges' linkage: turned by 110°
     // and moved, its front hinge corner (1, y, 19) carried to about
-    // (8.04, y, 3.58) (tools/hinge-sim/linkage.py), the latch edge out to
+    // (9.97, y, 2.95) (tools/hinge-sim/linkage.py), the latch edge out to
     // the front and left.
     let angle = 110_f32.to_radians();
     let door_l = posed.shown(node("door_l.stile[latch]")).unwrap();
     let corner = Vec3::new(1.0, 1000.0, 19.0);
     let moved = door_l.transform_point3(corner);
     assert!(
-        (moved - Vec3::new(8.04, 1000.0, 3.58)).abs().max_element() < 0.05,
+        (moved - Vec3::new(9.97, 1000.0, 2.95)).abs().max_element() < 0.05,
         "{moved}"
     );
     let latch_corner = Vec3::new(449.25, 1000.0, 19.0);
@@ -182,7 +182,7 @@ fn the_open_scene_swings_doors_and_slides_drawers() {
     let door_r = posed.shown(node("door_r.stile[latch]")).unwrap();
     let corner_r = door_r.transform_point3(Vec3::new(899.0, 1000.0, 19.0));
     assert!(
-        (corner_r - Vec3::new(899.0 - 7.04, 1000.0, moved.z))
+        (corner_r - Vec3::new(899.0 - 8.97, 1000.0, moved.z))
             .abs()
             .max_element()
             < 0.05,

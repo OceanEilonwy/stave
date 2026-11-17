@@ -381,7 +381,7 @@ fn focus_on_a_cup_hinge_names_its_members_and_measures_its_swing() {
             .starts_with("The two links: steel bars")
     );
     assert_eq!(row(&found, "Opens to"), "110°");
-    assert_eq!(row(&found, "Closest to the side"), "3.5 mm");
+    assert_eq!(row(&found, "Closest to the side"), "2.9 mm");
     assert_eq!(row(&found, "Closest to anything"), "top: 1.5 mm");
     assert_eq!(row(&found, "Swing check"), "clear all the way");
     let captions: Vec<&str> = found.key_poses.iter().map(|p| p.caption.as_str()).collect();
@@ -404,7 +404,7 @@ fn focus_on_a_cup_hinge_names_its_members_and_measures_its_swing() {
         .collect();
     assert_eq!(notes.len(), 1);
     assert!(
-        notes[0].starts_with("closest at ") && notes[0].ends_with("°: 3.5 mm"),
+        notes[0].starts_with("closest at ") && notes[0].ends_with("°: 2.9 mm"),
         "{notes:?}"
     );
     // At 45° the gap isn't true, so its dimension line isn't drawn; at the
@@ -424,7 +424,7 @@ fn focus_on_a_cup_hinge_names_its_members_and_measures_its_swing() {
     let lines = gap_lines(&closest);
     assert_eq!(lines.len(), 1);
     assert!(
-        (lines[0].from.distance(lines[0].to) - 3.5).abs() < 0.1,
+        (lines[0].from.distance(lines[0].to) - 2.9).abs() < 0.1,
         "{:?}",
         lines[0]
     );
@@ -727,5 +727,70 @@ fn drilled_meshes_are_watertight() {
             open.len(),
             open.first()
         );
+    }
+}
+
+/// Every cup hinge of the examples, swept through its whole opening:
+/// no member of its mechanism (arm, knuckle, links) is ever in wood,
+/// the door's (less only its cup's bore) or the side's.
+#[test]
+fn no_cup_hinge_puts_steel_in_wood() {
+    for folder in [
+        "examples/clothing_cabinet",
+        "examples/nightstand",
+        "examples/box",
+    ] {
+        let opened = stave_app::open(&workspace().join(folder)).unwrap();
+        let Some(design) = opened.design.as_ref() else {
+            continue;
+        };
+        for hardware in &design.hardware {
+            let (Some(mechanism), stave_model::solved::HardwareData::Hinge { on, .. }) =
+                (&hardware.mechanism, hardware.data)
+            else {
+                continue;
+            };
+            let solid = |id| {
+                let p = design.part(id).unwrap();
+                WorldSolid::of_part(p, &Solid::of(p, design))
+            };
+            let sweep = stave_geom::sweep::LinkageSweep::new(&mechanism.linkage);
+            let found = stave_geom::sweep::steel_in_wood(
+                hardware,
+                &solid(hardware.piece),
+                &solid(on),
+                &sweep,
+                2000,
+            );
+            for hit in &found {
+                eprintln!(
+                    "{} {:?} in {:?}: {:.2} mm deep at {:.1}°, {:.1} mm³",
+                    hardware.name,
+                    hit.member,
+                    hit.part,
+                    hit.depth / 1e6,
+                    hit.angle.to_degrees(),
+                    hit.volume / 1e18
+                );
+            }
+            assert!(
+                found.iter().all(|h| h.depth <= 50_000.0),
+                "{}: steel in wood {found:?}",
+                hardware.name
+            );
+            // And by the swing check's own sweep (conservative advancement,
+            // never stepping past a contact): no member ever touches wood.
+            assert_eq!(
+                stave_geom::sweep::mechanism_contact(
+                    hardware,
+                    &solid(hardware.piece),
+                    &solid(on),
+                    &sweep
+                ),
+                None,
+                "{}",
+                hardware.name
+            );
+        }
     }
 }
