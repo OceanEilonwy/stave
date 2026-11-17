@@ -289,8 +289,9 @@ base_kind     = "joint" | "slide" | "hinge" | "pull" | "fastener" | "tool" ;
 kind_entry    = { DOC } , ( param | require | makes | member )
               | roles | cut | mount | mechanism | adjust | field ;
 member        = "member" , IDENT , [ ":" , expr ] , [ block(member_entry) ] ;
-                (* a kind's named piece: member cup, member arm { shape: box(...) },
-                   or in a joint kind member pin : dowel_pin(...) { on: contact(piece, into), ... } *)
+                (* a kind's piece: member arm { shape: box(...) }, or in a joint kind
+                   member pin : dowel_pin(...) { on: contact(piece, into), ... };
+                   without a block it is error[missing-field] *)
 member_entry  = "shape" , [ IDENT ] , ":" , call_expr    (* shape: cylinder(...), shape knuckle: box(...) *)
               | mount                                    (* mount { depth: from(face(on, toward: piece)) } *)
               | field ;                                  (* with: piece; on:, count:, spaced: in a joint kind *)
@@ -428,7 +429,8 @@ Notes for the parser:
   member's shapes; `shape: box(...)` is a field and gives the member's only
   shape.
 - `cut dado: crossing(...) { }` (the word `cut`, a name, then `:`) is a named
-  cut; `cut crossing(...) { }` is an unnamed one, and `cut: ...` is a field.
+  cut; `cut crossing(...) { }` is an unnamed one (`warning[unnamed-cut]` in a
+  kind; see [Named cuts](#named-cuts)), and `cut: ...` is a field.
 - `mount { }` is a block when `mount` is directly followed by `{`;
   `mount: ...` is a field.
 
@@ -644,7 +646,7 @@ member (`oak_19.thickness`). Types are listed under [Types](#types-units-and-ari
 | `style` | `Text` | no | a hint for suggestions |
 | `tools` | list of `Tool` | no | the tools you have. Left out: every tool is assumed |
 | `methods` | list of `Recipe` | no | recipes to prefer, most preferred first |
-| `boards` | `Boards` | no (default `joined(by: glued_edge)`) | how the boards of a part made of boards are joined, for every part that doesn't say; see [Boards](#boards) |
+| `boards` | `Boards` | no (default: the prelude's, `joined(by: glued_edge)`) | how the boards of a part made of boards are joined, for every part that doesn't say; see [Boards](#boards) |
 
 ### `library "Title" { }`
 
@@ -652,6 +654,7 @@ member (`oak_19.thickness`). Types are listed under [Types](#types-units-and-ari
 |---|---|---|---|
 | `about` | `Text` | no | one line of description |
 | `license` | `Text` | no | credited in the build manual |
+| `boards` | `Boards` | no | in a library in the prelude: how a part's boards are joined when neither the part nor its project says; see [Boards](#boards) |
 
 ### `param name [: Type] [= default] [within domain] [locked]`
 
@@ -758,7 +761,7 @@ The condition is a `Bool` expression. See [Checks](#checks-and-require).
 | `adds` | `extend(...)` or a list of them | no | what the joint adds to each part's cut size |
 | `uses` | a fastener kind value, or a list | no | fasteners the joint consumes without placing them |
 | `member name [: fastener] { }` | | no | a piece it places where its parts touch, such as a dowel's pins; see [Joint members](#joint-members) |
-| `cut [name:] selector { }` | | no | material removed; a name (`cut dado: ...`) is what messages call the cut. `crossing(role, member)` is the wood a member takes out of a part |
+| `cut [name:] selector { }` | | no | material removed; a name (`cut dado: ...`) is what messages call the cut; see [Named cuts](#named-cuts). `crossing(role, member)` is the wood a member takes out of a part |
 | `makes part` | | no | a part the joint creates |
 | `note` | `Text` | no | one piece of advice for the build manual |
 
@@ -782,10 +785,10 @@ how it moves and what it cuts are all written in the kind. A `slide`,
 | `mount { }` | yes | where it sits on its piece unless the design says otherwise (see [Hardware placement](#hardware-placement)) |
 | `param` | no | settings; a param with a `within` list is a family (`side_mount_slide(length: 450mm)`) |
 | `require` | no | rules, checked for each piece of hardware where it is placed; `mount` names its mount face as an anchor (see [Adjustment](#adjustment)) |
-| `member` | no | its pieces, each with its shapes (see [Hardware members](#hardware-members)) |
+| `member` | no | its pieces, each with its shapes (see [Shapes](#shapes)) |
 | `adjust a on b: axis within d` | no | how far a member can be set on another, on one axis of the frame (see [Adjustment](#adjustment)) |
 | `mechanism { }` | no | how its members move (see [Mechanisms](#mechanisms)) |
-| `cut [name:] crossing(role, member) { }` | no | the wood it takes out: the bore for a cup, the mortise for a leaf, the hole for a screw (see [Faces to cut](#faces-to-cut)) |
+| `cut [name:] crossing(role, member) { }` | no | the wood it takes out: the bore for a cup, the mortise for a leaf, the hole for a screw (see [Faces to cut](#faces-to-cut)); a name is what messages call the cut (see [Named cuts](#named-cuts)) |
 | `uses` | no | fasteners it consumes without placing them, as a joint's `uses:`: counted, never placed |
 | `model` | no | a `Model`, for looks |
 | `moving`, `license` | no | `Text` |
@@ -828,70 +831,6 @@ rules are the kind's own: how far a cup hinge's arm can be set on its
 plate is an `adjust`, and the gap a slide needs beside the drawer is a
 `require` (see [Adjustment](#adjustment)). No rule about a hinge or a slide
 is built into the checker.
-
-#### Hardware members
-
-A hinge, slide or pull kind may name its pieces, each with a
-doc comment a beginner can read. A viewer numbers them, labels them on the
-drawing and shows the doc comment as the caption, in the order written:
-
-```
-kind euro_hinge : hinge {
-  ...
-  /// The mounting plate: screwed to the inside of the cabinet side, it
-  /// holds the hinge on the side and never moves.
-  member plate
-  /// The cup: a steel cup pressed into a 35mm hole bored in the back of
-  /// the door. The boss in its middle is where the links are pinned.
-  member cup
-}
-```
-
-A member may have a body: its **shapes** (see [Shapes](#shapes)) and what
-carries it (`with:`), written in a block after its name. A member with a
-body may have **any name**, and is what a `mechanism` moves:
-
-```
-  /// The arm: it clips onto the plate and reaches out to the door.
-  member arm {
-    with:          on
-    shape body:    box(along: 16mm, across: -2.9mm..15mm, depth: -55mm..0mm)
-    shape knuckle: box(along: 16mm, across: 8mm..15mm, depth: 0mm..12.4mm)
-  }
-```
-
-`with:` names a role (the member moves with that part: `piece`, `on`) or
-another member with a body (it rides on that member). A member with no
-`with:` is placed by the mechanism, as a link is; in a kind whose
-mechanism doesn't place it (or that has none) nothing moves it, which is
-`error[missing-field]` at the member. A member with a body has
-at least one shape (`error[missing-field]` otherwise); two shapes of one
-member have different names (`error[duplicate-name]`), and a member with
-more than one names them all. A member's own `mount { }` places it on some
-axes of the frame from something other than the kind's origin (see
-[Hardware placement](#hardware-placement)).
-
-*Being replaced:* a member **without** a body (`member plate`) is a word
-from the fixed table below, kept for the viewer's list until every member
-has a body. It has no shape, so it is neither drawn nor checked; a member
-that is drawn or checked has a body and at least one shape. A member with a body whose name is in the table is that entry
-of the list too. The words, per base:
-
-| Base | Members |
-|---|---|
-| `hinge` | `plate`, `arm`, `links`, `cup` (a cup hinge's); `leaves`, `pin` (a butt hinge's) |
-| `slide` | `cabinet_member`, `drawer_member` |
-| `pull` | `knob`, `bar`, `screw`, `screws` (a knob and its screw, a bar and its screws) |
-
-Members are optional, each at most once (`error[duplicate-name]`). Any other
-word for a member without a body is `error[unknown-field]`: `a hinge kind has
-no member 'cupp'`, with the nearest member word as help; fasteners and tools
-have no members (`a fastener kind has no member 'head'`). A joint's members
-always have a body and are placed on a contact patch instead of carried
-`with:` a part (see [Joint members](#joint-members)); a joint member without
-one is `error[missing-field]` (`member 'pin' is missing 'shape'`). Only a
-joint's member names what it is after `:`; a hardware member that does is
-`error[unknown-field]`.
 
 ### `recipe name : operation { }`
 
@@ -1210,7 +1149,11 @@ project "Side table" {
 }
 ```
 
-Left out everywhere, it is `joined(by: glued_edge)`. `by:` takes a joint
+Left out everywhere, it is what the first library in the prelude with a
+`boards:` says: `std:joinery`'s `library` block has `boards: joined(by:
+glued_edge)`, so it is `joined(by: glued_edge)`. A design whose part is
+made of boards when nothing says how they are joined is
+`error[unknown-name]`. `by:` takes a joint
 kind value, or a list of them, which are all used. Each is an ordinary
 `kind ... : joint` (`std:joinery` has `glued_edge`, `tongue_and_groove`,
 `splined_edge`, `chigiri` (butterfly keys across each seam) and
@@ -1387,10 +1330,10 @@ kind ari_tsugi : joint {
   cut_first: piece
   adds:      extend(piece, by: depth)
 
-  cut end(into, facing: piece) {
+  cut socket: end(into, facing: piece) {
     dovetail_socket(neck: neck, depth: depth, angle: angle)
   }
-  cut end(piece, facing: into) {
+  cut tail: end(piece, facing: into) {
     dovetail_tail(neck: neck, depth: depth, angle: angle)
   }
 
@@ -1484,8 +1427,8 @@ like a hardware member (see [One collision model](#one-collision-model)):
     spaced: evenly
     shape:  cylinder(diameter: diameter, depth: -depth..depth)
   }
-  cut crossing(piece, pin) { drill(diameter: diameter, depth: depth) }
-  cut crossing(into, pin) { drill(diameter: diameter, depth: depth) }
+  cut end_hole: crossing(piece, pin) { drill(diameter: diameter, depth: depth) }
+  cut hole: crossing(into, pin) { drill(diameter: diameter, depth: depth) }
 ```
 
 | Entry | Type | Required | Meaning |
@@ -1495,6 +1438,13 @@ like a hardware member (see [One collision model](#one-collision-model)):
 | `count:` | `Count` | no (default `1`) | how many copies, for each pair |
 | `spaced:` | `Spacing` | no (default `evenly`) | how the copies are spread along the patch's length |
 | `shape [name]:` | a shape | yes | what it is made of (see [Shapes](#shapes)) |
+
+A joint's member always has a body; one without is `error[missing-field]`
+(`member 'pin' is missing 'shape'`). It has no `with:` or `mount { }`
+(`error[unknown-field]`), and a missing `on:` is `error[missing-field]`.
+Only a joint's member names what it is after `:`; a hardware member that
+does is `error[unknown-field]` (`member 'screw' of a hardware kind can't
+name a fastener`); a hardware kind lists its fasteners with `uses:`.
 
 **The member's frame.** Each copy has its own frame, with the words a
 hardware kind's frame uses: `along` runs along the patch's length (its
@@ -1517,7 +1467,7 @@ of where its parts touch`, with the help to use fewer or space them closer.
 A copy is centred across the patch's width; a shape's `at:` moves it.
 Positions are exact and rounded once, like every solved length.
 
-**Cuts.** `cut crossing(role, member) { ... }` is made once for every shape
+**Cuts.** `cut name: crossing(role, member) { ... }` is made once for every shape
 of every copy, on the face of the role's part the shape touches or enters,
 measured on the shape (see [Faces to cut](#faces-to-cut)): a `drill` is
 centred on the shape's axis. Because both parts are cut from the same
@@ -1591,8 +1541,8 @@ each piece of hardware, a joint member's once for each copy (see [Joint
 members](#joint-members)). Its operations are the same as a joint's:
 
 ```
-cut crossing(piece, cup) { drill(diameter: 35mm, depth: 12.8mm) }
-cut crossing(on, fixed_leaf) { notch(depth: 1.5mm) }
+cut cup_bore: crossing(piece, cup) { drill(diameter: 35mm, depth: 12.8mm) }
+cut fixed_leaf_mortise: crossing(on, fixed_leaf) { notch(depth: 1.5mm) }
 ```
 
 When `p` and `q` cross right through each other, `crossing(p, q)` is `p`'s
@@ -1602,6 +1552,48 @@ edge. `normal: width | thickness` names the face instead (the face across
 bored down through a stick that another stick passes through vertically is
 `crossing(first, lock, normal: thickness)`. `opposite: true` takes the face
 opposite to the chosen one.
+
+#### Named cuts
+
+A cut in a joint or hardware kind is named by writing a name and `:` after
+`cut`: `cut groove: crossing(into, piece) { ... }`. The name is what
+messages call the cut, whatever its operations: `its groove in side_l`,
+`the tenon on rail`, `its socket in beam_a`. In a message the name's
+underscores are read as spaces (`mating_groove` is "mating groove"). A
+cut name is not an item: it shares no namespace with the kind's params,
+roles or made parts. Each cut of a kind has its own name, because the name
+is how messages and patches tell the kind's cuts apart: two cuts of one
+kind with the same name are `error[duplicate-name]`, naming both places,
+with the help `give each cut of a kind its own name, as in groove and
+mating_groove`. Two different kinds may use the same cut names.
+
+Names come only from the kind; Stave never guesses one. A message about an
+unnamed cut falls back to its operation's word: `mortise` for `pocket`,
+`hole` for `drill`, `notch`, `slot`, and `cut` for every other operation.
+So every `cut` in a kind should be named, and an unnamed one is
+`warning[unnamed-cut]` (layer 2), at the cut's selector:
+
+```
+warning[unnamed-cut]: this cut has no name, so messages will call it "a slot"
+  --> project.stave:52:7
+   |
+52 |   cut crossing(into, piece) {
+   |       ^^^^^^^^^^^^^^^^^^^^^
+   = help: name it after what it is, as in cut trench: crossing(...) { ... }
+```
+
+The word in quotes is the fallback above; when a cut's operations have
+different words (a `drill` and a `slot` in one cut) it is `cut`. The help
+repeats the cut's own selector word (`end`, `side` or `crossing`).
+
+- It is reported once for each unnamed `cut` in a kind, at the kind's
+  definition, however many times the kind is used (or in however many
+  modules that import it).
+- A kind nobody uses is still warned: every kind is resolved where it is
+  declared, used or not, so `stave check std` checks every kind in the
+  library.
+- The `cut { }` block of a recipe lists cutting steps, not a kind's cuts,
+  and never warns.
 
 #### The kind's frame
 
@@ -1800,7 +1792,7 @@ kind brass_knob_26 : pull {
     with:  piece
     shape: cylinder(diameter: 4mm, depth: 0mm..piece.thickness)
   }
-  cut crossing(piece, screw) { drill(diameter: 4mm, depth: through) }
+  cut screw_hole: crossing(piece, screw) { drill(diameter: 4mm, depth: through) }
   model: model("./models/brass_knob_26.glb", align: node("mount"))
 }
 ```
@@ -1904,8 +1896,8 @@ hold for every kind alike:
   joint's screws) is a shape like any other, and the kind drills its hole,
   so it fits and touches.
 
-Only declared shapes are drawn, and everything drawn is checked: a member
-without a body is neither (see [Hardware members](#hardware-members)).
+Only declared shapes are drawn, and everything drawn is checked; every
+member has at least one shape (see [Shapes](#shapes)).
 Diagnostics name a member as `<hardware>'s <member>`: `error[overlap]` at
 rest and at a scene's poses, `error[motion]` in a sweep
 (`door_l.hinges[upper]'s inner_link hits door_l.stile when door_l is
@@ -1972,6 +1964,37 @@ looked at before its pin is updated. A `sha256:` that is not 64
 hexadecimal digits is `error[type-mismatch]`.
 
 #### Shapes
+
+A hinge, slide or pull kind is made of **members**, each written `member
+name { ... }` with a doc comment a beginner can read. A viewer numbers the
+members in the order written, labels them on the drawing and shows the doc
+comment as the caption. A member may have **any name**; nothing in Stave
+knows a member by its name. Its block says what carries it (`with:`) and
+what it is made of: at least one `shape` (`error[missing-field]`
+otherwise, and so is a member written without a block, `member 'cup' is
+missing 'shape'`):
+
+```
+  /// The arm: it clips onto the plate and reaches out to the door.
+  member arm {
+    with:          on
+    shape body:    box(along: 16mm, across: -2.9mm..15mm, depth: -55mm..0mm)
+    shape knuckle: box(along: 16mm, across: 8mm..15mm, depth: 0mm..12.4mm)
+  }
+```
+
+`with:` names a role (the member moves with that part: `piece`, `on`) or
+another member (it rides on that member). A member with no `with:` is
+placed by the mechanism, as a link is; in a kind whose mechanism doesn't
+place it (or that has none) nothing moves it, which is
+`error[missing-field]` at the member. Two members of one kind have
+different names (`error[duplicate-name]`); two shapes of one member have
+different names (`error[duplicate-name]`), and a member with more than one
+names them all. A member's own `mount { }` places it on some axes of the
+frame from something other than the kind's origin (see [Hardware
+placement](#hardware-placement)). Fasteners, tools and joints have no
+members: `member head` in one is `error[unknown-field]` (`a fastener kind
+has no member 'head'`).
 
 A member's shapes are what it is made of: convex solids, written in the
 [kind's frame](#the-kinds-frame), with the hardware closed. Sizes and
@@ -2143,10 +2166,7 @@ step's members and the first drive value where it happens ("`rod` and
 `slider` lock at 41.6deg"). A step that would jump to its other branch
 between two samples is `error[motion]` ("flip over at"), and so is a pin
 that runs past an end of its slot ("`lid`'s pin reaches the end of its slot
-in `stay` at <value>"). A driven member hung on two links from held
-members (a cup hinge's four-bar) is also checked exactly, in integers,
-over its first step's range ("a cup hinge's links lock before it opens
-<angle>").
+in `stay` at <value>").
 
 **Fast paths.** Two shapes of motion are swept exactly, chosen by the
 mechanism's shape and never by its kind: a driven member pinned to a held
@@ -2586,6 +2606,7 @@ shape of their messages are fixed, because tests and AI tools match on them.
 | 2 | `import-cycle` | `modules import each other: <a> -> <b> -> <a>` |
 | 2 | `unknown-module` | `can't find module '<source>'` |
 | 2, 4 | `not-supported` | `<what> is not supported yet` (an error for remote imports and for a format version other than 1, a warning for a cut on a round or turned part other than a hole or a round tenon) |
+| 2 | `unnamed-cut` | `this cut has no name, so messages will call it "a <slot>"` (a warning, once for each unnamed `cut` in a kind; see [Named cuts](#named-cuts)) |
 | 3 | `ground` | `no part is placed with 'ground'`, `'<a>' and '<b>' are both placed with 'ground'`, or `'<a>' is placed with 'ground' inside a component` |
 | 3 | `axis-not-set` | `<item>: position along '<axis>' is not set` |
 | 3 | `axis-set-twice` | `<item>: position along '<axis>' is set twice` |
@@ -2603,7 +2624,7 @@ shape of their messages are fixed, because tests and AI tools match on them.
 | 7 | `order` | `<part>: there is no valid order for its cuts`, or for a joint's insert steps `<joint>: <step> is blocked by <part>` |
 
 Warnings and notes: `shadows-prelude`, `no-recipe`, `not-supported`,
-`model-mismatch`.
+`model-mismatch`, `unnamed-cut`.
 
 A model mismatch (layer 4) is reported at the kind's
 `model(...)` and says one of `<kind>'s model puts '<node>' at <point>, but

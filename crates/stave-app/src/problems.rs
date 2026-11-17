@@ -54,7 +54,8 @@ pub enum Category {
     Name,
     /// A value is the wrong kind, unit or size (`type-mismatch`, ...).
     Value,
-    /// A cut no recipe can make with the project's tools (`no-recipe`).
+    /// A cut no recipe can make with the project's tools (`no-recipe`), or
+    /// a kind's cut with no name (`unnamed-cut`).
     Cut,
     /// A hardware model doesn't match its envelope (`model-mismatch`).
     Hardware,
@@ -97,7 +98,7 @@ impl Category {
             | Code::UnknownField
             | Code::MissingField
             | Code::OutOfRange => Category::Value,
-            Code::NoRecipe => Category::Cut,
+            Code::NoRecipe | Code::UnnamedCut => Category::Cut,
             Code::ModelMismatch => Category::Hardware,
             Code::NotSupported => Category::NotSupported,
         }

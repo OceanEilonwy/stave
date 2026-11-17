@@ -3,10 +3,11 @@
 use std::sync::Arc;
 
 use glam::{Mat4, Quat, Vec3};
-use stave_geom::mechanism::{MechanismPath, Shape};
+use stave_geom::mechanism::MechanismPath;
 use stave_geom::solid::Solid;
 use stave_geom::{Aabb, Extent, Geometry, render};
 use stave_lang::placement::PartAxis;
+use stave_model::mechanism::MotionShape;
 use stave_model::mechanism::{DriveValue, MemberIndex};
 use stave_model::solved::{
     AssemblyId, BodyCarrier, BodyRef, HardwareId, Part, PartId, PoseValue, SceneId, SceneItem,
@@ -154,7 +155,10 @@ enum AssemblyMove {
 impl AssemblyMove {
     fn of_path(path: &Arc<MechanismPath>) -> AssemblyMove {
         match path.shape() {
-            Shape::Turn { pivot, opening } => {
+            MotionShape::Turn {
+                line: pivot,
+                opening,
+            } => {
                 // Turning about free × swing carries the free side toward
                 // the swing side.
                 let free = render::direction(pivot.free_side);
@@ -165,11 +169,11 @@ impl AssemblyMove {
                     opening: render::radians(opening),
                 }
             }
-            Shape::Travel { toward, travel } => AssemblyMove::Travel {
+            MotionShape::Travel { toward, travel } => AssemblyMove::Travel {
                 toward: render::direction(toward),
                 travel: render::mm(travel),
             },
-            Shape::General => AssemblyMove::General {
+            MotionShape::General => AssemblyMove::General {
                 path: Arc::clone(path),
                 full: match path.extent() {
                     DriveValue::Turn(angle) => render::radians(angle),
@@ -1034,8 +1038,8 @@ impl Exploded {
             .as_ref()
             .and_then(|mechanism| MechanismPath::new(mechanism).ok());
         let travel = path.as_ref().and_then(|path| match path.shape() {
-            Shape::Travel { toward, .. } => Some(toward),
-            Shape::Turn { .. } | Shape::General => None,
+            MotionShape::Travel { toward, .. } => Some(toward),
+            MotionShape::Turn { .. } | MotionShape::General => None,
         });
         let swing = path.as_ref().and_then(MechanismPath::swing);
         match (travel, swing) {

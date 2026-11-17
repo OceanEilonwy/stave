@@ -50,19 +50,21 @@ use std::f64::consts::TAU;
 use glam::{DMat4, DVec2, DVec3};
 use stave_lang::placement::{Axis, Direction};
 use stave_lang::units::{Angle, Length};
+use stave_model::mechanism::TurnLine;
 use stave_model::mechanism::{Mechanism, MemberIndex};
-use stave_model::solved::{Pivot, Point, PoseValue, WorldBox};
+use stave_model::solved::{Point, PoseValue, WorldBox};
 
 use crate::collide::{
     CONTACT_TOLERANCE, Placement, WorldPrism, WorldRod, WorldSolid, overlaps_placed, placed_bounds,
     translate_box,
 };
-use crate::mechanism::{MechanismPath, Shape};
+use crate::mechanism::MechanismPath;
 use crate::planar::MechanismError;
 use crate::plane::{
     Motion2, Piece, Plane, corners_of, intersect, piece_depth, piece_pairs, polygon_distance,
 };
 use crate::render;
+use stave_model::mechanism::MotionShape;
 
 /// The boxes of a solid's wood: its blocks and the boxes around its rods
 /// and prisms.
@@ -356,11 +358,11 @@ impl Path {
     pub fn reach(&self, solid: &WorldSolid, mover: &Mover<'_>) -> Option<WorldBox> {
         match (self.mechanism.shape(), mover) {
             (_, Mover::Fixed(placement)) => Some(placed_bounds(&solid.bounds()?, placement)),
-            (Shape::Turn { pivot, .. }, Mover::Rigid(_)) => turn_reach(solid, &pivot),
-            (Shape::Travel { toward, travel }, Mover::Rigid(_)) => {
+            (MotionShape::Turn { line: pivot, .. }, Mover::Rigid(_)) => turn_reach(solid, &pivot),
+            (MotionShape::Travel { toward, travel }, Mover::Rigid(_)) => {
                 slide_reach(solid, toward, travel)
             }
-            (Shape::General, Mover::Rigid(_)) => {
+            (MotionShape::General, Mover::Rigid(_)) => {
                 let member = self.mechanism.moving();
                 sampled_reach(solid, self, mover, |amount| {
                     self.mechanism.matrix(member, amount)
@@ -524,18 +526,28 @@ pub fn first_contact(
         return None;
     }
     match (path.mechanism.shape(), &ma, &mb) {
-        (Shape::Travel { toward, travel }, Mover::Rigid(_), Mover::Fixed(placement)) => {
+        (MotionShape::Travel { toward, travel }, Mover::Rigid(_), Mover::Fixed(placement)) => {
             slide_contact(a, b, placement, toward, travel).map(Reach::Distance)
         }
-        (Shape::Travel { toward, travel }, Mover::Fixed(placement), Mover::Rigid(_)) => {
+        (MotionShape::Travel { toward, travel }, Mover::Fixed(placement), Mover::Rigid(_)) => {
             slide_contact(b, a, placement, toward, travel).map(Reach::Distance)
         }
-        (Shape::Turn { pivot, opening }, Mover::Rigid(_), Mover::Fixed(placement)) => {
-            turn_contact(a, b, placement, &pivot, opening).map(Reach::Angle)
-        }
-        (Shape::Turn { pivot, opening }, Mover::Fixed(placement), Mover::Rigid(_)) => {
-            turn_contact(b, a, placement, &pivot, opening).map(Reach::Angle)
-        }
+        (
+            MotionShape::Turn {
+                line: pivot,
+                opening,
+            },
+            Mover::Rigid(_),
+            Mover::Fixed(placement),
+        ) => turn_contact(a, b, placement, &pivot, opening).map(Reach::Angle),
+        (
+            MotionShape::Turn {
+                line: pivot,
+                opening,
+            },
+            Mover::Fixed(placement),
+            Mover::Rigid(_),
+        ) => turn_contact(b, a, placement, &pivot, opening).map(Reach::Angle),
         _ => {
             let plane = path.plane();
             let limit = path.limit();
@@ -585,8 +597,8 @@ pub fn deepest_overlap(
     let mut worst: Option<(f64, PoseValue)> = None;
     let rigid_only = !matches!(ma, Mover::Member(..)) && !matches!(mb, Mover::Member(..));
     let travel = match path.mechanism.shape() {
-        Shape::Travel { travel, .. } if rigid_only => Some(travel),
-        Shape::Travel { .. } | Shape::Turn { .. } | Shape::General => None,
+        MotionShape::Travel { travel, .. } if rigid_only => Some(travel),
+        MotionShape::Travel { .. } | MotionShape::Turn { .. } | MotionShape::General => None,
     };
     if travel.is_none() {
         let plane = path.plane();
@@ -645,7 +657,7 @@ pub fn turn_contact(
     moving: &WorldSolid,
     fixed: &WorldSolid,
     fixed_at: &Placement,
-    pivot: &Pivot,
+    pivot: &TurnLine,
     opening: Angle,
 ) -> Option<Angle> {
     let plane = Plane::of_pivot(pivot);
@@ -663,7 +675,7 @@ pub fn turn_contact(
 
 /// The box a turning solid can reach: along the axis its own range, across
 /// it the square around the circle its farthest corner turns on.
-pub fn turn_reach(moving: &WorldSolid, pivot: &Pivot) -> Option<WorldBox> {
+pub fn turn_reach(moving: &WorldSolid, pivot: &TurnLine) -> Option<WorldBox> {
     let bounds = moving.bounds()?;
     let plane = Plane::of_pivot(pivot);
     let radius = corners_of(&bounds)
@@ -752,8 +764,8 @@ mod tests {
         );
     }
 
-    fn door_pivot() -> Pivot {
-        Pivot {
+    fn door_pivot() -> TurnLine {
+        TurnLine {
             axis: Axis::Up,
             through: point(0, 0, 0),
             free_side: Direction::Right,
@@ -839,7 +851,7 @@ mod tests {
             None
         );
         // Turned the wrong way it goes straight in.
-        let backward = Pivot {
+        let backward = TurnLine {
             swing_toward: Direction::Back,
             ..door_pivot()
         };
@@ -960,7 +972,7 @@ mod linkage_tests {
     #[test]
     fn a_door_on_a_linkage_first_hits_where_dense_steps_find_it() {
         let path = path();
-        assert_eq!(path.mechanism().shape(), Shape::General);
+        assert_eq!(path.mechanism().shape(), MotionShape::General);
         // A 450mm door, 19mm thick, in front of the side's edge.
         let door = block([0, 0, 0], [450, 700, 19]);
         // A post in front of the door's free end, and one beside its hinge

@@ -31,7 +31,8 @@ pub struct Shot {
     /// first view, about 17; 90 looks straight down).
     pub pitch: Option<f32>,
     /// Frame the shot on the items whose names start with this
-    /// (`door_l.hinges[lower]`: its cup, its plate and arm, its links).
+    /// (`door_l.hinges[lower]`: every member of the hinge, named
+    /// `door_l.hinges[lower] cup` and so on).
     pub frame: Option<String>,
     /// Assemblies opened by an angle in degrees (hinges) or a length in
     /// millimetres (slides): `("door_l", 45.0)`.
@@ -68,7 +69,7 @@ pub struct FocusShot {
 }
 
 /// Does a node's name start with `prefix` as a whole name: `door_l.hinges`
-/// matches `door_l.hinges[lower] plate and arm` but not `door_l.hingesx`.
+/// matches `door_l.hinges[lower] inner_link` but not `door_l.hingesx`.
 fn named(name: &str, prefix: &str) -> bool {
     name.strip_prefix(prefix)
         .is_some_and(|rest| rest.is_empty() || rest.starts_with([' ', '.', '[']))
@@ -573,7 +574,7 @@ mod tests {
         };
         assert!(render_scene(&mut renderer, design, &scene, &nowhere, (64, 64)).is_err());
         assert!(named(
-            "door_l.hinges[lower] plate and arm",
+            "door_l.hinges[lower] inner_link",
             "door_l.hinges[lower]"
         ));
         assert!(named("door_l.hinges[lower]", "door_l.hinges"));

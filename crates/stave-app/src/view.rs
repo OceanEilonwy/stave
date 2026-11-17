@@ -4,9 +4,13 @@
 
 use std::path::Path;
 
+use stave_lang::placement::Axis;
 use stave_lang::units::Length;
 use stave_lang::{Diagnostic, Severity, SourceMap};
-use stave_model::solved::{Envelope, HardwareBase, HardwareData, Part, SolvedDesign};
+use stave_model::mechanism::{DriveValue, Mechanism, MechanismEntry};
+use stave_model::solved::{
+    Body, BodyCarrier, Hardware, HardwareBase, MemberShape, Part, SolvedDesign, WorldBox,
+};
 pub use stave_scene::{
     BuildOptions, Extent, Highlight, Item, MotionRange, Posed, SceneEntry, SceneGraph,
 };
@@ -166,34 +170,17 @@ pub fn describe(design: &SolvedDesign, item: Item) -> Option<Description> {
                 HardwareBase::Hinge => "Hinge",
                 HardwareBase::Pull => "Pull",
             };
-            let shape = |envelope: &Envelope| match *envelope {
-                Envelope::Box {
-                    length,
-                    width,
-                    thickness,
-                } => format!("box {}", size_text(length, width, thickness)),
-                // A hinge's cup is sunk into the door; everything else
-                // stands off its face.
-                Envelope::Cylinder { diameter, length } => format!(
-                    "cylinder {} mm across, {} mm {}",
-                    millimetres(diameter),
-                    millimetres(length),
-                    if hardware.base == HardwareBase::Hinge {
-                        "deep"
-                    } else {
-                        "long"
-                    }
-                ),
-            };
-            let (moving_label, fixed_label) = match hardware.base {
-                HardwareBase::Slide => ("Drawer member", "Cabinet member"),
-                HardwareBase::Hinge if hardware.is_butt_hinge() => ("Leaf", "Fixed leaf"),
-                HardwareBase::Hinge => ("Cup", "Plate"),
-                HardwareBase::Pull => ("Envelope", "Fixed member"),
-            };
             let piece = design
                 .part(hardware.piece)
                 .map_or_else(|| "?".to_owned(), |p| p.name.clone());
+            let members = hardware.members.iter().map(|member| Row {
+                label: "Member",
+                value: member_text(design, hardware, member),
+            });
+            let mechanism = hardware.own_mechanism.as_ref().map(|mechanism| Row {
+                label: "Mechanism",
+                value: mechanism_text(mechanism),
+            });
             Some(Description {
                 name: hardware.name.clone(),
                 kind,
@@ -206,38 +193,10 @@ pub fn describe(design: &SolvedDesign, item: Item) -> Option<Description> {
                         label: "Mounted on",
                         value: format!("{piece}, {} face", hardware.mount_face.word()),
                     },
-                    Row {
-                        label: moving_label,
-                        value: shape(&hardware.envelope),
-                    },
                 ]
                 .into_iter()
-                .chain(hardware.fixed.as_ref().map(|member| Row {
-                    label: fixed_label,
-                    value: if hardware.is_butt_hinge() {
-                        format!(
-                            "{}, housed in {}",
-                            shape(&member.envelope),
-                            match hardware.data {
-                                HardwareData::ButtHinge { on, .. } => design
-                                    .part(on)
-                                    .map_or_else(|| "?".to_owned(), |p| p.name.clone()),
-                                _ => "?".to_owned(),
-                            }
-                        )
-                    } else {
-                        format!("{}, fixed to the carcass", shape(&member.envelope))
-                    },
-                }))
-                .chain(hardware.mechanism.as_ref().map(|mechanism| Row {
-                    label: "Mechanism",
-                    value: format!(
-                        "a four-bar linkage: an arm on the plate, two links ({} mm and {} mm, pin to pin) and the boss in the cup; opens {}",
-                        millimetres(link_length(&mechanism.linkage, 0)),
-                        millimetres(link_length(&mechanism.linkage, 1)),
-                        mechanism.linkage.opening_angle()
-                    ),
-                }))
+                .chain(members)
+                .chain(mechanism)
                 .chain([Row {
                     label: "Assembly",
                     value: assembly_path(design, hardware.assembly),
@@ -248,25 +207,129 @@ pub fn describe(design: &SolvedDesign, item: Item) -> Option<Description> {
     }
 }
 
-/// The length of one of a linkage's links, pin to pin, to the nearest
-/// nanometre (the integer square root of its squared length).
-fn link_length(linkage: &stave_model::solved::Linkage, index: usize) -> Length {
-    let Some(link) = linkage.links().get(index) else {
-        return Length::ZERO;
+/// `true` when `inner` lies inside `outer`.
+fn within(inner: &WorldBox, outer: &WorldBox) -> bool {
+    Axis::ALL.into_iter().all(|axis| {
+        outer.min().get(axis) <= inner.min().get(axis)
+            && inner.max().get(axis) <= outer.max().get(axis)
+    })
+}
+
+/// One member of a piece of hardware in words: its name, its shape, and
+/// what holds it: "fixed leaf, box 40 × 12 × 1.5 mm, housed in back".
+fn member_text(design: &SolvedDesign, hardware: &Hardware, member: &Body) -> String {
+    let bounds = member.bounds();
+    // The part that carries it, and whether it sits inside that part's
+    // wood (a cup in its bore, a leaf in its mortise).
+    let carrier = match member.carrier {
+        BodyCarrier::Part(part) => design.part(part),
+        BodyCarrier::Region(_) | BodyCarrier::Link(_) => None,
     };
-    let dx = i128::from(link.coupler.x.nm()).saturating_sub(i128::from(link.ground.x.nm()));
-    let dy = i128::from(link.coupler.y.nm()).saturating_sub(i128::from(link.ground.y.nm()));
-    let square = dx.saturating_mul(dx).saturating_add(dy.saturating_mul(dy));
-    // Newton's method from above.
-    let mut root = square.max(1);
-    loop {
-        let next = root.saturating_add(square / root) / 2;
-        if next >= root {
-            break;
+    let sunk = carrier.is_some_and(|part| within(&bounds, &part.cut_box()));
+    let shape = match member.shapes() {
+        [
+            MemberShape::Cylinder {
+                diameter,
+                start,
+                end,
+                ..
+            },
+        ] => format!(
+            "cylinder {} mm across, {} mm {}",
+            millimetres(*diameter),
+            millimetres(Length::from_nm(end.nm().saturating_sub(start.nm()))),
+            if sunk { "deep" } else { "long" }
+        ),
+        [MemberShape::Bar { thickness, .. }] => {
+            format!("bar {} mm thick", millimetres(*thickness))
         }
-        root = next;
-    }
-    Length::from_nm(i64::try_from(root).unwrap_or(i64::MAX))
+        [MemberShape::Prism { .. }] => "outline".to_owned(),
+        [MemberShape::Box(_)] | [] => {
+            let mut sizes = Axis::ALL.map(|axis| bounds.size(axis));
+            sizes.sort_unstable_by(|a, b| b.cmp(a));
+            let [length, width, thickness] = sizes;
+            format!("box {}", size_text(length, width, thickness))
+        }
+        [_, _, ..] => {
+            let mut sizes = Axis::ALL.map(|axis| bounds.size(axis));
+            sizes.sort_unstable_by(|a, b| b.cmp(a));
+            let [length, width, thickness] = sizes;
+            format!(
+                "{} shapes within {}",
+                member.shapes().len(),
+                size_text(length, width, thickness)
+            )
+        }
+    };
+    let held = match member.carrier {
+        BodyCarrier::Part(part) if part == hardware.piece => String::new(),
+        BodyCarrier::Part(part) => {
+            let name = design
+                .part(part)
+                .map_or_else(|| "?".to_owned(), |p| p.name.clone());
+            if sunk {
+                format!(", housed in {name}")
+            } else {
+                format!(", fixed to {name}")
+            }
+        }
+        BodyCarrier::Region(region) => {
+            let name = design
+                .regions
+                .get(region.index())
+                .map_or_else(|| "?".to_owned(), |r| r.name.clone());
+            format!(", fixed in {name}")
+        }
+        BodyCarrier::Link(_) => ", moved by the mechanism".to_owned(),
+    };
+    format!("{}, {shape}{held}", member.name.replace('_', " "))
+}
+
+/// A piece of hardware's own mechanism in words: what it is made of and
+/// how far it moves: "4 pivots; turns up to 110deg".
+fn mechanism_text(mechanism: &Mechanism) -> String {
+    let count = |test: fn(&MechanismEntry) -> bool, one: &str, many: &str| {
+        let found = mechanism
+            .entries()
+            .iter()
+            .filter(|entry| test(entry))
+            .count();
+        match found {
+            0 => None,
+            1 => Some(format!("1 {one}")),
+            found => Some(format!("{found} {many}")),
+        }
+    };
+    let parts: Vec<String> = [
+        count(
+            |e| matches!(e, MechanismEntry::Pivot { .. }),
+            "pivot",
+            "pivots",
+        ),
+        count(
+            |e| matches!(e, MechanismEntry::Slot { .. }),
+            "slot",
+            "slots",
+        ),
+        count(
+            |e| matches!(e, MechanismEntry::Rail { .. }),
+            "rail",
+            "rails",
+        ),
+        count(
+            |e| matches!(e, MechanismEntry::Couple { .. }),
+            "couple",
+            "couples",
+        ),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    let reach = match mechanism.drive().extent() {
+        DriveValue::Turn(angle) => format!("turns up to {angle}"),
+        DriveValue::Travel(length) => format!("travels up to {} mm", millimetres(length)),
+    };
+    format!("{}; {reach}", parts.join(", "))
 }
 
 /// A diagnostic as rows for a list.

@@ -10,9 +10,8 @@ use std::path::{Path, PathBuf};
 use common::{extent, mm, part, ranges};
 use stave_lang::placement::{Axis, Direction, Face, PartAxis};
 use stave_lang::{Code, Severity, render_diagnostics};
-use stave_model::solved::{
-    Contact, CutKind, CutPlace, Depth, End, HardwareData, Motion, PartOrigin, Shape,
-};
+use stave_model::mechanism::{DriveValue, MotionShape};
+use stave_model::solved::{Contact, CutKind, CutPlace, Depth, End, PartOrigin, RoleValue, Shape};
 
 fn workspace() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -400,11 +399,12 @@ fn the_clothing_cabinet_is_where_the_design_says() {
     // (19).
     let slide = hardware("drawer[bottom].slides[left]");
     assert_eq!(slide.mount_face, Face::Left);
+    let drawer_member = common::member_bounds(slide, "drawer_member");
     assert_eq!(
-        (slide.bounds.min().across, slide.bounds.max().across),
+        (drawer_member.min().across, drawer_member.max().across),
         (mm("25.35"), mm("31.7"))
     );
-    let cabinet_member = slide.fixed.unwrap().bounds;
+    let cabinet_member = common::member_bounds(slide, "cabinet_member");
     assert_eq!(
         (cabinet_member.min().across, cabinet_member.max().across),
         (mm("19"), mm("25.35"))
@@ -414,20 +414,21 @@ fn the_clothing_cabinet_is_where_the_design_says() {
     // at 1; 100 above the door's bottom (530).
     let hinge = hardware("door_l.hinges[lower]");
     assert_eq!(hinge.mount_face, Face::Back);
+    let cup = common::member_bounds(hinge, "cup");
     assert_eq!(
         (
-            hinge.bounds.min().up,
-            hinge.bounds.min().across,
-            hinge.bounds.max().across,
-            hinge.bounds.min().deep,
-            hinge.bounds.max().deep
+            cup.min().up,
+            cup.min().across,
+            cup.max().across,
+            cup.min().deep,
+            cup.max().deep
         ),
         (mm("630"), mm("6"), mm("41"), mm("-12.8"), mm("0"))
     );
     // Its plate (50 x 36 x 11) on the inside face of side_l (19), centred on
     // the cup (647.5) and on the 37mm screw line back from side_l's front:
     // never in side_l (across 0..19).
-    let plate = hinge.fixed.unwrap().bounds;
+    let plate = common::member_bounds(hinge, "plate");
     assert_eq!(
         (
             plate.min().across,
@@ -448,56 +449,50 @@ fn the_clothing_cabinet_is_where_the_design_says() {
     );
     let side_r_id = side_r.id;
     let mirrored_hinge = hardware("door_r.hinges[upper]");
-    let mirrored_plate = mirrored_hinge.fixed.unwrap().bounds;
+    let mirrored_plate = common::member_bounds(mirrored_hinge, "plate");
     assert_eq!(
         (mirrored_plate.min().across, mirrored_plate.max().across),
         (mm("870"), mm("881"))
     );
-    assert!(
-        matches!(mirrored_hinge.data, HardwareData::Hinge { on, .. } if on == side_r_id),
+    assert_eq!(
+        common::role(mirrored_hinge, "on"),
+        Some(RoleValue::Part(side_r_id)),
         "re-bound to side_r"
     );
-    let knob = hardware("door_l.handle");
-    assert_eq!(
-        (knob.bounds.min().deep, knob.bounds.min().up),
-        (mm("-49"), mm("1091.75"))
-    );
+    let knob = common::member_bounds(hardware("door_l.handle"), "knob");
+    assert_eq!((knob.min().deep, knob.min().up), (mm("-49"), mm("1091.75")));
 
     // Motions.
     let assembly = |name: &str| design.assemblies.iter().find(|a| a.name == name).unwrap();
-    // The doors move on their cup hinges' linkage, in the plane across
-    // the hinge edge at the door's front face (across 1, deep -19).
-    match assembly("door_l").motion {
-        Some(Motion::Linkage { linkage }) => {
-            let frame = linkage.frame();
-            assert_eq!(
-                (frame.axis(), frame.origin().across, frame.origin().deep),
-                (Axis::Up, mm("1"), mm("-19"))
-            );
-            assert_eq!(
-                (frame.free_side(), frame.swing_toward()),
-                (Direction::Right, Direction::Front)
-            );
-            assert_eq!(
-                linkage.opening_angle(),
-                stave_lang::units::Angle::from_deg(110)
-            );
-        }
-        other => panic!("door_l moves on a linkage, found {other:?}"),
-    }
-    match assembly("door_r").motion {
-        Some(Motion::Linkage { linkage }) => assert_eq!(
-            (linkage.frame().origin().across, linkage.frame().free_side()),
-            (mm("899"), Direction::Left)
-        ),
-        other => panic!("door_r moves on a linkage, found {other:?}"),
-    }
+    // The doors move on their cup hinges' mechanism, in the kind's frame:
+    // the plane across the hinge edge through the cup's centre on the
+    // stile's back face (across 23.5, deep 0), `across` toward the middle
+    // of the door and `depth` out of its front.
+    let mechanism = |name: &str| assembly(name).mechanism.as_ref().unwrap();
+    let frame = mechanism("door_l").frame();
+    assert_eq!(
+        (frame.axis(), frame.origin().across, frame.origin().deep),
+        (Axis::Up, mm("23.5"), mm("0"))
+    );
+    assert_eq!(
+        (frame.across(), frame.depth()),
+        (Direction::Right, Direction::Front)
+    );
+    assert_eq!(
+        mechanism("door_l").drive().extent(),
+        DriveValue::Turn(stave_lang::units::Angle::from_deg(110))
+    );
+    let mirrored = mechanism("door_r").frame();
+    assert_eq!(
+        (mirrored.origin().across, mirrored.across()),
+        (mm("876.5"), Direction::Left)
+    );
     assert!(matches!(
-        assembly("drawer[top]").motion,
-        Some(Motion::Travel {
+        mechanism("drawer[top]").shape(),
+        MotionShape::Travel {
             toward: Direction::Front,
             ..
-        })
+        }
     ));
 
     // Joints and cuts.
@@ -563,7 +558,7 @@ fn the_clothing_cabinet_is_where_the_design_says() {
 /// 5mm).
 #[test]
 fn the_cabinet_doors_move_on_their_hinges_linkage() {
-    use stave_geom::linkage::LinkagePath;
+    use stave_geom::mechanism::MechanismPath;
     let opened = stave_app::open(&workspace().join("examples/clothing_cabinet")).unwrap();
     let design = common::design(&opened);
     let door = design
@@ -571,10 +566,8 @@ fn the_cabinet_doors_move_on_their_hinges_linkage() {
         .iter()
         .find(|a| a.name == "door_l")
         .unwrap();
-    let Some(Motion::Linkage { linkage }) = door.motion else {
-        panic!("door_l moves on a linkage");
-    };
-    let path = LinkagePath::new(&linkage);
+    let path = MechanismPath::new(door.mechanism.as_ref().expect("door_l moves")).unwrap();
+    let moving = path.moving();
     // The stile's front corner at its hinge edge: across 1, deep -19.
     let corner = glam::DVec3::new(1e6, 647.5e6, -19e6);
     let expected = [
@@ -586,7 +579,7 @@ fn the_cabinet_doors_move_on_their_hinges_linkage() {
     ];
     for (degrees, across, deep) in expected {
         let theta = f64::from(degrees).to_radians();
-        let moved = path.coupler(theta).unwrap().transform_point3(corner);
+        let moved = path.matrix(moving, theta).unwrap().transform_point3(corner);
         let (x, z) = (moved.x / 1e6, moved.z / 1e6);
         assert!(
             (x - across).abs() < 0.02 && (z - deep).abs() < 0.02,
@@ -594,5 +587,5 @@ fn the_cabinet_doors_move_on_their_hinges_linkage() {
         );
     }
     // Closed is exact: no float is involved at 0deg.
-    assert_eq!(path.coupler(0.0), Some(glam::DMat4::IDENTITY));
+    assert_eq!(path.matrix(moving, 0.0), Some(glam::DMat4::IDENTITY));
 }

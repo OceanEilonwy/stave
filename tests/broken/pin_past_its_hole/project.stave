@@ -21,8 +21,8 @@ kind peg_joint : joint {
     on:    contact(piece, into)
     shape: cylinder(diameter: diameter, depth: -depth..depth + 5mm)
   }
-  cut crossing(piece, peg) { drill(diameter: diameter, depth: depth) }
-  cut crossing(into, peg) { drill(diameter: diameter, depth: depth) }
+  cut peg_hole: crossing(piece, peg) { drill(diameter: diameter, depth: depth) }
+  cut socket: crossing(into, peg) { drill(diameter: diameter, depth: depth) }
 }
 
 part side : oak_19 {

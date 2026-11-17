@@ -8,4 +8,4 @@ error[motion]: lid.panel hits back when lid is opened past 109.9deg
 64 | assembly lid : Lid {
    |          ^^^
    = note: the hinges open to 180deg
-   = help: open lid no further than 109.9deg (a smaller opening_angle), or move back out of its way
+   = help: open lid no further than 109.9deg (give its hardware's kind a smaller range), or move back out of its way

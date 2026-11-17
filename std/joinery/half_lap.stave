@@ -11,10 +11,10 @@ kind half_lap : joint {
 
   insert: [push(piece, along: thickness)]
 
-  cut crossing(into, piece) {
+  cut lap: crossing(into, piece) {
     notch(depth: into.thickness / 2)
   }
-  cut crossing(piece, into, opposite: true) {
+  cut mating_lap: crossing(piece, into, opposite: true) {
     notch(depth: piece.thickness / 2)
   }
 

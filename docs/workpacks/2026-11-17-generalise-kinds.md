@@ -78,6 +78,20 @@ Each one is green and committable on its own.
 Until H1 to H3 land, stages 1 to 7 keep the old fields filled, so those
 crates compile and behave as now without being touched.
 
+**Status.** H1, H2 and H3 landed with stage 8 (the other lanes had
+finished, and stage 8 took them over). `stave-app` reads a hardware's
+`members`, `roles`, `own_mechanism` and its assembly's `mechanism`; focus
+numbers a kind's members with a body by their own names and doc comments,
+anchors each number on that member's nodes, and heads the panel with the
+base's words ("How this hinge works") over the kind's doc comment. `stave
+dump` prints each member on a part or region by name, the kind's entries
+in its own order, and each assembly's motion from its mechanism (a turn
+about one pin and a travel along one rail in world terms as before; any
+other mechanism as its plane and entries). The slide and butt-hinge lines
+and the four plain dumps are unchanged; the cup hinge's and the pulls'
+lines changed, as the commit that made the change lists. H4 is still a
+proposal.
+
 ---
 
 ## Stage 0. Safety net: the Python oracles as Rust tests (K) — size M
@@ -743,6 +757,22 @@ reading source: stage 3's `a_cup_sits_in_its_bore_and_nowhere_else` and
 entry needs its reason, and review 3 should read the list.
 
 **Done when** the gate is green and the test passes.
+
+**Status: done.** Everything listed above and under "Deleted by the end"
+is gone (`Pivot` lives on as `stave_model::mechanism::TurnLine`, the line
+of the new `MotionShape::Turn`; `stave-geom` still needs `stave-schema`
+for `Grain`). The test scans eight crates (`stave-workplan` doesn't exist
+yet) and also reads each hardware kind's fields; its allow-list is
+`length`, `diameter`, `travel`, `bar`, `dowel`, `envelope`, `socket`,
+`centres`, `projection` and `clearance`, each with its reason, and an
+entry that is no longer a word of `std/` fails it. `butt` is left off the
+fixed list (it is `Contact::Butt`, the joint contact; `butt_hinge` is
+still a hit). Making it pass removed the last special cases: help lines
+that named `dado`, `cup`, `plate`, `ari_tsugi`, `glued_edge`,
+`tongue_and_groove` and `opening_angle`, and the built-in default edge
+joint (`DEFAULT_BOARD_JOINT = "glued_edge"`), which is now
+`std:joinery`'s `library { boards: joined(by: glued_edge) }` (grammar,
+"Boards").
 
 ## Stage 9. Models checked against the text (E) — size M
 

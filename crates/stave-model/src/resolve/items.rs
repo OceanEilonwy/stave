@@ -350,7 +350,7 @@ impl<'a> Resolver<'a> {
             }
             (ast::ItemKind::Library(library), false) => {
                 let title = self.text(&cx, &library.title).literal();
-                let (mut about, mut license) = (None, None);
+                let (mut about, mut license, mut boards) = (None, None, None);
                 if let Some(body) = &library.body {
                     let found = self.field_table(
                         &cx,
@@ -365,6 +365,9 @@ impl<'a> Resolver<'a> {
                     license = found
                         .get("license")
                         .and_then(|f| self.plain_text(&cx, &f.value, "license"));
+                    boards = found
+                        .get("boards")
+                        .map(|f| self.field_value(&cx, f, fields::LIBRARY));
                 }
                 (
                     None,
@@ -372,6 +375,8 @@ impl<'a> Resolver<'a> {
                         title,
                         about,
                         license,
+                        boards,
+                        file,
                     }),
                 )
             }

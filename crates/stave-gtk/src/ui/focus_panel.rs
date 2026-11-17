@@ -1,7 +1,7 @@
 //! Focus mode's side panel (JointFocus.dc.html, Hinge.dc.html): for a
 //! joint, its name and description, Goes in / Receives it / the cut / Fit,
 //! the X-ray, Tint cut faces and Fade other parts toggles, and its insert
-//! steps as written with a link to the kind; for hardware, "How a cup
+//! steps as written with a link to the kind; for hardware, "How this
 //! hinge works", its numbered members and Opens to / Closest to the side /
 //! Swing check. Everything it shows comes from `stave_app::focus::Focus`;
 //! this module only lays it out. The step player, the swing slider and the
@@ -267,7 +267,7 @@ impl FocusPanel {
                 .valign(gtk::Align::Start)
                 .build();
             line.append(&number);
-            let name = member_title(member.name);
+            let name = member_title(&member.name);
             let text = gtk::Label::builder()
                 .use_markup(true)
                 .label(if member.caption.is_empty() {

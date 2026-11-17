@@ -26,7 +26,7 @@ kind chigiri : joint {
   // Each board's half of the socket: the key's waist on the seam, its full
   // width half its length away. `across` runs from the reference edge, so
   // the seam is at piece.width on `piece` and at 0 on `into`.
-  cut side(piece, normal: thickness, from: into) {
+  cut socket: side(piece, normal: thickness, from: into) {
     outline(marks: [
       mark(along: piece.length / 2 - waist / 2, across: piece.width),
       mark(along: piece.length / 2 + waist / 2, across: piece.width),
@@ -34,7 +34,7 @@ kind chigiri : joint {
       mark(along: piece.length / 2 - key_width / 2, across: piece.width - key_length / 2)
     ], depth: key_thickness)
   }
-  cut side(into, normal: thickness, from: piece) {
+  cut mating_socket: side(into, normal: thickness, from: piece) {
     outline(marks: [
       mark(along: into.length / 2 - waist / 2, across: 0mm),
       mark(along: into.length / 2 + waist / 2, across: 0mm),
@@ -45,7 +45,7 @@ kind chigiri : joint {
 
   // The key: a block with a vee cut from each long side, which leaves the
   // butterfly.
-  cut side(key, normal: thickness, from: piece) {
+  cut waist: side(key, normal: thickness, from: piece) {
     outline(marks: [
       mark(along: 0mm, across: 0mm),
       mark(along: key_length, across: 0mm),

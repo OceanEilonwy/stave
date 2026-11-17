@@ -293,7 +293,7 @@ impl Resolver<'_> {
                 ),
                 cx.file,
                 item.span,
-                "only a joint's members say what they are (member pin : dowel_pin(...)); list a hardware kind's fasteners with uses:",
+                "only a joint's members say what they are (member name : kind(...)); list a hardware kind's fasteners with uses:",
             );
             return None;
         }
@@ -360,7 +360,7 @@ impl Resolver<'_> {
                 format!("'with' of member '{member}' needs a role or a member"),
                 cx.file,
                 field.value.span,
-                "name the part it moves with (with: piece) or the member it rides on (with: plate)",
+                "name the role whose part it moves with (with: piece) or another member it rides on",
             );
             return None;
         };

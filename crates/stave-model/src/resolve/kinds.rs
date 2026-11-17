@@ -7,9 +7,7 @@ use stave_lang::ast::{self, ExprKind, Span};
 use stave_lang::placement::PartAxis;
 use stave_lang::{Code, Diagnostic, Label};
 use stave_schema::fields::{self, Requirement};
-use stave_schema::kinds::{
-    JOINT_DEFAULT_ROLES, MemberName, RESERVED_JOINT_SETTINGS, RoleType, base, members_of,
-};
+use stave_schema::kinds::{JOINT_DEFAULT_ROLES, RESERVED_JOINT_SETTINGS, RoleType, base};
 use stave_schema::operations::{ArgumentDefault, MARK, Selector, cut_operation, operation};
 use stave_schema::placement::{AssemblyStepKind, EXTEND, MadePartTerm};
 use stave_schema::recipes::{CuttingStep, MarkingStep, NeedKind};
@@ -21,9 +19,8 @@ use super::items::kind_ids;
 use super::{Body, Cx, Origin, Resolver};
 use crate::defs::{
     CutDef, CutName, CutStepDef, DefId, ExtendDef, HardwareKindDef, JointKindDef, JointMember,
-    KindDef, MadePartDef, MadeTerm, MadeTermKind, MarkStepDef, MemberDef, Need, OperationDef,
-    ParamDef, RExpr, RExprKind, RecipeDef, RequireDef, RoleDef, SelectorDef, Setting, StepDef,
-    Symbol, UseDef, Word,
+    KindDef, MadePartDef, MadeTerm, MadeTermKind, MarkStepDef, Need, OperationDef, ParamDef, RExpr,
+    RExprKind, RecipeDef, RequireDef, RoleDef, SelectorDef, Setting, StepDef, Symbol, UseDef, Word,
 };
 use crate::ids::KindId;
 use crate::types::Ty;
@@ -88,7 +85,6 @@ pub(crate) fn made_parts(syntax: &ast::Kind) -> Vec<&ast::MadePart> {
         .collect()
 }
 
-/// Words joined for a sentence: `a, b and c`.
 /// `true` for `cut crossing(role, member) { ... }` where `member` is one
 /// of the kind's members with a body.
 fn is_member_cut(cut: &ast::Cut, members: &[&str]) -> bool {
@@ -102,14 +98,6 @@ fn is_member_cut(cut: &ast::Cut, members: &[&str]) -> bool {
             .is_some_and(|arg| {
                 matches!(&arg.value.kind, ExprKind::Name(name) if members.contains(&name.as_str()))
             })
-}
-
-fn and_list(words: &[&str]) -> String {
-    match words {
-        [] => String::new(),
-        [one] => (*one).to_owned(),
-        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
-    }
 }
 
 /// A list expression's elements, or the expression itself.
@@ -181,6 +169,7 @@ impl Resolver<'_> {
         let mut adjusts: Vec<&ast::Adjust> = Vec::new();
         let mut hardware_uses = JointKindDef::default();
         let mut joint_cuts: Vec<&ast::Cut> = Vec::new();
+        self.check_cut_names(&cx, &syntax.body.entries);
         for entry in &syntax.body.entries {
             match entry {
                 ast::KindEntry::Param(_) => {}
@@ -402,12 +391,12 @@ impl Resolver<'_> {
                 }
             }
         }
-        let members = self.lower_members(&cx, base_kind, &written_members);
-        let bodies = if members_of(base_kind).is_empty() && base_kind != BaseKind::Joint {
+        self.check_members(&cx, base_kind, &written_members);
+        let bodies = if base_kind.is_mounted_hardware() || base_kind == BaseKind::Joint {
+            self.lower_bodies(&cx, base_kind, &roles, &written_members)
+        } else {
             // Already reported: this kind has no members at all.
             None
-        } else {
-            self.lower_bodies(&cx, base_kind, &roles, &written_members)
         };
         if let Some(joint) = &mut joint {
             let body_names: Vec<&str> = written_members
@@ -451,7 +440,6 @@ impl Resolver<'_> {
             requires,
             fields: kind_fields,
             joint,
-            members,
             bodies: bodies.unwrap_or_default(),
             mechanism,
             hardware,
@@ -572,17 +560,15 @@ impl Resolver<'_> {
         self.lower_mechanism(cx, syntax.name.as_str(), bodies?, first)
     }
 
-    /// A hardware kind's `member` entries: each a member word of its base,
-    /// once.
-    fn lower_members(
+    /// A kind's `member` entries: each named once; only a slide, hinge or
+    /// pull kind has members, and every member has a body (its shapes are
+    /// lowered with the bodies).
+    fn check_members(
         &mut self,
         cx: &Cx,
         base_kind: BaseKind,
         written: &[&ast::Documented<ast::KindMember>],
-    ) -> Vec<MemberDef> {
-        let allowed = members_of(base_kind);
-        let what = format!("a {} kind", base_kind.word());
-        let mut members: Vec<MemberDef> = Vec::new();
+    ) {
         let mut seen: BTreeMap<&str, Span> = BTreeMap::new();
         for member in written {
             let word = member.node.name.as_str();
@@ -600,52 +586,33 @@ impl Resolver<'_> {
                 continue;
             }
             seen.insert(word, span);
-            let Some(name) = MemberName::from_word(word).filter(|name| allowed.contains(name))
-            else {
-                if member.node.body.is_some()
-                    && (!allowed.is_empty() || base_kind == BaseKind::Joint)
-                {
-                    // A member with a body may have any name; it joins the
-                    // viewer's list only under one of its base's words.
-                    continue;
-                }
-                if base_kind == BaseKind::Joint {
-                    self.error_help(
-                        Code::MissingField,
-                        format!("member '{word}' is missing 'shape'"),
-                        cx.file,
-                        span,
-                        "a joint's member is placed and checked: member pin : dowel_pin(...) { on: contact(piece, into), shape: cylinder(...) }",
-                    );
-                } else if allowed.is_empty() {
-                    self.error_help(
-                        Code::UnknownField,
-                        format!("{what} has no member '{word}'"),
-                        cx.file,
-                        span,
-                        "only joint, hinge, slide and pull kinds name their members",
-                    );
+            if !base_kind.is_mounted_hardware() && base_kind != BaseKind::Joint {
+                self.error_help(
+                    Code::UnknownField,
+                    format!("a {} kind has no member '{word}'", base_kind.word()),
+                    cx.file,
+                    span,
+                    "only joint, hinge, slide and pull kinds name their members",
+                );
+            } else if member.node.body.is_none() {
+                let help = if base_kind == BaseKind::Joint {
+                    format!(
+                        "a joint's member is placed and checked: member {word} : ...(...) {{ on: contact(piece, into), shape: cylinder(...) }}"
+                    )
                 } else {
-                    let words: Vec<&str> = allowed.iter().map(|m| m.word()).collect();
-                    self.unknown(
-                        Code::UnknownField,
-                        format!("{what} has no member '{word}'"),
-                        cx.file,
-                        span,
-                        word,
-                        words.iter().copied(),
-                        format!("{what}'s members are {}", and_list(&words)),
-                    );
-                }
-                continue;
-            };
-            members.push(MemberDef {
-                name,
-                span,
-                docs: member.docs.clone(),
-            });
+                    format!(
+                        "give it what it is made of: member {word} {{ shape: box(along: ..., across: ..., depth: ...) }}"
+                    )
+                };
+                self.error_help(
+                    Code::MissingField,
+                    format!("member '{word}' is missing 'shape'"),
+                    cx.file,
+                    span,
+                    help,
+                );
+            }
         }
-        members
     }
 
     /// Duplicate role, param and made-part names; reserved setting names;
@@ -1110,7 +1077,10 @@ impl Resolver<'_> {
         let operations = self.lower_operations(cx, selector.selector, &cut.operations);
         let name = match &cut.name {
             Some(name) => Some(CutName::new(name.as_str())?),
-            None => None,
+            None => {
+                self.warn_unnamed_cut(cx, cut);
+                None
+            }
         };
         Some(CutDef {
             name,
@@ -1118,6 +1088,68 @@ impl Resolver<'_> {
             operations,
             span: cut.span,
         })
+    }
+
+    /// `error[duplicate-name]` for two cuts of one kind with the same name
+    /// (grammar, "Named cuts"): a cut's name is how messages and patches
+    /// tell its cuts apart, so each is written once per kind.
+    fn check_cut_names(&mut self, cx: &Cx, entries: &[ast::KindEntry]) {
+        let mut seen: BTreeMap<&str, Span> = BTreeMap::new();
+        for entry in entries {
+            let ast::KindEntry::Cut(cut) = entry else {
+                continue;
+            };
+            let Some(name) = &cut.name else {
+                continue;
+            };
+            match seen.get(name.as_str()) {
+                Some(first) => {
+                    let word = name.as_str();
+                    self.report(
+                        Diagnostic::error(
+                            Code::DuplicateName,
+                            format!("'{word}' is declared twice"),
+                            Label::new(cx.file, name.span()),
+                        )
+                        .with_label(Label::with_message(cx.file, *first, "first written here"))
+                        .with_help(format!(
+                            "give each cut of a kind its own name, as in {word} and mating_{word}"
+                        )),
+                    );
+                }
+                None => {
+                    seen.insert(name.as_str(), name.span());
+                }
+            }
+        }
+    }
+
+    /// `warning[unnamed-cut]` for a joint or hardware kind's `cut` with no
+    /// name (grammar, "Named cuts"). Kinds are lowered once each, used or
+    /// not, so every unnamed cut is reported once, at its kind.
+    pub(super) fn warn_unnamed_cut(&mut self, cx: &Cx, cut: &ast::Cut) {
+        let mut nouns = cut
+            .operations
+            .iter()
+            .filter_map(|call| CutOperation::from_word(call.head.as_str()))
+            .map(CutOperation::unnamed_noun);
+        let first = nouns.next().unwrap_or("cut");
+        let noun = if nouns.all(|noun| noun == first) {
+            first
+        } else {
+            "cut"
+        };
+        let head = cut.selector.head.as_str();
+        self.report(
+            Diagnostic::warning(
+                Code::UnnamedCut,
+                format!("this cut has no name, so messages will call it \"a {noun}\""),
+                Label::new(cx.file, cut.selector.span),
+            )
+            .with_help(format!(
+                "name it after what it is, as in cut trench: {head}(...) {{ ... }}"
+            )),
+        );
     }
 
     /// The operations of a `cut` block, each checked against the selector

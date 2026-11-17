@@ -136,12 +136,13 @@ pub(crate) fn whereabouts(part: &Part, region: &WorldBox) -> String {
 }
 
 /// A dovetail tail that doesn't fit its socket: the tail's sloped faces go
-/// into the socket's.
+/// into the socket's. Each is called by its cut's name when its kind gives
+/// one.
 fn dovetail(checker: &Checker<'_>, a: PartId, b: PartId, deepest: &Overlap) -> Option<String> {
     let design = checker.design;
     let ends = |part: PartId, other: PartId, socket: bool| {
-        design.part(part).is_some_and(|p| {
-            p.cuts.iter().any(|cut| {
+        design.part(part).and_then(|p| {
+            p.cuts.iter().find(|cut| {
                 let toward = matches!(cut.place, CutPlace::End { toward } if toward == other);
                 let kind = match cut.kind {
                     CutKind::DovetailSocket { .. } => socket,
@@ -159,13 +160,26 @@ fn dovetail(checker: &Checker<'_>, a: PartId, b: PartId, deepest: &Overlap) -> O
             })
         })
     };
-    let (host, guest) = [(a, b), (b, a)]
-        .into_iter()
-        .find(|(host, guest)| ends(*host, *guest, true) && ends(*guest, *host, false))?;
+    let (host, guest, socket, tail) = [(a, b), (b, a)].into_iter().find_map(|(host, guest)| {
+        Some((
+            host,
+            guest,
+            ends(host, guest, true)?,
+            ends(guest, host, false)?,
+        ))
+    })?;
     let (host, guest) = (&design.part(host)?.name, &design.part(guest)?.name);
+    let socket = socket
+        .name
+        .as_ref()
+        .map_or_else(|| "socket".to_owned(), CutName::words);
+    let (tail, short) = match tail.name.as_ref().map(CutName::words) {
+        Some(name) => (name.clone(), name),
+        None => ("dovetail tail".to_owned(), "tail".to_owned()),
+    };
     let depth = length_text(deepest.depth);
     Some(format!(
-        "the sloped faces of the dovetail tail on {guest} go {depth} into the sloped sides of its socket in {host}; cut the tail and the socket with the same neck, depth and angle"
+        "the sloped faces of the {tail} on {guest} go {depth} into the sloped sides of its {socket} in {host}; cut the {short} and the {socket} with the same neck, depth and angle"
     ))
 }
 
@@ -200,16 +214,22 @@ fn cavity(
     let (feature, short) = guest_part
         .cuts
         .iter()
-        .find_map(|c| match (&c.kind, &c.place) {
-            (CutKind::Tenon { .. }, CutPlace::End { toward }) if *toward == host => Some((
-                format!("the tenon on {}", guest_part.name),
-                "the tenon".to_owned(),
-            )),
-            (CutKind::Spigot { .. }, CutPlace::End { toward }) if *toward == host => Some((
-                format!("the round tenon on {}", guest_part.name),
-                "the round tenon".to_owned(),
-            )),
-            _ => None,
+        .find_map(|c| {
+            let unnamed = match (&c.kind, &c.place) {
+                (CutKind::Tenon { .. }, CutPlace::End { toward }) if *toward == host => "tenon",
+                (CutKind::Spigot { .. }, CutPlace::End { toward }) if *toward == host => {
+                    "round tenon"
+                }
+                _ => return None,
+            };
+            let noun = c
+                .name
+                .as_ref()
+                .map_or_else(|| unnamed.to_owned(), CutName::words);
+            Some((
+                format!("the {noun} on {}", guest_part.name),
+                format!("the {noun}"),
+            ))
         })
         .unwrap_or_else(|| (guest_part.name.clone(), guest_part.name.clone()));
     let normal = host_part.pose.orientation.direction(cut.face.axis).axis();
@@ -327,19 +347,47 @@ fn joint_member(checker: &Checker<'_>, a: Item, b: Item, deepest: &Overlap) -> O
 }
 
 /// What a beginner calls the hole a cut makes: the name its kind gives
-/// the cut (`cut dado: ...`), otherwise the operation's word.
-fn cavity_noun(operation: CutOperation, name: Option<&CutName>) -> &str {
-    let named = name.map(CutName::as_str);
-    match operation {
-        CutOperation::Pocket => named.unwrap_or("mortise"),
-        CutOperation::Drill => named.unwrap_or("hole"),
-        CutOperation::Notch => named.unwrap_or("notch"),
-        CutOperation::Slot => named.unwrap_or("slot"),
-        CutOperation::Tenon
-        | CutOperation::Spigot
-        | CutOperation::Round
-        | CutOperation::DovetailSocket
-        | CutOperation::DovetailTail
-        | CutOperation::Outline => "cut",
+/// the cut (`cut dado: ...`), whatever the operation, otherwise the
+/// operation's word ([`CutOperation::unnamed_noun`]).
+fn cavity_noun(operation: CutOperation, name: Option<&CutName>) -> String {
+    name.map_or_else(|| operation.unnamed_noun().to_owned(), CutName::words)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_named_cut_is_called_by_its_name_for_every_operation() {
+        let Some(name) = CutName::new("mating_groove") else {
+            panic!("'mating_groove' is a word");
+        };
+        for operation in CutOperation::ALL {
+            assert_eq!(cavity_noun(operation, Some(&name)), "mating groove");
+        }
+    }
+
+    #[test]
+    fn a_named_tenon_or_dovetail_cut_uses_its_name() {
+        for (operation, word) in [
+            (CutOperation::Tenon, "tenon"),
+            (CutOperation::Spigot, "round_tenon"),
+            (CutOperation::DovetailSocket, "socket"),
+            (CutOperation::DovetailTail, "tail"),
+        ] {
+            let Some(name) = CutName::new(word) else {
+                panic!("'{word}' is a word");
+            };
+            assert_eq!(cavity_noun(operation, Some(&name)), word.replace('_', " "));
+        }
+    }
+
+    #[test]
+    fn an_unnamed_cut_is_called_by_its_operation() {
+        assert_eq!(cavity_noun(CutOperation::Slot, None), "slot");
+        assert_eq!(cavity_noun(CutOperation::Pocket, None), "mortise");
+        assert_eq!(cavity_noun(CutOperation::Drill, None), "hole");
+        assert_eq!(cavity_noun(CutOperation::Notch, None), "notch");
+        assert_eq!(cavity_noun(CutOperation::Tenon, None), "cut");
     }
 }

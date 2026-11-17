@@ -52,21 +52,11 @@
 //! [`Part::drawn_box`] and [`Part::cut_box`] give both in world
 //! coordinates.
 //!
-//! **Hardware frames** work the same way for the envelope: local `length`
-//! runs along the piece's length, local `thickness` stands off the mount
-//! face (outward), local `width` takes the remaining axis. A cylinder's own
-//! axis is the local `thickness`; its diameter spans `length` and `width`.
-//! A hinge's cup and a butt hinge's leaf are the exception: they are sunk
-//! into the mount face, so their `thickness` runs into the piece.
-//!
-//! **Hardware members.** A hinge and a slide each have a member on the
-//! piece, which moves with the piece's assembly ([`Hardware::envelope`]: a
-//! hinge's cup or leaf, a slide's drawer member) and a member fixed to the
-//! carcass, which stays put ([`Hardware::fixed`]: a cup hinge's mounting
-//! plate on the inside face of `on`, a butt hinge's other leaf sunk into
-//! `on`, a slide's cabinet member). A cup hinge also has its mechanism
-//! ([`Hardware::mechanism`]): the arm on the plate and two links, which
-//! move the door on a four-bar [`Linkage`] ([`Motion::Linkage`]).
+//! **Hardware members.** A piece of hardware is its kind's members
+//! ([`Hardware::members`]), each a [`Body`] of world shapes at rest with
+//! what carries it ([`BodyCarrier`]): a part, a region, or its assembly's
+//! mechanism ([`Assembly::mechanism`]), which places every member it moves.
+//! Nothing here knows a kind or a member by name.
 
 use std::fmt;
 
@@ -81,7 +71,6 @@ use std::collections::BTreeMap;
 pub use crate::defs::{BodyId, CutName};
 
 pub use crate::ids::{AssemblyId, HardwareId, JointId, KindId, PartId, RegionId, SceneId};
-pub use crate::linkage::{Branch, Link, Linkage, LinkageError, LinkageFrame, PlanePoint};
 pub use crate::mechanism::{Mechanism, MemberIndex};
 pub use crate::nonempty::NonEmpty;
 
@@ -172,6 +161,17 @@ impl WorldBox {
         } else {
             self.min.get(face.axis())
         }
+    }
+
+    /// The smallest box around both.
+    pub fn union(&self, other: &WorldBox) -> WorldBox {
+        let mut min = self.min;
+        let mut max = self.max;
+        for axis in Axis::ALL {
+            min = min.with(axis, min.get(axis).min(other.min.get(axis)));
+            max = max.with(axis, max.get(axis).max(other.max.get(axis)));
+        }
+        WorldBox { min, max }
     }
 }
 
@@ -1166,50 +1166,6 @@ pub struct Joint {
 // Hardware, assemblies, regions, scenes
 // ---------------------------------------------------------------------------
 
-/// A hardware envelope, exact.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case", tag = "kind")]
-pub enum Envelope {
-    /// A box in the envelope's frame.
-    Box {
-        /// Local length.
-        length: Length,
-        /// Local width.
-        width: Length,
-        /// Local thickness (stand-off).
-        thickness: Length,
-    },
-    /// A cylinder whose axis is the local thickness.
-    Cylinder {
-        /// Diameter (spans local length and width).
-        diameter: Length,
-        /// Length along its axis (stand-off).
-        length: Length,
-    },
-}
-
-impl Envelope {
-    /// The size of the envelope's local box.
-    pub fn size(&self) -> Size3 {
-        match *self {
-            Envelope::Box {
-                length,
-                width,
-                thickness,
-            } => Size3 {
-                length,
-                width,
-                thickness,
-            },
-            Envelope::Cylinder { diameter, length } => Size3 {
-                length: diameter,
-                width: diameter,
-                thickness: length,
-            },
-        }
-    }
-}
-
 /// What kind of mounted hardware.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -1232,56 +1188,6 @@ impl HardwareBase {
             BaseKind::Joint | BaseKind::Fastener | BaseKind::Tool => None,
         }
     }
-}
-
-/// The catalog data of a piece of hardware.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case", tag = "kind")]
-pub enum HardwareData {
-    /// A slide.
-    Slide {
-        /// Closed length.
-        length: Length,
-        /// Gap it needs beside the piece.
-        clearance: Length,
-        /// How far it opens.
-        travel: Length,
-        /// The region it runs in.
-        opening: RegionId,
-    },
-    /// A butt hinge: two leaves on a pin, each housed in a mortise.
-    ButtHinge {
-        /// How far it opens.
-        opening_angle: Angle,
-        /// The part its fixed leaf is housed in.
-        on: PartId,
-    },
-    /// A cup hinge.
-    Hinge {
-        /// How far it opens.
-        opening_angle: Angle,
-        /// Cup diameter.
-        cup_diameter: Length,
-        /// Cup depth.
-        cup_depth: Length,
-        /// Cup inset from the edge.
-        cup_inset: Length,
-        /// The part it is fixed to.
-        on: PartId,
-        /// How far the piece overlays `on`: from the piece's edge nearer
-        /// `on` to the face of `on` the plate is screwed to (negative when
-        /// the edge is short of it).
-        overlay: Length,
-    },
-    /// A pull.
-    Pull {
-        /// Screw centres, for two screws.
-        centres: Option<Length>,
-        /// Diameter of a round pull.
-        diameter: Option<Length>,
-        /// Screw diameter.
-        screw_diameter: Length,
-    },
 }
 
 /// The rest setting of one `adjust` of a piece of hardware (grammar,
@@ -1418,23 +1324,8 @@ pub struct Hardware {
     /// The world face of the piece it is mounted on.
     #[serde(serialize_with = "serialize_face")]
     pub mount_face: Face,
-    /// The member on the piece: the whole of a pull, a hinge's cup (sunk
-    /// into the mount face), a slide's drawer member. It moves with the
-    /// piece's assembly.
-    pub envelope: Envelope,
-    /// Its local origin and frame.
-    pub pose: Pose,
-    /// Its world box.
+    /// The world box around every member at rest.
     pub bounds: WorldBox,
-    /// The member fixed to the carcass, which stays put when the assembly
-    /// moves: a hinge's mounting plate, a slide's cabinet member. `None`
-    /// for pulls.
-    pub fixed: Option<HardwareMember>,
-    /// Catalog data.
-    pub data: HardwareData,
-    /// A cup hinge's mechanism: its arm, links and pins. `None` for every
-    /// other piece of hardware.
-    pub mechanism: Option<CupMechanism>,
     /// A model, when the kind has one.
     pub model: Option<Model>,
     /// The parts and regions it joins, in its kind's role order.
@@ -1610,6 +1501,150 @@ impl Body {
     pub fn shapes(&self) -> &[MemberShape] {
         &self.shapes
     }
+
+    /// The world box around all its shapes, at rest.
+    pub fn bounds(&self) -> WorldBox {
+        let mut shapes = self.shapes.iter().map(MemberShape::bounds);
+        let first = shapes.next().unwrap_or_else(|| {
+            let zero = Point {
+                across: Length::ZERO,
+                up: Length::ZERO,
+                deep: Length::ZERO,
+            };
+            WorldBox::new(zero, zero)
+        });
+        shapes.fold(first, |all, one| all.union(&one))
+    }
+}
+
+impl MemberShape {
+    /// The world box around the shape, at rest: exact for a box, a
+    /// cylinder and a prism; for a bar, its corners rounded outward to the
+    /// nanometre.
+    pub fn bounds(&self) -> WorldBox {
+        // A box from its extent along `axis` and on the two others.
+        let boxed = |axis: Axis, start: Length, end: Length, low: [i64; 2], high: [i64; 2]| {
+            let [first, second] = axis.others();
+            let corner = |along: Length, [a, b]: [i64; 2]| {
+                Point {
+                    across: Length::ZERO,
+                    up: Length::ZERO,
+                    deep: Length::ZERO,
+                }
+                .with(axis, along)
+                .with(first, Length::from_nm(a))
+                .with(second, Length::from_nm(b))
+            };
+            WorldBox::new(corner(start, low), corner(end, high))
+        };
+        match self {
+            MemberShape::Box(bounds) => *bounds,
+            MemberShape::Cylinder {
+                axis,
+                centre: [a, b],
+                diameter,
+                start,
+                end,
+            } => {
+                let radius = diameter.nm() / 2;
+                let rounded = diameter.nm() - radius;
+                boxed(
+                    *axis,
+                    *start,
+                    *end,
+                    [a.nm().saturating_sub(radius), b.nm().saturating_sub(radius)],
+                    [
+                        a.nm().saturating_add(rounded),
+                        b.nm().saturating_add(rounded),
+                    ],
+                )
+            }
+            MemberShape::Prism {
+                axis,
+                points,
+                start,
+                end,
+            } => {
+                let mut low = [i64::MAX; 2];
+                let mut high = [i64::MIN; 2];
+                for [a, b] in points {
+                    for (slot, value) in [(0, a.nm()), (1, b.nm())] {
+                        if let (Some(l), Some(h)) = (low.get_mut(slot), high.get_mut(slot)) {
+                            *l = (*l).min(value);
+                            *h = (*h).max(value);
+                        }
+                    }
+                }
+                if points.is_empty() {
+                    low = [0; 2];
+                    high = [0; 2];
+                }
+                boxed(*axis, *start, *end, low, high)
+            }
+            MemberShape::Bar {
+                axis,
+                from,
+                to,
+                thickness,
+                start,
+                end,
+            } => {
+                // The bar is a rectangle `thickness` wide reaching half its
+                // thickness past each end: each corner lies
+                // `t (|dx| + |dy|) / 2L` past its end's centre on one axis
+                // and `t (|dy| + |dx|) / 2L` on the other (L the bar's
+                // length), so the box grows by that on both, rounded up.
+                let [fa, fb] = from.map(|l| i128::from(l.nm()));
+                let [ta, tb] = to.map(|l| i128::from(l.nm()));
+                let (dx, dy) = (ta.saturating_sub(fa), tb.saturating_sub(fb));
+                let square = dx.saturating_mul(dx).saturating_add(dy.saturating_mul(dy));
+                let thick = i128::from(thickness.nm());
+                let grow = match integer_root(square) {
+                    0 => thick.saturating_add(1) / 2,
+                    length => {
+                        let numerator = thick.saturating_mul(
+                            dx.saturating_abs().saturating_add(dy.saturating_abs()),
+                        );
+                        let denominator = length.saturating_mul(2);
+                        // Rounded up, and up again for the root's floor.
+                        numerator / denominator + 1
+                    }
+                };
+                let narrow = |value: i128| {
+                    i64::try_from(value).unwrap_or(if value < 0 { i64::MIN } else { i64::MAX })
+                };
+                boxed(
+                    *axis,
+                    *start,
+                    *end,
+                    [
+                        narrow(fa.min(ta).saturating_sub(grow)),
+                        narrow(fb.min(tb).saturating_sub(grow)),
+                    ],
+                    [
+                        narrow(fa.max(ta).saturating_add(grow)),
+                        narrow(fb.max(tb).saturating_add(grow)),
+                    ],
+                )
+            }
+        }
+    }
+}
+
+/// The integer square root of a non-negative number, rounded down
+/// (Newton's method from above); zero for zero or less.
+fn integer_root(square: i128) -> i128 {
+    if square <= 0 {
+        return 0;
+    }
+    let mut root = square;
+    loop {
+        let next = root.saturating_add(square / root) / 2;
+        if next >= root {
+            return root;
+        }
+        root = next;
+    }
 }
 
 /// Fasteners a piece of hardware consumes (its kind's `uses:`).
@@ -1685,136 +1720,6 @@ pub enum EntryValue {
     Text(String),
 }
 
-/// The mechanism of a cup hinge: the arm on the mounting plate, and two
-/// links from the arm to the boss in the cup (grammar, "Hardware
-/// placement"). The cup ([`Hardware::envelope`]) moves with the door, the
-/// arm and plate stay put, and each link turns about its pin in the arm as
-/// the linkage moves.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-pub struct CupMechanism {
-    /// The four pins at rest and the range: the same linkage the
-    /// assembly's motion has when this is its first hinge.
-    pub linkage: Linkage,
-    /// The arm's body, fixed: a box on the plate, from the back of the
-    /// plate to the door's back face.
-    pub arm: HardwareMember,
-    /// The arm's front end, fixed: a box reaching into the cup (when the
-    /// door is closed) that carries the arm pins.
-    pub knuckle: HardwareMember,
-    /// The two links' sizes, in the order of [`Linkage::links`].
-    pub links: [LinkBar; 2],
-    /// The diameter of the four pins.
-    pub pin_diameter: Length,
-    /// How long the pins are, along the linkage's axis (as wide as the
-    /// widest link).
-    pub pin_length: Length,
-}
-
-/// The size of a link: a flat bar from pin to pin.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-pub struct LinkBar {
-    /// Along the pins.
-    pub width: Length,
-    /// Across the bar, in the linkage's plane.
-    pub thickness: Length,
-    /// The gap down its middle along the pins: a strap is two flanges with
-    /// the other link between them; zero for a solid bar.
-    pub slot: Length,
-}
-
-impl Hardware {
-    /// `true` for a butt hinge: two leaves, each housed in a mortise.
-    pub fn is_butt_hinge(&self) -> bool {
-        matches!(self.data, HardwareData::ButtHinge { .. })
-    }
-}
-
-/// A member of a piece of hardware fixed to the carcass.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-pub struct HardwareMember {
-    /// Its shape.
-    pub envelope: Envelope,
-    /// Its local origin and frame.
-    pub pose: Pose,
-    /// Its world box.
-    pub bounds: WorldBox,
-}
-
-/// The line a hinged assembly turns about.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-pub struct Pivot {
-    /// The world axis the line runs along.
-    #[serde(serialize_with = "serialize_axis")]
-    pub axis: Axis,
-    /// A point on the line (its coordinate along `axis` is the hinged
-    /// part's lowest point along it, and carries no meaning).
-    pub through: Point,
-    /// The direction from the line toward the rest of the assembly.
-    #[serde(serialize_with = "serialize_direction")]
-    pub free_side: Direction,
-    /// The direction the free side moves as it opens.
-    #[serde(serialize_with = "serialize_direction")]
-    pub swing_toward: Direction,
-}
-
-/// How an assembly moves.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case", tag = "kind")]
-pub enum Motion {
-    /// It turns about a pivot line, up to an angle.
-    Turn {
-        /// The line.
-        pivot: Pivot,
-        /// How far it opens.
-        opening_angle: Angle,
-    },
-    /// It turns and moves on a four-bar linkage (a cup hinge): one input,
-    /// the angle the door has turned, up to the linkage's opening angle.
-    Linkage {
-        /// The linkage.
-        linkage: Linkage,
-    },
-    /// It travels in one direction, up to a distance.
-    Travel {
-        /// The direction it opens in.
-        #[serde(serialize_with = "serialize_direction")]
-        toward: Direction,
-        /// How far it opens.
-        travel: Length,
-    },
-}
-
-impl Motion {
-    /// `true` for a hinge's motion (an angle), `false` for a slide's.
-    pub fn turns(&self) -> bool {
-        match self {
-            Motion::Turn { .. } | Motion::Linkage { .. } => true,
-            Motion::Travel { .. } => false,
-        }
-    }
-
-    /// How far a hinge's motion opens; `None` for a slide.
-    pub fn opening_angle(&self) -> Option<Angle> {
-        match self {
-            Motion::Turn { opening_angle, .. } => Some(*opening_angle),
-            Motion::Linkage { linkage } => Some(linkage.opening_angle()),
-            Motion::Travel { .. } => None,
-        }
-    }
-
-    /// For a hinge: the direction from the hinge edge toward the middle of
-    /// the door, and the direction the door swings to.
-    pub fn swing(&self) -> Option<(Direction, Direction)> {
-        match self {
-            Motion::Turn { pivot, .. } => Some((pivot.free_side, pivot.swing_toward)),
-            Motion::Linkage { linkage } => {
-                Some((linkage.frame().free_side(), linkage.frame().swing_toward()))
-            }
-            Motion::Travel { .. } => None,
-        }
-    }
-}
-
 /// An assembly: an instance of a component, or its mirror image.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Assembly {
@@ -1832,9 +1737,6 @@ pub struct Assembly {
     pub parts: Vec<PartId>,
     /// Every piece of hardware inside it.
     pub hardware: Vec<HardwareId>,
-    /// Its motion, from its hinges or slides (the old contract, filled
-    /// from `mechanism` until its readers move to it).
-    pub motion: Option<Motion>,
     /// Its mechanism: the hardware with a drive that moves it, and any
     /// that follow (grammar, "Mechanisms"). `None` when nothing moves it.
     pub mechanism: Option<crate::mechanism::Mechanism>,
@@ -1962,13 +1864,6 @@ fn serialize_optional_face<S: serde::Serializer>(
     }
 }
 
-fn serialize_direction<S: serde::Serializer>(
-    value: &Direction,
-    serializer: S,
-) -> Result<S::Ok, S::Error> {
-    serializer.serialize_str(value.word())
-}
-
 /// Vocabulary enums with a source word.
 trait Word {
     fn word(&self) -> &'static str;
@@ -2013,6 +1908,42 @@ mod tests {
 
     fn mm(value: i64) -> Length {
         Length::from_mm(value)
+    }
+
+    #[test]
+    fn a_member_shape_bounds_its_wood() {
+        // A cylinder up the `up` axis: its centre plus and minus half its
+        // diameter on across and deep.
+        let cylinder = MemberShape::Cylinder {
+            axis: Axis::Up,
+            centre: [mm(10), mm(20)],
+            diameter: mm(6),
+            start: mm(0),
+            end: mm(5),
+        };
+        let bounds = cylinder.bounds();
+        assert_eq!(bounds.min().get(Axis::Across), mm(7));
+        assert_eq!(bounds.max().get(Axis::Deep), mm(23));
+        assert_eq!(bounds.size(Axis::Up), mm(5));
+        // A bar along `across` reaches half its thickness past each end and
+        // either side; along a diagonal its corners reach further, rounded
+        // out, never in.
+        let bar = |to: [Length; 2]| MemberShape::Bar {
+            axis: Axis::Deep,
+            from: [mm(0), mm(0)],
+            to,
+            thickness: mm(2),
+            start: mm(0),
+            end: mm(1),
+        };
+        let straight = bar([mm(0), mm(10)]).bounds();
+        assert!(straight.min().get(Axis::Up) <= mm(-1));
+        let end = straight.max().get(Axis::Across).nm() - mm(11).nm();
+        assert!((0..2).contains(&end), "{end}");
+        let diagonal = bar([mm(10), mm(10)]).bounds();
+        // Each corner is sqrt(2) = 1.414..mm past its end on both axes.
+        let past = diagonal.max().get(Axis::Up).nm() - mm(10).nm();
+        assert!((1_414_214..1_414_217).contains(&past), "{past}");
     }
 
     #[test]

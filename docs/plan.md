@@ -197,3 +197,13 @@ Done when: the stool, side table, cabinet and chidori are verified by
 screenshots of focus mode (X-ray on, a step mid-way), the cabinet's top hinge
 is shown from above at 0°, 45° and 110° with its edge path and minimum gap,
 every new behaviour has tests, and the gate is green.
+
+# Done: generalise kinds (2026-11-17)
+
+The work pack `docs/workpacks/2026-11-17-generalise-kinds.md` is done
+through stage 9 (stage 10 is a proposal for the CLI lane). Stage 8
+removed the old hardware contract (`HardwareData`, the four-bar
+`Linkage` types, the `legacy` shims, the member-word tables): every kind
+is now data in `std/` read through members, roles, entries and
+mechanisms, and `CLAUDE.md`'s rule "No kind in the core" is held by
+`crates/stave-check/tests/standing_rule.rs`.

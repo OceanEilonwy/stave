@@ -433,10 +433,6 @@ fn a_165_degree_hinge_is_only_a_kind() {
     );
     let posed = MechanismPath::new(mechanism).unwrap();
     assert!((posed.amount(PoseValue::Open) - Angle::from_deg(165).to_radians_f64()).abs() < 1e-12);
-    assert_eq!(
-        door.motion.and_then(|m| m.opening_angle()),
-        Some(Angle::from_deg(165))
-    );
 
     // No steel in wood anywhere in the swing: every member the mechanism
     // moves, and every member on the door, against every part.
@@ -560,7 +556,7 @@ fn the_chidori_comes_apart_as_the_simulation_proves() {
     let no_flats = common::open_files(&[("project.stave", &broken_text("chidori_no_flats"))]);
     assert_eq!(order(&no_flats), 1);
     let unrounded = broken_text("chidori_no_flats").replace(
-        "cut crossing(lock, first) {\n    round(diameter: round_diameter)\n  }",
+        "cut rounding: crossing(lock, first) {\n    round(diameter: round_diameter)\n  }",
         "",
     );
     let opened = common::open_files(&[("project.stave", &unrounded)]);
@@ -582,7 +578,7 @@ fn every_motion_of_the_examples_is_clear_through_its_travel() {
         let opened = example(folder);
         let design = common::design(&opened);
         assert!(
-            design.assemblies.iter().any(|a| a.motion.is_some()),
+            design.assemblies.iter().any(|a| a.mechanism.is_some()),
             "{folder}"
         );
         assert!(opened.diagnostics.is_empty(), "{folder}");
@@ -625,7 +621,7 @@ part post : pine_19 {
   }
 }
 kind flatten : joint {
-  cut crossing(piece, into) {
+  cut housing: crossing(piece, into) {
     notch(depth: 5mm)
   }
 }
@@ -700,7 +696,7 @@ fn a_leaf_without_its_mortise_overlaps() {
     let start = library.find("kind butt_hinge : hinge {").unwrap();
     let length = library[start..].find("\n}\n").unwrap() + 3;
     let butt_hinge = &library[start..start + length];
-    let mortises = "  cut mortise: crossing(piece, leaf) { notch(depth: 1.5mm) }\n  cut mortise: crossing(on, fixed_leaf) { notch(depth: 1.5mm) }\n";
+    let mortises = "  cut leaf_mortise: crossing(piece, leaf) { notch(depth: 1.5mm) }\n  cut fixed_leaf_mortise: crossing(on, fixed_leaf) { notch(depth: 1.5mm) }\n";
     assert!(butt_hinge.contains(mortises));
     let bare = butt_hinge
         .replace("kind butt_hinge", "kind bare_butt_hinge")

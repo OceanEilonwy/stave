@@ -8,9 +8,9 @@ use stave_lang::units::{Angle, Length};
 use stave_lang::{SourceMap, SyntaxKind};
 use stave_model::Model;
 use stave_model::defs::Decl;
+use stave_model::mechanism::{DriveValue, Mechanism};
 use stave_model::solved::{
-    AssemblyId, CutKind, CutSource, HardwareBase, Motion, Part, PartId, PartOrigin, Shape,
-    SolvedDesign,
+    AssemblyId, CutKind, CutSource, HardwareBase, Part, PartId, PartOrigin, Shape, SolvedDesign,
 };
 use stave_scene::Item;
 use stave_schema::species::Srgb;
@@ -228,12 +228,12 @@ fn relative<'a>(design: &SolvedDesign, name: &'a str, assembly: Option<AssemblyI
         .unwrap_or(name)
 }
 
-/// An assembly's motion in a few words: "turns 110°", "slides out 400 mm".
-fn motion_words(motion: &Motion) -> String {
-    match motion {
-        Motion::Turn { opening_angle, .. } => format!("turns {}", degrees(*opening_angle)),
-        Motion::Linkage { linkage } => format!("turns {}", degrees(linkage.opening_angle())),
-        Motion::Travel { travel, .. } => format!("slides out {}", mm(*travel)),
+/// An assembly's motion in a few words, from its mechanism's range:
+/// "turns 110°", "slides out 400 mm".
+fn motion_words(mechanism: &Mechanism) -> String {
+    match mechanism.drive().extent() {
+        DriveValue::Turn(angle) => format!("turns {}", degrees(angle)),
+        DriveValue::Travel(travel) => format!("slides out {}", mm(travel)),
     }
 }
 
@@ -431,7 +431,7 @@ pub fn parts_tree(design: &SolvedDesign) -> PartsTree {
             .and_then(|rest| rest.strip_prefix('.'))
             .unwrap_or(&assembly.name)
             .to_owned();
-        let detail = match (assembly.mirror_of, &assembly.motion) {
+        let detail = match (assembly.mirror_of, &assembly.mechanism) {
             (Some(source), _) => design
                 .assemblies
                 .get(source.index())
@@ -519,7 +519,7 @@ pub struct Snippet {
 pub struct Connection {
     /// Its mark.
     pub swatch: Swatch,
-    /// The bold start: `cope_and_stick`, `2 cup bores`.
+    /// The bold start: `cope_and_stick`, `2 bores`.
     pub lead: String,
     /// The rest: "with rail[top], rail[bottom]".
     pub rest: String,
@@ -561,7 +561,7 @@ fn moving(design: &SolvedDesign, mut assembly: Option<AssemblyId>) -> Option<Ass
     let mut steps = 0;
     while let Some(id) = assembly {
         let found = design.assemblies.get(id.index())?;
-        if found.motion.is_some() {
+        if found.mechanism.is_some() {
             return Some(id);
         }
         steps += 1;
@@ -576,7 +576,7 @@ fn moving(design: &SolvedDesign, mut assembly: Option<AssemblyId>) -> Option<Ass
 /// "with door_l, turns 110°".
 fn moves_row(design: &SolvedDesign, moving: Option<AssemblyId>) -> Option<Row> {
     let assembly = design.assemblies.get(moving?.index())?;
-    let motion = assembly.motion.as_ref()?;
+    let motion = assembly.mechanism.as_ref()?;
     Some(Row {
         label: "Moves",
         value: format!("with {}, {}", assembly.name, motion_words(motion)),
@@ -755,7 +755,7 @@ fn source_of(
 
 /// Cuts the hardware on a part makes, of one kind and size.
 struct HardwareCut {
-    /// "cup bore", "screw hole".
+    /// The kind's name for the cut ("bore", "hole"), or what it is.
     what: String,
     /// Its size: "35 mm across, 12.8 mm deep".
     value: String,
@@ -896,9 +896,9 @@ fn inspect_part(checked: &Checked, design: &SolvedDesign, id: PartId) -> Option<
         let CutSource::Hardware { hardware } = cut.source else {
             continue;
         };
-        let Some(found) = design.hardware.get(hardware.index()) else {
+        if design.hardware.get(hardware.index()).is_none() {
             continue;
-        };
+        }
         // Holes are counted one by one: a pull's two screw holes are two.
         let (single, holes) = match &cut.kind {
             CutKind::Drill {
@@ -916,13 +916,13 @@ fn inspect_part(checked: &Checked, design: &SolvedDesign, id: PartId) -> Option<
             other => (other.clone(), 1),
         };
         let row = focus::cut_row("", &single);
-        let what = match (found.base, row.label) {
-            (HardwareBase::Hinge, "Hole") if found.mechanism.is_some() => "cup bore",
-            (HardwareBase::Hinge, _) => "hinge recess",
-            (HardwareBase::Pull | HardwareBase::Slide, "Hole") => "screw hole",
-            (_, other) => other,
-        }
-        .to_lowercase();
+        // The name the kind gives the cut (`cut bore: ...`), or else what
+        // the cut is.
+        let what = match &cut.name {
+            Some(name) => name.as_str().replace('_', " "),
+            None => row.label.to_lowercase(),
+        };
+
         match cuts
             .iter_mut()
             .find(|cut| cut.what == what && cut.value == row.value)
@@ -981,8 +981,7 @@ fn inspect_hardware(
         .part(hardware.piece)
         .map_or_else(|| "?".to_owned(), |p| p.name.clone());
     let what = match hardware.base {
-        HardwareBase::Hinge if hardware.is_butt_hinge() => "butt hinge",
-        HardwareBase::Hinge => "cup hinge",
+        HardwareBase::Hinge => "hinge",
         HardwareBase::Slide => "drawer slide",
         HardwareBase::Pull => "pull",
     };
@@ -1033,7 +1032,7 @@ fn inspect_assembly(
         label: "Component",
         value: assembly.component.clone(),
     }];
-    if let Some(motion) = &assembly.motion {
+    if let Some(motion) = &assembly.mechanism {
         rows.push(Row {
             label: "Moves",
             value: motion_words(motion),

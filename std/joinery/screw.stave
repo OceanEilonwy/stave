@@ -42,8 +42,8 @@ kind screw : joint {
     spaced: evenly
     shape:  cylinder(diameter: pilot, depth: -piece.thickness..length - piece.thickness)
   }
-  cut crossing(piece, screw) { drill(diameter: diameter + 0.5mm, depth: through) }
-  cut crossing(into, screw) { drill(diameter: pilot, depth: length - piece.thickness) }
+  cut clearance_hole: crossing(piece, screw) { drill(diameter: diameter + 0.5mm, depth: through) }
+  cut pilot_hole: crossing(into, screw) { drill(diameter: pilot, depth: length - piece.thickness) }
 
   note: "Clamp the parts together and drill the pilot holes through the clearance holes"
 }

@@ -32,8 +32,8 @@ kind dowel : joint {
     spaced: evenly
     shape:  cylinder(diameter: diameter, depth: -depth..depth)
   }
-  cut crossing(piece, pin) { drill(diameter: diameter, depth: depth) }
-  cut crossing(into, pin) { drill(diameter: diameter, depth: depth) }
+  cut end_hole: crossing(piece, pin) { drill(diameter: diameter, depth: depth) }
+  cut hole: crossing(into, pin) { drill(diameter: diameter, depth: depth) }
 
   note: "Drill both sets of holes from the same reference edge so they line up"
 }

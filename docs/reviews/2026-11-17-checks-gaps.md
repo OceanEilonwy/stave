@@ -386,3 +386,22 @@ error[require]: 'seat_wide' fails: the parts overlap too little for these dowels
   `drill(count:)` spreading in `hole_centres`, and the special-cases
   audit's S4 and SO18 (still justified: the hardware list reads a
   fastener's `diameter` and `length`, now for member items too).
+
+### Merged with "generalise kinds"
+
+Stage 2 was merged with the generalise-kinds work (named cuts, no member
+vocabulary, the standing rule). What changed in stage 2 for it:
+
+- `dowel`'s and `screw`'s member cuts are named, keeping the names that
+  work gave their old cuts: `cut end_hole: crossing(piece, pin)`, `cut
+  hole: crossing(into, pin)`, `cut clearance_hole: crossing(piece,
+  screw)`, `cut pilot_hole: crossing(into, screw)`;
+  `tests/broken/pin_past_its_hole` and `app/members` name theirs too, so
+  none warns `unnamed-cut`.
+- Members are checked by `check_members`, which has no word table: a
+  joint kind may have members (each with a body), a fastener or tool kind
+  none. A joint member without a body is still `member 'pin' is missing
+  'shape'`; the grammar's old "Hardware members" table is gone and the
+  joint-member rules it held are under "Joint members".
+- Helps no longer name a kind (`dowel_pin`, `screws`), for the standing
+  rule.

@@ -45,8 +45,6 @@ mod build;
 pub mod clearance;
 pub mod collide;
 pub mod glb;
-mod legacy;
-pub mod linkage;
 pub mod mechanism;
 mod mesh;
 mod mesh_cut;

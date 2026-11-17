@@ -68,8 +68,9 @@ drawer.slides[right]         side_mount_slide on drawer.side[right] (right face)
     cabinet member 424.65..431          485..530             19..369             
     length 350, clearance 12.7, travel 350
 drawer.pull                  knob             on drawer.front (front face)
-    box            210..240             491..521             -28..0              
-    one screw, 4
+    knob           210..240             491..521             -28..0              
+    screw          223..227             504..508             0..19               
+    diameter 30, projection 28, screw diameter 4
 
 JOINTS (6)
 shelf_dados                  dado

@@ -1,0 +1,10 @@
+---
+source: crates/stave-app/tests/spec_joints.rs
+expression: rendered
+---
+warning[unnamed-cut]: this cut has no name, so messages will call it "a slot"
+  --> tests/broken/unnamed_cut/project.stave:52:7
+   |
+52 |   cut crossing(into, piece) {
+   |       ^^^^^^^^^^^^^^^^^^^^^
+   = help: name it after what it is, as in cut trench: crossing(...) { ... }

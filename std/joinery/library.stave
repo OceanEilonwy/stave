@@ -17,4 +17,7 @@ stave 1
 library "Joinery" {
   about:   "The standard joints and the recipes that cut them"
   license: "AGPL-3.0-or-later"
+  // How a part made of boards is joined when neither it nor its project
+  // says (grammar, "Boards").
+  boards:  joined(by: glued_edge)
 }

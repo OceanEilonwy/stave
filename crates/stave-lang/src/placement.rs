@@ -21,13 +21,13 @@
 //! element's slot, `corners` becomes two [`Translation::Flush`] terms, and a
 //! `[same]` index is resolved to the matching element's anchor.
 //!
-//! Motions (hinges, slides) come from hardware. Placement fixes the *rest*
+//! Motions come from hardware mechanisms. Placement fixes the *rest*
 //! pose (doors closed, drawers shut); scenes set motion values relative to it.
 
 use std::fmt;
 use std::num::NonZeroU32;
 
-use crate::units::{Angle, Length};
+use crate::units::Length;
 
 /// Index of a resolved part (an array element is its own part).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -705,70 +705,6 @@ impl Placement {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Motion (used by scenes)
-// ---------------------------------------------------------------------------
-
-/// The line a hinged assembly turns about: the long edge of the hinge's
-/// `piece` where two of its faces meet.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Pivot {
-    /// The part that carries the hinges (a door stile).
-    pub piece: PartId,
-    /// The face opposite the hinge's mount face.
-    pub outer: Face,
-    /// The face of the piece nearer the part the hinge is fixed to.
-    pub edge: Face,
-}
-
-/// A degree of freedom that hardware gives an assembly. The whole assembly
-/// moves as one piece; the rest pose from placement is the motion's zero.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Motion {
-    /// Hinges: the assembly turns about a pivot line, from closed (zero) to
-    /// the hinge kind's opening angle.
-    Turn {
-        /// The assembly that moves.
-        moving: AssemblyId,
-        /// The line it turns about.
-        pivot: Pivot,
-        /// How far it opens.
-        opening_angle: Angle,
-    },
-    /// Slides: the assembly travels in one direction, from closed (zero) to
-    /// the slide kind's travel.
-    Travel {
-        /// The assembly that moves.
-        moving: AssemblyId,
-        /// The direction it opens in.
-        toward: Direction,
-        /// How far it opens.
-        travel: Length,
-    },
-}
-
-impl Motion {
-    /// The assembly that moves.
-    pub fn moving(self) -> AssemblyId {
-        match self {
-            Motion::Turn { moving, .. } | Motion::Travel { moving, .. } => moving,
-        }
-    }
-}
-
-/// Value a scene's `pose` gives a motion.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum MotionValue {
-    /// `closed`: the rest position.
-    Closed,
-    /// `open`: the hinge's opening angle or the slide's travel.
-    Open,
-    /// An angle, for hinges.
-    Angle(Angle),
-    /// A length, for slides.
-    Travel(Length),
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -956,26 +892,5 @@ mod tests {
                 Some(axis)
             );
         }
-    }
-
-    #[test]
-    fn motions_name_the_assembly_that_moves() {
-        let door = AssemblyId(3);
-        let turn = Motion::Turn {
-            moving: door,
-            pivot: Pivot {
-                piece: BASE,
-                outer: Face::Front,
-                edge: Face::Left,
-            },
-            opening_angle: Angle::from_deg(110),
-        };
-        assert_eq!(turn.moving(), door);
-        let travel = Motion::Travel {
-            moving: AssemblyId(4),
-            toward: Direction::Front,
-            travel: Length::from_mm(500),
-        };
-        assert_eq!(travel.moving(), AssemblyId(4));
     }
 }

@@ -732,10 +732,6 @@ pub struct KindDef {
     pub fields: Vec<Setting>,
     /// The joint entries, for a joint kind.
     pub joint: Option<JointKindDef>,
-    /// The named, documented members of a hardware kind (`member cup`),
-    /// in source order: the viewer's list, kept until every member has a
-    /// body.
-    pub members: Vec<MemberDef>,
     /// The members with a body (`member arm { ... }`), in source order;
     /// a [`BodyId`] indexes this list.
     pub bodies: Vec<BodyDef>,
@@ -887,6 +883,12 @@ impl CutName {
     /// The name as written.
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+
+    /// The name as a message writes it, its underscores read as spaces:
+    /// `mating_groove` is "mating groove".
+    pub fn words(&self) -> String {
+        self.0.replace('_', " ")
     }
 }
 
@@ -1305,18 +1307,6 @@ pub struct StopDef {
     pub span: Span,
 }
 
-/// `member cup` in a hardware kind: a named piece, with the doc comments
-/// written above it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MemberDef {
-    /// Which member.
-    pub name: stave_schema::kinds::MemberName,
-    /// Where its name is written.
-    pub span: Span,
-    /// Its doc comments, one line each.
-    pub docs: Vec<String>,
-}
-
 impl KindDef {
     /// The index of a param by name.
     pub fn param(&self, name: &str) -> Option<usize> {
@@ -1612,6 +1602,11 @@ pub struct LibraryDef {
     pub about: Option<String>,
     /// `license:`
     pub license: Option<String>,
+    /// `boards:`: how a part's boards are joined when neither the part nor
+    /// its project says (grammar, "Boards"), for a library in the prelude.
+    pub boards: Option<RExpr>,
+    /// The file the item is in.
+    pub file: FileId,
 }
 
 /// What a file sees besides its module: its imports.
@@ -1685,10 +1680,6 @@ pub struct Defs {
     pub components: Vec<ComponentDef>,
     /// `scene`s.
     pub scenes: Vec<SceneDef>,
-    /// The joint kind boards are joined by when no `boards:` says
-    /// (grammar, "Boards"): `glued_edge` from the prelude, when there is
-    /// one.
-    pub default_boards: Option<KindId>,
 }
 
 macro_rules! getters {
