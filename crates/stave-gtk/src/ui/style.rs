@@ -171,7 +171,8 @@ expander.stave-more title > arrow { min-width: 12px; min-height: 12px; }
 /// The colours, from libadwaita's named colours, so the light and dark
 /// styles (Main.dc.html, MainDark.dc.html) both come from this one sheet
 /// and follow the style manager the moment it changes. Only the code
-/// block is dark in both styles, as the design has it.
+/// blocks are dark in both styles, as the design has it (darker still,
+/// with an edge, on the dark style's dark panels).
 const COLOURS: &str = r#"
 .stave-header { background: @headerbar_bg_color; color: @headerbar_fg_color; box-shadow: inset 0 -1px @headerbar_shade_color; }
 .stave-header button.stave-icon-button:disabled { color: alpha(currentColor, 0.45); }
@@ -202,7 +203,14 @@ button.stave-build.building:disabled { background: alpha(@accent_bg_color, 0.45)
 .stave-card > button.stave-card-row { background: transparent; color: inherit; }
 .stave-card > button.stave-card-row:hover { background: alpha(currentColor, 0.05); }
 .stave-link { color: @accent_color; }
+/* Every code block (the "Defined in the text" snippet, a problem's
+   `stave check` text, a library's import line) is one style: dark in
+   both styles, as the design has it. On the dark style's panels
+   (#222226, cards about #38383b) #1e1e24 would all but vanish, so there
+   it sits a clear step darker with a thin light edge (the window has
+   `stave-dark` in the dark style). */
 .stave-code { background: #1e1e24; color: #e7e5ea; }
+.stave-dark .stave-code { background: #121216; box-shadow: inset 0 0 0 1px alpha(@window_fg_color, 0.16); }
 
 .stave-statusbar { background: @headerbar_bg_color; color: alpha(@headerbar_fg_color, 0.7); box-shadow: inset 0 1px @headerbar_shade_color; }
 .stave-floating { background: alpha(@view_bg_color, 0.94); color: @view_fg_color; box-shadow: 0 2px 10px alpha(black, 0.15); }
@@ -307,7 +315,8 @@ pub struct CodeColours {
     pub warning: &'static str,
 }
 
-/// The snippet's colours on its dark background (both styles).
+/// The snippet's colours on its dark background (#1e1e24 light, #121216
+/// dark): each at least 4.5:1 against both (tested below).
 pub const CODE: CodeColours = CodeColours {
     keyword: "#f0a3c4",
     name: "#8fd0ff",
@@ -317,6 +326,11 @@ pub const CODE: CodeColours = CodeColours {
     error: "#ff7b85",
     warning: "#ffcf80",
 };
+
+/// The code blocks' backgrounds as `COLOURS` writes them: light style,
+/// dark style.
+#[cfg(test)]
+const CODE_BACKGROUNDS: [&str; 2] = ["#1e1e24", "#121216"];
 
 /// The dot in the status bar: green, amber, red or grey.
 pub fn status_dot(tone: stave_app::session::Tone) -> gdk::RGBA {
@@ -351,4 +365,47 @@ pub fn install(display: &gdk::Display) {
     // the keyboard focus, so it looks highlighted for no reason. It can
     // still be selected with the mouse to copy.
     gtk::Settings::for_display(display).set_gtk_label_select_on_focus(false);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CODE, CODE_BACKGROUNDS, COLOURS};
+
+    /// The relative luminance of `#rrggbb` (WCAG 2).
+    fn luminance(hex: &str) -> f64 {
+        let channel = |range: std::ops::Range<usize>| {
+            let value = f64::from(u8::from_str_radix(&hex[range], 16).unwrap()) / 255.0;
+            if value <= 0.039_28 {
+                value / 12.92
+            } else {
+                ((value + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        0.2126 * channel(1..3) + 0.7152 * channel(3..5) + 0.0722 * channel(5..7)
+    }
+
+    fn contrast(a: &str, b: &str) -> f64 {
+        let (a, b) = (luminance(a), luminance(b));
+        (a.max(b) + 0.05) / (a.min(b) + 0.05)
+    }
+
+    #[test]
+    fn code_colours_read_on_both_code_backgrounds() {
+        for background in CODE_BACKGROUNDS {
+            assert!(COLOURS.contains(&format!("background: {background}")));
+            for colour in [
+                "#e7e5ea",
+                CODE.keyword,
+                CODE.name,
+                CODE.number,
+                CODE.text,
+                CODE.comment,
+                CODE.error,
+                CODE.warning,
+            ] {
+                let ratio = contrast(colour, background);
+                assert!(ratio >= 4.5, "{colour} on {background}: {ratio:.2}:1");
+            }
+        }
+    }
 }

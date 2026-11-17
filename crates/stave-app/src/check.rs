@@ -69,6 +69,30 @@ impl Checked {
     pub fn drawable(&self) -> Option<(&SolvedDesign, &SceneGraph)> {
         self.design().zip(self.scene.as_ref())
     }
+
+    /// The title the folder declares for itself: its `project "..."` or
+    /// `library "..."` title, read off the resolved model (or the solved
+    /// design when the model is missing). `None` when it declares none or
+    /// the title is blank.
+    pub fn declared_title(&self) -> Option<&str> {
+        let from_model = self.opened.model.as_ref().and_then(|model| {
+            let module = model.defs.modules.get(model.root.index())?;
+            module
+                .project
+                .as_ref()
+                .map(|project| project.title.as_str())
+                .or_else(|| {
+                    module
+                        .library
+                        .as_ref()
+                        .map(|library| library.title.as_str())
+                })
+        });
+        from_model
+            .or_else(|| self.design().map(|design| design.project.title.as_str()))
+            .map(str::trim)
+            .filter(|title| !title.is_empty())
+    }
 }
 
 /// What a check produced.
