@@ -16,9 +16,10 @@
 use glam::{DMat4, DVec2, DVec3};
 use stave_lang::placement::Axis;
 use stave_lang::units::Length;
-use stave_model::solved::{Linkage, Pivot, Point, WorldBox};
+use stave_model::solved::{Pivot, Point, WorldBox};
 
 use crate::collide::{CONTACT_TOLERANCE, WorldRod, WorldSolid, direction_vector, point_vector};
+use crate::mechanism::MechanismPath;
 use crate::render;
 
 /// A plane across a world axis: `x` and `y` in it, origin on it.
@@ -31,15 +32,15 @@ pub(crate) struct Plane {
 }
 
 impl Plane {
-    /// A linkage's plane: `x` toward the free side, `y` toward the side it
-    /// swings to, origin on the frame's origin.
-    pub fn of_linkage(linkage: &Linkage) -> Plane {
-        let frame = linkage.frame();
+    /// A mechanism's plane: `x` and `y` along its frame's two directions,
+    /// origin on its frame's origin, across the pins' axis.
+    pub fn of_mechanism(mechanism: &MechanismPath) -> Plane {
+        let (origin, x, y) = mechanism.plane_basis();
         Plane {
-            origin: point_vector(frame.origin()),
-            x: direction_vector(frame.free_side()),
-            y: direction_vector(frame.swing_toward()),
-            axis: frame.axis(),
+            origin,
+            x,
+            y,
+            axis: mechanism.axis(),
         }
     }
 

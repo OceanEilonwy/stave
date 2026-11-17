@@ -3,10 +3,11 @@
 //! checked through its whole travel, not only at its ends; "One collision
 //! model": every body, part or hardware member, is swept the same way).
 //!
-//! A [`Path`] is a motion ready to sweep, and a [`Mover`] says how it moves
-//! one body: not at all (where a scene places it), with the assembly as
-//! one piece, or as a link the hardware's mechanism turns. [`first_contact`]
-//! picks the method from the motion's shape, never from a kind:
+//! A [`Path`] is an assembly's mechanism ready to sweep
+//! ([`crate::mechanism`]), and a [`Mover`] says how it moves one body: not
+//! at all (where a scene places it), with the assembly as one piece, or as
+//! a member the mechanism places. [`first_contact`] picks the method from
+//! the motion's shape ([`Shape`]), never from a kind:
 //!
 //! - **Slides** are one-dimensional and exact. The moving solid travels
 //!   along a world direction; a fixed box is in its way when the two
@@ -23,17 +24,16 @@
 //!   closed form; between two of them the polygons either overlap all the
 //!   way or not at all, so testing one angle in each span finds the first
 //!   contact.
-//! - **A linkage** (a cup hinge) moves the door and each link differently
-//!   ([`crate::linkage`]), so there is no closed form. The same pieces are
-//!   swept by **conservative advancement**: at each angle the distance
-//!   between two pieces is measured, and the motion goes on by that
-//!   distance over the fastest their corners can close it (a door's
-//!   corner turns about the frame's origin and moves with the offset; a
-//!   link's corner turns about its arm pin as fast as its boss pin moves
-//!   over its length), so no contact can be stepped over; near contact the
-//!   step never falls below a quarter of the contact tolerance's worth of
-//!   movement. The first overlap is then bisected to far below a
-//!   micro-degree.
+//! - **Any other motion** (a cup hinge's linkage, and every member a
+//!   mechanism places) moves bodies differently, so there is no closed
+//!   form. The same pieces are swept by **conservative advancement** in
+//!   the mechanism's plane: at each step the distance between two pieces
+//!   is measured, and the motion goes on by that distance over the fastest
+//!   their corners can close it (each member's turn and offset speed,
+//!   found by the solver over the whole range), so no contact can be
+//!   stepped over; near contact the step never falls below a quarter of
+//!   the contact tolerance's worth of movement. The first overlap is then
+//!   bisected to far below a micro-degree (or a nanometre).
 //!
 //! **Sweeps see cuts**: a part's boxes are taken less the round holes
 //! whose axis lies in the plane, as their narrowest chord over the width
@@ -50,13 +50,15 @@ use std::f64::consts::TAU;
 use glam::{DMat4, DVec2, DVec3};
 use stave_lang::placement::{Axis, Direction};
 use stave_lang::units::{Angle, Length};
-use stave_model::solved::{LinkIndex, Linkage, Motion, Pivot, Point, PoseValue, WorldBox};
+use stave_model::mechanism::{Mechanism, MemberIndex};
+use stave_model::solved::{Pivot, Point, PoseValue, WorldBox};
 
 use crate::collide::{
     CONTACT_TOLERANCE, Placement, WorldPrism, WorldRod, WorldSolid, overlaps_placed, placed_bounds,
     translate_box,
 };
-use crate::linkage::LinkagePath;
+use crate::mechanism::{MechanismPath, Shape};
+use crate::planar::MechanismError;
 use crate::plane::{
     Motion2, Piece, Plane, corners_of, intersect, piece_depth, piece_pairs, polygon_distance,
 };
@@ -242,44 +244,36 @@ fn turn_first(moving: &[DVec2], fixed: &[DVec2], limit: f64) -> Option<f64> {
     None
 }
 
-/// A motion ready to sweep (grammar, "Scenes"): a turn about one line, a
-/// linkage solved once in floats with the fastest its offset changes, or a
-/// slide's travel.
-#[derive(Debug, Clone, Copy, PartialEq)]
+/// A motion ready to sweep (grammar, "Scenes"): an assembly's mechanism
+/// solved in floats, with its exact shape where it has one (a turn about
+/// one fixed line, a travel along one rail).
+#[derive(Debug, Clone, PartialEq)]
 pub struct Path {
-    motion: PathMotion,
-}
-
-// One per motion swept, and never in a collection: boxing the linkage
-// would buy nothing.
-#[allow(clippy::large_enum_variant)]
-#[derive(Debug, Clone, Copy, PartialEq)]
-enum PathMotion {
-    Turn {
-        pivot: Pivot,
-        opening: Angle,
-    },
-    Linkage {
-        linkage: Linkage,
-        path: LinkagePath,
-        offset_speed: f64,
-    },
-    Travel {
-        toward: Direction,
-        travel: Length,
-    },
+    mechanism: MechanismPath,
 }
 
 /// How a body moves in a sweep.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy)]
 pub enum Mover<'a> {
     /// It stays where it is placed.
     Fixed(Placement),
-    /// It moves with the path from rest, as one piece with the assembly.
+    /// It moves with the path from rest, as one piece with the assembly
+    /// (with the mechanism's driven member).
     Rigid(&'a Path),
-    /// It is that link of the path's linkage, from rest: it turns about its
-    /// arm pin as the linkage opens.
-    Member(&'a Path, LinkIndex),
+    /// It is (or rides on) that member of the path's mechanism, from rest:
+    /// the mechanism places it as the assembly moves.
+    Member(&'a Path, MemberIndex),
+}
+
+impl PartialEq for Mover<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Mover::Fixed(a), Mover::Fixed(b)) => a == b,
+            (Mover::Rigid(a), Mover::Rigid(b)) => std::ptr::eq(*a, *b),
+            (Mover::Member(a, x), Mover::Member(b, y)) => std::ptr::eq(*a, *b) && x == y,
+            (Mover::Fixed(_) | Mover::Rigid(_) | Mover::Member(..), _) => false,
+        }
+    }
 }
 
 impl Mover<'_> {
@@ -311,132 +305,88 @@ pub struct Depth {
 }
 
 impl Path {
-    /// A motion ready to sweep.
-    pub fn new(motion: &Motion) -> Path {
-        let motion = match *motion {
-            Motion::Turn {
-                pivot,
-                opening_angle,
-            } => PathMotion::Turn {
-                pivot,
-                opening: opening_angle,
-            },
-            Motion::Linkage { linkage } => {
-                let path = LinkagePath::new(&linkage);
-                PathMotion::Linkage {
-                    linkage,
-                    path,
-                    offset_speed: path.offset_speed(),
-                }
-            }
-            Motion::Travel { toward, travel } => PathMotion::Travel { toward, travel },
-        };
-        Path { motion }
+    /// An assembly's mechanism, run through its range and ready to sweep;
+    /// the solver's error when it can't be (see [`MechanismPath::new`]).
+    pub fn new(mechanism: &Mechanism) -> Result<Path, MechanismError> {
+        Ok(Path {
+            mechanism: MechanismPath::new(mechanism)?,
+        })
     }
 
-    /// The plane a turning motion moves in.
-    fn plane(&self) -> Option<Plane> {
-        match &self.motion {
-            PathMotion::Turn { pivot, .. } => Some(Plane::of_pivot(pivot)),
-            PathMotion::Linkage { linkage, .. } => Some(Plane::of_linkage(linkage)),
-            PathMotion::Travel { .. } => None,
-        }
+    /// The mechanism, posed in floats.
+    pub fn mechanism(&self) -> &MechanismPath {
+        &self.mechanism
     }
 
-    /// How far a turning motion opens, in radians.
+    /// The plane the mechanism moves in.
+    fn plane(&self) -> Plane {
+        Plane::of_mechanism(&self.mechanism)
+    }
+
+    /// How far the motion reaches from closed, in radians or nanometres.
     fn limit(&self) -> f64 {
-        match &self.motion {
-            PathMotion::Turn { opening, .. } => render::radians_f64(*opening),
-            PathMotion::Linkage { path, .. } => path.opening(),
-            PathMotion::Travel { .. } => 0.0,
-        }
+        self.mechanism.limit()
     }
 
-    /// Where a mover has moved its pieces in the plane at `theta`.
-    fn motion2(&self, mover: &Mover<'_>, theta: f64) -> Option<Motion2> {
-        let turn = |angle: f64| DVec2::from_angle(angle);
-        match (&self.motion, mover) {
-            (_, Mover::Fixed(_)) => Some(Motion2::STILL),
-            (PathMotion::Turn { .. }, Mover::Rigid(_)) => Some(Motion2 {
-                rotation: turn(theta),
-                offset: DVec2::ZERO,
-            }),
-            (PathMotion::Linkage { path, .. }, Mover::Rigid(_)) => {
-                let (rotation, offset) = path.plane_pose(theta)?;
-                Some(Motion2 { rotation, offset })
-            }
-            (PathMotion::Linkage { path, .. }, Mover::Member(_, link)) => {
-                let (rotation, offset) = path.link_motion(link.index(), theta)?;
-                Some(Motion2 { rotation, offset })
-            }
-            (PathMotion::Turn { .. } | PathMotion::Travel { .. }, Mover::Member(..))
-            | (PathMotion::Travel { .. }, Mover::Rigid(_)) => None,
-        }
+    /// Where a mover has moved its pieces in the plane, `amount` along the
+    /// motion.
+    fn motion2(&self, mover: &Mover<'_>, amount: f64) -> Option<Motion2> {
+        let member = match mover {
+            Mover::Fixed(_) => return Some(Motion2::STILL),
+            Mover::Rigid(_) => self.mechanism.moving(),
+            Mover::Member(_, member) => *member,
+        };
+        let (rotation, offset) = self.mechanism.motion(member, amount)?;
+        Some(Motion2 { rotation, offset })
     }
 
-    /// The fastest any corner of a piece can move per radian.
+    /// The fastest any corner of a piece can move per unit of the motion.
     fn speed(&self, mover: &Mover<'_>, piece: &Piece) -> f64 {
-        match (&self.motion, mover) {
-            (_, Mover::Fixed(_)) | (PathMotion::Travel { .. }, _) => 0.0,
-            (PathMotion::Turn { .. }, _) => piece.radius_about(DVec2::ZERO),
-            (PathMotion::Linkage { offset_speed, .. }, Mover::Rigid(_)) => {
-                LinkagePath::speed_bound(piece.radius_about(DVec2::ZERO), *offset_speed)
-            }
-            (
-                PathMotion::Linkage {
-                    path, offset_speed, ..
-                },
-                Mover::Member(_, link),
-            ) => {
-                let ground = path.ground_pin_of(link.index()).unwrap_or(DVec2::ZERO);
-                path.link_speed(link.index(), piece.radius_about(ground), *offset_speed)
-                    .unwrap_or(f64::INFINITY)
-            }
-        }
+        let member = match mover {
+            Mover::Fixed(_) => return 0.0,
+            Mover::Rigid(_) => self.mechanism.moving(),
+            Mover::Member(_, member) => *member,
+        };
+        self.mechanism
+            .speed(member, piece.radius_about(DVec2::ZERO))
+            .unwrap_or(f64::INFINITY)
     }
 
     /// The box a body can reach as the path moves it.
     pub fn reach(&self, solid: &WorldSolid, mover: &Mover<'_>) -> Option<WorldBox> {
-        match (&self.motion, mover) {
+        match (self.mechanism.shape(), mover) {
             (_, Mover::Fixed(placement)) => Some(placed_bounds(&solid.bounds()?, placement)),
-            (PathMotion::Turn { pivot, .. }, Mover::Rigid(_)) => turn_reach(solid, pivot),
-            (PathMotion::Travel { toward, travel }, Mover::Rigid(_)) => {
-                slide_reach(solid, *toward, *travel)
+            (Shape::Turn { pivot, .. }, Mover::Rigid(_)) => turn_reach(solid, &pivot),
+            (Shape::Travel { toward, travel }, Mover::Rigid(_)) => {
+                slide_reach(solid, toward, travel)
             }
-            (PathMotion::Linkage { path, .. }, Mover::Rigid(_)) => {
-                sampled_reach(solid, self, mover, |theta| path.coupler(theta))
-            }
-            (PathMotion::Linkage { path, .. }, Mover::Member(_, link)) => {
-                sampled_reach(solid, self, mover, |theta| {
-                    path.pose(theta)
-                        .and_then(|pose| pose.links.get(link.index()).copied())
+            (Shape::General, Mover::Rigid(_)) => {
+                let member = self.mechanism.moving();
+                sampled_reach(solid, self, mover, |amount| {
+                    self.mechanism.matrix(member, amount)
                 })
             }
-            (PathMotion::Turn { .. } | PathMotion::Travel { .. }, Mover::Member(..)) => None,
+            (_, Mover::Member(_, member)) => sampled_reach(solid, self, mover, |amount| {
+                self.mechanism.matrix(*member, amount)
+            }),
         }
     }
 
     /// The placement a mover gives its body at a pose value of the path.
     fn placement(&self, mover: &Mover<'_>, value: PoseValue) -> Placement {
-        let motion = match self.motion {
-            PathMotion::Turn { pivot, opening } => Motion::Turn {
-                pivot,
-                opening_angle: opening,
-            },
-            PathMotion::Linkage { linkage, .. } => Motion::Linkage { linkage },
-            PathMotion::Travel { toward, travel } => Motion::Travel { toward, travel },
-        };
         match mover {
             Mover::Fixed(placement) => *placement,
-            Mover::Rigid(_) => Placement::of_motions(&[(motion, value)]),
-            Mover::Member(_, link) => Placement::of_member(&[(motion, value)], Some(*link)),
+            Mover::Rigid(_) => Placement::of_mechanisms(&[(&self.mechanism, value)], None),
+            Mover::Member(_, member) => {
+                Placement::of_mechanisms(&[(&self.mechanism, value)], Some(*member))
+            }
         }
     }
 }
 
-/// The box a body reaches over a turning path, from its corners at 180
-/// steps of the opening (a degree or less each), grown by the most it can
-/// move within half a step.
+/// The box a body reaches over a path, from its corners at 180 steps of
+/// the motion (a degree or less each for a hinge), grown by the most it
+/// can move within half a step.
 fn sampled_reach(
     solid: &WorldSolid,
     path: &Path,
@@ -445,7 +395,7 @@ fn sampled_reach(
 ) -> Option<WorldBox> {
     let bounds = solid.bounds()?;
     let corners = corners_of(&bounds);
-    let plane = path.plane()?;
+    let plane = path.plane();
     let flat = Piece {
         corners: corners.iter().map(|c| plane.project(*c)).collect(),
         low: 0.0,
@@ -570,37 +520,44 @@ pub fn first_contact(
     if matches!((&ma, &mb), (Mover::Rigid(_), Mover::Rigid(_))) {
         return None;
     }
-    match (&path.motion, &ma, &mb) {
-        (PathMotion::Travel { toward, travel }, Mover::Rigid(_), Mover::Fixed(placement)) => {
-            slide_contact(a, b, placement, *toward, *travel).map(Reach::Distance)
+    if ma == mb {
+        return None;
+    }
+    match (path.mechanism.shape(), &ma, &mb) {
+        (Shape::Travel { toward, travel }, Mover::Rigid(_), Mover::Fixed(placement)) => {
+            slide_contact(a, b, placement, toward, travel).map(Reach::Distance)
         }
-        (PathMotion::Travel { toward, travel }, Mover::Fixed(placement), Mover::Rigid(_)) => {
-            slide_contact(b, a, placement, *toward, *travel).map(Reach::Distance)
+        (Shape::Travel { toward, travel }, Mover::Fixed(placement), Mover::Rigid(_)) => {
+            slide_contact(b, a, placement, toward, travel).map(Reach::Distance)
         }
-        (PathMotion::Travel { .. }, _, _) => None,
-        (PathMotion::Turn { pivot, opening }, Mover::Rigid(_), Mover::Fixed(placement)) => {
-            turn_contact(a, b, placement, pivot, *opening).map(Reach::Angle)
+        (Shape::Turn { pivot, opening }, Mover::Rigid(_), Mover::Fixed(placement)) => {
+            turn_contact(a, b, placement, &pivot, opening).map(Reach::Angle)
         }
-        (PathMotion::Turn { pivot, opening }, Mover::Fixed(placement), Mover::Rigid(_)) => {
-            turn_contact(b, a, placement, pivot, *opening).map(Reach::Angle)
+        (Shape::Turn { pivot, opening }, Mover::Fixed(placement), Mover::Rigid(_)) => {
+            turn_contact(b, a, placement, &pivot, opening).map(Reach::Angle)
         }
-        (PathMotion::Turn { .. }, _, _) => None,
-        (PathMotion::Linkage { .. }, _, _) => {
-            if ma == mb {
-                return None;
-            }
-            let plane = path.plane()?;
+        _ => {
+            let plane = path.plane();
             let limit = path.limit();
             let mut best: Option<f64> = None;
             for (p, q) in start_pairs(&plane, a, &ma, b, &mb) {
-                if let Some(angle) = advance(path, &p, &ma, &q, &mb, best.unwrap_or(limit))
-                    && best.is_none_or(|b| angle < b)
+                if let Some(amount) = advance(path, &p, &ma, &q, &mb, best.unwrap_or(limit))
+                    && best.is_none_or(|b| amount < b)
                 {
-                    best = Some(angle);
+                    best = Some(amount);
                 }
             }
-            best.and_then(render::angle_from_radians_floor)
-                .map(Reach::Angle)
+            let amount = best?;
+            if path.mechanism.turns() {
+                render::angle_from_radians_floor(amount).map(Reach::Angle)
+            } else {
+                render::length_from_nm(amount.floor()).map(|distance| {
+                    Reach::Distance(SlideHit {
+                        distance,
+                        shrink: None,
+                    })
+                })
+            }
         }
     }
 }
@@ -626,13 +583,19 @@ pub fn deepest_overlap(
     }
     let samples = samples.max(1);
     let mut worst: Option<(f64, PoseValue)> = None;
-    if let Some(plane) = path.plane() {
+    let rigid_only = !matches!(ma, Mover::Member(..)) && !matches!(mb, Mover::Member(..));
+    let travel = match path.mechanism.shape() {
+        Shape::Travel { travel, .. } if rigid_only => Some(travel),
+        Shape::Travel { .. } | Shape::Turn { .. } | Shape::General => None,
+    };
+    if travel.is_none() {
+        let plane = path.plane();
         let limit = path.limit();
         let pairs = start_pairs(&plane, a, &ma, b, &mb);
         for k in 0..=samples {
-            let theta = limit * f64::from(k) / f64::from(samples);
+            let amount = limit * f64::from(k) / f64::from(samples);
             let (Some(moved_a), Some(moved_b)) =
-                (path.motion2(&ma, theta), path.motion2(&mb, theta))
+                (path.motion2(&ma, amount), path.motion2(&mb, amount))
             else {
                 continue;
             };
@@ -641,13 +604,13 @@ pub fn deepest_overlap(
                     continue;
                 };
                 if worst.is_none_or(|(w, _)| depth > w)
-                    && let Some(angle) = render::angle_from_radians_floor(theta)
+                    && let Some(value) = path.mechanism.value_of(amount)
                 {
-                    worst = Some((depth, PoseValue::Angle(angle)));
+                    worst = Some((depth, value));
                 }
             }
         }
-    } else if let PathMotion::Travel { travel, .. } = path.motion {
+    } else if let Some(travel) = travel {
         for k in 0..=samples {
             let along = render::nm(travel) * f64::from(k) / f64::from(samples);
             let Some(distance) = render::length_from_nm(along.floor()) else {
@@ -896,7 +859,10 @@ mod tests {
 mod linkage_tests {
     use super::*;
     use stave_lang::placement::{Axis, Direction};
-    use stave_model::solved::{Link, LinkageFrame, PlanePoint};
+    use stave_model::mechanism::{
+        FramePoint, Holding, MechanismDrive, MechanismEntry, MechanismFrame, MechanismMember,
+    };
+    use stave_model::solved::{BodyId, HardwareId};
 
     fn mm(value: i64) -> Length {
         Length::from_mm(value)
@@ -911,34 +877,72 @@ mod linkage_tests {
         [(13_280_000, 3_560_000), (-9_540_000, 1_390_000)],
     ];
 
-    /// The cup hinge on a 19mm door in a frame at the door's front hinge
-    /// corner (the world origin): the door's back face is at deep 19mm,
-    /// the side's front edge behind it.
-    fn cup_hinge() -> Linkage {
-        let place = |(across, depth): (i64, i64)| {
-            PlanePoint::new(
-                Length::from_nm(22_500_000 + across),
-                Length::from_nm(depth - 19_000_000),
-            )
-        };
-        let links = PINS.map(|[arm, cup]| Link {
-            ground: place(arm),
-            coupler: place(cup),
-        });
-        let frame = LinkageFrame::new(
+    fn index(i: usize) -> MemberIndex {
+        MemberIndex::new(i).unwrap()
+    }
+
+    /// The cup hinge on a 19mm door whose front hinge corner is the world
+    /// origin, as its kind declares it: the frame's origin at the cup's
+    /// centre on the door's back face (deep 19mm), `across` toward the
+    /// middle of the door, `depth` into it; the arm (held), the cup
+    /// (driven), the inner and the outer link.
+    fn cup_hinge() -> Mechanism {
+        let frame = MechanismFrame::new(
             Axis::Up,
-            Point::default(),
+            Point {
+                across: Length::from_nm(22_500_000),
+                up: mm(0),
+                deep: mm(19),
+            },
             Direction::Right,
             Direction::Front,
         )
         .unwrap();
-        Linkage::new(frame, links, Angle::from_deg(110)).unwrap()
+        let member = |name: &str, holding| MechanismMember {
+            hardware: HardwareId::from_usize(0),
+            body: BodyId::new(0).unwrap(),
+            name: name.to_owned(),
+            holding,
+        };
+        let members = vec![
+            member("arm", Holding::Held),
+            member("cup", Holding::Free),
+            member("inner_link", Holding::Free),
+            member("outer_link", Holding::Free),
+        ];
+        let at = |(across, depth): (i64, i64)| {
+            FramePoint::new(Length::from_nm(across), Length::from_nm(depth))
+        };
+        let mut entries = Vec::new();
+        for (link, [arm, cup]) in PINS.iter().enumerate() {
+            entries.push(MechanismEntry::Pivot {
+                first: index(0),
+                second: index(2 + link),
+                at: at(*arm),
+            });
+            entries.push(MechanismEntry::Pivot {
+                first: index(1),
+                second: index(2 + link),
+                at: at(*cup),
+            });
+        }
+        Mechanism::new(
+            frame,
+            members,
+            entries,
+            MechanismDrive::Turn {
+                member: index(1),
+                from: Angle::ZERO,
+                to: Angle::from_deg(110),
+            },
+            None,
+            vec![HardwareId::from_usize(0)],
+        )
+        .unwrap()
     }
 
     fn path() -> Path {
-        Path::new(&Motion::Linkage {
-            linkage: cup_hinge(),
-        })
+        Path::new(&cup_hinge()).unwrap()
     }
 
     fn block(a: [i64; 3], b: [i64; 3]) -> WorldSolid {
@@ -956,14 +960,7 @@ mod linkage_tests {
     #[test]
     fn a_door_on_a_linkage_first_hits_where_dense_steps_find_it() {
         let path = path();
-        let PathMotion::Linkage {
-            linkage,
-            path: solved,
-            ..
-        } = path.motion
-        else {
-            panic!("a linkage");
-        };
+        assert_eq!(path.mechanism().shape(), Shape::General);
         // A 450mm door, 19mm thick, in front of the side's edge.
         let door = block([0, 0, 0], [450, 700, 19]);
         // A post in front of the door's free end, and one beside its hinge
@@ -987,13 +984,14 @@ mod linkage_tests {
             else {
                 panic!("a hit");
             };
-            let plane = Plane::of_linkage(&linkage);
+            let plane = path.plane();
             let pairs = piece_pairs(&plane, &door, &DMat4::IDENTITY, fixed, &DMat4::IDENTITY);
             let (m, f) = (&pairs[0].0, &pairs[0].1.corners);
+            let cup = path.mechanism().moving();
             let dense = (1..=11_000)
                 .map(|k| (f64::from(k) / 100.0).to_radians())
                 .find(|theta| {
-                    let (rotation, offset) = solved.plane_pose(*theta).unwrap();
+                    let (rotation, offset) = path.mechanism().motion(cup, *theta).unwrap();
                     intersect(&m.moved(Motion2 { rotation, offset }).corners, f)
                 })
                 .unwrap();
@@ -1058,7 +1056,7 @@ mod linkage_tests {
     #[test]
     fn swept_wood_has_its_bores() {
         let path = path();
-        let link = Mover::Member(&path, LinkIndex::First);
+        let link = Mover::Member(&path, index(2));
         let door_moves = Mover::Rigid(&path);
         assert_eq!(
             deepest_overlap(&inner_link(), link, &door(true), door_moves, 2000),

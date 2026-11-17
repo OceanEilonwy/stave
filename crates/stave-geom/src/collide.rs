@@ -39,10 +39,11 @@
 
 use glam::{DMat4, DVec3};
 use stave_lang::placement::{Axis, Direction, PartAxis};
-use stave_lang::units::Length;
-use stave_model::solved::{
-    Body, LinkIndex, MemberShape, Motion, Part, Point, Pose, PoseValue, WorldBox,
-};
+use stave_lang::units::{Angle, Length};
+use stave_model::mechanism::MemberIndex;
+use stave_model::solved::{Body, MemberShape, Part, Pivot, Point, Pose, PoseValue, WorldBox};
+
+use crate::mechanism::{MechanismPath, Shape as MotionShape};
 
 pub use crate::piece::WorldCut;
 use crate::piece::{self, Piece};
@@ -1040,24 +1041,26 @@ impl Placement {
         deep: Length::ZERO,
     });
 
-    /// The placement after a chain of motions, outermost first (a drawer
-    /// inside a cabinet that itself moves), each at its pose value.
-    pub fn of_motions(motions: &[(Motion, PoseValue)]) -> Placement {
-        Placement::of_member(motions, None)
-    }
-
-    /// The placement of a member after a chain of motions, outermost
-    /// first: with `link`, the member is that link of the linkage the last
-    /// motion moves on, and turns about its pin as the linkage opens
-    /// instead of moving with the door.
-    pub fn of_member(motions: &[(Motion, PoseValue)], link: Option<LinkIndex>) -> Placement {
+    /// The placement after a chain of assembly mechanisms, outermost first
+    /// (a drawer inside a cabinet that itself moves), each at its pose
+    /// value: with `member`, the body is that member of the last
+    /// mechanism (a link) instead of moving with its assembly.
+    ///
+    /// A travel along one rail stays exact; a turn about one fixed line
+    /// turns by the pose's angle as given; any other motion is posed by the
+    /// solver within its range (past it, where it stops).
+    pub fn of_mechanisms(
+        chain: &[(&MechanismPath, PoseValue)],
+        member: Option<MemberIndex>,
+    ) -> Placement {
         let mut offset = Point::default();
         let mut matrix = DMat4::IDENTITY;
         let mut turned = false;
-        let last = motions.len().saturating_sub(1);
-        for (index, (motion, value)) in motions.iter().enumerate() {
-            match *motion {
-                Motion::Travel { toward, travel } => {
+        let last = chain.len().saturating_sub(1);
+        for (index, (path, value)) in chain.iter().enumerate() {
+            let member = member.filter(|_| index == last);
+            match (member, path.shape()) {
+                (None, MotionShape::Travel { toward, travel }) => {
                     let amount = match *value {
                         PoseValue::Open => travel,
                         PoseValue::Travel(length) => length,
@@ -1074,12 +1077,9 @@ impl Placement {
                     }
                     matrix *= DMat4::from_translation(point_vector(step));
                 }
-                Motion::Turn {
-                    pivot,
-                    opening_angle,
-                } => {
+                (None, MotionShape::Turn { pivot, opening }) => {
                     let angle = match *value {
-                        PoseValue::Open => opening_angle,
+                        PoseValue::Open => opening,
                         PoseValue::Angle(angle) => angle,
                         PoseValue::Closed | PoseValue::Travel(_) => continue,
                     };
@@ -1087,34 +1087,14 @@ impl Placement {
                         continue;
                     }
                     turned = true;
-                    let free = direction_vector(pivot.free_side);
-                    let swing = direction_vector(pivot.swing_toward);
-                    let axis = free.cross(swing).normalize_or(axis_vector(pivot.axis));
-                    let through = point_vector(pivot.through);
-                    matrix *= DMat4::from_translation(through)
-                        * DMat4::from_axis_angle(axis, render::radians_f64(angle))
-                        * DMat4::from_translation(-through);
+                    matrix *= turn_about(&pivot, angle);
                 }
-                Motion::Linkage { linkage } => {
-                    let angle = match *value {
-                        PoseValue::Open => linkage.opening_angle(),
-                        PoseValue::Angle(angle) => angle,
-                        PoseValue::Closed | PoseValue::Travel(_) => continue,
-                    };
-                    if angle.microdeg() == 0 {
+                (Some(_), _) | (None, MotionShape::General) => {
+                    let amount = path.amount(*value);
+                    if amount == 0.0 {
                         continue;
                     }
-                    let path = crate::linkage::LinkagePath::new(&linkage);
-                    // Within the checked range the links always reach; past
-                    // it (a pose wider than the hinge opens), the door stays
-                    // where the hinge stops.
-                    let theta = render::radians_f64(angle).min(path.opening());
-                    let moved = match link.filter(|_| index == last) {
-                        Some(link) => path
-                            .pose(theta)
-                            .and_then(|pose| pose.links.get(link.index()).copied()),
-                        None => path.coupler(theta),
-                    };
+                    let moved = path.matrix(member.unwrap_or_else(|| path.moving()), amount);
                     if let Some(moved) = moved {
                         turned = true;
                         matrix *= moved;
@@ -1137,7 +1117,19 @@ impl Placement {
     }
 }
 
-fn direction_offset(direction: Direction, amount: Length) -> Point {
+/// The world turn of `angle` about a pivot line, `free_side` toward
+/// `swing_toward`.
+pub(crate) fn turn_about(pivot: &Pivot, angle: Angle) -> DMat4 {
+    let free = direction_vector(pivot.free_side);
+    let swing = direction_vector(pivot.swing_toward);
+    let axis = free.cross(swing).normalize_or(axis_vector(pivot.axis));
+    let through = point_vector(pivot.through);
+    DMat4::from_translation(through)
+        * DMat4::from_axis_angle(axis, render::radians_f64(angle))
+        * DMat4::from_translation(-through)
+}
+
+pub(crate) fn direction_offset(direction: Direction, amount: Length) -> Point {
     let value = if direction.is_positive() {
         amount
     } else {
@@ -1163,7 +1155,7 @@ fn axis_index(axis: Axis) -> usize {
     }
 }
 
-fn axis_vector(axis: Axis) -> DVec3 {
+pub(crate) fn axis_vector(axis: Axis) -> DVec3 {
     let mut v = DVec3::ZERO;
     v[axis_index(axis)] = 1.0;
     v
@@ -1486,27 +1478,59 @@ mod tests {
 
     #[test]
     fn a_turned_door_hits_what_is_in_its_way() {
-        use stave_lang::units::Angle;
-        use stave_model::solved::Pivot;
+        use stave_model::mechanism::{
+            FramePoint, Holding, Mechanism, MechanismDrive, MechanismEntry, MechanismFrame,
+            MechanismMember,
+        };
+        use stave_model::solved::{BodyId, HardwareId};
         // A door 500mm wide hinged at its left edge, swinging out toward
-        // the front, and a post 100mm in front of its hinge.
+        // the front, and a post 100mm in front of its hinge: a leaf turning
+        // on a pin at the door's front left edge.
         let door = block(point(0, 0, 0), point(500, 700, 19));
         let post = block(point(5, 0, -150), point(15, 700, -100));
-        let motion = Motion::Turn {
-            pivot: Pivot {
-                axis: Axis::Up,
-                through: point(0, 0, 0),
-                free_side: Direction::Right,
-                swing_toward: Direction::Front,
-            },
-            opening_angle: Angle::from_deg(110),
+        let member = |name: &str, holding| MechanismMember {
+            hardware: HardwareId::from_usize(0),
+            body: BodyId::new(0).unwrap(),
+            name: name.to_owned(),
+            holding,
         };
-        let shut = Placement::of_motions(&[(motion, PoseValue::Closed)]);
+        let index = |i| MemberIndex::new(i).unwrap();
+        let hinge = Mechanism::new(
+            MechanismFrame::new(Axis::Up, point(0, 0, 0), Direction::Right, Direction::Front)
+                .unwrap(),
+            vec![
+                member("leaf", Holding::Free),
+                member("fixed", Holding::Held),
+            ],
+            vec![MechanismEntry::Pivot {
+                first: index(0),
+                second: index(1),
+                at: FramePoint::default(),
+            }],
+            MechanismDrive::Turn {
+                member: index(0),
+                from: Angle::ZERO,
+                to: Angle::from_deg(110),
+            },
+            None,
+            vec![],
+        )
+        .unwrap();
+        let path = MechanismPath::new(&hinge).unwrap();
+        assert!(matches!(path.shape(), MotionShape::Turn { .. }));
+        let at = |value| Placement::of_mechanisms(&[(&path, value)], None);
+        let shut = at(PoseValue::Closed);
         assert_eq!(shut, Placement::REST);
         assert!(overlaps_placed(&door, &shut, &post, &Placement::REST).is_empty());
-        let square = Placement::of_motions(&[(motion, PoseValue::Angle(Angle::from_deg(90)))]);
+        let square = at(PoseValue::Angle(Angle::from_deg(90)));
         assert!(!overlaps_placed(&door, &square, &post, &Placement::REST).is_empty());
-        let ajar = Placement::of_motions(&[(motion, PoseValue::Angle(Angle::from_deg(10)))]);
+        let ajar = at(PoseValue::Angle(Angle::from_deg(10)));
         assert!(overlaps_placed(&door, &ajar, &post, &Placement::REST).is_empty());
+        // The leaf's own pose, from the solver, is the same turn.
+        let solved = Placement::of_mechanisms(
+            &[(&path, PoseValue::Angle(Angle::from_deg(90)))],
+            Some(index(0)),
+        );
+        assert!(!overlaps_placed(&door, &solved, &post, &Placement::REST).is_empty());
     }
 }

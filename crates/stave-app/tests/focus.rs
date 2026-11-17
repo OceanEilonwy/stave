@@ -795,8 +795,11 @@ fn no_cup_hinge_puts_steel_in_wood() {
                 continue;
             }
             let assembly = hardware.assembly.unwrap();
-            let motion = design.assemblies[assembly.index()].motion.unwrap();
-            let path = Path::new(&motion);
+            let mechanism = design.assemblies[assembly.index()]
+                .mechanism
+                .as_ref()
+                .unwrap();
+            let path = Path::new(mechanism).unwrap();
             for member in &hardware.members {
                 let carried = match member.carrier {
                     BodyCarrier::Part(part) => design.part(part).unwrap().assembly,

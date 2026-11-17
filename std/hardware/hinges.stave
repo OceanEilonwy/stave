@@ -161,6 +161,13 @@ kind butt_hinge : hinge {
     shape: box(along: length, across: 0mm..leaf_width, depth: -1.5mm..0mm)
   }
 
+  // The leaf in the lid or door turns on the pin, which lies on the edge
+  // where the two parts are flush, in the face they close on.
+  mechanism {
+    pivot leaf, fixed_leaf at point(across: 0mm, depth: 0mm)
+    drive: turn(leaf, from: 0deg, to: opening_angle)
+  }
+
   // A shallow mortise for each leaf, as deep as the leaf is thick.
   cut mortise: crossing(piece, leaf) { notch(depth: 1.5mm) }
   cut mortise: crossing(on, fixed_leaf) { notch(depth: 1.5mm) }

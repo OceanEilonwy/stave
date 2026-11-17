@@ -1148,8 +1148,9 @@ pub struct MechanismDef {
     pub constraints: Vec<ConstraintDef>,
     /// Its couplings, in source order.
     pub couplings: Vec<CouplingDef>,
-    /// Its one input.
-    pub drive: DriveDef,
+    /// Its one input; `None` for a mechanism that follows the hardware
+    /// that drives its assembly (a lid stay).
+    pub drive: Option<DriveDef>,
     /// What stops the drive, when the kind says.
     pub stop: Option<StopDef>,
     /// How thick every pin is, when the kind says.

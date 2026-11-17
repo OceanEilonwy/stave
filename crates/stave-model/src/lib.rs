@@ -23,6 +23,7 @@ pub mod defs;
 pub mod ids;
 pub mod instance;
 pub mod linkage;
+pub mod mechanism;
 mod resolve;
 pub mod solved;
 pub mod suggest;

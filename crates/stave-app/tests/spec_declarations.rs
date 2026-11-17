@@ -994,7 +994,9 @@ fn a_mechanism_needs_exactly_one_freedom() {
         "mechanism",
         "test_hinge's mechanism has -1 freedoms; it needs exactly one",
     );
-    // One freedom in another form is not supported yet.
+    // One freedom that can't be solved one step at a time: a couple
+    // between members that run on no rail. (Before the general solver this
+    // was not-supported: only the four-bar form was solved.)
     let slot = FOUR_PINS.replace(
         "    pivot cup, outer_link at point(across: -9.54mm, depth: 1.39mm)\n",
         "    slot cup, outer_link from point(across: -9.54mm, depth: 1.39mm) to point(across: -9.54mm, depth: 5mm)\n    couple outer_link to cup: 1/2\n",
@@ -1002,8 +1004,8 @@ fn a_mechanism_needs_exactly_one_freedom() {
     let opened = open(&hung_door(&slot));
     the_diagnostic(
         &opened,
-        "not-supported",
-        "test_hinge's mechanism is not supported yet",
+        "mechanism",
+        "test_hinge's mechanism: `outer_link` travels, but runs on no rail",
     );
 }
 
@@ -1027,14 +1029,13 @@ fn a_pivot_names_two_declared_members() {
     );
 }
 
-/// Until a mechanism can say how a hinge without links moves, a hinge kind
-/// with no `mechanism` turns about the edge its mount measures from (a
-/// butt hinge's pin); it has no linkage. (It used to be a cup hinge with no
-/// motion and a not-supported warning: whether a hinge is a cup hinge is
-/// no longer decided by its entries.) With no mechanism to place them, the
-/// links ride on the door (`with: piece`).
+/// A hinge kind with no `mechanism` doesn't move: nothing about a hinge is
+/// built in, so how it moves is only what its kind declares. (It used to
+/// turn about the edge its mount measures from, read from its base.) With
+/// no mechanism to place them, the links ride on the door
+/// (`with: piece`).
 #[test]
-fn a_hinge_kind_without_a_mechanism_turns_about_its_edge() {
+fn a_hinge_kind_without_a_mechanism_does_not_move() {
     let opened = open(&format!(
         "{}\ncomponent Door {{\n  part panel : pine_19 {{\n    length: 300mm\n    width:  200mm\n    place {{\n      orient(length: up, width: right)\n      against(base.top)\n      against(side.right)\n      against(base.front)\n    }}\n  }}\n}}",
         without_mechanism()
@@ -1052,10 +1053,13 @@ fn a_hinge_kind_without_a_mechanism_turns_about_its_edge() {
         "{:?}",
         diagnostics(&opened)
     );
+    let hinge = common::hardware(design(&opened), "hinge");
+    assert!(hinge.mechanism.is_none() && hinge.own_mechanism.is_none());
     assert!(
-        common::hardware(design(&opened), "hinge")
-            .mechanism
-            .is_none()
+        design(&opened)
+            .assemblies
+            .iter()
+            .all(|a| a.mechanism.is_none())
     );
 }
 

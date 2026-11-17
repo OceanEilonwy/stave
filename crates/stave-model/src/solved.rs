@@ -82,6 +82,7 @@ pub use crate::defs::{BodyId, CutName};
 
 pub use crate::ids::{AssemblyId, HardwareId, JointId, KindId, PartId, RegionId, SceneId};
 pub use crate::linkage::{Branch, Link, Linkage, LinkageError, LinkageFrame, PlanePoint};
+pub use crate::mechanism::{Mechanism, MemberIndex};
 
 // ---------------------------------------------------------------------------
 // Geometry
@@ -1268,6 +1269,11 @@ pub struct Hardware {
     /// Its members with a body, in its kind's order: every shape the
     /// checks see and the viewer draws (grammar, "One collision model").
     pub members: Vec<Body>,
+    /// Its kind's mechanism counted on its own, in its own plane, when it
+    /// has a drive: what the checks run through its range when no
+    /// assembly moves it. Its assembly's motion is
+    /// [`Assembly::mechanism`].
+    pub own_mechanism: Option<crate::mechanism::Mechanism>,
 }
 
 /// A member of one piece of hardware: which piece, and which of its kind's
@@ -1280,30 +1286,6 @@ pub struct BodyRef {
     pub body: BodyId,
 }
 
-/// One of the two links of a four-bar linkage, in the order of
-/// [`Linkage::links`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum LinkIndex {
-    /// The first link.
-    First,
-    /// The second link.
-    Second,
-}
-
-impl LinkIndex {
-    /// Both links, in order.
-    pub const BOTH: [LinkIndex; 2] = [LinkIndex::First, LinkIndex::Second];
-
-    /// Its index in [`Linkage::links`].
-    pub fn index(self) -> usize {
-        match self {
-            LinkIndex::First => 0,
-            LinkIndex::Second => 1,
-        }
-    }
-}
-
 /// What moves a member.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case", tag = "kind", content = "id")]
@@ -1314,9 +1296,10 @@ pub enum BodyCarrier {
     /// It moves with the assembly this region belongs to (`with:` a role
     /// bound to a region).
     Region(RegionId),
-    /// The hardware's mechanism turns it as its assembly opens: this link
-    /// of the linkage its assembly moves on.
-    Link(LinkIndex),
+    /// Its assembly's mechanism places it as the assembly moves: this
+    /// member of [`Assembly::mechanism`] (a link, or a member riding on
+    /// one).
+    Link(MemberIndex),
 }
 
 /// One convex shape of a member, at rest, in world coordinates.
@@ -1629,8 +1612,12 @@ pub struct Assembly {
     pub parts: Vec<PartId>,
     /// Every piece of hardware inside it.
     pub hardware: Vec<HardwareId>,
-    /// Its motion, from its hinges or slides.
+    /// Its motion, from its hinges or slides (the old contract, filled
+    /// from `mechanism` until its readers move to it).
     pub motion: Option<Motion>,
+    /// Its mechanism: the hardware with a drive that moves it, and any
+    /// that follow (grammar, "Mechanisms"). `None` when nothing moves it.
+    pub mechanism: Option<crate::mechanism::Mechanism>,
 }
 
 /// A region.

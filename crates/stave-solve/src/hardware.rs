@@ -12,50 +12,20 @@ use stave_lang::units::Length;
 use stave_lang::units::{ExactAngle, ExactLength, Rational};
 use stave_lang::{Code, Diagnostic, Label};
 use stave_model::defs::{
-    AxisRule, BodyId, Carrier, ConstraintDef, CutName, DefId, DriveDef, FaceRule, FrameAxis,
-    FromTerm, KindDef, KindPoint, MountSelector, MountTerm, RExpr, RangeDef, RoleIndex, ShapeDef,
+    AxisRule, BodyId, Carrier, CutName, DefId, FaceRule, FrameAxis, FromTerm, KindDef, KindPoint,
+    MountSelector, MountTerm, RExpr, RangeDef, RoleIndex, ShapeDef,
 };
 use stave_model::ids::{HardwareId, KindId, PartId, RegionId};
 use stave_model::instance::ItemSlot;
-use stave_model::solved::{CutKind, LinkBar, LinkIndex, Linkage, LinkageFrame, PlanePoint, Point};
+use stave_model::solved::CutKind;
 use stave_model::value::{ExactBox, ModelRef, Value};
 
 use crate::eval::{Env, KindEnv, midpoint};
 use crate::joints::Binding;
-use crate::legacy::{Input, Legacy, Member};
-use crate::mechanism::{Constraint, Drive, ExactPoint, MechanismError, Step};
+use crate::legacy::{CupParts, Input, Legacy, LegacyMotion};
+use crate::mechanism::{ExactPoint, HardwareMechanism};
 use crate::place::Siblings;
 use crate::{Memo, Reported, Solved, Solver};
-
-/// A cup hinge's arm and links, beside its linkage (which is its motion).
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) struct Mechanism {
-    /// The two links' members, in the linkage's order.
-    pub link_bodies: [BodyId; 2],
-    pub arm: Member,
-    pub knuckle: Member,
-    pub links: [LinkBar; 2],
-    pub pin_diameter: Length,
-    pub pin_length: Length,
-}
-
-/// The motion a piece of hardware gives its assembly.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) enum MotionExact {
-    Turn {
-        axis: Axis,
-        through: [ExactLength; 3],
-        free_side: Direction,
-        swing_toward: Direction,
-        angle: ExactAngle,
-    },
-    /// A cup hinge's four-bar linkage, checked and in whole nanometres.
-    Linkage(Linkage),
-    Travel {
-        toward: Direction,
-        travel: ExactLength,
-    },
-}
 
 /// What a role of a placed piece of hardware is bound to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -306,7 +276,8 @@ pub(crate) enum WorldShape {
 pub(crate) enum MemberCarrier {
     Part(PartId),
     Region(RegionId),
-    Link(stave_model::solved::LinkIndex),
+    /// Placed by its kind's mechanism: this member (with no `with:`) of it.
+    Link(BodyId),
 }
 
 /// A member with a body, at rest in the world.
@@ -356,9 +327,14 @@ pub(crate) struct Placed {
     pub cuts: Vec<HardwareCut>,
     /// The fasteners its kind uses: name, diameter, length and count.
     pub fasteners: Vec<stave_model::solved::HardwareFastener>,
-    pub motion: Option<MotionExact>,
-    /// A cup hinge's arm and links.
-    pub mechanism: Option<Mechanism>,
+    /// Its kind's mechanism, exact, in its own plane.
+    pub mechanism: Option<HardwareMechanism>,
+    /// That mechanism counted on its own, when it has a drive.
+    pub own: Option<stave_model::mechanism::Mechanism>,
+    /// The old contract's motion, read from the mechanism's shape.
+    pub motion: Option<LegacyMotion>,
+    /// The old contract's arm and links of a four-bar linkage.
+    pub cup: Option<CupParts>,
     pub model: Option<ModelRef>,
     /// The old contract.
     pub legacy: Legacy,
@@ -722,17 +698,25 @@ impl Solver<'_> {
             span,
         };
         let legacy = self.legacy(&input)?;
-        // The kind's mechanism moves it; without one, the old contract
-        // says how.
-        let (motion, mechanism) = if kind.mechanism.is_some() {
-            self.kind_linkage(
-                &binding, &kind, &kind_name, &name, &frame, &input, &piece_box, &env, span,
-            )?
-        } else {
-            (self.legacy_motion(&input, &piece_box)?, None)
+        // The kind's mechanism moves it, counted on its own first.
+        let (mechanism, own) = match &kind.mechanism {
+            Some(def) => {
+                let mechanism = self.kind_mechanism(&binding, &kind, &kind_name, def, &frame)?;
+                let own = self.check_mechanism(hardware, &roles, &mechanism, &kind_name)?;
+                (Some(mechanism), own)
+            }
+            None => (None, None),
         };
-        let links = mechanism.as_ref().map(|mechanism| mechanism.link_bodies);
-        let members = self.placed_members(&kind, &roles, &bodies, &frame, links)?;
+        let (motion, cup) = self.legacy_motion(
+            &input,
+            &piece_box,
+            mechanism.as_ref(),
+            &binding,
+            &name,
+            &env,
+            span,
+        )?;
+        let members = self.placed_members(&kind, &roles, &bodies, &frame)?;
         Ok(Placed {
             kind: binding.kind,
             kind_name: binding.name.clone(),
@@ -743,8 +727,10 @@ impl Solver<'_> {
             entries,
             cuts,
             fasteners,
-            motion,
             mechanism,
+            own,
+            motion,
+            cup,
             model,
             legacy,
             members,
@@ -758,12 +744,11 @@ impl Solver<'_> {
         roles: &[(String, RoleBound)],
         bodies: &[PlacedBody],
         frame: &Frame,
-        links: Option<[BodyId; 2]>,
     ) -> Solved<Vec<PlacedMember>> {
         let mut members = Vec::with_capacity(bodies.len());
         for placed in bodies {
             let body = kind.bodies.get(placed.body.index()).ok_or(Reported)?;
-            let Some(carrier) = member_carrier(kind, roles, placed.body, links) else {
+            let Some(carrier) = member_carrier(kind, roles, placed.body) else {
                 return Err(self.error(
                     Code::MissingField,
                     format!(
@@ -1301,141 +1286,9 @@ impl Solver<'_> {
         Ok(out)
     }
 
-    /// A kind's mechanism for one piece of hardware: its linkage placed
-    /// relative to the frame, and the old contract's arm and links.
-    #[allow(clippy::too_many_arguments)]
-    fn kind_linkage(
-        &mut self,
-        binding: &Binding,
-        kind: &KindDef,
-        kind_name: &str,
-        name: &str,
-        frame: &Frame,
-        input: &Input<'_>,
-        piece_box: &ExactBox,
-        env: &Env<'_>,
-        span: Span,
-    ) -> Solved<(Option<MotionExact>, Option<Mechanism>)> {
-        let Some(cup_kind) = self.cup_kind(binding, kind, kind_name, env, span)? else {
-            return Ok((None, None));
-        };
-        let face_axis = input.mount_face.axis();
-        let along = frame.along.axis();
-        let across = frame.across.axis();
-        let opposite = input.mount_face.opposite();
-        let opposite_position = if opposite.is_positive() {
-            piece_box.max(face_axis)
-        } else {
-            piece_box.min(face_axis)
-        };
-        let face_position = frame.origin_on(face_axis);
-        let edge = frame.across_edge.unwrap_or_else(|| frame.origin_on(across));
-        let mut through = [ExactLength::ZERO; 3];
-        for axis in Axis::ALL {
-            if let Some(slot) = through.get_mut(world_index(axis)) {
-                *slot = if axis == face_axis {
-                    opposite_position
-                } else if axis == across {
-                    edge
-                } else {
-                    frame.origin_on(along)
-                };
-            }
-        }
-        let cup_x = abs(frame.origin_on(across).checked_sub(edge).ok_or(Reported)?)?;
-        let thickness = abs(opposite_position
-            .checked_sub(face_position)
-            .ok_or(Reported)?)?;
-        let linkage = self.cup_linkage(
-            name,
-            &cup_kind.mechanism,
-            CupFrame {
-                axis: along,
-                origin: through,
-                free_side: frame.across,
-                swing_toward: opposite.direction(),
-                cup_x,
-                thickness,
-            },
-            env,
-            span,
-        )?;
-        let widest = cup_kind
-            .links
-            .iter()
-            .map(|link| link.width)
-            .max()
-            .unwrap_or(Length::ZERO);
-        let mechanism = Mechanism {
-            link_bodies: cup_kind.link_bodies,
-            arm: input.boxed(frame.world_box(&cup_kind.arm)?, &cup_kind.arm)?,
-            knuckle: input.boxed(frame.world_box(&cup_kind.knuckle)?, &cup_kind.knuckle)?,
-            links: cup_kind.links,
-            pin_diameter: cup_kind.pin_diameter,
-            pin_length: widest,
-        };
-        Ok((Some(MotionExact::Linkage(linkage)), Some(mechanism)))
-    }
-
-    /// A cup hinge's linkage: its kind's mechanism, its pins placed
-    /// relative to the cup, checked over the drive's range.
-    fn cup_linkage(
-        &mut self,
-        name: &str,
-        mechanism: &crate::mechanism::Mechanism,
-        frame: CupFrame,
-        env: &Env<'_>,
-        span: Span,
-    ) -> Solved<Linkage> {
-        let near = |value: ExactLength| value.to_nearest_length().ok_or(Reported);
-        let coordinate = |axis: Axis| -> Solved<Length> {
-            near(*frame.origin.get(world_index(axis)).ok_or(Reported)?)
-        };
-        let origin = Point {
-            across: coordinate(Axis::Across)?,
-            up: coordinate(Axis::Up)?,
-            deep: coordinate(Axis::Deep)?,
-        };
-        let world = LinkageFrame::new(frame.axis, origin, frame.free_side, frame.swing_toward)
-            .map_err(|_| Reported)?;
-        // From the kind's frame (across from the cup's centre, depth into
-        // the door from its back) to the linkage's plane (from the door's
-        // edge, and from its front face).
-        let place = |point: ExactPoint| -> Option<PlanePoint> {
-            let x = frame.cup_x.checked_add(point.across)?;
-            let y = point.depth.checked_sub(frame.thickness)?;
-            Some(PlanePoint::new(
-                x.to_nearest_length()?,
-                y.to_nearest_length()?,
-            ))
-        };
-        match mechanism.linkage(world, place) {
-            Ok(linkage) => Ok(linkage),
-            Err(MechanismError::DeadPoint) => {
-                let Drive::Turn { to, .. } = mechanism.drive() else {
-                    return Err(Reported);
-                };
-                let opening = to.to_nearest_angle().ok_or(Reported)?;
-                Err(self.error(
-                    Code::Motion,
-                    format!("{name}: a cup hinge's links lock before it opens {opening}"),
-                    env.file,
-                    span,
-                    "give the hinge a smaller opening_angle: its links can't turn this far",
-                ))
-            }
-            Err(
-                MechanismError::Freedom { .. }
-                | MechanismError::NoOrder { .. }
-                | MechanismError::NotSupported
-                | MechanismError::Overflow,
-            ) => Err(Reported),
-        }
-    }
-
     /// The environment a hardware kind's own expressions are evaluated
     /// in, for one piece of hardware, handed to `body`.
-    fn in_kind<T>(
+    pub(crate) fn in_kind<T>(
         &mut self,
         binding: &Binding,
         kind: &KindDef,
@@ -1459,282 +1312,21 @@ impl Solver<'_> {
         body(self, &env)
     }
 
-    /// A cup hinge kind's mechanism for one piece of hardware: checked, and
-    /// read for the old contract (its links' bars, its held member's two
-    /// boxes as the arm and its knuckle, and its pins). `None`, with a
-    /// warning, when the kind declares no mechanism.
-    fn cup_kind(
-        &mut self,
-        binding: &Binding,
-        kind: &KindDef,
-        kind_name: &str,
-        env: &Env<'_>,
-        span: Span,
-    ) -> Solved<Option<CupKind>> {
-        let Some(def) = &kind.mechanism else {
-            return Ok(None);
-        };
-        let file = kind.decl.file;
-        let evaluated = self.in_kind(binding, kind, |solver, kind_env| {
-            let mut constraints = Vec::new();
-            for constraint in &def.constraints {
-                constraints.push(match constraint {
-                    ConstraintDef::Pivot { bodies, at, .. } => Constraint::Pivot {
-                        bodies: *bodies,
-                        at: solver.kind_point(at, kind_env)?,
-                    },
-                    ConstraintDef::Slot {
-                        bodies, from, to, ..
-                    } => Constraint::Slot {
-                        bodies: *bodies,
-                        from: solver.kind_point(from, kind_env)?,
-                        to: solver.kind_point(to, kind_env)?,
-                    },
-                    ConstraintDef::Rail { bodies, along, .. } => Constraint::Rail {
-                        bodies: *bodies,
-                        along: *along,
-                    },
-                });
-            }
-            let drive = match &def.drive {
-                DriveDef::Turn { body, from, to, .. } => Drive::Turn {
-                    body: *body,
-                    from: solver.kind_angle(from, kind_env)?,
-                    to: solver.kind_angle(to, kind_env)?,
-                },
-                DriveDef::Travel { body, from, to, .. } => Drive::Travel {
-                    body: *body,
-                    from: solver.kind_length(from, kind_env)?,
-                    to: solver.kind_length(to, kind_env)?,
-                },
-            };
-            let stop = match &def.stop {
-                Some(stop) => Some((solver.eval(&stop.value, kind_env)?, stop)),
-                None => None,
-            };
-            let pin_diameter = match &def.pin_diameter {
-                Some(diameter) => solver.kind_length(diameter, kind_env)?,
-                None => ExactLength::ZERO,
-            };
-            Ok((constraints, drive, stop, pin_diameter))
-        })?;
-        let (constraints, drive, stop, pin_diameter) = evaluated;
-        let carriers: Vec<_> = kind.bodies.iter().map(|body| body.with).collect();
-        let mechanism = match crate::mechanism::Mechanism::new(
-            &carriers,
-            constraints,
-            def.couplings.len(),
-            drive,
-        ) {
-            Ok(mechanism) => mechanism,
-            Err(error) => {
-                if self.reported_mechanisms.insert(binding.kind) {
-                    let diagnostic = self.mechanism_error(kind, kind_name, def.span, &error);
-                    if let Some(diagnostic) = diagnostic {
-                        self.report(diagnostic);
-                    }
-                }
-                return Err(Reported);
-            }
-        };
-        // The drive goes no further than what stops it.
-        if let Some((value, stop)) = stop {
-            let beyond = match (drive, &value) {
-                (Drive::Turn { to, .. }, Value::Angle(at)) => to > *at,
-                (Drive::Travel { to, .. }, Value::Length(at)) => to > *at,
-                _ => false,
-            };
-            if beyond {
-                return Err(self.error(
-                    Code::Motion,
-                    format!(
-                        "kind '{kind_name}' is driven past its stop: {}",
-                        stop.message.literal()
-                    ),
-                    file,
-                    stop.span,
-                    "make the drive's to: no more than the stop",
-                ));
-            }
-        }
-        let Step::HungOnTwoLinks { links, .. } = mechanism.step();
-        let [first, second] = links;
-        let link_bars = [
-            self.link_bar(binding, kind, kind_name, first.link, env, span)?,
-            self.link_bar(binding, kind, kind_name, second.link, env, span)?,
-        ];
-        let held = kind.bodies.get(first.held.index()).ok_or(Reported)?;
-        let boxes: Vec<&ShapeDef> = held
-            .shapes
-            .iter()
-            .map(|shape| &shape.shape)
-            .filter(|shape| matches!(shape, ShapeDef::Box { .. }))
-            .collect();
-        let (arm, knuckle) = match (boxes.as_slice(), held.shapes.len()) {
-            ([arm, knuckle], 2) => {
-                let arm = (*arm).clone();
-                let knuckle = (*knuckle).clone();
-                self.in_kind(binding, kind, |solver, kind_env| {
-                    Ok((
-                        solver.frame_box(&arm, kind_env)?,
-                        solver.frame_box(&knuckle, kind_env)?,
-                    ))
-                })?
-            }
-            _ => {
-                return Err(self.error(
-                    Code::NotSupported,
-                    format!(
-                        "kind '{kind_name}': a cup hinge's held member '{}' with other than two boxes is not supported yet",
-                        held.name
-                    ),
-                    file,
-                    held.span,
-                    "give the arm two boxes: its body, then its knuckle",
-                ));
-            }
-        };
-        Ok(Some(CupKind {
-            mechanism,
-            links: link_bars,
-            link_bodies: [first.link, second.link],
-            arm,
-            knuckle,
-            pin_diameter: pin_diameter.to_nearest_length().ok_or(Reported)?,
-        }))
-    }
-
-    /// The diagnostic for a mechanism that can't be built, at the kind.
-    fn mechanism_error(
-        &self,
-        kind: &KindDef,
-        kind_name: &str,
-        span: Span,
-        error: &MechanismError,
-    ) -> Option<Diagnostic> {
-        let file = kind.decl.file;
-        let label = Label::new(file, span);
-        Some(match error {
-            MechanismError::Freedom { found } => Diagnostic::error(
-                Code::Mechanism,
-                format!("{kind_name}'s mechanism has {found} freedoms; it needs exactly one"),
-                label,
-            )
-            .with_help(
-                "count three for the driven member and for each member with no 'with:', less two for each pivot or rail and one for each slot or couple; add or remove pins until one is left",
-            ),
-            MechanismError::NoOrder { left } => {
-                let names: Vec<&str> = left
-                    .iter()
-                    .filter_map(|body| kind.bodies.get(body.index()))
-                    .map(|body| body.name.as_str())
-                    .collect();
-                Diagnostic::error(
-                    Code::Mechanism,
-                    format!(
-                        "{kind_name}'s mechanism can't be solved one step at a time from its drive"
-                    ),
-                    label,
-                )
-                .with_note(format!("nothing places {}", names.join(" and ")))
-                .with_help("pin each of them to a member that is held or driven, or to one pinned to those")
-            }
-            MechanismError::NotSupported => Diagnostic::error(
-                Code::NotSupported,
-                format!("{kind_name}'s mechanism is not supported yet"),
-                label,
-            )
-            .with_help(
-                "Stave solves a driven member hung on two links from a held member, turned from 0deg (a cup hinge's four-bar linkage)",
-            ),
-            MechanismError::DeadPoint | MechanismError::Overflow => return None,
-        })
-    }
-
-    /// A link's bar, from its shapes: one bar centred along the pins, or
-    /// two mirror-image bars (a strap whose sides pass either side of the
-    /// other link).
-    fn link_bar(
-        &mut self,
-        binding: &Binding,
-        kind: &KindDef,
-        kind_name: &str,
-        link: stave_model::defs::BodyId,
-        env: &Env<'_>,
-        span: Span,
-    ) -> Solved<LinkBar> {
-        let body = kind.bodies.get(link.index()).ok_or(Reported)?;
-        let bars: Vec<(RExpr, RangeDef)> = body
-            .shapes
-            .iter()
-            .filter_map(|shape| match &shape.shape {
-                ShapeDef::Bar {
-                    thickness, along, ..
-                } => Some((thickness.clone(), along.clone())),
-                ShapeDef::Box { .. } | ShapeDef::Cylinder { .. } | ShapeDef::Prism { .. } => None,
-            })
-            .collect();
-        let shapes = body.shapes.len();
-        let evaluated = self.in_kind(binding, kind, |solver, kind_env| {
-            bars.iter()
-                .map(|(thickness, along)| {
-                    Ok((
-                        solver.kind_length(thickness, kind_env)?,
-                        solver.frame_range(along, kind_env)?,
-                    ))
-                })
-                .collect::<Solved<Vec<_>>>()
-        })?;
-        let near = |value: ExactLength| value.to_nearest_length().ok_or(Reported);
-        let bar = match (evaluated.as_slice(), shapes) {
-            ([(thickness, (low, high))], 1) if low.checked_neg() == Some(*high) => {
-                Some((*thickness, high.checked_sub(*low), Some(ExactLength::ZERO)))
-            }
-            ([(thickness, (low, high)), (other, (far_low, far_high))], 2)
-                if thickness == other
-                    && far_low.checked_neg() == Some(*high)
-                    && far_high.checked_neg() == Some(*low)
-                    && *low >= ExactLength::ZERO =>
-            {
-                Some((*thickness, high.checked_add(*high), low.checked_add(*low)))
-            }
-            _ => None,
-        };
-        match bar {
-            Some((thickness, Some(width), Some(slot))) => Ok(LinkBar {
-                width: near(width)?,
-                thickness: near(thickness)?,
-                slot: near(slot)?,
-            }),
-            Some(_) => Err(Reported),
-            None => Err(self.error(
-                Code::NotSupported,
-                format!(
-                    "kind '{kind_name}': link '{}' is not one bar centred along its pins, or two mirror-image bars; that is not supported yet",
-                    body.name
-                ),
-                env.file,
-                span,
-                "give the link one bar(..., along: width) or two bars along lo..hi and -hi..-lo",
-            )),
-        }
-    }
-
-    fn kind_length(&mut self, expr: &RExpr, env: &Env<'_>) -> Solved<ExactLength> {
+    pub(crate) fn kind_length(&mut self, expr: &RExpr, env: &Env<'_>) -> Solved<ExactLength> {
         match self.eval(expr, env)? {
             Value::Length(length) => Ok(length),
             _ => Err(Reported),
         }
     }
 
-    fn kind_angle(&mut self, expr: &RExpr, env: &Env<'_>) -> Solved<ExactAngle> {
+    pub(crate) fn kind_angle(&mut self, expr: &RExpr, env: &Env<'_>) -> Solved<ExactAngle> {
         match self.eval(expr, env)? {
             Value::Angle(angle) => Ok(angle),
             _ => Err(Reported),
         }
     }
 
-    fn kind_point(&mut self, point: &KindPoint, env: &Env<'_>) -> Solved<ExactPoint> {
+    pub(crate) fn kind_point(&mut self, point: &KindPoint, env: &Env<'_>) -> Solved<ExactPoint> {
         Ok(ExactPoint {
             along: self.kind_length(&point.along, env)?,
             across: self.kind_length(&point.across, env)?,
@@ -1743,7 +1335,7 @@ impl Solver<'_> {
     }
 
     /// A range in the kind's frame, low end first.
-    fn frame_range(
+    pub(crate) fn frame_range(
         &mut self,
         range: &RangeDef,
         env: &Env<'_>,
@@ -1761,7 +1353,7 @@ impl Solver<'_> {
     }
 
     /// A box shape's three ranges.
-    fn frame_box(&mut self, shape: &ShapeDef, env: &Env<'_>) -> Solved<FrameBox> {
+    pub(crate) fn frame_box(&mut self, shape: &ShapeDef, env: &Env<'_>) -> Solved<FrameBox> {
         let ShapeDef::Box {
             along,
             across,
@@ -1788,43 +1380,14 @@ impl Solver<'_> {
     }
 }
 
-/// Where a cup hinge's linkage goes: its frame, and where the cup is in
-/// it.
-struct CupFrame {
-    axis: Axis,
-    /// The frame's origin: on the door's edge nearer `on`, on the face
-    /// opposite the mount face, at the cup's centre along the door.
-    origin: [ExactLength; 3],
-    free_side: Direction,
-    swing_toward: Direction,
-    /// The cup's centre, from the door's edge.
-    cup_x: ExactLength,
-    /// The door's thickness: the mount face is this far behind the origin.
-    thickness: ExactLength,
-}
-
-/// A cup hinge kind's mechanism for one piece of hardware, with what the
-/// old contract reads from its bodies (until its readers take the bodies).
-struct CupKind {
-    mechanism: crate::mechanism::Mechanism,
-    links: [LinkBar; 2],
-    /// The two links' members, in the linkage's order.
-    link_bodies: [BodyId; 2],
-    /// The held member's first box: the arm's body.
-    arm: FrameBox,
-    /// Its second box: the knuckle that reaches into the cup.
-    knuckle: FrameBox,
-    pin_diameter: Length,
-}
-
 /// What moves a member: the part or region of the role it is `with:`
-/// (following the members it rides on), or the link of the linkage it is.
-/// `None` for a member nothing moves.
+/// (following the members it rides on), or the member the kind's
+/// mechanism places that it is (or rides on). `None` for a member nothing
+/// moves.
 fn member_carrier(
     kind: &KindDef,
     roles: &[(String, RoleBound)],
     body: BodyId,
-    links: Option<[BodyId; 2]>,
 ) -> Option<MemberCarrier> {
     let mut current = body;
     // A member rides on at most every other member.
@@ -1838,14 +1401,10 @@ fn member_carrier(
             }
             Carrier::Body(other) => current = other,
             Carrier::Mechanism => {
-                let [first, second] = links?;
-                return if current == first {
-                    Some(MemberCarrier::Link(LinkIndex::First))
-                } else if current == second {
-                    Some(MemberCarrier::Link(LinkIndex::Second))
-                } else {
-                    None
-                };
+                return kind
+                    .mechanism
+                    .is_some()
+                    .then_some(MemberCarrier::Link(current));
             }
         }
     }

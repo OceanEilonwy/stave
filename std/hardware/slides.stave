@@ -32,4 +32,11 @@ kind side_mount_slide : slide {
     with:  piece
     shape: box(along: 0mm..length, across: 45mm, depth: -6.35mm..0mm)
   }
+
+  // The drawer member runs in the cabinet member, out toward the front:
+  // along runs back from the front end, so pulling out is against it.
+  mechanism {
+    rail drawer_member, cabinet_member along along
+    drive: travel(drawer_member, from: 0mm, to: -length)
+  }
 }

@@ -810,12 +810,11 @@ pins are catalogue data in the kind, written in the kind's own frame.
 `stop`; a mechanism whose links lock before the door opens that far is
 `error[motion]`.
 
-Until a mechanism can say so (version 1, being built), how a piece of
-hardware moves is still read from what its kind has: a `slide` travels
-toward the front by its `travel`; a `hinge` kind with a `mechanism` moves
-on it, and a `hinge` kind without one turns about the `along` line through
-the edge its `mount` measures `across` from, on the face opposite its mount
-face (a butt hinge's pin), by its `opening_angle`. A cup hinge's catalogue
+A piece of hardware moves only as its kind's `mechanism` says (see
+[Mechanisms](#mechanisms)): `butt_hinge` turns on one pin,
+`side_mount_slide` runs on one rail and `euro_hinge` moves on its
+four-bar linkage, all solved the same way. A kind with no `mechanism`
+doesn't move (a pull, or a hinge kind that leaves it out). A cup hinge's catalogue
 overlay is read from its `base_overlay`, `cup_inset`, `plate_height` and
 `overlay_adjustment` when it has `base_overlay`: the door must overlay
 `on` by `base_overlay + cup_inset - plate_height`, give or take
@@ -1557,6 +1556,12 @@ kind side_mount_slide : slide {
     with:  in
     shape: box(along: 0mm..length, across: 45mm, depth: -12.7mm..-6.35mm)
   }
+
+  // Pulled out toward the front: along runs back from the front end.
+  mechanism {
+    rail drawer_member, cabinet_member along along
+    drive: travel(drawer_member, from: 0mm, to: -length)
+  }
 }
 
 /// One exact product: a knob on one screw from behind.
@@ -1684,20 +1689,31 @@ different.
 | `stop: <value> "message"` | what stops the drive there; the message is shown when a pose or a design asks for more |
 | `pin_diameter: <length>` | how thick every pin is (optional, default `0mm`) |
 
-`drive` is required, and `stop` and `pin_diameter` are optional, each at
-most once. A drive's `to` beyond its `stop` is `error[motion]`, with the
-stop's message.
+`drive`, `stop` and `pin_diameter` are optional, each at most once. A
+drive's `to` beyond its `stop` is `error[motion]`, with the stop's
+message. A drive may run either way from its `from`: a slide whose `along`
+runs back from its front end pulls out toward the front with
+`travel(drawer_member, from: 0mm, to: -length)`. A pose or a scene's
+amount is measured from the closed pose toward `to` (a drawer pulled out
+200mm), whichever way that runs.
 
-**Version 1 limits.** A mechanism is planar: every pin is parallel to
-`along`, and the members move in the across/depth plane. It has exactly one
-freedom: three for each member that moves (the driven member and each
-member with no `with:`), less two for each `pivot` or `rail` and one for
-each `slot` or `couple`; any other count is `error[mechanism]` at the kind.
-In this version the only form solved is **a driven member hung on two
-links from a held member**: the drive turns a member carried by `piece`,
-each of two members with no `with:` is pinned once to it and once to a
-member carried by another role, and nothing else is written. That is a
-cup hinge's four-bar linkage:
+**The plane.** A mechanism is planar. Its members move in the across/depth
+plane and every pin is parallel to `along`; a mechanism with a `rail ...
+along along` (a slide) moves in the along/depth plane instead, its pins
+parallel to `across`. A rail along the pins' axis is `error[mechanism]`.
+
+**One freedom.** Three for each member the mechanism moves (the driven
+member and each member with no `with:`), less two for each `pivot` or
+`rail` and one for each `slot` or `couple`: a mechanism with a `drive`
+must come to exactly one, which the drive takes, and one without a drive
+to none once its assembly's motion is given (`error[mechanism]` at the
+kind otherwise, giving the count; counted on its own as soon as a piece of
+hardware is placed, and reported once per kind). The driven member is
+`with:` the part that moves (the door, the lid, the drawer side): the
+assembly moves with it (`error[mechanism]` otherwise). A member with no
+`with:` that no entry reaches from what is placed is `error[mechanism]`
+("nothing places ..."). How the members are then placed is in [How a
+mechanism is solved](#how-a-mechanism-is-solved).
 
 ```
   mechanism {
@@ -1710,19 +1726,38 @@ cup hinge's four-bar linkage:
   }
 ```
 
-Any other mechanism with one freedom, and a mechanism in a slide or pull
-kind, is `error[not-supported]`. The jargon stays in library
-files: a project still writes `hardware hinges[lower, upper] :
-euro_hinge(stile[hinge], on: side_l)`.
+That is a cup hinge's four-bar linkage. A butt hinge is `pivot leaf,
+fixed_leaf at point(...)` with `drive: turn(leaf, ...)`; a slide is `rail
+drawer_member, cabinet_member along along` with `drive:
+travel(drawer_member, ...)`; a full-extension slide adds a middle member
+on two rails and `couple middle_member to drawer_member: 1/2`. The jargon
+stays in library files: a project still writes `hardware hinges[lower,
+upper] : euro_hinge(stile[hinge], on: side_l)`.
+
+**Several items on one assembly.** An assembly has one motion, from the
+hardware inside it (not inside an assembly within it). Its items with a
+`drive` must all move it alike: seen in the first one's plane (the first
+in the design's order), the same members, held the same way, the same
+entries at the same points (to the nanometre) and the same drive from the
+same `from`. Two cup hinges of one kind and setting on one door do; a cup
+hinge and a butt hinge on one door don't (`error[motion]` at the second,
+"`door`'s hardware doesn't move alike", naming both). Every pin of every
+item is parallel to one axis (`error[motion]` otherwise). Items without a
+drive **follow** (a lid stay): their members `with:` a part that moves
+ride on the first driver's driven member, those `with:` a part that
+stays are held, and the rest are placed by the same steps. The assembly
+opens as far as the nearest end among its drivers' ranges and its
+followers' stops, and the nearest `stop` gives its message. An assembly
+whose hardware has no drive doesn't move.
 
 #### How a mechanism is solved
 
 A hardware kind's `mechanism { }` (pivots, slots, rails, couples and one
 drive, in the kind's frame with the hardware closed) is solved the same way
-for every kind, in closed form: no iteration, no guessing. The general
-solver is built and tested on its own; until hardware kinds are wired to it
-(work pack stage 4), a cup hinge's linkage is solved by the four-bar code,
-which takes the same steps and gives the same poses.
+for every kind, in closed form: no iteration, no guessing. An assembly's
+mechanism (its drivers' and its followers', see [Mechanisms](#mechanisms))
+is solved once; a piece of hardware no assembly moves is solved on its
+own, so a mechanism that can't move is reported wherever it is used.
 
 **The words.** A member is **held** (`with:` a role whose part stays put),
 **free** (the mechanism places it; the driven member is free even when it
@@ -1763,9 +1798,9 @@ repeats, until every member is placed, the first of these that applies:
 6. **Slot in a link**: a link pinned to a placed member, its slot over a
    pin on a placed member (a lid stay).
 
-When no step applies and members are left, that is `error[mechanism]`:
-"this mechanism can't be solved one step at a time from its drive",
-naming the members left over. An entry still unused when every member is
+When no step applies and members are left, that is `error[mechanism]` at
+the kind: "this mechanism can't be solved one step at a time from its
+drive", naming the members left over. An entry still unused when every member is
 placed holds the mechanism still: `error[mechanism]`. Two straight paths
 for one point (a pin on a rail running in a slot) are not solved in
 version 1.
@@ -1787,12 +1822,22 @@ step's members and the first drive value where it happens ("`rod` and
 `slider` lock at 41.6deg"). A step that would jump to its other branch
 between two samples is `error[motion]` ("flip over at"), and so is a pin
 that runs past an end of its slot ("`lid`'s pin reaches the end of its slot
-in `stay` at <value>"). The first step from the drive of a cup hinge is also
-checked exactly, in integers, as today.
+in `stay` at <value>"). A driven member hung on two links from held
+members (a cup hinge's four-bar) is also checked exactly, in integers,
+over its first step's range ("a cup hinge's links lock before it opens
+<angle>").
+
+**Fast paths.** Two shapes of motion are swept exactly, chosen by the
+mechanism's shape and never by its kind: a driven member pinned to a held
+one turns the assembly about that pin's line (a butt hinge), and a driven
+member on a rail along a held one moves it in one direction (a slide).
+Every other motion, and every member the mechanism places, is posed by the
+solver.
 
 **Version 1 limits.** Planar, one freedom, the steps above. A travelling
 drive and a couple act on rails that do not turn. An assembly inside a
-moving assembly is not swept.
+moving assembly is not swept: its motion is posed on top of its parent's
+in scenes, but only the outer one is swept.
 
 ---
 
@@ -2034,26 +2079,30 @@ scene drawer_bench "Top drawer on the bench" {
 ```
 
 - Placement sets the **rest position** (doors closed, drawers shut).
-- **Motions belong to assemblies.** The slides, or the hinges, declared inside
-  a component give each instance one motion: the whole assembly moves, as one
-  piece, relative to everything outside it. All hinges of an assembly must
-  share one pivot line and all slides one direction (`error[motion]`
-  otherwise); an assembly with both hinges and slides has no motion.
-- `pose` names the assembly and sets `open` (the hinge's `opening_angle`, the
-  slide's `travel`), `closed`, an angle (hinges) or a length (slides). A slide
-  travels along its piece's length, out through the front of its `in` region.
-  A mirrored assembly has the mirror image of its source's motion.
+- **Motions belong to assemblies.** The hardware that has a drive,
+  declared inside a component, gives each instance one motion: the whole
+  assembly moves, as one piece, relative to everything outside it, and the
+  members its mechanism places (a link, a stay's arm) move as the
+  mechanism moves them. Every item with a drive must move the assembly
+  alike, and items without one follow (see [Mechanisms](#mechanisms),
+  several items on one assembly).
+- `pose` names the assembly and sets `open` (as far as its mechanism
+  reaches: a hinge's `opening_angle`, a slide's travel, or sooner where a
+  `stop` says), `closed`, an angle (something that turns) or a length
+  (something that slides), measured from closed. A mirrored assembly has
+  the mirror image of its source's motion.
 - Every scene is collision checked, and every motion is checked through its
   whole travel, not only at its ends (`error[motion]`): every body that
-  moves (a door, the hardware on it, a link its hinge's mechanism turns) is
-  swept from closed to `opening_angle`, or from shut to `travel`, against
+  moves (a door, the hardware on it, a member its mechanism places) is
+  swept from closed to open, against
   every body that moves differently, and the message names the first angle
   or distance at which they hit (see [One collision
   model](#one-collision-model)). Each motion is checked from the rest
   position and from every scene's poses; the first contact is found to
   within the 0.05mm contact tolerance, never stepped over. A door on cup
   hinges follows its linkage (it turns and moves at once); a door on butt
-  hinges turns about its pin.
+  hinges turns about its pin (see [How a mechanism is
+  solved](#how-a-mechanism-is-solved), fast paths).
 - `explode: true` draws the scene with every part moved out from its rest
   position along the direction its joint is assembled (the reverse of the
   joint's last `insert` step), so the joinery shows. Assemblies move out
@@ -2162,12 +2211,12 @@ shape of their messages are fixed, because tests and AI tools match on them.
 | 3 | `placement-cycle` | `<a> and <b> are placed against each other` |
 | 3 | `fit-undecided` | `<part>: nothing decides its <length>` |
 | 3 | `mirror` | `<item> has no counterpart on the other side of the mirror` |
-| 3 | `mechanism` | `<kind>'s mechanism has <n> freedoms; it needs exactly one` |
+| 3 | `mechanism` | `<kind>'s mechanism has <n> freedoms; it needs exactly one`; `<kind>'s mechanism: this mechanism can't be solved one step at a time from its drive; left over: ...` |
 | 4 | `no-contact` | `<joint or hardware>: <part> meets none of the parts it should join` |
 | 4 | `overlap` | `<a> and <b> overlap` |
 | 4 | `slide-gap` | `<hardware>: <piece> is <gap> from the opening, but the slide needs <clearance>` |
 | 4 | `hinge-overlay` | `<hardware>: <piece> overlays <on> by <overlay>, but the hinge gives <low> to <high>` |
-| 5 | `motion` | `<a> hits <b> when <assembly> is <open>` |
+| 5 | `motion` | `<a> hits <b> when <assembly> is <open>`; `<assembly>'s hardware doesn't move alike`; `<hardware>: <members> lock at <value>` |
 | 6 | `require` | `'<name>' fails: <message>` |
 | 6 | `require-range` | `'<name>' does not hold for every allowed value: <message>` |
 | 6 | `range` | `<what> stops working when <param> <is below> <value>` |

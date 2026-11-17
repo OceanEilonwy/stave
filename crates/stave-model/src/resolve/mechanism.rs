@@ -656,25 +656,21 @@ impl Resolver<'_> {
                 }
             }
         }
-        let Some(drive) = drive else {
-            if !seen.contains_key("drive") {
-                self.error_help(
-                    Code::MissingField,
-                    format!("the mechanism of kind '{kind}' is missing 'drive'"),
-                    cx.file,
-                    block.span,
-                    "say what moves it and how far: drive: turn(member, from: 0deg, to: ...)",
-                );
-            }
+        if drive.is_none() && seen.contains_key("drive") {
+            // Written, but it didn't lower (reported).
             return None;
-        };
+        }
+        // A mechanism without a drive follows the hardware that drives its
+        // assembly (a lid stay); its stop is an angle or a length, as that
+        // drive's values are.
         let stop = stop.map(|(value, message, span)| {
-            let ty = match drive {
-                DriveDef::Turn { .. } => Ty::Angle,
-                DriveDef::Travel { .. } => Ty::Length,
+            let expect = match drive {
+                Some(DriveDef::Turn { .. }) => Expect::ty(Ty::Angle),
+                Some(DriveDef::Travel { .. }) => Expect::ty(Ty::Length),
+                None => Expect::any(),
             };
             StopDef {
-                value: self.value(cx, value, &Expect::ty(ty).named("stop")),
+                value: self.value(cx, value, &expect.named("stop")),
                 message: self.text(cx, message),
                 span,
             }

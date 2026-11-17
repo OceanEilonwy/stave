@@ -60,14 +60,16 @@ use std::collections::{BTreeMap, BTreeSet};
 use stave_geom::collide::{
     self, CONTACT_TOLERANCE, Overlap, Placement, WorldSolid, boxes_overlap, placed_bounds,
 };
+use stave_geom::planar::MechanismError;
 use stave_geom::solid::Solid;
+use stave_geom::sweep::Path;
 use stave_lang::ast::Span;
 use stave_lang::units::Length;
 use stave_lang::{Code, Diagnostic, FileId, Label, Severity};
 use stave_model::Model;
 use stave_model::solved::{
     AnchorItem, AssemblyId, BodyCarrier, BodyRef, CutSource, FixedSpacing, HardwareData,
-    HardwareId, LinkIndex, PartId, PartOrigin, PoseValue, SolvedDesign, WorldBox,
+    HardwareId, MemberIndex, PartId, PartOrigin, PoseValue, SolvedDesign, WorldBox,
 };
 
 use crate::names::{length_text, pose_text};
@@ -146,6 +148,7 @@ pub fn check_with_contacts(
     let mut checker = Checker::new(model, design);
     checker.misshapen();
     checker.not_supported();
+    checker.mechanisms();
     checker.contact();
     checker.overruns();
     checker.slide_gaps();
@@ -184,9 +187,9 @@ struct Body {
     bounds: WorldBox,
     /// The assemblies it moves with, outermost first.
     chain: Vec<AssemblyId>,
-    /// For a link its hardware's mechanism turns: the assembly whose
-    /// linkage turns it, and which link.
-    link: Option<(AssemblyId, LinkIndex)>,
+    /// For a member its assembly's mechanism places (a link): that
+    /// assembly, and which member of its mechanism.
+    link: Option<(AssemblyId, MemberIndex)>,
 }
 
 struct Checker<'a> {
@@ -194,6 +197,12 @@ struct Checker<'a> {
     design: &'a SolvedDesign,
     solids: Vec<Solid>,
     bodies: Vec<Body>,
+    /// Each assembly's mechanism, run through its range, by assembly;
+    /// `None` for one nothing moves (or whose mechanism can't move,
+    /// reported by [`Checker::mechanisms`]).
+    paths: Vec<Option<Path>>,
+    /// The mechanisms that can't be run through their range.
+    broken: Vec<(AssemblyId, MechanismError)>,
     /// Parts already reported, for their spacing or for a cut whose shape
     /// is a mistake: an overlap would report the same mistake again.
     reported: BTreeSet<PartId>,
@@ -266,11 +275,27 @@ impl<'a> Checker<'a> {
                 }
             }
         }
+        let mut paths = Vec::with_capacity(design.assemblies.len());
+        let mut broken = Vec::new();
+        for assembly in &design.assemblies {
+            paths.push(match &assembly.mechanism {
+                Some(mechanism) => match Path::new(mechanism) {
+                    Ok(path) => Some(path),
+                    Err(error) => {
+                        broken.push((assembly.id, error));
+                        None
+                    }
+                },
+                None => None,
+            });
+        }
         Checker {
             model,
             design,
             solids,
             bodies,
+            paths,
+            broken,
             reported: BTreeSet::new(),
             failed: BTreeSet::new(),
             posed_failed: BTreeSet::new(),
@@ -818,11 +843,7 @@ impl<'a> Checker<'a> {
                     .iter()
                     .filter_map(|assembly| {
                         let value = pose_of(*assembly)?;
-                        self.design
-                            .assemblies
-                            .get(assembly.index())?
-                            .motion
-                            .map(|_| (*assembly, value))
+                        self.path(*assembly).map(|_| (*assembly, value))
                     })
                     .collect();
                 // A link is turned by its own assembly's linkage only when
@@ -837,15 +858,14 @@ impl<'a> Checker<'a> {
         let placements = moves
             .iter()
             .map(|moves: &Moves| {
-                let motions: Vec<_> = moves
+                let chain: Vec<_> = moves
                     .steps
                     .iter()
                     .filter_map(|(assembly, value)| {
-                        let motion = self.design.assemblies.get(assembly.index())?.motion?;
-                        Some((motion, *value))
+                        Some((self.path(*assembly)?.mechanism(), *value))
                     })
                     .collect();
-                Placement::of_member(&motions, moves.link)
+                Placement::of_mechanisms(&chain, moves.link)
             })
             .collect();
         (moves, placements)
@@ -1040,7 +1060,7 @@ impl<'a> Checker<'a> {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 struct Moves {
     steps: Vec<(AssemblyId, PoseValue)>,
-    link: Option<LinkIndex>,
+    link: Option<MemberIndex>,
 }
 
 impl Moves {

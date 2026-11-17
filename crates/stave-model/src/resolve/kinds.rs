@@ -517,19 +517,6 @@ impl Resolver<'_> {
             );
             return None;
         }
-        if base_kind != BaseKind::Hinge {
-            self.error_help(
-                Code::NotSupported,
-                format!(
-                    "a mechanism in a {} kind is not supported yet",
-                    base_kind.word()
-                ),
-                cx.file,
-                first.span,
-                "Stave solves a hinge's mechanism; leave this one out",
-            );
-            return None;
-        }
         self.lower_mechanism(cx, syntax.name.as_str(), bodies?, first)
     }
 
