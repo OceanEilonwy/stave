@@ -1468,7 +1468,7 @@ warning[unnamed-cut]: this cut has no name, so messages will call it "a slot"
    |
 52 |   cut crossing(into, piece) {
    |       ^^^^^^^^^^^^^^^^^^^^^
-   = help: name it after what it is, as in cut groove: crossing(...) { ... }
+   = help: name it after what it is, as in cut trench: crossing(...) { ... }
 ```
 
 The word in quotes is the fallback above; when a cut's operations have

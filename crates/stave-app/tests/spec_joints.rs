@@ -1501,7 +1501,7 @@ fn a_kind_nobody_uses_is_still_warned() {
     );
     assert_eq!(
         opened.diagnostics[1].help.as_deref(),
-        Some("name it after what it is, as in cut groove: end(...) { ... }")
+        Some("name it after what it is, as in cut trench: end(...) { ... }")
     );
     let hardware = open(&format!(
         "kind screwed_knob : pull {{\n{PULL_HEAD}  member knob {{\n    with:  piece\n    shape: cylinder(diameter: 20mm, depth: -20mm..0mm)\n  }}\n  cut crossing(piece, knob) {{ drill(diameter: 4mm, depth: through) }}\n}}"

@@ -1107,7 +1107,7 @@ impl Resolver<'_> {
                 Label::new(cx.file, cut.selector.span),
             )
             .with_help(format!(
-                "name it after what it is, as in cut groove: {head}(...) {{ ... }}"
+                "name it after what it is, as in cut trench: {head}(...) {{ ... }}"
             )),
         );
     }
