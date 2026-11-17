@@ -1,0 +1,1138 @@
+//! What the Parts view shows about a design, worked out without any UI:
+//! the parts tree (the carcass's parts, then each assembly with its motion
+//! and what is inside it) and the inspector's account of the selection
+//! (its kind, its stock and size, how it moves, its joints and cuts, and
+//! where it is written in the text, with the snippet highlighted).
+
+use stave_lang::units::{Angle, Length};
+use stave_lang::{SourceMap, SyntaxKind};
+use stave_model::Model;
+use stave_model::defs::Decl;
+use stave_model::solved::{
+    AssemblyId, CutSource, HardwareBase, Motion, Part, PartId, PartOrigin, Shape, SolvedDesign,
+};
+use stave_scene::Item;
+use stave_schema::species::Srgb;
+
+use crate::check::Checked;
+use crate::focus::{self, Target};
+use crate::session::{LineNumber, Selection, SourceLocation};
+use crate::view::Row;
+
+/// The grey of hardware swatches (#a8adb4).
+const STEEL: Srgb = Srgb {
+    red: 0xa8,
+    green: 0xad,
+    blue: 0xb4,
+};
+
+/// The most lines a snippet shows before it is cut short.
+const SNIPPET_LINES: usize = 12;
+
+/// The little coloured mark before a row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Swatch {
+    /// Its shape.
+    pub shape: SwatchShape,
+    /// Its colour: the wood's species, or steel.
+    pub colour: Srgb,
+}
+
+/// A swatch's shape.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SwatchShape {
+    /// A board: a rounded square.
+    Board,
+    /// Round or turned wood, or hardware: a circle.
+    Round,
+}
+
+/// A list that is never empty.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NonEmpty<T> {
+    first: T,
+    rest: Vec<T>,
+}
+
+impl<T> NonEmpty<T> {
+    /// A list of one.
+    pub fn one(first: T) -> NonEmpty<T> {
+        NonEmpty {
+            first,
+            rest: Vec::new(),
+        }
+    }
+
+    /// The first element.
+    pub fn first(&self) -> &T {
+        &self.first
+    }
+
+    /// Every element, in order.
+    pub fn iter(&self) -> impl Iterator<Item = &T> {
+        std::iter::once(&self.first).chain(self.rest.iter())
+    }
+
+    /// How many.
+    pub fn len(&self) -> usize {
+        self.rest.len().saturating_add(1)
+    }
+
+    /// Never: here for completeness next to [`NonEmpty::len`].
+    pub fn is_empty(&self) -> bool {
+        false
+    }
+
+    fn push(&mut self, item: T) {
+        self.rest.push(item);
+    }
+}
+
+/// One row of the parts tree: a part or piece of hardware, or a few that
+/// are the same (`rail[top], rail[bottom]`, `feet[4]`, `side_l, side_r`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TreeEntry {
+    /// "stile[hinge]", "feet[4]", "hinges[lower, upper]".
+    pub label: String,
+    /// Dim text at the end: the stock (`oak_19`) or `turned`.
+    pub detail: Option<String>,
+    /// What it stands for; selecting the row selects the first.
+    pub items: NonEmpty<Item>,
+    /// Its mark.
+    pub swatch: Swatch,
+    /// Every full name it stands for, for searching.
+    names: Vec<String>,
+}
+
+impl TreeEntry {
+    /// Whether a search matches it (any part of any of its names, ignoring
+    /// case).
+    pub fn matches(&self, query: &str) -> bool {
+        let query = query.trim().to_lowercase();
+        query.is_empty()
+            || self.label.to_lowercase().contains(&query)
+            || self.names.iter().any(|n| n.to_lowercase().contains(&query))
+            || self
+                .detail
+                .as_ref()
+                .is_some_and(|d| d.to_lowercase().contains(&query))
+    }
+}
+
+/// An assembly in the parts tree, with its motion and what is inside it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AssemblyNode {
+    /// The assembly.
+    pub id: AssemblyId,
+    /// Its name relative to its parent: `door_l`, `drawer[top]`.
+    pub label: String,
+    /// "turns 110°", "slides out 400 mm", "mirror of door_l".
+    pub detail: Option<String>,
+    /// Its own parts and hardware.
+    pub entries: Vec<TreeEntry>,
+    /// The assemblies inside it.
+    pub children: Vec<AssemblyNode>,
+}
+
+impl AssemblyNode {
+    /// A copy with only the rows a search matches; `None` when nothing in
+    /// it does. An assembly whose own name matches keeps everything.
+    fn filtered(&self, query: &str) -> Option<AssemblyNode> {
+        if self
+            .label
+            .to_lowercase()
+            .contains(&query.trim().to_lowercase())
+        {
+            return Some(self.clone());
+        }
+        let entries: Vec<TreeEntry> = self
+            .entries
+            .iter()
+            .filter(|e| e.matches(query))
+            .cloned()
+            .collect();
+        let children: Vec<AssemblyNode> = self
+            .children
+            .iter()
+            .filter_map(|c| c.filtered(query))
+            .collect();
+        (!entries.is_empty() || !children.is_empty()).then(|| AssemblyNode {
+            entries,
+            children,
+            ..self.clone()
+        })
+    }
+}
+
+/// The Parts view's sidebar tree.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct PartsTree {
+    /// The parts and hardware outside every assembly.
+    pub carcass: Vec<TreeEntry>,
+    /// The top-level assemblies.
+    pub assemblies: Vec<AssemblyNode>,
+}
+
+impl PartsTree {
+    /// The tree with only what a search matches.
+    pub fn filtered(&self, query: &str) -> PartsTree {
+        if query.trim().is_empty() {
+            return self.clone();
+        }
+        PartsTree {
+            carcass: self
+                .carcass
+                .iter()
+                .filter(|e| e.matches(query))
+                .cloned()
+                .collect(),
+            assemblies: self
+                .assemblies
+                .iter()
+                .filter_map(|a| a.filtered(query))
+                .collect(),
+        }
+    }
+
+    /// Whether it has no rows.
+    pub fn is_empty(&self) -> bool {
+        self.carcass.is_empty() && self.assemblies.is_empty()
+    }
+}
+
+/// `110°`, `12.5°`.
+pub fn degrees(angle: Angle) -> String {
+    let text = angle.to_string();
+    text.strip_suffix("deg")
+        .map_or(text.clone(), |number| format!("{number}°"))
+}
+
+/// A length in millimetres: `1029.5 mm`.
+fn mm(length: Length) -> String {
+    let text = length.to_string();
+    let number = text.strip_suffix("mm").unwrap_or(&text);
+    format!("{number} mm")
+}
+
+/// A name with its assembly's prefix taken off: `stile[hinge]` for
+/// `door_l.stile[hinge]` in `door_l`.
+fn relative<'a>(design: &SolvedDesign, name: &'a str, assembly: Option<AssemblyId>) -> &'a str {
+    assembly
+        .and_then(|id| design.assemblies.get(id.index()))
+        .and_then(|a| name.strip_prefix(a.name.as_str()))
+        .and_then(|rest| rest.strip_prefix('.'))
+        .unwrap_or(name)
+}
+
+/// An assembly's motion in a few words: "turns 110°", "slides out 400 mm".
+fn motion_words(motion: &Motion) -> String {
+    match motion {
+        Motion::Turn { opening_angle, .. } => format!("turns {}", degrees(*opening_angle)),
+        Motion::Linkage { linkage } => format!("turns {}", degrees(linkage.opening_angle())),
+        Motion::Travel { travel, .. } => format!("slides out {}", mm(*travel)),
+    }
+}
+
+/// The swatch of a part.
+fn part_swatch(part: &Part) -> Swatch {
+    let shape = match part.shape {
+        Shape::Board => SwatchShape::Board,
+        Shape::Round { .. } | Shape::Turned { .. } => SwatchShape::Round,
+    };
+    Swatch {
+        shape,
+        colour: part.stock.species.colour(),
+    }
+}
+
+/// The steel swatch of hardware.
+fn hardware_swatch() -> Swatch {
+    Swatch {
+        shape: SwatchShape::Round,
+        colour: STEEL,
+    }
+}
+
+/// `rail` and `top` for `rail[top]`; the whole name and `None` otherwise.
+fn split_index(name: &str) -> (&str, Option<&str>) {
+    match name.strip_suffix(']').and_then(|n| n.rsplit_once('[')) {
+        Some((base, index)) if !base.contains('[') => (base, Some(index)),
+        _ => (name, None),
+    }
+}
+
+/// What makes rows the same: parts of one stock and size, or hardware of
+/// one kind, under one base name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Sameness {
+    Part {
+        base: String,
+        stock: String,
+        size: (Length, Length, Length),
+    },
+    Hardware {
+        base: String,
+        kind: String,
+    },
+}
+
+/// A row before grouping.
+struct Single {
+    item: Item,
+    label: String,
+    full: String,
+    detail: Option<String>,
+    swatch: Swatch,
+    same: Sameness,
+    mirror_of: Option<PartId>,
+}
+
+fn group(singles: Vec<Single>) -> Vec<TreeEntry> {
+    let mut groups: Vec<(Sameness, Vec<Single>)> = Vec::new();
+    for single in singles {
+        let joins = groups.last().is_some_and(|(same, members)| {
+            *same == single.same
+                || members.first().is_some_and(|first| {
+                    single.mirror_of.is_some()
+                        && Some(first.item) == single.mirror_of.map(Item::Part)
+                })
+        });
+        match groups.last_mut() {
+            Some((_, members)) if joins => members.push(single),
+            _ => groups.push((single.same.clone(), vec![single])),
+        }
+    }
+    groups
+        .into_iter()
+        .filter_map(|(_, members)| {
+            let mut members = members.into_iter();
+            let first = members.next()?;
+            let rest: Vec<Single> = members.collect();
+            let mut items = NonEmpty::one(first.item);
+            let mut names = vec![first.full.clone()];
+            let mut labels = vec![first.label.clone()];
+            for member in &rest {
+                items.push(member.item);
+                names.push(member.full.clone());
+                labels.push(member.label.clone());
+            }
+            let label = group_label(&labels);
+            Some(TreeEntry {
+                label,
+                detail: first.detail,
+                items,
+                swatch: first.swatch,
+                names,
+            })
+        })
+        .collect()
+}
+
+/// `stile[hinge]`; `feet[4]` for numbered members; `hinges[lower, upper]`
+/// for named ones; `side_l, side_r` otherwise.
+fn group_label(labels: &[String]) -> String {
+    let [first, ..] = labels else {
+        return String::new();
+    };
+    if labels.len() == 1 {
+        return first.clone();
+    }
+    let split: Vec<(&str, Option<&str>)> = labels.iter().map(|l| split_index(l)).collect();
+    let base = split.first().map(|(b, _)| *b);
+    let indices: Option<Vec<&str>> = split
+        .iter()
+        .map(|(b, index)| if Some(*b) == base { *index } else { None })
+        .collect();
+    match (base, indices) {
+        (Some(base), Some(indices)) => {
+            if indices.iter().all(|i| i.parse::<u32>().is_ok()) {
+                format!("{base}[{}]", indices.len())
+            } else {
+                format!("{base}[{}]", indices.join(", "))
+            }
+        }
+        _ => labels.join(", "),
+    }
+}
+
+/// The parts tree of a design.
+pub fn parts_tree(design: &SolvedDesign) -> PartsTree {
+    let singles_in = |assembly: Option<AssemblyId>| -> Vec<Single> {
+        let parts = design
+            .parts
+            .iter()
+            .filter(|p| p.assembly == assembly)
+            .map(|part| {
+                let label = relative(design, &part.name, part.assembly).to_owned();
+                let detail = match part.shape {
+                    Shape::Turned { .. } => "turned".to_owned(),
+                    Shape::Board | Shape::Round { .. } => part.stock.name.clone(),
+                };
+                let mirror_of = match part.origin {
+                    PartOrigin::Mirror { source } => Some(source),
+                    PartOrigin::Declared
+                    | PartOrigin::MirroredAssembly { .. }
+                    | PartOrigin::Made { .. } => None,
+                };
+                Single {
+                    item: Item::Part(part.id),
+                    same: Sameness::Part {
+                        base: split_index(&label).0.to_owned(),
+                        stock: part.stock.name.clone(),
+                        size: (part.cut.length, part.cut.width, part.cut.thickness),
+                    },
+                    label,
+                    full: part.name.clone(),
+                    detail: Some(detail),
+                    swatch: part_swatch(part),
+                    mirror_of,
+                }
+            });
+        let hardware = design
+            .hardware
+            .iter()
+            .filter(|h| h.assembly == assembly)
+            .map(|hardware| {
+                let label = relative(design, &hardware.name, hardware.assembly).to_owned();
+                Single {
+                    item: Item::Hardware(hardware.id),
+                    same: Sameness::Hardware {
+                        base: split_index(&label).0.to_owned(),
+                        kind: hardware.kind.clone(),
+                    },
+                    label,
+                    full: hardware.name.clone(),
+                    detail: None,
+                    swatch: hardware_swatch(),
+                    mirror_of: None,
+                }
+            });
+        parts.chain(hardware).collect()
+    };
+    fn node(
+        design: &SolvedDesign,
+        id: AssemblyId,
+        depth: usize,
+        singles_in: &dyn Fn(Option<AssemblyId>) -> Vec<Single>,
+    ) -> Option<AssemblyNode> {
+        let assembly = design.assemblies.get(id.index())?;
+        let parent_name = assembly
+            .parent
+            .and_then(|p| design.assemblies.get(p.index()))
+            .map(|p| p.name.as_str());
+        let label = parent_name
+            .and_then(|p| assembly.name.strip_prefix(p))
+            .and_then(|rest| rest.strip_prefix('.'))
+            .unwrap_or(&assembly.name)
+            .to_owned();
+        let detail = match (assembly.mirror_of, &assembly.motion) {
+            (Some(source), _) => design
+                .assemblies
+                .get(source.index())
+                .map(|s| format!("mirror of {}", s.name)),
+            (None, Some(motion)) => Some(motion_words(motion)),
+            (None, None) => Some(assembly.component.clone()),
+        };
+        // Assemblies nest only as deep as there are assemblies.
+        let children = if depth > design.assemblies.len() {
+            Vec::new()
+        } else {
+            design
+                .assemblies
+                .iter()
+                .filter(|a| a.parent == Some(id))
+                .filter_map(|a| node(design, a.id, depth.saturating_add(1), singles_in))
+                .collect()
+        };
+        Some(AssemblyNode {
+            id,
+            label,
+            detail,
+            entries: group(singles_in(Some(id))),
+            children,
+        })
+    }
+    PartsTree {
+        carcass: group(singles_in(None)),
+        assemblies: design
+            .assemblies
+            .iter()
+            .filter(|a| a.parent.is_none())
+            .filter_map(|a| node(design, a.id, 0, &singles_in))
+            .collect(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The inspector
+// ---------------------------------------------------------------------------
+
+/// How a word of a snippet is coloured.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TokenClass {
+    /// Names and punctuation.
+    Plain,
+    /// `assembly`, `part`, `import`.
+    Keyword,
+    /// A capitalised name: `FramePanelDoor`.
+    Type,
+    /// A name called like a function: `overlay(`.
+    Function,
+    /// `18mm`, `4`.
+    Number,
+    /// A string.
+    Text,
+    /// A comment.
+    Comment,
+}
+
+/// A run of text of one colour.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Token {
+    /// How it is coloured.
+    pub class: TokenClass,
+    /// The text.
+    pub text: String,
+}
+
+/// A declaration as written, highlighted, with where it is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Snippet {
+    /// Where it starts.
+    pub location: SourceLocation,
+    /// `doors.stave:9`.
+    pub label: String,
+    /// Its lines, each a run of tokens.
+    pub lines: Vec<Vec<Token>>,
+    /// `true` when the declaration is longer than what is shown.
+    pub cut_short: bool,
+}
+
+/// A row of the inspector's joints and cuts list.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Connection {
+    /// Its mark.
+    pub swatch: Swatch,
+    /// The bold start: `cope_and_stick`, `2 cup bores`.
+    pub lead: String,
+    /// The rest: "with rail[top], rail[bottom]".
+    pub rest: String,
+    /// Focus mode on it, when it can be shown.
+    pub target: Option<Target>,
+}
+
+/// What the inspector shows about the selection.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Inspection {
+    /// "PART · IN door_l".
+    pub eyebrow: String,
+    /// "stile[hinge]".
+    pub title: String,
+    /// The doc comment: "The upright on the hinge side of a door".
+    pub description: Option<String>,
+    /// Stock, finished size, grain, how it moves.
+    pub rows: Vec<Row>,
+    /// The heading of [`Inspection::connections`]: "Joints and cuts".
+    pub connections_title: &'static str,
+    /// Its joints and cuts, or what it can be focused on.
+    pub connections: Vec<Connection>,
+    /// The innermost assembly that moves around it, for the "Open it"
+    /// slider.
+    pub moves_with: Option<AssemblyId>,
+    /// Where it is written.
+    pub source: Option<Snippet>,
+}
+
+/// Doc comments as one paragraph.
+fn docs(decl: &Decl) -> Option<String> {
+    let text = decl.docs.join(" ");
+    let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    (!text.is_empty()).then_some(text)
+}
+
+/// The innermost assembly around `assembly` (itself included) that moves.
+fn moving(design: &SolvedDesign, mut assembly: Option<AssemblyId>) -> Option<AssemblyId> {
+    let mut steps = 0;
+    while let Some(id) = assembly {
+        let found = design.assemblies.get(id.index())?;
+        if found.motion.is_some() {
+            return Some(id);
+        }
+        steps += 1;
+        if steps > design.assemblies.len() {
+            return None;
+        }
+        assembly = found.parent;
+    }
+    None
+}
+
+/// "with door_l, turns 110°".
+fn moves_row(design: &SolvedDesign, moving: Option<AssemblyId>) -> Option<Row> {
+    let assembly = design.assemblies.get(moving?.index())?;
+    let motion = assembly.motion.as_ref()?;
+    Some(Row {
+        label: "Moves",
+        value: format!("with {}, {}", assembly.name, motion_words(motion)),
+    })
+}
+
+/// "PART · IN door_l".
+fn eyebrow(design: &SolvedDesign, kind: &str, assembly: Option<AssemblyId>) -> String {
+    match assembly.and_then(|id| design.assemblies.get(id.index())) {
+        Some(found) => format!("{kind} · IN {}", found.name),
+        None => kind.to_owned(),
+    }
+}
+
+/// Where a declaration is written, in the project's own files: the item's
+/// own declaration when it is there, otherwise the innermost assembly
+/// around it declared there (a part of a door from a component library is
+/// shown by the door's declaration).
+fn source_decl<'m>(
+    model: &'m Model,
+    own: Option<&'m Decl>,
+    mut assembly: Option<stave_model::ids::AssemblyId>,
+) -> Option<&'m Decl> {
+    let in_root = |decl: &Decl| {
+        model
+            .defs
+            .files
+            .get(&decl.file)
+            .is_some_and(|scope| scope.module == Some(model.root))
+    };
+    if let Some(decl) = own.filter(|d| in_root(d)) {
+        return Some(decl);
+    }
+    let mut steps = 0;
+    while let Some(id) = assembly {
+        let found = model.assemblies.get(id.index()).filter(|a| a.id == id)?;
+        if let Some(decl) = model.defs.assembly(found.def).map(|d| &d.decl)
+            && in_root(decl)
+        {
+            return Some(decl);
+        }
+        steps += 1;
+        if steps > model.assemblies.len() {
+            break;
+        }
+        assembly = found.parent;
+    }
+    own
+}
+
+/// A declaration's text, highlighted.
+pub fn snippet(sources: &SourceMap, folder: &std::path::Path, decl: &Decl) -> Option<Snippet> {
+    let file = sources.get(decl.file)?;
+    let line = LineNumber::from_usize(file.line_column(decl.span.start()).line)?;
+    let location = SourceLocation {
+        path: file.path().to_owned(),
+        line,
+    };
+    let start = usize::try_from(decl.span.start()).ok()?;
+    let end = usize::try_from(decl.span.end()).ok()?;
+    let text = file.text();
+    // Start at the beginning of the line, so indentation lines up.
+    let line_start = text.get(..start)?.rfind('\n').map_or(0, |i| i + 1);
+    let tokens = highlight(text.get(line_start..end)?);
+    let mut lines: Vec<Vec<Token>> = vec![Vec::new()];
+    for token in tokens {
+        let mut pieces = token.text.split('\n').peekable();
+        while let Some(piece) = pieces.next() {
+            if !piece.is_empty()
+                && let Some(line) = lines.last_mut()
+            {
+                line.push(Token {
+                    class: token.class,
+                    text: piece.to_owned(),
+                });
+            }
+            if pieces.peek().is_some() {
+                lines.push(Vec::new());
+            }
+        }
+    }
+    let cut_short = lines.len() > SNIPPET_LINES;
+    lines.truncate(SNIPPET_LINES);
+    Some(Snippet {
+        label: location.display(folder),
+        location,
+        lines,
+        cut_short,
+    })
+}
+
+/// Colours `.stave` source text by its tokens. The text is parsed on its
+/// own, so a fragment works too; anything the parser drops stays plain.
+pub fn highlight(text: &str) -> Vec<Token> {
+    // A file id of its own: the parse needs one, and nothing else reads it.
+    let Ok(file) = SourceMap::new().add("snippet.stave", text) else {
+        return vec![Token {
+            class: TokenClass::Plain,
+            text: text.to_owned(),
+        }];
+    };
+    let parse = stave_lang::parse_file(file, text);
+    let tokens: Vec<(SyntaxKind, String)> = parse
+        .syntax()
+        .descendants_with_tokens()
+        .filter_map(|element| element.into_token())
+        .map(|token| (token.kind(), token.text().to_owned()))
+        .collect();
+    let mut out: Vec<Token> = Vec::with_capacity(tokens.len());
+    let mut covered = 0usize;
+    for (index, (kind, token)) in tokens.iter().enumerate() {
+        let next_significant = tokens
+            .iter()
+            .skip(index.saturating_add(1))
+            .find(|(k, _)| !k.is_trivia())
+            .map(|(k, _)| *k);
+        let class = match kind {
+            SyntaxKind::LINE_COMMENT | SyntaxKind::BLOCK_COMMENT | SyntaxKind::DOC => {
+                TokenClass::Comment
+            }
+            SyntaxKind::QUANTITY | SyntaxKind::INT_NUMBER | SyntaxKind::DECIMAL_NUMBER => {
+                TokenClass::Number
+            }
+            SyntaxKind::STRING_QUOTE | SyntaxKind::STRING_TEXT => TokenClass::Text,
+            SyntaxKind::IDENT if next_significant == Some(SyntaxKind::L_PAREN) => {
+                TokenClass::Function
+            }
+            SyntaxKind::IDENT if token.starts_with(|c: char| c.is_ascii_uppercase()) => {
+                TokenClass::Type
+            }
+            kind if kind.is_keyword() => TokenClass::Keyword,
+            _ => TokenClass::Plain,
+        };
+        covered = covered.saturating_add(token.len());
+        match out.last_mut() {
+            Some(last) if last.class == class => last.text.push_str(token),
+            _ => out.push(Token {
+                class,
+                text: token.clone(),
+            }),
+        }
+    }
+    // Whatever the tree didn't keep (it is lossless, so normally nothing).
+    if let Some(rest) = text.get(covered..)
+        && !rest.is_empty()
+    {
+        out.push(Token {
+            class: TokenClass::Plain,
+            text: rest.to_owned(),
+        });
+    }
+    out
+}
+
+/// The inspector's account of a selection, from the shown result.
+pub fn inspect(checked: &Checked, selection: &Selection) -> Option<Inspection> {
+    let design = checked.design()?;
+    match selection {
+        Selection::Part(id) => inspect_part(checked, design, *id),
+        Selection::Hardware(id) => inspect_hardware(checked, design, *id),
+        Selection::Assembly(id) => inspect_assembly(checked, design, *id),
+        Selection::Joint { joint, pair } => inspect_joint(checked, design, *joint, *pair),
+        Selection::Location(_) | Selection::Problem(_) => None,
+    }
+}
+
+fn source_of(
+    checked: &Checked,
+    own: impl FnOnce(&Model) -> Option<&Decl>,
+    assembly: Option<AssemblyId>,
+) -> Option<Snippet> {
+    let model = checked.opened.model.as_ref()?;
+    let decl = source_decl(model, own(model), assembly)?;
+    snippet(&checked.opened.sources, &checked.folder, decl)
+}
+
+/// The declaration behind a part.
+fn part_decl(model: &Model, id: PartId) -> Option<&Decl> {
+    let instance = model
+        .parts
+        .get(id.index())
+        .filter(|p| p.id == id)
+        .or_else(|| model.parts.iter().find(|p| p.id == id))?;
+    model.defs.part(instance.def).map(|d| &d.decl)
+}
+
+/// The declaration behind a piece of hardware.
+fn hardware_decl(model: &Model, id: stave_model::solved::HardwareId) -> Option<&Decl> {
+    let instance = model
+        .hardware
+        .get(id.index())
+        .filter(|h| h.id == id)
+        .or_else(|| model.hardware.iter().find(|h| h.id == id))?;
+    model.defs.hardware_def(instance.def).map(|d| &d.decl)
+}
+
+fn inspect_part(checked: &Checked, design: &SolvedDesign, id: PartId) -> Option<Inspection> {
+    let part = design.part(id)?;
+    let kind = match part.origin {
+        PartOrigin::Declared => "PART",
+        PartOrigin::Mirror { .. } | PartOrigin::MirroredAssembly { .. } => "MIRROR IMAGE",
+        PartOrigin::Made { .. } => "MADE PART",
+    };
+    let model = checked.opened.model.as_ref();
+    let description = model.and_then(|m| part_decl(m, id)).and_then(docs);
+    let thickness = match part.shape {
+        Shape::Round { diameter } => format!("{} across", mm(diameter)),
+        Shape::Board | Shape::Turned { .. } => part
+            .stock
+            .thickness
+            .map_or_else(|| mm(part.cut.thickness), mm),
+    };
+    let mut rows = vec![
+        Row {
+            label: "Stock",
+            value: format!(
+                "{} · {}, {thickness}",
+                part.stock.name,
+                part.stock.species.title()
+            ),
+        },
+        Row {
+            label: "Finished size",
+            value: format!(
+                "{} × {} × {}",
+                mm(part.cut.length).trim_end_matches(" mm"),
+                mm(part.cut.width).trim_end_matches(" mm"),
+                mm(part.cut.thickness)
+            ),
+        },
+        Row {
+            label: "Grain",
+            value: format!("along the {}", part.grain.word()),
+        },
+    ];
+    if let Shape::Turned { profile, .. } = &part.shape {
+        rows.push(Row {
+            label: "Shape",
+            value: format!("turned to {profile}"),
+        });
+    }
+    if let PartOrigin::Mirror { source } | PartOrigin::MirroredAssembly { source } = part.origin
+        && let Some(source) = design.part(source)
+    {
+        rows.push(Row {
+            label: "Mirror of",
+            value: source.name.clone(),
+        });
+    }
+    let moves_with = moving(design, part.assembly);
+    rows.extend(moves_row(design, moves_with));
+    if let Some(note) = &part.note {
+        rows.push(Row {
+            label: "Note",
+            value: note.clone(),
+        });
+    }
+    let mut connections = Vec::new();
+    // One row per joint: its kind and the other parts in it.
+    for joint in design.joints.iter().filter(|j| {
+        j.pairs
+            .iter()
+            .any(|p| p.roles.iter().any(|r| r.part == id) || p.made_parts.contains(&id))
+    }) {
+        let mut others: Vec<&str> = Vec::new();
+        let mut first_pair = None;
+        for (index, pair) in joint.pairs.iter().enumerate() {
+            if !(pair.roles.iter().any(|r| r.part == id) || pair.made_parts.contains(&id)) {
+                continue;
+            }
+            first_pair.get_or_insert(index);
+            for role in &pair.roles {
+                if role.part != id
+                    && let Some(other) = design.part(role.part)
+                {
+                    let name = relative(design, &other.name, part.assembly);
+                    if !others.contains(&name) {
+                        others.push(name);
+                    }
+                }
+            }
+        }
+        connections.push(Connection {
+            swatch: part_swatch(part),
+            lead: joint
+                .kind
+                .rsplit('.')
+                .next()
+                .unwrap_or(&joint.kind)
+                .to_owned(),
+            rest: if others.is_empty() {
+                String::new()
+            } else {
+                format!("with {}", others.join(", "))
+            },
+            target: first_pair.map(|pair| Target::Joint {
+                joint: joint.id,
+                pair,
+            }),
+        });
+    }
+    // The hardware's cuts, grouped by hardware kind and cut.
+    let mut cuts: Vec<(String, String, Vec<stave_model::solved::HardwareId>)> = Vec::new();
+    for cut in &part.cuts {
+        let CutSource::Hardware { hardware } = cut.source else {
+            continue;
+        };
+        let Some(found) = design.hardware.get(hardware.index()) else {
+            continue;
+        };
+        let row = focus::cut_row("", &cut.kind);
+        let what = match (found.base, row.label) {
+            (HardwareBase::Hinge, "Hole") if found.mechanism.is_some() => "cup bore",
+            (HardwareBase::Hinge, _) => "hinge recess",
+            (HardwareBase::Pull, "Hole") => "screw hole",
+            (HardwareBase::Slide, "Hole") => "screw hole",
+            (_, other) => other,
+        }
+        .to_lowercase();
+        match cuts
+            .iter_mut()
+            .find(|(w, value, _)| *w == what && *value == row.value)
+        {
+            Some((_, _, list)) => {
+                if !list.contains(&hardware) {
+                    list.push(hardware);
+                }
+            }
+            None => cuts.push((what, row.value, vec![hardware])),
+        }
+    }
+    for (what, value, hardware) in cuts {
+        let count = hardware.len();
+        let lead = if count == 1 {
+            format!("1 {what}")
+        } else {
+            format!("{count} {what}s")
+        };
+        connections.push(Connection {
+            swatch: hardware_swatch(),
+            lead,
+            rest: format!("· {value}"),
+            target: hardware.first().map(|h| Target::Hardware(*h)),
+        });
+    }
+    let source = source_of(checked, |m| part_decl(m, id), part.assembly);
+    Some(Inspection {
+        eyebrow: eyebrow(design, kind, part.assembly),
+        title: relative(design, &part.name, part.assembly).to_owned(),
+        description,
+        rows,
+        connections_title: "Joints and cuts",
+        connections,
+        moves_with,
+        source,
+    })
+}
+
+fn inspect_hardware(
+    checked: &Checked,
+    design: &SolvedDesign,
+    id: stave_model::solved::HardwareId,
+) -> Option<Inspection> {
+    let hardware = design.hardware.get(id.index())?;
+    let model = checked.opened.model.as_ref();
+    let description = model
+        .and_then(|m| m.defs.kind(hardware.kind_id))
+        .and_then(|k| docs(&k.decl));
+    let piece = design
+        .part(hardware.piece)
+        .map_or_else(|| "?".to_owned(), |p| p.name.clone());
+    let what = match hardware.base {
+        HardwareBase::Hinge if hardware.is_butt_hinge() => "butt hinge",
+        HardwareBase::Hinge => "cup hinge",
+        HardwareBase::Slide => "drawer slide",
+        HardwareBase::Pull => "pull",
+    };
+    let mut rows = vec![
+        Row {
+            label: "Kind",
+            value: format!("{} ({what})", hardware.kind),
+        },
+        Row {
+            label: "Mounted on",
+            value: format!("{piece}, {} face", hardware.mount_face.word()),
+        },
+    ];
+    let moves_with = moving(design, hardware.assembly);
+    rows.extend(moves_row(design, moves_with));
+    let connections = vec![Connection {
+        swatch: hardware_swatch(),
+        lead: "See how it works".to_owned(),
+        rest: String::new(),
+        target: Some(Target::Hardware(id)),
+    }];
+    let source = source_of(checked, |m| hardware_decl(m, id), hardware.assembly);
+    Some(Inspection {
+        eyebrow: eyebrow(design, "HARDWARE", hardware.assembly),
+        title: relative(design, &hardware.name, hardware.assembly).to_owned(),
+        description,
+        rows,
+        connections_title: "How it works",
+        connections,
+        moves_with,
+        source,
+    })
+}
+
+fn inspect_assembly(
+    checked: &Checked,
+    design: &SolvedDesign,
+    id: AssemblyId,
+) -> Option<Inspection> {
+    let assembly = design.assemblies.get(id.index())?;
+    let model = checked.opened.model.as_ref();
+    let instance = model.and_then(|m| m.assemblies.get(id.index()).filter(|a| a.id == id));
+    let description = model
+        .zip(instance)
+        .and_then(|(m, a)| m.defs.component(a.component))
+        .and_then(|c| docs(&c.decl));
+    let mut rows = vec![Row {
+        label: "Component",
+        value: assembly.component.clone(),
+    }];
+    if let Some(motion) = &assembly.motion {
+        rows.push(Row {
+            label: "Moves",
+            value: motion_words(motion),
+        });
+    }
+    if let Some(source) = assembly
+        .mirror_of
+        .and_then(|s| design.assemblies.get(s.index()))
+    {
+        rows.push(Row {
+            label: "Mirror of",
+            value: source.name.clone(),
+        });
+    }
+    rows.push(Row {
+        label: "Inside",
+        value: format!(
+            "{} {}, {} of hardware",
+            assembly.parts.len(),
+            if assembly.parts.len() == 1 {
+                "part"
+            } else {
+                "parts"
+            },
+            assembly.hardware.len()
+        ),
+    });
+    let moves_with = moving(design, Some(id));
+    let source = source_of(
+        checked,
+        |model| {
+            let instance = model.assemblies.get(id.index()).filter(|a| a.id == id)?;
+            model.defs.assembly(instance.def).map(|d| &d.decl)
+        },
+        assembly.parent,
+    );
+    Some(Inspection {
+        eyebrow: eyebrow(design, "ASSEMBLY", assembly.parent),
+        title: relative(design, &assembly.name, assembly.parent).to_owned(),
+        description,
+        rows,
+        connections_title: "Joints and cuts",
+        connections: Vec::new(),
+        moves_with,
+        source,
+    })
+}
+
+fn inspect_joint(
+    checked: &Checked,
+    design: &SolvedDesign,
+    id: stave_model::solved::JointId,
+    pair: usize,
+) -> Option<Inspection> {
+    let joint = design.joints.get(id.index())?;
+    let model = checked.opened.model.as_ref();
+    let description = model
+        .and_then(|m| m.defs.kind(joint.kind_id))
+        .and_then(|k| docs(&k.decl));
+    let target = Target::Joint { joint: id, pair };
+    let rows = vec![
+        Row {
+            label: "Kind",
+            value: joint.kind.clone(),
+        },
+        Row {
+            label: "Pair",
+            value: focus::title(design, target),
+        },
+    ];
+    let source = source_of(
+        checked,
+        |model| {
+            let instance = model.joints.get(id.index()).filter(|j| j.id == id)?;
+            model.defs.joint(instance.def).map(|d| &d.decl)
+        },
+        joint.assembly,
+    );
+    Some(Inspection {
+        eyebrow: eyebrow(design, "JOINT", joint.assembly),
+        title: relative(design, &joint.name, joint.assembly).to_owned(),
+        description,
+        rows,
+        connections_title: "How it goes together",
+        connections: vec![Connection {
+            swatch: hardware_swatch(),
+            lead: "See how it goes together".to_owned(),
+            rest: String::new(),
+            target: Some(target),
+        }],
+        moves_with: None,
+        source,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn groups_are_labelled_compactly() {
+        let labels =
+            |l: &[&str]| group_label(&l.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>());
+        assert_eq!(labels(&["stile[hinge]"]), "stile[hinge]");
+        assert_eq!(
+            labels(&["feet[0]", "feet[1]", "feet[2]", "feet[3]"]),
+            "feet[4]"
+        );
+        assert_eq!(
+            labels(&["hinges[lower]", "hinges[upper]"]),
+            "hinges[lower, upper]"
+        );
+        assert_eq!(labels(&["side_l", "side_r"]), "side_l, side_r");
+    }
+
+    #[test]
+    fn snippets_are_coloured_by_token() {
+        let tokens = highlight(
+            "assembly door_l : casework.FramePanelDoor {\n  mount: overlay(left: 18mm)\n}",
+        );
+        let class_of = |text: &str| {
+            tokens
+                .iter()
+                .find(|t| t.text.contains(text))
+                .map(|t| t.class)
+        };
+        assert_eq!(class_of("assembly"), Some(TokenClass::Keyword));
+        assert_eq!(class_of("FramePanelDoor"), Some(TokenClass::Type));
+        assert_eq!(class_of("overlay"), Some(TokenClass::Function));
+        assert_eq!(class_of("18mm"), Some(TokenClass::Number));
+        let text: String = tokens.iter().map(|t| t.text.as_str()).collect();
+        assert!(text.starts_with("assembly door_l"));
+        assert!(text.ends_with('}'));
+    }
+
+    #[test]
+    fn angles_read_in_degrees() {
+        assert_eq!(degrees(Angle::from_deg(110)), "110°");
+    }
+}
