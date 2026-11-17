@@ -128,7 +128,8 @@ struct Arguments {
     #[arg(long, value_name = "DEGREES", allow_negative_numbers = true)]
     pitch: Option<f32>,
     /// Frame the screenshot close on the items whose names start with this
-    /// (`door_l.hinges[lower]`: the hinge's cup, plate and arm, and links).
+    /// (`door_l.hinges[lower]`: every member of the hinge,
+    /// `door_l.hinges[lower] cup` and the rest).
     #[arg(long, value_name = "NAME")]
     frame: Option<String>,
     /// Open an assembly for the screenshot: degrees for a door, millimetres

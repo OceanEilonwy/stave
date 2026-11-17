@@ -1,0 +1,57 @@
+// expect: warning[unnamed-cut] this cut has no name, so messages will call it "a slot"
+stave 1
+
+// A home-made housing whose cut has no name. The kind is used for both
+// sides, but the warning is given once, at the kind.
+
+project "A cut with no name" {
+  units: mm
+}
+
+stock pine_19 { species: pine, form: solid, thickness: 19mm }
+
+part base : pine_19 {
+  length: 600mm
+  width:  300mm
+  place {
+    ground
+  }
+}
+
+part side_l : pine_19 {
+  length: 500mm
+  width:  300mm
+  place {
+    orient(length: up, width: back)
+    against(base.top)
+    flush(base.left)
+    flush(base.front)
+  }
+}
+
+part side_r = mirror(side_l, about: mid(base, across))
+
+part shelf : pine_19 {
+  length: fit
+  width:  300mm
+  place {
+    flush(base.top, inset: -250mm)
+    center(base, across)
+    flush(base.front)
+  }
+}
+
+/// A housing as wide as the shelf is thick.
+kind housing : joint {
+  param depth = 6mm
+
+  insert:    [push(piece, along: width)]
+  cut_first: into
+  adds:      extend(piece, by: depth)
+
+  cut crossing(into, piece) {
+    slot(width: piece.thickness, depth: depth)
+  }
+}
+
+joint shelf_housings : housing(shelf, into: [side_l, side_r])

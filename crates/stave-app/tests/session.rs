@@ -452,7 +452,7 @@ fn the_inspector_describes_a_door_part() {
         .iter()
         .map(|c| c.lead.as_str())
         .collect();
-    assert!(leads.iter().any(|l| l.contains("cup bore")), "{leads:?}");
+    assert!(leads.iter().any(|l| l.contains("bore")), "{leads:?}");
     assert!(inspection.connections.iter().all(|c| c.target.is_some()));
     let source = inspection.source.unwrap();
     let first_line: String = source.lines[0].iter().map(|t| t.text.as_str()).collect();

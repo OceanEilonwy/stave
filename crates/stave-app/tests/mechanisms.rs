@@ -7,11 +7,13 @@ mod common;
 
 use std::path::Path;
 
-use stave_geom::mechanism::{MechanismPath, Shape};
+use stave_geom::mechanism::MechanismPath;
+use stave_lang::placement::Axis;
 use stave_lang::placement::Direction;
 use stave_lang::units::{Angle, Length};
+use stave_model::mechanism::MotionShape;
 use stave_model::mechanism::{DriveValue, Holding, Mechanism, MemberIndex};
-use stave_model::solved::{BodyCarrier, Motion, PoseValue, SolvedDesign};
+use stave_model::solved::{BodyCarrier, PoseValue, SolvedDesign};
 
 fn workspace() -> &'static Path {
     Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."))
@@ -78,20 +80,16 @@ fn a_lid_stay_follows_its_lid_and_stops_it() {
     };
     // Open, the arm's slotted end has slid up the slot: the arm turned.
     let path = MechanismPath::new(lid).unwrap();
-    assert!(matches!(path.shape(), Shape::Turn { .. }));
+    assert!(matches!(path.shape(), MotionShape::Turn { .. }));
     let open = path.amount(PoseValue::Open);
     assert!((open - std::f64::consts::FRAC_PI_2).abs() < 1e-9);
     let pose = path.planar_pose(arm_index, open).unwrap();
     assert!(pose.angle().abs() > 0.1, "{pose:?}");
-    // The old contract's motion reaches as far as the stay lets it.
-    let old = design
-        .assemblies
-        .iter()
-        .find(|a| a.name == "lid")
-        .unwrap()
-        .motion
-        .unwrap();
-    assert_eq!(old.opening_angle(), Some(Angle::from_deg(90)));
+    // The lid's mechanism reaches as far as the stay lets it.
+    assert_eq!(
+        mechanism(design, "lid").drive().extent(),
+        DriveValue::Turn(Angle::from_deg(90))
+    );
 }
 
 /// A full-extension slide: the middle member runs on the cabinet member,
@@ -194,7 +192,7 @@ assembly drawer : Drawer {
     );
     let path = MechanismPath::new(drawer).unwrap();
     // Not one rail: the drawer member runs on a member that moves.
-    assert_eq!(path.shape(), Shape::General);
+    assert_eq!(path.shape(), MotionShape::General);
     let open = path.amount(PoseValue::Open);
     let moved = |name: &str| {
         let matrix = path.matrix(member(drawer, name), open).unwrap();
@@ -222,45 +220,31 @@ fn a_slide_is_a_rail_and_a_butt_hinge_a_pivot() {
     let cabinet = stave_app::open(&workspace().join("examples/clothing_cabinet")).unwrap();
     let design = common::design(&cabinet);
     let drawer = mechanism(design, "drawer[top]");
-    let Shape::Travel { toward, travel } = MechanismPath::new(drawer).unwrap().shape() else {
+    let MotionShape::Travel { toward, travel } = MechanismPath::new(drawer).unwrap().shape() else {
         panic!("a slide travels");
     };
     assert_eq!(toward, Direction::Front);
-    let old = design
-        .assemblies
-        .iter()
-        .find(|a| a.name == "drawer[top]")
-        .unwrap()
-        .motion
-        .unwrap();
-    assert_eq!(old, Motion::Travel { toward, travel });
+    assert_eq!(travel, Length::from_mm(500));
 
     let boxed = stave_app::open(&workspace().join("examples/box")).unwrap();
     let design = common::design(&boxed);
     let lid = mechanism(design, "lid");
-    let Shape::Turn { pivot, opening } = MechanismPath::new(lid).unwrap().shape() else {
+    let MotionShape::Turn {
+        line: pivot,
+        opening,
+    } = MechanismPath::new(lid).unwrap().shape()
+    else {
         panic!("a butt hinge turns about its pin");
     };
-    let Some(Motion::Turn {
-        pivot: old,
-        opening_angle,
-    }) = design
-        .assemblies
-        .iter()
-        .find(|a| a.name == "lid")
-        .unwrap()
-        .motion
-    else {
-        panic!("the old contract turns");
-    };
-    assert_eq!(opening, opening_angle);
+    assert_eq!(opening, Angle::from_deg(180));
     assert_eq!(
         (pivot.axis, pivot.free_side, pivot.swing_toward),
-        (old.axis, old.free_side, old.swing_toward)
+        (Axis::Across, Direction::Front, Direction::Up)
     );
+
     // The pin is on the edge, in the face the lid closes on.
-    assert_eq!(pivot.through.deep, old.through.deep);
-    assert_eq!(pivot.through.up, old.through.up);
+    assert_eq!(pivot.through.deep, Length::from_nm(202_500_000));
+    assert_eq!(pivot.through.up, Length::from_mm(110));
 }
 
 /// A scene can't ask for more than the mechanism reaches: past the stay's

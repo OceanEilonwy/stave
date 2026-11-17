@@ -138,10 +138,6 @@ kind bent_hinge : hinge {
     shape body:    box(along: 16mm, across: -2.90mm..15.00mm, depth: -(plate_setback + 18mm)..0mm)
     shape knuckle: box(along: 16mm, across: 8.00mm..15.00mm, depth: 0mm..12.40mm)
   }
-  /// The two links: steel bars pinned to the arm at one end and to the cup
-  /// at the other. As the door opens they fold out, pushing the door
-  /// forward and away from the side so its edge doesn't hit it.
-  member links
   /// The cup: a steel cup pressed into a 35mm hole bored in the back of
   /// the door. The boss in its middle is where the links are pinned.
   member cup {

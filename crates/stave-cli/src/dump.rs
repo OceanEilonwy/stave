@@ -10,9 +10,14 @@ use std::fmt::Write as _;
 
 use stave_lang::placement::Axis;
 use stave_lang::units::Length;
+use stave_model::Model;
+use stave_model::defs::KindDef;
+use stave_model::mechanism::{
+    DriveValue, FramePoint, Mechanism, MechanismEntry, MemberIndex, MotionShape,
+};
 use stave_model::solved::{
-    Contact, CutKind, CutPlace, Depth, End, HardwareBase, HardwareData, LocalFace, Motion,
-    Orientation, Point, PoseValue, Shape, SolvedDesign, WorldBox,
+    Body, BodyCarrier, Contact, CutKind, CutPlace, Depth, End, EntryName, EntryValue, Hardware,
+    LocalFace, Orientation, Point, PoseValue, Shape, SolvedDesign, WorldBox,
 };
 
 /// A length in millimetres without the unit: `19`, `1104.75`.
@@ -144,8 +149,144 @@ fn cut_kind(kind: &CutKind) -> String {
     }
 }
 
-/// The table.
-pub fn table(design: &SolvedDesign) -> String {
+/// A name as words: `fixed_leaf` is `fixed leaf`.
+fn words(name: &str) -> String {
+    name.replace('_', " ")
+}
+
+/// A piece of hardware's entries (its kind's params, then its fields, as
+/// the kind writes them; by name when the kind isn't at hand), each as
+/// `name value`.
+fn entries_in_kind_order(hardware: &Hardware, kind: Option<&KindDef>) -> Vec<String> {
+    let value = |value: &EntryValue| match value {
+        EntryValue::Length(length) => mm(*length),
+        EntryValue::Angle(angle) => angle.to_string(),
+        EntryValue::Count(count) => count.to_string(),
+        EntryValue::Bool(true) => "yes".to_owned(),
+        EntryValue::Bool(false) => "no".to_owned(),
+        EntryValue::Text(text) => format!("\"{text}\""),
+    };
+    let names: Vec<&str> = match kind {
+        Some(kind) => kind
+            .params
+            .iter()
+            .map(|param| param.decl.name.as_str())
+            .chain(kind.fields.iter().map(|field| field.name.as_str()))
+            .collect(),
+        None => hardware.entries.keys().map(EntryName::as_str).collect(),
+    };
+    names
+        .into_iter()
+        .filter_map(|name| {
+            let found = hardware
+                .entries
+                .iter()
+                .find(|(entry, _)| entry.as_str() == name)?;
+            Some(format!("{} {}", words(name), value(found.1)))
+        })
+        .collect()
+}
+
+/// A point in a mechanism's plane.
+fn frame_point(point: FramePoint) -> String {
+    format!("{}, {}", mm(point.across), mm(point.depth))
+}
+
+/// An assembly's motion, from its mechanism: a turn about one pin and a
+/// travel along one rail in world terms, anything else as its plane and
+/// entries.
+fn motion(design: &SolvedDesign, mechanism: &Mechanism) -> String {
+    match mechanism.shape() {
+        MotionShape::Travel { toward, travel } => {
+            format!("travels {} toward the {}", mm(travel), toward.word())
+        }
+        MotionShape::Turn { line, opening } => {
+            // Any point of the line will do: the one level with the low
+            // end of the part the hardware is on.
+            let low = mechanism
+                .hardware()
+                .first()
+                .and_then(|id| design.hardware.get(id.index()))
+                .and_then(|hardware| design.part(hardware.piece))
+                .map(|part| part.drawn_box().min().get(line.axis));
+            let through = match low {
+                Some(low) => line.through.with(line.axis, low),
+                None => line.through,
+            };
+            format!(
+                "turns up to {opening} about the {} line through ({}), free side {}, swinging {}",
+                line.axis.word(),
+                point(through),
+                line.free_side.word(),
+                line.swing_toward.word()
+            )
+        }
+        MotionShape::General => {
+            let frame = mechanism.frame();
+            let member = |index: MemberIndex| {
+                mechanism
+                    .members()
+                    .get(index.index())
+                    .map_or_else(|| "?".to_owned(), |m| m.name.clone())
+            };
+            let entries: Vec<String> = mechanism
+                .entries()
+                .iter()
+                .map(|entry| match *entry {
+                    MechanismEntry::Pivot { first, second, at } => format!(
+                        "pivot {} and {} at ({})",
+                        member(first),
+                        member(second),
+                        frame_point(at)
+                    ),
+                    MechanismEntry::Slot {
+                        pin,
+                        guide,
+                        from,
+                        to,
+                    } => format!(
+                        "slot {} in {} from ({}) to ({})",
+                        member(pin),
+                        member(guide),
+                        frame_point(from),
+                        frame_point(to)
+                    ),
+                    MechanismEntry::Rail {
+                        runner,
+                        guide,
+                        direction,
+                    } => format!(
+                        "rail {} along {} toward ({}, {})",
+                        member(runner),
+                        member(guide),
+                        mm(direction.across()),
+                        mm(direction.depth())
+                    ),
+                    MechanismEntry::Couple {
+                        follower,
+                        leader,
+                        ratio,
+                    } => format!("couple {} to {}: {ratio}", member(follower), member(leader)),
+                })
+                .collect();
+            let reach = match mechanism.drive().extent() {
+                DriveValue::Turn(angle) => format!("turns up to {angle}"),
+                DriveValue::Travel(length) => format!("travels up to {}", mm(length)),
+            };
+            format!(
+                "{reach} on its mechanism across the {} axis from ({}), across {}, depth {}; {}",
+                frame.axis().word(),
+                point(frame.origin()),
+                frame.across().word(),
+                frame.depth().word(),
+                entries.join(", ")
+            )
+        }
+    }
+}
+
+/// The table. `model` gives each hardware kind's order of entries.
+pub fn table(design: &SolvedDesign, model: Option<&Model>) -> String {
     let mut out = String::new();
     let name = |id: stave_model::ids::PartId| {
         design
@@ -251,45 +392,6 @@ pub fn table(design: &SolvedDesign) -> String {
     let _ = writeln!(out);
     let _ = writeln!(out, "HARDWARE ({})", design.hardware.len());
     for hardware in &design.hardware {
-        let detail = match &hardware.data {
-            HardwareData::Slide {
-                length,
-                clearance,
-                travel,
-                ..
-            } => format!(
-                "length {}, clearance {}, travel {}",
-                mm(*length),
-                mm(*clearance),
-                mm(*travel)
-            ),
-            HardwareData::ButtHinge { opening_angle, on } => {
-                format!(
-                    "opens {opening_angle}, leaves housed in it and {}",
-                    name(*on)
-                )
-            }
-            HardwareData::Hinge {
-                opening_angle,
-                cup_diameter,
-                on,
-                overlay,
-                ..
-            } => format!(
-                "opens {opening_angle}, cup {}, on {}, overlays it by {}",
-                mm(*cup_diameter),
-                name(*on),
-                mm(*overlay)
-            ),
-            HardwareData::Pull {
-                centres,
-                screw_diameter,
-                ..
-            } => match centres {
-                Some(centres) => format!("screws {} apart, {}", mm(*centres), mm(*screw_diameter)),
-                None => format!("one screw, {}", mm(*screw_diameter)),
-            },
-        };
         let _ = writeln!(
             out,
             "{:<28} {:<16} on {} ({} face)",
@@ -298,26 +400,30 @@ pub fn table(design: &SolvedDesign) -> String {
             name(hardware.piece),
             hardware.mount_face.word()
         );
-        let (moving, fixed) = match (hardware.base, &hardware.data) {
-            (HardwareBase::Hinge, HardwareData::ButtHinge { .. }) => ("leaf", "fixed leaf"),
-            (HardwareBase::Hinge, _) => ("cup", "plate"),
-            (HardwareBase::Slide, _) => ("drawer member", "cabinet member"),
-            (HardwareBase::Pull, _) => ("box", "fixed"),
-        };
-        let _ = writeln!(out, "    {moving:<15}{}", extent(&hardware.bounds));
-        if let Some(member) = &hardware.fixed {
-            let _ = writeln!(out, "    {fixed:<15}{}", extent(&member.bounds));
-        }
-        if let Some(mechanism) = &hardware.mechanism {
-            let _ = writeln!(out, "    {:<15}{}", "arm", extent(&mechanism.arm.bounds));
+        // The members on the piece first, then the rest in the kind's
+        // order; a member the assembly's mechanism places (a link) is
+        // given by its pivots under ASSEMBLIES instead.
+        let on_piece = |body: &Body| body.carrier == BodyCarrier::Part(hardware.piece);
+        let placed = |body: &&Body| !matches!(body.carrier, BodyCarrier::Link(_));
+        for body in hardware
+            .members
+            .iter()
+            .filter(|body| on_piece(body))
+            .chain(hardware.members.iter().filter(|body| !on_piece(body)))
+            .filter(placed)
+        {
             let _ = writeln!(
                 out,
                 "    {:<15}{}",
-                "knuckle",
-                extent(&mechanism.knuckle.bounds)
+                words(&body.name),
+                extent(&body.bounds())
             );
         }
-        let _ = writeln!(out, "    {detail}");
+        let entries =
+            entries_in_kind_order(hardware, model.and_then(|m| m.defs.kind(hardware.kind_id)));
+        if !entries.is_empty() {
+            let _ = writeln!(out, "    {}", entries.join(", "));
+        }
     }
     let _ = writeln!(out);
     let _ = writeln!(out, "JOINTS ({})", design.joints.len());
@@ -386,37 +492,8 @@ pub fn table(design: &SolvedDesign) -> String {
     let _ = writeln!(out);
     let _ = writeln!(out, "ASSEMBLIES ({})", design.assemblies.len());
     for assembly in &design.assemblies {
-        let motion = match &assembly.motion {
-            Some(Motion::Turn {
-                pivot,
-                opening_angle,
-            }) => format!(
-                "turns up to {opening_angle} about the {} line through ({}), free side {}, swinging {}",
-                pivot.axis.word(),
-                point(pivot.through),
-                pivot.free_side.word(),
-                pivot.swing_toward.word()
-            ),
-            Some(Motion::Linkage { linkage }) => {
-                let frame = linkage.frame();
-                let [first, second] = linkage.links();
-                let pin = |p: &stave_model::solved::PlanePoint| format!("{}, {}", mm(p.x), mm(p.y));
-                format!(
-                    "opens up to {} on a cup hinge's linkage across the {} axis from ({}), free side {}, swinging {}; links ({}) to ({}) and ({}) to ({})",
-                    linkage.opening_angle(),
-                    frame.axis().word(),
-                    point(frame.origin()),
-                    frame.free_side().word(),
-                    frame.swing_toward().word(),
-                    pin(&first.ground),
-                    pin(&first.coupler),
-                    pin(&second.ground),
-                    pin(&second.coupler)
-                )
-            }
-            Some(Motion::Travel { toward, travel }) => {
-                format!("travels {} toward the {}", mm(*travel), toward.word())
-            }
+        let motion = match &assembly.mechanism {
+            Some(mechanism) => motion(design, mechanism),
             None => "fixed".into(),
         };
         let mirror = assembly

@@ -264,6 +264,8 @@ codes! {
     UnknownModule = "unknown-module", layer 2;
     /// `<what> is not supported yet`
     NotSupported = "not-supported", layer 2;
+    /// Warning: `this cut has no name, so messages will call it "a <slot>"`
+    UnnamedCut = "unnamed-cut", layer 2;
     /// `no part is placed with 'ground'`
     Ground = "ground", layer 3;
     /// `<item>: position along '<axis>' is not set`

@@ -13,7 +13,7 @@
 //! is left out.
 
 use stave_geom::collide::{Placement, boxes_overlap, overlaps_placed, placed_bounds, union};
-use stave_geom::mechanism::Shape;
+use stave_model::mechanism::MotionShape;
 use std::collections::BTreeSet;
 
 use stave_geom::planar::{MechanismError, MechanismErrorKind};
@@ -100,7 +100,7 @@ impl Checker<'_> {
                         place,
                         Vec::new(),
                         Some(
-                            "give it a smaller range (its kind's opening_angle or travel), or move its pins so they don't line up"
+                            "give its kind a smaller range, or move its pins so they don't line up"
                                 .to_owned(),
                         ),
                     );
@@ -418,13 +418,13 @@ impl Checker<'_> {
             return Contact::default();
         };
         let (at, shown) = match (reach, path.mechanism().extent()) {
-            (Reach::Angle(angle), DriveValue::Turn(opening_angle)) => (
+            (Reach::Angle(angle), DriveValue::Turn(limit)) => (
                 PoseValue::Angle(angle),
                 PoseValue::Angle(Angle::from_microdeg(
                     angle
                         .microdeg()
                         .saturating_add(2_000_000)
-                        .min(opening_angle.microdeg()),
+                        .min(limit.microdeg()),
                 )),
             ),
             (Reach::Distance(hit), DriveValue::Travel(travel)) => (
@@ -501,13 +501,13 @@ impl Checker<'_> {
         // A door that doesn't turn about one fixed line (a cup hinge's)
         // swings its edges out as it starts to open: an early hit is
         // cleared by a gap.
-        let swings_out = !matches!(path.mechanism().shape(), Shape::Turn { .. });
+        let swings_out = !matches!(path.mechanism().shape(), MotionShape::Turn { .. });
         let (message, mut notes, help) = match (reach, extent) {
-            (Reach::Angle(angle), DriveValue::Turn(opening_angle)) => {
+            (Reach::Angle(angle), DriveValue::Turn(limit)) => {
                 let at = angle_text(angle);
                 (
                     format!("{a_name} hits {b_name} when {name} is opened past {at}"),
-                    vec![format!("the hinges open to {opening_angle}")],
+                    vec![format!("the hinges open to {limit}")],
                     if angle.microdeg() < 1_000_000 {
                         self.clearance_help(assembly, scene_index, a, b)
                     } else {
@@ -516,7 +516,7 @@ impl Checker<'_> {
                             .then(|| self.clearance(assembly, scene_index, a, b))
                             .flatten()
                             .unwrap_or_else(|| format!(
-                                "open {name} no further than {at} (a smaller opening_angle), or move {b_name} out of its way"
+                                "open {name} no further than {at} (give its hardware's kind a smaller range), or move {b_name} out of its way"
                             ))
                     },
                 )

@@ -26,10 +26,10 @@ kind dowel : joint {
   insert: [push(piece, along: length)]
   uses:   dowel_pin(diameter: diameter, length: 2 * depth, count: count)
 
-  cut end(piece, facing: into) {
+  cut end_hole: end(piece, facing: into) {
     drill(diameter: diameter, depth: depth, count: count)
   }
-  cut crossing(into, piece) {
+  cut hole: crossing(into, piece) {
     drill(diameter: diameter, depth: depth, count: count)
   }
 

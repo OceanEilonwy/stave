@@ -41,9 +41,11 @@ use glam::{DMat4, DVec3};
 use stave_lang::placement::{Axis, Direction, PartAxis};
 use stave_lang::units::{Angle, Length};
 use stave_model::mechanism::MemberIndex;
-use stave_model::solved::{Body, MemberShape, Part, Pivot, Point, Pose, PoseValue, WorldBox};
+use stave_model::mechanism::TurnLine;
+use stave_model::solved::{Body, MemberShape, Part, Point, Pose, PoseValue, WorldBox};
 
-use crate::mechanism::{MechanismPath, Shape as MotionShape};
+use crate::mechanism::MechanismPath;
+use stave_model::mechanism::MotionShape;
 
 pub use crate::piece::WorldCut;
 use crate::piece::{self, Piece};
@@ -1077,7 +1079,13 @@ impl Placement {
                     }
                     matrix *= DMat4::from_translation(point_vector(step));
                 }
-                (None, MotionShape::Turn { pivot, opening }) => {
+                (
+                    None,
+                    MotionShape::Turn {
+                        line: pivot,
+                        opening,
+                    },
+                ) => {
                     let angle = match *value {
                         PoseValue::Open => opening,
                         PoseValue::Angle(angle) => angle,
@@ -1119,7 +1127,7 @@ impl Placement {
 
 /// The world turn of `angle` about a pivot line, `free_side` toward
 /// `swing_toward`.
-pub(crate) fn turn_about(pivot: &Pivot, angle: Angle) -> DMat4 {
+pub(crate) fn turn_about(pivot: &TurnLine, angle: Angle) -> DMat4 {
     let free = direction_vector(pivot.free_side);
     let swing = direction_vector(pivot.swing_toward);
     let axis = free.cross(swing).normalize_or(axis_vector(pivot.axis));

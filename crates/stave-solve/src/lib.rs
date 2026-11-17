@@ -36,7 +36,6 @@ mod eval;
 mod hardware;
 mod help;
 mod joints;
-mod legacy;
 mod mechanism;
 mod models;
 mod place;

@@ -207,24 +207,22 @@ focus mode: "closest at 110°: 2.9 mm").
   a millimetre) as `pivot` entries, the arm and knuckle as the arm's two
   boxes, the links as bars, the pin diameter, and the widest opening (its
   `opening_angle` param's range and the mechanism's `stop`, 110°), all in
-  the kind's frame, relative to its cup. Another cup hinge is another kind
-  with its own mechanism; `stave-solve`'s `mechanism` module checks it has
-  one freedom and the four-bar form before the door moves.
-- `stave-model::linkage::Linkage`: the pins exact (whole nanometres) in a
-  `LinkageFrame`, checked by `Linkage::new` in integers: links with length,
-  no shared pin, and from 0° to the opening angle the two circles the boss
-  must lie on stay at least 0.1mm from touching (a dead point), with the
-  sinusoid of their centres' distance bounded in closed form and integer
-  fixed-point cosines.
-- `stave-geom::linkage::LinkagePath`: the pose at an angle in floats (the
-  geometry boundary), the offset's derivative and a bound on how fast any
-  point moves, used by the sweeps (`stave-geom::sweep::linkage_contact`, by
-  conservative advancement then bisection) and by the viewer.
-- `stave-check`: the door swept on the linkage against everything; the
-  hinge's own arm, knuckle and links against its door (less only the
-  cup's bore) and side, from 0° (`sweep::mechanism_contact`; a member
-  already in wood when closed is caught at 0°), and measured
-  (`sweep::steel_in_wood`) by a test over every example's cup hinges; the
-  overlay is the kind's own text: the plate is drawn at its catalogue place
-  for `cup_inset` and `plate_height`, and `adjust arm on plate: across
-  within 2mm` is the side screw (`error[adjust]` past it).
+  the kind's frame, relative to its cup. The data is the kind: nothing in
+  Stave's code knows a cup hinge, its members or its pins. Another cup
+  hinge is another kind with its own mechanism (`wide_hinge_165` is one).
+- `stave-model::mechanism::Mechanism`: the door's mechanism exact (whole
+  nanometres) in its own frame, counted to exactly one freedom.
+- `stave-geom::planar`: the general planar solver runs the drive from 0°
+  to the opening angle in closed-form steps (the cup hung on its two
+  links), refusing a step within 0.1mm of a dead point; `MechanismPath`
+  gives every member's pose at an angle in floats (the geometry boundary)
+  and a bound on how fast any point moves, used by the sweeps
+  (conservative advancement then bisection) and by the viewer.
+- `stave-check`: the door swept on its mechanism against everything, and
+  every member of the hinge (the arm, its knuckle, the links, the cup)
+  against every part, like any other body; the overlay is the kind's own
+  text: the plate is drawn at its catalogue place for `cup_inset` and
+  `plate_height`, and `adjust arm on plate: across within 2mm` is the side
+  screw (`error[adjust]` past it).
+- `crates/stave-app/tests/oracle_hinge.rs`: the numbers above, measured on
+  designs Stave solves from the kind.

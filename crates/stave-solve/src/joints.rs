@@ -780,7 +780,7 @@ impl Solver<'_> {
             file,
             span,
             format!(
-                "stock '{stock_name}' comes no longer than {}; make it from two parts joined end to end (for example ari_tsugi), or buy longer stock",
+                "stock '{stock_name}' comes no longer than {}; make it from two parts joined end to end with a splice joint, or buy longer stock",
                 stave_model::value::format_length(max_length)
             ),
         ))

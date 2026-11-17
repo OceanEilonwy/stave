@@ -8,6 +8,8 @@ use glam::Vec3;
 use stave_app::focus::{self, FindError, Options, Target};
 use stave_app::view::{self, Item, SceneGraph};
 use stave_geom::clearance::{Closest, closest_for};
+use stave_geom::mechanism::MechanismPath;
+
 use stave_geom::collide::WorldSolid;
 use stave_geom::sequence::{Moved, pair_members, pair_steps, trace};
 use stave_geom::solid::Solid;
@@ -369,7 +371,7 @@ fn focus_on_the_chidori_turns_the_lock_last() {
 fn focus_on_a_cup_hinge_names_its_members_and_measures_its_swing() {
     let (opened, graph) = graph("examples/clothing_cabinet");
     let found = open_focus(&opened, &graph, "door_l.hinges[upper]", None);
-    assert_eq!(found.heading, "How a cup hinge works");
+    assert_eq!(found.heading, "How this hinge works");
     assert!(
         found
             .description
@@ -384,15 +386,25 @@ fn focus_on_a_cup_hinge_names_its_members_and_measures_its_swing() {
             "A concealed 35mm cup hinge for an overlay door (the common European clip-on kind). The cup is bored into the back of the door's hinge stile; the mounting plate screws to the inside face of the cabinet side, on the 37mm screw line of 32mm-system cabinets."
         )
     );
-    let members: Vec<(u8, &str)> = found.members.iter().map(|m| (m.number, m.name)).collect();
+    let members: Vec<(u8, &str)> = found
+        .members
+        .iter()
+        .map(|m| (m.number, m.name.as_str()))
+        .collect();
     assert_eq!(
         members,
-        [(1, "plate"), (2, "arm"), (3, "links"), (4, "cup")]
+        [
+            (1, "plate"),
+            (2, "arm"),
+            (3, "cup"),
+            (4, "inner_link"),
+            (5, "outer_link")
+        ]
     );
     assert!(
-        found.members[2]
+        found.members[3]
             .caption
-            .starts_with("The two links: steel bars")
+            .starts_with("The inner link: a solid steel bar")
     );
     assert_eq!(row(&found, "Opens to"), "110°");
     assert_eq!(row(&found, "Closest to the side"), "2.9 mm");
@@ -407,7 +419,7 @@ fn focus_on_a_cup_hinge_names_its_members_and_measures_its_swing() {
     // Every member is numbered on the drawing; the door's edge is dotted.
     let mut numbers: Vec<u8> = frame.overlay.labels.iter().map(|l| l.number).collect();
     numbers.sort_unstable();
-    assert_eq!(numbers, [1, 2, 3, 4]);
+    assert_eq!(numbers, [1, 2, 3, 4, 5]);
     assert!(frame.overlay.lines.len() > 10);
     // Where it comes closest to the side is marked with the gap.
     let notes: Vec<&str> = frame
@@ -485,7 +497,8 @@ fn focus_on_a_cup_hinge_names_its_members_and_measures_its_swing() {
         .iter()
         .find(|h| h.name == "door_l.hinges[upper]")
         .unwrap();
-    let arm_top = stave_geom::render::point(hinge.mechanism.as_ref().unwrap().arm.bounds.max()).y;
+    let arm = hinge.members.iter().find(|m| m.name == "arm").unwrap();
+    let arm_top = stave_geom::render::point(arm.bounds().max()).y;
     assert!((plan.section.offset - (arm_top + 0.5)).abs() < 1e-3);
     assert_eq!(plan.section.normal, Vec3::Y);
     let orbit = Orbit::plan(plan.bounds, 1.5, 0.0);
@@ -513,7 +526,7 @@ fn the_smallest_gap_over_a_swing_is_within_the_bound() {
         .map(|id| solid(design.part(*id).unwrap()))
         .collect();
     let top = solid(part(design, "top"));
-    let motion = door.motion.unwrap();
+    let motion = MechanismPath::new(door.mechanism.as_ref().unwrap()).unwrap();
     let Closest { gap, at, .. } =
         closest_for(&moving, std::slice::from_ref(&top), &motion, None).unwrap();
     // The door's top edge passes under the top's overhang 1.5mm below it,
@@ -538,7 +551,7 @@ fn the_smallest_gap_over_a_swing_is_within_the_bound() {
     let found = closest_for(
         &moving,
         std::slice::from_ref(&divider),
-        &drawer.motion.unwrap(),
+        &MechanismPath::new(drawer.mechanism.as_ref().unwrap()).unwrap(),
         None,
     )
     .unwrap();
@@ -549,9 +562,9 @@ fn the_smallest_gap_over_a_swing_is_within_the_bound() {
 fn focus_on_a_slide_follows_the_drawer() {
     let (opened, graph) = graph("examples/clothing_cabinet");
     let found = open_focus(&opened, &graph, "drawer[top].slides[left]", None);
-    assert_eq!(found.heading, "How a drawer slide works");
+    assert_eq!(found.heading, "How this drawer slide works");
     assert_eq!(row(&found, "Pulls out"), "500 mm");
-    let members: Vec<&str> = found.members.iter().map(|m| m.name).collect();
+    let members: Vec<&str> = found.members.iter().map(|m| m.name.as_str()).collect();
     assert_eq!(members, ["cabinet_member", "drawer_member"]);
     let rest = graph.scenes.first().unwrap();
     let frame = found.frame(&graph, rest, 0.5, &Options::default());
@@ -686,8 +699,12 @@ fn focus_poses_at_interactive_rates() {
 fn focus_on_a_knob_names_the_knob_and_its_screw() {
     let (opened, graph) = graph("examples/clothing_cabinet");
     let found = open_focus(&opened, &graph, "door_l.handle", None);
-    assert_eq!(found.heading, "How a pull is fixed");
-    let members: Vec<(u8, &str)> = found.members.iter().map(|m| (m.number, m.name)).collect();
+    assert_eq!(found.heading, "How this pull is fixed");
+    let members: Vec<(u8, &str)> = found
+        .members
+        .iter()
+        .map(|m| (m.number, m.name.as_str()))
+        .collect();
     assert_eq!(members, [(1, "knob"), (2, "screw")]);
     let rest = graph.scenes.first().unwrap();
     let frame = found.frame(&graph, rest, 0.0, &Options::default());

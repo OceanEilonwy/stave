@@ -16,7 +16,8 @@
 use glam::{DMat4, DVec2, DVec3};
 use stave_lang::placement::Axis;
 use stave_lang::units::Length;
-use stave_model::solved::{Pivot, Point, WorldBox};
+use stave_model::mechanism::TurnLine;
+use stave_model::solved::{Point, WorldBox};
 
 use crate::collide::{CONTACT_TOLERANCE, WorldRod, WorldSolid, direction_vector, point_vector};
 use crate::mechanism::MechanismPath;
@@ -47,7 +48,7 @@ impl Plane {
     /// The plane across a hinge's pivot line: `x` toward the free side,
     /// `y` toward the side it swings to, origin on the pivot. Turning by a
     /// positive angle is counter-clockwise here.
-    pub fn of_pivot(pivot: &Pivot) -> Plane {
+    pub fn of_pivot(pivot: &TurnLine) -> Plane {
         Plane {
             origin: point_vector(pivot.through),
             x: direction_vector(pivot.free_side),

@@ -204,7 +204,7 @@ impl Resolver<'_> {
                 format!("'with' of member '{member}' needs a role or a member"),
                 cx.file,
                 field.value.span,
-                "name the part it moves with (with: piece) or the member it rides on (with: plate)",
+                "name the role whose part it moves with (with: piece) or another member it rides on",
             );
             return None;
         };

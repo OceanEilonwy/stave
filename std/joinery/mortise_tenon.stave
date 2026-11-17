@@ -25,10 +25,10 @@ kind mortise_tenon : joint {
   cut_first: into                            // cut the mortise first, then fit the tenon to it
   adds:      extend(piece, by: length)
 
-  cut end(piece, facing: into) {
+  cut tenon: end(piece, facing: into) {
     tenon(length: length, width: piece.width - 2 * shoulder, thickness: thickness)
   }
-  cut crossing(into, piece) {
+  cut mortise: crossing(into, piece) {
     pocket(width: piece.width - 2 * shoulder, thickness: thickness, depth: length + relief)
   }
 

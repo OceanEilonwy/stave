@@ -78,6 +78,21 @@ open buffers) sits beside that chain after `stave-modules` and before
 
 - Only `stave-gtk` may depend on GTK, libadwaita or wgpu.
 - `stave-gtk` contains no business logic: handlers call into `stave-app`.
+- **No kind in the core.** `stave-lang`, `stave-schema`, `stave-modules`,
+  `stave-model`, `stave-solve`, `stave-geom`, `stave-check`,
+  `stave-workplan` and `stave-scene` never name a joint or hardware kind
+  (`euro_hinge`, `dado`), a member of one (`cup`, `leaf`, `arm`) or a field
+  only one kind has (`cup_inset`, `plate_height`), in code or in a string
+  (a help line's example included). Behaviour comes from the language: a
+  behaviour a kind needs that the language cannot yet say is a new language
+  primitive, with a spec entry in `docs/grammar.md` first, then code that
+  works for every kind. The bases `hinge`, `slide` and `pull` may choose
+  words in messages; they may not choose behaviour. No check may let a
+  particular pairing off: room is made by a cut or not at all.
+  `crates/stave-check/tests/standing_rule.rs` reads the names out of
+  `std/` and fails, naming file and line, if a core crate uses one; its
+  allow-list holds only the language's own vocabulary and plain English,
+  each entry with its reason, and is not grown to make a change pass.
 
 ## Working in this repo
 

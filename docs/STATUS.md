@@ -16,13 +16,14 @@ a line and a concrete help line for every problem:
    mirroring, regions and mounts, joints (pairs, `adds:`, made parts, cuts)
    and hardware (hinges, slides, pulls, their members and cuts). Exact
    throughout: lengths are whole nanometres, arithmetic is exact fractions.
-   Hinge, slide and pull kinds name and document their members
-   (`member cup` with a `///` doc comment; grammar, "Hardware members"):
-   the standard hinges, slides, knob and bar pull do, and a misnamed member is
-   `unknown-field` with the nearest word.
+   Hinge, slide and pull kinds are made of members, each with any name, a
+   `///` doc comment and at least one shape (grammar, "Shapes"); a member
+   without a shape is `missing-field`. Nothing in the core crates knows a
+   kind or a member by name: the standing rule (`CLAUDE.md`, "No kind in
+   the core") is held by `stave-check/tests/standing_rule.rs`.
    **Boards**: a `solid` part wider across the grain than its stock's
    `max_width` is made of equal boards (in `--json`), joined by the edge
-   joints its `boards:` names (or the project's, or `glued_edge`):
+   joints its `boards:` names (or the project's, or else the prelude's, `glued_edge`):
    `tongue_and_groove` widens each board by its tongue, `splined_edge` makes
    a spline per seam, `chigiri` lets a butterfly key into the face across
    each seam, `suitsuki_zan` slides two battens into dovetail housings
@@ -37,11 +38,14 @@ a line and a concrete help line for every problem:
    slots; an outline that crosses itself is `type-mismatch`). Wood
    passing through wood beyond the 0.05mm contact tolerance is `overlap`,
    with what goes where and by how much ("the tenon on rail goes 3mm past
-   the bottom of its mortise in leg"); a joint's parts that don't touch are
-   `no-contact`; a spacing that runs past `to` is `overlap`; a slide's gap
-   is `slide-gap`; a door overlaying its side by more or less than its
-   cup hinges' catalogue allows is `hinge-overlay` (with the `cup_inset`
-   or `plate_height` that fits). Every shape of every hardware member is a
+   the bottom of its mortise in leg"). Messages call a cut by the name its
+   kind gives it (`cut groove: ...`), whatever its operation; an unnamed
+   cut in a kind is the warning `unnamed-cut`, two cuts of one kind with
+   one name are `duplicate-name`, and every cut in `std/` and `examples/`
+   is named. A joint's parts that don't touch are `no-contact`; a spacing
+   that runs past `to` is `overlap`; a kind's catalogue rules are its own
+   `require`s and `adjust`s (a slide's gap, how far a cup hinge's arm can
+   be set on its plate). Every shape of every hardware member is a
    body and counts like wood, against its own parts too (a cut it makes is
    room for it); a kind's own members are not checked against each other.
    A part made of boards counts as its boards make it. A clash between an assembly (a door, a drawer) and something
@@ -52,12 +56,13 @@ a line and a concrete help line for every problem:
    and reported at the first angle or distance it hits something
    ("door_r.panel hits door_l.panel when door_r is opened past 71.5deg");
    a door that binds as soon as it opens is told the gap that clears it.
-   Slides are exact; butt hinges turn about their pin in closed form; cup
-   hinges are four-bar linkages (an arm, two links, the boss in the cup:
-   `docs/hardware/cup-hinge-linkage.md`), so the door turns and moves
-   forward and out at once, swept by conservative advancement and
-   bisection to within the contact tolerance, and the hinges' own arms and
-   links are checked against the door and the side.
+   Every motion is the mechanism its kinds declare, solved by one planar
+   solver: a rail travels exactly, one pin turns in closed form, and
+   anything else (a cup hinge's four-bar: an arm, two links, the boss in
+   the cup, `docs/hardware/cup-hinge-linkage.md`) is posed step by step, so
+   the door turns and moves forward and out at once, swept by conservative
+   advancement and bisection to within the contact tolerance, and every
+   member the mechanism moves is checked against everything else.
 6. **Requires** at the current values (over whole ranges: not yet).
 7. **Assembly sequences**: every joint's `insert` steps are run backwards
    from the finished joint and swept; a step that can't be undone is
@@ -72,7 +77,7 @@ not), and the **viewer** (`stave view`).
 
 ```
 cargo build --release -p stave-cli -p stave-gtk
-target/release/stave check examples                      # 0 errors; 2 warnings for cuts not drawn yet
+target/release/stave check examples                      # 0 errors, 0 warnings
 target/release/stave check tests/broken/door_hits_side   # one broken design per diagnostic
 target/release/stave dump examples/clothing_cabinet
 target/release/stave export examples/clothing_cabinet --gltf apart.glb --explode 1
@@ -299,12 +304,10 @@ through the window itself is not automated.
   steps are checked by dense sampling (1mm, 0.4mm of travel), not exactly.
 - **Motion**: an assembly inside another moving assembly is not swept; the
   rule that an assembly's hinges share one pivot (`motion`) is not checked.
-  A cup hinge moves on the mechanism its kind declares; version 1 solves
-  only the four-bar form (a driven cup hung on two links from a held
-  arm), and `std` has one, the 110° full-overlay `euro_hinge`:
-  half-overlay, inset and wide-angle (155°, 165°) hinges need their own
-  kinds, not written yet (a door that needs one is `hinge-overlay`; an
-  opening over 110° is out of `euro_hinge`'s range). The hinge stops at 110° on its
+  A cup hinge moves on the mechanism its kind declares; `std` has the 110°
+  full-overlay `euro_hinge` and a 165° `wide_hinge_165` with placeholder
+  pins; half-overlay and inset hinges need their own kinds, not written
+  yet (an opening over 110° is out of `euro_hinge`'s range). The hinge stops at 110° on its
   limiter (steel on steel, not modelled as a shape); nothing models the soft-close damper or the
   spring.
 - **Hardware models**: a kind's `.glb` is read only to check it against the text

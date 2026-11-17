@@ -14,10 +14,10 @@ kind cope_and_stick : joint {
   cut_first: into                            // cut the groove in the stile first, then fit the stub tenon
   adds:      extend(piece, by: depth)
 
-  cut end(piece, facing: into) {
+  cut cope: end(piece, facing: into) {
     tenon(length: depth, width: piece.width, thickness: tongue)
   }
-  cut crossing(into, piece) {
+  cut sticking: crossing(into, piece) {
     pocket(width: piece.width, thickness: tongue, depth: depth)
   }
 

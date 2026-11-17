@@ -382,8 +382,29 @@ impl Solver<'_> {
         })
     }
 
+    /// An expression of a module's header (a project's or a library's
+    /// `boards:`), evaluated in that module.
+    fn eval_in_module(
+        &mut self,
+        module: stave_modules::ModuleId,
+        file: FileId,
+        expr: &stave_model::defs::RExpr,
+    ) -> Solved<Value> {
+        let instance = self.model.module_instance(module).ok_or(Reported)?;
+        let env = Env {
+            ctx: Ctx {
+                instance,
+                element: None,
+            },
+            file,
+            kind: None,
+            array: None,
+        };
+        self.eval(expr, &env)
+    }
+
     /// The joint kinds a part's boards are joined by: its own `boards:`,
-    /// the project's, or `glued_edge`.
+    /// the project's, or the first prelude library's (grammar, "Boards").
     fn board_methods(
         &mut self,
         part: PartId,
@@ -398,26 +419,30 @@ impl Solver<'_> {
         let value = match own {
             Some((expr, env)) => Some(self.eval(&expr, &env)?),
             None => match self.model.defs.project(self.model.root).cloned() {
-                Some(project) if project.boards.is_some() => {
-                    let root = self
-                        .model
-                        .module_instance(self.model.root)
-                        .ok_or(Reported)?;
-                    let env = Env {
-                        ctx: Ctx {
-                            instance: root,
-                            element: None,
-                        },
-                        file: project.file,
-                        kind: None,
-                        array: None,
-                    };
-                    match &project.boards {
-                        Some(expr) => Some(self.eval(expr, &env)?),
+                Some(project) if project.boards.is_some() => match &project.boards {
+                    Some(expr) => Some(self.eval_in_module(self.model.root, project.file, expr)?),
+                    None => None,
+                },
+                _ => {
+                    // The prelude's say, from the first library in it that
+                    // has `boards:`.
+                    let found = self.model.defs.prelude.iter().find_map(|module| {
+                        let library = self
+                            .model
+                            .defs
+                            .modules
+                            .get(module.index())?
+                            .library
+                            .as_ref()?;
+                        Some((*module, library.file, library.boards.clone()?))
+                    });
+                    match found {
+                        Some((module, file, expr)) => {
+                            Some(self.eval_in_module(module, file, &expr)?)
+                        }
                         None => None,
                     }
                 }
-                _ => None,
             },
         };
         let kinds: Vec<KindValue> = match value {
@@ -431,28 +456,18 @@ impl Solver<'_> {
                     ),
                     file,
                     span,
-                    "write boards: joined(by: glued_edge)",
+                    "write boards: joined(by: kind_name)",
                 ));
             }
             None => {
-                let Some(kind) = self.model.defs.default_boards else {
-                    let name = self.part_name(part);
-                    return Err(self.error(
-                        Code::UnknownName,
-                        format!(
-                            "{name} is made of boards, and the default '{}' isn't available",
-                            stave_schema::fields::DEFAULT_BOARD_JOINT
-                        ),
-                        file,
-                        span,
-                        "say how its boards are joined with boards: joined(by: ...)",
-                    ));
-                };
-                vec![KindValue {
-                    kind,
-                    name: stave_schema::fields::DEFAULT_BOARD_JOINT.to_owned(),
-                    settings: Vec::new(),
-                }]
+                let name = self.part_name(part);
+                return Err(self.error(
+                    Code::UnknownName,
+                    format!("{name} is made of boards, and nothing says how they are joined"),
+                    file,
+                    span,
+                    "say how its boards are joined with boards: joined(by: ...)",
+                ));
             }
         };
         let mut methods = Vec::new();
@@ -469,7 +484,7 @@ impl Solver<'_> {
                     format!("'{}' is not a joint kind", value.name),
                     file,
                     span,
-                    "boards are joined by joint kinds such as glued_edge or tongue_and_groove",
+                    "boards are joined by joint kinds whose two roles are parts: joined(by: kind_name)",
                 ));
             }
             let roles: Vec<RoleType> = kind.roles.iter().map(|r| r.ty).collect();

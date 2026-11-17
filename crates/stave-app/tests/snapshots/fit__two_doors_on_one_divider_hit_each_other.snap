@@ -9,4 +9,4 @@ error[motion]: door_r.panel hits door_l.panel when door_r is opened past 71.5deg
    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
    = note: the hinges open to 110deg
    = note: with everything else as scene 'left_open' poses it
-   = help: open door_r no further than 71.5deg (a smaller opening_angle), or move door_l.panel out of its way
+   = help: open door_r no further than 71.5deg (give its hardware's kind a smaller range), or move door_l.panel out of its way

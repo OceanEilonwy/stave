@@ -41,7 +41,7 @@ kind kanawa_tsugi : joint {
   // the tip at the root, so turned end for end it is the line the other half
   // keeps below. The first stub length at the tip is the stub tenon (shaped
   // below); the last tip of height at the root is the hidden recess's mouth.
-  cut side(piece, normal: thickness, from: into) {
+  cut scarf: side(piece, normal: thickness, from: into) {
     outline(depth: through, marks: [
       mark(along: stub, across: tip),
       mark(along: stub + scarf / 2 + pin_size / 2, across: (piece.width - step) / 2),
@@ -67,7 +67,7 @@ kind kanawa_tsugi : joint {
     ])
   }
   // The stub's other outer third, from the opposite face.
-  cut side(piece, normal: thickness, from: into, opposite: true) {
+  cut stub_cheek: side(piece, normal: thickness, from: into, opposite: true) {
     outline(depth: piece.thickness / 3, marks: [
       mark(along: 0mm, across: 0mm),
       mark(along: stub, across: 0mm),
@@ -79,7 +79,7 @@ kind kanawa_tsugi : joint {
   // The other half: the same shape, turned end for end. Each step stands half
   // the pin's size past the middle of the splice, so the two steps end up a
   // pin's size apart, centred in the splice: the gap the pin is driven through.
-  cut side(into, normal: thickness, from: piece, flip: true) {
+  cut mating_scarf: side(into, normal: thickness, from: piece, flip: true) {
     outline(depth: through, marks: [
       mark(along: stub, across: tip),
       mark(along: stub + scarf / 2 + pin_size / 2, across: (into.width - step) / 2),
@@ -102,7 +102,7 @@ kind kanawa_tsugi : joint {
       mark(along: stub + scarf, across: into.width),
     ])
   }
-  cut side(into, normal: thickness, from: piece, flip: true, opposite: true) {
+  cut mating_stub_cheek: side(into, normal: thickness, from: piece, flip: true, opposite: true) {
     outline(depth: into.thickness / 3, marks: [
       mark(along: 0mm, across: 0mm),
       mark(along: stub, across: 0mm),

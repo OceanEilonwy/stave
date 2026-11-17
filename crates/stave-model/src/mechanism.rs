@@ -649,6 +649,159 @@ impl Mechanism {
             ..self.clone()
         })
     }
+
+    /// The exact shape of its motion: a turn about one fixed pin, a travel
+    /// along one rail, or neither.
+    pub fn shape(&self) -> MotionShape {
+        let moving = self.moving();
+        let held = |index: MemberIndex| {
+            self.members
+                .get(self.piece_of(index).index())
+                .is_some_and(|member| member.holding == Holding::Held)
+        };
+        let joins_held = |[a, b]: [MemberIndex; 2]| {
+            let (pa, pb) = (self.piece_of(a), self.piece_of(b));
+            (pa == moving && held(b)) || (pb == moving && held(a))
+        };
+        let frame = self.frame;
+        for entry in &self.entries {
+            match (*entry, self.drive) {
+                (
+                    MechanismEntry::Pivot { first, second, at },
+                    MechanismDrive::Turn { from, to, .. },
+                ) if joins_held([first, second]) => {
+                    let through = stepped(
+                        stepped(frame.origin(), frame.across(), at.across),
+                        frame.depth(),
+                        at.depth,
+                    );
+                    let opening = to.microdeg().saturating_sub(from.microdeg());
+                    let swing_toward = if opening >= 0 {
+                        frame.depth()
+                    } else {
+                        frame.depth().opposite()
+                    };
+                    return MotionShape::Turn {
+                        line: TurnLine {
+                            axis: frame.axis(),
+                            through,
+                            free_side: frame.across(),
+                            swing_toward,
+                        },
+                        opening: Angle::from_microdeg(opening.saturating_abs()),
+                    };
+                }
+                (
+                    MechanismEntry::Rail {
+                        runner,
+                        guide,
+                        direction,
+                    },
+                    MechanismDrive::Travel { from, to, .. },
+                ) if joins_held([runner, guide]) => {
+                    let along = match (direction.across().nm(), direction.depth().nm()) {
+                        (a, 0) if a > 0 => frame.across(),
+                        (a, 0) if a < 0 => frame.across().opposite(),
+                        (0, d) if d > 0 => frame.depth(),
+                        (0, d) if d < 0 => frame.depth().opposite(),
+                        _ => return MotionShape::General,
+                    };
+                    let travel = to.nm().saturating_sub(from.nm());
+                    // The runner's travel is measured along the rail's
+                    // direction in the guide; the guide is held, so that is
+                    // the world's.
+                    let runner_moves = self.piece_of(runner) == moving;
+                    let toward = if (travel >= 0) == runner_moves {
+                        along
+                    } else {
+                        along.opposite()
+                    };
+                    return MotionShape::Travel {
+                        toward,
+                        travel: Length::from_nm(travel.saturating_abs()),
+                    };
+                }
+                _ => {}
+            }
+        }
+        MotionShape::General
+    }
+
+    /// For a turning drive: the frame's first direction (from a hinge's
+    /// edge toward the middle of the door) and the way it turns as the
+    /// drive opens; `None` for a travelling drive.
+    pub fn swing(&self) -> Option<(Direction, Direction)> {
+        match self.drive {
+            MechanismDrive::Turn { from, to, .. } => {
+                let toward = if to.microdeg() >= from.microdeg() {
+                    self.frame.depth()
+                } else {
+                    self.frame.depth().opposite()
+                };
+                Some((self.frame.across(), toward))
+            }
+            MechanismDrive::Travel { .. } => None,
+        }
+    }
+}
+
+/// The line a member turns about when a mechanism's driven member is
+/// pinned straight to a held one (a pin between two leaves).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct TurnLine {
+    /// The world axis the line runs along.
+    #[serde(serialize_with = "serialize_axis")]
+    pub axis: Axis,
+    /// A point on the line; its coordinate along `axis` is the mechanism
+    /// frame's origin's, and carries no meaning.
+    pub through: Point,
+    /// The direction from the line toward the rest of the assembly: the
+    /// frame's first direction.
+    #[serde(serialize_with = "serialize_direction")]
+    pub free_side: Direction,
+    /// The direction the free side moves as the drive opens.
+    #[serde(serialize_with = "serialize_direction")]
+    pub swing_toward: Direction,
+}
+
+/// The exact shape of a mechanism's motion, where it has one: chosen by the
+/// mechanism's entries, never by a kind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case", tag = "kind")]
+pub enum MotionShape {
+    /// The driven member is pinned to a held one: the assembly turns about
+    /// this line, as far as `opening`.
+    Turn {
+        /// The line.
+        line: TurnLine,
+        /// How far it turns.
+        opening: Angle,
+    },
+    /// The driven member runs on a rail along a held one: the assembly
+    /// travels this way, as far as `travel`.
+    Travel {
+        /// The world direction it moves as it opens.
+        #[serde(serialize_with = "serialize_direction")]
+        toward: Direction,
+        /// How far it moves.
+        travel: Length,
+    },
+    /// Anything else: the members' poses come from the planar solver.
+    General,
+}
+
+/// `point` moved `amount` along a world direction, saturating.
+fn stepped(point: Point, direction: Direction, amount: Length) -> Point {
+    let signed = if direction.is_positive() {
+        amount.nm()
+    } else {
+        amount.nm().saturating_neg()
+    };
+    let axis = direction.axis();
+    point.with(
+        axis,
+        Length::from_nm(point.get(axis).nm().saturating_add(signed)),
+    )
 }
 
 fn serialize_axis<S: serde::Serializer>(value: &Axis, serializer: S) -> Result<S::Ok, S::Error> {

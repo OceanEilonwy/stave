@@ -102,6 +102,7 @@ pub const PROJECT: &[FieldSpec] = &[
 pub const LIBRARY: &[FieldSpec] = &[
     field("about", Type(TypeName::Text), Optional, false),
     field("license", Type(TypeName::Text), Optional, false),
+    field("boards", Type(TypeName::Boards), Optional, false),
 ];
 
 /// `stock name { }`
@@ -208,10 +209,6 @@ pub fn find(table: &'static [FieldSpec], name: &str) -> Option<&'static FieldSpe
 /// The default `resolution:` of a project, in nanometres (0.5mm).
 pub const DEFAULT_RESOLUTION_NM: i64 = 500_000;
 
-/// The joint kind a part's boards are joined by when neither the part nor
-/// the project has `boards:` (grammar, "Boards"); it is in `std:joinery`.
-pub const DEFAULT_BOARD_JOINT: &str = "glued_edge";
-
 /// `Depth` as a value type, for operation arguments.
 pub const DEPTH: ValueType = Depth;
 
@@ -222,16 +219,6 @@ mod tests {
 
     fn names(table: &[FieldSpec]) -> Vec<String> {
         table.iter().map(|spec| spec.name.to_owned()).collect()
-    }
-
-    #[test]
-    fn the_default_board_joint_matches_the_grammar() {
-        assert!(GRAMMAR.contains(&format!(
-            "Left out everywhere, it is `joined(by: {DEFAULT_BOARD_JOINT})`"
-        )));
-        assert!(GRAMMAR.contains(&format!(
-            "| `boards` | `Boards` | no (default `joined(by: {DEFAULT_BOARD_JOINT})`)"
-        )));
     }
 
     #[test]

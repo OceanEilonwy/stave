@@ -357,7 +357,7 @@ fn a_pull_is_mounted_on_the_front_face_of_its_piece_by_default() {
     let handle = hardware(design(&opened), "handle");
     assert_eq!(handle.mount_face, Face::Front);
     assert_eq!(
-        bounds(&handle.bounds),
+        bounds(&common::member_bounds(handle, "knob")),
         ranges([("135", "165"), ("79", "109"), ("-28", "0")])
     );
 }
@@ -371,7 +371,10 @@ fn face_names_another_mount_face() {
     let handle = hardware(design(&opened), "handle");
     assert_eq!(handle.mount_face, Face::Top);
     assert_eq!(
-        (handle.bounds.min().up, handle.bounds.max().up),
+        (
+            common::member_bounds(handle, "knob").min().up,
+            common::member_bounds(handle, "knob").max().up
+        ),
         (mm("169"), mm("197"))
     );
     let opened = open(&knob(
@@ -431,13 +434,13 @@ const DOOR: &str = "part door : pine_19 {
 fn a_hinge_is_placed_along_its_pieces_length_only() {
     let hinge = |place: &str| {
         open(&format!(
-            "{SIDE}\n{DOOR}\n/// A cup hinge for an inset door, whose plate has no adjustment: it\n/// is drawn where this design puts it.\nkind inset_cup_hinge : hinge {{\n  roles {{\n    piece: Part\n    on:    Part\n  }}\n  opening_angle: 110deg\n  cup_diameter:  35mm\n  cup_depth:     13mm\n  cup_inset:     5mm\n  mount {{\n    face:   back\n    across: from(edge(piece, nearer: on), inset: 22.5mm)\n    along:  open\n  }}\n  member plate {{\n    with:  on\n    shape: box(along: 50mm, across: -22.5mm..-11.5mm, depth: -55mm..-19mm)\n    mount {{\n      across: from(face(on, toward: piece), inset: -22.5mm)\n      depth:  from(face(on, toward: piece))\n    }}\n  }}\n  member cup {{\n    with:  piece\n    shape: cylinder(diameter: 35mm, depth: 0mm..13mm)\n  }}\n  cut crossing(piece, cup) {{ drill(diameter: 35mm, depth: 13mm) }}\n}}\nhardware h : inset_cup_hinge(door, on: side){place}"
+            "{SIDE}\n{DOOR}\n/// A cup hinge for an inset door, whose plate has no adjustment: it\n/// is drawn where this design puts it.\nkind inset_cup_hinge : hinge {{\n  roles {{\n    piece: Part\n    on:    Part\n  }}\n  opening_angle: 110deg\n  cup_diameter:  35mm\n  cup_depth:     13mm\n  cup_inset:     5mm\n  mount {{\n    face:   back\n    across: from(edge(piece, nearer: on), inset: 22.5mm)\n    along:  open\n  }}\n  member plate {{\n    with:  on\n    shape: box(along: 50mm, across: -22.5mm..-11.5mm, depth: -55mm..-19mm)\n    mount {{\n      across: from(face(on, toward: piece), inset: -22.5mm)\n      depth:  from(face(on, toward: piece))\n    }}\n  }}\n  member cup {{\n    with:  piece\n    shape: cylinder(diameter: 35mm, depth: 0mm..13mm)\n  }}\n  cut cup_bore: crossing(piece, cup) {{ drill(diameter: 35mm, depth: 13mm) }}\n}}\nhardware h : inset_cup_hinge(door, on: side){place}"
         ))
     };
     let opened = hinge(" {\n  place {\n    flush(door.bottom, inset: 50mm)\n  }\n}");
     let h = hardware(design(&opened), "h");
     assert_eq!(h.mount_face, Face::Back);
-    assert_eq!(h.bounds.min().up, mm("69"));
+    assert_eq!(common::member_bounds(h, "cup").min().up, mm("69"));
     only_error(
         &hinge(""),
         "axis-not-set",

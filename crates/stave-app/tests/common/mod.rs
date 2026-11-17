@@ -226,3 +226,28 @@ pub fn hardware<'d>(design: &'d SolvedDesign, name: &str) -> &'d stave_model::so
         .find(|h| h.name == name)
         .unwrap_or_else(|| panic!("no hardware '{name}'"))
 }
+
+/// A piece of hardware's role by name.
+pub fn role(
+    hardware: &stave_model::solved::Hardware,
+    name: &str,
+) -> Option<stave_model::solved::RoleValue> {
+    hardware
+        .roles
+        .iter()
+        .find(|(role, _)| role.as_str() == name)
+        .map(|(_, value)| *value)
+}
+
+/// A piece of hardware's member by name, as its world box at rest.
+pub fn member_bounds(
+    hardware: &stave_model::solved::Hardware,
+    name: &str,
+) -> stave_model::solved::WorldBox {
+    hardware
+        .members
+        .iter()
+        .find(|member| member.name == name)
+        .unwrap_or_else(|| panic!("{} has no member '{name}'", hardware.name))
+        .bounds()
+}
