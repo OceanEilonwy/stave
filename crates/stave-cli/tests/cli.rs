@@ -29,15 +29,7 @@ fn check_passes_on_the_examples_and_std() {
         let output = stave(&["check", folder]);
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(output.status.success(), "{stderr}");
-        assert!(stderr.contains(" 0 errors, "), "{stderr}");
-        // The only warnings are for cuts the geometry can't make yet (the
-        // Japanese joints in examples/joint_samples).
-        for line in stderr.lines().filter(|l| l.starts_with("warning")) {
-            assert!(
-                line.starts_with("warning[not-supported]: cutting "),
-                "{stderr}"
-            );
-        }
+        assert!(stderr.contains(" 0 errors, 0 warnings"), "{stderr}");
     }
 }
 

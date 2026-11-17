@@ -1235,9 +1235,11 @@ and checks, while a joint whose cuts are too small or in the wrong place is
 caught. A joint that needs room to move says so with a param and makes its
 cuts that much larger (`clearance:` in `groove` lets a solid panel swell).
 
-There is no way to switch this check off. A joint that uses a cut operation the
-geometry can't make yet is `warning[not-supported]`, and the fit of its parts
-is checked once it can.
+There is no way to switch this check off. Every cut operation is made and
+checked, angled ones included (see "Angled cuts" below). The only cuts the
+geometry can't make yet are cuts other than `drill` and `spigot` on round
+stock or a turned part: those are `warning[not-supported]`, and the part is
+drawn and checked without them.
 
 #### Faces to cut
 
@@ -1272,15 +1274,52 @@ opposite to the chosen one.
 | Operation | On | Removes |
 |---|---|---|
 | `notch(depth:)` | crossing | the whole footprint, to `depth` (dados, rabbets, grooves, halvings) |
-| `slot(width:, depth:, angle:, from_centre:)` | crossing | a slot `width` wide through the footprint's centre and out past its edges, to the faces of the part. `angle` (default `0deg`) turns it in the face, measured from the entering part's length axis toward its width axis (or from its width axis toward its thickness axis when its length runs into the face). With `from_centre: true` it starts at the footprint's centre and runs out one side only, in the direction of `angle` |
+| `slot(width:, depth:, angle:, from_centre:)` | crossing | a slot `width` wide through the footprint's centre and out past its edges, to the faces of the part. `angle` (default `0deg`) turns it in the face, measured from the entering part's length axis toward its width axis (or from its width axis toward its thickness axis when its length runs into the face). With `from_centre: true` it starts at the footprint's centre and runs out one side only, in the direction of `angle`. An angle that turns it into the face it is cut from is `error[type-mismatch]` |
 | `pocket(width:, thickness:, depth:)` | crossing, end, side | a rectangular mortise, centred; `width` and `thickness` are in the entering part's axes |
 | `tenon(length:, width:, thickness:)` | end | everything around a centred rectangular tenon |
 | `spigot(length:, diameter:)` | end | everything around a centred round tenon |
 | `round(diameter:, flats:, flats_angle:)` | crossing | turns the part round, to `diameter`, over the length where the other part passes (the footprint's extent along this part's length), leaving square sections either side. With `flats:` it keeps two flat faces that distance apart, their normal at `flats_angle` (default `0deg`) from the part's width axis toward its thickness axis |
 | `drill(diameter:, depth:, count:)` | crossing, end, side | `count` round holes (default 1), evenly spaced along the longer side of the footprint or end (equal gaps, including before the first and after the last, as `spaced(evenly)`) and centred across it |
-| `dovetail_socket(neck:, depth:, angle:)` | end | a dovetail socket, cut through the thickness |
-| `dovetail_tail(neck:, depth:, angle:)` | end | everything around a dovetail tail |
-| `outline(marks: [...], depth:, from_depth:)` | side | the shape marked out with `mark(along:, across:)` points, cut from `from_depth` (default `0mm`, the face itself) to `depth` below the face. With `from_depth` greater than zero the cut is hidden inside the part: a recess for a hidden stub tenon |
+| `dovetail_socket(neck:, depth:, angle:)` | end | a dovetail socket: `neck` wide at the end, `depth` deep, widening by `depth × tan(angle)` each side to its bottom, cut straight through the part (see "Angled cuts") |
+| `dovetail_tail(neck:, depth:, angle:)` | end | everything around a dovetail tail: over the last `depth` of the part, the wood either side of a tail `neck` wide at its shoulder and wider by `depth × tan(angle)` each side at the end, cut straight through the part |
+| `outline(marks: [...], depth:, from_depth:)` | side | the shape marked out with `mark(along:, across:)` points, in order round the shape, cut from `from_depth` (default `0mm`, the face itself) to `depth` below the face. With `from_depth` greater than zero the cut is hidden inside the part: a recess for a hidden stub tenon |
+
+**Angled cuts.** `dovetail_socket`, `dovetail_tail`, `outline` and a `slot`
+turned by an angle that isn't a multiple of 90deg are each a flat shape marked
+on a face and cut straight down from it: a polygon in the plane of the face,
+between two depths. They are cut, drawn and checked like every other cut.
+
+- **`outline`**: the polygon is the marks, joined in the order written, the
+  last back to the first (either way round). `along` is measured from the end
+  the selector measures from, `across` from the reference edge (or face). The
+  shape may have corners that point inward (an L, a stepped scarf), but its
+  marks must not cross themselves: at least three marks, no mark twice, not
+  all on one line, and no two sides that cross or touch except neighbours at
+  the mark they share. Otherwise it is `error[type-mismatch]`, naming a side
+  that crosses: `<joint>: the outline crosses itself between mark 3 and
+  mark 4`.
+- **`dovetail_socket`**: on the end of the part, centred across it. Its sides
+  lie across the entering part's width (along the axis of this part that the
+  entering part's width lies along; this part's own width when that one runs
+  into the end), and it is cut straight through the part's third axis. It is
+  `neck` wide at the end and `neck + 2 × depth × tan(angle)` wide at its
+  bottom, `depth` in: wider inside than at its mouth, so the tail goes in
+  only along the axis it is cut through.
+- **`dovetail_tail`**: on the end of the part, centred across its own width
+  and cut straight through its third axis. The tail is `neck` wide at its
+  shoulder, `depth` from the end, and widens by `depth × tan(angle)` each
+  side to the end; what is cut away is the wood either side of it. A tail and
+  a socket with the same `neck`, `depth` and `angle` fill each other exactly.
+  Where the tail is wider than the part, the part's own edge is its side.
+- **A `slot` at an angle**: the rectangle `width` wide through the
+  footprint's centre (from it, with `from_centre: true`), turned in the face
+  by `angle`, out past the part's edges.
+
+The marks are exact. Where a shape needs a number that is not a whole number
+of nanometres (a dovetail's `depth × tan(angle)`, the corners of a slot
+turned by an angle), it is worked out once from the exact angle and length
+and rounded to the nanometre, like a hole's position. A dovetail's `angle`
+must be less than 90deg (`error[type-mismatch]`).
 
 Turning a part to a profile (`shape: turned(profile)`) is the eleventh operation,
 `turning`. It isn't written in a `cut` block, but recipes are written for it
@@ -1703,14 +1742,14 @@ shape of their messages are fixed, because tests and AI tools match on them.
 | 2 | `duplicate-name` | `'<name>' is declared twice` |
 | 2 | `ambiguous-name` | `'<name>' could be <this> or <that> here` |
 | 2 | `unit-mismatch` | `can't <add> <a length> and <an angle>`, or `'<field>' needs <a length>, found <a count>` |
-| 2 | `type-mismatch` | `'<field>' needs <a part>, found <a region>` |
+| 2, 4 | `type-mismatch` | `'<field>' needs <a part>, found <a region>`, or for a cut's shape `<joint>: the outline crosses itself between mark <n> and mark <n + 1>` |
 | 2 | `unknown-field` | `<a part> has no field '<name>'` |
 | 2 | `missing-field` | `<what> is missing '<name>'` |
 | 2 | `out-of-range` | `'<param>' must be within <domain>, found <value>` |
 | 2 | `not-in-library` | `a library can't contain a <part> at the top level` |
 | 2 | `import-cycle` | `modules import each other: <a> -> <b> -> <a>` |
 | 2 | `unknown-module` | `can't find module '<source>'` |
-| 2, 4 | `not-supported` | `<what> is not supported yet` (an error for remote imports and for a format version other than 1, a warning for geometry) |
+| 2, 4 | `not-supported` | `<what> is not supported yet` (an error for remote imports and for a format version other than 1, a warning for a cut on a round or turned part other than a hole or a round tenon) |
 | 3 | `ground` | `no part is placed with 'ground'`, `'<a>' and '<b>' are both placed with 'ground'`, or `'<a>' is placed with 'ground' inside a component` |
 | 3 | `axis-not-set` | `<item>: position along '<axis>' is not set` |
 | 3 | `axis-set-twice` | `<item>: position along '<axis>' is set twice` |

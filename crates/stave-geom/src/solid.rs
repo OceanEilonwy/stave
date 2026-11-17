@@ -9,18 +9,27 @@
 //!   (`notch`, `pocket`, `tenon`, a `slot` along one of the part's axes,
 //!   the square ends a `spigot` or `round` leaves). Box minus box is exact,
 //!   so these cuts are exact.
+//! - **Angled cuts** (`dovetail_socket`, `dovetail_tail`, `outline` and a
+//!   `slot` turned by an angle that isn't a multiple of 90deg) are
+//!   [`Prism`]s: a polygon on a face cut straight down from it (grammar,
+//!   "Cut operations"). Each is split once into convex pieces; the pieces
+//!   that are axis-aligned rectangles are taken out of the blocks like any
+//!   box, and the others, the slanted pieces, are kept in
+//!   [`Solid::prisms`]: the wood is the blocks less those pieces.
 //! - **Round features** are [`Rod`]s: cylinders along one of the part's
 //!   axes. A `spigot` or `round` adds one to a board; round stock and turned
 //!   parts are a lathe [`Profile`] along the length; a `drill` removes one
 //!   (a hole). Their sizes and positions are exact; only the collision
 //!   tests and the meshes that use them work in floats.
-//! - A **`slot` turned by an angle** that isn't a multiple of 90deg is an
-//!   [`AngledSlot`]: exact measurements, tested in floats by assembly
-//!   sequences, not drawn yet, and left uncut by the overlap checks.
-//! - **Angled cuts** (`dovetail_socket`, `dovetail_tail`, `outline`) can't
-//!   be made yet. They are listed in [`Solid::skipped`] and the part is left uncut
-//!   there; the checker warns and leaves the parts they join out of the fit
-//!   check.
+//! - Cuts on round stock and turned parts other than `drill` and `spigot`
+//!   can't be made yet: they are listed in [`Solid::skipped`] and the
+//!   checker warns.
+//!
+//! A polygon's points are exact nanometres. Where a shape needs an
+//! irrational number (a dovetail's offset `depth × tan(angle)`, the
+//! corners of a slot turned by an angle), it is computed once from the
+//! exact angle and length and rounded to the nanometre when the prism is
+//! built, the same rule as a hole's position.
 //!
 //! Simplifications (recorded here, as the plan asks): the `flats` of a
 //! `round` are kept on its rod for drawing but collision tests use the full
@@ -33,8 +42,11 @@ use stave_lang::ast::CutOperation;
 use stave_lang::placement::PartAxis;
 use stave_lang::units::{Angle, Length};
 use stave_model::solved::{
-    Cut, CutKind, CutPlace, Depth, End, LocalBox, LocalFace, Part, Shape, Size3, SolvedDesign,
+    Cut, CutKind, CutPlace, Depth, End, LocalBox, LocalFace, Mark, Part, Shape, Size3, SolvedDesign,
 };
+
+pub use crate::prism::{ConvexPolygon, DepthRange, Point2, Polygon, PolygonError, Prism};
+use crate::render;
 
 /// A point in a part's own frame, in nanometres.
 pub type Local = Size3;
@@ -346,53 +358,20 @@ fn push_zone(stations: &mut Vec<ProfileStation>, zone: &Zone) {
     }
 }
 
-/// A slot turned in its face by an angle that isn't a multiple of 90deg
-/// (the chidori's diagonal slots). It can't be a box in the part's axes,
-/// so it is kept as exact measurements and tested in floats: its walls
-/// are not drawn yet, and the overlap checks leave it uncut (more wood
-/// than there is), but assembly sequences use it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct AngledSlot {
-    /// The axis of the face it is cut from (it runs through the part along
-    /// this axis over `depth`).
-    pub face_axis: PartAxis,
-    /// The local axis the angle is measured from, and whether its positive
-    /// direction is the one the angle starts from.
-    pub base: (PartAxis, bool),
-    /// The local axis the angle turns toward, likewise.
-    pub next: (PartAxis, bool),
-    /// The angle from `base` toward `next`.
-    pub angle: Angle,
-    /// The footprint's centre (the face axis is left at 0).
-    pub centre: Local,
-    /// Its width.
-    pub width: Length,
-    /// From the centre out one side only (toward the angle).
-    pub from_centre: bool,
-    /// The range it covers along the face axis.
-    pub depth: (Length, Length),
-}
-
 /// Why a cut was left unmade.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Unsupported {
-    /// An angled operation: `dovetail_socket`, `dovetail_tail`, `outline`.
-    Angled(CutOperation),
-    /// A `slot` turned by an angle that isn't a multiple of 90deg.
-    AngledSlot,
     /// A cut other than `drill` and `spigot` on round stock or a turned
     /// part.
     OnRoundPart(CutOperation),
 }
 
 impl Unsupported {
-    /// What can't be cut, with an article: "a dovetail tail", "a slot at
-    /// an angle", "a notch in a round or turned part". A `not-supported`
-    /// warning reads "cutting <this> is not supported yet".
+    /// What can't be cut, with an article: "a notch in a round or turned
+    /// part". A `not-supported` warning reads "cutting <this> is not
+    /// supported yet".
     pub fn description(&self) -> String {
         match self {
-            Unsupported::Angled(operation) => operation_noun(*operation).to_owned(),
-            Unsupported::AngledSlot => "a slot at an angle".to_owned(),
             Unsupported::OnRoundPart(operation) => {
                 format!("{} in a round or turned part", operation_noun(*operation))
             }
@@ -416,13 +395,71 @@ fn operation_noun(operation: CutOperation) -> &'static str {
     }
 }
 
-/// A cut that was left unmade.
+/// A cut that was left unmade because the geometry can't make it yet.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Skipped {
     /// Its index in [`Part::cuts`].
     pub cut: usize,
     /// Why.
     pub reason: Unsupported,
+}
+
+/// Why a cut's shape is not a shape: a mistake in the design, reported as
+/// `error[type-mismatch]`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum ShapeError {
+    /// Its polygon is not a simple polygon (an `outline` that crosses
+    /// itself, or a dovetail with no width or depth).
+    #[error(transparent)]
+    Polygon(#[from] PolygonError),
+    /// A `slot` whose angle turns it into the face it is cut from.
+    #[error("the slot's angle turns it into the face it is cut from")]
+    SlotIntoFace,
+    /// A dovetail whose angle is 90deg or more.
+    #[error("a dovetail's angle must be less than 90deg")]
+    TooSteep,
+}
+
+impl ShapeError {
+    /// A concrete help line for the diagnostic.
+    pub fn help(&self) -> String {
+        match self {
+            ShapeError::Polygon(error) => error.help(),
+            ShapeError::SlotIntoFace => {
+                "give the slot an angle that keeps it on the face, such as 0deg or 45deg".to_owned()
+            }
+            ShapeError::TooSteep => {
+                "dovetails slope between about 7deg and 14deg; try 10deg".to_owned()
+            }
+        }
+    }
+}
+
+/// A cut that was left unmade because its shape is a mistake.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Misshapen {
+    /// Its index in [`Part::cuts`].
+    pub cut: usize,
+    /// What is wrong with it.
+    pub error: ShapeError,
+}
+
+/// Why [`Solid::make`] left a cut unmade.
+enum Unmade {
+    NotSupported(Unsupported),
+    Misshapen(ShapeError),
+}
+
+impl From<ShapeError> for Unmade {
+    fn from(error: ShapeError) -> Unmade {
+        Unmade::Misshapen(error)
+    }
+}
+
+impl From<PolygonError> for Unmade {
+    fn from(error: PolygonError) -> Unmade {
+        Unmade::Misshapen(ShapeError::Polygon(error))
+    }
 }
 
 /// A part with its cuts made, in its own frame.
@@ -432,8 +469,9 @@ pub struct Solid {
     rods: Vec<Rod>,
     profile: Option<Profile>,
     holes: Vec<Rod>,
-    slots: Vec<AngledSlot>,
+    prisms: Vec<Prism>,
     skipped: Vec<Skipped>,
+    misshapen: Vec<Misshapen>,
 }
 
 impl Solid {
@@ -511,12 +549,19 @@ impl Solid {
             rods: Vec::new(),
             profile,
             holes: Vec::new(),
-            slots: Vec::new(),
+            prisms: Vec::new(),
             skipped: Vec::new(),
+            misshapen: Vec::new(),
         };
         for (index, cut) in part.cuts.iter().enumerate() {
-            if let Err(reason) = solid.make(part, cut, design, centre) {
-                solid.skipped.push(Skipped { cut: index, reason });
+            match solid.make(part, cut, design, centre) {
+                Ok(()) => {}
+                Err(Unmade::NotSupported(reason)) => {
+                    solid.skipped.push(Skipped { cut: index, reason });
+                }
+                Err(Unmade::Misshapen(error)) => {
+                    solid.misshapen.push(Misshapen { cut: index, error });
+                }
             }
         }
         solid
@@ -542,14 +587,21 @@ impl Solid {
         &self.holes
     }
 
-    /// The slots cut at an angle.
-    pub fn slots(&self) -> &[AngledSlot] {
-        &self.slots
+    /// The angled cuts with a slanted piece: the wood is the blocks less
+    /// their [`Prism::slanted_pieces`] (their rectangular pieces are
+    /// already taken out of the blocks).
+    pub fn prisms(&self) -> &[Prism] {
+        &self.prisms
     }
 
-    /// The cuts that could not be made.
+    /// The cuts the geometry can't make yet.
     pub fn skipped(&self) -> &[Skipped] {
         &self.skipped
+    }
+
+    /// The cuts whose shape is a mistake, left unmade.
+    pub fn misshapen(&self) -> &[Misshapen] {
+        &self.misshapen
     }
 
     /// Every cylinder of wood: the board's rods and the lathe profile as
@@ -569,14 +621,11 @@ impl Solid {
         cut: &Cut,
         design: &SolvedDesign,
         centre: [Length; 2],
-    ) -> Result<(), Unsupported> {
+    ) -> Result<(), Unmade> {
         let size = part.cut;
         let operation = cut.kind.operation();
         let round_part = self.profile.is_some();
         match &cut.kind {
-            CutKind::DovetailSocket { .. }
-            | CutKind::DovetailTail { .. }
-            | CutKind::Outline { .. } => return Err(Unsupported::Angled(operation)),
             CutKind::Drill {
                 diameter,
                 depth,
@@ -616,10 +665,13 @@ impl Solid {
             | CutKind::Slot { .. }
             | CutKind::Pocket { .. }
             | CutKind::Tenon { .. }
-            | CutKind::Round { .. } => {}
+            | CutKind::Round { .. }
+            | CutKind::DovetailSocket { .. }
+            | CutKind::DovetailTail { .. }
+            | CutKind::Outline { .. } => {}
         }
         if round_part {
-            return Err(Unsupported::OnRoundPart(operation));
+            return Err(Unmade::NotSupported(Unsupported::OnRoundPart(operation)));
         }
         match &cut.kind {
             CutKind::Notch { depth } => {
@@ -727,8 +779,8 @@ impl Solid {
                 let quarter = Angle::from_deg(90).microdeg();
                 if angle.microdeg().rem_euclid(quarter) != 0 {
                     let (base, next) = slot_axes(part, &cut.place, design, cut.face.axis)
-                        .ok_or(Unsupported::AngledSlot)?;
-                    self.slots.push(AngledSlot {
+                        .ok_or(ShapeError::SlotIntoFace)?;
+                    let slot = TurnedSlot {
                         face_axis: cut.face.axis,
                         base,
                         next,
@@ -736,13 +788,14 @@ impl Solid {
                         centre: place_centre(part, &cut.place, cut.face.axis),
                         width: *width,
                         from_centre: *from_centre,
-                        depth: depth_range(size, cut.face, *depth),
-                    });
+                    };
+                    let polygon = slot.polygon(size)?;
+                    self.add_prism(cut.face.axis, polygon, depth_range(size, cut.face, *depth))?;
                     return Ok(());
                 }
                 let turns = angle.microdeg().div_euclid(quarter).rem_euclid(4);
                 let (run, sign) = slot_run(part, &cut.place, design, cut.face.axis, turns)
-                    .ok_or(Unsupported::AngledSlot)?;
+                    .ok_or(ShapeError::SlotIntoFace)?;
                 let [first, second] = across(cut.face.axis);
                 let wide = if run == first { second } else { first };
                 let middle = place_centre(part, &cut.place, cut.face.axis);
@@ -765,11 +818,61 @@ impl Solid {
                     self.blocks.subtract(&block);
                 }
             }
-            CutKind::DovetailSocket { .. }
-            | CutKind::DovetailTail { .. }
-            | CutKind::Outline { .. }
-            | CutKind::Drill { .. }
-            | CutKind::Spigot { .. } => {}
+            CutKind::DovetailSocket { neck, depth, angle } => {
+                let dovetail = Dovetail::of(part, cut, design, *neck, *depth, *angle);
+                let (axis, polygon, range) = dovetail.socket()?;
+                self.add_prism(axis, polygon, range)?;
+            }
+            CutKind::DovetailTail { neck, depth, angle } => {
+                let dovetail = Dovetail::of(part, cut, design, *neck, *depth, *angle);
+                for (axis, polygon, range) in dovetail.wedges()? {
+                    self.add_prism(axis, polygon, range)?;
+                }
+            }
+            CutKind::Outline {
+                marks,
+                depth,
+                from_depth,
+            } => {
+                let polygon = outline_polygon(part, cut, marks)?;
+                let range = outline_range(size, cut.face, *depth, *from_depth);
+                self.add_prism(cut.face.axis, polygon, range)?;
+            }
+            CutKind::Drill { .. } | CutKind::Spigot { .. } => {}
+        }
+        Ok(())
+    }
+
+    /// Cuts a prism: its rectangular pieces out of the blocks, exactly;
+    /// the prism itself is kept when it has a slanted piece. A range with
+    /// no depth cuts nothing.
+    fn add_prism(
+        &mut self,
+        axis: PartAxis,
+        polygon: Polygon,
+        range: (Length, Length),
+    ) -> Result<(), PolygonError> {
+        let Some(depth) = DepthRange::new(range.0, range.1) else {
+            return Ok(());
+        };
+        let prism = Prism::new(axis, polygon, depth)?;
+        let [first, second] = across(axis);
+        for piece in prism.pieces().iter().filter(|p| p.is_rectangle()) {
+            let (low, high) = piece.bounds();
+            let min = Local::default()
+                .with(first, low.first)
+                .with(second, low.second)
+                .with(axis, depth.from());
+            let max = Local::default()
+                .with(first, high.first)
+                .with(second, high.second)
+                .with(axis, depth.to());
+            if let Some(block) = Block::new(min, max) {
+                self.blocks.subtract(&block);
+            }
+        }
+        if prism.is_slanted() {
+            self.prisms.push(prism);
         }
         Ok(())
     }
@@ -952,6 +1055,296 @@ fn slot_axes(
     };
     let (base, next) = (local(base), local(next));
     (base.0 != face_axis && next.0 != face_axis).then_some((base, next))
+}
+
+fn plus(a: Length, b: Length) -> Length {
+    Length::from_nm(a.nm().saturating_add(b.nm()))
+}
+
+fn minus(a: Length, b: Length) -> Length {
+    Length::from_nm(a.nm().saturating_sub(b.nm()))
+}
+
+/// A slot turned in its face by an angle that isn't a multiple of 90deg
+/// (the chidori's diagonal slots), before it becomes a polygon.
+struct TurnedSlot {
+    face_axis: PartAxis,
+    /// The local axis the angle is measured from, and whether its positive
+    /// direction is the one the angle starts from.
+    base: (PartAxis, bool),
+    /// The local axis the angle turns toward, likewise.
+    next: (PartAxis, bool),
+    angle: Angle,
+    /// The footprint's centre (the face axis is left at 0).
+    centre: Local,
+    width: Length,
+    /// From the centre out one side only (toward the angle).
+    from_centre: bool,
+}
+
+impl TurnedSlot {
+    /// The slot as a rectangle on the face, running out past the part's
+    /// edges (by the sum of its sizes, which is more than any diagonal).
+    /// Its corners are rounded to the nanometre.
+    fn polygon(&self, size: Size3) -> Result<Polygon, ShapeError> {
+        let [first, second] = across(self.face_axis);
+        let unit = |(axis, positive): (PartAxis, bool)| {
+            let sign = if positive { 1.0 } else { -1.0 };
+            if axis == first {
+                [sign, 0.0]
+            } else if axis == second {
+                [0.0, sign]
+            } else {
+                [0.0, 0.0]
+            }
+        };
+        let (base, next) = (unit(self.base), unit(self.next));
+        let radians = render::radians_f64(self.angle);
+        let (cos, sin) = (radians.cos(), radians.sin());
+        let u = [0, 1].map(|i| base[i] * cos + next[i] * sin);
+        let v = [0, 1].map(|i| next[i] * cos - base[i] * sin);
+        let centre = [
+            render::nm(self.centre.get(first)),
+            render::nm(self.centre.get(second)),
+        ];
+        let reach = PartAxis::ALL
+            .into_iter()
+            .map(|axis| render::nm(size.get(axis)))
+            .sum::<f64>();
+        let half = render::nm(self.width) / 2.0;
+        let start = if self.from_centre { 0.0 } else { -reach };
+        let corner = |along: f64, across: f64| {
+            let at = [0, 1].map(|i| centre[i] + u[i] * along + v[i] * across);
+            Some(Point2::new(
+                render::length_from_nm(at[0])?,
+                render::length_from_nm(at[1])?,
+            ))
+        };
+        let corners = [
+            corner(start, -half),
+            corner(reach, -half),
+            corner(reach, half),
+            corner(start, half),
+        ];
+        let points: Vec<Point2> = corners
+            .into_iter()
+            .collect::<Option<_>>()
+            .ok_or(ShapeError::Polygon(PolygonError::NoArea))?;
+        Ok(Polygon::new(points)?)
+    }
+}
+
+/// A dovetail on the end of a part: the axis it runs into the part along,
+/// the axis its sides lie across, and the axis it is cut straight through.
+struct Dovetail {
+    depth_axis: PartAxis,
+    through: PartAxis,
+    /// The end face, on the depth axis.
+    face_at: Length,
+    /// The bottom of the socket, or the tail's shoulder.
+    inner: Length,
+    /// The neck's sides on the width axis.
+    neck_low: Length,
+    neck_high: Length,
+    /// How far each side spreads over the depth: `depth × tan(angle)`,
+    /// rounded to the nanometre; `None` when the angle is too steep.
+    offset: Option<Length>,
+    /// The part's size on the width axis and through it.
+    width: Length,
+    thickness: Length,
+}
+
+impl Dovetail {
+    /// A socket's sides lie across the entering part's width; a tail's
+    /// across its own part's width. Both are centred across the end and
+    /// cut through the part's third axis.
+    fn of(
+        part: &Part,
+        cut: &Cut,
+        design: &SolvedDesign,
+        neck: Length,
+        depth: Length,
+        angle: Angle,
+    ) -> Dovetail {
+        let depth_axis = cut.face.axis;
+        let [first, second] = across(depth_axis);
+        let preferred = match &cut.kind {
+            CutKind::DovetailSocket { .. } => entering_part(&cut.place, design).map(|other| {
+                part.pose
+                    .orientation
+                    .part_axis(other.pose.orientation.direction(PartAxis::Width).axis())
+            }),
+            CutKind::Notch { .. }
+            | CutKind::Slot { .. }
+            | CutKind::Pocket { .. }
+            | CutKind::Tenon { .. }
+            | CutKind::Spigot { .. }
+            | CutKind::Round { .. }
+            | CutKind::Drill { .. }
+            | CutKind::DovetailTail { .. }
+            | CutKind::Outline { .. } => Some(PartAxis::Width),
+        };
+        let width_axis = preferred.filter(|axis| *axis != depth_axis).unwrap_or(
+            if first == PartAxis::Width || second == PartAxis::Width {
+                PartAxis::Width
+            } else {
+                first
+            },
+        );
+        let through = if width_axis == first { second } else { first };
+        let size = part.cut;
+        let (low, high) = depth_range(size, cut.face, Depth::Length(depth));
+        let (face_at, inner) = match cut.face.end {
+            End::Start => (low, high),
+            End::End => (high, low),
+        };
+        let width = size.get(width_axis);
+        let neck_low = centred_low(half(width), neck);
+        let spread = render::nm(minus(high, low)) * render::radians_f64(angle).tan();
+        Dovetail {
+            depth_axis,
+            through,
+            face_at,
+            inner,
+            neck_low,
+            neck_high: plus(neck_low, neck),
+            offset: render::length_from_nm(spread).filter(|_| spread.is_finite() && spread >= 0.0),
+            width,
+            thickness: size.get(through),
+        }
+    }
+
+    /// A point given on the depth and width axes, in the plane across
+    /// `through`.
+    fn point(&self, along_depth: Length, along_width: Length) -> Point2 {
+        let [first, _] = across(self.through);
+        if first == self.depth_axis {
+            Point2::new(along_depth, along_width)
+        } else {
+            Point2::new(along_width, along_depth)
+        }
+    }
+
+    fn offset(&self) -> Result<Length, ShapeError> {
+        self.offset.ok_or(ShapeError::TooSteep)
+    }
+
+    fn range(&self) -> (Length, Length) {
+        (Length::ZERO, self.thickness)
+    }
+
+    /// The socket: `neck` wide at the end face, wider by the offset each
+    /// side at its bottom.
+    fn socket(&self) -> Result<Marked, ShapeError> {
+        let offset = self.offset()?;
+        let polygon = Polygon::new(vec![
+            self.point(self.face_at, self.neck_low),
+            self.point(self.face_at, self.neck_high),
+            self.point(self.inner, plus(self.neck_high, offset)),
+            self.point(self.inner, minus(self.neck_low, offset)),
+        ])?;
+        Ok((self.through, polygon, self.range()))
+    }
+
+    /// What is cut away around the tail: the wedges either side of it,
+    /// between its shoulder and the end. The tail is `neck` wide at its
+    /// shoulder and wider by the offset each side at the end. A wedge
+    /// runs out past the part's edge where the tail is wider than the
+    /// part, which cuts nothing more.
+    fn wedges(&self) -> Result<Vec<Marked>, ShapeError> {
+        let offset = self.offset()?;
+        let mut out = Vec::new();
+        if self.neck_low > Length::ZERO {
+            let flank = minus(self.neck_low, offset);
+            let outer = flank.min(Length::ZERO);
+            let points = vec![
+                self.point(self.inner, outer),
+                self.point(self.inner, self.neck_low),
+                self.point(self.face_at, flank),
+                self.point(self.face_at, outer),
+            ];
+            out.push((self.through, Polygon::new(distinct(points))?, self.range()));
+        }
+        if self.neck_high < self.width {
+            let flank = plus(self.neck_high, offset);
+            let outer = flank.max(self.width);
+            let points = vec![
+                self.point(self.inner, self.neck_high),
+                self.point(self.inner, outer),
+                self.point(self.face_at, outer),
+                self.point(self.face_at, flank),
+            ];
+            out.push((self.through, Polygon::new(distinct(points))?, self.range()));
+        }
+        Ok(out)
+    }
+}
+
+/// A polygon marked on the plane across `axis`, cut over `range` of it.
+type Marked = (PartAxis, Polygon, (Length, Length));
+
+/// A ring of points with each point that repeats the one before dropped.
+fn distinct(points: Vec<Point2>) -> Vec<Point2> {
+    let mut out: Vec<Point2> = Vec::with_capacity(points.len());
+    for point in points {
+        if out.last() != Some(&point) && out.first() != Some(&point) {
+            out.push(point);
+        }
+    }
+    out
+}
+
+/// An outline's marks as a polygon on its face: `along` from the end the
+/// selector measures from, `across` from the reference edge (or face).
+fn outline_polygon(part: &Part, cut: &Cut, marks: &[Mark]) -> Result<Polygon, PolygonError> {
+    let size = part.cut;
+    let [first, second] = across(cut.face.axis);
+    let (along_axis, along_from, across_axis, across_from) = match &cut.place {
+        CutPlace::Side {
+            along_from,
+            across_axis,
+            across_from,
+            ..
+        } => (PartAxis::Length, *along_from, *across_axis, *across_from),
+        CutPlace::End { .. }
+        | CutPlace::Crossing { .. }
+        | CutPlace::Recess { .. }
+        | CutPlace::Mount { .. } => (first, End::Start, second, End::Start),
+    };
+    let measured = |axis: PartAxis, from: End, value: Length| match from {
+        End::Start => value,
+        End::End => minus(size.get(axis), value),
+    };
+    let points = marks
+        .iter()
+        .map(|mark| {
+            let local = Local::default()
+                .with(along_axis, measured(along_axis, along_from, mark.along))
+                .with(across_axis, measured(across_axis, across_from, mark.across));
+            Point2::new(local.get(first), local.get(second))
+        })
+        .collect();
+    Polygon::new(points)
+}
+
+/// The range an outline covers along its face's axis: from `from_depth`
+/// below the face down to `depth`.
+fn outline_range(
+    size: Size3,
+    face: LocalFace,
+    depth: Depth,
+    from_depth: Length,
+) -> (Length, Length) {
+    let full = size.get(face.axis);
+    let to = match depth {
+        Depth::Through => full,
+        Depth::Length(depth) => depth.min(full).max(Length::ZERO),
+    };
+    let from = from_depth.min(to).max(Length::ZERO);
+    match face.end {
+        End::Start => (from, to),
+        End::End => (minus(full, to), minus(full, from)),
+    }
 }
 
 /// Where the holes of a `drill` go, on the two axes across the face's.

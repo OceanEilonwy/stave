@@ -730,6 +730,27 @@ fn drilled_meshes_are_watertight() {
     }
 }
 
+#[test]
+fn angled_cut_meshes_are_watertight() {
+    // The kanawa tsugi's outlines (beam_a, beam_b) and the ari tsugi's
+    // dovetail socket and tail (beam_c, beam_d).
+    let (opened, _) = graph("examples/joint_samples");
+    let design = opened.design.as_ref().unwrap();
+    for name in ["beam_a", "beam_b", "beam_c", "beam_d"] {
+        let part = part(design, name);
+        let solid = Solid::of(part, design);
+        assert!(!solid.prisms().is_empty(), "{name} has no angled cut");
+        let mesh = stave_geom::cut_part(part, &solid).mesh;
+        let open = open_edges(&mesh);
+        assert!(
+            open.is_empty(),
+            "{name}: {} open edges, e.g. {:?}",
+            open.len(),
+            open.first()
+        );
+    }
+}
+
 /// Every cup hinge of the examples, swept through its whole opening:
 /// no member of its mechanism (arm, knuckle, links) is ever in wood,
 /// the door's (less only its cup's bore) or the side's.

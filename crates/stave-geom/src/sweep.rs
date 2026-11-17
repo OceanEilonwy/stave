@@ -36,9 +36,9 @@
 //!
 //! Approximations (each finds more wood than there is, never less): a rod
 //! is projected as the box around it (exact for a knob, whose axis lies in
-//! the plane; a rod along the hinge axis becomes its square), holes are
-//! left out, and a fixed solid turned about another axis is projected as
-//! the outline of its corners.
+//! the plane; a rod along the hinge axis becomes its square), holes and
+//! angled cuts are left out, and a fixed solid turned about another axis is
+//! projected as the outline of its corners.
 
 use std::f64::consts::TAU;
 
