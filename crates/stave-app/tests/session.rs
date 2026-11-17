@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use stave_app::check::{self, Outcome};
+use stave_app::empty::Reason;
 use stave_app::focus::Target;
 use stave_app::inspect::{self, SwatchShape};
 use stave_app::session::{
@@ -456,4 +457,100 @@ fn the_inspector_describes_a_door_part() {
     let source = inspection.source.unwrap();
     let first_line: String = source.lines[0].iter().map(|t| t.text.as_str()).collect();
     assert_eq!(first_line, "assembly door_l : casework.FramePanelDoor {");
+}
+
+#[test]
+fn the_title_is_what_the_folder_declares_and_its_name_only_until_then() {
+    let folder = example("japanese_joinery");
+    let session = Session::new(folder.clone());
+    assert_eq!(session.title(), "japanese_joinery");
+    let session = checked_session(folder);
+    assert_eq!(session.title(), "Japanese joinery samples");
+    assert_eq!(checked_session(example("stool")).title(), "Stool");
+    assert_eq!(
+        checked_session(example("clothing_cabinet")).title(),
+        "Clothing cabinet"
+    );
+}
+
+#[test]
+fn a_design_with_errors_keeps_its_declared_title() {
+    let mut session = Session::new(PathBuf::from("/project"));
+    let ticket = started(&session.apply(Command::Check)).unwrap();
+    session.finish_check(
+        ticket,
+        memory_check(&format!("{PROJECT}\npart broken : pine_19 {{\n}}\n")),
+    );
+    assert_eq!(session.title(), "Test");
+}
+
+#[test]
+fn a_folder_that_declares_no_title_is_named_after_itself() {
+    let mut session = Session::new(PathBuf::from("/project"));
+    let ticket = started(&session.apply(Command::Check)).unwrap();
+    session.finish_check(
+        ticket,
+        memory_check("stave 1\n\nproject \"  \" {\n  units: mm\n}\n"),
+    );
+    assert_eq!(session.title(), "project");
+}
+
+#[test]
+fn only_a_project_with_parts_and_no_errors_can_be_built() {
+    let session = checked_session(example("stool"));
+    assert_eq!(session.buildable(), Ok(()));
+    assert_eq!(session.build_tooltip(), "Build plan (Ctrl+B)");
+
+    let mut session = checked_session(example("japanese_joinery"));
+    assert_eq!(session.buildable(), Err(Reason::Library));
+    assert_eq!(
+        session.build_tooltip(),
+        "Nothing to build: a library has no parts"
+    );
+    // The button is off, and the command does nothing either.
+    assert!(session.apply(Command::Build).is_empty());
+    assert_eq!(session.build(), Build::Idle);
+
+    let session = Session::new(example("stool"));
+    assert_eq!(session.buildable(), Err(Reason::Checking));
+
+    let folder = workspace().join("tests/no_such_folder");
+    let mut session = Session::new(folder.clone());
+    let ticket = started(&session.apply(Command::Check)).unwrap();
+    session.finish_check(ticket, check::run(&folder));
+    assert_eq!(session.buildable(), Err(Reason::CantOpen));
+    assert_eq!(
+        session.build_tooltip(),
+        "Nothing to build: the folder couldn't be opened"
+    );
+
+    let mut session = Session::new(PathBuf::from("/project"));
+    let ticket = started(&session.apply(Command::Check)).unwrap();
+    session.finish_check(ticket, memory_check(&format!("{PROJECT}{SHELF}")));
+    assert_eq!(session.buildable(), Ok(()));
+    // Errors turn it off, even while the last good design is on show.
+    let ticket = started(&session.apply(Command::Check)).unwrap();
+    session.finish_check(
+        ticket,
+        memory_check(&format!("{PROJECT}\npart broken : pine_19 {{\n}}\n")),
+    );
+    assert!(session.showing_older());
+    assert_eq!(session.buildable(), Err(Reason::Errors));
+    assert_eq!(
+        session.build_tooltip(),
+        "Nothing to build yet: fix the problems first"
+    );
+
+    let mut session = Session::new(PathBuf::from("/project"));
+    let ticket = started(&session.apply(Command::Check)).unwrap();
+    session.finish_check(
+        ticket,
+        memory_check("stave 1\n\nproject \"Empty\" {\n  units: mm\n}\n"),
+    );
+    // A project without parts has an error (nothing stands on the ground).
+    assert_eq!(session.buildable(), Err(Reason::Errors));
+    assert_eq!(
+        Reason::NoParts.nothing_to_build(),
+        "Nothing to build: the project has no parts yet"
+    );
 }

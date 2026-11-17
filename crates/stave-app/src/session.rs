@@ -22,6 +22,7 @@ use stave_model::solved::{AssemblyId, HardwareId, JointId, PartId, SolvedDesign}
 use stave_scene::{Item, SceneEntry, SceneGraph};
 
 use crate::check::{Checked, Outcome, Summary};
+use crate::empty::Reason;
 use crate::focus::Target;
 use crate::view::Problem;
 
@@ -631,6 +632,61 @@ impl Session {
         self.build
     }
 
+    /// The window's title: the project's or library's own declared title
+    /// (`project "Kitchen wall cabinet"`, `library "Japanese joinery
+    /// samples"`), falling back to the folder's name only when none is
+    /// declared or nothing has been read yet.
+    pub fn title(&self) -> String {
+        self.latest
+            .iter()
+            .chain(self.shown.iter())
+            .find_map(|checked| checked.declared_title())
+            .map_or_else(
+                || {
+                    self.folder.file_name().map_or_else(
+                        || self.folder.display().to_string(),
+                        |name| name.to_string_lossy().into_owned(),
+                    )
+                },
+                str::to_owned,
+            )
+    }
+
+    /// Whether there is anything to build a plan for: `Ok` for a project
+    /// whose latest check has parts and no errors, otherwise why not
+    /// ([`Reason::nothing_to_build`] says it in words). The build button
+    /// is enabled only when this is `Ok`, and [`Command::Build`] does
+    /// nothing otherwise.
+    pub fn buildable(&self) -> Result<(), Reason> {
+        if let Some(Verdict::CantOpen(_)) = self.status.verdict() {
+            return Err(Reason::CantOpen);
+        }
+        let Some(latest) = &self.latest else {
+            return Err(Reason::Checking);
+        };
+        if latest.summary.errors > 0 {
+            return Err(Reason::Errors);
+        }
+        match latest.design() {
+            // No errors and nothing solved: a library, which places nothing.
+            None => Err(Reason::Library),
+            Some(design) if design.parts.is_empty() && design.hardware.is_empty() => {
+                Err(Reason::NoParts)
+            }
+            Some(_) => Ok(()),
+        }
+    }
+
+    /// The build button's tooltip: its name and shortcut, what it is
+    /// doing, or why there is nothing to build.
+    pub fn build_tooltip(&self) -> &'static str {
+        match (self.build, self.buildable()) {
+            (Build::Building, _) => "Building the plan…",
+            (Build::Idle, Ok(())) => "Build plan (Ctrl+B)",
+            (Build::Idle, Err(reason)) => reason.nothing_to_build(),
+        }
+    }
+
     /// The last check's result: its problems are the current problems.
     pub fn latest(&self) -> Option<&Rc<Checked>> {
         self.latest.as_ref()
@@ -784,7 +840,7 @@ impl Session {
             }
             Command::Check => self.request_check(&mut events),
             Command::Build => {
-                if self.build == Build::Idle {
+                if self.build == Build::Idle && self.buildable().is_ok() {
                     self.build = Build::Building;
                     events.push(Event::BuildChanged);
                     self.request_check(&mut events);

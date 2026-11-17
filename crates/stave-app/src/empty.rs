@@ -28,6 +28,20 @@ pub enum Reason {
     NoParts,
 }
 
+impl Reason {
+    /// Why the build button is off, in words: "Nothing to build: a
+    /// library has no parts".
+    pub fn nothing_to_build(self) -> &'static str {
+        match self {
+            Reason::Checking => "Nothing to build yet: the design is still being checked",
+            Reason::CantOpen => "Nothing to build: the folder couldn't be opened",
+            Reason::Errors => "Nothing to build yet: fix the problems first",
+            Reason::Library => "Nothing to build: a library has no parts",
+            Reason::NoParts => "Nothing to build: the project has no parts yet",
+        }
+    }
+}
+
 /// The view's empty state.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EmptyState {
