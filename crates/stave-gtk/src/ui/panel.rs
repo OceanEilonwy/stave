@@ -42,6 +42,10 @@ pub struct Panel {
     motion_row: adw::PreferencesRow,
     /// Stops showing the problem.
     pub close: gtk::Button,
+    /// Opens the selected item's door or drawer (degrees or millimetres).
+    pub opening: gtk::Scale,
+    opening_group: adw::PreferencesGroup,
+    opening_label: gtk::Label,
     /// How far apart the parts are pulled, 0 to 1.
     pub explode: gtk::Scale,
     /// Eases the explode control to fully apart, or back together.
@@ -142,10 +146,38 @@ impl Panel {
                 .build(),
         );
 
+        let opening_group = adw::PreferencesGroup::builder()
+            .title("Open it")
+            .visible(false)
+            .build();
+        let opening = gtk::Scale::with_range(gtk::Orientation::Horizontal, 0.0, 1.0, 0.1);
+        opening.set_hexpand(true);
+        opening.set_draw_value(true);
+        opening.set_value_pos(gtk::PositionType::Right);
+        let opening_label = gtk::Label::builder()
+            .xalign(0.0)
+            .wrap(true)
+            .css_classes(["dim-label"])
+            .build();
+        let opening_box = gtk::Box::new(gtk::Orientation::Vertical, 4);
+        opening_box.set_margin_top(8);
+        opening_box.set_margin_bottom(8);
+        opening_box.set_margin_start(12);
+        opening_box.set_margin_end(12);
+        opening_box.append(&opening_label);
+        opening_box.append(&opening);
+        opening_group.add(
+            &adw::PreferencesRow::builder()
+                .child(&opening_box)
+                .activatable(false)
+                .build(),
+        );
+
         content.append(&shown);
         content.append(&problems);
         content.append(&view);
         content.append(&selection);
+        content.append(&opening_group);
         content.append(&keys_group());
         let clamp = adw::Clamp::builder()
             .maximum_size(420)
@@ -167,9 +199,28 @@ impl Panel {
             motion,
             motion_row,
             close,
+            opening,
+            opening_group,
+            opening_label,
             explode,
             animate,
         }
+    }
+
+    /// Shows a slider that opens the selected item's door or drawer, named
+    /// `what`, from closed to `full` (degrees or millimetres); `None`
+    /// hides it.
+    pub fn show_opening(&self, what: Option<(&str, MotionSlider<'_>)>) {
+        let Some((name, slider)) = what else {
+            self.opening_group.set_visible(false);
+            return;
+        };
+        self.opening_group.set_visible(true);
+        self.opening_label
+            .set_label(&format!("{name}: closed to fully open, in {}", slider.unit));
+        self.opening.set_range(0.0, slider.full.max(0.1));
+        self.opening.set_value(slider.value);
+        self.opening.set_tooltip_text(Some(slider.unit));
     }
 
     /// Calls `callback` with a problem's index when its row is activated.

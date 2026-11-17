@@ -23,16 +23,23 @@ a line and a concrete help line for every problem:
    with what goes where and by how much ("the tenon on rail goes 3mm past
    the bottom of its mortise in leg"); a joint's parts that don't touch are
    `no-contact`; a spacing that runs past `to` is `overlap`; a slide's gap
-   is `slide-gap`. Hardware envelopes count, except against their own
-   parts. A clash between an assembly (a door, a drawer) and something
+   is `slide-gap`; a door overlaying its side by more or less than its
+   cup hinges' catalogue allows is `hinge-overlay` (with the `cup_inset`
+   or `plate_height` that fits). Hardware envelopes count, except against
+   their own parts. A clash between an assembly (a door, a drawer) and something
    outside it is one error at the line that placed the assembly, in the
    assembly's own terms ("make its top overlay 10mm smaller").
 5. **Motion**: every scene's poses are collision checked; every door and
    drawer is swept through its whole travel from rest and from every scene
-   (slides exactly, hinges in closed form) and reported at the first angle
-   or distance it hits something ("door.panel hits side_l when door is
-   opened past 90.1deg"); a door that binds as soon as it opens is told the
-   gap that clears it.
+   and reported at the first angle or distance it hits something
+   ("door_r.panel hits door_l.panel when door_r is opened past 71deg");
+   a door that binds as soon as it opens is told the gap that clears it.
+   Slides are exact; butt hinges turn about their pin in closed form; cup
+   hinges are four-bar linkages (an arm, two links, the boss in the cup:
+   `docs/hardware/cup-hinge-linkage.md`), so the door turns and moves
+   forward and out at once, swept by conservative advancement and
+   bisection to within the contact tolerance, and the hinges' own arms and
+   links are checked against the door and the side.
 6. **Requires** at the current values (over whole ranges: not yet).
 7. **Assembly sequences**: every joint's `insert` steps are run backwards
    from the finished joint and swept; a step that can't be undone is
@@ -75,10 +82,23 @@ project's scenes in a dropdown. It reloads when a file changes.
   The first half of the range moves each assembly out whole (drawers
   forward, doors off their hinges), the second pulls parts apart along
   the reverse of their joints' last insert step.
+- **Cup hinges** are drawn as their mechanism: the steel cup with its
+  rim and boss pins in the door, the plate, arm and arm pins on the side,
+  and the two links, which turn about their arm pins as the door opens.
+  Selecting any part or piece of hardware of a door or drawer (a hinge
+  included) offers an "Open it" slider that opens it, the hinges'
+  mechanism moving with it; the side panel describes the linkage.
+- **Sections**: a scene's `section:` cuts the view at a plane; the wood
+  it cuts is drawn flat.
 - **Offscreen**: `stave-gtk <folder> --screenshot out.png` with
-  `--scene NAME`, `--turn DEGREES`, `--explode AMOUNT` and
-  `--diagnostic N` (the Nth problem, from 0, in `stave check` order).
-  See `docs/screenshots/viewer/`.
+  `--scene NAME`, `--turn DEGREES`, `--pitch DEGREES`, `--explode
+  AMOUNT`, `--diagnostic N` (the Nth problem, from 0, in `stave check`
+  order), `--open ASSEMBLY=AMOUNT` (degrees or millimetres), `--hide NAME`,
+  `--section AXIS=MM` and `--frame NAME` (close up on an item). A hinge
+  from above, half open:
+  `stave-gtk examples/clothing_cabinet --screenshot h.png --open door_l=45
+  --frame 'door_l.hinges[lower]' --pitch 89 --turn -33.2 --section up=657`.
+  See `docs/screenshots/viewer/` and `docs/screenshots/hinge/`.
 
 Not checked here: the interactive window itself (window screenshots time
 out in the build environment); everything it draws is checked offscreen.
@@ -100,7 +120,12 @@ out in the build environment); everything it draws is checked offscreen.
   travel), not exactly.
 - **Motion**: an assembly inside another moving assembly is not swept; the
   rule that an assembly's hinges share one pivot (`motion`) is not checked.
-- **Scenes**: `section:` is not drawn.
+  Every cup hinge moves on the one built-in 110° full-overlay linkage:
+  half-overlay, inset and wide-angle (155°, 165°) hinges have other
+  mechanisms, not modelled (a door that needs one is `hinge-overlay`, an
+  opening over 110° `out-of-range`). The links come to rest on the cup's
+  rim at 110°, the stop; nothing models the soft-close damper or the
+  spring.
 - **Hardware models**: `.glb` models are not read (`model-mismatch`).
 - **Modules**: remote sources (`github:`, `https:`) and the lockfile.
 - **Editors and AI**: the language server, smart edits and patches.

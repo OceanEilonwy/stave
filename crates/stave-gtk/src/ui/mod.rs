@@ -27,7 +27,7 @@ use gtk::{gdk, gio, glib};
 use notify::Watcher as _;
 use stave_app::Contact;
 use stave_app::view::{self, Highlight, Item, Problem};
-use stave_model::solved::SolvedDesign;
+use stave_model::solved::{AssemblyId, SolvedDesign};
 use stave_scene::{NodeId, Orbit, Posed, SceneGraph};
 
 use crate::render::{Frame, Renderer};
@@ -178,6 +178,10 @@ struct State {
     explode_target: Option<f32>,
     /// Ignore slider changes made by the window itself.
     updating_controls: bool,
+    /// The selected item's door or drawer, opened by the selection's
+    /// slider: the assembly, its amount (radians or millimetres) and
+    /// whether it turns.
+    opened: Option<(AssemblyId, f32, bool)>,
 }
 
 struct Window {
@@ -222,6 +226,7 @@ impl Window {
                 explode: 0.0,
                 explode_target: None,
                 updating_controls: false,
+                opened: None,
             }),
             watcher: RefCell::new(None),
         });
@@ -422,6 +427,7 @@ impl Window {
             self.show_problem(index);
         }
         self.update_panel();
+        self.update_opening();
         if let Err(message) = &self.state.borrow().renderer {
             self.show_status("Can't draw in 3D", message);
         }
@@ -462,6 +468,72 @@ impl Window {
     fn select(self: &Rc<Self>, node: Option<NodeId>) {
         self.state.borrow_mut().selection = node;
         self.update_panel();
+        self.update_opening();
+        self.request_render();
+    }
+
+    /// Offers a slider that opens the selected item's door or drawer (the
+    /// innermost assembly around it that moves; for a hinge, the door it
+    /// hangs), and closes whatever the last one opened.
+    fn update_opening(&self) {
+        let mut state = self.state.borrow_mut();
+        let found = state.shown.as_ref().and_then(|shown| {
+            let node = shown.scene.node(state.selection?)?;
+            let mut assembly = match node.item {
+                Item::Part(id) => shown.design.part(id)?.assembly,
+                Item::Hardware(id) => shown.design.hardware.get(id.index())?.assembly,
+            };
+            while let Some(id) = assembly {
+                if let Some(range) = shown.scene.motion_range(id) {
+                    let name = shown.design.assemblies.get(id.index())?.name.clone();
+                    return Some((id, range, name));
+                }
+                assembly = shown.design.assemblies.get(id.index())?.parent;
+            }
+            None
+        });
+        state.opened = found.as_ref().map(|(id, range, _)| (*id, 0.0, range.turns));
+        Self::repose(&mut state);
+        state.updating_controls = true;
+        drop(state);
+        let slider = found.as_ref().map(|(_, range, name)| {
+            let full = if range.turns {
+                range.full.to_degrees()
+            } else {
+                range.full
+            };
+            (
+                name.as_str(),
+                panel::MotionSlider {
+                    full: f64::from(full),
+                    value: 0.0,
+                    unit: if range.turns {
+                        "degrees"
+                    } else {
+                        "millimetres"
+                    },
+                },
+            )
+        });
+        self.widgets.panel.show_opening(slider);
+        self.state.borrow_mut().updating_controls = false;
+    }
+
+    /// The selection's opening slider moved: degrees or millimetres.
+    fn open_selected(self: &Rc<Self>, value: f64) {
+        let mut state = self.state.borrow_mut();
+        if state.updating_controls {
+            return;
+        }
+        let Some((_, amount, turns)) = state.opened.as_mut() else {
+            return;
+        };
+        let value = narrow(value);
+        *amount = if *turns { value.to_radians() } else { value };
+        state.problem = None;
+        Self::repose(&mut state);
+        drop(state);
+        self.widgets.panel.show_problem(None, None);
         self.request_render();
     }
 
@@ -534,6 +606,7 @@ impl Window {
             shown,
             problem,
             explode,
+            opened,
             ..
         } = state;
         let Some(shown) = shown.as_mut() else {
@@ -549,7 +622,11 @@ impl Window {
             }
             None => {
                 if let Some(entry) = shown.scene.scenes.get(shown.scene_index) {
-                    shown.posed = shown.scene.pose_with(entry, &[], *explode);
+                    let overrides: Vec<(AssemblyId, f32)> = opened
+                        .iter()
+                        .map(|(id, amount, _)| (*id, *amount))
+                        .collect();
+                    shown.posed = shown.scene.pose_with(entry, &overrides, *explode);
                 }
             }
         }
@@ -933,6 +1010,11 @@ impl Window {
             .panel
             .motion
             .connect_value_changed(move |scale| window.scrub(scale.value()));
+        let window = self.clone();
+        widgets
+            .panel
+            .opening
+            .connect_value_changed(move |scale| window.open_selected(scale.value()));
         let window = self.clone();
         widgets
             .panel
