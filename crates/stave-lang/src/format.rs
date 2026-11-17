@@ -16,10 +16,12 @@
 //! 2. **Spacing** inside a line is one space between tokens, except: none
 //!    inside `( )` and `[ ]`, before `,`, around `.` and `..`, after a
 //!    prefix `-` or `!`, before the `(` of a call or the `[` of an index or
-//!    array, and before the `:` of a field, argument, role or station. The
+//!    array, and before the `:` of a field, argument, role, station, named
+//!    shape, `stop` or `couple`. The
 //!    `:` of a declaration (`part side_l : oak_19`) has a space on each side.
 //! 3. **Alignment**: consecutive lines that each start with a field
-//!    (`name:`), a named argument or a profile station, in the same block or
+//!    (`name:`, `stop:` included), a named shape (`shape knuckle:`), a named
+//!    argument or a profile station, in the same block or
 //!    argument list, line their values up one space after the longest key.
 //!    A blank line or another entry in the same block ends the run; comment
 //!    lines and the continuation lines of a value don't. Likewise,
@@ -269,7 +271,10 @@ fn space_between(previous: &Atom, next: &Atom) -> bool {
         return false;
     }
     match next.kind {
-        COLON => !matches!(next.parent, FIELD | ARG | ROLE | STATION | MIRROR),
+        COLON => !matches!(
+            next.parent,
+            FIELD | ARG | ROLE | STATION | MIRROR | SHAPE | STOP | COUPLE
+        ),
         L_PAREN => !matches!(next.parent, ARG_LIST | MIRROR),
         L_BRACK => !matches!(next.parent, INDEX | ARRAY_SPEC),
         _ => true,
@@ -285,11 +290,16 @@ fn key(line: &Line) -> Option<(usize, u32)> {
             line.atoms.iter().enumerate().find(|(_, atom)| {
                 atom.kind == SyntaxKind::COLON && atom.parent == SyntaxKind::STATION
             })?
+        } else if first.parent == SyntaxKind::SHAPE {
+            // `shape knuckle:`
+            line.atoms.iter().enumerate().find(|(_, atom)| {
+                atom.kind == SyntaxKind::COLON && atom.parent == SyntaxKind::SHAPE
+            })?
         } else {
             let second = line.atoms.get(1)?;
             let keyed = matches!(
                 second.parent,
-                SyntaxKind::FIELD | SyntaxKind::ARG | SyntaxKind::ROLE
+                SyntaxKind::FIELD | SyntaxKind::ARG | SyntaxKind::ROLE | SyntaxKind::STOP
             );
             if !(first.kind.is_word() && second.kind == SyntaxKind::COLON && keyed) {
                 return None;
@@ -609,6 +619,16 @@ mod tests {
                 "stave 1\nregion o = opening(\nleft: a,\n    bottom: b,\n)\nprofile p {\n  measure: diameter\n  at 0mm: 70mm\n  at 34mm: 70mm\n}\n"
             ),
             "stave 1\nregion o = opening(\n  left:   a,\n  bottom: b,\n)\nprofile p {\n  measure: diameter\n  at 0mm:  70mm\n  at 34mm: 70mm\n}\n"
+        );
+    }
+
+    #[test]
+    fn lays_out_members_and_mechanisms() {
+        assert_eq!(
+            format(
+                "stave 1\nkind h : hinge {\n  member arm {\n    with : on\n    shape body : box(along: 16mm, across: -2.9mm .. 15mm, depth: 0mm)\n    shape knuckle:box(along: 16mm, across: 8mm..15mm, depth: 0mm..12.4mm)\n  }\n  mechanism {\n    pivot arm , cup at point( across: 1mm )\n    slot a,b from point(depth: 1mm) to point(depth: 2mm)\n    rail a, b along along\n    couple a to b : 1/2\n    drive: turn(cup, from: 0deg, to: 90deg)\n    stop : 90deg \"the stop\"\n  }\n}\n"
+            ),
+            "stave 1\nkind h : hinge {\n  member arm {\n    with:          on\n    shape body:    box(along: 16mm, across: -2.9mm..15mm, depth: 0mm)\n    shape knuckle: box(along: 16mm, across: 8mm..15mm, depth: 0mm..12.4mm)\n  }\n  mechanism {\n    pivot arm, cup at point(across: 1mm)\n    slot a, b from point(depth: 1mm) to point(depth: 2mm)\n    rail a, b along along\n    couple a to b: 1 / 2\n    drive: turn(cup, from: 0deg, to: 90deg)\n    stop:  90deg \"the stop\"\n  }\n}\n"
         );
     }
 

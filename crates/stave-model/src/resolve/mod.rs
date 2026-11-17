@@ -18,6 +18,7 @@
 mod expr;
 mod items;
 mod kinds;
+mod mechanism;
 
 use std::collections::{BTreeMap, HashMap};
 

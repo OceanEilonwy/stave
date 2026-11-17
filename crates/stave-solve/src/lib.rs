@@ -33,6 +33,7 @@ mod build;
 mod eval;
 mod hardware;
 mod joints;
+mod mechanism;
 mod place;
 
 use std::collections::HashMap;
@@ -120,6 +121,9 @@ pub(crate) struct Solver<'m> {
     pub(crate) skipped: bool,
     /// Spaced elements that run past their `to` anchor.
     pub(crate) overruns: Vec<stave_model::solved::Overrun>,
+    /// Hardware kinds whose mechanism has been reported (a kind's mechanism
+    /// is checked for each piece of hardware, and reported once).
+    pub(crate) reported_mechanisms: std::collections::BTreeSet<stave_model::ids::KindId>,
 }
 
 impl<'m> Solver<'m> {
@@ -143,6 +147,7 @@ impl<'m> Solver<'m> {
             reported_cycles: Vec::new(),
             skipped: false,
             overruns: Vec::new(),
+            reported_mechanisms: std::collections::BTreeSet::new(),
         }
     }
 

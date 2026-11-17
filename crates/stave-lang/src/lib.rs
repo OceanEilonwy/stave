@@ -213,8 +213,33 @@ pub const KEYWORDS: &[&str] = &[
 /// position. `joint` is a base kind too, but it is a keyword and so is not
 /// listed here.
 pub const CONTEXTUAL_WORDS: &[&str] = &[
-    "as", "mirror", "about", "slide", "hinge", "pull", "fastener", "tool", "roles", "cut", "makes",
-    "member", "mark", "same", "to", "in", "replace", "unset", "rename",
+    "as",
+    "mirror",
+    "about",
+    "slide",
+    "hinge",
+    "pull",
+    "fastener",
+    "tool",
+    "roles",
+    "cut",
+    "makes",
+    "member",
+    "mechanism",
+    "shape",
+    "pivot",
+    "slot",
+    "rail",
+    "couple",
+    "from",
+    "along",
+    "mark",
+    "same",
+    "to",
+    "in",
+    "replace",
+    "unset",
+    "rename",
 ];
 
 /// The tokens after which the lexer drops a newline, besides dropping every

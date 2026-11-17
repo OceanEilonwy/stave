@@ -239,20 +239,28 @@ mod tests {
     use stave_lang::placement::{Axis, Direction};
     use stave_lang::units::{Angle, Length};
     use stave_model::solved::{Link, LinkageFrame, PlanePoint, Point};
-    use stave_schema::hinges::{CUP_HINGE_110, CupPoint};
 
-    /// The built-in cup hinge on a 19mm door with its cup 5mm from the edge,
-    /// in a frame at the door's front hinge corner.
+    /// The pins of `euro_hinge` (`std/hardware/hinges.stave`), in
+    /// nanometres across from the cup's centre and in from the door's
+    /// back: the arm's pin, then the cup's, for the inner link and then the
+    /// outer link.
+    const PINS: [[(i64, i64); 2]; 2] = [
+        [(13_500_000, 10_900_000), (-8_800_000, 7_330_000)],
+        [(13_280_000, 3_560_000), (-9_540_000, 1_390_000)],
+    ];
+
+    /// The cup hinge on a 19mm door with its cup 5mm from the edge, in a
+    /// frame at the door's front hinge corner.
     fn cup_hinge(opening: Angle) -> Linkage {
-        let place = |p: CupPoint| {
+        let place = |(across, depth): (i64, i64)| {
             PlanePoint::new(
-                Length::from_nm(22_500_000 + p.x),
-                Length::from_nm(p.y - 19_000_000),
+                Length::from_nm(22_500_000 + across),
+                Length::from_nm(depth - 19_000_000),
             )
         };
-        let links = CUP_HINGE_110.links.map(|link| Link {
-            ground: place(link.arm),
-            coupler: place(link.boss),
+        let links = PINS.map(|[arm, cup]| Link {
+            ground: place(arm),
+            coupler: place(cup),
         });
         let frame = LinkageFrame::new(
             Axis::Up,

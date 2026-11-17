@@ -816,3 +816,193 @@ fn a_fastener_has_no_members_and_a_member_is_written_once() {
         diagnostics(&opened)
     );
 }
+
+/// A cup hinge kind written out with its members and `mechanism` (the
+/// standard hinge's arm, cup, links and pins), and a door hung on it.
+fn hung_door(mechanism: &str) -> String {
+    format!(
+        "kind test_hinge : hinge {{
+  opening_angle: 110deg
+  cup_diameter:  35mm
+  cup_depth:     12.8mm
+  cup_inset:     5mm
+  plate_setback: 37mm
+  plate:         box(length: 50mm, width: 36mm, thickness: 11mm)
+  member plate
+  member arm {{
+    with:          on
+    shape body:    box(along: 16mm, across: -2.9mm..15mm, depth: -55mm..0mm)
+    shape knuckle: box(along: 16mm, across: 8mm..15mm, depth: 0mm..12.4mm)
+  }}
+  member cup {{ with: piece, shape: cylinder(diameter: 35mm, depth: 0mm..12.8mm) }}
+  member inner_link {{
+    shape: bar(from: point(across: 13.5mm, depth: 10.9mm), to: point(across: -8.8mm, depth: 7.33mm), thickness: 1.5mm, along: 9mm)
+  }}
+  member outer_link {{
+    shape: bar(from: point(across: 13.28mm, depth: 3.56mm), to: point(across: -9.54mm, depth: 1.39mm), thickness: 1.5mm, along: 14mm)
+  }}
+  mechanism {{
+{mechanism}
+  }}
+}}
+part side : pine_19 {{
+  length: 400mm
+  width:  300mm
+  place {{
+    orient(length: up, width: back)
+    against(base.top)
+    flush(base.left)
+    flush(base.back)
+  }}
+}}
+part door : pine_19 {{
+  length: 400mm
+  width:  200mm
+  place {{
+    orient(length: up, width: right)
+    against(base.top)
+    flush(side.left, inset: 0.5mm)
+    against(side.front)
+  }}
+}}
+hardware hinge : test_hinge(door, on: side) {{
+  place {{
+    flush(door.bottom, inset: 80mm)
+  }}
+}}"
+    )
+}
+
+const FOUR_PINS: &str = "    pivot arm, inner_link at point(across: 13.5mm, depth: 10.9mm)
+    pivot cup, inner_link at point(across: -8.8mm, depth: 7.33mm)
+    pivot arm, outer_link at point(across: 13.28mm, depth: 3.56mm)
+    pivot cup, outer_link at point(across: -9.54mm, depth: 1.39mm)
+    drive: turn(cup, from: 0deg, to: 110deg)";
+
+#[test]
+fn a_cup_hinge_moves_on_the_mechanism_its_kind_declares() {
+    let opened = open(&hung_door(FOUR_PINS));
+    assert!(
+        diagnostics(&opened).is_empty(),
+        "{:?}",
+        diagnostics(&opened)
+    );
+    let model = opened.model.as_ref().unwrap();
+    let kind = model
+        .defs
+        .kinds
+        .iter()
+        .find(|k| k.decl.name == "test_hinge")
+        .unwrap();
+    let bodies: Vec<&str> = kind.bodies.iter().map(|b| b.name.as_str()).collect();
+    assert_eq!(bodies, ["arm", "cup", "inner_link", "outer_link"]);
+    // The viewer's list keeps the base's words only.
+    let members: Vec<&str> = kind.members.iter().map(|m| m.name.word()).collect();
+    assert_eq!(members, ["plate", "arm", "cup"]);
+    let mechanism = kind.mechanism.as_ref().unwrap();
+    assert_eq!(mechanism.constraints.len(), 4);
+    // The hinge's links are the kind's bars, its pins the kind's pivots.
+    let hinge = common::hardware(design(&opened), "hinge")
+        .mechanism
+        .unwrap();
+    assert_eq!(
+        hinge.links.map(|link| (link.width, link.thickness)),
+        [(mm("9"), mm("1.5")), (mm("14"), mm("1.5"))]
+    );
+    assert_eq!(
+        hinge.linkage.opening_angle(),
+        stave_lang::units::Angle::from_deg(110)
+    );
+}
+
+#[test]
+fn point_is_an_error_outside_a_kind() {
+    let opened = open("param spot = point(across: 3mm)");
+    let diagnostic = the_diagnostic(
+        &opened,
+        "syntax",
+        "point(...) is written only inside a hardware kind's member or mechanism",
+    );
+    assert_eq!(body_line(&opened, diagnostic), 1);
+    // So is a range anywhere but a member's shape.
+    let opened = open(
+        "kind small_knob : pull {\n  envelope: box(length: 10mm..20mm, width: 20mm, thickness: 20mm)\n}",
+    );
+    the_diagnostic(
+        &opened,
+        "syntax",
+        "a range lo..hi is written only as an argument of a member's shape",
+    );
+}
+
+#[test]
+fn a_mechanism_needs_exactly_one_freedom() {
+    // Leaving out the outer link's pin in the cup leaves three: the cup and
+    // the two links move (nine), less two for each of three pins.
+    let three_pins = FOUR_PINS.replace(
+        "    pivot cup, outer_link at point(across: -9.54mm, depth: 1.39mm)\n",
+        "",
+    );
+    let opened = open(&hung_door(&three_pins));
+    the_diagnostic(
+        &opened,
+        "mechanism",
+        "test_hinge's mechanism has 3 freedoms; it needs exactly one",
+    );
+    // One pin too many takes the last freedom away.
+    let five_pins =
+        format!("{FOUR_PINS}\n    pivot inner_link, outer_link at point(across: 2mm, depth: 5mm)");
+    let opened = open(&hung_door(&five_pins));
+    the_diagnostic(
+        &opened,
+        "mechanism",
+        "test_hinge's mechanism has -1 freedoms; it needs exactly one",
+    );
+    // One freedom in another form is not supported yet.
+    let slot = FOUR_PINS.replace(
+        "    pivot cup, outer_link at point(across: -9.54mm, depth: 1.39mm)\n",
+        "    slot cup, outer_link from point(across: -9.54mm, depth: 1.39mm) to point(across: -9.54mm, depth: 5mm)\n    couple outer_link to cup: 1/2\n",
+    );
+    let opened = open(&hung_door(&slot));
+    the_diagnostic(
+        &opened,
+        "not-supported",
+        "test_hinge's mechanism is not supported yet",
+    );
+}
+
+#[test]
+fn a_pivot_names_two_declared_members() {
+    let misspelt = FOUR_PINS.replace("pivot arm, inner_link", "pivot ram, inner_link");
+    let opened = open(&hung_door(&misspelt));
+    let diagnostic = the_diagnostic(&opened, "unknown-name", "unknown name 'ram'");
+    assert_eq!(diagnostic.help.as_deref(), Some("did you mean 'arm'?"));
+    // A member without a body has nothing to pin.
+    let bare = FOUR_PINS.replace("pivot arm, inner_link", "pivot plate, inner_link");
+    let opened = open(&hung_door(&bare));
+    the_diagnostic(&opened, "unknown-name", "unknown name 'plate'");
+    // And the two are different members.
+    let twice = FOUR_PINS.replace("pivot arm, inner_link", "pivot arm, arm");
+    let opened = open(&hung_door(&twice));
+    the_diagnostic(
+        &opened,
+        "duplicate-name",
+        "'arm' is named twice in one pivot",
+    );
+}
+
+#[test]
+fn a_cup_hinge_kind_without_a_mechanism_gives_no_motion() {
+    let opened =
+        open(&hung_door(FOUR_PINS).replace(&format!("  mechanism {{\n{FOUR_PINS}\n  }}\n"), ""));
+    let warnings = diagnostics(&opened);
+    assert_eq!(
+        warnings,
+        ["not-supported: kind 'test_hinge' has no mechanism; its motion is not supported yet"]
+    );
+    assert!(
+        common::hardware(design(&opened), "hinge")
+            .mechanism
+            .is_none()
+    );
+}

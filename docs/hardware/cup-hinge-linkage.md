@@ -1,8 +1,9 @@
 # The cup hinge linkage
 
 How Stave moves a door on concealed 35mm cup hinges, where the numbers come
-from, and how they are checked. The mechanism's data is
-`crates/stave-schema/src/hinges.rs` (`CUP_HINGE_110`); the check is
+from, and how they are checked. The mechanism's data is text: the members
+and `mechanism { }` of `euro_hinge` in `std/hardware/hinges.stave`
+(grammar, "Mechanisms"); the check is
 `tools/hinge-sim/linkage.py` (run it: exit code 0 when every target is met)
 and the fit that found the pins is `tools/hinge-sim/fit.py`.
 
@@ -169,10 +170,13 @@ focus mode: "closest at 110°: 2.9 mm").
 
 ## In Stave
 
-- `stave-schema::hinges::CUP_HINGE_110`: the pins (hundredths of a
-  millimetre), arm, knuckle, link and pin sizes, and the widest opening
-  (110°). A hinge kind never names pins: every cup hinge kind moves on this
-  mechanism, placed relative to its cup.
+- `euro_hinge` in `std/hardware/hinges.stave`: the pins (to a hundredth of
+  a millimetre) as `pivot` entries, the arm and knuckle as the arm's two
+  boxes, the links as bars, the pin diameter, and the widest opening (its
+  `opening_angle` param's range and the mechanism's `stop`, 110°), all in
+  the kind's frame, relative to its cup. Another cup hinge is another kind
+  with its own mechanism; `stave-solve`'s `mechanism` module checks it has
+  one freedom and the four-bar form before the door moves.
 - `stave-model::linkage::Linkage`: the pins exact (whole nanometres) in a
   `LinkageFrame`, checked by `Linkage::new` in integers: links with length,
   no shared pin, and from 0° to the opening angle the two circles the boss

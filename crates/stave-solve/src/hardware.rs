@@ -6,18 +6,18 @@ use stave_lang::placement::{Axis, Direction, Face, PartAxis};
 use stave_lang::units::Length;
 use stave_lang::units::{ExactAngle, ExactLength, Rational};
 use stave_lang::{Code, Diagnostic, Label};
-use stave_model::defs::DefId;
+use stave_model::defs::{
+    ConstraintDef, DefId, DriveDef, KindDef, KindPoint, RExpr, RangeDef, ShapeDef,
+};
 use stave_model::ids::{HardwareId, KindId, PartId, RegionId};
 use stave_model::instance::ItemSlot;
-use stave_model::solved::{
-    Link, LinkBar, Linkage, LinkageError, LinkageFrame, Orientation, PlanePoint, Point,
-};
+use stave_model::solved::{LinkBar, Linkage, LinkageFrame, Orientation, PlanePoint, Point};
 use stave_model::value::{Envelope, ExactBox, ModelRef, Value};
-use stave_schema::hinges::{CUP_HINGE_110, CupPoint};
 use stave_schema::kinds::{MountRule, OpenAxes, base};
 
 use crate::eval::{Env, KindEnv, midpoint, mm};
 use crate::joints::Binding;
+use crate::mechanism::{Constraint, Drive, ExactPoint, MechanismError, Step};
 use crate::place::Siblings;
 use crate::{Memo, Reported, Solved, Solver};
 
@@ -809,48 +809,49 @@ impl Solver<'_> {
                     if let Some(slot) = through.get_mut(world_index(length_axis)) {
                         *slot = length_centre;
                     }
-                    let linkage = self.cup_linkage(
-                        &name,
-                        CupFrame {
-                            axis: length_axis,
-                            origin: through,
-                            free_side: width_direction,
-                            swing_toward: opposite_face.direction(),
-                            cup_x: offset,
-                            thickness,
-                        },
-                        angle,
-                        &env,
-                        span,
-                    )?;
-                    let (arm, knuckle) = cup_arm(
-                        &plate,
-                        CupArmFrame {
-                            length_direction,
-                            length_centre,
-                            width_direction,
-                            cup_centre,
-                            mount_direction,
-                            face_position,
-                        },
-                    )?;
-                    let widest = CUP_HINGE_110
-                        .links
-                        .iter()
-                        .map(|link| link.width)
-                        .max()
-                        .unwrap_or(0);
-                    mechanism = Some(Mechanism {
-                        arm,
-                        knuckle,
-                        links: CUP_HINGE_110.links.map(|link| LinkBar {
-                            width: Length::from_nm(link.width),
-                            thickness: Length::from_nm(CUP_HINGE_110.link_thickness),
-                            slot: Length::from_nm(link.slot),
-                        }),
-                        pin_diameter: Length::from_nm(CUP_HINGE_110.pin_diameter),
-                        pin_length: Length::from_nm(widest),
-                    });
+                    // The kind's mechanism moves the door; a cup hinge kind
+                    // without one gives no motion.
+                    let motion = match self.cup_kind(&binding, &kind, &kind_name, &env, span)? {
+                        Some(cup_kind) => {
+                            let linkage = self.cup_linkage(
+                                &name,
+                                &cup_kind.mechanism,
+                                CupFrame {
+                                    axis: length_axis,
+                                    origin: through,
+                                    free_side: width_direction,
+                                    swing_toward: opposite_face.direction(),
+                                    cup_x: offset,
+                                    thickness,
+                                },
+                                &env,
+                                span,
+                            )?;
+                            let frame = CupArmFrame {
+                                length_direction,
+                                length_centre,
+                                width_direction,
+                                cup_centre,
+                                mount_direction,
+                                face_position,
+                            };
+                            let widest = cup_kind
+                                .links
+                                .iter()
+                                .map(|link| link.width)
+                                .max()
+                                .unwrap_or(Length::ZERO);
+                            mechanism = Some(Mechanism {
+                                arm: frame_member(&frame, &cup_kind.arm)?,
+                                knuckle: frame_member(&frame, &cup_kind.knuckle)?,
+                                links: cup_kind.links,
+                                pin_diameter: cup_kind.pin_diameter,
+                                pin_length: widest,
+                            });
+                            Some(MotionExact::Linkage(linkage))
+                        }
+                        None => None,
+                    };
                     // The overlay: from the piece's edge nearer `on` to the
                     // face of `on` the plate is screwed to.
                     let on_box = self.drawn_box(on)?;
@@ -895,7 +896,7 @@ impl Solver<'_> {
                         count: 1,
                         centres: None,
                     };
-                    (data, Some(bore), Some(MotionExact::Linkage(linkage)))
+                    (data, Some(bore), motion)
                 }
             }
             BaseKind::Pull | BaseKind::Joint | BaseKind::Fastener | BaseKind::Tool => {
@@ -941,13 +942,13 @@ impl Solver<'_> {
         })
     }
 
-    /// A cup hinge's linkage: the built-in mechanism's pins, placed
-    /// relative to the cup, checked over the opening angle.
+    /// A cup hinge's linkage: its kind's mechanism, its pins placed
+    /// relative to the cup, checked over the drive's range.
     fn cup_linkage(
         &mut self,
         name: &str,
+        mechanism: &crate::mechanism::Mechanism,
         frame: CupFrame,
-        angle: ExactAngle,
         env: &Env<'_>,
         span: Span,
     ) -> Solved<Linkage> {
@@ -962,60 +963,394 @@ impl Solver<'_> {
         };
         let world = LinkageFrame::new(frame.axis, origin, frame.free_side, frame.swing_toward)
             .map_err(|_| Reported)?;
-        let place = |point: CupPoint| -> Solved<PlanePoint> {
-            let x = frame
-                .cup_x
-                .checked_add(Length::from_nm(point.x).to_exact())
-                .ok_or(Reported)?;
-            let y = Length::from_nm(point.y)
-                .to_exact()
-                .checked_sub(frame.thickness)
-                .ok_or(Reported)?;
-            Ok(PlanePoint::new(near(x)?, near(y)?))
+        // From the kind's frame (across from the cup's centre, depth into
+        // the door from its back) to the linkage's plane (from the door's
+        // edge, and from its front face).
+        let place = |point: ExactPoint| -> Option<PlanePoint> {
+            let x = frame.cup_x.checked_add(point.across)?;
+            let y = point.depth.checked_sub(frame.thickness)?;
+            Some(PlanePoint::new(
+                x.to_nearest_length()?,
+                y.to_nearest_length()?,
+            ))
         };
-        let [inner, outer] = CUP_HINGE_110.links;
-        let links = [
-            Link {
-                ground: place(inner.arm)?,
-                coupler: place(inner.boss)?,
-            },
-            Link {
-                ground: place(outer.arm)?,
-                coupler: place(outer.boss)?,
-            },
+        match mechanism.linkage(world, place) {
+            Ok(linkage) => Ok(linkage),
+            Err(MechanismError::DeadPoint) => {
+                let Drive::Turn { to, .. } = mechanism.drive() else {
+                    return Err(Reported);
+                };
+                let opening = to.to_nearest_angle().ok_or(Reported)?;
+                Err(self.error(
+                    Code::Motion,
+                    format!("{name}: a cup hinge's links lock before it opens {opening}"),
+                    env.file,
+                    span,
+                    "give the hinge a smaller opening_angle: its links can't turn this far",
+                ))
+            }
+            Err(
+                MechanismError::Freedom { .. }
+                | MechanismError::NoOrder { .. }
+                | MechanismError::NotSupported
+                | MechanismError::Overflow,
+            ) => Err(Reported),
+        }
+    }
+
+    /// The environment a hardware kind's own expressions are evaluated
+    /// in, for one piece of hardware, handed to `body`.
+    fn in_kind<T>(
+        &mut self,
+        binding: &Binding,
+        kind: &KindDef,
+        body: impl FnOnce(&mut Self, &Env<'_>) -> Solved<T>,
+    ) -> Solved<T> {
+        let kind_env = KindEnv::new(
+            binding.kind,
+            binding.roles.clone(),
+            binding.settings.clone(),
+            kind.params.len(),
+        );
+        let Some(ctx) = self.module_ctx(DefId::Kind(binding.kind)) else {
+            return Err(Reported);
+        };
+        let env = Env {
+            ctx,
+            file: kind.decl.file,
+            kind: Some(&kind_env),
+            array: None,
+        };
+        body(self, &env)
+    }
+
+    /// A cup hinge kind's mechanism for one piece of hardware: checked, and
+    /// read for the old contract (its links' bars, its held member's two
+    /// boxes as the arm and its knuckle, and its pins). `None`, with a
+    /// warning, when the kind declares no mechanism.
+    fn cup_kind(
+        &mut self,
+        binding: &Binding,
+        kind: &KindDef,
+        kind_name: &str,
+        env: &Env<'_>,
+        span: Span,
+    ) -> Solved<Option<CupKind>> {
+        let Some(def) = &kind.mechanism else {
+            if self.reported_mechanisms.insert(binding.kind) {
+                self.report(
+                    Diagnostic::warning(
+                        Code::NotSupported,
+                        format!("kind '{kind_name}' has no mechanism; its motion is not supported yet"),
+                        Label::new(env.file, span),
+                    )
+                    .with_help(
+                        "the door is checked closed only; give the kind its members and a mechanism { } block, as euro_hinge in std:hardware does",
+                    ),
+                );
+            }
+            return Ok(None);
+        };
+        let file = kind.decl.file;
+        let evaluated = self.in_kind(binding, kind, |solver, kind_env| {
+            let mut constraints = Vec::new();
+            for constraint in &def.constraints {
+                constraints.push(match constraint {
+                    ConstraintDef::Pivot { bodies, at, .. } => Constraint::Pivot {
+                        bodies: *bodies,
+                        at: solver.kind_point(at, kind_env)?,
+                    },
+                    ConstraintDef::Slot {
+                        bodies, from, to, ..
+                    } => Constraint::Slot {
+                        bodies: *bodies,
+                        from: solver.kind_point(from, kind_env)?,
+                        to: solver.kind_point(to, kind_env)?,
+                    },
+                    ConstraintDef::Rail { bodies, along, .. } => Constraint::Rail {
+                        bodies: *bodies,
+                        along: *along,
+                    },
+                });
+            }
+            let drive = match &def.drive {
+                DriveDef::Turn { body, from, to, .. } => Drive::Turn {
+                    body: *body,
+                    from: solver.kind_angle(from, kind_env)?,
+                    to: solver.kind_angle(to, kind_env)?,
+                },
+                DriveDef::Travel { body, from, to, .. } => Drive::Travel {
+                    body: *body,
+                    from: solver.kind_length(from, kind_env)?,
+                    to: solver.kind_length(to, kind_env)?,
+                },
+            };
+            let stop = match &def.stop {
+                Some(stop) => Some((solver.eval(&stop.value, kind_env)?, stop)),
+                None => None,
+            };
+            let pin_diameter = match &def.pin_diameter {
+                Some(diameter) => solver.kind_length(diameter, kind_env)?,
+                None => ExactLength::ZERO,
+            };
+            Ok((constraints, drive, stop, pin_diameter))
+        })?;
+        let (constraints, drive, stop, pin_diameter) = evaluated;
+        let carriers: Vec<_> = kind.bodies.iter().map(|body| body.with).collect();
+        let mechanism = match crate::mechanism::Mechanism::new(
+            &carriers,
+            constraints,
+            def.couplings.len(),
+            drive,
+        ) {
+            Ok(mechanism) => mechanism,
+            Err(error) => {
+                if self.reported_mechanisms.insert(binding.kind) {
+                    let diagnostic = self.mechanism_error(kind, kind_name, def.span, &error);
+                    if let Some(diagnostic) = diagnostic {
+                        self.report(diagnostic);
+                    }
+                }
+                return Err(Reported);
+            }
+        };
+        // The drive goes no further than what stops it.
+        if let Some((value, stop)) = stop {
+            let beyond = match (drive, &value) {
+                (Drive::Turn { to, .. }, Value::Angle(at)) => to > *at,
+                (Drive::Travel { to, .. }, Value::Length(at)) => to > *at,
+                _ => false,
+            };
+            if beyond {
+                return Err(self.error(
+                    Code::Motion,
+                    format!(
+                        "kind '{kind_name}' is driven past its stop: {}",
+                        stop.message.literal()
+                    ),
+                    file,
+                    stop.span,
+                    "make the drive's to: no more than the stop",
+                ));
+            }
+        }
+        let Step::HungOnTwoLinks { links, .. } = mechanism.step();
+        let [first, second] = links;
+        let link_bars = [
+            self.link_bar(binding, kind, kind_name, first.link, env, span)?,
+            self.link_bar(binding, kind, kind_name, second.link, env, span)?,
         ];
-        let opening = angle.to_nearest_angle().ok_or(Reported)?;
-        let widest = stave_lang::units::Angle::from_microdeg(CUP_HINGE_110.max_opening);
-        if opening > widest {
-            return Err(self.error(
-                Code::OutOfRange,
+        let held = kind.bodies.get(first.held.index()).ok_or(Reported)?;
+        let boxes: Vec<&ShapeDef> = held
+            .shapes
+            .iter()
+            .map(|shape| &shape.shape)
+            .filter(|shape| matches!(shape, ShapeDef::Box { .. }))
+            .collect();
+        let (arm, knuckle) = match (boxes.as_slice(), held.shapes.len()) {
+            ([arm, knuckle], 2) => {
+                let arm = (*arm).clone();
+                let knuckle = (*knuckle).clone();
+                self.in_kind(binding, kind, |solver, kind_env| {
+                    Ok((
+                        solver.frame_box(&arm, kind_env)?,
+                        solver.frame_box(&knuckle, kind_env)?,
+                    ))
+                })?
+            }
+            _ => {
+                return Err(self.error(
+                    Code::NotSupported,
+                    format!(
+                        "kind '{kind_name}': a cup hinge's held member '{}' with other than two boxes is not supported yet",
+                        held.name
+                    ),
+                    file,
+                    held.span,
+                    "give the arm two boxes: its body, then its knuckle",
+                ));
+            }
+        };
+        Ok(Some(CupKind {
+            mechanism,
+            links: link_bars,
+            arm,
+            knuckle,
+            pin_diameter: pin_diameter.to_nearest_length().ok_or(Reported)?,
+        }))
+    }
+
+    /// The diagnostic for a mechanism that can't be built, at the kind.
+    fn mechanism_error(
+        &self,
+        kind: &KindDef,
+        kind_name: &str,
+        span: Span,
+        error: &MechanismError,
+    ) -> Option<Diagnostic> {
+        let file = kind.decl.file;
+        let label = Label::new(file, span);
+        Some(match error {
+            MechanismError::Freedom { found } => Diagnostic::error(
+                Code::Mechanism,
+                format!("{kind_name}'s mechanism has {found} freedoms; it needs exactly one"),
+                label,
+            )
+            .with_help(
+                "count three for the driven member and for each member with no 'with:', less two for each pivot or rail and one for each slot or couple; add or remove pins until one is left",
+            ),
+            MechanismError::NoOrder { left } => {
+                let names: Vec<&str> = left
+                    .iter()
+                    .filter_map(|body| kind.bodies.get(body.index()))
+                    .map(|body| body.name.as_str())
+                    .collect();
+                Diagnostic::error(
+                    Code::Mechanism,
+                    format!(
+                        "{kind_name}'s mechanism can't be solved one step at a time from its drive"
+                    ),
+                    label,
+                )
+                .with_note(format!("nothing places {}", names.join(" and ")))
+                .with_help("pin each of them to a member that is held or driven, or to one pinned to those")
+            }
+            MechanismError::NotSupported => Diagnostic::error(
+                Code::NotSupported,
+                format!("{kind_name}'s mechanism is not supported yet"),
+                label,
+            )
+            .with_help(
+                "Stave solves a driven member hung on two links from a held member, turned from 0deg (a cup hinge's four-bar linkage)",
+            ),
+            MechanismError::DeadPoint | MechanismError::Overflow => return None,
+        })
+    }
+
+    /// A link's bar, from its shapes: one bar centred along the pins, or
+    /// two mirror-image bars (a strap whose sides pass either side of the
+    /// other link).
+    fn link_bar(
+        &mut self,
+        binding: &Binding,
+        kind: &KindDef,
+        kind_name: &str,
+        link: stave_model::defs::BodyId,
+        env: &Env<'_>,
+        span: Span,
+    ) -> Solved<LinkBar> {
+        let body = kind.bodies.get(link.index()).ok_or(Reported)?;
+        let bars: Vec<(RExpr, RangeDef)> = body
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                ShapeDef::Bar {
+                    thickness, along, ..
+                } => Some((thickness.clone(), along.clone())),
+                ShapeDef::Box { .. } | ShapeDef::Cylinder { .. } | ShapeDef::Prism { .. } => None,
+            })
+            .collect();
+        let shapes = body.shapes.len();
+        let evaluated = self.in_kind(binding, kind, |solver, kind_env| {
+            bars.iter()
+                .map(|(thickness, along)| {
+                    Ok((
+                        solver.kind_length(thickness, kind_env)?,
+                        solver.frame_range(along, kind_env)?,
+                    ))
+                })
+                .collect::<Solved<Vec<_>>>()
+        })?;
+        let near = |value: ExactLength| value.to_nearest_length().ok_or(Reported);
+        let bar = match (evaluated.as_slice(), shapes) {
+            ([(thickness, (low, high))], 1) if low.checked_neg() == Some(*high) => {
+                Some((*thickness, high.checked_sub(*low), Some(ExactLength::ZERO)))
+            }
+            ([(thickness, (low, high)), (other, (far_low, far_high))], 2)
+                if thickness == other
+                    && far_low.checked_neg() == Some(*high)
+                    && far_high.checked_neg() == Some(*low)
+                    && *low >= ExactLength::ZERO =>
+            {
+                Some((*thickness, high.checked_add(*high), low.checked_add(*low)))
+            }
+            _ => None,
+        };
+        match bar {
+            Some((thickness, Some(width), Some(slot))) => Ok(LinkBar {
+                width: near(width)?,
+                thickness: near(thickness)?,
+                slot: near(slot)?,
+            }),
+            Some(_) => Err(Reported),
+            None => Err(self.error(
+                Code::NotSupported,
                 format!(
-                    "'opening_angle' must be within 0deg..{widest} for a cup hinge, found {opening}"
+                    "kind '{kind_name}': link '{}' is not one bar centred along its pins, or two mirror-image bars; that is not supported yet",
+                    body.name
                 ),
                 env.file,
                 span,
-                format!(
-                    "give {name} an opening_angle of at most {widest}: Stave models the common {widest} cup hinge; wide-angle hinges have a different mechanism, not modelled yet"
-                ),
-            ));
+                "give the link one bar(..., along: width) or two bars along lo..hi and -hi..-lo",
+            )),
         }
-        match Linkage::new(world, links, opening) {
-            Ok(linkage) => Ok(linkage),
-            Err(LinkageError::DeadPoint(_) | LinkageError::Angle) => {
-                Err(self.error(
-                    Code::Motion,
-                    format!(
-                        "{name}: a cup hinge's links lock before it opens {opening}"
-                    ),
-                    env.file,
-                    span,
-                    format!(
-                        "give the hinge an opening_angle of at most {widest} (wider hinges have a mechanism Stave doesn't model yet)"
-                    ),
-                ))
+    }
+
+    fn kind_length(&mut self, expr: &RExpr, env: &Env<'_>) -> Solved<ExactLength> {
+        match self.eval(expr, env)? {
+            Value::Length(length) => Ok(length),
+            _ => Err(Reported),
+        }
+    }
+
+    fn kind_angle(&mut self, expr: &RExpr, env: &Env<'_>) -> Solved<ExactAngle> {
+        match self.eval(expr, env)? {
+            Value::Angle(angle) => Ok(angle),
+            _ => Err(Reported),
+        }
+    }
+
+    fn kind_point(&mut self, point: &KindPoint, env: &Env<'_>) -> Solved<ExactPoint> {
+        Ok(ExactPoint {
+            along: self.kind_length(&point.along, env)?,
+            across: self.kind_length(&point.across, env)?,
+            depth: self.kind_length(&point.depth, env)?,
+        })
+    }
+
+    /// A range in the kind's frame, low end first.
+    fn frame_range(
+        &mut self,
+        range: &RangeDef,
+        env: &Env<'_>,
+    ) -> Solved<(ExactLength, ExactLength)> {
+        let (low, high) = match range {
+            RangeDef::Centred(size) => {
+                let half = half(self.kind_length(size, env)?)?;
+                (half.checked_neg().ok_or(Reported)?, half)
             }
-            Err(_) => Err(Reported),
-        }
+            RangeDef::Between { low, high } => {
+                (self.kind_length(low, env)?, self.kind_length(high, env)?)
+            }
+        };
+        Ok((low.min(high), low.max(high)))
+    }
+
+    /// A box shape's three ranges.
+    fn frame_box(&mut self, shape: &ShapeDef, env: &Env<'_>) -> Solved<FrameBox> {
+        let ShapeDef::Box {
+            along,
+            across,
+            depth,
+        } = shape
+        else {
+            return Err(Reported);
+        };
+        Ok(FrameBox {
+            along: self.frame_range(along, env)?,
+            across: self.frame_range(across, env)?,
+            depth: self.frame_range(depth, env)?,
+        })
     }
 
     /// A butt hinge's second leaf: the moving leaf (`leaf_bounds`, sunk
@@ -1212,89 +1547,89 @@ struct CupArmFrame {
     face_position: ExactLength,
 }
 
-/// A cup hinge's arm, as two boxes: its body, from the back of its plate
-/// to the door's back face, and its knuckle, which reaches into the cup
-/// and carries the arm pins. Both are centred on the cup along the door.
-fn cup_arm(plate: &Member, frame: CupArmFrame) -> Solved<(Member, Member)> {
-    let mm = |nm: i64| Length::from_nm(nm).to_exact();
-    let width_axis = frame.width_direction.axis();
-    let across = |(low, high): (i64, i64)| -> Solved<(ExactLength, ExactLength)> {
-        Ok(if frame.width_direction.is_positive() {
+/// A cup hinge kind's mechanism for one piece of hardware, with what the
+/// old contract reads from its bodies (until its readers take the bodies).
+struct CupKind {
+    mechanism: crate::mechanism::Mechanism,
+    links: [LinkBar; 2],
+    /// The held member's first box: the arm's body.
+    arm: FrameBox,
+    /// Its second box: the knuckle that reaches into the cup.
+    knuckle: FrameBox,
+    pin_diameter: Length,
+}
+
+/// A box in the kind's frame: each extent low end first.
+#[derive(Debug, Clone, Copy)]
+struct FrameBox {
+    along: (ExactLength, ExactLength),
+    across: (ExactLength, ExactLength),
+    depth: (ExactLength, ExactLength),
+}
+
+/// A box of a cup hinge's arm, from the kind's frame (origin at the cup's
+/// centre on the door's back; `across` toward the middle of the door,
+/// `depth` into it) to the world.
+fn frame_member(frame: &CupArmFrame, shape: &FrameBox) -> Solved<Member> {
+    // `origin + value` along `direction`, as a world extent.
+    let world = |origin: ExactLength,
+                 (low, high): (ExactLength, ExactLength),
+                 positive: bool|
+     -> Solved<(ExactLength, ExactLength)> {
+        Ok(if positive {
             (
-                frame.cup_centre.checked_add(mm(low)).ok_or(Reported)?,
-                frame.cup_centre.checked_add(mm(high)).ok_or(Reported)?,
+                origin.checked_add(low).ok_or(Reported)?,
+                origin.checked_add(high).ok_or(Reported)?,
             )
         } else {
             (
-                frame.cup_centre.checked_sub(mm(high)).ok_or(Reported)?,
-                frame.cup_centre.checked_sub(mm(low)).ok_or(Reported)?,
+                origin.checked_sub(high).ok_or(Reported)?,
+                origin.checked_sub(low).ok_or(Reported)?,
             )
         })
     };
-    let depth_axis = frame.mount_direction.axis();
-    let front = mm(CUP_HINGE_110.knuckle_front);
-    let (knuckle_front, far) = if frame.mount_direction.is_positive() {
-        (
-            frame.face_position.checked_sub(front).ok_or(Reported)?,
-            plate.bounds.max(depth_axis),
-        )
-    } else {
-        (
-            frame.face_position.checked_add(front).ok_or(Reported)?,
-            plate.bounds.min(depth_axis),
-        )
-    };
-    let ordered = |a: ExactLength, b: ExactLength| (a.min(b), a.max(b));
-    let half_width = half(mm(CUP_HINGE_110.arm_width))?;
-    let along = (
-        frame
-            .length_centre
-            .checked_sub(half_width)
-            .ok_or(Reported)?,
-        frame
-            .length_centre
-            .checked_add(half_width)
-            .ok_or(Reported)?,
-    );
-    let member = |across: (ExactLength, ExactLength), depth: (ExactLength, ExactLength)| {
-        let mut extents = [(ExactLength::ZERO, ExactLength::ZERO); 3];
-        for (axis, extent) in [
-            (width_axis, across),
-            (frame.length_direction.axis(), along),
-            (depth_axis, depth),
-        ] {
-            if let Some(slot) = extents.get_mut(world_index(axis)) {
-                *slot = extent;
-            }
+    let along = world(
+        frame.length_centre,
+        shape.along,
+        frame.length_direction.is_positive(),
+    )?;
+    let across = world(
+        frame.cup_centre,
+        shape.across,
+        frame.width_direction.is_positive(),
+    )?;
+    // Depth runs into the door: against the mount face's outward direction.
+    let depth = world(
+        frame.face_position,
+        shape.depth,
+        !frame.mount_direction.is_positive(),
+    )?;
+    let mut extents = [(ExactLength::ZERO, ExactLength::ZERO); 3];
+    for (axis, extent) in [
+        (frame.width_direction.axis(), across),
+        (frame.length_direction.axis(), along),
+        (frame.mount_direction.axis(), depth),
+    ] {
+        if let Some(slot) = extents.get_mut(world_index(axis)) {
+            *slot = extent;
         }
-        let size = |(a, b): (ExactLength, ExactLength)| b.checked_sub(a).ok_or(Reported);
-        let envelope = Envelope::Box {
+    }
+    let size = |(a, b): (ExactLength, ExactLength)| b.checked_sub(a).ok_or(Reported);
+    let [x, y, z] = extents;
+    Ok(Member {
+        envelope: Envelope::Box {
             length: size(along)?,
             width: size(depth)?,
             thickness: size(across)?,
-        };
-        let [x, y, z] = extents;
-        Ok(Member {
-            envelope,
-            bounds: ExactBox::new(x, y, z),
-            orientation: Orientation::new(
-                frame.length_direction,
-                frame.mount_direction,
-                frame.width_direction,
-            )
-            .map_err(|_| Reported)?,
-        })
-    };
-    Ok((
-        member(
-            across(CUP_HINGE_110.arm_x)?,
-            ordered(frame.face_position, far),
-        )?,
-        member(
-            across(CUP_HINGE_110.knuckle_x)?,
-            ordered(frame.face_position, knuckle_front),
-        )?,
-    ))
+        },
+        bounds: ExactBox::new(x, y, z),
+        orientation: Orientation::new(
+            frame.length_direction,
+            frame.mount_direction,
+            frame.width_direction,
+        )
+        .map_err(|_| Reported)?,
+    })
 }
 
 /// Where a hinge's plate goes, from the placed cup.

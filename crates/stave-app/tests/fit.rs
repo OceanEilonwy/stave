@@ -135,26 +135,40 @@ fn a_door_too_far_out_for_its_cup_hinges() {
     insta::assert_snapshot!(rendered("tests/broken/hinge_overlay"));
 }
 
+/// Before the mechanism was text, a built-in cap stopped every cup hinge
+/// at 110deg. Now a kind that copies `euro_hinge`'s mechanism word for
+/// word and asks it to open 125deg is stopped by the mechanism itself: its
+/// links don't lock before 180deg, but past 112.1deg its inner link runs
+/// into the door, which is why the kind's stop is at 110deg.
 #[test]
 fn a_cup_hinge_opens_at_most_110_degrees() {
-    let design = std::fs::read_to_string(
-        workspace().join("tests/broken/hinge_overlay/project.stave"),
-    )
-    .unwrap()
-    .replace(
-        "overlay(left: 9mm, right: 9mm)",
-        "overlay(left: 17.5mm, right: 17.5mm)",
-    )
-    .replace(
-        "euro_hinge(panel, on: hinge_side)",
-        "wide_hinge(panel, on: hinge_side)",
-    ) + "\nkind wide_hinge : hinge {\n  opening_angle: 125deg\n  cup_diameter:  35mm\n  cup_depth:     12.8mm\n  cup_inset:     5mm\n  plate_setback: 37mm\n  plate:         box(length: 50mm, width: 36mm, thickness: 11mm)\n}\n";
+    let library = std::fs::read_to_string(workspace().join("std/hardware/hinges.stave")).unwrap();
+    let start = library.find("kind euro_hinge : hinge {").unwrap();
+    let length = library[start..].find("\n}\n").unwrap() + 3;
+    let opening = "param opening_angle = 110deg within 85deg..110deg";
+    let euro_hinge = &library[start..start + length];
+    assert!(euro_hinge.contains(opening) && euro_hinge.contains("mechanism {"));
+    let wide_hinge = euro_hinge
+        .replace("kind euro_hinge", "kind wide_hinge")
+        .replace(opening, "param opening_angle = 125deg within 85deg..125deg");
+    let design =
+        std::fs::read_to_string(workspace().join("tests/broken/hinge_overlay/project.stave"))
+            .unwrap()
+            .replace(
+                "overlay(left: 9mm, right: 9mm)",
+                "overlay(left: 17.5mm, right: 17.5mm)",
+            )
+            .replace(
+                "euro_hinge(panel, on: hinge_side)",
+                "wide_hinge(panel, on: hinge_side)",
+            )
+            + "\n"
+            + &wide_hinge;
     let opened = common::open_files(&[("project.stave", &design)]);
     let messages = common::diagnostics(&opened);
     assert!(
-        messages.iter().any(|m| m.contains(
-            "out-of-range: 'opening_angle' must be within 0deg..110deg for a cup hinge, found 125deg"
-        )),
+        messages.iter().any(|m| m
+            == "motion: the inner link of door.hinges[bottom] hits door.panel when door is opened past 112.1deg"),
         "{messages:?}"
     );
 }

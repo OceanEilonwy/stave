@@ -154,10 +154,12 @@ impl Resolver<'_> {
         let mut joint = (base_kind == BaseKind::Joint).then(JointKindDef::default);
         let mut seen_fields: BTreeMap<String, Span> = BTreeMap::new();
         let mut written_members: Vec<&ast::Documented<ast::KindMember>> = Vec::new();
+        let mut mechanisms: Vec<&ast::MechanismBlock> = Vec::new();
         for entry in &syntax.body.entries {
             match entry {
                 ast::KindEntry::Param(_) => {}
                 ast::KindEntry::Member(member) => written_members.push(member),
+                ast::KindEntry::Mechanism(block) => mechanisms.push(block),
                 ast::KindEntry::Require(require) => {
                     let condition = self.value(
                         &cx,
@@ -372,6 +374,14 @@ impl Resolver<'_> {
             kind_fields.iter().any(|f| f.name == name) || params.iter().any(|p| p.decl.name == name)
         });
         let members = self.lower_members(&cx, base_kind, cup, &written_members);
+        let bodies = if members_of(base_kind, cup).is_empty() {
+            // Already reported: this kind has no members at all.
+            None
+        } else {
+            self.lower_bodies(&cx, &roles, &written_members)
+        };
+        let mechanism =
+            self.kind_mechanism(&cx, syntax, base_kind, cup, bodies.as_deref(), &mechanisms);
         KindDef {
             decl: self.decl(DefId::Kind(id), &syntax.name, origin),
             base: base_kind,
@@ -381,7 +391,63 @@ impl Resolver<'_> {
             fields: kind_fields,
             joint,
             members,
+            bodies: bodies.unwrap_or_default(),
+            mechanism,
         }
+    }
+
+    /// A kind's one `mechanism`, where its base may have one. Version 1
+    /// solves only a cup hinge's (grammar, "Mechanisms").
+    fn kind_mechanism(
+        &mut self,
+        cx: &Cx,
+        syntax: &ast::Kind,
+        base_kind: BaseKind,
+        cup: bool,
+        bodies: Option<&[crate::defs::BodyDef]>,
+        mechanisms: &[&ast::MechanismBlock],
+    ) -> Option<crate::defs::MechanismDef> {
+        let (first, rest) = mechanisms.split_first()?;
+        for again in rest {
+            self.report(
+                Diagnostic::error(
+                    Code::DuplicateName,
+                    "'mechanism' is declared twice",
+                    Label::new(cx.file, again.span),
+                )
+                .with_label(Label::with_message(
+                    cx.file,
+                    first.span,
+                    "first written here",
+                ))
+                .with_help("write one mechanism block; put every entry in it"),
+            );
+        }
+        if !base_kind.is_mounted_hardware() {
+            self.error_help(
+                Code::UnknownField,
+                format!("a {} kind has no field 'mechanism'", base_kind.word()),
+                cx.file,
+                first.span,
+                "only hinge, slide and pull kinds have members that move",
+            );
+            return None;
+        }
+        if base_kind != BaseKind::Hinge || !cup {
+            let what = match base_kind {
+                BaseKind::Hinge => "a butt hinge".to_owned(),
+                other => format!("a {} kind", other.word()),
+            };
+            self.error_help(
+                Code::NotSupported,
+                format!("a mechanism in {what} is not supported yet"),
+                cx.file,
+                first.span,
+                "Stave solves a cup hinge's mechanism; leave this one out",
+            );
+            return None;
+        }
+        self.lower_mechanism(cx, syntax.name.as_str(), bodies?, first)
     }
 
     /// A hardware kind's `member` entries: each a member word of its base,
@@ -400,11 +466,30 @@ impl Resolver<'_> {
             other => format!("a {} kind", other.word()),
         };
         let mut members: Vec<MemberDef> = Vec::new();
+        let mut seen: BTreeMap<&str, Span> = BTreeMap::new();
         for member in written {
             let word = member.node.name.as_str();
             let span = member.node.name.span();
+            if let Some(first) = seen.get(word) {
+                self.report(
+                    Diagnostic::error(
+                        Code::DuplicateName,
+                        format!("'{word}' is declared twice"),
+                        Label::new(cx.file, span),
+                    )
+                    .with_label(Label::with_message(cx.file, *first, "first written here"))
+                    .with_help(format!("write 'member {word}' once; remove one of them")),
+                );
+                continue;
+            }
+            seen.insert(word, span);
             let Some(name) = MemberName::from_word(word).filter(|name| allowed.contains(name))
             else {
+                if member.node.body.is_some() && !allowed.is_empty() {
+                    // A member with a body may have any name; it joins the
+                    // viewer's list only under one of its base's words.
+                    continue;
+                }
                 if allowed.is_empty() {
                     self.error_help(
                         Code::UnknownField,
@@ -427,22 +512,6 @@ impl Resolver<'_> {
                 }
                 continue;
             };
-            if let Some(first) = members.iter().find(|m| m.name == name) {
-                self.report(
-                    Diagnostic::error(
-                        Code::DuplicateName,
-                        format!("'{word}' is declared twice"),
-                        Label::new(cx.file, span),
-                    )
-                    .with_label(Label::with_message(
-                        cx.file,
-                        first.span,
-                        "first written here",
-                    ))
-                    .with_help(format!("write 'member {word}' once; remove one of them")),
-                );
-                continue;
-            }
             members.push(MemberDef {
                 name,
                 span,

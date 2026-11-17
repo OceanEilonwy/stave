@@ -728,8 +728,364 @@ pub struct KindDef {
     /// The joint entries, for a joint kind.
     pub joint: Option<JointKindDef>,
     /// The named, documented members of a hardware kind (`member cup`),
-    /// in source order.
+    /// in source order: the viewer's list, kept until every member has a
+    /// body.
     pub members: Vec<MemberDef>,
+    /// The members with a body (`member arm { ... }`), in source order;
+    /// a [`BodyId`] indexes this list.
+    pub bodies: Vec<BodyDef>,
+    /// How the bodies move, when the kind says.
+    pub mechanism: Option<MechanismDef>,
+}
+
+/// A member with a body: its index among its kind's [`KindDef::bodies`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct BodyId(u32);
+
+impl BodyId {
+    /// The id of the body at `index`, if it fits.
+    pub fn new(index: usize) -> Option<BodyId> {
+        u32::try_from(index).ok().map(BodyId)
+    }
+
+    /// Its index in [`KindDef::bodies`].
+    pub fn index(self) -> usize {
+        usize::try_from(self.0).unwrap_or(usize::MAX)
+    }
+}
+
+/// A role of a kind: its index among [`KindDef::roles`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct RoleIndex(u32);
+
+impl RoleIndex {
+    /// The role at `index`, if it fits.
+    pub fn new(index: usize) -> Option<RoleIndex> {
+        u32::try_from(index).ok().map(RoleIndex)
+    }
+
+    /// Its index in [`KindDef::roles`].
+    pub fn index(self) -> usize {
+        usize::try_from(self.0).unwrap_or(usize::MAX)
+    }
+}
+
+/// The name of a member with a body: a word, as the kind writes it.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct BodyName(String);
+
+impl BodyName {
+    /// The name, if `word` is a word (letters, digits and `_`, not starting
+    /// with a digit).
+    pub fn new(word: &str) -> Option<BodyName> {
+        stave_lang::ast::is_word(word).then(|| BodyName(word.to_owned()))
+    }
+
+    /// The name as written.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for BodyName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// A list with at least one element.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NonEmpty<T> {
+    first: T,
+    rest: Vec<T>,
+}
+
+impl<T> NonEmpty<T> {
+    /// The list, if `items` has at least one element.
+    pub fn new(items: Vec<T>) -> Option<NonEmpty<T>> {
+        let mut items = items.into_iter();
+        let first = items.next()?;
+        Some(NonEmpty {
+            first,
+            rest: items.collect(),
+        })
+    }
+
+    /// The first element.
+    pub fn first(&self) -> &T {
+        &self.first
+    }
+
+    /// Every element, in order.
+    pub fn iter(&self) -> impl Iterator<Item = &T> {
+        std::iter::once(&self.first).chain(self.rest.iter())
+    }
+
+    /// How many elements there are (at least one).
+    pub fn len(&self) -> usize {
+        1 + self.rest.len()
+    }
+
+    /// Always `false`: the list has at least one element.
+    pub fn is_empty(&self) -> bool {
+        false
+    }
+}
+
+/// `member arm { with: on, shape body: box(...), ... }`: a member with a
+/// body, one rigid piece of the hardware.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BodyDef {
+    /// Its name.
+    pub name: BodyName,
+    /// Where its name is written.
+    pub span: Span,
+    /// Its doc comments, one line each.
+    pub docs: Vec<String>,
+    /// What carries it.
+    pub with: Carrier,
+    /// Its shapes, in source order.
+    pub shapes: NonEmpty<NamedShape>,
+}
+
+/// What carries a member with a body.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Carrier {
+    /// `with: piece`: it moves with that role's part.
+    Role(RoleIndex),
+    /// `with: plate`: it rides on another member.
+    Body(BodyId),
+    /// No `with:`: the mechanism places it (a link).
+    Mechanism,
+}
+
+/// One of a member's shapes, with its name when the kind gives one.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NamedShape {
+    /// `knuckle` in `shape knuckle: box(...)`.
+    pub name: Option<String>,
+    /// The whole entry.
+    pub span: Span,
+    /// The solid.
+    pub shape: ShapeDef,
+}
+
+/// A convex solid in the kind's frame (grammar, "Shapes").
+#[derive(Debug, Clone, PartialEq)]
+pub enum ShapeDef {
+    /// `box(along:, across:, depth:)`
+    Box {
+        /// Its extent along `along`.
+        along: RangeDef,
+        /// Its extent along `across`.
+        across: RangeDef,
+        /// Its extent along `depth`.
+        depth: RangeDef,
+    },
+    /// `cylinder(diameter:, depth:, at:, axis:)`
+    Cylinder {
+        /// Its diameter.
+        diameter: RExpr,
+        /// Its extent along its axis.
+        extent: RangeDef,
+        /// The point its axis runs through.
+        at: Box<KindPoint>,
+        /// The frame direction its axis runs along.
+        axis: FrameAxis,
+    },
+    /// `prism(points: [...], along:)`
+    Prism {
+        /// The outline in the across/depth plane, in order around it.
+        points: NonEmpty<KindPoint>,
+        /// Its extent along `along`.
+        along: RangeDef,
+    },
+    /// `bar(from:, to:, thickness:, along:)`
+    Bar {
+        /// One end's centre.
+        from: Box<KindPoint>,
+        /// The other end's centre.
+        to: Box<KindPoint>,
+        /// How thick it is in the across/depth plane.
+        thickness: RExpr,
+        /// Its extent along `along`.
+        along: RangeDef,
+    },
+}
+
+/// A range argument of a shape: `lo..hi`, or one length centred on the
+/// origin.
+#[derive(Debug, Clone, PartialEq)]
+pub enum RangeDef {
+    /// One length, centred on the origin.
+    Centred(RExpr),
+    /// `lo..hi`.
+    Between {
+        /// The low end.
+        low: RExpr,
+        /// The high end.
+        high: RExpr,
+    },
+}
+
+/// `point(along:, across:, depth:)`: a point in the kind's frame. Each
+/// coordinate is a length expression; unwritten ones are `0mm`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct KindPoint {
+    /// Along the piece's length.
+    pub along: RExpr,
+    /// Across the mount face, toward the middle of the piece.
+    pub across: RExpr,
+    /// From the mount face into the piece.
+    pub depth: RExpr,
+}
+
+/// One direction of the kind's frame (grammar, "The kind's frame").
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum FrameAxis {
+    /// Along the piece's length.
+    Along,
+    /// Across the mount face.
+    Across,
+    /// Into the piece from the mount face.
+    Depth,
+}
+
+impl FrameAxis {
+    /// Every direction, in the order the grammar lists them.
+    pub const ALL: [FrameAxis; 3] = [FrameAxis::Along, FrameAxis::Across, FrameAxis::Depth];
+
+    /// The word as written.
+    pub fn word(self) -> &'static str {
+        match self {
+            FrameAxis::Along => "along",
+            FrameAxis::Across => "across",
+            FrameAxis::Depth => "depth",
+        }
+    }
+
+    /// The direction for a word, if it is one.
+    pub fn from_word(word: &str) -> Option<FrameAxis> {
+        FrameAxis::ALL.into_iter().find(|axis| axis.word() == word)
+    }
+}
+
+/// `mechanism { ... }`: how a hardware kind's bodies move.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MechanismDef {
+    /// The `mechanism` word and its block.
+    pub span: Span,
+    /// Its pivots, slots and rails, in source order.
+    pub constraints: Vec<ConstraintDef>,
+    /// Its couplings, in source order.
+    pub couplings: Vec<CouplingDef>,
+    /// Its one input.
+    pub drive: DriveDef,
+    /// What stops the drive, when the kind says.
+    pub stop: Option<StopDef>,
+    /// How thick every pin is, when the kind says.
+    pub pin_diameter: Option<RExpr>,
+}
+
+/// A pivot, slot or rail between two bodies.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ConstraintDef {
+    /// `pivot a, b at point(...)`
+    Pivot {
+        /// The two bodies on the pin.
+        bodies: [BodyId; 2],
+        /// Where the pin is.
+        at: Box<KindPoint>,
+        /// The whole entry.
+        span: Span,
+    },
+    /// `slot a, b from point(...) to point(...)`
+    Slot {
+        /// The body with the pin, then the body with the slot.
+        bodies: [BodyId; 2],
+        /// One end of the slot.
+        from: Box<KindPoint>,
+        /// The other end.
+        to: Box<KindPoint>,
+        /// The whole entry.
+        span: Span,
+    },
+    /// `rail a, b along <word>`
+    Rail {
+        /// The body that runs, then the body it runs along.
+        bodies: [BodyId; 2],
+        /// The direction it runs.
+        along: FrameAxis,
+        /// The whole entry.
+        span: Span,
+    },
+}
+
+/// `couple a to b: ratio`
+#[derive(Debug, Clone, PartialEq)]
+pub struct CouplingDef {
+    /// The body that follows.
+    pub body: BodyId,
+    /// The body it follows.
+    pub to: BodyId,
+    /// The share of `to`'s travel, a ratio.
+    pub ratio: RExpr,
+    /// The whole entry.
+    pub span: Span,
+}
+
+/// `drive: turn(...)` or `drive: travel(...)`
+#[derive(Debug, Clone, PartialEq)]
+pub enum DriveDef {
+    /// `turn(m, from:, to:)`: angles.
+    Turn {
+        /// The driven body.
+        body: BodyId,
+        /// The closed pose's angle.
+        from: RExpr,
+        /// The widest angle.
+        to: RExpr,
+        /// The whole entry.
+        span: Span,
+    },
+    /// `travel(m, from:, to:)`: lengths.
+    Travel {
+        /// The driven body.
+        body: BodyId,
+        /// The closed pose's travel.
+        from: RExpr,
+        /// The furthest travel.
+        to: RExpr,
+        /// The whole entry.
+        span: Span,
+    },
+}
+
+impl DriveDef {
+    /// The driven body.
+    pub fn body(&self) -> BodyId {
+        match self {
+            DriveDef::Turn { body, .. } | DriveDef::Travel { body, .. } => *body,
+        }
+    }
+
+    /// The whole entry.
+    pub fn span(&self) -> Span {
+        match self {
+            DriveDef::Turn { span, .. } | DriveDef::Travel { span, .. } => *span,
+        }
+    }
+}
+
+/// `stop: value "message"`
+#[derive(Debug, Clone, PartialEq)]
+pub struct StopDef {
+    /// Where the drive stops: an angle for a turn, a length for a travel.
+    pub value: RExpr,
+    /// What stops it, for a beginner.
+    pub message: Text,
+    /// The whole entry.
+    pub span: Span,
 }
 
 /// `member cup` in a hardware kind: a named piece, with the doc comments

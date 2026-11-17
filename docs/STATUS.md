@@ -187,10 +187,12 @@ the window calls.
   travel), not exactly.
 - **Motion**: an assembly inside another moving assembly is not swept; the
   rule that an assembly's hinges share one pivot (`motion`) is not checked.
-  Every cup hinge moves on the one built-in 110° full-overlay linkage:
-  half-overlay, inset and wide-angle (155°, 165°) hinges have other
-  mechanisms, not modelled (a door that needs one is `hinge-overlay`, an
-  opening over 110° `out-of-range`). The hinge stops at 110° on its
+  A cup hinge moves on the mechanism its kind declares; version 1 solves
+  only the four-bar form (a driven cup hung on two links from a held
+  arm), and `std` has one, the 110° full-overlay `euro_hinge`:
+  half-overlay, inset and wide-angle (155°, 165°) hinges need their own
+  kinds, not written yet (a door that needs one is `hinge-overlay`; an
+  opening over 110° is out of `euro_hinge`'s range). The hinge stops at 110° on its
   limiter (steel on steel, not modelled as a shape); nothing models the soft-close damper or the
   spring.
 - **Hardware models**: `.glb` models are not read (`model-mismatch`).

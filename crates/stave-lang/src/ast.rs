@@ -664,7 +664,8 @@ impl KindBody {
             | KindEntry::Makes(_)
             | KindEntry::Member(_)
             | KindEntry::Roles(_)
-            | KindEntry::Cut(_) => None,
+            | KindEntry::Cut(_)
+            | KindEntry::Mechanism(_) => None,
         })
     }
 }
@@ -695,16 +696,126 @@ pub enum KindEntry {
     Roles(RolesBlock),
     /// `cut end(piece, facing: into) { tenon(...) }`
     Cut(Cut),
+    /// `mechanism { pivot arm, inner_link at point(...) ... }`
+    Mechanism(MechanismBlock),
     /// `insert: ...`, `adds: ...`, `envelope: ...`
     Field(Field),
 }
 
-/// `member cup`: one named piece of a hardware kind (a cup hinge's cup,
-/// plate, arm and links), documented by the doc comments above it.
+/// `member cup` or `member arm { with: on, shape: box(...) }`: one named
+/// piece of a hardware kind, documented by the doc comments above it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct KindMember {
-    /// The member's name: one of its base's member words.
+    /// The member's name: a member word of its base, or any name for a
+    /// member with a body.
     pub name: Ident,
+    /// Its shapes and fields, when it has a block.
+    pub body: Option<MemberBody>,
+}
+
+/// The `{ ... }` of a member: its shapes and fields.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MemberBody {
+    /// Entries in source order.
+    pub entries: Vec<MemberEntry>,
+    /// The braces and everything between them.
+    pub span: Span,
+}
+
+/// One entry of a member's body.
+#[derive(Debug, Clone, PartialEq)]
+pub enum MemberEntry {
+    /// `shape: box(...)` or `shape knuckle: box(...)`
+    Shape(ShapeEntry),
+    /// `with: piece`
+    Field(Field),
+}
+
+/// `shape: box(...)` (unnamed) or `shape knuckle: box(...)` (named).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ShapeEntry {
+    /// The shape's name, when written.
+    pub name: Option<Name>,
+    /// The shape: a call such as `box(along: 16mm, ...)`.
+    pub value: Expr,
+    /// The whole entry.
+    pub span: Span,
+}
+
+/// `mechanism { ... }`: how a hardware kind's members move.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MechanismBlock {
+    /// Entries in source order.
+    pub entries: Vec<MechanismEntry>,
+    /// The `mechanism` word and its block.
+    pub span: Span,
+}
+
+/// One entry of a `mechanism` block.
+#[derive(Debug, Clone, PartialEq)]
+pub enum MechanismEntry {
+    /// `pivot a, b at point(...)`
+    Pivot {
+        /// The two members on the pin.
+        members: [Ident; 2],
+        /// Where the pin is.
+        at: Expr,
+        /// The whole entry.
+        span: Span,
+    },
+    /// `slot a, b from point(...) to point(...)`
+    Slot {
+        /// The member carrying the pin, then the member with the slot.
+        members: [Ident; 2],
+        /// One end of the slot.
+        from: Expr,
+        /// The other end.
+        to: Expr,
+        /// The whole entry.
+        span: Span,
+    },
+    /// `rail a, b along word`
+    Rail {
+        /// The member that runs, then the member it runs along.
+        members: [Ident; 2],
+        /// The direction word, as written.
+        along: Ident,
+        /// The whole entry.
+        span: Span,
+    },
+    /// `couple a to b: ratio`
+    Couple {
+        /// The member that follows.
+        member: Ident,
+        /// The member it follows.
+        to: Ident,
+        /// The share of `to`'s travel.
+        ratio: Expr,
+        /// The whole entry.
+        span: Span,
+    },
+    /// `drive: turn(m, from:, to:)` or `drive: travel(m, from:, to:)`
+    Drive {
+        /// The `drive` word.
+        key: Name,
+        /// The call.
+        value: Expr,
+        /// The whole entry.
+        span: Span,
+    },
+    /// `stop: value "message"`
+    Stop {
+        /// The `stop` word.
+        key: Name,
+        /// Where the drive stops.
+        value: Expr,
+        /// What stops it, for a beginner.
+        message: StringLit,
+        /// The whole entry.
+        span: Span,
+    },
+    /// Any other `name: value`, such as `pin_diameter: 3mm`.
+    Field(Field),
 }
 
 /// `roles { lock: Part, first: Part, second: Part }`
@@ -1439,6 +1550,13 @@ pub enum ExprKind {
     List(Vec<Expr>),
     /// `( expr )`, kept so the formatter can preserve intent.
     Paren(Box<Expr>),
+    /// `lo..hi`: a range, allowed only as an argument of a member's shape.
+    Range {
+        /// The low end.
+        lo: Box<Expr>,
+        /// The high end.
+        hi: Box<Expr>,
+    },
 }
 
 impl Expr {
@@ -1467,7 +1585,8 @@ impl Expr {
                 | ExprKind::Unary { .. }
                 | ExprKind::Binary { .. }
                 | ExprKind::List(_)
-                | ExprKind::Paren(_) => None,
+                | ExprKind::Paren(_)
+                | ExprKind::Range { .. } => None,
             }
         }
         let mut segments = Vec::new();

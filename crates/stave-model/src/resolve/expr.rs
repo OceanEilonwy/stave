@@ -396,6 +396,16 @@ impl Resolver<'_> {
                 make(RExprKind::List(lowered), ty)
             }
             ExprKind::Paren(inner) => self.raw(cx, inner, expect),
+            ExprKind::Range { .. } => {
+                self.error_help(
+                    Code::Syntax,
+                    "a range lo..hi is written only as an argument of a member's shape",
+                    cx.file,
+                    span,
+                    "write one value here; ranges size a hardware member's shape, as in box(across: -3mm..15mm, ...)",
+                );
+                RExpr::error(span)
+            }
         }
     }
 
@@ -945,6 +955,21 @@ impl Resolver<'_> {
             let item_ty = item.map(|symbol| self.symbol_ty(symbol));
             let is_kind = matches!(item_ty, Some(Ty::Kind(_)));
             if !is_kind {
+                if item.is_none()
+                    && stave_schema::functions::is_member_only_function(ident.as_str())
+                {
+                    self.error_help(
+                        Code::Syntax,
+                        format!(
+                            "{}(...) is written only inside a hardware kind's member or mechanism",
+                            ident.as_str()
+                        ),
+                        cx.file,
+                        span,
+                        "points and member shapes are measurements within the hardware, in the kind's own frame; a design places things with relationships",
+                    );
+                    return RExpr::error(span);
+                }
                 if let Some(builtin) = Builtin::from_word(ident.as_str()) {
                     return self.builtin(cx, builtin, args, span, expect);
                 }

@@ -99,9 +99,13 @@ grammar position only:
 | `mirror`, `about` | directly after the `=` of a `part` or `assembly`, and as that call's named argument |
 | `joint`, `slide`, `hinge`, `pull`, `fastener`, `tool` | as the base kind after `kind name :` (`joint` is also a keyword) |
 | `roles`, `cut`, `makes`, `member` | at the start of an entry in a `kind` body, when not followed by `:` |
+| `mechanism` | at the start of an entry in a hardware `kind` body, when not followed by `:` |
+| `shape` | at the start of an entry in a member's body, when followed by a name and `:` (`shape knuckle: box(...)`); `shape: ...` is a field |
+| `pivot`, `slot`, `rail`, `couple` | at the start of an entry in a `mechanism` block, when not followed by `:` |
+| `from`, `along` | inside a `slot` (`from point(...) to point(...)`) and a `rail` (`along across`) |
 | `mark`, `cut` | at the start of an entry in a `recipe` body, when not followed by `:` |
 | `same` | as the whole content of an index: `drawer_bay[same]` |
-| `to`, `in` | after the item of a patch's `add`, and in `rename ... to` |
+| `to`, `in` | after the item of a patch's `add`, and in `rename ... to`; `to` also in a `slot` and a `couple` |
 | `replace`, `unset`, `rename` | at the start of a patch operation |
 
 ### Quantities
@@ -281,8 +285,20 @@ library       = "library" , STRING , [ block(field) ] ;
 kind          = "kind" , IDENT , ":" , base_kind , block(kind_entry) ;
 base_kind     = "joint" | "slide" | "hinge" | "pull" | "fastener" | "tool" ;
 kind_entry    = { DOC } , ( param | require | makes | member )
-              | roles | cut | field ;
-member        = "member" , IDENT ;                       (* a hardware kind's named piece: member cup *)
+              | roles | cut | mechanism | field ;
+member        = "member" , IDENT , [ block(member_entry) ] ;
+                (* a hardware kind's named piece: member cup, or member arm { shape: box(...) } *)
+member_entry  = "shape" , [ IDENT ] , ":" , call_expr    (* shape: cylinder(...), shape knuckle: box(...) *)
+              | field ;                                  (* with: piece *)
+call_expr     = IDENT , "(" , [ args ] , ")" ;           (* an expression that is one call *)
+mechanism     = "mechanism" , block(mechanism_entry) ;   (* how a hardware kind's members move *)
+mechanism_entry = "pivot" , IDENT , "," , IDENT , "at" , call_expr
+                                                         (* pivot arm, inner_link at point(...) *)
+              | "slot" , IDENT , "," , IDENT , "from" , call_expr , "to" , call_expr
+              | "rail" , IDENT , "," , IDENT , "along" , IDENT
+              | "couple" , IDENT , "to" , IDENT , ":" , expr   (* couple middle to drawer_member: 1/2 *)
+              | "stop" , ":" , expr , STRING             (* stop: opening_angle "the limiter stops it here" *)
+              | field ;                                  (* drive: turn(cup, from: 0deg, to: 110deg) *)
 roles         = "roles" , block(role) ;
 role          = NAME , ":" , IDENT ;                     (* piece: Part   into: Parts *)
 cut           = "cut" , call , block(call) ;             (* cut end(piece, facing: into) { tenon(...) } *)
@@ -357,7 +373,9 @@ mul_expr      = unary , { ( "*" | "/" ) , unary } ;
 unary         = ( "-" | "!" ) , unary | postfix ;
 postfix       = primary , { "." , NAME | "[" , index , "]" | "(" , [ args ] , ")" } ;
 args          = arg , { "," , arg } , [ "," ] ;
-arg           = [ NAME , ":" ] , expr ;                  (* named when a NAME is directly followed by ":" *)
+arg           = [ NAME , ":" ] , expr , [ ".." , expr ] ;
+                (* named when a NAME is directly followed by ":"; a range lo..hi is
+                   allowed only as an argument of a member's shape *)
 list          = "[" , [ expr , { "," , expr } , [ "," ] ] , "]" ;
 
 primary       = QUANTITY | NUMBER | STRING | "true" | "false" | "fit"
@@ -395,6 +413,11 @@ Notes for the parser:
 - There are no object literals. `{ }` appears only after a declaration header.
   Inside an expression, everything is a call: `euro_hinge(opening_angle: 110deg)`.
 - An empty `block` is fine: `scene closed "Closed" { }`.
+- `stop: value "message"` in a `mechanism` is the one entry that looks like a
+  field but carries a message after its value, as a `require` does.
+- `shape body: box(...)` (the word `shape`, a name, then `:`) names one of a
+  member's shapes; `shape: box(...)` is a field and gives the member's only
+  shape.
 
 ---
 
@@ -752,13 +775,17 @@ of its entries is `error[missing-field]` naming it; one with both is
 The two kinds move differently. A **butt hinge** is a pin: the door turns
 about a fixed line. A **cup hinge** is a four-bar linkage: an arm on the
 mounting plate, a boss in the cup and two links between them, so the door
-moves forward and out while it turns and clears the side it covers. Every
-cup hinge moves on Stave's one built-in linkage, that of the common 110°
-full-overlay clip-on hinge, fixed to its cup (its pins are catalogue data
-of the mechanism, never written in a `.stave` file; see
-`docs/hardware/cup-hinge-linkage.md`). Its `opening_angle` is at most
-`110deg` (`error[out-of-range]` otherwise; wide-angle hinges have another
-mechanism, not modelled yet).
+moves forward and out while it turns and clears the side it covers. A cup
+hinge moves on the mechanism its kind declares (see
+[Mechanisms](#mechanisms)): its members, their shapes and its pins are
+catalogue data in the kind, written in the kind's own frame, fixed to its
+cup. `euro_hinge` in `std:hardware` declares the common 110° full-overlay
+clip-on hinge (see `docs/hardware/cup-hinge-linkage.md`). How far it opens
+is its `opening_angle`, bounded by that param's range and by the
+mechanism's `stop`; a mechanism whose links lock before the door opens that
+far is `error[motion]`. A cup hinge kind with no `mechanism` gives no
+motion: it is `warning[not-supported]` at the kind, and the door is checked
+closed only.
 
 The optional entries are a cup hinge's catalogue overlay: `base_overlay` is
 the overlay with the cup at the door's very edge on a 0mm plate (the
@@ -770,8 +797,9 @@ take `overlay_adjustment` (`error[hinge-overlay]` otherwise, with the
 `cup_inset` or `plate_height` that fits).
 
 `model` is a `Model`, `moving` and `license` are `Text`. Hardware kinds accept
-`param`, `require` and `member` entries; they can't have `roles`, `cut`,
-`makes` or the joint fields. See [Hardware](#hardware).
+`param`, `require`, `member` and `mechanism` entries; they can't have
+`roles`, `cut`, `makes` or the joint fields. See [Hardware](#hardware),
+[Shapes](#shapes) and [Mechanisms](#mechanisms).
 
 #### Hardware members
 
@@ -791,9 +819,30 @@ kind euro_hinge : hinge {
 }
 ```
 
-The words are fixed per base, because Stave knows which piece each one is
-(the mechanism itself, the linkage's pins, stays catalogue data and is never
-written in a file):
+A member may have a body: its **shapes** (see [Shapes](#shapes)) and what
+carries it (`with:`), written in a block after its name. A member with a
+body may have **any name**, and is what a `mechanism` moves:
+
+```
+  /// The arm: it clips onto the plate and reaches out to the door.
+  member arm {
+    with:          on
+    shape body:    box(along: 16mm, across: -2.9mm..15mm, depth: -55mm..0mm)
+    shape knuckle: box(along: 16mm, across: 8mm..15mm, depth: 0mm..12.4mm)
+  }
+```
+
+`with:` names a role (the member moves with that part: `piece`, `on`) or
+another member with a body (it rides on that member). A member with no
+`with:` is placed by the mechanism, as a link is. A member with a body has
+at least one shape (`error[missing-field]` otherwise); two shapes of one
+member have different names (`error[duplicate-name]`), and a member with
+more than one names them all.
+
+*Being replaced:* a member **without** a body (`member plate`) is a word
+from the fixed table below, kept for the viewer's list until every member
+has a body. A member with a body whose name is in the table is that entry
+of the list too. The words, per base:
 
 | Base | Members |
 |---|---|
@@ -803,9 +852,9 @@ written in a file):
 | `pull` | `knob`, `bar`, `screw`, `screws` (a knob and its screw, a bar and its screws) |
 
 Members are optional, each at most once (`error[duplicate-name]`). Any other
-word is `error[unknown-field]`: `a cup hinge has no member 'cupp'`, with the
-nearest member word as help; fasteners, tools and joints have no members
-(`a fastener kind has no member 'head'`).
+word for a member without a body is `error[unknown-field]`: `a cup hinge has
+no member 'cupp'`, with the nearest member word as help; fasteners, tools and
+joints have no members (`a fastener kind has no member 'head'`).
 
 ### `recipe name : operation { }`
 
@@ -1265,6 +1314,27 @@ bored down through a stick that another stick passes through vertically is
 `crossing(first, lock, normal: thickness)`. `opposite: true` takes the face
 opposite to the chosen one.
 
+#### The kind's frame
+
+A hardware kind's members, shapes and pins are drawn in the kind's own
+frame, with the hardware closed, as a catalogue drawing is. Its three
+directions are the words a cut already uses on a face:
+
+| Word | Runs |
+|---|---|
+| `along` | along the length of the piece the hardware is mounted on |
+| `across` | across the mount face, away from the piece's edge the hardware is measured from (a hinge: the edge nearer `on`) toward the middle of the piece |
+| `depth` | from the mount face into the piece; negative stands off it |
+
+The frame's origin is the point where the hardware is placed on its mount
+face: a cup hinge's is the centre of its cup, on the face the cup is bored
+into. These are **measurements within the hardware**, like a profile's
+stations and a cut's marks: catalogue data, never a position in a design.
+They are written with `point(along:, across:, depth:)` (each a `Length`,
+default `0mm`) and with the ranges a shape takes, and only inside a
+hardware kind's `member` and `mechanism`: `point(...)` anywhere else is
+`error[syntax]`, as is a range `lo..hi` anywhere but a shape's argument.
+
 #### Cut operations
 
 `through` as a depth means all the way through the part.
@@ -1351,7 +1421,8 @@ What each base does:
   `travel`.
 - **`hinge`** — a cup hinge bores its cup: one `drill(diameter: cup_diameter,
   depth: cup_depth)` in the mount face. It gives the assembly a motion: the
-  door opens by up to `opening_angle` on the hinge's linkage, its one input
+  door opens by up to `opening_angle` on the mechanism its kind declares
+  (see [Mechanisms](#mechanisms)), its one input
   the angle the door has turned; at each angle the door turns by that angle
   and moves wherever its two links put it (forward, away from the cabinet,
   and sideways), and at `0deg` it is exactly where it is placed. The
@@ -1385,6 +1456,76 @@ anything else is `error[overlap]`.
   `front`, +X is `right`, units are metres.
 - `moving:` names the node that moves with the hardware's motion.
 - A missing model is drawn as its envelope with a label.
+
+#### Shapes
+
+A member's shapes are what it is made of: convex solids, written in the
+[kind's frame](#the-kinds-frame), with the hardware closed. Sizes and
+points may use the kind's params (as every expression in a kind may; its
+fields are read from outside it, `hinge_kind.cup_diameter`), so
+`euro_hinge(plate_setback: 52mm)` is still a family. Each range argument
+is a range `lo..hi` (`-2.9mm..15mm`) or one length, which is centred on the
+origin (`along: 16mm` is `-8mm..8mm`). A shape's arguments are named, each
+at most once.
+
+| Shape | Meaning |
+|---|---|
+| `box(along:, across:, depth:)` | a box; each argument is a range or one length |
+| `cylinder(diameter:, depth:, at:)` | a cylinder whose axis runs along `depth`, through `at` (a `point(...)`, default the origin); `depth` is a range or one length. `axis: along` or `axis: across` lays it down, and its range is then written under that word (`along:` or `across:`) instead of `depth:` |
+| `prism(points: [...], along:)` | a convex outline of `point(across:, depth:)`s, in order around it, extruded along `along` (a range or one length) |
+| `bar(from:, to:, thickness:, along:)` | a straight bar between two `point(...)`s, `thickness` wide in the across/depth plane and reaching half its thickness past each point, `along` long: a prism, written the way a link is made |
+
+Outside a member, `box(length:, width:, thickness:)` and
+`cylinder(diameter:, length:)` stay envelopes (see
+[Built-in functions](#built-in-functions)).
+
+#### Mechanisms
+
+A hardware kind says how its members move in one `mechanism { }` block.
+Every name in it is a member with a body declared in the kind
+(`error[unknown-name]` otherwise); the two members of one entry are
+different.
+
+| Entry | Meaning |
+|---|---|
+| `pivot a, b at point(...)` | `a` and `b` turn on one pin there |
+| `slot a, b from point(...) to point(...)` | a pin on `a` runs in a straight slot in `b` |
+| `rail a, b along <word>` | `a` runs straight along `b` without turning, along `along`, `across` or `depth` |
+| `couple a to b: <ratio>` | `a` travels that share of `b`'s travel (a full-extension slide's middle member) |
+| `drive: turn(m, from:, to:)` or `drive: travel(m, from:, to:)` | the one input and its range: member `m` turns through angles, or travels through lengths |
+| `stop: <value> "message"` | what stops the drive there; the message is shown when a pose or a design asks for more |
+| `pin_diameter: <length>` | how thick every pin is (optional, default `0mm`) |
+
+`drive` is required, and `stop` and `pin_diameter` are optional, each at
+most once. A drive's `to` beyond its `stop` is `error[motion]`, with the
+stop's message.
+
+**Version 1 limits.** A mechanism is planar: every pin is parallel to
+`along`, and the members move in the across/depth plane. It has exactly one
+freedom: three for each member that moves (the driven member and each
+member with no `with:`), less two for each `pivot` or `rail` and one for
+each `slot` or `couple`; any other count is `error[mechanism]` at the kind.
+In this version the only form solved is **a driven member hung on two
+links from a held member**: the drive turns a member carried by `piece`,
+each of two members with no `with:` is pinned once to it and once to a
+member carried by another role, and nothing else is written. That is a
+cup hinge's four-bar linkage:
+
+```
+  mechanism {
+    pivot arm, inner_link at point(across: 13.5mm, depth: 10.9mm)
+    pivot cup, inner_link at point(across: -8.8mm, depth: 7.33mm)
+    pivot arm, outer_link at point(across: 13.28mm, depth: 3.56mm)
+    pivot cup, outer_link at point(across: -9.54mm, depth: 1.39mm)
+    drive: turn(cup, from: 0deg, to: opening_angle)
+    stop:  opening_angle "the limiter in the arm stops the door here"
+  }
+```
+
+Any other mechanism with one freedom, and a mechanism in any kind but a
+cup hinge, is `error[not-supported]`. The jargon stays in library
+files: a project still writes `hardware hinges[lower, upper] :
+euro_hinge(stile[hinge], on: side_l)`.
 
 ---
 
@@ -1586,6 +1727,17 @@ These are looked up when a bare name is called (see [Names](#names), rule 3).
 | `model(source, align:)` | `Model` | a `.glb` model; `align: bounds` or `align: node("name")` |
 | `ends(inset:)`, `pitch(d)`, `gap(d)` | `Spacing` | used by `spaced`, with the bare words `evenly` and `ends` |
 
+Inside a hardware kind's `member` and `mechanism` only, written in the
+[kind's frame](#the-kinds-frame) (anywhere else, `point(...)` is
+`error[syntax]`):
+
+| Function | Meaning |
+|---|---|
+| `point(along:, across:, depth:)` | a point in the kind's frame; each a `Length`, default `0mm` |
+| `bar(from:, to:, thickness:, along:)` | a member's shape: a straight bar between two points (see [Shapes](#shapes)) |
+| `prism(points: [...], along:)` | a member's shape: a convex outline extruded along `along` |
+| `box(along:, across:, depth:)`, `cylinder(diameter:, depth:, at:)` | a member's shape; each argument a range `lo..hi` or one length |
+
 Words that look like functions but are fixed by position, not built-in
 functions: placement terms, face selectors, cut operations, `mark(...)` inside
 `outline`, assembly steps, `extend`, recipe steps, `before`/`after`, and
@@ -1717,6 +1869,7 @@ shape of their messages are fixed, because tests and AI tools match on them.
 | 3 | `placement-cycle` | `<a> and <b> are placed against each other` |
 | 3 | `fit-undecided` | `<part>: nothing decides its <length>` |
 | 3 | `mirror` | `<item> has no counterpart on the other side of the mirror` |
+| 3 | `mechanism` | `<kind>'s mechanism has <n> freedoms; it needs exactly one` |
 | 4 | `no-contact` | `<joint>: <part> meets none of the parts it should join` |
 | 4 | `overlap` | `<a> and <b> overlap` |
 | 4 | `slide-gap` | `<hardware>: <piece> is <gap> from the opening, but the slide needs <clearance>` |
@@ -1835,9 +1988,10 @@ ends a field, so lines are never joined or split) and normalises the rest:
 - one space between tokens, except none inside `( )` and `[ ]`, before `,`,
   around `.` and `..`, after a prefix `-` or `!`, before the `(` of a call
   or the `[` of an index or array, and before the `:` of a field, argument,
-  role or station; a declaration's `:` has a space on each side
-  (`part side_l : oak_19`);
-- consecutive lines that each start with a field, a named argument or a
+  role, station, named shape, `stop` or `couple`; a declaration's `:` has a
+  space on each side (`part side_l : oak_19`);
+- consecutive lines that each start with a field (`stop:` included), a
+  named shape (`shape knuckle:`), a named argument or a
   profile station, in the same block or argument list, line their values up
   one space after the longest key; a blank line or another kind of entry
   ends the run;

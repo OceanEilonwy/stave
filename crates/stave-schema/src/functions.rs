@@ -241,6 +241,81 @@ impl Builtin {
 /// `node("name")`: the other form of `model(..., align:)`.
 pub const MODEL_NODE: &str = "node";
 
+/// `point(along:, across:, depth:)`: a point in a hardware kind's frame,
+/// written only inside a member or a mechanism.
+pub const POINT: &str = "point";
+
+/// The named arguments of [`POINT`], each a length that defaults to `0mm`.
+pub const POINT_ARGUMENTS: [&str; 3] = ["along", "across", "depth"];
+
+/// A shape of a hardware kind's member (grammar, "Shapes"), written in the
+/// kind's frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum ShapeFunction {
+    /// `box(along:, across:, depth:)`
+    Box,
+    /// `cylinder(diameter:, depth:, at:, axis:)`
+    Cylinder,
+    /// `prism(points: [...], along:)`
+    Prism,
+    /// `bar(from:, to:, thickness:, along:)`
+    Bar,
+}
+
+impl ShapeFunction {
+    /// Every shape, in the order the grammar lists them.
+    pub const ALL: [ShapeFunction; 4] = [
+        ShapeFunction::Box,
+        ShapeFunction::Cylinder,
+        ShapeFunction::Prism,
+        ShapeFunction::Bar,
+    ];
+
+    /// The function's name.
+    pub fn word(self) -> &'static str {
+        match self {
+            ShapeFunction::Box => "box",
+            ShapeFunction::Cylinder => "cylinder",
+            ShapeFunction::Prism => "prism",
+            ShapeFunction::Bar => "bar",
+        }
+    }
+
+    /// The shape for a name, if it is one.
+    pub fn from_word(word: &str) -> Option<ShapeFunction> {
+        ShapeFunction::ALL
+            .into_iter()
+            .find(|shape| shape.word() == word)
+    }
+
+    /// Its named arguments. A cylinder's range is written under the name
+    /// of its axis (`depth:` unless `axis:` lays it down).
+    pub fn arguments(self) -> &'static [&'static str] {
+        match self {
+            ShapeFunction::Box => &["along", "across", "depth"],
+            ShapeFunction::Cylinder => &["diameter", "along", "across", "depth", "at", "axis"],
+            ShapeFunction::Prism => &["points", "along"],
+            ShapeFunction::Bar => &["from", "to", "thickness", "along"],
+        }
+    }
+
+    /// `true` for the shapes that are not also envelopes outside a member
+    /// (`prism` and `bar`): like `point`, they are written only inside a
+    /// hardware kind's member.
+    pub fn only_in_members(self) -> bool {
+        match self {
+            ShapeFunction::Prism | ShapeFunction::Bar => true,
+            ShapeFunction::Box | ShapeFunction::Cylinder => false,
+        }
+    }
+}
+
+/// The words written only inside a hardware kind's member or mechanism:
+/// `point`, `prism` and `bar`.
+pub fn is_member_only_function(word: &str) -> bool {
+    word == POINT || ShapeFunction::from_word(word).is_some_and(ShapeFunction::only_in_members)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

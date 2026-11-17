@@ -3,8 +3,9 @@
 //! pins (fixed), and the two links, each drawn at rest and turned about its
 //! arm pin by the viewer (see [`crate::linkage`]).
 //!
-//! Sizes are the catalogue's ([`stave_schema::hinges`]): simple boxes and
-//! cylinders, enough to see how the mechanism works.
+//! Sizes are the catalogue's, as the hinge's kind declares them (its
+//! members' shapes and its mechanism's pins): simple boxes and cylinders,
+//! enough to see how the mechanism works.
 
 use std::f32::consts::TAU;
 

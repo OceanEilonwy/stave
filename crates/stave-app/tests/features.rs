@@ -606,6 +606,29 @@ kind inset_cup_hinge : hinge {
   cup_inset:     5mm
   plate_setback: 37mm
   plate:         box(length: 50mm, width: 36mm, thickness: 11mm)
+  member arm {
+    with:          on
+    shape body:    box(along: 16mm, across: -2.9mm..15mm, depth: -55mm..0mm)
+    shape knuckle: box(along: 16mm, across: 8mm..15mm, depth: 0mm..12.4mm)
+  }
+  member cup {
+    with:  piece
+    shape: cylinder(diameter: 35mm, depth: 0mm..13mm)
+  }
+  member inner_link {
+    shape: bar(from: point(across: 13.5mm, depth: 10.9mm), to: point(across: -8.8mm, depth: 7.33mm), thickness: 1.5mm, along: 9mm)
+  }
+  member outer_link {
+    shape near: bar(from: point(across: 13.28mm, depth: 3.56mm), to: point(across: -9.54mm, depth: 1.39mm), thickness: 1.5mm, along: 5.5mm..7mm)
+    shape far:  bar(from: point(across: 13.28mm, depth: 3.56mm), to: point(across: -9.54mm, depth: 1.39mm), thickness: 1.5mm, along: -7mm..-5.5mm)
+  }
+  mechanism {
+    pivot arm, inner_link at point(across: 13.5mm, depth: 10.9mm)
+    pivot cup, inner_link at point(across: -8.8mm, depth: 7.33mm)
+    pivot arm, outer_link at point(across: 13.28mm, depth: 3.56mm)
+    pivot cup, outer_link at point(across: -9.54mm, depth: 1.39mm)
+    drive: turn(cup, from: 0deg, to: 110deg)
+  }
 }
 component Flap {
   param hinge_side : Part
