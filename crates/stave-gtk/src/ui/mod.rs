@@ -159,6 +159,21 @@ pub struct Options {
     pub wish: Wish,
     /// The Files view shows the text alone.
     pub text_only: bool,
+    /// Where the camera starts (screenshots of a close view).
+    pub camera: StartCamera,
+}
+
+/// Where the 3D view's camera starts, from the command line.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct StartCamera {
+    /// Degrees about the up axis from the default view.
+    pub turn: f32,
+    /// Degrees above the horizontal, instead of the default.
+    pub pitch: Option<f32>,
+    /// Frame the selection rather than everything.
+    pub frame_selection: bool,
+    /// Move this many times closer once framed.
+    pub zoom: Option<f32>,
 }
 
 /// Opens the window and runs until it is closed.
@@ -287,6 +302,9 @@ struct State {
     /// The selection is changing because the editor's cursor moved: the
     /// editor stays where it is.
     linking: bool,
+    /// Where the camera starts, applied once the view has a size and the
+    /// command line's selection is made.
+    start_camera: Option<StartCamera>,
 }
 
 /// The window's widgets.
@@ -361,6 +379,7 @@ impl Window {
                     text_only: options.text_only,
                 }),
                 window_screenshot: options.window_screenshot,
+                start_camera: (options.camera != StartCamera::default()).then_some(options.camera),
                 renderer,
                 uploaded: None,
                 posed: None,
@@ -553,6 +572,7 @@ impl Window {
             state.orbit = Self::frame_all(&state, &shown);
         }
         self.apply_wanted();
+        self.apply_start_camera();
         // Whatever the session carried over, shown again; the editor stays
         // where people are typing.
         self.state.borrow_mut().linking = true;
@@ -1330,6 +1350,51 @@ impl Window {
                 Some(state.orbit?.framed(bounds, aspect))
             });
             state.orbit = selected.or_else(|| Self::frame_all(&state, shown));
+        }
+        self.request_render();
+    }
+
+    /// Moves the camera where the command line asked, once the view has a
+    /// size and the asked-for selection is made.
+    fn apply_start_camera(self: &Rc<Self>) {
+        let ready = {
+            let state = self.state.borrow();
+            state.size.0 > 1 && state.wanted.is_none() && state.start_camera.is_some()
+        };
+        if !ready {
+            return;
+        }
+        let node = self.selected_node();
+        {
+            let session = self.session.borrow();
+            let mut state = self.state.borrow_mut();
+            let Some(camera) = state.start_camera.take() else {
+                return;
+            };
+            let aspect = Self::aspect(&state);
+            let Some(orbit) = state.orbit else {
+                return;
+            };
+            let turned = Orbit {
+                yaw: (orbit.yaw + camera.turn.to_radians()).rem_euclid(std::f32::consts::TAU),
+                pitch: camera.pitch.map_or(orbit.pitch, f32::to_radians),
+                ..orbit
+            };
+            let posed = state.posed.as_ref();
+            let drawable = session.drawable();
+            let bounds = drawable.and_then(|(_, graph)| {
+                let posed = posed?;
+                match node.filter(|_| camera.frame_selection) {
+                    Some(id) => graph.bounds_of(posed, &[id]),
+                    None => graph.bounds(posed),
+                }
+            });
+            let framed = bounds.map_or(turned, |bounds| turned.framed(bounds, aspect));
+            let zoomed = Orbit {
+                distance: framed.distance / camera.zoom.unwrap_or(1.0),
+                ..framed
+            };
+            state.orbit = Some(zoomed);
         }
         self.request_render();
     }
@@ -2528,6 +2593,9 @@ impl Window {
             let (changed, first) = changed;
             if first && window.state.borrow().focus.is_some() {
                 window.frame_focus();
+            }
+            if first {
+                window.apply_start_camera();
             }
             if changed {
                 window.request_render();

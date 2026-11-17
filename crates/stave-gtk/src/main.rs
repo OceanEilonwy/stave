@@ -96,8 +96,9 @@ struct Arguments {
     /// window while it checks.
     #[arg(long, hide = true)]
     building: bool,
-    /// Turn the screenshot's camera this many degrees about the up axis
-    /// from the default view (positive toward the right; 180 shows the back).
+    /// Turn the camera this many degrees about the up axis from the
+    /// default view (positive toward the right; 180 shows the back). Works
+    /// for the window too.
     #[arg(
         long,
         value_name = "DEGREES",
@@ -116,7 +117,7 @@ struct Arguments {
     #[arg(long, value_name = "N")]
     diagnostic: Option<usize>,
     /// Look from this many degrees above the horizontal (90: straight
-    /// down) for the screenshot.
+    /// down). Works for the window too.
     #[arg(long, value_name = "DEGREES", allow_negative_numbers = true)]
     pitch: Option<f32>,
     /// Frame the screenshot close on the items whose names start with this
@@ -171,6 +172,22 @@ struct Arguments {
     /// Don't tint the faces cuts made.
     #[arg(long)]
     no_tint: bool,
+    /// For the window: start with the camera framed on the selection (as
+    /// pressing F does).
+    #[arg(long)]
+    frame_selection: bool,
+    /// For the window: move the camera this many times closer once framed
+    /// (2: half as far away).
+    #[arg(long, value_name = "FACTOR", value_parser = parse_zoom)]
+    zoom: Option<f32>,
+}
+
+fn parse_zoom(text: &str) -> Result<f32> {
+    let zoom: f32 = text.trim().parse()?;
+    if !(0.05..=100.0).contains(&zoom) {
+        bail!("the zoom must be between 0.05 and 100");
+    }
+    Ok(zoom)
 }
 
 fn parse_theme(text: &str) -> Result<ui::Theme> {
@@ -279,6 +296,12 @@ fn main() -> ExitCode {
                 follow: arguments.follow,
             },
             text_only: arguments.text_only,
+            camera: ui::StartCamera {
+                turn: arguments.turn,
+                pitch: arguments.pitch,
+                frame_selection: arguments.frame_selection,
+                zoom: arguments.zoom,
+            },
         }),
     };
     match result {
