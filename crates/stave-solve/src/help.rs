@@ -90,7 +90,8 @@ fn compares_for_equality(condition: &RExpr) -> bool {
                 | BinaryOp::Add
                 | BinaryOp::Sub
                 | BinaryOp::Mul
-                | BinaryOp::Div,
+                | BinaryOp::Div
+                | BinaryOp::In,
             ..
         }
         | RExprKind::Length(_)
