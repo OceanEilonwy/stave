@@ -254,6 +254,24 @@ fn open_buffers_are_read_in_place_of_their_files() {
     assert!(analysis.project_symbol("door_l").is_none());
     let file = analysis.file(&doors).unwrap();
     assert!(analysis.diagnostics(file).next().is_some());
+    // A typo is an unresolved name; a field name, an enum word and a name
+    // that resolves are not.
+    let typo = buffers
+        .text(&doors)
+        .unwrap()
+        .replace("hinge_side:  side_l", "hinge_side:  side_q");
+    buffers.edit(&doors, &typo).unwrap();
+    let analysis = Analysis::load(&folder, &buffers.overlay()).unwrap();
+    let file = analysis.file(&doors).unwrap();
+    let text = analysis.text(file).unwrap();
+    let at = |needle: &str| FilePosition {
+        file,
+        offset: u32::try_from(text.find(needle).unwrap()).unwrap() + 1,
+    };
+    assert!(analysis.is_unresolved(at("side_q")));
+    assert!(!analysis.is_unresolved(at("hinge_side")));
+    assert!(!analysis.is_unresolved(at("across")));
+    assert!(!analysis.is_unresolved(at("oak_19")));
     // The rest of the file still resolves.
     let uses = analysis
         .uses(analysis.project_symbol("left_door").unwrap().id)

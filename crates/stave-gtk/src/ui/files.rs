@@ -77,7 +77,19 @@ pub struct Wish {
     pub follow: bool,
 }
 
-type LinkCallback = Rc<dyn Fn(Option<(Arc<Analysis>, SymbolId)>)>;
+type LinkCallback = Rc<dyn Fn(CursorName)>;
+
+/// What the cursor rests on, for the 3D view to follow.
+#[derive(Clone)]
+pub enum CursorName {
+    /// A name that means this symbol.
+    Name(Arc<Analysis>, SymbolId),
+    /// A name that means nothing (a typo): the link lets go.
+    Unresolved,
+    /// Anything else (a keyword, a field name, a number, a space, or text
+    /// not worked out yet): the link stays as it is.
+    Other,
+}
 type GoCallback = Rc<dyn Fn(Option<SourceLocation>, SourceLocation)>;
 type SymbolCallback = Rc<dyn Fn(Arc<Analysis>, SymbolId)>;
 
@@ -149,6 +161,9 @@ struct State {
     listed: Option<SymbolId>,
     /// Frames left in which the overlays follow the text's layout.
     settling: u32,
+    /// The text changed: tell the window what the cursor rests on once
+    /// the names are worked out again.
+    relink: bool,
 }
 
 /// The Files view.
@@ -388,8 +403,8 @@ impl FilesPage {
 
     // ---- what the window hears ----
 
-    /// The cursor rests on a name (or on nothing that names an item).
-    pub fn connect_link(&self, callback: impl Fn(Option<(Arc<Analysis>, SymbolId)>) + 'static) {
+    /// The cursor rests on a name, a broken name, or something else.
+    pub fn connect_link(&self, callback: impl Fn(CursorName) + 'static) {
         self.callbacks.borrow_mut().on_link = Some(Rc::new(callback));
     }
 
@@ -1058,6 +1073,7 @@ impl FilesPage {
         self.schedule_analysis();
         self.schedule_check();
         self.settle_overlays();
+        self.state.borrow_mut().relink = true;
     }
 
     fn schedule_analysis(self: &Rc<Self>) {
@@ -1183,7 +1199,8 @@ impl FilesPage {
             self.editor.underline(&buffer, &lines, &problems);
             self.show_lenses(analysis, *file);
         }
-        self.cursor_moved_now(false);
+        let relink = fresh.is_some() && std::mem::take(&mut self.state.borrow_mut().relink);
+        self.cursor_moved_now(relink);
     }
 
     fn check_problems(&self, document: &Document) -> Vec<Problem> {
@@ -1266,13 +1283,20 @@ impl FilesPage {
             let timer = glib::timeout_add_local_once(LINK_DELAY, move || {
                 let Some(page) = page.upgrade() else { return };
                 page.state.borrow_mut().link_timer = None;
-                let found = page.fresh().and_then(|(analysis, file)| {
-                    let symbol = analysis.symbol_at(FilePosition {
-                        file,
-                        offset: page.cursor(),
-                    })?;
-                    Some((analysis, symbol))
-                });
+                let found = match page.fresh() {
+                    Some((analysis, file)) => {
+                        let position = FilePosition {
+                            file,
+                            offset: page.cursor(),
+                        };
+                        match analysis.symbol_at(position) {
+                            Some(symbol) => CursorName::Name(analysis, symbol),
+                            None if analysis.is_unresolved(position) => CursorName::Unresolved,
+                            None => CursorName::Other,
+                        }
+                    }
+                    None => CursorName::Other,
+                };
                 let callback = page.callbacks.borrow().on_link.clone();
                 if let Some(callback) = callback {
                     callback(found);

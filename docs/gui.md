@@ -313,7 +313,7 @@ options, from above, playing) and lays the 3D view's area out by kind
 
 FilesMode.dc.html: the text is the design, and the 3D view beside it
 follows it. Pictures in `docs/screenshots/files/` (`linked.png`,
-`peek.png`, `hover.png`, `uses_dark.png`, `problem.png`, `typed_dark.png`,
+`peek.png`, `hover.png`, `uses_dark.png`, `problem.png`, `typed_dark.png`, `typed_light.png`,
 `selected_in_3d_dark.png`, `narrow.png`).
 
 ```
@@ -392,8 +392,10 @@ step and changes nothing in the interface.
   grammar's words through `stave-lang` and `stave-schema`), line numbers
   with the cursor's in the accent colour, the cursor's line tinted, the
   name under the cursor and its uses marked (its declaration stronger),
-  wavy underlines (red errors, amber warnings) from the fast tier and the
-  last check, a lens above each part, assembly, piece of hardware,
+  wavy underlines from the fast tier and the last check (drawn by the
+  text view itself, 1.6 px thick, in libadwaita's error and warning
+  colours for the style, with a bar of the same colour in the gutter
+  beside each line that has one), a lens above each part, assembly, piece of hardware,
   component and kind ("2 uses" lists them; "show in 3D" selects it and
   switches to Both).
 - **Keys**: F12 or Ctrl+click follows a name; Alt+F12 peeks at its
@@ -413,7 +415,9 @@ step and changes nothing in the interface.
   tells the window, which asks `link::selection_for` and sends
   `Command::Link`: the 3D view selects the part, the piece of hardware or
   the whole assembly (every part and piece of hardware in it drawn
-  selected). A name the 3D view can't show leaves the selection alone.
+  selected). A name the 3D view can't show leaves the selection alone; a
+  name that means nothing (a typo, `Analysis::is_unresolved`) lets the
+  selection go, so no stale chip stays.
   Selecting in the 3D view or the parts tree moves the editor to
   `link::placed_at` (a part of a library component: its assembly's line)
   without moving the selection back, and the chip on the 3D view names

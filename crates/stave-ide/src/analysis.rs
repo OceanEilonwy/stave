@@ -409,6 +409,46 @@ impl Analysis {
         None
     }
 
+    /// `true` when the word at a position stands where an item's name
+    /// goes (a bare name in an expression, a reference, a path) and means
+    /// nothing: a typo, or a name not declared yet. Enum words, built-in
+    /// functions and fixed call heads are words of the language, not
+    /// unresolved names.
+    pub fn is_unresolved(&self, position: FilePosition) -> bool {
+        if self.reference_at(position).is_some() {
+            return false;
+        }
+        let Some(root) = self.index.files.get(&position.file).map(FileData::root) else {
+            return false;
+        };
+        let Some(token) = token_at(&root, position.offset) else {
+            return false;
+        };
+        if token.kind() != SyntaxKind::IDENT {
+            return false;
+        }
+        let text = token.text();
+        let Some(parent) = token.parent() else {
+            return false;
+        };
+        match parent.kind() {
+            SyntaxKind::NAME_REF => {
+                !(words::is_enum_word(text)
+                    || words::is_fixed_call(text)
+                    || words::builtin_signature(text).is_some()
+                    || text == "same")
+            }
+            SyntaxKind::NAME => parent.parent().is_some_and(|holder| {
+                matches!(holder.kind(), SyntaxKind::REF | SyntaxKind::PATH)
+                    && holder
+                        .children()
+                        .find(|c| c.kind() == SyntaxKind::NAME)
+                        .is_some_and(|first| first == parent)
+            }),
+            _ => false,
+        }
+    }
+
     // ---- breadcrumbs ----
 
     /// Where a position is: the file, then each item, field or block

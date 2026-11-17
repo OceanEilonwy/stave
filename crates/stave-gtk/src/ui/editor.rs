@@ -140,8 +140,6 @@ impl Tags {
         tags.comment.set_style(gtk::pango::Style::Italic);
         tags.doc.set_style(gtk::pango::Style::Italic);
         tags.kind.set_weight(600);
-        tags.error.set_underline(gtk::pango::Underline::Error);
-        tags.warning.set_underline(gtk::pango::Underline::Error);
         tags.declared.set_weight(600);
         tags.lens
             .set_pixels_above_lines(LINE_SPACING.saturating_add(LENS_HEIGHT));
@@ -214,10 +212,6 @@ impl Tags {
         set(&self.kind, "#1a5fb4", "#99c1f1");
         set(&self.module, "#3d3846", "#deddda");
         set(&self.word, "#1c71d8", "#78aeed");
-        self.error
-            .set_underline_rgba(Some(&rgba(if dark { "#ff7b63" } else { "#c01c28" })));
-        self.warning
-            .set_underline_rgba(Some(&rgba(if dark { "#f8e45c" } else { "#c88800" })));
         self.declared
             .set_background_rgba(Some(&rgba(if dark { "#1e3a5f" } else { "#d3e4f9" })));
         self.used
@@ -303,11 +297,60 @@ mod imp {
                 ));
                 snapshot.append_layout(&layout, if current { &accent } else { &dim });
                 snapshot.restore();
+                if let Some(severity) = line_problem(&view, &iter) {
+                    let colour = problem_colour(severity, self.dark.get());
+                    let bar = gtk::graphene::Rect::new(
+                        4.0,
+                        crate::convert::f32_of_int(y),
+                        3.0,
+                        crate::convert::f32_of_int(text_height),
+                    );
+                    snapshot.append_color(&colour, &bar);
+                }
                 if !iter.forward_line() {
                     break;
                 }
             }
             let _ = buffer;
+        }
+    }
+
+    /// The text view: a `GtkTextView` that draws problems' wavy
+    /// underlines itself, thicker than Pango's, in libadwaita's error and
+    /// warning colours.
+    #[derive(Default)]
+    pub struct CodeView {
+        pub dark: Cell<bool>,
+    }
+
+    #[glib::object_subclass]
+    impl ObjectSubclass for CodeView {
+        const NAME: &'static str = "StaveCodeView";
+        type Type = super::CodeView;
+        type ParentType = gtk::TextView;
+    }
+
+    impl ObjectImpl for CodeView {}
+    impl WidgetImpl for CodeView {}
+
+    impl TextViewImpl for CodeView {
+        fn snapshot_layer(&self, layer: gtk::TextViewLayer, snapshot: gtk::Snapshot) {
+            self.parent_snapshot_layer(layer, snapshot.clone());
+            if layer != gtk::TextViewLayer::AboveText {
+                return;
+            }
+            let view = self.obj();
+            let view: &gtk::TextView = view.upcast_ref();
+            let buffer = view.buffer();
+            let table = buffer.tag_table();
+            let dark = self.dark.get();
+            for (name, severity) in [("warning", Severity::Warning), ("error", Severity::Error)] {
+                let Some(tag) = table.lookup(name) else {
+                    continue;
+                };
+                let colour = problem_colour(severity, dark);
+                draw_waves(view, &tag, &colour, &snapshot);
+            }
         }
     }
 }
@@ -317,6 +360,129 @@ glib::wrapper! {
     pub struct Gutter(ObjectSubclass<imp::Gutter>)
         @extends gtk::Widget,
         @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget;
+}
+
+glib::wrapper! {
+    /// The editor's text view.
+    pub struct CodeView(ObjectSubclass<imp::CodeView>)
+        @extends gtk::TextView, gtk::Widget,
+        @implements gtk::Accessible, gtk::AccessibleText, gtk::Buildable, gtk::ConstraintTarget, gtk::Scrollable;
+}
+
+/// The worst problem underlined on the line that starts at `line`.
+fn line_problem(view: &gtk::TextView, line: &gtk::TextIter) -> Option<Severity> {
+    let table = view.buffer().tag_table();
+    let mut end = *line;
+    if !end.ends_line() {
+        end.forward_to_line_end();
+    }
+    [("error", Severity::Error), ("warning", Severity::Warning)]
+        .into_iter()
+        .find(|(name, _)| {
+            table.lookup(name).is_some_and(|tag| {
+                let mut at = *line;
+                at.has_tag(&tag)
+                    || (at.forward_to_tag_toggle(Some(&tag)) && at.offset() < end.offset())
+            })
+        })
+        .map(|(_, severity)| severity)
+}
+
+/// libadwaita's error and warning colours (`@error_color`,
+/// `@warning_color`) for the light or dark style.
+fn problem_colour(severity: Severity, dark: bool) -> gtk::gdk::RGBA {
+    let hex = match (severity, dark) {
+        (Severity::Error, false) => "#c01c28",
+        (Severity::Error, true) => "#ff7b63",
+        (Severity::Warning | Severity::Note, false) => "#9c6e03",
+        (Severity::Warning | Severity::Note, true) => "#f8e45c",
+    };
+    gtk::gdk::RGBA::parse(hex).unwrap_or(gtk::gdk::RGBA::RED)
+}
+
+/// Draws a wave under every visible run of `tag`, line by line, in
+/// buffer coordinates (the layer's).
+fn draw_waves(
+    view: &gtk::TextView,
+    tag: &gtk::TextTag,
+    colour: &gtk::gdk::RGBA,
+    snapshot: &gtk::Snapshot,
+) {
+    let visible = view.visible_rect();
+    let (mut iter, _) = view.line_at_y(visible.y());
+    let (mut last, _) = view.line_at_y(visible.y().saturating_add(visible.height()));
+    last.forward_to_line_end();
+    let end = last.offset();
+    for _ in 0..10_000 {
+        if !iter.has_tag(tag) && !iter.forward_to_tag_toggle(Some(tag)) {
+            return;
+        }
+        if iter.offset() >= end || !iter.has_tag(tag) {
+            return;
+        }
+        let mut run_end = iter;
+        run_end.forward_to_tag_toggle(Some(tag));
+        // One wave per line the run covers.
+        let mut from = iter;
+        for _ in 0..10_000 {
+            let mut line_end = from;
+            if !line_end.ends_line() {
+                line_end.forward_to_line_end();
+            }
+            let to = if line_end.offset() < run_end.offset() {
+                line_end
+            } else {
+                run_end
+            };
+            let start = view.iter_location(&from);
+            let stop = view.iter_location(&to);
+            if stop.x() > start.x() {
+                wave(
+                    snapshot,
+                    f64::from(start.x()),
+                    f64::from(stop.x()),
+                    f64::from(start.y().saturating_add(start.height())) + 1.0,
+                    colour,
+                );
+            }
+            if to.offset() >= run_end.offset() || !from.forward_line() {
+                break;
+            }
+        }
+        iter = run_end;
+    }
+}
+
+/// A wavy line from `x0` to `x1` around `y`: 1.6 px thick, 1.6 px either
+/// side of the line, a crest every 5 px.
+fn wave(snapshot: &gtk::Snapshot, x0: f64, x1: f64, y: f64, colour: &gtk::gdk::RGBA) {
+    let width = (x1 - x0).max(4.0);
+    let bounds = gtk::graphene::Rect::new(
+        crate::convert::f32_of(x0 - 1.0),
+        crate::convert::f32_of(y - 3.0),
+        crate::convert::f32_of(width + 2.0),
+        6.0,
+    );
+    let context = snapshot.append_cairo(&bounds);
+    context.set_source_rgba(
+        f64::from(colour.red()),
+        f64::from(colour.green()),
+        f64::from(colour.blue()),
+        f64::from(colour.alpha()),
+    );
+    context.set_line_width(1.6);
+    context.set_line_join(gtk::cairo::LineJoin::Round);
+    context.move_to(x0, y);
+    let (step, amplitude) = (2.5, 1.6);
+    let mut x = x0;
+    let mut up = true;
+    while x < x0 + width {
+        x = (x + step).min(x0 + width);
+        context.line_to(x, if up { y - amplitude } else { y + amplitude });
+        up = !up;
+    }
+    // A failed stroke only leaves the wave out.
+    let _ = context.stroke();
 }
 
 impl Gutter {
@@ -393,18 +559,18 @@ impl Editor {
     pub fn new() -> Editor {
         let table = gtk::TextTagTable::new();
         let tags = Tags::new(&table);
-        let view = gtk::TextView::builder()
-            .monospace(true)
-            .wrap_mode(gtk::WrapMode::None)
-            .top_margin(12)
-            .bottom_margin(48)
-            .left_margin(2)
-            .right_margin(16)
-            .pixels_above_lines(LINE_SPACING)
-            .pixels_below_lines(LINE_SPACING)
-            .css_classes(["stave-editor"])
-            .has_tooltip(true)
-            .build();
+        let view: gtk::TextView = glib::Object::builder::<CodeView>()
+            .property("monospace", true)
+            .property("wrap-mode", gtk::WrapMode::None)
+            .property("top-margin", 12)
+            .property("bottom-margin", 48)
+            .property("left-margin", 2)
+            .property("right-margin", 16)
+            .property("pixels-above-lines", LINE_SPACING)
+            .property("pixels-below-lines", LINE_SPACING)
+            .property("css-classes", ["stave-editor"].to_value())
+            .build()
+            .upcast();
         view.set_buffer(Some(&gtk::TextBuffer::new(Some(&table))));
         let gutter = Gutter::new(&view);
         view.set_gutter(gtk::TextWindowType::Left, Some(&gutter));
@@ -485,6 +651,10 @@ impl Editor {
     /// Follows the light or dark style.
     pub fn colour(&self, dark: bool) {
         self.tags.colour(dark);
+        if let Some(code) = self.view.downcast_ref::<CodeView>() {
+            code.imp().dark.set(dark);
+        }
+        self.view.queue_draw();
         self.gutter.imp().dark.set(dark);
         self.gutter.queue_draw();
     }
@@ -537,6 +707,8 @@ impl Editor {
             }
             buffer.apply_tag(tag, &from, &to);
         }
+        self.gutter.queue_draw();
+        self.view.queue_draw();
     }
 
     /// Marks the uses of the name under the cursor, its declaration

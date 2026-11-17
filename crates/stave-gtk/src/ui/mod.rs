@@ -32,7 +32,6 @@ mod viewport;
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::sync::Arc;
 use std::time::Duration;
 
 use adw::prelude::*;
@@ -743,12 +742,23 @@ impl Window {
     /// The editor's cursor rests on a name: select what it means in the
     /// design, without a history entry. A name the 3D view can't show
     /// leaves the selection as it is.
-    fn text_linked(
-        self: &Rc<Self>,
-        found: Option<(Arc<stave_ide::Analysis>, stave_ide::SymbolId)>,
-    ) {
-        let Some((analysis, symbol)) = found else {
-            return;
+    fn text_linked(self: &Rc<Self>, found: files::CursorName) {
+        let (analysis, symbol) = match found {
+            files::CursorName::Name(analysis, symbol) => (analysis, symbol),
+            // A broken name: the 3D view lets go, and the chip goes.
+            files::CursorName::Unresolved => {
+                let linked =
+                    self.session.borrow().selection().is_some_and(|s| {
+                        !matches!(s, Selection::Location(_) | Selection::Problem(_))
+                    });
+                if linked {
+                    self.state.borrow_mut().linking = true;
+                    self.dispatch(Command::Link(None));
+                    self.state.borrow_mut().linking = false;
+                }
+                return;
+            }
+            files::CursorName::Other => return,
         };
         let selection = {
             let session = self.session.borrow();
