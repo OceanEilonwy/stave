@@ -41,8 +41,10 @@ a line and a concrete help line for every problem:
    `no-contact`; a spacing that runs past `to` is `overlap`; a slide's gap
    is `slide-gap`; a door overlaying its side by more or less than its
    cup hinges' catalogue allows is `hinge-overlay` (with the `cup_inset`
-   or `plate_height` that fits). Hardware envelopes count, except against
-   their own parts. A clash between an assembly (a door, a drawer) and something
+   or `plate_height` that fits). Every shape of every hardware member is a
+   body and counts like wood, against its own parts too (a cut it makes is
+   room for it); a kind's own members are not checked against each other.
+   A part made of boards counts as its boards make it. A clash between an assembly (a door, a drawer) and something
    outside it is one error at the line that placed the assembly, in the
    assembly's own terms ("make its top overlay 10mm smaller").
 5. **Motion**: every scene's poses are collision checked; every door and
