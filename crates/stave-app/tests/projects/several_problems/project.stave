@@ -1,0 +1,144 @@
+stave 1
+
+// Several problems of different kinds at once, for the problems list:
+// the door hits the wall as it opens (motion); the shelf is cut as long
+// as the base, so it runs into the side, and a block was set into it
+// (overlap, twice); and the lap's rail was placed in front of its post
+// instead of across it (no-contact).
+
+project "Several problems" {
+  units: mm
+}
+
+stock ply_18 { species: birch, form: plywood, thickness: 18mm }
+
+part base : ply_18 {
+  length: 600mm
+  width:  400mm
+  place {
+    ground
+  }
+}
+
+part side_l : ply_18 {
+  length: 700mm
+  width:  400mm
+  place {
+    orient(length: up, width: back)
+    against(base.top)
+    flush(base.left)
+    flush(base.back)
+  }
+}
+
+/// The wall beside the cabinet, as far forward as the front of the door.
+part wall : ply_18 {
+  length: 800mm
+  width:  418mm
+  place {
+    orient(length: up, width: back)
+    against(base.top)
+    against(side_l.left)
+    flush(base.back)
+  }
+}
+
+part side_r = mirror(side_l, about: mid(base, across))
+
+region bay = opening(
+  left:   side_l.right,
+  right:  side_r.left,
+  bottom: base.top,
+  top:    side_l.top,
+  front:  base.front,
+  back:   base.back,
+)
+
+component Door {
+  param opening    : Region
+  param hinge_side : Part
+
+  region face = cover(opening, overlay(left: 17.8mm, right: 17.8mm), thickness: ply_18.thickness)
+
+  part panel : ply_18 {
+    length: face.up
+    width:  face.across
+    place {
+      orient(length: up, width: right)
+      flush(face.left)
+      flush(face.bottom)
+      flush(face.front)
+    }
+  }
+
+  hardware hinges[bottom, top] : euro_hinge(panel, on: hinge_side) {
+    place {
+      spaced(ends(inset: 80mm), from: panel.bottom, to: panel.top)
+    }
+  }
+}
+
+assembly door : Door {
+  opening:    bay
+  hinge_side: side_l
+}
+
+part shelf : ply_18 {
+  length: 600mm
+  width:  380mm
+  place {
+    orient(length: right, width: back)
+    against(base.top, gap: 300mm)
+    flush(base.left)
+    flush(base.back)
+  }
+}
+
+stock pine_45 { species: pine, form: solid, thickness: 45mm }
+
+/// A block meant to stand on the shelf, placed flush with its top instead.
+part block : pine_45 {
+  length: 100mm
+  width:  45mm
+  place {
+    orient(length: right, width: back)
+    flush(shelf.top)
+    center(shelf, across)
+    center(shelf, deep)
+  }
+}
+
+part plinth : ply_18 {
+  length: 300mm
+  width:  300mm
+  place {
+    orient(length: right, width: back)
+    flush(base.bottom)
+    against(base.right, gap: 100mm)
+    flush(base.back)
+  }
+}
+
+part post : pine_45 {
+  length: 400mm
+  width:  45mm
+  place {
+    orient(length: up, width: right)
+    against(plinth.top)
+    center(plinth, across)
+    flush(plinth.back)
+  }
+}
+
+part rail : pine_45 {
+  length: 250mm
+  width:  45mm
+  place {
+    orient(length: right, width: up)
+    against(plinth.top, gap: 200mm)
+    center(plinth, across)
+    against(post.front, gap: 20mm)
+  }
+}
+
+joint lap : half_lap(rail, into: post)

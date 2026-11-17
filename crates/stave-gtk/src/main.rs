@@ -149,11 +149,13 @@ struct Arguments {
     #[arg(long, value_name = "N")]
     pair: Option<usize>,
     /// How far along focus mode is: 0 apart to 1 together for a joint, 0
-    /// closed to 1 fully open for hardware (default 0.5).
+    /// closed to 1 fully open for hardware (default 0.5; works for the
+    /// window too).
     #[arg(long, value_name = "AMOUNT", value_parser = parse_amount)]
     step: Option<f32>,
     /// With --focus on a hinge, a slide or a joint that turns upright: look
-    /// straight down, flat, through a section across it.
+    /// straight down, flat, through a section across it (works for the
+    /// window too).
     #[arg(long)]
     plan: bool,
     /// With --focus: stay in 3D where focus would open looking from above
@@ -255,6 +257,9 @@ fn main() -> ExitCode {
             scene: arguments.scene,
             select: arguments.select,
             focus: arguments.focus,
+            plan: arguments.plan,
+            in_3d: arguments.in_3d,
+            step: arguments.step,
             problem: arguments.diagnostic,
             explode: arguments.explode,
             view: arguments.view,

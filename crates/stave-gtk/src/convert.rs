@@ -43,6 +43,14 @@ pub fn int_of(value: f64) -> i32 {
         .unwrap_or(0)
 }
 
+/// A small `f32` (a percentage, a slider's reading) as the nearest whole
+/// number; 0 when it isn't a number or is out of `i32`'s range.
+pub fn int_of_f32(value: f32) -> i32 {
+    stave_geom::render::integer_from_f64(f64::from(value).round())
+        .and_then(|n| i32::try_from(n).ok())
+        .unwrap_or(0)
+}
+
 /// A byte size for a GPU buffer.
 pub fn bytes(size: usize) -> u64 {
     u64::try_from(size).unwrap_or(u64::MAX)
@@ -60,5 +68,7 @@ mod tests {
         assert_eq!(pixels(-3.0), 1);
         assert_eq!(pixels(1e9), 16384);
         assert_eq!(bytes(64), 64);
+        assert_eq!(int_of_f32(99.6), 100);
+        assert_eq!(int_of_f32(f32::NAN), 0);
     }
 }

@@ -8,10 +8,12 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use adw::prelude::*;
+use stave_app::apart::{Stage, Step};
 use stave_app::focus::Target;
 use stave_app::inspect::{Inspection, Snippet, TokenClass};
+use stave_app::problems::Details;
 use stave_app::session::SourceLocation;
-use stave_app::view::Problem;
+use stave_lang::Severity;
 
 use super::focus_panel::FocusPanel;
 use super::icons;
@@ -28,6 +30,7 @@ pub struct Inspector {
     /// Focus mode's panel.
     pub focus: FocusPanel,
     problem: gtk::Box,
+    apart: gtk::Box,
     callbacks: Rc<RefCell<Callbacks>>,
 }
 
@@ -35,6 +38,7 @@ pub struct Inspector {
 struct Callbacks {
     on_focus: Option<TargetCallback>,
     on_source: Option<SourceCallback>,
+    on_export: Option<Rc<dyn Fn()>>,
 }
 
 fn label(text: &str, classes: &[&str]) -> gtk::Label {
@@ -87,8 +91,15 @@ impl Inspector {
         root.add_named(&scrolled(&details), Some("details"));
         root.add_named(&scrolled(&focus_box), Some("focus"));
         root.add_named(&scrolled(&problem), Some("problem"));
+        let apart = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .spacing(14)
+            .css_classes(["stave-inspector"])
+            .build();
+        root.add_named(&scrolled(&apart), Some("apart"));
         root.set_visible_child_name("empty");
         Inspector {
+            apart,
             root,
             details,
             focus,
@@ -107,32 +118,195 @@ impl Inspector {
         self.callbacks.borrow_mut().on_source = Some(Rc::new(callback));
     }
 
+    /// Calls `callback` when "Save this view as glTF" is asked for.
+    pub fn connect_export(&self, callback: impl Fn() + 'static) {
+        self.callbacks.borrow_mut().on_export = Some(Rc::new(callback));
+    }
+
+    /// Shows "How it comes apart" (Exploded.dc.html): each stage's moves,
+    /// numbered by stage, and "Save this view as glTF".
+    pub fn show_apart(&self, steps: &[Step]) {
+        clear(&self.apart);
+        let head = gtk::Box::new(gtk::Orientation::Vertical, 4);
+        head.append(&label(
+            "PULLED APART",
+            &["stave-eyebrow", "stave-eyebrow-bold"],
+        ));
+        head.append(&label(
+            "How it comes apart",
+            &["stave-inspector-title", "stave-problem-title"],
+        ));
+        head.append(&label(
+            "Each move is the reverse of how that joint goes together.",
+            &["stave-description"],
+        ));
+        self.apart.append(&head);
+        let list = card();
+        if steps.is_empty() {
+            let line = gtk::Box::builder().css_classes(["stave-card-row"]).build();
+            line.append(&label(
+                "Nothing here comes apart: no part is joined to another.",
+                &[],
+            ));
+            list.append(&line);
+        }
+        for step in steps {
+            let line = gtk::Box::builder()
+                .spacing(10)
+                .css_classes(["stave-card-row"])
+                .build();
+            let number = gtk::Label::builder()
+                .label(step.stage.number().to_string())
+                .valign(gtk::Align::Start)
+                .css_classes([
+                    "stave-number",
+                    match step.stage {
+                        Stage::Assemblies => "first",
+                        Stage::Parts => "second",
+                    },
+                ])
+                .build();
+            line.append(&number);
+            let text = gtk::Label::builder()
+                .use_markup(true)
+                .label(format!(
+                    "<b>{}</b> {}",
+                    gtk::glib::markup_escape_text(&step.lead),
+                    gtk::glib::markup_escape_text(&step.text)
+                ))
+                .xalign(0.0)
+                .hexpand(true)
+                .wrap(true)
+                .wrap_mode(gtk::pango::WrapMode::WordChar)
+                .build();
+            line.append(&text);
+            list.append(&line);
+        }
+        list.update_property(&[gtk::accessible::Property::Label("How it comes apart")]);
+        self.apart.append(&list);
+        let save = card();
+        let line = gtk::Box::builder()
+            .spacing(10)
+            .css_classes(["stave-card-row"])
+            .build();
+        let words = label("Save this view as glTF", &[]);
+        words.set_hexpand(true);
+        line.append(&words);
+        let export = gtk::Button::builder()
+            .label("Export…")
+            .css_classes(["flat", "stave-link"])
+            .valign(gtk::Align::Center)
+            .tooltip_text("Save the parts as they are shown, pulled apart, as a glTF file")
+            .build();
+        let callbacks = self.callbacks.clone();
+        export.connect_clicked(move |_| {
+            let callback = callbacks.borrow().on_export.clone();
+            if let Some(callback) = callback {
+                callback();
+            }
+        });
+        line.append(&export);
+        save.append(&line);
+        self.apart.append(&save);
+        self.root.set_visible_child_name("apart");
+    }
+
     /// Shows focus mode's panel (it fills itself).
     pub fn show_focus(&self) {
         self.root.set_visible_child_name("focus");
     }
 
-    /// The problem slot: lane 3 replaces this with the problem's details.
-    /// For now it shows the message, the code, where and the help line.
-    pub fn show_problem(&self, problem: &Problem) {
+    /// Shows a problem's details (Problems.dc.html): the eyebrow
+    /// ("ERROR · MOTION"), a plain title, what happened, the text exactly
+    /// as `stave check` prints it, and the ways to fix it, each with a
+    /// "Show in text" link.
+    pub fn show_problem(&self, details: &Details) {
         clear(&self.problem);
-        let eyebrow = format!(
-            "{} · {}",
-            problem.severity.word().to_uppercase(),
-            problem.code.to_uppercase()
+        let head = gtk::Box::new(gtk::Orientation::Vertical, 4);
+        let eyebrow = label(
+            &details.eyebrow,
+            &["stave-eyebrow", "stave-problem-eyebrow"],
         );
-        let head = gtk::Box::new(gtk::Orientation::Vertical, 2);
-        head.append(&label(&eyebrow, &["stave-eyebrow"]));
-        head.append(&label(&problem.message, &["stave-inspector-title"]));
-        self.problem.append(&head);
-        if let Some(help) = &problem.help {
-            self.problem
-                .append(&label(&format!("help: {help}"), &["stave-description"]));
+        eyebrow.add_css_class(match details.severity {
+            Severity::Error => "error",
+            Severity::Warning => "warning",
+            Severity::Note => "note",
+        });
+        head.append(&eyebrow);
+        head.append(&label(
+            &details.title,
+            &["stave-inspector-title", "stave-problem-title"],
+        ));
+        if !details.explanation.is_empty() {
+            head.append(&label(&details.explanation, &["stave-description"]));
         }
-        if let Some(location) = &problem.location {
-            self.problem.append(&label(location, &["stave-footnote"]));
+        self.problem.append(&head);
+
+        let code = gtk::Label::builder()
+            .use_markup(true)
+            .label(diagnostic_markup(&details.text))
+            .xalign(0.0)
+            .wrap(true)
+            .wrap_mode(gtk::pango::WrapMode::WordChar)
+            .selectable(true)
+            .css_classes(["stave-code", "stave-diagnostic"])
+            .build();
+        code.update_property(&[gtk::accessible::Property::Label(&details.text)]);
+        self.problem.append(&code);
+
+        if !details.fixes.is_empty() {
+            let section = gtk::Box::new(gtk::Orientation::Vertical, 8);
+            section.append(&label("WAYS TO FIX IT", &["stave-section"]));
+            let card = card();
+            for fix in &details.fixes {
+                let line = gtk::Box::builder()
+                    .spacing(10)
+                    .css_classes(["stave-card-row"])
+                    .build();
+                line.append(
+                    &gtk::Label::builder()
+                        .label(&fix.text)
+                        .xalign(0.0)
+                        .hexpand(true)
+                        .wrap(true)
+                        .wrap_mode(gtk::pango::WrapMode::WordChar)
+                        .build(),
+                );
+                if let Some(location) = fix.location.clone() {
+                    line.append(&self.source_link(location));
+                }
+                card.append(&line);
+            }
+            section.append(&card);
+            section.append(&label(
+                "Edit the text and the check runs again when you save. Fixes are never applied without you.",
+                &["stave-footnote"],
+            ));
+            self.problem.append(&section);
+        } else if let Some(location) = details.location.clone() {
+            let link = self.source_link(location);
+            link.set_halign(gtk::Align::Start);
+            self.problem.append(&link);
         }
         self.root.set_visible_child_name("problem");
+    }
+
+    /// A "Show in text" link to a place in the text.
+    fn source_link(&self, location: SourceLocation) -> gtk::Button {
+        let link = gtk::Button::builder()
+            .label("Show in text")
+            .css_classes(["flat", "stave-link"])
+            .valign(gtk::Align::Center)
+            .tooltip_text("Show where to change it, in the Files view")
+            .build();
+        let callbacks = self.callbacks.clone();
+        link.connect_clicked(move |_| {
+            let callback = callbacks.borrow().on_source.clone();
+            if let Some(callback) = callback {
+                callback(location.clone());
+            }
+        });
+        link
     }
 
     /// Shows an inspection, or the hint when nothing is selected.
@@ -319,6 +493,81 @@ fn line_markup(line: &[stave_app::inspect::Token]) -> String {
         }
     }
     markup
+}
+
+/// A problem as `stave check` prints it, as Pango markup: the severity and
+/// code in red (amber for a warning), the arrows and gutter dim, the source
+/// line highlighted, the carets red, and `help:` green.
+fn diagnostic_markup(text: &str) -> String {
+    let escape = |text: &str| gtk::glib::markup_escape_text(text).to_string();
+    let span =
+        |colour: &str, text: &str| format!("<span foreground=\"{colour}\">{}</span>", escape(text));
+    let mut lines = Vec::new();
+    for (index, line) in text.lines().enumerate() {
+        if index == 0 {
+            let colour = if line.starts_with("warning") {
+                CODE.warning
+            } else {
+                CODE.error
+            };
+            let lines_head = match line.split_once(':') {
+                Some((head, rest)) => format!(
+                    "<span foreground=\"{colour}\" weight=\"500\">{}</span>:{}",
+                    escape(head),
+                    escape(rest)
+                ),
+                None => escape(line),
+            };
+            lines.push(lines_head);
+            continue;
+        }
+        let trimmed = line.trim_start();
+        let pad = line.get(..line.len() - trimmed.len()).unwrap_or("");
+        if trimmed.starts_with("-->") || trimmed.starts_with(":::") {
+            lines.push(span(CODE.comment, line));
+        } else if let Some(rest) = trimmed.strip_prefix("= help:") {
+            lines.push(format!(
+                "{}{}",
+                span(CODE.text, &format!("{pad}= help:")),
+                escape(rest)
+            ));
+        } else if let Some(rest) = trimmed.strip_prefix("= note:") {
+            lines.push(format!(
+                "{}{}",
+                span(CODE.comment, &format!("{pad}= note:")),
+                escape(rest)
+            ));
+        } else if let Some((gutter, source)) = line
+            .split_once(" | ")
+            .or_else(|| line.strip_suffix(" |").map(|gutter| (gutter, "")))
+        {
+            let numbered = {
+                let number = gutter.trim();
+                !number.is_empty() && number.chars().all(|c| c.is_ascii_digit())
+            };
+            let gutter = span(CODE.comment, &format!("{gutter} |"));
+            if numbered {
+                let tokens = stave_app::inspect::highlight(source);
+                lines.push(format!("{gutter} {}", line_markup(&tokens)));
+            } else if source.trim_start().starts_with(['^', '-']) {
+                let marks_end = source
+                    .char_indices()
+                    .find(|(_, c)| !matches!(c, ' ' | '^' | '-'))
+                    .map_or(source.len(), |(i, _)| i);
+                let (marks, message) = source.split_at(marks_end);
+                lines.push(format!(
+                    "{gutter} {}{}",
+                    span(CODE.error, marks),
+                    escape(message)
+                ));
+            } else {
+                lines.push(format!("{gutter} {}", escape(source)));
+            }
+        } else {
+            lines.push(escape(line));
+        }
+    }
+    lines.join("\n")
 }
 
 /// A rounded card holding rows.
