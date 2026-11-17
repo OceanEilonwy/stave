@@ -14,9 +14,11 @@
 //!   parts are a lathe [`Profile`] along the length; a `drill` removes one
 //!   (a hole). Their sizes and positions are exact; only the collision
 //!   tests and the meshes that use them work in floats.
-//! - **Angled cuts** (`dovetail_socket`, `dovetail_tail`, `outline`, and a
-//!   `slot` turned by an angle that isn't a multiple of 90deg) can't be made
-//!   yet. They are listed in [`Solid::skipped`] and the part is left uncut
+//! - A **`slot` turned by an angle** that isn't a multiple of 90deg is an
+//!   [`AngledSlot`]: exact measurements, tested in floats by assembly
+//!   sequences, not drawn yet, and left uncut by the overlap checks.
+//! - **Angled cuts** (`dovetail_socket`, `dovetail_tail`, `outline`) can't
+//!   be made yet. They are listed in [`Solid::skipped`] and the part is left uncut
 //!   there; the checker warns and leaves the parts they join out of the fit
 //!   check.
 //!
@@ -340,6 +342,33 @@ fn push_zone(stations: &mut Vec<ProfileStation>, zone: &Zone) {
     }
 }
 
+/// A slot turned in its face by an angle that isn't a multiple of 90deg
+/// (the chidori's diagonal slots). It can't be a box in the part's axes,
+/// so it is kept as exact measurements and tested in floats: its walls
+/// are not drawn yet, and the overlap checks leave it uncut (more wood
+/// than there is), but assembly sequences use it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AngledSlot {
+    /// The axis of the face it is cut from (it runs through the part along
+    /// this axis over `depth`).
+    pub face_axis: PartAxis,
+    /// The local axis the angle is measured from, and whether its positive
+    /// direction is the one the angle starts from.
+    pub base: (PartAxis, bool),
+    /// The local axis the angle turns toward, likewise.
+    pub next: (PartAxis, bool),
+    /// The angle from `base` toward `next`.
+    pub angle: Angle,
+    /// The footprint's centre (the face axis is left at 0).
+    pub centre: Local,
+    /// Its width.
+    pub width: Length,
+    /// From the centre out one side only (toward the angle).
+    pub from_centre: bool,
+    /// The range it covers along the face axis.
+    pub depth: (Length, Length),
+}
+
 /// Why a cut was left unmade.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Unsupported {
@@ -399,6 +428,7 @@ pub struct Solid {
     rods: Vec<Rod>,
     profile: Option<Profile>,
     holes: Vec<Rod>,
+    slots: Vec<AngledSlot>,
     skipped: Vec<Skipped>,
 }
 
@@ -475,6 +505,7 @@ impl Solid {
             rods: Vec::new(),
             profile,
             holes: Vec::new(),
+            slots: Vec::new(),
             skipped: Vec::new(),
         };
         for (index, cut) in part.cuts.iter().enumerate() {
@@ -503,6 +534,11 @@ impl Solid {
     /// The holes drilled in the part.
     pub fn holes(&self) -> &[Rod] {
         &self.holes
+    }
+
+    /// The slots cut at an angle.
+    pub fn slots(&self) -> &[AngledSlot] {
+        &self.slots
     }
 
     /// The cuts that could not be made.
@@ -684,7 +720,19 @@ impl Solid {
             } => {
                 let quarter = Angle::from_deg(90).microdeg();
                 if angle.microdeg().rem_euclid(quarter) != 0 {
-                    return Err(Unsupported::AngledSlot);
+                    let (base, next) = slot_axes(part, &cut.place, design, cut.face.axis)
+                        .ok_or(Unsupported::AngledSlot)?;
+                    self.slots.push(AngledSlot {
+                        face_axis: cut.face.axis,
+                        base,
+                        next,
+                        angle: *angle,
+                        centre: place_centre(part, &cut.place, cut.face.axis),
+                        width: *width,
+                        from_centre: *from_centre,
+                        depth: depth_range(size, cut.face, *depth),
+                    });
+                    return Ok(());
                 }
                 let turns = angle.microdeg().div_euclid(quarter).rem_euclid(4);
                 let (run, sign) = slot_run(part, &cut.place, design, cut.face.axis, turns)
@@ -871,6 +919,33 @@ fn slot_run(
     }
     let along = part.pose.orientation.direction(axis);
     Some((axis, along == direction))
+}
+
+/// The local axes an angled slot's angle is measured from and toward
+/// (see `slot_run`), each with whether its positive local direction is the
+/// world direction the angle uses.
+fn slot_axes(
+    part: &Part,
+    place: &CutPlace,
+    design: &SolvedDesign,
+    face_axis: PartAxis,
+) -> Option<((PartAxis, bool), (PartAxis, bool))> {
+    let other = entering_part(place, design)?;
+    let orientation = other.pose.orientation;
+    let face_world = part.pose.orientation.direction(face_axis).axis();
+    let (base, next) = if orientation.length().axis() == face_world {
+        (orientation.width(), orientation.thickness())
+    } else if orientation.width().axis() == face_world {
+        (orientation.length(), orientation.thickness())
+    } else {
+        (orientation.length(), orientation.width())
+    };
+    let local = |direction: stave_lang::placement::Direction| {
+        let axis = part.pose.orientation.part_axis(direction.axis());
+        (axis, part.pose.orientation.direction(axis) == direction)
+    };
+    let (base, next) = (local(base), local(next));
+    (base.0 != face_axis && next.0 != face_axis).then_some((base, next))
 }
 
 /// Where the holes of a `drill` go, on the two axes across the face's.

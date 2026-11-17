@@ -44,6 +44,8 @@ mod build;
 pub mod collide;
 mod mesh;
 pub mod render;
+mod sample;
+pub mod sequence;
 pub mod solid;
 pub mod sweep;
 

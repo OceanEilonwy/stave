@@ -426,7 +426,7 @@ fn clear(region: WorldBox, holes: &[WorldRod]) -> Vec<WorldBox> {
 
 /// How far a disc goes into a rectangle on the plane across an axis:
 /// the depth and the axis along which it is shortest to push it out.
-fn disc_into_rectangle(
+pub(crate) fn disc_into_rectangle(
     centre: [f64; 2],
     radius: f64,
     low: [f64; 2],
