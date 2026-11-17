@@ -5,7 +5,7 @@ use glam::DVec2;
 use super::plan::{Body, Dyad, Locus, Mechanism, SlotInLink, Step, Unknown};
 use super::{
     DEAD_POINT_MARGIN, Drive, DriveAmount, DriveValue, MechanismError, MemberId,
-    SAMPLE_STEP_MICRODEG, SAMPLE_STEP_NM,
+    PROOF_STEP_MICRODEG, PROOF_STEP_NM, SAMPLE_STEP_MICRODEG, SAMPLE_STEP_NM, proof,
 };
 use crate::render;
 
@@ -113,14 +113,142 @@ impl Speed {
 pub struct Path {
     mechanism: Mechanism,
     speeds: Vec<Speed>,
+    proof: Proof,
+}
+
+/// What [`Path::new`]'s proof found over the whole range (see
+/// `proof.rs`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Proof {
+    /// The least margin, in nanometres, proven for any step anywhere in
+    /// the range: never less than [`DEAD_POINT_MARGIN`]. `None` when no
+    /// step has two answers.
+    pub margin: Option<f64>,
+    /// The most times an interval between two samples was halved before
+    /// it was proven (0 when every one was proven at once).
+    pub halvings: u32,
+}
+
+/// One drive value and what the steps give there.
+#[derive(Debug, Clone)]
+struct Sample {
+    /// Exact units (micro-degrees or nanometres), absolute.
+    units: i64,
+    /// Radians or nanometres past the drive's start.
+    relative: f64,
+    evaluation: Evaluation,
+}
+
+impl Sample {
+    /// The steps at `units`; a step whose paths don't meet is a dead
+    /// point there.
+    fn at(mechanism: &Mechanism, units: i64) -> Result<Sample, MechanismError> {
+        let (from, _) = mechanism.range_units();
+        let relative_units = units.checked_sub(from).ok_or(MechanismError::Overflow)?;
+        let relative = relative_amount(mechanism, relative_units);
+        let evaluation = evaluate(mechanism, relative).map_err(|failure| match failure {
+            Failure::Unreachable(index) => {
+                dead_point(mechanism, index, mechanism.value_of_units(units))
+            }
+            Failure::Internal => MechanismError::Internal,
+        })?;
+        Ok(Sample {
+            units,
+            relative,
+            evaluation,
+        })
+    }
+}
+
+/// The least margin of any step at the samples alone, every
+/// [`SAMPLE_STEP_MICRODEG`] or [`SAMPLE_STEP_NM`], as the check was before
+/// the proof between samples: for tests that show what sampling misses.
+#[cfg(test)]
+pub(super) fn least_sampled_margin(mechanism: &Mechanism) -> Option<f64> {
+    let (from, to) = mechanism.range_units();
+    let span = i128::from(to) - i128::from(from);
+    let step = i128::from(match mechanism.drive() {
+        Drive::Turn { .. } => SAMPLE_STEP_MICRODEG,
+        Drive::Travel { .. } => SAMPLE_STEP_NM,
+    });
+    let samples = ((span.abs() + step - 1) / step).max(1);
+    (0..=samples)
+        .filter_map(|k| {
+            let units = i64::try_from(span * k / samples).ok()?;
+            let evaluation = evaluate(mechanism, relative_amount(mechanism, units)).ok()?;
+            evaluation
+                .crossings
+                .iter()
+                .flatten()
+                .map(|crossing| crossing.margin)
+                .reduce(f64::min)
+        })
+        .reduce(f64::min)
+}
+
+/// Proves the interval between two samples clear of every dead point,
+/// halving it where it can't, the first half first (see
+/// `proof.rs`).
+fn prove_between(
+    mechanism: &Mechanism,
+    start: &Sample,
+    end: &Sample,
+    halvings: u32,
+    found: &mut Proof,
+) -> Result<(), MechanismError> {
+    let margin = render::nm(DEAD_POINT_MARGIN);
+    let width = (end.relative - start.relative).abs();
+    let outcome = proof::prove(
+        mechanism,
+        width,
+        margin,
+        &start.evaluation.crossings,
+        &end.evaluation.crossings,
+    )
+    .map_err(|proof::Fault| MechanismError::Internal)?;
+    match outcome {
+        proof::Outcome::Proven(least) => {
+            found.margin = match (found.margin, least) {
+                (Some(a), Some(b)) => Some(a.min(b)),
+                (a, b) => a.or(b),
+            };
+            found.halvings = found.halvings.max(halvings);
+            Ok(())
+        }
+        proof::Outcome::Unproven { step, at_end } => {
+            let finest = match mechanism.drive() {
+                Drive::Turn { .. } => PROOF_STEP_MICRODEG,
+                Drive::Travel { .. } => PROOF_STEP_NM,
+            };
+            let apart = i128::from(end.units) - i128::from(start.units);
+            if apart.abs() <= i128::from(finest) {
+                let nearer = if at_end { end.units } else { start.units };
+                return Err(MechanismError::NearDeadPoint {
+                    members: step_members(mechanism, step),
+                    at: mechanism.value_of_units(nearer),
+                });
+            }
+            let middle = i128::from(start.units) + apart / 2;
+            let middle = i64::try_from(middle).map_err(|_| MechanismError::Overflow)?;
+            let middle = Sample::at(mechanism, middle)?;
+            let deeper = halvings.saturating_add(1);
+            prove_between(mechanism, start, &middle, deeper, found)?;
+            prove_between(mechanism, &middle, end, deeper, found)
+        }
+    }
 }
 
 /// One step's two crossings and how far it is from a dead point.
 #[derive(Debug, Clone, Copy)]
-struct Crossing {
+pub(super) struct Crossing {
     chosen: DVec2,
     other: DVec2,
-    margin: f64,
+    /// How far from a dead point, in nanometres (see
+    /// [`DEAD_POINT_MARGIN`]).
+    pub(super) margin: f64,
+    /// For a circle and a line, how far the circle's centre is from the
+    /// line's point (nanometres); zero otherwise.
+    pub(super) spread: f64,
 }
 
 /// A pin's place along its slot: 0 at `from`, 1 at `to`.
@@ -176,6 +304,7 @@ fn circles(c1: DVec2, r1: f64, c2: DVec2, r2: f64, side: f64) -> Option<Crossing
         chosen: c1 + unit * along + unit.perp() * (side * half),
         other: c1 + unit * along + unit.perp() * (-side * half),
         margin,
+        spread: 0.0,
     })
 }
 
@@ -200,6 +329,7 @@ fn circle_line(
         chosen: foot + unit * (side * half),
         other: foot + unit * (-side * half),
         margin: radius - distance,
+        spread: (centre - point).length(),
     })
 }
 
@@ -503,7 +633,10 @@ fn wrapped(angle: f64) -> f64 {
 
 impl Path {
     /// Runs `mechanism` through its range and checks it (see the module
-    /// docs).
+    /// docs): every sample, and between each two samples a proof that no
+    /// step comes within [`DEAD_POINT_MARGIN`] of a dead point (see
+    /// `proof.rs`), halving an interval it can't prove down
+    /// to [`PROOF_STEP_MICRODEG`] or [`PROOF_STEP_NM`].
     pub fn new(mechanism: Mechanism) -> Result<Path, MechanismError> {
         let (from, to) = mechanism.range_units();
         let span = i128::from(to) - i128::from(from);
@@ -516,7 +649,11 @@ impl Path {
         let margin = render::nm(DEAD_POINT_MARGIN);
         let count = mechanism.body_count();
         let mut fastest = vec![(0.0f64, 0.0f64); count];
-        let mut previous: Option<(f64, Evaluation)> = None;
+        let mut proof = Proof {
+            margin: None,
+            halvings: 0,
+        };
+        let mut previous: Option<Sample> = None;
         for k in 0..=samples {
             let relative_units = span
                 .checked_mul(k)
@@ -527,11 +664,8 @@ impl Path {
                 .checked_add(relative_units)
                 .ok_or(MechanismError::Overflow)?;
             let at = mechanism.value_of_units(value);
-            let relative = relative_amount(&mechanism, relative_units);
-            let evaluation = evaluate(&mechanism, relative).map_err(|failure| match failure {
-                Failure::Unreachable(index) => dead_point(&mechanism, index, at),
-                Failure::Internal => MechanismError::Internal,
-            })?;
+            let sample = Sample::at(&mechanism, value)?;
+            let evaluation = &sample.evaluation;
             for (index, crossing) in evaluation.crossings.iter().enumerate() {
                 if let Some(crossing) = crossing
                     && crossing.margin < margin
@@ -548,9 +682,12 @@ impl Path {
                     });
                 }
             }
-            if let Some((before, last)) = &previous {
-                for (index, (now, then)) in
-                    evaluation.crossings.iter().zip(&last.crossings).enumerate()
+            if let Some(last) = &previous {
+                for (index, (now, then)) in evaluation
+                    .crossings
+                    .iter()
+                    .zip(&last.evaluation.crossings)
+                    .enumerate()
                 {
                     if let (Some(now), Some(then)) = (now, then)
                         && (now.other - then.chosen).length() < (now.chosen - then.chosen).length()
@@ -561,10 +698,13 @@ impl Path {
                         });
                     }
                 }
-                let change = (relative - before).abs();
+                prove_between(&mechanism, last, &sample, 0, &mut proof)?;
+                let change = (sample.relative - last.relative).abs();
                 if change > 0.0 {
-                    for ((speed, now), then) in
-                        fastest.iter_mut().zip(&evaluation.poses).zip(&last.poses)
+                    for ((speed, now), then) in fastest
+                        .iter_mut()
+                        .zip(&evaluation.poses)
+                        .zip(&last.evaluation.poses)
                     {
                         let turn = wrapped(now.angle - then.angle).abs() / change;
                         let offset = (now.offset - then.offset).length() / change;
@@ -572,7 +712,7 @@ impl Path {
                     }
                 }
             }
-            previous = Some((relative, evaluation));
+            previous = Some(sample);
         }
         let speeds = fastest
             .into_iter()
@@ -581,7 +721,17 @@ impl Path {
                 offset: offset * 1.1 + 1_000.0,
             })
             .collect();
-        Ok(Path { mechanism, speeds })
+        Ok(Path {
+            mechanism,
+            speeds,
+            proof,
+        })
+    }
+
+    /// What the proof between samples found: the least margin it proved
+    /// and how finely it had to halve.
+    pub fn proof(&self) -> Proof {
+        self.proof
     }
 
     /// The mechanism.
