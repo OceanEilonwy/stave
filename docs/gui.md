@@ -199,8 +199,11 @@ PDF doesn't exist yet, and the button says so honestly.
   build (`buildable()`: a library, no parts, a folder that can't be
   opened, errors), its tooltip saying why (`build_tooltip()`). The title
   is `Session::title()`. The
-  main menu opens a project folder (Ctrl+O), checks again (Ctrl+R) and
-  sets the style (follow system, light, dark).
+  main menu opens a project folder (Ctrl+O), checks again (Ctrl+R),
+  frames everything, exports the view as glTF ("Export View as glTF…",
+  `win.export-view`: asks where and writes the view as posed, pulled
+  apart or opened, with `stave_app::export_view::save_glb`, the same file
+  `stave export` writes) and sets the style (follow system, light, dark).
 - **Parts sidebar** (`TreeSidebar`): the carcass, then assemblies with
   their motion ("turns 110°", "slides out 500 mm", "mirror of door_l").
   Rows that are the same part (one stock and size under one name, mirror
@@ -279,18 +282,10 @@ free of its warning.
   first, then parts) and redraws the toolbar; the toggle stays on at 0
   until it is switched off. The status bar says "Pulled apart · 60%" while
   nothing is selected. Hidden in focus mode and while a problem is posed.
-- **How it comes apart** (Exploded.dc.html): while Pull apart is on and
-  nothing is selected, the inspector lists the moves of
-  `stave_app::apart::steps`, read off the scene's poses at 0, ½ and 1 so
-  the words say what the picture does: stage 1 the assemblies moving out
-  whole ("Drawers slide forward on their slides until they clear the
-  carcass", "Doors come forward off their hinges. Cups go with the door,
-  plates stay on the side"), stage 2 the parts coming out of their
-  joints, per kind of assembly and then the carcass ("Carcass comes
-  apart: back slides out of its rabbet, divider and shelf slide out of
-  their dados, foot[4] drop out of their round tenon joints"). "Save this
-  view as glTF" asks where and writes the view as posed
-  (`apart::save_glb`, the same file `stave export` writes).
+- **Pulled apart, the inspector stays as it is**: with nothing selected
+  it shows "Nothing selected", and a selected part shows its usual
+  account. The mockup's "How it comes apart" panel (Exploded.dc.html) was
+  removed: its step list added little to the picture.
 - **Camera buttons** (top right, `CameraToolbar`): fit is `win.frame`
   (the selection, or everything); front looks from the front, a little
   above, framing everything; turn swings the view half way round.

@@ -1,98 +1,14 @@
-//! "How it comes apart" read off the exploded poses, and the view's empty
-//! states.
+//! The view's empty states: still checking, errors, a folder that can't
+//! be opened, and a library folder that lists what it defines.
 
 use std::path::{Path, PathBuf};
 
-use stave_app::apart::{self, Stage};
-use stave_app::check::{self, Checked, Outcome};
+use stave_app::check;
 use stave_app::empty::{self, LibraryGroup, Reason};
 use stave_app::session::{Command, Event, Session};
 
 fn workspace() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
-}
-
-fn checked(folder: &Path) -> Checked {
-    match check::run(folder) {
-        Outcome::Checked(checked) => *checked,
-        Outcome::CantOpen { message, .. } => panic!("can't open {}: {message}", folder.display()),
-    }
-}
-
-fn lines(name: &str) -> Vec<String> {
-    let checked = checked(&workspace().join("examples").join(name));
-    let (design, graph) = checked.drawable().expect("the design solves");
-    let scene = graph.scenes.first().expect("a scene");
-    apart::steps(design, graph, scene)
-        .into_iter()
-        .map(|step| format!("{} {}: {}", step.stage.number(), step.lead, step.text))
-        .collect()
-}
-
-#[test]
-fn the_cabinet_comes_apart_in_two_stages() {
-    let lines = lines("clothing_cabinet");
-    println!("{lines:#?}");
-    assert_eq!(
-        lines[0],
-        "1 Drawers: slide forward on their slides until they clear the carcass"
-    );
-    assert_eq!(
-        lines[1],
-        "1 Doors: come forward off their hinges. Cups go with the door, plates stay on the side"
-    );
-    assert!(
-        lines[2].starts_with("2 Drawer boxes: come apart: "),
-        "{}",
-        lines[2]
-    );
-    assert!(
-        lines[3].starts_with("2 Door frames: come apart: "),
-        "{}",
-        lines[3]
-    );
-    assert!(
-        lines[4].starts_with("2 Carcass: comes apart: "),
-        "{}",
-        lines[4]
-    );
-    assert_eq!(lines.len(), 5);
-}
-
-#[test]
-fn a_design_without_assemblies_has_only_its_parts_stage() {
-    let checked = checked(&workspace().join("examples/stool"));
-    let (design, graph) = checked.drawable().expect("the design solves");
-    let steps = apart::steps(design, graph, graph.scenes.first().expect("a scene"));
-    println!("{steps:#?}");
-    assert!(!steps.is_empty());
-    assert!(steps.iter().all(|step| step.stage == Stage::Parts));
-    assert_eq!(steps[0].lead, "Carcass");
-    assert!(steps[0].text.contains("out of"), "{}", steps[0].text);
-    // The rungs come out of their sockets as well as the legs off the seat.
-    assert!(steps[0].text.contains("leg[4]"), "{}", steps[0].text);
-    assert!(
-        steps[0].text.contains("side_rung[left, right]"),
-        "{}",
-        steps[0].text
-    );
-}
-
-#[test]
-fn the_steps_are_the_same_every_time() {
-    assert_eq!(lines("nightstand"), lines("nightstand"));
-}
-
-#[test]
-fn the_view_can_be_saved_as_gltf() {
-    let checked = checked(&workspace().join("examples/stool"));
-    let (_, graph) = checked.drawable().expect("the design solves");
-    let posed = graph.pose_with(graph.scenes.first().expect("a scene"), &[], 1.0);
-    let path = std::env::temp_dir().join(format!("stave-apart-{}.glb", std::process::id()));
-    apart::save_glb(graph, &posed, &path).expect("saved");
-    let bytes = std::fs::read(&path).expect("read back");
-    std::fs::remove_file(&path).ok();
-    assert_eq!(bytes.get(..4), Some(&b"glTF"[..]));
 }
 
 fn session_for(folder: PathBuf) -> Session {

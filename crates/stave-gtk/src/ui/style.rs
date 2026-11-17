@@ -290,7 +290,6 @@ button.stave-problem-row.selected { background: @view_bg_color; color: @view_fg_
 .stave-eyebrow.stave-problem-eyebrow.error { color: @error_color; }
 .stave-eyebrow.stave-problem-eyebrow.warning { color: @warning_color; }
 .stave-number { background: alpha(@accent_bg_color, 0.2); color: @accent_color; }
-.stave-number.second { background: alpha(currentColor, 0.1); color: alpha(currentColor, 0.85); }
 .stave-card .stave-value.good { color: @success_color; }
 .stave-card .stave-value.bad { color: @error_color; }
 "#;

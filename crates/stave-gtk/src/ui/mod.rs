@@ -857,9 +857,6 @@ impl Window {
         }
         match &problem {
             Some((_, details)) => widgets.inspector.show_problem(details),
-            None if inspection.is_none() && selection.is_none() && self.pulled_apart() => {
-                self.show_apart_panel();
-            }
             None => widgets.inspector.show(inspection.as_ref()),
         }
         // Pose a problem where it happens, or offer to open the selection.
@@ -1697,26 +1694,6 @@ impl Window {
         });
     }
 
-    /// Whether "Pull apart" is on.
-    fn pulled_apart(&self) -> bool {
-        self.state.borrow().pull_apart || self.session.borrow().explode().get() > 0.0
-    }
-
-    /// The inspector's "How it comes apart", read off the scene's exploded
-    /// poses.
-    fn show_apart_panel(&self) {
-        let steps = {
-            let session = self.session.borrow();
-            match (session.drawable(), session.scene_entry()) {
-                (Some((design, graph)), Some(entry)) => {
-                    stave_app::apart::steps(design, graph, entry)
-                }
-                _ => Vec::new(),
-            }
-        };
-        self.widgets.inspector.show_apart(&steps);
-    }
-
     /// Saves the view as posed as a glTF file, asking where.
     fn export_view(self: &Rc<Self>) {
         let name = {
@@ -1729,10 +1706,10 @@ impl Window {
                 .chars()
                 .map(|c| if c.is_alphanumeric() { c } else { '_' })
                 .collect();
-            format!("{slug}_apart.glb")
+            format!("{slug}_view.glb")
         };
         let dialog = gtk::FileDialog::builder()
-            .title("Save this view as glTF")
+            .title("Export View as glTF")
             .initial_name(name)
             .modal(true)
             .build();
@@ -1748,7 +1725,7 @@ impl Window {
                     let state = window.state.borrow();
                     match (session.drawable(), state.posed.as_ref()) {
                         (Some((_, graph)), Some(posed)) => {
-                            stave_app::apart::save_glb(graph, posed, &path)
+                            stave_app::export_view::save_glb(graph, posed, &path)
                                 .map_err(|error| error.to_string())
                         }
                         _ => Err("there is nothing to save yet".to_owned()),
@@ -1779,11 +1756,6 @@ impl Window {
             } else {
                 String::new()
             });
-            if self.pulled_apart() {
-                self.show_apart_panel();
-            } else {
-                self.widgets.inspector.show(None);
-            }
         }
         self.repose();
         self.request_render();
@@ -2092,6 +2064,8 @@ impl Window {
         let this = self.clone();
         add("frame", Box::new(move || this.frame()));
         let this = self.clone();
+        add("export-view", Box::new(move || this.export_view()));
+        let this = self.clone();
         add(
             "problems",
             Box::new(move || {
@@ -2337,12 +2311,6 @@ impl Window {
         widgets.inspector.connect_focus(move |target| {
             if let Some(window) = window.upgrade() {
                 window.dispatch(Command::Focus(target));
-            }
-        });
-        let window = Rc::downgrade(self);
-        widgets.inspector.connect_export(move || {
-            if let Some(window) = window.upgrade() {
-                window.export_view();
             }
         });
         let window = Rc::downgrade(self);
@@ -2827,6 +2795,7 @@ fn main_menu() -> gio::Menu {
     project.append(Some("Open Project…"), Some("win.open"));
     project.append(Some("Check Again"), Some("win.check"));
     project.append(Some("Frame Everything"), Some("win.frame"));
+    project.append(Some("Export View as glTF…"), Some("win.export-view"));
     menu.append_section(None, &project);
     let style = gio::Menu::new();
     style.append(Some("Follow System Style"), Some("win.style::system"));

@@ -17,7 +17,6 @@ stave-scene = { path = "../stave-scene" }
 stave-schema = { path = "../stave-schema" }
 thiserror = "2"
 notify = "8"
-glam = "0.30"
 
 [dev-dependencies]
 glam = "0.30"

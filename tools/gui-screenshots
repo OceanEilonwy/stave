@@ -61,7 +61,7 @@ shot $window/checking.png tests/broken/door_hits_side --theme light --checking -
 # The build button pressed: its check running.
 shot $window/building.png examples/stool --theme light --select 'leg[front_left]' --building
 # Pulled apart, light and dark: drawers and doors out first, then every
-# part out of its joints, and "How it comes apart" (Exploded).
+# part out of its joints; the inspector stays as it is with nothing selected.
 shot $window/exploded.png $cabinet --theme light --explode 1
 shot $window/exploded_dark.png $cabinet --theme dark --explode 1
 # The stool pulled apart: the legs drop off the seat and out at their
