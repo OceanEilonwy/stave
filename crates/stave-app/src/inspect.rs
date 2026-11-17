@@ -9,7 +9,8 @@ use stave_lang::{SourceMap, SyntaxKind};
 use stave_model::Model;
 use stave_model::defs::Decl;
 use stave_model::solved::{
-    AssemblyId, CutSource, HardwareBase, Motion, Part, PartId, PartOrigin, Shape, SolvedDesign,
+    AssemblyId, CutKind, CutSource, HardwareBase, Motion, Part, PartId, PartOrigin, Shape,
+    SolvedDesign,
 };
 use stave_scene::Item;
 use stave_schema::species::Srgb;
@@ -98,6 +99,9 @@ pub struct TreeEntry {
     pub detail: Option<String>,
     /// What it stands for; selecting the row selects the first.
     pub items: NonEmpty<Item>,
+    /// Each item's own label (`rail[top]`), in the order of `items`, for
+    /// showing a group's members one by one.
+    pub member_labels: Vec<String>,
     /// Its mark.
     pub swatch: Swatch,
     /// Every full name it stands for, for searching.
@@ -319,6 +323,7 @@ fn group(singles: Vec<Single>) -> Vec<TreeEntry> {
             let label = group_label(&labels);
             Some(TreeEntry {
                 label,
+                member_labels: labels,
                 detail: first.detail,
                 items,
                 swatch: first.swatch,
@@ -328,8 +333,8 @@ fn group(singles: Vec<Single>) -> Vec<TreeEntry> {
         .collect()
 }
 
-/// `stile[hinge]`; `feet[4]` for numbered members; `hinges[lower, upper]`
-/// for named ones; `side_l, side_r` otherwise.
+/// `stile[hinge]`; `feet[4]` for numbered members or more than two;
+/// `hinges[lower, upper]` for two named ones; `side_l, side_r` otherwise.
 fn group_label(labels: &[String]) -> String {
     let [first, ..] = labels else {
         return String::new();
@@ -345,7 +350,7 @@ fn group_label(labels: &[String]) -> String {
         .collect();
     match (base, indices) {
         (Some(base), Some(indices)) => {
-            if indices.iter().all(|i| i.parse::<u32>().is_ok()) {
+            if indices.len() > 2 || indices.iter().all(|i| i.parse::<u32>().is_ok()) {
                 format!("{base}[{}]", indices.len())
             } else {
                 format!("{base}[{}]", indices.join(", "))
@@ -747,6 +752,18 @@ fn source_of(
     snippet(&checked.opened.sources, &checked.folder, decl)
 }
 
+/// Cuts the hardware on a part makes, of one kind and size.
+struct HardwareCut {
+    /// "cup bore", "screw hole".
+    what: String,
+    /// Its size: "35 mm across, 12.8 mm deep".
+    value: String,
+    /// How many.
+    count: usize,
+    /// The hardware making them.
+    hardware: Vec<stave_model::solved::HardwareId>,
+}
+
 /// The declaration behind a part.
 fn part_decl(model: &Model, id: PartId) -> Option<&Decl> {
     let instance = model
@@ -873,7 +890,7 @@ fn inspect_part(checked: &Checked, design: &SolvedDesign, id: PartId) -> Option<
         });
     }
     // The hardware's cuts, grouped by hardware kind and cut.
-    let mut cuts: Vec<(String, String, Vec<stave_model::solved::HardwareId>)> = Vec::new();
+    let mut cuts: Vec<HardwareCut> = Vec::new();
     for cut in &part.cuts {
         let CutSource::Hardware { hardware } = cut.source else {
             continue;
@@ -881,39 +898,59 @@ fn inspect_part(checked: &Checked, design: &SolvedDesign, id: PartId) -> Option<
         let Some(found) = design.hardware.get(hardware.index()) else {
             continue;
         };
-        let row = focus::cut_row("", &cut.kind);
+        // Holes are counted one by one: a pull's two screw holes are two.
+        let (single, holes) = match &cut.kind {
+            CutKind::Drill {
+                diameter,
+                depth,
+                count,
+            } => (
+                CutKind::Drill {
+                    diameter: *diameter,
+                    depth: *depth,
+                    count: 1,
+                },
+                usize::try_from(*count).unwrap_or(1).max(1),
+            ),
+            other => (other.clone(), 1),
+        };
+        let row = focus::cut_row("", &single);
         let what = match (found.base, row.label) {
             (HardwareBase::Hinge, "Hole") if found.mechanism.is_some() => "cup bore",
             (HardwareBase::Hinge, _) => "hinge recess",
-            (HardwareBase::Pull, "Hole") => "screw hole",
-            (HardwareBase::Slide, "Hole") => "screw hole",
+            (HardwareBase::Pull | HardwareBase::Slide, "Hole") => "screw hole",
             (_, other) => other,
         }
         .to_lowercase();
         match cuts
             .iter_mut()
-            .find(|(w, value, _)| *w == what && *value == row.value)
+            .find(|cut| cut.what == what && cut.value == row.value)
         {
-            Some((_, _, list)) => {
-                if !list.contains(&hardware) {
-                    list.push(hardware);
+            Some(cut) => {
+                cut.count = cut.count.saturating_add(holes);
+                if !cut.hardware.contains(&hardware) {
+                    cut.hardware.push(hardware);
                 }
             }
-            None => cuts.push((what, row.value, vec![hardware])),
+            None => cuts.push(HardwareCut {
+                what,
+                value: row.value,
+                count: holes,
+                hardware: vec![hardware],
+            }),
         }
     }
-    for (what, value, hardware) in cuts {
-        let count = hardware.len();
-        let lead = if count == 1 {
-            format!("1 {what}")
+    for cut in cuts {
+        let lead = if cut.count == 1 {
+            format!("1 {}", cut.what)
         } else {
-            format!("{count} {what}s")
+            format!("{} {}s", cut.count, cut.what)
         };
         connections.push(Connection {
             swatch: hardware_swatch(),
             lead,
-            rest: format!("· {value}"),
-            target: hardware.first().map(|h| Target::Hardware(*h)),
+            rest: format!("· {}", cut.value),
+            target: cut.hardware.first().map(|h| Target::Hardware(*h)),
         });
     }
     let source = source_of(checked, |m| part_decl(m, id), part.assembly);
