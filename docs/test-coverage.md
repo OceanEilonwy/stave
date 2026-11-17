@@ -421,6 +421,7 @@ pinned down the same way.
 |---|---|---|
 | A require is checked at the current values | `app/spec_declarations::a_failing_require_is_reported_on_its_line_with_its_message`, `broken/require` | covered |
 | A require must hold over the whole range of every param it depends on | `broken/require_range` | pending: needs z3 (layer 6) |
+| A kind's failed equality rule gets help from a search of its `within` lists: the listed values that fit, one param at a time with the others as given, or that none fits; ranges and order comparisons keep the general help | `app/spec_joints::a_failed_equality_rule_offers_the_values_from_the_kinds_lists_that_fit`, `app/spec_joints::the_search_tries_one_param_at_a_time_with_the_others_as_given`, `app/spec_joints::a_failed_equality_rule_says_when_no_listed_value_fits`, `app/spec_joints::the_search_only_offers_listed_values_and_only_for_equality`, `app/suggestions::a_failed_kind_rule_offers_a_value_from_the_kinds_list`, `app/suggestions::a_failed_kind_rule_says_when_no_listed_value_fits`, `broken/require_help`, `broken/require_no_fit` | covered |
 | Checking runs in layers; a later layer skips items with earlier errors | `app/features::a_name_error_poisons_only_its_item`, `app/features::a_syntax_error_leaves_out_only_its_item` | covered |
 
 ### Diagnostics
@@ -514,7 +515,7 @@ One row per code of the grammar's Diagnostics table and its warnings.
 | `slide-gap` | 4 | covered | `broken/drawer_does_not_fit` | `app/fit::a_drawer_too_wide_for_its_slides` |
 | `hinge-overlay` | 4 | covered | `broken/hinge_overlay` | `app/fit::a_door_too_far_out_for_its_cup_hinges` |
 | `motion` | 5 | covered | `broken/scene_pose_clash`, `broken/door_hits_side`, `broken/doors_hit_each_other`, `broken/knob_hits_door`, `broken/drawer_hits_divider`, `broken/lid_hits_back`, `broken/double_doors_no_gap` | `app/fit::double_doors_with_no_gap_are_told_the_gap_they_need`, `app/fit::a_lid_that_hits_the_wall_in_a_scene`, `app/fit::a_door_whose_hinge_edge_swings_into_a_wall`, `app/fit::two_doors_on_one_divider_hit_each_other`, `app/fit::a_door_that_swings_into_a_knob`, `app/fit::a_drawer_that_catches_on_a_rail`, `app/fit::a_lid_that_drops_onto_the_back` |
-| `require` | 6 | covered | `broken/require` | `app/spec_declarations::a_failing_require_is_reported_on_its_line_with_its_message`, `app/features::a_failing_kind_require_is_reported_at_the_joint` |
+| `require` | 6 | covered | `broken/require`, `broken/require_help`, `broken/require_no_fit` | `app/spec_declarations::a_failing_require_is_reported_on_its_line_with_its_message`, `app/features::a_failing_kind_require_is_reported_at_the_joint` |
 | `require-range` | 6 | pending: checking over a param's whole range needs z3, not built yet | `broken/require_range` | — |
 | `range` | 6 | pending: range checks need z3, not built yet | — | — |
 | `order` | 7 | partial: reported for a joint's insert steps that can't be undone; buildability (the order of cuts, layer 7) is not built yet | `broken/tenon_wrong_way`, `broken/chidori_no_flats`, `broken/no_build_order` | `app/fit::a_tenon_pushed_in_the_wrong_way`, `app/fit::a_chidori_without_flats_cannot_come_apart` |

@@ -32,6 +32,7 @@
 mod build;
 mod eval;
 mod hardware;
+mod help;
 mod joints;
 mod place;
 

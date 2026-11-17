@@ -511,6 +511,11 @@ impl Solver<'_> {
                 let message = self.format_text(&require.message, &kind_env)?;
                 if !holds {
                     let names: Vec<String> = parts.iter().map(|p| self.part_name(*p)).collect();
+                    let search = self.help_search(&require.condition, &env);
+                    let help = self.search_help(&search).unwrap_or_else(|| {
+                        "change the joint's settings or the parts' sizes so the rule holds"
+                            .to_owned()
+                    });
                     self.report(
                         Diagnostic::error(
                             Code::Require,
@@ -523,9 +528,7 @@ impl Solver<'_> {
                             "the kind's rule",
                         ))
                         .with_note(format!("for {} in {name}", names.join(" and ")))
-                        .with_help(
-                            "change the joint's settings or the parts' sizes so the rule holds",
-                        ),
+                        .with_help(help),
                     );
                 }
                 results.push(stave_model::solved::RequireResult {

@@ -58,3 +58,21 @@ fn qualified_names_suggest_the_module_s_items() {
     ]);
     insta::assert_snapshot!(render(&opened));
 }
+
+/// The rendered diagnostics of a broken design, with paths relative to the
+/// workspace.
+fn broken(folder: &str) -> String {
+    let workspace = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."));
+    let opened = stave_app::open(&workspace.join("tests/broken").join(folder)).unwrap();
+    render(&opened).replace(&format!("{}/", workspace.display()), "")
+}
+
+#[test]
+fn a_failed_kind_rule_offers_a_value_from_the_kinds_list() {
+    insta::assert_snapshot!(broken("require_help"));
+}
+
+#[test]
+fn a_failed_kind_rule_says_when_no_listed_value_fits() {
+    insta::assert_snapshot!(broken("require_no_fit"));
+}
