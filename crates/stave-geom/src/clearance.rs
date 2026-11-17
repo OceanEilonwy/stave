@@ -24,9 +24,11 @@
 use glam::{DMat4, DVec3};
 use stave_lang::placement::{Axis, Direction};
 use stave_lang::units::Length;
-use stave_model::solved::{Motion, PoseValue, WorldBox};
+use stave_model::mechanism::MotionShape;
+use stave_model::solved::WorldBox;
 
 use crate::collide::{CONTACT_TOLERANCE, WorldRod, WorldSolid, point_vector};
+use crate::mechanism::MechanismPath;
 use crate::render;
 
 /// A swing is refined until no point moves more than this between
@@ -704,30 +706,32 @@ fn integer(count: f64) -> u32 {
 
 /// The smallest gap between an assembly's solids (`moving`, at rest) and
 /// the `fixed` ones over its whole motion: exact for a slide, sampled for a
-/// hinge's turn or a cup hinge's linkage. The nearest points are placed as
+/// turning mechanism (one pin, or links). The nearest points are placed as
 /// near `prefer` (world nanometres) as the gap allows; see
-/// [`closest_near`].
+/// [`closest_near`]. `None` for a travel that isn't along one straight
+/// rail, which has no sampled form here.
 pub fn closest_for(
     moving: &[WorldSolid],
     fixed: &[WorldSolid],
-    motion: &Motion,
+    path: &MechanismPath,
     prefer: Option<DVec3>,
 ) -> Option<Closest> {
-    if let Some((toward, travel)) = crate::legacy::travel(motion) {
-        return closest_near(moving, fixed, &Travel::Slide { toward, travel }, prefer);
+    match path.shape() {
+        MotionShape::Travel { toward, travel } => {
+            return closest_near(moving, fixed, &Travel::Slide { toward, travel }, prefer);
+        }
+        MotionShape::Turn { .. } | MotionShape::General if path.turns() => {}
+        MotionShape::Turn { .. } | MotionShape::General => return None,
     }
-    let range = render::radians_f64(motion.opening_angle()?);
-    let pose = |radians: f64| {
-        let angle = render::angle_from_radians_floor(radians)?;
-        Some(crate::legacy::placement(motion, PoseValue::Angle(angle)).matrix())
-    };
+    let member = path.moving();
+    let pose = |radians: f64| path.matrix(member, radians.clamp(0.0, path.limit()));
     closest_near(
         moving,
         fixed,
         &Travel::Swing {
             pose: &pose,
-            range,
-            about: crate::legacy::turning_axis(motion),
+            range: path.limit(),
+            about: Some(path.axis()),
         },
         prefer,
     )

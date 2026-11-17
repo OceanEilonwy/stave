@@ -10,45 +10,20 @@
 //! assembly moves with the driven member ([`MechanismPath::moving`]).
 //!
 //! Two shapes of motion have exact fast paths, chosen by the mechanism's
-//! shape and never by a kind ([`Shape`]): a driven member pinned to a held
+//! shape and never by a kind ([`MotionShape`]): a driven member pinned to a held
 //! one turns about one fixed line, and a driven member on a rail along a
 //! held one travels in one world direction.
 
 use glam::{DMat3, DMat4, DVec2, DVec3};
 use stave_lang::placement::{Axis, Direction};
-use stave_lang::units::{Angle, Length};
 use stave_model::mechanism::{
-    DriveValue, Holding, Mechanism, MechanismDrive, MechanismEntry, MemberIndex,
+    DriveValue, Holding, Mechanism, MechanismDrive, MechanismEntry, MemberIndex, MotionShape,
 };
-use stave_model::solved::{Pivot, Point, PoseValue};
+use stave_model::solved::PoseValue;
 
 use crate::collide::{direction_vector, point_vector};
 use crate::planar::{self, Declaration, MechanismError, MemberId, MemberName, PlanarPose};
 use crate::render;
-
-/// The exact shape of an assembly's motion, where it has one.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum Shape {
-    /// The driven member is pinned to a held one: the assembly turns about
-    /// this line, `free_side` turning toward `swing_toward`, as far as
-    /// `opening`.
-    Turn {
-        /// The line.
-        pivot: Pivot,
-        /// How far it turns.
-        opening: Angle,
-    },
-    /// The driven member runs on a rail along a held one: the assembly
-    /// travels this way, as far as `travel`.
-    Travel {
-        /// The direction it moves.
-        toward: Direction,
-        /// How far it moves.
-        travel: Length,
-    },
-    /// Anything else: the members' poses come from the solver.
-    General,
-}
 
 /// An assembly's mechanism, checked through its range and ready to pose
 /// in floats. See the module docs.
@@ -72,21 +47,7 @@ pub struct MechanismPath {
     from: f64,
     /// How far the range reaches from `from`, in radians or nanometres.
     limit: f64,
-    shape: Shape,
-}
-
-/// The world vector of a direction's `steps` nanometres, exactly.
-fn step(point: Point, direction: Direction, amount: Length) -> Point {
-    let signed = if direction.is_positive() {
-        amount.nm()
-    } else {
-        amount.nm().saturating_neg()
-    };
-    let axis = direction.axis();
-    point.with(
-        axis,
-        Length::from_nm(point.get(axis).nm().saturating_add(signed)),
-    )
+    shape: MotionShape,
 }
 
 impl MechanismPath {
@@ -190,12 +151,12 @@ impl MechanismPath {
             sense,
             from,
             limit: (to - from).abs(),
-            shape: shape_of(mechanism),
+            shape: mechanism.shape(),
         })
     }
 
     /// The exact shape of the motion, where it has one.
-    pub fn shape(&self) -> Shape {
+    pub fn shape(&self) -> MotionShape {
         self.shape
     }
 
@@ -323,82 +284,4 @@ fn to_planar(value: DriveValue) -> planar::DriveValue {
         DriveValue::Turn(angle) => planar::DriveValue::Turn(angle),
         DriveValue::Travel(length) => planar::DriveValue::Travel(length),
     }
-}
-
-/// The exact shape of a mechanism's motion: a turn about one fixed pin, a
-/// travel along one rail, or neither.
-fn shape_of(mechanism: &Mechanism) -> Shape {
-    let moving = mechanism.moving();
-    let held = |index: MemberIndex| {
-        mechanism
-            .members()
-            .get(mechanism.piece_of(index).index())
-            .is_some_and(|member| member.holding == Holding::Held)
-    };
-    let joins_held = |[a, b]: [MemberIndex; 2]| {
-        let (pa, pb) = (mechanism.piece_of(a), mechanism.piece_of(b));
-        (pa == moving && held(b)) || (pb == moving && held(a))
-    };
-    let frame = mechanism.frame();
-    let drive = *mechanism.drive();
-    for entry in mechanism.entries() {
-        match (*entry, drive) {
-            (
-                MechanismEntry::Pivot { first, second, at },
-                MechanismDrive::Turn { from, to, .. },
-            ) if joins_held([first, second]) => {
-                let through = step(
-                    step(frame.origin(), frame.across(), at.across),
-                    frame.depth(),
-                    at.depth,
-                );
-                let opening = to.microdeg().saturating_sub(from.microdeg());
-                let swing_toward = if opening >= 0 {
-                    frame.depth()
-                } else {
-                    frame.depth().opposite()
-                };
-                return Shape::Turn {
-                    pivot: Pivot {
-                        axis: frame.axis(),
-                        through,
-                        free_side: frame.across(),
-                        swing_toward,
-                    },
-                    opening: Angle::from_microdeg(opening.saturating_abs()),
-                };
-            }
-            (
-                MechanismEntry::Rail {
-                    runner,
-                    guide,
-                    direction,
-                },
-                MechanismDrive::Travel { from, to, .. },
-            ) if joins_held([runner, guide]) => {
-                let along = match (direction.across().nm(), direction.depth().nm()) {
-                    (a, 0) if a > 0 => frame.across(),
-                    (a, 0) if a < 0 => frame.across().opposite(),
-                    (0, d) if d > 0 => frame.depth(),
-                    (0, d) if d < 0 => frame.depth().opposite(),
-                    _ => return Shape::General,
-                };
-                let travel = to.nm().saturating_sub(from.nm());
-                // The runner's travel is measured along the rail's direction
-                // in the guide; the guide is held, so that is the world's.
-                let runner_moves = mechanism.piece_of(runner) == moving;
-                let toward = if (travel >= 0) == runner_moves {
-                    along
-                } else {
-                    along.opposite()
-                };
-                return Shape::Travel {
-                    toward,
-                    travel: Length::from_nm(travel.saturating_abs()),
-                };
-            }
-            _ => {}
-        }
-    }
-    Shape::General
 }

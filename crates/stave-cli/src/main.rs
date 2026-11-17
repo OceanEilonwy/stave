@@ -256,7 +256,7 @@ fn dump(path: &Path, json: bool) -> Result<bool> {
         serde_json::to_writer_pretty(&mut stdout, design)?;
         writeln!(stdout)?;
     } else {
-        write!(stdout, "{}", dump::table(design))?;
+        write!(stdout, "{}", dump::table(design, opened.model.as_ref()))?;
     }
     Ok(true)
 }

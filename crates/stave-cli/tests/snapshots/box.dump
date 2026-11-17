@@ -31,14 +31,15 @@ HARDWARE (3)
 lid.hinges[left]             butt_hinge       on lid.panel (bottom face)
     leaf           40..80               110..111.5           188..200            
     fixed leaf     40..80               108.5..110           188..200            
-    opens 180deg, leaves housed in it and back
+    length 40, leaf width 12, opening angle 180deg, knuckle diameter 5
 lid.hinges[right]            butt_hinge       on lid.panel (bottom face)
     leaf           220..260             110..111.5           188..200            
     fixed leaf     220..260             108.5..110           188..200            
-    opens 180deg, leaves housed in it and back
+    length 40, leaf width 12, opening angle 180deg, knuckle diameter 5
 lid.lift_knob                knob             on lid.panel (top face)
-    box            140..160             122..144             25..45              
-    one screw, 4
+    knob           140..160             122..144             25..45              
+    screw          148..152             110..122             33..37              
+    diameter 20, projection 22, screw diameter 4
 
 JOINTS (2)
 corners                      rabbet

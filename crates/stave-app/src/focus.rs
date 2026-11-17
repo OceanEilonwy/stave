@@ -21,23 +21,24 @@
 //! documented `member`s.
 
 use stave_geom::clearance::{box_centre, closest_for};
+use stave_geom::mechanism::MechanismPath;
+
 use stave_geom::collide::{CONTACT_TOLERANCE, WorldSolid, overlaps, touches};
 use stave_geom::sequence::{Member, pair_members, pair_steps, trace};
 use stave_geom::solid::Solid;
 use stave_lang::Code;
-use stave_lang::placement::Direction;
 use stave_lang::units::Length;
 use stave_model::defs::KindDef;
+use stave_model::mechanism::{Holding, Mechanism, MechanismEntry, MemberIndex, MotionShape};
 use stave_model::solved::{
-    AssemblyId, BodyCarrier, CutKind, CutSource, Depth, Hardware, HardwareBase, HardwareData,
-    HardwareId, JointId, Motion, Part, PartId, SolvedDesign, StepAmount, StepKind,
+    AssemblyId, Body, BodyCarrier, CutKind, CutSource, Depth, Hardware, HardwareBase, HardwareId,
+    JointId, Part, PartId, RoleValue, SolvedDesign, StepAmount, StepKind, WorldBox,
 };
 use stave_scene::focus::{
     Anchor, GapMark, MotionPlay, Plan, Play, StepPlay, amount_text, around, edge_point, hinge_view,
     key_poses, motion_zone,
 };
 use stave_scene::{Aabb, Item, Look, MotionRange, NodeId, Overlay, Posed, SceneEntry, SceneGraph};
-use stave_schema::kinds::MemberName;
 
 use crate::Opened;
 use crate::session::{LineNumber, SourceLocation};
@@ -195,7 +196,7 @@ pub struct MemberRow {
     /// Its number on the drawing, from 1.
     pub number: u8,
     /// Its name: `plate`.
-    pub name: &'static str,
+    pub name: String,
     /// Its doc comment.
     pub caption: String,
 }
@@ -758,29 +759,26 @@ fn hardware_focus(
     let target = Target::Hardware(hardware.id);
     let kind = kind_def(opened, hardware.kind_id);
     let hardware_nodes = graph.nodes_of(Item::Hardware(hardware.id));
-    let on = match hardware.data {
-        HardwareData::Hinge { on, .. } | HardwareData::ButtHinge { on, .. } => Some(on),
-        HardwareData::Slide { .. } | HardwareData::Pull { .. } => None,
-    };
     let mut context: Vec<PartId> = vec![hardware.piece];
     let outside_parts: Vec<PartId> = hardware
         .assembly
         .map(|assembly| assembly_parts(design, assembly))
         .unwrap_or_default();
-    context.extend(side_of(design, hardware, &outside_parts, on));
+    context.extend(side_of(design, hardware, &outside_parts));
     let mut focus_nodes = hardware_nodes.clone();
     focus_nodes.extend(part_nodes(graph, &context));
     let xray_nodes = part_nodes(graph, &[hardware.piece]);
 
-    // The members, numbered as the kind lists them.
+    // The members, numbered as the kind lists them, each by its own name
+    // and doc comment.
     let mut members = Vec::new();
     let mut anchors = Vec::new();
     if let Some(kind) = kind {
-        for (index, member) in kind.members.iter().enumerate() {
+        for (index, member) in kind.bodies.iter().enumerate() {
             let number = u8::try_from(index + 1).unwrap_or(u8::MAX);
             members.push(MemberRow {
                 number,
-                name: member.name.word(),
+                name: member.name.as_str().to_owned(),
                 caption: member
                     .docs
                     .join(" ")
@@ -788,8 +786,9 @@ fn hardware_focus(
                     .collect::<Vec<_>>()
                     .join(" "),
             });
-            if let Some(anchor) = member_anchor(graph, hardware, member.name, &hardware_nodes) {
-                anchors.push((number, anchor));
+            let nodes = member_nodes(graph, &hardware_nodes, index);
+            if !nodes.is_empty() {
+                anchors.push((number, Anchor::Nodes(nodes, None)));
             }
         }
     }
@@ -805,10 +804,16 @@ fn hardware_focus(
         moving_assembly(design, graph, hardware).filter(|_| hardware.base != HardwareBase::Pull);
     let play = match moves {
         Some((assembly, range)) => {
-            let motion = design
+            let mechanism = design
                 .assemblies
                 .get(assembly.index())
-                .and_then(|a| a.motion);
+                .and_then(|a| a.mechanism.as_ref());
+            let motion = mechanism.and_then(|m| MechanismPath::new(m).ok());
+            let swing = mechanism.and_then(Mechanism::swing);
+            let toward = match mechanism.map(Mechanism::shape) {
+                Some(MotionShape::Travel { toward, .. }) => Some(toward),
+                Some(MotionShape::Turn { .. } | MotionShape::General) | None => None,
+            };
             rows.push(Row {
                 label: if range.turns { "Opens to" } else { "Pulls out" },
                 value: amount_text(range, range.full),
@@ -836,7 +841,7 @@ fn hardware_focus(
             let prefer = Some(box_centre(&hardware.bounds));
             if let Some(motion) = &motion {
                 // To the side the hinge or slide is on, then to anything.
-                let side = side_of(design, hardware, &inside, on)
+                let side = side_of(design, hardware, &inside)
                     .and_then(|on| fixed_parts.iter().position(|p| p.id == on));
                 let on = side.and_then(|index| fixed_parts.get(index)).map(|p| p.id);
                 if let Some(index) = side
@@ -887,12 +892,7 @@ fn hardware_focus(
                 graph.bounds_of(&rest, &hardware_nodes),
             ) {
                 (Some(door), Some(level)) => {
-                    let toward = match motion {
-                        Some(Motion::Travel { toward, .. }) => Some(toward),
-                        Some(Motion::Turn { .. } | Motion::Linkage { .. }) | None => None,
-                    };
-                    let point =
-                        edge_point(door, level, motion.as_ref().and_then(Motion::swing), toward);
+                    let point = edge_point(door, level, swing, toward);
                     graph.path_of(assembly, point, 96)
                 }
                 _ => Vec::new(),
@@ -908,19 +908,15 @@ fn hardware_focus(
                     .to_owned(),
                 });
             }
-            match motion {
-                Some(Motion::Travel { toward, .. }) => {
+            match (toward, swing) {
+                (Some(toward), _) => {
                     plan = Plan::slide(graph, &hardware_nodes, toward, range.full);
                 }
-                Some(Motion::Turn { .. } | Motion::Linkage { .. }) => {
-                    let arm = hardware.mechanism.as_ref().map(|m| m.arm.bounds);
-                    plan = Plan::of(graph, &hardware_nodes, &path, arm);
-                    view = motion
-                        .as_ref()
-                        .and_then(Motion::swing)
-                        .map(|(free, _)| hinge_view(free));
+                (None, Some((free, _))) => {
+                    plan = Plan::of(graph, &hardware_nodes, &path, pinned_held(hardware));
+                    view = Some(hinge_view(free));
                 }
-                None => {}
+                (None, None) => {}
             }
             zone = motion_zone(graph, &hardware_nodes, assembly, &path, gap_mark.as_ref());
             Play::Motion(MotionPlay {
@@ -933,11 +929,12 @@ fn hardware_focus(
         }
         None => Play::Fixed(anchors.clone()),
     };
+    // The base's words; the kind's doc comment, shown under it, says which
+    // hinge, slide or pull it is.
     let heading = match hardware.base {
-        HardwareBase::Hinge if hardware.is_butt_hinge() => "How a butt hinge works",
-        HardwareBase::Hinge => "How a cup hinge works",
-        HardwareBase::Slide => "How a drawer slide works",
-        HardwareBase::Pull => "How a pull is fixed",
+        HardwareBase::Hinge => "How this hinge works",
+        HardwareBase::Slide => "How this drawer slide works",
+        HardwareBase::Pull => "How this pull is fixed",
     };
     let title = title(design, target);
     Some(Focus {
@@ -963,19 +960,25 @@ fn hardware_focus(
     })
 }
 
-/// The part a hinge or slide is fixed to outside its assembly: a hinge's
-/// `on`, or the part a slide's cabinet member lies against.
-fn side_of(
-    design: &SolvedDesign,
-    hardware: &Hardware,
-    inside: &[PartId],
-    on: Option<PartId>,
-) -> Option<PartId> {
-    if on.is_some() {
-        return on;
+/// The part a piece of hardware is fixed to outside its assembly: the
+/// first of its roles bound to a part outside it (a hinge's `on`), or else
+/// the part outside it that a member held by a region lies against (a
+/// slide's cabinet member against the side).
+fn side_of(design: &SolvedDesign, hardware: &Hardware, inside: &[PartId]) -> Option<PartId> {
+    let role = hardware.roles.iter().find_map(|(_, value)| match value {
+        RoleValue::Part(part) if *part != hardware.piece && !inside.contains(part) => Some(*part),
+        RoleValue::Part(_) | RoleValue::Region(_) => None,
+    });
+    if role.is_some() {
+        return role;
     }
-    let member = hardware.fixed.as_ref()?.bounds;
-    let touching = |a: &stave_model::solved::WorldBox, b: &stave_model::solved::WorldBox| {
+    let held: Vec<WorldBox> = hardware
+        .members
+        .iter()
+        .filter(|member| matches!(member.carrier, BodyCarrier::Region(_)))
+        .map(Body::bounds)
+        .collect();
+    let touching = |a: &WorldBox, b: &WorldBox| {
         stave_lang::placement::Axis::ALL.into_iter().all(|axis| {
             a.min().get(axis) <= b.max().get(axis) && b.min().get(axis) <= a.max().get(axis)
         })
@@ -984,57 +987,46 @@ fn side_of(
         .parts
         .iter()
         .filter(|p| !inside.contains(&p.id))
-        .find(|p| touching(&p.cut_box(), &member))
+        .find(|p| held.iter().any(|member| touching(&p.cut_box(), member)))
         .map(|p| p.id)
 }
 
-/// Where a member's number goes.
-fn member_anchor(
-    graph: &SceneGraph,
-    hardware: &Hardware,
-    member: MemberName,
-    nodes: &[NodeId],
-) -> Option<Anchor> {
-    // What moves each of the hardware's nodes: the piece, a link of its
-    // mechanism, or something else.
-    let carrier_of = |id: &NodeId| graph.node(*id).and_then(|node| node.member).map(|(_, c)| c);
-    let on_piece = |carrier: BodyCarrier| carrier == BodyCarrier::Part(hardware.piece);
-    let is_link = |carrier: BodyCarrier| matches!(carrier, BodyCarrier::Link(_));
-    let pick = |test: &dyn Fn(BodyCarrier) -> bool| -> Vec<NodeId> {
-        nodes
-            .iter()
-            .copied()
-            .filter(|id| carrier_of(id).is_some_and(test))
-            .collect()
+/// The nodes of one member of a piece of hardware (by its index among its
+/// kind's members with a body): where its number goes.
+fn member_nodes(graph: &SceneGraph, nodes: &[NodeId], body: usize) -> Vec<NodeId> {
+    nodes
+        .iter()
+        .copied()
+        .filter(|id| {
+            graph
+                .node(*id)
+                .and_then(|node| node.member)
+                .is_some_and(|(member, _)| member.body.index() == body)
+        })
+        .collect()
+}
+
+/// The world box around the held members a piece of hardware's mechanism
+/// pins its moving members to (an arm the links turn on, a fixed leaf):
+/// the view from above is cut just above them, so it shows what turns on
+/// them.
+fn pinned_held(hardware: &Hardware) -> Option<WorldBox> {
+    let mechanism = hardware.own_mechanism.as_ref()?;
+    let held = |index: MemberIndex| {
+        mechanism
+            .members()
+            .get(mechanism.piece_of(index).index())
+            .is_some_and(|member| member.holding == Holding::Held)
     };
-    Some(match member {
-        MemberName::Cup | MemberName::Leaves => Anchor::Nodes(pick(&on_piece), None),
-        // A slide's drawer member is long: its number goes near its front.
-        MemberName::DrawerMember => Anchor::Nodes(pick(&on_piece), Some(Direction::Front)),
-        // Seen from above the arm lies over the plate: the plate's number
-        // goes at its back end, the arm's at its front.
-        MemberName::Plate => Anchor::Box(hardware.fixed.as_ref()?.bounds, Some(Direction::Back)),
-        MemberName::Arm => Anchor::Box(
-            hardware.mechanism.as_ref()?.arm.bounds,
-            Some(Direction::Front),
-        ),
-        MemberName::Links => Anchor::Nodes(pick(&is_link), None),
-        // A slide's cabinet member is long: its number goes near its
-        // front, where the view from above looks.
-        MemberName::CabinetMember => {
-            Anchor::Box(hardware.fixed.as_ref()?.bounds, Some(Direction::Front))
-        }
-        MemberName::Pin => Anchor::Nodes(pick(&|c| !on_piece(c) && !is_link(c)), None),
-        // A pull stands off its face: what you hold is at the outer end,
-        // the screws at the end against the door.
-        MemberName::Knob | MemberName::Bar => {
-            Anchor::Box(hardware.bounds, Some(hardware.mount_face.direction()))
-        }
-        MemberName::Screw | MemberName::Screws => Anchor::Box(
-            hardware.bounds,
-            Some(hardware.mount_face.direction().opposite()),
-        ),
-    })
+    mechanism
+        .entries()
+        .iter()
+        .flat_map(MechanismEntry::members)
+        .filter(|index| held(*index))
+        .filter_map(|index| mechanism.members().get(index.index()))
+        .filter_map(|member| hardware.members.iter().find(|b| b.id.body == member.body))
+        .map(Body::bounds)
+        .reduce(|all, one| all.union(&one))
 }
 
 impl Focus {
@@ -1072,7 +1064,7 @@ impl Focus {
     pub fn plan_caption(&self) -> Option<&'static str> {
         self.plan.as_ref()?;
         Some(match self.target {
-            Target::Hardware(_) if self.heading.contains("slide") => {
+            Target::Hardware(_) if self.motion().is_some_and(|(_, range)| !range.turns) => {
                 "Looking down on the slide, cut through its middle"
             }
             Target::Hardware(_) => "Looking down on the hinge, through the cabinet top",

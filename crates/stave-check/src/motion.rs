@@ -13,7 +13,7 @@
 //! is left out.
 
 use stave_geom::collide::{Placement, boxes_overlap, overlaps_placed, placed_bounds, union};
-use stave_geom::mechanism::Shape;
+use stave_model::mechanism::MotionShape;
 use std::collections::BTreeSet;
 
 use stave_geom::planar::{MechanismError, MechanismErrorKind};
@@ -501,7 +501,7 @@ impl Checker<'_> {
         // A door that doesn't turn about one fixed line (a cup hinge's)
         // swings its edges out as it starts to open: an early hit is
         // cleared by a gap.
-        let swings_out = !matches!(path.mechanism().shape(), Shape::Turn { .. });
+        let swings_out = !matches!(path.mechanism().shape(), MotionShape::Turn { .. });
         let (message, mut notes, help) = match (reach, extent) {
             (Reach::Angle(angle), DriveValue::Turn(opening_angle)) => {
                 let at = angle_text(angle);

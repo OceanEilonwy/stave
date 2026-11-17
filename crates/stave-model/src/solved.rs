@@ -173,6 +173,17 @@ impl WorldBox {
             self.min.get(face.axis())
         }
     }
+
+    /// The smallest box around both.
+    pub fn union(&self, other: &WorldBox) -> WorldBox {
+        let mut min = self.min;
+        let mut max = self.max;
+        for axis in Axis::ALL {
+            min = min.with(axis, min.get(axis).min(other.min.get(axis)));
+            max = max.with(axis, max.get(axis).max(other.max.get(axis)));
+        }
+        WorldBox { min, max }
+    }
 }
 
 /// Validation error of an [`Orientation`].
@@ -1565,6 +1576,150 @@ impl Body {
     pub fn shapes(&self) -> &[MemberShape] {
         &self.shapes
     }
+
+    /// The world box around all its shapes, at rest.
+    pub fn bounds(&self) -> WorldBox {
+        let mut shapes = self.shapes.iter().map(MemberShape::bounds);
+        let first = shapes.next().unwrap_or_else(|| {
+            let zero = Point {
+                across: Length::ZERO,
+                up: Length::ZERO,
+                deep: Length::ZERO,
+            };
+            WorldBox::new(zero, zero)
+        });
+        shapes.fold(first, |all, one| all.union(&one))
+    }
+}
+
+impl MemberShape {
+    /// The world box around the shape, at rest: exact for a box, a
+    /// cylinder and a prism; for a bar, its corners rounded outward to the
+    /// nanometre.
+    pub fn bounds(&self) -> WorldBox {
+        // A box from its extent along `axis` and on the two others.
+        let boxed = |axis: Axis, start: Length, end: Length, low: [i64; 2], high: [i64; 2]| {
+            let [first, second] = axis.others();
+            let corner = |along: Length, [a, b]: [i64; 2]| {
+                Point {
+                    across: Length::ZERO,
+                    up: Length::ZERO,
+                    deep: Length::ZERO,
+                }
+                .with(axis, along)
+                .with(first, Length::from_nm(a))
+                .with(second, Length::from_nm(b))
+            };
+            WorldBox::new(corner(start, low), corner(end, high))
+        };
+        match self {
+            MemberShape::Box(bounds) => *bounds,
+            MemberShape::Cylinder {
+                axis,
+                centre: [a, b],
+                diameter,
+                start,
+                end,
+            } => {
+                let radius = diameter.nm() / 2;
+                let rounded = diameter.nm() - radius;
+                boxed(
+                    *axis,
+                    *start,
+                    *end,
+                    [a.nm().saturating_sub(radius), b.nm().saturating_sub(radius)],
+                    [
+                        a.nm().saturating_add(rounded),
+                        b.nm().saturating_add(rounded),
+                    ],
+                )
+            }
+            MemberShape::Prism {
+                axis,
+                points,
+                start,
+                end,
+            } => {
+                let mut low = [i64::MAX; 2];
+                let mut high = [i64::MIN; 2];
+                for [a, b] in points {
+                    for (slot, value) in [(0, a.nm()), (1, b.nm())] {
+                        if let (Some(l), Some(h)) = (low.get_mut(slot), high.get_mut(slot)) {
+                            *l = (*l).min(value);
+                            *h = (*h).max(value);
+                        }
+                    }
+                }
+                if points.is_empty() {
+                    low = [0; 2];
+                    high = [0; 2];
+                }
+                boxed(*axis, *start, *end, low, high)
+            }
+            MemberShape::Bar {
+                axis,
+                from,
+                to,
+                thickness,
+                start,
+                end,
+            } => {
+                // The bar is a rectangle `thickness` wide reaching half its
+                // thickness past each end: each corner lies
+                // `t (|dx| + |dy|) / 2L` past its end's centre on one axis
+                // and `t (|dy| + |dx|) / 2L` on the other (L the bar's
+                // length), so the box grows by that on both, rounded up.
+                let [fa, fb] = from.map(|l| i128::from(l.nm()));
+                let [ta, tb] = to.map(|l| i128::from(l.nm()));
+                let (dx, dy) = (ta.saturating_sub(fa), tb.saturating_sub(fb));
+                let square = dx.saturating_mul(dx).saturating_add(dy.saturating_mul(dy));
+                let thick = i128::from(thickness.nm());
+                let grow = match integer_root(square) {
+                    0 => thick.saturating_add(1) / 2,
+                    length => {
+                        let numerator = thick.saturating_mul(
+                            dx.saturating_abs().saturating_add(dy.saturating_abs()),
+                        );
+                        let denominator = length.saturating_mul(2);
+                        // Rounded up, and up again for the root's floor.
+                        numerator / denominator + 1
+                    }
+                };
+                let narrow = |value: i128| {
+                    i64::try_from(value).unwrap_or(if value < 0 { i64::MIN } else { i64::MAX })
+                };
+                boxed(
+                    *axis,
+                    *start,
+                    *end,
+                    [
+                        narrow(fa.min(ta).saturating_sub(grow)),
+                        narrow(fb.min(tb).saturating_sub(grow)),
+                    ],
+                    [
+                        narrow(fa.max(ta).saturating_add(grow)),
+                        narrow(fb.max(tb).saturating_add(grow)),
+                    ],
+                )
+            }
+        }
+    }
+}
+
+/// The integer square root of a non-negative number, rounded down
+/// (Newton's method from above); zero for zero or less.
+fn integer_root(square: i128) -> i128 {
+    if square <= 0 {
+        return 0;
+    }
+    let mut root = square;
+    loop {
+        let next = root.saturating_add(square / root) / 2;
+        if next >= root {
+            return root;
+        }
+        root = next;
+    }
 }
 
 /// Fasteners a piece of hardware consumes (its kind's `uses:`).
@@ -1968,6 +2123,42 @@ mod tests {
 
     fn mm(value: i64) -> Length {
         Length::from_mm(value)
+    }
+
+    #[test]
+    fn a_member_shape_bounds_its_wood() {
+        // A cylinder up the `up` axis: its centre plus and minus half its
+        // diameter on across and deep.
+        let cylinder = MemberShape::Cylinder {
+            axis: Axis::Up,
+            centre: [mm(10), mm(20)],
+            diameter: mm(6),
+            start: mm(0),
+            end: mm(5),
+        };
+        let bounds = cylinder.bounds();
+        assert_eq!(bounds.min().get(Axis::Across), mm(7));
+        assert_eq!(bounds.max().get(Axis::Deep), mm(23));
+        assert_eq!(bounds.size(Axis::Up), mm(5));
+        // A bar along `across` reaches half its thickness past each end and
+        // either side; along a diagonal its corners reach further, rounded
+        // out, never in.
+        let bar = |to: [Length; 2]| MemberShape::Bar {
+            axis: Axis::Deep,
+            from: [mm(0), mm(0)],
+            to,
+            thickness: mm(2),
+            start: mm(0),
+            end: mm(1),
+        };
+        let straight = bar([mm(0), mm(10)]).bounds();
+        assert!(straight.min().get(Axis::Up) <= mm(-1));
+        let end = straight.max().get(Axis::Across).nm() - mm(11).nm();
+        assert!((0..2).contains(&end), "{end}");
+        let diagonal = bar([mm(10), mm(10)]).bounds();
+        // Each corner is sqrt(2) = 1.414..mm past its end on both axes.
+        let past = diagonal.max().get(Axis::Up).nm() - mm(10).nm();
+        assert!((1_414_214..1_414_217).contains(&past), "{past}");
     }
 
     #[test]
