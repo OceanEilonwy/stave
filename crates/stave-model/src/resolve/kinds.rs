@@ -165,6 +165,7 @@ impl Resolver<'_> {
         let mut hardware_cuts: Vec<&ast::Cut> = Vec::new();
         let mut adjusts: Vec<&ast::Adjust> = Vec::new();
         let mut hardware_uses = JointKindDef::default();
+        self.check_cut_names(&cx, &syntax.body.entries);
         for entry in &syntax.body.entries {
             match entry {
                 ast::KindEntry::Param(_) => {}
@@ -1078,6 +1079,40 @@ impl Resolver<'_> {
             operations,
             span: cut.span,
         })
+    }
+
+    /// `error[duplicate-name]` for two cuts of one kind with the same name
+    /// (grammar, "Named cuts"): a cut's name is how messages and patches
+    /// tell its cuts apart, so each is written once per kind.
+    fn check_cut_names(&mut self, cx: &Cx, entries: &[ast::KindEntry]) {
+        let mut seen: BTreeMap<&str, Span> = BTreeMap::new();
+        for entry in entries {
+            let ast::KindEntry::Cut(cut) = entry else {
+                continue;
+            };
+            let Some(name) = &cut.name else {
+                continue;
+            };
+            match seen.get(name.as_str()) {
+                Some(first) => {
+                    let word = name.as_str();
+                    self.report(
+                        Diagnostic::error(
+                            Code::DuplicateName,
+                            format!("'{word}' is declared twice"),
+                            Label::new(cx.file, name.span()),
+                        )
+                        .with_label(Label::with_message(cx.file, *first, "first written here"))
+                        .with_help(format!(
+                            "give each cut of a kind its own name, as in {word} and mating_{word}"
+                        )),
+                    );
+                }
+                None => {
+                    seen.insert(name.as_str(), name.span());
+                }
+            }
+        }
     }
 
     /// `warning[unnamed-cut]` for a joint or hardware kind's `cut` with no

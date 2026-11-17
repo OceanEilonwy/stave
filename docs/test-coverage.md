@@ -528,7 +528,7 @@ One row per code of the grammar's Diagnostics table and its warnings.
 | `unclosed-bracket` | 1 | covered | `broken/unclosed_bracket` | `lang/parser::an_unclosed_bracket_costs_one_error`, `lang/spec_syntax::a_bracket_is_closed_where_two_values_meet_across_a_line_break` |
 | `missing-brace` | 1 | covered | `broken/missing_brace` | `lang/parser::a_missing_brace_ends_the_body_at_the_next_item`, `lang/spec_syntax::a_brace_missing_at_the_end_of_the_file` |
 | `unknown-name` | 2 | covered | `broken/unknown_name` | `app/features::unknown_names_and_duplicates_are_reported`, `app/spec_names::an_unknown_name_suggests_the_closest_names` |
-| `duplicate-name` | 2 | covered | `broken/duplicate_name` | `app/spec_names::a_name_declared_twice_in_a_component_is_a_duplicate_name`, `app/spec_declarations::a_field_written_twice_is_a_duplicate_name` |
+| `duplicate-name` | 2 | covered | `broken/duplicate_name`, `broken/duplicate_cut_name` | `app/spec_names::a_name_declared_twice_in_a_component_is_a_duplicate_name`, `app/spec_declarations::a_field_written_twice_is_a_duplicate_name`, `app/spec_joints::two_cuts_of_one_kind_with_one_name_are_an_error`, `app/spec_joints::two_kinds_may_share_a_cut_name` |
 | `ambiguous-name` | 2 | covered | `broken/ambiguous_name` | `app/features::a_word_and_an_item_both_accepted_are_ambiguous` |
 | `unit-mismatch` | 2 | covered | `broken/unit_mismatch` | `app/spec_values::a_length_plus_an_angle_is_a_unit_mismatch`, `app/spec_values::a_bare_number_is_never_a_length` |
 | `type-mismatch` | 2, 4 | covered | `broken/type_mismatch`, `broken/outline_crosses_itself` | `app/spec_placement::against_and_flush_take_a_face_not_a_mid_plane`, `app/spec_values::logical_operators_take_bools`, `app/fit::an_outline_that_crosses_itself_is_a_type_mismatch` |

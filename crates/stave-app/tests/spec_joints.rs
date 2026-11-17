@@ -1451,6 +1451,31 @@ fn an_unnamed_cut_is_a_warning_once_at_its_kind() {
     insta::assert_snapshot!(rendered);
 }
 
+/// The full text of `error[duplicate-name]` for two cuts of one kind with
+/// the same name: both places are named, and the help asks for a name per
+/// cut rather than removing one.
+#[test]
+fn two_cuts_of_one_kind_with_one_name_are_an_error() {
+    let root = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."));
+    let opened = stave_app::open(&root.join("tests/broken/duplicate_cut_name")).unwrap();
+    let rendered = stave_lang::render_diagnostics(&opened.sources, &opened.diagnostics)
+        .replace(&format!("{}/", root.display()), "");
+    insta::assert_snapshot!(rendered);
+}
+
+/// Two different kinds may give their cuts the same names.
+#[test]
+fn two_kinds_may_share_a_cut_name() {
+    let opened = open(
+        "kind trench : joint {\n  cut groove: crossing(into, piece) {\n    notch(depth: 3mm)\n  }\n}\nkind channel : joint {\n  cut groove: crossing(into, piece) {\n    notch(depth: 3mm)\n  }\n}",
+    );
+    assert!(
+        diagnostics(&opened).is_empty(),
+        "{:?}",
+        diagnostics(&opened)
+    );
+}
+
 /// Every kind is resolved where it is declared, so a kind nobody uses is
 /// still warned; the quoted word is the operation's, or `cut` when a cut's
 /// operations have different words. A hardware kind's cut warns the same.

@@ -1,0 +1,14 @@
+---
+source: crates/stave-app/tests/spec_joints.rs
+expression: rendered
+---
+error[duplicate-name]: 'housing' is declared twice
+  --> tests/broken/duplicate_cut_name/project.stave:55:7
+   |
+55 |   cut housing: end(piece, facing: into) {
+   |       ^^^^^^^
+  ::: tests/broken/duplicate_cut_name/project.stave:52:7
+   |
+52 |   cut housing: crossing(into, piece) {
+   |       ------- first written here
+   = help: give each cut of a kind its own name, as in housing and mating_housing

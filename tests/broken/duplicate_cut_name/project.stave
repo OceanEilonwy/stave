@@ -1,0 +1,60 @@
+// expect: error[duplicate-name] 'housing' is declared twice
+stave 1
+
+// A home-made housing with two cuts of the same name: a message or a
+// patch that names the housing couldn't tell which one it means.
+
+project "Two cuts with one name" {
+  units: mm
+}
+
+stock pine_19 { species: pine, form: solid, thickness: 19mm }
+
+part base : pine_19 {
+  length: 600mm
+  width:  300mm
+  place {
+    ground
+  }
+}
+
+part side_l : pine_19 {
+  length: 500mm
+  width:  300mm
+  place {
+    orient(length: up, width: back)
+    against(base.top)
+    flush(base.left)
+    flush(base.front)
+  }
+}
+
+part side_r = mirror(side_l, about: mid(base, across))
+
+part shelf : pine_19 {
+  length: fit
+  width:  300mm
+  place {
+    flush(base.top, inset: -250mm)
+    center(base, across)
+    flush(base.front)
+  }
+}
+
+/// A housing as wide as the shelf is thick.
+kind housing : joint {
+  param depth = 6mm
+
+  insert:    [push(piece, along: width)]
+  cut_first: into
+  adds:      extend(piece, by: depth)
+
+  cut housing: crossing(into, piece) {
+    slot(width: piece.thickness, depth: depth)
+  }
+  cut housing: end(piece, facing: into) {
+    drill(diameter: 4mm, depth: 10mm)
+  }
+}
+
+joint shelf_housings : housing(shelf, into: [side_l, side_r])

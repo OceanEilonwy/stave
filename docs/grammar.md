@@ -1504,8 +1504,11 @@ messages call the cut, whatever its operations: `its groove in side_l`,
 `the tenon on rail`, `its socket in beam_a`. In a message the name's
 underscores are read as spaces (`mating_groove` is "mating groove"). A
 cut name is not an item: it shares no namespace with the kind's params,
-roles or made parts, and two cuts of one kind may share a name, though the
-standard kinds give each cut its own.
+roles or made parts. Each cut of a kind has its own name, because the name
+is how messages and patches tell the kind's cuts apart: two cuts of one
+kind with the same name are `error[duplicate-name]`, naming both places,
+with the help `give each cut of a kind its own name, as in groove and
+mating_groove`. Two different kinds may use the same cut names.
 
 Names come only from the kind; Stave never guesses one. A message about an
 unnamed cut falls back to its operation's word: `mortise` for `pocket`,
