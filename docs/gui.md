@@ -16,6 +16,10 @@ tools/window-shot main.png examples/clothing_cabinet --theme light --select 'doo
 tools/window-shot dark.png examples/clothing_cabinet --theme dark
 tools/window-shot busy.png tests/broken/door_hits_side --checking --problems
 tools/window-shot narrow.png examples/clothing_cabinet --size 760x900
+tools/window-shot apart.png examples/clothing_cabinet --explode 1
+tools/window-shot problem.png tests/broken/door_hits_side --problems --diagnostic 0
+tools/window-shot joint.png examples/stool --focus rung_sockets --step 0.6
+tools/window-shot hinge.png examples/clothing_cabinet --focus 'door_l.hinges[upper]' --plan
 ```
 
 It starts a private Broadway display server (`gtk4-broadwayd`, part of
@@ -31,7 +35,8 @@ Set `STAVE_GTK` to use another binary (`CARGO_TARGET_DIR` is honoured).
 Window options (they work without `--window-screenshot` too): `--theme
 system|light|dark`, `--view parts|cut-list|files`, `--select NAME` (a
 part, piece of hardware or assembly), `--focus NAME` (a joint or a piece
-of hardware), `--diagnostic N` (select the Nth problem), `--problems` (open
+of hardware) with `--plan` (from above), `--in-3d` and `--step AMOUNT`
+(0 to 1), `--diagnostic N` (select the Nth problem), `--problems` (open
 the problems list), `--scene NAME`, `--explode AMOUNT`, `--size WxH`.
 Screenshot only: `--checking` holds a second check running (the pill's
 spinner), `--building` presses the build button and holds its check.
@@ -55,9 +60,13 @@ forwards what people do.
 | `stave-app` | `session` | The shared state and its commands and events (below). |
 | `stave-app` | `check` | One check as a value that crosses threads (`check::run`, `Checked`, `Outcome`), and the folder watcher with its debounce (`Watcher`, `RECHECK_DELAY` = 250 ms). |
 | `stave-app` | `inspect` | The parts tree (`parts_tree`, `PartsTree::filtered`) and the inspector's account of a selection (`inspect`), with the declaration it is written in, highlighted (`snippet`, `highlight`). |
-| `stave-app` | `focus`, `view` | Focus mode, problems as rows, posing at a contact (unchanged). |
+| `stave-app` | `problems` | The problems list (`tree(checked, Filter)`: the parts tree showing only parts with problems, one `ProblemRow` per `Category` with its places; involved parts; `elsewhere`) and a problem's `details` (eyebrow, plain title, the `stave check` text, `Fix`es, the `MotionCard`). |
+| `stave-app` | `focus`, `view` | Focus mode (its insert text with `steps`, `link` and `location`; `receives`), problems as rows, posing at a contact. |
 | `stave-gtk` | `ui/mod.rs` | The window: owns the `Session`, dispatches commands, redraws on events, runs checks on a worker thread, and keeps what only the 3D view needs (camera, renderer, focus mode's scrub, the "Open it" slider). |
-| `stave-gtk` | `ui/header.rs`, `tree.rs`, `inspector.rs`, `chrome.rs` | The title bar; the parts sidebar; the inspector; the status bar, motion bar, problems list and placeholder pages. |
+| `stave-gtk` | `ui/header.rs`, `tree.rs`, `inspector.rs`, `chrome.rs` | The title bar; the parts sidebar; the inspector (with a problem's details); the status bar, motion bar and placeholder pages. |
+| `stave-gtk` | `ui/problems.rs` | The Problems sidebar: filters and the problems tree. |
+| `stave-gtk` | `ui/view_tools.rs`, `slider.rs` | The 3D view's toolbar (Pull apart), camera buttons, the shared-wood key and focus mode's From above / In 3D switch; the design's slider (track, ring handle, a hatched blocked range). |
+| `stave-gtk` | `ui/focus_stage.rs`, `focus_panel.rs` | Focus mode in the 3D view's area (the step player, the caption, three small views, the swing card) and a problem's motion card; focus mode's side panel. |
 | `stave-gtk` | `ui/icons.rs`, `style.rs` | The design's icons drawn from SVG path data in the text colour; one stylesheet whose colours are all libadwaita's named colours (`@headerbar_bg_color`, `@sidebar_bg_color`, `@card_bg_color`, `@accent_bg_color`, `@success_color`, ...), so light and dark both come from it and follow the style manager the moment it changes; only the code block is dark in both. |
 
 ## The session contract
@@ -128,9 +137,10 @@ PDF doesn't exist yet, and the button says so honestly.
 ```
 ┌ title bar ── sidebar · back · forward · open · title ─ Parts|Cut list|Files ─ scene ▾ · pill · hammer · menu ┐
 │ ┌ sidebar ──────┐ ┌ 3D view ─────────────────────────────┐ ┌ inspector ─────┐ │
-│ │ Parts tree    │ │ [view-toolbar]        [camera-toolbar]│ │ details, focus │ │
-│ │  or problems  │ │                                       │ │ panel, or the  │ │
-│ │  list         │ │          motion bar ("Open it")       │ │ problem slot   │ │
+│ │ Parts tree    │ │ [Pull apart ▶ together—apart]  [fit]  │ │ details, focus │ │
+│ │  or problems  │ │                               [front] │ │ panel, or a    │ │
+│ │  tree         │ │                               [turn]  │ │ problem's      │ │
+│ │               │ │  motion bar / motion card / steps     │ │ details        │ │
 │ └───────────────┘ └───────────────────────────────────────┘ └────────────────┘ │
 └ status bar ── ● Checked 5 files · 0 errors · 0 warnings · 26 ms   Watching for changes   Selected: … ┘
 ```
@@ -158,31 +168,97 @@ PDF doesn't exist yet, and the button says so honestly.
   leaves focus or clears the selection. The backdrop follows the style
   (#e8e5df light, #242428 dark, chosen when each frame is drawn and
   redrawn when the style changes). The floating motion bar opens the
-  selection's door or drawer, or swings a selected problem's motion.
+  selection's door or drawer (a problem has its own motion card).
 - **Narrow windows**: below 1100 sp the parts sidebar folds away (the
   sidebar button shows it over the view); below 860 sp the inspector
   does too (it slides in while something is selected), the switcher and
   scene menu drop their words and the subtitle goes; below 600 sp the
   title, the open button and forward go too.
 
+## The 3D view's controls
+
+- **View toolbar** (top left, `ViewToolbar`): "Pull apart" is a toggle;
+  on, it sets `Command::SetExplode(1)` and grows a play button and the
+  "together … apart" slider (`Slider`, 12 px handle, thin ring); the
+  slider sends `SetExplode`; play runs the amount from 0 to 1 in 3 s on
+  the frame clock. `Event::ExplodeChanged` reposes (staged: assemblies
+  first, then parts) and redraws the toolbar; the toggle stays on at 0
+  until it is switched off. The status bar says "Pulled apart · 60%" while
+  nothing is selected. Hidden in focus mode and while a problem is posed.
+- **Camera buttons** (top right, `CameraToolbar`): fit is `win.frame`
+  (the selection, or everything); front looks from the front, a little
+  above, framing everything; turn swings the view half way round.
+
+## Problems
+
+- **The sidebar** (`ProblemsSidebar`, Problems.dc.html) opens with the
+  pill, Ctrl+E or `--problems`; from another view `win.problems` goes to
+  the Parts view first. Its filters (All / Errors / Warnings with counts)
+  and rows come from `stave_app::problems::tree(latest, filter)`; the
+  carcass and then the assemblies, each part with a problem showing a
+  badge (how many problems are about it, red for errors, amber for
+  warnings) or "involved", and under it one row per kind: the
+  category's icon (line icons in `icons.rs`: the door-swing plan symbol
+  for motion, two boxes sharing a corner for overlap, two apart for no
+  contact, a drawer between sides for a slide gap, two arrows for order,
+  ...), the title with its count when more than one, and the places in
+  monospace; the full messages are its tooltip. Choosing a row selects
+  its first problem (`Selection::Problem`); the row under the part it is
+  about is ringed.
+- **The details** (`Inspector::show_problem(&Details)`): the eyebrow in
+  the severity's colour, the plain title and what happened, the text
+  exactly as `stave check .` prints it in the dark code block (coloured
+  by line: code, arrows, the source line highlighted, carets, `help:`),
+  "Ways to fix it" (the help line split at "or"), each with "Show in
+  text" (`Command::GoToSource` to the problem's line), and the note that
+  fixes are never applied without you.
+- **Posed at contact**: a problem with a contact is posed and tinted with
+  its shared wood (unchanged), framed, with the "Shared wood at first
+  contact" key in the view toolbar's place; a motion gets the motion card
+  (`ProblemCard`): "Swing door to see where it hits", the slider from 0
+  to fully open with the blocked range hatched red from the contact (its
+  handle ringed red past it), "closed 0°", "blocked from 0.6°", "opens to
+  110°". The status bar says "Posed at contact · door at 2.6°".
+
+## Focus mode
+
+Focus mode keeps its state in the window (`FocusState`: progress,
+options, from above, playing) and lays the 3D view's area out by kind
+(`layout_for_focus`); the side panel is the inspector's `focus` page.
+
+- **A joint** (JointFocus.dc.html): the step player floats at the bottom
+  of the view (`StepCard`): play (pauses while playing), "**Step 1 of 1** ·
+  `push(rung[front], along: length)`", "rung[front] is 6 mm from home",
+  and the apart … together scrub. The side panel: JOINT, the kind's name
+  and the first sentence of its doc comment; Goes in / Receives it / the
+  cut / Fit (green when it fits); SHOW with X-ray ("see into
+  leg[front_left]"), Tint cut faces and Fade other parts; HOW IT GOES
+  TOGETHER with the link to the kind (`std:joinery/socket`, to its line)
+  and its `insert:` steps one a line.
+- **Hardware** (Hinge.dc.html): the area becomes a page (`.stave-stage.page`):
+  a line saying what the view looks at ("**Looking down** on the hinge,
+  through the cabinet top · back ↑ · front ↓", or "In 3D around ..."), the
+  view in a rounded frame with the From above / In 3D switch at its top
+  right (`PlanSwitch`; only when focus has a view from above), the
+  members' numbers drawn on it, three small views rendered offscreen at
+  fixed angles (closed, 45°, fully open; the nearest is ringed, a click
+  goes there), and the swing card (`SwingCard`: play, the door's name,
+  the slider and "44°"). The side panel: HARDWARE, "How a cup hinge
+  works" and the kind's doc comment, its documented members numbered as
+  on the drawing, and Opens to / Closest to the side / Closest to
+  anything / Swing check.
+- Leaving (Esc, the panel's close button, Back) puts the Parts view's
+  layout back.
+
 ## Slots for the next lanes
 
-- **Lane 2, the 3D view's toolbar**: two empty, hidden `gtk::Box`es are
-  overlaid on the view, named `view-toolbar` (top left: Pull apart and its
-  slider, Exploded.dc.html) and `camera-toolbar` (top right: fit, front,
-  turn). The explode amount is `Session::explode` (`Command::SetExplode`,
-  `Event::ExplodeChanged` reposes); fitting is the window's `win.frame`
-  action.
 - **Lane 2, the Files view**: the `files` page of the view stack
   (`chrome::FilesPage`, a placeholder) is replaced by the editor. It shows
   `Selection::Location` when `Event::ViewChanged` or
   `Event::SelectionChanged` arrives, and selects with `Command::Select` or
-  `Command::GoToSource`; back and forward already walk through it.
-- **Lane 3, problems**: the pill already toggles `Sidebar::Problems`; the
-  sidebar's `problems` page (`chrome::ProblemsList`, a plain list) is
-  replaced by the problems tree and filters (Problems.dc.html), selecting
-  with `Selection::Problem`. A selected problem with a contact is posed
-  and tinted already, and the motion bar swings it; the inspector's
-  `problem` page (`Inspector::show_problem`, message and help only) is
-  replaced by the problem's details and ways to fix it.
+  `Command::GoToSource`; back and forward already walk through it. "Show
+  in text" in a problem's details and the joint kind's link in focus mode
+  send `GoToSource` (the kind's link may name a `std/...` file).
+- **Pulled apart panel**: Exploded.dc.html's side panel ("How it comes
+  apart", the staged moves in words) isn't built.
 - **Cut list**: the `cut-list` page is a "Cut list is coming" status page.
