@@ -36,6 +36,13 @@ pub fn pixels(value: f64) -> u32 {
         .unwrap_or(1)
 }
 
+/// A pointer coordinate as the whole widget pixel it falls in.
+pub fn int_of(value: f64) -> i32 {
+    stave_geom::render::integer_from_f64(value.floor().clamp(-1e6, 1e6))
+        .and_then(|n| i32::try_from(n).ok())
+        .unwrap_or(0)
+}
+
 /// A byte size for a GPU buffer.
 pub fn bytes(size: usize) -> u64 {
     u64::try_from(size).unwrap_or(u64::MAX)

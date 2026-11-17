@@ -403,7 +403,7 @@ fn render_bounds(
         scene,
         posed,
         orbit,
-        selection: None,
+        selection: &[],
         highlight,
         section: view.section,
         looks: view.looks,

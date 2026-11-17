@@ -47,6 +47,14 @@ pub const SIDEBAR: Shape = stroke(
         "M6 2.5v11",
     ],
 );
+/// Linked: two chain links (the 3D view follows the text).
+pub const LINK: Shape = stroke(
+    1.6,
+    &[
+        "M6.5 9.5a3 3 0 0 0 4.2 0l2.1-2.1a3 3 0 0 0-4.2-4.2l-.7.7",
+        "M9.5 6.5a3 3 0 0 0-4.2 0L3.2 8.6a3 3 0 0 0 4.2 4.2l.7-.7",
+    ],
+);
 /// Back.
 pub const BACK: Shape = stroke(1.8, &["M10 3.5L5.5 8L10 12.5"]);
 /// Forward.

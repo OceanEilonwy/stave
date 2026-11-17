@@ -125,8 +125,9 @@ pub struct Frame<'a> {
     pub posed: &'a Posed,
     /// The camera.
     pub orbit: Orbit,
-    /// The selected node, drawn tinted.
-    pub selection: Option<NodeId>,
+    /// The selected nodes, drawn tinted: one item's, or every item of a
+    /// selected assembly.
+    pub selection: &'a [NodeId],
     /// A problem to show: its nodes tinted red and its shared volumes drawn
     /// as red boxes on top of everything.
     pub highlight: Option<&'a Highlight>,
@@ -1118,11 +1119,13 @@ impl Renderer {
         };
         self.queue
             .write_buffer(&self.globals, 0, bytemuck::bytes_of(&globals));
-        // Every node of the selected item is tinted (a hinge is two).
-        let selected = frame
+        // Every node of a selected item is tinted (a hinge is two).
+        let selected: Vec<stave_scene::Item> = frame
             .selection
-            .and_then(|id| scene.node(id))
-            .map(|node| node.item);
+            .iter()
+            .filter_map(|id| scene.node(*id))
+            .map(|node| node.item)
+            .collect();
         let nodes: Vec<NodeData> = scene
             .node_ids()
             .filter_map(|id| {
@@ -1155,7 +1158,7 @@ impl Renderer {
                     Look::XRay => [0.38, 0.1, cut_tint * 1.4, 0.9],
                 };
                 let in_problem = frame.highlight.is_some_and(|h| h.nodes.contains(&id));
-                let tint = if selected == Some(node.item) {
+                let tint = if selected.contains(&node.item) {
                     [ACCENT[0], ACCENT[1], ACCENT[2], 0.6]
                 } else if in_problem {
                     [PROBLEM[0], PROBLEM[1], PROBLEM[2], 0.18]

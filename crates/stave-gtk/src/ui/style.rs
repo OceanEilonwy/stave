@@ -65,6 +65,45 @@ button.stave-build { min-width: 36px; min-height: 34px; padding: 0; border-radiu
 
 .stave-floating { border-radius: 12px; padding: 8px 14px; font-size: 13px; border-spacing: 12px; }
 .stave-placeholder { font-size: 13px; }
+
+.stave-files .stave-file { padding: 5px 8px; border-spacing: 6px; }
+.stave-files .stave-file.nested { padding-left: 20px; }
+.stave-files .stave-file.found { border-spacing: 0; }
+.stave-files .stave-folder { padding: 9px 8px 5px 8px; font-weight: 600; }
+.stave-files .stave-read-only { font-size: 11px; }
+.stave-files > row:selected .stave-file { font-weight: 600; }
+.stave-tabs { min-height: 38px; padding: 0 8px; }
+.stave-tabs > box { border-spacing: 2px; }
+button.stave-tab { min-height: 32px; padding: 0 14px; margin-top: 6px; border-radius: 8px 8px 0 0; font-size: 13px; font-weight: normal; }
+button.stave-tab.active { font-weight: 600; }
+.stave-mode { padding: 2px; border-radius: 8px; font-size: 12px; font-weight: 600; }
+.stave-mode > toggle { min-height: 24px; padding: 0 10px; border-radius: 6px; }
+.stave-mode > separator { background: none; min-width: 0; margin: 0; }
+.stave-crumbs { min-height: 30px; padding: 0 16px; font-size: 12px; }
+.stave-crumb.current { font-weight: 600; }
+textview.stave-editor { font-family: "JetBrains Mono", "Adwaita Mono", monospace; font-size: 13px; }
+.stave-gutter { font-family: "JetBrains Mono", "Adwaita Mono", monospace; font-size: 13px; }
+.stave-editor-footer { min-height: 28px; padding: 0 16px; font-size: 12px; }
+.stave-lens { font-family: "Adwaita Sans", "Inter", sans-serif; font-size: 11.5px; border-spacing: 2px; }
+button.stave-lens-link { min-height: 0; min-width: 0; padding: 0 2px; font-weight: normal; border-radius: 4px; }
+.stave-peek { border-radius: 10px; margin-top: 2px; }
+.stave-peek-head { padding: 7px 12px; font-family: "Adwaita Sans", "Inter", sans-serif; font-size: 12px; border-radius: 10px 10px 0 0; }
+.stave-peek-path { font-weight: 700; }
+.stave-peek-body { padding: 6px 0; }
+.stave-peek-line { min-height: 21px; }
+.stave-peek-number { padding-right: 12px; font-family: "JetBrains Mono", "Adwaita Mono", monospace; font-size: 12.5px; }
+.stave-peek-code { font-family: "JetBrains Mono", "Adwaita Mono", monospace; font-size: 12.5px; }
+.stave-hover { border-radius: 10px; padding: 10px 12px; font-family: "Adwaita Sans", "Inter", sans-serif; font-size: 13px; }
+.stave-hover-kind { font-size: 11px; font-weight: 700; letter-spacing: 0.04em; }
+.stave-hover-signature { font-family: "JetBrains Mono", "Adwaita Mono", monospace; font-size: 12.5px; font-weight: 600; }
+.stave-hover-where, .stave-hover-help { font-size: 12px; }
+.stave-uses-head { padding: 4px 8px 4px 16px; font-size: 13px; }
+.stave-uses-list { background: none; }
+.stave-uses-list > row { padding: 0; }
+.stave-use { padding: 6px 16px; font-size: 12.5px; }
+.stave-use-place { font-weight: 600; }
+.stave-use-line { font-family: "JetBrains Mono", "Adwaita Mono", monospace; font-size: 12px; }
+.stave-chip { border-radius: 16px; padding: 6px 12px 6px 8px; font-size: 12px; font-weight: 600; }
 "#;
 
 /// The colours, from libadwaita's named colours, so the light and dark
@@ -105,6 +144,41 @@ button.stave-build.building:disabled { background: alpha(@accent_bg_color, 0.45)
 
 .stave-statusbar { background: @headerbar_bg_color; color: alpha(@headerbar_fg_color, 0.7); box-shadow: inset 0 1px @headerbar_shade_color; }
 .stave-floating { background: alpha(@view_bg_color, 0.94); color: @view_fg_color; box-shadow: 0 2px 10px alpha(black, 0.15); }
+
+.stave-files .stave-folder, .stave-files .stave-file.standard, .stave-files .stave-detail { color: alpha(currentColor, 0.7); }
+.stave-files > row:selected .stave-detail { color: alpha(@accent_fg_color, 0.9); }
+.stave-files .stave-unsaved { color: @accent_color; font-weight: 700; }
+.stave-files > row:selected .stave-unsaved { color: @accent_fg_color; }
+.stave-editor-column { background: @view_bg_color; color: @view_fg_color; box-shadow: inset -1px 0 @headerbar_shade_color; }
+.stave-tabs { background: mix(@view_bg_color, @window_bg_color, 0.6); box-shadow: inset 0 -1px @headerbar_shade_color; }
+button.stave-tab { background: transparent; color: alpha(currentColor, 0.7); box-shadow: none; }
+button.stave-tab:hover { background: alpha(currentColor, 0.05); }
+button.stave-tab.active { background: @view_bg_color; color: @view_fg_color; box-shadow: inset 1px 0 @headerbar_shade_color, inset -1px 0 @headerbar_shade_color, inset 0 1px @headerbar_shade_color; }
+.stave-mode { background: alpha(currentColor, 0.08); }
+.stave-crumbs { color: alpha(currentColor, 0.7); box-shadow: inset 0 -1px alpha(currentColor, 0.07); }
+.stave-crumb.current { color: @view_fg_color; }
+textview.stave-editor, textview.stave-editor > text, .stave-gutter { background: @view_bg_color; color: @view_fg_color; }
+.stave-editor-footer { color: alpha(currentColor, 0.7); box-shadow: inset 0 1px alpha(currentColor, 0.07); }
+.stave-lens { color: alpha(currentColor, 0.7); }
+button.stave-lens-link { color: @accent_color; background: none; }
+button.stave-lens-link:hover { background: alpha(@accent_color, 0.1); }
+.stave-peek { background: mix(@view_bg_color, @accent_bg_color, 0.02); box-shadow: 0 0 0 1px alpha(@accent_bg_color, 0.35), 0 4px 14px alpha(@accent_bg_color, 0.12); }
+.stave-peek-head { background: alpha(@accent_bg_color, 0.1); box-shadow: inset 0 -1px alpha(@accent_bg_color, 0.18); }
+.stave-peek-path { color: @accent_color; }
+.stave-peek-what, .stave-peek-number { color: alpha(currentColor, 0.6); }
+.stave-peek-line.current { background: alpha(@accent_bg_color, 0.06); }
+.stave-peek-line.current .stave-peek-number { color: @accent_color; }
+.stave-hover { background: @popover_bg_color; color: @popover_fg_color; box-shadow: 0 0 0 1px alpha(black, 0.1), 0 4px 16px alpha(black, 0.18); }
+.stave-hover-kind, .stave-hover-where, .stave-hover-help { color: alpha(currentColor, 0.7); }
+.stave-hover-kind.error { color: @error_color; }
+.stave-hover-kind.warning { color: @warning_color; }
+.stave-uses { background: @view_bg_color; box-shadow: inset 0 1px @headerbar_shade_color; }
+.stave-uses-list > row:hover { background: alpha(currentColor, 0.05); }
+.stave-use-place { color: @accent_color; }
+.stave-use-line { color: alpha(currentColor, 0.6); }
+.stave-viewport { background: @window_bg_color; color: @window_fg_color; }
+.stave-files-split > separator { background: @headerbar_shade_color; }
+.stave-chip { background: alpha(@view_bg_color, 0.92); color: @accent_color; box-shadow: 0 1px 6px alpha(black, 0.1); }
 "#;
 
 /// The snippet's colours: keyword, type or call, number, string, comment.

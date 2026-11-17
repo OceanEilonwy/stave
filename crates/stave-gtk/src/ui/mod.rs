@@ -15,6 +15,8 @@
 //! camera, picking); this module only wires widgets to them.
 
 mod chrome;
+mod editor;
+mod files;
 mod focus_panel;
 mod header;
 mod icons;
@@ -26,6 +28,7 @@ mod viewport;
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::Duration;
 
 use adw::prelude::*;
@@ -35,15 +38,19 @@ use stave_app::Contact;
 use stave_app::check::{self, Checked, Watcher};
 use stave_app::focus::{self, Focus, Target};
 use stave_app::inspect;
+use stave_app::link;
 use stave_app::session::{
-    Build, Command, Event, Explode, ProblemIndex, Selection, Session, Sidebar, Tone, Verdict, View,
+    Build, Command, Event, Explode, LineNumber, ProblemIndex, Selection, Session, Sidebar,
+    SourceLocation, Tone, Verdict, View,
 };
 use stave_app::view::{self, Highlight};
 use stave_model::solved::AssemblyId;
 use stave_scene::{Look, NodeId, Orbit, Overlay, Posed};
 
 use crate::render::{Backdrop, Frame, Renderer};
-use chrome::{FilesPage, MotionBar, ProblemsList, StatusBar};
+use chrome::{MotionBar, ProblemsList, StatusBar};
+pub use files::Wish;
+use files::{FilesPage, Mode};
 use header::Header;
 use inspector::Inspector;
 use tree::TreeSidebar;
@@ -126,6 +133,12 @@ pub struct Options {
     /// For the screenshot: press the build button and hold its check
     /// running, to show the building state.
     pub building: bool,
+    /// The file to open in the Files view, as `doors.stave:9`.
+    pub file: Option<String>,
+    /// What the Files view shows once the names are in (screenshots).
+    pub wish: Wish,
+    /// The Files view shows the text alone.
+    pub text_only: bool,
 }
 
 /// Opens the window and runs until it is closed.
@@ -167,6 +180,9 @@ struct Wanted {
     problems: bool,
     checking: bool,
     building: bool,
+    file: Option<String>,
+    wish: Wish,
+    text_only: bool,
 }
 
 /// A problem posed in the view.
@@ -226,6 +242,9 @@ struct State {
     updating_controls: bool,
     /// Don't run checks (a screenshot of the checking state).
     hold_checks: bool,
+    /// The selection is changing because the editor's cursor moved: the
+    /// editor stays where it is.
+    linking: bool,
 }
 
 /// The window's widgets.
@@ -245,7 +264,7 @@ struct Widgets {
     status_page: adw::StatusPage,
     viewport: Viewport,
     motion: MotionBar,
-    files: FilesPage,
+    files: Rc<FilesPage>,
     status: StatusBar,
 }
 
@@ -282,6 +301,9 @@ impl Window {
                     problems: options.problems,
                     checking: options.checking,
                     building: options.building,
+                    file: options.file,
+                    wish: options.wish,
+                    text_only: options.text_only,
                 }),
                 window_screenshot: options.window_screenshot,
                 renderer,
@@ -296,6 +318,7 @@ impl Window {
                 focus: None,
                 updating_controls: false,
                 hold_checks: false,
+                linking: false,
             }),
             watcher: RefCell::new(None),
         });
@@ -356,9 +379,11 @@ impl Window {
             return;
         }
         let folder = self.session.borrow().folder().to_path_buf();
+        // The project as the editor shows it, unsaved changes included.
+        let overlay = self.widgets.files.overlay_for_check();
         let window = Rc::downgrade(self);
         glib::spawn_future_local(async move {
-            let outcome = gio::spawn_blocking(move || check::run(&folder))
+            let outcome = gio::spawn_blocking(move || check::run_with(&folder, &overlay))
                 .await
                 .unwrap_or_else(|_| check::Outcome::CantOpen {
                     message: "checking the design crashed".to_owned(),
@@ -373,7 +398,7 @@ impl Window {
     }
 
     /// The folder in the title until the design is in.
-    fn show_folder(&self) {
+    fn show_folder(self: &Rc<Self>) {
         let folder = self.session.borrow().folder().to_path_buf();
         let name = folder.file_name().map_or_else(
             || folder.display().to_string(),
@@ -383,7 +408,7 @@ impl Window {
         self.widgets
             .window
             .set_title(Some(&format!("{name} — Stave")));
-        self.widgets.files.show(None, &folder);
+        self.widgets.files.set_folder(&folder);
     }
 
     fn result_changed(self: &Rc<Self>) {
@@ -401,6 +426,7 @@ impl Window {
             .as_ref()
             .map_or(&[][..], |latest| latest.problems.as_slice());
         widgets.problems.show(problems);
+        widgets.files.show_result(latest.as_deref());
         let Some(shown) = shown.filter(|c| c.drawable().is_some()) else {
             // Nothing solved yet: say why.
             let (title, description) = match latest.as_ref() {
@@ -421,6 +447,9 @@ impl Window {
                 },
             };
             self.show_status(title, &description);
+            // The views that don't need the 3D view (the Files view) still
+            // open as asked.
+            self.apply_wanted();
             return;
         };
         if showing_older {
@@ -475,7 +504,7 @@ impl Window {
         self.focus_changed();
         self.request_render();
         // The 3D view draws (and saves a screenshot) only when it shows.
-        if self.session.borrow().view() != View::Parts {
+        if !self.shows_3d() {
             self.capture_if_asked();
         }
     }
@@ -545,6 +574,30 @@ impl Window {
         if wanted.view != View::Parts {
             self.dispatch(Command::ShowView(wanted.view));
         }
+        if wanted.text_only {
+            self.widgets.files.set_mode(Mode::Text);
+        }
+        if let Some(file) = &wanted.file {
+            let folder = self.session.borrow().folder().to_path_buf();
+            let (path, line) = match file.rsplit_once(':') {
+                Some((path, line)) => match line.parse::<u32>() {
+                    Ok(line) => (path, line),
+                    Err(_) => (file.as_str(), 1),
+                },
+                None => (file.as_str(), 1),
+            };
+            let path = if path.starts_with("std/") {
+                path.to_owned()
+            } else {
+                folder.join(path).display().to_string()
+            };
+            if let Some(line) = LineNumber::new(line) {
+                self.dispatch(Command::GoToSource(SourceLocation { path, line }));
+            }
+        }
+        if wanted.wish != Wish::default() {
+            self.widgets.files.wish(wanted.wish.clone());
+        }
         if wanted.checking || wanted.building {
             self.state.borrow_mut().hold_checks = true;
             self.dispatch(if wanted.building {
@@ -555,13 +608,103 @@ impl Window {
         }
     }
 
-    fn view_changed(&self) {
-        let session = self.session.borrow();
-        let view = session.view();
+    fn view_changed(self: &Rc<Self>) {
+        let view = self.session.borrow().view();
         self.widgets.header.show_view(view);
         self.widgets.views.set_visible_child_name(view.word());
-        if let Some(Selection::Location(location)) = session.selection() {
-            self.widgets.files.show(Some(location), session.folder());
+        self.place_viewport();
+        self.sync_files();
+    }
+
+    /// `true` when the 3D view is on screen: the Parts view, or the Files
+    /// view beside the text.
+    fn shows_3d(&self) -> bool {
+        match self.session.borrow().view() {
+            View::Parts => true,
+            View::CutList => false,
+            View::Files => self.widgets.files.mode() == Mode::Both,
+        }
+    }
+
+    /// Puts the 3D view where it shows: in the Parts view, or beside the
+    /// text in the Files view (Both). It is one widget, moved between the
+    /// two, so the camera and everything posed stay as they are.
+    fn place_viewport(self: &Rc<Self>) {
+        let view_stack = &self.widgets.view_stack;
+        let in_files =
+            self.session.borrow().view() == View::Files && self.widgets.files.mode() == Mode::Both;
+        let slot = &self.widgets.files.view_slot;
+        let in_slot = view_stack
+            .parent()
+            .is_some_and(|parent| parent == *slot.upcast_ref::<gtk::Widget>());
+        if in_files && !in_slot {
+            self.widgets.inner.set_content(None::<&gtk::Widget>);
+            slot.set_child(Some(view_stack));
+            self.request_render();
+        } else if !in_files && in_slot {
+            slot.set_child(None::<&gtk::Widget>);
+            self.widgets.inner.set_content(Some(view_stack));
+            self.request_render();
+        }
+    }
+
+    /// The Files view follows the selection: a place in a file is shown;
+    /// a part, assembly or piece of hardware selected elsewhere moves the
+    /// text to the line that places it, and the chip names it.
+    fn sync_files(self: &Rc<Self>) {
+        let (view, selection, placed, chip) = {
+            let session = self.session.borrow();
+            let selection = session.selection().cloned();
+            let placed = session
+                .shown()
+                .zip(selection.as_ref())
+                .and_then(|(shown, selection)| link::placed_at(shown, selection));
+            let chip = session
+                .drawable()
+                .zip(selection.as_ref())
+                .zip(placed.as_ref())
+                .and_then(|(((design, _), selection), placed)| {
+                    link::chip(design, selection, placed)
+                });
+            (session.view(), selection, placed, chip)
+        };
+        if view != View::Files {
+            return;
+        }
+        let files = &self.widgets.files;
+        match (&selection, placed) {
+            (Some(Selection::Location(location)), _) => files.show_location(location),
+            (Some(_), Some(placed)) => {
+                if self.state.borrow().linking {
+                    files.set_chip(chip.as_deref());
+                } else {
+                    files.reveal(&placed, chip.as_deref());
+                }
+            }
+            _ => files.set_chip(None),
+        }
+    }
+
+    /// The editor's cursor rests on a name: select what it means in the
+    /// design, without a history entry. A name the 3D view can't show
+    /// leaves the selection as it is.
+    fn text_linked(
+        self: &Rc<Self>,
+        found: Option<(Arc<stave_ide::Analysis>, stave_ide::SymbolId)>,
+    ) {
+        let Some((analysis, symbol)) = found else {
+            return;
+        };
+        let selection = {
+            let session = self.session.borrow();
+            session.drawable().and_then(|(design, _)| {
+                link::selection_for(design, &analysis, symbol, session.selection())
+            })
+        };
+        if let Some(selection) = selection {
+            self.state.borrow_mut().linking = true;
+            self.dispatch(Command::Link(Some(selection)));
+            self.state.borrow_mut().linking = false;
         }
     }
 
@@ -593,11 +736,7 @@ impl Window {
                 .status
                 .show_selected(&name.map_or_else(String::new, |name| format!("Selected: {name}")));
         }
-        if let Some(Selection::Location(location)) = &selection {
-            widgets
-                .files
-                .show(Some(location), self.session.borrow().folder());
-        }
+        self.sync_files();
         // A narrow window shows the inspector over the view while
         // something is selected.
         if widgets.inner.is_collapsed() {
@@ -852,7 +991,7 @@ impl Window {
                 scene: graph,
                 posed: &frame.posed,
                 orbit,
-                selection: None,
+                selection: &[],
                 highlight: None,
                 section,
                 looks: Some(&frame.looks),
@@ -895,6 +1034,51 @@ impl Window {
         let item = session.selection()?.item()?;
         let (_, graph) = session.drawable()?;
         graph.nodes_of(item).into_iter().next()
+    }
+
+    /// Every node to draw selected: the selected item's, or those of every
+    /// part and piece of hardware inside a selected assembly.
+    fn selected_nodes(&self) -> Vec<NodeId> {
+        let session = self.session.borrow();
+        let Some((design, graph)) = session.drawable() else {
+            return Vec::new();
+        };
+        let items: Vec<stave_scene::Item> = match session.selection() {
+            Some(Selection::Assembly(id)) => {
+                let inside = |mut assembly: Option<AssemblyId>| {
+                    for _ in 0..=design.assemblies.len() {
+                        match assembly {
+                            Some(found) if found == *id => return true,
+                            Some(found) => {
+                                assembly =
+                                    design.assemblies.get(found.index()).and_then(|a| a.parent);
+                            }
+                            None => return false,
+                        }
+                    }
+                    false
+                };
+                design
+                    .parts
+                    .iter()
+                    .filter(|p| inside(p.assembly))
+                    .map(|p| stave_scene::Item::Part(p.id))
+                    .chain(
+                        design
+                            .hardware
+                            .iter()
+                            .filter(|h| inside(h.assembly))
+                            .map(|h| stave_scene::Item::Hardware(h.id)),
+                    )
+                    .collect()
+            }
+            Some(selection) => selection.item().into_iter().collect(),
+            None => Vec::new(),
+        };
+        items
+            .into_iter()
+            .flat_map(|item| graph.nodes_of(item).into_iter().take(1))
+            .collect()
     }
 
     /// F: frames the selection, or everything.
@@ -1184,7 +1368,7 @@ impl Window {
     }
 
     fn render_now(self: &Rc<Self>) {
-        let selection = self.selected_node();
+        let selection = self.selected_nodes();
         let backdrop = self.backdrop();
         let rendered = {
             let session = self.session.borrow();
@@ -1227,7 +1411,7 @@ impl Window {
                 scene: graph,
                 posed,
                 orbit,
-                selection: if focus.is_some() { None } else { selection },
+                selection: if focus.is_some() { &[] } else { &selection },
                 highlight: highlight.as_ref(),
                 section: plan
                     .map(|p| p.section)
@@ -1380,11 +1564,21 @@ impl Window {
         add(
             "search",
             Box::new(move || {
+                // The Files view searches files and names; the others the
+                // parts tree.
+                if this.session.borrow().view() == View::Files {
+                    this.widgets.files.focus_search();
+                    return;
+                }
                 this.dispatch(Command::ShowSidebar(Sidebar::Parts));
                 this.widgets.outer.set_show_sidebar(true);
                 this.widgets.tree.focus_search();
             }),
         );
+        let this = self.clone();
+        add("save", Box::new(move || this.widgets.files.save()));
+        let this = self.clone();
+        add("format", Box::new(move || this.widgets.files.format()));
         let this = self.clone();
         add(
             "sidebar",
@@ -1442,6 +1636,8 @@ impl Window {
                 ("win.view-parts", &["<Control>1"]),
                 ("win.view-cut-list", &["<Control>2"]),
                 ("win.view-files", &["<Control>3"]),
+                ("win.save", &["<Control>s"]),
+                ("win.format", &["<Control><Shift>i"]),
             ] {
                 application.set_accels_for_action(action, accels);
             }
@@ -1461,9 +1657,51 @@ impl Window {
             move |result| {
                 let Ok(folder) = result else { return };
                 let Some(path) = folder.path() else { return };
-                window.open_folder(path);
+                let next = window.clone();
+                window.ask_about_unsaved(move || next.open_folder(path));
             },
         );
+    }
+
+    /// Asks what to do with unsaved changes (save, throw away or stay),
+    /// then goes on, unless people chose to stay.
+    fn ask_about_unsaved(self: &Rc<Self>, then: impl FnOnce() + 'static) {
+        let files = &self.widgets.files;
+        let count = files.unsaved_count();
+        if count == 0 {
+            then();
+            return;
+        }
+        let dialog = adw::AlertDialog::builder()
+            .heading("Save your changes?")
+            .body(if count == 1 {
+                "One file has changes that aren't saved. If you don't save them, they are lost.".to_owned()
+            } else {
+                format!("{count} files have changes that aren't saved. If you don't save them, they are lost.")
+            })
+            .close_response("cancel")
+            .default_response("save")
+            .build();
+        dialog.add_responses(&[
+            ("cancel", "_Cancel"),
+            ("discard", "_Don't Save"),
+            ("save", "_Save"),
+        ]);
+        dialog.set_response_appearance("discard", adw::ResponseAppearance::Destructive);
+        dialog.set_response_appearance("save", adw::ResponseAppearance::Suggested);
+        let window = self.clone();
+        let then = RefCell::new(Some(then));
+        dialog.connect_response(None, move |_, response| {
+            let go_on = match response {
+                "save" => window.widgets.files.save_all(),
+                "discard" => true,
+                _ => false,
+            };
+            if go_on && let Some(then) = then.borrow_mut().take() {
+                then();
+            }
+        });
+        dialog.present(Some(&self.widgets.window));
     }
 
     fn open_folder(self: &Rc<Self>, folder: PathBuf) {
@@ -1600,10 +1838,117 @@ impl Window {
             if let Some(window) = window.upgrade() {
                 window.request_render();
                 window.render_pictures();
+                window
+                    .widgets
+                    .files
+                    .restyle(adw::StyleManager::default().is_dark());
             }
         });
 
+        self.connect_files();
         self.connect_viewport();
+    }
+
+    /// The Files view tells the window where the cursor is, where to go,
+    /// when typing has paused and which way it shows the 3D view.
+    fn connect_files(self: &Rc<Self>) {
+        let files = &self.widgets.files;
+        let window = Rc::downgrade(self);
+        files.connect_link(move |found| {
+            if let Some(window) = window.upgrade() {
+                window.text_linked(found);
+            }
+        });
+        let window = Rc::downgrade(self);
+        files.connect_go(move |from, to| {
+            let Some(window) = window.upgrade() else {
+                return;
+            };
+            // Where the cursor was becomes the place Back returns to.
+            if let Some(from) = from {
+                window.dispatch(Command::Link(Some(Selection::Location(from))));
+            }
+            window.dispatch(Command::GoToSource(to));
+        });
+        let window = Rc::downgrade(self);
+        files.connect_check(move || {
+            if let Some(window) = window.upgrade() {
+                window.dispatch(Command::Check);
+            }
+        });
+        let window = Rc::downgrade(self);
+        files.connect_show_in_3d(move |analysis, symbol| {
+            let Some(window) = window.upgrade() else {
+                return;
+            };
+            let selection = {
+                let session = window.session.borrow();
+                session.drawable().and_then(|(design, _)| {
+                    link::selection_for(design, &analysis, symbol, session.selection())
+                })
+            };
+            if window.widgets.files.mode() == Mode::Text {
+                window.widgets.files.set_mode(Mode::Both);
+            }
+            match selection {
+                Some(selection) => window.dispatch(Command::Select(Some(selection))),
+                None => window.widgets.toasts.add_toast(
+                    adw::Toast::builder()
+                        .title("It isn't in the design the 3D view shows")
+                        .timeout(4)
+                        .build(),
+                ),
+            }
+        });
+        let window = Rc::downgrade(self);
+        files.connect_mode(move |_| {
+            if let Some(window) = window.upgrade() {
+                window.place_viewport();
+                window.sync_files();
+            }
+        });
+        let window = Rc::downgrade(self);
+        files.connect_notice(move |text| {
+            if let Some(window) = window.upgrade() {
+                window
+                    .widgets
+                    .toasts
+                    .add_toast(adw::Toast::builder().title(text).timeout(4).build());
+            }
+        });
+        // The title bar's sidebar button shows the files in the Files view.
+        let window = Rc::downgrade(self);
+        self.widgets
+            .header
+            .sidebar
+            .connect_active_notify(move |button| {
+                let Some(window) = window.upgrade() else {
+                    return;
+                };
+                if window.session.borrow().view() == View::Files {
+                    window
+                        .widgets
+                        .files
+                        .root
+                        .set_show_sidebar(button.is_active());
+                }
+            });
+        // Closing the window asks about unsaved changes first.
+        let window = Rc::downgrade(self);
+        self.widgets.window.connect_close_request(move |_| {
+            let Some(window) = window.upgrade() else {
+                return glib::Propagation::Proceed;
+            };
+            if !window.widgets.files.has_unsaved() {
+                return glib::Propagation::Proceed;
+            }
+            let closing = window.clone();
+            window.ask_about_unsaved(move || {
+                closing.widgets.files.forget_unsaved();
+                closing.widgets.window.close();
+            });
+            glib::Propagation::Stop
+        });
     }
 
     fn connect_viewport(self: &Rc<Self>) {
@@ -1680,7 +2025,7 @@ impl Window {
         keys.connect_key_pressed(move |_, key, _, modifiers| {
             if !modifiers.is_empty()
                 || gtk::prelude::GtkWindowExt::focus(&window.widgets.window)
-                    .is_some_and(|w| w.is::<gtk::Text>())
+                    .is_some_and(|w| w.is::<gtk::Text>() || w.is::<gtk::TextView>())
             {
                 return glib::Propagation::Proceed;
             }
@@ -1768,7 +2113,14 @@ fn selection_name(
         Selection::Hardware(id) => design.hardware.get(id.index()).map(|h| h.name.clone()),
         Selection::Assembly(id) => design.assemblies.get(id.index()).map(|a| a.name.clone()),
         Selection::Joint { joint, .. } => design.joints.get(joint.index()).map(|j| j.name.clone()),
-        Selection::Location(location) => Some(location.path.clone()),
+        Selection::Location(location) => Some(format!(
+            "{}:{}",
+            Path::new(&location.path).file_name().map_or_else(
+                || location.path.clone(),
+                |n| n.to_string_lossy().into_owned()
+            ),
+            location.line
+        )),
         Selection::Problem(ProblemIndex(index)) => {
             Some(format!("problem {}", index.saturating_add(1)))
         }
@@ -1931,6 +2283,7 @@ fn build_widgets(application: &adw::Application, options: &Options) -> Widgets {
         .build();
 
     let files = FilesPage::new();
+    files.keep_chip_above(&motion.root);
     let views = gtk::Stack::builder()
         .transition_type(gtk::StackTransitionType::Crossfade)
         .vexpand(true)
@@ -1977,6 +2330,8 @@ fn build_widgets(application: &adw::Application, options: &Options) -> Widgets {
     let medium = breakpoint(1100.0);
     medium.add_setter(&outer, "collapsed", Some(&true.to_value()));
     medium.add_setter(&outer, "show-sidebar", Some(&false.to_value()));
+    medium.add_setter(&files.root, "collapsed", Some(&true.to_value()));
+    medium.add_setter(&files.root, "show-sidebar", Some(&false.to_value()));
     window.add_breakpoint(medium);
     for (width, tiny) in [(860.0, false), (600.0, true)] {
         let narrow = breakpoint(width);
@@ -1984,6 +2339,13 @@ fn build_widgets(application: &adw::Application, options: &Options) -> Widgets {
         narrow.add_setter(&outer, "show-sidebar", Some(&false.to_value()));
         narrow.add_setter(&inner, "collapsed", Some(&true.to_value()));
         narrow.add_setter(&inner, "show-sidebar", Some(&false.to_value()));
+        narrow.add_setter(&files.root, "collapsed", Some(&true.to_value()));
+        narrow.add_setter(&files.root, "show-sidebar", Some(&false.to_value()));
+        narrow.add_setter(
+            files.paned(),
+            "orientation",
+            Some(&gtk::Orientation::Vertical.to_value()),
+        );
         for label in header.switcher_labels() {
             narrow.add_setter(label, "visible", Some(&false.to_value()));
         }

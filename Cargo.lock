@@ -1819,8 +1819,10 @@ dependencies = [
  "pollster",
  "stave-app",
  "stave-geom",
+ "stave-ide",
  "stave-lang",
  "stave-model",
+ "stave-modules",
  "stave-scene",
  "wgpu",
 ]

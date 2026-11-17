@@ -7,7 +7,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use adw::prelude::*;
-use stave_app::session::{CheckStatus, SourceLocation, Tone};
+use stave_app::session::{CheckStatus, Tone};
 use stave_app::view::Problem;
 use stave_lang::Severity;
 
@@ -281,37 +281,4 @@ pub fn cut_list_page() -> adw::StatusPage {
         .description("Every board to cut, sized and rounded once, will be listed here. It has its own design and isn't part of this version yet. Meanwhile, “stave dump” lists every part and its size.")
         .css_classes(["stave-placeholder"])
         .build()
-}
-
-/// The Files view, until lane 2's editor lands: says which place a link
-/// asked for.
-pub struct FilesPage {
-    /// The page.
-    pub root: adw::StatusPage,
-}
-
-impl FilesPage {
-    /// The placeholder.
-    pub fn new() -> FilesPage {
-        let root = adw::StatusPage::builder()
-            .title("Files")
-            .description("The project's files and the editor will be here.")
-            .css_classes(["stave-placeholder"])
-            .build();
-        FilesPage { root }
-    }
-
-    /// Shows which place is selected.
-    pub fn show(&self, location: Option<&SourceLocation>, folder: &std::path::Path) {
-        let description = match location {
-            Some(location) => format!(
-                "The editor will open {} here. It isn't built yet.",
-                location.display(folder)
-            ),
-            None => {
-                "The project's files and the editor will be here. They aren't built yet.".to_owned()
-            }
-        };
-        self.root.set_description(Some(&description));
-    }
 }
