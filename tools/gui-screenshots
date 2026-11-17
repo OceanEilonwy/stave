@@ -45,6 +45,12 @@ shot() {
 # in the 3D view, and the inspector's account of it (Main / MainDark).
 shot $window/main_light.png $cabinet --theme light --select 'door_l.stile[hinge]'
 shot $window/main_dark.png $cabinet --theme dark --select 'door_l.stile[hinge]'
+# A selection close up: the mirrored door's latch stile with its accent
+# outline and flat wash, no grain showing through; and a whole assembly
+# selected, outlined as one.
+shot $window/selected_close.png $cabinet --theme light --select 'door_r.stile[latch]' --zoom 3.5 --turn 15
+shot $window/selected_close_dark.png $cabinet --theme dark --select 'door_r.stile[latch]' --zoom 3.5 --turn 15
+shot $window/selected_assembly.png $cabinet --theme light --select door_l
 # A narrow window: the sidebar folds away and the inspector lies over the
 # 3D view while something is selected.
 shot $window/narrow.png $cabinet --theme light --select 'door_l.stile[hinge]' --size 760x900

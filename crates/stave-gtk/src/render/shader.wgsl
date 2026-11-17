@@ -17,6 +17,9 @@ struct Globals {
     section: vec4<f32>,
     // rgb: the ground shadow's colour; a: its strength.
     shadow: vec4<f32>,
+    // rgb: the selection outline's colour; a: how strongly the outline
+    // shows where the selection is hidden behind other parts.
+    outline: vec4<f32>,
 };
 
 // Is a point cut away by the section?
@@ -31,11 +34,13 @@ struct Node {
     colour: vec4<f32>,
     // xy: pith in grain coordinates; z: a seed; w: 0 wood, 1 metal.
     params: vec4<f32>,
-    // rgb: highlight colour; a: how much of it.
+    // rgb: a problem's tint colour; a: how much of it.
     tint: vec4<f32>,
     // x: opacity; y: fade toward a pale grey; z: how much darker faces
     // cut by a joint are; w: outline strength.
     style: vec4<f32>,
+    // rgb: the selection tint's colour; a: 1 when the node is selected.
+    selected: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> globals: Globals;
@@ -52,6 +57,8 @@ const KEY: f32 = 0.78;
 const FILL: f32 = 0.26;
 // How much darker the faces a cut made are drawn.
 const CUT_TINT: f32 = 0.38;
+// How much of the accent washes a selected part's base colour.
+const SELECTED_WASH: f32 = 0.7;
 
 // ---- noise ----
 
@@ -187,6 +194,12 @@ fn mesh_fragment(in: MeshOut, @builtin(front_facing) front: bool) -> @location(0
         // Faces a cut made are tinted darker, so the joinery reads.
         albedo = albedo * (1.0 - clamp(CUT_TINT * node.style.z * in.cut, 0.0, 0.8));
     }
+    // Selected: one flat colour, the material's base washed with the
+    // accent, so neither the grain nor the darker cut faces streak it; the
+    // light still shades it, so its form reads. The outline pass draws
+    // its edge.
+    let selected = node.selected.a;
+    albedo = mix(albedo, mix(node.colour.rgb, node.selected.rgb, SELECTED_WASH), selected);
     let to_eye = normalize(globals.eye.xyz - in.world);
     let key_direction = globals.key_direction.xyz;
     var shadow = key_light(in.world, normal);
@@ -206,8 +219,8 @@ fn mesh_fragment(in: MeshOut, @builtin(front_facing) front: bool) -> @location(0
         let specular = pow(max(dot(normal, halfway), 0.0), 24.0) * 0.05 * shadow;
         colour += vec3<f32>(specular) * KEY_COLOUR;
     }
-    // Selection: the accent colour, lit like everything else, with a
-    // brighter rim.
+    // A problem: its colour, lit like everything else, with a brighter
+    // rim.
     let rim = pow(1.0 - max(dot(normal, to_eye), 0.0), 2.0);
     let accent = node.tint.rgb * (hemisphere + key + fill) * 1.25 + vec3<f32>(0.18 * rim);
     colour = mix(colour, accent, node.tint.a);
@@ -256,8 +269,78 @@ fn edge_fragment(in: EdgeOut) -> @location(0) vec4<f32> {
     }
     let node = nodes[in.node];
     let ink = vec4<f32>(0.022, 0.012, 0.005, 0.42 * node.style.w);
-    let selected = vec4<f32>(node.tint.rgb * 0.6, 1.0);
-    return mix(ink, selected, step(0.01, node.tint.a));
+    // A selected part's own edges in a deep accent ink: its outline is
+    // drawn over them by the outline pass.
+    let selected = vec4<f32>(globals.outline.rgb * 0.45, 0.75);
+    // A problem's parts are edged in its red.
+    let problem = vec4<f32>(node.tint.rgb * 0.6, 1.0);
+    let edge = mix(ink, problem, step(0.01, node.tint.a));
+    return mix(edge, selected, node.selected.a);
+}
+
+// ---- the selection outline ----
+//
+// The selected nodes are drawn into a two-channel mask (red: where they
+// are seen, tested against the scene's depth; green: everywhere they
+// cover, hidden or not). A full-screen pass then draws the accent where
+// the mask changes within a few pixels: a band of constant width on
+// screen, whatever the zoom, around every edge of what is selected (its
+// outside, a hole seen through, a part in front of it). Where it is
+// hidden the band is drawn faint, so a selection behind other parts can
+// still be found.
+
+@fragment
+fn mask_fragment(in: MeshOut) -> @location(0) vec4<f32> {
+    if (cut_away(in.world)) {
+        discard;
+    }
+    return vec4<f32>(1.0, 1.0, 0.0, 1.0);
+}
+
+@group(1) @binding(0) var selection_mask: texture_2d<f32>;
+
+@vertex
+fn outline_vertex(@builtin(vertex_index) index: u32) -> @builtin(position) vec4<f32> {
+    // One triangle covering the screen.
+    let x = f32(index & 1u) * 4.0 - 1.0;
+    let y = f32(index >> 1u) * 4.0 - 1.0;
+    return vec4<f32>(x, y, 0.0, 1.0);
+}
+
+// Pixels of the band outside the selection's edge, and inside it.
+const OUTLINE_OUTSIDE: f32 = 2.5;
+const OUTLINE_INSIDE: f32 = 1.0;
+
+@fragment
+fn outline_fragment(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
+    let size = vec2<i32>(textureDimensions(selection_mask)) - vec2<i32>(1);
+    let centre = vec2<i32>(floor(position.xy));
+    // Is there selection near (within the outside width), and a gap near
+    // (within the inside width)? Both: the pixel is on the band. Weights
+    // fall off over a pixel, so the band is smooth.
+    var seen_near = 0.0;
+    var seen_gap = 0.0;
+    var covered_near = 0.0;
+    var covered_gap = 0.0;
+    for (var y = -3; y <= 3; y += 1) {
+        for (var x = -3; x <= 3; x += 1) {
+            let distance = length(vec2<f32>(f32(x), f32(y)));
+            let outside = clamp(OUTLINE_OUTSIDE + 0.5 - distance, 0.0, 1.0);
+            if (outside <= 0.0) {
+                continue;
+            }
+            let inside = clamp(OUTLINE_INSIDE + 0.5 - distance, 0.0, 1.0);
+            let at = clamp(centre + vec2<i32>(x, y), vec2<i32>(0), size);
+            let mask = textureLoad(selection_mask, at, 0).rg;
+            seen_near = max(seen_near, mask.r * outside);
+            seen_gap = max(seen_gap, (1.0 - mask.r) * inside);
+            covered_near = max(covered_near, mask.g * outside);
+            covered_gap = max(covered_gap, (1.0 - mask.g) * inside);
+        }
+    }
+    let seen = min(seen_near, seen_gap);
+    let hidden = min(covered_near, covered_gap) * globals.outline.a;
+    return vec4<f32>(globals.outline.rgb, max(seen, hidden));
 }
 
 // ---- floor: a ground plane that only shows the shadow ----
