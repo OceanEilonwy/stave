@@ -190,8 +190,6 @@ pub const MOTION: Shape = stroke(
 pub const OVERLAP: Shape = stroke(1.6, &["M2 2h8v8h-8z", "M6 6h8v8h-8z"]);
 /// No contact: two boxes with a gap between them.
 pub const NO_CONTACT: Shape = stroke(1.6, &["M1.5 4h5v8h-5z", "M9.5 4h5v8h-5z"]);
-/// A slide gap: a drawer box between two sides, a small gap each side.
-pub const SLIDE_GAP: Shape = stroke(1.6, &["M2 2v12", "M14 2v12", "M5 5h6v6.5h-6z"]);
 /// An order problem: two arrows in sequence.
 pub const ORDER: Shape = stroke(
     1.6,
@@ -202,9 +200,9 @@ pub const ORDER: Shape = stroke(
         "M12 5.5L14.5 8L12 10.5",
     ],
 );
-/// A hinge overlay problem: a door across the front edge of its side,
-/// seen from above.
-pub const HINGE_OVERLAY: Shape = stroke(1.6, &["M3 2.5h3.5v8.5h-3.5z", "M1.5 11h13v2.5h-13z"]);
+/// An adjustment problem: a door that can't be set to cover the front
+/// edge of its side as placed, seen from above.
+pub const ADJUST: Shape = stroke(1.6, &["M3 2.5h3.5v8.5h-3.5z", "M1.5 11h13v2.5h-13z"]);
 /// A requirement: a ruler.
 pub const REQUIREMENT: Shape = stroke(
     1.6,
@@ -270,8 +268,8 @@ pub fn category(category: stave_app::problems::Category) -> Shape {
         Category::Motion => MOTION,
         Category::Overlap => OVERLAP,
         Category::NoContact => NO_CONTACT,
-        Category::SlideGap => SLIDE_GAP,
-        Category::HingeOverlay => HINGE_OVERLAY,
+        Category::Adjust => ADJUST,
+        Category::Mechanism => HARDWARE,
         Category::Order => ORDER,
         Category::Requirement => REQUIREMENT,
         Category::Placement => PLACEMENT,

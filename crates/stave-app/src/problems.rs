@@ -35,11 +35,12 @@ pub enum Category {
     Overlap,
     /// A joint's parts don't meet (`no-contact`).
     NoContact,
-    /// A drawer's slides don't fit their gap (`slide-gap`).
-    SlideGap,
-    /// A door covers its side by more or less than its hinges allow
-    /// (`hinge-overlay`).
-    HingeOverlay,
+    /// A piece of hardware can't be set within its adjustment to fit
+    /// where it is placed (`adjust`).
+    Adjust,
+    /// A piece of hardware's moving parts can't work as its kind declares
+    /// them (`mechanism`).
+    Mechanism,
     /// A joint can't be put together in the order its steps say (`order`).
     Order,
     /// A `require` doesn't hold (`require`, `require-range`, `range`).
@@ -68,8 +69,8 @@ impl Category {
             Code::Motion => Category::Motion,
             Code::Overlap => Category::Overlap,
             Code::NoContact => Category::NoContact,
-            Code::SlideGap => Category::SlideGap,
-            Code::HingeOverlay => Category::HingeOverlay,
+            Code::Adjust => Category::Adjust,
+            Code::Mechanism => Category::Mechanism,
             Code::Order => Category::Order,
             Code::Require | Code::RequireRange | Code::Range => Category::Requirement,
             Code::Ground
@@ -108,8 +109,8 @@ impl Category {
             Category::Motion => "Motion",
             Category::Overlap => "Overlap",
             Category::NoContact => "No contact",
-            Category::SlideGap => "Slide gap",
-            Category::HingeOverlay => "Hinge overlay",
+            Category::Adjust => "Adjustment",
+            Category::Mechanism => "Mechanism",
             Category::Order => "Order",
             Category::Requirement => "Requirement",
             Category::Placement => "Placement",
@@ -129,8 +130,8 @@ impl Category {
             Category::Motion => "A door or drawer hits something as it moves",
             Category::Overlap => "Wood passes through wood",
             Category::NoContact => "The joint's parts don't meet",
-            Category::SlideGap => "The drawer doesn't fit its slides",
-            Category::HingeOverlay => "The door covers the side by the wrong amount",
+            Category::Adjust => "The hardware can't be adjusted to fit",
+            Category::Mechanism => "The hardware's moving parts can't work as written",
             Category::Order => "The joint can't be put together in this order",
             Category::Requirement => "A requirement doesn't hold",
             Category::Placement => "Where a part goes isn't settled",
@@ -403,8 +404,8 @@ fn about_and_involved(
         },
         Category::Overlap => (items.clone(), Vec::new()),
         Category::NoContact
-        | Category::SlideGap
-        | Category::HingeOverlay
+        | Category::Adjust
+        | Category::Mechanism
         | Category::Order
         | Category::Requirement
         | Category::Placement
@@ -807,8 +808,8 @@ fn specific_title(
         }
         Category::Overlap
         | Category::NoContact
-        | Category::SlideGap
-        | Category::HingeOverlay
+        | Category::Adjust
+        | Category::Mechanism
         | Category::Order
         | Category::Requirement
         | Category::Placement
