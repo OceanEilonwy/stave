@@ -1,0 +1,11 @@
+---
+source: crates/stave-app/tests/fit.rs
+expression: "rendered(\"tests/broken/drawer_hits_divider\")"
+---
+error[motion]: drawer.side[left] hits divider when drawer is pulled out past 4mm
+  --> tests/broken/drawer_hits_divider/project.stave:83:34
+   |
+83 |   hardware slides[left, right] : side_mount_slide(side[same], in: opening, length: 400mm)
+   |                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = note: the slides travel 400mm
+   = help: drawer.side[left] reaches 130mm into the way of divider, measured up; make it that much smaller there, or move divider out of its way

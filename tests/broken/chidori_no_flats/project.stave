@@ -1,0 +1,96 @@
+// expect: error[order] node: push(lock, along: width, angle: 45deg) is blocked by first
+stave 1
+
+// The chidori with its flats left off the lock: a full round 22.5mm across
+// can't slide out through slots 13.5mm wide, so the node can't be put
+// together (tools/joint-sim/chidori.py shows the same).
+
+project "Chidori without flats" {
+  units: mm
+}
+
+stock hinoki_30 { species: hinoki, form: solid, thickness: 30mm, width: 30mm }
+
+part lock : hinoki_30 {
+  length: 300mm
+  place {
+    ground
+    orient(length: up, width: back)
+  }
+}
+
+part first : hinoki_30 {
+  length: 300mm
+  place {
+    center(lock, up)
+    center(lock, across)
+    center(lock, deep)
+  }
+}
+
+part second : hinoki_30 {
+  length: 300mm
+  place {
+    orient(length: back, width: right)
+    center(lock, up)
+    center(lock, across)
+    center(lock, deep)
+  }
+}
+
+joint node : chidori(lock, first: first, second: second)
+
+/// A chidori whose lock has no flats.
+kind chidori : joint {
+  roles {
+    lock:   Part                      // the stick that turns to lock the node
+    first:  Part                      // halved under the second, at the bottom of the node
+    second: Part                      // halved over the first, at the top of the node
+  }
+  /// The side of the square section all three sticks share.
+  param size = lock.width
+  /// Diameter of the rounded section of the lock, and of the holes it turns in.
+  param round_diameter = size * 3 / 4
+  /// Distance across the lock's flats, which is also the width of the slots.
+  param flats = size * 9 / 20
+
+  require square : lock.width == size && lock.thickness == size &&
+                   first.width == size && first.thickness == size &&
+                   second.width == size && second.thickness == size "all three sticks need the same square section"
+  require locks : flats < round_diameter "the flats must be closer together than the diameter, or the quarter turn won't lock"
+
+  // The first two sticks are halved over each other: first keeps the bottom
+  // half of the node, second the top half.
+  cut crossing(first, second) {
+    notch(depth: size / 2)
+  }
+  cut crossing(second, first, opposite: true) {
+    notch(depth: size / 2)
+  }
+
+  // Each is bored down through where the lock passes, and slotted from the
+  // hole out to the corner, on the diagonal of the lock's section.
+  cut crossing(first, lock, normal: thickness) {
+    drill(diameter: round_diameter, depth: through)
+    slot(width: flats, depth: through, angle: 45deg, from_centre: true)
+  }
+  cut crossing(second, lock, normal: thickness) {
+    drill(diameter: round_diameter, depth: through)
+    slot(width: flats, depth: through, angle: 45deg, from_centre: true)
+  }
+
+  // The lock is turned round through the node, but the flats were left off.
+  cut crossing(lock, first) {
+    round(diameter: round_diameter)
+  }
+
+  cut_first: [first, second, lock]            // bore and slot the pair, then fit the lock to the holes
+
+  insert: [
+    push(second, along: thickness),           // lower the second stick onto the first
+    push(lock, along: width, angle: 45deg),   // slide the lock in along the diagonal, flats leading
+    rotate(lock, by: 90deg, about: length),   // a quarter turn locks the node
+  ]
+
+  note: "Halve {first} and {second} together, slide {lock} in along the slots with its flats facing them, then give it a quarter turn"
+}

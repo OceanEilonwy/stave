@@ -1,0 +1,67 @@
+// expect: error[motion] lid.panel hits back when lid is opened past 90.5deg
+stave 1
+
+// The lid is set 5mm in from the back of the box, so its hinge pins sit
+// on top of the back instead of at its outside edge: past upright, the
+// lid's back edge drops onto the back.
+
+project "Lid hits the back" {
+  units: mm
+}
+
+stock pine_12 { species: pine, form: solid, thickness: 12mm }
+stock pine_19 { species: pine, form: solid, thickness: 19mm }
+
+part base : pine_12 {
+  length: 300mm
+  width:  200mm
+  place {
+    ground
+  }
+}
+
+part back : pine_12 {
+  length: 300mm
+  width:  100mm
+  place {
+    orient(length: right, width: up)
+    against(base.top)
+    flush(base.left)
+    flush(base.back)
+  }
+}
+
+region outline = opening(
+  left:   base.left,
+  right:  base.right,
+  bottom: base.bottom,
+  top:    back.top,
+  front:  base.front,
+  back:   base.back,
+)
+
+component Lid {
+  param outline  : Region
+  param hinge_on : Part
+
+  part panel : pine_12 {
+    length: outline.across
+    width:  outline.deep - 5mm
+    place {
+      against(outline.top)
+      flush(outline.left)
+      flush(outline.front)
+    }
+  }
+
+  hardware hinges[left, right] : butt_hinge(panel, on: hinge_on, face: bottom, length: 30mm) {
+    place {
+      spaced(ends(inset: 30mm), from: panel.left, to: panel.right)
+    }
+  }
+}
+
+assembly lid : Lid {
+  outline:  outline
+  hinge_on: back
+}

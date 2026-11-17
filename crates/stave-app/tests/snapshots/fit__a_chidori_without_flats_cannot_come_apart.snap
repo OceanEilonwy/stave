@@ -1,0 +1,11 @@
+---
+source: crates/stave-app/tests/fit.rs
+expression: "rendered(\"tests/broken/chidori_no_flats\")"
+---
+error[order]: node: push(lock, along: width, angle: 45deg) is blocked by first
+  --> tests/broken/chidori_no_flats/project.stave:41:14
+   |
+41 | joint node : chidori(lock, first: first, second: second)
+   |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = note: the steps are undone from the last, from the finished joint: undoing push(lock, along: width, angle: 45deg) moves lock into first either way
+   = help: lock can't slide out of first on this diagonal either way; check the cuts that make its way out (slots, flats, rounds) and the insert steps of 'node'

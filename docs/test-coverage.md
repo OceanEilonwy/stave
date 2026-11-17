@@ -328,7 +328,7 @@ and `broken/<folder>` for a design in `tests/broken/`.
 | Operation arguments: required ones, counts, `through` | `app/spec_joints::a_required_operation_argument_is_a_missing_field`, `app/spec_joints::a_count_argument_is_a_count`, `app/spec_joints::through_cuts_all_the_way` | covered |
 | The operations and their measurements | `app/spec_joints::operations_record_their_measurements`, `app/spec_joints::an_unknown_operation_lists_the_operations`, `app/pipeline::the_clothing_cabinet_is_where_the_design_says` | covered |
 | `insert:` steps move a part along or about its own axes | `app/spec_joints::insert_steps_move_a_part_along_its_own_axes`, `app/spec_joints::insert_steps_name_part_axes_and_a_fixed_vocabulary` | covered |
-| Steps are checked in reverse, swept continuously (`order`) | — | pending: assembly order checks are layers 5 and 7 |
+| Steps are checked in reverse, swept continuously (`order`) | `broken/tenon_wrong_way`, `broken/chidori_no_flats`, `app/fit::a_tenon_pushed_in_the_wrong_way`, `app/fit::the_chidori_comes_apart_as_the_simulation_proves` | covered |
 | `note:` advice, with interpolation | `app/spec_joints::a_kind_note_fills_in_its_roles` | covered |
 
 ### Hardware
@@ -390,7 +390,7 @@ and `broken/<folder>` for a design in `tests/broken/`.
 | `pose` names an assembly: open, closed, an angle or a length | `app/spec_declarations::poses_are_open_closed_an_angle_or_a_length`, `app/spec_declarations::only_an_assembly_can_be_posed` | covered |
 | A mirrored assembly has the mirror image of its source's motion | `app/pipeline::the_clothing_cabinet_is_where_the_design_says` | covered |
 | Hinges of an assembly share one pivot, slides one direction (`motion`) | — | pending: motion checks are layer 5 |
-| Every scene is collision checked, and every motion closed and fully open | `broken/scene_pose_clash`, `app/fit::a_lid_that_hits_the_wall_in_a_scene`, `geom/collide::a_turned_door_hits_what_is_in_its_way` | partial: every scene is checked at its poses; sweeping each motion through its travel is a later step (plan.md, steps 3 and 4) |
+| Every scene is collision checked, and every motion closed and fully open | `broken/scene_pose_clash`, `broken/door_hits_side`, `broken/doors_hit_each_other`, `broken/knob_hits_door`, `broken/drawer_hits_divider`, `broken/lid_hits_back`, `app/fit::every_motion_of_the_examples_is_clear_through_its_travel`, `geom/sweep::a_door_first_hits_a_post_at_the_angle_it_reaches_it`, `geom/sweep::a_drawer_hits_what_is_in_front_of_it` | covered |
 
 ### Checks and require
 
@@ -489,11 +489,11 @@ One row per code of the grammar's Diagnostics table and its warnings.
 | `no-contact` | 4 | covered | `broken/butt_hinge_meets_nothing`, `broken/joint_does_not_meet`, `broken/joint_parts_apart` | `app/features::a_butt_hinge_needs_its_parts_to_meet_at_the_mount_face`, `app/fit::a_joint_whose_parts_never_touch` |
 | `overlap` | 4 | covered | `broken/tenon_too_long`, `broken/shelf_misses_dado`, `broken/knob_hits_top`, `broken/pitch_runs_past_end` | `app/fit::a_tenon_that_bottoms_out_in_its_mortise`, `app/fit::a_shelf_thicker_than_its_dado`, `app/fit::a_knob_in_the_way_of_another_part`, `app/fit::a_pitch_that_runs_past_the_end`, `geom/collide::the_depth_is_the_thinnest_side_of_what_they_share` |
 | `slide-gap` | 4 | covered | `broken/drawer_does_not_fit` | `app/fit::a_drawer_too_wide_for_its_slides` |
-| `motion` | 5 | partial: reported for a scene whose poses make parts collide; sweeping each motion through its travel is a later step | `broken/scene_pose_clash` | `app/fit::a_lid_that_hits_the_wall_in_a_scene` |
+| `motion` | 5 | covered | `broken/scene_pose_clash`, `broken/door_hits_side`, `broken/doors_hit_each_other`, `broken/knob_hits_door`, `broken/drawer_hits_divider`, `broken/lid_hits_back` | `app/fit::a_lid_that_hits_the_wall_in_a_scene`, `app/fit::a_door_that_swings_into_its_own_side`, `app/fit::two_doors_on_one_divider_hit_each_other`, `app/fit::a_door_that_swings_into_a_knob`, `app/fit::a_drawer_that_catches_on_a_rail`, `app/fit::a_lid_that_drops_onto_the_back` |
 | `require` | 6 | covered | `broken/require` | `app/spec_declarations::a_failing_require_is_reported_on_its_line_with_its_message`, `app/features::a_failing_kind_require_is_reported_at_the_joint` |
 | `require-range` | 6 | pending: checking over a param's whole range needs z3, not built yet | `broken/require_range` | — |
 | `range` | 6 | pending: range checks need z3, not built yet | — | — |
-| `order` | 7 | pending: buildability (the order of operations) is layer 7, not built yet | `broken/no_build_order` | — |
+| `order` | 7 | partial: reported for a joint's insert steps that can't be undone; buildability (the order of cuts, layer 7) is not built yet | `broken/tenon_wrong_way`, `broken/chidori_no_flats`, `broken/no_build_order` | `app/fit::a_tenon_pushed_in_the_wrong_way`, `app/fit::a_chidori_without_flats_cannot_come_apart` |
 | `shadows-prelude` | 2 | covered | `broken/shadows_prelude` | `app/features::a_kind_hiding_the_prelude_is_a_warning`, `app/spec_names::a_recipe_hiding_a_standard_recipe_is_a_warning` |
 | `no-recipe` | 7 | pending: recipe choice is stave-workplan, not built yet | — | — |
 | `model-mismatch` | 4 | pending: reading glTF models is a later step | — | — |

@@ -1,0 +1,103 @@
+// expect: error[motion] door_r.panel hits door_l.panel when door_r is opened past 70.2deg
+stave 1
+
+// Two doors hung on the same middle divider, hinged to open 110 degrees:
+// with the left one open, it leans 20 degrees over the right one's side,
+// and the right one swings into it at 70 degrees.
+
+project "Doors hit each other" {
+  units: mm
+}
+
+stock ply_18 { species: birch, form: plywood, thickness: 18mm }
+
+part base : ply_18 {
+  length: 900mm
+  width:  400mm
+  place {
+    ground
+  }
+}
+
+part side_l : ply_18 {
+  length: 700mm
+  width:  400mm
+  place {
+    orient(length: up, width: back)
+    against(base.top)
+    flush(base.left)
+    flush(base.front)
+  }
+}
+
+part side_r = mirror(side_l, about: mid(base, across))
+
+part divider : ply_18 {
+  length: 700mm
+  width:  400mm
+  place {
+    orient(length: up, width: back)
+    against(base.top)
+    center(base, across)
+    flush(base.front)
+  }
+}
+
+region bay_l = opening(
+  left:   side_l.right,
+  right:  divider.left,
+  bottom: base.top,
+  top:    side_l.top,
+  front:  base.front,
+  back:   base.back,
+)
+
+region bay_r = opening(
+  left:   divider.right,
+  right:  side_r.left,
+  bottom: base.top,
+  top:    side_l.top,
+  front:  base.front,
+  back:   base.back,
+)
+
+component Door {
+  param opening    : Region
+  param hinge_side : Part
+  param mount      : Mount
+
+  region face = cover(opening, mount, thickness: ply_18.thickness)
+
+  part panel : ply_18 {
+    length: face.up
+    width:  face.across
+    place {
+      orient(length: up, width: right)
+      flush(face.left)
+      flush(face.bottom)
+      flush(face.front)
+    }
+  }
+
+  hardware hinges[bottom, top] : euro_hinge(panel, on: hinge_side) {
+    place {
+      spaced(ends(inset: 80mm), from: panel.bottom, to: panel.top)
+    }
+  }
+}
+
+assembly door_l : Door {
+  opening:    bay_l
+  hinge_side: divider
+  mount:      overlay(left: 16mm, right: 8mm, bottom: 16mm)
+}
+
+assembly door_r : Door {
+  opening:    bay_r
+  hinge_side: divider
+  mount:      overlay(left: 8mm, right: 16mm, bottom: 16mm)
+}
+
+scene left_open "Left door open" {
+  pose door_l = open
+}

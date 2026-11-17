@@ -1,0 +1,88 @@
+// expect: error[motion] drawer.side[left] hits divider when drawer is pulled out past 4mm
+stave 1
+
+// The drawer's opening was drawn up to the top of the cabinet instead of
+// up to the divider rail, so its box stands 100mm taller than its front,
+// behind the rail: pulled out, it catches on the rail after 4mm.
+
+project "Drawer hits the divider" {
+  units: mm
+}
+
+stock pine_19  { species: pine, form: solid, thickness: 19mm }
+stock pine_15  { species: pine, form: solid, thickness: 15mm }
+stock maple_12 { species: hard_maple, form: solid, thickness: 12mm }
+
+part base : pine_19 {
+  length: 600mm
+  width:  450mm
+  place {
+    ground
+  }
+}
+
+part side_l : pine_19 {
+  length: 400mm
+  width:  450mm
+  place {
+    orient(length: up, width: back)
+    against(base.top)
+    against(base.left)
+    flush(base.front)
+  }
+}
+
+part side_r = mirror(side_l, about: mid(base, across))
+
+/// A rail across the front, between the drawer and the shelf above it.
+part divider : pine_15 {
+  length: between(side_l, side_r)
+  width:  40mm
+  place {
+    orient(length: right, width: up)
+    against(base.top, gap: 180mm)
+    center(base, across)
+    flush(base.front)
+  }
+}
+
+region bay = opening(
+  left:   side_l.right,
+  right:  side_r.left,
+  bottom: base.top,
+  top:    side_l.top,
+  front:  base.front,
+  back:   base.back,
+)
+
+component Drawer {
+  param opening : Region
+
+  part front : pine_19 {
+    length: opening.across
+    width:  180mm
+    place {
+      orient(length: right, width: up)
+      flush(opening.left)
+      flush(opening.bottom)
+      flush(opening.front)
+    }
+  }
+
+  part side[left, right] : maple_12 {
+    length: 400mm
+    width:  opening.up - 100mm
+    place {
+      orient(length: back, width: up)
+      spaced(ends(inset: 12.7mm), from: opening.left, to: opening.right)
+      flush(opening.bottom, inset: 10mm)
+      against(front.back)
+    }
+  }
+
+  hardware slides[left, right] : side_mount_slide(side[same], in: opening, length: 400mm)
+}
+
+assembly drawer : Drawer {
+  opening: bay
+}

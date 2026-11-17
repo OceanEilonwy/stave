@@ -124,3 +124,111 @@ fn the_examples_check_clean_with_their_cuts_made() {
         );
     }
 }
+
+#[test]
+fn a_door_that_swings_into_its_own_side() {
+    insta::assert_snapshot!(rendered("tests/broken/door_hits_side"));
+}
+
+#[test]
+fn two_doors_on_one_divider_hit_each_other() {
+    insta::assert_snapshot!(rendered("tests/broken/doors_hit_each_other"));
+}
+
+#[test]
+fn a_door_that_swings_into_a_knob() {
+    insta::assert_snapshot!(rendered("tests/broken/knob_hits_door"));
+}
+
+#[test]
+fn a_drawer_that_catches_on_a_rail() {
+    insta::assert_snapshot!(rendered("tests/broken/drawer_hits_divider"));
+}
+
+#[test]
+fn a_lid_that_drops_onto_the_back() {
+    insta::assert_snapshot!(rendered("tests/broken/lid_hits_back"));
+}
+
+#[test]
+fn a_tenon_pushed_in_the_wrong_way() {
+    insta::assert_snapshot!(rendered("tests/broken/tenon_wrong_way"));
+}
+
+#[test]
+fn a_chidori_without_flats_cannot_come_apart() {
+    insta::assert_snapshot!(rendered("tests/broken/chidori_no_flats"));
+}
+
+/// The project text of a broken design.
+fn broken_text(name: &str) -> String {
+    std::fs::read_to_string(
+        workspace()
+            .join("tests/broken")
+            .join(name)
+            .join("project.stave"),
+    )
+    .unwrap()
+}
+
+#[test]
+fn the_chidori_comes_apart_as_the_simulation_proves() {
+    // tools/joint-sim/chidori.py: with its flats and its rounding the node
+    // comes apart (a quarter turn back, out along the diagonal, the second
+    // stick lifted off); without the flats the lock can't slide out, and
+    // without the rounding it doesn't fit in the holes at all.
+    let order = |opened: &Opened| {
+        opened
+            .diagnostics
+            .iter()
+            .filter(|d| d.code == stave_lang::Code::Order)
+            .count()
+    };
+    let samples = example("joint_samples");
+    assert_eq!(
+        order(&samples),
+        0,
+        "{}",
+        render_diagnostics(&samples.sources, &samples.diagnostics)
+    );
+    let with_flats = broken_text("chidori_no_flats").replace(
+        "round(diameter: round_diameter)",
+        "round(diameter: round_diameter, flats: flats, flats_angle: 45deg)",
+    );
+    let opened = common::open_files(&[("project.stave", &with_flats)]);
+    assert!(
+        opened.diagnostics.is_empty(),
+        "{}",
+        render_diagnostics(&opened.sources, &opened.diagnostics)
+    );
+    let no_flats = common::open_files(&[("project.stave", &broken_text("chidori_no_flats"))]);
+    assert_eq!(order(&no_flats), 1);
+    let unrounded = broken_text("chidori_no_flats").replace(
+        "cut crossing(lock, first) {\n    round(diameter: round_diameter)\n  }",
+        "",
+    );
+    let opened = common::open_files(&[("project.stave", &unrounded)]);
+    let errors: Vec<_> = opened.diagnostics.iter().filter(|d| d.is_error()).collect();
+    assert_eq!(
+        errors.len(),
+        1,
+        "{}",
+        render_diagnostics(&opened.sources, &opened.diagnostics)
+    );
+    assert_eq!(errors[0].code, stave_lang::Code::Overlap);
+}
+
+#[test]
+fn every_motion_of_the_examples_is_clear_through_its_travel() {
+    // The cabinet's doors and drawer, the nightstand's drawer and the box's
+    // lid (to 180 degrees) are swept from rest and from every scene.
+    for folder in ["clothing_cabinet", "nightstand", "box"] {
+        let opened = example(folder);
+        let design = common::design(&opened);
+        assert!(
+            design.assemblies.iter().any(|a| a.motion.is_some()),
+            "{folder}"
+        );
+        assert!(opened.diagnostics.is_empty(), "{folder}");
+    }
+}

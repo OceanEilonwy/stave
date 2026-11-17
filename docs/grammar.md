@@ -1230,7 +1230,7 @@ Each step in `insert:` moves one part along or about one of its own axes
 | `push(p, along: axis)` | move `p` along its axis from wherever it is free until seated |
 | `push(p, along: axis, by: d)` | move `p` exactly `d` along its axis into its seated position (a scarf laid one stub length short, then slid home) |
 | `push(p, along: axis, angle: a)` | move `p` along a direction turned by `a` from `axis` toward the next axis (`length` → `width` → `thickness` → `length`); `push(lock, along: width, angle: 45deg)` slides along the diagonal of its section |
-| `rotate(p, by: angle, about: axis)` | turn `p` in place, e.g. to lock a twist joint |
+| `rotate(p, by: angle, about: axis)` | turn `p` in place (about its axis through the middle of its section), e.g. to lock a twist joint |
 | `drive(p, along: axis)` | knock in a part the joint makes (a key, wedge or pin) |
 
 A step's axes are the moving part's axes **as placed in the finished joint**,
@@ -1247,6 +1247,9 @@ whole path and a turn through its whole angle. If any part would pass through
 another (beyond the contact tolerance) at any point, it is `error[order]`
 naming the step and the parts. The direction of each step (which way along or
 about the axis) is the one that is free; if neither is, that is the error.
+
+A joint's sequence is checked with the parts of one pair (and the parts it
+makes) only: the rest of the design is built around them.
 
 Reversing works because each step's start is the previous step's end: the
 assembled state is known, and disassembly is just the steps undone. It is also
@@ -1637,7 +1640,7 @@ shape of their messages are fixed, because tests and AI tools match on them.
 | 6 | `require` | `'<name>' fails: <message>` |
 | 6 | `require-range` | `'<name>' does not hold for every allowed value: <message>` |
 | 6 | `range` | `<what> stops working when <param> <is below> <value>` |
-| 7 | `order` | `<part>: there is no valid order for its cuts` |
+| 7 | `order` | `<part>: there is no valid order for its cuts`, or for a joint's insert steps `<joint>: <step> is blocked by <part>` |
 
 Warnings and notes: `shadows-prelude`, `no-recipe`, `not-supported`,
 `model-mismatch`.
@@ -1647,7 +1650,13 @@ joint's role order (`rail and leg`), a piece of hardware before a part, and
 otherwise in declaration order. In a `motion` message for a scene, `<open>`
 is the pose: `open`, `open 90deg` (a hinge turned to an angle) or
 `out 200mm` (a slide travelled a length); when two assemblies move, both are
-named (`door_l is open and drawer[top] is out 200mm`).
+named (`door_l is open and drawer[top] is out 200mm`). For a motion swept
+through its travel, `<open>` is where it first hits: `opened past 87.3deg`
+(rounded down to a tenth of a degree) or `pulled out past 120mm`, and a note
+gives how far the hinges open or the slides travel; each assembly is
+reported once, from rest or else from the first scene whose poses make it
+hit. In an `order` message, `<step>` is written as in the source
+(`push(rail, along: width)`).
 
 In messages, an item is written as in the source (`slides[left]`,
 `drawer[top].front`), and a length in the project's units with trailing zeros

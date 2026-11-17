@@ -1,0 +1,51 @@
+// expect: error[order] rail_tenon: push(rail, along: width) is blocked by leg
+stave 1
+
+// A home-made mortise and tenon that says the rail goes in along its width
+// (from above) instead of along its length (end first): a tenon in a
+// closed mortise can only come out the way it went in.
+
+project "Tenon pushed the wrong way" {
+  units: mm
+}
+
+stock oak_19    { species: white_oak, form: solid, thickness: 19mm }
+stock oak_45_sq { species: white_oak, form: solid, thickness: 45mm, width: 45mm }
+
+part leg : oak_45_sq {
+  length: 400mm
+  place {
+    ground
+    orient(length: up, width: right)
+  }
+}
+
+part rail : oak_19 {
+  length: 300mm
+  width:  60mm
+  place {
+    orient(length: right, width: up)
+    against(leg.right)
+    flush(leg.top)
+    center(leg, deep)
+  }
+}
+
+/// A mortise and tenon with a mistake in its insert step.
+kind my_tenon : joint {
+  param length = 25mm
+  param relief = 3mm
+
+  insert:    [push(piece, along: width)]
+  cut_first: into
+  adds:      extend(piece, by: length)
+
+  cut end(piece, facing: into) {
+    tenon(length: length, width: piece.width - 20mm, thickness: piece.thickness / 3)
+  }
+  cut crossing(into, piece) {
+    pocket(width: piece.width - 20mm, thickness: piece.thickness / 3, depth: length + relief)
+  }
+}
+
+joint rail_tenon : my_tenon(rail, into: leg)

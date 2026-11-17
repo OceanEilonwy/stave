@@ -1,0 +1,11 @@
+---
+source: crates/stave-app/tests/fit.rs
+expression: "rendered(\"tests/broken/tenon_wrong_way\")"
+---
+error[order]: rail_tenon: push(rail, along: width) is blocked by leg
+  --> tests/broken/tenon_wrong_way/project.stave:51:20
+   |
+51 | joint rail_tenon : my_tenon(rail, into: leg)
+   |                    ^^^^^^^^^^^^^^^^^^^^^^^^^
+   = note: the steps are undone from the last, from the finished joint: undoing push(rail, along: width) moves rail into leg either way
+   = help: rail comes free along its length: write push(rail, along: length)
