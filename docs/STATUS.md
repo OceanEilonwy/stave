@@ -72,7 +72,9 @@ project's scenes in a dropdown. It reloads when a file changes.
   slider swings it from closed to fully open.
 - **Exploded views**: any scene can be pulled apart with a slider (0 to
   1) or the "Pull apart" toggle; scenes with `explode: true` start apart.
-  Parts move out along the reverse of their joints' last insert step.
+  The first half of the range moves each assembly out whole (drawers
+  forward, doors off their hinges), the second pulls parts apart along
+  the reverse of their joints' last insert step.
 - **Offscreen**: `stave-gtk <folder> --screenshot out.png` with
   `--scene NAME`, `--turn DEGREES`, `--explode AMOUNT` and
   `--diagnostic N` (the Nth problem, from 0, in `stave check` order).

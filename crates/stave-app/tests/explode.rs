@@ -36,15 +36,19 @@ fn an_exploded_side_table_pulls_the_legs_off_the_aprons() {
     let back_right = offset(&graph, "leg[back_right]");
     assert!(back_right.x > 30.0 && back_right.z < -30.0, "{back_right}");
     assert!(offset(&graph, "slat[0]").y > 30.0);
-    // Pulled apart by half, everything is halfway.
+    // The slider is staged: up to a half, assemblies move as wholes (the
+    // table has none, so the legs haven't moved); then parts move apart.
     let rest = graph.scenes.first().unwrap();
-    let half = graph.pose_with(rest, &[], 0.5);
     let node = graph
         .node_ids()
         .find(|id| graph.node(*id).is_some_and(|n| n.name == "leg[front_left]"))
         .unwrap();
-    let moved = half.transforms[node.index()].transform_point3(glam::Vec3::ZERO);
-    assert!((moved - leg * 0.5).length() < 1e-3);
+    let at = |amount: f32| {
+        graph.pose_with(rest, &[], amount).transforms[node.index()]
+            .transform_point3(glam::Vec3::ZERO)
+    };
+    assert!(at(0.5).length() < 1e-3);
+    assert!((at(0.75) - leg * 0.5).length() < 1e-3);
 }
 
 #[test]
@@ -121,5 +125,51 @@ fn a_turn_moves_nothing_out_so_the_chidori_lock_leaves_on_its_diagonal() {
     assert!(
         (lock.x.abs() - lock.z.abs()).abs() < 1e-2 && lock.x.abs() > 20.0,
         "{lock}"
+    );
+}
+
+#[test]
+fn assemblies_move_out_whole_first_drawers_forward_doors_off_their_hinges() {
+    let (opened, graph) = graph("examples/clothing_cabinet");
+    let design = opened.design.as_ref().unwrap();
+    let rest = graph.scenes.first().unwrap();
+    let node = |name: &str| {
+        graph
+            .node_ids()
+            .find(|id| graph.node(*id).is_some_and(|n| n.name == name))
+            .unwrap_or_else(|| panic!("no node '{name}'"))
+    };
+    let half = graph.pose_with(rest, &[], 0.5);
+    let moved = |name: &str| half.transforms[node(name).index()].transform_point3(glam::Vec3::ZERO);
+    // The drawer comes out toward the viewer by more than its depth, as a
+    // whole: its front and its back move together.
+    let depth = design
+        .part_named("drawer[top].side[left]")
+        .map(|p| p.cut.length.to_mm_f64())
+        .unwrap();
+    let front = moved("drawer[top].front");
+    assert!(f64::from(front.z) > depth, "{front}");
+    assert_eq!(front, moved("drawer[top].back"));
+    // A door comes forward off its hinges, its parts together.
+    let stile = moved("door_l.stile[hinge]");
+    assert!(stile.z > 100.0 && stile == moved("door_l.panel"), "{stile}");
+    // The carcass hasn't moved yet.
+    assert_eq!(moved("top"), glam::Vec3::ZERO);
+    // The slide's cabinet member stays with the cabinet: it never comes
+    // out with the drawer.
+    let member = graph
+        .node_ids()
+        .find(|id| {
+            graph
+                .node(*id)
+                .is_some_and(|n| n.name == "drawer[top].slides[left] cabinet member")
+        })
+        .unwrap();
+    assert!(
+        half.transforms[member.index()]
+            .transform_point3(glam::Vec3::ZERO)
+            .z
+            .abs()
+            < 1e-3
     );
 }
