@@ -1,15 +1,14 @@
-// expect: error[unknown-field] a hinge kind has no member 'cupp'
+// expect: error[missing-field] member 'cup' is missing 'shape'
 stave 1
 
-project "Misnamed member" {
+project "Member without a shape" {
   units: mm
 }
 
 stock oak_19 { species: white_oak, form: solid, thickness: 19mm }
 
-/// A cup hinge whose last member is misspelt: a member without a body is
-/// one of a hinge's words (a cup hinge's plate, arm, links and cup, a butt
-/// hinge's leaves and pin).
+/// A hinge whose cup is named but not drawn: every member is drawn and
+/// checked, so every member says what it is made of.
 kind small_hinge : hinge {
   roles {
     piece: Part
@@ -23,9 +22,12 @@ kind small_hinge : hinge {
   }
 
   /// The plate, on the side.
-  member plate
+  member plate {
+    with:  on
+    shape: box(along: 50mm, across: -5mm..6mm, depth: -55mm..-19mm)
+  }
   /// The cup, in the door.
-  member cupp
+  member cup
 }
 
 part base : oak_19 {

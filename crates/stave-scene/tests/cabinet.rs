@@ -4,7 +4,10 @@
 use std::path::Path;
 
 use glam::Vec3;
-use stave_model::solved::SolvedDesign;
+use stave_lang::placement::Direction;
+use stave_lang::units::Length;
+use stave_model::mechanism::{FramePoint, MechanismEntry, MemberIndex};
+use stave_model::solved::{BodyCarrier, Hardware, Point, SolvedDesign};
 use stave_scene::{BuildOptions, Orbit, Ray, SceneGraph};
 
 fn solve(folder: &str) -> SolvedDesign {
@@ -31,13 +34,24 @@ fn close(a: Vec3, b: Vec3) -> bool {
 #[test]
 fn every_part_and_hardware_has_a_node() {
     let (design, graph) = cabinet();
-    let fixed = design.hardware.iter().filter(|h| h.fixed.is_some()).count();
-    assert_eq!(fixed, 8, "four hinge plates and four slide cabinet members");
-    let links = 2 * design
-        .hardware
-        .iter()
-        .filter(|h| h.mechanism.is_some())
-        .count();
+    let carried = |test: &dyn Fn(&Hardware, BodyCarrier) -> bool| {
+        design
+            .hardware
+            .iter()
+            .flat_map(|h| h.members.iter().map(move |m| (h, m.carrier)))
+            .filter(|(h, carrier)| test(h, *carrier))
+            .count()
+    };
+    let held = carried(&|h, carrier| match carrier {
+        BodyCarrier::Part(part) => part != h.piece,
+        BodyCarrier::Region(_) => true,
+        BodyCarrier::Link(_) => false,
+    });
+    assert_eq!(
+        held, 12,
+        "four hinge plates and arms, and four slide cabinet members"
+    );
+    let links = carried(&|_, carrier| matches!(carrier, BodyCarrier::Link(_)));
     assert_eq!(links, 8, "two links on each of the four cup hinges");
     // One node for each part and one for each member of each piece of
     // hardware, named `<hardware> <member>`.
@@ -307,9 +321,10 @@ fn every_example_builds_and_poses_every_scene() {
     }
 }
 
-/// Scrubbing a door open carries each cup hinge's links with it: every link
-/// keeps its pin in the arm where it is and its pin in the boss on the
-/// boss (which moves with the door), at every angle.
+/// Scrubbing a door open carries each cup hinge's links with it: the two
+/// members of every pivot of the door's mechanism keep their pin together
+/// (a link's pin in the arm stays where it is, as the arm does; its pin in
+/// the boss moves with the cup and the door), at every angle.
 #[test]
 fn the_hinge_links_follow_the_door() {
     let (design, graph) = cabinet();
@@ -318,43 +333,51 @@ fn the_hinge_links_follow_the_door() {
         .iter()
         .find(|a| a.name == "door_l")
         .unwrap();
-    let hinge = design
-        .hardware
-        .iter()
-        .find(|h| h.name == "door_l.hinges[lower]")
-        .unwrap();
-    let mechanism = hinge.mechanism.as_ref().unwrap();
-    let frame = mechanism.linkage.frame();
-    let node = |name: &str| {
+    let mechanism = door.mechanism.as_ref().unwrap();
+    let frame = mechanism.frame();
+    let world = |at: FramePoint| {
+        let step = |point: Point, direction: Direction, amount: Length| {
+            let signed = if direction.is_positive() {
+                amount.nm()
+            } else {
+                -amount.nm()
+            };
+            let axis = direction.axis();
+            point.with(axis, Length::from_nm(point.get(axis).nm() + signed))
+        };
+        stave_geom::render::point(step(
+            step(frame.origin(), frame.across(), at.across),
+            frame.depth(),
+            at.depth,
+        ))
+    };
+    let node = |index: MemberIndex| {
+        let member = mechanism.members().get(index.index()).unwrap();
+        let name = format!("door_l.hinges[lower] {}", member.name);
         graph
             .node_ids()
             .find(|id| graph.node(*id).is_some_and(|n| n.name == name))
             .unwrap()
     };
-    let cup = node("door_l.hinges[lower] cup");
-    let links = [
-        node("door_l.hinges[lower] inner_link"),
-        node("door_l.hinges[lower] outer_link"),
-    ];
+    let pivots: Vec<_> = mechanism
+        .entries()
+        .iter()
+        .filter_map(|entry| match *entry {
+            MechanismEntry::Pivot { first, second, at } => Some((node(first), node(second), at)),
+            MechanismEntry::Slot { .. }
+            | MechanismEntry::Rail { .. }
+            | MechanismEntry::Couple { .. } => None,
+        })
+        .collect();
+    assert_eq!(pivots.len(), 4);
     let rest = graph.scenes.first().unwrap();
     for degrees in [0.0f32, 15.0, 45.0, 90.0, 110.0] {
         let posed = graph.pose_with(rest, &[(door.id, degrees.to_radians())], 0.0);
-        let cup_transform = posed.transforms[cup.index()];
-        for (link, node) in mechanism.linkage.links().iter().zip(links) {
-            let arm_pin = stave_geom::render::point(frame.world(link.ground));
-            let boss_pin = stave_geom::render::point(frame.world(link.coupler));
-            let link_transform = posed.transforms[node.index()];
-            assert!(
-                close(link_transform.transform_point3(arm_pin), arm_pin),
-                "{degrees}deg: the arm pin moved"
-            );
-            assert!(
-                (link_transform.transform_point3(boss_pin)
-                    - cup_transform.transform_point3(boss_pin))
-                .length()
-                    < 0.01,
-                "{degrees}deg: the link left its boss pin"
-            );
+        for (first, second, at) in &pivots {
+            let pin = world(*at);
+            let a = posed.transforms[first.index()].transform_point3(pin);
+            let b = posed.transforms[second.index()].transform_point3(pin);
+            assert!(close(a, b), "{degrees}deg: a pivot came apart: {a} {b}");
         }
     }
 }

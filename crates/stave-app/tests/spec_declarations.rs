@@ -9,6 +9,7 @@ use common::{
 };
 use stave_lang::ast::CutOperation;
 use stave_lang::placement::PartAxis;
+use stave_lang::units::Length;
 use stave_model::solved::{Boards, End, PartOrigin, PoseValue, SceneItem, Shape, SolvedDesign};
 use stave_schema::words::{Grain, OutputUnit};
 
@@ -965,7 +966,7 @@ fn slide_kind(entries: &str) -> String {
 #[test]
 fn hardware_members_are_named_and_documented() {
     let opened = open(&slide_kind(
-        "  /// Screwed to the cabinet.\n  /// It stays put.\n  member cabinet_member\n  member drawer_member",
+        "  /// Screwed to the cabinet.\n  /// It stays put.\n  member cabinet_member {\n    with:  in\n    shape: box(along: 0mm..300mm, across: 45mm, depth: -12.7mm..-6.35mm)\n  }\n  member runner {\n    with:  piece\n    shape: box(along: 0mm..300mm, across: 45mm, depth: -6.35mm..0mm)\n  }",
     ));
     assert!(
         diagnostics(&opened).is_empty(),
@@ -979,10 +980,11 @@ fn hardware_members_are_named_and_documented() {
         .iter()
         .find(|k| k.decl.name == "small_slide")
         .unwrap();
+    // Any name will do; the doc comment goes with the member.
     let members: Vec<(&str, Vec<String>)> = kind
-        .members
+        .bodies
         .iter()
-        .map(|m| (m.name.word(), m.docs.clone()))
+        .map(|m| (m.name.as_str(), m.docs.clone()))
         .collect();
     assert_eq!(
         members,
@@ -994,7 +996,7 @@ fn hardware_members_are_named_and_documented() {
                     "It stays put.".to_owned()
                 ]
             ),
-            ("drawer_member", Vec::new()),
+            ("runner", Vec::new()),
         ]
     );
 }
@@ -1003,42 +1005,44 @@ fn hardware_members_are_named_and_documented() {
 fn the_standard_hinges_and_slides_document_their_members() {
     let opened = open("");
     let model = opened.model.as_ref().unwrap();
-    let members = |name: &str| -> Vec<&'static str> {
+    let members = |name: &str| -> Vec<&str> {
         let kind = model
             .defs
             .kinds
             .iter()
             .find(|k| k.decl.name == name)
             .unwrap();
-        assert!(kind.members.iter().all(|m| !m.docs.is_empty()), "{name}");
-        kind.members.iter().map(|m| m.name.word()).collect()
+        assert!(kind.bodies.iter().all(|m| !m.docs.is_empty()), "{name}");
+        kind.bodies.iter().map(|m| m.name.as_str()).collect()
     };
-    assert_eq!(members("euro_hinge"), ["plate", "arm", "links", "cup"]);
-    assert_eq!(members("butt_hinge"), ["leaves", "pin"]);
+    assert_eq!(
+        members("euro_hinge"),
+        ["plate", "arm", "cup", "inner_link", "outer_link"]
+    );
+    assert_eq!(members("butt_hinge"), ["leaf", "fixed_leaf"]);
     assert_eq!(
         members("side_mount_slide"),
         ["cabinet_member", "drawer_member"]
     );
 }
 
+/// Every member is drawn and checked, so every member has a body with at
+/// least one shape. (Until stage 8 a member without a body was a word from
+/// a closed list per base, and any other word was `unknown-field`; that
+/// list is gone.)
 #[test]
-fn a_misnamed_member_is_an_unknown_field() {
+fn a_member_without_a_shape_is_missing_one() {
     let opened = open(&slide_kind("  member drawer_membr"));
     let diagnostic = the_diagnostic(
         &opened,
-        "unknown-field",
-        "a slide kind has no member 'drawer_membr'",
+        "missing-field",
+        "member 'drawer_membr' is missing 'shape'",
     );
     assert_eq!(
         diagnostic.help.as_deref(),
-        Some("did you mean 'drawer_member'?")
-    );
-    // A cup hinge's member on a slide is not near any slide member.
-    let opened = open(&slide_kind("  member cup"));
-    let diagnostic = the_diagnostic(&opened, "unknown-field", "a slide kind has no member 'cup'");
-    assert_eq!(
-        diagnostic.help.as_deref(),
-        Some("a slide kind's members are cabinet_member and drawer_member")
+        Some(
+            "give it what it is made of: member drawer_membr { shape: box(along: ..., across: ..., depth: ...) }"
+        )
     );
 }
 
@@ -1054,17 +1058,16 @@ fn a_fastener_has_no_members_and_a_member_is_written_once() {
         diagnostic.help.as_deref(),
         Some("only hinge, slide and pull kinds name their members")
     );
-    let opened = open(&slide_kind(
-        "  member drawer_member\n  member drawer_member",
-    ));
+    let member = "  member drawer_member {\n    with:  piece\n    shape: box(along: 0mm..300mm, across: 45mm, depth: -6.35mm..0mm)\n  }\n";
+    let opened = open(&slide_kind(&format!("{member}{member}")));
     the_diagnostic(
         &opened,
         "duplicate-name",
         "'drawer_member' is declared twice",
     );
-    // A pull names its knob and screw, or its bar and screws.
+    // A pull's members may have any names.
     let opened = open(
-        "kind small_knob : pull {\n  roles {\n    piece: Part\n  }\n  mount {\n    face:   front\n    across: open\n    along:  open\n  }\n  /// Hold it.\n  member knob\n  member screw\n}",
+        "kind small_knob : pull {\n  roles {\n    piece: Part\n  }\n  mount {\n    face:   front\n    across: open\n    along:  open\n  }\n  /// Hold it.\n  member grip {\n    with:  piece\n    shape: cylinder(diameter: 30mm, depth: -28mm..0mm)\n  }\n}",
     );
     assert!(
         diagnostics(&opened).is_empty(),
@@ -1099,7 +1102,6 @@ fn hung_door(mechanism: &str) -> String {
       depth:  from(face(on, toward: piece))
     }}
   }}
-  member links
   member arm {{
     with:          on
     shape body:    box(along: 16mm, across: -2.9mm..15mm, depth: -55mm..0mm)
@@ -1168,22 +1170,34 @@ fn a_cup_hinge_moves_on_the_mechanism_its_kind_declares() {
         .unwrap();
     let bodies: Vec<&str> = kind.bodies.iter().map(|b| b.name.as_str()).collect();
     assert_eq!(bodies, ["plate", "arm", "cup", "inner_link", "outer_link"]);
-    // The viewer's list keeps the base's words only.
-    let members: Vec<&str> = kind.members.iter().map(|m| m.name.word()).collect();
-    assert_eq!(members, ["plate", "links", "arm", "cup"]);
     let mechanism = kind.mechanism.as_ref().unwrap();
     assert_eq!(mechanism.constraints.len(), 4);
-    // The hinge's links are the kind's bars, its pins the kind's pivots.
-    let hinge = common::hardware(design(&opened), "hinge")
-        .mechanism
-        .unwrap();
+    // The hinge's links are the kind's bars (thickness and length along
+    // the pins), its pins the kind's pivots.
+    let hinge = common::hardware(design(&opened), "hinge");
+    let bar = |name: &str| {
+        let member = hinge.members.iter().find(|m| m.name == name).unwrap();
+        match member.shapes() {
+            [
+                stave_model::solved::MemberShape::Bar {
+                    thickness,
+                    start,
+                    end,
+                    ..
+                },
+            ] => (Length::from_nm(end.nm() - start.nm()), *thickness),
+            other => panic!("{name} is one bar: {other:?}"),
+        }
+    };
     assert_eq!(
-        hinge.links.map(|link| (link.width, link.thickness)),
+        [bar("inner_link"), bar("outer_link")],
         [(mm("9"), mm("1.5")), (mm("14"), mm("1.5"))]
     );
+    let own = hinge.own_mechanism.as_ref().unwrap();
+    assert_eq!(own.entries().len(), 4);
     assert_eq!(
-        hinge.linkage.opening_angle(),
-        stave_lang::units::Angle::from_deg(110)
+        own.drive().extent(),
+        stave_model::mechanism::DriveValue::Turn(stave_lang::units::Angle::from_deg(110))
     );
 }
 
@@ -1290,7 +1304,8 @@ fn a_hinge_kind_without_a_mechanism_does_not_move() {
         diagnostics(&opened)
     );
     let hinge = common::hardware(design(&opened), "hinge");
-    assert!(hinge.mechanism.is_none() && hinge.own_mechanism.is_none());
+    assert!(hinge.own_mechanism.is_none());
+
     assert!(
         design(&opened)
             .assemblies

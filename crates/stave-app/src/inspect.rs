@@ -519,7 +519,7 @@ pub struct Snippet {
 pub struct Connection {
     /// Its mark.
     pub swatch: Swatch,
-    /// The bold start: `cope_and_stick`, `2 cup bores`.
+    /// The bold start: `cope_and_stick`, `2 bores`.
     pub lead: String,
     /// The rest: "with rail[top], rail[bottom]".
     pub rest: String,
@@ -755,7 +755,7 @@ fn source_of(
 
 /// Cuts the hardware on a part makes, of one kind and size.
 struct HardwareCut {
-    /// "cup bore", "screw hole".
+    /// The kind's name for the cut ("bore", "hole"), or what it is.
     what: String,
     /// Its size: "35 mm across, 12.8 mm deep".
     value: String,
@@ -896,9 +896,9 @@ fn inspect_part(checked: &Checked, design: &SolvedDesign, id: PartId) -> Option<
         let CutSource::Hardware { hardware } = cut.source else {
             continue;
         };
-        let Some(found) = design.hardware.get(hardware.index()) else {
+        if design.hardware.get(hardware.index()).is_none() {
             continue;
-        };
+        }
         // Holes are counted one by one: a pull's two screw holes are two.
         let (single, holes) = match &cut.kind {
             CutKind::Drill {
@@ -916,13 +916,13 @@ fn inspect_part(checked: &Checked, design: &SolvedDesign, id: PartId) -> Option<
             other => (other.clone(), 1),
         };
         let row = focus::cut_row("", &single);
-        let what = match (found.base, row.label) {
-            (HardwareBase::Hinge, "Hole") if found.mechanism.is_some() => "cup bore",
-            (HardwareBase::Hinge, _) => "hinge recess",
-            (HardwareBase::Pull | HardwareBase::Slide, "Hole") => "screw hole",
-            (_, other) => other,
-        }
-        .to_lowercase();
+        // The name the kind gives the cut (`cut bore: ...`), or else what
+        // the cut is.
+        let what = match &cut.name {
+            Some(name) => name.as_str().replace('_', " "),
+            None => row.label.to_lowercase(),
+        };
+
         match cuts
             .iter_mut()
             .find(|cut| cut.what == what && cut.value == row.value)

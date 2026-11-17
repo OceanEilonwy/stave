@@ -289,7 +289,7 @@ base_kind     = "joint" | "slide" | "hinge" | "pull" | "fastener" | "tool" ;
 kind_entry    = { DOC } , ( param | require | makes | member )
               | roles | cut | mount | mechanism | adjust | field ;
 member        = "member" , IDENT , [ block(member_entry) ] ;
-                (* a hardware kind's named piece: member cup, or member arm { shape: box(...) } *)
+                (* a hardware kind's piece: member arm { shape: box(...) }; without a block it is error[missing-field] *)
 member_entry  = "shape" , [ IDENT ] , ":" , call_expr    (* shape: cylinder(...), shape knuckle: box(...) *)
               | mount                                    (* mount { depth: from(face(on, toward: piece)) } *)
               | field ;                                  (* with: piece *)
@@ -780,7 +780,7 @@ how it moves and what it cuts are all written in the kind. A `slide`,
 | `mount { }` | yes | where it sits on its piece unless the design says otherwise (see [Hardware placement](#hardware-placement)) |
 | `param` | no | settings; a param with a `within` list is a family (`side_mount_slide(length: 450mm)`) |
 | `require` | no | rules, checked for each piece of hardware where it is placed; `mount` names its mount face as an anchor (see [Adjustment](#adjustment)) |
-| `member` | no | its pieces, each with its shapes (see [Hardware members](#hardware-members)) |
+| `member` | no | its pieces, each with its shapes (see [Shapes](#shapes)) |
 | `adjust a on b: axis within d` | no | how far a member can be set on another, on one axis of the frame (see [Adjustment](#adjustment)) |
 | `mechanism { }` | no | how its members move (see [Mechanisms](#mechanisms)) |
 | `cut [name:] crossing(role, member) { }` | no | the wood it takes out: the bore for a cup, the mortise for a leaf, the hole for a screw (see [Faces to cut](#faces-to-cut)) |
@@ -826,65 +826,6 @@ rules are the kind's own: how far a cup hinge's arm can be set on its
 plate is an `adjust`, and the gap a slide needs beside the drawer is a
 `require` (see [Adjustment](#adjustment)). No rule about a hinge or a slide
 is built into the checker.
-
-#### Hardware members
-
-A hinge, slide or pull kind may name its pieces, each with a
-doc comment a beginner can read. A viewer numbers them, labels them on the
-drawing and shows the doc comment as the caption, in the order written:
-
-```
-kind euro_hinge : hinge {
-  ...
-  /// The mounting plate: screwed to the inside of the cabinet side, it
-  /// holds the hinge on the side and never moves.
-  member plate
-  /// The cup: a steel cup pressed into a 35mm hole bored in the back of
-  /// the door. The boss in its middle is where the links are pinned.
-  member cup
-}
-```
-
-A member may have a body: its **shapes** (see [Shapes](#shapes)) and what
-carries it (`with:`), written in a block after its name. A member with a
-body may have **any name**, and is what a `mechanism` moves:
-
-```
-  /// The arm: it clips onto the plate and reaches out to the door.
-  member arm {
-    with:          on
-    shape body:    box(along: 16mm, across: -2.9mm..15mm, depth: -55mm..0mm)
-    shape knuckle: box(along: 16mm, across: 8mm..15mm, depth: 0mm..12.4mm)
-  }
-```
-
-`with:` names a role (the member moves with that part: `piece`, `on`) or
-another member with a body (it rides on that member). A member with no
-`with:` is placed by the mechanism, as a link is; in a kind whose
-mechanism doesn't place it (or that has none) nothing moves it, which is
-`error[missing-field]` at the member. A member with a body has
-at least one shape (`error[missing-field]` otherwise); two shapes of one
-member have different names (`error[duplicate-name]`), and a member with
-more than one names them all. A member's own `mount { }` places it on some
-axes of the frame from something other than the kind's origin (see
-[Hardware placement](#hardware-placement)).
-
-*Being replaced:* a member **without** a body (`member plate`) is a word
-from the fixed table below, kept for the viewer's list until every member
-has a body. It has no shape, so it is neither drawn nor checked; a member
-that is drawn or checked has a body and at least one shape. A member with a body whose name is in the table is that entry
-of the list too. The words, per base:
-
-| Base | Members |
-|---|---|
-| `hinge` | `plate`, `arm`, `links`, `cup` (a cup hinge's); `leaves`, `pin` (a butt hinge's) |
-| `slide` | `cabinet_member`, `drawer_member` |
-| `pull` | `knob`, `bar`, `screw`, `screws` (a knob and its screw, a bar and its screws) |
-
-Members are optional, each at most once (`error[duplicate-name]`). Any other
-word for a member without a body is `error[unknown-field]`: `a hinge kind has
-no member 'cupp'`, with the nearest member word as help; fasteners, tools and
-joints have no members (`a fastener kind has no member 'head'`).
 
 ### `recipe name : operation { }`
 
@@ -1792,8 +1733,8 @@ hold for every kind alike:
   (see `uses:`). A screw that is a member (a knob's screw) is a shape like
   any other, and the kind drills its hole, so it fits and touches.
 
-Only declared shapes are drawn, and everything drawn is checked: a member
-without a body is neither (see [Hardware members](#hardware-members)).
+Only declared shapes are drawn, and everything drawn is checked; every
+member has at least one shape (see [Shapes](#shapes)).
 Diagnostics name a member as `<hardware>'s <member>`: `error[overlap]` at
 rest and at a scene's poses, `error[motion]` in a sweep
 (`door_l.hinges[upper]'s inner_link hits door_l.stile when door_l is
@@ -1860,6 +1801,37 @@ looked at before its pin is updated. A `sha256:` that is not 64
 hexadecimal digits is `error[type-mismatch]`.
 
 #### Shapes
+
+A hinge, slide or pull kind is made of **members**, each written `member
+name { ... }` with a doc comment a beginner can read. A viewer numbers the
+members in the order written, labels them on the drawing and shows the doc
+comment as the caption. A member may have **any name**; nothing in Stave
+knows a member by its name. Its block says what carries it (`with:`) and
+what it is made of: at least one `shape` (`error[missing-field]`
+otherwise, and so is a member written without a block, `member 'cup' is
+missing 'shape'`):
+
+```
+  /// The arm: it clips onto the plate and reaches out to the door.
+  member arm {
+    with:          on
+    shape body:    box(along: 16mm, across: -2.9mm..15mm, depth: -55mm..0mm)
+    shape knuckle: box(along: 16mm, across: 8mm..15mm, depth: 0mm..12.4mm)
+  }
+```
+
+`with:` names a role (the member moves with that part: `piece`, `on`) or
+another member (it rides on that member). A member with no `with:` is
+placed by the mechanism, as a link is; in a kind whose mechanism doesn't
+place it (or that has none) nothing moves it, which is
+`error[missing-field]` at the member. Two members of one kind have
+different names (`error[duplicate-name]`); two shapes of one member have
+different names (`error[duplicate-name]`), and a member with more than one
+names them all. A member's own `mount { }` places it on some axes of the
+frame from something other than the kind's origin (see [Hardware
+placement](#hardware-placement)). Fasteners, tools and joints have no
+members: `member head` in one is `error[unknown-field]` (`a fastener kind
+has no member 'head'`).
 
 A member's shapes are what it is made of: convex solids, written in the
 [kind's frame](#the-kinds-frame), with the hardware closed. Sizes and
@@ -2031,10 +2003,7 @@ step's members and the first drive value where it happens ("`rod` and
 `slider` lock at 41.6deg"). A step that would jump to its other branch
 between two samples is `error[motion]` ("flip over at"), and so is a pin
 that runs past an end of its slot ("`lid`'s pin reaches the end of its slot
-in `stay` at <value>"). A driven member hung on two links from held
-members (a cup hinge's four-bar) is also checked exactly, in integers,
-over its first step's range ("a cup hinge's links lock before it opens
-<angle>").
+in `stay` at <value>").
 
 **Fast paths.** Two shapes of motion are swept exactly, chosen by the
 mechanism's shape and never by its kind: a driven member pinned to a held

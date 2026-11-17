@@ -20,11 +20,13 @@ mod common;
 
 use glam::{DVec2, DVec3};
 use stave_app::Opened;
-use stave_geom::linkage::LinkagePath;
+use stave_geom::mechanism::MechanismPath;
 use stave_geom::render;
+use stave_lang::placement::Direction;
 use stave_lang::render_diagnostics;
 use stave_lang::units::Length;
-use stave_model::solved::{Motion, Point, SolvedDesign, WorldBox};
+use stave_model::mechanism::{FramePoint, Holding, Mechanism, MechanismEntry, MemberIndex};
+use stave_model::solved::{Point, SolvedDesign, WorldBox};
 
 /// A tenth of a millimetre, in nanometres.
 const TENTH: i64 = 100_000;
@@ -160,11 +162,28 @@ fn corners(region: &WorldBox) -> [DVec3; 8] {
     })
 }
 
+/// A world direction as a unit vector in the frame of [`world`].
+fn unit(direction: Direction) -> DVec3 {
+    let sign = if direction.is_positive() { 1.0 } else { -1.0 };
+    world(Point::default().with(direction.axis(), Length::from_nm(1))) * sign
+}
+
+/// A point of a mechanism's plane in nanometres, as `DVec2`.
+fn planar(point: FramePoint) -> DVec2 {
+    DVec2::new(render::nm(point.across), render::nm(point.depth))
+}
+
 /// The door's swing, in the doc's frame (millimetres).
 struct Swing {
-    path: LinkagePath,
+    /// The door's mechanism, run through its range.
+    path: MechanismPath,
+    /// The member the door moves with (the cup).
+    moving: MemberIndex,
+    /// Each link's pin in the held arm and its pin in the moving cup, in
+    /// the mechanism's plane (nanometres from its origin), closed.
+    links: Vec<(DVec2, DVec2)>,
     /// The doc's origin (the side's inside face, the door's back face) in
-    /// the linkage's plane, nanometres from the plane's own origin.
+    /// the mechanism's plane, nanometres from the plane's own origin.
     origin: DVec2,
     /// The door's hinge edge, front and back faces in the doc's frame.
     edge: f64,
@@ -181,11 +200,21 @@ impl Swing {
             .iter()
             .find(|a| a.name == "door")
             .expect("the door assembly");
-        let Some(Motion::Linkage { linkage }) = door.motion else {
-            panic!("the door moves on its hinges' linkage");
+        let mechanism = door
+            .mechanism
+            .as_ref()
+            .expect("the door moves on its hinges' mechanism");
+        let path = MechanismPath::new(mechanism).expect("the mechanism runs");
+        let moving = mechanism.moving();
+        let frame = mechanism.frame();
+        let (origin, x, y) = (
+            world(frame.origin()),
+            unit(frame.across()),
+            unit(frame.depth()),
+        );
+        let plane = |region: &WorldBox| {
+            corners(region).map(|c| DVec2::new((c - origin).dot(x), (c - origin).dot(y)))
         };
-        let path = LinkagePath::new(&linkage);
-        let plane = |region: &WorldBox| corners(region).map(|c| path.to_plane(c).truncate());
         let side = plane(&common::part(design, "side_l").drawn_box());
         let panel = plane(&common::part(design, "door.panel").drawn_box());
         let fold = |points: &[DVec2], pick: fn(&DVec2) -> f64, max: bool| {
@@ -205,6 +234,8 @@ impl Swing {
         let origin = DVec2::new(fold(&side, x, true), fold(&panel, y, false));
         Swing {
             path,
+            moving,
+            links: links(mechanism),
             origin,
             edge: (fold(&panel, x, false) - origin.x) / 1e6,
             back: 0.0,
@@ -215,12 +246,12 @@ impl Swing {
     /// Where a point of the door (doc frame, mm, closed) is when the door
     /// has opened by `degrees`.
     fn moved(&self, degrees: f64, point: DVec2) -> DVec2 {
-        let (rotation, offset) = self
+        let pose = self
             .path
-            .plane_pose(degrees.to_radians())
-            .expect("the linkage reaches");
+            .planar_pose(self.moving, degrees.to_radians())
+            .expect("the mechanism reaches");
         let plane = point * 1e6 + self.origin;
-        (rotation.rotate(plane) + offset - self.origin) / 1e6
+        (pose.apply(plane) - self.origin) / 1e6
     }
 
     /// How far the links are from a dead point at `degrees` (mm): the two
@@ -229,13 +260,50 @@ impl Swing {
     fn reach_margin(&self, degrees: f64) -> f64 {
         let rotation = DVec2::from_angle(degrees.to_radians());
         let [(c1, l1), (c2, l2)] = [0, 1].map(|link| {
-            let arm = self.path.pin(link, false, 0.0).expect("an arm pin");
-            let boss = self.path.pin(link, true, 0.0).expect("a boss pin");
+            let (arm, boss) = *self.links.get(link).expect("two links");
             (arm - rotation.rotate(boss), (boss - arm).length())
         });
         let distance = (c2 - c1).length();
         (l1 + l2 - distance).min(distance - (l1 - l2).abs()) / 1e6
     }
+}
+
+/// Each link of a four-bar mechanism (a member pinned once to a held
+/// member and once to the moving one): its two pins, held first.
+fn links(mechanism: &Mechanism) -> Vec<(DVec2, DVec2)> {
+    let moving = mechanism.moving();
+    let held = |index: MemberIndex| {
+        mechanism
+            .members()
+            .get(mechanism.piece_of(index).index())
+            .is_some_and(|member| member.holding == Holding::Held)
+    };
+    let pivots: Vec<(MemberIndex, MemberIndex, FramePoint)> = mechanism
+        .entries()
+        .iter()
+        .filter_map(|entry| match *entry {
+            MechanismEntry::Pivot { first, second, at } => Some((first, second, at)),
+            MechanismEntry::Slot { .. }
+            | MechanismEntry::Rail { .. }
+            | MechanismEntry::Couple { .. } => None,
+        })
+        .collect();
+    let pin = |link: MemberIndex, other: &dyn Fn(MemberIndex) -> bool| {
+        pivots.iter().find_map(|(a, b, at)| {
+            ((*a == link && other(*b)) || (*b == link && other(*a))).then(|| planar(*at))
+        })
+    };
+    (0..mechanism.members().len())
+        .filter_map(MemberIndex::new)
+        .filter(|index| {
+            *index != moving
+                && mechanism
+                    .members()
+                    .get(index.index())
+                    .is_some_and(|member| member.holding == Holding::Free)
+        })
+        .filter_map(|link| Some((pin(link, &held)?, pin(link, &|m| m == moving)?)))
+        .collect()
 }
 
 /// The angles the script sampled, every 0.05deg from 0 to `last` degrees.
@@ -259,8 +327,14 @@ fn closed_is_exact() {
             let opened = open_clean(thickness, cup_inset, overlay);
             let design = common::design(&opened);
             let swing = Swing::of(design);
-            assert_eq!(swing.path.offset(0.0), Some(DVec2::ZERO));
-            assert_eq!(swing.path.coupler(0.0), Some(glam::DMat4::IDENTITY));
+            assert_eq!(
+                swing.path.planar_pose(swing.moving, 0.0),
+                Some(stave_geom::planar::PlanarPose::REST)
+            );
+            assert_eq!(
+                swing.path.matrix(swing.moving, 0.0),
+                Some(glam::DMat4::IDENTITY)
+            );
             let side = common::part(design, "side_l").drawn_box();
             let panel = common::part(design, "door.panel").drawn_box();
             assert_eq!(
@@ -285,10 +359,10 @@ fn the_links_reach_past_110_degrees_with_a_millimetre_to_spare() {
     let opened = open_clean(19, 50, catalogue_overlay(50));
     let swing = Swing::of(common::design(&opened));
     let lengths = [0, 1].map(|link| {
-        let arm = swing.path.pin(link, false, 0.0).unwrap();
-        let boss = swing.path.pin(link, true, 0.0).unwrap();
+        let (arm, boss) = swing.links[link];
         (boss - arm).length() / 1e6
     });
+
     assert!((lengths[0] - 22.584).abs() < 0.01, "{lengths:?}");
     assert!((lengths[1] - 22.923).abs() < 0.01, "{lengths:?}");
     let (closest, at) = angles(110)
@@ -438,7 +512,7 @@ fn nothing_passes_through_wood_at_any_side_screw_setting() {
                 let opened = open_clean(thickness, cup_inset, overlay);
                 let design = common::design(&opened);
                 assert!(
-                    design.assemblies.iter().any(|a| a.motion.is_some()),
+                    design.assemblies.iter().any(|a| a.mechanism.is_some()),
                     "the door moves"
                 );
             }

@@ -1,8 +1,7 @@
 //! Hardware: mounting a slide, hinge or pull on a face of its piece where
 //! its kind's `mount { }` and the design's `place { }` say, placing its
 //! members' shapes, the cuts its kind makes and the motion it gives its
-//! assembly. Nothing here knows a base or a member by name; what the old
-//! contract reads by name is filled in [`crate::legacy`].
+//! assembly. Nothing here knows a base or a member by name.
 
 use std::collections::BTreeMap;
 
@@ -23,7 +22,6 @@ use stave_model::value::{AnchorOwner, AnchorValue, ExactBox, Value};
 
 use crate::eval::{Env, KindEnv, midpoint};
 use crate::joints::Binding;
-use crate::legacy::{CupParts, Input, Legacy, LegacyMotion};
 use crate::mechanism::{ExactPoint, HardwareMechanism};
 use crate::place::Siblings;
 use crate::rules::{AdjustSetting, Call, Offset};
@@ -333,13 +331,7 @@ pub(crate) struct Placed {
     pub mechanism: Option<HardwareMechanism>,
     /// That mechanism counted on its own, when it has a drive.
     pub own: Option<stave_model::mechanism::Mechanism>,
-    /// The old contract's motion, read from the mechanism's shape.
-    pub motion: Option<LegacyMotion>,
-    /// The old contract's arm and links of a four-bar linkage.
-    pub cup: Option<CupParts>,
     pub model: Option<stave_model::solved::Model>,
-    /// The old contract.
-    pub legacy: Legacy,
     /// Its members with a body, in its kind's order.
     pub members: Vec<PlacedMember>,
     /// The settings its kind's `adjust` entries give it at rest.
@@ -352,8 +344,6 @@ pub(crate) struct Placed {
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct Rest {
     pub piece: PartId,
-    pub piece_box: ExactBox,
-    pub piece_orientation: stave_model::solved::Orientation,
     pub mount_face: Face,
     /// The mount face as an anchor: `mount` in the kind's rules.
     pub mount: AnchorValue,
@@ -473,8 +463,6 @@ impl Solver<'_> {
         };
         let Rest {
             piece,
-            piece_box,
-            piece_orientation,
             mount_face,
             mount: mount_anchor,
             frame,
@@ -493,21 +481,6 @@ impl Solver<'_> {
             env.file,
             span,
         )?;
-        let input = Input {
-            kind: &kind,
-            kind_name: &kind_name,
-            base: kind.base,
-            piece_orientation,
-            mount_face,
-            frame: &frame,
-            roles: &roles,
-            entries: &entries,
-            bodies: &bodies,
-            cuts: &cuts,
-            file: env.file,
-            span,
-        };
-        let legacy = self.legacy(&input)?;
         // The kind's mechanism moves it, counted on its own first.
         let (mechanism, own) = match &kind.mechanism {
             Some(def) => {
@@ -517,15 +490,6 @@ impl Solver<'_> {
             }
             None => (None, None),
         };
-        let (motion, cup) = self.legacy_motion(
-            &input,
-            &piece_box,
-            mechanism.as_ref(),
-            &binding,
-            &name,
-            &env,
-            span,
-        )?;
         let members = self.placed_members(&kind, &roles, &bodies, &frame)?;
         // The kind's rules where it is placed: its adjustments and requires.
         let (settings, rules) = self.hardware_rules(
@@ -553,10 +517,7 @@ impl Solver<'_> {
             fasteners,
             mechanism,
             own,
-            motion,
-            cup,
             model,
-            legacy,
             members,
             settings,
             rules,
@@ -839,8 +800,6 @@ impl Solver<'_> {
         };
         Ok(Rest {
             piece,
-            piece_box,
-            piece_orientation,
             mount_face,
             mount,
             frame,

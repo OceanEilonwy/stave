@@ -433,10 +433,6 @@ fn a_165_degree_hinge_is_only_a_kind() {
     );
     let posed = MechanismPath::new(mechanism).unwrap();
     assert!((posed.amount(PoseValue::Open) - Angle::from_deg(165).to_radians_f64()).abs() < 1e-12);
-    assert_eq!(
-        door.motion.and_then(|m| m.opening_angle()),
-        Some(Angle::from_deg(165))
-    );
 
     // No steel in wood anywhere in the swing: every member the mechanism
     // moves, and every member on the door, against every part.
@@ -582,7 +578,7 @@ fn every_motion_of_the_examples_is_clear_through_its_travel() {
         let opened = example(folder);
         let design = common::design(&opened);
         assert!(
-            design.assemblies.iter().any(|a| a.motion.is_some()),
+            design.assemblies.iter().any(|a| a.mechanism.is_some()),
             "{folder}"
         );
         assert!(opened.diagnostics.is_empty(), "{folder}");

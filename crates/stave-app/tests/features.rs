@@ -608,8 +608,9 @@ assembly flap_r = mirror(flap_l, about: mid(base, across))",
         .find(|h| h.name == "flap_r.hinge")
         .unwrap();
     let wall_right = part(design, "wall[right]").id;
-    assert!(
-        matches!(hinge.data, stave_model::solved::HardwareData::Hinge { on, .. } if on == wall_right)
+    assert_eq!(
+        common::role(hinge, "on"),
+        Some(stave_model::solved::RoleValue::Part(wall_right))
     );
 }
 
@@ -867,16 +868,10 @@ fn hardware_on_its_mount_face() {
         )
     ));
     let design = design(&opened);
-    let knob = &design.hardware[0];
+    let knob = common::member_bounds(&design.hardware[0], "knob");
     // A 30mm knob standing 28mm off the front face (deep 0).
-    assert_eq!(
-        (knob.bounds.min().deep, knob.bounds.max().deep),
-        (mm("-28"), mm("0"))
-    );
-    assert_eq!(
-        (knob.bounds.min().across, knob.bounds.max().across),
-        (mm("35"), mm("65"))
-    );
+    assert_eq!((knob.min().deep, knob.max().deep), (mm("-28"), mm("0")));
+    assert_eq!((knob.min().across, knob.max().across), (mm("35"), mm("65")));
     let twice = open(&format!(
         "{}\nhardware handle : knob(block) {{\n  place {{\n    center(block, across)\n    center(block, up)\n    center(block, deep)\n  }}\n}}",
         block(
@@ -1094,7 +1089,6 @@ fn butt_hinge_leaves_are_housed_in_both_parts_at_the_flush_edge() {
         .iter()
         .find(|h| h.name == "lid.hinge[left]")
         .unwrap();
-    assert!(hinge.is_butt_hinge());
     let bounds = |b: &stave_model::solved::WorldBox| {
         [
             (b.min().across, b.max().across),
@@ -1103,17 +1097,17 @@ fn butt_hinge_leaves_are_housed_in_both_parts_at_the_flush_edge() {
         ]
     };
     assert_eq!(
-        bounds(&hinge.bounds),
+        bounds(&common::member_bounds(hinge, "leaf")),
         ranges([("50", "90"), ("119", "120.5"), ("288", "300")])
     );
-    let fixed = hinge.fixed.as_ref().unwrap();
     assert_eq!(
-        bounds(&fixed.bounds),
+        bounds(&common::member_bounds(hinge, "fixed_leaf")),
         ranges([("50", "90"), ("117.5", "119"), ("288", "300")])
     );
     let back = part(design, "back");
-    assert!(
-        matches!(hinge.data, stave_model::solved::HardwareData::ButtHinge { on, .. } if on == back.id)
+    assert_eq!(
+        common::role(hinge, "on"),
+        Some(stave_model::solved::RoleValue::Part(back.id))
     );
     // A mortise as deep as a leaf in each part, where the leaf lies.
     let recesses = |name: &str| -> Vec<(stave_model::solved::LocalBox, Depth)> {
@@ -1148,8 +1142,9 @@ fn butt_hinge_leaves_are_housed_in_both_parts_at_the_flush_edge() {
     // flush edge. (It turned about the edge itself before the knuckle was
     // declared.)
     let lid = design.assemblies.iter().find(|a| a.name == "lid").unwrap();
-    let Some(stave_model::solved::Motion::Turn { pivot, .. }) = lid.motion else {
-        panic!("the lid has no turn: {:?}", lid.motion);
+    let shape = lid.mechanism.as_ref().map(|m| m.shape());
+    let Some(stave_model::mechanism::MotionShape::Turn { line: pivot, .. }) = shape else {
+        panic!("the lid has no turn: {shape:?}");
     };
     assert_eq!(
         (pivot.through.up, pivot.through.deep),
@@ -1219,9 +1214,11 @@ assembly flap_r = mirror(flap_l, about: mid(base, across))",
         .find(|h| h.name == "flap_r.hinge")
         .unwrap();
     let wall_right = part(design, "wall[right]").id;
-    assert!(
-        matches!(mirrored.data, stave_model::solved::HardwareData::ButtHinge { on, .. } if on == wall_right)
+    assert_eq!(
+        common::role(mirrored, "on"),
+        Some(stave_model::solved::RoleValue::Part(wall_right))
     );
+
     recess("flap_r.leaf");
 }
 

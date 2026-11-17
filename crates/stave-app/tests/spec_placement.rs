@@ -357,7 +357,7 @@ fn a_pull_is_mounted_on_the_front_face_of_its_piece_by_default() {
     let handle = hardware(design(&opened), "handle");
     assert_eq!(handle.mount_face, Face::Front);
     assert_eq!(
-        bounds(&handle.bounds),
+        bounds(&common::member_bounds(handle, "knob")),
         ranges([("135", "165"), ("79", "109"), ("-28", "0")])
     );
 }
@@ -371,7 +371,10 @@ fn face_names_another_mount_face() {
     let handle = hardware(design(&opened), "handle");
     assert_eq!(handle.mount_face, Face::Top);
     assert_eq!(
-        (handle.bounds.min().up, handle.bounds.max().up),
+        (
+            common::member_bounds(handle, "knob").min().up,
+            common::member_bounds(handle, "knob").max().up
+        ),
         (mm("169"), mm("197"))
     );
     let opened = open(&knob(
@@ -437,7 +440,7 @@ fn a_hinge_is_placed_along_its_pieces_length_only() {
     let opened = hinge(" {\n  place {\n    flush(door.bottom, inset: 50mm)\n  }\n}");
     let h = hardware(design(&opened), "h");
     assert_eq!(h.mount_face, Face::Back);
-    assert_eq!(h.bounds.min().up, mm("69"));
+    assert_eq!(common::member_bounds(h, "cup").min().up, mm("69"));
     only_error(
         &hinge(""),
         "axis-not-set",

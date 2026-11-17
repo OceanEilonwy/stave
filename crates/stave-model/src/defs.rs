@@ -730,10 +730,6 @@ pub struct KindDef {
     pub fields: Vec<Setting>,
     /// The joint entries, for a joint kind.
     pub joint: Option<JointKindDef>,
-    /// The named, documented members of a hardware kind (`member cup`),
-    /// in source order: the viewer's list, kept until every member has a
-    /// body.
-    pub members: Vec<MemberDef>,
     /// The members with a body (`member arm { ... }`), in source order;
     /// a [`BodyId`] indexes this list.
     pub bodies: Vec<BodyDef>,
@@ -1279,18 +1275,6 @@ pub struct StopDef {
     pub message: Text,
     /// The whole entry.
     pub span: Span,
-}
-
-/// `member cup` in a hardware kind: a named piece, with the doc comments
-/// written above it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MemberDef {
-    /// Which member.
-    pub name: stave_schema::kinds::MemberName,
-    /// Where its name is written.
-    pub span: Span,
-    /// Its doc comments, one line each.
-    pub docs: Vec<String>,
 }
 
 impl KindDef {

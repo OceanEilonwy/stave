@@ -11,12 +11,12 @@ use stave_model::ids::{AssemblyId, HardwareId, JointId, PartId, RegionId, SceneI
 use stave_model::instance::Ctx;
 use stave_model::mechanism::MemberIndex;
 use stave_model::solved::{
-    self, Assembly, Cut, CutPlace, CutSource, FastenerUse, Hardware, HardwareBase, HardwareData,
-    Joint, JointPair, LocalBox, LocalPoint, PartOrigin, Point, PoseValue, ProjectInfo, Region,
+    self, Assembly, Cut, CutPlace, CutSource, FastenerUse, Hardware, HardwareBase, Joint,
+    JointPair, LocalBox, LocalPoint, PartOrigin, Point, PoseValue, ProjectInfo, Region,
     RequireResult, RoleBinding, Scene, SceneItem, ScenePose, Shape, Size3, SolvedDesign, Station,
     Stock, Tool,
 };
-use stave_model::value::{Envelope as ExactEnvelope, ExactBox, Value};
+use stave_model::value::{ExactBox, Value};
 use stave_schema::words::{Grain, MotionWord, StockForm};
 
 use crate::eval::{Env, midpoint};
@@ -24,7 +24,6 @@ use crate::hardware::{
     HardwareCut, MemberCarrier, Placed, PlacedMember, RoleBound, WorldShape, world_index,
 };
 use crate::joints::{GeomTable, JointWork, PartGeom, local_slot, round_length};
-use crate::legacy::{CupParts, Data, LegacyMotion, legacy_assembly_motion};
 use crate::mechanism::AssemblyMechanism;
 use crate::place::reflect;
 use crate::{Reported, Solved, Solver};
@@ -269,23 +268,6 @@ fn reflect_box(bounds: &ExactBox, axis: Axis, plane: ExactLength) -> Solved<Exac
     Ok(bounds.with(axis, low, high))
 }
 
-/// The world position of a box's local corner (0, 0, 0) in a frame.
-fn pose_origin(bounds: &ExactBox, orientation: &solved::Orientation) -> [ExactLength; 3] {
-    let mut origin = [ExactLength::ZERO; 3];
-    for axis in PartAxis::ALL {
-        let direction = orientation.direction(axis);
-        let world = direction.axis();
-        if let Some(slot) = origin.get_mut(world_index(world)) {
-            *slot = if direction.is_positive() {
-                bounds.min(world)
-            } else {
-                bounds.max(world)
-            };
-        }
-    }
-    origin
-}
-
 pub(crate) fn build(solver: &mut Solver<'_>) -> Option<SolvedDesign> {
     let errors_before = solver.diagnostics.iter().filter(|d| d.is_error()).count();
     let part_count = solver.model.parts.len();
@@ -473,7 +455,7 @@ pub(crate) fn build(solver: &mut Solver<'_>) -> Option<SolvedDesign> {
         .ok()?;
     let hardware = solver.write_hardware(&placed, &mechanisms).ok()?;
     let regions = solver.write_regions().ok()?;
-    let assemblies = solver.write_assemblies(&placed, &mechanisms).ok()?;
+    let assemblies = solver.write_assemblies(&mechanisms).ok()?;
     let scenes = solver.write_scenes(&mechanisms).ok()?;
     let project = solver.write_project().ok()?;
     let joints: Vec<Joint> = joints.into_iter().collect::<Option<Vec<_>>>()?;
@@ -531,24 +513,6 @@ fn hardware_cut(geom: &PartGeom, cut: &HardwareCut, hardware: HardwareId) -> Sol
             },
         },
         kind: cut.kind.clone(),
-    })
-}
-
-fn exact_envelope(envelope: &ExactEnvelope) -> Solved<solved::Envelope> {
-    Ok(match envelope {
-        ExactEnvelope::Box {
-            length,
-            width,
-            thickness,
-        } => solved::Envelope::Box {
-            length: round_length(*length)?,
-            width: round_length(*width)?,
-            thickness: round_length(*thickness)?,
-        },
-        ExactEnvelope::Cylinder { diameter, length } => solved::Envelope::Cylinder {
-            diameter: round_length(*diameter)?,
-            length: round_length(*length)?,
-        },
     })
 }
 
@@ -999,46 +963,10 @@ impl Solver<'_> {
             let Some((_, RoleBound::Part(piece))) = roles.first().cloned() else {
                 continue;
             };
-            let data =
-                Solver::legacy_rebound(&source_placed.legacy.data, &source_placed.roles, &roles);
-            let reflected_motion = source_placed
-                .motion
-                .and_then(|motion| motion.reflected(axis, plane));
-            if source_placed.motion.is_some() && reflected_motion.is_none() {
-                continue;
-            }
             let mount_face = if source_placed.mount_face.axis() == axis {
                 source_placed.mount_face.opposite()
             } else {
                 source_placed.mount_face
-            };
-            let reflect_member = |member: &crate::legacy::Member| {
-                reflect_box(&member.bounds, axis, plane).map(|bounds| crate::legacy::Member {
-                    envelope: member.envelope,
-                    bounds,
-                    orientation: member.orientation.mirrored(axis),
-                })
-            };
-            let Ok(moving) = reflect_member(&source_placed.legacy.moving) else {
-                continue;
-            };
-            let fixed = match &source_placed.legacy.fixed {
-                Some(member) => match reflect_member(member) {
-                    Ok(member) => Some(member),
-                    Err(_) => continue,
-                },
-                None => None,
-            };
-            let cup = match &source_placed.cup {
-                Some(cup) => match (reflect_member(&cup.arm), reflect_member(&cup.knuckle)) {
-                    (Ok(arm), Ok(knuckle)) => Some(CupParts {
-                        arm,
-                        knuckle,
-                        ..cup.clone()
-                    }),
-                    _ => continue,
-                },
-                None => None,
             };
             // The mechanism's plane is reflected; its points stay.
             let mechanism = match &source_placed.mechanism {
@@ -1112,15 +1040,8 @@ impl Solver<'_> {
                 mount_face,
                 roles,
                 cuts: reflected_cuts,
-                motion: reflected_motion,
                 mechanism,
                 own,
-                cup,
-                legacy: crate::legacy::Legacy {
-                    moving,
-                    fixed,
-                    data,
-                },
                 members,
                 ..source_placed
             };
@@ -1414,71 +1335,20 @@ impl Solver<'_> {
                 return Err(Reported);
             };
             let base = HardwareBase::from_base(hw.base).ok_or(Reported)?;
-            let moving = &hw.legacy.moving;
-            let origin = pose_origin(&moving.bounds, &moving.orientation);
-            let member = |member: &crate::legacy::Member| -> Solved<solved::HardwareMember> {
-                Ok(solved::HardwareMember {
-                    envelope: exact_envelope(&member.envelope)?,
-                    pose: solved::Pose {
-                        origin: point(pose_origin(&member.bounds, &member.orientation))?,
-                        orientation: member.orientation,
-                    },
-                    bounds: world_box(&member.bounds)?,
-                })
-            };
-            let fixed = hw.legacy.fixed.as_ref().map(member).transpose()?;
-            let linkage = hw.motion.as_ref().and_then(LegacyMotion::linkage);
-            let mechanism = match (&hw.cup, linkage) {
-                (Some(cup_parts), Some(linkage)) => Some(solved::CupMechanism {
-                    linkage,
-                    arm: member(&cup_parts.arm)?,
-                    knuckle: member(&cup_parts.knuckle)?,
-                    links: cup_parts.links,
-                    pin_diameter: cup_parts.pin_diameter,
-                    pin_length: cup_parts.pin_length,
-                }),
-                _ => None,
-            };
-            let data = match &hw.legacy.data {
-                Data::Slide {
-                    length,
-                    clearance,
-                    travel,
-                    opening,
-                } => HardwareData::Slide {
-                    length: round_length(*length)?,
-                    clearance: round_length(*clearance)?,
-                    travel: round_length(*travel)?,
-                    opening: *opening,
-                },
-                Data::ButtHinge { opening_angle, on } => HardwareData::ButtHinge {
-                    opening_angle: opening_angle.to_nearest_angle().ok_or(Reported)?,
-                    on: *on,
-                },
-                Data::Hinge {
-                    opening_angle,
-                    cup_diameter,
-                    cup_depth,
-                    cup_inset,
-                    on,
-                    overlay,
-                } => HardwareData::Hinge {
-                    opening_angle: opening_angle.to_nearest_angle().ok_or(Reported)?,
-                    cup_diameter: round_length(*cup_diameter)?,
-                    cup_depth: round_length(*cup_depth)?,
-                    cup_inset: round_length(*cup_inset)?,
-                    on: *on,
-                    overlay: round_length(*overlay)?,
-                },
-                Data::Pull {
-                    centres,
-                    diameter,
-                    screw_diameter,
-                } => HardwareData::Pull {
-                    centres: centres.map(round_length).transpose()?,
-                    diameter: diameter.map(round_length).transpose()?,
-                    screw_diameter: round_length(*screw_diameter)?,
-                },
+            let members = members(inst.id, &hw.members, &placed_by, hw.piece)?;
+            // Around every member; with none, the face it is mounted on.
+            let bounds = match members
+                .iter()
+                .map(solved::Body::bounds)
+                .reduce(|all, one| all.union(&one))
+            {
+                Some(bounds) => bounds,
+                None => {
+                    let piece = world_box(&self.drawn_box(hw.piece)?)?;
+                    let at = piece.face(hw.mount_face);
+                    let axis = hw.mount_face.axis();
+                    solved::WorldBox::new(piece.min().with(axis, at), piece.max().with(axis, at))
+                }
             };
             out.push(Hardware {
                 id: inst.id,
@@ -1489,15 +1359,7 @@ impl Solver<'_> {
                 assembly: inst.assembly,
                 piece: hw.piece,
                 mount_face: hw.mount_face,
-                envelope: exact_envelope(&moving.envelope)?,
-                pose: solved::Pose {
-                    origin: point(origin)?,
-                    orientation: moving.orientation,
-                },
-                bounds: world_box(&moving.bounds)?,
-                fixed,
-                data,
-                mechanism,
+                bounds,
                 model: hw.model.clone(),
                 roles: hw
                     .roles
@@ -1511,7 +1373,7 @@ impl Solver<'_> {
                     })
                     .collect(),
                 fasteners: hw.fasteners.clone(),
-                members: members(inst.id, &hw.members, &placed_by, hw.piece)?,
+                members,
                 own_mechanism: hw.own.clone(),
                 settings: hw
                     .settings
@@ -1585,7 +1447,6 @@ impl Solver<'_> {
 
     fn write_assemblies(
         &mut self,
-        placed: &[Option<Placed>],
         mechanisms: &[Option<AssemblyMechanism>],
     ) -> Solved<Vec<Assembly>> {
         let mut out = Vec::new();
@@ -1594,23 +1455,6 @@ impl Solver<'_> {
                 .get(inst.id.index())
                 .and_then(Option::as_ref)
                 .map(|m| m.mechanism.clone());
-            // The old contract's motion: the first driver's.
-            let assembly_motion = match mechanism
-                .as_ref()
-                .and_then(|m| m.hardware().first())
-                .and_then(|first| placed.get(first.index()))
-                .and_then(Option::as_ref)
-                .and_then(|p| p.motion.as_ref())
-            {
-                Some(motion) => {
-                    let extent = mechanism
-                        .as_ref()
-                        .map(|m| m.drive().extent())
-                        .ok_or(Reported)?;
-                    Some(legacy_assembly_motion(motion, extent)?)
-                }
-                None => None,
-            };
             let parts = self
                 .model
                 .parts
@@ -1639,7 +1483,6 @@ impl Solver<'_> {
                 mirror_of: inst.mirror_of,
                 parts,
                 hardware,
-                motion: assembly_motion,
                 mechanism,
             });
         }

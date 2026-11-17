@@ -1117,7 +1117,7 @@ fn a_cup_hinge_bores_its_cup_in_the_mount_face() {
             count: 1
         }));
     // The plate stays on the side: it never reaches into it.
-    let plate = common::hardware(design, "h").fixed.unwrap().bounds;
+    let plate = common::member_bounds(common::hardware(design, "h"), "plate");
     assert!(plate.min().across >= extent(part(design, "side"))[0].1);
 }
 
@@ -1376,16 +1376,17 @@ fn face_nearer_works_on_any_axis() {
     ));
     let design = design(&opened);
     let runner = common::hardware(design, "runner");
+    let drawer_member = common::member_bounds(runner, "drawer_member");
     // The drawer side's back face is the one nearer a side of the bay.
     assert_eq!(runner.mount_face, stave_lang::placement::Face::Back);
     let [across, _, deep] = extent(part(design, "drawer_side"));
     // From the side's right end, 250mm along it, standing off its back.
     assert_eq!(
-        (runner.bounds.min().across, runner.bounds.max().across),
+        (drawer_member.min().across, drawer_member.max().across),
         (minus(across.1, mm("250")), across.1)
     );
     assert_eq!(
-        (runner.bounds.min().deep, runner.bounds.max().deep),
+        (drawer_member.min().deep, drawer_member.max().deep),
         (deep.1, plus(deep.1, mm("6.35")))
     );
     // A drawer side whose length doesn't run that way can't be measured

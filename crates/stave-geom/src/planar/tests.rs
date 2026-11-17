@@ -3,13 +3,10 @@
 //! `tools/hinge-sim/linkage.py`) records, and mechanisms with closed-form
 //! answers.
 
-use glam::{DMat4, DVec2};
-use stave_lang::placement::{Axis, Direction};
+use glam::DVec2;
 use stave_lang::units::{Angle, Length, Rational};
-use stave_model::solved::{Link, Linkage, LinkageFrame, PlanePoint, Point};
 
 use super::*;
-use crate::linkage::LinkagePath;
 
 /// Nanometres from hundredths of a millimetre.
 const fn hundredths(value: i64) -> i64 {
@@ -101,38 +98,14 @@ fn cup_hinge(across: i64, depth: i64, to: Angle) -> CupHinge {
     }
 }
 
-/// Today's linkage code for the same hinge, in the frame its own test
-/// uses (the door's front hinge corner, a 19mm door, the cup 5mm from the
-/// edge): pins at `(22.5mm + x, y - 19mm)`.
-fn todays_cup_hinge(opening: Angle) -> LinkagePath {
-    let place = |(x, y): (i64, i64)| {
-        PlanePoint::new(
-            Length::from_nm(22_500_000 + hundredths(x)),
-            Length::from_nm(hundredths(y) - 19_000_000),
-        )
-    };
-    let links = CUP_PINS.map(|(arm, boss)| Link {
-        ground: place(arm),
-        coupler: place(boss),
-    });
-    let frame = LinkageFrame::new(
-        Axis::Up,
-        Point::default(),
-        Direction::Right,
-        Direction::Front,
-    )
-    .unwrap();
-    LinkagePath::new(&Linkage::new(frame, links, opening).unwrap())
-}
-
-/// The general solver gives today's cup hinge poses: the cup's (and the
-/// door's) turn and offset, and every pin of both links, at every 0.1deg
-/// to 110deg, to a millionth of a nanometre; and exactly the declared pose
-/// closed.
+/// The general solver poses the cup hinge closed exactly as declared, and
+/// at every 0.1deg to 110deg turns the cup (and the door, carried on it)
+/// by exactly the drive's angle. (Until stage 8 this test also compared
+/// every pose with the old cup-hinge linkage code, which is deleted; the
+/// oracle tests below hold the numbers.)
 #[test]
-fn the_cup_hinge_moves_exactly_as_todays_linkage_code() {
+fn the_cup_hinge_turns_the_door_with_its_cup() {
     let hinge = cup_hinge(22_500_000, -19_000_000, Angle::from_deg(110));
-    let today = todays_cup_hinge(Angle::from_deg(110));
     let closed = hinge.path.pose(degrees_hundredths(0)).unwrap();
     assert!(
         closed
@@ -140,26 +113,14 @@ fn the_cup_hinge_moves_exactly_as_todays_linkage_code() {
             .iter()
             .all(|pose| *pose == PlanarPose::REST)
     );
-    assert_eq!(today.coupler(0.0), Some(DMat4::IDENTITY));
     for k in 1..=1100 {
         let theta = (f64::from(k) / 10.0).to_radians();
         let pose = hinge.path.pose_at(DriveAmount::radians(theta)).unwrap();
         let cup = pose.member(hinge.cup).unwrap();
-        let offset = today.offset(theta).unwrap();
         assert_eq!(cup.angle(), theta);
-        assert!(
-            (cup.offset() - offset).length() < 1e-6,
-            "{k}: {} {offset}",
-            cup.offset()
-        );
         assert_eq!(pose.member(hinge.door), Some(cup));
-        for (index, link) in [hinge.inner, hinge.outer].into_iter().enumerate() {
-            let link = pose.member(link).unwrap();
-            for coupler in [false, true] {
-                let rest = today.pin(index, coupler, 0.0).unwrap();
-                let now = today.pin(index, coupler, theta).unwrap();
-                assert!((link.apply(rest) - now).length() < 1e-6, "{k} link {index}");
-            }
+        for link in [hinge.inner, hinge.outer] {
+            assert!(pose.member(link).is_some(), "{k}");
         }
     }
 }
