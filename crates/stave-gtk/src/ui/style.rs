@@ -149,7 +149,7 @@ button.stave-build.building:disabled { background: alpha(@accent_bg_color, 0.45)
 .stave-files > row:selected .stave-detail { color: alpha(@accent_fg_color, 0.9); }
 .stave-files .stave-unsaved { color: @accent_color; font-weight: 700; }
 .stave-files > row:selected .stave-unsaved { color: @accent_fg_color; }
-.stave-editor-column { background: @view_bg_color; color: @view_fg_color; box-shadow: inset -1px 0 @headerbar_shade_color; }
+.stave-editor-column { background: @view_bg_color; color: @view_fg_color; box-shadow: inset -1px 0 mix(@view_bg_color, @view_fg_color, 0.15); }
 .stave-tabs { background: mix(@view_bg_color, @window_bg_color, 0.6); box-shadow: inset 0 -1px @headerbar_shade_color; }
 button.stave-tab { background: transparent; color: alpha(currentColor, 0.7); box-shadow: none; }
 button.stave-tab:hover { background: alpha(currentColor, 0.05); }
