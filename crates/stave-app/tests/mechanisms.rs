@@ -262,3 +262,25 @@ fn a_slide_is_a_rail_and_a_butt_hinge_a_pivot() {
     assert_eq!(pivot.through.deep, old.through.deep);
     assert_eq!(pivot.through.up, old.through.up);
 }
+
+/// A scene can't ask for more than the mechanism reaches: past the stay's
+/// stop the pose is refused with the stay's own words.
+#[test]
+fn a_pose_past_the_stop_is_refused_with_its_message() {
+    let design = std::fs::read_to_string(workspace().join("tests/designs/lid_stay/project.stave"))
+        .unwrap()
+        .replace("pose lid = open", "pose lid = 100deg");
+    let opened = common::open_files(&[("project.stave", &design)]);
+    assert_eq!(
+        common::diagnostics(&opened),
+        ["motion: lid can't open 100deg: the stay's slot holds the lid upright"]
+    );
+    // As far as it reaches is fine.
+    let design = design.replace("pose lid = 100deg", "pose lid = 90deg");
+    let opened = common::open_files(&[("project.stave", &design)]);
+    assert!(
+        opened.diagnostics.is_empty(),
+        "{:?}",
+        common::diagnostics(&opened)
+    );
+}

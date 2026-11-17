@@ -2090,8 +2090,11 @@ scene drawer_bench "Top drawer on the bench" {
 - `pose` names the assembly and sets `open` (as far as its mechanism
   reaches: a hinge's `opening_angle`, a slide's travel, or sooner where a
   `stop` says), `closed`, an angle (something that turns) or a length
-  (something that slides), measured from closed. A mirrored assembly has
-  the mirror image of its source's motion.
+  (something that slides), measured from closed. A pose past where the
+  mechanism reaches is `error[motion]` at the pose, with the `stop`'s
+  message when a stop ends the range ("`door` can't open 170deg: the
+  arm's limiter stops the door here"). A mirrored assembly has the mirror
+  image of its source's motion.
 - Every scene is collision checked, and every motion is checked through its
   whole travel, not only at its ends (`error[motion]`): every body that
   moves (a door, the hardware on it, a member its mechanism places) is

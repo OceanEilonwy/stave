@@ -991,6 +991,50 @@ fn narrower(drive: &MechanismDrive, to: DriveValue) -> Option<MechanismDrive> {
 }
 
 impl Solver<'_> {
+    /// A scene's pose of an assembly asks no more of its mechanism than it
+    /// reaches: an angle or a travel past it is `error[motion]`, with the
+    /// stop's message when a `stop` ends the range.
+    pub(crate) fn pose_within(
+        &mut self,
+        assembly: AssemblyId,
+        mechanism: &Mechanism,
+        value: stave_model::solved::PoseValue,
+        file: stave_lang::FileId,
+        span: stave_lang::ast::Span,
+    ) -> Solved<()> {
+        use stave_model::solved::PoseValue;
+        let extent = mechanism.drive().extent();
+        let asked = match (value, extent) {
+            (PoseValue::Angle(angle), DriveValue::Turn(reach)) if angle > reach => {
+                Some((angle.to_string(), reach.to_string(), "open"))
+            }
+            (PoseValue::Travel(length), DriveValue::Travel(reach)) if length > reach => {
+                Some((length.to_string(), reach.to_string(), "pull out"))
+            }
+            _ => None,
+        };
+        let Some((asked, reach, verb)) = asked else {
+            return Ok(());
+        };
+        let name = self
+            .model
+            .assemblies
+            .get(assembly.index())
+            .map(|a| a.name.clone())
+            .unwrap_or_default();
+        let why = match mechanism.stop() {
+            Some(stop) if stop.at == mechanism.drive().to() => stop.message.clone(),
+            Some(_) | None => format!("its hardware goes {reach} at most"),
+        };
+        Err(self.error(
+            Code::Motion,
+            format!("{name} can't {verb} {asked}: {why}"),
+            file,
+            span,
+            format!("pose {name} at most {reach}, or write open"),
+        ))
+    }
+
     /// A kind's mechanism for one piece of hardware, every value worked
     /// out exactly in the plane it moves in: across/depth with the pins
     /// along `along`, or along/depth (pins across) when a rail runs

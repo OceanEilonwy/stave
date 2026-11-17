@@ -467,7 +467,7 @@ pub(crate) fn build(solver: &mut Solver<'_>) -> Option<SolvedDesign> {
     let hardware = solver.write_hardware(&placed, &mechanisms).ok()?;
     let regions = solver.write_regions().ok()?;
     let assemblies = solver.write_assemblies(&placed, &mechanisms).ok()?;
-    let scenes = solver.write_scenes().ok()?;
+    let scenes = solver.write_scenes(&mechanisms).ok()?;
     let project = solver.write_project().ok()?;
     let joints: Vec<Joint> = joints.into_iter().collect::<Option<Vec<_>>>()?;
     if solver.diagnostics.iter().filter(|d| d.is_error()).count() > errors_before {
@@ -1640,7 +1640,7 @@ impl Solver<'_> {
         }
     }
 
-    fn write_scenes(&mut self) -> Solved<Vec<Scene>> {
+    fn write_scenes(&mut self, mechanisms: &[Option<AssemblyMechanism>]) -> Solved<Vec<Scene>> {
         let mut scenes = vec![Scene {
             id: SceneId::from_usize(0),
             name: stave_schema::REST_SCENE.to_owned(),
@@ -1693,6 +1693,13 @@ impl Solver<'_> {
                     Value::Length(length) => PoseValue::Travel(round_length(length)?),
                     _ => return Err(Reported),
                 };
+                let mechanism = mechanisms
+                    .get(assembly.index())
+                    .and_then(Option::as_ref)
+                    .map(|m| &m.mechanism);
+                if let Some(mechanism) = mechanism {
+                    self.pose_within(assembly, mechanism, value, def.decl.file, pose.span)?;
+                }
                 poses.push(ScenePose { assembly, value });
             }
             let show = match &def.show {
