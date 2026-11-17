@@ -110,3 +110,16 @@ fn an_overlap_at_rest_highlights_both_parts() {
     // 3mm past the bottom of the mortise, across the rail's length.
     assert!((volume.size().x - 3.0).abs() < 1e-3, "{volume:?}");
 }
+
+#[test]
+fn a_turn_moves_nothing_out_so_the_chidori_lock_leaves_on_its_diagonal() {
+    // The chidori's last step turns the lock; the push before it slides
+    // the lock out along the diagonal of its section, level.
+    let (_, graph) = graph("examples/joint_samples");
+    let lock = offset(&graph, "stick_z");
+    assert!(lock.y.abs() < 1e-3, "{lock}");
+    assert!(
+        (lock.x.abs() - lock.z.abs()).abs() < 1e-2 && lock.x.abs() > 20.0,
+        "{lock}"
+    );
+}

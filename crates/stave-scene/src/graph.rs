@@ -6,7 +6,7 @@ use stave_geom::{Aabb, Extent, Geometry, render};
 use stave_lang::placement::PartAxis;
 use stave_model::solved::{
     AssemblyId, HardwareBase, HardwareData, HardwareId, Motion, Part, PartId, PoseValue, SceneId,
-    SceneItem, SolvedDesign,
+    SceneItem, SolvedDesign, StepKind,
 };
 use stave_schema::species::{Species, Srgb};
 use stave_schema::words::StockForm;
@@ -611,7 +611,8 @@ fn away_from(direction: Vec3, part: Vec3, from: Vec3) -> Vec3 {
 /// (grammar, "Scenes"), deterministically.
 ///
 /// A part that is the moving part of a joint's last `insert` step moves
-/// out along the reverse of that step, away from the others of the pair.
+/// out along the reverse of that step, away from the others of the pair
+/// (the last push or drive: a `rotate` turns a part in place).
 /// A part that would move out of two of its pairs in opposite directions
 /// (a rail tenoned into two stiles, an apron into two legs) stays, and the
 /// parts it is joined to move away from it instead. A part's moves in
@@ -630,7 +631,13 @@ fn explode_offsets(design: &SolvedDesign) -> Vec<Vec3> {
     let mut moves: Vec<Move> = Vec::new();
     for joint in &design.joints {
         for pair in &joint.pairs {
-            let Some(step) = pair.insert.last() else {
+            // A turn moves nothing out: the last push (or drive) does.
+            let Some(step) = pair
+                .insert
+                .iter()
+                .rev()
+                .find(|step| !matches!(step.kind, StepKind::Rotate))
+            else {
                 continue;
             };
             let Some(part) = design.part(step.part) else {
