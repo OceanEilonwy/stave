@@ -62,7 +62,15 @@ a line and a concrete help line for every problem:
    the cup, `docs/hardware/cup-hinge-linkage.md`) is posed step by step, so
    the door turns and moves forward and out at once, swept by conservative
    advancement and bisection to within the contact tolerance, and every
-   member the mechanism moves is checked against everything else.
+   member the mechanism moves is checked against everything else. The
+   solver proves, not samples, that no step comes within 0.1mm of a dead
+   point over the whole range: between each two samples it bounds how
+   fast each step's margin can change from the declared geometry and
+   halves an interval it can't prove, down to 0.00005deg or 50nm
+   (`stave-geom/src/planar/proof.rs`). The 110deg cup hinge is proven
+   with at least 1.016mm to spare and the 165deg wide hinge with 0.190mm,
+   neither needing a halving. A slot's ends are still checked at the
+   samples only.
 6. **Requires** at the current values (over whole ranges: not yet).
 7. **Assembly sequences**: every joint's `insert` steps are run backwards
    from the finished joint and swept; a step that can't be undone is

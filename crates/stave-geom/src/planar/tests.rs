@@ -869,3 +869,191 @@ fn poses_outside_the_range_are_refused() {
     }
     assert!(hinge.path.pose_at(DriveAmount::radians(2.0)).is_err());
 }
+
+/// The pins of `wide_hinge_165` in `std/hardware/hinges.stave`, as
+/// [`CUP_PINS`]: the inner link, then the outer, each `(arm pin, cup pin)`
+/// in hundredths of a millimetre in the kind's frame.
+const WIDE_PINS: [((i64, i64), (i64, i64)); 2] =
+    [((1262, 687), (-1163, 110)), ((1278, 845), (-1109, 213))];
+
+/// A four-bar cup hinge from its pins (kind's frame, hundredths of a
+/// millimetre), the cup turning from closed to `to`: run and proven.
+fn four_bar(pins: [((i64, i64), (i64, i64)); 2], to: Angle) -> Result<Path, MechanismError> {
+    let mut declaration = Declaration::new();
+    let arm = declaration.member(name("arm"), Holding::Held).unwrap();
+    let cup = declaration.member(name("cup"), Holding::Free).unwrap();
+    let inner = declaration
+        .member(name("inner_link"), Holding::Free)
+        .unwrap();
+    let outer = declaration
+        .member(name("outer_link"), Holding::Free)
+        .unwrap();
+    let place = |(x, y): (i64, i64)| point(hundredths(x), hundredths(y));
+    for (link, (arm_pin, cup_pin)) in [inner, outer].into_iter().zip(pins) {
+        declaration.constrain(Constraint::Pivot {
+            first: arm,
+            second: link,
+            at: place(arm_pin),
+        });
+        declaration.constrain(Constraint::Pivot {
+            first: cup,
+            second: link,
+            at: place(cup_pin),
+        });
+    }
+    let drive = Drive::Turn {
+        member: cup,
+        from: Angle::ZERO,
+        to,
+    };
+    Path::new(Mechanism::new(declaration, drive)?)
+}
+
+/// A slider-crank turned 0 to 90deg: a crank of `radius` nanometres pinned
+/// at the origin, its pin `pin_microdeg` round from `across` when closed,
+/// and a rod to a slider on a rail along `across` through the origin, the
+/// rod `clearance` nanometres longer than the crank. Also gives how far
+/// the rail comes inside the rod's circle at its closest, from the exact
+/// points.
+fn slider_crank(radius: f64, pin_microdeg: i64, clearance: f64) -> (Mechanism, f64) {
+    let angle = f64::from(i32::try_from(pin_microdeg).unwrap()) / 1e6;
+    let (sin, cos) = angle.to_radians().sin_cos();
+    let pin = ((radius * cos).round(), (radius * sin).round());
+    let crank = pin.0.hypot(pin.1);
+    let rod = crank + clearance;
+    let slider = (pin.0 + (rod * rod - pin.1 * pin.1).sqrt()).round();
+    let nm = |value: f64| Length::from_nm(value as i64);
+    let mut declaration = Declaration::new();
+    let frame = declaration.member(name("frame"), Holding::Held).unwrap();
+    let crank_member = declaration.member(name("crank"), Holding::Free).unwrap();
+    let link = declaration.member(name("rod"), Holding::Free).unwrap();
+    let runner = declaration.member(name("slider"), Holding::Free).unwrap();
+    declaration.constrain(Constraint::Pivot {
+        first: crank_member,
+        second: frame,
+        at: point_mm(0, 0),
+    });
+    declaration.constrain(Constraint::Pivot {
+        first: crank_member,
+        second: link,
+        at: PlanarPoint::new(nm(pin.0), nm(pin.1)),
+    });
+    declaration.constrain(Constraint::Pivot {
+        first: link,
+        second: runner,
+        at: PlanarPoint::new(nm(slider), Length::ZERO),
+    });
+    declaration.constrain(Constraint::Rail {
+        runner,
+        guide: frame,
+        direction: PlanarDirection::ACROSS,
+    });
+    let drive = Drive::Turn {
+        member: crank_member,
+        from: Angle::ZERO,
+        to: Angle::from_deg(90),
+    };
+    let rod = (pin.0 - slider).hypot(pin.1);
+    (Mechanism::new(declaration, drive).unwrap(), rod - crank)
+}
+
+/// A 500mm crank whose rod passes 0.09997mm inside its reach at the top of
+/// the crank's turn, at 45.025deg: between the samples at 45deg and
+/// 45.05deg, where the rail is 0.1mm and 17.6nm inside the rod's circle.
+/// Sampling alone passes it; the proof between samples refuses it, naming
+/// the rod and the slider. The proof bounds how fast the margin can change
+/// by the crank pin's speed (500mm a radian), so it stops a little before
+/// the dip, at the first value it can't prove clear (44.97deg).
+#[test]
+fn a_dead_point_between_two_samples_is_caught() {
+    let (mechanism, least) = slider_crank(500e6, 44_975_000, 99_970.0);
+    let margin = crate::render::nm(DEAD_POINT_MARGIN);
+    assert!(least < margin, "{least}");
+    let sampled = path::least_sampled_margin(&mechanism).unwrap();
+    assert!(
+        sampled >= margin && sampled < margin + 20.0,
+        "sampling alone passes it: {sampled}"
+    );
+    let error = Path::new(mechanism).unwrap_err();
+    let MechanismError::NearDeadPoint { members, at } = &error else {
+        panic!("{error}");
+    };
+    assert_eq!(members, &[name("rod"), name("slider")]);
+    let DriveValue::Turn(angle) = *at else {
+        panic!("{at}");
+    };
+    assert!(
+        angle >= Angle::from_microdeg(44_900_000) && angle <= Angle::from_microdeg(45_050_000),
+        "{angle}"
+    );
+    assert_eq!(error.kind(), MechanismErrorKind::Motion);
+    assert_eq!(
+        error.to_string(),
+        format!("`rod` and `slider` may come within 0.1mm of locking near {at}")
+    );
+}
+
+/// A slider-crank (a circle and a line) is proven over its whole range:
+/// the same 500mm crank with its rod 0.5mm past its reach, and a 30mm
+/// crank with an 80mm rod.
+#[test]
+fn a_slider_crank_is_proven_between_samples() {
+    let (mechanism, least) = slider_crank(500e6, 44_975_000, 500_000.0);
+    let proof = Path::new(mechanism).unwrap().proof();
+    let proven = proof.margin.unwrap();
+    assert!(proven >= crate::render::nm(DEAD_POINT_MARGIN), "{proof:?}");
+    assert!(proven <= least, "{proof:?} against {least}");
+    let (mechanism, _) = slider_crank(30e6, 0, 50e6);
+    let proof = Path::new(mechanism).unwrap().proof();
+    assert!(proof.margin.unwrap() >= 0.1e6, "{proof:?}");
+}
+
+/// The 110deg cup hinge is proven clear of its dead points over its whole
+/// range, never needing to halve; the least margin proven is under the
+/// 1.02mm the oracle measures at the samples, and no finer sampling finds
+/// less.
+#[test]
+fn the_110_degree_cup_hinge_is_proven_over_its_range() {
+    let path = four_bar(CUP_PINS, Angle::from_deg(110)).unwrap();
+    let proof = path.proof();
+    let proven = proof.margin.unwrap();
+    assert!(proven >= crate::render::nm(DEAD_POINT_MARGIN), "{proof:?}");
+    assert!(proven < 1.02e6, "{proof:?}");
+    assert_eq!(proof.halvings, 0, "{proof:?}");
+    assert!(finely_sampled_margin(&path, 110) >= proven);
+}
+
+/// The 165deg wide-angle hinge, whose links pass within about 0.19mm of a
+/// dead point, is proven over its whole range too, and no finer sampling
+/// finds less than the proof.
+#[test]
+fn the_165_degree_hinge_is_proven_over_its_range() {
+    let path = four_bar(WIDE_PINS, Angle::from_deg(165)).unwrap();
+    let proof = path.proof();
+    let proven = proof.margin.unwrap();
+    assert!(proven >= crate::render::nm(DEAD_POINT_MARGIN), "{proof:?}");
+    assert!(proven < 0.2e6, "{proof:?}");
+    let sampled = finely_sampled_margin(&path, 165);
+    assert!(sampled >= proven && sampled < proven + 1_000.0, "{sampled}");
+}
+
+/// The least margin of any step every 0.002deg from closed to `degrees`.
+fn finely_sampled_margin(path: &Path, degrees: i32) -> f64 {
+    (0..=degrees * 500)
+        .map(|k| {
+            let theta = (f64::from(k) / 500.0).to_radians();
+            let pose = path.pose_at(DriveAmount::radians(theta)).unwrap();
+            pose.margin().unwrap()
+        })
+        .fold(f64::INFINITY, f64::min)
+}
+
+/// The proof is the same run to run: the same path, the same error.
+#[test]
+fn the_proof_is_the_same_run_to_run() {
+    let wide = || four_bar(WIDE_PINS, Angle::from_deg(165));
+    assert_eq!(wide(), wide());
+    let caught = || Path::new(slider_crank(500e6, 44_975_000, 99_970.0).0);
+    assert_eq!(caught(), caught());
+    assert!(caught().is_err());
+}

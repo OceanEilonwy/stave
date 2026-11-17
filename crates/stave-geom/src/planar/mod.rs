@@ -46,7 +46,12 @@
 //! [`SAMPLE_STEP_NM`] nanometres, keeping each step on the closed pose's
 //! branch, and refuses a step that comes within [`DEAD_POINT_MARGIN`] of a
 //! dead point, a branch that would have to flip between samples, and a pin
-//! that runs off the end of its slot. Its errors are
+//! that runs off the end of its slot. Between each two samples it proves,
+//! from bounds on how fast each step's margin can change, that no step
+//! comes within [`DEAD_POINT_MARGIN`] of a dead point anywhere in between
+//! (the argument is in `proof.rs`); an interval it can't prove is halved,
+//! down to [`PROOF_STEP_MICRODEG`] or [`PROOF_STEP_NM`], and then refused
+//! as [`MechanismError::NearDeadPoint`]. Its errors are
 //! [`MechanismErrorKind::Motion`]: `error[motion]` at the hardware, naming
 //! the drive value. A checked [`Path`] gives a [`Pose`] (every member's
 //! [`PlanarPose`]) at any drive value in range, exactly the declared pose
@@ -73,6 +78,7 @@
 
 mod path;
 mod plan;
+mod proof;
 #[cfg(test)]
 mod tests;
 
@@ -80,7 +86,7 @@ use std::fmt;
 
 use stave_lang::units::{Angle, Length, Rational};
 
-pub use path::{Path, PlanarPose, Pose, Speed};
+pub use path::{Path, PlanarPose, Pose, Proof, Speed};
 pub use plan::Mechanism;
 
 /// How close any step may come to a dead point over the drive's range:
@@ -94,6 +100,14 @@ pub const SAMPLE_STEP_MICRODEG: i64 = 50_000;
 
 /// A travelling drive is checked at least every 0.05mm.
 pub const SAMPLE_STEP_NM: i64 = 50_000;
+
+/// Between two samples of a turning drive the proof halves an interval it
+/// can't prove down to this (0.00005deg) before it gives up.
+pub const PROOF_STEP_MICRODEG: i64 = 50;
+
+/// Between two samples of a travelling drive the proof halves an interval
+/// it can't prove down to this (50 nanometres) before it gives up.
+pub const PROOF_STEP_NM: i64 = 50;
 
 /// A point in the mechanism's plane, in the kind's frame with the hardware
 /// closed.
@@ -510,6 +524,21 @@ pub enum MechanismError {
         /// The first drive value where it happens.
         at: DriveValue,
     },
+    /// Between two samples that both clear [`DEAD_POINT_MARGIN`], a step
+    /// can't be shown to stay that far from a dead point, even with the
+    /// interval halved down to [`PROOF_STEP_MICRODEG`] or
+    /// [`PROOF_STEP_NM`].
+    #[error(
+        "{} may come within {} of locking near {at}",
+        names(members),
+        DEAD_POINT_MARGIN
+    )]
+    NearDeadPoint {
+        /// The members of the step.
+        members: Vec<MemberName>,
+        /// The sample nearest the dead point where the proof stopped.
+        at: DriveValue,
+    },
     /// Between two samples a step jumped to its other branch.
     #[error("{} flip over at {at}", names(members))]
     BranchFlip {
@@ -564,6 +593,7 @@ impl MechanismError {
             | MechanismError::Overflow
             | MechanismError::Internal => MechanismErrorKind::Mechanism,
             MechanismError::DeadPoint { .. }
+            | MechanismError::NearDeadPoint { .. }
             | MechanismError::BranchFlip { .. }
             | MechanismError::SlotEnd { .. }
             | MechanismError::OutOfRange { .. } => MechanismErrorKind::Motion,
