@@ -37,6 +37,7 @@ mod joints;
 mod legacy;
 mod mechanism;
 mod place;
+mod rules;
 
 use std::collections::HashMap;
 
@@ -61,6 +62,14 @@ pub fn solve(model: &Model) -> (Option<SolvedDesign>, Vec<Diagnostic>) {
     let mut solver = Solver::new(model, project.file, project.span);
     let design = solver.run();
     let mut diagnostics = solver.diagnostics;
+    // The rules of hardware kinds are fit (layer 4): reported only when no
+    // earlier layer found an error, so one mistake is one error.
+    if !diagnostics
+        .iter()
+        .any(|d| d.is_error() && d.code.layer() < Code::Adjust.layer())
+    {
+        diagnostics.extend(solver.deferred);
+    }
     diagnostics.sort_by_key(|d| {
         d.primary()
             .map(|label| (label.file, label.span.start(), label.span.end()))
@@ -126,6 +135,10 @@ pub(crate) struct Solver<'m> {
     /// Hardware kinds whose mechanism has been reported (a kind's mechanism
     /// is checked for each piece of hardware, and reported once).
     pub(crate) reported_mechanisms: std::collections::BTreeSet<stave_model::ids::KindId>,
+    /// What the rules of hardware kinds found (layer 4), in the order the
+    /// hardware was placed: reported only when no earlier layer found an
+    /// error.
+    pub(crate) deferred: Vec<Diagnostic>,
 }
 
 impl<'m> Solver<'m> {
@@ -150,6 +163,7 @@ impl<'m> Solver<'m> {
             skipped: false,
             overruns: Vec::new(),
             reported_mechanisms: std::collections::BTreeSet::new(),
+            deferred: Vec::new(),
         }
     }
 

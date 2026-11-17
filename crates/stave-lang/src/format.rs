@@ -273,7 +273,7 @@ fn space_between(previous: &Atom, next: &Atom) -> bool {
     match next.kind {
         COLON => !matches!(
             next.parent,
-            FIELD | ARG | ROLE | STATION | MIRROR | SHAPE | STOP | COUPLE | CUT
+            FIELD | ARG | ROLE | STATION | MIRROR | SHAPE | STOP | COUPLE | CUT | ADJUST
         ),
         L_PAREN => !matches!(next.parent, ARG_LIST | MIRROR),
         L_BRACK => !matches!(next.parent, INDEX | ARRAY_SPEC),

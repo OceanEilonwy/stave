@@ -666,7 +666,8 @@ impl KindBody {
             | KindEntry::Roles(_)
             | KindEntry::Cut(_)
             | KindEntry::Mount(_)
-            | KindEntry::Mechanism(_) => None,
+            | KindEntry::Mechanism(_)
+            | KindEntry::Adjust(_) => None,
         })
     }
 }
@@ -701,8 +702,26 @@ pub enum KindEntry {
     Mount(MountBlock),
     /// `mechanism { pivot arm, inner_link at point(...) ... }`
     Mechanism(MechanismBlock),
+    /// `adjust arm on plate: across within 2mm`
+    Adjust(Adjust),
     /// `insert: ...`, `adds: ...`, `envelope: ...`
     Field(Field),
+}
+
+/// `adjust a on b: axis within d`: member `a` can be set up to `d` either
+/// way on member `b`, along one axis of the kind's frame.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Adjust {
+    /// The member that is set.
+    pub member: Ident,
+    /// The member it is set on.
+    pub on: Ident,
+    /// The frame axis, as written (`across`).
+    pub axis: Ident,
+    /// How far either way.
+    pub within: Expr,
+    /// The whole entry.
+    pub span: Span,
 }
 
 /// `mount { ... }`: where a piece of hardware sits on its piece, or where

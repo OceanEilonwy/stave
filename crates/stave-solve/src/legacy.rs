@@ -272,21 +272,12 @@ pub(crate) enum Data {
         /// From the piece's edge nearer `on` to the face of `on` the plate
         /// is on.
         overlay: ExactLength,
-        overlay_range: Option<OverlayRangeExact>,
     },
     Pull {
         centres: Option<ExactLength>,
         diameter: Option<ExactLength>,
         screw_diameter: ExactLength,
     },
-}
-
-/// A cup hinge's catalogue overlay data.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) struct OverlayRangeExact {
-    pub base: ExactLength,
-    pub plate_height: ExactLength,
-    pub adjustment: ExactLength,
 }
 
 /// One solid of the old contract: an envelope, its world box and its frame.
@@ -564,13 +555,6 @@ impl Solver<'_> {
                     edge.checked_sub(inside)
                 }
                 .ok_or(Reported)?;
-                let overlay_range = input.length("base_overlay").map(|base| OverlayRangeExact {
-                    base,
-                    plate_height: input.length("plate_height").unwrap_or(ExactLength::ZERO),
-                    adjustment: input
-                        .length("overlay_adjustment")
-                        .unwrap_or(ExactLength::ZERO),
-                });
                 Ok(Legacy {
                     moving: input.member(cup, Thickness::Into)?,
                     fixed: Some(input.member(plate, Thickness::Across)?),
@@ -581,7 +565,6 @@ impl Solver<'_> {
                         cup_inset,
                         on,
                         overlay,
-                        overlay_range,
                     },
                 })
             }
@@ -949,7 +932,6 @@ impl Solver<'_> {
                 cup_inset,
                 on,
                 overlay,
-                overlay_range,
             } => Data::Hinge {
                 opening_angle,
                 cup_diameter,
@@ -957,7 +939,6 @@ impl Solver<'_> {
                 cup_inset,
                 on: part(on),
                 overlay,
-                overlay_range,
             },
             pull @ Data::Pull { .. } => pull,
         }

@@ -18,13 +18,15 @@ use stave_model::defs::{
 use stave_model::ids::{HardwareId, KindId, PartId, RegionId};
 use stave_model::instance::ItemSlot;
 use stave_model::solved::CutKind;
-use stave_model::value::{ExactBox, ModelRef, Value};
+use stave_model::solved::Rules;
+use stave_model::value::{AnchorOwner, AnchorValue, ExactBox, ModelRef, Value};
 
 use crate::eval::{Env, KindEnv, midpoint};
 use crate::joints::Binding;
 use crate::legacy::{CupParts, Input, Legacy, LegacyMotion};
 use crate::mechanism::{ExactPoint, HardwareMechanism};
 use crate::place::Siblings;
+use crate::rules::{AdjustSetting, Call, Offset};
 use crate::{Memo, Reported, Solved, Solver};
 
 /// What a role of a placed piece of hardware is bound to.
@@ -340,6 +342,26 @@ pub(crate) struct Placed {
     pub legacy: Legacy,
     /// Its members with a body, in its kind's order.
     pub members: Vec<PlacedMember>,
+    /// The settings its kind's `adjust` entries give it at rest.
+    pub settings: Vec<AdjustSetting>,
+    /// Whether its kind's rules hold where it is placed.
+    pub rules: Rules,
+}
+
+/// Where a piece of hardware sits at rest, before its cuts and motion.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Rest {
+    pub piece: PartId,
+    pub piece_box: ExactBox,
+    pub piece_orientation: stave_model::solved::Orientation,
+    pub mount_face: Face,
+    /// The mount face as an anchor: `mount` in the kind's rules.
+    pub mount: AnchorValue,
+    pub frame: Frame,
+    pub bodies: Vec<PlacedBody>,
+    /// Each member's offset from its nominal place on each axis its own
+    /// mount sets, in the kind's order.
+    pub offsets: Vec<Offset>,
 }
 
 pub(crate) fn world_index(axis: Axis) -> usize {
@@ -440,25 +462,146 @@ impl Solver<'_> {
             return Err(Reported);
         };
         let roles = self.hardware_roles(&kind, &binding)?;
-        let Some(Value::Part(piece)) = binding.roles.first().cloned() else {
-            return Err(Reported);
-        };
-        let piece_box = self.drawn_box(piece)?;
-        let piece_orientation = self.part_orientation(piece)?;
         let entries = self.hardware_entries(&binding, &kind, env.file, span)?;
         let fasteners = self.hardware_fasteners(&binding, &kind, &hardware_kind.uses)?;
         let model = match entries.get("model") {
             Some(Value::Model(model)) => Some(model.clone()),
             _ => None,
         };
+        let Rest {
+            piece,
+            piece_box,
+            piece_orientation,
+            mount_face,
+            mount: mount_anchor,
+            frame,
+            bodies,
+            offsets,
+        } = self.rest(hardware, &binding)?;
+        self.check_contact(&name, &kind, &roles, &bodies, piece, env.file, span)?;
+        let cuts = self.hardware_cuts(
+            &binding,
+            &kind,
+            &hardware_kind.cuts,
+            &roles,
+            &bodies,
+            &frame,
+            &name,
+            env.file,
+            span,
+        )?;
+        let input = Input {
+            kind: &kind,
+            kind_name: &kind_name,
+            base: kind.base,
+            piece_orientation,
+            mount_face,
+            frame: &frame,
+            roles: &roles,
+            entries: &entries,
+            bodies: &bodies,
+            cuts: &cuts,
+            file: env.file,
+            span,
+        };
+        let legacy = self.legacy(&input)?;
+        // The kind's mechanism moves it, counted on its own first.
+        let (mechanism, own) = match &kind.mechanism {
+            Some(def) => {
+                let mechanism = self.kind_mechanism(&binding, &kind, &kind_name, def, &frame)?;
+                let own = self.check_mechanism(hardware, &roles, &mechanism, &kind_name)?;
+                (Some(mechanism), own)
+            }
+            None => (None, None),
+        };
+        let (motion, cup) = self.legacy_motion(
+            &input,
+            &piece_box,
+            mechanism.as_ref(),
+            &binding,
+            &name,
+            &env,
+            span,
+        )?;
+        let members = self.placed_members(&kind, &roles, &bodies, &frame)?;
+        // The kind's rules where it is placed: its adjustments and requires.
+        let (settings, rules) = self.hardware_rules(
+            Call {
+                hardware,
+                name: &name,
+                file: env.file,
+                span,
+            },
+            &binding,
+            &kind,
+            &hardware_kind.adjusts,
+            &offsets,
+            mount_anchor,
+        )?;
+        Ok(Placed {
+            kind: binding.kind,
+            kind_name: binding.name.clone(),
+            base: kind.base,
+            piece,
+            mount_face,
+            roles,
+            entries,
+            cuts,
+            fasteners,
+            mechanism,
+            own,
+            motion,
+            cup,
+            model,
+            legacy,
+            members,
+            settings,
+            rules,
+        })
+    }
+
+    /// Where a piece of hardware sits at rest, from its call `binding`:
+    /// its frame, its members with their own mounts, and each member's
+    /// offset from its nominal place (grammar, "Hardware placement"). The
+    /// help search places it again with other settings.
+    pub(crate) fn rest(&mut self, hardware: HardwareId, binding: &Binding) -> Solved<Rest> {
+        let Some(inst) = self.model.hardware.get(hardware.index()).cloned() else {
+            return Err(Reported);
+        };
+        let Some(def) = self.model.defs.hardware_def(inst.def).cloned() else {
+            return Err(Reported);
+        };
+        let array = def.array.as_ref().map(|_| {
+            (
+                DefId::Hardware(inst.def),
+                self.array_len(DefId::Hardware(inst.def), inst.ctx),
+            )
+        });
+        let env = Env {
+            ctx: inst.ctx,
+            file: def.decl.file,
+            kind: None,
+            array,
+        };
+        let name = inst.name.clone();
+        let Some(kind) = self.model.defs.kind(binding.kind).cloned() else {
+            return Err(Reported);
+        };
+        let kind_name = binding.name.clone();
+        let Some(hardware_kind) = kind.hardware.clone() else {
+            return Err(Reported);
+        };
+        let Some(Value::Part(piece)) = binding.roles.first().cloned() else {
+            return Err(Reported);
+        };
+        let piece_box = self.drawn_box(piece)?;
+        let piece_orientation = self.part_orientation(piece)?;
         // The mount face fixes the depth axis: the origin lies on it.
         let mount = &hardware_kind.mount;
         let mount_face = match (binding.face, mount.face) {
             (Some(face), _) => face,
             (None, FaceRule::Word(face)) => face,
-            (None, FaceRule::Nearer { part, region }) => {
-                self.face_nearer(&binding, part, region)?
-            }
+            (None, FaceRule::Nearer { part, region }) => self.face_nearer(binding, part, region)?,
         };
         let face_axis = mount_face.axis();
         let face_position = if mount_face.is_positive() {
@@ -497,7 +640,7 @@ impl Solver<'_> {
             match rule {
                 AxisRule::Open => open.push(axis),
                 AxisRule::Term(MountTerm::Centre { part }) => {
-                    let part = self.role_part(&binding, *part)?;
+                    let part = self.role_part(binding, *part)?;
                     let part_box = self.drawn_box(part)?;
                     let centre =
                         midpoint(part_box.min(world), part_box.max(world)).ok_or(Reported)?;
@@ -506,7 +649,7 @@ impl Solver<'_> {
                     }
                 }
                 AxisRule::Term(MountTerm::From(from)) => {
-                    let (plane, at) = self.term_plane(&binding, &kind, mount_face, world, from)?;
+                    let (plane, at) = self.term_plane(binding, &kind, mount_face, world, from)?;
                     let inward = if plane.inward_positive {
                         positive_direction(world)
                     } else {
@@ -532,7 +675,7 @@ impl Solver<'_> {
         for (index, body) in kind.bodies.iter().enumerate() {
             let id = BodyId::new(index).ok_or(Reported)?;
             let shapes: Vec<ShapeDef> = body.shapes.iter().map(|s| s.shape.clone()).collect();
-            let boxes = self.in_kind(&binding, &kind, |solver, kind_env| {
+            let boxes = self.in_kind(binding, &kind, |solver, kind_env| {
                 shapes
                     .iter()
                     .map(|shape| solver.shape_box(shape, kind_env))
@@ -622,6 +765,7 @@ impl Solver<'_> {
             }
         }
         // Every member at rest: its own mount, then the frame.
+        let mut all_offsets = Vec::new();
         let mut bodies = Vec::new();
         for (id, boxes) in &frame_bodies {
             let Some(body) = kind.bodies.get(id.index()) else {
@@ -631,8 +775,10 @@ impl Solver<'_> {
             for placement in &body.mount {
                 let world = frame.direction(placement.axis).axis();
                 let (_, at) =
-                    self.term_plane(&binding, &kind, mount_face, world, &placement.from)?;
-                offsets.push((placement.axis, frame.coordinate(placement.axis, at)?));
+                    self.term_plane(binding, &kind, mount_face, world, &placement.from)?;
+                let offset = frame.coordinate(placement.axis, at)?;
+                offsets.push((placement.axis, offset));
+                all_offsets.push((*id, placement.axis, offset));
             }
             let mut shapes = Vec::new();
             for (frame_box, cylinder, outline) in boxes {
@@ -671,69 +817,21 @@ impl Solver<'_> {
             }
             bodies.push(PlacedBody { body: *id, shapes });
         }
-        self.check_contact(&name, &kind, &roles, &bodies, piece, env.file, span)?;
-        let cuts = self.hardware_cuts(
-            &binding,
-            &kind,
-            &hardware_kind.cuts,
-            &roles,
-            &bodies,
-            &frame,
-            &name,
-            env.file,
-            span,
-        )?;
-        let input = Input {
-            kind: &kind,
-            kind_name: &kind_name,
-            base: kind.base,
+        let mount = AnchorValue {
+            axis: face_axis,
+            position: face_position,
+            face: Some(mount_face),
+            owner: AnchorOwner::Part(piece),
+        };
+        Ok(Rest {
+            piece,
+            piece_box,
             piece_orientation,
             mount_face,
-            frame: &frame,
-            roles: &roles,
-            entries: &entries,
-            bodies: &bodies,
-            cuts: &cuts,
-            file: env.file,
-            span,
-        };
-        let legacy = self.legacy(&input)?;
-        // The kind's mechanism moves it, counted on its own first.
-        let (mechanism, own) = match &kind.mechanism {
-            Some(def) => {
-                let mechanism = self.kind_mechanism(&binding, &kind, &kind_name, def, &frame)?;
-                let own = self.check_mechanism(hardware, &roles, &mechanism, &kind_name)?;
-                (Some(mechanism), own)
-            }
-            None => (None, None),
-        };
-        let (motion, cup) = self.legacy_motion(
-            &input,
-            &piece_box,
-            mechanism.as_ref(),
-            &binding,
-            &name,
-            &env,
-            span,
-        )?;
-        let members = self.placed_members(&kind, &roles, &bodies, &frame)?;
-        Ok(Placed {
-            kind: binding.kind,
-            kind_name: binding.name.clone(),
-            base: kind.base,
-            piece,
-            mount_face,
-            roles,
-            entries,
-            cuts,
-            fasteners,
-            mechanism,
-            own,
-            motion,
-            cup,
-            model,
-            legacy,
-            members,
+            mount,
+            frame,
+            bodies,
+            offsets: all_offsets,
         })
     }
 

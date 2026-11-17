@@ -31,6 +31,9 @@ pub(crate) struct KindEnv {
     pub params: RefCell<Vec<Option<Value>>>,
     /// Parts the kind made for this pair.
     pub made: Vec<PartId>,
+    /// For a piece of hardware once it is placed: its mount face, as an
+    /// anchor (`mount` in its kind's rules).
+    pub mount: Option<AnchorValue>,
 }
 
 impl KindEnv {
@@ -46,6 +49,7 @@ impl KindEnv {
             settings,
             params: RefCell::new(vec![None; param_count]),
             made: Vec::new(),
+            mount: None,
         }
     }
 }
@@ -365,6 +369,11 @@ impl Solver<'_> {
                 .and_then(|k| k.made.get(index).copied())
                 .map(Value::Part)
                 .ok_or_else(|| self.eval_error(env, span, "the made part doesn't exist yet here", "refer to made parts only in cuts and assembly steps")),
+            Symbol::Mount(_) => env
+                .kind
+                .and_then(|k| k.mount)
+                .map(Value::Anchor)
+                .ok_or_else(|| self.eval_error(env, span, "the mount face is known only where the hardware is placed", "use mount in the kind's require entries")),
         }
     }
 
@@ -1399,6 +1408,25 @@ impl Solver<'_> {
                         ))
                     }
                 }
+            }
+            (Value::Anchor(anchor), Value::Region(region))
+            | (Value::Region(region), Value::Anchor(anchor)) => {
+                // From a face to the same side of the region.
+                let Some(face) = anchor.face else {
+                    return Err(self.eval_error(
+                        env,
+                        span,
+                        "'between' needs a face to measure to a region, found a mid-plane",
+                        "name a face, such as side.left: it is measured to the region's same side",
+                    ));
+                };
+                let side = self.region_value(*region)?.bounds.face(face);
+                let distance = anchor.position.checked_sub(side).ok_or(Reported)?;
+                Ok(if distance < ExactLength::ZERO {
+                    distance.checked_neg().ok_or(Reported)?
+                } else {
+                    distance
+                })
             }
             (Value::Anchor(a), Value::Anchor(b)) => {
                 if a.axis != b.axis {

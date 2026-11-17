@@ -1657,6 +1657,20 @@ impl<'t> Parser<'t> {
                 p.block(Body::Mechanism, owner)
             });
         }
+        if self.at_entry_word("adjust") {
+            return self.node(ADJUST, |p| {
+                p.bump();
+                p.root_name()?;
+                p.expect_word("on")?;
+                p.root_name()?;
+                p.expect(COLON, "':'")?;
+                let name = p.nth_text(0);
+                let at = p.span(0);
+                p.root_name()?;
+                p.expect(KW_WITHIN, "'within'")?;
+                p.value(name, at)
+            });
+        }
         if self.at_entry_word("roles") {
             return self.node(ROLES, |p| {
                 p.bump();

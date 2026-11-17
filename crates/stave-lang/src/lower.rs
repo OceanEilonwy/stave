@@ -587,6 +587,16 @@ fn kind(node: &SyntaxNode) -> Option<Kind> {
                 })
             }
             SyntaxKind::MOUNT => KindEntry::Mount(mount(&entry)?),
+            SyntaxKind::ADJUST => {
+                let mut names = children(&entry, SyntaxKind::NAME);
+                KindEntry::Adjust(Adjust {
+                    member: ident(&names.next()?)?,
+                    on: ident(&names.next()?)?,
+                    axis: ident(&names.next()?)?,
+                    within: expr(&exprs(&entry).next()?)?,
+                    span: span_of(&entry),
+                })
+            }
             SyntaxKind::CUT => KindEntry::Cut(Cut {
                 name: match child(&entry, SyntaxKind::NAME) {
                     Some(node) => Some(name(&node)?),

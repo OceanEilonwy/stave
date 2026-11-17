@@ -100,6 +100,7 @@ grammar position only:
 | `joint`, `slide`, `hinge`, `pull`, `fastener`, `tool` | as the base kind after `kind name :` (`joint` is also a keyword) |
 | `roles`, `cut`, `makes`, `member` | at the start of an entry in a `kind` body, when not followed by `:` |
 | `mechanism` | at the start of an entry in a hardware `kind` body, when not followed by `:` |
+| `adjust`, `on` | `adjust` at the start of an entry in a hardware `kind` body, when not followed by `:`; `on` between its two members (`adjust arm on plate: across within 2mm`) |
 | `mount` | at the start of an entry in a hardware `kind` body or a member's body, when not followed by `:` |
 | `shape` | at the start of an entry in a member's body, when followed by a name and `:` (`shape knuckle: box(...)`); `shape: ...` is a field |
 | `pivot`, `slot`, `rail`, `couple` | at the start of an entry in a `mechanism` block, when not followed by `:` |
@@ -286,7 +287,7 @@ library       = "library" , STRING , [ block(field) ] ;
 kind          = "kind" , IDENT , ":" , base_kind , block(kind_entry) ;
 base_kind     = "joint" | "slide" | "hinge" | "pull" | "fastener" | "tool" ;
 kind_entry    = { DOC } , ( param | require | makes | member )
-              | roles | cut | mount | mechanism | field ;
+              | roles | cut | mount | mechanism | adjust | field ;
 member        = "member" , IDENT , [ block(member_entry) ] ;
                 (* a hardware kind's named piece: member cup, or member arm { shape: box(...) } *)
 member_entry  = "shape" , [ IDENT ] , ":" , call_expr    (* shape: cylinder(...), shape knuckle: box(...) *)
@@ -302,6 +303,8 @@ mechanism_entry = "pivot" , IDENT , "," , IDENT , "at" , call_expr
               | "couple" , IDENT , "to" , IDENT , ":" , expr   (* couple middle to drawer_member: 1/2 *)
               | "stop" , ":" , expr , STRING             (* stop: opening_angle "the limiter stops it here" *)
               | field ;                                  (* drive: turn(cup, from: 0deg, to: 110deg) *)
+adjust        = "adjust" , IDENT , "on" , IDENT , ":" , IDENT , "within" , expr ;
+                                                         (* adjust arm on plate: across within 2mm *)
 roles         = "roles" , block(role) ;
 role          = NAME , ":" , IDENT ;                     (* piece: Part   into: Parts *)
 cut           = "cut" , [ IDENT , ":" ] , call , block(call) ;
@@ -774,8 +777,9 @@ how it moves and what it cuts are all written in the kind. A `slide`,
 | `roles { }` | yes | the parts it joins, as a joint's roles (see [Roles and pairs](#roles-and-pairs)). The first is a `Part`: the **piece** it is mounted on, which takes the positional argument. The others are `Part` or `Region` (a slide's opening) |
 | `mount { }` | yes | where it sits on its piece unless the design says otherwise (see [Hardware placement](#hardware-placement)) |
 | `param` | no | settings; a param with a `within` list is a family (`side_mount_slide(length: 450mm)`) |
-| `require` | no | rules, checked for each piece of hardware |
+| `require` | no | rules, checked for each piece of hardware where it is placed; `mount` names its mount face as an anchor (see [Adjustment](#adjustment)) |
 | `member` | no | its pieces, each with its shapes (see [Hardware members](#hardware-members)) |
+| `adjust a on b: axis within d` | no | how far a member can be set on another, on one axis of the frame (see [Adjustment](#adjustment)) |
 | `mechanism { }` | no | how its members move (see [Mechanisms](#mechanisms)) |
 | `cut [name:] crossing(role, member) { }` | no | the wood it takes out: the bore for a cup, the mortise for a leaf, the hole for a screw (see [Faces to cut](#faces-to-cut)) |
 | `uses` | no | fasteners it consumes, as a joint's `uses:`: counted, never placed |
@@ -815,13 +819,11 @@ A piece of hardware moves only as its kind's `mechanism` says (see
 just outside the edge where the two parts are flush,
 `side_mount_slide` runs on one rail and `euro_hinge` moves on its
 four-bar linkage, all solved the same way. A kind with no `mechanism`
-doesn't move (a pull, or a hinge kind that leaves it out). A cup hinge's catalogue
-overlay is read from its `base_overlay`, `cup_inset`, `plate_height` and
-`overlay_adjustment` when it has `base_overlay`: the door must overlay
-`on` by `base_overlay + cup_inset - plate_height`, give or take
-`overlay_adjustment` (`error[hinge-overlay]` otherwise, with the
-`cup_inset` or `plate_height` that fits). A slide's `clearance` is checked
-against its `in` region (`error[slide-gap]`).
+doesn't move (a pull, or a hinge kind that leaves it out). A catalogue's
+rules are the kind's own: how far a cup hinge's arm can be set on its
+plate is an `adjust`, and the gap a slide needs beside the drawer is a
+`require` (see [Adjustment](#adjustment)). No rule about a hinge or a slide
+is built into the checker.
 
 #### Hardware members
 
@@ -1048,22 +1050,35 @@ fixes it"); an open axis with no term is `error[axis-not-set]`. `orient`,
 `ground` and `corners` don't apply to hardware. Fasteners and tools are
 never placed.
 
-**A member's own `mount { }`** places that member, on the axes it names
-(`across`, `along`, `depth`), from an anchor instead of from the kind's
-origin: its shapes on that axis are measured from the anchor's plane,
-moved `inset` into the anchor's part, in the frame's direction. Each entry
-is `from(anchor, inset: d)`:
+**A member's own `mount { }`** places that member in the design, on the
+axes it names (`across`, `along`, `depth`), from an anchor instead of from
+the kind's origin. Its shapes are still written in the kind's frame, at
+the member's **nominal place**: where the catalogue puts it, with the
+rest of the hardware where the kind draws it. Each entry is
+`from(anchor, inset: d)`: on that axis, the member's `0mm` lies on the
+anchor's plane, moved `d` into the anchor's part (a negative `d` moves it
+out of the part). How far the mount moves the member from its nominal
+place is its **offset** on that axis: where that point lies in the frame.
+An offset must be exactly `0mm`, unless an `adjust` of the kind lets the
+member be set there (see [Adjustment](#adjustment)); otherwise it is
+`error[adjust]`. The member is drawn and checked where its mount puts it:
 
 ```
   /// The mounting plate: screwed to the inside of the cabinet side.
   member plate {
     with:  on
-    // 11mm thick, standing off the side's inside face; 36mm wide, its
-    // middle plate_setback back from the side's front edge.
-    shape: box(along: 50mm, across: 0mm..11mm, depth: 36mm)
+    // 11mm thick plus plate_height, standing off the side's inside face,
+    // which nominally lies 5mm + plate_height outside the cup's centre;
+    // 36mm wide, its middle plate_setback back from the side's front
+    // face, which lies against the back of the door.
+    shape: box(
+      along:  50mm,
+      across: -(5mm + plate_height)..6mm,
+      depth:  -(plate_setback + 18mm)..-(plate_setback - 18mm),
+    )
     mount {
-      across: from(face(on, toward: piece))
-      depth:  from(face(on, toward: piece), inset: plate_setback)
+      across: from(face(on, toward: piece), inset: -(5mm + plate_height))
+      depth:  from(face(on, toward: piece))
     }
   }
 ```
@@ -1598,6 +1613,68 @@ project's `tools:` and a recipe's `tools:`.
 **Envelopes.** Outside a member, `box(length:, width:, thickness:)` and
 `cylinder(diameter:, length:)` are envelopes: a fastener's size.
 
+#### Adjustment
+
+Real hardware has screws that set it: a cup hinge's arm slides on its
+plate to bring the door in or out. A kind says so with `adjust`:
+
+```
+  adjust arm on plate: across within 2mm
+```
+
+`adjust a on b: axis within d` says that member `a` can be set up to `d`
+either way on member `b`, along `axis` (`along`, `across` or `depth`) of
+the [kind's frame](#the-kinds-frame). Both are members with a body
+(`error[unknown-name]` otherwise), and on that axis exactly one of them
+has its own `mount` (`error[missing-field]` when neither has, as nothing
+would ever move it; `error[type-mismatch]` when both have). `d` is a
+`Length` and may use the kind's params; an axis is adjusted at most once
+for a member (`error[duplicate-name]`).
+
+The rest pose is solved within the adjustments: the design places the
+parts, each member's mount places it, and the **setting** of `a` on `b` is
+how far `a` then sits from its nominal place on `b`: the offset of `a`
+less the offset of `b` on that axis (see [Hardware
+placement](#hardware-placement); a member without a mount on the axis has
+offset `0mm`). Everything is drawn and checked at that setting, which is
+part of the solved design. A setting more than `d` either way, or an offset
+on an axis no `adjust` covers, is `error[adjust]` at the hardware's kind
+call:
+
+```
+error[adjust]: door.hinges[bottom]: the arm would sit 8.5mm off its place on the plate; it adjusts 2mm
+  --> project.stave:62:34
+   = note: the arm's setting across is 8.5mm; adjust arm on plate: across within 2mm
+   = note: the same for door.hinges[top]
+   = help: use plate_height: 9mm, from the kind's list
+```
+
+The other pieces of hardware of the same call (the elements of an array)
+that fail the same way are a note on the first error, `the same for
+<hardware>`; so are those that fail the same `require`.
+
+The help is the general search over the kind's `within` lists (see
+[Checks and `require`](#checks-and-require)): each value of each list, one
+param at a time with the others as given, with the hardware placed again;
+it prints the values that bring every setting within its adjustment, and
+never a value the kind would reject.
+
+**Catalogue rules are `require`s of the kind.** A hardware kind's
+`require` is checked for each piece of hardware where it is placed. In it,
+`mount` names the mount face as an anchor, so `between(mount, in)` is the
+gap between the face the slide is mounted on and the same side of its
+opening:
+
+```
+  require gap : between(mount, in) == 12.7mm "the slide needs exactly this much beside the drawer"
+```
+
+A failed rule is `error[require]` at the hardware's kind call, with the
+help search; when the condition is `a == b`, a note gives both sides (`the
+rule measures 10mm and needs 12.7mm`). Hardware whose `require` or
+`adjust` failed is left out of the overlap check and the motion checks:
+it is not where it can be, and one mistake is one error.
+
 #### One collision model
 
 Every solid in the design is a **body**: every part with its cuts made, and
@@ -2029,7 +2106,7 @@ These are looked up when a bare name is called (see [Names](#names), rule 3).
 
 | Function | Returns | Meaning |
 |---|---|---|
-| `between(a, b)` | `Length` | the clear distance between two parts, or between two parallel anchors. Two parts must be apart along exactly one axis |
+| `between(a, b)` | `Length` | the clear distance between two parts, or between two parallel anchors, or from a face to the same side of a region (`between(side.left, opening)` is from the side's left face to the opening's left side). Two parts must be apart along exactly one axis |
 | `extent(items, axis)` | `Length` | overall drawn size of a list of parts along a world axis. With `of: part`, `axis` is one of that part's own axes (`length`, `width`, `thickness`), meaning the world axis it runs along once placed. In a joint kind this measures the other part along this one's direction: `extent(into, thickness, of: piece)` is how much of `into` a screw driven through `piece`'s thickness can bite into (its thickness for a face, its width for an edge) |
 | `mid(item, axis)` | `Anchor` | the mid-plane of a part or region |
 | `opening(...)`, `split(...)`, `cover(...)` | `Region` | see [Regions](#regions) |
@@ -2163,7 +2240,9 @@ lists that were tried:
 10mm, 12mm]); change the parts' sizes`. Only lists are searched: a param
 `within` a range (`within 2mm..9mm`) is left as it is. A rule that only
 compares for order (`<`, `>=`), or a kind with no `within` list, keeps the
-general help.
+general help. The same search runs for a hardware kind's `require` and for
+its adjustments (`error[adjust]`, see [Adjustment](#adjustment)), where each
+trial places the hardware again.
 
 Requires are what an AI patch or a smart edit is judged against: a change that
 breaks one is rejected, with the message.
@@ -2175,7 +2254,8 @@ errors in the same item.
 2. **Names and types**: names resolve, units match, fields and roles exist.
 3. **Placement and sizes**: every axis set once, `fit` resolvable, no cycles.
 4. **Fit and geometry**: parts meet where joints say they do and overlap
-   nowhere else (using cut sizes and cuts); slides have their clearance.
+   nowhere else (using cut sizes and cuts); hardware sits within its
+   adjustments and keeps its kind's rules.
 5. **Motion**: every scene, and every motion through its whole travel, is
    collision free.
 6. **Requires and ranges** (z3): every `require` holds, and layers 3 and 4 hold,
@@ -2218,8 +2298,7 @@ shape of their messages are fixed, because tests and AI tools match on them.
 | 3 | `mechanism` | `<kind>'s mechanism has <n> freedoms; it needs exactly one`; `<kind>'s mechanism: this mechanism can't be solved one step at a time from its drive; left over: ...` |
 | 4 | `no-contact` | `<joint or hardware>: <part> meets none of the parts it should join` |
 | 4 | `overlap` | `<a> and <b> overlap` |
-| 4 | `slide-gap` | `<hardware>: <piece> is <gap> from the opening, but the slide needs <clearance>` |
-| 4 | `hinge-overlay` | `<hardware>: <piece> overlays <on> by <overlay>, but the hinge gives <low> to <high>` |
+| 4 | `adjust` | `<hardware>: the <member> would sit <offset> off its place on the <member>; it adjusts <d>`, or for an axis no `adjust` covers `<hardware>: the <member> would sit <offset> off its place <across>; it doesn't adjust that way` |
 | 5 | `motion` | `<a> hits <b> when <assembly> is <open>`; `<assembly>'s hardware doesn't move alike`; `<hardware>: <members> lock at <value>` |
 | 6 | `require` | `'<name>' fails: <message>` |
 | 6 | `require-range` | `'<name>' does not hold for every allowed value: <message>` |

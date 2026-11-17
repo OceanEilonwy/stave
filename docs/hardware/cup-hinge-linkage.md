@@ -224,5 +224,7 @@ focus mode: "closest at 110°: 2.9 mm").
   hinge's own arm, knuckle and links against its door (less only the
   cup's bore) and side, from 0° (`sweep::mechanism_contact`; a member
   already in wood when closed is caught at 0°), and measured
-  (`sweep::steel_in_wood`) by a test over every example's cup hinges; `hinge-overlay` against the kind's
-  `base_overlay`, `plate_height` and `overlay_adjustment`.
+  (`sweep::steel_in_wood`) by a test over every example's cup hinges; the
+  overlay is the kind's own text: the plate is drawn at its catalogue place
+  for `cup_inset` and `plate_height`, and `adjust arm on plate: across
+  within 2mm` is the side screw (`error[adjust]` past it).

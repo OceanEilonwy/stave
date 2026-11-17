@@ -1439,7 +1439,6 @@ impl Solver<'_> {
                     cup_inset,
                     on,
                     overlay,
-                    overlay_range,
                 } => HardwareData::Hinge {
                     opening_angle: opening_angle.to_nearest_angle().ok_or(Reported)?,
                     cup_diameter: round_length(*cup_diameter)?,
@@ -1447,15 +1446,6 @@ impl Solver<'_> {
                     cup_inset: round_length(*cup_inset)?,
                     on: *on,
                     overlay: round_length(*overlay)?,
-                    overlay_range: overlay_range
-                        .map(|range| -> Solved<solved::OverlayRange> {
-                            Ok(solved::OverlayRange {
-                                base: round_length(range.base)?,
-                                plate_height: round_length(range.plate_height)?,
-                                adjustment: round_length(range.adjustment)?,
-                            })
-                        })
-                        .transpose()?,
                 },
                 Data::Pull {
                     centres,
@@ -1506,6 +1496,21 @@ impl Solver<'_> {
                 fasteners: hw.fasteners.clone(),
                 members: members(inst.id, &hw.members, &placed_by, hw.piece)?,
                 own_mechanism: hw.own.clone(),
+                settings: hw
+                    .settings
+                    .iter()
+                    .map(|setting| -> Solved<solved::Setting> {
+                        Ok(solved::Setting {
+                            body: solved::BodyRef {
+                                hardware: inst.id,
+                                body: setting.body,
+                            },
+                            axis: setting.axis,
+                            offset: round_length(setting.offset)?,
+                        })
+                    })
+                    .collect::<Solved<Vec<_>>>()?,
+                rules: hw.rules,
                 entries: hw
                     .entries
                     .iter()

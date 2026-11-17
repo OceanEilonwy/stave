@@ -140,6 +140,228 @@ fn a_door_too_far_out_for_its_cup_hinges() {
     insta::assert_snapshot!(rendered("tests/broken/hinge_overlay"));
 }
 
+/// `broken/hinge_overlay` with its doors overlaying the sides by
+/// `overlay`, and `euro_hinge` replaced by `kind` when one is given (a
+/// copy of it under another name, appended to the design).
+fn overlay_design(overlay: &str, kind: Option<(&str, String)>) -> stave_app::Opened {
+    let mut design =
+        std::fs::read_to_string(workspace().join("tests/broken/hinge_overlay/project.stave"))
+            .unwrap()
+            .replace(
+                "overlay(left: 9mm, right: 9mm)",
+                &format!("overlay(left: {overlay}, right: {overlay})"),
+            );
+    if let Some((name, text)) = kind {
+        design = design.replace(
+            "euro_hinge(panel, on: hinge_side)",
+            &format!("{name}(panel, on: hinge_side)"),
+        ) + "\n"
+            + &text;
+    }
+    common::open_files(&[("project.stave", &design)])
+}
+
+/// `euro_hinge`'s text from `std/hardware/hinges.stave`, renamed.
+fn euro_hinge_as(name: &str) -> String {
+    let library = std::fs::read_to_string(workspace().join("std/hardware/hinges.stave")).unwrap();
+    let start = library.find("kind euro_hinge : hinge {").unwrap();
+    let length = library[start..].find("\n}\n").unwrap() + 3;
+    library[start..start + length].replace("kind euro_hinge", &format!("kind {name}"))
+}
+
+/// The help for `error[adjust]` is the general search: each value of the
+/// kind's lists, one at a time, with the hinge placed again. It prints
+/// only listed values that bring the arm within its 2mm, never the exact
+/// amount that would (8.5mm, 5.5mm).
+#[test]
+fn the_help_only_offers_values_the_kind_allows() {
+    let help = |opened: &stave_app::Opened| -> Vec<String> {
+        opened
+            .diagnostics
+            .iter()
+            .filter(|d| d.code == stave_lang::Code::Adjust)
+            .filter_map(|d| d.help.clone())
+            .collect()
+    };
+    // 9mm: the arm would sit 8.5mm off; only a 9mm plate brings it back.
+    let nine = overlay_design("9mm", None);
+    assert_eq!(
+        help(&nine).first().map(String::as_str),
+        Some("use plate_height: 9mm, from the kind's list")
+    );
+    // 12mm: 5.5mm off; plates of 3.5mm to 7.5mm would do, and 6mm is
+    // the one the kind lists. No boring distance comes near.
+    let twelve = overlay_design("12mm", None);
+    assert_eq!(
+        help(&twelve).first().map(String::as_str),
+        Some("use plate_height: 6mm, from the kind's list")
+    );
+    // 14mm: 3.5mm off; a 3mm boring distance or a 1.5mm or 3mm plate.
+    let fourteen = overlay_design("14mm", None);
+    assert_eq!(
+        help(&fourteen).first().map(String::as_str),
+        Some(
+            "use cup_inset: 3mm or plate_height: 1.5mm or plate_height: 3mm, from the kind's lists"
+        )
+    );
+    // Taking the 6mm plate the help offered checks clean.
+    let fixed = overlay_design(
+        "12mm",
+        Some((
+            "tall_plate_hinge",
+            euro_hinge_as("tall_plate_hinge").replace(
+                "param plate_height = 0mm within",
+                "param plate_height = 6mm within",
+            ),
+        )),
+    );
+    assert!(
+        fixed.diagnostics.is_empty(),
+        "{:?}",
+        common::diagnostics(&fixed)
+    );
+}
+
+/// The example cabinet's doors overlay its sides by 18mm, 0.5mm past the
+/// hinge's nominal 17.5mm: the arm is set 0.5mm out on its plate (its
+/// setting across is -0.5mm, away from the middle of the door), within its
+/// 2mm, and the design checks clean at that setting, with the arm drawn
+/// where the door needs it (the dump's `arm 20.6..38.5`).
+#[test]
+fn a_design_inside_the_adjustment_checks_at_the_setting_it_needs() {
+    use stave_lang::units::Length;
+    use stave_model::defs::FrameAxis;
+    use stave_model::solved::Rules;
+    let opened = stave_app::open(&workspace().join("examples/clothing_cabinet")).unwrap();
+    assert!(
+        opened.diagnostics.is_empty(),
+        "{:?}",
+        common::diagnostics(&opened)
+    );
+    let design = common::design(&opened);
+    let model = opened.model.as_ref().unwrap();
+    for name in [
+        "door_l.hinges[lower]",
+        "door_l.hinges[upper]",
+        "door_r.hinges[lower]",
+        "door_r.hinges[upper]",
+    ] {
+        let hinge = common::hardware(design, name);
+        assert_eq!(hinge.rules, Rules::Hold, "{name}");
+        let kind = model.defs.kind(hinge.kind_id).unwrap();
+        let settings: Vec<(&str, FrameAxis, Length)> = hinge
+            .settings
+            .iter()
+            .map(|setting| {
+                (
+                    kind.bodies[setting.body.body.index()].name.as_str(),
+                    setting.axis,
+                    setting.offset,
+                )
+            })
+            .collect();
+        assert_eq!(
+            settings,
+            [("arm", FrameAxis::Across, Length::from_nm(-500_000))],
+            "{name}"
+        );
+    }
+}
+
+/// A member's own mount on an axis no `adjust` covers must put it exactly
+/// where the kind draws it: without its `adjust`, `euro_hinge` takes only
+/// the nominal 17.5mm overlay, and a plate mounted 1mm deeper than it is
+/// drawn is off its place in depth.
+#[test]
+fn an_axis_without_adjust_must_be_exact() {
+    let adjust = "  adjust arm on plate: across within 2mm\n";
+    let fixed = euro_hinge_as("fixed_hinge");
+    assert!(fixed.contains(adjust));
+    let fixed = fixed.replace(adjust, "");
+    // At the nominal overlay it fits.
+    let nominal = overlay_design("17.5mm", Some(("fixed_hinge", fixed.clone())));
+    assert!(
+        nominal.diagnostics.is_empty(),
+        "{:?}",
+        common::diagnostics(&nominal)
+    );
+    // Half a millimetre more is off its place.
+    let more = overlay_design("18mm", Some(("fixed_hinge", fixed)));
+    assert!(
+        common::diagnostics(&more).iter().any(|m| m
+            == "adjust: door.hinges[bottom]: the plate would sit 0.5mm off its place across; it doesn't adjust that way"),
+        "{:?}",
+        common::diagnostics(&more)
+    );
+    // Depth has no adjust in the kind at all.
+    let depth = "      depth:  from(face(on, toward: piece))\n";
+    let deeper = euro_hinge_as("deep_plate_hinge");
+    assert!(deeper.contains(depth));
+    let deeper = deeper.replace(
+        depth,
+        "      depth:  from(face(on, toward: piece), inset: 1mm)\n",
+    );
+    let off = overlay_design("17.5mm", Some(("deep_plate_hinge", deeper)));
+    assert!(
+        common::diagnostics(&off).iter().any(|m| m
+            == "adjust: door.hinges[bottom]: the plate would sit 1mm off its place in depth; it doesn't adjust that way"),
+        "{:?}",
+        common::diagnostics(&off)
+    );
+}
+
+/// An `adjust` names two members with a body and an axis of the frame on
+/// which exactly one of them has its own mount, once per member and axis
+/// (grammar, "Adjustment").
+#[test]
+fn an_adjust_names_two_members_and_an_axis_one_of_them_is_mounted_on() {
+    let adjust = "  adjust arm on plate: across within 2mm\n";
+    let with = |replacement: &str| {
+        let kind = euro_hinge_as("odd_hinge");
+        assert!(kind.contains(adjust));
+        overlay_design(
+            "17.5mm",
+            Some(("odd_hinge", kind.replace(adjust, replacement))),
+        )
+    };
+    let cases = [
+        (
+            "  adjust arm on plat: across within 2mm\n",
+            "unknown-name: unknown name 'plat'",
+        ),
+        (
+            "  adjust arm on plate: sideways within 2mm\n",
+            "type-mismatch: an adjust is along along, across or depth, found 'sideways'",
+        ),
+        (
+            "  adjust arm on plate: along within 2mm\n",
+            "missing-field: adjust arm on plate: neither has a mount on 'along', so nothing would ever be set",
+        ),
+        (
+            "  adjust plate on plate: across within 2mm\n",
+            "duplicate-name: 'plate' is named twice in one adjust",
+        ),
+        (
+            "  adjust arm on plate: across within 2mm\n  adjust cup on plate: across within 1mm\n",
+            "duplicate-name: 'plate' is adjusted twice across",
+        ),
+    ];
+    for (replacement, expected) in cases {
+        let opened = with(replacement);
+        let found = common::diagnostics(&opened);
+        assert!(found.iter().any(|m| m == expected), "{expected}: {found:?}");
+    }
+    // An adjust in a joint kind is not an entry it has.
+    let opened = common::open("kind odd_joint : joint {\n  adjust a on b: across within 1mm\n}");
+    let found = common::diagnostics(&opened);
+    assert!(
+        found
+            .iter()
+            .any(|m| m == "unknown-field: a joint kind has no field 'adjust'"),
+        "{found:?}"
+    );
+}
+
 /// Before the mechanism was text, a built-in cap stopped every cup hinge
 /// at 110deg. Now a kind that copies `euro_hinge`'s mechanism word for
 /// word and asks it to open 125deg is stopped by the mechanism itself: its

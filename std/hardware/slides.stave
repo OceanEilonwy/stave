@@ -12,6 +12,10 @@ kind side_mount_slide : slide {
   clearance: 12.7mm
   travel:    length                      // full extension: the drawer comes all the way out
 
+  // The cabinet member and the bearings fill exactly the clearance between
+  // the drawer side and the side of its opening.
+  require gap : between(mount, in) == 12.7mm "the slide needs exactly this much beside the drawer"
+
   // On the side of the drawer box nearer the cabinet, its front end level
   // with the side's, centred up and down.
   mount {

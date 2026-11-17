@@ -163,6 +163,7 @@ impl Resolver<'_> {
         let mounted = base_kind.is_mounted_hardware();
         let mut mounts: Vec<&ast::MountBlock> = Vec::new();
         let mut hardware_cuts: Vec<&ast::Cut> = Vec::new();
+        let mut adjusts: Vec<&ast::Adjust> = Vec::new();
         let mut hardware_uses = JointKindDef::default();
         for entry in &syntax.body.entries {
             match entry {
@@ -182,6 +183,19 @@ impl Resolver<'_> {
                 }
                 ast::KindEntry::Member(member) => written_members.push(member),
                 ast::KindEntry::Mechanism(block) => mechanisms.push(block),
+                ast::KindEntry::Adjust(adjust) => {
+                    if mounted {
+                        adjusts.push(adjust);
+                    } else {
+                        self.error_help(
+                            Code::UnknownField,
+                            format!("a {} kind has no field 'adjust'", base_kind.word()),
+                            cx.file,
+                            adjust.span,
+                            "only slide, hinge and pull kinds have members that are set on each other",
+                        );
+                    }
+                }
                 ast::KindEntry::Require(require) => {
                     let condition = self.value(
                         &cx,
@@ -390,6 +404,7 @@ impl Resolver<'_> {
                 bodies.as_deref(),
                 &mounts,
                 &hardware_cuts,
+                &adjusts,
                 hardware_uses.uses,
             )
         } else {
@@ -410,7 +425,8 @@ impl Resolver<'_> {
         }
     }
 
-    /// A slide, hinge or pull kind's roles, `mount { }`, cuts and `uses:`.
+    /// A slide, hinge or pull kind's roles, `mount { }`, cuts, `adjust`
+    /// entries and `uses:`.
     /// `None` (reported) when one of them is missing or doesn't lower.
     #[allow(clippy::too_many_arguments)]
     fn hardware_kind(
@@ -421,6 +437,7 @@ impl Resolver<'_> {
         bodies: Option<&[crate::defs::BodyDef]>,
         mounts: &[&ast::MountBlock],
         cuts: &[&ast::Cut],
+        adjusts: &[&ast::Adjust],
         uses: Vec<UseDef>,
     ) -> Option<HardwareKindDef> {
         let what = format!("kind '{}'", syntax.name.as_str());
@@ -474,10 +491,12 @@ impl Resolver<'_> {
                 lowered.push(cut);
             }
         }
+        let adjusts = self.lower_adjusts(cx, syntax.name.as_str(), bodies, adjusts);
         Some(HardwareKindDef {
             mount: mount?,
             cuts: lowered,
             uses,
+            adjusts,
         })
     }
 

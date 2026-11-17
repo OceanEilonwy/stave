@@ -16,9 +16,9 @@ use stave_schema::functions::{POINT, POINT_ARGUMENTS, ShapeFunction};
 use super::expr::Expect;
 use super::{Cx, Resolver};
 use crate::defs::{
-    BodyDef, BodyId, BodyName, Carrier, ConstraintDef, CouplingDef, DriveDef, FrameAxis, KindPoint,
-    MechanismDef, NamedShape, NonEmpty, RExpr, RExprKind, RangeDef, RoleDef, RoleIndex, ShapeDef,
-    StopDef,
+    AdjustDef, BodyDef, BodyId, BodyName, Carrier, ConstraintDef, CouplingDef, DriveDef, FrameAxis,
+    KindPoint, MechanismDef, NamedShape, NonEmpty, RExpr, RExprKind, RangeDef, RoleDef, RoleIndex,
+    ShapeDef, StopDef,
 };
 use crate::types::Ty;
 
@@ -707,6 +707,146 @@ impl Resolver<'_> {
             format!("a mechanism names members with a body declared in kind '{kind}'"),
         );
         None
+    }
+
+    /// A hardware kind's `adjust` entries (grammar, "Adjustment"): each
+    /// names two members with a body and an axis of the frame on which
+    /// exactly one of them has its own mount; each member is adjusted on an
+    /// axis at most once. Entries that don't lower are reported and left
+    /// out.
+    pub(super) fn lower_adjusts(
+        &mut self,
+        cx: &Cx,
+        kind: &str,
+        bodies: &[BodyDef],
+        adjusts: &[&ast::Adjust],
+    ) -> Vec<AdjustDef> {
+        let mut lowered = Vec::new();
+        let mut seen: BTreeMap<(BodyId, FrameAxis), Span> = BTreeMap::new();
+        for adjust in adjusts {
+            let within = self.frame_length(cx, &adjust.within, "within");
+            let named = |this: &mut Self, ident: &ast::Ident| -> Option<BodyId> {
+                let word = ident.as_str();
+                if let Some(index) = bodies.iter().position(|body| body.name.as_str() == word) {
+                    return BodyId::new(index);
+                }
+                this.unknown(
+                    Code::UnknownName,
+                    format!("unknown name '{word}'"),
+                    cx.file,
+                    ident.span(),
+                    word,
+                    bodies.iter().map(|body| body.name.as_str()),
+                    format!("an adjust names members with a body declared in kind '{kind}'"),
+                );
+                None
+            };
+            let body = named(self, &adjust.member);
+            let on = named(self, &adjust.on);
+            let axis = FrameAxis::from_word(adjust.axis.as_str());
+            if axis.is_none() {
+                self.error_help(
+                    Code::TypeMismatch,
+                    format!(
+                        "an adjust is along along, across or depth, found '{}'",
+                        adjust.axis
+                    ),
+                    cx.file,
+                    adjust.axis.span(),
+                    "write adjust a on b: across within 2mm (or along, or depth)",
+                );
+            }
+            let (Some(body), Some(on), Some(axis)) = (body, on, axis) else {
+                continue;
+            };
+            if body == on {
+                self.error_help(
+                    Code::DuplicateName,
+                    format!("'{}' is named twice in one adjust", adjust.on),
+                    cx.file,
+                    adjust.on.span(),
+                    "an adjust sets one member on another",
+                );
+                continue;
+            }
+            let mounted = |id: BodyId| {
+                bodies
+                    .get(id.index())
+                    .is_some_and(|b| b.mount.iter().any(|placement| placement.axis == axis))
+            };
+            match (mounted(body), mounted(on)) {
+                (true, false) | (false, true) => {}
+                (false, false) => {
+                    self.error_help(
+                        Code::MissingField,
+                        format!(
+                            "adjust {} on {}: neither has a mount on '{}', so nothing would ever be set",
+                            adjust.member,
+                            adjust.on,
+                            axis.word()
+                        ),
+                        cx.file,
+                        adjust.span,
+                        format!(
+                            "give one of them a mount {{ {}: from(...) }}, or remove this adjust",
+                            axis.word()
+                        ),
+                    );
+                    continue;
+                }
+                (true, true) => {
+                    self.error_help(
+                        Code::TypeMismatch,
+                        format!(
+                            "adjust {} on {}: both have a mount on '{}', so the setting is fixed by the design twice",
+                            adjust.member,
+                            adjust.on,
+                            axis.word()
+                        ),
+                        cx.file,
+                        adjust.span,
+                        format!(
+                            "mount only one of them on '{}'; the other is drawn where the kind puts it",
+                            axis.word()
+                        ),
+                    );
+                    continue;
+                }
+            }
+            let mut again = None;
+            for id in [body, on] {
+                if let Some(first) = seen.get(&(id, axis)) {
+                    again = Some((id, *first));
+                    break;
+                }
+            }
+            if let Some((id, first)) = again {
+                let name = bodies
+                    .get(id.index())
+                    .map(|b| b.name.as_str().to_owned())
+                    .unwrap_or_default();
+                self.report(
+                    Diagnostic::error(
+                        Code::DuplicateName,
+                        format!("'{name}' is adjusted twice {}", axis.word()),
+                        Label::new(cx.file, adjust.span),
+                    )
+                    .with_label(Label::with_message(cx.file, first, "first written here"))
+                    .with_help("write one adjust for a member on each axis"),
+                );
+                continue;
+            }
+            seen.insert((body, axis), adjust.span);
+            seen.insert((on, axis), adjust.span);
+            lowered.push(AdjustDef {
+                body,
+                on,
+                axis,
+                within,
+                span: adjust.span,
+            });
+        }
+        lowered
     }
 
     /// The two different bodies of a mechanism entry.

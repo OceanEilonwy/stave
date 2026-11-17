@@ -18,9 +18,10 @@
 //! 2. **Contact** (`error[no-contact]`): every part a joint lists must touch
 //!    at least one of its counterparts, after every cut.
 //! 3. **Spacing** (`error[overlap]`): an element spaced with `pitch` or
-//!    `gap` that runs past its `to` anchor. **Slide clearance**
-//!    (`error[slide-gap]`): the gap between a slide's piece and the side of
-//!    its opening is exactly the slide's `clearance`.
+//!    `gap` that runs past its `to` anchor. Hardware whose kind's
+//!    `require` or `adjust` failed where the solver placed it
+//!    ([`Rules::Broken`], already reported) is left out of the overlap and
+//!    motion checks, for every kind alike.
 //! 4. **Overlap at rest** (`error[overlap]`): one body for every part's
 //!    cut solid and one for every hardware member's shapes, each against
 //!    every other (grammar, "One collision model"). A cup sits in its door
@@ -49,7 +50,6 @@
 #![warn(missing_docs)]
 
 mod explain;
-mod hinges;
 mod instance;
 mod motion;
 mod names;
@@ -64,12 +64,11 @@ use stave_geom::planar::MechanismError;
 use stave_geom::solid::Solid;
 use stave_geom::sweep::Path;
 use stave_lang::ast::Span;
-use stave_lang::units::Length;
 use stave_lang::{Code, Diagnostic, FileId, Label, Severity};
 use stave_model::Model;
 use stave_model::solved::{
-    AnchorItem, AssemblyId, BodyCarrier, BodyRef, CutSource, FixedSpacing, HardwareData,
-    HardwareId, MemberIndex, PartId, PartOrigin, PoseValue, SolvedDesign, WorldBox,
+    AnchorItem, AssemblyId, BodyCarrier, BodyRef, CutSource, FixedSpacing, HardwareId, MemberIndex,
+    PartId, PartOrigin, PoseValue, Rules, SolvedDesign, WorldBox,
 };
 
 use crate::names::{length_text, pose_text};
@@ -146,13 +145,12 @@ pub fn check_with_contacts(
     design: &SolvedDesign,
 ) -> Vec<(Diagnostic, Option<Contact>)> {
     let mut checker = Checker::new(model, design);
+    checker.misfits();
     checker.misshapen();
     checker.not_supported();
     checker.mechanisms();
     checker.contact();
     checker.overruns();
-    checker.slide_gaps();
-    checker.hinge_overlays();
     checker.rest();
     checker.scenes();
     checker.sweeps();
@@ -210,9 +208,10 @@ struct Checker<'a> {
     failed: BTreeSet<Item>,
     /// Items with an error at a scene's poses.
     posed_failed: BTreeSet<Item>,
-    /// Slides reported for their gap: their members are left out of the
-    /// overlap checks, which would only report the same mistake again.
-    misfit_slides: BTreeSet<HardwareId>,
+    /// Hardware whose kind's rules failed where it is placed (reported by
+    /// the solver): its members are left out of the overlap and motion
+    /// checks, which would only report the same mistake again.
+    misfit: BTreeSet<HardwareId>,
     diagnostics: Vec<(Diagnostic, Option<Contact>)>,
     /// What the next reported diagnostic is about.
     next_contact: Option<Contact>,
@@ -299,7 +298,15 @@ impl<'a> Checker<'a> {
             reported: BTreeSet::new(),
             failed: BTreeSet::new(),
             posed_failed: BTreeSet::new(),
-            misfit_slides: BTreeSet::new(),
+            misfit: design
+                .hardware
+                .iter()
+                .filter(|hardware| match hardware.rules {
+                    Rules::Hold => false,
+                    Rules::Broken => true,
+                })
+                .map(|hardware| hardware.id)
+                .collect(),
             diagnostics: Vec::new(),
             next_contact: None,
         }
@@ -380,6 +387,17 @@ impl<'a> Checker<'a> {
             .get(hardware.index())
             .map(|h| h.name.clone())
             .unwrap_or_default()
+    }
+
+    /// The members of hardware whose kind's rules failed have an error
+    /// already: later layers leave them out.
+    fn misfits(&mut self) {
+        let members: Vec<Item> = self
+            .misfit
+            .iter()
+            .flat_map(|hardware| self.members_of(*hardware))
+            .collect();
+        self.failed.extend(members);
     }
 
     /// Every member of a piece of hardware, as items.
@@ -635,88 +653,19 @@ impl<'a> Checker<'a> {
     }
 
     // -----------------------------------------------------------------------
-    // Slide clearance
-    // -----------------------------------------------------------------------
-
-    /// A slide needs exactly its `clearance` between the piece's mount
-    /// face and the facing side of its opening.
-    fn slide_gaps(&mut self) {
-        let mut found = Vec::new();
-        for hardware in &self.design.hardware {
-            let HardwareData::Slide {
-                clearance, opening, ..
-            } = hardware.data
-            else {
-                continue;
-            };
-            let (Some(piece), Some(region)) = (
-                self.design.part(hardware.piece),
-                self.design.regions.get(opening.index()),
-            ) else {
-                continue;
-            };
-            let face = hardware.mount_face;
-            let mount = piece.drawn_box().face(face).nm();
-            let side = region.bounds.face(face).nm();
-            let gap = if face.is_positive() {
-                side.saturating_sub(mount)
-            } else {
-                mount.saturating_sub(side)
-            };
-            if gap != clearance.nm() {
-                found.push((hardware.id, piece.id, Length::from_nm(gap), clearance));
-            }
-        }
-        for (hardware, piece, gap, clearance) in found {
-            self.misfit_slides.insert(hardware);
-            let (name, piece_name) = (self.hardware_name(hardware), self.part_name(piece));
-            let difference =
-                Length::from_nm(clearance.nm().saturating_sub(gap.nm()).saturating_abs());
-            let help = if gap < clearance {
-                format!(
-                    "make the drawer {} narrower on this side, so {piece_name} is {} from the side of the opening",
-                    length_text(difference),
-                    length_text(clearance)
-                )
-            } else {
-                format!(
-                    "make the drawer {} wider on this side, so {piece_name} is {} from the side of the opening",
-                    length_text(difference),
-                    length_text(clearance)
-                )
-            };
-            let mut items = self.members_of(hardware);
-            items.push(Item::Part(piece));
-            self.next_contact = Some(Contact::of(&items, &[]));
-            self.report(
-                Severity::Error,
-                Code::SlideGap,
-                format!(
-                    "{name}: {piece_name} is {} from the opening, but the slide needs {}",
-                    length_text(gap),
-                    length_text(clearance)
-                ),
-                self.hardware_place(hardware),
-                Vec::new(),
-                Some(help),
-            );
-        }
-    }
-
-    // -----------------------------------------------------------------------
     // 4. Overlap at rest
     // -----------------------------------------------------------------------
 
     /// Items that may share room: two members of one piece of hardware (a
     /// kind's own members are not checked against each other, for every
-    /// kind alike), the members of a slide already reported for its gap,
+    /// kind alike), the members of hardware whose kind's rules failed,
     /// and parts already reported (for their spacing, or for a cut whose
     /// shape is a mistake). One mistake, one error.
     fn exempt(&self, a: Item, b: Item) -> bool {
         if [a, b]
             .into_iter()
             .filter_map(Item::hardware)
-            .any(|h| self.misfit_slides.contains(&h))
+            .any(|h| self.misfit.contains(&h))
         {
             return true;
         }

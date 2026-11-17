@@ -22,14 +22,8 @@ kind euro_hinge : hinge {
   /// How far the mounting plate lifts the arm off the side (the catalogue's
   /// distance): a taller plate gives a smaller overlay.
   param plate_height = 0mm within [0mm, 1.5mm, 3mm, 6mm, 9mm]
-  cup_diameter:       35mm
-  cup_depth:          12.8mm
-  // The overlay with the cup at the door's very edge on a 0mm plate (the
-  // catalogue's base): the door overlays the side by
-  // base_overlay + cup_inset - plate_height.
-  base_overlay:       12.5mm
-  // How far the arm's side screw moves the door either way.
-  overlay_adjustment: 2mm
+  cup_diameter: 35mm
+  cup_depth:    12.8mm
 
   // On the back of the stile, the cup's centre cup_inset and half the cup
   // in from the edge nearer the side. The design says where along it.
@@ -43,13 +37,20 @@ kind euro_hinge : hinge {
   /// holds the hinge on the side and never moves.
   member plate {
     with:  on
-    // 11mm thick, standing off the side's inside face; 36mm wide, its
-    // middle plate_setback back from the side's front edge (the screw
-    // line); 50mm long, centred on the cup.
-    shape: box(along: 50mm, across: 0mm..11mm, depth: 36mm)
+    // Drawn at its catalogue place: 11mm thick plus plate_height, standing
+    // off the side's inside face, which lies 5mm + plate_height outside the
+    // cup's centre (so the door overlays the side by 12.5mm + cup_inset -
+    // plate_height); 36mm wide, its middle plate_setback back from the
+    // side's front face (the screw line), which lies against the back of
+    // the door; 50mm long, centred on the cup.
+    shape: box(
+      along:  50mm,
+      across: -(5mm + plate_height)..6mm,
+      depth:  -(plate_setback + 18mm)..-(plate_setback - 18mm),
+    )
     mount {
-      across: from(face(on, toward: piece))
-      depth:  from(face(on, toward: piece), inset: plate_setback)
+      across: from(face(on, toward: piece), inset: -(5mm + plate_height))
+      depth:  from(face(on, toward: piece))
     }
   }
   /// The arm: it clips onto the plate and reaches out to the door; its
@@ -116,6 +117,10 @@ kind euro_hinge : hinge {
 
   // The 35mm hole the cup is pressed into, cup_depth deep.
   cut bore: crossing(piece, cup) { drill(diameter: 35mm, depth: 12.8mm) }
+
+  // The arm's side screw sets it 2mm either way on the plate, moving the
+  // door in or out over the side.
+  adjust arm on plate: across within 2mm
 }
 
 /// A wide-angle concealed cup hinge: the door opens to 165°, clear of
@@ -160,10 +165,12 @@ kind wide_hinge_165 : hinge {
   /// The mounting plate: screwed to the inside of the cabinet side.
   member plate {
     with:  on
-    shape: box(along: 50mm, across: 0mm..11mm, depth: 36mm)
+    // Drawn at its place for a 17.5mm overlay: the side's inside face 5mm
+    // outside the cup's centre, the side's front face against the door.
+    shape: box(along: 50mm, across: -5mm..6mm, depth: -(plate_setback + 18mm)..-(plate_setback - 18mm))
     mount {
-      across: from(face(on, toward: piece))
-      depth:  from(face(on, toward: piece), inset: plate_setback)
+      across: from(face(on, toward: piece), inset: -5mm)
+      depth:  from(face(on, toward: piece))
     }
   }
   /// The arm: it clips onto the plate and reaches out to the door, its
@@ -230,6 +237,9 @@ kind wide_hinge_165 : hinge {
 
   // The 35mm hole the cup is pressed into, cup_depth deep.
   cut bore: crossing(piece, cup) { drill(diameter: 35mm, depth: 12.8mm) }
+
+  // The arm's side screw sets it 2mm either way on the plate.
+  adjust arm on plate: across within 2mm
 }
 
 /// A brass butt hinge: two leaves on a pin, for box lids and small doors.

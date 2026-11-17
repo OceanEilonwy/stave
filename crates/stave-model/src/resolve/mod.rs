@@ -799,6 +799,7 @@ impl<'a> Resolver<'a> {
             }
             Symbol::KindParam(kind, index) => self.kind_param_ty(kind, index),
             Symbol::MadePart(..) => Ty::Part,
+            Symbol::Mount(..) => Ty::Anchor,
         }
     }
 
@@ -1021,6 +1022,12 @@ impl<'a> Resolver<'a> {
             names
                 .entry(made.name.as_str().to_owned())
                 .or_insert(Symbol::MadePart(kind, index));
+        }
+        if syntax.base.value.is_mounted_hardware() {
+            // `mount`: the mount face, as an anchor (grammar, "Adjustment").
+            names
+                .entry("mount".to_owned())
+                .or_insert(Symbol::Mount(kind));
         }
         self.kind_names.insert(kind, names);
     }

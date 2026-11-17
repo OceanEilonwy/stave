@@ -282,10 +282,8 @@ codes! {
     NoContact = "no-contact", layer 4;
     /// `<a> and <b> overlap`
     Overlap = "overlap", layer 4;
-    /// `<hardware>: <piece> is <gap> from the opening, but the slide needs <clearance>`
-    SlideGap = "slide-gap", layer 4;
-    /// `<hardware>: <piece> overlays <on> by <overlay>, but the hinge gives <low> to <high>`
-    HingeOverlay = "hinge-overlay", layer 4;
+    /// `<hardware>: the <member> would sit <offset> off its place on the <member>; it adjusts <d>`
+    Adjust = "adjust", layer 4;
     /// `<a> hits <b> when <assembly> is <open>`
     Motion = "motion", layer 5;
     /// `'<name>' fails: <message>`

@@ -257,6 +257,8 @@ syntax_kinds! {
     MECHANISM,
     /// `mount { fields }` in a hardware kind or a member's body
     MOUNT,
+    /// `adjust a on b: axis within d` in a hardware kind
+    ADJUST,
     /// `pivot a, b at point(...)` in a mechanism
     PIVOT,
     /// `slot a, b from point(...) to point(...)` in a mechanism

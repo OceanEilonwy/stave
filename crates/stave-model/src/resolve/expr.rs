@@ -1267,14 +1267,16 @@ impl Resolver<'_> {
     fn check_item_argument(&mut self, cx: &Cx, builtin: Builtin, value: &RExpr) {
         let fits = match builtin {
             Builtin::Mid => matches!(value.ty, Ty::Part | Ty::Region | Ty::Unknown),
-            Builtin::Between => matches!(value.ty, Ty::Part | Ty::Anchor | Ty::Unknown),
+            Builtin::Between => {
+                matches!(value.ty, Ty::Part | Ty::Anchor | Ty::Region | Ty::Unknown)
+            }
             Builtin::Extent => value.ty.fits(&Ty::Parts),
             _ => true,
         };
         if !fits {
             let wanted = match builtin {
                 Builtin::Mid => "a part or a region",
-                Builtin::Between => "a part or a face",
+                Builtin::Between => "a part, a face or a region",
                 _ => "parts",
             };
             self.error(
@@ -1325,6 +1327,7 @@ fn describe_symbol(symbol: Symbol) -> &'static str {
         Symbol::Role(..) => "role",
         Symbol::KindParam(..) => "param",
         Symbol::MadePart(..) => "made part",
+        Symbol::Mount(..) => "mount face",
     }
 }
 

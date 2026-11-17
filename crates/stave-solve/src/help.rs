@@ -5,7 +5,7 @@
 
 use std::cell::RefCell;
 
-use stave_lang::ast::BinaryOp;
+use stave_lang::ast::{BinaryOp, Span};
 use stave_model::defs::{DefId, Domain, RExpr, RExprKind};
 use stave_model::value::Value;
 
@@ -128,6 +128,38 @@ impl Solver<'_> {
         let Some(ctx) = self.module_ctx(DefId::Kind(given.kind)) else {
             return HelpSearch::NotSearched;
         };
+        let base = Env {
+            ctx,
+            file: kind.decl.file,
+            kind: None,
+            array: None,
+        };
+        self.search_lists(given, condition.span, &mut |solver, trial| {
+            let trial_env = Env {
+                kind: Some(trial),
+                ..base
+            };
+            solver.eval_bool(condition, &trial_env).ok() == Some(true)
+        })
+    }
+
+    /// The general search (grammar, "Checks and `require`"): tries every
+    /// value of each of the kind's `within` lists, one param at a time with
+    /// the others as `given` has them, and keeps the values for which
+    /// `fits` says yes. Each trial runs quietly: what it would report is
+    /// dropped.
+    pub(crate) fn search_lists(
+        &mut self,
+        given: &KindEnv,
+        span: Span,
+        fits: &mut dyn FnMut(&mut Self, &KindEnv) -> bool,
+    ) -> HelpSearch {
+        let Some(kind) = self.model.defs.kind(given.kind) else {
+            return HelpSearch::NotSearched;
+        };
+        let Some(ctx) = self.module_ctx(DefId::Kind(given.kind)) else {
+            return HelpSearch::NotSearched;
+        };
         let file = kind.decl.file;
         let lists: Vec<(String, Vec<RExpr>)> = kind
             .params
@@ -146,13 +178,7 @@ impl Solver<'_> {
             kind: None,
             array: None,
         };
-        let kind_env = Env {
-            ctx,
-            file,
-            kind: Some(given),
-            array: None,
-        };
-        let mut fits = Vec::new();
+        let mut found = Vec::new();
         let mut searched = Vec::new();
         for (param, values) in lists {
             let current = self.quietly(|solver| {
@@ -162,7 +188,7 @@ impl Solver<'_> {
                     .kind(given.kind)
                     .and_then(|kind| kind.param(&param));
                 match index {
-                    Some(index) => solver.kind_param(given, index, file, condition.span).ok(),
+                    Some(index) => solver.kind_param(given, index, file, span).ok(),
                     None => None,
                 }
             });
@@ -189,14 +215,10 @@ impl Solver<'_> {
                     settings,
                     params: RefCell::new(vec![None; param_count]),
                     made: given.made.clone(),
+                    mount: given.mount,
                 };
-                let trial_env = Env {
-                    kind: Some(&trial),
-                    ..kind_env
-                };
-                let holds = self.quietly(|solver| solver.eval_bool(condition, &trial_env).ok());
-                if holds == Some(true) {
-                    fits.push(Fitting {
+                if self.quietly(|solver| fits(solver, &trial)) {
+                    found.push(Fitting {
                         param: param.clone(),
                         value,
                     });
@@ -207,8 +229,8 @@ impl Solver<'_> {
                 values: texts,
             });
         }
-        if let Some(fits) = NonEmpty::new(fits) {
-            return HelpSearch::Fits(fits);
+        if let Some(found) = NonEmpty::new(found) {
+            return HelpSearch::Fits(found);
         }
         match NonEmpty::new(searched) {
             Some(searched) => HelpSearch::NoneFit(searched),

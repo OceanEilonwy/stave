@@ -544,8 +544,8 @@ region bay[low, high] = split(space, up, at: shelf)",
 fn mirrored_assemblies_rebind_outside_parts() {
     let opened = open(
         "part wall[left, right] : pine_19 {\n  length: 200mm\n  width: 300mm\n  place {\n    orient(length: up, width: back)\n    against(base.top)\n    spaced(ends, from: base.left, to: base.right)\n    flush(base.front)\n  }\n}
-/// A cup hinge for an inset door, with no catalogue overlay (so its
-/// overlay isn't checked).
+/// A cup hinge for an inset door, whose plate has no adjustment: it
+/// is drawn where this design puts it.
 kind inset_cup_hinge : hinge {
   roles {
     piece: Part
@@ -562,10 +562,10 @@ kind inset_cup_hinge : hinge {
   }
   member plate {
     with:  on
-    shape: box(along: 50mm, across: 0mm..11mm, depth: 36mm)
+    shape: box(along: 50mm, across: -22.5mm..-11.5mm, depth: -55mm..-19mm)
     mount {
-      across: from(face(on, toward: piece))
-      depth:  from(face(on, toward: piece), inset: 37mm)
+      across: from(face(on, toward: piece), inset: -22.5mm)
+      depth:  from(face(on, toward: piece))
     }
   }
   member cup {
@@ -617,8 +617,8 @@ assembly flap_r = mirror(flap_l, about: mid(base, across))",
 fn a_mirror_without_a_counterpart_is_an_error() {
     let opened = open(
         "part wall : pine_19 {\n  length: 200mm\n  width: 300mm\n  place {\n    orient(length: up, width: back)\n    against(base.top)\n    flush(base.left)\n    flush(base.front)\n  }\n}
-/// A cup hinge for an inset door, with no catalogue overlay (so its
-/// overlay isn't checked).
+/// A cup hinge for an inset door, whose plate has no adjustment: it
+/// is drawn where this design puts it.
 kind inset_cup_hinge : hinge {
   roles {
     piece: Part
@@ -635,10 +635,10 @@ kind inset_cup_hinge : hinge {
   }
   member plate {
     with:  on
-    shape: box(along: 50mm, across: 0mm..11mm, depth: 36mm)
+    shape: box(along: 50mm, across: -22.5mm..-11.5mm, depth: -55mm..-19mm)
     mount {
-      across: from(face(on, toward: piece))
-      depth:  from(face(on, toward: piece), inset: 37mm)
+      across: from(face(on, toward: piece), inset: -22.5mm)
+      depth:  from(face(on, toward: piece))
     }
   }
   cut crossing(piece, cup) { drill(diameter: 35mm, depth: 13mm) }

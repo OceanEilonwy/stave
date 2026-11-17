@@ -597,8 +597,8 @@ fn poses_are_open_closed_an_angle_or_a_length() {
     flush(base.front)
   }
 }
-/// A cup hinge for an inset door, with no catalogue overlay (so its
-/// overlay isn't checked).
+/// A cup hinge for an inset door, whose plate has no adjustment: it
+/// is drawn where this design puts it.
 kind inset_cup_hinge : hinge {
   roles {
     piece: Part
@@ -615,10 +615,10 @@ kind inset_cup_hinge : hinge {
   }
   member plate {
     with:  on
-    shape: box(along: 50mm, across: 0mm..11mm, depth: 36mm)
+    shape: box(along: 50mm, across: -3.5mm..7.5mm, depth: -55mm..-19mm)
     mount {
-      across: from(face(on, toward: piece))
-      depth:  from(face(on, toward: piece), inset: 37mm)
+      across: from(face(on, toward: piece), inset: -3.5mm)
+      depth:  from(face(on, toward: piece))
     }
   }
   member cup {
@@ -857,10 +857,10 @@ fn hung_door(mechanism: &str) -> String {
   }}
   member plate {{
     with:  on
-    shape: box(along: 50mm, across: 0mm..11mm, depth: 36mm)
+    shape: box(along: 50mm, across: -4mm..7mm, depth: -55mm..-19mm)
     mount {{
-      across: from(face(on, toward: piece))
-      depth:  from(face(on, toward: piece), inset: 37mm)
+      across: from(face(on, toward: piece), inset: -4mm)
+      depth:  from(face(on, toward: piece))
     }}
   }}
   member links

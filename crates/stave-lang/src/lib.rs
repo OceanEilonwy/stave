@@ -232,6 +232,8 @@ pub const CONTEXTUAL_WORDS: &[&str] = &[
     "slot",
     "rail",
     "couple",
+    "adjust",
+    "on",
     "from",
     "along",
     "mark",
@@ -606,7 +608,7 @@ mod tests {
             "axis-set-twice",
             "axis-not-set",
             "require-range",
-            "slide-gap",
+            "adjust",
             "order",
         ] {
             assert!(

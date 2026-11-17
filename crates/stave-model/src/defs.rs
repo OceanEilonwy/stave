@@ -74,6 +74,9 @@ pub enum Symbol {
     KindParam(KindId, usize),
     /// A part the kind makes.
     MadePart(KindId, usize),
+    /// `mount` in a slide, hinge or pull kind: the face of its piece the
+    /// hardware is mounted on, as an anchor; bound per piece of hardware.
+    Mount(KindId),
 }
 
 /// Where a declaration lives.
@@ -897,6 +900,26 @@ pub struct HardwareKindDef {
     pub cuts: Vec<HardwareCutDef>,
     /// `uses:` fasteners, counted and never placed.
     pub uses: Vec<UseDef>,
+    /// Its `adjust` entries, in source order.
+    pub adjusts: Vec<AdjustDef>,
+}
+
+/// `adjust a on b: axis within d` (grammar, "Adjustment"): member `body`
+/// can be set up to `within` either way on member `on`, along `axis` of
+/// the kind's frame. On that axis exactly one of the two has its own
+/// mount, and each of them is adjusted on it at most once.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AdjustDef {
+    /// The member that is set.
+    pub body: BodyId,
+    /// The member it is set on.
+    pub on: BodyId,
+    /// The frame axis.
+    pub axis: FrameAxis,
+    /// How far either way: a length over the kind's params.
+    pub within: RExpr,
+    /// The whole entry.
+    pub span: Span,
 }
 
 /// A hardware kind's `mount { }`: the face of its piece it sits on and
@@ -1110,7 +1133,7 @@ pub struct KindPoint {
 }
 
 /// One direction of the kind's frame (grammar, "The kind's frame").
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize)]
 pub enum FrameAxis {
     /// Along the piece's length.
     Along,

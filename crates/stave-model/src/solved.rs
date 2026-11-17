@@ -1167,9 +1167,6 @@ pub enum HardwareData {
         /// `on` to the face of `on` the plate is screwed to (negative when
         /// the edge is short of it).
         overlay: Length,
-        /// What the catalogue says about the overlay, when the kind gives
-        /// its `base_overlay`.
-        overlay_range: Option<OverlayRange>,
     },
     /// A pull.
     Pull {
@@ -1182,30 +1179,30 @@ pub enum HardwareData {
     },
 }
 
-/// The overlays a cup hinge can give: `base + cup_inset - plate_height`,
-/// give or take `adjustment` on the arm's side screw.
+/// The rest setting of one `adjust` of a piece of hardware (grammar,
+/// "Adjustment"): how far a member sits from its nominal place on the
+/// member its kind's `adjust` names, along one axis of the kind's frame.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-pub struct OverlayRange {
-    /// The overlay with the cup at the door's edge on a 0mm plate (the
-    /// catalogue's base or fixed distance).
-    pub base: Length,
-    /// The mounting plate's height (the catalogue's distance).
-    pub plate_height: Length,
-    /// How far the side screw moves the door, each way.
-    pub adjustment: Length,
+pub struct Setting {
+    /// The member that is set.
+    pub body: BodyRef,
+    /// The axis of the kind's frame.
+    pub axis: crate::defs::FrameAxis,
+    /// How far from its nominal place, signed along the axis.
+    pub offset: Length,
 }
 
-impl OverlayRange {
-    /// The overlay at the side screw's middle setting, for a cup this far
-    /// from the door's edge.
-    pub fn nominal(&self, cup_inset: Length) -> Length {
-        Length::from_nm(
-            self.base
-                .nm()
-                .saturating_add(cup_inset.nm())
-                .saturating_sub(self.plate_height.nm()),
-        )
-    }
+/// Whether a piece of hardware keeps its kind's rules where it is placed:
+/// every `require` holds and every member sits within its adjustments.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Rules {
+    /// Every rule holds.
+    Hold,
+    /// A `require` or an adjustment failed, and was reported: the
+    /// hardware is not where it can be, so the overlap and motion checks
+    /// leave it out.
+    Broken,
 }
 
 /// A model for looks.
@@ -1274,6 +1271,11 @@ pub struct Hardware {
     /// assembly moves it. Its assembly's motion is
     /// [`Assembly::mechanism`].
     pub own_mechanism: Option<crate::mechanism::Mechanism>,
+    /// The settings its kind's `adjust` entries give it at rest, in the
+    /// kind's order.
+    pub settings: Vec<Setting>,
+    /// Whether its kind's rules hold where it is placed.
+    pub rules: Rules,
 }
 
 /// A member of one piece of hardware: which piece, and which of its kind's
