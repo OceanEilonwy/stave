@@ -9,6 +9,10 @@ stave 1
 /// Numbers are catalogue values for a full-overlay 110° hinge on a 0mm
 /// plate (Hettich Sensys 8645i).
 kind euro_hinge : hinge {
+  roles {
+    piece: Part                      // the door's hinge stile
+    on:    Part                      // the cabinet side
+  }
   /// How far the door opens; a clip-on limiter stops it sooner.
   param opening_angle = 110deg within 85deg..110deg
   /// From the door's edge to the rim of the cup (the boring distance).
@@ -26,11 +30,28 @@ kind euro_hinge : hinge {
   base_overlay:       12.5mm
   // How far the arm's side screw moves the door either way.
   overlay_adjustment: 2mm
-  plate:              box(length: 50mm, width: 36mm, thickness: 11mm)
+
+  // On the back of the stile, the cup's centre cup_inset and half the cup
+  // in from the edge nearer the side. The design says where along it.
+  mount {
+    face:   back
+    across: from(edge(piece, nearer: on), inset: cup_inset + 35mm / 2)
+    along:  open
+  }
 
   /// The mounting plate: screwed to the inside of the cabinet side, it
   /// holds the hinge on the side and never moves.
-  member plate
+  member plate {
+    with:  on
+    // 11mm thick, standing off the side's inside face; 36mm wide, its
+    // middle plate_setback back from the side's front edge (the screw
+    // line); 50mm long, centred on the cup.
+    shape: box(along: 50mm, across: 0mm..11mm, depth: 36mm)
+    mount {
+      across: from(face(on, toward: piece))
+      depth:  from(face(on, toward: piece), inset: plate_setback)
+    }
+  }
   /// The arm: it clips onto the plate and reaches out to the door; its
   /// screws set how far the door overlays the side.
   member arm {
@@ -92,6 +113,9 @@ kind euro_hinge : hinge {
     drive:        turn(cup, from: 0deg, to: opening_angle)
     stop:         opening_angle "the limiter in the arm stops the door here"
   }
+
+  // The 35mm hole the cup is pressed into, cup_depth deep.
+  cut bore: crossing(piece, cup) { drill(diameter: 35mm, depth: 12.8mm) }
 }
 
 /// A brass butt hinge: two leaves on a pin, for box lids and small doors.
@@ -99,6 +123,10 @@ kind euro_hinge : hinge {
 /// in the box or cabinet, so the parts close face to face and only the
 /// knuckle shows. Sizes are typical for solid brass box hinges.
 kind butt_hinge : hinge {
+  roles {
+    piece: Part                      // the lid or door
+    on:    Part                      // the box or cabinet
+  }
   /// Length of the hinge along its pin.
   param length = 40mm within [25mm, 30mm, 40mm, 50mm, 65mm, 75mm]
   /// Width of one leaf, from the pin to its edge; no more than the
@@ -106,11 +134,34 @@ kind butt_hinge : hinge {
   param leaf_width = length * 3 / 10
   /// How far it opens.
   param opening_angle = 180deg within 90deg..180deg
-  leaf: box(length: length, width: leaf_width, thickness: 1.5mm)
+
+  // On the face of the lid or door that closes against the box, the pin
+  // on the edge where the two parts are flush. The design says where
+  // along it.
+  mount {
+    face:   back
+    across: from(edge(piece, flush_with: on))
+    along:  open
+  }
 
   /// The two leaves: one housed in the lid or door, one in the box or
   /// cabinet. Each sits flush in its own shallow mortise.
   member leaves
   /// The pin through the knuckle: the line the lid or door turns about.
   member pin
+  /// The leaf in the lid or door.
+  member leaf {
+    with:  piece
+    shape: box(along: length, across: 0mm..leaf_width, depth: 0mm..1.5mm)
+  }
+  /// The leaf in the box or cabinet: just off the mount face, so the mount
+  /// face must lie against it.
+  member fixed_leaf {
+    with:  on
+    shape: box(along: length, across: 0mm..leaf_width, depth: -1.5mm..0mm)
+  }
+
+  // A shallow mortise for each leaf, as deep as the leaf is thick.
+  cut mortise: crossing(piece, leaf) { notch(depth: 1.5mm) }
+  cut mortise: crossing(on, fixed_leaf) { notch(depth: 1.5mm) }
 }

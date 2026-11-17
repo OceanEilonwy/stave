@@ -226,6 +226,7 @@ pub const CONTEXTUAL_WORDS: &[&str] = &[
     "makes",
     "member",
     "mechanism",
+    "mount",
     "shape",
     "pivot",
     "slot",

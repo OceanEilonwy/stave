@@ -13,7 +13,7 @@ kind groove : joint {
   cut_first: into                                  // cut the groove first, then size the panel to it
   adds:      extend(piece, by: depth - clearance)  // the panel reaches into every groove it meets
 
-  cut crossing(into, piece) {
+  cut groove: crossing(into, piece) {
     notch(depth: depth)
   }
 

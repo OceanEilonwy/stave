@@ -536,7 +536,14 @@ fn the_clothing_cabinet_is_where_the_design_says() {
         .iter()
         .find(|c| matches!(c.kind, CutKind::Drill { diameter, .. } if diameter == mm("35")))
         .unwrap();
-    assert!(matches!(cup.place, CutPlace::Mount { centre, .. } if centre.width == mm("22.5")));
+    // Centred 22.5mm from the stile's edge: cup_inset and half the cup.
+    let CutPlace::Member { footprint, .. } = cup.place else {
+        panic!("the cup's bore is not a hardware cut: {:?}", cup.place);
+    };
+    assert_eq!(
+        (footprint.min.width, footprint.max.width),
+        (mm("5"), mm("40"))
+    );
 
     // Requires hold and scenes are there.
     assert!(design.requires.iter().all(|r| r.holds));

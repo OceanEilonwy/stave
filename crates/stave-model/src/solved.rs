@@ -76,6 +76,9 @@ use stave_lang::placement::{Axis, Direction, Face, PartAxis};
 use stave_lang::units::{Angle, Length};
 use stave_schema::species::Species;
 use stave_schema::words::{Grain, Measure, OutputUnit, StockForm};
+use std::collections::BTreeMap;
+
+pub use crate::defs::{BodyId, CutName};
 
 pub use crate::ids::{AssemblyId, HardwareId, JointId, KindId, PartId, RegionId, SceneId};
 pub use crate::linkage::{Branch, Link, Linkage, LinkageError, LinkageFrame, PlanePoint};
@@ -633,7 +636,7 @@ pub enum CutSource {
         /// The pair.
         pair: usize,
     },
-    /// A hinge cup, a hinge leaf's mortise or the screw holes of a pull.
+    /// A `cut` of a hardware kind, for one piece of hardware.
     Hardware {
         /// The hardware.
         hardware: HardwareId,
@@ -802,18 +805,17 @@ pub enum CutPlace {
         /// The region both cut boxes share, in this part's frame.
         footprint: LocalBox,
     },
-    /// A hardware recess, such as a butt hinge's leaf mortise: the region
-    /// the hardware fills, in this part's local coordinates.
-    Recess {
-        /// The region the hardware fills.
+    /// `crossing(p, member)` in a hardware kind: where one shape of a
+    /// member of a piece of hardware meets this part. The footprint is the
+    /// region the shape's box and the part's cut box share, in this part's
+    /// local coordinates.
+    Member {
+        /// The piece of hardware.
+        hardware: HardwareId,
+        /// The member, in its kind's list of members with a body.
+        body: BodyId,
+        /// The region the shape and the part share, in this part's frame.
         footprint: LocalBox,
-    },
-    /// A hardware cut, centred at a point on the face.
-    Mount {
-        /// The centre, on the face.
-        centre: LocalPoint,
-        /// For two holes: their distance apart along the length.
-        centres: Option<Length>,
     },
 }
 
@@ -822,6 +824,8 @@ pub enum CutPlace {
 pub struct Cut {
     /// Where it comes from.
     pub source: CutSource,
+    /// The name its kind gives it (`cut dado: ...`): what messages call it.
+    pub name: Option<CutName>,
     /// The face it is cut from.
     pub face: LocalFace,
     /// Where on the face.
@@ -1229,6 +1233,87 @@ pub struct Hardware {
     pub mechanism: Option<CupMechanism>,
     /// A model, when the kind has one.
     pub model: Option<Model>,
+    /// The parts and regions it joins, in its kind's role order.
+    pub roles: Vec<(RoleName, RoleValue)>,
+    /// Its kind's params and fields for this piece of hardware, by name:
+    /// the ones whose value is a length, an angle, a count, a truth value
+    /// or a text.
+    pub entries: BTreeMap<EntryName, EntryValue>,
+    /// The fasteners its kind's `uses:` names: counted, never placed.
+    pub fasteners: Vec<HardwareFastener>,
+}
+
+/// Fasteners a piece of hardware consumes (its kind's `uses:`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct HardwareFastener {
+    /// The fastener kind's name.
+    pub kind: String,
+    /// Its diameter.
+    pub diameter: Length,
+    /// Its length.
+    pub length: Length,
+    /// How many.
+    pub count: u32,
+}
+
+/// The name of a role of a kind, as the kind writes it: `piece`, `on`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
+pub struct RoleName(String);
+
+impl RoleName {
+    /// The name, if `word` is a word (letters, digits and `_`, not starting
+    /// with a digit).
+    pub fn new(word: &str) -> Option<RoleName> {
+        stave_lang::ast::is_word(word).then(|| RoleName(word.to_owned()))
+    }
+
+    /// The name as written.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// What a role of a piece of hardware is bound to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case", tag = "kind", content = "id")]
+pub enum RoleValue {
+    /// A part.
+    Part(PartId),
+    /// A region.
+    Region(RegionId),
+}
+
+/// The name of a param or field of a kind, as the kind writes it.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
+pub struct EntryName(String);
+
+impl EntryName {
+    /// The name, if `word` is a word (letters, digits and `_`, not starting
+    /// with a digit).
+    pub fn new(word: &str) -> Option<EntryName> {
+        stave_lang::ast::is_word(word).then(|| EntryName(word.to_owned()))
+    }
+
+    /// The name as written.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// The value of a kind's param or field for one piece of hardware.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case", tag = "kind", content = "value")]
+pub enum EntryValue {
+    /// A length, rounded to the nanometre.
+    Length(Length),
+    /// An angle.
+    Angle(Angle),
+    /// A count.
+    Count(u32),
+    /// A truth value.
+    Bool(bool),
+    /// A text.
+    Text(String),
 }
 
 /// The mechanism of a cup hinge: the arm on the mounting plate, and two

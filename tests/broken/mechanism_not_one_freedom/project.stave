@@ -15,12 +15,29 @@ stock ply_18 { species: birch, form: plywood, thickness: 18mm }
 
 /// The common cup hinge, with one pin left out.
 kind loose_hinge : hinge {
+  roles {
+    piece: Part
+    on:    Part
+  }
   opening_angle: 110deg
   cup_diameter:  35mm
   cup_depth:     12.8mm
   cup_inset:     5mm
-  plate_setback: 37mm
-  plate:         box(length: 50mm, width: 36mm, thickness: 11mm)
+  mount {
+    face:   back
+    across: from(edge(piece, nearer: on), inset: 22.5mm)
+    along:  open
+  }
+
+  /// The plate, on the side.
+  member plate {
+    with:  on
+    shape: box(along: 50mm, across: 0mm..11mm, depth: 36mm)
+    mount {
+      across: from(face(on, toward: piece))
+      depth:  from(face(on, toward: piece), inset: 37mm)
+    }
+  }
 
   /// The arm, clipped to the plate on the side.
   member arm {

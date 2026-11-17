@@ -76,8 +76,18 @@ impl Resolver<'_> {
             let mut with_span: Option<Span> = None;
             let mut shapes: Vec<NamedShape> = Vec::new();
             let mut shape_names: BTreeMap<Option<String>, Span> = BTreeMap::new();
+            let mut mount = Vec::new();
+            let mut mount_span: Option<Span> = None;
             for entry in &body.entries {
                 match entry {
+                    ast::MemberEntry::Mount(block) => {
+                        if let Some(first) = mount_span {
+                            self.duplicate("mount", block.span, first, cx);
+                            continue;
+                        }
+                        mount_span = Some(block.span);
+                        mount = self.member_mount(cx, roles, block);
+                    }
                     ast::MemberEntry::Field(field) if field.key.as_str() == "with" => {
                         if let Some(first) = with_span {
                             self.duplicate("with", field.key.span(), first, cx);
@@ -96,8 +106,8 @@ impl Resolver<'_> {
                             cx.file,
                             field.key.span(),
                             key,
-                            ["with", "shape"],
-                            "a member's body holds its shapes (shape: box(...)) and what carries it (with: ...)",
+                            ["with", "shape", "mount"],
+                            "a member's body holds its shapes (shape: box(...)), what carries it (with: ...) and its own mount { }",
                         );
                     }
                     ast::MemberEntry::Shape(shape) => {
@@ -149,6 +159,7 @@ impl Resolver<'_> {
                     docs: member.docs.clone(),
                     with: carrier,
                     shapes,
+                    mount,
                 },
                 rides_on,
             ));
@@ -231,7 +242,7 @@ impl Resolver<'_> {
         None
     }
 
-    fn duplicate(&mut self, word: &str, at: Span, first: Span, cx: &Cx) {
+    pub(super) fn duplicate(&mut self, word: &str, at: Span, first: Span, cx: &Cx) {
         self.report(
             Diagnostic::error(
                 Code::DuplicateName,

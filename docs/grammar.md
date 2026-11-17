@@ -100,6 +100,7 @@ grammar position only:
 | `joint`, `slide`, `hinge`, `pull`, `fastener`, `tool` | as the base kind after `kind name :` (`joint` is also a keyword) |
 | `roles`, `cut`, `makes`, `member` | at the start of an entry in a `kind` body, when not followed by `:` |
 | `mechanism` | at the start of an entry in a hardware `kind` body, when not followed by `:` |
+| `mount` | at the start of an entry in a hardware `kind` body or a member's body, when not followed by `:` |
 | `shape` | at the start of an entry in a member's body, when followed by a name and `:` (`shape knuckle: box(...)`); `shape: ...` is a field |
 | `pivot`, `slot`, `rail`, `couple` | at the start of an entry in a `mechanism` block, when not followed by `:` |
 | `from`, `along` | inside a `slot` (`from point(...) to point(...)`) and a `rail` (`along across`) |
@@ -285,11 +286,13 @@ library       = "library" , STRING , [ block(field) ] ;
 kind          = "kind" , IDENT , ":" , base_kind , block(kind_entry) ;
 base_kind     = "joint" | "slide" | "hinge" | "pull" | "fastener" | "tool" ;
 kind_entry    = { DOC } , ( param | require | makes | member )
-              | roles | cut | mechanism | field ;
+              | roles | cut | mount | mechanism | field ;
 member        = "member" , IDENT , [ block(member_entry) ] ;
                 (* a hardware kind's named piece: member cup, or member arm { shape: box(...) } *)
 member_entry  = "shape" , [ IDENT ] , ":" , call_expr    (* shape: cylinder(...), shape knuckle: box(...) *)
+              | mount                                    (* mount { depth: from(face(on, toward: piece)) } *)
               | field ;                                  (* with: piece *)
+mount         = "mount" , block(field) ;                 (* where hardware sits: mount { face: back, along: open } *)
 call_expr     = IDENT , "(" , [ args ] , ")" ;           (* an expression that is one call *)
 mechanism     = "mechanism" , block(mechanism_entry) ;   (* how a hardware kind's members move *)
 mechanism_entry = "pivot" , IDENT , "," , IDENT , "at" , call_expr
@@ -301,7 +304,8 @@ mechanism_entry = "pivot" , IDENT , "," , IDENT , "at" , call_expr
               | field ;                                  (* drive: turn(cup, from: 0deg, to: 110deg) *)
 roles         = "roles" , block(role) ;
 role          = NAME , ":" , IDENT ;                     (* piece: Part   into: Parts *)
-cut           = "cut" , call , block(call) ;             (* cut end(piece, facing: into) { tenon(...) } *)
+cut           = "cut" , [ IDENT , ":" ] , call , block(call) ;
+                (* cut end(piece, facing: into) { tenon(...) }; named: cut dado: crossing(into, piece) { ... } *)
 makes         = "makes" , "part" , IDENT , ":" , ref , block(part_entry) ;
 
 recipe        = "recipe" , IDENT , ":" , IDENT , block(recipe_entry) ;
@@ -418,6 +422,10 @@ Notes for the parser:
 - `shape body: box(...)` (the word `shape`, a name, then `:`) names one of a
   member's shapes; `shape: box(...)` is a field and gives the member's only
   shape.
+- `cut dado: crossing(...) { }` (the word `cut`, a name, then `:`) is a named
+  cut; `cut crossing(...) { }` is an unnamed one, and `cut: ...` is a field.
+- `mount { }` is a block when `mount` is directly followed by `{`;
+  `mount: ...` is a field.
 
 ---
 
@@ -742,7 +750,7 @@ The condition is a `Bool` expression. See [Checks](#checks-and-require).
 | `cut_first` | a role, or a list of roles | no | the order in which the roles are cut |
 | `adds` | `extend(...)` or a list of them | no | what the joint adds to each part's cut size |
 | `uses` | a fastener kind value, or a list | no | fasteners the joint consumes |
-| `cut selector { }` | | no | material removed |
+| `cut [name:] selector { }` | | no | material removed; a name (`cut dado: ...`) is what messages call the cut |
 | `makes part` | | no | a part the joint creates |
 | `note` | `Text` | no | one piece of advice for the build manual |
 
@@ -753,53 +761,66 @@ named `glue` or `methods`.
 
 ### `kind name : slide | hinge | pull | fastener | tool { }`
 
-A required entry may be written as a field (`clearance: 12.7mm`) or declared as
-a `param` of the same name, which makes it a setting of the family
-(`param length = 500mm within [...]`). Fields may refer to the kind's params.
-All entries are readable (`slide.clearance`, `hinge_kind.cup_diameter`).
+A hardware kind is a product or a family of products. The base (`slide`,
+`hinge`, `pull`) gives the words a message uses ("opened", "pulled out")
+and the kind's type (`SlideKind`, `HingeKind`, `PullKind`); it decides
+nothing else. What the hardware joins, where it sits, what it is made of,
+how it moves and what it cuts are all written in the kind. A `slide`,
+`hinge` or `pull` kind may contain:
 
-| Base | Roles (fixed) | Required | Optional |
-|---|---|---|---|
-| `slide` | `piece: Part` (the drawer side), `in: Region` (the opening) | `length`, `clearance`, `travel`: `Length`; `envelope`: `Envelope` | `model`, `moving`, `license` |
-| `hinge` | `piece: Part` (the door stile, the lid), `on: Part` (the cabinet side, the box) | `opening_angle`: `Angle`; and either, for a cup hinge, `cup_diameter`, `cup_depth`, `cup_inset`, `plate_setback`: `Length`; `plate`: `Envelope` (a box); or, for a butt hinge, `leaf`: `Envelope` (a box) | `base_overlay`, `plate_height` (default `0mm`), `overlay_adjustment` (default `0mm`): `Length`; `model`, `moving`, `license` |
-| `pull` | `piece: Part` | `envelope` | `centres`, `diameter`, `screw_diameter` (default `4mm`): `Length`; `model`, `license` |
-| `fastener` | none | `diameter`, `length`: `Length` | `envelope`, `model`, `license` |
-| `tool` | none | | `title`: `Text`; `powered`: `Bool` (default `false`) |
+| Entry | Required | Meaning |
+|---|---|---|
+| `roles { }` | yes | the parts it joins, as a joint's roles (see [Roles and pairs](#roles-and-pairs)). The first is a `Part`: the **piece** it is mounted on, which takes the positional argument. The others are `Part` or `Region` (a slide's opening) |
+| `mount { }` | yes | where it sits on its piece unless the design says otherwise (see [Hardware placement](#hardware-placement)) |
+| `param` | no | settings; a param with a `within` list is a family (`side_mount_slide(length: 450mm)`) |
+| `require` | no | rules, checked for each piece of hardware |
+| `member` | no | its pieces, each with its shapes (see [Hardware members](#hardware-members)) |
+| `mechanism { }` | no | how its members move (see [Mechanisms](#mechanisms)) |
+| `cut [name:] crossing(role, member) { }` | no | the wood it takes out: the bore for a cup, the mortise for a leaf, the hole for a screw (see [Faces to cut](#faces-to-cut)) |
+| `uses` | no | fasteners it consumes, as a joint's `uses:`: counted, never placed |
+| `model` | no | a `Model`, for looks |
+| `moving`, `license` | no | `Text` |
+| any other `name: value` | no | catalogue data (`clearance: 12.7mm`, `cup_diameter: 35mm`); readable from outside as `slide.clearance` |
 
-A hinge kind is a **cup hinge** (it has the `cup_` entries, `plate_setback`
-and `plate`) or a **butt hinge** (it has `leaf`), never both. A hinge kind
-with neither is `error[missing-field]` naming `leaf`; a cup hinge missing one
-of its entries is `error[missing-field]` naming it; one with both is
-`error[type-mismatch]`.
+Every entry is readable on a kind value (`slide.length`,
+`hinge_kind.cup_diameter`), params and fields alike. Inside the kind,
+expressions may use its roles (`piece.thickness`) and its params, not its
+fields. A kind can't have `makes` or the joint fields (`insert`,
+`cut_first`, `adds`, `note`).
 
-The two kinds move differently. A **butt hinge** is a pin: the door turns
-about a fixed line. A **cup hinge** is a four-bar linkage: an arm on the
-mounting plate, a boss in the cup and two links between them, so the door
-moves forward and out while it turns and clears the side it covers. A cup
-hinge moves on the mechanism its kind declares (see
-[Mechanisms](#mechanisms)): its members, their shapes and its pins are
-catalogue data in the kind, written in the kind's own frame, fixed to its
-cup. `euro_hinge` in `std:hardware` declares the common 110° full-overlay
-clip-on hinge (see `docs/hardware/cup-hinge-linkage.md`). How far it opens
-is its `opening_angle`, bounded by that param's range and by the
-mechanism's `stop`; a mechanism whose links lock before the door opens that
-far is `error[motion]`. A cup hinge kind with no `mechanism` gives no
-motion: it is `warning[not-supported]` at the kind, and the door is checked
-closed only.
+`fastener` and `tool` kinds keep a fixed set of entries, because the
+hardware list and the work plan read them:
 
-The optional entries are a cup hinge's catalogue overlay: `base_overlay` is
-the overlay with the cup at the door's very edge on a 0mm plate (the
-catalogue's base, or fixed distance), `plate_height` the mounting plate's
-height (the catalogue's distance) and `overlay_adjustment` how far the arm's
-side screw moves the door each way. When a kind gives `base_overlay`, the
-door must overlay `on` by `base_overlay + cup_inset - plate_height`, give or
-take `overlay_adjustment` (`error[hinge-overlay]` otherwise, with the
-`cup_inset` or `plate_height` that fits).
+| Base | Required | Optional |
+|---|---|---|
+| `fastener` | `diameter`, `length`: `Length` | `envelope`, `model`, `license` |
+| `tool` | | `title`: `Text`; `powered`: `Bool` (default `false`) |
 
-`model` is a `Model`, `moving` and `license` are `Text`. Hardware kinds accept
-`param`, `require`, `member` and `mechanism` entries; they can't have
-`roles`, `cut`, `makes` or the joint fields. See [Hardware](#hardware),
-[Shapes](#shapes) and [Mechanisms](#mechanisms).
+A fastener or tool kind has no `roles`, `mount`, `member`, `mechanism` or
+`cut`.
+
+The standard kinds in `std:hardware` are written this way; see
+[Hardware](#hardware) for them. A cup hinge moves on the mechanism its kind
+declares (see [Mechanisms](#mechanisms)): its members, their shapes and its
+pins are catalogue data in the kind, written in the kind's own frame.
+`euro_hinge` declares the common 110° full-overlay clip-on hinge (see
+`docs/hardware/cup-hinge-linkage.md`). How far it opens is its
+`opening_angle`, bounded by that param's range and by the mechanism's
+`stop`; a mechanism whose links lock before the door opens that far is
+`error[motion]`.
+
+Until a mechanism can say so (version 1, being built), how a piece of
+hardware moves is still read from what its kind has: a `slide` travels
+toward the front by its `travel`; a `hinge` kind with a `mechanism` moves
+on it, and a `hinge` kind without one turns about the `along` line through
+the edge its `mount` measures `across` from, on the face opposite its mount
+face (a butt hinge's pin), by its `opening_angle`. A cup hinge's catalogue
+overlay is read from its `base_overlay`, `cup_inset`, `plate_height` and
+`overlay_adjustment` when it has `base_overlay`: the door must overlay
+`on` by `base_overlay + cup_inset - plate_height`, give or take
+`overlay_adjustment` (`error[hinge-overlay]` otherwise, with the
+`cup_inset` or `plate_height` that fits). A slide's `clearance` is checked
+against its `in` region (`error[slide-gap]`).
 
 #### Hardware members
 
@@ -837,7 +858,9 @@ another member with a body (it rides on that member). A member with no
 `with:` is placed by the mechanism, as a link is. A member with a body has
 at least one shape (`error[missing-field]` otherwise); two shapes of one
 member have different names (`error[duplicate-name]`), and a member with
-more than one names them all.
+more than one names them all. A member's own `mount { }` places it on some
+axes of the frame from something other than the kind's origin (see
+[Hardware placement](#hardware-placement)).
 
 *Being replaced:* a member **without** a body (`member plate`) is a word
 from the fixed table below, kept for the viewer's list until every member
@@ -846,13 +869,12 @@ of the list too. The words, per base:
 
 | Base | Members |
 |---|---|
-| cup hinge | `plate`, `arm`, `links`, `cup` |
-| butt hinge | `leaves`, `pin` |
+| `hinge` | `plate`, `arm`, `links`, `cup` (a cup hinge's); `leaves`, `pin` (a butt hinge's) |
 | `slide` | `cabinet_member`, `drawer_member` |
 | `pull` | `knob`, `bar`, `screw`, `screws` (a knob and its screw, a bar and its screws) |
 
 Members are optional, each at most once (`error[duplicate-name]`). Any other
-word for a member without a body is `error[unknown-field]`: `a cup hinge has
+word for a member without a body is `error[unknown-field]`: `a hinge kind has
 no member 'cupp'`, with the nearest member word as help; fasteners, tools and
 joints have no members (`a fastener kind has no member 'head'`).
 
@@ -955,70 +977,111 @@ Rake and splay (angled legs) are out of scope for version 1.
 
 ### Hardware placement
 
-A piece of hardware is mounted on a **face of its `piece`**. Every hardware
-call accepts `face:` (a face word) to name it; left out, the base kind decides:
+A piece of hardware is mounted on a **face of its piece** (its first role).
+Where it sits is the kind's `mount { }` block, then the design's
+`place { }` for the axes the kind leaves `open`:
 
-| Base | Mount face (default) | Fixed by the base | Set by `place { }` |
-|---|---|---|---|
-| `slide` | the `left` or `right` face of `piece`, whichever is nearer the same-named face of the `in` region | everything: the slide runs along the piece's length, front ends level, centred on the piece's width | nothing; a `place` is `error[axis-set-twice]` |
-| `hinge` | the `back` face of `piece` | a cup hinge: the cup sits `cup_inset` in from the long edge of the mount face that is nearer `on`; the plate sits on the inside face of `on`. A butt hinge: the leaves start at the pin edge (see below) | the one axis along the piece's length (the cup's or the leaves') |
-| `pull` | the `front` face of `piece` | nothing | the two axes of the mount face |
+```
+kind euro_hinge : hinge {
+  roles {
+    piece: Part                      // the door's hinge stile
+    on:    Part                      // the cabinet side
+  }
+  ...
+  // On the back of the stile, the cup's centre cup_inset and half the
+  // cup in from the edge nearer the side; the design says where along it.
+  mount {
+    face:   back
+    across: from(edge(piece, nearer: on), inset: cup_inset + 35mm / 2)
+    along:  open
+  }
+}
+```
 
-The mount face fixes the axis it is normal to. The terms are the same as for
-parts (`center`, `flush`, `against`, `spaced` for hardware arrays), applied to
-the hardware's envelope. `orient`, `ground` and `corners` don't apply to
-hardware.
+| Entry | Value | Meaning |
+|---|---|---|
+| `face` | a face word, or `face(piece, nearer: r)` | the face of the piece it is mounted on. A call's `face:` setting (every slide, hinge and pull call accepts one) overrides it |
+| `across` | a mount term, or `open` | where the frame's origin is across the mount face |
+| `along` | a mount term, or `open` | where the frame's origin is along the piece's length |
 
-An envelope lies on the mount face like this: its `thickness` (or a cylinder's
-`length`) stands off the face; its `length` runs along the piece's length; its
-`width` along the remaining axis. A slide's "front ends level" means its
-envelope starts at the piece's front end (the low end of the piece's length
-when the length doesn't run front to back). Fasteners and tools are never
-placed.
+All three are required (`error[missing-field]`), each at most once. The
+mount face fixes the third axis: the origin lies on the face. This places
+the [kind's frame](#the-kinds-frame), and every member's shapes are drawn
+in it.
 
-**Members.** Hinges and slides are two pieces of metal: one moves with the
-door or drawer, one is screwed to the carcass and stays put.
+**Mount terms**, usable in kinds only:
 
-- A **cup hinge** is its **cup**, its **plate**, its **arm** and two
-  **links**. The cup is a cylinder, `cup_diameter` across and `cup_depth`
-  deep, sunk into the mount face (the back of the stile), its rim
-  `cup_inset` in from the stile's long edge nearer the middle of `on`;
-  `place { }` positions the cup along the piece's length. The plate is the
-  `plate` box, screwed to the face of `on` that looks toward the middle of
-  the door (the inside of the cabinet side): its `thickness` stands off that
-  face, its `length` runs along the door's length centred on the cup, and
-  its `width` runs back from the face of `on` the door closes against, its
-  middle `plate_setback` back from it (the screw line; 37mm on 32mm-system
-  cabinets). Neither member reaches into `on`'s thickness or past its outer
-  face. The arm lies on the plate, from the plate's back to the door's back
-  face, and its front end (the knuckle) reaches into the cup when the door
-  is closed; it carries two pins. The cup carries the boss and its two pins;
-  each link joins a pin in the arm to a pin in the boss. The arm and its
-  pins are where the built-in mechanism puts them relative to the cup, so a
-  side screw setting (see `overlay_adjustment`) moves the arm on the plate.
-  The cup moves with the door; the plate and arm stay; each link turns
-  about its pin in the arm. The arm, its knuckle and the links must stay
-  out of the wood of the door and of `on` at every angle as the door
-  opens; only the cup's bore is taken out of the door (its rim lies on the
-  face and removes no wood). The hinge stops at its widest angle on a
-  limiter inside the arm, steel on steel; nothing is excused as a stop.
-- A **butt hinge** is two **leaves**, each the `leaf` box: its `length`
-  runs along the pin (the piece's length), its `width` from the pin to the
-  leaf's edge, its `thickness` is the leaf's. The mount face of `piece` must
-  lie against a face of `on` (a lid's underside on the top edge of the box's
-  back, a door's edge against the cabinet side). The **pin edge** is the long
-  edge of the mount face where the piece's neighbouring face lies in the same
-  plane as a face of `on`: the side where the two parts are flush and the
-  knuckle shows. If neither edge (or both) is flush, it is the edge nearer the
-  middle of `on`. One leaf is housed in a mortise in the mount face, the other
-  in a mortise in the face of `on` it closes against, each as deep as the leaf
-  is thick, both reaching `width` in from the pin edge; so the parts close
-  face to face. Each mortise is a `notch` cut by the hinge. The leaf in
-  `piece` moves with it; the leaf in `on` stays.
-- A **slide** with a box envelope is two members, each half the envelope's
-  thickness: the **drawer member** against the piece, which travels with
-  the drawer, and the **cabinet member** against the `in` region's side,
-  which stays.
+| Term | Meaning |
+|---|---|
+| `from(anchor, inset: d)` | the origin lies on the anchor, moved `d` (default `0mm`) into the piece: away from an edge or an end toward the middle of the mount face, into the part a face belongs to |
+| `center(p)` | the origin lies midway across the mount face of `p` along this axis |
+
+**Anchors**, usable in kinds only. An edge or an end belongs to the mount
+face; a face is chosen across the axis the entry is for:
+
+| Anchor | Meaning |
+|---|---|
+| `edge(p, nearer: q)` | of the two edges of the mount face that run along the piece's length, the one nearer the middle of `q` (the lower one when they are equally near) |
+| `edge(p, flush_with: q)` | the edge of the mount face where `p`'s neighbouring face lies in a face of `q` (a butt hinge's pin edge, where the two parts are flush); if neither or both are, the edge nearer the middle of `q` |
+| `end(p, toward: dir)` | the end of `p`'s length that faces the direction `dir` (`front`); `p`'s length must run along that direction's axis (`error[type-mismatch]` otherwise) |
+| `face(p, toward: q)` | of `p`'s two faces across this entry's axis, the one nearer the middle of `q` |
+| `crossing(p, q)` | the face of `p` that `q` touches or enters (as in [Faces to cut](#faces-to-cut)) |
+| `face(p, nearer: r)` | for `face:` only: of the two faces across `p`'s thickness, the one nearer the same-named face of region `r` (the lower one when they are equally near) |
+
+The frame's directions on the mount face: `along` runs along the piece's
+length (its width when the mount face is an end of the piece), from the end
+when `along` is `from(end(...))`, otherwise the way the piece's length
+runs; `across` runs from the edge when `across` is `from(edge(...))`, toward
+the middle of the face, otherwise toward `right`, `up` or `back`; `depth`
+runs into the piece.
+
+**`open`** leaves an axis to the design: the hardware's `place { }` sets it,
+with the same terms as for parts (`center`, `flush`, `against`, `spaced` for
+hardware arrays), applied to the box around the shapes of the members
+carried by the piece (`with:` its first role). A `place` term for an axis
+that is not open is `error[axis-set-twice]` ("the hardware's kind already
+fixes it"); an open axis with no term is `error[axis-not-set]`. `orient`,
+`ground` and `corners` don't apply to hardware. Fasteners and tools are
+never placed.
+
+**A member's own `mount { }`** places that member, on the axes it names
+(`across`, `along`, `depth`), from an anchor instead of from the kind's
+origin: its shapes on that axis are measured from the anchor's plane,
+moved `inset` into the anchor's part, in the frame's direction. Each entry
+is `from(anchor, inset: d)`:
+
+```
+  /// The mounting plate: screwed to the inside of the cabinet side.
+  member plate {
+    with:  on
+    // 11mm thick, standing off the side's inside face; 36mm wide, its
+    // middle plate_setback back from the side's front edge.
+    shape: box(along: 50mm, across: 0mm..11mm, depth: 36mm)
+    mount {
+      across: from(face(on, toward: piece))
+      depth:  from(face(on, toward: piece), inset: plate_setback)
+    }
+  }
+```
+
+**Which members are checked** is being replaced: until every member's
+shapes are checked (see [Hardware](#hardware)), the overlap and motion
+checks see, by name, a hinge's `cup` or `leaf` and its `plate` or
+`fixed_leaf` and the two shapes of its `arm`; a slide's `drawer_member` and
+`cabinet_member`; a pull's `knob` or `bar`. A cup hinge's arm, knuckle and
+links must stay out of the wood of the door and of `on` at every angle as
+the door opens; only the cup's bore is taken out of the door (its rim lies
+on the face and removes no wood). The hinge stops at its widest angle on a
+limiter inside the arm, steel on steel; nothing is excused as a stop.
+
+**Contact.** Every part a piece of hardware joins must meet it: of the
+members a role's part carries (`with:` that role), at least one touches or
+enters that part at rest. Otherwise the hardware's piece meets none of the
+parts it should join (`error[no-contact]`, `hinge: lid meets none of the
+parts it should join`), as for a joint. A butt hinge's `fixed_leaf` lies
+just off its mount face, in `on`: if the mount face of the piece does not
+lie against `on`, the leaf meets nothing. Likewise a `cut` whose member
+neither touches nor enters the part it names is `error[no-contact]`.
 
 ### Mirroring
 
@@ -1045,6 +1108,8 @@ Mirroring is defined on **results**, not on text:
   param such as `hinge_side: side_l`) is re-bound to the part or region that
   occupies the reflected place: `side_r`. If nothing occupies that place
   exactly, it is `error[mirror]`, naming the item that has no counterpart.
+  Every role of a piece of hardware is re-bound this way, whatever its
+  name.
 - Arguments are not rewritten: there is no textual swap of `left` and `right`.
 - The cut list marks a mirrored part as the mirror image of its source, and
   the work plan marks the pair out together.
@@ -1175,7 +1240,11 @@ and may add settings. Giving the same setting twice is
 
 ### Roles and pairs
 
-- A role is `Part` (exactly one part) or `Parts` (one part or a list).
+- A role is `Part` (exactly one part) or `Parts` (one part or a list). A
+  hardware kind's roles are `Part` or `Region` (a slide's opening), its
+  first a `Part` (the piece it is mounted on); a piece of hardware is one
+  connection between exactly those, and every part it carries members on
+  must meet one of them (see [Hardware placement](#hardware-placement)).
 - A kind with a `Parts` role must have exactly two roles. Such a joint applies
   to **pairs**: one part from the first role and one from the second that
   **meet**. A kind with three or more roles has only `Part` roles; it is one
@@ -1306,6 +1375,18 @@ part can choose with `face_side:` and `face_edge:`.
 | `side(p, normal: width \| thickness, from: q)` | the reference face (`normal: thickness`) or reference edge (`normal: width`) of `p`; `opposite: true` takes the face opposite to it | `along` from the end nearest `q`; `across` from the reference edge (or reference face); `flip: true` measures `across` from the opposite edge |
 | `crossing(p, q)` | the face of `p` that `q` touches or enters. The **footprint** is the outline of `q`'s cut-size box on that face | within the footprint, in `q`'s own axes |
 
+In a hardware kind, the second argument of `crossing` may be a member:
+`crossing(piece, cup)` is the face of `piece` the member's shapes touch or
+enter (when a shape passes right through, the one nearer the mount face),
+and there is one **footprint per shape**: the region the shape's box and
+the part's cut box share, in the part's own frame. A hardware cut is made
+once for each piece of hardware. Its operations are the same as a joint's:
+
+```
+cut crossing(piece, cup) { drill(diameter: 35mm, depth: 12.8mm) }
+cut crossing(on, fixed_leaf) { notch(depth: 1.5mm) }
+```
+
 When `p` and `q` cross right through each other, `crossing(p, q)` is `p`'s
 reference face if it is parallel to both lengths, otherwise `p`'s reference
 edge. `normal: width | thickness` names the face instead (the face across
@@ -1326,9 +1407,10 @@ directions are the words a cut already uses on a face:
 | `across` | across the mount face, away from the piece's edge the hardware is measured from (a hinge: the edge nearer `on`) toward the middle of the piece |
 | `depth` | from the mount face into the piece; negative stands off it |
 
-The frame's origin is the point where the hardware is placed on its mount
-face: a cup hinge's is the centre of its cup, on the face the cup is bored
-into. These are **measurements within the hardware**, like a profile's
+The frame's origin is the point where the kind's `mount { }` and the
+design's `place { }` put the hardware on its mount face (see
+[Hardware placement](#hardware-placement)): a cup hinge's is the centre of
+its cup, on the face the cup is bored into. These are **measurements within the hardware**, like a profile's
 stations and a cut's marks: catalogue data, never a position in a design.
 They are written with `point(along:, across:, depth:)` (each a `Length`,
 default `0mm`) and with the ranges a shape takes, and only inside a
@@ -1393,57 +1475,76 @@ how the build manual's assembly pictures are drawn.
 
 ### Hardware
 
-A `kind` with a hardware base declares a product or a family of products: its
-catalog data for the checks, and optionally a 3D model for the viewport.
+A `kind` with a hardware base declares a product or a family of products:
+the parts it joins, where it sits, its members and their shapes, how they
+move and what it cuts, and optionally a 3D model for the viewport. Nothing
+about a slide, a hinge or a pull is built into the checker: the standard
+kinds in `std:hardware` are written in `.stave` like any other.
 
 ```
 /// A full-extension slide; a family, chosen by length.
 kind side_mount_slide : slide {
+  roles {
+    piece: Part                      // the drawer side
+    in:    Region                    // the opening it runs in
+  }
   param length = 500mm within [250mm, 300mm, 350mm, 400mm, 450mm, 500mm, 550mm, 600mm]
   clearance: 12.7mm
   travel:    length
-  envelope:  box(length: length, width: 45mm, thickness: 12.7mm)
+
+  // On the side of the drawer box nearer the cabinet, its front end level
+  // with the side's, centred up and down.
+  mount {
+    face:   face(piece, nearer: in)
+    across: center(piece)
+    along:  from(end(piece, toward: front))
+  }
+
+  member drawer_member {
+    with:  piece
+    shape: box(along: 0mm..length, across: 45mm, depth: -6.35mm..0mm)
+  }
+  member cabinet_member {
+    with:  in
+    shape: box(along: 0mm..length, across: 45mm, depth: -12.7mm..-6.35mm)
+  }
 }
 
-/// One exact product.
+/// One exact product: a knob on one screw from behind.
 kind brass_knob_26 : pull {
-  diameter: 26mm
-  envelope: cylinder(diameter: 26mm, length: 30mm)
-  model:    model("./models/brass_knob_26.glb", align: node("mount"))
+  roles {
+    piece: Part
+  }
+  screw_diameter: 4mm
+  mount {
+    face:   front
+    across: open
+    along:  open
+  }
+  member knob {
+    with:  piece
+    shape: cylinder(diameter: 26mm, depth: -30mm..0mm)
+  }
+  member screw {
+    with:  piece
+    shape: cylinder(diameter: 4mm, depth: 0mm..piece.thickness)
+  }
+  cut crossing(piece, screw) { drill(diameter: 4mm, depth: through) }
+  model: model("./models/brass_knob_26.glb", align: node("mount"))
 }
 ```
 
-What each base does:
+A butt hinge sinks a leaf into each part and cuts a mortise for each; a
+cup hinge bores its cup; a pull drills a hole for each screw. Each is a
+`cut` of the kind (see [Faces to cut](#faces-to-cut)). `fastener` kinds are
+only ever used through a `uses:`, and `tool` kinds are listed in a
+project's `tools:` and a recipe's `tools:`.
 
-- **`slide`** — checks that the gap between the piece's mount face and the
-  facing side of the `in` region equals `clearance` (`error[slide-gap]`), and
-  gives the assembly it is in a motion: it travels toward the front by up to
-  `travel`.
-- **`hinge`** — a cup hinge bores its cup: one `drill(diameter: cup_diameter,
-  depth: cup_depth)` in the mount face. It gives the assembly a motion: the
-  door opens by up to `opening_angle` on the mechanism its kind declares
-  (see [Mechanisms](#mechanisms)), its one input
-  the angle the door has turned; at each angle the door turns by that angle
-  and moves wherever its two links put it (forward, away from the cabinet,
-  and sideways), and at `0deg` it is exactly where it is placed. The
-  linkage's plane is across the long edge of `piece` that is on the face
-  opposite the mount face and nearer `on`; its free side is toward the
-  middle of the door and it swings toward the face opposite the mount face.
-  A butt hinge cuts its two leaf mortises (`notch(depth:` the leaf's
-  thickness`)`, one in `piece` and one in `on`) and turns about its pin
-  edge, the free side swinging away from the mount face (a lid lifts). A
-  hinge has no `envelope:`: its cup, `plate`, arm and links, or its two
-  leaves, are its envelope (see [Hardware placement](#hardware-placement)).
-- **`pull`** — bores its screw holes through the piece: one hole of
-  `screw_diameter` in the middle of the envelope, or two holes `centres` apart
-  along its length when `centres` is given.
-- **`fastener`** — only ever used through a joint's `uses:`.
-- **`tool`** — listed in a project's `tools:` and a recipe's `tools:`.
-
-**Envelopes** are what fit and collision checks use: `box(length:, width:,
-thickness:)` or `cylinder(diameter:, length:)`. An envelope may overlap the
-hardware's own role parts (a hinge's cup is sunk into its door); overlapping
-anything else is `error[overlap]`.
+**Envelopes.** Outside a member, `box(length:, width:, thickness:)` and
+`cylinder(diameter:, length:)` are envelopes: a fastener's size. The members
+the checks see (see [Hardware placement](#hardware-placement)) may overlap
+the hardware's own role parts (a hinge's cup is sunk into its door);
+overlapping anything else is `error[overlap]`.
 
 **Models are for looks only.**
 
@@ -1522,8 +1623,8 @@ cup hinge's four-bar linkage:
   }
 ```
 
-Any other mechanism with one freedom, and a mechanism in any kind but a
-cup hinge, is `error[not-supported]`. The jargon stays in library
+Any other mechanism with one freedom, and a mechanism in a slide or pull
+kind, is `error[not-supported]`. The jargon stays in library
 files: a project still writes `hardware hinges[lower, upper] :
 euro_hinge(stile[hinge], on: side_l)`.
 
@@ -1739,9 +1840,10 @@ Inside a hardware kind's `member` and `mechanism` only, written in the
 | `box(along:, across:, depth:)`, `cylinder(diameter:, depth:, at:)` | a member's shape; each argument a range `lo..hi` or one length |
 
 Words that look like functions but are fixed by position, not built-in
-functions: placement terms, face selectors, cut operations, `mark(...)` inside
-`outline`, assembly steps, `extend`, recipe steps, `before`/`after`, and
-`mirror`.
+functions: placement terms, face selectors, a hardware `mount`'s terms and
+anchors (`from`, `center`, `edge`, `end`, `face`), cut operations,
+`mark(...)` inside `outline`, assembly steps, `extend`, recipe steps,
+`before`/`after`, and `mirror`.
 
 ---
 
@@ -1870,7 +1972,7 @@ shape of their messages are fixed, because tests and AI tools match on them.
 | 3 | `fit-undecided` | `<part>: nothing decides its <length>` |
 | 3 | `mirror` | `<item> has no counterpart on the other side of the mirror` |
 | 3 | `mechanism` | `<kind>'s mechanism has <n> freedoms; it needs exactly one` |
-| 4 | `no-contact` | `<joint>: <part> meets none of the parts it should join` |
+| 4 | `no-contact` | `<joint or hardware>: <part> meets none of the parts it should join` |
 | 4 | `overlap` | `<a> and <b> overlap` |
 | 4 | `slide-gap` | `<hardware>: <piece> is <gap> from the opening, but the slide needs <clearance>` |
 | 4 | `hinge-overlay` | `<hardware>: <piece> overlays <on> by <overlay>, but the hinge gives <low> to <high>` |

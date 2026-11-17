@@ -226,20 +226,22 @@ pub fn table(design: &SolvedDesign) -> String {
                     mm(footprint.min.thickness),
                     mm(footprint.max.thickness)
                 ),
-                CutPlace::Recess { footprint } => format!(
-                    "recess local {}..{} x {}..{} x {}..{}",
+                CutPlace::Member {
+                    hardware,
+                    footprint,
+                    ..
+                } => format!(
+                    "where {} meets it, local {}..{} x {}..{} x {}..{}",
+                    design
+                        .hardware
+                        .get(hardware.index())
+                        .map_or("", |h| h.name.as_str()),
                     mm(footprint.min.length),
                     mm(footprint.max.length),
                     mm(footprint.min.width),
                     mm(footprint.max.width),
                     mm(footprint.min.thickness),
                     mm(footprint.max.thickness)
-                ),
-                CutPlace::Mount { centre, .. } => format!(
-                    "centred at local {}, {}, {}",
-                    mm(centre.length),
-                    mm(centre.width),
-                    mm(centre.thickness)
                 ),
             };
             let _ = writeln!(

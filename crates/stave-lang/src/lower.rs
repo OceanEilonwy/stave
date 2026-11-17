@@ -586,7 +586,12 @@ fn kind(node: &SyntaxNode) -> Option<Kind> {
                     span: span_of(&entry),
                 })
             }
+            SyntaxKind::MOUNT => KindEntry::Mount(mount(&entry)?),
             SyntaxKind::CUT => KindEntry::Cut(Cut {
+                name: match child(&entry, SyntaxKind::NAME) {
+                    Some(node) => Some(name(&node)?),
+                    None => None,
+                },
                 selector: call(&child(&entry, SyntaxKind::CALL)?)?,
                 operations: calls(&child(&entry, SyntaxKind::BLOCK)?)?,
                 span: span_of(&entry),
@@ -608,12 +613,26 @@ fn kind(node: &SyntaxNode) -> Option<Kind> {
     })
 }
 
+/// `mount { fields }`.
+fn mount(entry: &SyntaxNode) -> Option<MountBlock> {
+    let block = child(entry, SyntaxKind::BLOCK)?;
+    let fields = block
+        .children()
+        .map(|node| field(&node))
+        .collect::<Option<_>>()?;
+    Some(MountBlock {
+        fields,
+        span: span_of(entry),
+    })
+}
+
 /// A member's `{ ... }`: named shapes, `shape:` fields (unnamed shapes) and
 /// other fields.
 fn member_body(block: &SyntaxNode) -> Option<MemberBody> {
     let entries = block
         .children()
         .map(|entry| match entry.kind() {
+            SyntaxKind::MOUNT => Some(MemberEntry::Mount(mount(&entry)?)),
             SyntaxKind::SHAPE => Some(MemberEntry::Shape(ShapeEntry {
                 name: Some(name(&child(&entry, SyntaxKind::NAME)?)?),
                 value: expr(&exprs(&entry).next()?)?,

@@ -33,6 +33,7 @@ mod build;
 mod eval;
 mod hardware;
 mod joints;
+mod legacy;
 mod mechanism;
 mod place;
 

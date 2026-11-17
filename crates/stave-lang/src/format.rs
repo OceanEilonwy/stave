@@ -273,7 +273,7 @@ fn space_between(previous: &Atom, next: &Atom) -> bool {
     match next.kind {
         COLON => !matches!(
             next.parent,
-            FIELD | ARG | ROLE | STATION | MIRROR | SHAPE | STOP | COUPLE
+            FIELD | ARG | ROLE | STATION | MIRROR | SHAPE | STOP | COUPLE | CUT
         ),
         L_PAREN => !matches!(next.parent, ARG_LIST | MIRROR),
         L_BRACK => !matches!(next.parent, INDEX | ARRAY_SPEC),
@@ -629,6 +629,16 @@ mod tests {
                 "stave 1\nkind h : hinge {\n  member arm {\n    with : on\n    shape body : box(along: 16mm, across: -2.9mm .. 15mm, depth: 0mm)\n    shape knuckle:box(along: 16mm, across: 8mm..15mm, depth: 0mm..12.4mm)\n  }\n  mechanism {\n    pivot arm , cup at point( across: 1mm )\n    slot a,b from point(depth: 1mm) to point(depth: 2mm)\n    rail a, b along along\n    couple a to b : 1/2\n    drive: turn(cup, from: 0deg, to: 90deg)\n    stop : 90deg \"the stop\"\n  }\n}\n"
             ),
             "stave 1\nkind h : hinge {\n  member arm {\n    with:          on\n    shape body:    box(along: 16mm, across: -2.9mm..15mm, depth: 0mm)\n    shape knuckle: box(along: 16mm, across: 8mm..15mm, depth: 0mm..12.4mm)\n  }\n  mechanism {\n    pivot arm, cup at point(across: 1mm)\n    slot a, b from point(depth: 1mm) to point(depth: 2mm)\n    rail a, b along along\n    couple a to b: 1 / 2\n    drive: turn(cup, from: 0deg, to: 90deg)\n    stop:  90deg \"the stop\"\n  }\n}\n"
+        );
+    }
+
+    #[test]
+    fn lays_out_mounts_and_named_cuts() {
+        assert_eq!(
+            format(
+                "stave 1\nkind h : hinge {\n  mount {\n    face : back\n    across: from(edge(piece, nearer: on), inset: 22.5mm)\n    along:open\n  }\n  member plate {\n    shape: box(along: 50mm)\n    mount { depth : from(face(on, toward: piece)) }\n  }\n  cut bore : crossing(piece, cup) { drill(diameter: 35mm, depth: 12.8mm) }\n}\n"
+            ),
+            "stave 1\nkind h : hinge {\n  mount {\n    face:   back\n    across: from(edge(piece, nearer: on), inset: 22.5mm)\n    along:  open\n  }\n  member plate {\n    shape: box(along: 50mm)\n    mount { depth: from(face(on, toward: piece)) }\n  }\n  cut bore: crossing(piece, cup) { drill(diameter: 35mm, depth: 12.8mm) }\n}\n"
         );
     }
 

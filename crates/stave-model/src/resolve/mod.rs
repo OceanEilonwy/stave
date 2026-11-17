@@ -16,6 +16,7 @@
 //!    result kept, so nothing is reported twice.
 
 mod expr;
+mod hardware;
 mod items;
 mod kinds;
 mod mechanism;

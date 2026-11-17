@@ -736,10 +736,12 @@ pub struct KindDef {
     pub bodies: Vec<BodyDef>,
     /// How the bodies move, when the kind says.
     pub mechanism: Option<MechanismDef>,
+    /// Where it sits and what it cuts, for a slide, hinge or pull kind.
+    pub hardware: Option<HardwareKindDef>,
 }
 
 /// A member with a body: its index among its kind's [`KindDef::bodies`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize)]
 pub struct BodyId(u32);
 
 impl BodyId {
@@ -846,6 +848,173 @@ pub struct BodyDef {
     pub with: Carrier,
     /// Its shapes, in source order.
     pub shapes: NonEmpty<NamedShape>,
+    /// Its own `mount { }`: the frame axes it is placed on from an anchor
+    /// instead of from the kind's origin, each at most once.
+    pub mount: Vec<MemberPlacement>,
+}
+
+/// One entry of a member's `mount { }`: `depth: from(face(on, toward:
+/// piece), inset: plate_setback)`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MemberPlacement {
+    /// The frame axis it places the member on.
+    pub axis: FrameAxis,
+    /// The anchor and inset.
+    pub from: FromTerm,
+}
+
+/// The name of a cut: `dado` in `cut dado: crossing(into, piece) { ... }`.
+/// What messages call the cut.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize)]
+pub struct CutName(String);
+
+impl CutName {
+    /// The name, if `word` is a word (letters, digits and `_`, not starting
+    /// with a digit).
+    pub fn new(word: &str) -> Option<CutName> {
+        stave_lang::ast::is_word(word).then(|| CutName(word.to_owned()))
+    }
+
+    /// The name as written.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for CutName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// The entries of a slide, hinge or pull kind that say where it sits and
+/// what it cuts (grammar, "Hardware placement" and "Faces to cut").
+#[derive(Debug, Clone, PartialEq)]
+pub struct HardwareKindDef {
+    /// Its `mount { }`.
+    pub mount: MountDef,
+    /// Its `cut` entries, in source order.
+    pub cuts: Vec<HardwareCutDef>,
+    /// `uses:` fasteners, counted and never placed.
+    pub uses: Vec<UseDef>,
+}
+
+/// A hardware kind's `mount { }`: the face of its piece it sits on and
+/// where its frame's origin is across and along that face.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MountDef {
+    /// `face:`
+    pub face: FaceRule,
+    /// `across:`
+    pub across: AxisRule,
+    /// `along:`
+    pub along: AxisRule,
+    /// The whole block.
+    pub span: Span,
+}
+
+/// How a hardware kind picks the face of its piece it is mounted on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FaceRule {
+    /// `face: back`: always this face.
+    Word(Face),
+    /// `face: face(piece, nearer: in)`: of the two faces across the piece's
+    /// thickness, the one nearer the same-named face of a region.
+    Nearer {
+        /// The role whose part the hardware is mounted on.
+        part: RoleIndex,
+        /// The region role.
+        region: RoleIndex,
+    },
+}
+
+/// One axis of a hardware kind's `mount { }`.
+#[derive(Debug, Clone, PartialEq)]
+pub enum AxisRule {
+    /// `open`: the design's `place { }` sets it.
+    Open,
+    /// The kind sets it.
+    Term(MountTerm),
+}
+
+/// A term of a `mount { }` entry.
+#[derive(Debug, Clone, PartialEq)]
+pub enum MountTerm {
+    /// `from(anchor, inset: d)`
+    From(FromTerm),
+    /// `center(p)`: midway across the mount face of `p` along the axis.
+    Centre {
+        /// The role whose part it is centred on.
+        part: RoleIndex,
+    },
+}
+
+/// `from(anchor, inset: d)`: the anchor's plane, moved `d` into the piece
+/// (from an edge or an end) or into the anchor's part (from a face).
+#[derive(Debug, Clone, PartialEq)]
+pub struct FromTerm {
+    /// The anchor.
+    pub anchor: MountSelector,
+    /// `inset:`; zero when left out.
+    pub inset: Option<RExpr>,
+    /// The whole term.
+    pub span: Span,
+}
+
+/// An anchor of a `mount { }` term (grammar, "Hardware placement").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MountSelector {
+    /// `edge(p, nearer: q)`
+    EdgeNearer {
+        /// The part whose mount face's edge it is.
+        part: RoleIndex,
+        /// The part or region whose middle decides.
+        other: RoleIndex,
+    },
+    /// `edge(p, flush_with: q)`
+    EdgeFlushWith {
+        /// The part whose mount face's edge it is.
+        part: RoleIndex,
+        /// The part a neighbouring face lies in a face of.
+        other: RoleIndex,
+    },
+    /// `end(p, toward: dir)`
+    EndToward {
+        /// The part whose end it is.
+        part: RoleIndex,
+        /// The direction the end faces.
+        toward: Direction,
+    },
+    /// `face(p, toward: q)`: of `p`'s two faces across the entry's axis,
+    /// the one nearer the middle of `q`.
+    FaceToward {
+        /// The part whose face it is.
+        part: RoleIndex,
+        /// The part or region whose middle decides.
+        other: RoleIndex,
+    },
+    /// `crossing(p, q)`: the face of `p` that `q` touches or enters.
+    Crossing {
+        /// The part whose face it is.
+        part: RoleIndex,
+        /// The part that touches or enters it.
+        other: RoleIndex,
+    },
+}
+
+/// `cut [name:] crossing(role, member) { operations }` in a hardware kind.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HardwareCutDef {
+    /// Its name, when written.
+    pub name: Option<CutName>,
+    /// The role whose part is cut.
+    pub part: RoleIndex,
+    /// The member whose shapes make the footprints.
+    pub body: BodyId,
+    /// The operations in order.
+    pub operations: Vec<OperationDef>,
+    /// The whole entry.
+    pub span: Span,
 }
 
 /// What carries a member with a body.
@@ -1206,6 +1375,8 @@ pub struct SelectorDef {
 /// A `cut selector { operations }` entry.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CutDef {
+    /// Its name, when written: what messages call the cut.
+    pub name: Option<CutName>,
     /// The face.
     pub selector: SelectorDef,
     /// The operations in order.

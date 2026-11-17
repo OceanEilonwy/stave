@@ -431,7 +431,7 @@ const DOOR: &str = "part door : pine_19 {
 fn a_hinge_is_placed_along_its_pieces_length_only() {
     let hinge = |place: &str| {
         open(&format!(
-            "{SIDE}\n{DOOR}\n/// A cup hinge for an inset door, with no catalogue overlay (so its\n/// overlay isn't checked).\nkind inset_cup_hinge : hinge {{\n  opening_angle: 110deg\n  cup_diameter:  35mm\n  cup_depth:     13mm\n  cup_inset:     5mm\n  plate_setback: 37mm\n  plate:         box(length: 50mm, width: 36mm, thickness: 11mm)\n}}\nhardware h : inset_cup_hinge(door, on: side){place}"
+            "{SIDE}\n{DOOR}\n/// A cup hinge for an inset door, with no catalogue overlay (so its\n/// overlay isn't checked).\nkind inset_cup_hinge : hinge {{\n  roles {{\n    piece: Part\n    on:    Part\n  }}\n  opening_angle: 110deg\n  cup_diameter:  35mm\n  cup_depth:     13mm\n  cup_inset:     5mm\n  mount {{\n    face:   back\n    across: from(edge(piece, nearer: on), inset: 22.5mm)\n    along:  open\n  }}\n  member plate {{\n    with:  on\n    shape: box(along: 50mm, across: 0mm..11mm, depth: 36mm)\n    mount {{\n      across: from(face(on, toward: piece))\n      depth:  from(face(on, toward: piece), inset: 37mm)\n    }}\n  }}\n  member cup {{\n    with:  piece\n    shape: cylinder(diameter: 35mm, depth: 0mm..13mm)\n  }}\n  cut crossing(piece, cup) {{ drill(diameter: 35mm, depth: 13mm) }}\n}}\nhardware h : inset_cup_hinge(door, on: side){place}"
         ))
     };
     let opened = hinge(" {\n  place {\n    flush(door.bottom, inset: 50mm)\n  }\n}");

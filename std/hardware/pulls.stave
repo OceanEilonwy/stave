@@ -2,32 +2,67 @@ stave 1
 
 /// A round knob held by one screw from behind.
 kind knob : pull {
+  roles {
+    piece: Part                      // the door or drawer front
+  }
   /// Diameter of the knob.
   param diameter = 30mm
   /// How far the knob stands off the face.
   param projection = 28mm
   screw_diameter: 4mm
-  envelope:       cylinder(diameter: diameter, length: projection)
+
+  // On the front; the design says where.
+  mount {
+    face:   front
+    across: open
+    along:  open
+  }
 
   /// The knob: the round part you hold to open the door or drawer.
-  member knob
+  member knob {
+    with:  piece
+    shape: cylinder(diameter: diameter, depth: -projection..0mm)
+  }
   /// The screw: it goes in from behind, through a hole drilled in the
   /// door or drawer front, and holds the knob on.
-  member screw
+  member screw {
+    with:  piece
+    shape: cylinder(diameter: 4mm, depth: 0mm..piece.thickness)
+  }
+
+  cut hole: crossing(piece, screw) { drill(diameter: 4mm, depth: through) }
 }
 
 /// A bar pull held by two screws from behind.
 kind bar_pull : pull {
+  roles {
+    piece: Part                      // the door or drawer front
+  }
   /// Distance between the two screw holes.
   param centres = 128mm
   /// How far the pull stands off the face.
   param projection = 35mm
   screw_diameter: 4mm
-  envelope:       box(length: centres + 32mm, width: 12mm, thickness: projection)
+
+  // On the front; the design says where.
+  mount {
+    face:   front
+    across: open
+    along:  open
+  }
 
   /// The bar: the handle you hold, standing off the face on two legs.
-  member bar
+  member bar {
+    with:  piece
+    shape: box(along: centres + 32mm, across: 12mm, depth: -projection..0mm)
+  }
   /// The two screws: they go in from behind, through two holes drilled
   /// the bar's centres apart, one into each leg.
-  member screws
+  member screws {
+    with:        piece
+    shape left:  cylinder(diameter: 4mm, depth: 0mm..piece.thickness, at: point(along: -centres / 2))
+    shape right: cylinder(diameter: 4mm, depth: 0mm..piece.thickness, at: point(along: centres / 2))
+  }
+
+  cut hole: crossing(piece, screws) { drill(diameter: 4mm, depth: through) }
 }

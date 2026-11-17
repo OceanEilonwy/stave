@@ -4,7 +4,7 @@
 use stave_geom::collide::Overlap;
 use stave_lang::ast::CutOperation;
 use stave_lang::placement::{Axis, Direction, PartAxis};
-use stave_model::solved::{CutKind, CutPlace, Part, PartId, WorldBox};
+use stave_model::solved::{CutKind, CutName, CutPlace, Part, PartId, WorldBox};
 
 use crate::names::length_text;
 use crate::{Checker, Item, deepest};
@@ -158,15 +158,7 @@ fn cavity(
     })?;
     let host_part = design.part(host)?;
     let guest_part = design.part(guest)?;
-    let kind = match cut.source {
-        stave_model::solved::CutSource::Joint { joint, .. } => design
-            .joints
-            .get(joint.index())
-            .map(|j| j.kind.clone())
-            .unwrap_or_default(),
-        stave_model::solved::CutSource::Hardware { .. } => String::new(),
-    };
-    let noun = cavity_noun(cut.kind.operation(), &kind);
+    let noun = cavity_noun(cut.kind.operation(), cut.name.as_ref());
     let (feature, short) = guest_part
         .cuts
         .iter()
@@ -233,15 +225,13 @@ fn cavity(
     }
 }
 
-/// What a beginner calls the hole a cut makes: the joint's own word when
-/// it is one (`dado`, `rabbet`, `groove`), otherwise the operation's.
-fn cavity_noun(operation: CutOperation, kind: &str) -> &'static str {
-    let named = ["dado", "rabbet", "groove", "mortise", "housing", "socket"]
-        .into_iter()
-        .find(|word| kind.contains(word));
+/// What a beginner calls the hole a cut makes: the name its kind gives
+/// the cut (`cut dado: ...`), otherwise the operation's word.
+fn cavity_noun(operation: CutOperation, name: Option<&CutName>) -> &str {
+    let named = name.map(CutName::as_str);
     match operation {
-        CutOperation::Pocket => "mortise",
-        CutOperation::Drill => named.filter(|w| *w == "socket").unwrap_or("hole"),
+        CutOperation::Pocket => named.unwrap_or("mortise"),
+        CutOperation::Drill => named.unwrap_or("hole"),
         CutOperation::Notch => named.unwrap_or("notch"),
         CutOperation::Slot => named.unwrap_or("slot"),
         CutOperation::Tenon

@@ -11,7 +11,7 @@ kind rabbet : joint {
   cut_first: into                            // cut the rabbet first, then fit the panel to it
   adds:      extend(piece, by: depth)        // the panel is cut wider by the depth at each housed edge
 
-  cut crossing(into, piece) {
+  cut rabbet: crossing(into, piece) {
     notch(depth: depth)
   }
 

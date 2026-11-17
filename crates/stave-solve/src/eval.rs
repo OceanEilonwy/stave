@@ -4,7 +4,7 @@ use std::cell::RefCell;
 
 use stave_lang::ast::Span;
 use stave_lang::placement::{Axis, Face};
-use stave_lang::units::{ExactLength, Length, Rational};
+use stave_lang::units::{ExactLength, Rational};
 use stave_lang::{Code, FileId};
 use stave_model::defs::{
     ArrayDef, DefId, Index, Member, RExpr, RExprKind, StockField, Symbol, Text, TextPart, Word,
@@ -16,7 +16,6 @@ use stave_model::value::{
     RegionOrigin, RegionValue, Spacing, Value,
 };
 use stave_schema::functions::Builtin;
-use stave_schema::kinds::DEFAULT_SCREW_DIAMETER_NM;
 use stave_schema::words::StockForm;
 
 use crate::{Frame, Memo, Reported, Solved, Solver};
@@ -125,10 +124,6 @@ fn slot_value(slot: &ItemSlot, element: Option<usize>) -> Option<Value> {
         ItemSlot::Hardware(Slot::Many(all)) => Value::Hardware(pick(all, element)?),
         ItemSlot::Param(_) | ItemSlot::Let(_) | ItemSlot::Require(_) => return None,
     })
-}
-
-pub(crate) fn mm(nanometres: i64) -> ExactLength {
-    Length::from_nm(nanometres).to_exact()
 }
 
 impl Solver<'_> {
@@ -747,9 +742,6 @@ impl Solver<'_> {
                 array: None,
             };
             return self.eval(&value_expr, &env);
-        }
-        if name == "screw_diameter" && kind.base == stave_lang::ast::BaseKind::Pull {
-            return Ok(Value::Length(mm(DEFAULT_SCREW_DIAMETER_NM)));
         }
         let kind_name = self.model.defs.kind_display(kind_value.kind, Some(file));
         Err(self.error(

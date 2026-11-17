@@ -392,6 +392,9 @@ fn contextual_words_in_their_positions() {
          \x20 roles: 3\n\
          \x20 cut end(piece, facing: in) { tenon(length: 3mm) }\n\
          \x20 cut: 4\n\
+         \x20 cut dado: crossing(piece, in) { notch(depth: 1mm) }\n\
+         \x20 mount { face: back, along: open }\n\
+         \x20 mount: 7\n\
          \x20 makes part key : s { length: 1mm }\n\
          \x20 makes: 5\n\
          \x20 /// The cup.\n\
@@ -416,7 +419,17 @@ fn contextual_words_in_their_positions() {
         .iter()
         .map(|entry| match entry {
             KindEntry::Roles(_) => "roles",
-            KindEntry::Cut(_) => "cut",
+            KindEntry::Cut(cut) => match &cut.name {
+                Some(name) => {
+                    assert_eq!(name.as_str(), "dado");
+                    "named cut"
+                }
+                None => "cut",
+            },
+            KindEntry::Mount(mount) => {
+                assert_eq!(mount.fields.len(), 2);
+                "mount"
+            }
             KindEntry::Makes(_) => "makes",
             KindEntry::Member(member) => {
                 assert_eq!(member.docs, ["The cup."]);
@@ -431,7 +444,17 @@ fn contextual_words_in_their_positions() {
     assert_eq!(
         entries,
         [
-            "roles", "roles", "cut", "cut", "makes", "makes", "member", "member"
+            "roles",
+            "roles",
+            "cut",
+            "cut",
+            "named cut",
+            "mount",
+            "mount",
+            "makes",
+            "makes",
+            "member",
+            "member"
         ]
     );
     let ItemKind::Recipe(recipe) = &file.items[3].kind else {

@@ -665,6 +665,7 @@ impl KindBody {
             | KindEntry::Member(_)
             | KindEntry::Roles(_)
             | KindEntry::Cut(_)
+            | KindEntry::Mount(_)
             | KindEntry::Mechanism(_) => None,
         })
     }
@@ -696,10 +697,23 @@ pub enum KindEntry {
     Roles(RolesBlock),
     /// `cut end(piece, facing: into) { tenon(...) }`
     Cut(Cut),
+    /// `mount { face: back, across: ..., along: open }`
+    Mount(MountBlock),
     /// `mechanism { pivot arm, inner_link at point(...) ... }`
     Mechanism(MechanismBlock),
     /// `insert: ...`, `adds: ...`, `envelope: ...`
     Field(Field),
+}
+
+/// `mount { ... }`: where a piece of hardware sits on its piece, or where
+/// one of its members sits; each entry a field (`face: back`,
+/// `across: from(...)`, `along: open`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct MountBlock {
+    /// Entries in source order.
+    pub fields: Vec<Field>,
+    /// The `mount` word and its block.
+    pub span: Span,
 }
 
 /// `member cup` or `member arm { with: on, shape: box(...) }`: one named
@@ -727,6 +741,8 @@ pub struct MemberBody {
 pub enum MemberEntry {
     /// `shape: box(...)` or `shape knuckle: box(...)`
     Shape(ShapeEntry),
+    /// `mount { depth: from(face(on, toward: piece)) }`
+    Mount(MountBlock),
     /// `with: piece`
     Field(Field),
 }
@@ -843,6 +859,9 @@ pub struct Role {
 /// `cut end(piece, facing: into) { tenon(...) }`
 #[derive(Debug, Clone, PartialEq)]
 pub struct Cut {
+    /// `dado` in `cut dado: crossing(into, piece) { ... }`: what messages
+    /// call the cut.
+    pub name: Option<Name>,
     /// Face selector: `end(...)`, `side(...)` or `crossing(...)`.
     pub selector: Call,
     /// Cut operations, one per line: `notch(depth: depth)`, `outline(...)`.

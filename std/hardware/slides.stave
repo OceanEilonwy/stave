@@ -3,16 +3,33 @@ stave 1
 /// A full-extension ball-bearing slide that mounts on the side of a drawer
 /// box. Needs 12.7mm (1/2in) between the drawer side and the cabinet.
 kind side_mount_slide : slide {
+  roles {
+    piece: Part                      // the drawer side
+    in:    Region                    // the opening it runs in
+  }
   /// Closed length of the slide; they are sold in these sizes.
   param length = 500mm within [250mm, 300mm, 350mm, 400mm, 450mm, 500mm, 550mm, 600mm]
   clearance: 12.7mm
   travel:    length                      // full extension: the drawer comes all the way out
-  envelope:  box(length: length, width: 45mm, thickness: 12.7mm)
+
+  // On the side of the drawer box nearer the cabinet, its front end level
+  // with the side's, centred up and down.
+  mount {
+    face:   face(piece, nearer: in)
+    across: center(piece)
+    along:  from(end(piece, toward: front))
+  }
 
   /// The cabinet member: screwed to the inside of the cabinet side; it
   /// stays put.
-  member cabinet_member
+  member cabinet_member {
+    with:  in
+    shape: box(along: 0mm..length, across: 45mm, depth: -12.7mm..-6.35mm)
+  }
   /// The drawer member: screwed to the side of the drawer box; it runs out
   /// on ball bearings inside the cabinet member.
-  member drawer_member
+  member drawer_member {
+    with:  piece
+    shape: box(along: 0mm..length, across: 45mm, depth: -6.35mm..0mm)
+  }
 }

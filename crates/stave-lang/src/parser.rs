@@ -1648,6 +1648,9 @@ impl<'t> Parser<'t> {
                 Some("doc comments go right before a declaration; use // for other comments"),
             ));
         }
+        if self.at_mount() {
+            return self.mount(owner);
+        }
         if self.at_entry_word("mechanism") {
             return self.node(MECHANISM, |p| {
                 p.bump();
@@ -1663,6 +1666,11 @@ impl<'t> Parser<'t> {
         if self.at_entry_word("cut") {
             return self.node(CUT, |p| {
                 p.bump();
+                if p.nth(0) == IDENT && p.nth(1) == COLON {
+                    // `cut dado: crossing(...) { }`: a named cut.
+                    p.wrap(NAME);
+                    p.bump();
+                }
                 p.call(CallKind::Selector)?;
                 if !p.at(L_BRACE)
                     && let Some(help) = p.missing_parentheses_help(Some(CallKind::Selector))
@@ -1707,8 +1715,25 @@ impl<'t> Parser<'t> {
         })
     }
 
-    /// `shape name: call` or a field, in a member's body.
+    /// `mount { fields }`: where a piece of hardware, or one of its
+    /// members, sits.
+    fn mount(&mut self, owner: &str) -> PResult {
+        self.node(MOUNT, |p| {
+            p.bump();
+            p.block(Body::Fields, owner)
+        })
+    }
+
+    /// `true` at `mount {`, the start of a mount block.
+    fn at_mount(&self) -> bool {
+        self.at_word("mount") && self.nth(1) == L_BRACE
+    }
+
+    /// `shape name: call`, `mount { }` or a field, in a member's body.
     fn member_entry(&mut self) -> PResult {
+        if self.at_mount() {
+            return self.mount("a member's mount");
+        }
         if self.at_word("shape") && self.nth(1) == IDENT && self.nth(2) == COLON {
             return self.node(SHAPE, |p| {
                 p.bump();

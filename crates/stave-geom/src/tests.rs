@@ -293,6 +293,9 @@ fn knob(orientation: Orientation, origin: Point, envelope: Envelope) -> Hardware
         },
         mechanism: None,
         model: None,
+        roles: Vec::new(),
+        entries: std::collections::BTreeMap::new(),
+        fasteners: Vec::new(),
     }
 }
 
@@ -393,10 +396,16 @@ fn hardware_cut(face: LocalFace, place: CutPlace, kind: CutKind) -> Cut {
         source: CutSource::Hardware {
             hardware: HardwareId::from_usize(0),
         },
+        name: None,
         face,
         place,
         kind,
     }
+}
+
+/// The first member of a hardware kind.
+fn member() -> stave_model::solved::BodyId {
+    stave_model::solved::BodyId::new(0).unwrap()
 }
 
 fn face(axis: PartAxis, end: End) -> LocalFace {
@@ -432,7 +441,9 @@ fn a_dado_outlines_only_where_the_surface_bends() {
     // A housing straight across the width, in the top face.
     let dado = hardware_cut(
         face(PartAxis::Thickness, End::End),
-        CutPlace::Recess {
+        CutPlace::Member {
+            hardware: HardwareId::from_usize(0),
+            body: member(),
             footprint: LocalBox {
                 min: local_point(40, 0, 14),
                 max: local_point(60, 50, 20),
@@ -469,7 +480,9 @@ fn a_tenon_and_a_mortise_keep_their_volume() {
     );
     let pocket = hardware_cut(
         face(PartAxis::Thickness, End::End),
-        CutPlace::Recess {
+        CutPlace::Member {
+            hardware: HardwareId::from_usize(0),
+            body: member(),
             footprint: LocalBox {
                 min: local_point(10, 10, 0),
                 max: local_point(40, 40, 20),
@@ -495,9 +508,15 @@ fn a_hole_opens_in_its_face() {
     );
     board.cuts = vec![hardware_cut(
         face(PartAxis::Thickness, End::End),
-        CutPlace::Mount {
-            centre: local_point(50, 25, 20),
-            centres: None,
+        CutPlace::Member {
+            hardware: HardwareId::from_usize(0),
+            body: member(),
+            // The hole's shape: 10mm across, centred at (50, 25) on the
+            // top face.
+            footprint: LocalBox {
+                min: local_point(45, 20, 12),
+                max: local_point(55, 30, 20),
+            },
         },
         CutKind::Drill {
             diameter: mm(10),
@@ -562,6 +581,7 @@ fn a_slot_at_an_angle_is_drawn_cut() {
         source: CutSource::Hardware {
             hardware: HardwareId::from_usize(0),
         },
+        name: None,
         face: face(PartAxis::Thickness, End::End),
         place: CutPlace::Crossing {
             other: stick.id,
@@ -621,6 +641,7 @@ fn a_round_section_keeps_its_flats() {
         source: CutSource::Hardware {
             hardware: HardwareId::from_usize(0),
         },
+        name: None,
         face: face(PartAxis::Width, End::Start),
         place: CutPlace::Crossing {
             other: other.id,

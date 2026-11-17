@@ -1,4 +1,4 @@
-// expect: error[unknown-field] a cup hinge has no member 'cupp'
+// expect: error[unknown-field] a hinge kind has no member 'cupp'
 stave 1
 
 project "Misnamed member" {
@@ -7,15 +7,20 @@ project "Misnamed member" {
 
 stock oak_19 { species: white_oak, form: solid, thickness: 19mm }
 
-/// A cup hinge whose last member is misspelt: a cup hinge's members are
-/// plate, arm, links and cup.
+/// A cup hinge whose last member is misspelt: a member without a body is
+/// one of a hinge's words (a cup hinge's plate, arm, links and cup, a butt
+/// hinge's leaves and pin).
 kind small_hinge : hinge {
+  roles {
+    piece: Part
+    on:    Part
+  }
   opening_angle: 110deg
-  cup_diameter:  35mm
-  cup_depth:     12.8mm
-  cup_inset:     5mm
-  plate_setback: 37mm
-  plate:         box(length: 50mm, width: 36mm, thickness: 11mm)
+  mount {
+    face:   back
+    across: from(edge(piece, nearer: on), inset: 22.5mm)
+    along:  open
+  }
 
   /// The plate, on the side.
   member plate

@@ -811,8 +811,10 @@ fn depth_range(size: Size3, face: LocalFace, depth: Depth) -> (Length, Length) {
 /// The footprint of a place, if it has one.
 fn footprint(place: &CutPlace) -> Option<&LocalBox> {
     match place {
-        CutPlace::Crossing { footprint, .. } | CutPlace::Recess { footprint } => Some(footprint),
-        CutPlace::End { .. } | CutPlace::Side { .. } | CutPlace::Mount { .. } => None,
+        CutPlace::Crossing { footprint, .. } | CutPlace::Member { footprint, .. } => {
+            Some(footprint)
+        }
+        CutPlace::End { .. } | CutPlace::Side { .. } => None,
     }
 }
 
@@ -840,16 +842,8 @@ fn face_extent(part: &Part, place: &CutPlace, axis: PartAxis) -> (Length, Length
 fn place_centre(part: &Part, place: &CutPlace, face_axis: PartAxis) -> Local {
     let mut centre = Local::default();
     for axis in across(face_axis) {
-        let value = match place {
-            CutPlace::Mount { centre, .. } => local_get(centre, axis),
-            CutPlace::Crossing { .. }
-            | CutPlace::Recess { .. }
-            | CutPlace::End { .. }
-            | CutPlace::Side { .. } => {
-                let (low, high) = face_extent(part, place, axis);
-                Length::from_nm(low.nm().saturating_add(high.nm()).div_euclid(2))
-            }
-        };
+        let (low, high) = face_extent(part, place, axis);
+        let value = Length::from_nm(low.nm().saturating_add(high.nm()).div_euclid(2));
         centre = centre.with(axis, value);
     }
     centre
@@ -861,7 +855,7 @@ fn entering_part<'d>(place: &CutPlace, design: &'d SolvedDesign) -> Option<&'d P
         CutPlace::Crossing { other, .. } => design.part(*other),
         CutPlace::End { toward } => design.part(*toward),
         CutPlace::Side { from, .. } => design.part(*from),
-        CutPlace::Recess { .. } | CutPlace::Mount { .. } => None,
+        CutPlace::Member { .. } => None,
     }
 }
 
@@ -958,26 +952,6 @@ fn slot_axes(
 fn hole_centres(part: &Part, cut: &Cut, count: u32) -> Vec<[Length; 2]> {
     let [first, second] = across(cut.face.axis);
     let count = count.max(1);
-    if let CutPlace::Mount { centre, centres } = &cut.place {
-        let middle = [local_get(centre, first), local_get(centre, second)];
-        return match centres {
-            Some(apart) if count >= 2 => {
-                // Two holes `apart` along the length (or the first axis of
-                // the face when the face is an end).
-                let slot = usize::from(first != PartAxis::Length && second == PartAxis::Length);
-                let mut out = Vec::new();
-                for sign in [-1i64, 1] {
-                    let mut point = middle;
-                    if let Some(value) = point.get_mut(slot) {
-                        *value = Length::from_nm(value.nm().saturating_add(sign * apart.nm() / 2));
-                    }
-                    out.push(point);
-                }
-                out
-            }
-            Some(_) | None => vec![middle],
-        };
-    }
     let (a0, a1) = face_extent(part, &cut.place, first);
     let (b0, b1) = face_extent(part, &cut.place, second);
     let long_is_first = (a1.nm() - a0.nm()) >= (b1.nm() - b0.nm());

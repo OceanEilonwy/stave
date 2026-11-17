@@ -11,7 +11,7 @@ kind dado : joint {
   cut_first: into                            // cut the dado first, then fit the shelf to it
   adds:      extend(piece, by: depth)        // the shelf is cut longer by the depth at each housed end
 
-  cut crossing(into, piece) {
+  cut dado: crossing(into, piece) {
     notch(depth: depth)
   }
 

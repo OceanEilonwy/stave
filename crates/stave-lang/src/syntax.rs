@@ -255,6 +255,8 @@ syntax_kinds! {
     SHAPE,
     /// `mechanism { entries }` in a hardware kind
     MECHANISM,
+    /// `mount { fields }` in a hardware kind or a member's body
+    MOUNT,
     /// `pivot a, b at point(...)` in a mechanism
     PIVOT,
     /// `slot a, b from point(...) to point(...)` in a mechanism

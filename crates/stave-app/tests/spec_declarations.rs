@@ -600,12 +600,32 @@ fn poses_are_open_closed_an_angle_or_a_length() {
 /// A cup hinge for an inset door, with no catalogue overlay (so its
 /// overlay isn't checked).
 kind inset_cup_hinge : hinge {
+  roles {
+    piece: Part
+    on:    Part
+  }
   opening_angle: 110deg
   cup_diameter:  35mm
   cup_depth:     13mm
   cup_inset:     5mm
-  plate_setback: 37mm
-  plate:         box(length: 50mm, width: 36mm, thickness: 11mm)
+  mount {
+    face:   back
+    across: from(edge(piece, nearer: on), inset: 22.5mm)
+    along:  open
+  }
+  member plate {
+    with:  on
+    shape: box(along: 50mm, across: 0mm..11mm, depth: 36mm)
+    mount {
+      across: from(face(on, toward: piece))
+      depth:  from(face(on, toward: piece), inset: 37mm)
+    }
+  }
+  member cup {
+    with:  piece
+    shape: cylinder(diameter: 35mm, depth: 0mm..13mm)
+  }
+  cut crossing(piece, cup) { drill(diameter: 35mm, depth: 13mm) }
 }
 component Flap {
   part leaf : pine_19 {
@@ -614,8 +634,8 @@ component Flap {
     place {
       orient(length: up, width: right)
       against(base.top)
-      against(wall.right)
-      against(base.front)
+      flush(wall.left)
+      against(wall.front)
     }
   }
   hardware hinge : inset_cup_hinge(leaf, on: wall) {
@@ -702,7 +722,7 @@ fn an_array_of_assemblies_takes_its_arguments_per_element() {
 /// A slide kind with extra entries.
 fn slide_kind(entries: &str) -> String {
     format!(
-        "kind small_slide : slide {{\n  length:    300mm\n  clearance: 12.7mm\n  travel:    300mm\n  envelope:  box(length: 300mm, width: 45mm, thickness: 12.7mm)\n{entries}\n}}"
+        "kind small_slide : slide {{\n  roles {{\n    piece: Part\n    in:    Region\n  }}\n  length:    300mm\n  clearance: 12.7mm\n  travel:    300mm\n  mount {{\n    face:   face(piece, nearer: in)\n    across: center(piece)\n    along:  from(end(piece, toward: front))\n  }}\n{entries}\n}}"
     )
 }
 
@@ -808,7 +828,7 @@ fn a_fastener_has_no_members_and_a_member_is_written_once() {
     );
     // A pull names its knob and screw, or its bar and screws.
     let opened = open(
-        "kind small_knob : pull {\n  envelope: cylinder(diameter: 20mm, length: 20mm)\n  /// Hold it.\n  member knob\n  member screw\n}",
+        "kind small_knob : pull {\n  roles {\n    piece: Part\n  }\n  mount {\n    face:   front\n    across: open\n    along:  open\n  }\n  /// Hold it.\n  member knob\n  member screw\n}",
     );
     assert!(
         diagnostics(&opened).is_empty(),
@@ -822,13 +842,28 @@ fn a_fastener_has_no_members_and_a_member_is_written_once() {
 fn hung_door(mechanism: &str) -> String {
     format!(
         "kind test_hinge : hinge {{
+  roles {{
+    piece: Part
+    on:    Part
+  }}
   opening_angle: 110deg
   cup_diameter:  35mm
   cup_depth:     12.8mm
   cup_inset:     5mm
-  plate_setback: 37mm
-  plate:         box(length: 50mm, width: 36mm, thickness: 11mm)
-  member plate
+  mount {{
+    face:   back
+    across: from(edge(piece, nearer: on), inset: 22.5mm)
+    along:  open
+  }}
+  member plate {{
+    with:  on
+    shape: box(along: 50mm, across: 0mm..11mm, depth: 36mm)
+    mount {{
+      across: from(face(on, toward: piece))
+      depth:  from(face(on, toward: piece), inset: 37mm)
+    }}
+  }}
+  member links
   member arm {{
     with:          on
     shape body:    box(along: 16mm, across: -2.9mm..15mm, depth: -55mm..0mm)
@@ -895,10 +930,10 @@ fn a_cup_hinge_moves_on_the_mechanism_its_kind_declares() {
         .find(|k| k.decl.name == "test_hinge")
         .unwrap();
     let bodies: Vec<&str> = kind.bodies.iter().map(|b| b.name.as_str()).collect();
-    assert_eq!(bodies, ["arm", "cup", "inner_link", "outer_link"]);
+    assert_eq!(bodies, ["plate", "arm", "cup", "inner_link", "outer_link"]);
     // The viewer's list keeps the base's words only.
     let members: Vec<&str> = kind.members.iter().map(|m| m.name.word()).collect();
-    assert_eq!(members, ["plate", "arm", "cup"]);
+    assert_eq!(members, ["plate", "links", "arm", "cup"]);
     let mechanism = kind.mechanism.as_ref().unwrap();
     assert_eq!(mechanism.constraints.len(), 4);
     // The hinge's links are the kind's bars, its pins the kind's pivots.
@@ -926,7 +961,7 @@ fn point_is_an_error_outside_a_kind() {
     assert_eq!(body_line(&opened, diagnostic), 1);
     // So is a range anywhere but a member's shape.
     let opened = open(
-        "kind small_knob : pull {\n  envelope: box(length: 10mm..20mm, width: 20mm, thickness: 20mm)\n}",
+        "kind small_knob : pull {\n  roles {\n    piece: Part\n  }\n  mount {\n    face:   front\n    across: open\n    along:  open\n  }\n  envelope: box(length: 10mm..20mm, width: 20mm, thickness: 20mm)\n}",
     );
     the_diagnostic(
         &opened,
@@ -978,9 +1013,9 @@ fn a_pivot_names_two_declared_members() {
     let diagnostic = the_diagnostic(&opened, "unknown-name", "unknown name 'ram'");
     assert_eq!(diagnostic.help.as_deref(), Some("did you mean 'arm'?"));
     // A member without a body has nothing to pin.
-    let bare = FOUR_PINS.replace("pivot arm, inner_link", "pivot plate, inner_link");
+    let bare = FOUR_PINS.replace("pivot arm, inner_link", "pivot links, inner_link");
     let opened = open(&hung_door(&bare));
-    the_diagnostic(&opened, "unknown-name", "unknown name 'plate'");
+    the_diagnostic(&opened, "unknown-name", "unknown name 'links'");
     // And the two are different members.
     let twice = FOUR_PINS.replace("pivot arm, inner_link", "pivot arm, arm");
     let opened = open(&hung_door(&twice));
@@ -991,14 +1026,21 @@ fn a_pivot_names_two_declared_members() {
     );
 }
 
+/// Until a mechanism can say how a hinge without links moves, a hinge kind
+/// with no `mechanism` turns about the edge its mount measures from (a
+/// butt hinge's pin); it has no linkage. (It used to be a cup hinge with no
+/// motion and a not-supported warning: whether a hinge is a cup hinge is
+/// no longer decided by its entries.)
 #[test]
-fn a_cup_hinge_kind_without_a_mechanism_gives_no_motion() {
-    let opened =
-        open(&hung_door(FOUR_PINS).replace(&format!("  mechanism {{\n{FOUR_PINS}\n  }}\n"), ""));
-    let warnings = diagnostics(&opened);
-    assert_eq!(
-        warnings,
-        ["not-supported: kind 'test_hinge' has no mechanism; its motion is not supported yet"]
+fn a_hinge_kind_without_a_mechanism_turns_about_its_edge() {
+    let opened = open(&format!(
+        "{}\ncomponent Door {{\n  part panel : pine_19 {{\n    length: 300mm\n    width:  200mm\n    place {{\n      orient(length: up, width: right)\n      against(base.top)\n      against(side.right)\n      against(base.front)\n    }}\n  }}\n}}",
+        hung_door(FOUR_PINS).replace(&format!("  mechanism {{\n{FOUR_PINS}\n  }}\n"), "")
+    ));
+    assert!(
+        diagnostics(&opened).is_empty(),
+        "{:?}",
+        diagnostics(&opened)
     );
     assert!(
         common::hardware(design(&opened), "hinge")
