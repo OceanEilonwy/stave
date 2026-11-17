@@ -1143,14 +1143,17 @@ fn butt_hinge_leaves_are_housed_in_both_parts_at_the_flush_edge() {
         (mm("98.5"), mm("100"))
     );
     assert_eq!(recesses("lid.panel").len(), 2);
-    // The lid turns about its pin edge, lifting its front.
+    // The lid turns about its pin, in the middle of the knuckle: in the
+    // face the parts close on, the knuckle's radius (2.5mm) behind the
+    // flush edge. (It turned about the edge itself before the knuckle was
+    // declared.)
     let lid = design.assemblies.iter().find(|a| a.name == "lid").unwrap();
     let Some(stave_model::solved::Motion::Turn { pivot, .. }) = lid.motion else {
         panic!("the lid has no turn: {:?}", lid.motion);
     };
     assert_eq!(
         (pivot.through.up, pivot.through.deep),
-        (mm("119"), mm("300"))
+        (mm("119"), mm("302.5"))
     );
     assert_eq!(pivot.free_side, Direction::Front);
     assert_eq!(pivot.swing_toward, Direction::Up);

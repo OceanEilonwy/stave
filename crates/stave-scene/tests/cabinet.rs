@@ -249,15 +249,16 @@ fn the_box_lid_lifts_on_its_butt_hinges() {
             .find(|id| graph.node(*id).unwrap().name == name)
             .unwrap_or_else(|| panic!("no node '{name}'"))
     };
-    // The lid turns 100° about the hinge pins, at the top of the back's back
-    // face: (x, 110, -200) in the render frame, where +z is the front.
+    // The lid turns 100° about the hinge pins, in their knuckles at the top
+    // of the back's back face, 2.5mm behind it: (x, 110, -202.5) in the
+    // render frame, where +z is the front.
     let lid = posed.shown(node("lid.panel")).unwrap();
-    let pivot = Vec3::new(150.0, 110.0, -200.0);
+    let pivot = Vec3::new(150.0, 110.0, -202.5);
     assert!(close(lid.transform_point3(pivot), pivot));
     // Its front top edge swings up and back over the box.
     let angle = 100_f32.to_radians();
     let front_top = Vec3::new(150.0, 122.0, 0.0);
-    let (dy, dz) = (12.0, 200.0);
+    let (dy, dz) = (12.0, 202.5);
     let expected = pivot
         + Vec3::new(
             0.0,

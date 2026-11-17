@@ -811,7 +811,8 @@ pins are catalogue data in the kind, written in the kind's own frame.
 `error[motion]`.
 
 A piece of hardware moves only as its kind's `mechanism` says (see
-[Mechanisms](#mechanisms)): `butt_hinge` turns on one pin,
+[Mechanisms](#mechanisms)): `butt_hinge` turns on the pin in its knuckle,
+just outside the edge where the two parts are flush,
 `side_mount_slide` runs on one rail and `euro_hinge` moves on its
 four-bar linkage, all solved the same way. A kind with no `mechanism`
 doesn't move (a pull, or a hinge kind that leaves it out). A cup hinge's catalogue

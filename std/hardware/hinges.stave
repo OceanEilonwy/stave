@@ -134,6 +134,8 @@ kind butt_hinge : hinge {
   param leaf_width = length * 3 / 10
   /// How far it opens.
   param opening_angle = 180deg within 90deg..180deg
+  /// The knuckle: the barrel the pin runs through, outside the edge.
+  param knuckle_diameter = 5mm within [4mm, 5mm, 6mm]
 
   // On the face of the lid or door that closes against the box, the pin
   // on the edge where the two parts are flush. The design says where
@@ -161,10 +163,11 @@ kind butt_hinge : hinge {
     shape: box(along: length, across: 0mm..leaf_width, depth: -1.5mm..0mm)
   }
 
-  // The leaf in the lid or door turns on the pin, which lies on the edge
-  // where the two parts are flush, in the face they close on.
+  // The leaf in the lid or door turns on the pin in the middle of the
+  // knuckle: in the face the two parts close on, the knuckle's radius
+  // outside the edge where they are flush.
   mechanism {
-    pivot leaf, fixed_leaf at point(across: 0mm, depth: 0mm)
+    pivot leaf, fixed_leaf at point(across: -knuckle_diameter / 2, depth: 0mm)
     drive: turn(leaf, from: 0deg, to: opening_angle)
   }
 
