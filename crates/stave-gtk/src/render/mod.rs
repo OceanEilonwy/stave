@@ -212,9 +212,18 @@ pub struct Renderer {
     /// small depth bias only lets outlines, drawn on the surfaces they
     /// outline, win against those surfaces.
     mesh_pipeline: wgpu::RenderPipeline,
-    /// The same, drawing back faces too: through a section's cut they are
-    /// the inside of the wood, drawn flat as the cut face.
-    section_pipeline: wgpu::RenderPipeline,
+    /// In a section, back faces only: seen through the section's cut they
+    /// are the inside of the wood, drawn flat as the cut face. With the
+    /// meshes' bias, like `mesh_pipeline`.
+    section_cut_pipeline: wgpu::RenderPipeline,
+    /// In a section, front faces only, pushed back a little further than
+    /// the cut faces. Where the section opens a part whose face meets
+    /// another's (a hinge cup on the floor of its hole), the opened part's
+    /// back face lies exactly on the other's front face, and both are
+    /// drawn: the back face must win, because a line of sight leaves the
+    /// opened part there before it enters the other. Without the extra
+    /// bias the two fight and the cut face comes out torn.
+    section_faces_pipeline: wgpu::RenderPipeline,
     edge_pipeline: wgpu::RenderPipeline,
     floor_pipeline: wgpu::RenderPipeline,
     shadow_pipeline: wgpu::RenderPipeline,
@@ -489,7 +498,17 @@ impl Renderer {
             clamp: 0.0,
         };
         let mesh_pipeline = mesh_pipeline_with("meshes", mesh_bias, Some(wgpu::Face::Back));
-        let section_pipeline = mesh_pipeline_with("meshes in a section", mesh_bias, None);
+        let section_cut_pipeline =
+            mesh_pipeline_with("cut faces in a section", mesh_bias, Some(wgpu::Face::Front));
+        let section_faces_pipeline = mesh_pipeline_with(
+            "faces in a section",
+            wgpu::DepthBiasState {
+                constant: mesh_bias.constant + 6,
+                slope_scale: mesh_bias.slope_scale + 1.0,
+                clamp: 0.0,
+            },
+            Some(wgpu::Face::Back),
+        );
         let edge_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("outlines"),
             layout: Some(&main_layout),
@@ -791,7 +810,8 @@ impl Renderer {
             shadow_group,
             shadow_view,
             mesh_pipeline,
-            section_pipeline,
+            section_cut_pipeline,
+            section_faces_pipeline,
             edge_pipeline,
             floor_pipeline,
             shadow_pipeline,
@@ -1103,15 +1123,20 @@ impl Renderer {
             });
             pass.set_bind_group(0, &self.scene_group, &[]);
             pass.set_bind_group(1, &self.shadow_group, &[]);
-            pass.set_pipeline(if frame.section.is_some() {
-                &self.section_pipeline
+            // In a section, every mesh twice: its cut faces, then its
+            // faces, which lose to a cut face lying on them.
+            let pipelines: &[&wgpu::RenderPipeline] = if frame.section.is_some() {
+                &[&self.section_cut_pipeline, &self.section_faces_pipeline]
             } else {
-                &self.mesh_pipeline
-            });
-            for (index, mesh) in &visible {
-                pass.set_vertex_buffer(0, mesh.vertices.slice(..));
-                pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
-                pass.draw_indexed(0..mesh.index_count, 0, *index..*index + 1);
+                &[&self.mesh_pipeline]
+            };
+            for pipeline in pipelines {
+                pass.set_pipeline(pipeline);
+                for (index, mesh) in &visible {
+                    pass.set_vertex_buffer(0, mesh.vertices.slice(..));
+                    pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
+                    pass.draw_indexed(0..mesh.index_count, 0, *index..*index + 1);
+                }
             }
             pass.set_pipeline(&self.floor_pipeline);
             pass.draw(0..6, 0..1);
