@@ -43,6 +43,7 @@
 mod explain;
 mod motion;
 mod names;
+mod sequence;
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -72,6 +73,7 @@ pub fn check(model: &Model, design: &SolvedDesign) -> Vec<Diagnostic> {
     checker.rest();
     checker.scenes();
     checker.sweeps();
+    checker.sequences();
     checker.finish()
 }
 
