@@ -28,7 +28,7 @@ use stave_ide::{
 use stave_lang::Severity;
 use stave_lang::ast::Span;
 
-use super::editor::{Editor, LineStarts, Run};
+use super::editor::{Editor, LensLine, LineStarts, Run};
 
 /// How long typing must pause before the names are worked out again.
 const ANALYSE_DELAY: Duration = Duration::from_millis(150);
@@ -71,6 +71,10 @@ pub struct Wish {
     pub hover: bool,
     /// List the uses of the word under the cursor.
     pub uses: bool,
+    /// Type this text at the cursor, as if typed.
+    pub typing: Option<String>,
+    /// Follow the name under the cursor to its declaration (F12).
+    pub follow: bool,
 }
 
 type LinkCallback = Rc<dyn Fn(Option<(Arc<Analysis>, SymbolId)>)>;
@@ -137,13 +141,14 @@ struct State {
     check_timer: Option<glib::SourceId>,
     link_timer: Option<glib::SourceId>,
     hover_timer: Option<glib::SourceId>,
-    hover: Option<gtk::Widget>,
     mode: Mode,
     expanded: BTreeSet<&'static str>,
     rows: Vec<RowTarget>,
     wish: Option<Wish>,
     /// The symbol whose uses the panel lists.
     listed: Option<SymbolId>,
+    /// Frames left in which the overlays follow the text's layout.
+    settling: u32,
 }
 
 /// The Files view.
@@ -482,6 +487,7 @@ impl FilesPage {
     pub fn save_all(self: &Rc<Self>) -> bool {
         let result = self.state.borrow_mut().buffers.save_all();
         self.refresh_markers();
+        self.fill_sidebar();
         match result {
             Ok(()) => true,
             Err(error) => {
@@ -507,6 +513,7 @@ impl FilesPage {
             self.notice(error.to_string());
         }
         self.refresh_markers();
+        self.fill_sidebar();
     }
 
     /// Lays the document showing out with `stave fmt`, as one step that
@@ -749,6 +756,21 @@ impl FilesPage {
 
     fn connect_editor(self: &Rc<Self>) {
         let view = &self.editor.view;
+        let page = Rc::downgrade(self);
+        self.editor.connect_lens_uses(move |symbol| {
+            if let Some(page) = page.upgrade() {
+                page.list_uses(symbol);
+            }
+        });
+        let page = Rc::downgrade(self);
+        self.editor.connect_lens_show(move |symbol| {
+            let Some(page) = page.upgrade() else { return };
+            let analysis = page.state.borrow().analysis.clone();
+            let callback = page.callbacks.borrow().on_show_in_3d.clone();
+            if let (Some(callback), Some(analysis)) = (callback, analysis) {
+                callback(analysis, symbol);
+            }
+        });
         // Keys: F12, Alt+F12, Shift+F12, Escape; Ctrl+click follows.
         let keys = gtk::EventControllerKey::new();
         keys.set_propagation_phase(gtk::PropagationPhase::Capture);
@@ -763,6 +785,7 @@ impl FilesPage {
                 gtk::gdk::Key::F12 if alt => page.peek_at_cursor(),
                 gtk::gdk::Key::F12 if shift => page.list_uses_at_cursor(),
                 gtk::gdk::Key::F12 => page.follow_at_cursor(),
+                gtk::gdk::Key::Escape if page.editor.has_card() => page.editor.hide_card(),
                 gtk::gdk::Key::Escape if page.editor.has_peek() => page.editor.set_peek(None),
                 gtk::gdk::Key::Escape if page.uses.reveals_child() => {
                     page.uses.set_reveal_child(false);
@@ -814,7 +837,37 @@ impl FilesPage {
         let page = Rc::downgrade(self);
         self.editor.root.vadjustment().connect_changed(move |_| {
             if let Some(page) = page.upgrade() {
-                page.editor.place_overlays();
+                page.settle_overlays();
+            }
+        });
+    }
+
+    /// Keeps the lenses and the peek on their lines for the next half
+    /// second, while GTK lays out the text (line heights below the view
+    /// are only estimates until then).
+    fn settle_overlays(self: &Rc<Self>) {
+        let running = {
+            let mut state = self.state.borrow_mut();
+            let running = state.settling > 0;
+            state.settling = 30;
+            running
+        };
+        self.editor.place_overlays();
+        if running {
+            return;
+        }
+        let page = Rc::downgrade(self);
+        self.editor.view.add_tick_callback(move |_, _| {
+            let Some(page) = page.upgrade() else {
+                return glib::ControlFlow::Break;
+            };
+            page.editor.place_overlays();
+            let mut state = page.state.borrow_mut();
+            state.settling = state.settling.saturating_sub(1);
+            if state.settling == 0 {
+                glib::ControlFlow::Break
+            } else {
+                glib::ControlFlow::Continue
             }
         });
     }
@@ -928,6 +981,11 @@ impl FilesPage {
     fn activate(self: &Rc<Self>, index: usize) {
         let found = {
             let mut state = self.state.borrow_mut();
+            // A standard file shows its module's files in the sidebar.
+            if let Some(Document::Std { module, .. }) = state.tabs.get(index).map(|t| &t.document) {
+                let module = *module;
+                state.expanded.insert(module);
+            }
             if state.active == Some(index) {
                 None
             } else {
@@ -980,26 +1038,26 @@ impl FilesPage {
 
     fn text_changed(self: &Rc<Self>, document: &Document, buffer: &gtk::TextBuffer) {
         let text = buffer.text(&buffer.start_iter(), &buffer.end_iter(), true);
-        {
+        let (was_dirty, dirty) = {
             let mut state = self.state.borrow_mut();
             if let Some(tab) = state.tabs.iter_mut().find(|t| t.document == *document) {
                 tab.lines = LineStarts::new(&text);
             }
+            let was_dirty = state.buffers.is_dirty(document);
             if state.buffers.edit(document, &text).is_err() {
                 return;
             }
-        }
+            (was_dirty, state.buffers.is_dirty(document))
+        };
         self.editor.set_peek(None);
         self.hide_hover();
         self.refresh_markers();
+        if was_dirty != dirty {
+            self.fill_sidebar();
+        }
         self.schedule_analysis();
         self.schedule_check();
-        let page = Rc::downgrade(self);
-        glib::idle_add_local_once(move || {
-            if let Some(page) = page.upgrade() {
-                page.editor.place_overlays();
-            }
-        });
+        self.settle_overlays();
     }
 
     fn schedule_analysis(self: &Rc<Self>) {
@@ -1139,50 +1197,21 @@ impl FilesPage {
     }
 
     fn show_lenses(self: &Rc<Self>, analysis: &Arc<Analysis>, file: stave_lang::FileId) {
-        let mut lenses = Vec::new();
-        for lens in analysis.lenses(file) {
-            let Ok(line) = i32::try_from(lens.location.line.saturating_sub(1)) else {
-                continue;
-            };
-            let row = gtk::Box::builder()
-                .orientation(gtk::Orientation::Horizontal)
-                .spacing(4)
-                .css_classes(["stave-lens"])
-                .build();
-            let uses = gtk::Button::builder()
-                .label(lens.uses_text())
-                .css_classes(["flat", "stave-lens-link"])
-                .tooltip_text(format!("List the uses of {} (Shift+F12)", lens.name))
-                .build();
-            let page = Rc::downgrade(self);
-            let symbol = lens.symbol;
-            uses.connect_clicked(move |_| {
-                if let Some(page) = page.upgrade() {
-                    page.list_uses(symbol);
-                }
-            });
-            row.append(&uses);
-            if lens.shows_in_3d() {
-                row.append(&label("·", &["stave-lens-dot"]));
-                let show = gtk::Button::builder()
-                    .label("show in 3D")
-                    .css_classes(["flat", "stave-lens-link"])
-                    .tooltip_text(format!("Select {} in the 3D view", lens.name))
-                    .build();
-                let page = Rc::downgrade(self);
-                let analysis = analysis.clone();
-                show.connect_clicked(move |_| {
-                    let Some(page) = page.upgrade() else { return };
-                    let callback = page.callbacks.borrow().on_show_in_3d.clone();
-                    if let Some(callback) = callback {
-                        callback(analysis.clone(), symbol);
-                    }
-                });
-                row.append(&show);
-            }
-            lenses.push((row.upcast::<gtk::Widget>(), line));
-        }
-        self.editor.set_lenses(lenses);
+        let lenses: Vec<LensLine> = analysis
+            .lenses(file)
+            .into_iter()
+            .filter_map(|lens| {
+                Some(LensLine {
+                    line: i32::try_from(lens.location.line.saturating_sub(1)).ok()?,
+                    uses: lens.uses_text(),
+                    shows_in_3d: lens.shows_in_3d(),
+                    symbol: lens.symbol,
+                    name: lens.name,
+                })
+            })
+            .collect();
+        self.editor.set_lenses(&lenses);
+        self.settle_overlays();
     }
 
     fn cursor_moved(self: &Rc<Self>) {
@@ -1432,6 +1461,7 @@ impl FilesPage {
         let peek = self.peek_widget(&analysis, symbol, &location);
         let (line, _) = self.active_lines().position(offset);
         self.editor.set_peek(Some((peek.upcast(), line)));
+        self.settle_overlays();
     }
 
     fn peek_widget(
@@ -1543,9 +1573,7 @@ impl FilesPage {
     }
 
     fn hide_hover(&self) {
-        if let Some(card) = self.state.borrow_mut().hover.take() {
-            self.editor.view.remove(&card);
-        }
+        self.editor.hide_card();
     }
 
     /// Shows the card for the word at an offset: its problem, or what it
@@ -1631,12 +1659,11 @@ impl FilesPage {
         let lines = self.active_lines();
         let iter = super::editor::iter_at(&buffer, &lines, anchor);
         let rect = self.editor.view.iter_location(&iter);
-        self.editor.view.add_overlay(
-            &card,
+        self.editor.show_card(
+            card.upcast_ref(),
             rect.x(),
             rect.y().saturating_add(rect.height()).saturating_add(6),
         );
-        self.state.borrow_mut().hover = Some(card.upcast());
     }
 
     // ---- the sidebar ----
@@ -1898,6 +1925,15 @@ impl FilesPage {
         let page = self.clone();
         // Once the text is laid out.
         glib::timeout_add_local_once(Duration::from_millis(150), move || {
+            if let Some(text) = &wish.typing {
+                let (_, buffer) = page.active_tab().unzip();
+                if let Some(buffer) = buffer {
+                    buffer.insert_interactive_at_cursor(text, true);
+                }
+            }
+            if wish.follow {
+                page.follow_at_cursor();
+            }
             if wish.uses {
                 page.list_uses_at_cursor();
             }

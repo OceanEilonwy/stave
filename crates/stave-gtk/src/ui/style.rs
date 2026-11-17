@@ -177,7 +177,7 @@ button.stave-lens-link:hover { background: alpha(@accent_color, 0.1); }
 .stave-use-place { color: @accent_color; }
 .stave-use-line { color: alpha(currentColor, 0.6); }
 .stave-viewport { background: @window_bg_color; color: @window_fg_color; }
-.stave-files-split > separator { background: @headerbar_shade_color; }
+.stave-files-split > separator { background: mix(@window_bg_color, @window_fg_color, 0.15); }
 .stave-chip { background: alpha(@view_bg_color, 0.92); color: @accent_color; box-shadow: 0 1px 6px alpha(black, 0.1); }
 "#;
 

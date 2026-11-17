@@ -79,6 +79,12 @@ struct Arguments {
     /// In the Files view, list the uses of the name under the cursor.
     #[arg(long)]
     uses: bool,
+    /// In the Files view, type this text at the cursor, as if typed.
+    #[arg(long = "type", value_name = "TEXT")]
+    typing: Option<String>,
+    /// In the Files view, follow the name under the cursor (F12).
+    #[arg(long)]
+    follow: bool,
     /// In the Files view, show the text alone (no 3D view beside it).
     #[arg(long)]
     text_only: bool,
@@ -264,6 +270,8 @@ fn main() -> ExitCode {
                 peek: arguments.peek,
                 hover: arguments.hover,
                 uses: arguments.uses,
+                typing: arguments.typing,
+                follow: arguments.follow,
             },
             text_only: arguments.text_only,
         }),

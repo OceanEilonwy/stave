@@ -499,8 +499,11 @@ impl Window {
             state.orbit = Self::frame_all(&state, &shown);
         }
         self.apply_wanted();
-        // Whatever the session carried over, shown again.
+        // Whatever the session carried over, shown again; the editor stays
+        // where people are typing.
+        self.state.borrow_mut().linking = true;
         self.selection_changed();
+        self.state.borrow_mut().linking = false;
         self.focus_changed();
         self.request_render();
         // The 3D view draws (and saves a screenshot) only when it shows.

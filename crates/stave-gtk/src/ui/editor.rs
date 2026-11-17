@@ -16,11 +16,12 @@
 //! numbers are a gutter widget of our own.
 
 use std::cell::{Cell, RefCell};
+use std::rc::Rc;
 
 use adw::prelude::*;
 use gtk::glib;
 use gtk::subclass::prelude::*;
-use stave_ide::{SymbolKind, TokenClass};
+use stave_ide::{SymbolId, SymbolKind, TokenClass};
 use stave_lang::Severity;
 
 /// The text's own spacing above and below each line: 13 px type on
@@ -345,10 +346,46 @@ pub struct Editor {
     table: gtk::TextTagTable,
     tags: Tags,
     gutter: Gutter,
-    /// The lens widgets and the lines they sit above.
-    lenses: RefCell<Vec<(gtk::Widget, i32)>>,
-    /// The peek and the line it sits under.
-    peek: RefCell<Option<(gtk::Widget, i32)>>,
+    /// The lens rows, made as needed and kept (GTK can't take an overlay
+    /// back out of a text view, so they are hidden when not used).
+    lenses: RefCell<Vec<LensSlot>>,
+    /// How many of the lens rows are in use.
+    lenses_used: Cell<usize>,
+    /// Where the peek goes, and the line it sits under while it shows.
+    peek_box: gtk::Box,
+    peek_line: Cell<Option<i32>>,
+    /// Where the hover card goes.
+    card_box: gtk::Box,
+    on_uses: LensCallback,
+    on_show: LensCallback,
+}
+
+/// What a lens's link calls, set once the page connects it.
+type LensCallback = Rc<RefCell<Option<Rc<dyn Fn(SymbolId)>>>>;
+
+/// What a lens says: "2 uses · show in 3D" above a line.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LensLine {
+    /// The line it sits above, from 0.
+    pub line: i32,
+    /// "2 uses".
+    pub uses: String,
+    /// Whether it offers "show in 3D".
+    pub shows_in_3d: bool,
+    /// The declaration.
+    pub symbol: SymbolId,
+    /// The declaration's name, for the tooltips.
+    pub name: String,
+}
+
+/// One lens row.
+struct LensSlot {
+    root: gtk::Box,
+    uses: gtk::Button,
+    dot: gtk::Label,
+    show: gtk::Button,
+    symbol: Rc<Cell<Option<SymbolId>>>,
+    line: Cell<i32>,
 }
 
 impl Editor {
@@ -393,6 +430,16 @@ impl Editor {
                 horizontal.set_value(0.0);
             }
         });
+        let peek_box = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .visible(false)
+            .build();
+        view.add_overlay(&peek_box, 0, 0);
+        let card_box = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .visible(false)
+            .build();
+        view.add_overlay(&card_box, 0, 0);
         let editor = Editor {
             root,
             view,
@@ -400,7 +447,12 @@ impl Editor {
             tags,
             gutter,
             lenses: RefCell::new(Vec::new()),
-            peek: RefCell::new(None),
+            lenses_used: Cell::new(0),
+            peek_box,
+            peek_line: Cell::new(None),
+            card_box,
+            on_uses: Rc::new(RefCell::new(None)),
+            on_show: Rc::new(RefCell::new(None)),
         };
         editor.colour(adw::StyleManager::default().is_dark());
         editor
@@ -531,65 +583,157 @@ impl Editor {
     }
 
     fn clear_overlays(&self) {
-        for (widget, _) in self.lenses.borrow_mut().drain(..) {
-            self.view.remove(&widget);
-        }
-        if let Some((widget, _)) = self.peek.borrow_mut().take() {
-            self.view.remove(&widget);
-        }
-        let buffer = self.view.buffer();
-        let (start, end) = buffer.bounds();
-        buffer.remove_tag(&self.tags.lens, &start, &end);
-        buffer.remove_tag(&self.tags.peek, &start, &end);
+        self.set_lenses(&[]);
+        self.set_peek(None);
+        self.hide_card();
     }
 
-    /// Puts a lens widget above each of these lines (from 0), replacing
-    /// the ones there.
-    pub fn set_lenses(&self, lenses: Vec<(gtk::Widget, i32)>) {
+    /// A lens's "2 uses" was clicked.
+    pub fn connect_lens_uses(&self, callback: impl Fn(SymbolId) + 'static) {
+        *self.on_uses.borrow_mut() = Some(Rc::new(callback));
+    }
+
+    /// A lens's "show in 3D" was clicked.
+    pub fn connect_lens_show(&self, callback: impl Fn(SymbolId) + 'static) {
+        *self.on_show.borrow_mut() = Some(Rc::new(callback));
+    }
+
+    fn lens_slot(&self) -> LensSlot {
+        let root = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing(4)
+            .css_classes(["stave-lens"])
+            .build();
+        let uses = gtk::Button::builder()
+            .css_classes(["flat", "stave-lens-link"])
+            .build();
+        let dot = gtk::Label::new(Some("·"));
+        dot.add_css_class("stave-lens-dot");
+        let show = gtk::Button::builder()
+            .label("show in 3D")
+            .css_classes(["flat", "stave-lens-link"])
+            .build();
+        root.append(&uses);
+        root.append(&dot);
+        root.append(&show);
+        let symbol: Rc<Cell<Option<SymbolId>>> = Rc::new(Cell::new(None));
+        for (button, callbacks) in [(&uses, &self.on_uses), (&show, &self.on_show)] {
+            let symbol = symbol.clone();
+            let callbacks = callbacks.clone();
+            button.connect_clicked(move |_| {
+                let callback = callbacks.borrow().clone();
+                if let (Some(callback), Some(symbol)) = (callback, symbol.get()) {
+                    callback(symbol);
+                }
+            });
+        }
+        self.view.add_overlay(&root, 0, 0);
+        LensSlot {
+            root,
+            uses,
+            dot,
+            show,
+            symbol,
+            line: Cell::new(0),
+        }
+    }
+
+    /// Puts a lens above each of these lines, replacing the ones there.
+    pub fn set_lenses(&self, lenses: &[LensLine]) {
         let buffer = self.view.buffer();
         let (start, end) = buffer.bounds();
         buffer.remove_tag(&self.tags.lens, &start, &end);
-        for (widget, _) in self.lenses.borrow_mut().drain(..) {
-            self.view.remove(&widget);
+        while self.lenses.borrow().len() < lenses.len() {
+            let slot = self.lens_slot();
+            self.lenses.borrow_mut().push(slot);
         }
-        for (widget, line) in &lenses {
-            if let Some(from) = buffer.iter_at_line(*line) {
-                let mut to = from;
-                to.forward_to_line_end();
-                buffer.apply_tag(&self.tags.lens, &from, &to);
+        for (index, slot) in self.lenses.borrow().iter().enumerate() {
+            match lenses.get(index) {
+                Some(lens) => {
+                    slot.uses.set_label(&lens.uses);
+                    slot.uses.set_tooltip_text(Some(&format!(
+                        "List the uses of {} (Shift+F12)",
+                        lens.name
+                    )));
+                    slot.show
+                        .set_tooltip_text(Some(&format!("Select {} in the 3D view", lens.name)));
+                    slot.dot.set_visible(lens.shows_in_3d);
+                    slot.show.set_visible(lens.shows_in_3d);
+                    slot.symbol.set(Some(lens.symbol));
+                    slot.line.set(lens.line);
+                    slot.root.set_visible(true);
+                    if let Some(from) = buffer.iter_at_line(lens.line) {
+                        let mut to = from;
+                        to.forward_to_line_end();
+                        buffer.apply_tag(&self.tags.lens, &from, &to);
+                    }
+                }
+                None => {
+                    slot.root.set_visible(false);
+                    slot.symbol.set(None);
+                }
             }
-            self.view.add_overlay(widget, 0, 0);
         }
-        *self.lenses.borrow_mut() = lenses;
+        self.lenses_used.set(lenses.len());
         self.place_overlays();
     }
 
     /// Shows a peek under a line (from 0), or none.
     pub fn set_peek(&self, peek: Option<(gtk::Widget, i32)>) {
+        while let Some(child) = self.peek_box.first_child() {
+            self.peek_box.remove(&child);
+        }
         let buffer = self.view.buffer();
         let (start, end) = buffer.bounds();
         buffer.remove_tag(&self.tags.peek, &start, &end);
-        if let Some((widget, _)) = self.peek.borrow_mut().take() {
-            self.view.remove(&widget);
+        match peek {
+            Some((widget, line)) => {
+                self.peek_box.append(&widget);
+                self.peek_box.set_visible(true);
+                self.peek_line.set(Some(line));
+            }
+            None => {
+                self.peek_box.set_visible(false);
+                self.peek_line.set(None);
+            }
         }
-        if let Some((widget, _)) = &peek {
-            self.view.add_overlay(widget, 0, 0);
-        }
-        *self.peek.borrow_mut() = peek;
         self.size_peek();
         self.place_overlays();
     }
 
     /// `true` while a peek is open.
     pub fn has_peek(&self) -> bool {
-        self.peek.borrow().is_some()
+        self.peek_line.get().is_some()
+    }
+
+    /// Shows a card (the hover card) at a point of the text, in buffer
+    /// coordinates.
+    pub fn show_card(&self, card: &gtk::Widget, x: i32, y: i32) {
+        while let Some(child) = self.card_box.first_child() {
+            self.card_box.remove(&child);
+        }
+        self.card_box.append(card);
+        self.card_box.set_visible(true);
+        self.view.move_overlay(&self.card_box, x, y);
+    }
+
+    /// Hides the hover card.
+    pub fn hide_card(&self) {
+        self.card_box.set_visible(false);
+        while let Some(child) = self.card_box.first_child() {
+            self.card_box.remove(&child);
+        }
+    }
+
+    /// `true` while the hover card shows.
+    pub fn has_card(&self) -> bool {
+        self.card_box.is_visible()
     }
 
     /// Fits the peek to the editor's width and makes room for it above the
     /// next line, so the cursor's line keeps its own tint.
     fn size_peek(&self) {
-        let peek = self.peek.borrow();
-        let Some((widget, line)) = peek.as_ref() else {
+        let Some(line) = self.peek_line.get() else {
             return;
         };
         let width = self
@@ -598,12 +742,18 @@ impl Editor {
             .saturating_sub(GUTTER_WIDTH)
             .saturating_sub(16)
             .max(400);
-        if widget.width_request() != width {
-            widget.set_size_request(width, -1);
+        if self.peek_box.width_request() != width {
+            self.peek_box.set_size_request(width, -1);
         }
-        let (_, natural, _, _) = widget.measure(gtk::Orientation::Vertical, width);
+        let (_, natural, _, _) = self.peek_box.measure(gtk::Orientation::Vertical, width);
         let next = line.saturating_add(1);
-        let lens_below = self.lenses.borrow().iter().any(|(_, l)| *l == next);
+        let used = self.lenses_used.get();
+        let lens_below = self
+            .lenses
+            .borrow()
+            .iter()
+            .take(used)
+            .any(|slot| slot.line.get() == next);
         let mut room = LINE_SPACING.saturating_add(natural).saturating_add(10);
         if lens_below {
             room = room.saturating_add(LENS_HEIGHT);
@@ -627,7 +777,7 @@ impl Editor {
             None => {
                 self.tags.peek.set_pixels_above_lines(LINE_SPACING);
                 self.tags.peek.set_pixels_below_lines(room);
-                if let Some(from) = buffer.iter_at_line(*line) {
+                if let Some(from) = buffer.iter_at_line(line) {
                     let mut to = from;
                     to.forward_to_line_end();
                     buffer.apply_tag(&self.tags.peek, &from, &to);
@@ -640,19 +790,20 @@ impl Editor {
     pub fn place_overlays(&self) {
         self.size_peek();
         let buffer = self.view.buffer();
-        for (widget, line) in self.lenses.borrow().iter() {
-            if let Some(iter) = buffer.iter_at_line(*line) {
+        let used = self.lenses_used.get();
+        for slot in self.lenses.borrow().iter().take(used) {
+            if let Some(iter) = buffer.iter_at_line(slot.line.get()) {
                 // Just above the line's text, whatever room is above it.
                 let text_top = self.view.iter_location(&iter).y();
                 let y = text_top
                     .saturating_sub(LINE_SPACING)
                     .saturating_sub(LENS_HEIGHT)
                     .saturating_add(2);
-                self.view.move_overlay(widget, 2, y);
+                self.view.move_overlay(&slot.root, 2, y);
             }
         }
-        if let Some((widget, line)) = self.peek.borrow().as_ref()
-            && let Some(iter) = buffer.iter_at_line(*line)
+        if let Some(line) = self.peek_line.get()
+            && let Some(iter) = buffer.iter_at_line(line)
         {
             let location = self.view.iter_location(&iter);
             let y = location
@@ -660,7 +811,7 @@ impl Editor {
                 .saturating_add(location.height())
                 .saturating_add(LINE_SPACING)
                 .saturating_add(4);
-            self.view.move_overlay(widget, 0, y);
+            self.view.move_overlay(&self.peek_box, 0, y);
         }
     }
 
