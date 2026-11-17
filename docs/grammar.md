@@ -775,7 +775,7 @@ take `overlay_adjustment` (`error[hinge-overlay]` otherwise, with the
 
 #### Hardware members
 
-A hinge or slide kind may name its moving and fixed pieces, each with a
+A hinge, slide or pull kind may name its pieces, each with a
 doc comment a beginner can read. A viewer numbers them, labels them on the
 drawing and shows the doc comment as the caption, in the order written:
 
@@ -800,11 +800,12 @@ written in a file):
 | cup hinge | `plate`, `arm`, `links`, `cup` |
 | butt hinge | `leaves`, `pin` |
 | `slide` | `cabinet_member`, `drawer_member` |
+| `pull` | `knob`, `bar`, `screw`, `screws` (a knob and its screw, a bar and its screws) |
 
 Members are optional, each at most once (`error[duplicate-name]`). Any other
 word is `error[unknown-field]`: `a cup hinge has no member 'cupp'`, with the
-nearest member word as help; pulls, fasteners, tools and joints have no
-members (`a pull kind has no member 'knob'`).
+nearest member word as help; fasteners, tools and joints have no members
+(`a fastener kind has no member 'head'`).
 
 ### `recipe name : operation { }`
 

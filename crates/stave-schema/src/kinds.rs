@@ -195,11 +195,19 @@ pub enum MemberName {
     DrawerMember,
     /// A slide's member screwed to the cabinet.
     CabinetMember,
+    /// A knob: the part you hold.
+    Knob,
+    /// A bar pull's bar: the part you hold.
+    Bar,
+    /// A knob's one screw, from behind through the door or drawer front.
+    Screw,
+    /// A bar pull's two screws, from behind.
+    Screws,
 }
 
 impl MemberName {
     /// Every member word.
-    pub const ALL: [MemberName; 8] = [
+    pub const ALL: [MemberName; 12] = [
         MemberName::Cup,
         MemberName::Plate,
         MemberName::Arm,
@@ -208,6 +216,10 @@ impl MemberName {
         MemberName::Pin,
         MemberName::DrawerMember,
         MemberName::CabinetMember,
+        MemberName::Knob,
+        MemberName::Bar,
+        MemberName::Screw,
+        MemberName::Screws,
     ];
 
     /// The word as written: `cup`, `drawer_member`.
@@ -221,6 +233,10 @@ impl MemberName {
             MemberName::Pin => "pin",
             MemberName::DrawerMember => "drawer_member",
             MemberName::CabinetMember => "cabinet_member",
+            MemberName::Knob => "knob",
+            MemberName::Bar => "bar",
+            MemberName::Screw => "screw",
+            MemberName::Screws => "screws",
         }
     }
 
@@ -245,14 +261,24 @@ pub const BUTT_HINGE_MEMBERS: [MemberName; 2] = [MemberName::Leaves, MemberName:
 /// The members a slide may declare.
 pub const SLIDE_MEMBERS: [MemberName; 2] = [MemberName::CabinetMember, MemberName::DrawerMember];
 
+/// The members a pull may declare: a knob and its screw, or a bar and
+/// its screws.
+pub const PULL_MEMBERS: [MemberName; 4] = [
+    MemberName::Knob,
+    MemberName::Bar,
+    MemberName::Screw,
+    MemberName::Screws,
+];
+
 /// The members a kind of this base may declare; `cup` tells a cup hinge
-/// from a butt hinge. Pulls, fasteners, tools and joints have none.
+/// from a butt hinge. Fasteners, tools and joints have none.
 pub fn members_of(base: BaseKind, cup: bool) -> &'static [MemberName] {
     match base {
         BaseKind::Hinge if cup => &CUP_HINGE_MEMBERS,
         BaseKind::Hinge => &BUTT_HINGE_MEMBERS,
         BaseKind::Slide => &SLIDE_MEMBERS,
-        BaseKind::Pull | BaseKind::Fastener | BaseKind::Tool | BaseKind::Joint => &[],
+        BaseKind::Pull => &PULL_MEMBERS,
+        BaseKind::Fastener | BaseKind::Tool | BaseKind::Joint => &[],
     }
 }
 

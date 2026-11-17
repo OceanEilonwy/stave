@@ -411,7 +411,7 @@ impl Resolver<'_> {
                         format!("{what} has no member '{word}'"),
                         cx.file,
                         span,
-                        "only hinge and slide kinds name their members",
+                        "only hinge, slide and pull kinds name their members",
                     );
                 } else {
                     let words: Vec<&str> = allowed.iter().map(|m| m.word()).collect();

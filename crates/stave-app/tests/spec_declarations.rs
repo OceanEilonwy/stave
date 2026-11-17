@@ -787,14 +787,16 @@ fn a_misnamed_member_is_an_unknown_field() {
 }
 
 #[test]
-fn a_pull_has_no_members_and_a_member_is_written_once() {
-    let opened = open(
-        "kind small_knob : pull {\n  envelope: cylinder(diameter: 20mm, length: 20mm)\n  member knob\n}",
+fn a_fastener_has_no_members_and_a_member_is_written_once() {
+    let opened = open("kind peg : fastener {\n  diameter: 6mm\n  length:   30mm\n  member head\n}");
+    let diagnostic = the_diagnostic(
+        &opened,
+        "unknown-field",
+        "a fastener kind has no member 'head'",
     );
-    let diagnostic = the_diagnostic(&opened, "unknown-field", "a pull kind has no member 'knob'");
     assert_eq!(
         diagnostic.help.as_deref(),
-        Some("only hinge and slide kinds name their members")
+        Some("only hinge, slide and pull kinds name their members")
     );
     let opened = open(&slide_kind(
         "  member drawer_member\n  member drawer_member",
@@ -803,5 +805,14 @@ fn a_pull_has_no_members_and_a_member_is_written_once() {
         &opened,
         "duplicate-name",
         "'drawer_member' is declared twice",
+    );
+    // A pull names its knob and screw, or its bar and screws.
+    let opened = open(
+        "kind small_knob : pull {\n  envelope: cylinder(diameter: 20mm, length: 20mm)\n  /// Hold it.\n  member knob\n  member screw\n}",
+    );
+    assert!(
+        diagnostics(&opened).is_empty(),
+        "{:?}",
+        diagnostics(&opened)
     );
 }

@@ -10,6 +10,11 @@ kind brass_knob_26 : pull {
   diameter:       26mm
   screw_diameter: 4mm
   envelope:       cylinder(diameter: 26mm, length: 30mm)
+
+  /// The knob you hold.
+  member knob
+  /// The screw from behind that holds it on.
+  member screw
 }
 
 /// A bar pull with its screws 160mm apart.
@@ -17,4 +22,9 @@ kind bar_pull_160 : pull {
   centres:        160mm
   screw_diameter: 4mm
   envelope:       box(length: 192mm, width: 12mm, thickness: 35mm)
+
+  /// The bar you hold.
+  member bar
+  /// The two screws from behind, 160mm apart.
+  member screws
 }

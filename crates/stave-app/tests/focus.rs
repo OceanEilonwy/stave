@@ -505,3 +505,19 @@ fn focus_poses_at_interactive_rates() {
         println!("{name}: opening focus {opening:?}, one frame posed {posing:?}");
     }
 }
+
+#[test]
+fn focus_on_a_knob_names_the_knob_and_its_screw() {
+    let (opened, graph) = graph("examples/clothing_cabinet");
+    let found = open_focus(&opened, &graph, "door_l.handle", None);
+    assert_eq!(found.heading, "How a pull is fixed");
+    let members: Vec<(u8, &str)> = found.members.iter().map(|m| (m.number, m.name)).collect();
+    assert_eq!(members, [(1, "knob"), (2, "screw")]);
+    let rest = graph.scenes.first().unwrap();
+    let frame = found.frame(&graph, rest, 0.0, &Options::default());
+    let labels: Vec<&stave_scene::Label> = frame.overlay.labels.iter().collect();
+    assert_eq!(labels.len(), 2);
+    // The knob's number is in front of the screw's (the knob stands off
+    // the door's front face, +z).
+    assert!(labels[0].at.z > labels[1].at.z);
+}

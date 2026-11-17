@@ -8,6 +8,12 @@ kind knob : pull {
   param projection = 28mm
   screw_diameter: 4mm
   envelope:       cylinder(diameter: diameter, length: projection)
+
+  /// The knob: the round part you hold to open the door or drawer.
+  member knob
+  /// The screw: it goes in from behind, through a hole drilled in the
+  /// door or drawer front, and holds the knob on.
+  member screw
 }
 
 /// A bar pull held by two screws from behind.
@@ -18,4 +24,10 @@ kind bar_pull : pull {
   param projection = 35mm
   screw_diameter: 4mm
   envelope:       box(length: centres + 32mm, width: 12mm, thickness: projection)
+
+  /// The bar: the handle you hold, standing off the face on two legs.
+  member bar
+  /// The two screws: they go in from behind, through two holes drilled
+  /// the bar's centres apart, one into each leg.
+  member screws
 }

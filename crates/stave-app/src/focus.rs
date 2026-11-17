@@ -833,7 +833,7 @@ fn hardware_focus(
         HardwareBase::Hinge if hardware.is_butt_hinge() => "How a butt hinge works",
         HardwareBase::Hinge => "How a cup hinge works",
         HardwareBase::Slide => "How a drawer slide works",
-        HardwareBase::Pull => "A pull",
+        HardwareBase::Pull => "How a pull is fixed",
     };
     let title = title(design, target);
     Some(Focus {
@@ -893,6 +893,15 @@ fn member_anchor(
         MemberName::CabinetMember | MemberName::Pin => {
             Anchor::Nodes(pick(&|rest| !rest.is_empty() && !rest.ends_with("link")))
         }
+        // A pull stands off its face: what you hold is at the outer end,
+        // the screws at the end against the door.
+        MemberName::Knob | MemberName::Bar => {
+            Anchor::Box(hardware.bounds, Some(hardware.mount_face.direction()))
+        }
+        MemberName::Screw | MemberName::Screws => Anchor::Box(
+            hardware.bounds,
+            Some(hardware.mount_face.direction().opposite()),
+        ),
     })
 }
 
