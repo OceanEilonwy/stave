@@ -22,7 +22,9 @@ a line and a concrete help line for every problem:
    `unknown-field` with the nearest word.
 4. **Fit and geometry**: every part is cut into a solid (its cut box minus
    its cuts: exact boxes for axis-aligned cuts, exact cylinders for holes,
-   round tenons and round sections, the chidori's angled slots). Wood
+   round tenons and round sections, and exact prisms, a polygon on a face
+   cut straight down, for dovetails, `outline`s and the chidori's angled
+   slots; an outline that crosses itself is `type-mismatch`). Wood
    passing through wood beyond the 0.05mm contact tolerance is `overlap`,
    with what goes where and by how much ("the tenon on rail goes 3mm past
    the bottom of its mortise in leg"); a joint's parts that don't touch are
@@ -48,7 +50,7 @@ a line and a concrete help line for every problem:
 7. **Assembly sequences**: every joint's `insert` steps are run backwards
    from the finished joint and swept; a step that can't be undone is
    `order`. The chidori's quarter turn and diagonal slide come apart as
-   `tools/joint-sim/chidori.py` proves, and fail without its flats.
+   `stave-app/tests/oracle_chidori.rs` proves, and fail without its flats.
 
 **Formatting** (`stave fmt`), **dumping** the solved design (`stave dump`,
 `--json`), **glTF export** (`stave export`, posed in any scene, exploded or
@@ -179,12 +181,14 @@ the window calls.
 - **Ranges**: `require` and the layer 3 and 4 checks hold only at the
   current values; checking over a param's whole `within` range (z3,
   `require-range`, `range`) is not built.
-- **Geometry**: dovetails and `outline` cuts are drawn uncut and their
-  joints' fit isn't checked (`not-supported` warnings). The overlap checks
-  leave the chidori's angled slots uncut and its lock's round section
-  without its flats (more wood than there is); assembly sequences use both.
-  Turned and rotated steps are checked by dense sampling (1mm, 0.4mm of
-  travel), not exactly.
+- **Geometry**: cuts on round and turned parts other than holes and round
+  tenons are drawn uncut (`not-supported`). The overlap checks keep the
+  chidori's lock's round section without its flats (more wood than there
+  is); assembly sequences use the flats. Where an angled cut is involved,
+  overlaps and straight pushes are worked out in floats from exact inputs
+  (well under a nanometre against the 0.05mm tolerance); motion sweeps and
+  rods leave angled cuts in (more wood than there is). Turned and rotated
+  steps are checked by dense sampling (1mm, 0.4mm of travel), not exactly.
 - **Motion**: an assembly inside another moving assembly is not swept; the
   rule that an assembly's hinges share one pivot (`motion`) is not checked.
   A cup hinge moves on the mechanism its kind declares; version 1 solves

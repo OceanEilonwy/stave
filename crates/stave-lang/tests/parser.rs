@@ -740,6 +740,31 @@ fn precedence_and_associativity() {
 }
 
 #[test]
+fn a_slope_is_a_number_in_a_number() {
+    let file = clean("stave 1\nlet a = 2 * 1 in 8\nlet b = in_ + 1\n");
+    fn shape(expr: &Expr) -> String {
+        match &expr.kind {
+            ExprKind::Binary { op, lhs, rhs } => {
+                format!("({} {} {})", shape(lhs), op.symbol(), shape(rhs))
+            }
+            ExprKind::Number(Number::Integer(n)) => n.to_string(),
+            ExprKind::Name(name) => name.to_string(),
+            other => format!("{other:?}"),
+        }
+    }
+    let shapes: Vec<String> = file
+        .items
+        .iter()
+        .map(|item| match design(item) {
+            DesignItem::Let(binding) => shape(&binding.value),
+            _ => panic!(),
+        })
+        .collect();
+    // `1 in 8` binds tighter than anything: it is one value.
+    assert_eq!(shapes, ["(2 * (1 in 8))", "(in_ + 1)"]);
+}
+
+#[test]
 fn patch_files_parse() {
     let text = "stave 1\n\
                 patch \"Add a shoe shelf\" {\n\

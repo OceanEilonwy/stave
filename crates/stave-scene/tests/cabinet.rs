@@ -144,7 +144,7 @@ fn the_open_scene_swings_doors_and_slides_drawers() {
 
     // The left door opens 110° on its cup hinges' linkage: turned by 110°
     // and moved, its front hinge corner (1, y, 19) carried to about
-    // (9.97, y, 2.95) (tools/hinge-sim/linkage.py), the latch edge out to
+    // (9.97, y, 2.95) (docs/hardware/cup-hinge-linkage.md), the latch edge out to
     // the front and left.
     let angle = 110_f32.to_radians();
     let door_l = posed.shown(node("door_l.stile[latch]")).unwrap();

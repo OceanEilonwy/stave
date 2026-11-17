@@ -1,0 +1,43 @@
+// expect: error[require] 'thirds' fails: the slot is a third of the post's thickness
+stave 1
+
+project "No bit for this post" {
+  units: mm
+}
+
+stock oak_25 { species: white_oak, form: solid, thickness: 25mm }
+
+/// A rail housed in a slot cut with one straight router bit. The slot is
+/// a third of the post's thickness, and the bit comes in four sizes.
+kind slot_joint : joint {
+  roles {
+    piece: Part
+    into:  Part
+  }
+  param slot = 6mm within [6mm, 8mm, 10mm, 12mm]
+  require thirds : slot * 3 == into.thickness "the slot is a third of the post's thickness"
+
+  insert: [push(piece, along: length)]
+}
+
+part post : oak_25 {
+  length: 600mm
+  width:  60mm
+  place {
+    orient(length: up, width: right)
+    ground
+  }
+}
+
+// No bit cuts a third of a 25mm post.
+part rail : oak_25 {
+  length: 400mm
+  width:  60mm
+  place {
+    against(post.right)
+    flush(post.front)
+    flush(post.top)
+  }
+}
+
+joint corner : slot_joint(rail, into: post)

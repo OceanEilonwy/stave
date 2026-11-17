@@ -3,7 +3,7 @@ stave 1
 
 // The chidori with its flats left off the lock: a full round 22.5mm across
 // can't slide out through slots 13.5mm wide, so the node can't be put
-// together (tools/joint-sim/chidori.py shows the same).
+// together (crates/stave-app/tests/oracle_chidori.rs shows the same).
 
 project "Chidori without flats" {
   units: mm

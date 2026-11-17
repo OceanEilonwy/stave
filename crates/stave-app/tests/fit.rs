@@ -64,8 +64,13 @@ fn a_drawer_too_wide_for_its_slides() {
 }
 
 #[test]
-fn a_dovetail_is_drawn_uncut_and_left_out_of_the_fit_check() {
-    insta::assert_snapshot!(rendered("tests/broken/dovetail_not_cut"));
+fn a_dovetail_tail_wider_than_its_socket_overlaps_it() {
+    insta::assert_snapshot!(rendered("tests/broken/dovetail_too_wide"));
+}
+
+#[test]
+fn an_outline_that_crosses_itself_is_a_type_mismatch() {
+    insta::assert_snapshot!(rendered("tests/broken/outline_crosses_itself"));
 }
 
 /// The cut solids of two parts of a design, placed.
@@ -216,7 +221,7 @@ fn broken_text(name: &str) -> String {
 
 #[test]
 fn the_chidori_comes_apart_as_the_simulation_proves() {
-    // tools/joint-sim/chidori.py: with its flats and its rounding the node
+    // As oracle_chidori checks: with its flats and its rounding the node
     // comes apart (a quarter turn back, out along the diagonal, the second
     // stick lifted off); without the flats the lock can't slide out, and
     // without the rounding it doesn't fit in the holes at all.
@@ -284,4 +289,49 @@ fn a_door_overlay_into_the_top_is_one_error_at_the_mount() {
 #[test]
 fn double_doors_with_no_gap_are_told_the_gap_they_need() {
     insta::assert_snapshot!(rendered("tests/broken/double_doors_no_gap"));
+}
+
+/// The one cut the geometry can't make yet: anything but a hole or a round
+/// tenon in a round or turned part. It is a warning, the part is drawn
+/// uncut there, and its fit is checked as drawn.
+#[test]
+fn a_notch_in_a_round_part_is_not_supported() {
+    let opened = common::open(
+        "stock dowel_30 { species: beech, form: dowel, diameter: 30mm }
+part rail : dowel_30 {
+  length: 200mm
+  place {
+    against(base.top)
+    flush(base.left)
+    flush(base.front)
+  }
+}
+part post : pine_19 {
+  length: 100mm
+  width:  60mm
+  place {
+    orient(length: up, width: back)
+    against(base.top)
+    against(rail.right)
+    flush(base.front)
+  }
+}
+kind flatten : joint {
+  cut crossing(piece, into) {
+    notch(depth: 5mm)
+  }
+}
+joint seat : flatten(rail, into: post)",
+    );
+    let found = common::diagnostics(&opened);
+    assert_eq!(
+        found,
+        ["not-supported: cutting a notch in a round or turned part is not supported yet"],
+        "{found:?}"
+    );
+    let note = &opened.diagnostics[0].notes;
+    assert_eq!(
+        note,
+        &["seat: rail is drawn uncut there, and its fit is checked as drawn".to_owned()]
+    );
 }

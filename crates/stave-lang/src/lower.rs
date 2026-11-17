@@ -1067,7 +1067,12 @@ fn expr(node: &SyntaxNode) -> Option<Expr> {
             let op = node
                 .children_with_tokens()
                 .filter_map(|element| element.into_token())
-                .find_map(|token| binary_op(token.kind()))?;
+                .find_map(|token| {
+                    binary_op(token.kind()).or_else(|| {
+                        (token.kind() == SyntaxKind::IDENT && token.text() == "in")
+                            .then_some(BinaryOp::In)
+                    })
+                })?;
             ExprKind::Binary {
                 op,
                 lhs: Box::new(lhs),

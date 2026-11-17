@@ -291,7 +291,7 @@ mod tests {
         }
         // At 90deg the door's front hinge corner (the frame's origin) is
         // 5.54mm further across and 9.27mm further back than closed, as
-        // tools/hinge-sim/linkage.py has it; its back corner, which rested
+        // docs/hardware/cup-hinge-linkage.md has it; its back corner, which rested
         // on the cabinet's front (deep 19mm here), is 10mm in front of it:
         // the door was pushed out as it turned.
         let door = path.coupler(90f64.to_radians()).unwrap();

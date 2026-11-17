@@ -2085,6 +2085,19 @@ impl<'t> Parser<'t> {
 
     fn primary(&mut self) -> PResult {
         match self.current() {
+            INT_NUMBER | DECIMAL_NUMBER
+                if self.nth(1) == IDENT
+                    && self.nth_text(1) == "in"
+                    && matches!(self.nth(2), INT_NUMBER | DECIMAL_NUMBER) =>
+            {
+                // A slope: `1 in 8`.
+                self.node(BINARY_EXPR, |p| {
+                    p.wrap(LITERAL);
+                    p.bump();
+                    p.wrap(LITERAL);
+                    Ok(())
+                })
+            }
             QUANTITY | INT_NUMBER | DECIMAL_NUMBER | KW_TRUE | KW_FALSE | KW_FIT => {
                 self.wrap(LITERAL);
                 Ok(())

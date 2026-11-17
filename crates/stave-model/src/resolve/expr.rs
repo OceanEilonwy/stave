@@ -119,7 +119,7 @@ fn verb(op: BinaryOp) -> &'static str {
         BinaryOp::Add => "add",
         BinaryOp::Sub => "subtract",
         BinaryOp::Mul => "multiply",
-        BinaryOp::Div => "divide",
+        BinaryOp::Div | BinaryOp::In => "divide",
         BinaryOp::Eq | BinaryOp::Ne | BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge => {
             "compare"
         }
@@ -142,6 +142,7 @@ pub(crate) fn binary_ty(op: BinaryOp, lhs: &Ty, rhs: &Ty) -> Option<Ty> {
             | BinaryOp::Gt
             | BinaryOp::Ge => Bool,
             BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div => Unknown,
+            BinaryOp::In => Ratio,
         });
     }
     let number = |t: &Ty| matches!(t, Count | Ratio);
@@ -178,6 +179,7 @@ pub(crate) fn binary_ty(op: BinaryOp, lhs: &Ty, rhs: &Ty) -> Option<Ty> {
             (a, b) if number(a) && number(b) => Some(Ratio),
             _ => None,
         },
+        BinaryOp::In => (number(lhs) && number(rhs)).then_some(Ratio),
     }
 }
 

@@ -1,14 +1,17 @@
-//! Drawing what the grid of a board can't: slots turned by an angle, and
-//! the flats of a round section.
+//! Drawing what the grid of a board can't: the slanted pieces of angled
+//! cuts on a board that also has holes or round features, and the flats
+//! of a round section. (A board whose only cuts are blocks and angled
+//! cuts along one axis is drawn by [`mesh_prism`](crate::mesh_prism)
+//! instead, watertight.)
 //!
-//! An [`AngledSlot`] is a band across its face, `width` wide, running from
-//! its centre out along `u` (or both ways), through the face axis over its
-//! depth range. A board face in a plane across the slot's face axis is
-//! clipped to the outside of the band: three convex pieces (left of the
-//! band, right of it, and behind its start), each cut by Sutherland–Hodgman
-//! from the face polygon. A face along the slot's face axis loses the
-//! rectangle where the band runs out through it. The band's two walls are
-//! drawn wherever they pass through wood.
+//! Each slanted piece of a [`Prism`] is a [`Band`]: a convex polygon on its
+//! face, through the face axis over its depth range. A board face in a
+//! plane across the band's face axis is clipped to the outside of the
+//! band: one convex piece per side of the band (outside that side, inside
+//! the sides before it), each cut by Sutherland–Hodgman from the face
+//! polygon. A face along the band's face axis loses the rectangle where
+//! the band runs out through it. The band's walls (its sides that are
+//! sides of the cut's outline) are drawn wherever they pass through wood.
 //!
 //! A round section with flats is drawn as a prism of its outline: each
 //! ring point is the round's radius, cut back to the flat where the flat
@@ -22,7 +25,7 @@ use stave_lang::placement::PartAxis;
 
 use crate::build::{Builder, Frame, GrainAxes};
 use crate::render;
-use crate::solid::{AngledSlot, Rod, across};
+use crate::solid::{ConvexPolygon, Prism, Rod, across};
 
 /// The slot of a part axis in a local vector.
 pub(crate) fn slot_of(axis: PartAxis) -> usize {
@@ -33,67 +36,80 @@ pub(crate) fn slot_of(axis: PartAxis) -> usize {
     }
 }
 
-fn unit(axis: PartAxis) -> Vec3 {
-    let mut v = Vec3::ZERO;
-    v[slot_of(axis)] = 1.0;
-    v
-}
-
-/// A slot in local millimetres.
-#[derive(Debug, Clone, Copy)]
+/// A slanted piece of an angled cut, in local millimetres.
+#[derive(Debug, Clone)]
 pub(crate) struct Band {
     /// The face axis it runs through.
     pub(crate) face: usize,
-    /// Its centre (the face coordinate is 0).
-    pub(crate) centre: Vec3,
-    /// Along it, from the centre out.
-    pub(crate) u: Vec3,
-    /// Across it.
-    pub(crate) v: Vec3,
-    /// Half its width.
-    pub(crate) half: f32,
-    /// Only on the `u` side of the centre.
-    pub(crate) from_centre: bool,
+    /// Its corners (the face coordinate is 0), counter-clockwise on the
+    /// face's plane.
+    corners: Vec<Vec3>,
+    /// Per side (from corner `i` to `i + 1`): the outward normal `n` and
+    /// offset `c`; inside is `n·p < c`.
+    sides: Vec<(Vec3, f32)>,
+    /// Per side: is it a side of the cut's outline (a wall), rather than
+    /// one shared with another piece of the same cut?
+    walls: Vec<bool>,
     /// Its range along the face axis.
     pub(crate) depth: (f32, f32),
 }
 
 impl Band {
-    pub(crate) fn of(slot: &AngledSlot) -> Band {
-        let signed = |(axis, positive): (PartAxis, bool)| {
-            if positive { unit(axis) } else { -unit(axis) }
-        };
-        let (base, next) = (signed(slot.base), signed(slot.next));
-        let angle = render::radians(slot.angle);
-        let u = base * angle.cos() + next * angle.sin();
-        let v = next * angle.cos() - base * angle.sin();
-        let mut centre = Vec3::new(
-            render::mm(slot.centre.length),
-            render::mm(slot.centre.width),
-            render::mm(slot.centre.thickness),
-        );
-        centre[slot_of(slot.face_axis)] = 0.0;
-        Band {
-            face: slot_of(slot.face_axis),
-            centre,
-            u,
-            v,
-            half: render::mm(slot.width) * 0.5,
-            from_centre: slot.from_centre,
-            depth: (render::mm(slot.depth.0), render::mm(slot.depth.1)),
+    /// The band of one convex piece of a prism.
+    pub(crate) fn of(prism: &Prism, piece: &ConvexPolygon) -> Band {
+        let face = slot_of(prism.face_axis());
+        let [a, b] = across(prism.face_axis()).map(slot_of);
+        let corners: Vec<Vec3> = piece
+            .points()
+            .iter()
+            .map(|p| {
+                let mut v = Vec3::ZERO;
+                v[a] = render::mm(p.first);
+                v[b] = render::mm(p.second);
+                v
+            })
+            .collect();
+        let count = corners.len();
+        let mut sides = Vec::with_capacity(count);
+        let mut walls = Vec::with_capacity(count);
+        let outline = prism.outline().points();
+        let points = piece.points();
+        for i in 0..count {
+            let (Some(&p), Some(&q)) = (corners.get(i), corners.get((i + 1) % count)) else {
+                continue;
+            };
+            let run = q - p;
+            let mut normal = Vec3::ZERO;
+            normal[a] = run[b];
+            normal[b] = -run[a];
+            let normal = normal.normalize_or_zero();
+            sides.push((normal, normal.dot(p)));
+            let (from, to) = (points.get(i), points.get((i + 1) % count));
+            let on_outline = outline
+                .iter()
+                .enumerate()
+                .any(|(k, o)| Some(o) == from && outline.get((k + 1) % outline.len()) == to);
+            walls.push(on_outline);
         }
-    }
-
-    fn relative(&self, p: Vec3) -> Vec3 {
-        let mut r = p - self.centre;
-        r[self.face] = 0.0;
-        r
+        Band {
+            face,
+            corners,
+            sides,
+            walls,
+            depth: (
+                render::mm(prism.depth().from()),
+                render::mm(prism.depth().to()),
+            ),
+        }
     }
 
     /// Is a point strictly inside the band (ignoring depth)?
     pub(crate) fn holds(&self, p: Vec3) -> bool {
-        let r = self.relative(p);
-        r.dot(self.v).abs() < self.half - 1e-4 && (!self.from_centre || r.dot(self.u) > 1e-4)
+        let mut flat = p;
+        flat[self.face] = 0.0;
+        self.sides
+            .iter()
+            .all(|(normal, offset)| normal.dot(flat) < offset - 1e-4)
     }
 
     fn reaches(&self, along_face: f32) -> bool {
@@ -101,58 +117,54 @@ impl Band {
     }
 
     /// Clips a planar polygon (across the face axis) to the outside of the
-    /// band: up to three convex pieces.
+    /// band: a convex piece per side at most.
     pub(crate) fn outside(&self, polygon: &[Vec3]) -> Vec<Vec<Vec3>> {
-        // Half-planes as (normal, offset) about the centre: n·r <= c.
-        let left = [(self.v, -self.half)];
-        let right = [(-self.v, -self.half)];
-        let behind = [(self.u, 0.0), (self.v, self.half), (-self.v, self.half)];
-        let mut pieces: Vec<&[(Vec3, f32)]> = vec![&left, &right];
-        if self.from_centre {
-            pieces.push(&behind);
+        let face = self.face;
+        let flat = move |p: Vec3| {
+            let mut q = p;
+            q[face] = 0.0;
+            q
+        };
+        let mut pieces = Vec::new();
+        for (j, (normal, offset)) in self.sides.iter().enumerate() {
+            // Outside side j.
+            let mut out = clip(polygon, |p| offset - normal.dot(flat(p)));
+            // Inside the sides before it.
+            for (n, c) in self.sides.iter().take(j) {
+                if out.len() < 3 {
+                    break;
+                }
+                out = clip(&out, |p| n.dot(flat(p)) - c);
+            }
+            if out.len() >= 3 && area(&out) > 1e-6 {
+                pieces.push(out);
+            }
         }
         pieces
-            .into_iter()
-            .filter_map(|planes| {
-                let mut out = polygon.to_vec();
-                for (normal, offset) in planes {
-                    out = clip(&out, |p| normal.dot(self.relative(p)) - offset);
-                    if out.len() < 3 {
-                        return None;
-                    }
-                }
-                (area(&out) > 1e-6).then_some(out)
-            })
-            .collect()
     }
 
     /// Where the band crosses a plane along the face axis (normal axis
     /// `a`, at `plane`), as a range along the in-plane axis `t`.
     fn crossing(&self, a: usize, plane: f32, t: usize) -> Option<(f32, f32)> {
-        let ra = plane - self.centre[a];
         let mut low = f32::NEG_INFINITY;
         let mut high = f32::INFINITY;
-        // half >= |v_a ra + v_t rt|, and (from centre) u_a ra + u_t rt > 0.
-        let mut limit = |coefficient: f32, constant: f32, below: f32, above: f32| {
-            // below <= constant + coefficient * rt <= above
-            if coefficient.abs() < 1e-6 {
-                if constant < below || constant > above {
-                    low = f32::INFINITY;
+        // n_a plane + n_t s < c, for every side.
+        for (normal, offset) in &self.sides {
+            let rest = offset - normal[a] * plane;
+            if normal[t].abs() < 1e-6 {
+                if rest <= 0.0 {
+                    return None;
                 }
-                return;
+                continue;
             }
-            let (a0, a1) = (
-                (below - constant) / coefficient,
-                (above - constant) / coefficient,
-            );
-            low = low.max(a0.min(a1));
-            high = high.min(a0.max(a1));
-        };
-        limit(self.v[t], self.v[a] * ra, -self.half, self.half);
-        if self.from_centre {
-            limit(self.u[t], self.u[a] * ra, 0.0, f32::INFINITY);
+            let bound = rest / normal[t];
+            if normal[t] > 0.0 {
+                high = high.min(bound);
+            } else {
+                low = low.max(bound);
+            }
         }
-        (low < high).then_some((low + self.centre[t], high + self.centre[t]))
+        (low < high).then_some((low, high))
     }
 }
 
@@ -314,30 +326,22 @@ pub(crate) fn walls(
     };
     let (lo, hi) = (flat(low), flat(high));
     // Each wall as a line (origin, direction, range) and the way it faces
-    // (into the band): the two long walls, and the end wall where a slot
-    // from the centre starts.
-    let start = if band.from_centre { 0.0 } else { -1e6 };
-    let mut lines = vec![
-        (
-            band.centre - band.v * band.half,
-            band.u,
-            (start, 1e6),
-            band.v,
-        ),
-        (
-            band.centre + band.v * band.half,
-            band.u,
-            (start, 1e6),
-            -band.v,
-        ),
-    ];
-    if band.from_centre {
-        lines.push((
-            band.centre - band.v * band.half,
-            band.v,
-            (0.0, band.half * 2.0),
-            band.u,
-        ));
+    // (into the band): the sides of the cut's outline.
+    let mut lines = Vec::new();
+    let count = band.corners.len();
+    for (i, (normal, _)) in band.sides.iter().enumerate() {
+        if !band.walls.get(i).copied().unwrap_or(false) {
+            continue;
+        }
+        let (Some(&p), Some(&q)) = (band.corners.get(i), band.corners.get((i + 1) % count)) else {
+            continue;
+        };
+        let run = q - p;
+        let length = run.length();
+        if length < 1e-6 {
+            continue;
+        }
+        lines.push((p, run / length, (0.0, length), -*normal));
     }
     for (offset, direction, (mut s0, mut s1), facing) in lines {
         // Clipped to the cell.
