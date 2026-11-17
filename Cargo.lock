@@ -1825,6 +1825,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "stave-ide"
+version = "0.1.0"
+dependencies = [
+ "rowan",
+ "stave-lang",
+ "stave-modules",
+ "stave-schema",
+ "thiserror",
+]
+
+[[package]]
 name = "stave-lang"
 version = "0.1.0"
 dependencies = [

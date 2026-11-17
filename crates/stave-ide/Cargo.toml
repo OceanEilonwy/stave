@@ -1,0 +1,13 @@
+[package]
+name = "stave-ide"
+description = "Stave's editor features without a UI: names, uses, hovers, breadcrumbs, colours and open buffers"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+stave-lang = { path = "../stave-lang" }
+stave-modules = { path = "../stave-modules" }
+stave-schema = { path = "../stave-schema" }
+rowan = "0.17"
+thiserror = "2"
