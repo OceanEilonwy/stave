@@ -882,6 +882,12 @@ impl CutName {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+
+    /// The name as a message writes it, its underscores read as spaces:
+    /// `mating_groove` is "mating groove".
+    pub fn words(&self) -> String {
+        self.0.replace('_', " ")
+    }
 }
 
 impl std::fmt::Display for CutName {

@@ -116,7 +116,7 @@ kind euro_hinge : hinge {
   }
 
   // The 35mm hole the cup is pressed into, cup_depth deep.
-  cut bore: crossing(piece, cup) { drill(diameter: 35mm, depth: 12.8mm) }
+  cut cup_bore: crossing(piece, cup) { drill(diameter: 35mm, depth: 12.8mm) }
 
   // The arm's side screw sets it 2mm either way on the plate, moving the
   // door in or out over the side.
@@ -236,7 +236,7 @@ kind wide_hinge_165 : hinge {
   }
 
   // The 35mm hole the cup is pressed into, cup_depth deep.
-  cut bore: crossing(piece, cup) { drill(diameter: 35mm, depth: 12.8mm) }
+  cut cup_bore: crossing(piece, cup) { drill(diameter: 35mm, depth: 12.8mm) }
 
   // The arm's side screw sets it 2mm either way on the plate.
   adjust arm on plate: across within 2mm
@@ -296,6 +296,6 @@ kind butt_hinge : hinge {
   }
 
   // A shallow mortise for each leaf, as deep as the leaf is thick.
-  cut mortise: crossing(piece, leaf) { notch(depth: 1.5mm) }
-  cut mortise: crossing(on, fixed_leaf) { notch(depth: 1.5mm) }
+  cut leaf_mortise: crossing(piece, leaf) { notch(depth: 1.5mm) }
+  cut fixed_leaf_mortise: crossing(on, fixed_leaf) { notch(depth: 1.5mm) }
 }

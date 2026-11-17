@@ -36,7 +36,7 @@ kind marked_lap : joint {
 
   adds: extend(piece, by: lap)
 
-  cut side(piece, normal: width, from: into) {
+  cut scarf: side(piece, normal: width, from: into) {
     outline(depth: through, marks: [
       mark(along: 0mm, across: 0mm),
       mark(along: lap, across: piece.thickness / 2),

@@ -16,10 +16,10 @@ kind tongue_and_groove : joint {
   cut_first: into                          // cut the groove first, then fit the tongue to it
   adds:      extend(piece, by: depth)      // the board with the tongue is cut wider by the tongue
 
-  cut crossing(into, piece) {
+  cut groove: crossing(into, piece) {
     slot(width: thickness, depth: depth)
   }
-  cut crossing(piece, into) {
+  cut tongue: crossing(piece, into) {
     tenon(length: depth, width: piece.length, thickness: thickness)
   }
 

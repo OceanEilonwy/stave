@@ -37,7 +37,10 @@ a line and a concrete help line for every problem:
    slots; an outline that crosses itself is `type-mismatch`). Wood
    passing through wood beyond the 0.05mm contact tolerance is `overlap`,
    with what goes where and by how much ("the tenon on rail goes 3mm past
-   the bottom of its mortise in leg"); a joint's parts that don't touch are
+   the bottom of its mortise in leg"). Messages call a cut by the name its
+   kind gives it (`cut groove: ...`), whatever its operation, and an
+   unnamed cut in a kind is the warning `unnamed-cut`; every cut in
+   `std/` and `examples/` is named. A joint's parts that don't touch are
    `no-contact`; a spacing that runs past `to` is `overlap`; a slide's gap
    is `slide-gap`; a door overlaying its side by more or less than its
    cup hinges' catalogue allows is `hinge-overlay` (with the `cup_inset`

@@ -2093,6 +2093,24 @@ impl CutOperation {
         }
     }
 
+    /// What a message calls a cut made by this operation when its kind
+    /// gives the cut no name: `mortise`, `hole`, `notch`, `slot`, or `cut`
+    /// for an operation that leaves a shape rather than a hollow.
+    pub fn unnamed_noun(self) -> &'static str {
+        match self {
+            CutOperation::Pocket => "mortise",
+            CutOperation::Drill => "hole",
+            CutOperation::Notch => "notch",
+            CutOperation::Slot => "slot",
+            CutOperation::Tenon
+            | CutOperation::Spigot
+            | CutOperation::Round
+            | CutOperation::DovetailSocket
+            | CutOperation::DovetailTail
+            | CutOperation::Outline => "cut",
+        }
+    }
+
     /// The cut operation for a name, if it is one.
     pub fn from_word(word: &str) -> Option<CutOperation> {
         CutOperation::ALL

@@ -29,16 +29,16 @@ kind suitsuki_zan : joint {
 
   // A housing in every board for each batten, and the dovetail tongue
   // along each batten.
-  cut crossing(boards, batten_start, normal: thickness, opposite: true) {
+  cut start_housing: crossing(boards, batten_start, normal: thickness, opposite: true) {
     dovetail_socket(neck: neck, depth: depth, slope: slope)
   }
-  cut crossing(boards, batten_end, normal: thickness, opposite: true) {
+  cut end_housing: crossing(boards, batten_end, normal: thickness, opposite: true) {
     dovetail_socket(neck: neck, depth: depth, slope: slope)
   }
-  cut crossing(batten_start, boards, normal: thickness) {
+  cut start_tongue: crossing(batten_start, boards, normal: thickness) {
     dovetail_tail(neck: neck, depth: depth, slope: slope)
   }
-  cut crossing(batten_end, boards, normal: thickness) {
+  cut end_tongue: crossing(batten_end, boards, normal: thickness) {
     dovetail_tail(neck: neck, depth: depth, slope: slope)
   }
 

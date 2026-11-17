@@ -75,7 +75,7 @@ fn a_word_and_an_item_both_accepted_are_ambiguous() {
     let opened = open(
         "let through = 5mm
 kind slot_joint : joint {
-  cut crossing(into, piece) {
+  cut housing: crossing(into, piece) {
     notch(depth: through)
   }
 }",
@@ -572,7 +572,7 @@ kind inset_cup_hinge : hinge {
     with:  piece
     shape: cylinder(diameter: 35mm, depth: 0mm..13mm)
   }
-  cut crossing(piece, cup) { drill(diameter: 35mm, depth: 13mm) }
+  cut cup_bore: crossing(piece, cup) { drill(diameter: 35mm, depth: 13mm) }
 }
 component Flap {
   param hinge_side : Part
@@ -641,7 +641,7 @@ kind inset_cup_hinge : hinge {
       depth:  from(face(on, toward: piece))
     }
   }
-  cut crossing(piece, cup) { drill(diameter: 35mm, depth: 13mm) }
+  cut cup_bore: crossing(piece, cup) { drill(diameter: 35mm, depth: 13mm) }
   member arm {
     with:          on
     shape body:    box(along: 16mm, across: -2.9mm..15mm, depth: -55mm..0mm)

@@ -18,10 +18,10 @@ kind screw : joint {
   insert: [push(piece, along: thickness)]
   uses:   wood_screw(diameter: diameter, length: length, count: count)
 
-  cut crossing(piece, into) {
+  cut clearance_hole: crossing(piece, into) {
     drill(diameter: diameter + 0.5mm, depth: through, count: count)
   }
-  cut crossing(into, piece) {
+  cut pilot_hole: crossing(into, piece) {
     drill(diameter: diameter * 3 / 4, depth: length - piece.thickness, count: count)
   }
 

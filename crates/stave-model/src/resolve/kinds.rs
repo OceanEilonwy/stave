@@ -1067,7 +1067,10 @@ impl Resolver<'_> {
         let operations = self.lower_operations(cx, selector.selector, &cut.operations);
         let name = match &cut.name {
             Some(name) => Some(CutName::new(name.as_str())?),
-            None => None,
+            None => {
+                self.warn_unnamed_cut(cx, cut);
+                None
+            }
         };
         Some(CutDef {
             name,
@@ -1075,6 +1078,34 @@ impl Resolver<'_> {
             operations,
             span: cut.span,
         })
+    }
+
+    /// `warning[unnamed-cut]` for a joint or hardware kind's `cut` with no
+    /// name (grammar, "Named cuts"). Kinds are lowered once each, used or
+    /// not, so every unnamed cut is reported once, at its kind.
+    pub(super) fn warn_unnamed_cut(&mut self, cx: &Cx, cut: &ast::Cut) {
+        let mut nouns = cut
+            .operations
+            .iter()
+            .filter_map(|call| CutOperation::from_word(call.head.as_str()))
+            .map(CutOperation::unnamed_noun);
+        let first = nouns.next().unwrap_or("cut");
+        let noun = if nouns.all(|noun| noun == first) {
+            first
+        } else {
+            "cut"
+        };
+        let head = cut.selector.head.as_str();
+        self.report(
+            Diagnostic::warning(
+                Code::UnnamedCut,
+                format!("this cut has no name, so messages will call it \"a {noun}\""),
+                Label::new(cx.file, cut.selector.span),
+            )
+            .with_help(format!(
+                "name it after what it is, as in cut groove: {head}(...) {{ ... }}"
+            )),
+        );
     }
 
     /// The operations of a `cut` block, each checked against the selector

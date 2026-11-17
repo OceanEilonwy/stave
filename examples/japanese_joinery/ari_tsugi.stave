@@ -22,10 +22,10 @@ kind ari_tsugi : joint {
   cut_first: piece                        // cut the tail first, then mark the socket from it
   adds:      extend(piece, by: depth)     // the beams are drawn meeting end to end; the tail reaches past
 
-  cut end(into, facing: piece) {
+  cut socket: end(into, facing: piece) {
     dovetail_socket(neck: neck, depth: depth, angle: angle)
   }
-  cut end(piece, facing: into) {
+  cut tail: end(piece, facing: into) {
     dovetail_tail(neck: neck, depth: depth, angle: angle)
   }
 

@@ -560,7 +560,7 @@ fn the_chidori_comes_apart_as_the_simulation_proves() {
     let no_flats = common::open_files(&[("project.stave", &broken_text("chidori_no_flats"))]);
     assert_eq!(order(&no_flats), 1);
     let unrounded = broken_text("chidori_no_flats").replace(
-        "cut crossing(lock, first) {\n    round(diameter: round_diameter)\n  }",
+        "cut rounding: crossing(lock, first) {\n    round(diameter: round_diameter)\n  }",
         "",
     );
     let opened = common::open_files(&[("project.stave", &unrounded)]);
@@ -625,7 +625,7 @@ part post : pine_19 {
   }
 }
 kind flatten : joint {
-  cut crossing(piece, into) {
+  cut housing: crossing(piece, into) {
     notch(depth: 5mm)
   }
 }
@@ -700,7 +700,7 @@ fn a_leaf_without_its_mortise_overlaps() {
     let start = library.find("kind butt_hinge : hinge {").unwrap();
     let length = library[start..].find("\n}\n").unwrap() + 3;
     let butt_hinge = &library[start..start + length];
-    let mortises = "  cut mortise: crossing(piece, leaf) { notch(depth: 1.5mm) }\n  cut mortise: crossing(on, fixed_leaf) { notch(depth: 1.5mm) }\n";
+    let mortises = "  cut leaf_mortise: crossing(piece, leaf) { notch(depth: 1.5mm) }\n  cut fixed_leaf_mortise: crossing(on, fixed_leaf) { notch(depth: 1.5mm) }\n";
     assert!(butt_hinge.contains(mortises));
     let bare = butt_hinge
         .replace("kind butt_hinge", "kind bare_butt_hinge")

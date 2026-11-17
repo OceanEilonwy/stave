@@ -19,7 +19,7 @@ part base : pine_19 {
 let through = 5mm
 
 kind slot_joint : joint {
-  cut crossing(into, piece) {
+  cut housing: crossing(into, piece) {
     notch(depth: through)
   }
 }

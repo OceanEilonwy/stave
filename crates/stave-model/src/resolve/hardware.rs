@@ -162,7 +162,10 @@ impl Resolver<'_> {
         let body = self.body_of(cx, bodies, member)?;
         let name = match &cut.name {
             Some(name) => Some(CutName::new(name.as_str())?),
-            None => None,
+            None => {
+                self.warn_unnamed_cut(cx, cut);
+                None
+            }
         };
         let operations = self.lower_operations(cx, Selector::Crossing, &cut.operations);
         Some(HardwareCutDef {

@@ -8,4 +8,4 @@ error[overlap]: beam_b and beam_a overlap
 47 | joint splice : end_dovetail(beam_b, into: beam_a)
    |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
    = note: they share 45 × 90 × 9.565mm (across × up × deep) at the left end of beam_b
-   = help: the sloped faces of the dovetail tail on beam_b go 1.595mm into the sloped sides of its socket in beam_a; cut the tail and the socket with the same neck, depth and angle
+   = help: the sloped faces of the tail on beam_b go 1.595mm into the sloped sides of its socket in beam_a; cut the tail and the socket with the same neck, depth and angle
