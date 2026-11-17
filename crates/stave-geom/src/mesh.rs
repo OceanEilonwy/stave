@@ -15,8 +15,9 @@
 //!
 //! # Holes
 //!
-//! Each hole's bounding square (on the two axes across it) is added to the
-//! grid, so where the hole opens on a face its square is one face cell. That
+//! Each hole's square (on the two axes across it, a little larger than the
+//! hole) is added to the grid, so where the hole opens on a face its square
+//! is one face cell. That
 //! cell is drawn as a square minus the circle (fans to its four corners),
 //! the hole's wall as an inward-facing cylinder, a bottom disc where it
 //! stops inside the part, and the opening as an outline circle. When other
@@ -182,10 +183,17 @@ struct HoleShape {
 }
 
 impl HoleShape {
+    /// The square is a little larger than the hole (by an eighth of its
+    /// radius each way), so the circle never touches its sides: a point
+    /// of the circle on a side would sit in the middle of the neighbouring
+    /// face's edge, and the mesh would crack there.
     fn of(rod: &Rod) -> HoleShape {
         let radius = rod.diameter.nm() / 2;
         let rest = rod.diameter.nm() - radius;
-        let square = rod.centre.map(|c| (c.nm() - radius, c.nm() + rest));
+        let margin = radius / 8;
+        let square = rod
+            .centre
+            .map(|c| (c.nm() - radius - margin, c.nm() + rest + margin));
         HoleShape { rod: *rod, square }
     }
 }
@@ -649,8 +657,10 @@ fn segments() -> u16 {
     build::LATHE_SEGMENTS
 }
 
+/// The angle of a step around a hole; the last step is the first again,
+/// exactly, so a ring closes without a crack.
 fn angle_of(step: u16) -> f32 {
-    TAU * f32::from(step) / f32::from(segments())
+    TAU * f32::from(step % segments().max(1)) / f32::from(segments())
 }
 
 /// Where a hole opens: (face axis, plane index, cell u, cell v), and

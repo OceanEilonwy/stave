@@ -521,3 +521,49 @@ fn focus_on_a_knob_names_the_knob_and_its_screw() {
     // the door's front face, +z).
     assert!(labels[0].at.z > labels[1].at.z);
 }
+
+/// Every edge of a mesh, by the positions of its ends, and how many
+/// triangles use it: a watertight mesh uses each exactly twice.
+fn open_edges(mesh: &stave_geom::Mesh) -> Vec<([u32; 3], [u32; 3], usize)> {
+    use std::collections::BTreeMap;
+    let key = |p: Vec3| p.to_array().map(|c| (c + 0.0).to_bits());
+    let mut counts: BTreeMap<([u32; 3], [u32; 3]), usize> = BTreeMap::new();
+    for [a, b, c] in mesh.triangles() {
+        if (b - a).cross(c - a).length_squared() < 1e-12 {
+            continue;
+        }
+        for (p, q) in [(a, b), (b, c), (c, a)] {
+            let (p, q) = (key(p), key(q));
+            let edge = if p <= q { (p, q) } else { (q, p) };
+            *counts.entry(edge).or_default() += 1;
+        }
+    }
+    counts
+        .into_iter()
+        .filter(|(_, count)| *count != 2)
+        .map(|((p, q), count)| (p, q, count))
+        .collect()
+}
+
+#[test]
+fn drilled_meshes_are_watertight() {
+    let (opened, _) = graph("examples/stool");
+    let design = opened.design.as_ref().unwrap();
+    for name in [
+        "leg[front_left]",
+        "leg[front_right]",
+        "leg[back_left]",
+        "leg[back_right]",
+        "seat",
+    ] {
+        let part = part(design, name);
+        let mesh = stave_geom::cut_part(part, &Solid::of(part, design)).mesh;
+        let open = open_edges(&mesh);
+        assert!(
+            open.is_empty(),
+            "{name}: {} open edges, e.g. {:?}",
+            open.len(),
+            open.first()
+        );
+    }
+}

@@ -403,7 +403,7 @@ pinned down the same way.
 
 | Rule | Tests | Status |
 |---|---|---|
-| Holes in round and turned parts are drawn (the stool's sockets) and cut from the solid | `app/focus::a_turned_leg_is_drawn_with_its_sockets_bored` | covered |
+| Holes in round and turned parts are drawn (the stool's sockets) and cut from the solid; drilled meshes, turned or board, are watertight (every edge shared by two triangles) | `app/focus::a_turned_leg_is_drawn_with_its_sockets_bored`, `app/focus::drilled_meshes_are_watertight` | covered |
 | Faces a cut made are marked for tinting; the stock's own surface is not | `app/focus::cut_faces_are_marked_and_the_stock_surface_is_not` | covered |
 | A joint's insert steps are traced forwards from the same run the order check makes | `app/focus::a_joint_traces_its_steps_forwards` | covered |
 | Joint focus: the parts, cuts, fit and insert steps in words; the steps played from apart to together; the receiving part see-through, the rest ghosts; the home outlined | `app/focus::focus_on_a_socket_plays_the_rung_in`, `app/focus::focus_on_the_chidori_turns_the_lock_last`, `gtk/screenshot::focus_renders_offscreen` | covered |
