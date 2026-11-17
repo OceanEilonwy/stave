@@ -698,7 +698,12 @@ fn explode_offsets(design: &SolvedDesign) -> Vec<Vec3> {
             continue;
         };
         if pinned(m.mover) {
+            // A partner centred on the held part along the step (a stile
+            // either side of a panel's groove) has no side to move to.
             for partner in m.partners.iter().filter_map(|p| design.part(*p)) {
+                if (middle(partner) - middle(mover)).dot(m.direction).abs() < 1.0 {
+                    continue;
+                }
                 let direction = away_from(m.direction, middle(partner), middle(mover));
                 add(partner, direction, m.mover);
             }
