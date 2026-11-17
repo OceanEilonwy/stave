@@ -44,7 +44,7 @@ use stave_app::inspect;
 use stave_app::link;
 use stave_app::session::{
     Build, Command, Event, Explode, LineNumber, ProblemIndex, Selection, Session, Sidebar,
-    SourceLocation, Tone, View,
+    SourceLocation, View,
 };
 use stave_app::view::{self, Highlight};
 use stave_model::solved::AssemblyId;
@@ -466,27 +466,33 @@ impl Window {
     /// The folder in the title until the design is in.
     fn show_folder(self: &Rc<Self>) {
         let folder = self.session.borrow().folder().to_path_buf();
-        let name = folder.file_name().map_or_else(
-            || folder.display().to_string(),
-            |name| name.to_string_lossy().into_owned(),
-        );
-        self.widgets.header.show_title(&name, &shown_path(&folder));
-        self.widgets
-            .window
-            .set_title(Some(&format!("{name} — Stave")));
+        self.show_title();
         self.widgets.files.set_folder(&folder);
     }
 
+    /// The project's or library's own title (the folder's name until one
+    /// is read), with the folder under it.
+    fn show_title(&self) {
+        let (title, folder) = {
+            let session = self.session.borrow();
+            (session.title(), session.folder().to_path_buf())
+        };
+        self.widgets.header.show_title(&title, &shown_path(&folder));
+        self.widgets
+            .window
+            .set_title(Some(&format!("{title} — Stave")));
+    }
+
     fn result_changed(self: &Rc<Self>) {
-        let (shown, latest, folder, showing_older) = {
+        let (shown, latest, showing_older) = {
             let session = self.session.borrow();
             (
                 session.shown().cloned(),
                 session.latest().cloned(),
-                session.folder().to_path_buf(),
                 session.showing_older(),
             )
         };
+        self.show_title();
         let widgets = &self.widgets;
         widgets.files.show_result(latest.as_deref());
         widgets.problems.show(latest.clone());
@@ -517,12 +523,6 @@ impl Window {
         let Some((design, graph)) = shown.drawable() else {
             return;
         };
-        widgets
-            .header
-            .show_title(&design.project.title, &shown_path(&folder));
-        widgets
-            .window
-            .set_title(Some(&format!("{} — Stave", design.project.title)));
         widgets.tree.show_tree(inspect::parts_tree(design));
         let first = {
             let mut state = self.state.borrow_mut();
@@ -1526,6 +1526,14 @@ impl Window {
                 page.remove_css_class("dark");
             }
         }
+        // What only the dark style changes in the sheet (the code blocks)
+        // hangs off the window: a CSS media query doesn't see a style
+        // chosen in the app's menu.
+        if dark {
+            self.widgets.window.add_css_class("stave-dark");
+        } else {
+            self.widgets.window.remove_css_class("stave-dark");
+        }
     }
 
     /// Turns the camera to look from a direction, framing everything.
@@ -1989,12 +1997,13 @@ impl Window {
 
     fn build_changed(&self) {
         let session = self.session.borrow();
-        let has_errors = session.check_status().pill().tone == Tone::Errors;
-        self.widgets.header.show_build(session.build(), has_errors);
+        self.widgets
+            .header
+            .show_build(session.build(), session.build_tooltip());
         if let Some(action) = self.widgets.window.lookup_action("build")
             && let Ok(action) = action.downcast::<gio::SimpleAction>()
         {
-            action.set_enabled(session.build() == Build::Idle && !has_errors);
+            action.set_enabled(session.build() == Build::Idle && session.buildable().is_ok());
         }
     }
 

@@ -329,24 +329,19 @@ impl Header {
             .update_property(&[gtk::accessible::Property::Label(&tooltip)]);
     }
 
-    /// The build button: building (spinning, disabled), or ready unless
-    /// the design has errors.
-    pub fn show_build(&self, build: Build, has_errors: bool) {
+    /// The build button: building (spinning) or ready, with the tooltip
+    /// the session gives (what it does, or why there is nothing to build).
+    pub fn show_build(&self, build: Build, tooltip: &str) {
         match build {
             Build::Building => {
                 self.build.add_css_class("building");
                 self.build_stack.set_visible_child_name("building");
-                self.build.set_tooltip_text(Some("Building the plan…"));
             }
             Build::Idle => {
                 self.build.remove_css_class("building");
                 self.build_stack.set_visible_child_name("ready");
-                self.build.set_tooltip_text(Some(if has_errors {
-                    "Build plan (Ctrl+B): fix the problems first"
-                } else {
-                    "Build plan (Ctrl+B)"
-                }));
             }
         }
+        self.build.set_tooltip_text(Some(tooltip));
     }
 }

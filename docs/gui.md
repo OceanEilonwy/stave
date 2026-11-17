@@ -122,7 +122,17 @@ and is tested headless (`crates/stave-app/tests/session.rs`).
   `Unknown`, `Clean`, `Warnings`, `Errors`; `label`: "No problems",
   "3 problems"; `Activity`: `Idle` or `Checking`, keeping the last tone and
   label while checking); `line()` the status bar's words.
-- `build() -> Build`: `Idle` or `Building`.
+- `build() -> Build`: `Idle` or `Building`. `buildable() ->
+  Result<(), empty::Reason>`: `Ok` only when the latest check has parts
+  and no errors; otherwise why not (`Checking`, `CantOpen`, `Errors`,
+  `Library`, `NoParts`, said in words by `Reason::nothing_to_build`:
+  "Nothing to build: a library has no parts"). `build_tooltip()` is the
+  hammer's tooltip: "Build plan (Ctrl+B)", "Building the plan…" or that
+  reason.
+- `title()`: the window's title, the folder's own declared title
+  (`project "Clothing cabinet"`, `library "Japanese joinery samples"`),
+  falling back to the folder's name only when none is declared or
+  nothing has been read yet.
 - `latest()`: the last check's result (its `problems()` are the current
   problems). `shown()`, `drawable()`: the last result that solved, which
   the tree, the inspector and the 3D view show; `showing_older()` when the
@@ -155,7 +165,8 @@ to `finish_check(ticket, outcome)`. A stale ticket's outcome is dropped.
 The new result replaces the old one whole (`Rc<Checked>`); the selection,
 focus and every history entry are carried to the new ids by name (a
 problem by its code, message and place), and anything gone is let go.
-`Command::Build` checks first and, when that check is done, gives
+`Command::Build` does nothing unless `buildable()`; it checks first and,
+when that check is done, gives
 `Notice::BuildPlanNotBuilt` ("The build plan (PDF) isn't built yet"): the
 PDF doesn't exist yet, and the button says so honestly.
 
@@ -176,7 +187,10 @@ PDF doesn't exist yet, and the button says so honestly.
   (Alt+←/→); the switcher is an `AdwToggleGroup` named by `View::word`;
   the scene menu lists the scene titles; the pill is `win.problems`
   (Ctrl+E, toggles `Sidebar::Problems`); the hammer is `win.build`
-  (Ctrl+B), disabled while building or while the design has errors. The
+  (Ctrl+B), disabled while building or whenever there is nothing to
+  build (`buildable()`: a library, no parts, a folder that can't be
+  opened, errors), its tooltip saying why (`build_tooltip()`). The title
+  is `Session::title()`. The
   main menu opens a project folder (Ctrl+O), checks again (Ctrl+R) and
   sets the style (follow system, light, dark).
 - **Parts sidebar** (`TreeSidebar`): the carcass, then assemblies with
@@ -190,7 +204,12 @@ PDF doesn't exist yet, and the button says so honestly.
   focus mode: `Command::Focus`), and "Defined in the text": the snippet of
   the declaration in the project's own files (a part of a library
   component is shown by its assembly's declaration) with a file:line link
-  that sends `Command::GoToSource`.
+  that sends `Command::GoToSource`. Every code block (this snippet, a
+  problem's `stave check` text, a library's import line) is one style,
+  `.stave-code`: #1e1e24 in both styles, and in the dark style #121216
+  with a thin light edge so it stands apart from the dark panels (the
+  window carries `stave-dark` then); the syntax colours are tested at
+  4.5:1 or more on both.
 - **3D view**: click to select (`Command::Select`), F frames, Escape
   leaves focus or clears the selection. The backdrop follows the style
   (#e8e5df light, #242428 dark, chosen when each frame is drawn and
