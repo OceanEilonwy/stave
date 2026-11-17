@@ -12,6 +12,7 @@ stave-model = { path = "../stave-model" }
 stave-solve = { path = "../stave-solve" }
 stave-check = { path = "../stave-check" }
 stave-geom = { path = "../stave-geom" }
+stave-ide = { path = "../stave-ide" }
 stave-scene = { path = "../stave-scene" }
 stave-schema = { path = "../stave-schema" }
 thiserror = "2"

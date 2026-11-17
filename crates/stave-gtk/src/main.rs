@@ -62,6 +62,32 @@ struct Arguments {
     /// Open the window with the problems list showing.
     #[arg(long)]
     problems: bool,
+    /// Open this file in the Files view, at a line: `doors.stave:9`
+    /// (relative to the folder, or `std/joinery/dado.stave`).
+    #[arg(long, value_name = "FILE[:LINE]")]
+    file: Option<String>,
+    /// In the Files view, put the cursor on the first occurrence of this
+    /// word on the line `--file` names.
+    #[arg(long, value_name = "WORD")]
+    cursor: Option<String>,
+    /// In the Files view, peek at the definition under the cursor.
+    #[arg(long)]
+    peek: bool,
+    /// In the Files view, show the card for the word under the cursor.
+    #[arg(long)]
+    hover: bool,
+    /// In the Files view, list the uses of the name under the cursor.
+    #[arg(long)]
+    uses: bool,
+    /// In the Files view, type this text at the cursor, as if typed.
+    #[arg(long = "type", value_name = "TEXT")]
+    typing: Option<String>,
+    /// In the Files view, follow the name under the cursor (F12).
+    #[arg(long)]
+    follow: bool,
+    /// In the Files view, show the text alone (no 3D view beside it).
+    #[arg(long)]
+    text_only: bool,
     /// With --window-screenshot: check again and capture the window while
     /// that check runs (the status pill's spinner).
     #[arg(long)]
@@ -243,6 +269,16 @@ fn main() -> ExitCode {
             size: arguments.size.unwrap_or((1440, 900)),
             checking: arguments.checking,
             building: arguments.building,
+            file: arguments.file,
+            wish: ui::Wish {
+                cursor: arguments.cursor,
+                peek: arguments.peek,
+                hover: arguments.hover,
+                uses: arguments.uses,
+                typing: arguments.typing,
+                follow: arguments.follow,
+            },
+            text_only: arguments.text_only,
         }),
     };
     match result {

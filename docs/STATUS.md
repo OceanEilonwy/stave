@@ -94,8 +94,29 @@ the system or the main menu, the 3D backdrop with them.
   the 3D view selects in both. The inspector gives the kind and assembly
   ("PART · IN door_l"), the doc comment, stock, finished size, grain and
   how it moves, its joints and hardware cuts (each opens focus mode), and
-  the declaration as written, highlighted, with a file:line link (to the
-  Files view, whose editor isn't built yet).
+  the declaration as written, highlighted, with a file:line link that
+  opens it in the Files view.
+- **Files view** (FilesMode.dc.html; `docs/gui.md`, "The Files view"):
+  the project's files by folder and the read-only standard library with
+  "Go to file or name", tabs, breadcrumbs and an editor that edits the
+  real files: `.stave` colours from the navigation layer's semantic
+  tokens, line numbers, wavy underlines with a card for each problem,
+  F12 / Ctrl+click to follow a name (across files, imports and the
+  standard library, through the back and forward history), Alt+F12 to
+  peek at a definition under the line, Shift+F12 to list every use with
+  what it does there ("door_r mirrors it", "scene all_open poses it"), "2
+  uses · show in 3D" above declarations, a card with the doc comment on
+  hover, Ctrl+S to save (atomically), Ctrl+Shift+I to lay the file out on
+  demand. Typing re-checks the design from the open buffers; unsaved
+  files are marked and closing asks. Text | Both puts the 3D view beside
+  the text: the cursor on a part, assembly or piece of hardware selects
+  it there, and selecting in 3D or the tree moves the editor to the line
+  that places it ("Linked to the text · door_l, line 9"). See
+  `docs/screenshots/files/`.
+- **Navigation layer** (`stave-ide`, no GTK): definition, uses, hover,
+  breadcrumbs, semantic tokens, lenses, search and the fast diagnostics
+  at a byte offset, plus open buffers and saving; the future language
+  server's core.
 - **Build button**: checks, then says "The build plan (PDF) isn't built
   yet"; disabled while the design has errors.
 - **Problems**: the pill (or Ctrl+E, from any view) opens the Problems
@@ -224,10 +245,10 @@ through the window itself is not automated.
 
 ## Not done yet
 
-- **Window**: the Files view (the editor) and the Cut list view are
-  placeholders with their slots ready (`docs/gui.md`). A problem's ways
-  to fix it are its help line split at "or", and "Show in
-  text" goes to the problem's own line, not to each fix's.
+- **Window**: the Cut list view is a placeholder with its slot ready
+  (`docs/gui.md`). A problem's ways to fix it are its help line split at
+  "or", and "Show in text" goes to the problem's own line, not to each
+  fix's.
 - **Build plan and cut list**: `stave build`, the work plan (recipes,
   order of operations, tool settings), the PDF and the CSV cut list
   (stave-workplan, stave-output) are not written yet; neither is layer 7's
@@ -255,4 +276,8 @@ through the window itself is not automated.
   part, not by triangle. A joint's view from above exists only when one
   of its parts turns about the up axis.
 - **Modules**: remote sources (`github:`, `https:`) and the lockfile.
-- **Editors and AI**: the language server, smart edits and patches.
+- **Editors and AI**: the language server (`stave-lsp`, on `stave-ide`),
+  completion, signature help, rename, quick fixes, inlay hints, smart
+  edits and patches. The editor is a plain GtkTextView because
+  GtkSourceView 5 isn't installed here; the navigation layer rebuilds its
+  index on each pause in typing rather than per file (a few milliseconds).

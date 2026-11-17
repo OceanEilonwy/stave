@@ -453,6 +453,10 @@ pub enum Command {
     /// Show a place in a file: switches to the Files view with it
     /// selected (a "Defined in the text" link).
     GoToSource(SourceLocation),
+    /// The editor's cursor is on this item (or on nothing the views can
+    /// show): select it where the window is, without a history entry, so
+    /// the 3D view follows the text as the cursor moves.
+    Link(Option<Selection>),
     /// Show the scene with this name (its own explode amount with it).
     ShowScene(String),
     /// Pull the parts apart this far.
@@ -733,6 +737,19 @@ impl Session {
                 };
                 if place != self.place {
                     self.go(place, &mut events);
+                }
+            }
+            Command::Link(selection) => {
+                if selection != self.place.selection {
+                    let before = self.place.clone();
+                    self.place.selection = selection;
+                    self.place.focus = None;
+                    if before.selection != self.place.selection {
+                        events.push(Event::SelectionChanged);
+                    }
+                    if before.focus.is_some() {
+                        events.push(Event::FocusChanged);
+                    }
                 }
             }
             Command::ShowScene(name) => {

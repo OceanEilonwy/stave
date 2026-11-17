@@ -71,6 +71,11 @@ Dependency order (a crate depends only on crates above it):
 → `stave-geom` → `stave-check` → `stave-workplan` → `stave-scene` →
 `stave-output` → `stave-app` → `stave-cli`, `stave-gtk`.
 
+`stave-ide` (the editor's navigation layer: names, uses, hovers, colours,
+open buffers) sits beside that chain after `stave-modules` and before
+`stave-app`: it depends only on `stave-lang`, `stave-schema` and
+`stave-modules`, has no GTK types, and the future `stave-lsp` builds on it.
+
 - Only `stave-gtk` may depend on GTK, libadwaita or wgpu.
 - `stave-gtk` contains no business logic: handlers call into `stave-app`.
 

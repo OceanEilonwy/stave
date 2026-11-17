@@ -1760,6 +1760,7 @@ dependencies = [
  "notify",
  "stave-check",
  "stave-geom",
+ "stave-ide",
  "stave-lang",
  "stave-model",
  "stave-modules",
@@ -1818,10 +1819,23 @@ dependencies = [
  "pollster",
  "stave-app",
  "stave-geom",
+ "stave-ide",
  "stave-lang",
  "stave-model",
+ "stave-modules",
  "stave-scene",
  "wgpu",
+]
+
+[[package]]
+name = "stave-ide"
+version = "0.1.0"
+dependencies = [
+ "rowan",
+ "stave-lang",
+ "stave-modules",
+ "stave-schema",
+ "thiserror",
 ]
 
 [[package]]

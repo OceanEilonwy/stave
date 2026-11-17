@@ -36,6 +36,13 @@ pub fn pixels(value: f64) -> u32 {
         .unwrap_or(1)
 }
 
+/// A pointer coordinate as the whole widget pixel it falls in.
+pub fn int_of(value: f64) -> i32 {
+    stave_geom::render::integer_from_f64(value.floor().clamp(-1e6, 1e6))
+        .and_then(|n| i32::try_from(n).ok())
+        .unwrap_or(0)
+}
+
 /// A small `f32` (a percentage, a slider's reading) as the nearest whole
 /// number; 0 when it isn't a number or is out of `i32`'s range.
 pub fn int_of_f32(value: f32) -> i32 {

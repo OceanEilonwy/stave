@@ -98,6 +98,23 @@ pub fn run(folder: &Path) -> Outcome {
     }
 }
 
+/// Checks a project folder as the editor shows it: open buffers with
+/// unsaved changes are read in place of their files (grammar, "Modules in
+/// an editor"). Blocking; call it off the main thread.
+pub fn run_with(folder: &Path, overlay: &stave_ide::Overlay) -> Outcome {
+    if overlay.is_empty() {
+        return run(folder);
+    }
+    let started = Instant::now();
+    match crate::open_with(folder, overlay) {
+        Ok(opened) => Outcome::Checked(Box::new(checked(folder, opened, started))),
+        Err(error) => Outcome::CantOpen {
+            message: error.to_string(),
+            elapsed: started.elapsed(),
+        },
+    }
+}
+
 /// Wraps a pipeline result as a check (for tests and in-memory projects).
 pub fn checked(folder: &Path, opened: Opened, started: Instant) -> Checked {
     let scene = opened.design.as_ref().map(view::scene);

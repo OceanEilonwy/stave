@@ -26,6 +26,8 @@ properly typed and tested, with the simplifications listed below.
              ──stave-scene──▶ SceneGraph (render-ready meshes, materials, camera) and
                               vector line drawings for the PDF
              ──stave-output─▶ PDF (Typst) + CSV
+             ──stave-ide────▶ editor navigation (from the module set: names, uses, hovers,
+                              colours, open buffers; no GTK, reused by stave-lsp)
              ──stave-app────▶ headless application: open project, run pipeline, commands
              ──stave-cli / stave-gtk
 ```
