@@ -217,6 +217,12 @@ fn focus_on_a_socket_plays_the_rung_in() {
         "{}",
         insert.source
     );
+    assert_eq!(insert.steps, ["push(piece, along: length)"]);
+    assert_eq!(insert.link, "std:joinery/socket");
+    let location = insert.location.as_ref().unwrap();
+    assert_eq!(location.path, "std/joinery/socket.stave");
+    assert_eq!(location.line.get(), 10);
+    assert_eq!(found.receives.as_deref(), Some("leg[front_left]"));
     assert!(found.assembles());
     assert_eq!(found.step_count(), 1);
 
