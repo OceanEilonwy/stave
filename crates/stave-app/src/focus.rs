@@ -20,7 +20,7 @@
 //! doc comments, a kind's `insert:` steps as written, and a hardware kind's
 //! documented `member`s.
 
-use stave_geom::clearance::closest_for;
+use stave_geom::clearance::{box_centre, closest_for};
 use stave_geom::collide::{CONTACT_TOLERANCE, WorldSolid, overlaps, touches};
 use stave_geom::sequence::{Member, pair_members, pair_steps, trace};
 use stave_geom::solid::Solid;
@@ -33,8 +33,8 @@ use stave_model::solved::{
     JointId, Motion, Part, PartId, SolvedDesign, StepAmount, StepKind,
 };
 use stave_scene::focus::{
-    Anchor, GapMark, MotionPlay, Plan, Play, StepPlay, amount_text, edge_point, hinge_view,
-    key_poses,
+    Anchor, GapMark, MotionPlay, Plan, Play, StepPlay, amount_text, around, edge_point, hinge_view,
+    key_poses, motion_zone,
 };
 use stave_scene::{Aabb, Item, Look, MotionRange, NodeId, Overlay, Posed, SceneEntry, SceneGraph};
 use stave_schema::kinds::MemberName;
@@ -252,6 +252,8 @@ pub struct Focus {
     plan: Option<Plan>,
     /// What to frame in the 3D view.
     zone: Option<Aabb>,
+    /// Focus opens on the view from above (a joint that turns upright).
+    prefers_plan: bool,
     /// The direction to look from in 3D (yaw and pitch), when focus has
     /// a better one than the viewer's: a hinge from inside the cabinet.
     view: Option<(f32, f32)>,
@@ -533,6 +535,17 @@ fn joint_focus(
         value: fit_text(&parts, &solids),
     });
 
+    // A part that turns about the up axis (the chidori's lock) is best
+    // seen from above, cut through the node: its flats lining up with the
+    // slots it turns into.
+    let zone = graph.joint_zone(&moving, &receiving);
+    let turning = pair.insert.iter().find(|step| {
+        step.kind == StepKind::Rotate
+            && design.part(step.part).is_some_and(|part| {
+                part.pose.orientation.direction(step.axis).axis() == stave_lang::placement::Axis::Up
+            })
+    });
+    let plan = turning.and_then(|step| Plan::joint(graph, step.part, &receiving));
     let insert = kind.and_then(|kind| insert_text(opened, kind));
     let description = kind.and_then(doc_text).map(|text| first_sentence(&text));
     let title = title(design, target);
@@ -573,10 +586,11 @@ fn joint_focus(
         closest: None,
         focus_nodes: part_nodes(graph, &members),
         xray_nodes: part_nodes(graph, &receiving),
-        zone: graph.joint_zone(&moving, &receiving),
+        zone,
         view: None,
         play,
-        plan: None,
+        plan,
+        prefers_plan: plan.is_some(),
     })
 }
 
@@ -690,7 +704,11 @@ fn hardware_focus(
         HardwareData::Slide { .. } | HardwareData::Pull { .. } => None,
     };
     let mut context: Vec<PartId> = vec![hardware.piece];
-    context.extend(on);
+    let outside_parts: Vec<PartId> = hardware
+        .assembly
+        .map(|assembly| assembly_parts(design, assembly))
+        .unwrap_or_default();
+    context.extend(side_of(design, hardware, &outside_parts, on));
     let mut focus_nodes = hardware_nodes.clone();
     focus_nodes.extend(part_nodes(graph, &context));
     let xray_nodes = part_nodes(graph, &[hardware.piece]);
@@ -722,7 +740,11 @@ fn hardware_focus(
     let mut closest = None;
     let mut plan = None;
     let mut view = None;
-    let play = match moving_assembly(design, graph, hardware) {
+    let mut zone = None;
+    // A pull is about how it is fixed, not about the door it is on.
+    let moves =
+        moving_assembly(design, graph, hardware).filter(|_| hardware.base != HardwareBase::Pull);
+    let play = match moves {
         Some((assembly, range)) => {
             let motion = design
                 .assemblies
@@ -751,20 +773,25 @@ fn hardware_focus(
                 .collect();
             let fixed: Vec<WorldSolid> = fixed_parts.iter().map(|p| solid(p)).collect();
             let mut gap_mark = None;
+            // Where a gap runs along the hardware, it is shown level with it.
+            let prefer = Some(box_centre(&hardware.bounds));
             if let Some(motion) = &motion {
-                // To the part the hinge is on (the side), then to anything.
-                let side = on.and_then(|on| fixed_parts.iter().position(|p| p.id == on));
+                // To the side the hinge or slide is on, then to anything.
+                let side = side_of(design, hardware, &inside, on)
+                    .and_then(|on| fixed_parts.iter().position(|p| p.id == on));
+                let on = side.and_then(|index| fixed_parts.get(index)).map(|p| p.id);
                 if let Some(index) = side
                     && let Some(side) = fixed.get(index)
-                    && let Some(found) = closest_for(&moving, std::slice::from_ref(side), motion)
+                    && let Some(found) =
+                        closest_for(&moving, std::slice::from_ref(side), motion, prefer)
                 {
                     rows.push(Row {
                         label: "Closest to the side",
                         value: gap_text(found.gap),
                     });
-                    gap_mark = GapMark::new(graph, assembly, &found, gap_text(found.gap));
+                    gap_mark = GapMark::new(graph, assembly, &found, &gap_text(found.gap));
                 }
-                if let Some(found) = closest_for(&moving, &fixed, motion)
+                if let Some(found) = closest_for(&moving, &fixed, motion, prefer)
                     && let Some(part) = fixed_parts.get(found.fixed)
                 {
                     if Some(part.id) != on {
@@ -773,7 +800,7 @@ fn hardware_focus(
                             value: format!("{}: {}", part.name, gap_text(found.gap)),
                         });
                         if gap_mark.is_none() {
-                            gap_mark = GapMark::new(graph, assembly, &found, gap_text(found.gap));
+                            gap_mark = GapMark::new(graph, assembly, &found, &gap_text(found.gap));
                         }
                     }
                     closest = Some((part.name.clone(), found.gap));
@@ -811,14 +838,32 @@ fn hardware_focus(
                 }
                 _ => Vec::new(),
             };
-            if range.turns {
-                let arm = hardware.mechanism.as_ref().map(|m| m.arm.bounds);
-                plan = Plan::of(graph, &hardware_nodes, &path, arm);
-                view = motion
-                    .as_ref()
-                    .and_then(Motion::swing)
-                    .map(|(free, _)| hinge_view(free));
+            if !path.is_empty() {
+                rows.push(Row {
+                    label: "Dotted line",
+                    value: if range.turns {
+                        "the path of the door's front edge: solid where it has been"
+                    } else {
+                        "the path of the drawer's front: solid where it has been"
+                    }
+                    .to_owned(),
+                });
             }
+            match motion {
+                Some(Motion::Travel { toward, .. }) => {
+                    plan = Plan::slide(graph, &hardware_nodes, toward, range.full);
+                }
+                Some(Motion::Turn { .. } | Motion::Linkage { .. }) => {
+                    let arm = hardware.mechanism.as_ref().map(|m| m.arm.bounds);
+                    plan = Plan::of(graph, &hardware_nodes, &path, arm);
+                    view = motion
+                        .as_ref()
+                        .and_then(Motion::swing)
+                        .map(|(free, _)| hinge_view(free));
+                }
+                None => {}
+            }
+            zone = motion_zone(graph, &hardware_nodes, assembly, &path, gap_mark.as_ref());
             Play::Motion(MotionPlay {
                 assembly,
                 range,
@@ -827,7 +872,7 @@ fn hardware_focus(
                 gap: gap_mark,
             })
         }
-        None => Play::Still,
+        None => Play::Fixed(anchors.clone()),
     };
     let heading = match hardware.base {
         HardwareBase::Hinge if hardware.is_butt_hinge() => "How a butt hinge works",
@@ -849,13 +894,37 @@ fn hardware_focus(
         closest,
         focus_nodes,
         xray_nodes,
-        zone: plan
-            .map(|p| p.bounds)
-            .or_else(|| graph.bounds_of(&graph.rest(), &hardware_nodes)),
+        zone: zone.or_else(|| around(graph, &hardware_nodes)),
         view,
         play,
         plan,
+        prefers_plan: false,
     })
+}
+
+/// The part a hinge or slide is fixed to outside its assembly: a hinge's
+/// `on`, or the part a slide's cabinet member lies against.
+fn side_of(
+    design: &SolvedDesign,
+    hardware: &Hardware,
+    inside: &[PartId],
+    on: Option<PartId>,
+) -> Option<PartId> {
+    if on.is_some() {
+        return on;
+    }
+    let member = hardware.fixed.as_ref()?.bounds;
+    let touching = |a: &stave_model::solved::WorldBox, b: &stave_model::solved::WorldBox| {
+        stave_lang::placement::Axis::ALL.into_iter().all(|axis| {
+            a.min().get(axis) <= b.max().get(axis) && b.min().get(axis) <= a.max().get(axis)
+        })
+    };
+    design
+        .parts
+        .iter()
+        .filter(|p| !inside.contains(&p.id))
+        .find(|p| touching(&p.cut_box(), &member))
+        .map(|p| p.id)
 }
 
 /// Where a member's number goes.
@@ -879,8 +948,10 @@ fn member_anchor(
             .collect()
     };
     Some(match member {
-        MemberName::Cup | MemberName::Leaves | MemberName::DrawerMember => {
-            Anchor::Nodes(pick(&|rest| rest.is_empty()))
+        MemberName::Cup | MemberName::Leaves => Anchor::Nodes(pick(&|rest| rest.is_empty()), None),
+        // A slide's drawer member is long: its number goes near its front.
+        MemberName::DrawerMember => {
+            Anchor::Nodes(pick(&|rest| rest.is_empty()), Some(Direction::Front))
         }
         // Seen from above the arm lies over the plate: the plate's number
         // goes at its back end, the arm's at its front.
@@ -889,10 +960,16 @@ fn member_anchor(
             hardware.mechanism.as_ref()?.arm.bounds,
             Some(Direction::Front),
         ),
-        MemberName::Links => Anchor::Nodes(pick(&|rest| rest.ends_with("link"))),
-        MemberName::CabinetMember | MemberName::Pin => {
-            Anchor::Nodes(pick(&|rest| !rest.is_empty() && !rest.ends_with("link")))
+        MemberName::Links => Anchor::Nodes(pick(&|rest| rest.ends_with("link")), None),
+        // A slide's cabinet member is long: its number goes near its
+        // front, where the view from above looks.
+        MemberName::CabinetMember => {
+            Anchor::Box(hardware.fixed.as_ref()?.bounds, Some(Direction::Front))
         }
+        MemberName::Pin => Anchor::Nodes(
+            pick(&|rest| !rest.is_empty() && !rest.ends_with("link")),
+            None,
+        ),
         // A pull stands off its face: what you hold is at the outer end,
         // the screws at the end against the door.
         MemberName::Knob | MemberName::Bar => {
@@ -930,7 +1007,25 @@ impl Focus {
         self.view
     }
 
-    /// A flat view from above, for a hinge.
+    /// Whether focus should open looking from above: a joint whose part
+    /// turns about the up axis reads best that way.
+    pub fn prefers_plan(&self) -> bool {
+        self.prefers_plan
+    }
+
+    /// What the view from above shows, in words.
+    pub fn plan_caption(&self) -> Option<&'static str> {
+        self.plan.as_ref()?;
+        Some(match self.target {
+            Target::Hardware(_) if self.heading.contains("slide") => {
+                "Looking down on the slide, cut through its middle"
+            }
+            Target::Hardware(_) => "Looking down on the hinge, through the cabinet top",
+            Target::Joint { .. } => "Looking down on the joint, cut through its middle",
+        })
+    }
+
+    /// A flat view from above, for a hinge or a slide.
     pub fn plan(&self) -> Option<&Plan> {
         self.plan.as_ref()
     }
@@ -939,7 +1034,16 @@ impl Focus {
     pub fn step_count(&self) -> usize {
         match &self.play {
             Play::Steps(play) => play.traced.len(),
-            Play::Motion(_) | Play::Still => 0,
+            Play::Motion(_) | Play::Still | Play::Fixed(_) => 0,
+        }
+    }
+
+    /// Where along the motion (0 to 1) it comes closest to the parts
+    /// around it, when that is marked: the one pose its gap is drawn in.
+    pub fn closest_progress(&self) -> Option<f32> {
+        match &self.play {
+            Play::Motion(play) => play.closest_progress(),
+            Play::Steps(_) | Play::Still | Play::Fixed(_) => None,
         }
     }
 
@@ -947,7 +1051,7 @@ impl Focus {
     pub fn motion(&self) -> Option<(AssemblyId, MotionRange)> {
         match &self.play {
             Play::Motion(play) => Some((play.assembly, play.range)),
-            Play::Steps(_) | Play::Still => None,
+            Play::Steps(_) | Play::Still | Play::Fixed(_) => None,
         }
     }
 

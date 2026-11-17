@@ -117,7 +117,7 @@ impl FocusPanel {
         display.add(&fade);
         let from_above = gtk::ToggleButton::builder()
             .label("From above")
-            .tooltip_text("Look straight down, through a cut just above the hinge")
+            .tooltip_text("Look straight down, flat, through a cut across it")
             .valign(gtk::Align::Center)
             .build();
         let view_row = adw::ActionRow::builder()

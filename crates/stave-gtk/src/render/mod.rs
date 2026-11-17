@@ -1142,7 +1142,10 @@ impl Renderer {
 
 /// The overlay's colours, linear: the path in the selection blue, the
 /// home outline dark, the labels white on blue.
-const PATH_COLOUR: [f32; 4] = [0.0284, 0.1590, 0.6724, 0.95];
+/// The path of a door's edge: a deep teal (#00756f), apart from the
+/// selection and badge blue and the gap's orange, and over 4.5:1 against
+/// the light stage.
+const PATH_COLOUR: [f32; 4] = [0.0, 0.178, 0.155, 1.0];
 const HOME_COLOUR: [f32; 4] = [0.05, 0.03, 0.02, 0.85];
 const LABEL_FILL: [f32; 4] = [0.0284, 0.1590, 0.6724, 1.0];
 const LABEL_INK: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
@@ -1171,6 +1174,59 @@ fn glyph(character: char) -> (f32, Strokes) {
                 &[(0.0, 1.1), (0.3, 1.3), (0.65, 1.1), (0.65, 0.0)],
                 &[(0.65, 1.1), (0.95, 1.3), (1.3, 1.1), (1.3, 0.0)],
             ]),
+        ),
+        'c' => (
+            1.0,
+            owned(&[&[(1.0, 1.3), (0.0, 1.3), (0.0, 0.0), (1.0, 0.0)]]),
+        ),
+        'l' => (0.6, owned(&[&[(0.3, 2.0), (0.3, 0.0)]])),
+        'o' => (
+            1.0,
+            owned(&[&[(0.0, 0.0), (1.0, 0.0), (1.0, 1.3), (0.0, 1.3), (0.0, 0.0)]]),
+        ),
+        's' => (
+            1.0,
+            owned(&[&[
+                (1.0, 1.3),
+                (0.0, 1.3),
+                (0.0, 0.65),
+                (1.0, 0.65),
+                (1.0, 0.0),
+                (0.0, 0.0),
+            ]]),
+        ),
+        'e' => (
+            1.0,
+            owned(&[&[
+                (0.0, 0.65),
+                (1.0, 0.65),
+                (1.0, 1.3),
+                (0.0, 1.3),
+                (0.0, 0.0),
+                (1.0, 0.0),
+            ]]),
+        ),
+        't' => (
+            0.9,
+            owned(&[
+                &[(0.35, 2.0), (0.35, 0.0), (0.9, 0.0)],
+                &[(0.0, 1.3), (0.9, 1.3)],
+            ]),
+        ),
+        'a' => (
+            1.0,
+            owned(&[&[
+                (0.0, 1.3),
+                (1.0, 1.3),
+                (1.0, 0.0),
+                (0.0, 0.0),
+                (0.0, 0.65),
+                (1.0, 0.65),
+            ]]),
+        ),
+        ':' => (
+            0.4,
+            owned(&[&[(0.15, 0.1), (0.15, 0.3)], &[(0.15, 1.0), (0.15, 1.2)]]),
         ),
         '°' => (
             0.6,
@@ -1276,7 +1332,8 @@ fn overlay_triangles(
             continue;
         };
         let (pixels, colour) = match line.kind {
-            LineKind::Path => (3.0, PATH_COLOUR),
+            LineKind::Path => (2.5, PATH_COLOUR),
+            LineKind::PathTravelled => (3.0, PATH_COLOUR),
             LineKind::Home => (2.0, HOME_COLOUR),
             LineKind::Gap => (2.5, GAP_COLOUR),
         };
@@ -1342,31 +1399,34 @@ fn overlay_triangles(
             }
         }
     }
-    for note in &overlay.notes {
-        let Some(at) = project(note.at) else {
-            continue;
-        };
-        let size = 6.5_f32;
+    // Text in strokes from an origin (its bottom left on screen), with a
+    // pale pill behind it when asked.
+    let text = |out: &mut Vec<OverlayVertex>,
+                origin: glam::Vec2,
+                words: &str,
+                size: f32,
+                ink: [f32; 4],
+                pill: bool| {
         let gap = 0.45;
-        let glyphs: Vec<(f32, Strokes)> = note.text.chars().map(glyph).collect();
+        let glyphs: Vec<(f32, Strokes)> = words.chars().map(glyph).collect();
         let width: f32 = glyphs.iter().map(|(w, _)| w + gap).sum::<f32>() - gap;
-        // A pale pill to the right of and above the point, then the text.
-        let origin = at + glam::Vec2::new(10.0, 8.0) * per_pixel;
-        let pad = glam::Vec2::new(5.0, 4.0);
-        let low = origin - pad * per_pixel;
-        let high = origin + (glam::Vec2::new(width, 2.0) * size + pad) * per_pixel;
-        for corner in [
-            low,
-            glam::Vec2::new(high.x, low.y),
-            high,
-            low,
-            high,
-            glam::Vec2::new(low.x, high.y),
-        ] {
-            out.push(OverlayVertex {
-                position: corner.to_array(),
-                colour: NOTE_FILL,
-            });
+        if pill {
+            let pad = glam::Vec2::new(5.0, 4.0);
+            let low = origin - pad * per_pixel;
+            let high = origin + (glam::Vec2::new(width, 2.0) * size + pad) * per_pixel;
+            for corner in [
+                low,
+                glam::Vec2::new(high.x, low.y),
+                high,
+                low,
+                high,
+                glam::Vec2::new(low.x, high.y),
+            ] {
+                out.push(OverlayVertex {
+                    position: corner.to_array(),
+                    colour: NOTE_FILL,
+                });
+            }
         }
         let mut left = 0.0;
         for (advance, strokes) in &glyphs {
@@ -1376,12 +1436,59 @@ fn overlay_triangles(
                         let place = |(x, y): (f32, f32)| {
                             origin + glam::Vec2::new(left + x, y) * size * per_pixel
                         };
-                        segment(&mut out, place(*a), place(*b), 1.9, NOTE_INK);
+                        segment(out, place(*a), place(*b), size * 0.3, ink);
                     }
                 }
             }
             left += advance + gap;
         }
+    };
+    for note in &overlay.notes {
+        let Some(at) = project(note.at) else {
+            continue;
+        };
+        // Above the point, ending at it, so it covers neither the moving
+        // part nor the path beside it.
+        let size = 6.5;
+        let width = note.text.chars().map(|c| glyph(c).0 + 0.45).sum::<f32>() * size;
+        let origin = at + glam::Vec2::new(-width - 6.0, 10.0) * per_pixel;
+        text(&mut out, origin, &note.text, size, NOTE_INK, true);
+    }
+    let marker_points: Vec<Option<glam::Vec2>> =
+        overlay.markers.iter().map(|m| project(m.at)).collect();
+    for (index, marker) in overlay.markers.iter().enumerate() {
+        let Some(Some(at)) = marker_points.get(index).copied() else {
+            continue;
+        };
+        // The caption sits beyond the dot, away from the path's other end.
+        let others: Vec<glam::Vec2> = marker_points
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| *i != index)
+            .filter_map(|(_, p)| *p)
+            .collect();
+        let away = others.first().map_or(glam::Vec2::new(-1.0, -1.0), |other| {
+            ((at - *other) / per_pixel).normalize_or(glam::Vec2::new(-1.0, -1.0))
+        });
+        let steps = 12_u16;
+        let point = |step: u16| {
+            let angle = std::f32::consts::TAU * f32::from(step) / f32::from(steps);
+            at + glam::Vec2::new(angle.cos(), angle.sin()) * 4.0 * per_pixel
+        };
+        for step in 0..steps {
+            for corner in [at, point(step), point(step + 1)] {
+                out.push(OverlayVertex {
+                    position: corner.to_array(),
+                    colour: PATH_COLOUR,
+                });
+            }
+        }
+        let size = 5.5;
+        let width = marker.text.chars().map(|c| glyph(c).0 + 0.45).sum::<f32>() * size;
+        let height = 2.0 * size;
+        let centre = at + away * 22.0 * per_pixel;
+        let origin = centre - glam::Vec2::new(width, height) * 0.5 * per_pixel;
+        text(&mut out, origin, &marker.text, size, PATH_COLOUR, false);
     }
     out
 }

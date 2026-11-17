@@ -105,10 +105,14 @@ struct Arguments {
     /// closed to 1 fully open for hardware (default 0.5).
     #[arg(long, value_name = "AMOUNT", value_parser = parse_amount)]
     step: Option<f32>,
-    /// With --focus on a hinge: look straight down, flat, through a section
-    /// just above it.
+    /// With --focus on a hinge, a slide or a joint that turns upright: look
+    /// straight down, flat, through a section across it.
     #[arg(long)]
     plan: bool,
+    /// With --focus: stay in 3D where focus would open looking from above
+    /// (a joint whose part turns upright, the chidori).
+    #[arg(long)]
+    in_3d: bool,
     /// With --focus: draw the receiving part solid, not see-through.
     #[arg(long)]
     no_xray: bool,
@@ -178,6 +182,7 @@ fn main() -> ExitCode {
                     pair: arguments.pair,
                     step: arguments.step,
                     plan: arguments.plan,
+                    in_3d: arguments.in_3d,
                     options: stave_app::focus::Options {
                         xray: !arguments.no_xray,
                         tint_cut_faces: !arguments.no_tint,

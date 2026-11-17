@@ -29,8 +29,11 @@ pub enum Look {
 /// What kind of line an overlay line is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum LineKind {
-    /// The path a point follows as something moves (dotted).
+    /// The path a point follows as something moves, still to come
+    /// (dotted).
     Path,
+    /// The part of the path already travelled (solid).
+    PathTravelled,
     /// Where a part ends up when its joint is together (dashed).
     Home,
     /// Between a moving part and the fixed part it comes closest to.
@@ -76,6 +79,8 @@ pub struct Overlay {
     pub labels: Vec<Label>,
     /// The notes.
     pub notes: Vec<Note>,
+    /// Small dots with a tiny caption: the ends of a path ("0°", "110°").
+    pub markers: Vec<Note>,
 }
 
 impl Overlay {
@@ -116,16 +121,31 @@ impl Overlay {
         }
     }
 
-    /// Adds a path through points, dotted.
-    pub fn add_path(&mut self, points: &[Vec3]) {
-        let segments: Vec<[Vec3; 2]> = points
-            .windows(2)
-            .filter_map(|pair| match pair {
-                [a, b] => Some([*a, *b]),
-                _ => None,
-            })
-            .collect();
-        self.add_broken(&segments, LineKind::Path, 1.2, 2.0);
+    /// Adds a path through points: solid up to point `travelled`, dotted
+    /// (closely, so a short curve still reads) after it.
+    pub fn add_path(&mut self, points: &[Vec3], travelled: usize) {
+        let segments = |points: &[Vec3]| -> Vec<[Vec3; 2]> {
+            points
+                .windows(2)
+                .filter_map(|pair| match pair {
+                    [a, b] => Some([*a, *b]),
+                    _ => None,
+                })
+                .collect()
+        };
+        let split = travelled.min(points.len().saturating_sub(1));
+        let (done, ahead) = (
+            points.get(..=split).unwrap_or(&[]),
+            points.get(split..).unwrap_or(&[]),
+        );
+        for [from, to] in segments(done) {
+            self.lines.push(OverlayLine {
+                from,
+                to,
+                kind: LineKind::PathTravelled,
+            });
+        }
+        self.add_broken(&segments(ahead), LineKind::Path, 0.7, 0.9);
     }
 }
 
@@ -237,6 +257,8 @@ pub enum Play {
     Motion(MotionPlay),
     /// Nothing moves.
     Still,
+    /// Nothing moves, but its members are numbered (a pull on its door).
+    Fixed(Vec<(u8, Anchor)>),
 }
 
 /// A joint pair's steps: its parts, each step's move (from
@@ -255,8 +277,9 @@ pub struct StepPlay {
 /// Where a numbered label goes.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Anchor {
-    /// The middle of these nodes, where they are posed.
-    Nodes(Vec<NodeId>),
+    /// These nodes where they are posed: their middle, or (with a
+    /// direction) a fifth of the way in from their end that way.
+    Nodes(Vec<NodeId>, Option<Direction>),
     /// A world box that doesn't move: its middle, or (with a direction)
     /// a fifth of the way in from its end that way, so labels of boxes
     /// one above the other (a hinge's plate under its arm) don't cover
@@ -286,30 +309,50 @@ pub struct MotionPlay {
 pub struct GapMark {
     /// The point on the fixed part (render frame).
     pub fixed: Vec3,
-    /// The point on the moving part, at rest (render frame).
+    /// The point on the moving part where it comes closest (render
+    /// frame): exactly the gap from `fixed`.
     pub moving: Vec3,
-    /// "3.5 mm".
+    /// Where along the motion it comes closest (radians or millimetres).
+    pub at: f32,
+    /// "closest at 108°: 3.5 mm".
     pub text: String,
 }
 
 impl GapMark {
     /// The mark for a closest approach of an assembly's motion found by
-    /// [`stave_geom::clearance`]; `None` when it has no points.
+    /// [`stave_geom::clearance`], `gap` its size in words ("3.5 mm");
+    /// `None` when it has no points.
     pub fn new(
         graph: &SceneGraph,
         assembly: AssemblyId,
         closest: &stave_geom::clearance::Closest,
-        text: String,
+        gap: &str,
     ) -> Option<GapMark> {
         let (on_moving, on_fixed) = closest.points?;
-        let posed = graph.motion_transform(assembly, render::narrow(closest.at))?;
+        let range = graph.motion_range(assembly)?;
+        // Radians for a turn; nanometres along a slide, millimetres here.
+        let at = render::narrow(if range.turns {
+            closest.at
+        } else {
+            closest.at * 1e-6
+        });
         Some(GapMark {
             fixed: render::point_of_nm(on_fixed),
-            moving: posed
-                .inverse()
-                .transform_point3(render::point_of_nm(on_moving)),
-            text,
+            moving: render::point_of_nm(on_moving),
+            at,
+            text: format!("closest at {}: {gap}", amount_text(range, at)),
         })
+    }
+
+    /// Whether a motion at `amount` is where this gap is measured: within
+    /// 2° of a turn, 2mm of a slide.
+    pub fn is_at(&self, range: MotionRange, amount: f32) -> bool {
+        let tolerance = if range.turns {
+            2.0_f32.to_radians()
+        } else {
+            2.0
+        };
+        (amount - self.at).abs() <= tolerance
     }
 }
 
@@ -391,6 +434,17 @@ impl Play {
                 step: None,
                 status: "it doesn't move".to_owned(),
             },
+            Play::Fixed(anchors) => {
+                let posed = graph.pose_with(scene, &[], 0.0);
+                let mut overlay = Overlay::default();
+                label_anchors(graph, &posed, anchors, &mut overlay);
+                PlayFrame {
+                    posed,
+                    overlay,
+                    step: None,
+                    status: "fixed in place".to_owned(),
+                }
+            }
         }
     }
 }
@@ -486,43 +540,48 @@ impl StepPlay {
 }
 
 impl MotionPlay {
+    /// Where along the motion (0 to 1) the closest approach is, when it
+    /// is marked.
+    pub fn closest_progress(&self) -> Option<f32> {
+        let gap = self.gap.as_ref()?;
+        (self.range.full > 0.0).then(|| gap.at / self.range.full)
+    }
+
     fn frame(&self, graph: &SceneGraph, scene: &SceneEntry, progress: f32) -> PlayFrame {
         let amount = self.range.full * progress;
         let posed = graph.pose_with(scene, &[(self.assembly, amount)], 0.0);
         let mut overlay = Overlay::default();
-        overlay.add_path(&self.path);
-        if let Some(gap) = &self.gap
-            && let Some(transform) = graph.motion_transform(self.assembly, amount)
-        {
-            overlay.lines.push(OverlayLine {
-                from: gap.fixed,
-                to: transform.transform_point3(gap.moving),
-                kind: LineKind::Gap,
-            });
+        // The path: travelled solid, still to come dotted, its ends marked.
+        let steps = self.path.len().saturating_sub(1);
+        let travelled = index_of(f64::from(progress) * f64_of(steps));
+        overlay.add_path(&self.path, travelled);
+        for (point, amount) in [
+            (self.path.first(), 0.0),
+            (self.path.last(), self.range.full),
+        ] {
+            if let Some(point) = point {
+                overlay.markers.push(Note {
+                    at: *point,
+                    text: amount_text(self.range, amount),
+                });
+            }
+        }
+        // The gap is written where it is found; its dimension line only
+        // where it is true, at the pose it is measured in.
+        if let Some(gap) = &self.gap {
+            if gap.is_at(self.range, amount) {
+                overlay.lines.push(OverlayLine {
+                    from: gap.fixed,
+                    to: gap.moving,
+                    kind: LineKind::Gap,
+                });
+            }
             overlay.notes.push(Note {
                 at: gap.fixed,
                 text: gap.text.clone(),
             });
         }
-        for (number, anchor) in &self.anchors {
-            let at = match anchor {
-                Anchor::Box(region, toward) => {
-                    let (low, high) = (render::point(region.min()), render::point(region.max()));
-                    let middle = (low + high) * 0.5;
-                    Some(toward.map_or(middle, |direction| {
-                        let along = render::direction(direction);
-                        middle + along * ((high - low).abs().dot(along.abs()) * 0.3)
-                    }))
-                }
-                Anchor::Nodes(nodes) => graph.bounds_of(&posed, nodes).map(|b| b.centre()),
-            };
-            if let Some(at) = at {
-                overlay.labels.push(Label {
-                    at,
-                    number: *number,
-                });
-            }
-        }
+        label_anchors(graph, &posed, &self.anchors, &mut overlay);
         let closed = if self.range.turns {
             amount <= 1e-4
         } else {
@@ -540,6 +599,39 @@ impl MotionPlay {
             overlay,
             step: None,
             status,
+        }
+    }
+}
+
+/// Numbers each anchor's member where it is posed.
+fn label_anchors(
+    graph: &SceneGraph,
+    posed: &Posed,
+    anchors: &[(u8, Anchor)],
+    overlay: &mut Overlay,
+) {
+    for (number, anchor) in anchors {
+        let at = match anchor {
+            Anchor::Box(region, toward) => {
+                let (low, high) = (render::point(region.min()), render::point(region.max()));
+                let middle = (low + high) * 0.5;
+                Some(toward.map_or(middle, |direction| {
+                    let along = render::direction(direction);
+                    middle + along * ((high - low).abs().dot(along.abs()) * 0.3)
+                }))
+            }
+            Anchor::Nodes(nodes, toward) => graph.bounds_of(posed, nodes).map(|b| {
+                toward.map_or(b.centre(), |direction| {
+                    let along = render::direction(direction);
+                    b.centre() + along * (b.size().dot(along.abs()) * 0.3)
+                })
+            }),
+        };
+        if let Some(at) = at {
+            overlay.labels.push(Label {
+                at,
+                number: *number,
+            });
         }
     }
 }
@@ -582,8 +674,12 @@ pub fn edge_point(
             point
         }
         (None, toward) => {
+            // On the front face, level with and beside the slide, so the
+            // path runs past it.
             let toward = toward.map_or(Vec3::Z, render::direction);
-            door.centre() + toward * (door.size().dot(toward.abs()) * 0.5)
+            let beside = level.centre().clamp(door.min, door.max);
+            let front = door.centre() + toward * (door.size().dot(toward.abs()) * 0.5);
+            beside * (Vec3::ONE - toward.abs()) + front * toward.abs()
         }
     }
 }
@@ -606,6 +702,9 @@ pub struct Plan {
     pub section: Section,
     /// What to frame.
     pub bounds: Aabb,
+    /// The orbit's yaw (radians): 0 has the front at the bottom of the
+    /// picture; a slide's view turns so the drawer travels across it.
+    pub yaw: f32,
 }
 
 impl Plan {
@@ -634,7 +733,149 @@ impl Plan {
                 offset: top + 0.5,
             },
             bounds,
+            yaw: 0.0,
         })
+    }
+
+    /// The plan of a joint whose part turns about the up axis (the
+    /// chidori's lock): looking down along that axis, cut through the
+    /// middle of where the turning part passes through the receiving ones,
+    /// so its section and the slots it turns into show together, framed
+    /// close on them.
+    pub fn joint(graph: &SceneGraph, turning: PartId, receiving: &[PartId]) -> Option<Plan> {
+        let rest = graph.rest();
+        let a = graph.bounds_of(&rest, &graph.nodes_of(Item::Part(turning)))?;
+        let nodes: Vec<NodeId> = receiving
+            .iter()
+            .flat_map(|part| graph.nodes_of(Item::Part(*part)))
+            .collect();
+        let b = graph.bounds_of(&rest, &nodes)?;
+        let low = a.min.max(b.min);
+        let high = a.max.min(b.max);
+        if (high - low).min_element() < 0.0 {
+            return None;
+        }
+        let grow = Vec3::splat((high - low).max_element().max(20.0));
+        Some(Plan {
+            section: Section {
+                normal: Vec3::Y,
+                offset: (low.y + high.y) * 0.5,
+            },
+            bounds: Aabb {
+                min: low - grow,
+                max: high + grow,
+            },
+            yaw: 0.0,
+        })
+    }
+
+    /// The plan of a slide drawn by `nodes`, travelling `toward` up to
+    /// `travel` millimetres: cut through the middle of its height, framed
+    /// across from the cabinet side to the drawer side and along from a
+    /// little behind its front to 180mm out (or its whole travel, if
+    /// shorter), close enough that its members read, turned so the travel
+    /// runs across the picture.
+    pub fn slide(
+        graph: &SceneGraph,
+        nodes: &[NodeId],
+        toward: Direction,
+        travel: f32,
+    ) -> Option<Plan> {
+        let slide = graph.bounds_of(&graph.rest(), nodes)?;
+        let along = render::direction(toward);
+        let front = if along.dot(Vec3::ONE) >= 0.0 {
+            slide.max.dot(along.abs())
+        } else {
+            slide.min.dot(along.abs())
+        };
+        let behind = front - along.dot(Vec3::ONE).signum() * 120.0;
+        let reach = front + along.dot(Vec3::ONE).signum() * travel.min(180.0);
+        let mut min = slide.min - Vec3::splat(30.0);
+        let mut max = slide.max + Vec3::splat(30.0);
+        let axis = along.abs();
+        let (low, high) = (behind.min(reach), behind.max(reach));
+        min = min * (Vec3::ONE - axis) + axis * low;
+        max = max * (Vec3::ONE - axis) + axis * high;
+        Some(Plan {
+            section: Section {
+                normal: Vec3::Y,
+                offset: slide.centre().y,
+            },
+            bounds: Aabb { min, max },
+            yaw: if axis.z > 0.5 {
+                std::f32::consts::FRAC_PI_2
+            } else {
+                0.0
+            },
+        })
+    }
+}
+
+/// The box around some nodes at rest, grown by its own largest size, so
+/// what they are fixed to shows around them (a pull on its door).
+pub fn around(graph: &SceneGraph, nodes: &[NodeId]) -> Option<Aabb> {
+    let bounds = graph.bounds_of(&graph.rest(), nodes)?;
+    let grow = Vec3::splat(bounds.size().max_element());
+    Some(Aabb {
+        min: bounds.min - grow,
+        max: bounds.max + grow,
+    })
+}
+
+/// What to frame a piece of hardware in, in 3D: its nodes wherever the
+/// motion takes them, the dotted path and the gap mark, so the camera
+/// keeps everything in view through the whole motion.
+pub fn motion_zone(
+    graph: &SceneGraph,
+    nodes: &[NodeId],
+    assembly: AssemblyId,
+    path: &[Vec3],
+    gap: Option<&GapMark>,
+) -> Option<Aabb> {
+    let scene = graph.scenes.first()?;
+    let swept = graph.swept_bounds(scene, nodes, assembly, 16);
+    let mut points: Vec<Vec3> = path.to_vec();
+    if let Some(gap) = gap {
+        points.push(gap.fixed);
+        if let Some(range) = graph.motion_range(assembly) {
+            for k in 0..=16_u16 {
+                if let Some(transform) =
+                    graph.motion_transform(assembly, range.full * f32::from(k) / 16.0)
+                {
+                    points.push(transform.transform_point3(gap.moving));
+                }
+            }
+        }
+    }
+    let zone = match (swept, Aabb::around(points)) {
+        (Some(a), Some(b)) => a.union(b),
+        (a, b) => a.or(b)?,
+    };
+    Some(Aabb {
+        min: zone.min - Vec3::splat(10.0),
+        max: zone.max + Vec3::splat(10.0),
+    })
+}
+
+impl SceneGraph {
+    /// The box around some nodes over an assembly's whole motion, at
+    /// `samples + 1` amounts from closed to fully open, in a scene.
+    pub fn swept_bounds(
+        &self,
+        scene: &SceneEntry,
+        nodes: &[NodeId],
+        assembly: AssemblyId,
+        samples: u16,
+    ) -> Option<Aabb> {
+        let range = self.motion_range(assembly)?;
+        let count = samples.max(1);
+        (0..=count)
+            .filter_map(|k| {
+                let amount = range.full * f32::from(k) / f32::from(count);
+                let posed = self.pose_with(scene, &[(assembly, amount)], 0.0);
+                self.bounds_of(&posed, nodes)
+            })
+            .reduce(Aabb::union)
     }
 }
 

@@ -59,8 +59,10 @@ pub struct FocusShot {
     /// How far along: 0 apart (closed) to 1 together (fully open).
     /// Default: half way. An `--open` of the focused assembly overrides it.
     pub step: Option<f32>,
-    /// Look straight down, flat, cut just above the hardware.
+    /// Look straight down, flat, cut through the hardware or the joint.
     pub plan: bool,
+    /// Stay in 3D even where focus would open looking from above.
+    pub in_3d: bool,
     /// The display toggles.
     pub options: stave_app::focus::Options,
 }
@@ -169,8 +171,9 @@ pub struct View<'a> {
     pub section: Option<Section>,
     /// Draw flat.
     pub flat: bool,
-    /// Look straight down on this box, flat (a plan); overrides `frame`.
-    pub plan: Option<Aabb>,
+    /// Look straight down on this box, flat (a plan), turned by this yaw
+    /// (radians); overrides `frame`.
+    pub plan: Option<(Aabb, f32)>,
     /// Look from this yaw and pitch (radians) instead of `turn` and
     /// `pitch`.
     pub look: Option<(f32, f32)>,
@@ -286,10 +289,13 @@ pub fn render_focus(
             };
         }
     }
+    // A joint that turns upright opens looking from above, unless the
+    // shot asks for 3D.
+    let from_above = focus_shot.plan || (focus.prefers_plan() && !focus_shot.in_3d);
     // From above, the section cuts the receiving part open: it is drawn
     // solid.
     let options = stave_app::focus::Options {
-        xray: focus_shot.options.xray && !focus_shot.plan,
+        xray: focus_shot.options.xray && !from_above,
         ..focus_shot.options
     };
     let frame = focus.frame(scene, entry, progress, &options);
@@ -301,9 +307,9 @@ pub fn render_focus(
             }
         }
     }
-    let plan = focus_shot.plan.then(|| focus.plan()).flatten();
+    let plan = from_above.then(|| focus.plan()).flatten();
     if focus_shot.plan && plan.is_none() {
-        bail!("only a hinge has a view from above");
+        bail!("this has no view from above: hinges, slides and joints that turn upright do");
     }
     let framed = if shot.frame.is_none() {
         focus
@@ -319,7 +325,7 @@ pub fn render_focus(
     let view = View {
         look,
         section: plan.map(|p| p.section).or_else(|| section_of(shot, scene)),
-        plan: plan.map(|p| p.bounds),
+        plan: plan.map(|p| (p.bounds, p.yaw)),
         looks: Some(&frame.looks),
         overlay: Some(&frame.overlay),
         tint_cut_faces: focus_shot.options.tint_cut_faces,
@@ -349,9 +355,10 @@ pub fn render_focus(
         panel.push(step.clone());
     }
     panel.push(frame.status.clone());
-    if let Some(plan) = plan {
-        let _ = plan;
-        panel.push("Looking down on the hinge, through the cabinet top".to_owned());
+    if plan.is_some()
+        && let Some(caption) = focus.plan_caption()
+    {
+        panel.push(caption.to_owned());
     }
     let poses: Vec<&str> = focus.key_poses.iter().map(|p| p.caption.as_str()).collect();
     panel.push(format!("Small views: {}", poses.join(", ")));
@@ -371,7 +378,7 @@ fn render_bounds(
     let aspect = crate::render::aspect(width, height);
     renderer.upload(scene);
     let orbit = match view.plan {
-        Some(plan) => Orbit::plan(plan, aspect, view.turn.to_radians()),
+        Some((plan, yaw)) => Orbit::plan(plan, aspect, yaw + view.turn.to_radians()),
         None => {
             let default = Orbit::framing(bounds, aspect);
             let (yaw, pitch) = view.look.unwrap_or((
@@ -659,7 +666,43 @@ mod tests {
                 assert_ne!(a, b);
             }
         }
-        // A joint has no view from above.
+        // The chidori opens from above by default; --in-3d keeps it in 3D.
+        let folder = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/joint_samples");
+        let samples = stave_app::open(&folder).unwrap();
+        let samples_design = samples.design.as_ref().unwrap();
+        let samples_scene = stave_app::view::scene(samples_design);
+        let chidori = |in_3d: bool| FocusShot {
+            name: "node".to_owned(),
+            step: Some(0.83),
+            in_3d,
+            ..FocusShot::default()
+        };
+        let mut views = Vec::new();
+        for in_3d in [false, true] {
+            let focus_shot = chidori(in_3d);
+            let shot = Shot {
+                focus: Some(focus_shot.clone()),
+                ..Shot::default()
+            };
+            let (image, panel) = render_focus(
+                &mut renderer,
+                &samples,
+                samples_design,
+                &samples_scene,
+                &shot,
+                &focus_shot,
+                (160, 120),
+            )
+            .unwrap();
+            assert_eq!(
+                panel.contains("Looking down on the joint, cut through its middle"),
+                !in_3d,
+                "{panel}"
+            );
+            views.push(image.rgba);
+        }
+        assert_ne!(views[0], views[1]);
+        // A joint that doesn't turn has no view from above.
         let mut joint = hinge(0.0, true);
         if let Some(focus) = joint.focus.as_mut() {
             focus.name = "shelf_dados".to_owned();

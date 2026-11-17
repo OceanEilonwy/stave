@@ -617,11 +617,12 @@ impl Window {
         let progress = if found.assembles() { 0.0 } else { 0.4 };
         state.problem = None;
         state.opened = None;
+        let plan = found.prefers_plan();
         state.focus = Some(FocusState {
             focus: found,
             progress,
             options: focus::Options::default(),
-            plan: false,
+            plan,
             playing: false,
             looks: Vec::new(),
             overlay: Overlay::default(),
@@ -657,6 +658,9 @@ impl Window {
             panel.xray.set_active(true);
             panel.tint.set_active(true);
             panel.fade.set_active(true);
+            panel
+                .from_above
+                .set_active(state.focus.as_ref().is_some_and(|f| f.plan));
             if let Some(focus) = state.focus.as_ref() {
                 self.widgets.title.set_subtitle(&focus.focus.context);
             }
@@ -790,7 +794,10 @@ impl Window {
                 .frame(&shown.scene, entry, pose.progress, &focus.options);
             let aspect = crate::render::aspect(width, height);
             let (orbit, section) = match focus.focus.plan() {
-                Some(plan) => (Orbit::plan(plan.bounds, aspect, 0.0), Some(plan.section)),
+                Some(plan) => (
+                    Orbit::plan(plan.bounds, aspect, plan.yaw),
+                    Some(plan.section),
+                ),
                 None => (
                     focus
                         .focus
@@ -1150,7 +1157,7 @@ impl Window {
             .filter(|f| f.plan)
             .and_then(|f| f.focus.plan().copied());
         let orbit = match plan {
-            Some(plan) => Orbit::plan(plan.bounds, crate::render::aspect(width, height), 0.0),
+            Some(plan) => Orbit::plan(plan.bounds, crate::render::aspect(width, height), plan.yaw),
             None => orbit,
         };
         // The shared wood is drawn only where it was measured; moved by the

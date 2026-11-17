@@ -329,6 +329,24 @@ fn focus_on_the_chidori_turns_the_lock_last() {
         Some("Step 3 of 3 · rotate(stick_z, by: 90deg, about: length)")
     );
     assert_eq!(frame.status, "stick_z has 45° still to turn");
+    // The lock turns upright: focus opens looking down on the node, cut
+    // through where the lock passes through stick_x, framed close.
+    assert!(found.prefers_plan());
+    let plan = found.plan().unwrap();
+    assert_eq!(plan.section.normal, Vec3::Y);
+    assert!(
+        plan.bounds.size().max_element() < 200.0,
+        "{:?}",
+        plan.bounds
+    );
+    assert_eq!(
+        found.plan_caption(),
+        Some("Looking down on the joint, cut through its middle")
+    );
+    // A joint that doesn't turn has no view from above.
+    let (opened_stool, graph_stool) = self::graph("examples/stool");
+    let socket = open_focus(&opened_stool, &graph_stool, "rung_sockets", None);
+    assert!(!socket.prefers_plan() && socket.plan().is_none());
     let start = found.frame(&graph, rest, 0.0, &Options::default());
     assert_eq!(
         start.step.as_deref(),
@@ -384,16 +402,60 @@ fn focus_on_a_cup_hinge_names_its_members_and_measures_its_swing() {
         .iter()
         .map(|n| n.text.as_str())
         .collect();
-    assert_eq!(notes, ["3.5 mm"]);
-    assert_eq!(
+    assert_eq!(notes.len(), 1);
+    assert!(
+        notes[0].starts_with("closest at ") && notes[0].ends_with("°: 3.5 mm"),
+        "{notes:?}"
+    );
+    // At 45° the gap isn't true, so its dimension line isn't drawn; at the
+    // pose it is measured in, its two ends are exactly the gap apart.
+    let gap_lines = |frame: &focus::Frame| -> Vec<stave_scene::OverlayLine> {
         frame
             .overlay
             .lines
             .iter()
             .filter(|l| l.kind == stave_scene::LineKind::Gap)
-            .count(),
-        1
+            .copied()
+            .collect()
+    };
+    assert!(gap_lines(&frame).is_empty());
+    let at = found.closest_progress().unwrap();
+    let closest = found.frame(&graph, rest, at, &Options::default());
+    let lines = gap_lines(&closest);
+    assert_eq!(lines.len(), 1);
+    assert!(
+        (lines[0].from.distance(lines[0].to) - 3.5).abs() < 0.1,
+        "{:?}",
+        lines[0]
     );
+    // Its angle is the one written.
+    let degrees = (at * 110.0).round();
+    assert!(
+        notes[0].contains(&format!("at {degrees}°")),
+        "{notes:?} {degrees}"
+    );
+    // The path: solid where the door's edge has been, dotted ahead, with
+    // its ends marked 0° and 110°.
+    let kinds = |frame: &focus::Frame, kind| {
+        frame
+            .overlay
+            .lines
+            .iter()
+            .filter(|l| l.kind == kind)
+            .count()
+    };
+    assert!(kinds(&frame, stave_scene::LineKind::PathTravelled) > 0);
+    assert!(kinds(&frame, stave_scene::LineKind::Path) > 0);
+    let shut = found.frame(&graph, rest, 0.0, &Options::default());
+    assert_eq!(kinds(&shut, stave_scene::LineKind::PathTravelled), 0);
+    let markers: Vec<&str> = frame
+        .overlay
+        .markers
+        .iter()
+        .map(|m| m.text.as_str())
+        .collect();
+    assert_eq!(markers, ["0°", "110°"]);
+    assert!(found.rows.iter().any(|r| r.label == "Dotted line"));
     // The hinge, its door stile and the side are drawn; the rest fade.
     let design = opened.design.as_ref().unwrap();
     let top = graph.node_of(Item::Part(part(design, "top").id)).unwrap();
@@ -439,11 +501,11 @@ fn the_smallest_gap_over_a_swing_is_within_the_bound() {
     let top = solid(part(design, "top"));
     let motion = door.motion.unwrap();
     let Closest { gap, at, .. } =
-        closest_for(&moving, std::slice::from_ref(&top), &motion).unwrap();
+        closest_for(&moving, std::slice::from_ref(&top), &motion, None).unwrap();
     // The door's top edge passes under the top's overhang 1.5mm below it,
     // all the way round.
     assert_eq!(gap, Length::from_nm(1_500_000));
-    let found = closest_for(&moving, std::slice::from_ref(&top), &motion).unwrap();
+    let found = closest_for(&moving, std::slice::from_ref(&top), &motion, None).unwrap();
     let (on_door, on_top) = found.points.unwrap();
     assert!((on_door.distance(on_top) - 1_500_000.0).abs() < 1_000.0);
     assert!((0.0..=110.0_f64.to_radians() + 1e-9).contains(&at));
@@ -463,6 +525,7 @@ fn the_smallest_gap_over_a_swing_is_within_the_bound() {
         &moving,
         std::slice::from_ref(&divider),
         &drawer.motion.unwrap(),
+        None,
     )
     .unwrap();
     assert!(found.gap > Length::ZERO);
@@ -476,10 +539,109 @@ fn focus_on_a_slide_follows_the_drawer() {
     assert_eq!(row(&found, "Pulls out"), "500 mm");
     let members: Vec<&str> = found.members.iter().map(|m| m.name).collect();
     assert_eq!(members, ["cabinet_member", "drawer_member"]);
-    assert!(found.plan().is_none());
     let rest = graph.scenes.first().unwrap();
     let frame = found.frame(&graph, rest, 0.5, &Options::default());
     assert_eq!(frame.status, "out 250 mm");
+    // From above: cut through the middle of the slide's height, turned so
+    // the drawer travels across the picture.
+    let design = opened.design.as_ref().unwrap();
+    let slide = design
+        .hardware
+        .iter()
+        .find(|h| h.name == "drawer[top].slides[left]")
+        .unwrap();
+    let plan = found.plan().unwrap();
+    let middle = (stave_geom::render::point(slide.bounds.min()).y
+        + stave_geom::render::point(slide.bounds.max()).y)
+        / 2.0;
+    assert!((plan.section.offset - middle).abs() < 1e-3);
+    assert!((plan.yaw - std::f32::consts::FRAC_PI_2).abs() < 1e-6);
+    assert_eq!(
+        found.plan_caption(),
+        Some("Looking down on the slide, cut through its middle")
+    );
+    // The gap to the side it is on is exact and marked.
+    assert!(found.rows.iter().any(|r| r.label == "Closest to the side"));
+    assert_eq!(frame.overlay.notes.len(), 1);
+    let at = found.closest_progress().unwrap();
+    let there = found.frame(&graph, rest, at, &Options::default());
+    let line = there
+        .overlay
+        .lines
+        .iter()
+        .find(|l| l.kind == stave_scene::LineKind::Gap)
+        .unwrap();
+    let gap = row(&found, "Closest to the side");
+    let mm: f32 = gap.trim_end_matches(" mm").parse().unwrap();
+    assert!(
+        (line.from.distance(line.to) - mm).abs() < 0.1,
+        "{line:?} vs {gap}"
+    );
+}
+
+#[test]
+fn the_nightstands_slide_shows_its_drawer_travelling_from_above() {
+    let (opened, graph) = graph("examples/nightstand");
+    let found = open_focus(&opened, &graph, "drawer.slides[left]", None);
+    assert_eq!(row(&found, "Pulls out"), "350 mm");
+    assert_eq!(row(&found, "Closest to the side"), "2.0 mm");
+    assert!(found.plan().is_some());
+    let rest = graph.scenes.first().unwrap();
+    let shut = found.frame(&graph, rest, 0.0, &Options::default());
+    let out = found.frame(&graph, rest, 1.0, &Options::default());
+    assert_eq!(out.status, "out 350 mm");
+    // The gap is drawn only where it is measured, and its ends are the
+    // gap apart there.
+    let gap_line = |frame: &focus::Frame| {
+        frame
+            .overlay
+            .lines
+            .iter()
+            .find(|l| l.kind == stave_scene::LineKind::Gap)
+            .copied()
+    };
+    let at = found.closest_progress().unwrap();
+    let there = found.frame(&graph, rest, at, &Options::default());
+    let line = gap_line(&there).unwrap();
+    assert!((line.from.distance(line.to) - 2.0).abs() < 0.05, "{line:?}");
+    for frame in [&shut, &out] {
+        if (at - 0.0).abs() > 0.01 && (at - 1.0).abs() > 0.01 {
+            assert!(gap_line(frame).is_none());
+        }
+    }
+}
+
+#[test]
+fn hardware_focus_frames_the_whole_motion() {
+    let (opened, graph) = graph("examples/clothing_cabinet");
+    let found = open_focus(&opened, &graph, "door_l.hinges[upper]", None);
+    let zone = found.zone().unwrap();
+    let rest = graph.scenes.first().unwrap();
+    for progress in [0.0, 0.25, 0.5, 0.75, 1.0] {
+        let frame = found.frame(&graph, rest, progress, &Options::default());
+        let design = opened.design.as_ref().unwrap();
+        let hinge = design
+            .hardware
+            .iter()
+            .find(|h| h.name == "door_l.hinges[upper]")
+            .unwrap();
+        let nodes = graph.nodes_of(Item::Hardware(hinge.id));
+        let bounds = graph.bounds_of(&frame.posed, &nodes).unwrap();
+        for corner in bounds.corners() {
+            assert!(
+                (corner.cmpge(zone.min) & corner.cmple(zone.max)).all(),
+                "{corner} outside {zone:?} at {progress}"
+            );
+        }
+        for note in &frame.overlay.notes {
+            assert!((note.at.cmpge(zone.min) & note.at.cmple(zone.max)).all());
+        }
+        for line in &frame.overlay.lines {
+            assert!((line.to.cmpge(zone.min) & line.to.cmple(zone.max)).all());
+        }
+    }
+    // Not the whole cabinet.
+    assert!(zone.size().max_element() < 300.0, "{zone:?}");
 }
 
 /// Times focus mode's posing; run with

@@ -16,9 +16,9 @@ a line and a concrete help line for every problem:
    mirroring, regions and mounts, joints (pairs, `adds:`, made parts, cuts)
    and hardware (hinges, slides, pulls, their members and cuts). Exact
    throughout: lengths are whole nanometres, arithmetic is exact fractions.
-   Hinge and slide kinds name and document their members
+   Hinge, slide and pull kinds name and document their members
    (`member cup` with a `///` doc comment; grammar, "Hardware members"):
-   the standard hinges and slides do, and a misnamed member is
+   the standard hinges, slides, knob and bar pull do, and a misnamed member is
    `unknown-field` with the nearest word.
 4. **Fit and geometry**: every part is cut into a solid (its cut box minus
    its cuts: exact boxes for axis-aligned cuts, exact cylinders for holes,
@@ -95,7 +95,8 @@ project's scenes in a dropdown. It reloads when a file changes.
 - **Sections**: a scene's `section:` cuts the view at a plane; the wood
   it cuts is drawn flat (evenly lit).
 - **Every cut drawn**: holes in round and turned parts are bored too (the
-  stool's sockets), and every face a cut made (holes, mortises, dados,
+  stool's sockets), every drilled mesh is watertight (no hairline cracks
+  where a hole's opening crosses a facet edge), and every face a cut made (holes, mortises, dados,
   rabbets, grooves, tenon cheeks, round tenons, hinge recesses) is drawn
   darker, so the joinery reads at a glance.
 - **Focus mode**: selecting a part offers "See how it goes together" for
@@ -118,10 +119,26 @@ project's scenes in a dropdown. It reloads when a file changes.
     slides; for swings within 0.05mm: it is refined until no point moves
     more than 0.1mm between samples), the swing check's verdict, and three
     small views (0°, 45°, fully open). The path of the door's front edge
-    is dotted and the closest approach is marked with its gap. A cup
-    hinge is first seen from inside the cabinet, and can be seen **from
-    above**: flat (orthographic), cut just above its arm, through the
-    cabinet top.
+    is drawn whole, in teal: solid where the edge has been, dotted where it
+    will go, with dots and tiny angle labels at closed and fully open (the
+    panel says what the line is). The closest approach is written beside
+    the part it comes closest to ("closest at 110°: 3.5 mm"); its
+    dimension line is drawn only in the pose where it is true (within 2°
+    or 2mm), from point to point exactly the gap apart, level with the
+    hinge where the gap runs along it. In 3D the camera frames the
+    whole motion, so the hinge and the mark stay in view all the way. A
+    cup hinge is first seen from inside the cabinet, and can be seen
+    **from above**: flat (orthographic), cut just above its arm, through
+    the cabinet top.
+  - A **drawer slide** drives its drawer and can be seen from above, cut
+    through the middle of its height and turned so the drawer travels
+    across the picture: the cabinet member on the side, the drawer member
+    on the drawer side running out. Its closest gap is exact and marked.
+  - A **pull** shows how it is fixed: its knob or bar and its screw or
+    screws, numbered, on its door or drawer front seen through.
+  - A joint whose part **turns upright** (the chidori's lock) opens
+    looking down on the node, cut through it, so the lock's flats are
+    seen lining up with the slots before the quarter turn.
   - Toggles: X-ray, tint cut faces, fade other parts.
 - **Offscreen**: `stave-gtk <folder> --screenshot out.png` with
   `--scene NAME`, `--turn DEGREES`, `--pitch DEGREES`, `--explode
@@ -136,7 +153,8 @@ project's scenes in a dropdown. It reloads when a file changes.
 - **Focus offscreen**: `--focus NAME` (a joint or a piece of hardware),
   `--pair N` (which pair of a joint, from 0), `--step AMOUNT` (0 apart to
   1 together, or 0 closed to 1 open; an `--open` of the focused door sets
-  it in degrees), `--plan` (a hinge from above), `--no-xray`, `--no-fade`;
+  it in degrees), `--plan` (a hinge or a slide from above), `--in-3d`
+  (keep a joint that opens from above in 3D), `--no-xray`, `--no-fade`;
   the panel's text is printed. For example
   `stave-gtk examples/stool --screenshot s.png --focus rung_sockets --step 0.6`
   and `stave-gtk examples/clothing_cabinet --screenshot h.png --focus
@@ -175,12 +193,9 @@ the window calls.
   rim at 110°, the stop; nothing models the soft-close damper or the
   spring.
 - **Hardware models**: `.glb` models are not read (`model-mismatch`).
-- **Focus mode**: only a hinge has a view from above (a slide's is not
-  drawn), and the PDF work cards that will reuse flat views don't exist
-  yet. The closest approach is marked for swings only (a slide's gap is
-  given, not drawn). Pulls name no members. A hole's wall meets a turned
-  part's facets along straight lines, so a hair-thin crack can show where
-  the opening crosses a facet edge. Ghosts and see-through parts are
-  sorted back to front by part, not by triangle.
+- **Focus mode**: the PDF work cards that will reuse flat views don't
+  exist yet. Ghosts and see-through parts are sorted back to front by
+  part, not by triangle. A joint's view from above exists only when one
+  of its parts turns about the up axis.
 - **Modules**: remote sources (`github:`, `https:`) and the lockfile.
 - **Editors and AI**: the language server, smart edits and patches.

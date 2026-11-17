@@ -43,8 +43,8 @@ pub struct Closest {
     /// Where along the travel: radians for a swing, nanometres for a
     /// slide.
     pub at: f64,
-    /// For a swing, the two nearest points there (world nanometres): on
-    /// the moving assembly as moved, and on the fixed solid.
+    /// The two nearest points there (world nanometres): on the moving
+    /// assembly as moved, and on the fixed solid.
     pub points: Option<(DVec3, DVec3)>,
 }
 
@@ -90,12 +90,49 @@ pub fn closest(
     fixed: &[WorldSolid],
     travel: &Travel<'_>,
 ) -> Option<Closest> {
+    closest_near(moving, fixed, travel, None)
+}
+
+/// [`closest`], with the nearest points placed as near `prefer` as they
+/// can be without changing the gap: where the two nearest boxes run side
+/// by side along an axis the motion doesn't move along, any point of that
+/// run is as near as any other, and the one level with `prefer` (the
+/// hardware) is the one worth showing.
+pub fn closest_near(
+    moving: &[WorldSolid],
+    fixed: &[WorldSolid],
+    travel: &Travel<'_>,
+    prefer: Option<DVec3>,
+) -> Option<Closest> {
     let moving: Vec<WorldBox> = moving.iter().flat_map(boxes).collect();
     let fixed: Vec<Vec<WorldBox>> = fixed.iter().map(boxes).collect();
     match travel {
-        Travel::Slide { toward, travel } => slide(&moving, &fixed, *toward, *travel),
-        Travel::Swing { pose, range, about } => swing(&moving, &fixed, *pose, *range, *about),
+        Travel::Slide { toward, travel } => slide(&moving, &fixed, *toward, *travel, prefer),
+        Travel::Swing { pose, range, about } => {
+            swing(&moving, &fixed, *pose, *range, *about, prefer)
+        }
     }
+}
+
+/// The middle of a box in world nanometres, for [`closest_near`]'s
+/// `prefer`.
+pub fn box_centre(region: &WorldBox) -> DVec3 {
+    (point_vector(region.min()) + point_vector(region.max())) / 2.0
+}
+
+/// Slides two nearest points together along `axis` toward `prefer`,
+/// within the range both boxes cover there (`low..high`, nanometres).
+fn slide_points(points: &mut (DVec3, DVec3), slot: usize, low: f64, high: f64, prefer: f64) {
+    if low > high {
+        return;
+    }
+    let (a, b) = (points.0[slot], points.1[slot]);
+    if (a - b).abs() > 1.0 {
+        return;
+    }
+    let at = prefer.clamp(low, high);
+    points.0[slot] = at;
+    points.1[slot] = at;
 }
 
 // ---------------------------------------------------------------------------
@@ -133,12 +170,13 @@ fn slide(
     fixed: &[Vec<WorldBox>],
     toward: Direction,
     travel: Length,
+    prefer: Option<DVec3>,
 ) -> Option<Closest> {
     let axis = toward.axis();
     let [first, second] = axis.others();
     let tolerance = i128::from(CONTACT_TOLERANCE.nm());
     let total = travel.nm().max(0);
-    let mut best: Option<(i128, usize, i64)> = None;
+    let mut best: Option<(i128, usize, i64, WorldBox, WorldBox)> = None;
     for (index, boxes) in fixed.iter().enumerate() {
         for m in moving {
             for f in boxes {
@@ -170,18 +208,61 @@ fn slide(
                 };
                 let along = i128::from(along);
                 let gap = across[0] * across[0] + across[1] * across[1] + along * along;
-                if best.is_none_or(|(b, _, _)| gap < b) {
-                    best = Some((gap, index, at));
+                if best.is_none_or(|(b, ..)| gap < b) {
+                    best = Some((gap, index, at, *m, *f));
                 }
             }
         }
     }
-    let (squared, index, at) = best?;
+    let (squared, index, at, m, f) = best?;
+    // The nearest points: on each axis the facing ends, or the middle of
+    // where the two overlap; the moving box moved to where it is nearest.
+    let shift = if toward.is_positive() { at } else { -at };
+    let mut on_moving = DVec3::ZERO;
+    let mut on_fixed = DVec3::ZERO;
+    for (slot, world_axis) in [Axis::Across, Axis::Up, Axis::Deep].into_iter().enumerate() {
+        let (mut m0, mut m1) = axis_range(&m, world_axis);
+        if world_axis == axis {
+            m0 = m0.saturating_add(shift);
+            m1 = m1.saturating_add(shift);
+        }
+        let (f0, f1) = axis_range(&f, world_axis);
+        let nm = |value: i64| render::nm(Length::from_nm(value));
+        let (a, b) = if m1 < f0 {
+            (nm(m1), nm(f0))
+        } else if f1 < m0 {
+            (nm(m0), nm(f1))
+        } else {
+            let middle = (nm(m0.max(f0)) + nm(m1.min(f1))) / 2.0;
+            (middle, middle)
+        };
+        on_moving[slot] = a;
+        on_fixed[slot] = b;
+    }
+    let mut points = (on_moving, on_fixed);
+    if let Some(prefer) = prefer {
+        for (slot, world_axis) in [Axis::Across, Axis::Up, Axis::Deep].into_iter().enumerate() {
+            if world_axis == axis {
+                continue;
+            }
+            let (m0, m1) = axis_range(&m, world_axis);
+            let (f0, f1) = axis_range(&f, world_axis);
+            let nm = |value: i64| render::nm(Length::from_nm(value));
+            slide_points(
+                &mut points,
+                slot,
+                nm(m0.max(f0)),
+                nm(m1.min(f1)),
+                prefer[slot],
+            );
+        }
+    }
+    let (on_moving, on_fixed) = points;
     Some(Closest {
         fixed: index,
         gap: Length::from_nm(i64::try_from(isqrt(squared)).unwrap_or(i64::MAX)),
         at: render::nm(Length::from_nm(at)),
-        points: None,
+        points: Some((on_moving, on_fixed)),
     })
 }
 
@@ -443,6 +524,7 @@ fn swing(
     pose: &dyn Fn(f64) -> Option<DMat4>,
     range: f64,
     about: Option<Axis>,
+    prefer: Option<DVec3>,
 ) -> Option<Closest> {
     let rest = moving
         .iter()
@@ -578,12 +660,33 @@ fn swing(
     let (gap, index, at) = best?;
     let points = pose(at).and_then(|matrix| {
         let placed: Vec<Placed> = moving.iter().map(|b| Placed::of(b, &matrix)).collect();
-        fixed_placed
+        let (_, mut points, m, f) = fixed_placed
             .get(index)?
             .iter()
-            .flat_map(|f| placed.iter().map(move |m| m.nearest(f)))
-            .min_by(|a, b| a.0.total_cmp(&b.0))
-            .map(|(_, on_moving, on_fixed)| (on_moving, on_fixed))
+            .flat_map(|f| {
+                placed.iter().map(move |m| {
+                    let (d, a, b) = m.nearest(f);
+                    (d, (a, b), m, f)
+                })
+            })
+            .min_by(|a, b| a.0.total_cmp(&b.0))?;
+        // Along the axis it turns about the boxes keep their section, so
+        // the nearest points may slide level with the hardware.
+        if let (Some(axis), Some(prefer)) = (about, prefer) {
+            let slot = match axis {
+                Axis::Across => 0,
+                Axis::Up => 1,
+                Axis::Deep => 2,
+            };
+            slide_points(
+                &mut points,
+                slot,
+                m.low[slot].max(f.low[slot]),
+                m.high[slot].min(f.high[slot]),
+                prefer[slot],
+            );
+        }
+        Some(points)
     });
     Some(Closest {
         fixed: index,
@@ -601,15 +704,18 @@ fn integer(count: f64) -> u32 {
 
 /// The smallest gap between an assembly's solids (`moving`, at rest) and
 /// the `fixed` ones over its whole motion: exact for a slide, sampled for a
-/// hinge's turn or a cup hinge's linkage.
+/// hinge's turn or a cup hinge's linkage. The nearest points are placed as
+/// near `prefer` (world nanometres) as the gap allows; see
+/// [`closest_near`].
 pub fn closest_for(
     moving: &[WorldSolid],
     fixed: &[WorldSolid],
     motion: &Motion,
+    prefer: Option<DVec3>,
 ) -> Option<Closest> {
     match *motion {
         Motion::Travel { toward, travel } => {
-            closest(moving, fixed, &Travel::Slide { toward, travel })
+            closest_near(moving, fixed, &Travel::Slide { toward, travel }, prefer)
         }
         Motion::Turn { .. } | Motion::Linkage { .. } => {
             let range = render::radians_f64(motion.opening_angle()?);
@@ -622,7 +728,7 @@ pub fn closest_for(
                 Motion::Linkage { linkage } => Some(linkage.frame().axis()),
                 Motion::Travel { .. } => None,
             };
-            closest(
+            closest_near(
                 moving,
                 fixed,
                 &Travel::Swing {
@@ -630,6 +736,7 @@ pub fn closest_for(
                     range,
                     about,
                 },
+                prefer,
             )
         }
     }
