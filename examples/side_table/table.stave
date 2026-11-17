@@ -36,7 +36,8 @@ stock oak_45_sq { species: white_oak, form: solid, thickness: 45mm, width: 45mm 
 
 // ---- the top and legs ----
 
-/// The top. It is wider than oak_19's max_width, so the cut list plans a glue-up.
+/// The top. It is wider than oak_19's max_width, so it is made of boards, glued
+/// edge to edge (the default; see "Boards" in the grammar).
 part top : oak_19 {
   length: top_size
   width:  top_size

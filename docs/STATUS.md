@@ -20,6 +20,13 @@ a line and a concrete help line for every problem:
    (`member cup` with a `///` doc comment; grammar, "Hardware members"):
    the standard hinges, slides, knob and bar pull do, and a misnamed member is
    `unknown-field` with the nearest word.
+   **Boards**: a `solid` part wider across the grain than its stock's
+   `max_width` is made of equal boards (in `--json`), joined by the edge
+   joints its `boards:` names (or the project's, or `glued_edge`):
+   `tongue_and_groove` widens each board by its tongue, `splined_edge` makes
+   a spline per seam, `glue: false` is kept. The collision checks see the
+   part's wood as its boards make it. A sheet wider than `max_width` is an
+   error, as a part longer than `max_length` is.
 4. **Fit and geometry**: every part is cut into a solid (its cut box minus
    its cuts: exact boxes for axis-aligned cuts, exact cylinders for holes,
    round tenons and round sections, the chidori's angled slots). Wood
@@ -176,6 +183,14 @@ the window calls.
   order of operations, tool settings), the PDF and the CSV cut list
   (stave-workplan, stave-output) are not written yet; neither is layer 7's
   buildability check (`order` for cuts, `no-recipe`).
+- **Boards**: boards are of equal width. The cuts other joints make on a
+  part made of boards (a dado across a wide side) stay on the part; they
+  are assigned to its boards when the work plan exists. On a part with
+  `grain: width`, an edge joint that cuts a tongue is refused (the seam is
+  across the part's length there). Board joints that `uses:` fasteners
+  don't list them (`not-supported`), and only box-shaped cuts are made on
+  boards (`not-supported` for the rest). The text dump doesn't print boards
+  yet (CLI lane).
 - **Ranges**: `require` and the layer 3 and 4 checks hold only at the
   current values; checking over a param's whole `within` range (z3,
   `require-range`, `range`) is not built.
