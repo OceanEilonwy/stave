@@ -12,7 +12,9 @@ pub enum Builtin {
     /// `between(a, b)`: a length.
     Between,
     /// `extent(items, axis)`: a length. With `of: part`, the axis is one
-    /// of that part's own axes (`length`, `width`, `thickness`).
+    /// of that part's own axes (`length`, `width`, `thickness`); with
+    /// `of: contact(a, b)`, one of the patch's (`length` and `width` along
+    /// it, `thickness` square to it).
     Extent,
     /// `mid(item, axis)`: an anchor.
     Mid,
@@ -42,6 +44,8 @@ pub enum Builtin {
     Pitch,
     /// `gap(d)`: a spacing.
     Gap,
+    /// `contact(a, b)`: the patch where two parts touch, a [`TypeName::Patch`].
+    Contact,
 }
 
 /// A parameter of a built-in function.
@@ -83,7 +87,7 @@ const ITEM: ValueType = ValueType::Items;
 
 impl Builtin {
     /// Every built-in, in the order the grammar lists them.
-    pub const ALL: [Builtin; 16] = [
+    pub const ALL: [Builtin; 17] = [
         Builtin::Between,
         Builtin::Extent,
         Builtin::Mid,
@@ -100,6 +104,7 @@ impl Builtin {
         Builtin::Ends,
         Builtin::Pitch,
         Builtin::Gap,
+        Builtin::Contact,
     ];
 
     /// The function's name.
@@ -121,6 +126,7 @@ impl Builtin {
             Builtin::Ends => "ends",
             Builtin::Pitch => "pitch",
             Builtin::Gap => "gap",
+            Builtin::Contact => "contact",
         }
     }
 
@@ -142,6 +148,7 @@ impl Builtin {
             Builtin::Box | Builtin::Cylinder => TypeName::Envelope,
             Builtin::Model => TypeName::Model,
             Builtin::Ends | Builtin::Pitch | Builtin::Gap => TypeName::Spacing,
+            Builtin::Contact => TypeName::Patch,
         }
     }
 
@@ -156,7 +163,8 @@ impl Builtin {
                 const LIST: &[Parameter] = &[
                     positional("items", ITEM),
                     positional("axis", AXIS),
-                    named("of", Type(TypeName::Part), false),
+                    // A part or a patch: checked by the resolver.
+                    named("of", ITEM, false),
                 ];
                 LIST
             }
@@ -245,7 +253,38 @@ impl Builtin {
                 const LIST: &[Parameter] = &[positional("distance", LENGTH)];
                 LIST
             }
+            Builtin::Contact => {
+                const LIST: &[Parameter] = &[positional("a", ITEM), positional("b", ITEM)];
+                LIST
+            }
         }
+    }
+}
+
+/// A size of a [`TypeName::Patch`], read as `contact(a, b).length`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum PatchSize {
+    /// `length`: the longer side of the patch.
+    Length,
+    /// `width`: the shorter side of the patch.
+    Width,
+}
+
+impl PatchSize {
+    /// Every size, in the order the grammar lists them.
+    pub const ALL: [PatchSize; 2] = [PatchSize::Length, PatchSize::Width];
+
+    /// The size's name as written after the `.`.
+    pub fn word(self) -> &'static str {
+        match self {
+            PatchSize::Length => "length",
+            PatchSize::Width => "width",
+        }
+    }
+
+    /// The size for a name, if it is one.
+    pub fn from_word(word: &str) -> Option<PatchSize> {
+        PatchSize::ALL.into_iter().find(|size| size.word() == word)
     }
 }
 

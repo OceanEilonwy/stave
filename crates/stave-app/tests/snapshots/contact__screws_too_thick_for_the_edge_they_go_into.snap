@@ -1,0 +1,17 @@
+---
+source: crates/stave-app/tests/contact.rs
+expression: "rendered(\"tests/broken/screw_too_thick\")"
+---
+error[require]: 'seat_wide' fails: the parts overlap too little for screws this thick
+  --> tests/broken/screw_too_thick/project.stave:32:22
+   |
+32 | joint shelf_screws : screw(shelf, into: arm[*], length: 40mm, count: 2, diameter: 30mm, glue: false)
+   |                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  ::: std/joinery/screw.stave:28:3
+   |
+28 |   require seat_wide    : contact(piece, into).width >= diameter + 2 * wall "the parts overlap too little for screws this thick"
+   |   ----------------------------------------------------------------------------------------------------------------------------- the kind's rule
+   = note: for shelf and arm[left] in shelf_screws
+   = note: the rule measures 19mm and needs at least 42mm
+   = note: the same for shelf and arm[right] in shelf_screws
+   = help: change the joint's diameter or wall, or the parts' sizes, so the rule holds

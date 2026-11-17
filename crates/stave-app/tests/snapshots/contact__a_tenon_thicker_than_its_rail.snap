@@ -1,0 +1,17 @@
+---
+source: crates/stave-app/tests/contact.rs
+expression: "rendered(\"tests/broken/tenon_too_thick\")"
+---
+error[require]: 'tenon_thin' fails: a tenon thicker than half the rail leaves its cheeks too thin
+  --> tests/broken/tenon_too_thick/project.stave:44:26
+   |
+44 | joint stretcher_tenons : mortise_tenon(stretcher, into: [leg_l, leg_r], length: 25mm, thickness: 30mm)
+   |                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  ::: std/joinery/mortise_tenon.stave:21:3
+   |
+21 |   require tenon_thin    : thickness <= piece.thickness / 2 "a tenon thicker than half the rail leaves its cheeks too thin"
+   |   ------------------------------------------------------------------------------------------------------------------------ the kind's rule
+   = note: for stretcher and leg_l in stretcher_tenons
+   = note: the rule measures 30mm and needs at most 9.5mm
+   = note: the same for stretcher and leg_r in stretcher_tenons
+   = help: change the joint's thickness, or the parts' sizes, so the rule holds

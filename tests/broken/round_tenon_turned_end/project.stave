@@ -1,0 +1,44 @@
+// expect: error[require] 'tenon_fits' fails: the tenon is too thick for the end of the part
+stave 1
+
+// The stool's turned leg with a 30mm tenon. The leg swells to 40mm lower
+// down, but it is only 34mm across at the top, where it meets the seat:
+// the rule measures that end, which leaves less than 3mm of shoulder
+// round the tenon.
+
+project "Round tenon on a slim turned end" {
+  units: mm
+}
+
+stock ash_30    { species: ash, form: solid, thickness: 30mm, max_width: 200mm }
+stock ash_45_sq { species: ash, form: solid, thickness: 45mm, width: 45mm }
+
+part seat : ash_30 {
+  length: 320mm
+  width:  320mm
+  place {
+    ground
+  }
+}
+
+profile leg_shape {
+  measure:  diameter
+  smooth:   true
+  at 0mm:   34mm
+  at 190mm: 40mm
+  at 300mm: 40mm
+  at 420mm: 30mm
+}
+
+part leg : ash_45_sq {
+  length: fit
+  shape:  turned(leg_shape)
+  place {
+    orient(length: down)
+    against(seat.bottom)
+    flush(seat.left, inset: 30mm)
+    flush(seat.front, inset: 30mm)
+  }
+}
+
+joint leg_tenon : round_tenon(leg, into: seat, diameter: 30mm, length: 20mm)

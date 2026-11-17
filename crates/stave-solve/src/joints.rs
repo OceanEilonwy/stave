@@ -421,6 +421,33 @@ impl Solver<'_> {
         }
     }
 
+    /// One mistake, one error: when another pair of the same joint already
+    /// broke this rule (the same message at the same call), that error
+    /// gets a note `the same for <pair>` and `true` comes back.
+    fn noted_with_earlier_pair(
+        &mut self,
+        file: FileId,
+        span: Span,
+        message: &str,
+        pair: &str,
+    ) -> bool {
+        let earlier = self.diagnostics.iter_mut().find(|diagnostic| {
+            diagnostic.code == Code::Require
+                && diagnostic.message == message
+                && diagnostic
+                    .primary()
+                    .is_some_and(|label| label.file == file && label.span == span)
+        });
+        let Some(earlier) = earlier else {
+            return false;
+        };
+        let note = format!("the same for {pair}");
+        if !earlier.notes.contains(&note) {
+            earlier.notes.push(note);
+        }
+        true
+    }
+
     /// Pass A of a joint: pairs, requires and what it adds to its parts.
     pub(crate) fn work_joint(&mut self, joint: JointId) -> Solved<JointWork> {
         let binding = self.joint_binding(joint)?;
@@ -541,25 +568,25 @@ impl Solver<'_> {
                 let message = self.format_text(&require.message, &kind_env)?;
                 if !holds {
                     let names: Vec<String> = parts.iter().map(|p| self.part_name(*p)).collect();
-                    let search = self.help_search(&require.condition, &env);
-                    let help = self.search_help(&search).unwrap_or_else(|| {
-                        "change the joint's settings or the parts' sizes so the rule holds"
-                            .to_owned()
-                    });
-                    self.report(
-                        Diagnostic::error(
-                            Code::Require,
-                            format!("'{}' fails: {message}", require.decl.name),
-                            Label::new(file, span),
-                        )
-                        .with_label(Label::with_message(
-                            require.decl.file,
-                            require.decl.span,
-                            "the kind's rule",
-                        ))
-                        .with_note(format!("for {} in {name}", names.join(" and ")))
-                        .with_help(help),
-                    );
+                    let pair = format!("{} in {name}", names.join(" and "));
+                    let message = format!("'{}' fails: {message}", require.decl.name);
+                    // One mistake, one error: another pair of this joint
+                    // that breaks the same rule is a note on the first.
+                    if !self.noted_with_earlier_pair(file, span, &message, &pair) {
+                        let mut diagnostic =
+                            Diagnostic::error(Code::Require, message, Label::new(file, span))
+                                .with_label(Label::with_message(
+                                    require.decl.file,
+                                    require.decl.span,
+                                    "the kind's rule",
+                                ))
+                                .with_note(format!("for {pair}"));
+                        if let Some(note) = self.measures_note(&require.condition, &kind_env) {
+                            diagnostic = diagnostic.with_note(note);
+                        }
+                        let help = self.require_help(&require.condition, &kind_env, "joint");
+                        self.report(diagnostic.with_help(help));
+                    }
                 }
                 results.push(stave_model::solved::RequireResult {
                     name: format!("{name}.{}", require.decl.name),

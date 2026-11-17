@@ -1,0 +1,17 @@
+---
+source: crates/stave-app/tests/contact.rs
+expression: "rendered(\"tests/broken/too_many_screws\")"
+---
+error[require]: 'seat_long' fails: too many screws for this joint
+  --> tests/broken/too_many_screws/project.stave:31:22
+   |
+31 | joint shelf_screws : screw(shelf, into: arm[*], length: 40mm, count: 60, glue: false)
+   |                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  ::: std/joinery/screw.stave:29:3
+   |
+29 |   require seat_long    : contact(piece, into).length >= count * (diameter + gap) + gap "too many screws for this joint"
+   |   --------------------------------------------------------------------------------------------------------------------- the kind's rule
+   = note: for shelf and arm[left] in shelf_screws
+   = note: the rule measures 140mm and needs at least 1155mm
+   = note: the same for shelf and arm[right] in shelf_screws
+   = help: change the joint's count, diameter or gap, or the parts' sizes, so the rule holds

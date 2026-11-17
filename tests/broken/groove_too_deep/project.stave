@@ -1,0 +1,58 @@
+// expect: error[require] 'not_too_deep' fails: a groove deeper than half the board weakens it
+stave 1
+
+// The box's bottom groove made 12mm deep in 12mm walls: the groove would
+// cut each wall in two.
+
+project "Groove too deep" {
+  units: mm
+}
+
+stock walnut_12 { species: walnut, form: solid, thickness: 12mm, max_width: 200mm }
+stock ply_6     { species: birch, form: plywood, thickness: 6mm }
+
+part end_l : walnut_12 {
+  length: 200mm
+  width:  110mm
+  place {
+    ground
+    orient(length: back, width: up)
+  }
+}
+
+part end_r : walnut_12 {
+  length: 200mm
+  width:  110mm
+  place {
+    orient(length: back, width: up)
+    against(end_l.right, gap: 276mm)
+    flush(end_l.bottom)
+    flush(end_l.front)
+  }
+}
+
+part front : walnut_12 {
+  length: fit
+  width:  110mm
+  place {
+    orient(length: right, width: up)
+    center(from: end_l.right, to: end_r.left)
+    flush(end_l.bottom)
+    flush(end_l.front)
+  }
+}
+
+part back = mirror(front, about: mid(end_l, deep))
+
+part bottom : ply_6 {
+  length: fit
+  width:  fit
+  place {
+    flush(end_l.bottom, inset: 6mm)
+    center(from: end_l.right, to: end_r.left)
+    center(from: front.back, to: back.front)
+  }
+}
+
+joint corners       : rabbet([front, back], into: [end_l, end_r], depth: 6mm)
+joint bottom_groove : groove(bottom, into: [front, back, end_l, end_r], depth: 12mm, glue: false)

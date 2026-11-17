@@ -140,6 +140,8 @@ pub enum Member {
     AssemblyItem(DefId),
     /// A param or field of a kind value, by name: `slide.clearance`.
     KindEntry(String),
+    /// `contact(a, b).length`, `contact(a, b).width`: a size of the patch.
+    PatchSize(stave_schema::functions::PatchSize),
 }
 
 /// A readable field of a stock.

@@ -1927,6 +1927,8 @@ pub enum TypeName {
     Model,
     /// `evenly`, `ends`, `pitch(d)` or `gap(d)`.
     Spacing,
+    /// `contact(a, b)`: the patch where two parts touch.
+    Patch,
     /// A kind value of base `joint`.
     JointKind,
     /// A kind value of base `slide`, `hinge` or `pull`.
@@ -1947,7 +1949,7 @@ pub enum TypeName {
 
 impl TypeName {
     /// Every type, in the order the grammar's type table lists them.
-    pub const ALL: [TypeName; 28] = [
+    pub const ALL: [TypeName; 29] = [
         TypeName::Length,
         TypeName::Angle,
         TypeName::Ratio,
@@ -1968,6 +1970,7 @@ impl TypeName {
         TypeName::Envelope,
         TypeName::Model,
         TypeName::Spacing,
+        TypeName::Patch,
         TypeName::JointKind,
         TypeName::HardwareKind,
         TypeName::SlideKind,
@@ -2001,6 +2004,7 @@ impl TypeName {
             TypeName::Envelope => "Envelope",
             TypeName::Model => "Model",
             TypeName::Spacing => "Spacing",
+            TypeName::Patch => "Patch",
             TypeName::JointKind => "JointKind",
             TypeName::HardwareKind => "HardwareKind",
             TypeName::SlideKind => "SlideKind",

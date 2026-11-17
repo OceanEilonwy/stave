@@ -1,0 +1,48 @@
+// expect: error[require-range] 'seat_wide' does not hold for every allowed value: the parts overlap too little for these dowels
+// pending: checking a require over a param's whole range needs z3 (layer 6), not built yet
+stave 1
+
+// At 1800mm the top covers the whole of each side's end, but 'within'
+// allows it down to 1773mm, where it covers only 5.5mm: too little for the
+// dowels. A kind's rule that reads contact() must hold over the range too.
+
+project "Dowels over a range" {
+  units: mm
+}
+
+param top_length = 1800mm within 1773mm..1800mm
+
+stock oak_19 { species: white_oak, form: solid, thickness: 19mm }
+
+part base : oak_19 {
+  length: 1800mm
+  width:  560mm
+  place {
+    ground
+  }
+}
+
+part side_l : oak_19 {
+  length: 1662mm
+  width:  560mm
+  place {
+    orient(length: up, width: back)
+    against(base.top)
+    flush(base.left)
+    flush(base.back)
+  }
+}
+
+part side_r = mirror(side_l, about: mid(base, across))
+
+part top : oak_19 {
+  length: top_length
+  width:  560mm
+  place {
+    against(side_l.top)
+    center(base, across)
+    flush(base.back)
+  }
+}
+
+joint top_dowels : dowel([side_l, side_r], into: top, count: 4)

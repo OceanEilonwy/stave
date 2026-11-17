@@ -1,0 +1,43 @@
+// expect: error[require] 'tenon_fits' fails: the tenon is too thick for the end of the part
+stave 1
+
+// The clothing cabinet's bun foot with an 80mm round tenon: the foot is
+// only 70mm across where it meets the base, so the tenon would be wider
+// than the foot it is turned on.
+
+project "Round tenon too thick" {
+  units: mm
+}
+
+stock oak_19    { species: white_oak, form: solid, thickness: 19mm }
+stock oak_75_sq { species: white_oak, form: solid, thickness: 75mm, width: 75mm }
+
+part base : oak_19 {
+  length: 900mm
+  width:  560mm
+  place {
+    ground
+  }
+}
+
+/// Station 0 is at the top, against the base.
+profile bun_foot {
+  measure: diameter
+  smooth:  true
+  at 0mm:  70mm
+  at 34mm: 70mm
+  at 80mm: 40mm
+}
+
+part foot : oak_75_sq {
+  length: fit
+  shape:  turned(bun_foot)
+  place {
+    orient(length: down)
+    against(base.bottom)
+    flush(base.left, inset: 60mm)
+    flush(base.front, inset: 60mm)
+  }
+}
+
+joint foot_tenon : round_tenon(foot, into: base, diameter: 80mm, length: 16mm)

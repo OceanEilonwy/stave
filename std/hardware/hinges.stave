@@ -24,6 +24,11 @@ kind euro_hinge : hinge {
   param plate_height = 0mm within [0mm, 1.5mm, 3mm, 6mm, 9mm]
   cup_diameter: 35mm
   cup_depth:    12.8mm
+  // The bore is cup_depth deep (a kind's rules read its params, not its
+  // fields, so the number is written again). At least 2mm of wood must
+  // stay in front of it, or the cup shows through the face of the door;
+  // the maker's tables start at 15mm doors, which leave 2.2mm.
+  require cup_stops : piece.thickness >= 12.8mm + 2mm "the door is too thin for the hinge cup"
 
   // On the back of the stile, the cup's centre cup_inset and half the cup
   // in from the edge nearer the side. The design says where along it.
@@ -147,6 +152,11 @@ kind wide_hinge_165 : hinge {
   param plate_setback = 37mm within [37mm]
   cup_diameter: 35mm
   cup_depth:    12.8mm
+  // The bore is cup_depth deep (a kind's rules read its params, not its
+  // fields, so the number is written again). At least 2mm of wood must
+  // stay in front of it, or the cup shows through the face of the door;
+  // the maker's tables start at 15mm doors, which leave 2.2mm.
+  require cup_stops : piece.thickness >= 12.8mm + 2mm "the door is too thin for the hinge cup"
 
   // On the back of the stile, the cup's centre cup_inset and half the cup
   // in from the edge nearer the side. The design says where along it.

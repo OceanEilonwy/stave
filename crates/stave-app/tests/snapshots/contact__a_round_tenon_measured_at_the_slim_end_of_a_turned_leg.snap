@@ -1,0 +1,16 @@
+---
+source: crates/stave-app/tests/contact.rs
+expression: "rendered(\"tests/broken/round_tenon_turned_end\")"
+---
+error[require]: 'tenon_fits' fails: the tenon is too thick for the end of the part
+  --> tests/broken/round_tenon_turned_end/project.stave:44:19
+   |
+44 | joint leg_tenon : round_tenon(leg, into: seat, diameter: 30mm, length: 20mm)
+   |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  ::: std/joinery/round_tenon.stave:17:3
+   |
+17 |   require tenon_fits : diameter <= contact(piece, into).width - 2 * shoulder "the tenon is too thick for the end of the part"
+   |   --------------------------------------------------------------------------------------------------------------------------- the kind's rule
+   = note: for leg and seat in leg_tenon
+   = note: the rule measures 30mm and needs at most 28mm
+   = help: change the joint's diameter or shoulder, or the parts' sizes, so the rule holds

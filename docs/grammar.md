@@ -2239,7 +2239,7 @@ These are looked up when a bare name is called (see [Names](#names), rule 3).
 | Function | Returns | Meaning |
 |---|---|---|
 | `between(a, b)` | `Length` | the clear distance between two parts, or between two parallel anchors, or from a face to the same side of a region (`between(side.left, opening)` is from the side's left face to the opening's left side). Two parts must be apart along exactly one axis |
-| `extent(items, axis)` | `Length` | overall drawn size of a list of parts along a world axis. With `of: part`, `axis` is one of that part's own axes (`length`, `width`, `thickness`), meaning the world axis it runs along once placed. In a joint kind this measures the other part along this one's direction: `extent(into, thickness, of: piece)` is how much of `into` a screw driven through `piece`'s thickness can bite into (its thickness for a face, its width for an edge) |
+| `extent(items, axis)` | `Length` | overall drawn size of a list of parts along a world axis. With `of: part`, `axis` is one of that part's own axes (`length`, `width`, `thickness`), meaning the world axis it runs along once placed. In a joint kind this measures the other part along this one's direction: `extent(into, thickness, of: piece)` is how much of `into` a screw driven through `piece`'s thickness can bite into (its thickness for a face, its width for an edge). With `of: contact(a, b)`, `axis` is one of the patch's own axes: `length` and `width` along it, `thickness` square to it, so `extent(into, thickness, of: contact(piece, into))` is how much of `into` lies behind the place where `piece` meets it |
 | `mid(item, axis)` | `Anchor` | the mid-plane of a part or region |
 | `opening(...)`, `split(...)`, `cover(...)` | `Region` | see [Regions](#regions) |
 | `overlay(...)`, `inset(reveal:)` | `Mount` | see [Regions](#regions) |
@@ -2249,6 +2249,26 @@ These are looked up when a bare name is called (see [Names](#names), rule 3).
 | `cylinder(diameter:, length:)` | `Envelope` | a hardware envelope; its axis stands off the mount face |
 | `model(source, align:, sha256:)` | `Model` | a `.glb` model; optional `align: node("name")` and `sha256: "<hex>"` (see [Hardware](#hardware)) |
 | `ends(inset:)`, `pitch(d)`, `gap(d)` | `Spacing` | used by `spaced`, with the bare words `evenly` and `ends` |
+| `contact(a, b)` | `Patch` | the patch where two parts touch, read as `.length` (its longer side) and `.width` (its shorter side); see below |
+
+**`contact(a, b)`** is where two parts touch: a flat patch, measured on
+the parts' drawn boxes, before joints lengthen them (a tenon reaching into
+its mortise doesn't count as touching). Where the parts butt, the patch is
+the overlap of the two faces that meet; where they cross (a half lap), it
+is their overlap seen square to `a`'s faces. A turned part that meets the
+other with an end touches only over its profile's diameter at that end.
+`a` and `b` are one part each; a role of type `Parts` is one part in each
+pair. Two parts that don't touch over an area are `error[no-contact]`
+(`side_l and top don't touch`) at the call, with the help to place one
+against the other. A `Patch` is read only for its sizes, `.length` and
+`.width`, both `Length`s, and as `of:` in `extent` (above); the sizes are
+exact, never rounded. A kind's rules use it to size a joint to the wood it
+sits on:
+
+```
+require seat_wide : contact(piece, into).width >= diameter + 2 * wall "the parts overlap too little for these dowels"
+require seat_long : contact(piece, into).length >= count * (diameter + wall) + wall "too many dowels for this joint"
+```
 
 Inside a hardware kind's `member` and `mechanism` only, written in the
 [kind's frame](#the-kinds-frame) (anywhere else, `point(...)` is
@@ -2368,6 +2388,7 @@ and their lists are written. It never prints a value the kind would reject:
 error[require]: 'thirds' fails: the slot is a third of the post's thickness
   --> project.stave:44:14
    = note: for rail and post in corner
+   = note: the rule measures 18mm and needs 24mm
    = help: use slot: 8mm, from the kind's list
 ```
 
@@ -2380,6 +2401,32 @@ compares for order (`<`, `>=`), or a kind with no `within` list, keeps the
 general help. The same search runs for a hardware kind's `require` and for
 its adjustments (`error[adjust]`, see [Adjustment](#adjustment)), where each
 trial places the hardware again.
+
+**A failed kind rule says what it measured.** When the condition compares
+two values (or joins comparisons with `&&`, of which the first that fails
+is taken), a note gives both sides: the left is what the rule measures, the
+right what it needs, `at least`, `more than`, `at most` or `less than` it
+for `>=`, `>`, `<=` and `<`, and exactly it for `==`
+(`the rule measures 5.5mm and needs at least 16mm`). Other pairs of the same
+joint that break the same rule are a note on the first error, `the same for
+side_r and top in top_dowels`, as for hardware. When the search offers
+nothing, the help is, in order: for a comparison that reads
+`contact(a, b).width` or `.length` where one part covers only some of the
+other's end, edge or face along that side, how much and what to move; or
+else the general help, naming the kind's params the comparison reads
+(`change the joint's count, diameter or wall, or the parts' sizes, so the
+rule holds`), or `change the joint's settings or the parts' sizes so the
+rule holds` when it reads none. The reported cabinet whose top covers only
+part of each side's end:
+
+```
+error[require]: 'seat_wide' fails: the parts overlap too little for these dowels
+  --> carcass.stave:102:22
+   = note: for side_l and top in top_dowels
+   = note: the rule measures 5.5mm and needs at least 16mm
+   = note: the same for side_r and top in top_dowels
+   = help: top covers only 5.5mm of side_l's 19mm end; move or resize top so it covers the whole end
+```
 
 Requires are what an AI patch or a smart edit is judged against: a change that
 breaks one is rejected, with the message.
@@ -2433,7 +2480,7 @@ shape of their messages are fixed, because tests and AI tools match on them.
 | 3 | `fit-undecided` | `<part>: nothing decides its <length>` |
 | 3 | `mirror` | `<item> has no counterpart on the other side of the mirror` |
 | 3 | `mechanism` | `<kind>'s mechanism has <n> freedoms; it needs exactly one`; `<kind>'s mechanism: this mechanism can't be solved one step at a time from its drive; left over: ...` |
-| 4 | `no-contact` | `<joint or hardware>: <part> meets none of the parts it should join` |
+| 4 | `no-contact` | `<joint or hardware>: <part> meets none of the parts it should join`, or for `contact(a, b)` `<a> and <b> don't touch` |
 | 4 | `overlap` | `<a> and <b> overlap` |
 | 4 | `adjust` | `<hardware>: the <member> would sit <offset> off its place on the <member>; it adjusts <d>`, or for an axis no `adjust` covers `<hardware>: the <member> would sit <offset> off its place <across>; it doesn't adjust that way` |
 | 5 | `motion` | `<a> hits <b> when <assembly> is <open>`; `<assembly>'s hardware doesn't move alike`; `<hardware>: <members> lock at <value>` |
@@ -2647,6 +2694,7 @@ The complete list of types. A `param` may name any of them.
 | `Envelope` | `box(...)`, `cylinder(...)` |
 | `Model` | `model(...)` |
 | `Spacing` | `evenly`, `ends`, `ends(inset: d)`, `pitch(d)`, `gap(d)` |
+| `Patch` | `contact(a, b)`: where two parts touch (not a patch file, see [Patches](#patches)) |
 | `JointKind` | a kind value of base `joint` |
 | `HardwareKind` | a kind value of base `slide`, `hinge` or `pull` |
 | `SlideKind`, `HingeKind`, `PullKind`, `FastenerKind` | a kind value of that base |
@@ -2665,6 +2713,9 @@ z3 works with exact real arithmetic over the params. For a param with a
 range, and says so: a param multiplied by a param, division by a param, and
 `spaced(evenly)` over an array whose count is a param. Each assertion is tracked
 by its source span, so a failure points at the line that caused it.
+`contact(a, b)` is a smallest and a largest of placed faces, which z3 can
+check as a split into cases; until this layer is built, a rule that reads
+it is checked at the current values like every other `require`.
 
 ---
 

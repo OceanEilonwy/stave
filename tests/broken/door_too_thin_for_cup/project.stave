@@ -1,0 +1,71 @@
+// expect: error[require] 'cup_stops' fails: the door is too thin for the hinge cup
+stave 1
+
+// The clothing cabinet's doors made from 12mm maple: a cup hinge's bore is
+// 12.8mm deep, so it would come out through the front of the door.
+
+project "Door too thin for a cup hinge" {
+  units: mm
+}
+
+stock ply_18   { species: birch, form: plywood, thickness: 18mm }
+stock maple_12 { species: hard_maple, form: solid, thickness: 12mm, max_width: 150mm }
+
+part base : ply_18 {
+  length: 600mm
+  width:  400mm
+  place {
+    ground
+  }
+}
+
+part side_l : ply_18 {
+  length: 700mm
+  width:  400mm
+  place {
+    orient(length: up, width: back)
+    against(base.top)
+    flush(base.left)
+    flush(base.back)
+  }
+}
+
+part side_r = mirror(side_l, about: mid(base, across))
+
+region bay = opening(
+  left:   side_l.right,
+  right:  side_r.left,
+  bottom: base.top,
+  top:    side_l.top,
+  front:  base.front,
+  back:   base.back,
+)
+
+component Door {
+  param opening    : Region
+  param hinge_side : Part
+
+  region face = cover(opening, overlay(left: 18mm, right: 18mm), thickness: maple_12.thickness)
+
+  part panel : maple_12 {
+    length: face.up
+    width:  face.across
+    place {
+      orient(length: up, width: right)
+      flush(face.left)
+      flush(face.bottom)
+      flush(face.front)
+    }
+  }
+
+  hardware hinges[bottom, top] : euro_hinge(panel, on: hinge_side) {
+    place {
+      spaced(ends(inset: 80mm), from: panel.bottom, to: panel.top)
+    }
+  }
+}
+
+assembly door : Door {
+  opening:    bay
+  hinge_side: side_l
+}

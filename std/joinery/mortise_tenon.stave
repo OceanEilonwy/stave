@@ -11,8 +11,15 @@ kind mortise_tenon : joint {
   param length = 30mm
   /// Extra depth in the mortise so the shoulders close before the tenon bottoms out.
   param relief = 2mm
+
+  // tenon_thin: a third of the piece is usual and half the most; a thicker
+  // tenon leaves cheeks too thin to hold its shoulders square.
+  // mortise_fits: the tenon, and so its mortise, must lie on the patch
+  // where the parts touch, or the mortise runs out past the other part.
   require has_width     : piece.width > 2 * shoulder "the shoulders leave no tenon"
   require mortise_stops : length + relief <= extent(into, length, of: piece) - 3mm "the mortise would come through the other side"
+  require tenon_thin    : thickness <= piece.thickness / 2 "a tenon thicker than half the rail leaves its cheeks too thin"
+  require mortise_fits  : piece.width - 2 * shoulder <= contact(piece, into).length "the mortise would run out past the edge of the other part"
 
   insert:    [push(piece, along: length)]
   cut_first: into                            // cut the mortise first, then fit the tenon to it

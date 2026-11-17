@@ -1,0 +1,31 @@
+// expect: error[require] 'seat_long' fails: too many screws for this joint
+stave 1
+
+// The wall shelf with sixty screws into each 140mm bracket arm.
+
+project "Too many screws" {
+  units: mm
+}
+
+stock pine_19    { species: pine, form: solid, thickness: 19mm }
+stock pine_strip { species: pine, form: solid, thickness: 19mm, width: 40mm }
+
+part shelf : pine_19 {
+  length: 600mm
+  width:  150mm
+  place {
+    ground
+  }
+}
+
+part arm[left, right] : pine_strip {
+  length: 140mm
+  place {
+    orient(length: back, width: up)
+    against(shelf.bottom)
+    flush(shelf.back)
+    spaced(ends(inset: 60mm), from: shelf.left, to: shelf.right)
+  }
+}
+
+joint shelf_screws : screw(shelf, into: arm[*], length: 40mm, count: 60, glue: false)

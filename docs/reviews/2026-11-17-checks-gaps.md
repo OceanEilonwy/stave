@@ -250,3 +250,42 @@ error[require]: 'seat_wide' fails: the parts overlap too little for these dowels
    audit's S4 and SO18 entries.
 5. **Stock lengths.** Require or warn on missing `max_length` for solid
    stock.
+
+## Resolution: stage 1
+
+- **`contact(a, b)`** is a built-in returning a typed `Patch`
+  (`TypeName::Patch`, `stave_schema::functions::PatchSize`,
+  `stave_model::value::Patch`), read as `.length` and `.width`, and usable
+  as `of:` in `extent` (`length`, `width` along the patch, `thickness`
+  square to it). It is evaluated in `crates/stave-solve/src/contact.rs`
+  from the intersection of the two parts' **drawn** boxes: the cut boxes
+  are not final while a joint's rules run (joints are still adding their
+  extensions), and a tenon reaching into its mortise is not where the
+  parts touch. A turned part touching with an end touches over its
+  profile's diameter at that end. Parts that don't touch are
+  `error[no-contact]`. Spec: grammar, "Built-in functions".
+- **Messages.** Every failed kind rule that compares now notes `the rule
+  measures X and needs at least Y` (any comparison, not only `==`); other
+  pairs of the same joint breaking the same rule are `the same for` notes;
+  a rule reading `contact()` where one part covers only some of the other
+  says how much (`top covers only 5.5mm of side_l's 19mm end; move or
+  resize top so it covers the whole end`); otherwise the general help names
+  the params the rule reads. The note reads "needs at least 16mm", not the
+  review's "needs 16mm".
+- **std rules:** `dowel` (`wall`, `seat_wide`, `seat_long` as above),
+  `screw` (`wall = 6mm`, `gap = 15mm`, `seat_wide`, `seat_long`), `groove`
+  (`not_too_deep`: half the board measured square to the patch, so a groove
+  in a frame's edge is held to the stile's width, not its thickness),
+  `mortise_tenon` (`tenon_thin`: at most half the rail; `mortise_fits`:
+  the tenon's width on the patch's length), `round_tenon` (`shoulder =
+  3mm`, `tenon_fits` on the patch's width, the turned end's diameter),
+  `euro_hinge` and `wide_hinge_165` (`cup_stops`: 12.8mm + 2mm, the maker's
+  tables starting at 15mm doors).
+- **The range layer** does not exist yet (`require-range` is pending), so
+  there was nothing to extend; `broken/contact_range` is pending with it,
+  and the grammar says how `contact()` fits z3.
+- **Not closed here:** joint members, `wall()`, the engine backstops,
+  `held`, focus drawing (stages 2 to 5). The reported cabinet's holes still
+  misalign by up to 1.5mm on overlaps that pass `seat_wide`. The `tenon_thin`
+  rule catches the side table's 30mm tenon, but an 18mm tenon with a 0mm
+  setback (a 0.5mm mortise wall) still needs `wall()`.

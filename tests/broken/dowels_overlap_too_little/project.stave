@@ -1,0 +1,48 @@
+// expect: error[require] 'seat_wide' fails: the parts overlap too little for these dowels
+stave 1
+
+// The reported clothing cabinet edit: the base is made twice the cabinet's
+// width and the top 1.97 times it. The top (1773mm, centred on an 1800mm
+// base) then covers only 5.5mm of each side's 19mm end, too little for an
+// 8mm dowel with wood either side of its hole.
+
+project "Dowels on a narrow overlap" {
+  units: mm
+}
+
+param cabinet_width = 900mm
+
+stock oak_19 { species: white_oak, form: solid, thickness: 19mm }
+
+part base : oak_19 {
+  length: cabinet_width * 2
+  width:  560mm
+  place {
+    ground
+  }
+}
+
+part side_l : oak_19 {
+  length: 1662mm
+  width:  560mm
+  place {
+    orient(length: up, width: back)
+    against(base.top)
+    flush(base.left)
+    flush(base.back)
+  }
+}
+
+part side_r = mirror(side_l, about: mid(base, across))
+
+part top : oak_19 {
+  length: cabinet_width * 1.97
+  width:  560mm
+  place {
+    against(side_l.top)
+    center(base, across)
+    flush(base.back)
+  }
+}
+
+joint top_dowels : dowel([side_l, side_r], into: top, count: 4)

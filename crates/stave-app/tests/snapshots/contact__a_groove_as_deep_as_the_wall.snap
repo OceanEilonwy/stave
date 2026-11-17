@@ -1,0 +1,19 @@
+---
+source: crates/stave-app/tests/contact.rs
+expression: "rendered(\"tests/broken/groove_too_deep\")"
+---
+error[require]: 'not_too_deep' fails: a groove deeper than half the board weakens it
+  --> tests/broken/groove_too_deep/project.stave:58:23
+   |
+58 | joint bottom_groove : groove(bottom, into: [front, back, end_l, end_r], depth: 12mm, glue: false)
+   |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  ::: std/joinery/groove.stave:15:3
+   |
+15 |   require not_too_deep  : depth <= extent(into, thickness, of: contact(piece, into)) / 2 "a groove deeper than half the board weakens it"
+   |   --------------------------------------------------------------------------------------------------------------------------------------- the kind's rule
+   = note: for bottom and front in bottom_groove
+   = note: the rule measures 12mm and needs at most 6mm
+   = note: the same for bottom and back in bottom_groove
+   = note: the same for bottom and end_l in bottom_groove
+   = note: the same for bottom and end_r in bottom_groove
+   = help: change the joint's depth, or the parts' sizes, so the rule holds

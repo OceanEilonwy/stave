@@ -31,6 +31,7 @@
 
 mod boards;
 mod build;
+mod contact;
 mod eval;
 mod hardware;
 mod help;

@@ -1,0 +1,32 @@
+// expect: error[no-contact] shelf and side don't touch
+stave 1
+
+// A rule that measures where two parts touch, written for parts that
+// don't: the shelf stands 20mm clear of the side.
+
+project "Contact between parts apart" {
+  units: mm
+}
+
+stock pine_19 { species: pine, form: solid, thickness: 19mm }
+
+part side : pine_19 {
+  length: 400mm
+  width:  300mm
+  place {
+    ground
+    orient(length: up, width: back)
+  }
+}
+
+part shelf : pine_19 {
+  length: 200mm
+  width:  300mm
+  place {
+    against(side.right, gap: 20mm)
+    flush(side.bottom, inset: 100mm)
+    flush(side.front)
+  }
+}
+
+require seated : contact(shelf, side).width >= 19mm "the shelf must sit on its whole end"

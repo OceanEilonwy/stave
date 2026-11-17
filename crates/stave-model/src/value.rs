@@ -11,8 +11,9 @@ use std::cmp::Ordering;
 use std::fmt;
 
 use stave_lang::ast::{BinaryOp, UnaryOp};
-use stave_lang::placement::{Axis, Face};
+use stave_lang::placement::{Axis, Face, PartAxis};
 use stave_lang::units::{ExactAngle, ExactLength, Rational};
+use stave_schema::functions::PatchSize;
 
 use crate::defs::Word;
 use crate::ids::{
@@ -345,6 +346,81 @@ pub struct Joining {
     pub by: crate::nonempty::NonEmpty<KindValue>,
 }
 
+/// Where two parts touch: what `contact(a, b)` gives (grammar, "Built-in
+/// functions"). A rectangle square to one world axis, its `normal`, with a
+/// longer side (`length`) and a shorter one (`width`), both more than zero.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Patch {
+    area: ExactBox,
+    normal: Axis,
+    length_axis: Axis,
+    width_axis: Axis,
+}
+
+impl Patch {
+    /// The patch covering `area`, square to `normal`; `None` when it has no
+    /// area (the two sides along it aren't both more than zero, or the box
+    /// overflows). The longer side is its length; when the two are equal,
+    /// the first axis of [`Axis::ALL`] is.
+    pub fn new(area: ExactBox, normal: Axis) -> Option<Patch> {
+        let mut along = Axis::ALL.into_iter().filter(|axis| *axis != normal);
+        let (first, second) = (along.next()?, along.next()?);
+        let (first_size, second_size) = (area.size(first)?, area.size(second)?);
+        if first_size <= ExactLength::ZERO || second_size <= ExactLength::ZERO {
+            return None;
+        }
+        let (length_axis, width_axis) = if second_size > first_size {
+            (second, first)
+        } else {
+            (first, second)
+        };
+        Some(Patch {
+            area,
+            normal,
+            length_axis,
+            width_axis,
+        })
+    }
+
+    /// The box the patch covers, in world coordinates. Along its normal it
+    /// is as thick as the overlap of the two parts (nothing, where they
+    /// only touch).
+    pub fn area(&self) -> ExactBox {
+        self.area
+    }
+
+    /// The world axis square to the patch.
+    pub fn normal(&self) -> Axis {
+        self.normal
+    }
+
+    /// The world axis a size runs along.
+    pub fn size_axis(&self, size: PatchSize) -> Axis {
+        match size {
+            PatchSize::Length => self.length_axis,
+            PatchSize::Width => self.width_axis,
+        }
+    }
+
+    /// The world axis one of the patch's own axes runs along, as
+    /// `extent(items, axis, of: patch)` reads it: `length` and `width`
+    /// along the patch, `thickness` square to it.
+    pub fn axis(&self, axis: PartAxis) -> Axis {
+        match axis {
+            PartAxis::Length => self.length_axis,
+            PartAxis::Width => self.width_axis,
+            PartAxis::Thickness => self.normal,
+        }
+    }
+
+    /// A size of the patch, always more than zero.
+    pub fn size(&self, size: PatchSize) -> ExactLength {
+        self.area
+            .size(self.size_axis(size))
+            .unwrap_or(ExactLength::ZERO)
+    }
+}
+
 /// An evaluated value.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
@@ -404,6 +480,8 @@ pub enum Value {
     Hardware(HardwareId),
     /// A list of other values.
     List(Vec<Value>),
+    /// Where two parts touch.
+    Patch(Patch),
 }
 
 /// Why arithmetic failed.
@@ -458,6 +536,7 @@ impl Value {
             Value::Joint(_) => "a joint",
             Value::Hardware(_) => "a piece of hardware",
             Value::List(_) => "a list",
+            Value::Patch(_) => "a contact patch",
         }
     }
 

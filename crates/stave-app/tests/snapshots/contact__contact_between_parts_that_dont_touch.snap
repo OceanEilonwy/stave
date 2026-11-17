@@ -1,0 +1,10 @@
+---
+source: crates/stave-app/tests/contact.rs
+expression: "rendered(\"tests/broken/contact_apart\")"
+---
+error[no-contact]: shelf and side don't touch
+  --> tests/broken/contact_apart/project.stave:32:18
+   |
+32 | require seated : contact(shelf, side).width >= 19mm "the shelf must sit on its whole end"
+   |                  ^^^^^^^^^^^^^^^^^^^^
+   = help: contact measures where two parts meet; place shelf so it lies against side

@@ -825,6 +825,7 @@ impl Solver<'_> {
                 let inner_env = Env { ctx, ..*env };
                 self.def_value(*def, &inner_env, span)
             }
+            (Value::Patch(patch), Member::PatchSize(size)) => Ok(Value::Length(patch.size(*size))),
             (Value::Kind(kind_value), Member::KindEntry(name)) => {
                 self.kind_entry(kind_value, name, env.file, span)
             }
@@ -859,6 +860,9 @@ impl Solver<'_> {
                     (Value::Region(_), word) => Axis::from_word(word).map(Member::RegionSize),
                     (Value::Stock(_), word) => StockField::from_name(word).map(Member::StockField),
                     (Value::Profile(_), "length") => Some(Member::ProfileLength),
+                    (Value::Patch(_), word) => {
+                        stave_schema::functions::PatchSize::from_word(word).map(Member::PatchSize)
+                    }
                     _ => None,
                 };
                 match typed {
@@ -1226,12 +1230,26 @@ impl Solver<'_> {
                 let items = self.eval(items, env)?;
                 let axis = match (self.eval(axis, env)?, Self::arg(args, "of")) {
                     (Value::Word(Word::Axis(axis)), None) => axis,
-                    // An axis of another part: the world axis it runs along.
+                    // An axis of another part, or of a contact patch: the
+                    // world axis it runs along.
                     (Value::Word(Word::PartAxis(part_axis)), Some(of)) => {
-                        let Value::Part(of) = self.eval(of, env)? else {
-                            return Err(Reported);
-                        };
-                        self.part_orientation(of)?.direction(part_axis).axis()
+                        match self.eval(of, env)? {
+                            Value::Part(of) => {
+                                self.part_orientation(of)?.direction(part_axis).axis()
+                            }
+                            Value::Patch(patch) => patch.axis(part_axis),
+                            other => {
+                                return Err(self.eval_error(
+                                    env,
+                                    of.span,
+                                    format!(
+                                        "'of' needs a part or a contact patch, found {}",
+                                        other.description()
+                                    ),
+                                    "name one part, or write contact(a, b)",
+                                ));
+                            }
+                        }
                     }
                     _ => return Err(Reported),
                 };
@@ -1332,6 +1350,14 @@ impl Solver<'_> {
                     bounds,
                     origin: RegionOrigin::Plain,
                 }]))
+            }
+            Builtin::Contact => {
+                let (Some(a), Some(b)) = (Self::arg(args, "a"), Self::arg(args, "b")) else {
+                    return Err(Reported);
+                };
+                let a = self.contact_part(a, env)?;
+                let b = self.contact_part(b, env)?;
+                self.contact(a, b, env, span).map(Value::Patch)
             }
             Builtin::Split => self.split(args, env, span),
             Builtin::Cover => self.cover(args, env, span),

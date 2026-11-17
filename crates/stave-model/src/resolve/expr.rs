@@ -7,7 +7,7 @@ use stave_lang::placement::{Axis, Direction, Face, PartAxis};
 use stave_lang::units::{number_to_rational, quantity_to_angle, quantity_to_length};
 use stave_lang::{Diagnostic, Label};
 use stave_schema::fields::ValueType;
-use stave_schema::functions::{Builtin, MODEL_NODE};
+use stave_schema::functions::{Builtin, MODEL_NODE, PatchSize};
 use stave_schema::kinds::base;
 use stave_schema::species::Species;
 use stave_schema::words::{Grain, Measure, MotionWord, OutputUnit, StockForm, WordSet};
@@ -683,6 +683,9 @@ impl Resolver<'_> {
                 (Member::StockField(field), ty)
             }),
             Ty::Profile => (name == "length").then_some((Member::ProfileLength, Ty::Length)),
+            Ty::Patch => {
+                PatchSize::from_word(name).map(|size| (Member::PatchSize(size), Ty::Length))
+            }
             Ty::Assembly(component) => {
                 let entry = self
                     .component_names
@@ -781,6 +784,10 @@ impl Resolver<'_> {
             .map(|s| (*s).to_owned())
             .collect(),
             Ty::Profile => vec!["length".to_owned()],
+            Ty::Patch => PatchSize::ALL
+                .iter()
+                .map(|size| size.word().to_owned())
+                .collect(),
             Ty::Assembly(component) => self
                 .component_names
                 .get(component.index())
@@ -1220,7 +1227,7 @@ impl Resolver<'_> {
             let value = match parameter.ty {
                 ValueType::Items => {
                     let value = self.value(cx, &arg.value, &Expect::any().named(parameter.name));
-                    self.check_item_argument(cx, builtin, &value);
+                    self.check_item_argument(cx, builtin, parameter.name, &value);
                     value
                 }
                 _ => self.value(cx, &arg.value, &expect),
@@ -1259,21 +1266,42 @@ impl Resolver<'_> {
         }
     }
 
-    fn check_item_argument(&mut self, cx: &Cx, builtin: Builtin, value: &RExpr) {
-        let fits = match builtin {
-            Builtin::Mid => matches!(value.ty, Ty::Part | Ty::Region | Ty::Unknown),
-            Builtin::Between => {
-                matches!(value.ty, Ty::Part | Ty::Anchor | Ty::Region | Ty::Unknown)
-            }
-            Builtin::Extent => value.ty.fits(&Ty::Parts),
-            _ => true,
+    fn check_item_argument(&mut self, cx: &Cx, builtin: Builtin, parameter: &str, value: &RExpr) {
+        let (fits, wanted) = match (builtin, parameter) {
+            (Builtin::Mid, _) => (
+                matches!(value.ty, Ty::Part | Ty::Region | Ty::Unknown),
+                "a part or a region",
+            ),
+            (Builtin::Between, _) => (
+                matches!(value.ty, Ty::Part | Ty::Anchor | Ty::Region | Ty::Unknown),
+                "a part, a face or a region",
+            ),
+            // `extent(items, axis, of: part)` or `of: contact(a, b)`.
+            (Builtin::Extent, "of") => (
+                matches!(value.ty, Ty::Part | Ty::Patch | Ty::Unknown),
+                "a part or a contact patch",
+            ),
+            (Builtin::Extent, _) => (value.ty.fits(&Ty::Parts), "parts"),
+            // One part each; a role of type `Parts` is one part per pair.
+            (Builtin::Contact, _) => (value.ty.fits(&Ty::Parts), "a part"),
+            (
+                Builtin::Opening
+                | Builtin::Split
+                | Builtin::Cover
+                | Builtin::Overlay
+                | Builtin::Inset
+                | Builtin::Turned
+                | Builtin::Joined
+                | Builtin::Box
+                | Builtin::Cylinder
+                | Builtin::Model
+                | Builtin::Ends
+                | Builtin::Pitch
+                | Builtin::Gap,
+                _,
+            ) => (true, ""),
         };
         if !fits {
-            let wanted = match builtin {
-                Builtin::Mid => "a part or a region",
-                Builtin::Between => "a part, a face or a region",
-                _ => "parts",
-            };
             self.error(
                 Code::TypeMismatch,
                 format!("'{}' needs {wanted}, found {}", builtin.word(), value.ty),
@@ -1332,6 +1360,7 @@ fn member_help(ty: &Ty) -> String {
         Ty::Region => "a region has across, up, deep and the faces top, bottom, left, right, front and back".into(),
         Ty::Stock => "a stock has species, form, thickness, diameter, width, max_width and max_length".into(),
         Ty::Profile => "a profile has length".into(),
+        Ty::Patch => "a contact patch has length (its longer side) and width (its shorter side)".into(),
         _ => format!("{ty} has no readable fields here"),
     }
 }

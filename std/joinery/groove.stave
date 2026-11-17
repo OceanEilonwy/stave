@@ -7,7 +7,12 @@ kind groove : joint {
   param depth = 8mm
   /// Room left at the bottom of the groove so a solid panel can swell.
   param clearance = 0mm
+
+  // not_too_deep is dado's rule, measured square to where the panel meets
+  // the board: the board's thickness for a groove in its face (a box's
+  // bottom), its width for a groove in its edge (a door frame's stiles).
   require panel_is_held : clearance < depth "the panel must reach into the groove"
+  require not_too_deep  : depth <= extent(into, thickness, of: contact(piece, into)) / 2 "a groove deeper than half the board weakens it"
 
   insert:    [push(piece, along: length)]
   cut_first: into                                  // cut the groove first, then size the panel to it

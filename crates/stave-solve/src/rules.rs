@@ -3,10 +3,10 @@
 //! here knows a base, a member or a param by name: a cup hinge's arm on
 //! its plate and a slide's gap beside the drawer are the kinds' own text.
 
-use stave_lang::ast::{BinaryOp, Span};
+use stave_lang::ast::Span;
 use stave_lang::units::ExactLength;
 use stave_lang::{Code, Diagnostic, FileId, Label};
-use stave_model::defs::{AdjustDef, BodyId, DefId, FrameAxis, KindDef, RExpr, RExprKind};
+use stave_model::defs::{AdjustDef, BodyId, DefId, FrameAxis, KindDef, RExpr};
 use stave_model::ids::HardwareId;
 use stave_model::solved::Rules;
 use stave_model::value::{AnchorValue, Value};
@@ -328,13 +328,10 @@ impl Solver<'_> {
                         "the kind's rule",
                     ))
                     .with_note(format!("for {}", call.name));
-            if let Some(note) = self.sides_note(&require.condition, &env) {
+            if let Some(note) = self.measures_note(&require.condition, &env) {
                 diagnostic = diagnostic.with_note(note);
             }
-            let search = self.help_search(&require.condition, &kind_env);
-            let help = self.search_help(&search).unwrap_or_else(|| {
-                "change the hardware's settings or the parts' sizes so the rule holds".to_owned()
-            });
+            let help = self.require_help(&require.condition, &env, "hardware");
             self.deferred.push(diagnostic.with_help(help));
         }
         Ok(all)
@@ -371,26 +368,6 @@ impl Solver<'_> {
             earlier.notes.push(note);
         }
         true
-    }
-
-    /// For a failed `a == b`: what each side came to, `the rule measures
-    /// 10mm and needs 12.7mm`.
-    fn sides_note(&mut self, condition: &RExpr, env: &Env<'_>) -> Option<String> {
-        let RExprKind::Binary {
-            op: BinaryOp::Eq,
-            lhs,
-            rhs,
-        } = &condition.kind
-        else {
-            return None;
-        };
-        let measured = self.eval(lhs, env).ok()?;
-        let needed = self.eval(rhs, env).ok()?;
-        Some(format!(
-            "the rule measures {} and needs {}",
-            self.describe(&measured),
-            self.describe(&needed)
-        ))
     }
 
     /// A length as messages write it.

@@ -257,7 +257,7 @@ pub const LINE_CONTINUATION_TOKENS: &[&str] = &[
 /// name is called.
 pub const BUILTIN_FUNCTIONS: &[&str] = &[
     "between", "extent", "mid", "opening", "split", "cover", "overlay", "inset", "turned",
-    "joined", "box", "cylinder", "model", "ends", "pitch", "gap",
+    "joined", "box", "cylinder", "model", "ends", "pitch", "gap", "contact",
 ];
 
 /// Current version written in the `stave <version>` header.

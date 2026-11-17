@@ -36,14 +36,18 @@ REGIONS (0)
 
 ASSEMBLIES (0)
 
-REQUIRES (7)
+REQUIRES (11)
 arm_supports                                 holds
 corner[left].same_thickness                  holds
 corner[right].same_thickness                 holds
 shelf_screws.stays_inside                    holds
 shelf_screws.bites                           holds
+shelf_screws.seat_wide                       holds
+shelf_screws.seat_long                       holds
 shelf_screws.stays_inside                    holds
 shelf_screws.bites                           holds
+shelf_screws.seat_wide                       holds
+shelf_screws.seat_long                       holds
 
 SCENES (1)
 rest                         As built

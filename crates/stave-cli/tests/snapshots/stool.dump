@@ -76,13 +76,17 @@ REGIONS (0)
 
 ASSEMBLIES (0)
 
-REQUIRES (14)
+REQUIRES (18)
 rungs_miss                                   holds
 legs_fit                                     holds
 leg_tenons.hole_stops                        holds
+leg_tenons.tenon_fits                        holds
 leg_tenons.hole_stops                        holds
+leg_tenons.tenon_fits                        holds
 leg_tenons.hole_stops                        holds
+leg_tenons.tenon_fits                        holds
 leg_tenons.hole_stops                        holds
+leg_tenons.tenon_fits                        holds
 rung_sockets.not_too_deep                    holds
 rung_sockets.not_too_deep                    holds
 rung_sockets.not_too_deep                    holds

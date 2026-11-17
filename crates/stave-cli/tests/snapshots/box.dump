@@ -66,7 +66,7 @@ outline                      0..300               0..110               0..200
 ASSEMBLIES (1)
 lid                          Lid (1 parts): turns up to 180deg about the across line through (0, 110, 202.5), free side front, swinging up
 
-REQUIRES (10)
+REQUIRES (14)
 hinge_room                                   holds
 useful                                       holds
 corners.not_too_deep                         holds
@@ -74,9 +74,13 @@ corners.not_too_deep                         holds
 corners.not_too_deep                         holds
 corners.not_too_deep                         holds
 bottom_groove.panel_is_held                  holds
+bottom_groove.not_too_deep                   holds
 bottom_groove.panel_is_held                  holds
+bottom_groove.not_too_deep                   holds
 bottom_groove.panel_is_held                  holds
+bottom_groove.not_too_deep                   holds
 bottom_groove.panel_is_held                  holds
+bottom_groove.not_too_deep                   holds
 
 SCENES (2)
 rest                         As built

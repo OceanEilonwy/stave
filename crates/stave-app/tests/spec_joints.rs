@@ -468,21 +468,29 @@ fn the_search_only_offers_listed_values_and_only_for_equality() {
     );
     assert_eq!(
         common::help(&opened),
-        "change the joint's settings or the parts' sizes so the rule holds"
+        "change the joint's pin, or the parts' sizes, so the rule holds"
     );
     // A rule that compares for order, or joins an equality with `||`,
-    // keeps the general help.
-    for condition in [
-        "pin * 2 >= piece.thickness",
-        "pin * 2 == piece.thickness || depth == pin",
+    // keeps the general help, which names the params the rule reads.
+    for (condition, help) in [
+        (
+            "pin * 2 >= piece.thickness",
+            "change the joint's pin, or the parts' sizes, so the rule holds",
+        ),
+        (
+            "pin * 2 == piece.thickness || depth == pin",
+            "change the joint's pin or depth, or the parts' sizes, so the rule holds",
+        ),
     ] {
         let opened = pin_rule(PIN_LISTS, condition, "");
-        assert_eq!(
-            common::help(&opened),
-            "change the joint's settings or the parts' sizes so the rule holds",
-            "{condition}"
-        );
+        assert_eq!(common::help(&opened), help, "{condition}");
     }
+    // A rule that reads no param keeps the general help as it is.
+    let opened = pin_rule(PIN_LISTS, "piece.thickness >= 30mm", "");
+    assert_eq!(
+        common::help(&opened),
+        "change the joint's settings or the parts' sizes so the rule holds"
+    );
 }
 
 #[test]

@@ -1,0 +1,44 @@
+// expect: error[require] 'tenon_thin' fails: a tenon thicker than half the rail leaves its cheeks too thin
+stave 1
+
+// The side table's stretcher tenons made 30mm thick: thicker than the 19mm
+// stretcher itself, so the tenon would have no cheeks and its mortise would
+// break out of the leg's face.
+
+project "Tenon too thick" {
+  units: mm
+}
+
+stock oak_19    { species: white_oak, form: solid, thickness: 19mm }
+stock oak_45_sq { species: white_oak, form: solid, thickness: 45mm, width: 45mm }
+
+part leg_l : oak_45_sq {
+  length: 575mm
+  place {
+    ground
+    orient(length: up, width: right)
+  }
+}
+
+part leg_r : oak_45_sq {
+  length: 575mm
+  place {
+    orient(length: up, width: right)
+    against(leg_l.right, gap: 400mm)
+    flush(leg_l.bottom)
+    flush(leg_l.front)
+  }
+}
+
+part stretcher : oak_19 {
+  length: between(leg_l, leg_r)
+  width:  50mm
+  place {
+    orient(length: right, width: up)
+    against(leg_l.right)
+    flush(leg_l.bottom, inset: 100mm)
+    flush(leg_l.front, inset: 5mm)
+  }
+}
+
+joint stretcher_tenons : mortise_tenon(stretcher, into: [leg_l, leg_r], length: 25mm, thickness: 30mm)

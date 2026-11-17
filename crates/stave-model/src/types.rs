@@ -65,6 +65,8 @@ pub enum Ty {
     Model,
     /// A spacing for `spaced`.
     Spacing,
+    /// `contact(a, b)`: where two parts touch.
+    Patch,
     /// A bare word from a closed list (axes and directions included).
     Word(WordSet),
     /// A kind value.
@@ -119,6 +121,7 @@ impl Ty {
             TypeName::Envelope => Ty::Envelope,
             TypeName::Model => Ty::Model,
             TypeName::Spacing => Ty::Spacing,
+            TypeName::Patch => Ty::Patch,
             TypeName::JointKind => kind(BaseKind::Joint),
             TypeName::HardwareKind => Ty::Kind(KindTy {
                 base: None,
@@ -213,6 +216,7 @@ impl Ty {
             Ty::Envelope => "an envelope".into(),
             Ty::Model => "a model".into(),
             Ty::Spacing => "a spacing".into(),
+            Ty::Patch => "a contact patch".into(),
             Ty::Word(set) => set.description().into(),
             Ty::Kind(kind) => match kind.base {
                 Some(BaseKind::Joint) => "a joint kind".into(),

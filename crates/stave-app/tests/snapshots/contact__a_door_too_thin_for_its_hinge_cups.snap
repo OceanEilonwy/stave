@@ -1,0 +1,17 @@
+---
+source: crates/stave-app/tests/contact.rs
+expression: "rendered(\"tests/broken/door_too_thin_for_cup\")"
+---
+error[require]: 'cup_stops' fails: the door is too thin for the hinge cup
+  --> tests/broken/door_too_thin_for_cup/project.stave:61:34
+   |
+61 |   hardware hinges[bottom, top] : euro_hinge(panel, on: hinge_side) {
+   |                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  ::: std/hardware/hinges.stave:31:3
+   |
+31 |   require cup_stops : piece.thickness >= 12.8mm + 2mm "the door is too thin for the hinge cup"
+   |   -------------------------------------------------------------------------------------------- the kind's rule
+   = note: for door.hinges[bottom]
+   = note: the rule measures 12mm and needs at least 14.8mm
+   = note: the same for door.hinges[top]
+   = help: change the hardware's settings or the parts' sizes so the rule holds

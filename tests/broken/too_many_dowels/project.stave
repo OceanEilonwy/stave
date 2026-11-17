@@ -1,0 +1,35 @@
+// expect: error[require] 'seat_long' fails: too many dowels for this joint
+stave 1
+
+// The bookshelf's kick with nine dowels at each end: nine 8mm holes along
+// a 70mm kick would run into each other.
+
+project "Too many dowels" {
+  units: mm
+}
+
+stock pine_19 { species: pine, form: solid, thickness: 19mm }
+
+part side_l : pine_19 {
+  length: 900mm
+  width:  250mm
+  place {
+    ground
+    orient(length: up, width: back)
+  }
+}
+
+part kick : pine_19 {
+  length: 600mm
+  width:  70mm
+  place {
+    orient(length: right, width: up)
+    against(side_l.right)
+    flush(side_l.bottom)
+    flush(side_l.front)
+  }
+}
+
+part side_r = mirror(side_l, about: mid(kick, across))
+
+joint kick_dowels : dowel(kick, into: [side_l, side_r], count: 9)

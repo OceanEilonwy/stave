@@ -12,4 +12,5 @@ error[require]: 'thirds' fails: the slot is a third of the post's thickness
 18 |   require thirds : slot * 3 == into.thickness "the slot is a third of the post's thickness"
    |   ----------------------------------------------------------------------------------------- the kind's rule
    = note: for rail and post in corner
+   = note: the rule measures 18mm and needs 24mm
    = help: use slot: 8mm, from the kind's list
