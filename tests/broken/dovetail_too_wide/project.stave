@@ -36,10 +36,10 @@ kind end_dovetail : joint {
   cut_first: piece
   adds:      extend(piece, by: depth)
 
-  cut end(into, facing: piece) {
+  cut socket: end(into, facing: piece) {
     dovetail_socket(neck: neck, depth: depth, angle: angle)
   }
-  cut end(piece, facing: into) {
+  cut tail: end(piece, facing: into) {
     dovetail_tail(neck: neck, depth: depth, angle: angle + 2deg)
   }
 }

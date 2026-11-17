@@ -878,7 +878,7 @@ kind inset_cup_hinge : hinge {
     with:  piece
     shape: cylinder(diameter: 35mm, depth: 0mm..13mm)
   }
-  cut crossing(piece, cup) { drill(diameter: 35mm, depth: 13mm) }
+  cut cup_bore: crossing(piece, cup) { drill(diameter: 35mm, depth: 13mm) }
 }
 component Flap {
   part leaf : pine_19 {

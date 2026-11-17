@@ -13,10 +13,10 @@ kind round_tenon : joint {
   cut_first: into                            // drill the hole first, then fit the tenon to it
   adds:      extend(piece, by: length)       // the tenon is extra length on the piece
 
-  cut end(piece, facing: into) {
+  cut round_tenon: end(piece, facing: into) {
     spigot(diameter: diameter, length: length)
   }
-  cut crossing(into, piece) {
+  cut hole: crossing(into, piece) {
     drill(diameter: diameter, depth: length)
   }
 

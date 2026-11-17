@@ -16,10 +16,10 @@ kind splined_edge : joint {
   insert:    [push(piece, along: width)]
   cut_first: [piece, into]                 // both grooves first; the spline comes last
 
-  cut crossing(piece, into) {
+  cut groove: crossing(piece, into) {
     slot(width: thickness, depth: depth)
   }
-  cut crossing(into, piece) {
+  cut mating_groove: crossing(into, piece) {
     slot(width: thickness, depth: depth)
   }
 

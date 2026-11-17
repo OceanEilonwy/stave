@@ -329,7 +329,7 @@ fn a_tongue_is_a_tenon_on_an_edge() {
     // Where the other part meets this one on its end, it is a type
     // mismatch.
     let opened = with_parts(
-        "kind lap : joint {\n  cut crossing(piece, into) {\n    tenon(length: 5mm, width: 50mm, thickness: 5mm)\n  }\n}\njoint j : lap(shelf, into: side)",
+        "kind lap : joint {\n  cut tongue: crossing(piece, into) {\n    tenon(length: 5mm, width: 50mm, thickness: 5mm)\n  }\n}\njoint j : lap(shelf, into: side)",
     );
     the_diagnostic(
         &opened,
@@ -691,14 +691,14 @@ fn a_cut_selector_is_end_side_or_crossing() {
 fn side_names_the_face_across_the_width_or_thickness() {
     the_diagnostic(
         &open(
-            "kind k : joint {\n  cut side(piece, normal: length, from: into) {\n    pocket(width: 10mm, thickness: 5mm, depth: 5mm)\n  }\n}",
+            "kind k : joint {\n  cut recess: side(piece, normal: length, from: into) {\n    pocket(width: 10mm, thickness: 5mm, depth: 5mm)\n  }\n}",
         ),
         "type-mismatch",
         "'normal' needs width or thickness, found length",
     );
     the_diagnostic(
         &open(
-            "kind k : joint {\n  cut side(piece, from: into) {\n    pocket(width: 10mm, thickness: 5mm, depth: 5mm)\n  }\n}",
+            "kind k : joint {\n  cut recess: side(piece, from: into) {\n    pocket(width: 10mm, thickness: 5mm, depth: 5mm)\n  }\n}",
         ),
         "missing-field",
         "'side' is missing 'normal'",
@@ -728,7 +728,7 @@ fn each_operation_is_cut_on_its_own_selectors() {
         ),
     ] {
         let opened = open(&format!(
-            "kind k : joint {{\n  cut {selector} {{\n    {operation}\n  }}\n}}"
+            "kind k : joint {{\n  cut shape: {selector} {{\n    {operation}\n  }}\n}}"
         ));
         only_error(&opened, "type-mismatch", message);
         assert_eq!(common::help(&opened), help);
@@ -738,7 +738,7 @@ fn each_operation_is_cut_on_its_own_selectors() {
 #[test]
 fn a_required_operation_argument_is_a_missing_field() {
     the_diagnostic(
-        &open("kind k : joint {\n  cut crossing(into, piece) {\n    notch()\n  }\n}"),
+        &open("kind k : joint {\n  cut housing: crossing(into, piece) {\n    notch()\n  }\n}"),
         "missing-field",
         "'notch' is missing 'depth'",
     );
@@ -746,8 +746,9 @@ fn a_required_operation_argument_is_a_missing_field() {
 
 #[test]
 fn an_unknown_operation_lists_the_operations() {
-    let opened =
-        open("kind k : joint {\n  cut crossing(into, piece) {\n    chop(depth: 3mm)\n  }\n}");
+    let opened = open(
+        "kind k : joint {\n  cut housing: crossing(into, piece) {\n    chop(depth: 3mm)\n  }\n}",
+    );
     only_error(&opened, "unknown-name", "unknown name 'chop'");
     assert_eq!(
         common::help(&opened),
@@ -758,7 +759,7 @@ fn an_unknown_operation_lists_the_operations() {
 #[test]
 fn through_cuts_all_the_way() {
     let opened = with_parts(
-        "kind k : joint {\n  cut crossing(into, piece) {\n    notch(depth: through)\n  }\n}\njoint j : k(shelf, into: side)",
+        "kind k : joint {\n  cut housing: crossing(into, piece) {\n    notch(depth: through)\n  }\n}\njoint j : k(shelf, into: side)",
     );
     let side = part(design(&opened), "side");
     assert!(side.cuts.iter().any(|c| c.kind
@@ -771,14 +772,14 @@ fn through_cuts_all_the_way() {
 fn operations_record_their_measurements() {
     let opened = with_parts(
         "kind k : joint {
-  cut crossing(into, piece) {
+  cut housing: crossing(into, piece) {
     slot(width: 5mm, depth: 6mm, angle: 10deg, from_centre: true)
     drill(diameter: 5mm, depth: 8mm, count: 2)
   }
-  cut side(piece, normal: thickness, from: into, opposite: true, flip: true) {
+  cut recess: side(piece, normal: thickness, from: into, opposite: true, flip: true) {
     pocket(width: 10mm, thickness: 5mm, depth: 5mm)
   }
-  cut end(piece, facing: into) {
+  cut tenon: end(piece, facing: into) {
     tenon(length: 10mm, width: 100mm, thickness: 6mm)
   }
 }
@@ -815,7 +816,7 @@ joint j : k(shelf, into: side)",
 fn a_dovetail_slope_is_written_1_in_n() {
     let opened = with_parts(
         "kind k : joint {
-  cut end(piece, facing: into) {
+  cut tenon: end(piece, facing: into) {
     dovetail_tail(neck: 100mm, depth: 10mm, slope: 1 in 8)
   }
 }
@@ -843,7 +844,7 @@ joint j : k(shelf, into: side)",
 fn a_dovetail_takes_an_angle_or_a_slope() {
     let joint = |arguments: &str| {
         with_parts(&format!(
-            "kind k : joint {{\n  cut end(piece, facing: into) {{\n    dovetail_tail(neck: 100mm, depth: 10mm{arguments})\n  }}\n}}\njoint j : k(shelf, into: side)"
+            "kind k : joint {{\n  cut tail: end(piece, facing: into) {{\n    dovetail_tail(neck: 100mm, depth: 10mm{arguments})\n  }}\n}}\njoint j : k(shelf, into: side)"
         ))
     };
     only_error(
@@ -867,7 +868,7 @@ fn a_dovetail_takes_an_angle_or_a_slope() {
 fn a_count_argument_is_a_count() {
     only_error(
         &open(
-            "kind k : joint {\n  cut crossing(into, piece) {\n    drill(diameter: 5mm, depth: 5mm, count: 2mm)\n  }\n}",
+            "kind k : joint {\n  cut hole: crossing(into, piece) {\n    drill(diameter: 5mm, depth: 5mm, count: 2mm)\n  }\n}",
         ),
         "unit-mismatch",
         "'count' needs a count, found a length",
@@ -993,12 +994,12 @@ fn hardware_kinds_have_no_joint_fields_and_cut_where_a_member_is() {
     }
     for (entry, code, message) in [
         (
-            "cut end(piece, facing: piece) {\n    drill(diameter: 3mm, depth: 3mm)\n  }",
+            "cut hole: end(piece, facing: piece) {\n    drill(diameter: 3mm, depth: 3mm)\n  }",
             "type-mismatch",
             "a hardware kind cuts on crossing, found 'end'",
         ),
         (
-            "cut crossing(piece, knob) {\n    drill(diameter: 3mm, depth: 3mm)\n  }",
+            "cut hole: crossing(piece, knob) {\n    drill(diameter: 3mm, depth: 3mm)\n  }",
             "unknown-name",
             "'crossing' needs a member of the kind, found 'knob'",
         ),
@@ -1106,7 +1107,7 @@ fn a_pull_bores_one_hole_or_two_holes_centres_apart() {
 #[test]
 fn a_cup_hinge_bores_its_cup_in_the_mount_face() {
     let opened = open(
-        "/// A cup hinge for an inset door, whose plate has no adjustment: it\n/// is drawn where this design puts it.\nkind inset_cup_hinge : hinge {\n  roles {\n    piece: Part\n    on:    Part\n  }\n  opening_angle: 110deg\n  cup_diameter:  35mm\n  cup_depth:     13mm\n  cup_inset:     5mm\n  mount {\n    face:   back\n    across: from(edge(piece, nearer: on), inset: 22.5mm)\n    along:  open\n  }\n  member plate {\n    with:  on\n    shape: box(along: 50mm, across: -22.5mm..-11.5mm, depth: -55mm..-19mm)\n    mount {\n      across: from(face(on, toward: piece), inset: -22.5mm)\n      depth:  from(face(on, toward: piece))\n    }\n  }\n  member cup {\n    with:  piece\n    shape: cylinder(diameter: 35mm, depth: 0mm..13mm)\n  }\n  cut crossing(piece, cup) { drill(diameter: 35mm, depth: 13mm) }\n}\npart side : pine_19 {\n  length: 400mm\n  width:  300mm\n  place {\n    orient(length: up, width: back)\n    against(base.top)\n    flush(base.left)\n    flush(base.front)\n  }\n}\npart door : pine_19 {\n  length: 300mm\n  width:  200mm\n  place {\n    orient(length: up, width: right)\n    against(base.top)\n    against(side.right)\n    against(base.front)\n  }\n}\nhardware h : inset_cup_hinge(door, on: side) {\n  place {\n    flush(door.bottom, inset: 50mm)\n  }\n}",
+        "/// A cup hinge for an inset door, whose plate has no adjustment: it\n/// is drawn where this design puts it.\nkind inset_cup_hinge : hinge {\n  roles {\n    piece: Part\n    on:    Part\n  }\n  opening_angle: 110deg\n  cup_diameter:  35mm\n  cup_depth:     13mm\n  cup_inset:     5mm\n  mount {\n    face:   back\n    across: from(edge(piece, nearer: on), inset: 22.5mm)\n    along:  open\n  }\n  member plate {\n    with:  on\n    shape: box(along: 50mm, across: -22.5mm..-11.5mm, depth: -55mm..-19mm)\n    mount {\n      across: from(face(on, toward: piece), inset: -22.5mm)\n      depth:  from(face(on, toward: piece))\n    }\n  }\n  member cup {\n    with:  piece\n    shape: cylinder(diameter: 35mm, depth: 0mm..13mm)\n  }\n  cut cup_bore: crossing(piece, cup) { drill(diameter: 35mm, depth: 13mm) }\n}\npart side : pine_19 {\n  length: 400mm\n  width:  300mm\n  place {\n    orient(length: up, width: back)\n    against(base.top)\n    flush(base.left)\n    flush(base.front)\n  }\n}\npart door : pine_19 {\n  length: 300mm\n  width:  200mm\n  place {\n    orient(length: up, width: right)\n    against(base.top)\n    against(side.right)\n    against(base.front)\n  }\n}\nhardware h : inset_cup_hinge(door, on: side) {\n  place {\n    flush(door.bottom, inset: 50mm)\n  }\n}",
     );
     let design = design(&opened);
     let door = part(design, "door");
@@ -1436,7 +1437,132 @@ fn a_named_cut_is_called_by_its_name() {
             .name
             .as_ref()
             .map(|n| n.as_str()),
-        Some("hole")
+        Some("screw_hole")
+    );
+}
+
+/// The full text of `warning[unnamed-cut]`: a kind used for two sides is
+/// warned once, at its cut.
+#[test]
+fn an_unnamed_cut_is_a_warning_once_at_its_kind() {
+    let root = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."));
+    let opened = stave_app::open(&root.join("tests/broken/unnamed_cut")).unwrap();
+    let rendered = stave_lang::render_diagnostics(&opened.sources, &opened.diagnostics)
+        .replace(&format!("{}/", root.display()), "");
+    insta::assert_snapshot!(rendered);
+}
+
+/// The full text of `error[duplicate-name]` for two cuts of one kind with
+/// the same name: both places are named, and the help asks for a name per
+/// cut rather than removing one.
+#[test]
+fn two_cuts_of_one_kind_with_one_name_are_an_error() {
+    let root = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."));
+    let opened = stave_app::open(&root.join("tests/broken/duplicate_cut_name")).unwrap();
+    let rendered = stave_lang::render_diagnostics(&opened.sources, &opened.diagnostics)
+        .replace(&format!("{}/", root.display()), "");
+    insta::assert_snapshot!(rendered);
+}
+
+/// Two different kinds may give their cuts the same names.
+#[test]
+fn two_kinds_may_share_a_cut_name() {
+    let opened = open(
+        "kind trench : joint {\n  cut groove: crossing(into, piece) {\n    notch(depth: 3mm)\n  }\n}\nkind channel : joint {\n  cut groove: crossing(into, piece) {\n    notch(depth: 3mm)\n  }\n}",
+    );
+    assert!(
+        diagnostics(&opened).is_empty(),
+        "{:?}",
+        diagnostics(&opened)
+    );
+}
+
+/// Every kind is resolved where it is declared, so a kind nobody uses is
+/// still warned; the quoted word is the operation's, or `cut` when a cut's
+/// operations have different words. A hardware kind's cut warns the same.
+#[test]
+fn a_kind_nobody_uses_is_still_warned() {
+    let opened = open(
+        "kind trench : joint {\n  cut crossing(into, piece) {\n    notch(depth: 3mm)\n  }\n  cut end(piece, facing: into) {\n    tenon(length: 3mm, width: 10mm, thickness: 3mm)\n  }\n  cut crossing(piece, into) {\n    drill(diameter: 3mm, depth: 3mm)\n    slot(width: 3mm, depth: 3mm)\n  }\n}",
+    );
+    assert_eq!(
+        diagnostics(&opened),
+        [
+            "unnamed-cut: this cut has no name, so messages will call it \"a notch\"",
+            "unnamed-cut: this cut has no name, so messages will call it \"a cut\"",
+            "unnamed-cut: this cut has no name, so messages will call it \"a cut\"",
+        ]
+    );
+    assert!(
+        opened
+            .diagnostics
+            .iter()
+            .all(|d| d.severity == stave_lang::Severity::Warning)
+    );
+    assert_eq!(
+        opened.diagnostics[1].help.as_deref(),
+        Some("name it after what it is, as in cut groove: end(...) { ... }")
+    );
+    let hardware = open(&format!(
+        "kind screwed_knob : pull {{\n{PULL_HEAD}  member knob {{\n    with:  piece\n    shape: cylinder(diameter: 20mm, depth: -20mm..0mm)\n  }}\n  cut crossing(piece, knob) {{ drill(diameter: 4mm, depth: through) }}\n}}"
+    ));
+    assert_eq!(
+        diagnostics(&hardware),
+        ["unnamed-cut: this cut has no name, so messages will call it \"a hole\""]
+    );
+    // Named, the same kinds are quiet.
+    let named = open(&format!(
+        "kind screwed_knob : pull {{\n{PULL_HEAD}  member knob {{\n    with:  piece\n    shape: cylinder(diameter: 20mm, depth: -20mm..0mm)\n  }}\n  cut screw_hole: crossing(piece, knob) {{ drill(diameter: 4mm, depth: through) }}\n}}"
+    ));
+    assert_eq!(diagnostics(&named), Vec::<String>::new());
+}
+
+/// A recipe's `cut { }` block lists cutting steps, not a kind's cuts: it
+/// never warns.
+#[test]
+fn a_recipes_cut_block_never_warns() {
+    let opened = open(
+        "recipe notch_by_saw : notch {\n  tools: [tenon_saw, chisel]\n  cut {\n    saw(walls, to: depth)\n    chop(waste, with: chisel)\n  }\n}",
+    );
+    assert_eq!(diagnostics(&opened), Vec::<String>::new());
+}
+
+/// A named tenon is called by its name in a message about its fit, and
+/// so is a named dovetail tail and socket (`broken/dovetail_too_wide`).
+#[test]
+fn a_named_tenon_or_dovetail_uses_its_name_in_a_message() {
+    let root = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."));
+    let read = |folder: &str| {
+        std::fs::read_to_string(root.join("tests/broken").join(folder).join("project.stave"))
+            .unwrap()
+    };
+    let help_of = |text: &str| {
+        let opened = common::open_files(&[("project.stave", text)]);
+        let overlap = opened
+            .diagnostics
+            .iter()
+            .find(|d| d.code == stave_lang::Code::Overlap)
+            .expect("an overlap");
+        overlap.help.clone().unwrap_or_default()
+    };
+    let tenon = read("tenon_too_long");
+    assert!(tenon.contains("cut tenon: end(piece, facing: into)"));
+    let stub = tenon.replace("cut tenon: end(", "cut stub_tenon: end(");
+    let help = help_of(&stub);
+    assert!(
+        help.starts_with("the stub tenon on rail goes ")
+            && help.contains("its mortise in leg")
+            && help.contains("or the stub tenon "),
+        "{help}"
+    );
+    let dovetail = read("dovetail_too_wide")
+        .replace("cut socket: end(", "cut housing: end(")
+        .replace("cut tail: end(", "cut key: end(");
+    let help = help_of(&dovetail);
+    assert!(
+        help.starts_with("the sloped faces of the key on beam_b ")
+            && help.contains("its housing in beam_a; cut the key and the housing "),
+        "{help}"
     );
 }
 

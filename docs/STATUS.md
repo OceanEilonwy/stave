@@ -38,10 +38,14 @@ a line and a concrete help line for every problem:
    slots; an outline that crosses itself is `type-mismatch`). Wood
    passing through wood beyond the 0.05mm contact tolerance is `overlap`,
    with what goes where and by how much ("the tenon on rail goes 3mm past
-   the bottom of its mortise in leg"); a joint's parts that don't touch are
-   `no-contact`; a spacing that runs past `to` is `overlap`; a kind's
-   catalogue rules are its own `require`s and `adjust`s (a slide's gap, how
-   far a cup hinge's arm can be set on its plate). Every shape of every hardware member is a
+   the bottom of its mortise in leg"). Messages call a cut by the name its
+   kind gives it (`cut groove: ...`), whatever its operation; an unnamed
+   cut in a kind is the warning `unnamed-cut`, two cuts of one kind with
+   one name are `duplicate-name`, and every cut in `std/` and `examples/`
+   is named. A joint's parts that don't touch are `no-contact`; a spacing
+   that runs past `to` is `overlap`; a kind's catalogue rules are its own
+   `require`s and `adjust`s (a slide's gap, how far a cup hinge's arm can
+   be set on its plate). Every shape of every hardware member is a
    body and counts like wood, against its own parts too (a cut it makes is
    room for it); a kind's own members are not checked against each other.
    A part made of boards counts as its boards make it. A clash between an assembly (a door, a drawer) and something

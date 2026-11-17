@@ -34,27 +34,27 @@ kind chidori : joint {
 
   // The first two sticks are halved over each other: first keeps the bottom
   // half of the node, second the top half.
-  cut crossing(first, second) {
+  cut first_lap: crossing(first, second) {
     notch(depth: size / 2)
   }
-  cut crossing(second, first, opposite: true) {
+  cut second_lap: crossing(second, first, opposite: true) {
     notch(depth: size / 2)
   }
 
   // Each is bored down through where the lock passes, and slotted from the
   // hole out to the corner, on the diagonal of the lock's section.
-  cut crossing(first, lock, normal: thickness) {
+  cut first_lock_hole: crossing(first, lock, normal: thickness) {
     drill(diameter: round_diameter, depth: through)
     slot(width: flats, depth: through, angle: 45deg, from_centre: true)
   }
-  cut crossing(second, lock, normal: thickness) {
+  cut second_lock_hole: crossing(second, lock, normal: thickness) {
     drill(diameter: round_diameter, depth: through)
     slot(width: flats, depth: through, angle: 45deg, from_centre: true)
   }
 
   // The lock is turned round through the node, keeping two flats. In the
   // finished node the flats face along the slots, so the round faces block them.
-  cut crossing(lock, first) {
+  cut rounding: crossing(lock, first) {
     round(diameter: round_diameter, flats: flats, flats_angle: 45deg)
   }
 

@@ -427,7 +427,8 @@ Notes for the parser:
   member's shapes; `shape: box(...)` is a field and gives the member's only
   shape.
 - `cut dado: crossing(...) { }` (the word `cut`, a name, then `:`) is a named
-  cut; `cut crossing(...) { }` is an unnamed one, and `cut: ...` is a field.
+  cut; `cut crossing(...) { }` is an unnamed one (`warning[unnamed-cut]` in a
+  kind; see [Named cuts](#named-cuts)), and `cut: ...` is a field.
 - `mount { }` is a block when `mount` is directly followed by `{`;
   `mount: ...` is a field.
 
@@ -757,7 +758,7 @@ The condition is a `Bool` expression. See [Checks](#checks-and-require).
 | `cut_first` | a role, or a list of roles | no | the order in which the roles are cut |
 | `adds` | `extend(...)` or a list of them | no | what the joint adds to each part's cut size |
 | `uses` | a fastener kind value, or a list | no | fasteners the joint consumes |
-| `cut [name:] selector { }` | | no | material removed; a name (`cut dado: ...`) is what messages call the cut |
+| `cut [name:] selector { }` | | no | material removed; a name (`cut dado: ...`) is what messages call the cut; see [Named cuts](#named-cuts) |
 | `makes part` | | no | a part the joint creates |
 | `note` | `Text` | no | one piece of advice for the build manual |
 
@@ -784,7 +785,7 @@ how it moves and what it cuts are all written in the kind. A `slide`,
 | `member` | no | its pieces, each with its shapes (see [Shapes](#shapes)) |
 | `adjust a on b: axis within d` | no | how far a member can be set on another, on one axis of the frame (see [Adjustment](#adjustment)) |
 | `mechanism { }` | no | how its members move (see [Mechanisms](#mechanisms)) |
-| `cut [name:] crossing(role, member) { }` | no | the wood it takes out: the bore for a cup, the mortise for a leaf, the hole for a screw (see [Faces to cut](#faces-to-cut)) |
+| `cut [name:] crossing(role, member) { }` | no | the wood it takes out: the bore for a cup, the mortise for a leaf, the hole for a screw (see [Faces to cut](#faces-to-cut)); a name is what messages call the cut (see [Named cuts](#named-cuts)) |
 | `uses` | no | fasteners it consumes, as a joint's `uses:`: counted, never placed |
 | `model` | no | a `Model`, for looks |
 | `moving`, `license` | no | `Text` |
@@ -1324,10 +1325,10 @@ kind ari_tsugi : joint {
   cut_first: piece
   adds:      extend(piece, by: depth)
 
-  cut end(into, facing: piece) {
+  cut socket: end(into, facing: piece) {
     dovetail_socket(neck: neck, depth: depth, angle: angle)
   }
-  cut end(piece, facing: into) {
+  cut tail: end(piece, facing: into) {
     dovetail_tail(neck: neck, depth: depth, angle: angle)
   }
 
@@ -1429,8 +1430,8 @@ the part's cut box share, in the part's own frame. A hardware cut is made
 once for each piece of hardware. Its operations are the same as a joint's:
 
 ```
-cut crossing(piece, cup) { drill(diameter: 35mm, depth: 12.8mm) }
-cut crossing(on, fixed_leaf) { notch(depth: 1.5mm) }
+cut cup_bore: crossing(piece, cup) { drill(diameter: 35mm, depth: 12.8mm) }
+cut fixed_leaf_mortise: crossing(on, fixed_leaf) { notch(depth: 1.5mm) }
 ```
 
 When `p` and `q` cross right through each other, `crossing(p, q)` is `p`'s
@@ -1440,6 +1441,48 @@ edge. `normal: width | thickness` names the face instead (the face across
 bored down through a stick that another stick passes through vertically is
 `crossing(first, lock, normal: thickness)`. `opposite: true` takes the face
 opposite to the chosen one.
+
+#### Named cuts
+
+A cut in a joint or hardware kind is named by writing a name and `:` after
+`cut`: `cut groove: crossing(into, piece) { ... }`. The name is what
+messages call the cut, whatever its operations: `its groove in side_l`,
+`the tenon on rail`, `its socket in beam_a`. In a message the name's
+underscores are read as spaces (`mating_groove` is "mating groove"). A
+cut name is not an item: it shares no namespace with the kind's params,
+roles or made parts. Each cut of a kind has its own name, because the name
+is how messages and patches tell the kind's cuts apart: two cuts of one
+kind with the same name are `error[duplicate-name]`, naming both places,
+with the help `give each cut of a kind its own name, as in groove and
+mating_groove`. Two different kinds may use the same cut names.
+
+Names come only from the kind; Stave never guesses one. A message about an
+unnamed cut falls back to its operation's word: `mortise` for `pocket`,
+`hole` for `drill`, `notch`, `slot`, and `cut` for every other operation.
+So every `cut` in a kind should be named, and an unnamed one is
+`warning[unnamed-cut]` (layer 2), at the cut's selector:
+
+```
+warning[unnamed-cut]: this cut has no name, so messages will call it "a slot"
+  --> project.stave:52:7
+   |
+52 |   cut crossing(into, piece) {
+   |       ^^^^^^^^^^^^^^^^^^^^^
+   = help: name it after what it is, as in cut groove: crossing(...) { ... }
+```
+
+The word in quotes is the fallback above; when a cut's operations have
+different words (a `drill` and a `slot` in one cut) it is `cut`. The help
+repeats the cut's own selector word (`end`, `side` or `crossing`).
+
+- It is reported once for each unnamed `cut` in a kind, at the kind's
+  definition, however many times the kind is used (or in however many
+  modules that import it).
+- A kind nobody uses is still warned: every kind is resolved where it is
+  declared, used or not, so `stave check std` checks every kind in the
+  library.
+- The `cut { }` block of a recipe lists cutting steps, not a kind's cuts,
+  and never warns.
 
 #### The kind's frame
 
@@ -1638,7 +1681,7 @@ kind brass_knob_26 : pull {
     with:  piece
     shape: cylinder(diameter: 4mm, depth: 0mm..piece.thickness)
   }
-  cut crossing(piece, screw) { drill(diameter: 4mm, depth: through) }
+  cut screw_hole: crossing(piece, screw) { drill(diameter: 4mm, depth: through) }
   model: model("./models/brass_knob_26.glb", align: node("mount"))
 }
 ```
@@ -2400,6 +2443,7 @@ shape of their messages are fixed, because tests and AI tools match on them.
 | 2 | `import-cycle` | `modules import each other: <a> -> <b> -> <a>` |
 | 2 | `unknown-module` | `can't find module '<source>'` |
 | 2, 4 | `not-supported` | `<what> is not supported yet` (an error for remote imports and for a format version other than 1, a warning for a cut on a round or turned part other than a hole or a round tenon) |
+| 2 | `unnamed-cut` | `this cut has no name, so messages will call it "a <slot>"` (a warning, once for each unnamed `cut` in a kind; see [Named cuts](#named-cuts)) |
 | 3 | `ground` | `no part is placed with 'ground'`, `'<a>' and '<b>' are both placed with 'ground'`, or `'<a>' is placed with 'ground' inside a component` |
 | 3 | `axis-not-set` | `<item>: position along '<axis>' is not set` |
 | 3 | `axis-set-twice` | `<item>: position along '<axis>' is set twice` |
@@ -2417,7 +2461,7 @@ shape of their messages are fixed, because tests and AI tools match on them.
 | 7 | `order` | `<part>: there is no valid order for its cuts`, or for a joint's insert steps `<joint>: <step> is blocked by <part>` |
 
 Warnings and notes: `shadows-prelude`, `no-recipe`, `not-supported`,
-`model-mismatch`.
+`model-mismatch`, `unnamed-cut`.
 
 A model mismatch (layer 4) is reported at the kind's
 `model(...)` and says one of `<kind>'s model puts '<node>' at <point>, but

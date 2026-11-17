@@ -40,10 +40,10 @@ kind my_tenon : joint {
   cut_first: into
   adds:      extend(piece, by: length)
 
-  cut end(piece, facing: into) {
+  cut tenon: end(piece, facing: into) {
     tenon(length: length, width: piece.width - 20mm, thickness: piece.thickness / 3)
   }
-  cut crossing(into, piece) {
+  cut mortise: crossing(into, piece) {
     pocket(width: piece.width - 20mm, thickness: piece.thickness / 3, depth: length + relief)
   }
 }
