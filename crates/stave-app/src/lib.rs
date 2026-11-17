@@ -24,6 +24,7 @@
 
 use std::path::Path;
 
+pub mod focus;
 pub mod view;
 
 use stave_lang::{Diagnostic, SourceMap};

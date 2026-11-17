@@ -13,6 +13,7 @@ stave-solve = { path = "../stave-solve" }
 stave-check = { path = "../stave-check" }
 stave-geom = { path = "../stave-geom" }
 stave-scene = { path = "../stave-scene" }
+stave-schema = { path = "../stave-schema" }
 thiserror = "2"
 
 [dev-dependencies]
