@@ -15,13 +15,26 @@ use stave_model::solved::{Point, Size3};
 
 /// A length in millimetres.
 pub fn mm(length: Length) -> f32 {
-    // The only narrowing cast at the boundary: f64 millimetres to f32.
-    length.to_mm_f64() as f32
+    gpu(length.to_mm_f64())
 }
 
 /// An angle in radians.
 pub fn radians(angle: Angle) -> f32 {
-    angle.to_radians_f64() as f32
+    gpu(angle.to_radians_f64())
+}
+
+/// The GPU boundary: an `f64` narrowed to the nearest `f32`, the one
+/// float narrowing in Stave. An `f32` keeps 24 significant bits, so a
+/// length of a few metres (in millimetres) is held to about 0.1µm and an
+/// angle to about 1e-7 rad, far finer than a screen shows; non-finite
+/// values stay non-finite, and values beyond `f32`'s range (never a
+/// design's) become infinite. Everything exact has already been decided
+/// in nanometres before this point.
+fn gpu(value: f64) -> f32 {
+    // Rust defines this cast as rounding to nearest, ties to even.
+    #[allow(clippy::cast_possible_truncation)]
+    let narrowed = value as f32;
+    narrowed
 }
 
 /// A length in nanometres, for collision tests.
@@ -149,6 +162,15 @@ mod tests {
             length_from_nm(-9_223_372_036_854_775_808.0),
             Some(Length::from_nm(i64::MIN))
         );
+    }
+
+    #[test]
+    fn floats_narrow_to_the_nearest_f32() {
+        assert_eq!(gpu(1.5), 1.5_f32);
+        assert_eq!(mm(Length::from_nm(19_050_000)), 19.05_f32);
+        assert!((gpu(1_234.000_000_1) - 1234.0).abs() < 1e-3);
+        assert!(gpu(f64::NAN).is_nan());
+        assert_eq!(gpu(1e300), f32::INFINITY);
     }
 
     #[test]
