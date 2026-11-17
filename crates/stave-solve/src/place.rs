@@ -372,6 +372,10 @@ impl Solver<'_> {
     // -----------------------------------------------------------------------
 
     pub(crate) fn part_stock(&mut self, part: PartId) -> Solved<StockId> {
+        if let Some(board) = self.boards.get(&part) {
+            let owner = board.part;
+            return self.part_stock(owner);
+        }
         if let Some((source, _, _)) = self.mirror_source(part)? {
             return self.part_stock(source);
         }
@@ -461,6 +465,9 @@ impl Solver<'_> {
     }
 
     pub(crate) fn part_orientation(&mut self, part: PartId) -> Solved<Orientation> {
+        if let Some(board) = self.boards.get(&part) {
+            return Ok(board.orientation);
+        }
         match self.parts.get(part.index()).map(|s| &s.orientation) {
             Some(Memo::Done(o)) => return Ok(*o),
             Some(Memo::Failed) => return Err(Reported),
@@ -848,6 +855,9 @@ impl Solver<'_> {
     /// A part's drawn size along one of its own axes.
     pub(crate) fn drawn_size(&mut self, part: PartId, axis: PartAxis) -> Solved<ExactLength> {
         let slot = part_axis_slot(axis);
+        if let Some(board) = self.boards.get(&part) {
+            return board.drawn.get(slot).copied().ok_or(Reported);
+        }
         match self.parts.get(part.index()).and_then(|s| s.sizes.get(slot)) {
             Some(Memo::Done(size)) => return Ok(*size),
             Some(Memo::Failed) => return Err(Reported),
@@ -1518,6 +1528,9 @@ impl Solver<'_> {
     /// The low end of a part's drawn box along a world axis.
     pub(crate) fn part_min(&mut self, part: PartId, axis: Axis) -> Solved<ExactLength> {
         let slot = axis_slot(axis);
+        if let Some(board) = self.boards.get(&part) {
+            return board.min.get(slot).copied().ok_or(Reported);
+        }
         match self.parts.get(part.index()).and_then(|s| s.mins.get(slot)) {
             Some(Memo::Done(v)) => return Ok(*v),
             Some(Memo::Failed) => return Err(Reported),

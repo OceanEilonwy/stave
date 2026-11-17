@@ -30,12 +30,14 @@ use crate::place::reflect;
 use crate::{Reported, Solved, Solver};
 
 /// A part a joint made.
-struct MadeInfo {
-    joint: JointId,
-    pair: usize,
-    name: String,
-    stock: StockId,
-    note: Option<String>,
+pub(crate) struct MadeInfo {
+    /// Which joint and pair, or which part's boards, made it.
+    pub origin: PartOrigin,
+    /// The assembly it belongs to: its joint's, or its part's.
+    pub assembly: Option<AssemblyId>,
+    pub name: String,
+    pub stock: StockId,
+    pub note: Option<String>,
 }
 
 fn point(values: [ExactLength; 3]) -> Solved<Point> {
@@ -402,6 +404,9 @@ pub(crate) fn build(solver: &mut Solver<'_>) -> Option<SolvedDesign> {
         &mut placed,
     );
 
+    // 6b. Parts wider than their stock: boards and the joints between them.
+    let boards = solver.make_boards(&mut geoms, &mut cuts, &mut memberships, &mut made);
+
     // 7. Every assembly's mechanism, from the hardware that moves it.
     let mechanisms = solver.assembly_mechanisms(&placed);
 
@@ -463,7 +468,9 @@ pub(crate) fn build(solver: &mut Solver<'_>) -> Option<SolvedDesign> {
     }
 
     // 9. Write everything out.
-    let parts = solver.write_parts(&geoms, cuts, memberships, &made).ok()?;
+    let parts = solver
+        .write_parts(&geoms, cuts, memberships, &made, boards)
+        .ok()?;
     let hardware = solver.write_hardware(&placed, &mechanisms).ok()?;
     let regions = solver.write_regions().ok()?;
     let assemblies = solver.write_assemblies(&placed, &mechanisms).ok()?;
@@ -602,8 +609,11 @@ impl Solver<'_> {
                     list.push(joint);
                 }
                 made.push(MadeInfo {
-                    joint,
-                    pair: pair_index,
+                    origin: PartOrigin::Made {
+                        joint,
+                        pair: pair_index,
+                    },
+                    assembly: inst.assembly,
                     name,
                     stock: placed.stock,
                     note: note_text,
@@ -694,15 +704,30 @@ impl Solver<'_> {
             {
                 note = Some(self.format_text(text, &env)?);
             }
-            let roles = kind
-                .roles
-                .iter()
-                .zip(&pair.parts)
-                .map(|(role, part)| RoleBinding {
-                    role: role.name.clone(),
-                    part: *part,
-                })
-                .collect();
+            let roles = if pair.across {
+                // One `Parts` role: every part is bound to it.
+                let name = kind
+                    .roles
+                    .first()
+                    .map(|r| r.name.clone())
+                    .unwrap_or_default();
+                pair.parts
+                    .iter()
+                    .map(|part| RoleBinding {
+                        role: name.clone(),
+                        part: *part,
+                    })
+                    .collect()
+            } else {
+                kind.roles
+                    .iter()
+                    .zip(&pair.parts)
+                    .map(|(role, part)| RoleBinding {
+                        role: role.name.clone(),
+                        part: *part,
+                    })
+                    .collect()
+            };
             pairs.push(JointPair {
                 roles,
                 contact: pair.contact,
@@ -818,6 +843,10 @@ impl Solver<'_> {
                         },
                         CutSource::Hardware { hardware } => CutSource::Hardware {
                             hardware: *hardware_map.get(&hardware).unwrap_or(&hardware),
+                        },
+                        CutSource::Boards { part, seam } => CutSource::Boards {
+                            part: *part_map.get(&part).unwrap_or(&part),
+                            seam,
                         },
                     };
                     cut.place = match cut.place {
@@ -1216,6 +1245,7 @@ impl Solver<'_> {
         cuts: Vec<Vec<Cut>>,
         memberships: Vec<Vec<JointId>>,
         made: &[MadeInfo],
+        mut boards: Vec<Option<solved::Boards>>,
     ) -> Solved<Vec<solved::Part>> {
         let mut parts = Vec::new();
         let mut cuts = cuts.into_iter();
@@ -1301,18 +1331,10 @@ impl Solver<'_> {
                     )
                 } else {
                     let info = made.get(index - self.model.parts.len()).ok_or(Reported)?;
-                    let assembly = self
-                        .model
-                        .joints
-                        .get(info.joint.index())
-                        .and_then(|j| j.assembly);
                     (
                         info.name.clone(),
-                        assembly,
-                        PartOrigin::Made {
-                            joint: info.joint,
-                            pair: info.pair,
-                        },
+                        info.assembly,
+                        info.origin,
                         info.stock,
                         Shape::Board,
                         Grain::Length,
@@ -1367,6 +1389,7 @@ impl Solver<'_> {
                 cuts: part_cuts,
                 joints: part_joints,
                 note,
+                boards: boards.get_mut(index).and_then(Option::take),
             });
         }
         Ok(parts)

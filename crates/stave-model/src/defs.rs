@@ -463,6 +463,8 @@ pub struct PartBodyDef {
     pub face_edge: Option<(Face, Span)>,
     /// `note:`
     pub note: Option<Text>,
+    /// `boards:`: how its boards are joined (grammar, "Boards").
+    pub boards: Option<RExpr>,
     /// The `place { }` terms in order.
     pub place: Vec<PlaceTerm>,
     /// The `place { }` block, when written.
@@ -1566,6 +1568,8 @@ pub struct ProjectDef {
     pub tools: Option<Vec<KindId>>,
     /// `methods:`
     pub methods: Vec<RecipeId>,
+    /// `boards:`: how boards are joined in every part that doesn't say.
+    pub boards: Option<RExpr>,
     /// The file it is in.
     pub file: FileId,
     /// The whole item.
@@ -1654,6 +1658,10 @@ pub struct Defs {
     pub components: Vec<ComponentDef>,
     /// `scene`s.
     pub scenes: Vec<SceneDef>,
+    /// The joint kind boards are joined by when no `boards:` says
+    /// (grammar, "Boards"): `glued_edge` from the prelude, when there is
+    /// one.
+    pub default_boards: Option<KindId>,
 }
 
 macro_rules! getters {

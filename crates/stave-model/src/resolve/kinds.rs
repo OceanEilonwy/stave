@@ -653,11 +653,11 @@ impl Resolver<'_> {
                 }
             }
             let has_parts = roles.iter().any(|(_, ty, _)| *ty == RoleType::Parts);
-            if has_parts && roles.len() != 2 {
+            if has_parts && roles.len() > 2 {
                 self.error_help(
                     Code::TypeMismatch,
                     format!(
-                        "kind '{}' has a Parts role, so it needs exactly two roles",
+                        "kind '{}' has a Parts role, so it has one role or two",
                         syntax.name.as_str()
                     ),
                     cx.file,
@@ -1006,21 +1006,21 @@ impl Resolver<'_> {
             return None;
         };
         let part = self.joint_member(cx, first, head.as_str())?;
-        let other_expr = match selector {
+        // `facing:` and `from:` may be left out: the selector then names the
+        // part against itself (grammar, "Faces to cut").
+        let other = match selector {
             Selector::End => parsed.get("facing"),
             Selector::Side => parsed.get("from"),
             Selector::Crossing => parsed.positional.get(1).copied(),
         };
-        let Some(other_expr) = other_expr else {
-            let wanted = match selector {
-                Selector::End => "facing:",
-                Selector::Side => "from:",
-                Selector::Crossing => "a second part",
-            };
-            self.missing_argument(cx, head.as_str(), wanted, span);
-            return None;
+        let other = match (selector, other) {
+            (_, Some(other_expr)) => self.joint_member(cx, other_expr, head.as_str())?,
+            (Selector::End | Selector::Side, None) => part,
+            (Selector::Crossing, None) => {
+                self.missing_argument(cx, head.as_str(), "a second part", span);
+                return None;
+            }
         };
-        let other = self.joint_member(cx, other_expr, head.as_str())?;
         let normal = match parsed.get("normal") {
             Some(e) => match self.part_axis(cx, e, "normal") {
                 Some(PartAxis::Length) => {

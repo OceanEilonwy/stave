@@ -93,7 +93,7 @@ fn describe_part(design: &SolvedDesign, part: &Part) -> Description {
     let kind = match part.origin {
         PartOrigin::Declared => "Part",
         PartOrigin::Mirror { .. } | PartOrigin::MirroredAssembly { .. } => "Mirror image",
-        PartOrigin::Made { .. } => "Made part",
+        PartOrigin::Made { .. } | PartOrigin::Boards { .. } => "Made part",
     };
     let mut rows = vec![
         Row {

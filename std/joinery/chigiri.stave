@@ -1,0 +1,76 @@
+stave 1
+
+/// Chigiri: a butterfly key let into the face across a seam. Each half of
+/// the key is wider away from the seam than at it, so the boards can't
+/// pull apart, and it holds without glue. The joint makes one key for every
+/// seam, in the middle of its length, flush with the reference face.
+kind chigiri : joint {
+  /// How long the key is, across the seam.
+  param key_length = 4 * piece.thickness
+  /// How wide the key is at its ends, along the seam.
+  param key_width = 2 * piece.thickness
+  /// How wide the key is at its waist, on the seam.
+  param waist = piece.thickness
+  /// How thick the key is, which is how deep its socket is.
+  param key_thickness = piece.thickness / 2
+  /// What the key is cut from.
+  param key_stock : Stock = piece.stock
+  require same_thickness : piece.thickness == into.thickness "boards joined by a butterfly key need the same thickness"
+  require waisted        : waist < key_width "the key's waist must be narrower than its ends, or it won't hold the boards together"
+  require shallow        : key_thickness < piece.thickness "the key is as thick as the boards: its socket would go right through"
+  require fits_board     : key_length / 2 < piece.width "the key is longer than the boards are wide"
+
+  insert:    [push(piece, along: width), drive(key, along: thickness)]
+  cut_first: [piece, into]                 // both sockets first; the key is fitted to them
+
+  // Each board's half of the socket: the key's waist on the seam, its full
+  // width half its length away. `across` runs from the reference edge, so
+  // the seam is at piece.width on `piece` and at 0 on `into`.
+  cut side(piece, normal: thickness, from: into) {
+    outline(marks: [
+      mark(along: piece.length / 2 - waist / 2, across: piece.width),
+      mark(along: piece.length / 2 + waist / 2, across: piece.width),
+      mark(along: piece.length / 2 + key_width / 2, across: piece.width - key_length / 2),
+      mark(along: piece.length / 2 - key_width / 2, across: piece.width - key_length / 2)
+    ], depth: key_thickness)
+  }
+  cut side(into, normal: thickness, from: piece) {
+    outline(marks: [
+      mark(along: into.length / 2 - waist / 2, across: 0mm),
+      mark(along: into.length / 2 + waist / 2, across: 0mm),
+      mark(along: into.length / 2 + key_width / 2, across: key_length / 2),
+      mark(along: into.length / 2 - key_width / 2, across: key_length / 2)
+    ], depth: key_thickness)
+  }
+
+  // The key: a block with a vee cut from each long side, which leaves the
+  // butterfly.
+  cut side(key, normal: thickness, from: piece) {
+    outline(marks: [
+      mark(along: 0mm, across: 0mm),
+      mark(along: key_length, across: 0mm),
+      mark(along: key_length / 2, across: (key_width - waist) / 2)
+    ], depth: through)
+    outline(marks: [
+      mark(along: 0mm, across: key_width),
+      mark(along: key_length, across: key_width),
+      mark(along: key_length / 2, across: key_width - (key_width - waist) / 2)
+    ], depth: through)
+  }
+
+  /// The key: across the seam, in the middle of its length, its top flush
+  /// with the boards' reference face.
+  makes part key : key_stock {
+    length:    key_length
+    width:     key_width
+    thickness: key_thickness
+    place {
+      orient(length: width, width: length, of: piece)
+      center(crossing(piece, into), width)
+      center(crossing(piece, into), length)
+      flush(side(piece, normal: thickness))
+    }
+  }
+
+  note: "Rout both sockets to the knife lines, then pare the key's sides until it taps home"
+}

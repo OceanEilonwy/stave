@@ -441,7 +441,7 @@ impl<'a> Checker<'a> {
         let mut found = Vec::new();
         for (part, solid) in self.design.parts.iter().zip(&self.solids) {
             for misshapen in solid.misshapen() {
-                if let Some(cut) = part.cuts.get(misshapen.cut) {
+                if let Some(cut) = stave_geom::solid::cut_at(part, misshapen.cut) {
                     found.push((part.id, cut.source, misshapen.error));
                 }
             }
@@ -460,6 +460,10 @@ impl<'a> Checker<'a> {
                 SourceKey::Hardware(hardware) => {
                     (self.hardware_place(hardware), self.hardware_name(hardware))
                 }
+                SourceKey::Boards(part) => (
+                    self.part_place(part),
+                    format!("{}'s boards", self.part_name(part)),
+                ),
             };
             let note = format!(
                 "{owner}: {} is drawn without this cut until it is fixed",
@@ -502,6 +506,10 @@ impl<'a> Checker<'a> {
                 SourceKey::Hardware(hardware) => {
                     (self.hardware_place(hardware), self.hardware_name(hardware))
                 }
+                SourceKey::Boards(part) => (
+                    self.part_place(part),
+                    format!("{}'s boards", self.part_name(part)),
+                ),
             };
             let note = if names.len() == 1 {
                 format!(
@@ -1033,6 +1041,7 @@ impl Moves {
 enum SourceKey {
     Joint(stave_model::solved::JointId),
     Hardware(HardwareId),
+    Boards(PartId),
 }
 
 impl SourceKey {
@@ -1040,6 +1049,7 @@ impl SourceKey {
         match source {
             CutSource::Joint { joint, .. } => SourceKey::Joint(joint),
             CutSource::Hardware { hardware } => SourceKey::Hardware(hardware),
+            CutSource::Boards { part, .. } => SourceKey::Boards(part),
         }
     }
 }

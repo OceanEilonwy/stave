@@ -70,6 +70,7 @@ fn part(orientation: Orientation, origin: Point, cut: Size3, shape: Shape) -> Pa
         cuts: Vec::new(),
         joints: Vec::new(),
         note: None,
+        boards: None,
     }
 }
 

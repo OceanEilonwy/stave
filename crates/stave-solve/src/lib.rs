@@ -29,6 +29,7 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+mod boards;
 mod build;
 mod eval;
 mod hardware;
@@ -140,6 +141,10 @@ pub(crate) struct Solver<'m> {
     /// hardware was placed: reported only when no earlier layer found an
     /// error.
     pub(crate) deferred: Vec<Diagnostic>,
+    /// The boards of a part made of boards, while its board joints are
+    /// worked out: each stands in for a part under its own id (see
+    /// [`boards::BOARD_ID_BASE`]).
+    pub(crate) boards: std::collections::BTreeMap<PartId, boards::BoardPart>,
 }
 
 impl<'m> Solver<'m> {
@@ -165,6 +170,7 @@ impl<'m> Solver<'m> {
             overruns: Vec::new(),
             reported_mechanisms: std::collections::BTreeSet::new(),
             deferred: Vec::new(),
+            boards: std::collections::BTreeMap::new(),
         }
     }
 
@@ -300,6 +306,13 @@ impl<'m> Solver<'m> {
     }
 
     pub(crate) fn part_name(&self, part: PartId) -> String {
+        if let Some(board) = self.boards.get(&part) {
+            return format!(
+                "{}.board[{}]",
+                self.part_name(board.part),
+                board.index.get()
+            );
+        }
         self.model
             .parts
             .get(part.index())

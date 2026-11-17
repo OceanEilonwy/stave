@@ -337,6 +337,14 @@ impl KindValue {
     }
 }
 
+/// How the boards of a part are joined: `joined(by: ...)` (grammar,
+/// "Boards"). Every kind is a joint kind value; all of them are used.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Joining {
+    /// The joint kinds, in the order written.
+    pub by: crate::nonempty::NonEmpty<KindValue>,
+}
+
 /// An evaluated value.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
@@ -372,6 +380,8 @@ pub enum Value {
     Mount(Mount),
     /// `turned(profile)`.
     Turned(ProfileId),
+    /// `joined(by: ...)`.
+    Boards(Joining),
     /// An envelope.
     Envelope(Envelope),
     /// A model.
@@ -437,6 +447,7 @@ impl Value {
             Value::Word(_) => "a word",
             Value::Mount(_) => "a mount",
             Value::Turned(_) => "a shape",
+            Value::Boards(_) => "a way of joining boards",
             Value::Envelope(_) => "an envelope",
             Value::Model(_) => "a model",
             Value::Spacing(_) => "a spacing",

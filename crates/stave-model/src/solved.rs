@@ -83,6 +83,7 @@ pub use crate::defs::{BodyId, CutName};
 pub use crate::ids::{AssemblyId, HardwareId, JointId, KindId, PartId, RegionId, SceneId};
 pub use crate::linkage::{Branch, Link, Linkage, LinkageError, LinkageFrame, PlanePoint};
 pub use crate::mechanism::{Mechanism, MemberIndex};
+pub use crate::nonempty::NonEmpty;
 
 // ---------------------------------------------------------------------------
 // Geometry
@@ -447,9 +448,12 @@ impl SolvedDesign {
 
     /// The parts joints made.
     pub fn made_parts(&self) -> impl Iterator<Item = &Part> {
-        self.parts
-            .iter()
-            .filter(|p| matches!(p.origin, PartOrigin::Made { .. }))
+        self.parts.iter().filter(|p| {
+            matches!(
+                p.origin,
+                PartOrigin::Made { .. } | PartOrigin::Boards { .. }
+            )
+        })
     }
 
     /// The lowest point of any part: where the floor is.
@@ -535,6 +539,15 @@ pub enum PartOrigin {
         /// The pair (index into [`Joint::pairs`]).
         pair: usize,
     },
+    /// A part a board joint makes (a spline): once per seam of a part made
+    /// of boards, or once for a kind with one `Parts` role.
+    Boards {
+        /// The part made of boards.
+        part: PartId,
+        /// The seam (index into [`Boards::seams`]); `None` for a kind
+        /// across all of the part's boards.
+        seam: Option<usize>,
+    },
 }
 
 /// A turned profile's station: a diameter at a distance from the start.
@@ -612,6 +625,81 @@ pub struct Part {
     pub joints: Vec<JointId>,
     /// `note:`
     pub note: Option<String>,
+    /// The boards it is made of, when it is wider than its stock's
+    /// `max_width` (grammar, "Boards"). Derived, never written.
+    pub boards: Option<Boards>,
+}
+
+/// The number of a board within its part: 1 is the board at the
+/// reference edge (at the start of the length when `grain: width`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[serde(transparent)]
+pub struct BoardIndex(std::num::NonZeroU32);
+
+impl BoardIndex {
+    /// The board numbered `number`; `None` for 0.
+    pub fn new(number: u32) -> Option<BoardIndex> {
+        std::num::NonZeroU32::new(number).map(BoardIndex)
+    }
+
+    /// Its number, from 1.
+    pub fn get(self) -> u32 {
+        self.0.get()
+    }
+}
+
+/// The boards a part is made of, how they are joined and where the seams
+/// are. Lengths along `axis` are in the part's own frame.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Boards {
+    /// The part's axis across the grain that the boards divide: `width`,
+    /// or `length` when `grain: width`.
+    pub axis: PartAxis,
+    /// The boards, numbered from 1 at the reference edge.
+    pub boards: NonEmpty<Board>,
+    /// The seams between neighbouring boards, from the reference edge.
+    pub seams: Vec<Seam>,
+    /// The joint kinds the seams are joined by, as `boards:` lists them.
+    pub methods: NonEmpty<BoardMethod>,
+    /// The board joints' requires, per seam (`top.seam[1].fits`) or across
+    /// all boards (`top.boards.fits`). A failing one is also an error.
+    pub requires: Vec<RequireResult>,
+}
+
+/// One board of a part.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Board {
+    /// Its number.
+    pub index: BoardIndex,
+    /// Its cut width across the grain: an equal share of the part's,
+    /// plus what its edge joints add (a tongue).
+    pub width: Length,
+    /// Where its cut width starts along [`Boards::axis`].
+    pub offset: Length,
+    /// The cuts its edge joints make, measured on the board itself (its
+    /// own frame starts at `offset`). A neighbouring board is named by the
+    /// part it belongs to.
+    pub cuts: Vec<Cut>,
+}
+
+/// A seam between two neighbouring boards.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct Seam {
+    /// The boards on either side: the one nearer the reference edge first.
+    pub between: (BoardIndex, BoardIndex),
+    /// Where the boards meet along [`Boards::axis`], before joints add.
+    pub at: Length,
+}
+
+/// One joint kind a part's boards are joined by.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct BoardMethod {
+    /// The kind.
+    pub kind: KindId,
+    /// Its name as written.
+    pub name: String,
+    /// `false` when the kind value says `glue: false`.
+    pub glue: bool,
 }
 
 impl Part {
@@ -641,6 +729,14 @@ pub enum CutSource {
     Hardware {
         /// The hardware.
         hardware: HardwareId,
+    },
+    /// A `cut` of a joint kind that joins the boards of a part.
+    Boards {
+        /// The part made of boards.
+        part: PartId,
+        /// The seam (index into [`Boards::seams`]); `None` for a kind
+        /// across all of the part's boards.
+        seam: Option<usize>,
     },
 }
 

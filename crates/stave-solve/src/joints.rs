@@ -159,7 +159,12 @@ pub(crate) struct JointWork {
 
 /// One pair of a joint.
 pub(crate) struct PairWork {
+    /// One part per role; for a kind with one `Parts` role, every part of
+    /// that role.
     pub parts: Vec<PartId>,
+    /// `true` for a kind with one `Parts` role: one connection across all
+    /// of `parts`.
+    pub across: bool,
     pub contact: Contact,
     pub env: KindEnv,
     pub extensions: Vec<stave_model::solved::Extension>,
@@ -429,7 +434,11 @@ impl Solver<'_> {
             .get(joint.index())
             .map(|j| j.name.clone())
             .unwrap_or_default();
-        let pairwise = kind.roles.iter().any(|r| r.ty == RoleType::Parts);
+        let has_parts = kind.roles.iter().any(|r| r.ty == RoleType::Parts);
+        // Two roles with a `Parts` role: pairs. One `Parts` role: one
+        // connection across all of its parts (grammar, "Roles and pairs").
+        let pairwise = has_parts && kind.roles.len() == 2;
+        let across = has_parts && kind.roles.len() == 1;
         let mut plans: Vec<(Vec<PartId>, Contact)> = Vec::new();
         let mut unmatched = Vec::new();
         let role_parts: Vec<Vec<PartId>> = binding
@@ -464,6 +473,23 @@ impl Solver<'_> {
                     unmatched.push(*part);
                 }
             }
+        } else if across {
+            let parts = role_parts.first().cloned().unwrap_or_default();
+            for (index, part) in parts.iter().enumerate() {
+                let mut meets = false;
+                for (other_index, other) in parts.iter().enumerate() {
+                    if index != other_index
+                        && self.drawn_box(*part)?.meets(&self.drawn_box(*other)?)
+                    {
+                        meets = true;
+                        break;
+                    }
+                }
+                if !meets && !unmatched.contains(part) {
+                    unmatched.push(*part);
+                }
+            }
+            plans.push((parts, Contact::Connection));
         } else {
             let parts: Vec<PartId> = role_parts
                 .iter()
@@ -488,7 +514,11 @@ impl Solver<'_> {
         let mut pairs = Vec::new();
         let mut requires = Vec::new();
         for (parts, contact) in plans {
-            let roles: Vec<Value> = parts.iter().map(|p| Value::Part(*p)).collect();
+            let roles: Vec<Value> = if across {
+                vec![Value::Parts(parts.clone())]
+            } else {
+                parts.iter().map(|p| Value::Part(*p)).collect()
+            };
             let env = KindEnv::new(
                 binding.kind,
                 roles,
@@ -543,12 +573,17 @@ impl Solver<'_> {
             if let Some(joint_def) = &kind.joint {
                 for extend in &joint_def.adds {
                     let by = self.eval_length(&extend.by, &kind_env)?;
-                    let Some(part) = parts.get(extend.role).copied() else {
-                        continue;
+                    let members: Vec<PartId> = if across {
+                        parts.clone()
+                    } else {
+                        parts.get(extend.role).copied().into_iter().collect()
                     };
-                    let others: Vec<PartId> =
-                        parts.iter().copied().filter(|p| *p != part).collect();
-                    for other in others {
+                    for (part, other) in members.iter().flat_map(|part| {
+                        parts
+                            .iter()
+                            .filter(move |other| *other != part)
+                            .map(move |other| (*part, *other))
+                    }) {
                         let (a, b) = (self.drawn_box(part)?, self.drawn_box(other)?);
                         if !a.meets(&b) {
                             continue;
@@ -584,6 +619,7 @@ impl Solver<'_> {
             }
             pairs.push(PairWork {
                 parts,
+                across,
                 contact,
                 env,
                 extensions,
@@ -717,7 +753,7 @@ impl Solver<'_> {
             file,
             span,
             format!(
-                "stock '{stock_name}' comes no longer than {}; make the part shorter or choose longer stock",
+                "stock '{stock_name}' comes no longer than {}; make it from two parts joined end to end (for example ari_tsugi), or buy longer stock",
                 stave_model::value::format_length(max_length)
             ),
         ))
@@ -810,16 +846,70 @@ impl Solver<'_> {
         }
     }
 
+    /// The geometry a made part's place reads for a member: its part's,
+    /// or, for a kind's only `Parts` role, the box around all of its parts
+    /// in the first part's axes (grammar, "Roles and pairs").
+    fn member_geom(
+        pair: &PairWork,
+        member: JointMember,
+        geoms: &GeomTable,
+    ) -> Solved<(PartId, PartGeom)> {
+        let part = Self::member_part(pair, member).ok_or(Reported)?;
+        let mut geom = geoms.get(part).cloned().ok_or(Reported)?;
+        if !(pair.across && member == JointMember::Role(0)) {
+            return Ok((part, geom));
+        }
+        for other in pair.parts.iter().skip(1) {
+            let other = geoms.get(*other).ok_or(Reported)?;
+            geom.drawn_box = hull(&geom.drawn_box, &other.drawn_box);
+            geom.cut_box = hull(&geom.cut_box, &other.cut_box);
+        }
+        for axis in PartAxis::ALL {
+            let direction = geom.orientation.direction(axis);
+            let world = direction.axis();
+            let low = geom
+                .drawn_box
+                .min(world)
+                .checked_sub(geom.cut_box.min(world))
+                .ok_or(Reported)?;
+            let high = geom
+                .cut_box
+                .max(world)
+                .checked_sub(geom.drawn_box.max(world))
+                .ok_or(Reported)?;
+            let (start, end) = if direction.is_positive() {
+                (low, high)
+            } else {
+                (high, low)
+            };
+            let slot = local_slot(axis);
+            let size = geom.drawn_box.size(world).ok_or(Reported)?;
+            if let (Some(d), Some(s), Some(e)) = (
+                geom.drawn.get_mut(slot),
+                geom.start.get_mut(slot),
+                geom.end.get_mut(slot),
+            ) {
+                *d = size;
+                *s = start;
+                *e = end;
+            }
+        }
+        Ok((part, geom))
+    }
+
     /// The face a selector names and where on it.
+    /// `target` overrides the part the selector names (one part of a
+    /// kind's only `Parts` role).
     pub(crate) fn selector_place(
         &mut self,
         selector: &SelectorDef,
         pair: &PairWork,
         geoms: &GeomTable,
         file: FileId,
+        target: Option<PartId>,
     ) -> Solved<(PartId, LocalFace, CutPlace)> {
         let (Some(p), Some(q)) = (
-            Self::member_part(pair, selector.part),
+            target.or_else(|| Self::member_part(pair, selector.part)),
             Self::member_part(pair, selector.other),
         ) else {
             return Err(Reported);
@@ -827,105 +917,8 @@ impl Solver<'_> {
         let (Some(gp), Some(gq)) = (geoms.get(p), geoms.get(q)) else {
             return Err(Reported);
         };
-        let (gp, gq) = (gp.clone(), gq.clone());
-        let length_world = gp.orientation.direction(PartAxis::Length).axis();
-        let q_centre = midpoint(
-            gq.drawn_box.min(length_world),
-            gq.drawn_box.max(length_world),
-        )
-        .ok_or(Reported)?;
-        let p_centre = midpoint(
-            gp.drawn_box.min(length_world),
-            gp.drawn_box.max(length_world),
-        )
-        .ok_or(Reported)?;
-        let near_end = gp.face_toward(length_world, q_centre >= p_centre);
         let _ = file;
-        match selector.selector {
-            Selector::End => {
-                let face = if selector.opposite {
-                    LocalFace {
-                        axis: PartAxis::Length,
-                        end: flip(near_end.end),
-                    }
-                } else {
-                    near_end
-                };
-                Ok((p, face, CutPlace::End { toward: q }))
-            }
-            Selector::Side => {
-                let normal = selector.normal.unwrap_or(PartAxis::Thickness);
-                let (face_ref, across_ref) = match normal {
-                    PartAxis::Width => (gp.reference_edge, gp.reference_face),
-                    PartAxis::Thickness | PartAxis::Length => {
-                        (gp.reference_face, gp.reference_edge)
-                    }
-                };
-                let face = if selector.opposite {
-                    LocalFace {
-                        axis: face_ref.axis,
-                        end: flip(face_ref.end),
-                    }
-                } else {
-                    face_ref
-                };
-                let across_from = if selector.flip {
-                    flip(across_ref.end)
-                } else {
-                    across_ref.end
-                };
-                Ok((
-                    p,
-                    face,
-                    CutPlace::Side {
-                        from: q,
-                        along_from: near_end.end,
-                        across_axis: across_ref.axis,
-                        across_from,
-                    },
-                ))
-            }
-            Selector::Crossing => {
-                let face = match selector.normal {
-                    Some(PartAxis::Thickness) => gp.reference_face,
-                    Some(PartAxis::Width) => gp.reference_edge,
-                    Some(PartAxis::Length) => near_end,
-                    None => match gp.drawn_box.touching_axis(&gq.drawn_box) {
-                        Some(axis) => {
-                            let toward_positive = gp.drawn_box.max(axis) == gq.drawn_box.min(axis);
-                            gp.face_toward(axis, toward_positive)
-                        }
-                        None => {
-                            let q_length = gq.orientation.direction(PartAxis::Length).axis();
-                            let p_thickness = gp.orientation.direction(PartAxis::Thickness).axis();
-                            if q_length != p_thickness {
-                                gp.reference_face
-                            } else {
-                                gp.reference_edge
-                            }
-                        }
-                    },
-                };
-                let face = if selector.opposite {
-                    LocalFace {
-                        axis: face.axis,
-                        end: flip(face.end),
-                    }
-                } else {
-                    face
-                };
-                let local = gp.local_box(&gq.cut_box.intersection(&gp.cut_box))?;
-                let footprint = local_box(&local)?;
-                Ok((
-                    p,
-                    face,
-                    CutPlace::Crossing {
-                        other: q,
-                        footprint,
-                    },
-                ))
-            }
-        }
+        selector_on(selector, p, gp, q, gq)
     }
 
     fn depth(&mut self, value: Value, env: &Env<'_>, span: Span) -> Solved<Depth> {
@@ -1152,13 +1145,69 @@ impl Solver<'_> {
         geoms: &GeomTable,
         env: &Env<'_>,
     ) -> Solved<Vec<(PartId, LocalFace, CutPlace, CutKind)>> {
-        let (part, face, place) = self.selector_place(&cut.selector, pair, geoms, env.file)?;
+        // A cut on a kind's only `Parts` role is made on each of its parts
+        // that meets the other part of the selector.
+        let targets: Vec<Option<PartId>> = if pair.across
+            && cut.selector.part == JointMember::Role(0)
+        {
+            let other = Self::member_part(pair, cut.selector.other);
+            pair.parts
+                .iter()
+                .filter(|part| {
+                    let (Some(a), Some(b)) = (geoms.get(**part), other.and_then(|o| geoms.get(o)))
+                    else {
+                        return false;
+                    };
+                    Some(**part) != other && a.cut_box.meets(&b.cut_box)
+                })
+                .map(|part| Some(*part))
+                .collect()
+        } else {
+            vec![None]
+        };
         let mut out = Vec::new();
-        for operation in &cut.operations {
-            let kind = self.cut_kind(operation, env)?;
-            out.push((part, face, place.clone(), kind));
+        for target in targets {
+            let (part, face, place) =
+                self.selector_place(&cut.selector, pair, geoms, env.file, target)?;
+            for operation in &cut.operations {
+                let kind = self.cut_kind(operation, env)?;
+                self.check_tongue(operation, &place, face, env)?;
+                out.push((part, face, place.clone(), kind));
+            }
         }
         Ok(out)
+    }
+
+    /// A tenon on `crossing` is a tongue along an edge, for parts that
+    /// butt edge to edge: the face must be across the part's width
+    /// (grammar, "Cut operations").
+    fn check_tongue(
+        &mut self,
+        operation: &OperationDef,
+        place: &CutPlace,
+        face: LocalFace,
+        env: &Env<'_>,
+    ) -> Solved<()> {
+        let CutPlace::Crossing { other, .. } = place else {
+            return Ok(());
+        };
+        if operation.operation != CutOperation::Tenon || face.axis == PartAxis::Width {
+            return Ok(());
+        }
+        Err(self.error(
+            Code::TypeMismatch,
+            format!(
+                "a tenon on crossing is a tongue along an edge, but {} meets this part on its {}",
+                self.part_name(*other),
+                match face.axis {
+                    PartAxis::Length => "end",
+                    PartAxis::Width | PartAxis::Thickness => "face",
+                }
+            ),
+            env.file,
+            operation.span,
+            "use crossing only for parts that butt edge to edge, or cut the tenon on end(...)",
+        ))
     }
 
     /// The assembly steps of a pair.
@@ -1332,33 +1381,28 @@ impl Solver<'_> {
                 | MadeTermKind::Against { selector, .. }
                 | MadeTermKind::Flush { selector, .. } => selector,
             };
-            let (p, q) = match (
-                Self::member_part(pair, selector.part),
-                Self::member_part(pair, selector.other),
-            ) {
-                (Some(p), Some(q)) => (p, q),
-                _ => return Err(Reported),
-            };
-            let (Some(gp), Some(gq)) = (geoms.get(p).cloned(), geoms.get(q).cloned()) else {
-                return Err(Reported);
-            };
-            let (_, face, _) = self.selector_place(selector, pair, geoms, env.file)?;
+            let (p, gp) = Self::member_geom(pair, selector.part, geoms)?;
+            let (q, gq) = Self::member_geom(pair, selector.other, geoms)?;
+            let (_, face, _) = selector_on(selector, p, &gp, q, &gq)?;
             let (face_axis, _, positive) = gp.face_plane(face);
-            // The plane: the contact plane of the drawn boxes for parts that
-            // butt; the middle of their overlap for parts that cross.
-            let plane = match gp.drawn_box.touching_axis(&gq.drawn_box) {
-                Some(axis) if axis == face_axis => {
-                    if positive {
-                        gp.drawn_box.max(axis)
-                    } else {
-                        gp.drawn_box.min(axis)
+            let drawn_face = if positive {
+                gp.drawn_box.max(face_axis)
+            } else {
+                gp.drawn_box.min(face_axis)
+            };
+            // The plane: for `end` and `side`, that face of the first part;
+            // for `crossing`, the contact plane of the drawn boxes for parts
+            // that butt, the middle of their overlap for parts that cross.
+            let plane = match selector.selector {
+                Selector::End | Selector::Side => drawn_face,
+                Selector::Crossing => match gp.drawn_box.touching_axis(&gq.drawn_box) {
+                    Some(axis) if axis == face_axis => drawn_face,
+                    _ => {
+                        let low = gp.drawn_box.min(face_axis).max(gq.drawn_box.min(face_axis));
+                        let high = gp.drawn_box.max(face_axis).min(gq.drawn_box.max(face_axis));
+                        midpoint(low, high).ok_or(Reported)?
                     }
-                }
-                _ => {
-                    let low = gp.drawn_box.min(face_axis).max(gq.drawn_box.min(face_axis));
-                    let high = gp.drawn_box.max(face_axis).min(gq.drawn_box.max(face_axis));
-                    midpoint(low, high).ok_or(Reported)?
-                }
+                },
             };
             let centre_of = |axis: Axis| {
                 midpoint(
@@ -1492,14 +1536,23 @@ pub(crate) struct MadeGeom {
 #[derive(Default)]
 pub(crate) struct GeomTable {
     pub parts: Vec<Option<PartGeom>>,
+    /// The boards of a part made of boards, while they are worked out.
+    pub boards: std::collections::BTreeMap<PartId, PartGeom>,
 }
 
 impl GeomTable {
     pub fn get(&self, part: PartId) -> Option<&PartGeom> {
+        if crate::boards::is_board(part) {
+            return self.boards.get(&part);
+        }
         self.parts.get(part.index()).and_then(Option::as_ref)
     }
 
     pub fn set(&mut self, part: PartId, geom: PartGeom) {
+        if crate::boards::is_board(part) {
+            self.boards.insert(part, geom);
+            return;
+        }
         if self.parts.len() <= part.index() {
             self.parts.resize(part.index() + 1, None);
         }
@@ -1527,4 +1580,135 @@ fn local_box(local: &[(ExactLength, ExactLength); 3]) -> Solved<LocalBox> {
         min: point(|p| p.0)?,
         max: point(|p| p.1)?,
     })
+}
+
+/// The face a selector names and where on it, given the geometry of its
+/// two parts (`gp` may stand for all the parts of a kind's only `Parts`
+/// role together). A selector that names a part against itself (`end(p)`,
+/// `side(p, normal: ..)`) measures from the start of `p`'s length, and
+/// `end(p)` is the end at the end of it.
+fn selector_on(
+    selector: &SelectorDef,
+    p: PartId,
+    gp: &PartGeom,
+    q: PartId,
+    gq: &PartGeom,
+) -> Solved<(PartId, LocalFace, CutPlace)> {
+    let alone = selector.part == selector.other;
+    let near_end = if alone {
+        LocalFace {
+            axis: PartAxis::Length,
+            end: End::End,
+        }
+    } else {
+        let length_world = gp.orientation.direction(PartAxis::Length).axis();
+        let q_centre = midpoint(
+            gq.drawn_box.min(length_world),
+            gq.drawn_box.max(length_world),
+        )
+        .ok_or(Reported)?;
+        let p_centre = midpoint(
+            gp.drawn_box.min(length_world),
+            gp.drawn_box.max(length_world),
+        )
+        .ok_or(Reported)?;
+        gp.face_toward(length_world, q_centre >= p_centre)
+    };
+    let along_from = if alone { End::Start } else { near_end.end };
+    match selector.selector {
+        Selector::End => {
+            let face = if selector.opposite {
+                LocalFace {
+                    axis: PartAxis::Length,
+                    end: flip(near_end.end),
+                }
+            } else {
+                near_end
+            };
+            Ok((p, face, CutPlace::End { toward: q }))
+        }
+        Selector::Side => {
+            let normal = selector.normal.unwrap_or(PartAxis::Thickness);
+            let (face_ref, across_ref) = match normal {
+                PartAxis::Width => (gp.reference_edge, gp.reference_face),
+                PartAxis::Thickness | PartAxis::Length => (gp.reference_face, gp.reference_edge),
+            };
+            let face = if selector.opposite {
+                LocalFace {
+                    axis: face_ref.axis,
+                    end: flip(face_ref.end),
+                }
+            } else {
+                face_ref
+            };
+            let across_from = if selector.flip {
+                flip(across_ref.end)
+            } else {
+                across_ref.end
+            };
+            Ok((
+                p,
+                face,
+                CutPlace::Side {
+                    from: q,
+                    along_from,
+                    across_axis: across_ref.axis,
+                    across_from,
+                },
+            ))
+        }
+        Selector::Crossing => {
+            let face = match selector.normal {
+                Some(PartAxis::Thickness) => gp.reference_face,
+                Some(PartAxis::Width) => gp.reference_edge,
+                Some(PartAxis::Length) => near_end,
+                None => match gp.drawn_box.touching_axis(&gq.drawn_box) {
+                    Some(axis) => {
+                        let toward_positive = gp.drawn_box.max(axis) == gq.drawn_box.min(axis);
+                        gp.face_toward(axis, toward_positive)
+                    }
+                    None => {
+                        let q_length = gq.orientation.direction(PartAxis::Length).axis();
+                        let p_thickness = gp.orientation.direction(PartAxis::Thickness).axis();
+                        if q_length != p_thickness {
+                            gp.reference_face
+                        } else {
+                            gp.reference_edge
+                        }
+                    }
+                },
+            };
+            let face = if selector.opposite {
+                LocalFace {
+                    axis: face.axis,
+                    end: flip(face.end),
+                }
+            } else {
+                face
+            };
+            let local = gp.local_box(&gq.cut_box.intersection(&gp.cut_box))?;
+            let footprint = local_box(&local)?;
+            Ok((
+                p,
+                face,
+                CutPlace::Crossing {
+                    other: q,
+                    footprint,
+                },
+            ))
+        }
+    }
+}
+
+/// The smallest box holding both boxes.
+fn hull(a: &ExactBox, b: &ExactBox) -> ExactBox {
+    let mut out = *a;
+    for axis in Axis::ALL {
+        out = out.with(
+            axis,
+            a.min(axis).min(b.min(axis)),
+            a.max(axis).max(b.max(axis)),
+        );
+    }
+    out
 }
