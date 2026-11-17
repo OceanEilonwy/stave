@@ -69,6 +69,13 @@ fn a_design_without_assemblies_has_only_its_parts_stage() {
     assert!(steps.iter().all(|step| step.stage == Stage::Parts));
     assert_eq!(steps[0].lead, "Carcass");
     assert!(steps[0].text.contains("out of"), "{}", steps[0].text);
+    // The rungs come out of their sockets as well as the legs off the seat.
+    assert!(steps[0].text.contains("leg[4]"), "{}", steps[0].text);
+    assert!(
+        steps[0].text.contains("side_rung[left, right]"),
+        "{}",
+        steps[0].text
+    );
 }
 
 #[test]

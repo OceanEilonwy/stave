@@ -745,8 +745,11 @@ fn away_from(direction: Vec3, part: Vec3, from: Vec3) -> Vec3 {
 /// out along the reverse of that step, away from the others of the pair
 /// (the last push or drive: a `rotate` turns a part in place).
 /// A part that would move out of two of its pairs in opposite directions
-/// (a rail tenoned into two stiles, an apron into two legs) stays, and the
-/// parts it is joined to move away from it instead. A part's moves in
+/// (a rail tenoned into two stiles, an apron into two legs) is held: the
+/// parts it is joined to move away from it instead, and it goes with what
+/// they all do besides (a rung follows the legs that drop off a seat;
+/// an apron follows its two legs out from the middle), so the parts come
+/// off its ends and its joinery still lines up. A part's moves in
 /// different directions add up (a table leg moves out diagonally from its
 /// two aprons), and a part moving out of a part that itself moves goes
 /// with it.
@@ -851,29 +854,91 @@ fn explode_offsets(design: &SolvedDesign, base: f32) -> Vec<Vec3> {
             add(mover, m.direction, *parent);
         }
     }
-    // Compose along chains of parts moving out of moving parts.
-    (0..design.parts.len())
-        .map(|index| {
-            let mut offset = Vec3::ZERO;
-            let mut current = Some(index);
-            let mut seen = Vec::new();
-            while let Some(at) = current {
-                if seen.contains(&at) {
-                    break;
-                }
-                seen.push(at);
-                let Some((list, parent)) = own.get(at) else {
-                    break;
-                };
-                offset += list
-                    .iter()
-                    .map(|(d, distance)| *d * *distance)
-                    .fold(Vec3::ZERO, |a, b| a + b);
-                current = parent.map(PartId::index);
+    // Compose along chains of parts moving out of moving parts, stopping
+    // before `stop` when given.
+    let composed = |index: usize, stop: Option<usize>| {
+        let mut offset = Vec3::ZERO;
+        let mut current = Some(index);
+        let mut seen = Vec::new();
+        while let Some(at) = current {
+            if seen.contains(&at) || Some(at) == stop {
+                break;
             }
-            offset
-        })
-        .collect()
+            seen.push(at);
+            let Some((list, parent)) = own.get(at) else {
+                break;
+            };
+            offset += list
+                .iter()
+                .map(|(d, distance)| *d * *distance)
+                .fold(Vec3::ZERO, |a, b| a + b);
+            current = parent.map(PartId::index);
+        }
+        offset
+    };
+    let mut offsets: Vec<Vec3> = (0..design.parts.len())
+        .map(|index| composed(index, None))
+        .collect();
+    // A held part that nothing else moves goes with what all the parts it
+    // is held between do on their own (not because of it), except along
+    // the ways it comes out of them: a rung between two legs that drop off
+    // a seat drops with them, so the legs pull off its ends and its tenons
+    // still point at their sockets. When they share no move (the two sides
+    // of a carcass a shelf is housed in move apart) it stays.
+    for part in &design.parts {
+        let index = part.id.index();
+        if !pinned(part.id) || offsets.get(index).is_none_or(|o| o.length() > STILL) {
+            continue;
+        }
+        let mut directions: Vec<Vec3> = Vec::new();
+        let mut partners: Vec<PartId> = Vec::new();
+        for m in moves.iter().filter(|m| m.mover == part.id) {
+            directions.push(m.direction);
+            for partner in &m.partners {
+                if !partners.contains(partner) {
+                    partners.push(*partner);
+                }
+            }
+        }
+        let mut follow = shared_move(partners.iter().map(|p| composed(p.index(), Some(index))));
+        for direction in &directions {
+            follow -= *direction * follow.dot(*direction);
+        }
+        if let Some(slot) = offsets.get_mut(index) {
+            *slot = follow;
+        }
+    }
+    offsets
+}
+
+/// Moves shorter than this (millimetres) leave a part where it is.
+const STILL: f32 = 0.5;
+
+/// The move some parts all make, axis by axis: the smallest amount when
+/// they all go the same way, nothing when one goes the other way or not
+/// at all (or there are no parts).
+fn shared_move(offsets: impl Iterator<Item = Vec3>) -> Vec3 {
+    let mut shared: Option<Vec3> = None;
+    for offset in offsets {
+        shared = Some(match shared {
+            None => offset,
+            Some(so_far) => {
+                let axis = |a: f32, b: f32| {
+                    if a * b > 0.0 {
+                        a.signum() * a.abs().min(b.abs())
+                    } else {
+                        0.0
+                    }
+                };
+                Vec3::new(
+                    axis(so_far.x, offset.x),
+                    axis(so_far.y, offset.y),
+                    axis(so_far.z, offset.z),
+                )
+            }
+        });
+    }
+    shared.unwrap_or(Vec3::ZERO)
 }
 
 /// Two cut boxes that touch or overlap.

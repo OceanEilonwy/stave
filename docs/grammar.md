@@ -1641,7 +1641,11 @@ scene drawer_bench "Top drawer on the bench" {
   assembly, and the parts in none, move apart about where it went. A part
   that would
   leave two of its pairs in opposite directions (a rail tenoned into two
-  stiles) stays, and the parts it joins move away from it instead; a
+  stiles) is held: the parts it joins move away from it instead, and,
+  when nothing else moves it, it goes with whatever those parts all do
+  besides, except along its own joints (a rung follows the legs it joins
+  as they drop off the seat, so they pull off its ends); a held part
+  whose parts share no move stays. A
   part's moves in different directions add up, a part coming out of a
   part that moves goes with it, and hardware goes with its part.
   Exploding is a drawing only: it is never collision checked.
