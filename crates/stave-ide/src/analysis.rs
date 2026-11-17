@@ -208,6 +208,12 @@ impl Analysis {
         self.index.symbol(id)
     }
 
+    /// `true` if a symbol is declared in the project's own folder (not in
+    /// a module it imports or the standard library).
+    pub fn is_in_project(&self, id: SymbolId) -> bool {
+        self.symbol(id).is_some_and(|s| s.module == self.index.root)
+    }
+
     /// The symbol a name declares, by module-level name in the project's
     /// own folder: `door_l`.
     pub fn project_symbol(&self, name: &str) -> Option<&Symbol> {

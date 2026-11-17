@@ -27,6 +27,7 @@ use std::path::Path;
 pub mod check;
 pub mod focus;
 pub mod inspect;
+pub mod link;
 pub mod session;
 pub mod view;
 

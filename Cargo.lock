@@ -1760,6 +1760,7 @@ dependencies = [
  "notify",
  "stave-check",
  "stave-geom",
+ "stave-ide",
  "stave-lang",
  "stave-model",
  "stave-modules",
