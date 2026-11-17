@@ -147,10 +147,9 @@ the system or the main menu, the 3D backdrop with them.
   between, so the stool's rungs drop with its legs and the legs pull off
   their ends. The 3D
   view's toolbar has "Pull apart": on, it grows a play button and a
-  "together … apart" slider, and the inspector says how it comes apart,
-  stage by stage, read off the exploded poses, with "Save this view as
-  glTF". The camera buttons fit the view, look at the front and turn to
-  the back. A library folder, or a design that doesn't solve, says so in
+  "together … apart" slider; the inspector keeps its usual state. The
+  main menu's "Export View as glTF…" saves the view as posed. The camera
+  buttons fit the view, look at the front and turn to the back. A library folder, or a design that doesn't solve, says so in
   the view instead of leaving it blank, and so do the sidebar and the
   inspector: a library's sidebar lists the kinds, recipes and components
   it defines (each opens its text) and its inspector explains what a
