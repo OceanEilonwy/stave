@@ -13,12 +13,16 @@
 //!
 //! The window sets their values and hears back only from what people do.
 
+use std::cell::{Cell, RefCell};
+use std::rc::Rc;
+
 use adw::prelude::*;
 use gtk::gdk;
 use stave_app::problems::MotionCard;
 
 use super::icons::{self, PathIcon};
 use super::slider::Slider;
+use super::viewport::{Sizing, Viewport};
 
 /// A round blue play button, 40 px.
 fn play_button(label: &str) -> (gtk::Button, PathIcon) {
@@ -254,10 +258,21 @@ impl Caption {
     }
 }
 
-/// Hardware focus's three small views at fixed angles.
+/// Called when the pictures need rendering again at a new size.
+type ResizeHandler = Box<dyn Fn()>;
+
+/// Hardware focus's three small views at fixed angles. Each is rendered
+/// at its slot's size in device pixels and drawn one texel to a pixel, so
+/// it is sharp at any size and scale.
 pub struct Pictures {
     /// The row.
     pub root: gtk::Box,
+    /// The slots, one a picture, in order, with their captions.
+    slots: RefCell<Vec<(Viewport, String)>>,
+    /// The slots' size in device pixels when last reported.
+    size: Rc<Cell<(u32, u32)>>,
+    /// Called when the slots' size in device pixels changes.
+    on_resize: Rc<RefCell<Option<ResizeHandler>>>,
 }
 
 impl Pictures {
@@ -270,28 +285,62 @@ impl Pictures {
             .css_classes(["stave-pictures"])
             .visible(false)
             .build();
-        Pictures { root }
+        Pictures {
+            root,
+            slots: RefCell::new(Vec::new()),
+            size: Rc::new(Cell::new((0, 0))),
+            on_resize: Rc::new(RefCell::new(None)),
+        }
     }
 
-    /// Shows the pictures, each a button that goes to its pose; the one
-    /// nearest `current` (an index) is ringed.
-    pub fn show(
-        &self,
-        pictures: Vec<(gdk::Texture, String)>,
-        current: Option<usize>,
-        on_choose: impl Fn(usize) + Clone + 'static,
-    ) {
+    /// Calls `handler` when the pictures' size in device pixels changes
+    /// (the window resized, or moved to a screen of another scale): they
+    /// need rendering again at [`Pictures::device_size`].
+    pub fn connect_resized(&self, handler: impl Fn() + 'static) {
+        self.on_resize.replace(Some(Box::new(handler)));
+    }
+
+    /// The size, in device pixels, to render the pictures at; `None`
+    /// before they have been given room.
+    pub fn device_size(&self) -> Option<(u32, u32)> {
+        let slots = self.slots.borrow();
+        let (slot, _) = slots.first()?;
+        (slot.width() > 1 && slot.height() > 1).then(|| slot.device_size())
+    }
+
+    /// Lays out a picture for each caption, each a button that goes to its
+    /// pose, empty until [`Pictures::show_textures`]. The same captions
+    /// as last time keep the pictures as they are.
+    pub fn show(&self, captions: &[String], on_choose: impl Fn(usize) + Clone + 'static) {
+        let unchanged = self
+            .slots
+            .borrow()
+            .iter()
+            .map(|(_, caption)| caption)
+            .eq(captions.iter());
+        if unchanged {
+            return;
+        }
         while let Some(child) = self.root.first_child() {
             self.root.remove(&child);
         }
-        let count = pictures.len();
-        for (index, (texture, caption)) in pictures.into_iter().enumerate() {
-            let picture = gtk::Picture::builder()
-                .paintable(&texture)
-                .can_shrink(true)
-                .content_fit(gtk::ContentFit::Contain)
-                .height_request(110)
-                .build();
+        self.size.set((0, 0));
+        let count = captions.len();
+        let mut slots = Vec::with_capacity(count);
+        for (index, caption) in captions.iter().enumerate() {
+            let picture = Viewport::picture(Sizing::Picture {
+                natural_width: 320,
+                minimum_height: 110,
+            });
+            let size = self.size.clone();
+            let on_resize = self.on_resize.clone();
+            picture.connect_resized(move |width, height| {
+                if size.replace((width, height)) != (width, height)
+                    && let Some(handler) = on_resize.borrow().as_ref()
+                {
+                    handler();
+                }
+            });
             let words = if index == 0 {
                 "closed"
             } else if index + 1 == count {
@@ -303,7 +352,7 @@ impl Pictures {
                 .use_markup(true)
                 .label(format!(
                     "<b>{}</b> {words}",
-                    gtk::glib::markup_escape_text(&caption)
+                    gtk::glib::markup_escape_text(caption)
                 ))
                 .xalign(0.0)
                 .ellipsize(gtk::pango::EllipsizeMode::End)
@@ -317,12 +366,18 @@ impl Pictures {
                 .css_classes(["stave-picture"])
                 .tooltip_text(format!("Show it at {caption}"))
                 .build();
-            if current == Some(index) {
-                button.add_css_class("current");
-            }
             let choose = on_choose.clone();
             button.connect_clicked(move |_| choose(index));
             self.root.append(&button);
+            slots.push((picture, caption.clone()));
+        }
+        self.slots.replace(slots);
+    }
+
+    /// Shows the rendered pictures, in the order of the captions.
+    pub fn show_textures(&self, textures: Vec<gdk::Texture>) {
+        for ((slot, _), texture) in self.slots.borrow().iter().zip(textures) {
+            slot.show_frame(texture);
         }
     }
 
