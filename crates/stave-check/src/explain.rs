@@ -4,7 +4,7 @@
 use stave_geom::collide::Overlap;
 use stave_lang::ast::CutOperation;
 use stave_lang::placement::{Axis, Direction, PartAxis};
-use stave_model::solved::{CutKind, CutName, CutPlace, Part, PartId, WorldBox};
+use stave_model::solved::{BodyOwner, CutKind, CutName, CutPlace, Part, PartId, WorldBox};
 
 use crate::names::length_text;
 use crate::{Checker, Item, deepest};
@@ -50,6 +50,9 @@ pub(crate) fn overlap(checker: &Checker<'_>, a: Item, b: Item, found: &[Overlap]
         && let Some(help) =
             dovetail(checker, x, y, deepest).or_else(|| cavity(checker, x, y, found, deepest))
     {
+        return Explanation { notes, help };
+    }
+    if let Some(help) = joint_member(checker, a, b, deepest) {
         return Explanation { notes, help };
     }
     let direction = away(checker, a, deepest);
@@ -257,6 +260,69 @@ fn cavity(
                 side.opposite().word()
             ))
         }
+    }
+}
+
+/// A joint's member (a dowel's pin, a screw) where it shouldn't be: past
+/// the bottom of its own hole, in wood no hole is drilled in for it, or
+/// into another member.
+fn joint_member(checker: &Checker<'_>, a: Item, b: Item, deepest: &Overlap) -> Option<String> {
+    let depth = length_text(deepest.depth);
+    match (a, b) {
+        (Item::Member(member), Item::Part(part)) | (Item::Part(part), Item::Member(member)) => {
+            let BodyOwner::Joint { joint, .. } = member.owner else {
+                return None;
+            };
+            let name = &checker.member(member)?.name;
+            let joint_name = checker.joint_name(joint);
+            let host = checker.design.part(part)?;
+            let drilled = host.cuts.iter().any(|cut| {
+                matches!(cut.place, CutPlace::Member { owner, body, .. }
+                    if owner == member.owner && body == member.body)
+            });
+            Some(if drilled {
+                format!(
+                    "the {name} of '{joint_name}' goes {depth} past the bottom of its hole in {}; make the hole as deep as the {name} reaches, or the {name} {depth} shorter",
+                    host.name
+                )
+            } else {
+                format!(
+                    "the {name} of '{joint_name}' goes {depth} into {}, where no hole is drilled for it; move {} or the joint so the {name} misses it, or make the {name} shorter",
+                    host.name, host.name
+                )
+            })
+        }
+        (Item::Member(first), Item::Member(second)) => {
+            let is_joint = |member: stave_model::solved::BodyRef| {
+                matches!(member.owner, BodyOwner::Joint { .. })
+            };
+            if !is_joint(first) && !is_joint(second) {
+                return None;
+            }
+            let describe = |member: stave_model::solved::BodyRef| -> Option<String> {
+                let name = &checker.member(member)?.name;
+                let owner = match member.owner {
+                    BodyOwner::Joint { joint, .. } => checker.joint_name(joint),
+                    BodyOwner::Hardware { hardware } => checker.hardware_name(hardware),
+                };
+                Some(format!("the {name} of '{owner}'"))
+            };
+            let inside = checker
+                .design
+                .parts
+                .iter()
+                .find(|part| {
+                    stave_geom::collide::intersection(&part.cut_box(), &deepest.region).is_some()
+                })
+                .map(|part| format!(" inside {}", part.name))
+                .unwrap_or_default();
+            Some(format!(
+                "{} and {} run {depth} into each other{inside}; move one of the joints, or use fewer or shorter ones",
+                describe(first)?,
+                describe(second)?
+            ))
+        }
+        (Item::Part(_), Item::Part(_)) => None,
     }
 }
 

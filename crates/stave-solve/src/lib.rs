@@ -38,6 +38,7 @@ mod help;
 mod joints;
 mod legacy;
 mod mechanism;
+mod members;
 mod models;
 mod place;
 mod rules;

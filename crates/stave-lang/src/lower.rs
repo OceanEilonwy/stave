@@ -559,6 +559,10 @@ fn kind(node: &SyntaxNode) -> Option<Kind> {
                     docs,
                     node: KindMember {
                         name: ident(&child(&entry, SyntaxKind::NAME)?)?,
+                        item: match exprs(&entry).next() {
+                            Some(item) => Some(expr(&item)?),
+                            None => None,
+                        },
                         body: match child(&entry, SyntaxKind::BLOCK) {
                             Some(block) => Some(member_body(&block)?),
                             None => None,

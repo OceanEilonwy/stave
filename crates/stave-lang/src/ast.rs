@@ -735,13 +735,17 @@ pub struct MountBlock {
     pub span: Span,
 }
 
-/// `member cup` or `member arm { with: on, shape: box(...) }`: one named
-/// piece of a hardware kind, documented by the doc comments above it.
+/// `member cup`, `member arm { with: on, shape: box(...) }` or, in a
+/// joint kind, `member pin : dowel_pin(...) { on: ..., shape: ... }`: one
+/// named piece of a kind, documented by the doc comments above it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct KindMember {
     /// The member's name: a member word of its base, or any name for a
     /// member with a body.
     pub name: Ident,
+    /// What it is, after `:`: a fastener kind value the hardware list
+    /// counts once for every copy placed.
+    pub item: Option<Expr>,
     /// Its shapes and fields, when it has a block.
     pub body: Option<MemberBody>,
 }

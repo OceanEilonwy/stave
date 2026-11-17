@@ -372,7 +372,7 @@ pub(crate) fn world_index(axis: Axis) -> usize {
     }
 }
 
-fn positive_direction(axis: Axis) -> Direction {
+pub(crate) fn positive_direction(axis: Axis) -> Direction {
     match axis {
         Axis::Up => Direction::Up,
         Axis::Across => Direction::Right,
@@ -712,7 +712,9 @@ impl Solver<'_> {
         let carried: Option<FrameBox> = frame_bodies
             .iter()
             .filter(|(id, _)| {
-                kind.bodies.get(id.index()).map(|body| body.with) == Some(Carrier::Role(piece_role))
+                kind.bodies
+                    .get(id.index())
+                    .is_some_and(|body| body.with == Carrier::Role(piece_role))
             })
             .flat_map(|(_, boxes)| boxes.iter().map(|(b, _, _)| *b))
             .reduce(|a, b| a.union(&b));
@@ -1177,7 +1179,7 @@ impl Solver<'_> {
 
     /// A shape's box in the kind's frame, the axis of a cylinder and the
     /// outline of a prism or a bar.
-    fn shape_box(
+    pub(crate) fn shape_box(
         &mut self,
         shape: &ShapeDef,
         env: &Env<'_>,
@@ -1341,7 +1343,7 @@ impl Solver<'_> {
         &mut self,
         binding: &Binding,
         kind: &KindDef,
-        cuts: &[stave_model::defs::HardwareCutDef],
+        cuts: &[stave_model::defs::MemberCutDef],
         roles: &[(String, RoleBound)],
         bodies: &[PlacedBody],
         frame: &Frame,
@@ -1504,27 +1506,29 @@ fn member_carrier(
     let mut current = body;
     // A member rides on at most every other member.
     for _ in 0..=kind.bodies.len() {
-        match kind.bodies.get(current.index())?.with {
+        match &kind.bodies.get(current.index())?.with {
             Carrier::Role(role) => {
                 return roles.get(role.index()).map(|(_, bound)| match *bound {
                     RoleBound::Part(part) => MemberCarrier::Part(part),
                     RoleBound::Region(region) => MemberCarrier::Region(region),
                 });
             }
-            Carrier::Body(other) => current = other,
+            Carrier::Body(other) => current = *other,
             Carrier::Mechanism => {
                 return kind
                     .mechanism
                     .is_some()
                     .then_some(MemberCarrier::Link(current));
             }
+            // A joint's member: never in a hardware kind.
+            Carrier::Contact(_) => return None,
         }
     }
     None
 }
 
 /// A placed shape in the world, exactly.
-fn world_shape(shape: &PlacedShape, frame: &Frame) -> Solved<WorldShape> {
+pub(crate) fn world_shape(shape: &PlacedShape, frame: &Frame) -> Solved<WorldShape> {
     let along = frame.along.axis();
     let low = shape.frame.along.0;
     let point = |[across, depth]: [ExactLength; 2]| frame.world_point(low, across, depth);
@@ -1579,7 +1583,7 @@ fn meets(a: &ExactBox, b: &ExactBox) -> bool {
 /// cut"): across the frame's depth first, then across the other axes; on
 /// one axis, the face nearer the frame's origin when the shape passes
 /// right through.
-fn crossing_face(shape: &ExactBox, part: &ExactBox, frame: &Frame) -> Option<Face> {
+pub(crate) fn crossing_face(shape: &ExactBox, part: &ExactBox, frame: &Frame) -> Option<Face> {
     let depth = frame.depth.axis();
     let order = std::iter::once(depth).chain(Axis::ALL.into_iter().filter(|a| *a != depth));
     for axis in order {

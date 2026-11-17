@@ -20,8 +20,11 @@ kind screw : joint {
   /// ends of the patch: about four times a common 4mm screw. Screws driven
   /// closer than this split the wood along the grain between them.
   param gap = 15mm
+  /// The pilot hole: about three quarters of the shank, the size of the
+  /// screw's core, so the thread cuts its own way into the wood around it.
+  param pilot = diameter * 3 / 4
 
-  // The holes are centred across the patch where the parts touch and
+  // The screws are centred across the patch where the parts touch and
   // spread evenly along it.
   require stays_inside : length <= piece.thickness + bite - 3mm "the screw would come out the other side"
   require bites        : length >= piece.thickness + 8mm "the screw is too short to hold"
@@ -29,14 +32,18 @@ kind screw : joint {
   require seat_long    : contact(piece, into).length >= count * (diameter + gap) + gap "too many screws for this joint"
 
   insert: [push(piece, along: thickness)]
-  uses:   wood_screw(diameter: diameter, length: length, count: count)
 
-  cut crossing(piece, into) {
-    drill(diameter: diameter + 0.5mm, depth: through, count: count)
+  /// The screws: driven through the piece and into the other part. Each is
+  /// drawn and checked at the size of its core, the pilot hole: the thread
+  /// bites into the wood around it and takes no room of its own.
+  member screw : wood_screw(diameter: diameter, length: length) {
+    on:     contact(piece, into)
+    count:  count
+    spaced: evenly
+    shape:  cylinder(diameter: pilot, depth: -piece.thickness..length - piece.thickness)
   }
-  cut crossing(into, piece) {
-    drill(diameter: diameter * 3 / 4, depth: length - piece.thickness, count: count)
-  }
+  cut crossing(piece, screw) { drill(diameter: diameter + 0.5mm, depth: through) }
+  cut crossing(into, screw) { drill(diameter: pilot, depth: length - piece.thickness) }
 
   note: "Clamp the parts together and drill the pilot holes through the clearance holes"
 }

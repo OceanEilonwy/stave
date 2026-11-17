@@ -13,7 +13,7 @@ use stave_schema::operations::Selector;
 use super::expr::Expect;
 use super::{Cx, Resolver};
 use crate::defs::{
-    AxisRule, BodyDef, BodyId, CutName, FaceRule, FrameAxis, FromTerm, HardwareCutDef,
+    AxisRule, BodyDef, BodyId, CutName, FaceRule, FrameAxis, FromTerm, MemberCutDef,
     MemberPlacement, MountDef, MountSelector, MountTerm, RoleDef, RoleIndex,
 };
 use crate::types::Ty;
@@ -141,7 +141,7 @@ impl Resolver<'_> {
         roles: &[RoleDef],
         bodies: &[BodyDef],
         cut: &ast::Cut,
-    ) -> Option<HardwareCutDef> {
+    ) -> Option<MemberCutDef> {
         let head = cut.selector.head.as_str();
         if head != Selector::Crossing.word() {
             self.error_help(
@@ -165,7 +165,7 @@ impl Resolver<'_> {
             None => None,
         };
         let operations = self.lower_operations(cx, Selector::Crossing, &cut.operations);
-        Some(HardwareCutDef {
+        Some(MemberCutDef {
             name,
             part,
             body,

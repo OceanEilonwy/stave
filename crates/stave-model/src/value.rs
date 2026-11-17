@@ -11,7 +11,7 @@ use std::cmp::Ordering;
 use std::fmt;
 
 use stave_lang::ast::{BinaryOp, UnaryOp};
-use stave_lang::placement::{Axis, Face, PartAxis};
+use stave_lang::placement::{Axis, Direction, Face, PartAxis};
 use stave_lang::units::{ExactAngle, ExactLength, Rational};
 use stave_schema::functions::PatchSize;
 
@@ -355,6 +355,9 @@ pub struct Patch {
     normal: Axis,
     length_axis: Axis,
     width_axis: Axis,
+    /// `true` when the second part of `contact(a, b)` lies on the positive
+    /// side of the first along the normal.
+    toward_positive: bool,
 }
 
 impl Patch {
@@ -379,7 +382,30 @@ impl Patch {
             normal,
             length_axis,
             width_axis,
+            toward_positive: true,
         })
+    }
+
+    /// The same patch, with the second part on the `positive` side of the
+    /// first along the normal (the default) or on the negative side.
+    pub fn facing(self, positive: bool) -> Patch {
+        Patch {
+            toward_positive: positive,
+            ..self
+        }
+    }
+
+    /// The direction along the normal from the first part of
+    /// `contact(a, b)` into the second: where a joint member's `depth`
+    /// runs.
+    pub fn into_second(&self) -> Direction {
+        let positive = self.toward_positive;
+        Direction::ALL
+            .into_iter()
+            .find(|direction| {
+                direction.axis() == self.normal && direction.is_positive() == positive
+            })
+            .unwrap_or(Direction::Up)
     }
 
     /// The box the patch covers, in world coordinates. Along its normal it

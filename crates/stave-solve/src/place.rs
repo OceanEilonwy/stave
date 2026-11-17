@@ -135,20 +135,20 @@ pub(crate) struct Siblings {
     pub part: Option<PartId>,
 }
 
-fn add(a: ExactLength, b: ExactLength) -> Solved<ExactLength> {
+pub(crate) fn add(a: ExactLength, b: ExactLength) -> Solved<ExactLength> {
     a.checked_add(b).ok_or(Reported)
 }
 
-fn sub(a: ExactLength, b: ExactLength) -> Solved<ExactLength> {
+pub(crate) fn sub(a: ExactLength, b: ExactLength) -> Solved<ExactLength> {
     a.checked_sub(b).ok_or(Reported)
 }
 
-fn scale(a: ExactLength, n: usize) -> Solved<ExactLength> {
+pub(crate) fn scale(a: ExactLength, n: usize) -> Solved<ExactLength> {
     let n = i64::try_from(n).map_err(|_| Reported)?;
     a.checked_mul(Rational::from(n)).ok_or(Reported)
 }
 
-fn divide(a: ExactLength, n: usize) -> Solved<ExactLength> {
+pub(crate) fn divide(a: ExactLength, n: usize) -> Solved<ExactLength> {
     let n = i64::try_from(n).map_err(|_| Reported)?;
     a.checked_div(Rational::from(n)).ok_or(Reported)
 }

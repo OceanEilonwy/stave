@@ -1,0 +1,11 @@
+---
+source: crates/stave-app/tests/members.rs
+expression: "rendered(\"tests/broken/dowels_cross_dowels\")"
+---
+error[overlap]: side_dowels's pin and cap_dowels's pin overlap
+  --> tests/broken/dowels_cross_dowels/project.stave:44:21
+   |
+44 | joint side_dowels : dowel(side, into: base)
+   |                     ^^^^^^^^^^^^^^^^^^^^^^^
+   = note: they share 8 × 8 × 8mm (across × up × deep)
+   = help: the pin of 'side_dowels' and the pin of 'cap_dowels' run 8mm into each other inside base; move one of the joints, or use fewer or shorter ones

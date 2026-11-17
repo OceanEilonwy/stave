@@ -1713,7 +1713,7 @@ impl<'t> Parser<'t> {
         })
     }
 
-    /// `{ DOC } member name [ { entries } ]`
+    /// `{ DOC } member name [ : item ] [ { entries } ]`
     fn member(&mut self) -> PResult {
         self.node(MEMBER, |p| {
             while p.at(DOC) {
@@ -1721,6 +1721,10 @@ impl<'t> Parser<'t> {
             }
             p.bump();
             p.declared_name()?;
+            if p.at(COLON) {
+                p.bump();
+                p.expr()?;
+            }
             if p.at(L_BRACE) {
                 let owner = format!("member '{}'", p.previous_text());
                 p.block(Body::Member, &owner)?;

@@ -1,0 +1,11 @@
+---
+source: crates/stave-app/tests/members.rs
+expression: "rendered(\"tests/broken/pin_past_its_hole\")"
+---
+error[overlap]: shelf_pegs's peg and side overlap
+  --> tests/broken/pin_past_its_hole/project.stave:47:20
+   |
+47 | joint shelf_pegs : peg_joint(shelf, into: side)
+   |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = note: they share 8 × 5 × 8mm (across × up × deep) at the left end of side
+   = help: the peg of 'shelf_pegs' goes 5mm past the bottom of its hole in side; make the hole as deep as the peg reaches, or the peg 5mm shorter

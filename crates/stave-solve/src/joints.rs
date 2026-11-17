@@ -155,6 +155,10 @@ pub(crate) struct JointWork {
     pub pairs: Vec<PairWork>,
     pub unmatched: Vec<PartId>,
     pub requires: Vec<Vec<stave_model::solved::RequireResult>>,
+    /// The cuts its members make, in the world, once its pairs are
+    /// finished: a mirrored assembly cuts them again, reflected, in the
+    /// parts outside it.
+    pub member_cuts: Vec<crate::members::WorldMemberCut>,
 }
 
 /// One pair of a joint.
@@ -409,7 +413,7 @@ impl Solver<'_> {
         result
     }
 
-    fn joint_place(&self, joint: JointId) -> (FileId, Span) {
+    pub(crate) fn joint_place(&self, joint: JointId) -> (FileId, Span) {
         let def = self
             .model
             .joints
@@ -657,6 +661,7 @@ impl Solver<'_> {
             pairs,
             unmatched,
             requires,
+            member_cuts: Vec::new(),
         })
     }
 

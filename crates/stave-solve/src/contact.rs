@@ -181,7 +181,15 @@ impl Solver<'_> {
     /// over an area.
     pub(crate) fn contact_patch(&mut self, a: PartId, b: PartId) -> Solved<Option<Patch>> {
         Ok(match self.touching(a, b)? {
-            Some(touching) => Patch::new(touching.a.intersection(&touching.b), touching.normal),
+            Some(touching) => {
+                // The second part lies on the side of the first its middle
+                // is on; parts crossing with one middle face `a`'s way.
+                let normal = touching.normal;
+                let middle = |part: &ExactBox| midpoint(part.min(normal), part.max(normal));
+                let positive = middle(&touching.b) >= middle(&touching.a);
+                Patch::new(touching.a.intersection(&touching.b), normal)
+                    .map(|patch| patch.facing(positive))
+            }
             None => None,
         })
     }

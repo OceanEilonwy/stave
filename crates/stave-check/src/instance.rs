@@ -248,9 +248,9 @@ impl Checker<'_> {
             }
         }
         let mut contact = Contact::default();
-        contact.add_item(group.other);
+        contact.add_item(self.design, group.other);
         for (item, _) in &group.members {
-            contact.add_item(*item);
+            contact.add_item(self.design, *item);
         }
         contact.regions = group.found.iter().map(|o| o.region).collect();
         self.diagnostics.push((diagnostic, Some(contact)));

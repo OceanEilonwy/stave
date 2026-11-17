@@ -1052,7 +1052,7 @@ fn a_fastener_has_no_members_and_a_member_is_written_once() {
     );
     assert_eq!(
         diagnostic.help.as_deref(),
-        Some("only hinge, slide and pull kinds name their members")
+        Some("only joint, hinge, slide and pull kinds name their members")
     );
     let opened = open(&slide_kind(
         "  member drawer_member\n  member drawer_member",

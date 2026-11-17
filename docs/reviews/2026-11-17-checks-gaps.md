@@ -289,3 +289,100 @@ error[require]: 'seat_wide' fails: the parts overlap too little for these dowels
   misalign by up to 1.5mm on overlaps that pass `seat_wide`. The `tenon_thin`
   rule catches the side table's 30mm tenon, but an 18mm tenon with a 0mm
   setback (a 0.5mm mortise wall) still needs `wall()`.
+
+## Resolution: stage 2
+
+- **Joint members** (grammar, "Joint members"). A joint kind writes
+  `member pin : dowel_pin(...) { on: contact(piece, into), count:,
+  spaced:, shape: ... }`. The `: fastener` follows the `part name : stock`
+  and `joint name : kind(...)` convention and is optional; the parser
+  takes any expression there. `on:` is a `Patch` (required), `count:` a
+  `Count` (default 1), `spaced:` a `Spacing` (default `evenly`): the same
+  closed vocabulary parts use (`evenly`, `ends`, `ends(inset:)`,
+  `pitch(d)`, `gap(d)`), so a new spacing is one variant of
+  `stave_model::value::Spacing` for parts and members alike. A joint
+  member has no `with:` or `mount`, always has a body, and only a joint's
+  member may name a fastener. Each copy has the hardware frame's words:
+  `along` the patch's length, `across` its width, `depth` square to it
+  from `a` into `b` of `contact(a, b)` (`Patch::into_second`), origin on
+  the contact plane in the middle of the width. Copies are as long as
+  their shapes along `along`, so `evenly` leaves equal *wood* between and
+  beyond them, which is what `seat_long` measures.
+- **Types.** `Carrier::Contact(Box<LayoutDef>)` (`stave_model::defs`) is
+  what carries a joint member; `BodyDef::item` is what it is;
+  `HardwareCutDef` became `MemberCutDef`, shared by hardware kinds and
+  `JointKindDef::member_cuts`. In the solved design, `BodyOwner` (a piece
+  of hardware, or a joint pair) replaces `BodyRef::hardware`, and
+  `CutPlace::Member { owner, body, footprint, shape }` carries the shape's
+  whole box besides the footprint. `JointPair::members` holds each
+  member as one `Body` with a shape per copy.
+- **Where it lives.** Layout: `crates/stave-solve/src/members.rs`
+  (`offsets`, `lay_out_members`, exact `ExactLength` arithmetic, rounded
+  once in `build::joint_body`). Cuts: `build.rs` (`finish_joint`, the
+  shared `member_cut`), one per shape per copy, on the face
+  `hardware::crossing_face` picks. Geometry: `stave-geom`'s `face_extent`
+  measures a member cut on the shape, not the clipped footprint, so a
+  hole is centred on the pin even where the patch is narrower than one
+  part's end. Mirrored assemblies reflect a joint's members and cut the
+  parts outside them again (`JointWork::member_cuts`), as hardware does.
+  Checks: `stave-check` adds every joint pair's members as bodies in the
+  layer-4 rest overlap check (not `steel_in_wood`); the "a kind's own
+  members aren't checked against each other" rule is now per owner;
+  `explain::joint_member` words the help.
+- **Screws: a shape at pilot size.** The screw's shape is its core, the
+  size of its pilot hole (`param pilot = diameter * 3 / 4`; `shape:
+  cylinder(diameter: pilot, depth: -piece.thickness..length -
+  piece.thickness)`), which the pilot hole holds exactly and the
+  clearance hole holds loosely. A declared core diameter would be a field
+  the overlap check reads for fasteners only, an engine special case; a
+  shape is the one thing the check already reads for every body, so the
+  rule "a shape is the room a piece takes once it is in" covers screws
+  without a new concept. What it gives up: the shank's real 4mm in the
+  piece's 4.5mm hole isn't modelled (it is thinner there, never thicker).
+- **std.** `dowel` and `screw` are members now, with the stage 1 rules
+  unchanged; no other `std/joinery` kind used `uses:` or `drill(count:)`
+  for something placed. Nothing in `std/`, `examples/` or `tests/` spreads
+  holes with `drill(count:)` any more; it still works (two spec tests use
+  it) until stage 4 retires it. The spec described its spreading as
+  `spaced(evenly)`, but the code steps centres equally (less wood between
+  holes than at the ends); the spec now says what the code does.
+- **The alignment check.** The cabinet with `base` at
+  `cabinet_width * 2` and `top` at `cabinet_width * 2 - 4mm` (the top,
+  centred, covers 17mm of each side's 19mm end; `seat_wide` holds) checks
+  clean, and every hole in a side's top end has a hole in the top with
+  the same centre: side_l's at across 10.5mm, deep 109.6, 223.2, 336.8,
+  450.4mm, up 1666..1681mm, the top's at the same centres, up
+  1681..1696mm; side_r's at across 1789.5mm (`app/members::
+  the_cabinets_dowel_holes_line_up_where_the_top_covers_only_part_of_the_sides`).
+  Before, they were up to 1.5mm apart on such overlaps.
+- **New diagnostics** (`tests/broken/pin_past_its_hole`,
+  `dowel_into_tenon`, `dowels_cross_dowels`), all `error[overlap]` at the
+  joint's call: `shelf_pegs's peg and side overlap` (help: `the peg of
+  'shelf_pegs' goes 5mm past the bottom of its hole in side; make the
+  hole as deep as the peg reaches, or the peg 5mm shorter`);
+  `side_dowels's pin and foot overlap` (help: `the pin of 'side_dowels'
+  goes 8mm into foot, where no hole is drilled for it; move foot or the
+  joint so the pin misses it, or make the pin shorter`); `side_dowels's
+  pin and cap_dowels's pin overlap` (help: `the pin of 'side_dowels' and
+  the pin of 'cap_dowels' run 8mm into each other inside base; move one
+  of the joints, or use fewer or shorter ones`). Also `pegs: its pegs run
+  10mm past the end of where its parts touch` (`pitch`/`gap` overrun),
+  `<joint>: its <member> doesn't reach <part>` (`no-contact`), a
+  not-supported warning for members between boards, and the resolver's
+  `member 'peg' is missing 'on'`, `member 'peg' has no field 'with'`,
+  `member 'screw' of a hardware kind can't name a fastener`.
+- **Showing it.** `stave dump` names the member a cut is for (`where
+  top_dowels's pin meets it`; hardware cuts now say `lid.lift_knob's
+  screw` too) and lists each pair's member shapes under the joint, so all
+  six dump snapshots changed. The pins are drawable from the solved
+  design alone (`stave_geom::body(&pair.members[i])`, tested); wiring them
+  into `stave-scene`'s graph and joint focus needs a scene `Item` for a
+  joint's member and its handling in `stave-app`'s view, session and
+  problems, which is stage 4's work and was left out here.
+- **Left for stages 3 and 4.** A pin running into another joint's empty
+  hole (no pin or tenon in it) is air, not overlap: `wall()` (stage 3).
+  Crowded pins of one pair are still only the `seat_long` rule's to
+  catch. Stage 4: scene and focus drawing of joint members, retiring
+  `drill(count:)` spreading in `hole_centres`, and the special-cases
+  audit's S4 and SO18 (still justified: the hardware list reads a
+  fastener's `diameter` and `length`, now for member items too).

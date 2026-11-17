@@ -926,17 +926,22 @@ pub enum CutPlace {
         /// The region both cut boxes share, in this part's frame.
         footprint: LocalBox,
     },
-    /// `crossing(p, member)` in a hardware kind: where one shape of a
-    /// member of a piece of hardware meets this part. The footprint is the
-    /// region the shape's box and the part's cut box share, in this part's
-    /// local coordinates.
+    /// `crossing(p, member)`: where one shape of a member of a piece of
+    /// hardware, or of one copy of a joint's member, meets this part. The
+    /// footprint is the region the shape's box and the part's cut box
+    /// share; the shape is the shape's whole box, which a hole is centred
+    /// on, so the holes a member makes in two parts line up even where it
+    /// runs past the edge of one of them. Both are in this part's local
+    /// coordinates.
     Member {
-        /// The piece of hardware.
-        hardware: HardwareId,
+        /// The piece of hardware or the joint pair.
+        owner: BodyOwner,
         /// The member, in its kind's list of members with a body.
         body: BodyId,
         /// The region the shape and the part share, in this part's frame.
         footprint: LocalBox,
+        /// The shape's whole box, in this part's frame.
+        shape: LocalBox,
     },
 }
 
@@ -1123,6 +1128,10 @@ pub struct JointPair {
     pub made_parts: Vec<PartId>,
     /// The kind's requires for this pair.
     pub requires: Vec<RequireResult>,
+    /// The kind's members, laid out on this pair's contact patch: each
+    /// with one shape per shape of the member for every copy, drawn and
+    /// checked like any body (grammar, "Joint members").
+    pub members: Vec<Body>,
 }
 
 /// A joint, resolved per pair.
@@ -1451,14 +1460,50 @@ pub struct Hardware {
     pub rules: Rules,
 }
 
-/// A member of one piece of hardware: which piece, and which of its kind's
-/// members.
+/// What a member with a body belongs to: a piece of hardware, or one pair
+/// of a joint whose kind lays members out on its contact patch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "snake_case", tag = "kind")]
+pub enum BodyOwner {
+    /// A piece of hardware.
+    Hardware {
+        /// Which.
+        hardware: HardwareId,
+    },
+    /// One pair of a joint.
+    Joint {
+        /// The joint.
+        joint: JointId,
+        /// The pair (index into [`Joint::pairs`]).
+        pair: usize,
+    },
+}
+
+impl BodyOwner {
+    /// The piece of hardware, for a hardware member.
+    pub fn hardware(self) -> Option<HardwareId> {
+        match self {
+            BodyOwner::Hardware { hardware } => Some(hardware),
+            BodyOwner::Joint { .. } => None,
+        }
+    }
+}
+
+/// A member of one piece of hardware or one joint pair: whose, and which
+/// of its kind's members.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
 pub struct BodyRef {
-    /// The piece of hardware.
-    pub hardware: HardwareId,
+    /// The piece of hardware or the joint pair.
+    pub owner: BodyOwner,
     /// The member, among its kind's members with a body.
     pub body: BodyId,
+}
+
+impl BodyRef {
+    /// The piece of hardware, for a hardware member.
+    pub fn hardware(self) -> Option<HardwareId> {
+        self.owner.hardware()
+    }
 }
 
 /// What moves a member.

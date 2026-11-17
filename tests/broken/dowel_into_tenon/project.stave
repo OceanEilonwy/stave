@@ -1,0 +1,48 @@
+// expect: error[overlap] side_dowels's pin and foot overlap
+stave 1
+
+// A side stands on the left end of the base on dowels, and a small foot
+// under the base is held by a round tenon in a hole in the base. The foot
+// sits right under one of the side's pins: the pin, going down into the
+// base, runs into the foot's tenon coming up.
+
+project "A dowel into a tenon" {
+  units: mm
+}
+
+stock oak_19 { species: white_oak, form: solid, thickness: 19mm }
+
+part base : oak_19 {
+  length: 900mm
+  width:  560mm
+  place {
+    ground
+  }
+}
+
+part side : oak_19 {
+  length: 600mm
+  width:  560mm
+  place {
+    orient(length: up, width: back)
+    against(base.top)
+    flush(base.left)
+    flush(base.back)
+  }
+}
+
+// The side's first pin is 181.333mm from the base's front to its near
+// side: the foot, as wide as the side is thick, is centred on it.
+part foot : oak_19 {
+  length: 60mm
+  width:  19mm
+  place {
+    orient(length: down, width: back)
+    against(base.bottom)
+    flush(base.left)
+    flush(base.front, inset: 175.833333mm)
+  }
+}
+
+joint side_dowels : dowel(side, into: base)
+joint foot_tenon  : round_tenon(foot, into: base, diameter: 8mm, length: 12mm)

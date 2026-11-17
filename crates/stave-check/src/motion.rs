@@ -472,7 +472,7 @@ impl Checker<'_> {
             }
             _ => Vec::new(),
         };
-        let mut contact = Contact::of(&[a, b], &found);
+        let mut contact = Contact::of(self.design, &[a, b], &found);
         contact.scene = (scene_index > 0)
             .then(|| self.design.scenes.get(scene_index).map(|s| s.id))
             .flatten();

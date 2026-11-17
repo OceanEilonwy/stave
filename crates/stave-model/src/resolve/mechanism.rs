@@ -8,19 +8,31 @@
 
 use std::collections::BTreeMap;
 
-use stave_lang::ast::{self, ExprKind, Span};
+use stave_lang::ast::{self, BaseKind, ExprKind, Span};
 use stave_lang::units::ExactLength;
 use stave_lang::{Code, Diagnostic, Label};
 use stave_schema::functions::{POINT, POINT_ARGUMENTS, ShapeFunction};
+use stave_schema::words::WordSet;
 
 use super::expr::Expect;
 use super::{Cx, Resolver};
 use crate::defs::{
     AdjustDef, BodyDef, BodyId, BodyName, Carrier, ConstraintDef, CouplingDef, DriveDef, FrameAxis,
-    KindPoint, MechanismDef, NamedShape, NonEmpty, RExpr, RExprKind, RangeDef, RoleDef, RoleIndex,
-    ShapeDef, StopDef,
+    KindPoint, LayoutDef, MechanismDef, NamedShape, NonEmpty, RExpr, RExprKind, RangeDef, RoleDef,
+    RoleIndex, ShapeDef, StopDef,
 };
 use crate::types::Ty;
+
+/// The fields of a joint's member that say where it goes.
+const LAYOUT_FIELDS: [&str; 3] = ["on", "count", "spaced"];
+
+/// A joint member's `on:`, `count:` and `spaced:` while they are read.
+#[derive(Default)]
+struct Layout {
+    on: Option<RExpr>,
+    count: Option<RExpr>,
+    spaced: Option<RExpr>,
+}
 
 /// The named arguments of a call, by name.
 type Arguments<'a> = BTreeMap<&'a str, &'a ast::Arg>;
@@ -42,9 +54,11 @@ impl Resolver<'_> {
     pub(super) fn lower_bodies(
         &mut self,
         cx: &Cx,
+        base_kind: BaseKind,
         roles: &[RoleDef],
         written: &[&ast::Documented<ast::KindMember>],
     ) -> Option<Vec<BodyDef>> {
+        let joint = base_kind == BaseKind::Joint;
         // A member written twice is reported where the members are listed;
         // only its first is a body.
         let mut unique: Vec<&str> = Vec::new();
@@ -78,8 +92,47 @@ impl Resolver<'_> {
             let mut shape_names: BTreeMap<Option<String>, Span> = BTreeMap::new();
             let mut mount = Vec::new();
             let mut mount_span: Option<Span> = None;
+            let mut layout = Layout::default();
+            let item = self.member_item(cx, joint, member);
             for entry in &body.entries {
                 match entry {
+                    ast::MemberEntry::Mount(block) if joint => {
+                        self.error_help(
+                            Code::UnknownField,
+                            format!("member '{member_name}' has no field 'mount'"),
+                            cx.file,
+                            block.span,
+                            "a joint's member is placed on: the patch where two of its parts touch, with count: and spaced:",
+                        );
+                    }
+                    ast::MemberEntry::Field(field)
+                        if joint && LAYOUT_FIELDS.contains(&field.key.as_str()) =>
+                    {
+                        self.layout_field(cx, &mut layout, field);
+                    }
+                    ast::MemberEntry::Field(field)
+                        if !joint && LAYOUT_FIELDS.contains(&field.key.as_str()) =>
+                    {
+                        self.error_help(
+                            Code::UnknownField,
+                            format!(
+                                "member '{member_name}' has no field '{}'",
+                                field.key.as_str()
+                            ),
+                            cx.file,
+                            field.key.span(),
+                            "only a joint's members are laid out on a contact patch; a hardware member is carried with: a role or another member",
+                        );
+                    }
+                    ast::MemberEntry::Field(field) if joint && field.key.as_str() == "with" => {
+                        self.error_help(
+                            Code::UnknownField,
+                            format!("member '{member_name}' has no field 'with'"),
+                            cx.file,
+                            field.key.span(),
+                            "a joint's member sits where its parts touch: write on: contact(piece, into)",
+                        );
+                    }
                     ast::MemberEntry::Mount(block) => {
                         if let Some(first) = mount_span {
                             self.duplicate("mount", block.span, first, cx);
@@ -100,15 +153,27 @@ impl Resolver<'_> {
                     }
                     ast::MemberEntry::Field(field) => {
                         let key = field.key.as_str();
-                        self.unknown(
-                            Code::UnknownField,
-                            format!("member '{member_name}' has no field '{key}'"),
-                            cx.file,
-                            field.key.span(),
-                            key,
-                            ["with", "shape", "mount"],
-                            "a member's body holds its shapes (shape: box(...)), what carries it (with: ...) and its own mount { }",
-                        );
+                        if joint {
+                            self.unknown(
+                                Code::UnknownField,
+                                format!("member '{member_name}' has no field '{key}'"),
+                                cx.file,
+                                field.key.span(),
+                                key,
+                                ["on", "count", "spaced", "shape"],
+                                "a joint's member holds where it goes (on:, count:, spaced:) and its shapes (shape: cylinder(...))",
+                            );
+                        } else {
+                            self.unknown(
+                                Code::UnknownField,
+                                format!("member '{member_name}' has no field '{key}'"),
+                                cx.file,
+                                field.key.span(),
+                                key,
+                                ["with", "shape", "mount"],
+                                "a member's body holds its shapes (shape: box(...)), what carries it (with: ...) and its own mount { }",
+                            );
+                        }
                     }
                     ast::MemberEntry::Shape(shape) => {
                         let shape_name = shape.name.as_ref().map(|name| name.as_str().to_owned());
@@ -147,10 +212,30 @@ impl Resolver<'_> {
             let Some(shapes) = NonEmpty::new(shapes) else {
                 continue;
             };
-            let (carrier, rides_on) = match with {
-                Pending::Role(role) => (Carrier::Role(role), None),
-                Pending::Body(other) => (Carrier::Mechanism, Some(other)),
-                Pending::Mechanism => (Carrier::Mechanism, None),
+            let (carrier, rides_on) = if joint {
+                let Some(on) = layout.on else {
+                    self.error_help(
+                        Code::MissingField,
+                        format!("member '{member_name}' is missing 'on'"),
+                        cx.file,
+                        member.node.name.span(),
+                        "say where it goes: on: contact(piece, into), the patch where the parts touch",
+                    );
+                    continue;
+                };
+                let carrier = Carrier::Contact(Box::new(LayoutDef {
+                    span: on.span,
+                    on,
+                    count: layout.count,
+                    spaced: layout.spaced,
+                }));
+                (carrier, None)
+            } else {
+                match with {
+                    Pending::Role(role) => (Carrier::Role(role), None),
+                    Pending::Body(other) => (Carrier::Mechanism, Some(other)),
+                    Pending::Mechanism => (Carrier::Mechanism, None),
+                }
             };
             bodies.push((
                 BodyDef {
@@ -158,6 +243,7 @@ impl Resolver<'_> {
                     span: member.node.name.span(),
                     docs: member.docs.clone(),
                     with: carrier,
+                    item,
                     shapes,
                     mount,
                 },
@@ -187,6 +273,76 @@ impl Resolver<'_> {
         }
         // Ids would shift past a member left out; its errors are reported.
         (lowered.len() == with_body.len()).then_some(lowered)
+    }
+
+    /// What a member is, after `:`: a fastener kind value with its
+    /// settings, in a joint kind only.
+    fn member_item(
+        &mut self,
+        cx: &Cx,
+        joint: bool,
+        member: &ast::Documented<ast::KindMember>,
+    ) -> Option<RExpr> {
+        let item = member.node.item.as_ref()?;
+        if !joint {
+            self.error_help(
+                Code::UnknownField,
+                format!(
+                    "member '{}' of a hardware kind can't name a fastener",
+                    member.node.name.as_str()
+                ),
+                cx.file,
+                item.span,
+                "only a joint's members say what they are (member pin : dowel_pin(...)); list a hardware kind's fasteners with uses:",
+            );
+            return None;
+        }
+        let (callee, args) = match &item.kind {
+            ExprKind::Call { callee, args } => (&**callee, args.as_slice()),
+            _ => (item, &[][..]),
+        };
+        let kind_expr = self.value(
+            cx,
+            callee,
+            &Expect::ty(Ty::from_type_name(ast::TypeName::FastenerKind)).named("member"),
+        );
+        let Ty::Kind(kind_ty) = kind_expr.ty.clone() else {
+            return None;
+        };
+        let settings = self.kind_settings(cx, kind_ty, args, &[]);
+        Some(RExpr {
+            kind: RExprKind::KindValue {
+                kind: Box::new(kind_expr),
+                settings,
+            },
+            ty: Ty::Kind(kind_ty),
+            span: item.span,
+        })
+    }
+
+    /// `on:`, `count:` or `spaced:` of a joint's member, each at most once.
+    fn layout_field(&mut self, cx: &Cx, layout: &mut Layout, field: &ast::Field) {
+        let key = field.key.as_str();
+        let (written, expect) = match key {
+            "on" => (&layout.on, Expect::ty(Ty::Patch).named("on")),
+            "count" => (&layout.count, Expect::ty(Ty::Count).named("count")),
+            _ => (
+                &layout.spaced,
+                Expect::ty(Ty::Spacing)
+                    .with_words(&[WordSet::Spacing])
+                    .named("spaced"),
+            ),
+        };
+        if let Some(first) = written.as_ref().map(|value| value.span) {
+            self.duplicate(key, field.key.span(), first, cx);
+            return;
+        }
+        let value = Some(self.value(cx, &field.value, &expect));
+        match key {
+            "on" => layout.on = value,
+            "count" => layout.count = value,
+            _ => layout.spaced = value,
+        }
     }
 
     /// `with: piece` or `with: plate`.

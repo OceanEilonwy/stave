@@ -1,0 +1,45 @@
+// expect: error[overlap] side_dowels's pin and cap_dowels's pin overlap
+stave 1
+
+// A side stands on the left end of the base on dowels, and a cap butts the
+// base's left end on dowels of its own. Both joints spread two pins evenly
+// along the same 560mm, so each of the side's pins, going down into the
+// base, runs into one of the cap's, going across into it.
+
+project "Dowels that cross" {
+  units: mm
+}
+
+stock oak_19 { species: white_oak, form: solid, thickness: 19mm }
+
+part base : oak_19 {
+  length: 900mm
+  width:  560mm
+  place {
+    ground
+  }
+}
+
+part side : oak_19 {
+  length: 600mm
+  width:  560mm
+  place {
+    orient(length: up, width: back)
+    against(base.top)
+    flush(base.left)
+    flush(base.back)
+  }
+}
+
+part cap : oak_19 {
+  length: 100mm
+  width:  560mm
+  place {
+    against(base.left)
+    flush(base.bottom)
+    flush(base.back)
+  }
+}
+
+joint side_dowels : dowel(side, into: base)
+joint cap_dowels  : dowel(cap, into: base)

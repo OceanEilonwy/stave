@@ -851,6 +851,10 @@ pub struct BodyDef {
     pub docs: Vec<String>,
     /// What carries it.
     pub with: Carrier,
+    /// What it is, for a joint's member: a fastener kind value
+    /// (`member pin : dowel_pin(...)`), counted in the hardware list once
+    /// for every copy placed.
+    pub item: Option<RExpr>,
     /// Its shapes, in source order.
     pub shapes: NonEmpty<NamedShape>,
     /// Its own `mount { }`: the frame axes it is placed on from an anchor
@@ -899,7 +903,7 @@ pub struct HardwareKindDef {
     /// Its `mount { }`.
     pub mount: MountDef,
     /// Its `cut` entries, in source order.
-    pub cuts: Vec<HardwareCutDef>,
+    pub cuts: Vec<MemberCutDef>,
     /// `uses:` fasteners, counted and never placed.
     pub uses: Vec<UseDef>,
     /// Its `adjust` entries, in source order.
@@ -1027,9 +1031,10 @@ pub enum MountSelector {
     },
 }
 
-/// `cut [name:] crossing(role, member) { operations }` in a hardware kind.
+/// `cut [name:] crossing(role, member) { operations }`: the wood a member
+/// takes out of a role's part, in a hardware kind or a joint kind.
 #[derive(Debug, Clone, PartialEq)]
-pub struct HardwareCutDef {
+pub struct MemberCutDef {
     /// Its name, when written.
     pub name: Option<CutName>,
     /// The role whose part is cut.
@@ -1043,7 +1048,7 @@ pub struct HardwareCutDef {
 }
 
 /// What carries a member with a body.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Carrier {
     /// `with: piece`: it moves with that role's part.
     Role(RoleIndex),
@@ -1051,6 +1056,23 @@ pub enum Carrier {
     Body(BodyId),
     /// No `with:`: the mechanism places it (a link).
     Mechanism,
+    /// `on: contact(piece, into)`: a joint's member, laid out on the
+    /// patch where two of the joint's parts touch, once or several times.
+    Contact(Box<LayoutDef>),
+}
+
+/// Where a joint's member goes (grammar, "Joint members"): `on:` a patch,
+/// `count:` copies, `spaced:` along it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LayoutDef {
+    /// `on:`: a `Patch`, `contact(a, b)`.
+    pub on: RExpr,
+    /// `count:`: how many copies, per pair; one when left out.
+    pub count: Option<RExpr>,
+    /// `spaced:`: a `Spacing`; `evenly` when left out.
+    pub spaced: Option<RExpr>,
+    /// The `on:` entry.
+    pub span: Span,
 }
 
 /// One of a member's shapes, with its name when the kind gives one.
@@ -1325,6 +1347,9 @@ pub struct JointKindDef {
     pub uses: Vec<UseDef>,
     /// `cut selector { }` entries.
     pub cuts: Vec<CutDef>,
+    /// `cut crossing(role, member) { }` entries: the wood the kind's
+    /// members take out of its parts.
+    pub member_cuts: Vec<MemberCutDef>,
     /// `makes part` entries.
     pub makes: Vec<MadePartDef>,
     /// `note:`

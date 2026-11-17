@@ -288,11 +288,12 @@ kind          = "kind" , IDENT , ":" , base_kind , block(kind_entry) ;
 base_kind     = "joint" | "slide" | "hinge" | "pull" | "fastener" | "tool" ;
 kind_entry    = { DOC } , ( param | require | makes | member )
               | roles | cut | mount | mechanism | adjust | field ;
-member        = "member" , IDENT , [ block(member_entry) ] ;
-                (* a hardware kind's named piece: member cup, or member arm { shape: box(...) } *)
+member        = "member" , IDENT , [ ":" , expr ] , [ block(member_entry) ] ;
+                (* a kind's named piece: member cup, member arm { shape: box(...) },
+                   or in a joint kind member pin : dowel_pin(...) { on: contact(piece, into), ... } *)
 member_entry  = "shape" , [ IDENT ] , ":" , call_expr    (* shape: cylinder(...), shape knuckle: box(...) *)
               | mount                                    (* mount { depth: from(face(on, toward: piece)) } *)
-              | field ;                                  (* with: piece *)
+              | field ;                                  (* with: piece; on:, count:, spaced: in a joint kind *)
 mount         = "mount" , block(field) ;                 (* where hardware sits: mount { face: back, along: open } *)
 call_expr     = IDENT , "(" , [ args ] , ")" ;           (* an expression that is one call *)
 mechanism     = "mechanism" , block(mechanism_entry) ;   (* how a hardware kind's members move *)
@@ -755,8 +756,9 @@ The condition is a `Bool` expression. See [Checks](#checks-and-require).
 | `insert` | list of assembly steps | no | how the parts come together |
 | `cut_first` | a role, or a list of roles | no | the order in which the roles are cut |
 | `adds` | `extend(...)` or a list of them | no | what the joint adds to each part's cut size |
-| `uses` | a fastener kind value, or a list | no | fasteners the joint consumes |
-| `cut [name:] selector { }` | | no | material removed; a name (`cut dado: ...`) is what messages call the cut |
+| `uses` | a fastener kind value, or a list | no | fasteners the joint consumes without placing them |
+| `member name [: fastener] { }` | | no | a piece it places where its parts touch, such as a dowel's pins; see [Joint members](#joint-members) |
+| `cut [name:] selector { }` | | no | material removed; a name (`cut dado: ...`) is what messages call the cut. `crossing(role, member)` is the wood a member takes out of a part |
 | `makes part` | | no | a part the joint creates |
 | `note` | `Text` | no | one piece of advice for the build manual |
 
@@ -784,7 +786,7 @@ how it moves and what it cuts are all written in the kind. A `slide`,
 | `adjust a on b: axis within d` | no | how far a member can be set on another, on one axis of the frame (see [Adjustment](#adjustment)) |
 | `mechanism { }` | no | how its members move (see [Mechanisms](#mechanisms)) |
 | `cut [name:] crossing(role, member) { }` | no | the wood it takes out: the bore for a cup, the mortise for a leaf, the hole for a screw (see [Faces to cut](#faces-to-cut)) |
-| `uses` | no | fasteners it consumes, as a joint's `uses:`: counted, never placed |
+| `uses` | no | fasteners it consumes without placing them, as a joint's `uses:`: counted, never placed |
 | `model` | no | a `Model`, for looks |
 | `moving`, `license` | no | `Text` |
 | any other `name: value` | no | catalogue data (`clearance: 12.7mm`, `cup_diameter: 35mm`); readable from outside as `slide.clearance` |
@@ -883,8 +885,13 @@ of the list too. The words, per base:
 
 Members are optional, each at most once (`error[duplicate-name]`). Any other
 word for a member without a body is `error[unknown-field]`: `a hinge kind has
-no member 'cupp'`, with the nearest member word as help; fasteners, tools and
-joints have no members (`a fastener kind has no member 'head'`).
+no member 'cupp'`, with the nearest member word as help; fasteners and tools
+have no members (`a fastener kind has no member 'head'`). A joint's members
+always have a body and are placed on a contact patch instead of carried
+`with:` a part (see [Joint members](#joint-members)); a joint member without
+one is `error[missing-field]` (`member 'pin' is missing 'shape'`). Only a
+joint's member names what it is after `:`; a hardware member that does is
+`error[unknown-field]`.
 
 ### `recipe name : operation { }`
 
@@ -1224,7 +1231,9 @@ the last three need no glue), applied as for a joint between parts:
   cut list as `<part>.<name>[n]`, one per seam (`n` counts seams from 1), or
   `<part>.<name>` for a kind with one `Parts` role.
 - `glue: false` in the kind value says the seam is not glued.
-- Fasteners a board joint `uses:` aren't listed yet. Every cut a solid
+- Fasteners a board joint `uses:` aren't listed yet, and a board joint's
+  [members](#joint-members) aren't placed between boards yet
+  (`warning[not-supported]`). Every cut a solid
   part can have is made on boards: the box-shaped ones (`notch`, `slot`,
   `pocket`, `tenon`) and the angled ones (`outline`, `dovetail_socket`,
   `dovetail_tail`, a `slot` at an angle). `drill`, `spigot` and `round` are
@@ -1399,11 +1408,14 @@ at its end diameter; the joint's cuts then shape the extension. When two
 joints extend the same end of a part, the extensions add up.
 
 **`uses:`** — a fastener kind value, with `count:` saying how many each pair
-takes (default 1): `uses: dowel_pin(diameter: diameter, length: 2 * depth,
-count: count)`. Fasteners appear in the hardware list. They are counted, never
-placed, take no part in collision checks, and are the only thing not
-modelled, for joints and hardware alike (see [One collision
-model](#one-collision-model)).
+takes (default 1): `uses: wood_screw(length: 30mm, count: 4)`. These
+fasteners appear in the hardware list. They are counted, never placed, take
+no part in collision checks, and are the only thing not modelled, for joints
+and hardware alike (see [One collision model](#one-collision-model)). `uses:`
+is for what is genuinely not placed (the screws that come with a hinge, a
+handful of glue blocks); a fastener that goes somewhere particular (a dowel's
+pins, the screws of a screwed joint) is a [joint member](#joint-members),
+which the hardware list counts too.
 
 **`cut_first:`** — a role, or a list of roles in order. The listed roles are
 cut in that order, each before the roles after it; roles not listed come after
@@ -1457,6 +1469,98 @@ geometry can't make yet are cuts other than `drill` and `spigot` on round
 stock or a turned part: those are `warning[not-supported]`, and the part is
 drawn and checked without them.
 
+#### Joint members
+
+A joint kind may place pieces where its parts touch: a dowel's pins, the
+screws of a screwed joint. Each is a `member` with a body, laid out on a
+contact patch instead of carried by a part, and drawn, cut for and checked
+like a hardware member (see [One collision model](#one-collision-model)):
+
+```
+  /// The pins: wooden dowels glued half into each part, in matching holes.
+  member pin : dowel_pin(diameter: diameter, length: 2 * depth) {
+    on:     contact(piece, into)
+    count:  count
+    spaced: evenly
+    shape:  cylinder(diameter: diameter, depth: -depth..depth)
+  }
+  cut crossing(piece, pin) { drill(diameter: diameter, depth: depth) }
+  cut crossing(into, pin) { drill(diameter: diameter, depth: depth) }
+```
+
+| Entry | Type | Required | Meaning |
+|---|---|---|---|
+| `: fastener` | a fastener kind value | no | what it is: the hardware list counts it once for every copy placed |
+| `on:` | `Patch` | yes | where it goes: `contact(a, b)`, the patch where two of the joint's parts touch |
+| `count:` | `Count` | no (default `1`) | how many copies, for each pair |
+| `spaced:` | `Spacing` | no (default `evenly`) | how the copies are spread along the patch's length |
+| `shape [name]:` | a shape | yes | what it is made of (see [Shapes](#shapes)) |
+
+**The member's frame.** Each copy has its own frame, with the words a
+hardware kind's frame uses: `along` runs along the patch's length (its
+longer side), `across` along its width, and `depth` square to the patch,
+from `a` into `b` of `contact(a, b)`: negative depths lie in `a`, positive
+ones in `b`. The origin is on the **contact plane** (where the two parts
+touch; for parts that cross, the middle of their overlap), in the middle of
+the patch's width. So `cylinder(diameter: 8mm, depth: -15mm..15mm)` is a pin
+reaching 15mm into each part from the joint line. `along` and `across` run
+toward the higher world coordinate, which matters only for a shape that is
+not symmetric along them.
+
+**Spacing.** `spaced:` takes the [spacing values](#placement-terms) parts
+use, measured along the patch's length from its lower end, with each copy
+as long as its shapes are along `along`: `evenly` (equal gaps before,
+between and after), `ends` and `ends(inset: d)`, `pitch(d)` and `gap(d)`.
+With `pitch` or `gap`, copies that run past the far end of the patch are
+`error[overlap]` at the joint's call: `pegs: its pegs run 10mm past the end
+of where its parts touch`, with the help to use fewer or space them closer.
+A copy is centred across the patch's width; a shape's `at:` moves it.
+Positions are exact and rounded once, like every solved length.
+
+**Cuts.** `cut crossing(role, member) { ... }` is made once for every shape
+of every copy, on the face of the role's part the shape touches or enters,
+measured on the shape (see [Faces to cut](#faces-to-cut)): a `drill` is
+centred on the shape's axis. Because both parts are cut from the same
+placed shape, the holes a pin makes in two parts share their centres by
+construction, even where the patch is narrower than one part's end. A
+member that meets nothing of the role's part is `error[no-contact]` at the
+joint's call (`pegs: its peg doesn't reach base`).
+
+**Checks.** A joint's members are bodies in the overlap check at rest, as
+every hardware member is. A pin in its own hole touches it; a pin that
+reaches past the bottom of its hole, into a part no hole is drilled in for
+it, or into another joint's pin or tenon is `error[overlap]` at the joint's
+call, naming the member as `<joint>'s <member>` (with the pair's parts when
+the joint has several pairs):
+
+```
+error[overlap]: side_dowels's pin and foot overlap
+  --> project.stave:47:21
+   = note: they share 8 × 8 × 8mm (across × up × deep) at the top end of foot
+   = help: the pin of 'side_dowels' goes 8mm into foot, where no hole is drilled for it; move foot or the joint so the pin misses it, or make the pin shorter
+```
+
+The other helps say `the pin of '<joint>' goes 5mm past the bottom of its
+hole in <part>; make the hole as deep as the pin reaches, or the pin 5mm
+shorter`, and `the pin of '<joint>' and the pin of '<other>' run 8mm into
+each other inside <part>; move one of the joints, or use fewer or shorter
+ones`. The members of one pair are not checked against each other, as a
+kind's own members never are: a kind keeps its copies apart with a rule on
+the patch (`require seat_long : contact(piece, into).length >= count *
+(diameter + wall) + wall`).
+
+**Screws.** A member is checked by its shapes, so a shape is the room the
+piece takes once it is in. A screw's thread cuts its own way into the wood
+around its pilot hole and takes no room of its own: a screw is written at
+the size of its core, the pilot hole, and the pilot hole holds it exactly
+while the clearance hole in the piece is wider. `std:joinery`'s `screw`
+writes `shape: cylinder(diameter: pilot, depth: -piece.thickness..length -
+piece.thickness)`.
+
+A joint member moves with the pair's first part. Members aren't placed
+between the boards of a part made of boards yet: such a kind is
+`warning[not-supported]` there (see [Boards](#boards)).
+
 #### Faces to cut
 
 A cut is measured on one face of one role's part, from that face's own edges.
@@ -1475,12 +1579,16 @@ part can choose with `face_side:` and `face_edge:`.
 | `side(p, normal: width \| thickness, from: q)` | the reference face (`normal: thickness`) or reference edge (`normal: width`) of `p`; `opposite: true` takes the face opposite to it | `along` from the end nearest `q` (without `from:`, from the start of `p`'s length); `across` from the reference edge (or reference face); `flip: true` measures `across` from the opposite edge |
 | `crossing(p, q)` | the face of `p` that `q` touches or enters. The **footprint** is the outline of `q`'s cut-size box on that face | within the footprint, in `q`'s own axes |
 
-In a hardware kind, the second argument of `crossing` may be a member:
-`crossing(piece, cup)` is the face of `piece` the member's shapes touch or
-enter (when a shape passes right through, the one nearer the mount face),
-and there is one **footprint per shape**: the region the shape's box and
-the part's cut box share, in the part's own frame. A hardware cut is made
-once for each piece of hardware. Its operations are the same as a joint's:
+In a hardware or joint kind, the second argument of `crossing` may be a
+member: `crossing(piece, cup)` is the face of `piece` the member's shapes
+touch or enter (when a shape passes right through, the one nearer the mount
+face, or for a joint member the contact plane), and there is one
+**footprint per shape**: the region the shape's box and the part's cut box
+share, in the part's own frame. The operations are measured on the shape's
+whole box, not on the footprint: a `drill` is centred on the shape, so it
+stays where the member is even where the shape runs past the part's edge. A hardware cut is made once for
+each piece of hardware, a joint member's once for each copy (see [Joint
+members](#joint-members)). Its operations are the same as a joint's:
 
 ```
 cut crossing(piece, cup) { drill(diameter: 35mm, depth: 12.8mm) }
@@ -1529,7 +1637,7 @@ hardware kind's `member` and `mechanism`: `point(...)` anywhere else is
 | `tenon(length:, width:, thickness:)` | end, crossing | everything around a centred rectangular tenon, `length` long from the face. On `end`, `width` and `thickness` are across the part's width and thickness. On `crossing` it is a **tongue** along an edge, for parts that butt edge to edge (the face is across the part's width): `width` runs along the part's length, `thickness` across its thickness, centred on the footprint. On any other face of a crossing it is `error[type-mismatch]` |
 | `spigot(length:, diameter:)` | end | everything around a centred round tenon |
 | `round(diameter:, flats:, flats_angle:)` | crossing | turns the part round, to `diameter`, over the length where the other part passes (the footprint's extent along this part's length), leaving square sections either side. With `flats:` it keeps two flat faces that distance apart, their normal at `flats_angle` (default `0deg`) from the part's width axis toward its thickness axis |
-| `drill(diameter:, depth:, count:)` | crossing, end, side | `count` round holes (default 1), evenly spaced along the longer side of the footprint or end (equal gaps, including before the first and after the last, as `spaced(evenly)`) and centred across it |
+| `drill(diameter:, depth:, count:)` | crossing, end, side | `count` round holes (default 1), spread along the longer side of the footprint or end (equal steps between their centres and from the ends, which leaves less wood between holes than at the ends) and centred across it. *Being replaced:* holes for something placed are a [joint member](#joint-members)'s, which spaces copies by their size; `count:` stays until nothing in `std:` uses it |
 | `dovetail_socket(neck:, depth:, angle:, slope:)` | end, crossing | a dovetail socket: `neck` wide at the face, `depth` deep, widening by its spread each side to its bottom, cut straight through the part (see "Angled cuts"). On `crossing` it is a **housing** for a sliding dovetail, running along the entering part's length |
 | `dovetail_tail(neck:, depth:, angle:, slope:)` | end, crossing | everything around a dovetail tail: over the last `depth` of the part, the wood either side of a tail `neck` wide at its shoulder and wider by its spread each side at the face, cut straight through the part. On `crossing` it is the **tongue** of a sliding dovetail, running along the part's own length |
 | `outline(marks: [...], depth:, from_depth:)` | side | the shape marked out with `mark(along:, across:)` points, in order round the shape, cut from `from_depth` (default `0mm`, the face itself) to `depth` below the face. With `from_depth` greater than zero the cut is hidden inside the part: a recess for a hidden stub tenon |
@@ -1700,7 +1808,8 @@ kind brass_knob_26 : pull {
 A butt hinge sinks a leaf into each part and cuts a mortise for each; a
 cup hinge bores its cup; a pull drills a hole for each screw. Each is a
 `cut` of the kind (see [Faces to cut](#faces-to-cut)). `fastener` kinds are
-only ever used through a `uses:`, and `tool` kinds are listed in a
+only ever used through a `uses:` or as what a joint member is (`member pin :
+dowel_pin(...)`), and `tool` kinds are listed in a
 project's `tools:` and a recipe's `tools:`.
 
 **Envelopes.** Outside a member, `box(length:, width:, thickness:)` and
@@ -1770,8 +1879,9 @@ it is not where it can be, and one mistake is one error.
 
 #### One collision model
 
-Every solid in the design is a **body**: every part with its cuts made, and
-every shape of every hardware member, wood or steel. Each body is posed by
+Every solid in the design is a **body**: every part with its cuts made,
+every shape of every hardware member, wood or steel, and every copy of
+every joint member (a dowel's pins, see [Joint members](#joint-members)). Each body is posed by
 the motions: a member moves with the part or region it is `with:` (or with
 the member it rides on), and a member the mechanism places (a link) moves
 as the mechanism moves it. One overlap check covers every body at rest and
@@ -1787,10 +1897,12 @@ hold for every kind alike:
 - **A kind's own members are not checked against each other.** Stave
   checks a design, not a product: how a hinge's links fold inside its arm
   is the maker's drawing, not the design's. Members of two different
-  pieces of hardware are checked against each other like anything else.
+  pieces of hardware, or of two joint pairs, are checked against each other
+  like anything else; the copies of one pair's members are one piece.
 - **Fasteners named in `uses:` are counted, not placed, and not modelled**
-  (see `uses:`). A screw that is a member (a knob's screw) is a shape like
-  any other, and the kind drills its hole, so it fits and touches.
+  (see `uses:`). A screw that is a member (a knob's screw, a screwed
+  joint's screws) is a shape like any other, and the kind drills its hole,
+  so it fits and touches.
 
 Only declared shapes are drawn, and everything drawn is checked: a member
 without a body is neither (see [Hardware members](#hardware-members)).
@@ -2261,8 +2373,9 @@ other with an end touches only over its profile's diameter at that end.
 pair. Two parts that don't touch over an area are `error[no-contact]`
 (`side_l and top don't touch`) at the call, with the help to place one
 against the other. A `Patch` is read only for its sizes, `.length` and
-`.width`, both `Length`s, and as `of:` in `extent` (above); the sizes are
-exact, never rounded. A kind's rules use it to size a joint to the wood it
+`.width`, both `Length`s, as `of:` in `extent` (above), and as a joint
+member's `on:` (see [Joint members](#joint-members)); the sizes are exact,
+never rounded. A kind's rules use it to size a joint to the wood it
 sits on:
 
 ```

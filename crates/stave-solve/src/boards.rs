@@ -760,6 +760,26 @@ impl Solver<'_> {
                     .with_help("add the fasteners to your shopping list by hand"),
                 );
             }
+            let has_members = kind
+                .bodies
+                .iter()
+                .any(|body| matches!(body.with, stave_model::defs::Carrier::Contact(_)));
+            if has_members && report && seam.is_none_or(|s| s == 0) {
+                self.report(
+                    Diagnostic::warning(
+                        Code::NotSupported,
+                        format!(
+                            "placing the members of '{}' between boards is not supported yet",
+                            method.name
+                        ),
+                        Label::new(file, span),
+                    )
+                    .with_note(format!(
+                        "{part_name} is made of boards; their joints' pins and screws are not drawn, drilled or listed"
+                    ))
+                    .with_help("lay out and drill the pins or screws between the boards by hand"),
+                );
+            }
         }
         let contact = match parts.as_slice() {
             [p, q] if !method.across => {

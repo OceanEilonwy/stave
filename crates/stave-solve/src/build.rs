@@ -11,21 +11,23 @@ use stave_model::ids::{AssemblyId, HardwareId, JointId, PartId, RegionId, SceneI
 use stave_model::instance::Ctx;
 use stave_model::mechanism::MemberIndex;
 use stave_model::solved::{
-    self, Assembly, Cut, CutPlace, CutSource, FastenerUse, Hardware, HardwareBase, HardwareData,
-    Joint, JointPair, LocalBox, LocalPoint, PartOrigin, Point, PoseValue, ProjectInfo, Region,
-    RequireResult, RoleBinding, Scene, SceneItem, ScenePose, Shape, Size3, SolvedDesign, Station,
-    Stock, Tool,
+    self, Assembly, BodyOwner, Cut, CutPlace, CutSource, FastenerUse, Hardware, HardwareBase,
+    HardwareData, Joint, JointPair, LocalBox, LocalPoint, PartOrigin, Point, PoseValue,
+    ProjectInfo, Region, RequireResult, RoleBinding, Scene, SceneItem, ScenePose, Shape, Size3,
+    SolvedDesign, Station, Stock, Tool,
 };
 use stave_model::value::{Envelope as ExactEnvelope, ExactBox, Value};
 use stave_schema::words::{Grain, MotionWord, StockForm};
 
 use crate::eval::{Env, midpoint};
 use crate::hardware::{
-    HardwareCut, MemberCarrier, Placed, PlacedMember, RoleBound, WorldShape, world_index,
+    HardwareCut, MemberCarrier, Placed, PlacedMember, RoleBound, WorldShape, crossing_face,
+    world_index, world_shape,
 };
 use crate::joints::{GeomTable, JointWork, PartGeom, local_slot, round_length};
 use crate::legacy::{CupParts, Data, LegacyMotion, legacy_assembly_motion};
 use crate::mechanism::AssemblyMechanism;
+use crate::members::{LaidOut, WorldMemberCut};
 use crate::place::reflect;
 use crate::{Reported, Solved, Solver};
 
@@ -252,7 +254,7 @@ fn members(
                 .collect::<Solved<Vec<_>>>()?;
             solved::Body::new(
                 solved::BodyRef {
-                    hardware,
+                    owner: BodyOwner::Hardware { hardware },
                     body: member.body,
                 },
                 member.name.clone(),
@@ -262,6 +264,96 @@ fn members(
             .ok_or(Reported)
         })
         .collect()
+}
+
+/// A member's shape in the solved design, reflected through a plane
+/// across `axis`.
+fn reflect_member_shape(
+    shape: &solved::MemberShape,
+    axis: Axis,
+    plane: ExactLength,
+) -> Solved<solved::MemberShape> {
+    let flip = |low: Length, high: Length| -> Solved<(Length, Length)> {
+        let (low, high) = reflect(low.to_exact(), high.to_exact(), plane)?;
+        Ok((round_length(low)?, round_length(high)?))
+    };
+    let flip_one = |value: Length| -> Solved<Length> { Ok(flip(value, value)?.0) };
+    // A point on the plane across `along`, its two coordinates in
+    // `Axis::others` order.
+    let flip_pair = |along: Axis, [a, b]: [Length; 2]| -> Solved<[Length; 2]> {
+        let [first, second] = along.others();
+        Ok([
+            if first == axis { flip_one(a)? } else { a },
+            if second == axis { flip_one(b)? } else { b },
+        ])
+    };
+    let ends = |along: Axis, start: Length, end: Length| -> Solved<(Length, Length)> {
+        if along == axis {
+            flip(start, end)
+        } else {
+            Ok((start, end))
+        }
+    };
+    Ok(match shape {
+        solved::MemberShape::Box(bounds) => {
+            let (low, high) = flip(bounds.min().get(axis), bounds.max().get(axis))?;
+            solved::MemberShape::Box(solved::WorldBox::new(
+                bounds.min().with(axis, low),
+                bounds.max().with(axis, high),
+            ))
+        }
+        solved::MemberShape::Cylinder {
+            axis: along,
+            centre,
+            diameter,
+            start,
+            end,
+        } => {
+            let (start, end) = ends(*along, *start, *end)?;
+            solved::MemberShape::Cylinder {
+                axis: *along,
+                centre: flip_pair(*along, *centre)?,
+                diameter: *diameter,
+                start,
+                end,
+            }
+        }
+        solved::MemberShape::Prism {
+            axis: along,
+            points,
+            start,
+            end,
+        } => {
+            let (start, end) = ends(*along, *start, *end)?;
+            solved::MemberShape::Prism {
+                axis: *along,
+                points: points
+                    .iter()
+                    .map(|point| flip_pair(*along, *point))
+                    .collect::<Solved<Vec<_>>>()?,
+                start,
+                end,
+            }
+        }
+        solved::MemberShape::Bar {
+            axis: along,
+            from,
+            to,
+            thickness,
+            start,
+            end,
+        } => {
+            let (start, end) = ends(*along, *start, *end)?;
+            solved::MemberShape::Bar {
+                axis: *along,
+                from: flip_pair(*along, *from)?,
+                to: flip_pair(*along, *to)?,
+                thickness: *thickness,
+                start,
+                end,
+            }
+        }
+    })
 }
 
 fn reflect_box(bounds: &ExactBox, axis: Axis, plane: ExactLength) -> Solved<ExactBox> {
@@ -402,6 +494,7 @@ pub(crate) fn build(solver: &mut Solver<'_>) -> Option<SolvedDesign> {
         &mut memberships,
         &mut joints,
         &mut placed,
+        &work,
     );
 
     // 6b. Parts wider than their stock: boards and the joints between them.
@@ -502,36 +595,90 @@ pub(crate) fn build(solver: &mut Solver<'_>) -> Option<SolvedDesign> {
 /// A cut a piece of hardware makes: its member's shape where it meets the
 /// part, from the face the solver chose.
 fn hardware_cut(geom: &PartGeom, cut: &HardwareCut, hardware: HardwareId) -> Solved<Cut> {
+    member_cut(
+        geom,
+        MemberCut {
+            source: CutSource::Hardware { hardware },
+            owner: BodyOwner::Hardware { hardware },
+            body: cut.body,
+            name: cut.name.clone(),
+            face: cut.face,
+            shape: &cut.shape,
+            kind: cut.kind.clone(),
+        },
+    )
+}
+
+/// One cut a member's shape makes in a part.
+struct MemberCut<'a> {
+    source: CutSource,
+    owner: BodyOwner,
+    body: BodyId,
+    name: Option<solved::CutName>,
+    /// The world face of the part it is cut from.
+    face: stave_lang::placement::Face,
+    /// The shape's world box.
+    shape: &'a ExactBox,
+    kind: solved::CutKind,
+}
+
+/// A cut a member makes: its shape where it meets the part (the
+/// footprint), and the shape's whole box, in the part's frame.
+fn member_cut(geom: &PartGeom, cut: MemberCut<'_>) -> Solved<Cut> {
     let face = geom.face_toward(cut.face.axis(), cut.face.is_positive());
-    let mut region = cut.shape;
+    let mut region = *cut.shape;
     for axis in Axis::ALL {
         let low = region.min(axis).max(geom.cut_box.min(axis));
         let high = region.max(axis).min(geom.cut_box.max(axis));
         region = region.with(axis, low, high.max(low));
     }
-    let local = geom.local_box(&region)?;
-    let [length, width, thickness] = local;
-    let corner = |pick: fn(&(ExactLength, ExactLength)) -> ExactLength| -> Solved<LocalPoint> {
-        Ok(LocalPoint {
-            length: round_length(pick(&length))?,
-            width: round_length(pick(&width))?,
-            thickness: round_length(pick(&thickness))?,
+    let local_box = |world: &ExactBox| -> Solved<LocalBox> {
+        let [length, width, thickness] = geom.local_box(world)?;
+        let corner = |pick: fn(&(ExactLength, ExactLength)) -> ExactLength| -> Solved<LocalPoint> {
+            Ok(LocalPoint {
+                length: round_length(pick(&length))?,
+                width: round_length(pick(&width))?,
+                thickness: round_length(pick(&thickness))?,
+            })
+        };
+        Ok(LocalBox {
+            min: corner(|p| p.0)?,
+            max: corner(|p| p.1)?,
         })
     };
     Ok(Cut {
-        source: CutSource::Hardware { hardware },
-        name: cut.name.clone(),
+        source: cut.source,
+        name: cut.name,
         face,
         place: CutPlace::Member {
-            hardware,
+            owner: cut.owner,
             body: cut.body,
-            footprint: LocalBox {
-                min: corner(|p| p.0)?,
-                max: corner(|p| p.1)?,
-            },
+            footprint: local_box(&region)?,
+            shape: local_box(cut.shape)?,
         },
-        kind: cut.kind.clone(),
+        kind: cut.kind,
     })
+}
+
+/// A joint's member for one pair in the solved design: one shape for
+/// each shape of each copy, carried by the pair's first part.
+fn joint_body(owner: BodyOwner, member: &LaidOut, carrier: PartId) -> Solved<solved::Body> {
+    let mut shapes = Vec::new();
+    for copy in &member.copies {
+        for shape in &copy.shapes {
+            shapes.push(member_shape(&world_shape(shape, &copy.frame)?)?);
+        }
+    }
+    solved::Body::new(
+        solved::BodyRef {
+            owner,
+            body: member.body,
+        },
+        member.name.clone(),
+        solved::BodyCarrier::Part(carrier),
+        shapes,
+    )
+    .ok_or(Reported)
 }
 
 fn exact_envelope(envelope: &ExactEnvelope) -> Solved<solved::Envelope> {
@@ -651,6 +798,87 @@ impl Solver<'_> {
                     }
                 }
             }
+            // Members, laid out on the patch, and the cuts they make.
+            let owner = BodyOwner::Joint {
+                joint,
+                pair: pair_index,
+            };
+            let place = self.joint_place(joint);
+            let laid_out = self.lay_out_members(&kind, &env, &inst.name, place)?;
+            for cut in &joint_def.member_cuts {
+                let (Some(part), Some(member)) = (
+                    pair.parts.get(cut.part.index()).copied(),
+                    laid_out.iter().find(|member| member.body == cut.body),
+                ) else {
+                    return Err(Reported);
+                };
+                let kinds = cut
+                    .operations
+                    .iter()
+                    .map(|operation| self.cut_kind(operation, &env))
+                    .collect::<Solved<Vec<_>>>()?;
+                let Some(geom) = geoms.get(part).cloned() else {
+                    return Err(Reported);
+                };
+                for copy in &member.copies {
+                    for shape in &copy.shapes {
+                        let Some(face) = crossing_face(&shape.world, &geom.cut_box, &copy.frame)
+                        else {
+                            let part_name = self.part_name(part);
+                            let (file, span) = place;
+                            return Err(self.error(
+                                Code::NoContact,
+                                format!(
+                                    "{}: its {} doesn't reach {part_name}",
+                                    inst.name, member.name
+                                ),
+                                file,
+                                span,
+                                format!(
+                                    "the kind cuts {part_name} for its {0}, so the {0} must go into {part_name}: check the {0}'s shape and where it is laid out",
+                                    member.name
+                                ),
+                            ));
+                        };
+                        for cut_kind in &kinds {
+                            work.member_cuts.push(WorldMemberCut {
+                                pair: pair_index,
+                                part,
+                                body: cut.body,
+                                name: cut.name.clone(),
+                                face,
+                                shape: shape.world,
+                                kind: cut_kind.clone(),
+                            });
+                            let made = member_cut(
+                                &geom,
+                                MemberCut {
+                                    source: CutSource::Joint {
+                                        joint,
+                                        pair: pair_index,
+                                    },
+                                    owner,
+                                    body: cut.body,
+                                    name: cut.name.clone(),
+                                    face,
+                                    shape: &shape.world,
+                                    kind: cut_kind.clone(),
+                                },
+                            )?;
+                            if let Some(list) = cuts.get_mut(part.index()) {
+                                list.push(made);
+                            }
+                        }
+                    }
+                }
+            }
+            let carrier = pair.parts.first().copied().ok_or(Reported)?;
+            // A member laid out no times (`count: 0`) is no body.
+            let members = laid_out
+                .iter()
+                .filter(|member| !member.copies.is_empty())
+                .map(|member| joint_body(owner, member, carrier))
+                .collect::<Solved<Vec<_>>>()?;
             let insert = self.pair_steps(kind_id, pair, &env)?;
             let mut cut_order = Vec::new();
             if !joint_def.cut_first.is_empty() {
@@ -668,6 +896,10 @@ impl Solver<'_> {
                 }
                 cut_order.extend(made_ids.iter().copied());
             }
+            // Fasteners: those `uses:` counts, and every copy of a member
+            // that says what it is.
+            let mut counted: Vec<(stave_model::value::KindValue, u32, stave_lang::ast::Span)> =
+                Vec::new();
             for uses in &joint_def.uses {
                 let Value::Kind(fastener) = self.eval(&uses.fastener, &env)? else {
                     continue;
@@ -676,7 +908,20 @@ impl Solver<'_> {
                     Some(count) => self.eval_count(count, &env)?,
                     None => 1,
                 };
-                let span = uses.span;
+                counted.push((fastener, count, uses.span));
+            }
+            for (member, body) in laid_out.iter().filter_map(|member| {
+                let body = kind.bodies.get(member.body.index())?;
+                Some((member, body))
+            }) {
+                if let (Some(item), Some(written)) = (&member.item, &body.item)
+                    && !member.copies.is_empty()
+                {
+                    let count = u32::try_from(member.copies.len()).map_err(|_| Reported)?;
+                    counted.push((item.clone(), count, written.span));
+                }
+            }
+            for (fastener, count, span) in counted {
                 let diameter = match self.kind_entry(&fastener, "diameter", kind.decl.file, span)? {
                     Value::Length(l) => round_length(l)?,
                     _ => return Err(Reported),
@@ -736,6 +981,7 @@ impl Solver<'_> {
                 insert,
                 made_parts: made_ids,
                 requires: work.requires.get(pair_index).cloned().unwrap_or_default(),
+                members,
             });
         }
         for (name, diameter, length, count) in fastener_totals {
@@ -805,6 +1051,7 @@ impl Solver<'_> {
         memberships: &mut [Vec<JointId>],
         joints: &mut [Option<Joint>],
         placed: &mut [Option<Placed>],
+        work: &[Option<JointWork>],
     ) {
         let mut part_map: HashMap<PartId, PartId> = HashMap::new();
         let mut joint_map: HashMap<JointId, JointId> = HashMap::new();
@@ -869,13 +1116,23 @@ impl Solver<'_> {
                             footprint,
                         },
                         CutPlace::Member {
-                            hardware,
+                            owner,
                             body,
                             footprint,
+                            shape,
                         } => CutPlace::Member {
-                            hardware: *hardware_map.get(&hardware).unwrap_or(&hardware),
+                            owner: match owner {
+                                BodyOwner::Hardware { hardware } => BodyOwner::Hardware {
+                                    hardware: *hardware_map.get(&hardware).unwrap_or(&hardware),
+                                },
+                                BodyOwner::Joint { joint, pair } => BodyOwner::Joint {
+                                    joint: *joint_map.get(&joint).unwrap_or(&joint),
+                                    pair,
+                                },
+                            },
                             body,
                             footprint,
+                            shape,
                         },
                     };
                     cut
@@ -930,7 +1187,42 @@ impl Solver<'_> {
                     }
                 }
             };
-            for pair in &mut copy.pairs {
+            let mut unreflected = false;
+            for (pair_index, pair) in copy.pairs.iter_mut().enumerate() {
+                // The members are reflected and belong to the copy.
+                let mut members = Vec::with_capacity(pair.members.len());
+                for member in &pair.members {
+                    let carrier = match member.carrier {
+                        solved::BodyCarrier::Part(part) => {
+                            solved::BodyCarrier::Part(map(self, part))
+                        }
+                        other => other,
+                    };
+                    let shapes = member
+                        .shapes()
+                        .iter()
+                        .map(|shape| reflect_member_shape(shape, axis, plane))
+                        .collect::<Solved<Vec<_>>>();
+                    let body = shapes.ok().and_then(|shapes| {
+                        solved::Body::new(
+                            solved::BodyRef {
+                                owner: BodyOwner::Joint {
+                                    joint,
+                                    pair: pair_index,
+                                },
+                                body: member.id.body,
+                            },
+                            member.name.clone(),
+                            carrier,
+                            shapes,
+                        )
+                    });
+                    match body {
+                        Some(body) => members.push(body),
+                        None => unreflected = true,
+                    }
+                }
+                pair.members = members;
                 for require in &mut pair.requires {
                     require.name = require.name.replacen(&source_joint.name, &inst.name, 1);
                 }
@@ -946,7 +1238,57 @@ impl Solver<'_> {
                 }
             }
             copy.unmatched = copy.unmatched.iter().map(|p| map(self, *p)).collect();
-            if !failed && let Some(entry) = joints.get_mut(joint.index()) {
+            if failed || unreflected {
+                continue;
+            }
+            // Its members' cuts in parts outside the assembly are made
+            // again, reflected, in the part that occupies the reflected
+            // place; those inside came with the mirrored parts' cuts.
+            let source_cuts = work
+                .get(source.index())
+                .and_then(Option::as_ref)
+                .map(|w| w.member_cuts.clone())
+                .unwrap_or_default();
+            for cut in source_cuts {
+                if part_map.contains_key(&cut.part) {
+                    continue;
+                }
+                let Ok(part) = self.rebind_part(cut.part, axis, plane, assembly) else {
+                    continue;
+                };
+                let (Ok(shape), Some(geom)) =
+                    (reflect_box(&cut.shape, axis, plane), geoms.get(part))
+                else {
+                    continue;
+                };
+                let face = if cut.face.axis() == axis {
+                    cut.face.opposite()
+                } else {
+                    cut.face
+                };
+                let made = member_cut(
+                    geom,
+                    MemberCut {
+                        source: CutSource::Joint {
+                            joint,
+                            pair: cut.pair,
+                        },
+                        owner: BodyOwner::Joint {
+                            joint,
+                            pair: cut.pair,
+                        },
+                        body: cut.body,
+                        name: cut.name,
+                        face,
+                        shape: &shape,
+                        kind: cut.kind,
+                    },
+                );
+                if let (Ok(made), Some(list)) = (made, cuts.get_mut(part.index())) {
+                    list.push(made);
+                }
+            }
+            if let Some(entry) = joints.get_mut(joint.index()) {
                 *entry = Some(copy);
             }
         }
@@ -1519,7 +1861,7 @@ impl Solver<'_> {
                     .map(|setting| -> Solved<solved::Setting> {
                         Ok(solved::Setting {
                             body: solved::BodyRef {
-                                hardware: inst.id,
+                                owner: BodyOwner::Hardware { hardware: inst.id },
                                 body: setting.body,
                             },
                             axis: setting.axis,

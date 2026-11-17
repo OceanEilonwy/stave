@@ -1082,7 +1082,7 @@ fn a_pull_bores_one_hole_or_two_holes_centres_apart() {
         .filter_map(|c| match (&c.place, &c.kind) {
             (
                 CutPlace::Member {
-                    hardware,
+                    owner: stave_model::solved::BodyOwner::Hardware { hardware },
                     footprint,
                     ..
                 },

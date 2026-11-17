@@ -1,0 +1,11 @@
+---
+source: crates/stave-app/tests/members.rs
+expression: "rendered(\"tests/broken/dowel_into_tenon\")"
+---
+error[overlap]: side_dowels's pin and foot overlap
+  --> tests/broken/dowel_into_tenon/project.stave:47:21
+   |
+47 | joint side_dowels : dowel(side, into: base)
+   |                     ^^^^^^^^^^^^^^^^^^^^^^^
+   = note: they share 8 × 8 × 8mm (across × up × deep) at the top end of foot
+   = help: the pin of 'side_dowels' goes 8mm into foot, where no hole is drilled for it; move foot or the joint so the pin misses it, or make the pin shorter

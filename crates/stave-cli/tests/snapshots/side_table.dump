@@ -5,8 +5,12 @@ all lengths in mm; boxes are drawn boxes as across, up, deep ranges from the gro
 PARTS (18)
 part                         stock          cut L x W x T              across               up                   deep                 length/width/thickness
 top                          oak_19         500 x 500 x 19             0..500               0..19                0..500               right/back/up
-    cut drill 3 x diameter 3 depth 11 on thickness start: where cleat_front meets it, local 70..430 x 49..79 x 0..0
-    cut drill 3 x diameter 3 depth 11 on thickness start: where cleat_back meets it, local 70..430 x 421..451 x 0..0
+    cut drill 1 x diameter 3 depth 11 on thickness start: where top_screws's screw meets it, local 157.75..160.75 x 62.5..65.5 x 0..11
+    cut drill 1 x diameter 3 depth 11 on thickness start: where top_screws's screw meets it, local 248.5..251.5 x 62.5..65.5 x 0..11
+    cut drill 1 x diameter 3 depth 11 on thickness start: where top_screws's screw meets it, local 339.25..342.25 x 62.5..65.5 x 0..11
+    cut drill 1 x diameter 3 depth 11 on thickness start: where top_screws's screw meets it, local 157.75..160.75 x 434.5..437.5 x 0..11
+    cut drill 1 x diameter 3 depth 11 on thickness start: where top_screws's screw meets it, local 248.5..251.5 x 434.5..437.5 x 0..11
+    cut drill 1 x diameter 3 depth 11 on thickness start: where top_screws's screw meets it, local 339.25..342.25 x 434.5..437.5 x 0..11
 leg[front_left]              oak_45_sq      581 x 45 x 45              25..70               -581..0              25..70               up/right/back
     cut pocket 70 x 6.333333 depth 27 on width end: where apron_front meets it, local 491..581 x 20..45 x 5..24
     cut pocket 70 x 6.333333 depth 27 on thickness end: where apron_left meets it, local 491..581 x 5..24 x 20..45
@@ -40,42 +44,66 @@ apron_right                  oak_19         410 x 90 x 19              451..470 
     cut tenon 25 x 70 x 6.333333 on length start: end toward leg[front_right]
     cut tenon 25 x 70 x 6.333333 on length end: end toward leg[back_right]
 cleat_front                  oak_19         360 x 30 x 19              70..430              -19..0               49..79               right/back/up
-    cut drill 3 x diameter 4.5 depth through on thickness end: where top meets it, local 0..360 x 0..30 x 19..19
+    cut drill 1 x diameter 4.5 depth through on thickness end: where top_screws's screw meets it, local 87.75..90.75 x 13.5..16.5 x 0..19
+    cut drill 1 x diameter 4.5 depth through on thickness end: where top_screws's screw meets it, local 178.5..181.5 x 13.5..16.5 x 0..19
+    cut drill 1 x diameter 4.5 depth through on thickness end: where top_screws's screw meets it, local 269.25..272.25 x 13.5..16.5 x 0..19
 cleat_back                   oak_19         360 x 30 x 19              70..430              -19..0               421..451             right/front/up
-    cut drill 3 x diameter 4.5 depth through on thickness end: where top meets it, local 0..360 x 0..30 x 19..19
+    cut drill 1 x diameter 4.5 depth through on thickness end: where top_screws's screw meets it, local 87.75..90.75 x 13.5..16.5 x 0..19
+    cut drill 1 x diameter 4.5 depth through on thickness end: where top_screws's screw meets it, local 178.5..181.5 x 13.5..16.5 x 0..19
+    cut drill 1 x diameter 4.5 depth through on thickness end: where top_screws's screw meets it, local 269.25..272.25 x 13.5..16.5 x 0..19
 stretcher_front              oak_19         410 x 50 x 19              70..430              -481..-431           30..49               right/up/back
     drawn 360 x 50 x 19, starting 25 x 0 x 0 into the cut size
     cut tenon 25 x 30 x 6.333333 on length start: end toward leg[front_left]
     cut tenon 25 x 30 x 6.333333 on length end: end toward leg[front_right]
-    cut drill 2 x diameter 3 depth 21 on width end: where slat[0] meets it, local 25..85 x 50..50 x 0..19
-    cut drill 2 x diameter 3 depth 21 on width end: where slat[1] meets it, local 100..160 x 50..50 x 0..19
-    cut drill 2 x diameter 3 depth 21 on width end: where slat[2] meets it, local 175..235 x 50..50 x 0..19
-    cut drill 2 x diameter 3 depth 21 on width end: where slat[3] meets it, local 250..310 x 50..50 x 0..19
-    cut drill 2 x diameter 3 depth 21 on width end: where slat[4] meets it, local 325..385 x 50..50 x 0..19
+    cut drill 1 x diameter 3 depth 21 on width end: where slat_screws's screw meets it, local 43..46 x 29..50 x 8..11
+    cut drill 1 x diameter 3 depth 21 on width end: where slat_screws's screw meets it, local 64..67 x 29..50 x 8..11
+    cut drill 1 x diameter 3 depth 21 on width end: where slat_screws's screw meets it, local 118..121 x 29..50 x 8..11
+    cut drill 1 x diameter 3 depth 21 on width end: where slat_screws's screw meets it, local 139..142 x 29..50 x 8..11
+    cut drill 1 x diameter 3 depth 21 on width end: where slat_screws's screw meets it, local 193..196 x 29..50 x 8..11
+    cut drill 1 x diameter 3 depth 21 on width end: where slat_screws's screw meets it, local 214..217 x 29..50 x 8..11
+    cut drill 1 x diameter 3 depth 21 on width end: where slat_screws's screw meets it, local 268..271 x 29..50 x 8..11
+    cut drill 1 x diameter 3 depth 21 on width end: where slat_screws's screw meets it, local 289..292 x 29..50 x 8..11
+    cut drill 1 x diameter 3 depth 21 on width end: where slat_screws's screw meets it, local 343..346 x 29..50 x 8..11
+    cut drill 1 x diameter 3 depth 21 on width end: where slat_screws's screw meets it, local 364..367 x 29..50 x 8..11
 stretcher_back               oak_19         410 x 50 x 19              70..430              -481..-431           451..470             right/up/front
     drawn 360 x 50 x 19, starting 25 x 0 x 0 into the cut size
     cut tenon 25 x 30 x 6.333333 on length start: end toward leg[back_left]
     cut tenon 25 x 30 x 6.333333 on length end: end toward leg[back_right]
-    cut drill 2 x diameter 3 depth 21 on width end: where slat[0] meets it, local 25..85 x 50..50 x 0..19
-    cut drill 2 x diameter 3 depth 21 on width end: where slat[1] meets it, local 100..160 x 50..50 x 0..19
-    cut drill 2 x diameter 3 depth 21 on width end: where slat[2] meets it, local 175..235 x 50..50 x 0..19
-    cut drill 2 x diameter 3 depth 21 on width end: where slat[3] meets it, local 250..310 x 50..50 x 0..19
-    cut drill 2 x diameter 3 depth 21 on width end: where slat[4] meets it, local 325..385 x 50..50 x 0..19
+    cut drill 1 x diameter 3 depth 21 on width end: where slat_screws's screw meets it, local 43..46 x 29..50 x 8..11
+    cut drill 1 x diameter 3 depth 21 on width end: where slat_screws's screw meets it, local 64..67 x 29..50 x 8..11
+    cut drill 1 x diameter 3 depth 21 on width end: where slat_screws's screw meets it, local 118..121 x 29..50 x 8..11
+    cut drill 1 x diameter 3 depth 21 on width end: where slat_screws's screw meets it, local 139..142 x 29..50 x 8..11
+    cut drill 1 x diameter 3 depth 21 on width end: where slat_screws's screw meets it, local 193..196 x 29..50 x 8..11
+    cut drill 1 x diameter 3 depth 21 on width end: where slat_screws's screw meets it, local 214..217 x 29..50 x 8..11
+    cut drill 1 x diameter 3 depth 21 on width end: where slat_screws's screw meets it, local 268..271 x 29..50 x 8..11
+    cut drill 1 x diameter 3 depth 21 on width end: where slat_screws's screw meets it, local 289..292 x 29..50 x 8..11
+    cut drill 1 x diameter 3 depth 21 on width end: where slat_screws's screw meets it, local 343..346 x 29..50 x 8..11
+    cut drill 1 x diameter 3 depth 21 on width end: where slat_screws's screw meets it, local 364..367 x 29..50 x 8..11
 slat[0]                      oak_19         440 x 60 x 19              70..130              -431..-412           30..470              back/right/up
-    cut drill 2 x diameter 4.5 depth through on thickness start: where stretcher_front meets it, local 0..19 x 0..60 x 0..0
-    cut drill 2 x diameter 4.5 depth through on thickness start: where stretcher_back meets it, local 421..440 x 0..60 x 0..0
+    cut drill 1 x diameter 4.5 depth through on thickness start: where slat_screws's screw meets it, local 8..11 x 18..21 x 0..19
+    cut drill 1 x diameter 4.5 depth through on thickness start: where slat_screws's screw meets it, local 8..11 x 39..42 x 0..19
+    cut drill 1 x diameter 4.5 depth through on thickness start: where slat_screws's screw meets it, local 429..432 x 18..21 x 0..19
+    cut drill 1 x diameter 4.5 depth through on thickness start: where slat_screws's screw meets it, local 429..432 x 39..42 x 0..19
 slat[1]                      oak_19         440 x 60 x 19              145..205             -431..-412           30..470              back/right/up
-    cut drill 2 x diameter 4.5 depth through on thickness start: where stretcher_front meets it, local 0..19 x 0..60 x 0..0
-    cut drill 2 x diameter 4.5 depth through on thickness start: where stretcher_back meets it, local 421..440 x 0..60 x 0..0
+    cut drill 1 x diameter 4.5 depth through on thickness start: where slat_screws's screw meets it, local 8..11 x 18..21 x 0..19
+    cut drill 1 x diameter 4.5 depth through on thickness start: where slat_screws's screw meets it, local 8..11 x 39..42 x 0..19
+    cut drill 1 x diameter 4.5 depth through on thickness start: where slat_screws's screw meets it, local 429..432 x 18..21 x 0..19
+    cut drill 1 x diameter 4.5 depth through on thickness start: where slat_screws's screw meets it, local 429..432 x 39..42 x 0..19
 slat[2]                      oak_19         440 x 60 x 19              220..280             -431..-412           30..470              back/right/up
-    cut drill 2 x diameter 4.5 depth through on thickness start: where stretcher_front meets it, local 0..19 x 0..60 x 0..0
-    cut drill 2 x diameter 4.5 depth through on thickness start: where stretcher_back meets it, local 421..440 x 0..60 x 0..0
+    cut drill 1 x diameter 4.5 depth through on thickness start: where slat_screws's screw meets it, local 8..11 x 18..21 x 0..19
+    cut drill 1 x diameter 4.5 depth through on thickness start: where slat_screws's screw meets it, local 8..11 x 39..42 x 0..19
+    cut drill 1 x diameter 4.5 depth through on thickness start: where slat_screws's screw meets it, local 429..432 x 18..21 x 0..19
+    cut drill 1 x diameter 4.5 depth through on thickness start: where slat_screws's screw meets it, local 429..432 x 39..42 x 0..19
 slat[3]                      oak_19         440 x 60 x 19              295..355             -431..-412           30..470              back/right/up
-    cut drill 2 x diameter 4.5 depth through on thickness start: where stretcher_front meets it, local 0..19 x 0..60 x 0..0
-    cut drill 2 x diameter 4.5 depth through on thickness start: where stretcher_back meets it, local 421..440 x 0..60 x 0..0
+    cut drill 1 x diameter 4.5 depth through on thickness start: where slat_screws's screw meets it, local 8..11 x 18..21 x 0..19
+    cut drill 1 x diameter 4.5 depth through on thickness start: where slat_screws's screw meets it, local 8..11 x 39..42 x 0..19
+    cut drill 1 x diameter 4.5 depth through on thickness start: where slat_screws's screw meets it, local 429..432 x 18..21 x 0..19
+    cut drill 1 x diameter 4.5 depth through on thickness start: where slat_screws's screw meets it, local 429..432 x 39..42 x 0..19
 slat[4]                      oak_19         440 x 60 x 19              370..430             -431..-412           30..470              back/right/up
-    cut drill 2 x diameter 4.5 depth through on thickness start: where stretcher_front meets it, local 0..19 x 0..60 x 0..0
-    cut drill 2 x diameter 4.5 depth through on thickness start: where stretcher_back meets it, local 421..440 x 0..60 x 0..0
+    cut drill 1 x diameter 4.5 depth through on thickness start: where slat_screws's screw meets it, local 8..11 x 18..21 x 0..19
+    cut drill 1 x diameter 4.5 depth through on thickness start: where slat_screws's screw meets it, local 8..11 x 39..42 x 0..19
+    cut drill 1 x diameter 4.5 depth through on thickness start: where slat_screws's screw meets it, local 429..432 x 18..21 x 0..19
+    cut drill 1 x diameter 4.5 depth through on thickness start: where slat_screws's screw meets it, local 429..432 x 39..42 x 0..19
 
 HARDWARE (0)
 
@@ -108,18 +136,44 @@ stretcher_tenons             mortise_tenon
         adds 25 to the length end of stretcher_back
 top_screws                   screw, no glue
     piece: cleat_front, into: top (butt across up)
+        screw cylinder up diameter 3, up -19..11, centre across 159.25 x deep 64
+        screw cylinder up diameter 3, up -19..11, centre across 250 x deep 64
+        screw cylinder up diameter 3, up -19..11, centre across 340.75 x deep 64
     piece: cleat_back, into: top (butt across up)
+        screw cylinder up diameter 3, up -19..11, centre across 159.25 x deep 436
+        screw cylinder up diameter 3, up -19..11, centre across 250 x deep 436
+        screw cylinder up diameter 3, up -19..11, centre across 340.75 x deep 436
 slat_screws                  screw
     piece: slat[0], into: stretcher_front (butt across up)
+        screw cylinder up diameter 3, up -452..-412, centre across 89.5 x deep 39.5
+        screw cylinder up diameter 3, up -452..-412, centre across 110.5 x deep 39.5
     piece: slat[0], into: stretcher_back (butt across up)
+        screw cylinder up diameter 3, up -452..-412, centre across 89.5 x deep 460.5
+        screw cylinder up diameter 3, up -452..-412, centre across 110.5 x deep 460.5
     piece: slat[1], into: stretcher_front (butt across up)
+        screw cylinder up diameter 3, up -452..-412, centre across 164.5 x deep 39.5
+        screw cylinder up diameter 3, up -452..-412, centre across 185.5 x deep 39.5
     piece: slat[1], into: stretcher_back (butt across up)
+        screw cylinder up diameter 3, up -452..-412, centre across 164.5 x deep 460.5
+        screw cylinder up diameter 3, up -452..-412, centre across 185.5 x deep 460.5
     piece: slat[2], into: stretcher_front (butt across up)
+        screw cylinder up diameter 3, up -452..-412, centre across 239.5 x deep 39.5
+        screw cylinder up diameter 3, up -452..-412, centre across 260.5 x deep 39.5
     piece: slat[2], into: stretcher_back (butt across up)
+        screw cylinder up diameter 3, up -452..-412, centre across 239.5 x deep 460.5
+        screw cylinder up diameter 3, up -452..-412, centre across 260.5 x deep 460.5
     piece: slat[3], into: stretcher_front (butt across up)
+        screw cylinder up diameter 3, up -452..-412, centre across 314.5 x deep 39.5
+        screw cylinder up diameter 3, up -452..-412, centre across 335.5 x deep 39.5
     piece: slat[3], into: stretcher_back (butt across up)
+        screw cylinder up diameter 3, up -452..-412, centre across 314.5 x deep 460.5
+        screw cylinder up diameter 3, up -452..-412, centre across 335.5 x deep 460.5
     piece: slat[4], into: stretcher_front (butt across up)
+        screw cylinder up diameter 3, up -452..-412, centre across 389.5 x deep 39.5
+        screw cylinder up diameter 3, up -452..-412, centre across 410.5 x deep 39.5
     piece: slat[4], into: stretcher_back (butt across up)
+        screw cylinder up diameter 3, up -452..-412, centre across 389.5 x deep 460.5
+        screw cylinder up diameter 3, up -452..-412, centre across 410.5 x deep 460.5
 
 FASTENERS
 top_screws                   6 x wood_screw (4 x 30)

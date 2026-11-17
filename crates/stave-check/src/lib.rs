@@ -72,8 +72,8 @@ use stave_lang::ast::Span;
 use stave_lang::{Code, Diagnostic, FileId, Label, Severity};
 use stave_model::Model;
 use stave_model::solved::{
-    AnchorItem, AssemblyId, BodyCarrier, BodyRef, CutSource, FixedSpacing, HardwareId, MemberIndex,
-    PartId, PartOrigin, PoseValue, Rules, SolvedDesign, WorldBox,
+    AnchorItem, AssemblyId, BodyCarrier, BodyOwner, BodyRef, CutSource, FixedSpacing, HardwareId,
+    MemberIndex, PartId, PartOrigin, PoseValue, Rules, SolvedDesign, WorldBox,
 };
 
 use crate::names::{length_text, pose_text};
@@ -114,21 +114,38 @@ pub struct Contact {
 }
 
 impl Contact {
-    fn add_item(&mut self, item: Item) {
-        let item = match item {
-            Item::Part(part) => ContactItem::Part(part),
-            Item::Member(member) => ContactItem::Hardware(member.hardware),
+    /// Adds what an item is about: a part, a piece of hardware, or for a
+    /// joint's member the parts of its pair.
+    fn add_item(&mut self, design: &SolvedDesign, item: Item) {
+        let items: Vec<ContactItem> = match item {
+            Item::Part(part) => vec![ContactItem::Part(part)],
+            Item::Member(member) => match member.owner {
+                BodyOwner::Hardware { hardware } => vec![ContactItem::Hardware(hardware)],
+                BodyOwner::Joint { joint, pair } => design
+                    .joints
+                    .get(joint.index())
+                    .and_then(|joint| joint.pairs.get(pair))
+                    .map(|pair| {
+                        pair.roles
+                            .iter()
+                            .map(|role| ContactItem::Part(role.part))
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+            },
         };
-        if !self.items.contains(&item) {
-            self.items.push(item);
+        for item in items {
+            if !self.items.contains(&item) {
+                self.items.push(item);
+            }
         }
     }
 
     /// A contact about some items and the wood they share.
-    fn of(items: &[Item], found: &[Overlap]) -> Contact {
+    fn of(design: &SolvedDesign, items: &[Item], found: &[Overlap]) -> Contact {
         let mut contact = Contact::default();
         for item in items {
-            contact.add_item(*item);
+            contact.add_item(design, *item);
         }
         contact.regions = found.iter().map(|o| o.region).collect();
         contact
@@ -168,10 +185,11 @@ pub fn check_with_contacts(
 }
 
 /// Something that takes up room: a part, or a member of a piece of
-/// hardware (grammar, "One collision model").
+/// hardware or of a joint pair (grammar, "One collision model").
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 enum Item {
-    /// A member of a piece of hardware: all its shapes.
+    /// A member of a piece of hardware or of a joint pair: all its shapes
+    /// (for a joint's member, every copy of it).
     Member(BodyRef),
     /// A part.
     Part(PartId),
@@ -181,7 +199,15 @@ impl Item {
     /// The piece of hardware a member belongs to.
     fn hardware(self) -> Option<HardwareId> {
         match self {
-            Item::Member(member) => Some(member.hardware),
+            Item::Member(member) => member.hardware(),
+            Item::Part(_) => None,
+        }
+    }
+
+    /// What a member belongs to.
+    fn owner(self) -> Option<BodyOwner> {
+        match self {
+            Item::Member(member) => Some(member.owner),
             Item::Part(_) => None,
         }
     }
@@ -283,6 +309,28 @@ impl<'a> Checker<'a> {
                 }
             }
         }
+        // Every joint's members (a dowel's pins), where its kind laid them
+        // out: they move with the pair's first part.
+        for joint in &design.joints {
+            for pair in &joint.pairs {
+                for member in &pair.members {
+                    let assembly = match member.carrier {
+                        BodyCarrier::Part(part) => design.part(part).and_then(|p| p.assembly),
+                        BodyCarrier::Region(_) | BodyCarrier::Link(_) => joint.assembly,
+                    };
+                    let world = WorldSolid::of_body(member);
+                    if let Some(bounds) = world.bounds() {
+                        bodies.push(Body {
+                            item: Item::Member(member.id),
+                            solid: world,
+                            bounds,
+                            chain: chain_of(assembly),
+                            link: None,
+                        });
+                    }
+                }
+            }
+        }
         let mut paths = Vec::with_capacity(design.assemblies.len());
         let mut broken = Vec::new();
         for assembly in &design.assemblies {
@@ -375,22 +423,59 @@ impl<'a> Checker<'a> {
         self.diagnostics.push((diagnostic, contact));
     }
 
-    /// A part's name, or a member's as `<hardware>'s <member>`.
+    /// A member's body, wherever it is.
+    pub(crate) fn member(&self, member: BodyRef) -> Option<&stave_model::solved::Body> {
+        let members = match member.owner {
+            BodyOwner::Hardware { hardware } => {
+                &self.design.hardware.get(hardware.index())?.members
+            }
+            BodyOwner::Joint { joint, pair } => {
+                &self
+                    .design
+                    .joints
+                    .get(joint.index())?
+                    .pairs
+                    .get(pair)?
+                    .members
+            }
+        };
+        members.iter().find(|m| m.id == member)
+    }
+
+    /// A part's name, or a member's as `<hardware>'s <member>` or
+    /// `<joint>'s <member>` (with the pair's parts, when the joint has
+    /// more than one pair: `top_dowels's pin between side_l and top`).
     fn item_name(&self, item: Item) -> String {
         match item {
             Item::Part(part) => self.part_name(part),
             Item::Member(member) => {
-                let hardware = self.design.hardware.get(member.hardware.index());
-                let name = hardware
-                    .and_then(|h| h.members.iter().find(|m| m.id == member))
+                let name = self
+                    .member(member)
                     .map(|m| m.name.as_str())
                     .unwrap_or_default();
-                format!("{}'s {name}", self.hardware_name(member.hardware))
+                match member.owner {
+                    BodyOwner::Hardware { hardware } => {
+                        format!("{}'s {name}", self.hardware_name(hardware))
+                    }
+                    BodyOwner::Joint { joint, pair } => {
+                        let found = self.design.joints.get(joint.index());
+                        let between = found
+                            .filter(|joint| joint.pairs.len() > 1)
+                            .and_then(|joint| joint.pairs.get(pair))
+                            .map(|pair| {
+                                let parts: Vec<String> =
+                                    pair.roles.iter().map(|r| self.part_name(r.part)).collect();
+                                format!(" between {}", names::and_list(&parts))
+                            })
+                            .unwrap_or_default();
+                        format!("{}'s {name}{between}", self.joint_name(joint))
+                    }
+                }
             }
         }
     }
 
-    fn hardware_name(&self, hardware: HardwareId) -> String {
+    pub(crate) fn hardware_name(&self, hardware: HardwareId) -> String {
         self.design
             .hardware
             .get(hardware.index())
@@ -425,7 +510,7 @@ impl<'a> Checker<'a> {
             .unwrap_or_default()
     }
 
-    fn joint_name(&self, joint: stave_model::solved::JointId) -> String {
+    pub(crate) fn joint_name(&self, joint: stave_model::solved::JointId) -> String {
         self.design
             .joints
             .get(joint.index())
@@ -469,7 +554,7 @@ impl<'a> Checker<'a> {
                 "{owner}: {} is drawn without this cut until it is fixed",
                 self.part_name(part)
             );
-            self.next_contact = Some(Contact::of(&[Item::Part(part)], &[]));
+            self.next_contact = Some(Contact::of(self.design, &[Item::Part(part)], &[]));
             self.report(
                 Severity::Error,
                 Code::TypeMismatch,
@@ -523,7 +608,7 @@ impl<'a> Checker<'a> {
                 )
             };
             let items: Vec<Item> = parts.iter().map(|p| Item::Part(*p)).collect();
-            self.next_contact = Some(Contact::of(&items, &[]));
+            self.next_contact = Some(Contact::of(self.design, &items, &[]));
             self.report(
                 Severity::Warning,
                 Code::NotSupported,
@@ -593,7 +678,7 @@ impl<'a> Checker<'a> {
         }
         for (joint, part) in problems {
             let (joint_name, part_name) = (self.joint_name(joint), self.part_name(part));
-            self.next_contact = Some(Contact::of(&[Item::Part(part)], &[]));
+            self.next_contact = Some(Contact::of(self.design, &[Item::Part(part)], &[]));
             self.report(
                 Severity::Error,
                 Code::NoContact,
@@ -641,7 +726,7 @@ impl<'a> Checker<'a> {
                     "use fewer elements, or make the space they are spaced in larger".to_owned()
                 }
             };
-            let contact = Contact::of(&[Item::Part(overrun.part)], &[]);
+            let contact = Contact::of(self.design, &[Item::Part(overrun.part)], &[]);
             self.diagnostics.push((
                 Diagnostic {
                     severity: Severity::Error,
@@ -686,7 +771,7 @@ impl<'a> Checker<'a> {
         {
             return true;
         }
-        if let (Some(x), Some(y)) = (a.hardware(), b.hardware()) {
+        if let (Some(x), Some(y)) = (a.owner(), b.owner()) {
             return x == y;
         }
         if let (Item::Part(x), Item::Part(y)) = (a, b) {
@@ -765,12 +850,13 @@ impl<'a> Checker<'a> {
                 Some((joint, _)) => self.joint_place(joint),
                 None => self.part_place(x.max(y)),
             },
-            (Item::Member(member), _) | (_, Item::Member(member)) => {
-                self.hardware_place(member.hardware)
-            }
+            (Item::Member(member), _) | (_, Item::Member(member)) => match member.owner {
+                BodyOwner::Hardware { hardware } => self.hardware_place(hardware),
+                BodyOwner::Joint { joint, .. } => self.joint_place(joint),
+            },
         };
         let explanation = explain::overlap(self, a, b, found);
-        self.next_contact = Some(Contact::of(&[a, b], found));
+        self.next_contact = Some(Contact::of(self.design, &[a, b], found));
         self.report(
             Severity::Error,
             Code::Overlap,

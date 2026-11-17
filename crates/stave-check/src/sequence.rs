@@ -136,6 +136,7 @@ impl Checker<'_> {
             ),
         };
         self.next_contact = Some(crate::Contact::of(
+            self.design,
             &[Item::Part(step.part), Item::Part(other)],
             &[],
         ));

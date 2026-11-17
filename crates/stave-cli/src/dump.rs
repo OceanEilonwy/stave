@@ -11,8 +11,8 @@ use std::fmt::Write as _;
 use stave_lang::placement::Axis;
 use stave_lang::units::Length;
 use stave_model::solved::{
-    Contact, CutKind, CutPlace, Depth, End, HardwareBase, HardwareData, LocalFace, Motion,
-    Orientation, Point, PoseValue, Shape, SolvedDesign, WorldBox,
+    BodyOwner, BodyRef, Contact, CutKind, CutPlace, Depth, End, HardwareBase, HardwareData,
+    LocalFace, MemberShape, Motion, Orientation, Point, PoseValue, Shape, SolvedDesign, WorldBox,
 };
 
 /// A length in millimetres without the unit: `19`, `1104.75`.
@@ -145,6 +145,66 @@ fn cut_kind(kind: &CutKind) -> String {
 }
 
 /// The table.
+/// What a member is called in a cut's place: `<hardware>'s <member>` or
+/// `<joint>'s <member>`.
+fn member_name(design: &SolvedDesign, member: BodyRef) -> String {
+    let (owner, members) = match member.owner {
+        BodyOwner::Hardware { hardware } => match design.hardware.get(hardware.index()) {
+            Some(hardware) => (hardware.name.as_str(), &hardware.members),
+            None => return String::new(),
+        },
+        BodyOwner::Joint { joint, pair } => {
+            match design
+                .joints
+                .get(joint.index())
+                .and_then(|j| Some((j.name.as_str(), &j.pairs.get(pair)?.members)))
+            {
+                Some(found) => found,
+                None => return String::new(),
+            }
+        }
+    };
+    let body = members
+        .iter()
+        .find(|m| m.id == member)
+        .map_or("", |m| m.name.as_str());
+    format!("{owner}'s {body}")
+}
+
+/// One shape of a member, in world coordinates.
+fn member_shape(shape: &MemberShape) -> String {
+    match shape {
+        MemberShape::Box(bounds) => format!("box {}", extent(bounds)),
+        MemberShape::Cylinder {
+            axis,
+            centre,
+            diameter,
+            start,
+            end,
+        } => {
+            let [first, second] = axis.others();
+            format!(
+                "cylinder {} diameter {}, {} {}..{}, centre {} {} x {} {}",
+                axis.word(),
+                mm(*diameter),
+                axis.word(),
+                mm(*start),
+                mm(*end),
+                first.word(),
+                mm(centre[0]),
+                second.word(),
+                mm(centre[1])
+            )
+        }
+        MemberShape::Prism {
+            axis, start, end, ..
+        }
+        | MemberShape::Bar {
+            axis, start, end, ..
+        } => format!("prism {} {}..{}", axis.word(), mm(*start), mm(*end)),
+    }
+}
+
 pub fn table(design: &SolvedDesign) -> String {
     let mut out = String::new();
     let name = |id: stave_model::ids::PartId| {
@@ -223,15 +283,19 @@ pub fn table(design: &SolvedDesign) -> String {
                     mm(footprint.max.thickness)
                 ),
                 CutPlace::Member {
-                    hardware,
+                    owner,
+                    body,
                     footprint,
                     ..
                 } => format!(
                     "where {} meets it, local {}..{} x {}..{} x {}..{}",
-                    design
-                        .hardware
-                        .get(hardware.index())
-                        .map_or("", |h| h.name.as_str()),
+                    member_name(
+                        design,
+                        BodyRef {
+                            owner: *owner,
+                            body: *body
+                        }
+                    ),
                     mm(footprint.min.length),
                     mm(footprint.max.length),
                     mm(footprint.min.width),
@@ -353,6 +417,11 @@ pub fn table(design: &SolvedDesign) -> String {
             }
             for made in &pair.made_parts {
                 let _ = writeln!(out, "        makes {}", name(*made));
+            }
+            for member in &pair.members {
+                for shape in member.shapes() {
+                    let _ = writeln!(out, "        {} {}", member.name, member_shape(shape));
+                }
             }
         }
         for part in &joint.unmatched {

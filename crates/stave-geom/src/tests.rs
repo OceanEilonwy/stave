@@ -2,8 +2,8 @@ use glam::Vec3;
 use stave_lang::placement::{Axis, Direction, PartAxis};
 use stave_lang::units::Length;
 use stave_model::solved::{
-    Body, BodyCarrier, BodyRef, End, HardwareId, LocalFace, MemberShape, Orientation, Part, PartId,
-    PartOrigin, Point, Pose, Shape, Size3, Station, Stock, WorldBox,
+    Body, BodyCarrier, BodyOwner, BodyRef, End, HardwareId, LocalFace, MemberShape, Orientation,
+    Part, PartId, PartOrigin, Point, Pose, Shape, Size3, Station, Stock, WorldBox,
 };
 use stave_schema::species::Species;
 use stave_schema::words::{Grain, Measure, StockForm};
@@ -273,7 +273,9 @@ fn a_dowel_is_a_cylinder() {
 fn knob_member(shapes: Vec<MemberShape>) -> Body {
     Body::new(
         BodyRef {
-            hardware: HardwareId::from_usize(0),
+            owner: BodyOwner::Hardware {
+                hardware: HardwareId::from_usize(0),
+            },
             body: stave_model::solved::BodyId::new(0).unwrap(),
         },
         "knob".into(),
@@ -445,9 +447,15 @@ fn a_dado_outlines_only_where_the_surface_bends() {
     let dado = hardware_cut(
         face(PartAxis::Thickness, End::End),
         CutPlace::Member {
-            hardware: HardwareId::from_usize(0),
+            owner: BodyOwner::Hardware {
+                hardware: HardwareId::from_usize(0),
+            },
             body: member(),
             footprint: LocalBox {
+                min: local_point(40, 0, 14),
+                max: local_point(60, 50, 20),
+            },
+            shape: LocalBox {
                 min: local_point(40, 0, 14),
                 max: local_point(60, 50, 20),
             },
@@ -484,9 +492,15 @@ fn a_tenon_and_a_mortise_keep_their_volume() {
     let pocket = hardware_cut(
         face(PartAxis::Thickness, End::End),
         CutPlace::Member {
-            hardware: HardwareId::from_usize(0),
+            owner: BodyOwner::Hardware {
+                hardware: HardwareId::from_usize(0),
+            },
             body: member(),
             footprint: LocalBox {
+                min: local_point(10, 10, 0),
+                max: local_point(40, 40, 20),
+            },
+            shape: LocalBox {
                 min: local_point(10, 10, 0),
                 max: local_point(40, 40, 20),
             },
@@ -512,11 +526,17 @@ fn a_hole_opens_in_its_face() {
     board.cuts = vec![hardware_cut(
         face(PartAxis::Thickness, End::End),
         CutPlace::Member {
-            hardware: HardwareId::from_usize(0),
+            owner: BodyOwner::Hardware {
+                hardware: HardwareId::from_usize(0),
+            },
             body: member(),
             // The hole's shape: 10mm across, centred at (50, 25) on the
             // top face.
             footprint: LocalBox {
+                min: local_point(45, 20, 12),
+                max: local_point(55, 30, 20),
+            },
+            shape: LocalBox {
                 min: local_point(45, 20, 12),
                 max: local_point(55, 30, 20),
             },

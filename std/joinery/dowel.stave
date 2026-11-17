@@ -14,7 +14,7 @@ kind dowel : joint {
   /// a hole splits when the glued pin swells.
   param wall = 4mm
 
-  // The holes are centred across the patch where the parts touch and
+  // The pins are centred across the patch where the parts touch and
   // spread evenly along it, so the patch must be a hole and a wall each
   // side wide, and long enough for every hole with a wall between and
   // beyond them.
@@ -24,14 +24,16 @@ kind dowel : joint {
   require seat_long      : contact(piece, into).length >= count * (diameter + wall) + wall "too many dowels for this joint"
 
   insert: [push(piece, along: length)]
-  uses:   dowel_pin(diameter: diameter, length: 2 * depth, count: count)
 
-  cut end(piece, facing: into) {
-    drill(diameter: diameter, depth: depth, count: count)
+  /// The pins: wooden dowels glued half into each part, in matching holes.
+  member pin : dowel_pin(diameter: diameter, length: 2 * depth) {
+    on:     contact(piece, into)
+    count:  count
+    spaced: evenly
+    shape:  cylinder(diameter: diameter, depth: -depth..depth)
   }
-  cut crossing(into, piece) {
-    drill(diameter: diameter, depth: depth, count: count)
-  }
+  cut crossing(piece, pin) { drill(diameter: diameter, depth: depth) }
+  cut crossing(into, pin) { drill(diameter: diameter, depth: depth) }
 
   note: "Drill both sets of holes from the same reference edge so they line up"
 }

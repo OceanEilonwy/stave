@@ -1,0 +1,47 @@
+// expect: error[overlap] shelf_pegs's peg and side overlap
+stave 1
+
+// A home-made joint kind whose pegs are longer than the holes it drills
+// for them: each peg goes 5mm past the bottom of its hole in the side.
+
+project "Pegs longer than their holes" {
+  units: mm
+}
+
+stock oak_19 { species: white_oak, form: solid, thickness: 19mm }
+
+kind peg_joint : joint {
+  param diameter = 8mm
+  param depth    = 12mm
+
+  insert: [push(piece, along: length)]
+
+  /// The pegs: one in each end of the shelf.
+  member peg {
+    on:    contact(piece, into)
+    shape: cylinder(diameter: diameter, depth: -depth..depth + 5mm)
+  }
+  cut crossing(piece, peg) { drill(diameter: diameter, depth: depth) }
+  cut crossing(into, peg) { drill(diameter: diameter, depth: depth) }
+}
+
+part side : oak_19 {
+  length: 600mm
+  width:  300mm
+  place {
+    ground
+  }
+}
+
+part shelf : oak_19 {
+  length: 400mm
+  width:  300mm
+  place {
+    orient(length: up, width: back)
+    against(side.top)
+    flush(side.left, inset: 100mm)
+    flush(side.front)
+  }
+}
+
+joint shelf_pegs : peg_joint(shelf, into: side)

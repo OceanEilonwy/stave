@@ -44,8 +44,8 @@ use stave_lang::ast::CutOperation;
 use stave_lang::placement::PartAxis;
 use stave_lang::units::{Angle, Length};
 use stave_model::solved::{
-    Boards, Cut, CutKind, CutPlace, Depth, End, LocalBox, LocalFace, Mark, Part, Shape, Size3,
-    Slope, SolvedDesign,
+    Boards, Cut, CutKind, CutPlace, Depth, End, LocalFace, Mark, Part, Shape, Size3, Slope,
+    SolvedDesign,
 };
 
 pub use crate::prism::{ConvexPolygon, DepthRange, Point2, Polygon, PolygonError, Prism};
@@ -1028,16 +1028,6 @@ fn depth_range(size: Size3, face: LocalFace, depth: Depth) -> (Length, Length) {
     }
 }
 
-/// The footprint of a place, if it has one.
-fn footprint(place: &CutPlace) -> Option<&LocalBox> {
-    match place {
-        CutPlace::Crossing { footprint, .. } | CutPlace::Member { footprint, .. } => {
-            Some(footprint)
-        }
-        CutPlace::End { .. } | CutPlace::Side { .. } => None,
-    }
-}
-
 fn local_get(point: &stave_model::solved::LocalPoint, axis: PartAxis) -> Length {
     match axis {
         PartAxis::Length => point.length,
@@ -1046,14 +1036,18 @@ fn local_get(point: &stave_model::solved::LocalPoint, axis: PartAxis) -> Length 
     }
 }
 
-/// The extent of a cut's place along an axis of the face: the footprint's,
-/// or the whole part's.
+/// The extent of a cut's place along an axis of the face: a member's
+/// whole shape (so a member's holes in two parts share their centres even
+/// where the shape runs past the edge of one), the footprint's, or the
+/// whole part's.
 fn face_extent(part: &Part, place: &CutPlace, axis: PartAxis) -> (Length, Length) {
-    match footprint(place) {
-        Some(footprint) => (
-            local_get(&footprint.min, axis),
-            local_get(&footprint.max, axis),
-        ),
+    let extent = match place {
+        CutPlace::Member { shape, .. } => Some(shape),
+        CutPlace::Crossing { footprint, .. } => Some(footprint),
+        CutPlace::End { .. } | CutPlace::Side { .. } => None,
+    };
+    match extent {
+        Some(extent) => (local_get(&extent.min, axis), local_get(&extent.max, axis)),
         None => (Length::ZERO, part.cut.get(axis)),
     }
 }

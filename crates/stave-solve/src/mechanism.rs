@@ -1185,10 +1185,12 @@ impl Solver<'_> {
                 Some(KindMember {
                     body: BodyId::new(index)?,
                     name: body.name.as_str().to_owned(),
-                    with: match body.with {
-                        Carrier::Role(role) => MemberWith::Role(role),
-                        Carrier::Body(other) => MemberWith::Member(other),
+                    with: match &body.with {
+                        Carrier::Role(role) => MemberWith::Role(*role),
+                        Carrier::Body(other) => MemberWith::Member(*other),
                         Carrier::Mechanism => MemberWith::Placed,
+                        // A joint's member: never in a hardware kind.
+                        Carrier::Contact(_) => return None,
                     },
                 })
             })

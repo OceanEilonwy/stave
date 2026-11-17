@@ -18,14 +18,14 @@ front                        walnut_12      288 x 110 x 12             12..288  
 back                         walnut_12      288 x 110 x 12             12..288              0..110               188..200             right/up/front
     drawn 276 x 110 x 12, starting 6 x 0 x 0 into the cut size
     cut notch depth 6 on thickness end: where bottom meets it, local 0..288 x 6..12 x 6..12
-    cut notch depth 1.5 on width end: where lid.hinges[left] meets it, local 34..74 x 108.5..110 x 0..12
-    cut notch depth 1.5 on width end: where lid.hinges[right] meets it, local 214..254 x 108.5..110 x 0..12
+    cut notch depth 1.5 on width end: where lid.hinges[left]'s fixed_leaf meets it, local 34..74 x 108.5..110 x 0..12
+    cut notch depth 1.5 on width end: where lid.hinges[right]'s fixed_leaf meets it, local 214..254 x 108.5..110 x 0..12
 bottom                       ply_6          288 x 188 x 6              12..288              6..12                12..188              right/back/up
     drawn 276 x 176 x 6, starting 6 x 6 x 0 into the cut size
 lid.panel                    walnut_12      300 x 200 x 12             0..300               110..122             0..200               right/back/up
-    cut notch depth 1.5 on thickness start: where lid.hinges[left] meets it, local 40..80 x 188..200 x 0..1.5
-    cut notch depth 1.5 on thickness start: where lid.hinges[right] meets it, local 220..260 x 188..200 x 0..1.5
-    cut drill 1 x diameter 4 depth through on thickness end: where lid.lift_knob meets it, local 148..152 x 33..37 x 0..12
+    cut notch depth 1.5 on thickness start: where lid.hinges[left]'s leaf meets it, local 40..80 x 188..200 x 0..1.5
+    cut notch depth 1.5 on thickness start: where lid.hinges[right]'s leaf meets it, local 220..260 x 188..200 x 0..1.5
+    cut drill 1 x diameter 4 depth through on thickness end: where lid.lift_knob's screw meets it, local 148..152 x 33..37 x 0..12
 
 HARDWARE (3)
 lid.hinges[left]             butt_hinge       on lid.panel (bottom face)

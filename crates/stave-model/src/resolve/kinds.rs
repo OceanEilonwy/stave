@@ -89,6 +89,21 @@ pub(crate) fn made_parts(syntax: &ast::Kind) -> Vec<&ast::MadePart> {
 }
 
 /// Words joined for a sentence: `a, b and c`.
+/// `true` for `cut crossing(role, member) { ... }` where `member` is one
+/// of the kind's members with a body.
+fn is_member_cut(cut: &ast::Cut, members: &[&str]) -> bool {
+    cut.selector.head.as_str() == Selector::Crossing.word()
+        && cut
+            .selector
+            .args
+            .iter()
+            .filter(|arg| arg.name.is_none())
+            .nth(1)
+            .is_some_and(|arg| {
+                matches!(&arg.value.kind, ExprKind::Name(name) if members.contains(&name.as_str()))
+            })
+}
+
 fn and_list(words: &[&str]) -> String {
     match words {
         [] => String::new(),
@@ -165,6 +180,7 @@ impl Resolver<'_> {
         let mut hardware_cuts: Vec<&ast::Cut> = Vec::new();
         let mut adjusts: Vec<&ast::Adjust> = Vec::new();
         let mut hardware_uses = JointKindDef::default();
+        let mut joint_cuts: Vec<&ast::Cut> = Vec::new();
         for entry in &syntax.body.entries {
             match entry {
                 ast::KindEntry::Param(_) => {}
@@ -229,11 +245,9 @@ impl Resolver<'_> {
                     }
                 }
                 ast::KindEntry::Cut(cut) => match &mut joint {
-                    Some(joint) => {
-                        if let Some(lowered) = self.lower_cut(&cx, id, cut) {
-                            joint.cuts.push(lowered);
-                        }
-                    }
+                    // Lowered once the members are known: a cut on
+                    // crossing(role, member) is the member's.
+                    Some(_) => joint_cuts.push(cut),
                     None if mounted => hardware_cuts.push(cut),
                     None => self.error_help(
                         Code::UnknownField,
@@ -389,12 +403,31 @@ impl Resolver<'_> {
             }
         }
         let members = self.lower_members(&cx, base_kind, &written_members);
-        let bodies = if members_of(base_kind).is_empty() {
+        let bodies = if members_of(base_kind).is_empty() && base_kind != BaseKind::Joint {
             // Already reported: this kind has no members at all.
             None
         } else {
-            self.lower_bodies(&cx, &roles, &written_members)
+            self.lower_bodies(&cx, base_kind, &roles, &written_members)
         };
+        if let Some(joint) = &mut joint {
+            let body_names: Vec<&str> = written_members
+                .iter()
+                .filter(|member| member.node.body.is_some())
+                .map(|member| member.node.name.as_str())
+                .collect();
+            for cut in joint_cuts {
+                if is_member_cut(cut, &body_names) {
+                    // A member that didn't lower has been reported.
+                    if let Some(bodies) = bodies.as_deref()
+                        && let Some(lowered) = self.lower_hardware_cut(&cx, &roles, bodies, cut)
+                    {
+                        joint.member_cuts.push(lowered);
+                    }
+                } else if let Some(lowered) = self.lower_cut(&cx, id, cut) {
+                    joint.cuts.push(lowered);
+                }
+            }
+        }
         let mechanism = self.kind_mechanism(&cx, syntax, base_kind, bodies.as_deref(), &mechanisms);
         let hardware = if mounted {
             self.hardware_kind(
@@ -569,18 +602,28 @@ impl Resolver<'_> {
             seen.insert(word, span);
             let Some(name) = MemberName::from_word(word).filter(|name| allowed.contains(name))
             else {
-                if member.node.body.is_some() && !allowed.is_empty() {
+                if member.node.body.is_some()
+                    && (!allowed.is_empty() || base_kind == BaseKind::Joint)
+                {
                     // A member with a body may have any name; it joins the
                     // viewer's list only under one of its base's words.
                     continue;
                 }
-                if allowed.is_empty() {
+                if base_kind == BaseKind::Joint {
+                    self.error_help(
+                        Code::MissingField,
+                        format!("member '{word}' is missing 'shape'"),
+                        cx.file,
+                        span,
+                        "a joint's member is placed and checked: member pin : dowel_pin(...) { on: contact(piece, into), shape: cylinder(...) }",
+                    );
+                } else if allowed.is_empty() {
                     self.error_help(
                         Code::UnknownField,
                         format!("{what} has no member '{word}'"),
                         cx.file,
                         span,
-                        "only hinge, slide and pull kinds name their members",
+                        "only joint, hinge, slide and pull kinds name their members",
                     );
                 } else {
                     let words: Vec<&str> = allowed.iter().map(|m| m.word()).collect();
