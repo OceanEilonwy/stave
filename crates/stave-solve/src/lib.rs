@@ -36,6 +36,7 @@ mod help;
 mod joints;
 mod legacy;
 mod mechanism;
+mod models;
 mod place;
 
 use std::collections::HashMap;

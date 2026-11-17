@@ -12,8 +12,8 @@ use stave_model::defs::{
 use stave_model::ids::{InstanceId, KindId, PartId, StockId};
 use stave_model::instance::{Ctx, ItemSlot, ParamSource, Slot};
 use stave_model::value::{
-    self, AnchorOwner, AnchorValue, Envelope, ExactBox, KindValue, ModelAlign, ModelRef, Mount,
-    RegionOrigin, RegionValue, Spacing, Value,
+    self, AnchorOwner, AnchorValue, Envelope, ExactBox, KindValue, ModelRef, Mount, RegionOrigin,
+    RegionValue, Spacing, Value,
 };
 use stave_schema::functions::Builtin;
 use stave_schema::words::StockForm;
@@ -1334,10 +1334,32 @@ impl Solver<'_> {
                     .map(|e| self.eval(e, env))
                     .transpose()?
                 {
-                    Some(Value::Text(node)) => ModelAlign::Node(node),
-                    _ => ModelAlign::Bounds,
+                    Some(Value::Text(node)) => Some(node),
+                    _ => None,
                 };
-                Ok(Value::Model(ModelRef { source, align }))
+                let sha256 = match Self::arg(args, "sha256") {
+                    Some(expr) => match self.eval(expr, env)? {
+                        Value::Text(text) => match text.parse::<value::Sha256>() {
+                            Ok(digest) => Some(digest),
+                            Err(why) => {
+                                return Err(self.error(
+                                    Code::TypeMismatch,
+                                    format!("'sha256' needs 64 hexadecimal digits: {why}"),
+                                    env.file,
+                                    expr.span,
+                                    "copy the file's SHA-256 whole (`sha256sum model.glb` prints it), or leave sha256: out",
+                                ));
+                            }
+                        },
+                        _ => return Err(Reported),
+                    },
+                    None => None,
+                };
+                Ok(Value::Model(ModelRef {
+                    source,
+                    align,
+                    sha256,
+                }))
             }
             Builtin::Ends => Ok(Value::Spacing(Spacing::Ends(
                 length(self, "inset")?.unwrap_or(ExactLength::ZERO),

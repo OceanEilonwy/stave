@@ -18,7 +18,7 @@ use stave_model::defs::{
 use stave_model::ids::{HardwareId, KindId, PartId, RegionId};
 use stave_model::instance::ItemSlot;
 use stave_model::solved::{CutKind, LinkBar, LinkIndex, Linkage, LinkageFrame, PlanePoint, Point};
-use stave_model::value::{ExactBox, ModelRef, Value};
+use stave_model::value::{ExactBox, Value};
 
 use crate::eval::{Env, KindEnv, midpoint};
 use crate::joints::Binding;
@@ -359,7 +359,7 @@ pub(crate) struct Placed {
     pub motion: Option<MotionExact>,
     /// A cup hinge's arm and links.
     pub mechanism: Option<Mechanism>,
-    pub model: Option<ModelRef>,
+    pub model: Option<stave_model::solved::Model>,
     /// The old contract.
     pub legacy: Legacy,
     /// Its members with a body, in its kind's order.
@@ -384,7 +384,7 @@ fn positive_direction(axis: Axis) -> Direction {
 
 /// Each shape of a member in the kind's frame, with the axis of a cylinder
 /// and the outline of a prism or a bar.
-type FrameShapes = Vec<(FrameBox, Option<FrameAxis>, Option<Outline>)>;
+pub(crate) type FrameShapes = Vec<(FrameBox, Option<FrameAxis>, Option<Outline>)>;
 
 /// The world plane an anchor names, and which way is into the part it
 /// belongs to.
@@ -564,6 +564,10 @@ impl Solver<'_> {
             })?;
             frame_bodies.push((id, boxes));
         }
+        let model = match &model {
+            Some(model) => Some(self.hardware_model(&binding, &kind, model, &frame_bodies)?),
+            None => None,
+        };
         let label = inst.ctx.element.and_then(|element| {
             match self.model.defs.array(DefId::Hardware(inst.def)) {
                 Some(stave_model::defs::ArrayDef::Labels(labels)) => {
@@ -1435,7 +1439,7 @@ impl Solver<'_> {
 
     /// The environment a hardware kind's own expressions are evaluated
     /// in, for one piece of hardware, handed to `body`.
-    fn in_kind<T>(
+    pub(crate) fn in_kind<T>(
         &mut self,
         binding: &Binding,
         kind: &KindDef,
@@ -1734,7 +1738,7 @@ impl Solver<'_> {
         }
     }
 
-    fn kind_point(&mut self, point: &KindPoint, env: &Env<'_>) -> Solved<ExactPoint> {
+    pub(crate) fn kind_point(&mut self, point: &KindPoint, env: &Env<'_>) -> Solved<ExactPoint> {
         Ok(ExactPoint {
             along: self.kind_length(&point.along, env)?,
             across: self.kind_length(&point.across, env)?,

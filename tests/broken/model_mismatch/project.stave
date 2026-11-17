@@ -1,0 +1,62 @@
+// expect: warning[model-mismatch] brass_knob's model has 'knob' over along -13mm..13mm, across -12.9mm..13.1mm, depth -30mm..0mm, but the kind says along -13mm..13mm, across -13mm..13mm, depth -30mm..0mm
+stave 1
+
+// A knob kind with a model whose knob is drawn a tenth of a millimetre off
+// to one side. The kind's numbers are the truth; the model is only drawn,
+// so this is a warning. knob.glb is built by
+// crates/stave-app/tests/models.rs.
+
+project "Model mismatch" {
+  units: mm
+}
+
+stock pine_19 { species: pine, form: solid, thickness: 19mm }
+
+part base : pine_19 {
+  length: 600mm
+  width:  300mm
+  place {
+    ground
+  }
+}
+
+part front : pine_19 {
+  length: 300mm
+  width:  150mm
+  place {
+    orient(length: right, width: up)
+    against(base.top)
+    flush(base.left)
+    flush(base.front)
+  }
+}
+
+/// A 26mm brass knob on one screw from behind.
+kind brass_knob : pull {
+  roles {
+    piece: Part
+  }
+  screw_diameter: 4mm
+  mount {
+    face:   front
+    across: open
+    along:  open
+  }
+  member knob {
+    with:  piece
+    shape: cylinder(diameter: 26mm, depth: -30mm..0mm)
+  }
+  member screw {
+    with:  piece
+    shape: cylinder(diameter: 4mm, depth: 0mm..piece.thickness)
+  }
+  cut hole: crossing(piece, screw) { drill(diameter: 4mm, depth: through) }
+  model: model("./knob.glb")
+}
+
+hardware handle : brass_knob(front) {
+  place {
+    center(front, across)
+    center(front, up)
+  }
+}

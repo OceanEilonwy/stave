@@ -1207,13 +1207,90 @@ impl OverlayRange {
     }
 }
 
-/// A model for looks.
+/// A model for looks, with what the text says its nodes are (grammar,
+/// "Checked against the text").
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Model {
     /// The source as written.
     pub source: String,
-    /// `align: node("name")`; `None` for `align: bounds`.
+    /// `align: node("name")`: the node on the kind's origin; `None` for the
+    /// model's own origin.
     pub node: Option<String>,
+    /// The file, when it is on this computer: the source, relative to the
+    /// folder of the file that declares the kind. `None` for a model in a
+    /// standard module or at a remote source, which is not read.
+    pub path: Option<std::path::PathBuf>,
+    /// `sha256:`: the one file it is pinned to.
+    pub sha256: Option<crate::value::Sha256>,
+    /// The file the `model(...)` is written in.
+    #[serde(skip)]
+    pub file: stave_lang::FileId,
+    /// Where the `model(...)` is written.
+    #[serde(skip)]
+    pub span: stave_lang::ast::Span,
+    /// Every node the text says the model has, in the kind's order: its
+    /// shapes', then its pivots' and slots'.
+    pub nodes: Vec<DeclaredNode>,
+}
+
+/// A node a hardware kind's text says its model has, and where.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct DeclaredNode {
+    /// Its name: `arm knuckle`, `knob`, `arm inner_link`.
+    pub name: String,
+    /// What the text says about it.
+    pub value: DeclaredValue,
+}
+
+/// What a kind's text says about one node of its model, in the kind's
+/// frame with the hardware closed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case", tag = "kind")]
+pub enum DeclaredValue {
+    /// A pivot's pin or a slot's end: the node's origin.
+    Point(FramePoint),
+    /// A member's shapes (one named shape, or its unnamed shapes
+    /// together): the bounds of the node's mesh. Never empty.
+    Shapes(Vec<FrameShape>),
+}
+
+/// A point in a hardware kind's frame (grammar, "The kind's frame").
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct FramePoint {
+    /// Along the piece.
+    pub along: Length,
+    /// Across the mount face.
+    pub across: Length,
+    /// Into the piece from the mount face.
+    pub depth: Length,
+}
+
+/// A shape of a hardware kind's member in the kind's frame, as declared
+/// (before the member's own `mount { }`), as far as its bounds need.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case", tag = "kind")]
+pub enum FrameShape {
+    /// A box, a cylinder or a prism: its bounds, exact, each range low end
+    /// first.
+    Bounds {
+        /// Along the piece.
+        along: [Length; 2],
+        /// Across the mount face.
+        across: [Length; 2],
+        /// Into the piece.
+        depth: [Length; 2],
+    },
+    /// A bar, whose bounds depend on the angle it lies at.
+    Bar {
+        /// One end's centre, `[across, depth]`.
+        from: [Length; 2],
+        /// The other end's centre, `[across, depth]`.
+        to: [Length; 2],
+        /// How thick it is; it reaches half of it past each centre.
+        thickness: Length,
+        /// Its extent along the piece, low end first.
+        along: [Length; 2],
+    },
 }
 
 /// A piece of mounted hardware.

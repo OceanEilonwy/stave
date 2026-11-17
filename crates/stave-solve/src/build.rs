@@ -1512,13 +1512,7 @@ impl Solver<'_> {
                 fixed,
                 data,
                 mechanism,
-                model: hw.model.as_ref().map(|m| solved::Model {
-                    source: m.source.clone(),
-                    node: match &m.align {
-                        stave_model::value::ModelAlign::Node(node) => Some(node.clone()),
-                        stave_model::value::ModelAlign::Bounds => None,
-                    },
-                }),
+                model: hw.model.clone(),
                 roles: hw
                     .roles
                     .iter()

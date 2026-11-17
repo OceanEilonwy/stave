@@ -941,11 +941,22 @@ fn an_envelope_is_a_box_or_a_cylinder() {
 
 #[test]
 fn a_model_is_for_looks_only() {
-    // A missing model file is drawn as its members: no diagnostic.
+    // A missing model file is drawn as its members: no diagnostic. `align:`
+    // and `sha256:` are both optional (tests/models.rs checks a model that
+    // is there against the text).
     let opened = open(&format!(
-        "kind p : pull {{\n{PULL_HEAD}  model:    model(\"./models/knob.glb\", align: node(\"mount\"))\n  license:  \"CC0\"\n  moving:   \"knob\"\n}}\nkind q : pull {{\n{PULL_HEAD}  model:    model(\"./models/knob.glb\", align: bounds)\n}}"
+        "kind p : pull {{\n{PULL_HEAD}  model:    model(\"./models/knob.glb\", align: node(\"mount\"))\n  license:  \"CC0\"\n  moving:   \"knob\"\n}}\nkind q : pull {{\n{PULL_HEAD}  model:    model(\"./models/knob.glb\", sha256: \"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\")\n}}\nkind r : pull {{\n{PULL_HEAD}  model:    model(\"./models/knob.glb\")\n}}"
     ));
     assert!(opened.diagnostics.is_empty(), "{:?}", diagnostics(&opened));
+    // A model is no longer fitted to its bounds: the text is checked
+    // against its named nodes instead.
+    only_error(
+        &open(&format!(
+            "kind q : pull {{\n{PULL_HEAD}  model:    model(\"./models/knob.glb\", align: bounds)\n}}"
+        )),
+        "unknown-name",
+        "unknown name 'bounds'",
+    );
 }
 
 #[test]
