@@ -214,7 +214,7 @@ pub const KEYWORDS: &[&str] = &[
 /// listed here.
 pub const CONTEXTUAL_WORDS: &[&str] = &[
     "as", "mirror", "about", "slide", "hinge", "pull", "fastener", "tool", "roles", "cut", "makes",
-    "mark", "same", "to", "in", "replace", "unset", "rename",
+    "member", "mark", "same", "to", "in", "replace", "unset", "rename",
 ];
 
 /// The tokens after which the lexer drops a newline, besides dropping every

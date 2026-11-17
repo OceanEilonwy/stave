@@ -54,7 +54,7 @@ and `broken/<folder>` for a design in `tests/broken/`.
 | A bracket is closed where one line ends with a value and the next starts another | `lang/spec_syntax::a_bracket_is_closed_where_two_values_meet_across_a_line_break`, `app/one_mistake::a_bracket_forgotten_in_a_place_block_is_one_error_on_its_line` | covered |
 | A missing `}` ends the body at the next item it can't contain | `lang/parser::a_missing_brace_ends_the_body_at_the_next_item`, `lang/parser::a_missing_brace_inside_a_component_body`, `lang/spec_syntax::a_brace_missing_at_the_end_of_the_file`, `broken/missing_brace` | covered |
 | Doc comments attach to the next item | `lang/spec_syntax::doc_comments_attach_to_the_next_item`, `lang/parser::a_missing_brace_ends_the_body_at_the_next_item` | covered |
-| In a kind, doc comments may precede a param, a require or a makes | `lang/spec_syntax::in_a_kind_doc_comments_may_precede_a_param_a_require_or_a_makes` | covered |
+| In a kind, doc comments may precede a param, a require, a makes or a member | `lang/spec_syntax::in_a_kind_doc_comments_may_precede_a_param_a_require_or_a_makes`, `lang/spec_syntax::in_a_hardware_kind_doc_comments_may_precede_a_member` | covered |
 | A doc comment anywhere else is `syntax` | `lang/spec_syntax::a_doc_comment_anywhere_else_is_a_syntax_error`, `lang/parser::one_mistake_one_error` | covered |
 | Strings split into text and interpolation parts, each with its span | `lang/parser::interpolation_parts_have_spans`, `lang/lexer::strings_split_into_parts_with_spans` | covered |
 | Interpolation only in `note:`, `check:` and require messages | `lang/parser::interpolation_is_allowed_only_in_notes_checks_and_require_messages` | covered |

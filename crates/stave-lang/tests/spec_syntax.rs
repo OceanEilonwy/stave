@@ -135,11 +135,26 @@ fn in_a_kind_doc_comments_may_precede_a_param_a_require_or_a_makes() {
 }
 
 #[test]
+fn in_a_hardware_kind_doc_comments_may_precede_a_member() {
+    let parse = parse_text(
+        "stave 1\nkind k : slide {\n  /// Screwed to the cabinet.\n  member cabinet_member\n}\n",
+    );
+    assert!(parse.diagnostics.is_empty(), "{:?}", messages(&parse));
+    let ItemKind::Kind(kind) = &parse.ast.unwrap().items[0].kind else {
+        panic!()
+    };
+    let KindEntry::Member(member) = &kind.body.entries[0] else {
+        panic!()
+    };
+    assert_eq!(member.docs, ["Screwed to the cabinet."]);
+}
+
+#[test]
 fn a_doc_comment_anywhere_else_is_a_syntax_error() {
     let parse = parse_text("stave 1\nkind k : joint {\n  /// doc\n  note: \"x\"\n}\n");
     assert_eq!(
         only(&parse).message,
-        "expected 'param' or 'require' or 'makes', found a doc comment"
+        "expected 'param' or 'require' or 'makes' or 'member', found a doc comment"
     );
 }
 

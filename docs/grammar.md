@@ -232,8 +232,8 @@ enclosing scope.
 
 `///` starts a doc comment. Each line is one `DOC` token (the newline after it
 is dropped). Doc comments attach to the next item; inside a `kind` body they
-may also precede a `param`, a `require` or a `makes`. Anywhere else a doc
-comment is `error[syntax]`. Docs reach the inspector and the build manual.
+may also precede a `param`, a `require`, a `makes` or a `member`. Anywhere
+else a doc comment is `error[syntax]`. Docs reach the inspector and the build manual.
 
 ### Strings
 
