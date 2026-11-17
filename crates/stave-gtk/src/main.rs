@@ -89,6 +89,35 @@ struct Arguments {
     /// (`deep=...`), in millimetres. Default: the scene's own section.
     #[arg(long, value_name = "AXIS=MM", value_parser = parse_section)]
     section: Option<(stave_lang::placement::Axis, f32)>,
+    /// Draw the screenshot flat (orthographic), as a drawing would.
+    #[arg(long)]
+    flat: bool,
+    /// Focus on a joint or a piece of hardware by name
+    /// (`rung_sockets`, `door_l.hinges[upper]`): everything else fades, the
+    /// part receiving a joint is drawn see-through, and the side panel's
+    /// text is printed.
+    #[arg(long, value_name = "NAME")]
+    focus: Option<String>,
+    /// Which pair of the focused joint, from 0 (default 0).
+    #[arg(long, value_name = "N")]
+    pair: Option<usize>,
+    /// How far along focus mode is: 0 apart to 1 together for a joint, 0
+    /// closed to 1 fully open for hardware (default 0.5).
+    #[arg(long, value_name = "AMOUNT", value_parser = parse_amount)]
+    step: Option<f32>,
+    /// With --focus on a hinge: look straight down, flat, through a section
+    /// just above it.
+    #[arg(long)]
+    plan: bool,
+    /// With --focus: draw the receiving part solid, not see-through.
+    #[arg(long)]
+    no_xray: bool,
+    /// With --focus: keep the other parts as they are, not faded.
+    #[arg(long)]
+    no_fade: bool,
+    /// Don't tint the faces cuts made.
+    #[arg(long)]
+    no_tint: bool,
 }
 
 fn parse_open(text: &str) -> Result<(String, f32)> {
@@ -142,6 +171,19 @@ fn main() -> ExitCode {
                 open: arguments.open.clone(),
                 hide: arguments.hide.clone(),
                 section: arguments.section,
+                flat: arguments.flat,
+                no_tint: arguments.no_tint,
+                focus: arguments.focus.clone().map(|name| screenshot::FocusShot {
+                    name,
+                    pair: arguments.pair,
+                    step: arguments.step,
+                    plan: arguments.plan,
+                    options: stave_app::focus::Options {
+                        xray: !arguments.no_xray,
+                        tint_cut_faces: !arguments.no_tint,
+                        fade_others: !arguments.no_fade,
+                    },
+                }),
             },
             arguments.diagnostic,
             arguments.size,

@@ -7,11 +7,13 @@
 use std::path::Path;
 
 use anyhow::{Context as _, Result, bail};
-use stave_app::view;
+use stave_app::{focus, view};
 use stave_lang::placement::Axis;
 use stave_lang::render_diagnostics;
 use stave_model::solved::SolvedDesign;
-use stave_scene::{Aabb, Highlight, NodeId, Orbit, Posed, SceneGraph, Section};
+use stave_scene::{
+    Aabb, Highlight, Look, NodeId, Orbit, Overlay, Posed, Projection, SceneGraph, Section,
+};
 
 use crate::render::{Frame, Image, Renderer, write_png};
 
@@ -39,6 +41,28 @@ pub struct Shot {
     /// A section: cut away what is above (`up`), right of (`across`) or in
     /// front of (`deep`) this many millimetres. Default: the scene's own.
     pub section: Option<(Axis, f32)>,
+    /// Draw flat (orthographic) instead of in perspective.
+    pub flat: bool,
+    /// Don't tint the faces cuts made.
+    pub no_tint: bool,
+    /// Focus mode on a joint or a piece of hardware, by name.
+    pub focus: Option<FocusShot>,
+}
+
+/// Focus mode for a screenshot.
+#[derive(Debug, Clone, Default)]
+pub struct FocusShot {
+    /// The joint or hardware.
+    pub name: String,
+    /// Which pair of a joint (default the first).
+    pub pair: Option<usize>,
+    /// How far along: 0 apart (closed) to 1 together (fully open).
+    /// Default: half way. An `--open` of the focused assembly overrides it.
+    pub step: Option<f32>,
+    /// Look straight down, flat, cut just above the hardware.
+    pub plan: bool,
+    /// The display toggles.
+    pub options: stave_app::focus::Options,
 }
 
 /// Does a node's name start with `prefix` as a whole name: `door_l.hinges`
@@ -143,6 +167,33 @@ pub struct View<'a> {
     pub pitch: Option<f32>,
     /// A section.
     pub section: Option<Section>,
+    /// Draw flat.
+    pub flat: bool,
+    /// Look straight down on this box, flat (a plan); overrides `frame`.
+    pub plan: Option<Aabb>,
+    /// How each node looks (focus mode).
+    pub looks: Option<&'a [Look]>,
+    /// The overlay (focus mode).
+    pub overlay: Option<&'a Overlay>,
+    /// Tint the faces cuts made.
+    pub tint_cut_faces: bool,
+}
+
+impl<'a> View<'a> {
+    /// A plain view of a shot.
+    fn of(shot: &'a Shot, scene: &SceneGraph) -> View<'a> {
+        View {
+            frame: shot.frame.as_deref(),
+            turn: shot.turn,
+            pitch: shot.pitch,
+            section: section_of(shot, scene),
+            flat: shot.flat,
+            plan: None,
+            looks: None,
+            overlay: None,
+            tint_cut_faces: !shot.no_tint,
+        }
+    }
 }
 
 /// Renders a posed scene to an image, framed on what is shown (or on the
@@ -156,7 +207,6 @@ pub fn render_posed(
     (width, height): (u32, u32),
     view: &View<'_>,
 ) -> Result<Image> {
-    let aspect = crate::render::aspect(width, height);
     let bounds: Aabb = match view.frame {
         None => scene.bounds(posed).context("the scene shows nothing")?,
         Some(prefix) => {
@@ -169,24 +219,15 @@ pub fn render_posed(
                 .with_context(|| format!("'{prefix}' has nothing to frame"))?
         }
     };
-    renderer.upload(scene);
-    let default = Orbit::framing(bounds, aspect);
-    let orbit = Orbit {
-        yaw: (default.yaw + view.turn.to_radians()).rem_euclid(std::f32::consts::TAU),
-        pitch: view.pitch.map_or(default.pitch, f32::to_radians),
-        ..default
-    }
-    .framed(bounds, aspect);
-    renderer.render(&Frame {
+    render_bounds(
+        renderer,
         scene,
         posed,
-        orbit,
-        selection: None,
         highlight,
-        section: view.section,
-        width,
-        height,
-    })
+        (width, height),
+        view,
+        bounds,
+    )
 }
 
 /// Renders a scene of a design to an image.
@@ -198,13 +239,158 @@ pub fn render_scene(
     size: (u32, u32),
 ) -> Result<Image> {
     let posed = pose_shot(design, scene, shot)?;
-    let view = View {
-        frame: shot.frame.as_deref(),
-        turn: shot.turn,
-        pitch: shot.pitch,
-        section: section_of(shot, scene),
+    render_posed(renderer, scene, &posed, None, size, &View::of(shot, scene))
+}
+
+/// Renders focus mode on a joint or a piece of hardware, and returns the
+/// side panel's text with the image.
+pub fn render_focus(
+    renderer: &mut Renderer,
+    opened: &stave_app::Opened,
+    design: &SolvedDesign,
+    scene: &SceneGraph,
+    shot: &Shot,
+    focus_shot: &FocusShot,
+    size: (u32, u32),
+) -> Result<(Image, String)> {
+    let target = focus::find(design, &focus_shot.name, focus_shot.pair)?;
+    let focus = focus::open(opened, design, scene, target)
+        .with_context(|| format!("can't focus on '{}'", focus_shot.name))?;
+    let entry = match &shot.scene {
+        None => scene.scenes.first().context("the design has no scenes")?,
+        Some(name) => scene
+            .scene_named(name)
+            .with_context(|| format!("there is no scene '{name}'"))?,
     };
-    render_posed(renderer, scene, &posed, None, size, &view)
+    // An --open of the focused assembly sets how far it is open.
+    let mut progress = focus_shot.step.unwrap_or(0.5);
+    if let Some((assembly, range)) = focus.motion() {
+        let name = design
+            .assemblies
+            .get(assembly.index())
+            .map(|a| a.name.as_str());
+        if let Some((_, value)) = shot.open.iter().find(|(n, _)| Some(n.as_str()) == name) {
+            let amount = if range.turns {
+                value.to_radians()
+            } else {
+                *value
+            };
+            progress = if range.full > 0.0 {
+                amount / range.full
+            } else {
+                0.0
+            };
+        }
+    }
+    // From above, the section cuts the receiving part open: it is drawn
+    // solid.
+    let options = stave_app::focus::Options {
+        xray: focus_shot.options.xray && !focus_shot.plan,
+        ..focus_shot.options
+    };
+    let frame = focus.frame(scene, entry, progress, &options);
+    let mut posed = frame.posed;
+    for prefix in &shot.hide {
+        for id in nodes_named(scene, prefix) {
+            if let Some(slot) = posed.visible.get_mut(id.index()) {
+                *slot = false;
+            }
+        }
+    }
+    let plan = focus_shot.plan.then(|| focus.plan()).flatten();
+    if focus_shot.plan && plan.is_none() {
+        bail!("only a hinge has a view from above");
+    }
+    let framed = if shot.frame.is_none() {
+        focus
+            .zone()
+            .or_else(|| scene.bounds_of(&posed, focus.nodes()))
+    } else {
+        None
+    };
+    let view = View {
+        section: plan.map(|p| p.section).or_else(|| section_of(shot, scene)),
+        plan: plan.map(|p| p.bounds),
+        looks: Some(&frame.looks),
+        overlay: Some(&frame.overlay),
+        tint_cut_faces: focus_shot.options.tint_cut_faces,
+        ..View::of(shot, scene)
+    };
+    let image = match framed {
+        Some(bounds) => render_bounds(renderer, scene, &posed, None, size, &view, bounds)?,
+        None => render_posed(renderer, scene, &posed, None, size, &view)?,
+    };
+    let mut panel = vec![focus.context.clone(), String::new(), focus.heading.clone()];
+    if let Some(description) = &focus.description {
+        panel.push(description.clone());
+    }
+    for row in &focus.rows {
+        panel.push(format!("  {}: {}", row.label, row.value));
+    }
+    for member in &focus.members {
+        panel.push(format!(
+            "  {}. {}: {}",
+            member.number, member.name, member.caption
+        ));
+    }
+    if let Some(insert) = &focus.insert {
+        panel.push(format!("  {}   ({})", insert.text, insert.source));
+    }
+    if let Some(step) = &frame.step {
+        panel.push(step.clone());
+    }
+    panel.push(frame.status.clone());
+    if let Some(plan) = plan {
+        let _ = plan;
+        panel.push("Looking down on the hinge, through the cabinet top".to_owned());
+    }
+    let poses: Vec<&str> = focus.key_poses.iter().map(|p| p.caption.as_str()).collect();
+    panel.push(format!("Small views: {}", poses.join(", ")));
+    Ok((image, panel.join("\n")))
+}
+
+/// Renders framed on a box, from the view's direction.
+fn render_bounds(
+    renderer: &mut Renderer,
+    scene: &SceneGraph,
+    posed: &Posed,
+    highlight: Option<&Highlight>,
+    (width, height): (u32, u32),
+    view: &View<'_>,
+    bounds: Aabb,
+) -> Result<Image> {
+    let aspect = crate::render::aspect(width, height);
+    renderer.upload(scene);
+    let orbit = match view.plan {
+        Some(plan) => Orbit::plan(plan, aspect, view.turn.to_radians()),
+        None => {
+            let default = Orbit::framing(bounds, aspect);
+            Orbit {
+                yaw: (default.yaw + view.turn.to_radians()).rem_euclid(std::f32::consts::TAU),
+                pitch: view.pitch.map_or(default.pitch, f32::to_radians),
+                projection: if view.flat {
+                    Projection::Flat
+                } else {
+                    Projection::Perspective
+                },
+                ..default
+            }
+            .framed(bounds, aspect)
+        }
+    };
+    renderer.render(&Frame {
+        scene,
+        posed,
+        orbit,
+        selection: None,
+        highlight,
+        section: view.section,
+        looks: view.looks,
+        overlay: view.overlay,
+        tint_cut_faces: view.tint_cut_faces,
+        width,
+        height,
+    })
 }
 
 /// Opens a project, renders it and writes a PNG.
@@ -236,9 +422,22 @@ pub fn run(
     };
     let scene = stave_app::view::scene(design);
     let mut renderer = Renderer::new()?;
-    let image = match diagnostic {
-        None => render_scene(&mut renderer, design, &scene, shot, size)?,
-        Some(index) => {
+    let image = match (diagnostic, &shot.focus) {
+        (None, Some(focus_shot)) => {
+            let (image, panel) = render_focus(
+                &mut renderer,
+                &opened,
+                design,
+                &scene,
+                shot,
+                focus_shot,
+                size,
+            )?;
+            println!("{panel}");
+            image
+        }
+        (None, None) => render_scene(&mut renderer, design, &scene, shot, size)?,
+        (Some(index), _) => {
             let problems = view::problems(&opened, folder);
             let problem = problems.get(index).with_context(|| {
                 format!(
@@ -256,13 +455,14 @@ pub fn run(
             let posed = view::pose_at_contact(&scene, contact, None)
                 .context("the problem's scene is missing")?;
             let highlight = view::highlight(&scene, contact);
-            let view = View {
-                frame: shot.frame.as_deref(),
-                turn: shot.turn,
-                pitch: shot.pitch,
-                section: section_of(shot, &scene),
-            };
-            render_posed(&mut renderer, &scene, &posed, Some(&highlight), size, &view)?
+            render_posed(
+                &mut renderer,
+                &scene,
+                &posed,
+                Some(&highlight),
+                size,
+                &View::of(shot, &scene),
+            )?
         }
     };
     write_png(&image, output)?;
@@ -357,5 +557,112 @@ mod tests {
         ));
         assert!(named("door_l.hinges[lower]", "door_l.hinges"));
         assert!(!named("door_l.hingesx", "door_l.hinges"));
+    }
+
+    /// Focus mode renders offscreen: a joint mid-way, X-ray on and off,
+    /// and a hinge from above; skips without a GPU adapter.
+    #[test]
+    fn focus_renders_offscreen() {
+        let mut renderer = match Renderer::new() {
+            Ok(renderer) => renderer,
+            Err(error) => {
+                eprintln!("skipped: {error:#}");
+                return;
+            }
+        };
+        let folder = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/stool");
+        let opened = stave_app::open(&folder).unwrap();
+        let design = opened.design.as_ref().unwrap();
+        let scene = stave_app::view::scene(design);
+        let shot = |step: f32, xray: bool| Shot {
+            focus: Some(FocusShot {
+                name: "rung_sockets".to_owned(),
+                step: Some(step),
+                options: stave_app::focus::Options {
+                    xray,
+                    ..stave_app::focus::Options::default()
+                },
+                ..FocusShot::default()
+            }),
+            ..Shot::default()
+        };
+        let render = |renderer: &mut Renderer, shot: &Shot| {
+            let focus_shot = shot.focus.clone().unwrap();
+            render_focus(
+                renderer,
+                &opened,
+                design,
+                &scene,
+                shot,
+                &focus_shot,
+                (240, 160),
+            )
+            .unwrap()
+        };
+        let (mid, panel) = render(&mut renderer, &shot(0.6, true));
+        assert!(
+            panel.contains("Step 1 of 1 · push(rung[front], along: length)"),
+            "{panel}"
+        );
+        assert!(panel.contains("rung[front] is 6 mm from home"), "{panel}");
+        let (solid, _) = render(&mut renderer, &shot(0.6, false));
+        let (home, _) = render(&mut renderer, &shot(1.0, true));
+        assert_ne!(mid.rgba, solid.rgba);
+        assert_ne!(mid.rgba, home.rgba);
+
+        let folder = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/clothing_cabinet");
+        let opened = stave_app::open(&folder).unwrap();
+        let design = opened.design.as_ref().unwrap();
+        let scene = stave_app::view::scene(design);
+        let hinge = |open: f32, plan: bool| Shot {
+            open: vec![("door_l".to_owned(), open)],
+            focus: Some(FocusShot {
+                name: "door_l.hinges[upper]".to_owned(),
+                plan,
+                ..FocusShot::default()
+            }),
+            ..Shot::default()
+        };
+        let mut images = Vec::new();
+        for (open, plan) in [(0.0, true), (45.0, true), (110.0, true), (45.0, false)] {
+            let shot = hinge(open, plan);
+            let focus_shot = shot.focus.clone().unwrap();
+            let (image, panel) = render_focus(
+                &mut renderer,
+                &opened,
+                design,
+                &scene,
+                &shot,
+                &focus_shot,
+                (240, 160),
+            )
+            .unwrap();
+            assert!(panel.contains("1. plate: The mounting plate"), "{panel}");
+            assert!(panel.contains("Closest to the side: 3.5 mm"), "{panel}");
+            images.push(image.rgba);
+        }
+        for (i, a) in images.iter().enumerate() {
+            for b in images.iter().skip(i + 1) {
+                assert_ne!(a, b);
+            }
+        }
+        // A joint has no view from above.
+        let mut joint = hinge(0.0, true);
+        if let Some(focus) = joint.focus.as_mut() {
+            focus.name = "shelf_dados".to_owned();
+        }
+        let focus_shot = joint.focus.clone().unwrap();
+        assert!(
+            render_focus(
+                &mut renderer,
+                &opened,
+                design,
+                &scene,
+                &joint,
+                &focus_shot,
+                (64, 64)
+            )
+            .is_err()
+        );
     }
 }

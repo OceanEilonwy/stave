@@ -10,7 +10,9 @@ use std::num::NonZeroU64;
 
 use anyhow::{Context as _, Result, anyhow, bail};
 use glam::{Mat4, Vec3};
-use stave_scene::{Aabb, Highlight, Material, NodeId, Orbit, Posed, SceneGraph, Section};
+use stave_scene::{
+    Aabb, Highlight, LineKind, Look, Material, NodeId, Orbit, Overlay, Posed, SceneGraph, Section,
+};
 use wgpu::util::DeviceExt as _;
 
 const COLOUR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
@@ -57,6 +59,18 @@ struct NodeData {
     colour: [f32; 4],
     params: [f32; 4],
     tint: [f32; 4],
+    /// x: opacity; y: how far faded toward a pale grey (a ghost); z: how
+    /// much darker faces cut by a joint are; w: outline strength.
+    style: [f32; 4],
+}
+
+/// A vertex of the overlay: a point on screen (normalised device
+/// coordinates) and a colour.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct OverlayVertex {
+    position: [f32; 2],
+    colour: [f32; 4],
 }
 
 /// A finished frame: tightly packed sRGB RGBA, rows top to bottom.
@@ -86,6 +100,12 @@ pub struct Frame<'a> {
     /// A plane cutting the view: what lies beyond it isn't drawn, and the
     /// wood it cuts through is drawn flat.
     pub section: Option<Section>,
+    /// How each node looks (focus mode); `None` draws every node as usual.
+    pub looks: Option<&'a [Look]>,
+    /// Lines and numbered labels drawn on top of everything.
+    pub overlay: Option<&'a Overlay>,
+    /// Draw the faces cuts made darker, so the joinery reads.
+    pub tint_cut_faces: bool,
     /// Pixels across.
     pub width: u32,
     /// Pixels down.
@@ -140,13 +160,26 @@ pub struct Renderer {
     /// last without a depth test so wood never hides them.
     volume_pipeline: wgpu::RenderPipeline,
     volume_edge_pipeline: wgpu::RenderPipeline,
+    /// Ghosts and see-through parts: blended over what is drawn, without
+    /// writing depth, pushed back a little so a surface they share with a
+    /// solid part (a socket's wall around its rung) never shows through.
+    translucent_pipeline: wgpu::RenderPipeline,
+    /// The same with back faces, for a section: a see-through part's cut
+    /// face shows, faint.
+    translucent_section_pipeline: wgpu::RenderPipeline,
+    /// The overlay: triangles on screen, on top of everything.
+    overlay_pipeline: wgpu::RenderPipeline,
     meshes: Vec<GpuMesh>,
     target: Option<Target>,
 }
 
 fn vertex_layout() -> wgpu::VertexBufferLayout<'static> {
-    const ATTRIBUTES: [wgpu::VertexAttribute; 3] =
-        wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x3];
+    const ATTRIBUTES: [wgpu::VertexAttribute; 4] = wgpu::vertex_attr_array![
+        0 => Float32x3,
+        1 => Float32x3,
+        2 => Float32x3,
+        3 => Float32
+    ];
     wgpu::VertexBufferLayout {
         array_stride: crate::convert::bytes(std::mem::size_of::<stave_geom::Vertex>()),
         step_mode: wgpu::VertexStepMode::Vertex,
@@ -502,7 +535,82 @@ impl Renderer {
             wgpu::PrimitiveTopology::LineList,
             "volume_edge_fragment",
         );
+        let translucent_with = |label: &'static str, cull_mode: Option<wgpu::Face>| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(label),
+                layout: Some(&main_layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some("mesh_vertex"),
+                    compilation_options: Default::default(),
+                    buffers: &mesh_buffers,
+                },
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    front_face: wgpu::FrontFace::Ccw,
+                    cull_mode,
+                    ..Default::default()
+                },
+                depth_stencil: Some(depth(
+                    false,
+                    wgpu::DepthBiasState {
+                        constant: 24,
+                        slope_scale: 3.0,
+                        clamp: 0.0,
+                    },
+                )),
+                multisample,
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some("mesh_fragment"),
+                    compilation_options: Default::default(),
+                    targets: &blended,
+                }),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+        let translucent_pipeline = translucent_with("translucent meshes", Some(wgpu::Face::Back));
+        let translucent_section_pipeline =
+            translucent_with("translucent meshes in a section", None);
+        const OVERLAY_ATTRIBUTES: [wgpu::VertexAttribute; 2] =
+            wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x4];
+        let overlay_buffers = [Some(wgpu::VertexBufferLayout {
+            array_stride: crate::convert::bytes(std::mem::size_of::<OverlayVertex>()),
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &OVERLAY_ATTRIBUTES,
+        })];
+        let overlay_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("overlay"),
+            layout: Some(&main_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("overlay_vertex"),
+                compilation_options: Default::default(),
+                buffers: &overlay_buffers,
+            },
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: Some(false),
+                depth_compare: Some(wgpu::CompareFunction::Always),
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample,
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("overlay_fragment"),
+                compilation_options: Default::default(),
+                targets: &blended,
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
         Ok(Renderer {
+            translucent_pipeline,
+            translucent_section_pipeline,
+            overlay_pipeline,
             device,
             queue,
             adapter_name,
@@ -666,13 +774,63 @@ impl Renderer {
             .highlight
             .filter(|h| !h.volumes.is_empty())
             .map(|h| self.volume_buffers(&h.volumes));
+        let look = |id: NodeId| {
+            frame
+                .looks
+                .and_then(|looks| looks.get(id.index()).copied())
+                .unwrap_or(Look::Normal)
+        };
         let visible: Vec<(u32, &GpuMesh)> = frame
             .scene
             .node_ids()
             .zip(&self.meshes)
-            .filter(|(id, _)| frame.posed.shown(*id).is_some())
+            .filter(|(id, _)| frame.posed.shown(*id).is_some() && look(*id) == Look::Normal)
             .filter_map(|(id, mesh)| Some((u32::try_from(id.index()).ok()?, mesh)))
             .collect();
+        // Ghosts and see-through parts, farthest first so they blend in
+        // order.
+        let eye = frame.orbit.eye();
+        let mut translucent: Vec<(f32, Look, u32, &GpuMesh)> = frame
+            .scene
+            .node_ids()
+            .zip(&self.meshes)
+            .filter_map(|(id, mesh)| {
+                let transform = frame.posed.shown(id)?;
+                let look = look(id);
+                if look == Look::Normal {
+                    return None;
+                }
+                let centre = frame
+                    .scene
+                    .node(id)?
+                    .geometry
+                    .bounds
+                    .transformed(transform)
+                    .centre();
+                Some((
+                    centre.distance(eye),
+                    look,
+                    u32::try_from(id.index()).ok()?,
+                    mesh,
+                ))
+            })
+            .collect();
+        translucent.sort_by(|a, b| b.0.total_cmp(&a.0));
+        let overlay = frame
+            .overlay
+            .map(|overlay| overlay_triangles(overlay, frame, width, height))
+            .filter(|vertices| !vertices.is_empty())
+            .map(|vertices| {
+                (
+                    self.device
+                        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                            label: Some("overlay"),
+                            contents: bytemuck::cast_slice(&vertices),
+                            usage: wgpu::BufferUsages::VERTEX,
+                        }),
+                    u32::try_from(vertices.len()).unwrap_or(u32::MAX),
+                )
+            });
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("shadow"),
@@ -691,10 +849,17 @@ impl Renderer {
             });
             pass.set_pipeline(&self.shadow_pipeline);
             pass.set_bind_group(0, &self.scene_group, &[]);
-            for (index, mesh) in &visible {
+            // Ghosts cast no shadow; see-through parts do.
+            let casting = visible.iter().copied().chain(
+                translucent
+                    .iter()
+                    .filter(|(_, look, _, _)| *look == Look::XRay)
+                    .map(|(_, _, index, mesh)| (*index, *mesh)),
+            );
+            for (index, mesh) in casting {
                 pass.set_vertex_buffer(0, mesh.vertices.slice(..));
                 pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
-                pass.draw_indexed(0..mesh.index_count, 0, *index..*index + 1);
+                pass.draw_indexed(0..mesh.index_count, 0, index..index + 1);
             }
         }
         {
@@ -742,6 +907,25 @@ impl Renderer {
                     pass.draw(0..*count, *index..*index + 1);
                 }
             }
+            if !translucent.is_empty() {
+                pass.set_pipeline(if frame.section.is_some() {
+                    &self.translucent_section_pipeline
+                } else {
+                    &self.translucent_pipeline
+                });
+                for (_, _, index, mesh) in &translucent {
+                    pass.set_vertex_buffer(0, mesh.vertices.slice(..));
+                    pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
+                    pass.draw_indexed(0..mesh.index_count, 0, *index..*index + 1);
+                }
+                pass.set_pipeline(&self.edge_pipeline);
+                for (_, _, index, mesh) in &translucent {
+                    if let Some((buffer, count)) = &mesh.edges {
+                        pass.set_vertex_buffer(0, buffer.slice(..));
+                        pass.draw(0..*count, *index..*index + 1);
+                    }
+                }
+            }
             if let Some((faces, face_count, lines, line_count)) = &volumes {
                 pass.set_pipeline(&self.volume_pipeline);
                 pass.set_vertex_buffer(0, faces.slice(..));
@@ -749,6 +933,11 @@ impl Renderer {
                 pass.set_pipeline(&self.volume_edge_pipeline);
                 pass.set_vertex_buffer(0, lines.slice(..));
                 pass.draw(0..*line_count, 0..1);
+            }
+            if let Some((buffer, count)) = &overlay {
+                pass.set_pipeline(&self.overlay_pipeline);
+                pass.set_vertex_buffer(0, buffer.slice(..));
+                pass.draw(0..*count, 0..1);
             }
         }
         encoder.copy_texture_to_buffer(
@@ -919,6 +1108,16 @@ impl Renderer {
                         ([r, g, b, 0.0], [0.0, 0.0, seed, 1.0])
                     }
                 };
+                let cut_tint = if frame.tint_cut_faces { 1.0 } else { 0.0 };
+                let style = match frame
+                    .looks
+                    .and_then(|looks| looks.get(id.index()).copied())
+                    .unwrap_or(Look::Normal)
+                {
+                    Look::Normal => [1.0, 0.0, cut_tint, 1.0],
+                    Look::Ghost => [0.16, 0.85, 0.0, 0.18],
+                    Look::XRay => [0.38, 0.1, cut_tint * 1.4, 0.9],
+                };
                 let in_problem = frame.highlight.is_some_and(|h| h.nodes.contains(&id));
                 let tint = if selected == Some(node.item) {
                     [ACCENT[0], ACCENT[1], ACCENT[2], 0.6]
@@ -932,12 +1131,184 @@ impl Renderer {
                     colour,
                     params,
                     tint,
+                    style,
                 })
             })
             .collect();
         self.queue
             .write_buffer(&self.nodes, 0, bytemuck::cast_slice(&nodes));
     }
+}
+
+/// The overlay's colours, linear: the path in the selection blue, the
+/// home outline dark, the labels white on blue.
+const PATH_COLOUR: [f32; 4] = [0.0284, 0.1590, 0.6724, 0.95];
+const HOME_COLOUR: [f32; 4] = [0.05, 0.03, 0.02, 0.85];
+const LABEL_FILL: [f32; 4] = [0.0284, 0.1590, 0.6724, 1.0];
+const LABEL_INK: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
+
+/// Strokes of a digit in a box 1 wide and 2 high, from the bottom left.
+fn digit_strokes(digit: u8) -> &'static [&'static [(f32, f32)]] {
+    match digit {
+        0 => &[&[(0.0, 0.0), (1.0, 0.0), (1.0, 2.0), (0.0, 2.0), (0.0, 0.0)]],
+        1 => &[&[(0.2, 1.6), (0.55, 2.0), (0.55, 0.0)]],
+        2 => &[&[
+            (0.0, 2.0),
+            (1.0, 2.0),
+            (1.0, 1.0),
+            (0.0, 1.0),
+            (0.0, 0.0),
+            (1.0, 0.0),
+        ]],
+        3 => &[
+            &[(0.0, 2.0), (1.0, 2.0), (1.0, 0.0), (0.0, 0.0)],
+            &[(0.1, 1.0), (1.0, 1.0)],
+        ],
+        4 => &[
+            &[(0.0, 2.0), (0.0, 1.0), (1.0, 1.0)],
+            &[(1.0, 2.0), (1.0, 0.0)],
+        ],
+        5 => &[&[
+            (1.0, 2.0),
+            (0.0, 2.0),
+            (0.0, 1.0),
+            (1.0, 1.0),
+            (1.0, 0.0),
+            (0.0, 0.0),
+        ]],
+        6 => &[&[
+            (1.0, 2.0),
+            (0.0, 2.0),
+            (0.0, 0.0),
+            (1.0, 0.0),
+            (1.0, 1.0),
+            (0.0, 1.0),
+        ]],
+        7 => &[&[(0.0, 2.0), (1.0, 2.0), (0.35, 0.0)]],
+        8 => &[
+            &[(0.0, 0.0), (1.0, 0.0), (1.0, 2.0), (0.0, 2.0), (0.0, 0.0)],
+            &[(0.0, 1.0), (1.0, 1.0)],
+        ],
+        _ => &[&[
+            (1.0, 1.0),
+            (0.0, 1.0),
+            (0.0, 2.0),
+            (1.0, 2.0),
+            (1.0, 0.0),
+            (0.0, 0.0),
+        ]],
+    }
+}
+
+/// The overlay as triangles on screen: lines a constant width in pixels,
+/// labels as filled discs with their numbers in white.
+fn overlay_triangles(
+    overlay: &Overlay,
+    frame: &Frame<'_>,
+    width: u32,
+    height: u32,
+) -> Vec<OverlayVertex> {
+    let aspect = aspect(width, height);
+    let view_projection = frame.orbit.view_projection(aspect);
+    let (w, h) = (
+        crate::convert::f32_of_u32(width),
+        crate::convert::f32_of_u32(height),
+    );
+    // Pixels to normalised device coordinates.
+    let per_pixel = glam::Vec2::new(2.0 / w.max(1.0), 2.0 / h.max(1.0));
+    let project = |point: Vec3| {
+        let clip = view_projection * point.extend(1.0);
+        (clip.w > 1e-6).then(|| glam::Vec2::new(clip.x / clip.w, clip.y / clip.w))
+    };
+    let mut out = Vec::new();
+    let segment = |out: &mut Vec<OverlayVertex>,
+                   a: glam::Vec2,
+                   b: glam::Vec2,
+                   pixels: f32,
+                   colour: [f32; 4]| {
+        let along = ((b - a) / per_pixel).normalize_or_zero();
+        let across = glam::Vec2::new(-along.y, along.x) * pixels * 0.5 * per_pixel;
+        let corners = [a - across, a + across, b + across, b - across];
+        for index in [0, 1, 2, 0, 2, 3] {
+            if let Some(corner) = corners.get(index) {
+                out.push(OverlayVertex {
+                    position: corner.to_array(),
+                    colour,
+                });
+            }
+        }
+    };
+    for line in &overlay.lines {
+        let (Some(a), Some(b)) = (project(line.from), project(line.to)) else {
+            continue;
+        };
+        let (pixels, colour) = match line.kind {
+            LineKind::Path => (3.0, PATH_COLOUR),
+            LineKind::Home => (2.0, HOME_COLOUR),
+        };
+        segment(&mut out, a, b, pixels, colour);
+    }
+    let radius = 13.0;
+    let mut placed: Vec<glam::Vec2> = Vec::new();
+    for label in &overlay.labels {
+        let Some(anchor) = project(label.at) else {
+            continue;
+        };
+        // A label that would cover another moves up, with a leader line
+        // back to its point.
+        let mut centre = anchor;
+        let clear = (2.0 * radius + 3.0) * per_pixel.y;
+        let mut tries = 0;
+        while tries < 8
+            && placed
+                .iter()
+                .any(|p| ((*p - centre) / per_pixel).length() < 2.0 * radius + 3.0)
+        {
+            centre.y += clear;
+            tries += 1;
+        }
+        if tries > 0 {
+            segment(&mut out, anchor, centre, 1.5, LABEL_FILL);
+        }
+        placed.push(centre);
+        let steps = 24_u16;
+        let point = |step: u16| {
+            let angle = std::f32::consts::TAU * f32::from(step) / f32::from(steps);
+            centre + glam::Vec2::new(angle.cos(), angle.sin()) * radius * per_pixel
+        };
+        for step in 0..steps {
+            for corner in [centre, point(step), point(step + 1)] {
+                out.push(OverlayVertex {
+                    position: corner.to_array(),
+                    colour: LABEL_FILL,
+                });
+            }
+        }
+        let digits: Vec<u8> = label
+            .number
+            .to_string()
+            .bytes()
+            .map(|b| b.saturating_sub(b'0'))
+            .collect();
+        let glyph = glam::Vec2::new(6.0, 6.0);
+        let gap = 4.0;
+        let count = crate::convert::f32_of_index(digits.len());
+        let total = count * glyph.x + (count - 1.0).max(0.0) * gap;
+        for (index, digit) in digits.iter().enumerate() {
+            let left = -total * 0.5 + crate::convert::f32_of_index(index) * (glyph.x + gap);
+            let place = |(x, y): (f32, f32)| {
+                centre + glam::Vec2::new(left + x * glyph.x, (y - 1.0) * glyph.y) * per_pixel
+            };
+            for stroke in digit_strokes(*digit) {
+                for pair in stroke.windows(2) {
+                    if let [a, b] = pair {
+                        segment(&mut out, place(*a), place(*b), 2.2, LABEL_INK);
+                    }
+                }
+            }
+        }
+    }
+    out
 }
 
 /// Writes an image as a PNG.

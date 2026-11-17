@@ -9,7 +9,8 @@ use adw::prelude::*;
 use stave_app::view::{Description, Problem};
 use stave_lang::Severity;
 
-/// Called with a problem's index when its row is activated.
+/// Called with a problem's or a focus target's index when its row is
+/// activated.
 type ProblemCallback = Rc<dyn Fn(usize)>;
 
 /// A shown problem's motion slider: its full range, where it starts, and
@@ -50,6 +51,11 @@ pub struct Panel {
     pub explode: gtk::Scale,
     /// Eases the explode control to fully apart, or back together.
     pub animate: gtk::ToggleButton,
+    /// Focus mode's own panel.
+    pub focus: super::focus_panel::FocusPanel,
+    targets: adw::PreferencesGroup,
+    target_rows: RefCell<Vec<gtk::Widget>>,
+    on_target: RefCell<Option<ProblemCallback>>,
 }
 
 fn property_row(title: &str, value: &str) -> adw::ActionRow {
@@ -173,10 +179,17 @@ impl Panel {
                 .build(),
         );
 
+        let focus = super::focus_panel::FocusPanel::new();
+        let targets = adw::PreferencesGroup::builder()
+            .title("See how it works")
+            .visible(false)
+            .build();
+        content.append(&focus.root);
         content.append(&shown);
         content.append(&problems);
         content.append(&view);
         content.append(&selection);
+        content.append(&targets);
         content.append(&opening_group);
         content.append(&keys_group());
         let clamp = adw::Clamp::builder()
@@ -204,7 +217,50 @@ impl Panel {
             opening_label,
             explode,
             animate,
+            focus,
+            targets,
+            target_rows: RefCell::new(Vec::new()),
+            on_target: RefCell::new(None),
         }
+    }
+
+    /// Calls `callback` with a focus target's index when its row is
+    /// activated.
+    pub fn connect_target(&self, callback: impl Fn(usize) + 'static) {
+        self.on_target.replace(Some(Rc::new(callback)));
+    }
+
+    /// Lists what the selection can be focused on: its joints, or the
+    /// hardware itself.
+    pub fn show_targets(&self, labels: &[String], hardware: bool) {
+        for row in self.target_rows.take() {
+            self.targets.remove(&row);
+        }
+        self.targets.set_visible(!labels.is_empty());
+        self.targets.set_title(if hardware {
+            "See how it works"
+        } else {
+            "See how it goes together"
+        });
+        let mut rows = Vec::with_capacity(labels.len());
+        for label in labels {
+            let row = adw::ActionRow::builder()
+                .title(label)
+                .use_markup(false)
+                .activatable(true)
+                .build();
+            row.add_suffix(&gtk::Image::from_icon_name("go-next-symbolic"));
+            let callback = self.on_target.borrow().clone();
+            let index = rows.len();
+            row.connect_activated(move |_| {
+                if let Some(callback) = &callback {
+                    callback(index);
+                }
+            });
+            self.targets.add(&row);
+            rows.push(row.upcast());
+        }
+        self.target_rows.replace(rows);
     }
 
     /// Shows a slider that opens the selected item's door or drawer, named

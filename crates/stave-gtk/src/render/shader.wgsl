@@ -31,6 +31,9 @@ struct Node {
     params: vec4<f32>,
     // rgb: highlight colour; a: how much of it.
     tint: vec4<f32>,
+    // x: opacity; y: fade toward a pale grey; z: how much darker faces
+    // cut by a joint are; w: outline strength.
+    style: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> globals: Globals;
@@ -45,6 +48,8 @@ const FILL_COLOUR: vec3<f32> = vec3<f32>(0.78, 0.84, 0.97);
 const AMBIENT: f32 = 0.50;
 const KEY: f32 = 0.78;
 const FILL: f32 = 0.26;
+// How much darker the faces a cut made are drawn.
+const CUT_TINT: f32 = 0.38;
 
 // ---- noise ----
 
@@ -71,6 +76,7 @@ struct MeshIn {
     @location(0) position: vec3<f32>,
     @location(1) normal: vec3<f32>,
     @location(2) grain: vec3<f32>,
+    @location(3) cut: f32,
 };
 
 struct MeshOut {
@@ -79,6 +85,7 @@ struct MeshOut {
     @location(1) normal: vec3<f32>,
     @location(2) grain: vec3<f32>,
     @location(3) @interpolate(flat) node: u32,
+    @location(4) cut: f32,
 };
 
 @vertex
@@ -91,6 +98,7 @@ fn mesh_vertex(in: MeshIn, @builtin(instance_index) node: u32) -> MeshOut {
     out.normal = (model * vec4<f32>(in.normal, 0.0)).xyz;
     out.grain = in.grain;
     out.node = node;
+    out.cut = in.cut;
     return out;
 }
 
@@ -155,12 +163,16 @@ fn mesh_fragment(in: MeshOut, @builtin(front_facing) front: bool) -> @location(0
     }
     let node = nodes[in.node];
     var normal = normalize(in.normal);
+    // A section's cut face is lit evenly: the surface drawn there lies
+    // below the cut, so its own shadow would streak it.
+    var cut_face = false;
     if (!front) {
         normal = -normal;
         // Seen through a section's cut: the inside of the wood, drawn as
         // the flat cut face, facing the way the section looks.
         if (dot(globals.section.xyz, globals.section.xyz) > 0.5) {
             normal = globals.section.xyz;
+            cut_face = true;
         }
     }
     let is_metal = node.params.w > 0.5;
@@ -169,10 +181,16 @@ fn mesh_fragment(in: MeshOut, @builtin(front_facing) front: bool) -> @location(0
     var albedo = wood(node.colour.rgb, in.grain, node.params, node.colour.a, radius, blur);
     if (is_metal) {
         albedo = metal(node.colour.rgb, in.grain);
+    } else {
+        // Faces a cut made are tinted darker, so the joinery reads.
+        albedo = albedo * (1.0 - clamp(CUT_TINT * node.style.z * in.cut, 0.0, 0.8));
     }
     let to_eye = normalize(globals.eye.xyz - in.world);
     let key_direction = globals.key_direction.xyz;
-    let shadow = key_light(in.world, normal);
+    var shadow = key_light(in.world, normal);
+    if (cut_face) {
+        shadow = 1.0;
+    }
     let hemisphere = mix(GROUND, SKY, normal.y * 0.5 + 0.5) * AMBIENT;
     let key = max(dot(normal, key_direction), 0.0) * KEY * shadow * KEY_COLOUR;
     let fill = max(dot(normal, globals.fill_direction.xyz), 0.0) * FILL * FILL_COLOUR;
@@ -191,7 +209,15 @@ fn mesh_fragment(in: MeshOut, @builtin(front_facing) front: bool) -> @location(0
     let rim = pow(1.0 - max(dot(normal, to_eye), 0.0), 2.0);
     let accent = node.tint.rgb * (hemisphere + key + fill) * 1.25 + vec3<f32>(0.18 * rim);
     colour = mix(colour, accent, node.tint.a);
-    return vec4<f32>(colour, 1.0);
+    // A ghost fades toward a pale warm grey.
+    colour = mix(colour, vec3<f32>(0.80, 0.78, 0.75), node.style.y);
+    // Seen through (X-ray, not a ghost), the faces a cut made stay
+    // nearly solid, so a socket or a mortise reads inside its part.
+    var alpha = node.style.x;
+    if (node.style.x < 0.99 && node.style.y < 0.5) {
+        alpha = mix(alpha, 0.88, in.cut);
+    }
+    return vec4<f32>(colour, alpha);
 }
 
 // ---- shadow map ----
@@ -227,7 +253,7 @@ fn edge_fragment(in: EdgeOut) -> @location(0) vec4<f32> {
         discard;
     }
     let node = nodes[in.node];
-    let ink = vec4<f32>(0.022, 0.012, 0.005, 0.42);
+    let ink = vec4<f32>(0.022, 0.012, 0.005, 0.42 * node.style.w);
     let selected = vec4<f32>(node.tint.rgb * 0.6, 1.0);
     return mix(ink, selected, step(0.01, node.tint.a));
 }
@@ -278,4 +304,24 @@ fn volume_fragment() -> @location(0) vec4<f32> {
 @fragment
 fn volume_edge_fragment() -> @location(0) vec4<f32> {
     return vec4<f32>(0.45, 0.0, 0.0, 0.95);
+}
+
+// ---- the overlay: paths, outlines and labels, on screen ----
+
+struct OverlayOut {
+    @builtin(position) clip: vec4<f32>,
+    @location(0) colour: vec4<f32>,
+};
+
+@vertex
+fn overlay_vertex(@location(0) position: vec2<f32>, @location(1) colour: vec4<f32>) -> OverlayOut {
+    var out: OverlayOut;
+    out.clip = vec4<f32>(position, 0.0, 1.0);
+    out.colour = colour;
+    return out;
+}
+
+@fragment
+fn overlay_fragment(in: OverlayOut) -> @location(0) vec4<f32> {
+    return in.colour;
 }

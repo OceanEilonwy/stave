@@ -13,6 +13,7 @@
 //! descriptions, problems) and `stave-scene` (poses, camera, picking);
 //! this module only wires widgets to them.
 
+mod focus_panel;
 mod panel;
 mod viewport;
 
@@ -26,9 +27,10 @@ use anyhow::{Context as _, Result, bail};
 use gtk::{gdk, gio, glib};
 use notify::Watcher as _;
 use stave_app::Contact;
+use stave_app::focus::{self, Focus, Target};
 use stave_app::view::{self, Highlight, Item, Problem};
 use stave_model::solved::{AssemblyId, SolvedDesign};
-use stave_scene::{NodeId, Orbit, Posed, SceneGraph};
+use stave_scene::{Look, NodeId, Orbit, Overlay, Posed, SceneGraph};
 
 use crate::render::{Frame, Renderer};
 use panel::Panel;
@@ -139,10 +141,31 @@ struct Widgets {
 /// The last design that solved, ready to draw.
 struct Shown {
     design: SolvedDesign,
+    /// The rest of what opening the folder produced (the model, the
+    /// sources and the checks' contacts), for focus mode's words.
+    opened: stave_app::Opened,
     scene: SceneGraph,
     scene_index: usize,
     posed: Posed,
 }
+
+/// Focus mode: one joint or piece of hardware.
+struct FocusState {
+    focus: Focus,
+    /// 0 to 1: apart to together, or closed to fully open.
+    progress: f32,
+    options: focus::Options,
+    /// Looking down from above, flat.
+    plan: bool,
+    /// Playing: the progress moves on each frame.
+    playing: bool,
+    /// The last frame's looks and overlay.
+    looks: Vec<Look>,
+    overlay: Overlay,
+}
+
+/// How fast focus mode plays: the whole way in 2.5 seconds.
+const PLAY_PER_SECOND: f64 = 0.4;
 
 /// What the window remembers between events.
 struct State {
@@ -182,6 +205,10 @@ struct State {
     /// slider: the assembly, its amount (radians or millimetres) and
     /// whether it turns.
     opened: Option<(AssemblyId, f32, bool)>,
+    /// What the selection can be focused on.
+    targets: Vec<Target>,
+    /// Focus mode, when on.
+    focus: Option<FocusState>,
 }
 
 struct Window {
@@ -227,6 +254,8 @@ impl Window {
                 explode_target: None,
                 updating_controls: false,
                 opened: None,
+                targets: Vec::new(),
+                focus: None,
             }),
             watcher: RefCell::new(None),
         });
@@ -280,10 +309,11 @@ impl Window {
         }
         widgets.panel.show_problem(None, None);
         let errors = opened.error_count();
-        match (opened.design, scene) {
+        let mut opened = opened;
+        match (opened.design.take(), scene) {
             (Some(design), Some(scene)) => {
                 widgets.title.set_title(&design.project.title);
-                self.show_design(design, scene);
+                self.show_design(design, opened, scene);
                 widgets.banner.set_revealed(false);
                 widgets.stack.set_visible_child_name("view");
                 if !first {
@@ -361,7 +391,12 @@ impl Window {
 
     /// Shows a freshly solved design, keeping the scene, the camera and
     /// the selection (by name) when they still exist.
-    fn show_design(self: &Rc<Self>, design: SolvedDesign, scene: SceneGraph) {
+    fn show_design(
+        self: &Rc<Self>,
+        design: SolvedDesign,
+        opened: stave_app::Opened,
+        scene: SceneGraph,
+    ) {
         let mut state = self.state.borrow_mut();
         let previous_scene = state.wanted_scene.take().or_else(|| {
             let shown = state.shown.as_ref()?;
@@ -396,10 +431,13 @@ impl Window {
         let titles: Vec<String> = scene.scenes.iter().map(|s| s.title.clone()).collect();
         state.shown = Some(Shown {
             design,
+            opened,
             scene,
             scene_index,
             posed,
         });
+        // A reload renumbers everything: leave focus mode.
+        state.focus = None;
         if state.orbit.is_none() {
             state.orbit = Self::frame_all(&state);
         }
@@ -426,6 +464,7 @@ impl Window {
         if let Some(index) = problem {
             self.show_problem(index);
         }
+        self.widgets.panel.focus.show(None);
         self.update_panel();
         self.update_opening();
         if let Err(message) = &self.state.borrow().renderer {
@@ -538,12 +577,244 @@ impl Window {
     }
 
     fn update_panel(&self) {
-        let state = self.state.borrow();
+        let mut state = self.state.borrow_mut();
         let description = state.shown.as_ref().and_then(|shown| {
             let node = shown.scene.node(state.selection?)?;
             view::describe(&shown.design, node.item)
         });
+        let (targets, hardware) = state
+            .shown
+            .as_ref()
+            .and_then(|shown| {
+                let node = shown.scene.node(state.selection?)?;
+                Some((
+                    focus::targets_of(&shown.design, node.item),
+                    matches!(node.item, Item::Hardware(_)),
+                ))
+            })
+            .unwrap_or_default();
+        state.targets = targets.iter().map(|(target, _)| *target).collect();
+        drop(state);
         self.widgets.panel.show_selection(description.as_ref());
+        let labels: Vec<String> = targets.into_iter().map(|(_, label)| label).collect();
+        self.widgets.panel.show_targets(&labels, hardware);
+    }
+
+    // ---- focus mode ----
+
+    /// Focuses on the selection's `index`th target.
+    fn open_focus(self: &Rc<Self>, index: usize) {
+        let mut state = self.state.borrow_mut();
+        let Some(target) = state.targets.get(index).copied() else {
+            return;
+        };
+        let Some(shown) = state.shown.as_ref() else {
+            return;
+        };
+        let Some(found) = focus::open(&shown.opened, &shown.design, &shown.scene, target) else {
+            return;
+        };
+        let progress = if found.assembles() { 0.0 } else { 0.4 };
+        state.problem = None;
+        state.opened = None;
+        state.focus = Some(FocusState {
+            focus: found,
+            progress,
+            options: focus::Options::default(),
+            plan: false,
+            playing: false,
+            looks: Vec::new(),
+            overlay: Overlay::default(),
+        });
+        let texts = Self::repose(&mut state);
+        // Frame the joint or the hardware.
+        let aspect = Self::aspect(&state);
+        let framed = state
+            .focus
+            .as_ref()
+            .and_then(|f| f.focus.zone())
+            .zip(state.orbit);
+        if let Some((zone, orbit)) = framed {
+            state.orbit = Some(orbit.framed(zone, aspect));
+        }
+        state.updating_controls = true;
+        drop(state);
+        {
+            let state = self.state.borrow();
+            let panel = &self.widgets.panel.focus;
+            panel.show(state.focus.as_ref().map(|f| &f.focus));
+            panel.scrub.set_value(f64::from(progress));
+            panel.play.set_active(false);
+            panel.xray.set_active(true);
+            panel.tint.set_active(true);
+            panel.fade.set_active(true);
+            if let Some(focus) = state.focus.as_ref() {
+                self.widgets.title.set_subtitle(&focus.focus.context);
+            }
+        }
+        self.state.borrow_mut().updating_controls = false;
+        self.widgets.panel.show_problem(None, None);
+        self.show_focus_texts(texts);
+        self.render_pictures();
+        self.request_render();
+    }
+
+    /// Leaves focus mode.
+    fn leave_focus(self: &Rc<Self>) {
+        let mut state = self.state.borrow_mut();
+        state.focus = None;
+        Self::repose(&mut state);
+        let folder = state.folder.display().to_string();
+        drop(state);
+        self.widgets.title.set_subtitle(&folder);
+        self.widgets.panel.focus.show(None);
+        self.request_render();
+    }
+
+    fn show_focus_texts(&self, texts: Option<(Option<String>, String)>) {
+        if let Some((step, status)) = texts {
+            self.widgets
+                .panel
+                .focus
+                .show_frame(step.as_deref(), &status);
+        }
+    }
+
+    /// The scrub moved, or a toggle changed: poses again.
+    fn update_focus(self: &Rc<Self>, change: impl FnOnce(&mut FocusState)) {
+        let mut state = self.state.borrow_mut();
+        if state.updating_controls {
+            return;
+        }
+        let Some(focus) = state.focus.as_mut() else {
+            return;
+        };
+        change(focus);
+        let texts = Self::repose(&mut state);
+        drop(state);
+        self.show_focus_texts(texts);
+        self.request_render();
+    }
+
+    /// Play toggled: moves the progress on every frame until it is done.
+    fn play_focus(self: &Rc<Self>, playing: bool) {
+        {
+            let mut state = self.state.borrow_mut();
+            if state.updating_controls {
+                return;
+            }
+            let Some(focus) = state.focus.as_mut() else {
+                return;
+            };
+            let already = focus.playing;
+            focus.playing = playing;
+            if playing && focus.progress >= 1.0 {
+                focus.progress = 0.0;
+            }
+            if already || !playing {
+                return;
+            }
+        }
+        let window = self.clone();
+        let last: std::cell::Cell<Option<i64>> = std::cell::Cell::new(None);
+        self.widgets.viewport.add_tick_callback(move |_, clock| {
+            let now = clock.frame_time();
+            let seconds = last.get().map_or(0.0, |before| {
+                f64::from(i32::try_from(now - before).unwrap_or(0)) / 1e6
+            });
+            last.set(Some(now));
+            let mut state = window.state.borrow_mut();
+            let Some(focus) = state.focus.as_mut() else {
+                return glib::ControlFlow::Break;
+            };
+            if !focus.playing {
+                return glib::ControlFlow::Break;
+            }
+            focus.progress = (focus.progress + narrow(seconds * PLAY_PER_SECOND)).min(1.0);
+            let done = focus.progress >= 1.0;
+            if done {
+                focus.playing = false;
+            }
+            let progress = focus.progress;
+            let texts = Self::repose(&mut state);
+            state.updating_controls = true;
+            drop(state);
+            let panel = &window.widgets.panel.focus;
+            panel.scrub.set_value(f64::from(progress));
+            if done {
+                panel.play.set_active(false);
+            }
+            window.state.borrow_mut().updating_controls = false;
+            window.show_focus_texts(texts);
+            window.request_render();
+            if done {
+                glib::ControlFlow::Break
+            } else {
+                glib::ControlFlow::Continue
+            }
+        });
+    }
+
+    /// Renders the focus's small pictures offscreen for the panel.
+    fn render_pictures(&self) {
+        let mut state = self.state.borrow_mut();
+        let State {
+            shown,
+            focus,
+            renderer,
+            orbit,
+            ..
+        } = &mut *state;
+        let (Some(shown), Some(focus), Ok(renderer), Some(orbit)) =
+            (shown.as_ref(), focus.as_ref(), renderer, *orbit)
+        else {
+            return;
+        };
+        let Some(entry) = shown.scene.scenes.get(shown.scene_index) else {
+            return;
+        };
+        let (width, height) = (240, 170);
+        let mut pictures = Vec::new();
+        for pose in &focus.focus.key_poses {
+            let frame = focus
+                .focus
+                .frame(&shown.scene, entry, pose.progress, &focus.options);
+            let aspect = crate::render::aspect(width, height);
+            let (orbit, section) = match focus.focus.plan() {
+                Some(plan) => (Orbit::plan(plan.bounds, aspect, 0.0), Some(plan.section)),
+                None => (
+                    focus
+                        .focus
+                        .zone()
+                        .map_or(orbit, |zone| orbit.framed(zone, aspect)),
+                    entry.section,
+                ),
+            };
+            let image = renderer.render(&Frame {
+                scene: &shown.scene,
+                posed: &frame.posed,
+                orbit,
+                selection: None,
+                highlight: None,
+                section,
+                looks: Some(&frame.looks),
+                overlay: Some(&frame.overlay),
+                tint_cut_faces: focus.options.tint_cut_faces,
+                width,
+                height,
+            });
+            let Ok(image) = image else { continue };
+            let stride = usize::try_from(image.width).unwrap_or(0) * 4;
+            let (Ok(w), Ok(h)) = (i32::try_from(image.width), i32::try_from(image.height)) else {
+                continue;
+            };
+            let bytes = glib::Bytes::from_owned(image.rgba);
+            let texture =
+                gdk::MemoryTexture::new(w, h, gdk::MemoryFormat::R8g8b8a8, &bytes, stride);
+            pictures.push((texture.upcast::<gdk::Texture>(), pose.caption.clone()));
+        }
+        drop(state);
+        self.widgets.panel.focus.show_pictures(pictures);
     }
 
     fn pick(self: &Rc<Self>, x: f64, y: f64) {
@@ -599,19 +870,35 @@ impl Window {
         self.request_render();
     }
 
-    /// Poses the design for what the window shows: a problem at its
-    /// contact, or the current scene pulled apart by the explode amount.
-    fn repose(state: &mut State) {
+    /// Poses the design for what the window shows: focus mode, a problem
+    /// at its contact, or the current scene pulled apart by the explode
+    /// amount. In focus mode, returns its step and status for the panel.
+    fn repose(state: &mut State) -> Option<(Option<String>, String)> {
         let State {
             shown,
             problem,
             explode,
             opened,
+            focus,
             ..
         } = state;
-        let Some(shown) = shown.as_mut() else {
-            return;
-        };
+        let shown = shown.as_mut()?;
+        if let Some(focus) = focus.as_mut() {
+            let entry = shown.scene.scenes.get(shown.scene_index)?;
+            // From above, the section cuts the receiving part open: it is
+            // drawn solid.
+            let options = focus::Options {
+                xray: focus.options.xray && !focus.plan,
+                ..focus.options
+            };
+            let frame = focus
+                .focus
+                .frame(&shown.scene, entry, focus.progress, &options);
+            shown.posed = frame.posed;
+            focus.looks = frame.looks;
+            focus.overlay = frame.overlay;
+            return Some((frame.step, frame.status));
+        }
         match problem {
             Some(problem) => {
                 if let Some(posed) =
@@ -630,6 +917,7 @@ impl Window {
                 }
             }
         }
+        None
     }
 
     /// Shows the slider and toggle at the window's explode amount.
@@ -679,6 +967,7 @@ impl Window {
             }
         });
         state.explode_target = None;
+        state.focus = None;
         state.problem = Some(ShownProblem {
             contact,
             highlight,
@@ -698,6 +987,7 @@ impl Window {
         }
         state.updating_controls = true;
         drop(state);
+        self.widgets.panel.focus.show(None);
         self.widgets
             .panel
             .show_problem(Some(&problem.message), slider);
@@ -840,10 +1130,19 @@ impl Window {
             selection,
             renderer,
             problem,
+            focus,
             ..
         } = &mut *state;
         let (Some(shown), Some(orbit), Ok(renderer)) = (shown.as_ref(), *orbit, renderer) else {
             return;
+        };
+        let focus = focus.as_ref();
+        let plan = focus
+            .filter(|f| f.plan)
+            .and_then(|f| f.focus.plan().copied());
+        let orbit = match plan {
+            Some(plan) => Orbit::plan(plan.bounds, crate::render::aspect(width, height), 0.0),
+            None => orbit,
         };
         // The shared wood is drawn only where it was measured; moved by the
         // slider, the parts stay tinted.
@@ -860,11 +1159,16 @@ impl Window {
             orbit,
             selection: *selection,
             highlight: highlight.as_ref(),
-            section: shown
-                .scene
-                .scenes
-                .get(shown.scene_index)
-                .and_then(|entry| entry.section),
+            section: plan.map(|p| p.section).or_else(|| {
+                shown
+                    .scene
+                    .scenes
+                    .get(shown.scene_index)
+                    .and_then(|entry| entry.section)
+            }),
+            looks: focus.map(|f| f.looks.as_slice()),
+            overlay: focus.map(|f| &f.overlay),
+            tint_cut_faces: focus.is_none_or(|f| f.options.tint_cut_faces),
             width,
             height,
         };
@@ -1030,6 +1334,50 @@ impl Window {
             .panel
             .animate
             .connect_toggled(move |button| window.animate_explode(button.is_active()));
+
+        let window = Rc::downgrade(self);
+        widgets.panel.connect_target(move |index| {
+            if let Some(window) = window.upgrade() {
+                window.open_focus(index);
+            }
+        });
+        let focus_panel = &widgets.panel.focus;
+        let window = self.clone();
+        focus_panel
+            .done
+            .connect_clicked(move |_| window.leave_focus());
+        let window = self.clone();
+        focus_panel.scrub.connect_value_changed(move |scale| {
+            let value = narrow(scale.value()).clamp(0.0, 1.0);
+            window.update_focus(|focus| {
+                focus.progress = value;
+                focus.playing = false;
+            });
+        });
+        let window = self.clone();
+        focus_panel
+            .play
+            .connect_toggled(move |button| window.play_focus(button.is_active()));
+        let window = self.clone();
+        focus_panel.xray.connect_active_notify(move |row| {
+            let on = row.is_active();
+            window.update_focus(|focus| focus.options.xray = on);
+        });
+        let window = self.clone();
+        focus_panel.tint.connect_active_notify(move |row| {
+            let on = row.is_active();
+            window.update_focus(|focus| focus.options.tint_cut_faces = on);
+        });
+        let window = self.clone();
+        focus_panel.fade.connect_active_notify(move |row| {
+            let on = row.is_active();
+            window.update_focus(|focus| focus.options.fade_others = on);
+        });
+        let window = self.clone();
+        focus_panel.from_above.connect_toggled(move |button| {
+            let on = button.is_active();
+            window.update_focus(|focus| focus.plan = on);
+        });
     }
 
     /// The part of a drag not applied yet.
