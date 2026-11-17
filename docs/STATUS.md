@@ -149,7 +149,8 @@ project's scenes in a dropdown. It reloads when a file changes.
   `stave-gtk examples/clothing_cabinet --screenshot h.png --open door_l=45
   --frame 'door_l.hinges[lower]' --pitch 89 --turn -33.2 --section up=657`.
   `--flat` draws flat; `--no-tint` leaves cut faces untinted.
-  See `docs/screenshots/viewer/` and `docs/screenshots/hinge/`.
+  See `docs/screenshots/viewer/` and `docs/screenshots/hinge/` (rendered
+  with the refitted linkage).
 - **Focus offscreen**: `--focus NAME` (a joint or a piece of hardware),
   `--pair N` (which pair of a joint, from 0), `--step AMOUNT` (0 apart to
   1 together, or 0 closed to 1 open; an `--open` of the focused door sets
