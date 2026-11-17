@@ -189,6 +189,10 @@ impl Checker<'_> {
                 "{part} can't come out of {other_name} along any one of its axes; check the cuts and insert steps of '{joint_name}'"
             ),
         };
+        self.next_contact = Some(crate::Contact::of(
+            &[Item::Part(step.part), Item::Part(other)],
+            &[],
+        ));
         self.report(
             Severity::Error,
             Code::Order,

@@ -8,15 +8,15 @@
 //! contact. An assembly inside another that moves, or with an item already
 //! reported at rest or at a scene's poses, is left out.
 
-use stave_geom::collide::{Placement, boxes_overlap, placed_bounds, union};
+use stave_geom::collide::{Placement, boxes_overlap, overlaps_placed, placed_bounds, union};
 use stave_geom::sweep::{SlideHit, slide_contact, slide_reach, turn_contact, turn_reach};
 use stave_lang::placement::Direction;
 use stave_lang::units::{Angle, Length};
 use stave_lang::{Code, Severity};
-use stave_model::solved::{AssemblyId, HardwareBase, Motion, WorldBox};
+use stave_model::solved::{AssemblyId, HardwareBase, Motion, PoseValue, WorldBox};
 
 use crate::names::length_text;
-use crate::{Checker, Item};
+use crate::{Checker, Contact, ContactMotion, Item};
 
 /// Where a motion first hits something.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -267,6 +267,66 @@ impl Checker<'_> {
         }
     }
 
+    /// The contact of a sweep's first hit: the motion stopped a little
+    /// past it, and the wood shared there.
+    fn sweep_contact(
+        &self,
+        assembly: AssemblyId,
+        motion: &Motion,
+        scene_index: usize,
+        reach: Reach,
+        a: Item,
+        b: Item,
+    ) -> Contact {
+        let (at, shown) = match (reach, *motion) {
+            (Reach::Angle(angle), Motion::Turn { opening_angle, .. }) => (
+                PoseValue::Angle(angle),
+                PoseValue::Angle(Angle::from_microdeg(
+                    angle
+                        .microdeg()
+                        .saturating_add(2_000_000)
+                        .min(opening_angle.microdeg()),
+                )),
+            ),
+            (Reach::Distance(hit), Motion::Travel { travel, .. }) => (
+                PoseValue::Travel(hit.distance),
+                PoseValue::Travel(Length::from_nm(
+                    hit.distance.nm().saturating_add(2_000_000).min(travel.nm()),
+                )),
+            ),
+            (Reach::Angle(_), Motion::Travel { .. })
+            | (Reach::Distance(_), Motion::Turn { .. }) => {
+                return Contact::default();
+            }
+        };
+        let (_, placements) = self.scene_moves(scene_index);
+        let body = |item: Item| self.bodies.iter().position(|x| x.item == item);
+        let found = match (body(a), body(b)) {
+            (Some(ia), Some(ib)) => {
+                match (self.bodies.get(ia), self.bodies.get(ib), placements.get(ib)) {
+                    (Some(x), Some(y), Some(pb)) => overlaps_placed(
+                        &x.solid,
+                        &Placement::of_motions(&[(*motion, shown)]),
+                        &y.solid,
+                        pb,
+                    ),
+                    _ => Vec::new(),
+                }
+            }
+            _ => Vec::new(),
+        };
+        let mut contact = Contact::of(&[a, b], &found);
+        contact.scene = (scene_index > 0)
+            .then(|| self.design.scenes.get(scene_index).map(|s| s.id))
+            .flatten();
+        contact.motion = Some(ContactMotion {
+            assembly,
+            at,
+            shown,
+        });
+        contact
+    }
+
     fn report_sweep(
         &mut self,
         assembly: AssemblyId,
@@ -331,6 +391,7 @@ impl Checker<'_> {
                 self.motion_hardware(assembly)
                     .and_then(|hardware| self.hardware_place(hardware))
             });
+        self.next_contact = Some(self.sweep_contact(assembly, motion, scene_index, reach, a, b));
         self.report(
             Severity::Error,
             Code::Motion,

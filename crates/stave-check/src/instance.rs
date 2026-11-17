@@ -20,7 +20,7 @@ use stave_model::solved::{AssemblyId, WorldBox};
 use stave_model::types::Ty;
 
 use crate::names::{length_text, list};
-use crate::{Checker, Item, deepest};
+use crate::{Checker, Contact, Item, deepest};
 
 /// Two items whose wood overlaps, and where.
 pub(crate) type Clash = (Item, Item, Vec<Overlap>);
@@ -247,6 +247,12 @@ impl Checker<'_> {
                 labelled += 1;
             }
         }
-        self.diagnostics.push(diagnostic);
+        let mut contact = Contact::default();
+        contact.add_item(group.other);
+        for (item, _) in &group.members {
+            contact.add_item(*item);
+        }
+        contact.regions = group.found.iter().map(|o| o.region).collect();
+        self.diagnostics.push((diagnostic, Some(contact)));
     }
 }

@@ -63,9 +63,77 @@ use stave_model::solved::{
 
 use crate::names::{length_text, pose_text};
 
+/// Something a diagnostic is about, for a viewer to show.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ContactItem {
+    /// A part.
+    Part(PartId),
+    /// A piece of hardware (either member).
+    Hardware(HardwareId),
+}
+
+/// Where a motion hits something.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ContactMotion {
+    /// The assembly that moves.
+    pub assembly: AssemblyId,
+    /// Where it first touches: an angle or a distance.
+    pub at: PoseValue,
+    /// A little further (2deg or 2mm, within its travel), where the
+    /// shared wood in [`Contact::regions`] is measured.
+    pub shown: PoseValue,
+}
+
+/// What a fit or motion diagnostic is about, in the design: the items
+/// involved, the shared wood, and the pose in which they collide.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Contact {
+    /// The parts and hardware involved.
+    pub items: Vec<ContactItem>,
+    /// The shared wood, as world boxes, in the pose below.
+    pub regions: Vec<WorldBox>,
+    /// The scene whose poses apply; `None` for rest.
+    pub scene: Option<stave_model::solved::SceneId>,
+    /// The motion that collides, and where.
+    pub motion: Option<ContactMotion>,
+}
+
+impl Contact {
+    fn add_item(&mut self, item: Item) {
+        let item = match item {
+            Item::Part(part) => ContactItem::Part(part),
+            Item::Hardware(h) | Item::Fixed(h) => ContactItem::Hardware(h),
+        };
+        if !self.items.contains(&item) {
+            self.items.push(item);
+        }
+    }
+
+    /// A contact about some items and the wood they share.
+    fn of(items: &[Item], found: &[Overlap]) -> Contact {
+        let mut contact = Contact::default();
+        for item in items {
+            contact.add_item(*item);
+        }
+        contact.regions = found.iter().map(|o| o.region).collect();
+        contact
+    }
+}
+
 /// Checks a solved design. Diagnostics come back in a fixed order; the
 /// application sorts them by position with everything else.
 pub fn check(model: &Model, design: &SolvedDesign) -> Vec<Diagnostic> {
+    check_with_contacts(model, design)
+        .into_iter()
+        .map(|(diagnostic, _)| diagnostic)
+        .collect()
+}
+
+/// [`check`], with what each diagnostic is about in the design.
+pub fn check_with_contacts(
+    model: &Model,
+    design: &SolvedDesign,
+) -> Vec<(Diagnostic, Option<Contact>)> {
     let mut checker = Checker::new(model, design);
     checker.not_supported();
     checker.contact();
@@ -117,7 +185,9 @@ struct Checker<'a> {
     /// Slides reported for their gap: their members are left out of the
     /// overlap checks, which would only report the same mistake again.
     misfit_slides: BTreeSet<HardwareId>,
-    diagnostics: Vec<Diagnostic>,
+    diagnostics: Vec<(Diagnostic, Option<Contact>)>,
+    /// What the next reported diagnostic is about.
+    next_contact: Option<Contact>,
 }
 
 impl<'a> Checker<'a> {
@@ -188,6 +258,7 @@ impl<'a> Checker<'a> {
             posed_failed: BTreeSet::new(),
             misfit_slides: BTreeSet::new(),
             diagnostics: Vec::new(),
+            next_contact: None,
         }
     }
 
@@ -241,7 +312,8 @@ impl<'a> Checker<'a> {
         diagnostic.severity = severity;
         diagnostic.notes = notes;
         diagnostic.help = help;
-        self.diagnostics.push(diagnostic);
+        let contact = self.next_contact.take();
+        self.diagnostics.push((diagnostic, contact));
     }
 
     fn item_name(&self, item: Item) -> String {
@@ -331,6 +403,8 @@ impl<'a> Checker<'a> {
                     names::list(&names)
                 )
             };
+            let items: Vec<Item> = parts.iter().map(|p| Item::Part(*p)).collect();
+            self.next_contact = Some(Contact::of(&items, &[]));
             self.report(
                 Severity::Warning,
                 Code::NotSupported,
@@ -400,6 +474,7 @@ impl<'a> Checker<'a> {
         }
         for (joint, part) in problems {
             let (joint_name, part_name) = (self.joint_name(joint), self.part_name(part));
+            self.next_contact = Some(Contact::of(&[Item::Part(part)], &[]));
             self.report(
                 Severity::Error,
                 Code::NoContact,
@@ -447,28 +522,32 @@ impl<'a> Checker<'a> {
                     "use fewer elements, or make the space they are spaced in larger".to_owned()
                 }
             };
-            self.diagnostics.push(Diagnostic {
-                severity: Severity::Error,
-                code: Code::Overlap,
-                message: format!("{part} and {to} overlap"),
-                labels: Vec::new(),
-                notes: vec![format!(
-                    "with {word}({}), {part} ends {} past {anchor}",
-                    length_text(value),
-                    length_text(overrun.past)
-                )],
-                help: Some(help),
-            });
+            let contact = Contact::of(&[Item::Part(overrun.part)], &[]);
+            self.diagnostics.push((
+                Diagnostic {
+                    severity: Severity::Error,
+                    code: Code::Overlap,
+                    message: format!("{part} and {to} overlap"),
+                    labels: Vec::new(),
+                    notes: vec![format!(
+                        "with {word}({}), {part} ends {} past {anchor}",
+                        length_text(value),
+                        length_text(overrun.past)
+                    )],
+                    help: Some(help),
+                },
+                Some(contact),
+            ));
             if let Some((file, span)) = self
                 .part_place(overrun.part)
                 .or_else(|| self.project_place())
-                && let Some(last) = self.diagnostics.last_mut()
+                && let Some((last, _)) = self.diagnostics.last_mut()
             {
                 last.labels.push(Label::new(file, span));
             }
         }
         // A diagnostic without a place is dropped.
-        self.diagnostics.retain(|d| !d.labels.is_empty());
+        self.diagnostics.retain(|(d, _)| !d.labels.is_empty());
     }
 
     // -----------------------------------------------------------------------
@@ -525,6 +604,14 @@ impl<'a> Checker<'a> {
                     length_text(clearance)
                 )
             };
+            self.next_contact = Some(Contact::of(
+                &[
+                    Item::Hardware(hardware),
+                    Item::Fixed(hardware),
+                    Item::Part(piece),
+                ],
+                &[],
+            ));
             self.report(
                 Severity::Error,
                 Code::SlideGap,
@@ -656,6 +743,7 @@ impl<'a> Checker<'a> {
             }
         };
         let explanation = explain::overlap(self, a, b, found);
+        self.next_contact = Some(Contact::of(&[a, b], found));
         self.report(
             Severity::Error,
             Code::Overlap,
@@ -850,33 +938,44 @@ impl<'a> Checker<'a> {
 
     /// One diagnostic per mistake: diagnostics with the same code at the
     /// same place are merged into the first, the others becoming notes.
-    fn finish(self) -> Vec<Diagnostic> {
-        let mut merged: Vec<Diagnostic> = Vec::new();
+    fn finish(self) -> Vec<(Diagnostic, Option<Contact>)> {
+        let mut merged: Vec<(Diagnostic, Option<Contact>)> = Vec::new();
         let mut extra: BTreeMap<usize, Vec<String>> = BTreeMap::new();
-        for diagnostic in self.diagnostics {
-            let key = |d: &Diagnostic| {
-                (
-                    d.severity,
-                    d.code,
-                    d.primary().map(|l| (l.file, l.span.start(), l.span.end())),
-                )
-            };
-            if let Some(index) = merged.iter().position(|d| key(d) == key(&diagnostic)) {
-                if merged
-                    .get(index)
-                    .is_some_and(|d| d.message != diagnostic.message)
-                {
-                    let list = extra.entry(index).or_default();
-                    if !list.contains(&diagnostic.message) {
-                        list.push(diagnostic.message);
+        let key = |d: &Diagnostic| {
+            (
+                d.severity,
+                d.code,
+                d.primary().map(|l| (l.file, l.span.start(), l.span.end())),
+            )
+        };
+        for (diagnostic, contact) in self.diagnostics {
+            if let Some(index) = merged.iter().position(|(d, _)| key(d) == key(&diagnostic)) {
+                if let Some((first, first_contact)) = merged.get_mut(index) {
+                    if first.message != diagnostic.message {
+                        let list = extra.entry(index).or_default();
+                        if !list.contains(&diagnostic.message) {
+                            list.push(diagnostic.message);
+                        }
+                    }
+                    // Show everything the line causes.
+                    if let (Some(first), Some(other)) = (first_contact.as_mut(), contact)
+                        && first.scene == other.scene
+                        && first.motion == other.motion
+                    {
+                        for item in other.items {
+                            if !first.items.contains(&item) {
+                                first.items.push(item);
+                            }
+                        }
+                        first.regions.extend(other.regions);
                     }
                 }
             } else {
-                merged.push(diagnostic);
+                merged.push((diagnostic, contact));
             }
         }
         for (index, messages) in extra {
-            if let Some(diagnostic) = merged.get_mut(index) {
+            if let Some((diagnostic, _)) = merged.get_mut(index) {
                 let shown: Vec<String> = messages.iter().take(3).cloned().collect();
                 let more = messages.len().saturating_sub(shown.len());
                 let mut note = format!("the same line also causes: {}", shown.join("; "));
