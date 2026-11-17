@@ -1,4 +1,4 @@
-// expect: error[motion] door_r.panel hits door_l.panel when door_r is opened past 70.2deg
+// expect: error[motion] door_r.panel hits door_l.panel when door_r is opened past 71deg
 stave 1
 
 // Two doors hung on the same middle divider, hinged to open 110 degrees:
@@ -79,7 +79,7 @@ component Door {
     }
   }
 
-  hardware hinges[bottom, top] : euro_hinge(panel, on: hinge_side) {
+  hardware hinges[bottom, top] : euro_hinge(panel, on: hinge_side, plate_height: 9mm) {
     place {
       spaced(ends(inset: 80mm), from: panel.bottom, to: panel.top)
     }

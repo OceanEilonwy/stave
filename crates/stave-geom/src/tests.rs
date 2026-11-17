@@ -290,6 +290,7 @@ fn knob(orientation: Orientation, origin: Point, envelope: Envelope) -> Hardware
             diameter: Some(mm(26)),
             screw_diameter: mm(4),
         },
+        mechanism: None,
         model: None,
     }
 }

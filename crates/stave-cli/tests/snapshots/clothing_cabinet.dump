@@ -56,8 +56,8 @@ door_l.stile[hinge]          oak_19         1149.5 x 60 x 19           1..61    
     cut pocket 60 x 6 depth 10 on width end: where door_l.rail[bottom] meets it, local 0..60 x 50..60 x 0..19
     cut pocket 60 x 6 depth 10 on width end: where door_l.rail[top] meets it, local 1089.5..1149.5 x 50..60 x 0..19
     cut notch depth 10 on width end: where door_l.panel meets it, local 52..1097.5 x 52..60 x 6.5..12.5
-    cut drill 1 x diameter 35 depth 13 on thickness end: centred at local 117.5, 22.5, 19
-    cut drill 1 x diameter 35 depth 13 on thickness end: centred at local 1032, 22.5, 19
+    cut drill 1 x diameter 35 depth 12.8 on thickness end: centred at local 117.5, 22.5, 19
+    cut drill 1 x diameter 35 depth 12.8 on thickness end: centred at local 1032, 22.5, 19
 door_l.stile[latch]          oak_19         1149.5 x 60 x 19           389.25..449.25       530..1679.5          -19..0               up/right/back
     cut pocket 60 x 6 depth 10 on width start: where door_l.rail[bottom] meets it, local 0..60 x 0..10 x 0..19
     cut pocket 60 x 6 depth 10 on width start: where door_l.rail[top] meets it, local 1089.5..1149.5 x 0..10 x 0..19
@@ -119,8 +119,8 @@ door_r.stile[hinge]          oak_19         1149.5 x 60 x 19           839..899 
     cut pocket 60 x 6 depth 10 on width end: where door_r.rail[bottom] meets it, local 0..60 x 50..60 x 0..19
     cut pocket 60 x 6 depth 10 on width end: where door_r.rail[top] meets it, local 1089.5..1149.5 x 50..60 x 0..19
     cut notch depth 10 on width end: where door_r.panel meets it, local 52..1097.5 x 52..60 x 6.5..12.5
-    cut drill 1 x diameter 35 depth 13 on thickness end: centred at local 117.5, 22.5, 19
-    cut drill 1 x diameter 35 depth 13 on thickness end: centred at local 1032, 22.5, 19
+    cut drill 1 x diameter 35 depth 12.8 on thickness end: centred at local 117.5, 22.5, 19
+    cut drill 1 x diameter 35 depth 12.8 on thickness end: centred at local 1032, 22.5, 19
 door_r.stile[latch]          oak_19         1149.5 x 60 x 19           450.75..510.75       530..1679.5          -19..0               up/left/back
     cut pocket 60 x 6 depth 10 on width start: where door_r.rail[bottom] meets it, local 0..60 x 0..10 x 0..19
     cut pocket 60 x 6 depth 10 on width start: where door_r.rail[top] meets it, local 1089.5..1149.5 x 0..10 x 0..19
@@ -141,13 +141,17 @@ door_r.panel                 oak_6          1045.5 x 344.25 x 6        510.75..8
 
 HARDWARE (12)
 door_l.hinges[lower]         euro_hinge       on door_l.stile[hinge] (back face)
-    cup            6..41                630..665             -13..0              
+    cup            6..41                630..665             -12.8..0            
     plate          19..30               622.5..672.5         19..55              
-    opens 110deg, cup 35, on side_l
+    arm            20.6..37.3           639.5..655.5         0..55               
+    knuckle        31.5..37.3           639.5..655.5         -12.4..0            
+    opens 110deg, cup 35, on side_l, overlays it by 18
 door_l.hinges[upper]         euro_hinge       on door_l.stile[hinge] (back face)
-    cup            6..41                1544.5..1579.5       -13..0              
+    cup            6..41                1544.5..1579.5       -12.8..0            
     plate          19..30               1537..1587           19..55              
-    opens 110deg, cup 35, on side_l
+    arm            20.6..37.3           1554..1570           0..55               
+    knuckle        31.5..37.3           1554..1570           -12.4..0            
+    opens 110deg, cup 35, on side_l, overlays it by 18
 door_l.handle                hw.brass_knob_26 on door_l.stile[latch] (front face)
     box            406.25..432.25       1091.75..1117.75     -49..-19            
     one screw, 4
@@ -174,13 +178,17 @@ drawer[top].pull             hw.bar_pull_160  on drawer[top].front (front face)
     box            354..546             392.375..404.375     -54..-19            
     screws 160 apart, 4
 door_r.hinges[lower]         euro_hinge       on door_r.stile[hinge] (back face)
-    cup            859..894             630..665             -13..0              
+    cup            859..894             630..665             -12.8..0            
     plate          870..881             622.5..672.5         19..55              
-    opens 110deg, cup 35, on side_r
+    arm            862.7..879.4         639.5..655.5         0..55               
+    knuckle        862.7..868.5         639.5..655.5         -12.4..0            
+    opens 110deg, cup 35, on side_r, overlays it by 18
 door_r.hinges[upper]         euro_hinge       on door_r.stile[hinge] (back face)
-    cup            859..894             1544.5..1579.5       -13..0              
+    cup            859..894             1544.5..1579.5       -12.8..0            
     plate          870..881             1537..1587           19..55              
-    opens 110deg, cup 35, on side_r
+    arm            862.7..879.4         1554..1570           0..55               
+    knuckle        862.7..868.5         1554..1570           -12.4..0            
+    opens 110deg, cup 35, on side_r, overlays it by 18
 door_r.handle                hw.brass_knob_26 on door_r.stile[latch] (front face)
     box            467.75..493.75       1091.75..1117.75     -49..-19            
     one screw, 4
@@ -317,10 +325,10 @@ drawer[top].face             1..899               269.75..527          -19..0
 door_r.door                  450.75..899          530..1679.5          -19..0              
 
 ASSEMBLIES (4)
-door_l                       FramePanelDoor (5 parts): turns up to 110deg about the up line through (1, 530, -19), free side right, swinging front
+door_l                       FramePanelDoor (5 parts): opens up to 110deg on a cup hinge's linkage across the up axis from (1, 647.5, -19), free side right, swinging front; links (34.49, -8.19) to (12.17, -11.25) and (33.37, -16.76) to (11.03, -17.49)
 drawer[bottom]               Drawer (6 parts): travels 500 toward the front
 drawer[top]                  Drawer (6 parts): travels 500 toward the front
-door_r                       FramePanelDoor (5 parts, mirror of door_l): turns up to 110deg about the up line through (899, 530, -19), free side left, swinging front
+door_r                       FramePanelDoor (5 parts, mirror of door_l): opens up to 110deg on a cup hinge's linkage across the up axis from (899, 647.5, -19), free side left, swinging front; links (34.49, -8.19) to (12.17, -11.25) and (33.37, -16.76) to (11.03, -17.49)
 
 REQUIRES (63)
 hanger_room                                  holds

@@ -33,9 +33,15 @@ fn every_part_and_hardware_has_a_node() {
     let (design, graph) = cabinet();
     let fixed = design.hardware.iter().filter(|h| h.fixed.is_some()).count();
     assert_eq!(fixed, 8, "four hinge plates and four slide cabinet members");
+    let links = 2 * design
+        .hardware
+        .iter()
+        .filter(|h| h.mechanism.is_some())
+        .count();
+    assert_eq!(links, 8, "two links on each of the four cup hinges");
     assert_eq!(
         graph.nodes.len(),
-        design.parts.len() + design.hardware.len() + fixed
+        design.parts.len() + design.hardware.len() + fixed + links
     );
     assert_eq!(graph.scenes.first().map(|s| s.name.as_str()), Some("rest"));
     let stile = graph
@@ -136,23 +142,33 @@ fn the_open_scene_swings_doors_and_slides_drawers() {
         Vec3::new(0.0, 0.0, 500.0)
     ));
 
-    // The left door turns 110° about its outer front corner, (1, y, 19):
-    // the latch edge swings out to the front and left.
+    // The left door opens 110° on its cup hinges' linkage: turned by 110°
+    // and moved, its front hinge corner (1, y, 19) carried to about
+    // (8.04, y, 3.58) (tools/hinge-sim/linkage.py), the latch edge out to
+    // the front and left.
     let angle = 110_f32.to_radians();
     let door_l = posed.shown(node("door_l.stile[latch]")).unwrap();
-    let pivot = Vec3::new(1.0, 1000.0, 19.0);
-    assert!(close(door_l.transform_point3(pivot), pivot));
+    let corner = Vec3::new(1.0, 1000.0, 19.0);
+    let moved = door_l.transform_point3(corner);
+    assert!(
+        (moved - Vec3::new(8.04, 1000.0, 3.58)).abs().max_element() < 0.05,
+        "{moved}"
+    );
     let latch_corner = Vec3::new(449.25, 1000.0, 19.0);
     let reach = 448.25;
-    let expected = pivot + Vec3::new(angle.cos(), 0.0, angle.sin()) * reach;
-    assert!(close(door_l.transform_point3(latch_corner), expected));
+    let expected = moved + Vec3::new(angle.cos(), 0.0, angle.sin()) * reach;
+    assert!(
+        (door_l.transform_point3(latch_corner) - expected).length() < 0.01,
+        "{}",
+        door_l.transform_point3(latch_corner)
+    );
     // The hinge cups go with the door; the plates stay on the side, and so
     // do the slides' cabinet members.
     let hinge = posed.shown(node("door_l.hinges[upper]")).unwrap();
     assert_eq!(hinge, door_l);
     for fixed in [
-        "door_l.hinges[upper] plate",
-        "door_r.hinges[lower] plate",
+        "door_l.hinges[upper] plate and arm",
+        "door_r.hinges[lower] plate and arm",
         "drawer[top].slides[left] cabinet member",
     ] {
         assert_eq!(
@@ -164,10 +180,17 @@ fn the_open_scene_swings_doors_and_slides_drawers() {
 
     // The right door is its mirror image.
     let door_r = posed.shown(node("door_r.stile[latch]")).unwrap();
-    let pivot_r = Vec3::new(899.0, 1000.0, 19.0);
+    let corner_r = door_r.transform_point3(Vec3::new(899.0, 1000.0, 19.0));
+    assert!(
+        (corner_r - Vec3::new(899.0 - 7.04, 1000.0, moved.z))
+            .abs()
+            .max_element()
+            < 0.05,
+        "{corner_r}"
+    );
     let latch_r = Vec3::new(450.75, 1000.0, 19.0);
-    let expected_r = pivot_r + Vec3::new(-angle.cos(), 0.0, angle.sin()) * reach;
-    assert!(close(door_r.transform_point3(latch_r), expected_r));
+    let expected_r = corner_r + Vec3::new(-angle.cos(), 0.0, angle.sin()) * reach;
+    assert!((door_r.transform_point3(latch_r) - expected_r).length() < 0.01);
 
     // The carcass doesn't move.
     let side = posed.shown(node("side_l")).unwrap();
@@ -266,6 +289,58 @@ fn every_example_builds_and_poses_every_scene() {
             let entry = graph.scene_named(&scene.name).unwrap();
             let posed = graph.pose(entry);
             assert!(graph.bounds(&posed).is_some(), "{example}: {}", scene.name);
+        }
+    }
+}
+
+/// Scrubbing a door open carries each cup hinge's links with it: every link
+/// keeps its pin in the arm where it is and its pin in the boss on the
+/// boss (which moves with the door), at every angle.
+#[test]
+fn the_hinge_links_follow_the_door() {
+    let (design, graph) = cabinet();
+    let door = design
+        .assemblies
+        .iter()
+        .find(|a| a.name == "door_l")
+        .unwrap();
+    let hinge = design
+        .hardware
+        .iter()
+        .find(|h| h.name == "door_l.hinges[lower]")
+        .unwrap();
+    let mechanism = hinge.mechanism.as_ref().unwrap();
+    let frame = mechanism.linkage.frame();
+    let node = |name: &str| {
+        graph
+            .node_ids()
+            .find(|id| graph.node(*id).is_some_and(|n| n.name == name))
+            .unwrap()
+    };
+    let cup = node("door_l.hinges[lower]");
+    let links = [
+        node("door_l.hinges[lower] inner link"),
+        node("door_l.hinges[lower] outer link"),
+    ];
+    let rest = graph.scenes.first().unwrap();
+    for degrees in [0.0f32, 15.0, 45.0, 90.0, 110.0] {
+        let posed = graph.pose_with(rest, &[(door.id, degrees.to_radians())], 0.0);
+        let cup_transform = posed.transforms[cup.index()];
+        for (link, node) in mechanism.linkage.links().iter().zip(links) {
+            let arm_pin = stave_geom::render::point(frame.world(link.ground));
+            let boss_pin = stave_geom::render::point(frame.world(link.coupler));
+            let link_transform = posed.transforms[node.index()];
+            assert!(
+                close(link_transform.transform_point3(arm_pin), arm_pin),
+                "{degrees}deg: the arm pin moved"
+            );
+            assert!(
+                (link_transform.transform_point3(boss_pin)
+                    - cup_transform.transform_point3(boss_pin))
+                .length()
+                    < 0.01,
+                "{degrees}deg: the link left its boss pin"
+            );
         }
     }
 }

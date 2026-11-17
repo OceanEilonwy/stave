@@ -769,7 +769,7 @@ fn a_pull_bores_one_hole_or_two_holes_centres_apart() {
 #[test]
 fn a_cup_hinge_bores_its_cup_in_the_mount_face() {
     let opened = open(
-        "part side : pine_19 {\n  length: 400mm\n  width:  300mm\n  place {\n    orient(length: up, width: back)\n    against(base.top)\n    flush(base.left)\n    flush(base.front)\n  }\n}\npart door : pine_19 {\n  length: 300mm\n  width:  200mm\n  place {\n    orient(length: up, width: right)\n    against(base.top)\n    against(side.right)\n    against(base.front)\n  }\n}\nhardware h : euro_hinge(door, on: side) {\n  place {\n    flush(door.bottom, inset: 50mm)\n  }\n}",
+        "/// A cup hinge for an inset door, with no catalogue overlay (so its\n/// overlay isn't checked).\nkind inset_cup_hinge : hinge {\n  opening_angle: 110deg\n  cup_diameter:  35mm\n  cup_depth:     13mm\n  cup_inset:     5mm\n  plate_setback: 37mm\n  plate:         box(length: 50mm, width: 36mm, thickness: 11mm)\n}\npart side : pine_19 {\n  length: 400mm\n  width:  300mm\n  place {\n    orient(length: up, width: back)\n    against(base.top)\n    flush(base.left)\n    flush(base.front)\n  }\n}\npart door : pine_19 {\n  length: 300mm\n  width:  200mm\n  place {\n    orient(length: up, width: right)\n    against(base.top)\n    against(side.right)\n    against(base.front)\n  }\n}\nhardware h : inset_cup_hinge(door, on: side) {\n  place {\n    flush(door.bottom, inset: 50mm)\n  }\n}",
     );
     let design = design(&opened);
     let door = part(design, "door");

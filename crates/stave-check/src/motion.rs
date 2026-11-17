@@ -9,7 +9,10 @@
 //! reported at rest or at a scene's poses, is left out.
 
 use stave_geom::collide::{Placement, boxes_overlap, overlaps_placed, placed_bounds, union};
-use stave_geom::sweep::{SlideHit, slide_contact, slide_reach, turn_contact, turn_reach};
+use stave_geom::sweep::{
+    LinkageSweep, SlideHit, linkage_contact, linkage_reach, slide_contact, slide_reach,
+    turn_contact, turn_reach,
+};
 use stave_lang::placement::Direction;
 use stave_lang::units::{Angle, Length};
 use stave_lang::{Code, Severity};
@@ -37,6 +40,64 @@ impl Reach {
         };
         let hardware = |item: Item| !matches!(item, Item::Part(_));
         (amount, hardware(a), hardware(b), a, b)
+    }
+}
+
+/// A motion ready to sweep: a cup hinge's linkage solved once.
+enum Sweeper {
+    Turn {
+        pivot: stave_model::solved::Pivot,
+        opening: Angle,
+    },
+    Linkage(Box<LinkageSweep>),
+    Travel {
+        toward: Direction,
+        travel: Length,
+    },
+}
+
+impl Sweeper {
+    fn of(motion: &Motion) -> Sweeper {
+        match *motion {
+            Motion::Turn {
+                pivot,
+                opening_angle,
+            } => Sweeper::Turn {
+                pivot,
+                opening: opening_angle,
+            },
+            Motion::Linkage { linkage } => Sweeper::Linkage(Box::new(LinkageSweep::new(&linkage))),
+            Motion::Travel { toward, travel } => Sweeper::Travel { toward, travel },
+        }
+    }
+
+    /// The box a solid can reach over the motion.
+    fn reach(&self, solid: &stave_geom::collide::WorldSolid) -> Option<WorldBox> {
+        match self {
+            Sweeper::Turn { pivot, .. } => turn_reach(solid, pivot),
+            Sweeper::Linkage(sweep) => linkage_reach(solid, sweep),
+            Sweeper::Travel { toward, travel } => slide_reach(solid, *toward, *travel),
+        }
+    }
+
+    /// The first contact of a moving solid with a fixed one.
+    fn contact(
+        &self,
+        moving: &stave_geom::collide::WorldSolid,
+        fixed: &stave_geom::collide::WorldSolid,
+        placement: &Placement,
+    ) -> Option<Reach> {
+        match self {
+            Sweeper::Turn { pivot, opening } => {
+                turn_contact(moving, fixed, placement, pivot, *opening).map(Reach::Angle)
+            }
+            Sweeper::Linkage(sweep) => {
+                linkage_contact(moving, fixed, placement, sweep).map(Reach::Angle)
+            }
+            Sweeper::Travel { toward, travel } => {
+                slide_contact(moving, fixed, placement, *toward, *travel).map(Reach::Distance)
+            }
+        }
     }
 }
 
@@ -118,12 +179,10 @@ impl Checker<'_> {
         moving: &[usize],
         placements: &[Placement],
     ) -> Option<(Reach, Item, Item)> {
+        let sweeper = Sweeper::of(motion);
         let reach_of = |index: usize| -> Option<WorldBox> {
             let body = self.bodies.get(index)?;
-            match *motion {
-                Motion::Travel { toward, travel } => slide_reach(&body.solid, toward, travel),
-                Motion::Turn { pivot, .. } => turn_reach(&body.solid, &pivot),
-            }
+            sweeper.reach(&body.solid)
         };
         let reach = moving
             .iter()
@@ -150,17 +209,7 @@ impl Checker<'_> {
                 if self.exempt(body.item, fixed.item) {
                     continue;
                 }
-                let hit = match *motion {
-                    Motion::Travel { toward, travel } => {
-                        slide_contact(&body.solid, &fixed.solid, &placement, toward, travel)
-                            .map(Reach::Distance)
-                    }
-                    Motion::Turn {
-                        pivot,
-                        opening_angle,
-                    } => turn_contact(&body.solid, &fixed.solid, &placement, &pivot, opening_angle)
-                        .map(Reach::Angle),
-                };
+                let hit = sweeper.contact(&body.solid, &fixed.solid, &placement);
                 if let Some(hit) = hit
                     && best.is_none_or(|(b, x, y)| hit.key(body.item, fixed.item) < b.key(x, y))
                 {
@@ -185,31 +234,49 @@ impl Checker<'_> {
     ) -> String {
         let name = self.assembly_name(assembly);
         let b_name = self.item_name(b);
-        let fallback = format!(
-            "{name} turns into {b_name} as soon as it opens; leave a gap between them, or move {b_name} out of its way"
-        );
-        let Motion::Turn {
-            pivot,
-            opening_angle,
-        } = *motion
-        else {
-            return fallback;
-        };
+        self.clearance(assembly, motion, scene_index, a, b).unwrap_or_else(|| {
+            format!(
+                "{name} turns into {b_name} as soon as it opens; leave a gap between them, or move {b_name} out of its way"
+            )
+        })
+    }
+
+    /// The gap that clears a hinged assembly's first hit, found by moving
+    /// the other item away from it across the door (toward the free side,
+    /// or, for something beside the hinge edge, away from it) in steps of
+    /// 0.5mm; said in the instance's own terms when it has a mount. `None`
+    /// when 20mm doesn't clear it.
+    fn clearance(
+        &self,
+        assembly: AssemblyId,
+        motion: &Motion,
+        scene_index: usize,
+        a: Item,
+        b: Item,
+    ) -> Option<String> {
+        let name = self.assembly_name(assembly);
+        let b_name = self.item_name(b);
+        let (free, _) = motion.swing()?;
+        let sweeper = Sweeper::of(motion);
         let (_, placements) = self.scene_moves(scene_index);
         let body = |item: Item| self.bodies.iter().position(|x| x.item == item);
-        let (Some(ia), Some(ib)) = (body(a), body(b)) else {
-            return fallback;
-        };
+        let (ia, ib) = (body(a)?, body(b)?);
         let (Some(moving), Some(fixed), Some(Placement::Exact(offset))) = (
             self.bodies.get(ia),
             self.bodies.get(ib),
             placements.get(ib).copied(),
         ) else {
-            return fallback;
+            return None;
         };
-        let free = pivot.free_side;
         let axis = free.axis();
         let placed = placed_bounds(&fixed.bounds, &Placement::Exact(offset));
+        // Is the other item on the free side of the moving one, or beside
+        // its hinge edge?
+        let middle = |b: &WorldBox| b.min().get(axis).nm() / 2 + b.max().get(axis).nm() / 2;
+        let beyond =
+            (middle(&placed) - middle(&moving.bounds)) * if free.is_positive() { 1 } else { -1 };
+        let at_hinge_edge = beyond < 0;
+        let free = if at_hinge_edge { free.opposite() } else { free };
         let gap = if free.is_positive() {
             placed.min().get(axis).nm() - moving.bounds.max().get(axis).nm()
         } else {
@@ -226,28 +293,36 @@ impl Checker<'_> {
                 axis,
                 Length::from_nm(offset.get(axis).nm().saturating_add(shift)),
             );
-            turn_contact(
-                &moving.solid,
-                &fixed.solid,
-                &Placement::Exact(moved),
-                &pivot,
-                opening_angle,
-            )
-            .is_none()
+            sweeper
+                .contact(&moving.solid, &fixed.solid, &Placement::Exact(moved))
+                .is_none()
         });
-        let Some(total) = needed else {
-            return fallback;
-        };
+        let total = needed?;
         let total_text = length_text(Length::from_nm(total));
         let more = length_text(Length::from_nm(total - gap));
         let root = self.mirror_root(assembly);
         let mount = self.instance_place(root).is_some_and(|p| p.mount);
         let other = self.outer(b);
-        match other {
-            Some(other) if mount && self.mirror_root(other) == root => format!(
+        let field = match free {
+            Direction::Right => Some("right"),
+            Direction::Left => Some("left"),
+            Direction::Up => Some("top"),
+            Direction::Down => Some("bottom"),
+            Direction::Front | Direction::Back => None,
+        };
+        Some(match other {
+            // Two mirrored doors that meet at their free edges.
+            Some(other) if mount && self.mirror_root(other) == root && !at_hinge_edge => format!(
                 "leave at least {total_text} between {name} and {}: use meeting: -{} (each door)",
                 self.assembly_name(other),
                 length_text(Length::from_nm(total / 2))
+            ),
+            // Two mirrored doors hinged back to back: each gives half.
+            Some(other) if mount && self.mirror_root(other) == root && field.is_some() => format!(
+                "leave at least {total_text} between {name} and {}: make its {} overlay {} smaller (the mirrored door follows)",
+                self.assembly_name(other),
+                field.unwrap_or_default(),
+                length_text(Length::from_nm((total - gap) / 2))
             ),
             _ if mount => {
                 let field = match free {
@@ -256,7 +331,9 @@ impl Checker<'_> {
                     Direction::Up => "top",
                     Direction::Down => "bottom",
                     Direction::Front | Direction::Back => {
-                        return format!("leave at least {total_text} between {name} and {b_name}");
+                        return Some(format!(
+                            "leave at least {total_text} between {name} and {b_name}"
+                        ));
                     }
                 };
                 format!(
@@ -264,7 +341,7 @@ impl Checker<'_> {
                 )
             }
             _ => format!("leave at least {total_text} between {name} and {b_name}"),
-        }
+        })
     }
 
     /// The contact of a sweep's first hit: the motion stopped a little
@@ -278,8 +355,8 @@ impl Checker<'_> {
         a: Item,
         b: Item,
     ) -> Contact {
-        let (at, shown) = match (reach, *motion) {
-            (Reach::Angle(angle), Motion::Turn { opening_angle, .. }) => (
+        let (at, shown) = match (reach, motion.opening_angle()) {
+            (Reach::Angle(angle), Some(opening_angle)) => (
                 PoseValue::Angle(angle),
                 PoseValue::Angle(Angle::from_microdeg(
                     angle
@@ -288,14 +365,19 @@ impl Checker<'_> {
                         .min(opening_angle.microdeg()),
                 )),
             ),
-            (Reach::Distance(hit), Motion::Travel { travel, .. }) => (
-                PoseValue::Travel(hit.distance),
-                PoseValue::Travel(Length::from_nm(
-                    hit.distance.nm().saturating_add(2_000_000).min(travel.nm()),
-                )),
-            ),
-            (Reach::Angle(_), Motion::Travel { .. })
-            | (Reach::Distance(_), Motion::Turn { .. }) => {
+            (Reach::Distance(hit), None) => {
+                let Motion::Travel { travel, .. } = *motion else {
+                    return Contact::default();
+                };
+                (
+                    PoseValue::Travel(hit.distance),
+                    PoseValue::Travel(Length::from_nm(
+                        hit.distance.nm().saturating_add(2_000_000).min(travel.nm()),
+                    )),
+                )
+            }
+            // A reach always matches its motion.
+            (Reach::Angle(_), None) | (Reach::Distance(_), Some(_)) => {
                 return Contact::default();
             }
         };
@@ -339,7 +421,8 @@ impl Checker<'_> {
         let name = self.assembly_name(assembly);
         let (a_name, b_name) = (self.item_name(a), self.item_name(b));
         let (message, mut notes, help) = match (reach, *motion) {
-            (Reach::Angle(angle), Motion::Turn { opening_angle, .. }) => {
+            (Reach::Angle(angle), Motion::Turn { .. } | Motion::Linkage { .. }) => {
+                let opening_angle = motion.opening_angle().unwrap_or_default();
                 let at = angle_text(angle);
                 (
                     format!("{a_name} hits {b_name} when {name} is opened past {at}"),
@@ -347,9 +430,16 @@ impl Checker<'_> {
                     if angle.microdeg() < 1_000_000 {
                         self.clearance_help(assembly, motion, scene_index, a, b)
                     } else {
-                        format!(
-                            "open {name} no further than {at} (a smaller opening_angle), or move {b_name} out of its way"
-                        )
+                        // A cup hinge swings the door's edges out as it
+                        // starts to open: an early hit is cleared by a gap.
+                        let early =
+                            matches!(motion, Motion::Linkage { .. }) && angle < Angle::from_deg(30);
+                        early
+                            .then(|| self.clearance(assembly, motion, scene_index, a, b))
+                            .flatten()
+                            .unwrap_or_else(|| format!(
+                                "open {name} no further than {at} (a smaller opening_angle), or move {b_name} out of its way"
+                            ))
                     },
                 )
             }
@@ -370,7 +460,7 @@ impl Checker<'_> {
             }
             // A reach always matches its motion.
             (Reach::Angle(_), Motion::Travel { .. })
-            | (Reach::Distance(_), Motion::Turn { .. }) => {
+            | (Reach::Distance(_), Motion::Turn { .. } | Motion::Linkage { .. }) => {
                 return;
             }
         };

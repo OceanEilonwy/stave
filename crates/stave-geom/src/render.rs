@@ -105,6 +105,18 @@ pub fn point(point: Point) -> Vec3 {
     Vec3::new(mm(point.across), mm(point.up), -mm(point.deep))
 }
 
+/// A world transform (world nanometres to world nanometres, as the
+/// collision tests and [`crate::linkage`] use) as a render-frame transform
+/// (millimetres, `z` toward the front).
+pub fn transform(world: glam::DMat4) -> glam::Mat4 {
+    // world nm -> render mm: x, y scaled; deep flipped to z.
+    let scale = glam::DMat4::from_scale(glam::DVec3::new(1e-6, 1e-6, -1e-6));
+    let back = glam::DMat4::from_scale(glam::DVec3::new(1e6, 1e6, -1e6));
+    let render = scale * world * back;
+    let columns = render.to_cols_array().map(gpu);
+    glam::Mat4::from_cols_array(&columns)
+}
+
 /// The unit vector of a world direction in the render frame.
 pub fn direction(direction: Direction) -> Vec3 {
     match direction {

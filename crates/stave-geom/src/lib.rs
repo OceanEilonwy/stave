@@ -31,7 +31,10 @@
 //!   and sharp corners.
 //! - **Hardware** is its envelope: a box, or a cylinder standing off the
 //!   mount face (a hinge's cup is sunk into it); hinges and slides also
-//!   have a member fixed to the carcass ([`hardware_fixed`]).
+//!   have a member fixed to the carcass ([`hardware_fixed`]). A cup hinge
+//!   is drawn as its mechanism ([`hinge`]): the steel cup with its rim and
+//!   boss pins, the plate, arm and arm pins, and two links
+//!   ([`hardware_links`]).
 //!
 //! Mirrored parts have left-handed frames. Every triangle is wound so its
 //! geometric normal agrees with the outward normal it was built from, so
@@ -42,6 +45,8 @@
 
 mod build;
 pub mod collide;
+pub mod hinge;
+pub mod linkage;
 mod mesh;
 mod mesh_cut;
 pub mod render;
@@ -351,18 +356,32 @@ fn centre_of(part: &Part) -> [f32; 2] {
 }
 
 /// The mesh of the member of a piece of hardware on its piece: the whole
-/// of a pull, a hinge's cup, a slide's drawer member.
+/// of a pull, a hinge's cup (with a cup hinge's rim and boss pins), a
+/// slide's drawer member.
 pub fn hardware(hardware: &Hardware) -> Geometry {
-    envelope(&hardware.envelope, &hardware.pose)
+    match hinge::mechanism(hardware) {
+        Some(mechanism) => mechanism.cup,
+        None => envelope(&hardware.envelope, &hardware.pose),
+    }
 }
 
-/// The mesh of the member fixed to the carcass (a hinge's plate, a slide's
-/// cabinet member), when the hardware has one.
+/// The mesh of the member fixed to the carcass (a hinge's plate, with a
+/// cup hinge's arm and arm pins; a slide's cabinet member), when the
+/// hardware has one.
 pub fn hardware_fixed(hardware: &Hardware) -> Option<Geometry> {
+    if let Some(mechanism) = hinge::mechanism(hardware) {
+        return Some(mechanism.fixed);
+    }
     hardware
         .fixed
         .as_ref()
         .map(|member| envelope(&member.envelope, &member.pose))
+}
+
+/// The meshes of a cup hinge's two links at rest; `None` for any other
+/// hardware.
+pub fn hardware_links(hardware: &Hardware) -> Option<[Geometry; 2]> {
+    hinge::mechanism(hardware).map(|mechanism| mechanism.links)
 }
 
 /// A box or a cylinder (along the local thickness) at a pose.

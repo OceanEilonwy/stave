@@ -1,9 +1,10 @@
 // expect: error[motion] door_l.panel hits door_r.panel when door_l is opened past 0.1deg
 stave 1
 
-// A pair of doors that meet with no gap between them: as one opens, its
-// back edge swings across the line where they meet (by a fraction of a
-// millimetre), into the other door. They need a small gap.
+// A pair of doors hinged on the same middle divider, their hinge edges
+// meeting with no gap between them. A cup hinge pushes its door out and
+// swings the hinge edge sideways by about a millimetre as it opens: into
+// the other door. Doors that share a divider need a small gap.
 
 project "Double doors with no gap" {
   units: mm
@@ -43,22 +44,31 @@ part top : ply_18 {
   }
 }
 
-region bay[left, right] = split(
-  opening(
-    left:   side_l.right,
-    right:  side_r.left,
-    bottom: base.top,
-    top:    side_l.top,
-    front:  base.front,
-    back:   base.back,
-  ),
-  across,
+part divider : ply_18 {
+  length: 700mm
+  width:  400mm
+  place {
+    orient(length: up, width: back)
+    against(base.top)
+    center(base, across)
+    flush(base.front)
+  }
+}
+
+region bay_l = opening(
+  left:   side_l.right,
+  right:  divider.left,
+  bottom: base.top,
+  top:    side_l.top,
+  front:  base.front,
+  back:   base.back,
 )
 
+// Each door covers half the divider: 9mm, on hinges with 9mm plates.
 assembly door_l : Door {
-  opening:    bay[left]
-  hinge_side: side_l
-  mount:      overlay(left: 16mm, top: -2mm, bottom: 16mm, meeting: 0mm)
+  opening:    bay_l
+  hinge_side: divider
+  mount:      overlay(left: 16mm, right: 9mm, top: -2mm, bottom: 16mm)
 }
 
 assembly door_r = mirror(door_l, about: mid(base, across))

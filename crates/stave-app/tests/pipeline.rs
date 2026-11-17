@@ -425,7 +425,7 @@ fn the_clothing_cabinet_is_where_the_design_says() {
             hinge.bounds.min().deep,
             hinge.bounds.max().deep
         ),
-        (mm("630"), mm("6"), mm("41"), mm("-13"), mm("0"))
+        (mm("630"), mm("6"), mm("41"), mm("-12.8"), mm("0"))
     );
     // Its plate (50 x 36 x 11) on the inside face of side_l (19), centred on
     // the cup (647.5) and on the 37mm screw line back from side_l's front:
@@ -468,25 +468,32 @@ fn the_clothing_cabinet_is_where_the_design_says() {
 
     // Motions.
     let assembly = |name: &str| design.assemblies.iter().find(|a| a.name == name).unwrap();
+    // The doors move on their cup hinges' linkage, in the plane across
+    // the hinge edge at the door's front face (across 1, deep -19).
     match assembly("door_l").motion {
-        Some(Motion::Turn { pivot, .. }) => {
+        Some(Motion::Linkage { linkage }) => {
+            let frame = linkage.frame();
             assert_eq!(
-                (pivot.axis, pivot.through.across, pivot.through.deep),
+                (frame.axis(), frame.origin().across, frame.origin().deep),
                 (Axis::Up, mm("1"), mm("-19"))
             );
             assert_eq!(
-                (pivot.free_side, pivot.swing_toward),
+                (frame.free_side(), frame.swing_toward()),
                 (Direction::Right, Direction::Front)
             );
+            assert_eq!(
+                linkage.opening_angle(),
+                stave_lang::units::Angle::from_deg(110)
+            );
         }
-        other => panic!("door_l turns, found {other:?}"),
+        other => panic!("door_l moves on a linkage, found {other:?}"),
     }
     match assembly("door_r").motion {
-        Some(Motion::Turn { pivot, .. }) => assert_eq!(
-            (pivot.through.across, pivot.free_side),
+        Some(Motion::Linkage { linkage }) => assert_eq!(
+            (linkage.frame().origin().across, linkage.frame().free_side()),
             (mm("899"), Direction::Left)
         ),
-        other => panic!("door_r turns, found {other:?}"),
+        other => panic!("door_r moves on a linkage, found {other:?}"),
     }
     assert!(matches!(
         assembly("drawer[top]").motion,
@@ -542,4 +549,45 @@ fn the_clothing_cabinet_is_where_the_design_says() {
         ["rest", "all_open", "drawer_bench"]
     );
     assert_eq!(design.parts.len(), 34);
+}
+
+/// The door's hinge edge, front corner, as the left door of the cabinet
+/// opens on its cup hinges' linkage: exactly where it is placed when
+/// closed, then pushed forward and out, as `tools/hinge-sim/linkage.py`
+/// computes for the same hinge (19mm door, 18mm overlay, boring distance
+/// 5mm).
+#[test]
+fn the_cabinet_doors_move_on_their_hinges_linkage() {
+    use stave_geom::linkage::LinkagePath;
+    let opened = stave_app::open(&workspace().join("examples/clothing_cabinet")).unwrap();
+    let design = common::design(&opened);
+    let door = design
+        .assemblies
+        .iter()
+        .find(|a| a.name == "door_l")
+        .unwrap();
+    let Some(Motion::Linkage { linkage }) = door.motion else {
+        panic!("door_l moves on a linkage");
+    };
+    let path = LinkagePath::new(&linkage);
+    // The stile's front corner at its hinge edge: across 1, deep -19.
+    let corner = glam::DVec3::new(1e6, 647.5e6, -19e6);
+    let expected = [
+        (0, 1.0, -19.0),
+        (30, 3.03, -30.02),
+        (60, 2.99, -21.05),
+        (90, 4.79, -10.01),
+        (110, 8.04, -3.58),
+    ];
+    for (degrees, across, deep) in expected {
+        let theta = f64::from(degrees).to_radians();
+        let moved = path.coupler(theta).unwrap().transform_point3(corner);
+        let (x, z) = (moved.x / 1e6, moved.z / 1e6);
+        assert!(
+            (x - across).abs() < 0.02 && (z - deep).abs() < 0.02,
+            "{degrees}deg: ({x:.2}, {z:.2}), expected ({across}, {deep})"
+        );
+    }
+    // Closed is exact: no float is involved at 0deg.
+    assert_eq!(path.coupler(0.0), Some(glam::DMat4::IDENTITY));
 }

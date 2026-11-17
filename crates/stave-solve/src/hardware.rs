@@ -3,13 +3,17 @@
 
 use stave_lang::ast::{BaseKind, Span};
 use stave_lang::placement::{Axis, Direction, Face, PartAxis};
+use stave_lang::units::Length;
 use stave_lang::units::{ExactAngle, ExactLength, Rational};
 use stave_lang::{Code, Diagnostic, Label};
 use stave_model::defs::DefId;
 use stave_model::ids::{HardwareId, KindId, PartId, RegionId};
 use stave_model::instance::ItemSlot;
-use stave_model::solved::Orientation;
+use stave_model::solved::{
+    Link, LinkBar, Linkage, LinkageError, LinkageFrame, Orientation, PlanePoint, Point,
+};
 use stave_model::value::{Envelope, ExactBox, ModelRef, Value};
+use stave_schema::hinges::{CUP_HINGE_110, CupPoint};
 use stave_schema::kinds::{MountRule, OpenAxes, base};
 
 use crate::eval::{Env, KindEnv, midpoint, mm};
@@ -36,12 +40,34 @@ pub(crate) enum Data {
         cup_depth: ExactLength,
         cup_inset: ExactLength,
         on: PartId,
+        /// From the piece's edge nearer `on` to the face of `on` the plate
+        /// is on.
+        overlay: ExactLength,
+        overlay_range: Option<OverlayRangeExact>,
     },
     Pull {
         centres: Option<ExactLength>,
         diameter: Option<ExactLength>,
         screw_diameter: ExactLength,
     },
+}
+
+/// A cup hinge's catalogue overlay data.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct OverlayRangeExact {
+    pub base: ExactLength,
+    pub plate_height: ExactLength,
+    pub adjustment: ExactLength,
+}
+
+/// A cup hinge's arm and links, beside its linkage (which is its motion).
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Mechanism {
+    pub arm: Member,
+    pub knuckle: Member,
+    pub links: [LinkBar; 2],
+    pub pin_diameter: Length,
+    pub pin_length: Length,
 }
 
 /// A hole hardware bores in its piece.
@@ -91,6 +117,8 @@ pub(crate) enum MotionExact {
         swing_toward: Direction,
         angle: ExactAngle,
     },
+    /// A cup hinge's four-bar linkage, checked and in whole nanometres.
+    Linkage(Linkage),
     Travel {
         toward: Direction,
         travel: ExactLength,
@@ -128,6 +156,8 @@ pub(crate) struct Placed {
     /// Mortises the hardware is housed in.
     pub recesses: Vec<Recess>,
     pub motion: Option<MotionExact>,
+    /// A cup hinge's arm and links.
+    pub mechanism: Option<Mechanism>,
     pub model: Option<ModelRef>,
 }
 
@@ -419,6 +449,7 @@ impl Solver<'_> {
         let mut width_direction = positive_direction(width_axis);
         let length_axis = length_direction.axis();
         let mut on_part = None;
+        let mut mechanism = None;
         match kind.base {
             BaseKind::Slide => {
                 let low = piece_box.min(length_axis);
@@ -756,7 +787,8 @@ impl Solver<'_> {
                             };
                         }
                     }
-                    fixed = Some(self.hinge_plate(
+                    let length_centre = centre_of(length_axis)?;
+                    let plate = self.hinge_plate(
                         &binding,
                         &env,
                         span,
@@ -764,17 +796,97 @@ impl Solver<'_> {
                         on,
                         HingeFrame {
                             length_direction,
-                            length_centre: centre_of(length_axis)?,
+                            length_centre,
                             toward_door_middle: width_direction,
                             mount_direction,
                         },
-                    )?);
+                    )?;
+                    // The piece's thickness at the mount face: the frame's
+                    // origin is on its opposite face.
+                    let thickness = abs(opposite_position
+                        .checked_sub(face_position)
+                        .ok_or(Reported)?)?;
+                    if let Some(slot) = through.get_mut(world_index(length_axis)) {
+                        *slot = length_centre;
+                    }
+                    let linkage = self.cup_linkage(
+                        &name,
+                        CupFrame {
+                            axis: length_axis,
+                            origin: through,
+                            free_side: width_direction,
+                            swing_toward: opposite_face.direction(),
+                            cup_x: offset,
+                            thickness,
+                        },
+                        angle,
+                        &env,
+                        span,
+                    )?;
+                    let (arm, knuckle) = cup_arm(
+                        &plate,
+                        CupArmFrame {
+                            length_direction,
+                            length_centre,
+                            width_direction,
+                            cup_centre,
+                            mount_direction,
+                            face_position,
+                        },
+                    )?;
+                    let widest = CUP_HINGE_110
+                        .links
+                        .iter()
+                        .map(|link| link.width)
+                        .max()
+                        .unwrap_or(0);
+                    mechanism = Some(Mechanism {
+                        arm,
+                        knuckle,
+                        links: CUP_HINGE_110.links.map(|link| LinkBar {
+                            width: Length::from_nm(link.width),
+                            thickness: Length::from_nm(CUP_HINGE_110.link_thickness),
+                            slot: Length::from_nm(link.slot),
+                        }),
+                        pin_diameter: Length::from_nm(CUP_HINGE_110.pin_diameter),
+                        pin_length: Length::from_nm(widest),
+                    });
+                    // The overlay: from the piece's edge nearer `on` to the
+                    // face of `on` the plate is screwed to.
+                    let on_box = self.drawn_box(on)?;
+                    let inside_face = if width_direction.is_positive() {
+                        on_box.max(width_axis)
+                    } else {
+                        on_box.min(width_axis)
+                    };
+                    let overlay = if width_direction.is_positive() {
+                        inside_face.checked_sub(edge)
+                    } else {
+                        edge.checked_sub(inside_face)
+                    }
+                    .ok_or(Reported)?;
+                    let overlay_range =
+                        match self.hardware_length(&binding, "base_overlay", &env, span)? {
+                            Some(base) => Some(OverlayRangeExact {
+                                base,
+                                plate_height: self
+                                    .hardware_length(&binding, "plate_height", &env, span)?
+                                    .unwrap_or(ExactLength::ZERO),
+                                adjustment: self
+                                    .hardware_length(&binding, "overlay_adjustment", &env, span)?
+                                    .unwrap_or(ExactLength::ZERO),
+                            }),
+                            None => None,
+                        };
+                    fixed = Some(plate);
                     let data = Data::Hinge {
                         opening_angle: angle,
                         cup_diameter,
                         cup_depth,
                         cup_inset,
                         on,
+                        overlay,
+                        overlay_range,
                     };
                     let bore = Bore {
                         centre: bore_centre,
@@ -783,14 +895,7 @@ impl Solver<'_> {
                         count: 1,
                         centres: None,
                     };
-                    let motion = MotionExact::Turn {
-                        axis: length_axis,
-                        through,
-                        free_side: width_direction,
-                        swing_toward: opposite_face.direction(),
-                        angle,
-                    };
-                    (data, Some(bore), Some(motion))
+                    (data, Some(bore), Some(MotionExact::Linkage(linkage)))
                 }
             }
             BaseKind::Pull | BaseKind::Joint | BaseKind::Fastener | BaseKind::Tool => {
@@ -831,8 +936,86 @@ impl Solver<'_> {
             bore,
             recesses,
             motion,
+            mechanism,
             model,
         })
+    }
+
+    /// A cup hinge's linkage: the built-in mechanism's pins, placed
+    /// relative to the cup, checked over the opening angle.
+    fn cup_linkage(
+        &mut self,
+        name: &str,
+        frame: CupFrame,
+        angle: ExactAngle,
+        env: &Env<'_>,
+        span: Span,
+    ) -> Solved<Linkage> {
+        let near = |value: ExactLength| value.to_nearest_length().ok_or(Reported);
+        let coordinate = |axis: Axis| -> Solved<Length> {
+            near(*frame.origin.get(world_index(axis)).ok_or(Reported)?)
+        };
+        let origin = Point {
+            across: coordinate(Axis::Across)?,
+            up: coordinate(Axis::Up)?,
+            deep: coordinate(Axis::Deep)?,
+        };
+        let world = LinkageFrame::new(frame.axis, origin, frame.free_side, frame.swing_toward)
+            .map_err(|_| Reported)?;
+        let place = |point: CupPoint| -> Solved<PlanePoint> {
+            let x = frame
+                .cup_x
+                .checked_add(Length::from_nm(point.x).to_exact())
+                .ok_or(Reported)?;
+            let y = Length::from_nm(point.y)
+                .to_exact()
+                .checked_sub(frame.thickness)
+                .ok_or(Reported)?;
+            Ok(PlanePoint::new(near(x)?, near(y)?))
+        };
+        let [inner, outer] = CUP_HINGE_110.links;
+        let links = [
+            Link {
+                ground: place(inner.arm)?,
+                coupler: place(inner.boss)?,
+            },
+            Link {
+                ground: place(outer.arm)?,
+                coupler: place(outer.boss)?,
+            },
+        ];
+        let opening = angle.to_nearest_angle().ok_or(Reported)?;
+        let widest = stave_lang::units::Angle::from_microdeg(CUP_HINGE_110.max_opening);
+        if opening > widest {
+            return Err(self.error(
+                Code::OutOfRange,
+                format!(
+                    "'opening_angle' must be within 0deg..{widest} for a cup hinge, found {opening}"
+                ),
+                env.file,
+                span,
+                format!(
+                    "give {name} an opening_angle of at most {widest}: Stave models the common {widest} cup hinge; wide-angle hinges have a different mechanism, not modelled yet"
+                ),
+            ));
+        }
+        match Linkage::new(world, links, opening) {
+            Ok(linkage) => Ok(linkage),
+            Err(LinkageError::DeadPoint(_) | LinkageError::Angle) => {
+                Err(self.error(
+                    Code::Motion,
+                    format!(
+                        "{name}: a cup hinge's links lock before it opens {opening}"
+                    ),
+                    env.file,
+                    span,
+                    format!(
+                        "give the hinge an opening_angle of at most {widest} (wider hinges have a mechanism Stave doesn't model yet)"
+                    ),
+                ))
+            }
+            Err(_) => Err(Reported),
+        }
     }
 
     /// A butt hinge's second leaf: the moving leaf (`leaf_bounds`, sunk
@@ -998,6 +1181,120 @@ impl Solver<'_> {
             _ => 1,
         }
     }
+}
+
+/// Where a cup hinge's linkage goes: its frame, and where the cup is in
+/// it.
+struct CupFrame {
+    axis: Axis,
+    /// The frame's origin: on the door's edge nearer `on`, on the face
+    /// opposite the mount face, at the cup's centre along the door.
+    origin: [ExactLength; 3],
+    free_side: Direction,
+    swing_toward: Direction,
+    /// The cup's centre, from the door's edge.
+    cup_x: ExactLength,
+    /// The door's thickness: the mount face is this far behind the origin.
+    thickness: ExactLength,
+}
+
+/// Where a cup hinge's arm goes.
+struct CupArmFrame {
+    length_direction: Direction,
+    length_centre: ExactLength,
+    /// From the hinge edge toward the middle of the door.
+    width_direction: Direction,
+    /// The cup's centre across the door.
+    cup_centre: ExactLength,
+    /// Out of the door's back.
+    mount_direction: Direction,
+    /// The mount face's position along `mount_direction`'s axis.
+    face_position: ExactLength,
+}
+
+/// A cup hinge's arm, as two boxes: its body, from the back of its plate
+/// to the door's back face, and its knuckle, which reaches into the cup
+/// and carries the arm pins. Both are centred on the cup along the door.
+fn cup_arm(plate: &Member, frame: CupArmFrame) -> Solved<(Member, Member)> {
+    let mm = |nm: i64| Length::from_nm(nm).to_exact();
+    let width_axis = frame.width_direction.axis();
+    let across = |(low, high): (i64, i64)| -> Solved<(ExactLength, ExactLength)> {
+        Ok(if frame.width_direction.is_positive() {
+            (
+                frame.cup_centre.checked_add(mm(low)).ok_or(Reported)?,
+                frame.cup_centre.checked_add(mm(high)).ok_or(Reported)?,
+            )
+        } else {
+            (
+                frame.cup_centre.checked_sub(mm(high)).ok_or(Reported)?,
+                frame.cup_centre.checked_sub(mm(low)).ok_or(Reported)?,
+            )
+        })
+    };
+    let depth_axis = frame.mount_direction.axis();
+    let front = mm(CUP_HINGE_110.knuckle_front);
+    let (knuckle_front, far) = if frame.mount_direction.is_positive() {
+        (
+            frame.face_position.checked_sub(front).ok_or(Reported)?,
+            plate.bounds.max(depth_axis),
+        )
+    } else {
+        (
+            frame.face_position.checked_add(front).ok_or(Reported)?,
+            plate.bounds.min(depth_axis),
+        )
+    };
+    let ordered = |a: ExactLength, b: ExactLength| (a.min(b), a.max(b));
+    let half_width = half(mm(CUP_HINGE_110.arm_width))?;
+    let along = (
+        frame
+            .length_centre
+            .checked_sub(half_width)
+            .ok_or(Reported)?,
+        frame
+            .length_centre
+            .checked_add(half_width)
+            .ok_or(Reported)?,
+    );
+    let member = |across: (ExactLength, ExactLength), depth: (ExactLength, ExactLength)| {
+        let mut extents = [(ExactLength::ZERO, ExactLength::ZERO); 3];
+        for (axis, extent) in [
+            (width_axis, across),
+            (frame.length_direction.axis(), along),
+            (depth_axis, depth),
+        ] {
+            if let Some(slot) = extents.get_mut(world_index(axis)) {
+                *slot = extent;
+            }
+        }
+        let size = |(a, b): (ExactLength, ExactLength)| b.checked_sub(a).ok_or(Reported);
+        let envelope = Envelope::Box {
+            length: size(along)?,
+            width: size(depth)?,
+            thickness: size(across)?,
+        };
+        let [x, y, z] = extents;
+        Ok(Member {
+            envelope,
+            bounds: ExactBox::new(x, y, z),
+            orientation: Orientation::new(
+                frame.length_direction,
+                frame.mount_direction,
+                frame.width_direction,
+            )
+            .map_err(|_| Reported)?,
+        })
+    };
+    Ok((
+        member(
+            across(CUP_HINGE_110.arm_x)?,
+            ordered(frame.face_position, far),
+        )?,
+        member(
+            across(CUP_HINGE_110.knuckle_x)?,
+            ordered(frame.face_position, knuckle_front),
+        )?,
+    ))
 }
 
 /// Where a hinge's plate goes, from the placed cup.

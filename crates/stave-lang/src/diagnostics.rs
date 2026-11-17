@@ -282,6 +282,8 @@ codes! {
     Overlap = "overlap", layer 4;
     /// `<hardware>: <piece> is <gap> from the opening, but the slide needs <clearance>`
     SlideGap = "slide-gap", layer 4;
+    /// `<hardware>: <piece> overlays <on> by <overlay>, but the hinge gives <low> to <high>`
+    HingeOverlay = "hinge-overlay", layer 4;
     /// `<a> hits <b> when <assembly> is <open>`
     Motion = "motion", layer 5;
     /// `'<name>' fails: <message>`

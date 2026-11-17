@@ -30,7 +30,7 @@ fn rows(example: &str, hardware: &str) -> Vec<String> {
 fn a_cup_hinge_cup_is_described_as_deep() {
     let rows = rows("clothing_cabinet", "door_l.hinges[lower]");
     assert!(
-        rows.contains(&"Cup: cylinder 35 mm across, 13 mm deep".to_owned()),
+        rows.contains(&"Cup: cylinder 35 mm across, 12.8 mm deep".to_owned()),
         "{rows:?}"
     );
 }

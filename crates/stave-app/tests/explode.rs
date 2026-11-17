@@ -82,7 +82,9 @@ fn a_problem_poses_the_design_where_it_hits_and_shows_the_shared_wood() {
     assert!(range.turns);
     let shown = graph.amount(motion.assembly, motion.shown).unwrap();
     assert!(
-        (shown.to_degrees() - 92.1).abs() < 0.2,
+        // It first touches the wall at 2.5deg (its hinge edge swings out);
+        // it is shown 2deg past that.
+        (shown.to_degrees() - 4.5).abs() < 0.2,
         "{}",
         shown.to_degrees()
     );
@@ -90,7 +92,7 @@ fn a_problem_poses_the_design_where_it_hits_and_shows_the_shared_wood() {
     let highlight = view::highlight(&graph, contact);
     assert_eq!(highlight.nodes.len(), 2);
     assert!(!highlight.volumes.is_empty());
-    // The door is turned, the side isn't.
+    // The door is turned, the wall isn't.
     let door = highlight
         .nodes
         .iter()

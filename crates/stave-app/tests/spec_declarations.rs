@@ -597,6 +597,16 @@ fn poses_are_open_closed_an_angle_or_a_length() {
     flush(base.front)
   }
 }
+/// A cup hinge for an inset door, with no catalogue overlay (so its
+/// overlay isn't checked).
+kind inset_cup_hinge : hinge {
+  opening_angle: 110deg
+  cup_diameter:  35mm
+  cup_depth:     13mm
+  cup_inset:     5mm
+  plate_setback: 37mm
+  plate:         box(length: 50mm, width: 36mm, thickness: 11mm)
+}
 component Flap {
   part leaf : pine_19 {
     length: 200mm
@@ -608,7 +618,7 @@ component Flap {
       against(base.front)
     }
   }
-  hardware hinge : euro_hinge(leaf, on: wall) {
+  hardware hinge : inset_cup_hinge(leaf, on: wall) {
     place {
       flush(leaf.bottom, inset: 20mm)
     }

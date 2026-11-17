@@ -64,7 +64,9 @@
 //! hinge's cup or leaf, a slide's drawer member) and a member fixed to the
 //! carcass, which stays put ([`Hardware::fixed`]: a cup hinge's mounting
 //! plate on the inside face of `on`, a butt hinge's other leaf sunk into
-//! `on`, a slide's cabinet member).
+//! `on`, a slide's cabinet member). A cup hinge also has its mechanism
+//! ([`Hardware::mechanism`]): the arm on the plate and two links, which
+//! move the door on a four-bar [`Linkage`] ([`Motion::Linkage`]).
 
 use std::fmt;
 
@@ -76,6 +78,7 @@ use stave_schema::species::Species;
 use stave_schema::words::{Grain, Measure, OutputUnit, StockForm};
 
 pub use crate::ids::{AssemblyId, HardwareId, JointId, PartId, RegionId, SceneId};
+pub use crate::linkage::{Branch, Link, Linkage, LinkageError, LinkageFrame, PlanePoint};
 
 // ---------------------------------------------------------------------------
 // Geometry
@@ -1127,6 +1130,13 @@ pub enum HardwareData {
         cup_inset: Length,
         /// The part it is fixed to.
         on: PartId,
+        /// How far the piece overlays `on`: from the piece's edge nearer
+        /// `on` to the face of `on` the plate is screwed to (negative when
+        /// the edge is short of it).
+        overlay: Length,
+        /// What the catalogue says about the overlay, when the kind gives
+        /// its `base_overlay`.
+        overlay_range: Option<OverlayRange>,
     },
     /// A pull.
     Pull {
@@ -1137,6 +1147,32 @@ pub enum HardwareData {
         /// Screw diameter.
         screw_diameter: Length,
     },
+}
+
+/// The overlays a cup hinge can give: `base + cup_inset - plate_height`,
+/// give or take `adjustment` on the arm's side screw.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct OverlayRange {
+    /// The overlay with the cup at the door's edge on a 0mm plate (the
+    /// catalogue's base or fixed distance).
+    pub base: Length,
+    /// The mounting plate's height (the catalogue's distance).
+    pub plate_height: Length,
+    /// How far the side screw moves the door, each way.
+    pub adjustment: Length,
+}
+
+impl OverlayRange {
+    /// The overlay at the side screw's middle setting, for a cup this far
+    /// from the door's edge.
+    pub fn nominal(&self, cup_inset: Length) -> Length {
+        Length::from_nm(
+            self.base
+                .nm()
+                .saturating_add(cup_inset.nm())
+                .saturating_sub(self.plate_height.nm()),
+        )
+    }
 }
 
 /// A model for looks.
@@ -1180,8 +1216,48 @@ pub struct Hardware {
     pub fixed: Option<HardwareMember>,
     /// Catalog data.
     pub data: HardwareData,
+    /// A cup hinge's mechanism: its arm, links and pins. `None` for every
+    /// other piece of hardware.
+    pub mechanism: Option<CupMechanism>,
     /// A model, when the kind has one.
     pub model: Option<Model>,
+}
+
+/// The mechanism of a cup hinge: the arm on the mounting plate, and two
+/// links from the arm to the boss in the cup (grammar, "Hardware
+/// placement"). The cup ([`Hardware::envelope`]) moves with the door, the
+/// arm and plate stay put, and each link turns about its pin in the arm as
+/// the linkage moves.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct CupMechanism {
+    /// The four pins at rest and the range: the same linkage the
+    /// assembly's motion has when this is its first hinge.
+    pub linkage: Linkage,
+    /// The arm's body, fixed: a box on the plate, from the back of the
+    /// plate to the door's back face.
+    pub arm: HardwareMember,
+    /// The arm's front end, fixed: a box reaching into the cup (when the
+    /// door is closed) that carries the arm pins.
+    pub knuckle: HardwareMember,
+    /// The two links' sizes, in the order of [`Linkage::links`].
+    pub links: [LinkBar; 2],
+    /// The diameter of the four pins.
+    pub pin_diameter: Length,
+    /// How long the pins are, along the linkage's axis (as wide as the
+    /// widest link).
+    pub pin_length: Length,
+}
+
+/// The size of a link: a flat bar from pin to pin.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct LinkBar {
+    /// Along the pins.
+    pub width: Length,
+    /// Across the bar, in the linkage's plane.
+    pub thickness: Length,
+    /// The gap down its middle along the pins: a strap is two flanges with
+    /// the other link between them; zero for a solid bar.
+    pub slot: Length,
 }
 
 impl Hardware {
@@ -1230,6 +1306,12 @@ pub enum Motion {
         /// How far it opens.
         opening_angle: Angle,
     },
+    /// It turns and moves on a four-bar linkage (a cup hinge): one input,
+    /// the angle the door has turned, up to the linkage's opening angle.
+    Linkage {
+        /// The linkage.
+        linkage: Linkage,
+    },
     /// It travels in one direction, up to a distance.
     Travel {
         /// The direction it opens in.
@@ -1238,6 +1320,37 @@ pub enum Motion {
         /// How far it opens.
         travel: Length,
     },
+}
+
+impl Motion {
+    /// `true` for a hinge's motion (an angle), `false` for a slide's.
+    pub fn turns(&self) -> bool {
+        match self {
+            Motion::Turn { .. } | Motion::Linkage { .. } => true,
+            Motion::Travel { .. } => false,
+        }
+    }
+
+    /// How far a hinge's motion opens; `None` for a slide.
+    pub fn opening_angle(&self) -> Option<Angle> {
+        match self {
+            Motion::Turn { opening_angle, .. } => Some(*opening_angle),
+            Motion::Linkage { linkage } => Some(linkage.opening_angle()),
+            Motion::Travel { .. } => None,
+        }
+    }
+
+    /// For a hinge: the direction from the hinge edge toward the middle of
+    /// the door, and the direction the door swings to.
+    pub fn swing(&self) -> Option<(Direction, Direction)> {
+        match self {
+            Motion::Turn { pivot, .. } => Some((pivot.free_side, pivot.swing_toward)),
+            Motion::Linkage { linkage } => {
+                Some((linkage.frame().free_side(), linkage.frame().swing_toward()))
+            }
+            Motion::Travel { .. } => None,
+        }
+    }
 }
 
 /// An assembly: an instance of a component, or its mirror image.

@@ -275,11 +275,13 @@ pub fn table(design: &SolvedDesign) -> String {
                 opening_angle,
                 cup_diameter,
                 on,
+                overlay,
                 ..
             } => format!(
-                "opens {opening_angle}, cup {}, on {}",
+                "opens {opening_angle}, cup {}, on {}, overlays it by {}",
                 mm(*cup_diameter),
-                name(*on)
+                name(*on),
+                mm(*overlay)
             ),
             HardwareData::Pull {
                 centres,
@@ -307,6 +309,15 @@ pub fn table(design: &SolvedDesign) -> String {
         let _ = writeln!(out, "    {moving:<15}{}", extent(&hardware.bounds));
         if let Some(member) = &hardware.fixed {
             let _ = writeln!(out, "    {fixed:<15}{}", extent(&member.bounds));
+        }
+        if let Some(mechanism) = &hardware.mechanism {
+            let _ = writeln!(out, "    {:<15}{}", "arm", extent(&mechanism.arm.bounds));
+            let _ = writeln!(
+                out,
+                "    {:<15}{}",
+                "knuckle",
+                extent(&mechanism.knuckle.bounds)
+            );
         }
         let _ = writeln!(out, "    {detail}");
     }
@@ -388,6 +399,23 @@ pub fn table(design: &SolvedDesign) -> String {
                 pivot.free_side.word(),
                 pivot.swing_toward.word()
             ),
+            Some(Motion::Linkage { linkage }) => {
+                let frame = linkage.frame();
+                let [first, second] = linkage.links();
+                let pin = |p: &stave_model::solved::PlanePoint| format!("{}, {}", mm(p.x), mm(p.y));
+                format!(
+                    "opens up to {} on a cup hinge's linkage across the {} axis from ({}), free side {}, swinging {}; links ({}) to ({}) and ({}) to ({})",
+                    linkage.opening_angle(),
+                    frame.axis().word(),
+                    point(frame.origin()),
+                    frame.free_side().word(),
+                    frame.swing_toward().word(),
+                    pin(&first.ground),
+                    pin(&first.coupler),
+                    pin(&second.ground),
+                    pin(&second.coupler)
+                )
+            }
             Some(Motion::Travel { toward, travel }) => {
                 format!("travels {} toward the {}", mm(*travel), toward.word())
             }

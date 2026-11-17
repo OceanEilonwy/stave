@@ -431,7 +431,7 @@ const DOOR: &str = "part door : pine_19 {
 fn a_hinge_is_placed_along_its_pieces_length_only() {
     let hinge = |place: &str| {
         open(&format!(
-            "{SIDE}\n{DOOR}\nhardware h : euro_hinge(door, on: side){place}"
+            "{SIDE}\n{DOOR}\n/// A cup hinge for an inset door, with no catalogue overlay (so its\n/// overlay isn't checked).\nkind inset_cup_hinge : hinge {{\n  opening_angle: 110deg\n  cup_diameter:  35mm\n  cup_depth:     13mm\n  cup_inset:     5mm\n  plate_setback: 37mm\n  plate:         box(length: 50mm, width: 36mm, thickness: 11mm)\n}}\nhardware h : inset_cup_hinge(door, on: side){place}"
         ))
     };
     let opened = hinge(" {\n  place {\n    flush(door.bottom, inset: 50mm)\n  }\n}");

@@ -1,0 +1,11 @@
+---
+source: crates/stave-app/tests/fit.rs
+expression: "rendered(\"tests/broken/door_hits_side\")"
+---
+error[motion]: door.panel hits wall when door is opened past 2.5deg
+  --> tests/broken/door_hits_side/project.stave:82:10
+   |
+82 | assembly door : Door {
+   |          ^^^^
+   = note: the hinges open to 110deg
+   = help: leave at least 1mm between door and wall

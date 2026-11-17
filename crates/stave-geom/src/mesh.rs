@@ -102,7 +102,7 @@ pub fn cut_part(part: &Part, solid: &Solid, grain: GrainAxes) -> Geometry {
 }
 
 /// Joins geometries into one.
-fn merge(pieces: Vec<Geometry>) -> Geometry {
+pub(crate) fn merge(pieces: Vec<Geometry>) -> Geometry {
     let mut mesh = Mesh::default();
     let mut edges = Edges::default();
     let mut bounds: Option<Aabb> = None;

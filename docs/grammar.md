@@ -737,7 +737,7 @@ All entries are readable (`slide.clearance`, `hinge_kind.cup_diameter`).
 | Base | Roles (fixed) | Required | Optional |
 |---|---|---|---|
 | `slide` | `piece: Part` (the drawer side), `in: Region` (the opening) | `length`, `clearance`, `travel`: `Length`; `envelope`: `Envelope` | `model`, `moving`, `license` |
-| `hinge` | `piece: Part` (the door stile, the lid), `on: Part` (the cabinet side, the box) | `opening_angle`: `Angle`; and either, for a cup hinge, `cup_diameter`, `cup_depth`, `cup_inset`, `plate_setback`: `Length`; `plate`: `Envelope` (a box); or, for a butt hinge, `leaf`: `Envelope` (a box) | `model`, `moving`, `license` |
+| `hinge` | `piece: Part` (the door stile, the lid), `on: Part` (the cabinet side, the box) | `opening_angle`: `Angle`; and either, for a cup hinge, `cup_diameter`, `cup_depth`, `cup_inset`, `plate_setback`: `Length`; `plate`: `Envelope` (a box); or, for a butt hinge, `leaf`: `Envelope` (a box) | `base_overlay`, `plate_height` (default `0mm`), `overlay_adjustment` (default `0mm`): `Length`; `model`, `moving`, `license` |
 | `pull` | `piece: Part` | `envelope` | `centres`, `diameter`, `screw_diameter` (default `4mm`): `Length`; `model`, `license` |
 | `fastener` | none | `diameter`, `length`: `Length` | `envelope`, `model`, `license` |
 | `tool` | none | | `title`: `Text`; `powered`: `Bool` (default `false`) |
@@ -747,6 +747,26 @@ and `plate`) or a **butt hinge** (it has `leaf`), never both. A hinge kind
 with neither is `error[missing-field]` naming `leaf`; a cup hinge missing one
 of its entries is `error[missing-field]` naming it; one with both is
 `error[type-mismatch]`.
+
+The two kinds move differently. A **butt hinge** is a pin: the door turns
+about a fixed line. A **cup hinge** is a four-bar linkage: an arm on the
+mounting plate, a boss in the cup and two links between them, so the door
+moves forward and out while it turns and clears the side it covers. Every
+cup hinge moves on Stave's one built-in linkage, that of the common 110°
+full-overlay clip-on hinge, fixed to its cup (its pins are catalogue data
+of the mechanism, never written in a `.stave` file; see
+`docs/hardware/cup-hinge-linkage.md`). Its `opening_angle` is at most
+`110deg` (`error[out-of-range]` otherwise; wide-angle hinges have another
+mechanism, not modelled yet).
+
+The optional entries are a cup hinge's catalogue overlay: `base_overlay` is
+the overlay with the cup at the door's very edge on a 0mm plate (the
+catalogue's base, or fixed distance), `plate_height` the mounting plate's
+height (the catalogue's distance) and `overlay_adjustment` how far the arm's
+side screw moves the door each way. When a kind gives `base_overlay`, the
+door must overlay `on` by `base_overlay + cup_inset - plate_height`, give or
+take `overlay_adjustment` (`error[hinge-overlay]` otherwise, with the
+`cup_inset` or `plate_height` that fits).
 
 `model` is a `Model`, `moving` and `license` are `Text`. Hardware kinds accept
 `param` and `require` entries; they can't have `roles`, `cut`, `makes` or the
@@ -875,18 +895,28 @@ placed.
 **Members.** Hinges and slides are two pieces of metal: one moves with the
 door or drawer, one is screwed to the carcass and stays put.
 
-- A **hinge** is its **cup** and its **plate**. The cup is a cylinder,
-  `cup_diameter` across and `cup_depth` deep, sunk into the mount face (the
-  back of the stile), its rim `cup_inset` in from the stile's long edge
-  nearer the middle of `on`; `place { }` positions the cup along the
-  piece's length. The plate is the `plate` box, screwed to the face of `on`
-  that looks toward the middle of the door (the inside of the cabinet side):
-  its `thickness` stands off that face, its `length` runs along the door's
-  length centred on the cup, and its `width` runs back from the face of
-  `on` the door closes against, its middle `plate_setback` back from it (the
-  screw line; 37mm on 32mm-system cabinets). Neither member reaches into
-  `on`'s thickness or past its outer face. The cup moves with the door; the
-  plate stays.
+- A **cup hinge** is its **cup**, its **plate**, its **arm** and two
+  **links**. The cup is a cylinder, `cup_diameter` across and `cup_depth`
+  deep, sunk into the mount face (the back of the stile), its rim
+  `cup_inset` in from the stile's long edge nearer the middle of `on`;
+  `place { }` positions the cup along the piece's length. The plate is the
+  `plate` box, screwed to the face of `on` that looks toward the middle of
+  the door (the inside of the cabinet side): its `thickness` stands off that
+  face, its `length` runs along the door's length centred on the cup, and
+  its `width` runs back from the face of `on` the door closes against, its
+  middle `plate_setback` back from it (the screw line; 37mm on 32mm-system
+  cabinets). Neither member reaches into `on`'s thickness or past its outer
+  face. The arm lies on the plate, from the plate's back to the door's back
+  face, and its front end (the knuckle) reaches into the cup when the door
+  is closed; it carries two pins. The cup carries the boss and its two pins;
+  each link joins a pin in the arm to a pin in the boss. The arm and its
+  pins are where the built-in mechanism puts them relative to the cup, so a
+  side screw setting (see `overlay_adjustment`) moves the arm on the plate.
+  The cup moves with the door; the plate and arm stay; each link turns
+  about its pin in the arm. The arm and links must stay out of the wood of
+  the door (outside the cup) and of `on` as the door opens: a link resting
+  on the cup's rim (a 40mm steel rim on a 35mm cup) is the hinge's stop,
+  not a collision.
 - A **butt hinge** is two **leaves**, each the `leaf` box: its `length`
   runs along the pin (the piece's length), its `width` from the pin to the
   leaf's edge, its `thickness` is the leaf's. The mount face of `piece` must
@@ -1284,14 +1314,19 @@ What each base does:
   gives the assembly it is in a motion: it travels toward the front by up to
   `travel`.
 - **`hinge`** — a cup hinge bores its cup: one `drill(diameter: cup_diameter,
-  depth: cup_depth)` in the mount face. It gives the assembly a motion: it
-  turns by up to `opening_angle` about the long edge of `piece` that is on the
-  face opposite the mount face and nearer `on` (for an overlay door: its outer
-  front corner). A butt hinge cuts its two leaf mortises (`notch(depth:` the
-  leaf's thickness`)`, one in `piece` and one in `on`) and turns about its pin
+  depth: cup_depth)` in the mount face. It gives the assembly a motion: the
+  door opens by up to `opening_angle` on the hinge's linkage, its one input
+  the angle the door has turned; at each angle the door turns by that angle
+  and moves wherever its two links put it (forward, away from the cabinet,
+  and sideways), and at `0deg` it is exactly where it is placed. The
+  linkage's plane is across the long edge of `piece` that is on the face
+  opposite the mount face and nearer `on`; its free side is toward the
+  middle of the door and it swings toward the face opposite the mount face.
+  A butt hinge cuts its two leaf mortises (`notch(depth:` the leaf's
+  thickness`)`, one in `piece` and one in `on`) and turns about its pin
   edge, the free side swinging away from the mount face (a lid lifts). A
-  hinge has no `envelope:`: its cup and `plate`, or its two leaves, are its
-  envelope (see [Hardware placement](#hardware-placement)).
+  hinge has no `envelope:`: its cup, `plate`, arm and links, or its two
+  leaves, are its envelope (see [Hardware placement](#hardware-placement)).
 - **`pull`** — bores its screw holes through the piece: one hole of
   `screw_diameter` in the middle of the envelope, or two holes `centres` apart
   along its length when `centres` is given.
@@ -1556,7 +1591,11 @@ scene drawer_bench "Top drawer on the bench" {
   whole travel, not only at its ends (`error[motion]`): a door is swung from
   closed to `opening_angle` and a drawer slid from shut to `travel`, and the
   message names the first angle or distance at which it hits something. Each
-  motion is checked from the rest position and from every scene's poses.
+  motion is checked from the rest position and from every scene's poses. A
+  door on cup hinges follows its linkage (it turns and moves at once), and
+  the hinges' own arms and links are checked against the door and the side
+  too; the first contact is found to within the 0.05mm contact tolerance,
+  never stepped over. A door on butt hinges turns about its pin.
 - `explode: true` draws the scene with every part moved out from its rest
   position along the direction its joint is assembled (the reverse of the
   joint's last `insert` step), so the joinery shows. Assemblies move out
@@ -1645,6 +1684,7 @@ shape of their messages are fixed, because tests and AI tools match on them.
 | 4 | `no-contact` | `<joint>: <part> meets none of the parts it should join` |
 | 4 | `overlap` | `<a> and <b> overlap` |
 | 4 | `slide-gap` | `<hardware>: <piece> is <gap> from the opening, but the slide needs <clearance>` |
+| 4 | `hinge-overlay` | `<hardware>: <piece> overlays <on> by <overlay>, but the hinge gives <low> to <high>` |
 | 5 | `motion` | `<a> hits <b> when <assembly> is <open>` |
 | 6 | `require` | `'<name>' fails: <message>` |
 | 6 | `require-range` | `'<name>' does not hold for every allowed value: <message>` |
@@ -1669,7 +1709,9 @@ through its travel, `<open>` is where it first hits: `opened past 87.3deg`
 (rounded down to a tenth of a degree) or `pulled out past 120mm`, and a note
 gives how far the hinges open or the slides travel; each assembly is
 reported once, from rest or else from the first scene whose poses make it
-hit. In an `order` message, `<step>` is written as in the source
+hit. A cup hinge's own arm or link that runs into wood is named with its
+hinge: `the outer link of door_l.hinges[lower] hits door_l.stile[hinge] when
+door_l is opened past 108.2deg`, once per assembly. In an `order` message, `<step>` is written as in the source
 (`push(rail, along: width)`).
 
 In messages, an item is written as in the source (`slides[left]`,

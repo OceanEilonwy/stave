@@ -1,10 +1,11 @@
-// expect: error[motion] door.panel hits side_l when door is opened past 90.1deg
+// expect: error[motion] door.panel hits wall when door is opened past 2.5deg
 stave 1
 
-// The sides stand 40mm proud of the front of the cabinet, and the door
-// hangs between them (2mm clear of the latch side) on hinges that open to
-// 110 degrees: once it is square to the front, it swings back into the side
-// it is hinged on.
+// The cabinet stands against a wall that reaches as far forward as the
+// door, and the door covers the side it is hinged on almost to the wall
+// (0.5mm clear). A cup hinge doesn't turn the door about its edge: it
+// pushes the door out and swings its hinge edge sideways by about a
+// millimetre as it opens, into the wall.
 
 project "Door hits the side" {
   units: mm
@@ -22,11 +23,23 @@ part base : ply_18 {
 
 part side_l : ply_18 {
   length: 700mm
-  width:  440mm
+  width:  400mm
   place {
     orient(length: up, width: back)
     against(base.top)
-    against(base.left)
+    flush(base.left)
+    flush(base.back)
+  }
+}
+
+/// The wall beside the cabinet, as far forward as the front of the door.
+part wall : ply_18 {
+  length: 800mm
+  width:  418mm
+  place {
+    orient(length: up, width: back)
+    against(base.top)
+    against(side_l.left)
     flush(base.back)
   }
 }
@@ -46,7 +59,7 @@ component Door {
   param opening    : Region
   param hinge_side : Part
 
-  region face = cover(opening, overlay(right: -2mm), thickness: ply_18.thickness)
+  region face = cover(opening, overlay(left: 17.5mm, right: 17.5mm), thickness: ply_18.thickness)
 
   part panel : ply_18 {
     length: face.up

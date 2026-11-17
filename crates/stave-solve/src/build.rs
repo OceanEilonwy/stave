@@ -403,6 +403,7 @@ fn motion(motion: &MotionExact) -> Solved<Motion> {
             },
             opening_angle: angle.to_nearest_angle().ok_or(Reported)?,
         },
+        MotionExact::Linkage(linkage) => Motion::Linkage { linkage: *linkage },
         MotionExact::Travel { toward, travel } => Motion::Travel {
             toward: *toward,
             travel: round_length(*travel)?,
@@ -824,6 +825,8 @@ impl Solver<'_> {
                     cup_depth,
                     cup_inset,
                     on,
+                    overlay,
+                    overlay_range,
                 } => {
                     let on = match part_map.get(&on) {
                         Some(mapped) => *mapped,
@@ -838,6 +841,8 @@ impl Solver<'_> {
                         cup_depth,
                         cup_inset,
                         on,
+                        overlay,
+                        overlay_range,
                     }
                 }
                 Data::Slide {
@@ -858,7 +863,7 @@ impl Solver<'_> {
                 }
                 pull @ Data::Pull { .. } => pull,
             };
-            let reflected_motion = source_placed.motion.map(|m| match m {
+            let reflected_motion = source_placed.motion.and_then(|m| match m {
                 MotionExact::Turn {
                     axis: pivot_axis,
                     through,
@@ -871,19 +876,33 @@ impl Solver<'_> {
                         let twice = plane.checked_add(plane).unwrap_or(plane);
                         *slot = twice.checked_sub(*slot).unwrap_or(*slot);
                     }
-                    MotionExact::Turn {
+                    Some(MotionExact::Turn {
                         axis: pivot_axis,
                         through,
                         free_side: reflect_direction(free_side, axis),
                         swing_toward: reflect_direction(swing_toward, axis),
                         angle,
-                    }
+                    })
                 }
-                MotionExact::Travel { toward, travel } => MotionExact::Travel {
+                MotionExact::Linkage(linkage) => {
+                    // The linkage's points in its own frame stay; its frame
+                    // is reflected, the origin exactly, then to the nearest
+                    // nanometre.
+                    let at = linkage.frame().origin().get(axis).to_exact();
+                    let twice = plane.checked_add(plane)?;
+                    let origin = twice.checked_sub(at)?.to_nearest_length()?;
+                    Some(MotionExact::Linkage(
+                        linkage.in_frame(linkage.frame().reflected(axis, origin)),
+                    ))
+                }
+                MotionExact::Travel { toward, travel } => Some(MotionExact::Travel {
                     toward: reflect_direction(toward, axis),
                     travel,
-                },
+                }),
             });
+            if source_placed.motion.is_some() && reflected_motion.is_none() {
+                continue;
+            }
             let mount_face = if source_placed.mount_face.axis() == axis {
                 source_placed.mount_face.opposite()
             } else {
@@ -898,6 +917,28 @@ impl Solver<'_> {
                     }),
                     Err(_) => continue,
                 },
+                None => None,
+            };
+            let mechanism = match &source_placed.mechanism {
+                Some(mechanism) => {
+                    let reflect = |member: &crate::hardware::Member| {
+                        reflect_box(&member.bounds, axis, plane).map(|bounds| {
+                            crate::hardware::Member {
+                                envelope: member.envelope,
+                                bounds,
+                                orientation: member.orientation.mirrored(axis),
+                            }
+                        })
+                    };
+                    match (reflect(&mechanism.arm), reflect(&mechanism.knuckle)) {
+                        (Ok(arm), Ok(knuckle)) => Some(crate::hardware::Mechanism {
+                            arm,
+                            knuckle,
+                            ..mechanism.clone()
+                        }),
+                        _ => continue,
+                    }
+                }
                 None => None,
             };
             // Recesses: the one in the piece came with the mirrored part's
@@ -951,6 +992,7 @@ impl Solver<'_> {
                 bore: None,
                 recesses,
                 motion: reflected_motion,
+                mechanism,
                 ..source_placed
             };
             if let Some(entry) = placed.get_mut(hardware.index()) {
@@ -1242,16 +1284,29 @@ impl Solver<'_> {
             };
             let base = HardwareBase::from_base(hw.base).ok_or(Reported)?;
             let origin = pose_origin(&hw.bounds, &hw.orientation);
-            let fixed = match &hw.fixed {
-                Some(member) => Some(solved::HardwareMember {
+            let member = |member: &crate::hardware::Member| -> Solved<solved::HardwareMember> {
+                Ok(solved::HardwareMember {
                     envelope: exact_envelope(&member.envelope)?,
                     pose: solved::Pose {
                         origin: point(pose_origin(&member.bounds, &member.orientation))?,
                         orientation: member.orientation,
                     },
                     bounds: world_box(&member.bounds)?,
-                }),
-                None => None,
+                })
+            };
+            let fixed = hw.fixed.as_ref().map(member).transpose()?;
+            let mechanism = match (&hw.mechanism, &hw.motion) {
+                (Some(mechanism), Some(MotionExact::Linkage(linkage))) => {
+                    Some(solved::CupMechanism {
+                        linkage: *linkage,
+                        arm: member(&mechanism.arm)?,
+                        knuckle: member(&mechanism.knuckle)?,
+                        links: mechanism.links,
+                        pin_diameter: mechanism.pin_diameter,
+                        pin_length: mechanism.pin_length,
+                    })
+                }
+                _ => None,
             };
             let data = match &hw.data {
                 Data::Slide {
@@ -1275,12 +1330,24 @@ impl Solver<'_> {
                     cup_depth,
                     cup_inset,
                     on,
+                    overlay,
+                    overlay_range,
                 } => HardwareData::Hinge {
                     opening_angle: opening_angle.to_nearest_angle().ok_or(Reported)?,
                     cup_diameter: round_length(*cup_diameter)?,
                     cup_depth: round_length(*cup_depth)?,
                     cup_inset: round_length(*cup_inset)?,
                     on: *on,
+                    overlay: round_length(*overlay)?,
+                    overlay_range: overlay_range
+                        .map(|range| -> Solved<solved::OverlayRange> {
+                            Ok(solved::OverlayRange {
+                                base: round_length(range.base)?,
+                                plate_height: round_length(range.plate_height)?,
+                                adjustment: round_length(range.adjustment)?,
+                            })
+                        })
+                        .transpose()?,
                 },
                 Data::Pull {
                     centres,
@@ -1308,6 +1375,7 @@ impl Solver<'_> {
                 bounds: world_box(&hw.bounds)?,
                 fixed,
                 data,
+                mechanism,
                 model: hw.model.as_ref().map(|m| solved::Model {
                     source: m.source.clone(),
                     node: match &m.align {

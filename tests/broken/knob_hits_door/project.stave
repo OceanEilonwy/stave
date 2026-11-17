@@ -1,4 +1,4 @@
-// expect: error[motion] door_r.panel hits door_l.handle when door_r is opened past 103.2deg
+// expect: error[motion] door_r.panel hits door_l.handle when door_r is opened past 108.6deg
 stave 1
 
 // Two bays side by side, each door hinged on its left. The left door's knob
@@ -65,6 +65,7 @@ component Door {
   param opening    : Region
   param hinge_side : Part
   param mount      : Mount
+  param plate      = 0mm                 // the hinge plates' height: 9mm where a door covers half the divider
 
   region face = cover(opening, mount, thickness: ply_18.thickness)
 
@@ -79,7 +80,7 @@ component Door {
     }
   }
 
-  hardware hinges[bottom, top] : euro_hinge(panel, on: hinge_side) {
+  hardware hinges[bottom, top] : euro_hinge(panel, on: hinge_side, plate_height: plate) {
     place {
       spaced(ends(inset: 80mm), from: panel.bottom, to: panel.top)
     }
@@ -103,4 +104,5 @@ assembly door_r : Door {
   opening:    bay_r
   hinge_side: divider
   mount:      overlay(left: 8mm, right: 16mm, bottom: 16mm)
+  plate:      9mm
 }

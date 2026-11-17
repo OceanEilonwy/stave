@@ -21,6 +21,19 @@
 //! [`render`](crate::render)); the result is rounded down to the
 //! micro-degree.
 //!
+//! **Cup hinges** move on a four-bar linkage: the door turns and moves at
+//! once ([`crate::linkage`]), so a fixed corner meets a moving edge on no
+//! circle and there is no closed form. The same projected polygons are
+//! swept by **conservative advancement**: at each angle the distance
+//! between the two polygons is measured, and the door turns on by that
+//! distance divided by the fastest any of its corners can move per radian
+//! (its distance from the frame's origin plus the fastest the linkage's
+//! offset changes), so no contact can be stepped over; near contact the
+//! step never falls below a quarter of the contact tolerance's worth of
+//! movement. The first angle at which they overlap is then found by
+//! bisection, to far below a micro-degree. Butt hinges keep the exact
+//! closed form.
+//!
 //! Approximations (each finds more wood than there is, never less): a rod
 //! is projected as the box around it (exact for a knob, whose axis lies in
 //! the plane; a rod along the hinge axis becomes its square), holes are
@@ -32,12 +45,13 @@ use std::f64::consts::TAU;
 use glam::{DVec2, DVec3};
 use stave_lang::placement::{Axis, Direction};
 use stave_lang::units::{Angle, Length};
-use stave_model::solved::{Pivot, Point, WorldBox};
+use stave_model::solved::{Linkage, Pivot, Point, WorldBox};
 
 use crate::collide::{
     CONTACT_TOLERANCE, Placement, WorldRod, WorldSolid, direction_vector, placed_bounds,
     point_vector, translate_box,
 };
+use crate::linkage::LinkagePath;
 use crate::render;
 
 /// The boxes of a solid's wood: its blocks and the boxes around its rods.
@@ -160,6 +174,16 @@ struct Plane {
 }
 
 impl Plane {
+    fn of_linkage(linkage: &Linkage) -> Plane {
+        let frame = linkage.frame();
+        Plane {
+            origin: point_vector(frame.origin()),
+            x: direction_vector(frame.free_side()),
+            y: direction_vector(frame.swing_toward()),
+            axis: frame.axis(),
+        }
+    }
+
     fn of(pivot: &Pivot) -> Plane {
         Plane {
             origin: point_vector(pivot.through),
@@ -434,6 +458,465 @@ pub fn turn_reach(moving: &WorldSolid, pivot: &Pivot) -> Option<WorldBox> {
     Some(WorldBox::new(min, max))
 }
 
+/// A cup hinge's linkage, ready to sweep: solved in floats, with the
+/// fastest its offset changes.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LinkageSweep {
+    linkage: Linkage,
+    path: LinkagePath,
+    offset_speed: f64,
+}
+
+impl LinkageSweep {
+    /// Prepares a linkage for sweeping.
+    pub fn new(linkage: &Linkage) -> LinkageSweep {
+        let path = LinkagePath::new(linkage);
+        LinkageSweep {
+            linkage: *linkage,
+            path,
+            offset_speed: path.offset_speed(),
+        }
+    }
+
+    /// The solved linkage.
+    pub fn path(&self) -> &LinkagePath {
+        &self.path
+    }
+
+    /// The fastest a point this far (nanometres, in the plane) from the
+    /// frame's origin moves per radian of opening.
+    fn speed(&self, radius: f64) -> f64 {
+        LinkagePath::speed_bound(radius, self.offset_speed)
+    }
+}
+
+/// The distance from a point to a segment.
+fn point_segment(p: DVec2, a: DVec2, b: DVec2) -> f64 {
+    let ab = b - a;
+    let length2 = ab.length_squared();
+    let t = if length2 > 0.0 {
+        ((p - a).dot(ab) / length2).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    (a + ab * t - p).length()
+}
+
+/// The distance between two convex polygons that don't overlap.
+fn polygon_distance(a: &[DVec2], b: &[DVec2]) -> f64 {
+    let mut best = f64::INFINITY;
+    for (polygon, other) in [(a, b), (b, a)] {
+        let n = other.len();
+        for p in polygon {
+            for i in 0..n {
+                if let (Some(&from), Some(&to)) = (other.get(i), other.get((i + 1) % n)) {
+                    best = best.min(point_segment(*p, from, to));
+                }
+            }
+        }
+    }
+    best
+}
+
+/// A polygon of the door moved to `theta` on the linkage.
+fn on_linkage(corners: &[DVec2], path: &LinkagePath, theta: f64) -> Option<Vec<DVec2>> {
+    let (rotation, offset) = path.plane_pose(theta)?;
+    Some(
+        corners
+            .iter()
+            .map(|c| rotation.rotate(*c) + offset)
+            .collect(),
+    )
+}
+
+/// The first angle in `(0, limit]` at which the moving polygon, carried
+/// by the linkage, overlaps the fixed one; `None` when it moves the whole
+/// way clear (or overlaps it at rest, which the static checks report).
+fn linkage_first_contact(
+    moving: &[DVec2],
+    fixed: &[DVec2],
+    sweep: &LinkageSweep,
+    limit: f64,
+) -> Option<f64> {
+    if intersect(moving, fixed) {
+        return None;
+    }
+    let radius = moving.iter().map(|c| c.length()).fold(0.0, f64::max);
+    let speed = sweep.speed(radius);
+    let smallest = render::nm(CONTACT_TOLERANCE) / 4.0 / speed;
+    let at = |theta: f64| on_linkage(moving, &sweep.path, theta);
+    let mut theta = 0.0;
+    let mut here = moving.to_vec();
+    loop {
+        let step = (polygon_distance(&here, fixed) / speed).max(smallest);
+        let next = (theta + step).min(limit);
+        let there = at(next)?;
+        if intersect(&there, fixed) {
+            // Bisect between the last clear angle and the first overlap.
+            let (mut clear, mut hit) = (theta, next);
+            for _ in 0..60 {
+                let middle = (clear + hit) / 2.0;
+                if intersect(&at(middle)?, fixed) {
+                    hit = middle;
+                } else {
+                    clear = middle;
+                }
+            }
+            return Some(clear);
+        }
+        if next >= limit {
+            return None;
+        }
+        theta = next;
+        here = there;
+    }
+}
+
+/// How far `moving` (at rest) can turn on a cup hinge's linkage before it
+/// first hits `fixed` (placed at `fixed_at`); `None` when it opens the
+/// whole way clear. The angle is rounded down to the micro-degree.
+pub fn linkage_contact(
+    moving: &WorldSolid,
+    fixed: &WorldSolid,
+    fixed_at: &Placement,
+    sweep: &LinkageSweep,
+) -> Option<Angle> {
+    let plane = Plane::of_linkage(&sweep.linkage);
+    let limit = sweep.path.opening();
+    let tolerance = render::nm(CONTACT_TOLERANCE);
+    let moving_pieces = pieces(&plane, moving, &Placement::REST);
+    let fixed_pieces = pieces(&plane, fixed, fixed_at);
+    let mut best: Option<f64> = None;
+    for m in &moving_pieces {
+        for f in &fixed_pieces {
+            if m.high.min(f.high) - m.low.max(f.low) <= tolerance {
+                continue;
+            }
+            if let Some(angle) =
+                linkage_first_contact(&m.corners, &f.corners, sweep, best.unwrap_or(limit))
+                && best.is_none_or(|b| angle < b)
+            {
+                best = Some(angle);
+            }
+        }
+    }
+    best.and_then(render::angle_from_radians_floor)
+}
+
+/// The box a solid carried by a linkage can reach: its corners at 180
+/// steps of the opening (a degree or less each), grown by the most it can
+/// move within half a step.
+pub fn linkage_reach(moving: &WorldSolid, sweep: &LinkageSweep) -> Option<WorldBox> {
+    let bounds = moving.bounds()?;
+    let corners = corners_of(&bounds);
+    let plane = Plane::of_linkage(&sweep.linkage);
+    let radius = corners
+        .iter()
+        .map(|c| plane.project(*c).length())
+        .fold(0.0, f64::max);
+    let count: u32 = 180;
+    let step = sweep.path.opening() / f64::from(count);
+    let grow = sweep.speed(radius) * step / 2.0 + 1.0;
+    let mut low = DVec3::splat(f64::INFINITY);
+    let mut high = DVec3::splat(f64::NEG_INFINITY);
+    for k in 0..=count {
+        let Some(matrix) = sweep.path.coupler(step * f64::from(k)) else {
+            continue;
+        };
+        for corner in &corners {
+            let placed = matrix.transform_point3(*corner);
+            low = low.min(placed);
+            high = high.max(placed);
+        }
+    }
+    let point = |v: DVec3, round: fn(f64) -> f64| -> Option<Point> {
+        Some(Point {
+            across: render::length_from_nm(round(v.x))?,
+            up: render::length_from_nm(round(v.y))?,
+            deep: render::length_from_nm(round(v.z))?,
+        })
+    };
+    Some(WorldBox::new(
+        point(low - DVec3::splat(grow), f64::floor)?,
+        point(high + DVec3::splat(grow), f64::ceil)?,
+    ))
+}
+
+/// A member of a cup hinge's mechanism that can run into wood.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum MechanismMember {
+    /// The arm (its body and its knuckle), fixed.
+    Arm,
+    /// The first link of the linkage (the inner link).
+    InnerLink,
+    /// The second (the outer link, a strap).
+    OuterLink,
+}
+
+/// Which of a hinge's two parts a member runs into.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum HingePart {
+    /// The piece the cup is bored into (the door's stile).
+    Piece,
+    /// The part the plate is screwed to (the cabinet side).
+    On,
+}
+
+/// Where a cup hinge's own mechanism first runs into wood as the door
+/// opens.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MechanismHit {
+    /// The member.
+    pub member: MechanismMember,
+    /// The part it runs into.
+    pub part: HingePart,
+    /// How far the door has opened, rounded down to the micro-degree.
+    pub angle: Angle,
+}
+
+/// The cup's steel rim reaches this far past the bore (2.5mm: a 40mm rim
+/// on a 35mm cup) and links may rest this deep in its shadow (1.5mm):
+/// resting on the rim is the hinge's stop, steel on steel, not wood.
+const RIM_WIDTH_NM: f64 = 2_500_000.0;
+const RIM_DEPTH_NM: f64 = 1_500_000.0;
+
+/// An axis-aligned rectangle in the plane as a counter-clockwise polygon,
+/// shrunk by half the contact tolerance; `None` when nothing is left.
+fn rectangle(low: DVec2, high: DVec2) -> Option<Vec<DVec2>> {
+    if high.x <= low.x || high.y <= low.y {
+        return None;
+    }
+    shrink(
+        &[
+            low,
+            DVec2::new(high.x, low.y),
+            high,
+            DVec2::new(low.x, high.y),
+        ],
+        render::nm(CONTACT_TOLERANCE) / 2.0,
+    )
+}
+
+/// The plane rectangle of a world box.
+fn plane_rectangle(plane: &Plane, region: &WorldBox) -> (DVec2, DVec2, f64, f64) {
+    let points = corners_of(region).map(|c| plane.project(c));
+    let low = points
+        .iter()
+        .copied()
+        .fold(DVec2::splat(f64::INFINITY), DVec2::min);
+    let high = points
+        .iter()
+        .copied()
+        .fold(DVec2::splat(f64::NEG_INFINITY), DVec2::max);
+    let along = |v: Point| render::nm(v.get(plane.axis));
+    (low, high, along(region.min()), along(region.max()))
+}
+
+/// A link's bar at an angle: from pin to pin, past each by half its
+/// thickness (as it is drawn), shrunk by half the contact tolerance.
+fn link_polygon(from: DVec2, to: DVec2, thickness: f64) -> Option<Vec<DVec2>> {
+    let direction = (to - from).normalize_or_zero();
+    let across = direction.perp() * (thickness / 2.0);
+    let (a, b) = (
+        from - direction * (thickness / 2.0),
+        to + direction * (thickness / 2.0),
+    );
+    let polygon = [a - across, b - across, b + across, a + across];
+    shrink(&polygon, render::nm(CONTACT_TOLERANCE) / 2.0)
+}
+
+/// How far a cup hinge's door opens before the hinge's own arm or links run
+/// into the wood of its piece (outside the cup) or of the part it is
+/// screwed to; `None` when they stay clear to the full opening.
+///
+/// In the linkage's plane, over the mechanism's width along the pins: the
+/// piece's boxes less the bore (as wide as the bore is at each member's
+/// edge, and the rim's shadow), and the part's boxes, against each link's
+/// bar and the arm's two boxes. Swept by conservative advancement, each
+/// step no more than the distance to the nearest wood over the fastest
+/// any point involved can move.
+pub fn mechanism_contact(
+    hardware: &stave_model::solved::Hardware,
+    piece: &WorldSolid,
+    on: &WorldSolid,
+    sweep: &LinkageSweep,
+) -> Option<MechanismHit> {
+    let mechanism = hardware.mechanism.as_ref()?;
+    let plane = Plane::of_linkage(&mechanism.linkage);
+    let path = &sweep.path;
+    let limit = path.opening();
+    let tolerance = render::nm(CONTACT_TOLERANCE);
+    let middle = render::nm(mechanism.linkage.frame().origin().get(plane.axis));
+    // The bore, in the plane.
+    let (bore_low, bore_high, _, _) = plane_rectangle(&plane, &hardware.bounds);
+    let bore_centre = (bore_low.x + bore_high.x) / 2.0;
+    let bore_radius = (bore_high.x - bore_low.x) / 2.0;
+    // The face the cup is bored into is the bore's low y (toward the
+    // cabinet); the bore runs to its high y.
+    let (face, bottom) = (bore_low.y, bore_high.y);
+    let wood_of = |solid: &WorldSolid, half_width: f64, bored: bool| -> Vec<Vec<DVec2>> {
+        let mut out = Vec::new();
+        for region in wood_boxes(solid) {
+            let (low, high, start, end) = plane_rectangle(&plane, &region);
+            if end.min(middle + half_width) - start.max(middle - half_width) <= tolerance {
+                continue;
+            }
+            if !bored {
+                out.extend(rectangle(low, high));
+                continue;
+            }
+            let chord = (bore_radius * bore_radius - half_width * half_width)
+                .max(0.0)
+                .sqrt();
+            let rim = bore_radius + RIM_WIDTH_NM;
+            let rim_chord = (rim * rim - half_width * half_width).max(0.0).sqrt();
+            let (inner, outer) = (bore_centre - chord, bore_centre + chord);
+            let (rim_low, rim_high) = (bore_centre - rim_chord, bore_centre + rim_chord);
+            let rim_bottom = face + RIM_DEPTH_NM;
+            // The box less the bore and the rim's shadow, as rectangles.
+            let parts = [
+                (low, DVec2::new(rim_low.min(high.x), high.y)),
+                (DVec2::new(rim_high.max(low.x), low.y), high),
+                (
+                    DVec2::new(rim_low.max(low.x), rim_bottom.max(low.y)),
+                    DVec2::new(inner.min(high.x), high.y),
+                ),
+                (
+                    DVec2::new(outer.max(low.x), rim_bottom.max(low.y)),
+                    DVec2::new(rim_high.min(high.x), high.y),
+                ),
+                (
+                    DVec2::new(inner.max(low.x), bottom.max(low.y)),
+                    DVec2::new(outer.min(high.x), high.y),
+                ),
+            ];
+            for (a, b) in parts {
+                out.extend(rectangle(a, b));
+            }
+        }
+        out
+    };
+    let [inner_bar, outer_bar] = mechanism.links;
+    let arm_rectangles: Vec<Vec<DVec2>> = [&mechanism.arm, &mechanism.knuckle]
+        .iter()
+        .filter_map(|member| {
+            let (low, high, _, _) = plane_rectangle(&plane, &member.bounds);
+            rectangle(low, high)
+        })
+        .collect();
+    let arm_half = render::nm(mechanism.arm.envelope.size().length) / 2.0;
+    // Each member: its polygons at an angle, and how wide it is.
+    let members: [(MechanismMember, f64); 3] = [
+        (MechanismMember::Arm, arm_half),
+        (
+            MechanismMember::InnerLink,
+            render::nm(inner_bar.width) / 2.0,
+        ),
+        (
+            MechanismMember::OuterLink,
+            render::nm(outer_bar.width) / 2.0,
+        ),
+    ];
+    let member_at = |member: MechanismMember, theta: f64| -> Option<Vec<Vec<DVec2>>> {
+        let (index, bar) = match member {
+            MechanismMember::Arm => return Some(arm_rectangles.clone()),
+            MechanismMember::InnerLink => (0, inner_bar),
+            MechanismMember::OuterLink => (1, outer_bar),
+        };
+        let from = path.pin(index, false, theta)?;
+        let to = path.pin(index, true, theta)?;
+        Some(
+            link_polygon(from, to, render::nm(bar.thickness))
+                .into_iter()
+                .collect(),
+        )
+    };
+    // The fastest anything moves: the door near the hinge and the links.
+    let reach = |polygons: &[Vec<DVec2>]| {
+        polygons
+            .iter()
+            .flatten()
+            .map(|c| c.length())
+            .fold(0.0, f64::max)
+    };
+    let mut best: Option<(f64, MechanismMember, HingePart)> = None;
+    for (member, half_width) in members {
+        let piece_wood = wood_of(piece, half_width, true);
+        let on_wood = wood_of(on, half_width, false);
+        let rest = member_at(member, 0.0)?;
+        // The door's corners move with the boss; a link's corners at most
+        // twice as fast as its boss pin (it turns about its arm pin).
+        let speed = sweep.speed(reach(&piece_wood)) + 2.0 * sweep.speed(reach(&rest));
+        let smallest = tolerance / 4.0 / speed;
+        let wood_at = |part: HingePart, theta: f64| -> Option<Vec<Vec<DVec2>>> {
+            match part {
+                HingePart::On => Some(on_wood.clone()),
+                HingePart::Piece => {
+                    let (rotation, offset) = path.plane_pose(theta)?;
+                    Some(
+                        piece_wood
+                            .iter()
+                            .map(|p| p.iter().map(|c| rotation.rotate(*c) + offset).collect())
+                            .collect(),
+                    )
+                }
+            }
+        };
+        for part in [HingePart::Piece, HingePart::On] {
+            let overlapping = |theta: f64| -> Option<(bool, f64)> {
+                let mine = member_at(member, theta)?;
+                let wood = wood_at(part, theta)?;
+                let mut distance = f64::INFINITY;
+                for a in &mine {
+                    for b in &wood {
+                        if intersect(a, b) {
+                            return Some((true, 0.0));
+                        }
+                        distance = distance.min(polygon_distance(a, b));
+                    }
+                }
+                Some((false, distance))
+            };
+            let (at_rest, _) = overlapping(0.0)?;
+            if at_rest {
+                continue;
+            }
+            let stop = best.map_or(limit, |(angle, _, _)| angle);
+            let mut theta = 0.0;
+            loop {
+                let (_, distance) = overlapping(theta)?;
+                let next = (theta + (distance / speed).max(smallest)).min(stop);
+                let (hit, _) = overlapping(next)?;
+                if hit {
+                    let (mut clear, mut into) = (theta, next);
+                    for _ in 0..60 {
+                        let middle_angle = (clear + into) / 2.0;
+                        if overlapping(middle_angle)?.0 {
+                            into = middle_angle;
+                        } else {
+                            clear = middle_angle;
+                        }
+                    }
+                    if best.is_none_or(|(angle, _, _)| clear < angle) {
+                        best = Some((clear, member, part));
+                    }
+                    break;
+                }
+                if next >= stop {
+                    break;
+                }
+                theta = next;
+            }
+        }
+    }
+    let (angle, member, part) = best?;
+    Some(MechanismHit {
+        member,
+        part,
+        angle: render::angle_from_radians_floor(angle)?,
+    })
+}
+
 /// The box a sliding solid covers over its travel.
 pub fn slide_reach(moving: &WorldSolid, toward: Direction, travel: Length) -> Option<WorldBox> {
     let bounds = moving.bounds()?;
@@ -600,5 +1083,98 @@ mod tests {
         )
         .unwrap();
         assert!(angle < Angle::from_deg(1), "{angle}");
+    }
+}
+
+#[cfg(test)]
+mod linkage_tests {
+    use super::*;
+    use stave_lang::placement::{Axis, Direction};
+    use stave_model::solved::{Link, LinkageFrame, PlanePoint};
+    use stave_schema::hinges::{CUP_HINGE_110, CupPoint};
+
+    fn mm(value: i64) -> Length {
+        Length::from_mm(value)
+    }
+
+    /// The built-in cup hinge on a 19mm door in a frame at the door's
+    /// front hinge corner (the world origin): the door's back face is at
+    /// deep 19mm, the side's front edge behind it.
+    fn cup_hinge() -> Linkage {
+        let place = |p: CupPoint| {
+            PlanePoint::new(
+                Length::from_nm(22_500_000 + p.x),
+                Length::from_nm(p.y - 19_000_000),
+            )
+        };
+        let links = CUP_HINGE_110.links.map(|link| Link {
+            ground: place(link.arm),
+            coupler: place(link.boss),
+        });
+        let frame = LinkageFrame::new(
+            Axis::Up,
+            Point::default(),
+            Direction::Right,
+            Direction::Front,
+        )
+        .unwrap();
+        Linkage::new(frame, links, Angle::from_deg(110)).unwrap()
+    }
+
+    fn block(a: [i64; 3], b: [i64; 3]) -> WorldSolid {
+        let point = |[across, up, deep]: [i64; 3]| Point {
+            across: mm(across),
+            up: mm(up),
+            deep: mm(deep),
+        };
+        WorldSolid::from_boxes(vec![WorldBox::new(point(a), point(b))])
+    }
+
+    /// The linkage sweep finds the same first contact as stepping the door
+    /// through every hundredth of a degree, to within that step, and
+    /// never later.
+    #[test]
+    fn a_door_on_a_linkage_first_hits_where_dense_steps_find_it() {
+        let sweep = LinkageSweep::new(&cup_hinge());
+        // A 450mm door, 19mm thick, in front of the side's edge.
+        let door = block([0, 0, 0], [450, 700, 19]);
+        // A post in front of the door's free end, and one beside its hinge
+        // edge (a wall 0.5mm off it, as deep as the door).
+        let post = block([300, 0, -200], [340, 700, -150]);
+        let wall_point = |across: f64, deep: i64| Point {
+            across: Length::from_nm((across * 1e6).round() as i64),
+            up: mm(0),
+            deep: mm(deep),
+        };
+        let wall = WorldSolid::from_boxes(vec![WorldBox::new(
+            wall_point(-20.0, 0),
+            Point {
+                up: mm(700),
+                ..wall_point(-0.5, 400)
+            },
+        )]);
+        for fixed in [&post, &wall] {
+            let found = linkage_contact(&door, fixed, &Placement::REST, &sweep).unwrap();
+            let plane = Plane::of_linkage(&sweep.linkage);
+            let moving = pieces(&plane, &door, &Placement::REST);
+            let still = pieces(&plane, fixed, &Placement::REST);
+            let (m, f) = (&moving[0].corners, &still[0].corners);
+            let dense = (1..=11_000)
+                .map(|k| (f64::from(k) / 100.0).to_radians())
+                .find(|theta| intersect(&on_linkage(m, sweep.path(), *theta).unwrap(), f))
+                .unwrap();
+            let found_radians = render::radians_f64(found);
+            assert!(found_radians <= dense, "{found} after {dense}");
+            assert!(dense - found_radians < 0.0002, "{found} vs {dense}");
+        }
+        // Nothing in the way: clear.
+        let far = block([600, 0, -200], [640, 700, -150]);
+        assert_eq!(linkage_contact(&door, &far, &Placement::REST, &sweep), None);
+        // The side the door rests on: the linkage lifts it off.
+        let side = block([-19, 0, 19], [0, 700, 400]);
+        assert_eq!(
+            linkage_contact(&door, &side, &Placement::REST, &sweep),
+            None
+        );
     }
 }

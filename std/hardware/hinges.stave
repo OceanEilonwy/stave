@@ -3,18 +3,30 @@ stave 1
 /// A concealed 35mm cup hinge for an overlay door (the common European
 /// clip-on kind). The cup is bored into the back of the door's hinge stile;
 /// the mounting plate screws to the inside face of the cabinet side, on the
-/// 37mm screw line of 32mm-system cabinets. Numbers are typical catalog
-/// values for a full-overlay 110° hinge on a cruciform plate.
+/// 37mm screw line of 32mm-system cabinets. The hinge is a four-bar
+/// linkage: an arm on the plate, two links, and the boss in the cup, so the
+/// door moves forward and out as it turns and clears the side it covers.
+/// Numbers are catalogue values for a full-overlay 110° hinge on a 0mm
+/// plate (Hettich Sensys 8645i).
 kind euro_hinge : hinge {
-  /// How far the door opens.
-  param opening_angle = 110deg within [95deg, 110deg, 125deg, 155deg, 165deg]
+  /// How far the door opens; a clip-on limiter stops it sooner.
+  param opening_angle = 110deg within 85deg..110deg
   /// From the door's edge to the rim of the cup (the boring distance).
-  param cup_inset = 5mm within [3mm, 4mm, 5mm, 6mm, 7mm]
+  param cup_inset = 5mm within [3mm, 4mm, 4.5mm, 5mm, 6mm, 7mm]
   /// From the cabinet's front edge back to the plate's screw line.
   param plate_setback = 37mm within [37mm, 52mm]
-  cup_diameter: 35mm
-  cup_depth:    13mm
-  plate:        box(length: 50mm, width: 36mm, thickness: 11mm)
+  /// How far the mounting plate lifts the arm off the side (the catalogue's
+  /// distance): a taller plate gives a smaller overlay.
+  param plate_height = 0mm within [0mm, 1.5mm, 3mm, 6mm, 9mm]
+  cup_diameter:       35mm
+  cup_depth:          12.8mm
+  // The overlay with the cup at the door's very edge on a 0mm plate (the
+  // catalogue's base): the door overlays the side by
+  // base_overlay + cup_inset - plate_height.
+  base_overlay:       12.5mm
+  // How far the arm's side screw moves the door either way.
+  overlay_adjustment: 2mm
+  plate:              box(length: 50mm, width: 36mm, thickness: 11mm)
 }
 
 /// A brass butt hinge: two leaves on a pin, for box lids and small doors.

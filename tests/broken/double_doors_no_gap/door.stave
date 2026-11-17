@@ -19,7 +19,7 @@ component Door {
     }
   }
 
-  hardware hinges[bottom, top] : euro_hinge(panel, on: hinge_side) {
+  hardware hinges[bottom, top] : euro_hinge(panel, on: hinge_side, plate_height: 9mm) {
     place {
       spaced(ends(inset: 80mm), from: panel.bottom, to: panel.top)
     }

@@ -15,6 +15,8 @@
 //! - [`placement`]: placement terms, spacing values, made-part terms and
 //!   assembly steps (namespace 3: call heads fixed by position).
 //! - [`functions`]: built-in function signatures.
+//! - [`hinges`]: the built-in mechanism of a cup hinge (its pins, arm and
+//!   links), which every cup hinge kind moves on.
 //!
 //! Joint, hardware and tool kinds themselves are *not* built in: they are
 //! written in `.stave` in the standard library. The tests at the bottom of
@@ -26,6 +28,7 @@
 
 pub mod fields;
 pub mod functions;
+pub mod hinges;
 pub mod kinds;
 pub mod operations;
 pub mod placement;

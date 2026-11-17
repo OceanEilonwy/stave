@@ -41,6 +41,7 @@
 #![warn(missing_docs)]
 
 mod explain;
+mod hinges;
 mod instance;
 mod motion;
 mod names;
@@ -139,9 +140,11 @@ pub fn check_with_contacts(
     checker.contact();
     checker.overruns();
     checker.slide_gaps();
+    checker.hinge_overlays();
     checker.rest();
     checker.scenes();
     checker.sweeps();
+    checker.mechanisms();
     checker.sequences();
     checker.finish()
 }
@@ -232,7 +235,15 @@ impl<'a> Checker<'a> {
                 });
             }
             if let Some(member) = &hardware.fixed {
-                let world = WorldSolid::of_envelope(&member.envelope, &member.pose);
+                // A cup hinge's arm and knuckle stay with its plate.
+                let world = match &hardware.mechanism {
+                    Some(mechanism) => WorldSolid::from_boxes(vec![
+                        member.bounds,
+                        mechanism.arm.bounds,
+                        mechanism.knuckle.bounds,
+                    ]),
+                    None => WorldSolid::of_envelope(&member.envelope, &member.pose),
+                };
                 let outside = hardware
                     .assembly
                     .and_then(|id| design.assemblies.get(id.index()))

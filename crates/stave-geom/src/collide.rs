@@ -726,6 +726,25 @@ impl Placement {
                         * DMat4::from_axis_angle(axis, render::radians_f64(angle))
                         * DMat4::from_translation(-through);
                 }
+                Motion::Linkage { linkage } => {
+                    let angle = match *value {
+                        PoseValue::Open => linkage.opening_angle(),
+                        PoseValue::Angle(angle) => angle,
+                        PoseValue::Closed | PoseValue::Travel(_) => continue,
+                    };
+                    if angle.microdeg() == 0 {
+                        continue;
+                    }
+                    let path = crate::linkage::LinkagePath::new(&linkage);
+                    // Within the checked range the links always reach; past
+                    // it (a pose wider than the hinge opens), the door stays
+                    // where the hinge stops.
+                    let theta = render::radians_f64(angle).min(path.opening());
+                    if let Some(coupler) = path.coupler(theta) {
+                        turned = true;
+                        matrix *= coupler;
+                    }
+                }
             }
         }
         if turned {

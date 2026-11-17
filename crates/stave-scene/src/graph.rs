@@ -1,6 +1,7 @@
 //! Nodes, materials and scene poses.
 
 use glam::{Mat4, Quat, Vec3};
+use stave_geom::linkage::LinkagePath;
 use stave_geom::solid::Solid;
 use stave_geom::{Aabb, Extent, Geometry, render};
 use stave_lang::placement::PartAxis;
@@ -83,6 +84,32 @@ pub struct Node {
     pub material: Material,
     /// The assemblies it is inside, outermost first.
     pub assemblies: Vec<AssemblyId>,
+    /// A cup hinge's link: it turns about its arm pin as the hinge's
+    /// assembly opens, on top of what its own assemblies do.
+    pub follows: Option<LinkFollower>,
+}
+
+/// How a cup hinge's link moves: with the linkage of its hinge, at the
+/// amount its door's assembly is opened.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LinkFollower {
+    /// The assembly the hinge opens (the door).
+    pub assembly: AssemblyId,
+    /// The hinge's linkage.
+    path: LinkagePath,
+    /// Which link (0 or 1).
+    link: usize,
+}
+
+impl LinkFollower {
+    /// The link's transform with its assembly opened by `amount` radians.
+    fn transform(&self, amount: f32) -> Mat4 {
+        let theta = f64::from(amount).clamp(0.0, self.path.opening());
+        self.path
+            .pose(theta)
+            .and_then(|pose| pose.links.get(self.link).copied())
+            .map_or(Mat4::IDENTITY, render::transform)
+    }
 }
 
 /// A motion with its amounts in render units.
@@ -92,6 +119,12 @@ enum RenderMotion {
         through: Vec3,
         /// Unit axis; turning by a positive angle opens.
         axis: Vec3,
+        /// Radians.
+        opening: f32,
+    },
+    /// A cup hinge's four-bar linkage.
+    Linkage {
+        path: LinkagePath,
         /// Radians.
         opening: f32,
     },
@@ -119,6 +152,10 @@ impl RenderMotion {
                     opening: render::radians(opening_angle),
                 }
             }
+            Motion::Linkage { linkage } => RenderMotion::Linkage {
+                path: LinkagePath::new(&linkage),
+                opening: render::radians(linkage.opening_angle()),
+            },
             Motion::Travel { toward, travel } => RenderMotion::Travel {
                 toward: render::direction(toward),
                 travel: render::mm(travel),
@@ -130,13 +167,18 @@ impl RenderMotion {
     fn amount(&self, value: PoseValue) -> f32 {
         match (self, value) {
             (_, PoseValue::Closed) => 0.0,
-            (RenderMotion::Turn { opening, .. }, PoseValue::Open) => *opening,
+            (
+                RenderMotion::Turn { opening, .. } | RenderMotion::Linkage { opening, .. },
+                PoseValue::Open,
+            ) => *opening,
             (RenderMotion::Travel { travel, .. }, PoseValue::Open) => *travel,
-            (RenderMotion::Turn { .. }, PoseValue::Angle(angle)) => render::radians(angle),
+            (RenderMotion::Turn { .. } | RenderMotion::Linkage { .. }, PoseValue::Angle(angle)) => {
+                render::radians(angle)
+            }
             (RenderMotion::Travel { .. }, PoseValue::Travel(length)) => render::mm(length),
             // A value of the other kind is a type error the checker
             // reports; it doesn't move anything.
-            (RenderMotion::Turn { .. }, PoseValue::Travel(_))
+            (RenderMotion::Turn { .. } | RenderMotion::Linkage { .. }, PoseValue::Travel(_))
             | (RenderMotion::Travel { .. }, PoseValue::Angle(_)) => 0.0,
         }
     }
@@ -147,6 +189,11 @@ impl RenderMotion {
                 Mat4::from_translation(through)
                     * Mat4::from_quat(Quat::from_axis_angle(axis, amount))
                     * Mat4::from_translation(-through)
+            }
+            RenderMotion::Linkage { path, .. } => {
+                let theta = f64::from(amount).clamp(0.0, path.opening());
+                path.coupler(theta)
+                    .map_or(Mat4::IDENTITY, render::transform)
             }
             RenderMotion::Travel { toward, .. } => Mat4::from_translation(toward * amount),
         }
@@ -329,6 +376,7 @@ impl SceneGraph {
                 geometry,
                 material,
                 assemblies: assemblies_of(part.assembly),
+                follows: None,
             });
         }
         for hardware in &design.hardware {
@@ -338,6 +386,7 @@ impl SceneGraph {
                 geometry: stave_geom::hardware(hardware),
                 material: Material::Metal,
                 assemblies: assemblies_of(hardware.assembly),
+                follows: None,
             });
             // The member screwed to the carcass stays put when the assembly
             // the hardware moves moves: it belongs to the assembly outside.
@@ -348,6 +397,7 @@ impl SceneGraph {
                     .and_then(|assembly| assembly.parent);
                 let member = match hardware.base {
                     HardwareBase::Hinge if hardware.is_butt_hinge() => "fixed leaf",
+                    HardwareBase::Hinge if hardware.mechanism.is_some() => "plate and arm",
                     HardwareBase::Hinge => "plate",
                     HardwareBase::Slide => "cabinet member",
                     HardwareBase::Pull => "fixed member",
@@ -358,7 +408,35 @@ impl SceneGraph {
                     geometry,
                     material: Material::Metal,
                     assemblies: assemblies_of(outside),
+                    follows: None,
                 });
+                // A cup hinge's links: each turns about its pin in the arm as
+                // the door opens.
+                if let (Some(links), Some(mechanism), Some(assembly)) = (
+                    stave_geom::hardware_links(hardware),
+                    hardware.mechanism.as_ref(),
+                    hardware.assembly,
+                ) {
+                    let path = LinkagePath::new(&mechanism.linkage);
+                    for (link, (geometry, label)) in links
+                        .into_iter()
+                        .zip(["inner link", "outer link"])
+                        .enumerate()
+                    {
+                        nodes.push(Node {
+                            item: Item::Hardware(hardware.id),
+                            name: format!("{} {label}", hardware.name),
+                            geometry,
+                            material: Material::Metal,
+                            assemblies: assemblies_of(outside),
+                            follows: Some(LinkFollower {
+                                assembly,
+                                path,
+                                link,
+                            }),
+                        });
+                    }
+                }
             }
         }
         let motions: Vec<Option<RenderMotion>> = design
@@ -406,10 +484,12 @@ impl SceneGraph {
     pub fn motion_range(&self, assembly: AssemblyId) -> Option<MotionRange> {
         let motion = self.motions.get(assembly.index()).copied().flatten()?;
         Some(match motion {
-            RenderMotion::Turn { opening, .. } => MotionRange {
-                turns: true,
-                full: opening,
-            },
+            RenderMotion::Turn { opening, .. } | RenderMotion::Linkage { opening, .. } => {
+                MotionRange {
+                    turns: true,
+                    full: opening,
+                }
+            }
             RenderMotion::Travel { travel, .. } => MotionRange {
                 turns: false,
                 full: travel,
@@ -513,6 +593,11 @@ impl SceneGraph {
                 if let (Some(motion), Some(amount)) = (motion, amount(*assembly)) {
                     transform *= motion.transform(amount);
                 }
+            }
+            if let Some(follower) = node.follows
+                && let Some(amount) = amount(follower.assembly)
+            {
+                transform *= follower.transform(amount);
             }
             transform = Mat4::from_translation(self.staged_offset(index, explode)) * transform;
             let shown = scene
@@ -826,9 +911,12 @@ impl Exploded {
                 let direction = render::direction(toward);
                 direction * (extent_along(&bounds, direction) + base)
             }
-            Some(Motion::Turn { pivot, .. }) => {
-                let direction = render::direction(pivot.swing_toward);
-                let across = render::direction(pivot.free_side);
+            Some(motion @ (Motion::Turn { .. } | Motion::Linkage { .. })) => {
+                let Some((free, swing)) = motion.swing() else {
+                    return Vec3::ZERO;
+                };
+                let direction = render::direction(swing);
+                let across = render::direction(free);
                 direction * (extent_along(&bounds, across) * 0.5 + base)
             }
             None => {

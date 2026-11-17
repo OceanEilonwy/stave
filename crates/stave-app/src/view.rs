@@ -229,6 +229,15 @@ pub fn describe(design: &SolvedDesign, item: Item) -> Option<Description> {
                         format!("{}, fixed to the carcass", shape(&member.envelope))
                     },
                 }))
+                .chain(hardware.mechanism.as_ref().map(|mechanism| Row {
+                    label: "Mechanism",
+                    value: format!(
+                        "a four-bar linkage: an arm on the plate, two links ({} mm and {} mm, pin to pin) and the boss in the cup; opens {}",
+                        millimetres(link_length(&mechanism.linkage, 0)),
+                        millimetres(link_length(&mechanism.linkage, 1)),
+                        mechanism.linkage.opening_angle()
+                    ),
+                }))
                 .chain([Row {
                     label: "Assembly",
                     value: assembly_path(design, hardware.assembly),
@@ -237,6 +246,27 @@ pub fn describe(design: &SolvedDesign, item: Item) -> Option<Description> {
             })
         }
     }
+}
+
+/// The length of one of a linkage's links, pin to pin, to the nearest
+/// nanometre (the integer square root of its squared length).
+fn link_length(linkage: &stave_model::solved::Linkage, index: usize) -> Length {
+    let Some(link) = linkage.links().get(index) else {
+        return Length::ZERO;
+    };
+    let dx = i128::from(link.coupler.x.nm()).saturating_sub(i128::from(link.ground.x.nm()));
+    let dy = i128::from(link.coupler.y.nm()).saturating_sub(i128::from(link.ground.y.nm()));
+    let square = dx.saturating_mul(dx).saturating_add(dy.saturating_mul(dy));
+    // Newton's method from above.
+    let mut root = square.max(1);
+    loop {
+        let next = root.saturating_add(square / root) / 2;
+        if next >= root {
+            break;
+        }
+        root = next;
+    }
+    Length::from_nm(i64::try_from(root).unwrap_or(i64::MAX))
 }
 
 /// A diagnostic as rows for a list.

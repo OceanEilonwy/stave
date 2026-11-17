@@ -173,6 +173,17 @@ pub const CUP_HINGE_ENTRIES: [&str; 5] = [
 /// The entries only a butt hinge has.
 pub const BUTT_HINGE_ENTRIES: [&str; 1] = ["leaf"];
 
+/// The optional entries of a hinge: a cup hinge's catalogue overlay data,
+/// and the entries every piece of hardware may have.
+const HINGE_OPTIONAL: [FieldSpec; 6] = [
+    entry("base_overlay", LENGTH, Optional),
+    entry("plate_height", LENGTH, Optional),
+    entry("overlay_adjustment", LENGTH, Optional),
+    entry("model", Type(TypeName::Model), Optional),
+    entry("moving", Type(TypeName::Text), Optional),
+    entry("license", Type(TypeName::Text), Optional),
+];
+
 const HINGE: BaseSpec = BaseSpec {
     base: BaseKind::Hinge,
     roles: &[
@@ -194,7 +205,7 @@ const HINGE: BaseSpec = BaseSpec {
         entry("plate", Type(TypeName::Envelope), CUP_HINGE),
         entry("leaf", Type(TypeName::Envelope), BUTT_HINGE),
     ],
-    optional: &HARDWARE_OPTIONAL,
+    optional: &HINGE_OPTIONAL,
     mount: Some(MountRule::Face(Face::Back)),
     open_axes: Some(OpenAxes::AlongPieceLength),
 };

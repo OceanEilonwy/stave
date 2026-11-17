@@ -544,6 +544,16 @@ region bay[low, high] = split(space, up, at: shelf)",
 fn mirrored_assemblies_rebind_outside_parts() {
     let opened = open(
         "part wall[left, right] : pine_19 {\n  length: 200mm\n  width: 300mm\n  place {\n    orient(length: up, width: back)\n    against(base.top)\n    spaced(ends, from: base.left, to: base.right)\n    flush(base.front)\n  }\n}
+/// A cup hinge for an inset door, with no catalogue overlay (so its
+/// overlay isn't checked).
+kind inset_cup_hinge : hinge {
+  opening_angle: 110deg
+  cup_diameter:  35mm
+  cup_depth:     13mm
+  cup_inset:     5mm
+  plate_setback: 37mm
+  plate:         box(length: 50mm, width: 36mm, thickness: 11mm)
+}
 component Flap {
   param hinge_side : Part
   part leaf : pine_12 {
@@ -556,7 +566,7 @@ component Flap {
       against(base.front)
     }
   }
-  hardware hinge : euro_hinge(leaf, on: hinge_side) {
+  hardware hinge : inset_cup_hinge(leaf, on: hinge_side) {
     place {
       flush(leaf.bottom, inset: 20mm)
     }
@@ -587,6 +597,16 @@ assembly flap_r = mirror(flap_l, about: mid(base, across))",
 fn a_mirror_without_a_counterpart_is_an_error() {
     let opened = open(
         "part wall : pine_19 {\n  length: 200mm\n  width: 300mm\n  place {\n    orient(length: up, width: back)\n    against(base.top)\n    flush(base.left)\n    flush(base.front)\n  }\n}
+/// A cup hinge for an inset door, with no catalogue overlay (so its
+/// overlay isn't checked).
+kind inset_cup_hinge : hinge {
+  opening_angle: 110deg
+  cup_diameter:  35mm
+  cup_depth:     13mm
+  cup_inset:     5mm
+  plate_setback: 37mm
+  plate:         box(length: 50mm, width: 36mm, thickness: 11mm)
+}
 component Flap {
   param hinge_side : Part
   part leaf : pine_12 {
@@ -599,7 +619,7 @@ component Flap {
       against(base.front)
     }
   }
-  hardware hinge : euro_hinge(leaf, on: hinge_side) {
+  hardware hinge : inset_cup_hinge(leaf, on: hinge_side) {
     place {
       flush(leaf.bottom, inset: 20mm)
     }

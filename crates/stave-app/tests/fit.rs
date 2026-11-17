@@ -126,8 +126,37 @@ fn the_examples_check_clean_with_their_cuts_made() {
 }
 
 #[test]
-fn a_door_that_swings_into_its_own_side() {
+fn a_door_whose_hinge_edge_swings_into_a_wall() {
     insta::assert_snapshot!(rendered("tests/broken/door_hits_side"));
+}
+
+#[test]
+fn a_door_too_far_out_for_its_cup_hinges() {
+    insta::assert_snapshot!(rendered("tests/broken/hinge_overlay"));
+}
+
+#[test]
+fn a_cup_hinge_opens_at_most_110_degrees() {
+    let design = std::fs::read_to_string(
+        workspace().join("tests/broken/hinge_overlay/project.stave"),
+    )
+    .unwrap()
+    .replace(
+        "overlay(left: 9mm, right: 9mm)",
+        "overlay(left: 17.5mm, right: 17.5mm)",
+    )
+    .replace(
+        "euro_hinge(panel, on: hinge_side)",
+        "wide_hinge(panel, on: hinge_side)",
+    ) + "\nkind wide_hinge : hinge {\n  opening_angle: 125deg\n  cup_diameter:  35mm\n  cup_depth:     12.8mm\n  cup_inset:     5mm\n  plate_setback: 37mm\n  plate:         box(length: 50mm, width: 36mm, thickness: 11mm)\n}\n";
+    let opened = common::open_files(&[("project.stave", &design)]);
+    let messages = common::diagnostics(&opened);
+    assert!(
+        messages.iter().any(|m| m.contains(
+            "out-of-range: 'opening_angle' must be within 0deg..110deg for a cup hinge, found 125deg"
+        )),
+        "{messages:?}"
+    );
 }
 
 #[test]

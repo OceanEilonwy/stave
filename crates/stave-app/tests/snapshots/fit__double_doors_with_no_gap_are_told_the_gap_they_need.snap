@@ -3,10 +3,10 @@ source: crates/stave-app/tests/fit.rs
 expression: "rendered(\"tests/broken/double_doors_no_gap\")"
 ---
 error[motion]: door_l.panel hits door_r.panel when door_l is opened past 0.1deg
-  --> tests/broken/double_doors_no_gap/project.stave:61:15
+  --> tests/broken/double_doors_no_gap/project.stave:71:15
    |
-61 |   mount:      overlay(left: 16mm, top: -2mm, bottom: 16mm, meeting: 0mm)
-   |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+71 |   mount:      overlay(left: 16mm, right: 9mm, top: -2mm, bottom: 16mm)
+   |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
    = note: the hinges open to 110deg
    = note: the same line also causes: door_r.panel hits door_l.panel when door_r is opened past 0.1deg
-   = help: leave at least 0.5mm between door_l and door_r: use meeting: -0.25mm (each door)
+   = help: leave at least 1mm between door_l and door_r: make its right overlay 0.5mm smaller (the mirrored door follows)

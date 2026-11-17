@@ -47,6 +47,11 @@ impl Frame {
         }
     }
 
+    /// A frame from an origin and three unit axes.
+    pub(crate) fn new(origin: Vec3, axes: [Vec3; 3]) -> Frame {
+        Frame { origin, axes }
+    }
+
     /// The same frame turned so the thickness comes first, then the
     /// length and the width (a cyclic turn, so handedness is kept).
     pub fn thickness_first(&self) -> Frame {
