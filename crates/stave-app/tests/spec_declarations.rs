@@ -330,12 +330,28 @@ fn a_wider_part_than_max_width_is_planned_as_a_glue_up() {
 
 #[test]
 fn boards_are_joined_by_the_projects_default() {
-    // Left out everywhere: glued_edge.
+    // Left out everywhere: what the prelude's library says, std:joinery's
+    // `boards: joined(by: glued_edge)`; no kind is the default in Stave
+    // itself.
     let opened = open(&wide_part(""));
     assert_eq!(
         methods(boards_of(design(&opened), "p")),
         [("glued_edge".to_owned(), true)]
     );
+    let defs = &opened.model.as_ref().unwrap().defs;
+    let saying: Vec<&str> = defs
+        .prelude
+        .iter()
+        .filter_map(|module| defs.modules.get(module.index()))
+        .filter(|module| {
+            module
+                .library
+                .as_ref()
+                .is_some_and(|library| library.boards.is_some())
+        })
+        .map(|module| module.name.as_str())
+        .collect();
+    assert_eq!(saying.len(), 1, "{saying:?}");
     // The project's boards: for every part that doesn't say.
     let opened = open_files(&[(
         "project.stave",
@@ -464,7 +480,7 @@ fn a_longer_part_names_an_end_joint() {
     );
     assert_eq!(
         common::help(&opened),
-        "stock 'short' comes no longer than 500mm; make it from two parts joined end to end (for example ari_tsugi), or buy longer stock"
+        "stock 'short' comes no longer than 500mm; make it from two parts joined end to end with a splice joint, or buy longer stock"
     );
 }
 

@@ -643,7 +643,7 @@ member (`oak_19.thickness`). Types are listed under [Types](#types-units-and-ari
 | `style` | `Text` | no | a hint for suggestions |
 | `tools` | list of `Tool` | no | the tools you have. Left out: every tool is assumed |
 | `methods` | list of `Recipe` | no | recipes to prefer, most preferred first |
-| `boards` | `Boards` | no (default `joined(by: glued_edge)`) | how the boards of a part made of boards are joined, for every part that doesn't say; see [Boards](#boards) |
+| `boards` | `Boards` | no (default: the prelude's, `joined(by: glued_edge)`) | how the boards of a part made of boards are joined, for every part that doesn't say; see [Boards](#boards) |
 
 ### `library "Title" { }`
 
@@ -651,6 +651,7 @@ member (`oak_19.thickness`). Types are listed under [Types](#types-units-and-ari
 |---|---|---|---|
 | `about` | `Text` | no | one line of description |
 | `license` | `Text` | no | credited in the build manual |
+| `boards` | `Boards` | no | in a library in the prelude: how a part's boards are joined when neither the part nor its project says; see [Boards](#boards) |
 
 ### `param name [: Type] [= default] [within domain] [locked]`
 
@@ -1144,7 +1145,11 @@ project "Side table" {
 }
 ```
 
-Left out everywhere, it is `joined(by: glued_edge)`. `by:` takes a joint
+Left out everywhere, it is what the first library in the prelude with a
+`boards:` says: `std:joinery`'s `library` block has `boards: joined(by:
+glued_edge)`, so it is `joined(by: glued_edge)`. A design whose part is
+made of boards when nothing says how they are joined is
+`error[unknown-name]`. `by:` takes a joint
 kind value, or a list of them, which are all used. Each is an ordinary
 `kind ... : joint` (`std:joinery` has `glued_edge`, `tongue_and_groove`,
 `splined_edge`, `chigiri` (butterfly keys across each seam) and

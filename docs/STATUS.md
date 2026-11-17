@@ -18,10 +18,12 @@ a line and a concrete help line for every problem:
    throughout: lengths are whole nanometres, arithmetic is exact fractions.
    Hinge, slide and pull kinds are made of members, each with any name, a
    `///` doc comment and at least one shape (grammar, "Shapes"); a member
-   without a shape is `missing-field`.
+   without a shape is `missing-field`. Nothing in the core crates knows a
+   kind or a member by name: the standing rule (`CLAUDE.md`, "No kind in
+   the core") is held by `stave-check/tests/standing_rule.rs`.
    **Boards**: a `solid` part wider across the grain than its stock's
    `max_width` is made of equal boards (in `--json`), joined by the edge
-   joints its `boards:` names (or the project's, or `glued_edge`):
+   joints its `boards:` names (or the project's, or else the prelude's, `glued_edge`):
    `tongue_and_groove` widens each board by its tongue, `splined_edge` makes
    a spline per seam, `chigiri` lets a butterfly key into the face across
    each seam, `suitsuki_zan` slides two battens into dovetail housings

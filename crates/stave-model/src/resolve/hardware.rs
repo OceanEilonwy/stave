@@ -474,7 +474,7 @@ impl Resolver<'_> {
             expr.span,
             &word,
             bodies.iter().map(|body| body.name.as_str()),
-            "name one of the kind's members with a shape: cut crossing(piece, cup) { ... }",
+            "name one of the kind's members with a shape: cut crossing(piece, member) { ... }",
         );
         None
     }

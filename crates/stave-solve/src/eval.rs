@@ -1375,7 +1375,7 @@ impl Solver<'_> {
                                         ),
                                         env.file,
                                         expr.span,
-                                        "list joint kinds such as glued_edge or tongue_and_groove",
+                                        "list joint kinds: joined(by: [kind_name, other_kind])",
                                     ));
                                 }
                             }
@@ -1388,7 +1388,7 @@ impl Solver<'_> {
                             format!("'by' needs a joint kind, found {}", other.description()),
                             env.file,
                             expr.span,
-                            "name a joint kind such as glued_edge or tongue_and_groove",
+                            "name a joint kind: joined(by: kind_name)",
                         ));
                     }
                 };
@@ -1399,7 +1399,7 @@ impl Solver<'_> {
                         "'by' needs at least one joint kind",
                         env.file,
                         expr.span,
-                        "name a joint kind such as glued_edge",
+                        "name a joint kind: joined(by: kind_name)",
                     )),
                 }
             }

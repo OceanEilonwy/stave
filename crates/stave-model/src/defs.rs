@@ -1569,6 +1569,11 @@ pub struct LibraryDef {
     pub about: Option<String>,
     /// `license:`
     pub license: Option<String>,
+    /// `boards:`: how a part's boards are joined when neither the part nor
+    /// its project says (grammar, "Boards"), for a library in the prelude.
+    pub boards: Option<RExpr>,
+    /// The file the item is in.
+    pub file: FileId,
 }
 
 /// What a file sees besides its module: its imports.
@@ -1642,10 +1647,6 @@ pub struct Defs {
     pub components: Vec<ComponentDef>,
     /// `scene`s.
     pub scenes: Vec<SceneDef>,
-    /// The joint kind boards are joined by when no `boards:` says
-    /// (grammar, "Boards"): `glued_edge` from the prelude, when there is
-    /// one.
-    pub default_boards: Option<KindId>,
 }
 
 macro_rules! getters {

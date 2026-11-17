@@ -8,4 +8,4 @@ error[motion]: door_r.panel hits door_l.handle's knob when door_r is opened past
 106 |   mount:      overlay(left: 8mm, right: 16mm, bottom: 16mm)
     |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
     = note: the hinges open to 110deg
-    = help: open door_r no further than 106.8deg (a smaller opening_angle), or move door_l.handle's knob out of its way
+    = help: open door_r no further than 106.8deg (give its hardware's kind a smaller range), or move door_l.handle's knob out of its way

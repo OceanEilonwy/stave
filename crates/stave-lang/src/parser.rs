@@ -1340,7 +1340,9 @@ impl<'t> Parser<'t> {
             if !p.at(L_PAREN) {
                 return Err(p.expected_with_help(
                     &["'('"],
-                    Some("name the kind with its parts and settings: dado(shelf, into: side_l)"),
+                    Some(
+                        "call the kind with its parts and settings: kind_name(piece, into: other)",
+                    ),
                 ));
             }
             p.arg_list();

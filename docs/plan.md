@@ -205,4 +205,5 @@ through stage 9 (stage 10 is a proposal for the CLI lane). Stage 8
 removed the old hardware contract (`HardwareData`, the four-bar
 `Linkage` types, the `legacy` shims, the member-word tables): every kind
 is now data in `std/` read through members, roles, entries and
-mechanisms.
+mechanisms, and `CLAUDE.md`'s rule "No kind in the core" is held by
+`crates/stave-check/tests/standing_rule.rs`.

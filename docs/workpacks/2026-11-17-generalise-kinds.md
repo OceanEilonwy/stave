@@ -758,6 +758,22 @@ entry needs its reason, and review 3 should read the list.
 
 **Done when** the gate is green and the test passes.
 
+**Status: done.** Everything listed above and under "Deleted by the end"
+is gone (`Pivot` lives on as `stave_model::mechanism::TurnLine`, the line
+of the new `MotionShape::Turn`; `stave-geom` still needs `stave-schema`
+for `Grain`). The test scans eight crates (`stave-workplan` doesn't exist
+yet) and also reads each hardware kind's fields; its allow-list is
+`length`, `diameter`, `travel`, `bar`, `dowel`, `envelope`, `socket`,
+`centres`, `projection` and `clearance`, each with its reason, and an
+entry that is no longer a word of `std/` fails it. `butt` is left off the
+fixed list (it is `Contact::Butt`, the joint contact; `butt_hinge` is
+still a hit). Making it pass removed the last special cases: help lines
+that named `dado`, `cup`, `plate`, `ari_tsugi`, `glued_edge`,
+`tongue_and_groove` and `opening_angle`, and the built-in default edge
+joint (`DEFAULT_BOARD_JOINT = "glued_edge"`), which is now
+`std:joinery`'s `library { boards: joined(by: glued_edge) }` (grammar,
+"Boards").
+
 ## Stage 9. Models checked against the text (E) — size M
 
 **Goal.** `warning[model-mismatch]` when a `.glb` and its kind disagree.
