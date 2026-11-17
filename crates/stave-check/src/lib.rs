@@ -41,6 +41,7 @@
 #![warn(missing_docs)]
 
 mod explain;
+mod instance;
 mod motion;
 mod names;
 mod sequence;
@@ -595,9 +596,15 @@ impl<'a> Checker<'a> {
                 clashes.push((a.item, b.item, found));
             }
         }
-        for (a, b, found) in clashes {
-            self.failed.insert(a);
-            self.failed.insert(b);
+        for (a, b, _) in &clashes {
+            self.failed.insert(*a);
+            self.failed.insert(*b);
+        }
+        let (groups, rest) = self.group(clashes);
+        for group in groups {
+            self.report_group(group);
+        }
+        for (a, b, found) in rest {
             self.overlap(a, b, &found);
         }
     }

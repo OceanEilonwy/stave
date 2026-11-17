@@ -3,9 +3,9 @@ source: crates/stave-app/tests/fit.rs
 expression: "rendered(\"tests/broken/door_hits_side\")"
 ---
 error[motion]: door.panel hits side_l when door is opened past 90.1deg
-  --> tests/broken/door_hits_side/project.stave:62:34
+  --> tests/broken/door_hits_side/project.stave:69:10
    |
-62 |   hardware hinges[bottom, top] : euro_hinge(panel, on: hinge_side) {
-   |                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+69 | assembly door : Door {
+   |          ^^^^
    = note: the hinges open to 110deg
    = help: open door no further than 90.1deg (a smaller opening_angle), or move side_l out of its way

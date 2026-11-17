@@ -1,0 +1,27 @@
+stave 1
+
+/// A slab door hung on two cup hinges.
+component Door {
+  param opening    : Region
+  param hinge_side : Part
+  param mount      : Mount
+
+  region face = cover(opening, mount, thickness: ply_18.thickness)
+
+  part panel : ply_18 {
+    length: face.up
+    width:  face.across
+    place {
+      orient(length: up, width: right)
+      flush(face.left)
+      flush(face.bottom)
+      flush(face.front)
+    }
+  }
+
+  hardware hinges[bottom, top] : euro_hinge(panel, on: hinge_side) {
+    place {
+      spaced(ends(inset: 80mm), from: panel.bottom, to: panel.top)
+    }
+  }
+}

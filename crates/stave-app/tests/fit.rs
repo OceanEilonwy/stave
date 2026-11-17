@@ -232,3 +232,13 @@ fn every_motion_of_the_examples_is_clear_through_its_travel() {
         assert!(opened.diagnostics.is_empty(), "{folder}");
     }
 }
+
+#[test]
+fn a_door_overlay_into_the_top_is_one_error_at_the_mount() {
+    insta::assert_snapshot!(rendered("tests/broken/door_overlay_into_top"));
+}
+
+#[test]
+fn double_doors_with_no_gap_are_told_the_gap_they_need() {
+    insta::assert_snapshot!(rendered("tests/broken/double_doors_no_gap"));
+}

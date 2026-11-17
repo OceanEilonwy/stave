@@ -3,10 +3,10 @@ source: crates/stave-app/tests/fit.rs
 expression: "rendered(\"tests/broken/doors_hit_each_other\")"
 ---
 error[motion]: door_r.panel hits door_l.panel when door_r is opened past 70.2deg
-  --> tests/broken/doors_hit_each_other/project.stave:82:34
+  --> tests/broken/doors_hit_each_other/project.stave:98:15
    |
-82 |   hardware hinges[bottom, top] : euro_hinge(panel, on: hinge_side) {
-   |                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+98 |   mount:      overlay(left: 8mm, right: 16mm, bottom: 16mm)
+   |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
    = note: the hinges open to 110deg
    = note: with everything else as scene 'left_open' poses it
    = help: open door_r no further than 70.2deg (a smaller opening_angle), or move door_l.panel out of its way

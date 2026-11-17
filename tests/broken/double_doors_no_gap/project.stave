@@ -1,0 +1,64 @@
+// expect: error[motion] door_l.panel hits door_r.panel when door_l is opened past 0.1deg
+stave 1
+
+// A pair of doors that meet with no gap between them: as one opens, its
+// back edge swings across the line where they meet (by a fraction of a
+// millimetre), into the other door. They need a small gap.
+
+project "Double doors with no gap" {
+  units: mm
+}
+
+stock ply_18 { species: birch, form: plywood, thickness: 18mm }
+
+part base : ply_18 {
+  length: 800mm
+  width:  400mm
+  place {
+    ground
+  }
+}
+
+part side_l : ply_18 {
+  length: 700mm
+  width:  400mm
+  place {
+    orient(length: up, width: back)
+    against(base.top)
+    flush(base.left)
+    flush(base.front)
+  }
+}
+
+part side_r = mirror(side_l, about: mid(base, across))
+
+/// The top overhangs the front by 30mm.
+part top : ply_18 {
+  length: 800mm
+  width:  430mm
+  place {
+    against(side_l.top)
+    flush(base.left)
+    flush(base.back)
+  }
+}
+
+region bay[left, right] = split(
+  opening(
+    left:   side_l.right,
+    right:  side_r.left,
+    bottom: base.top,
+    top:    side_l.top,
+    front:  base.front,
+    back:   base.back,
+  ),
+  across,
+)
+
+assembly door_l : Door {
+  opening:    bay[left]
+  hinge_side: side_l
+  mount:      overlay(left: 16mm, top: -2mm, bottom: 16mm, meeting: 0mm)
+}
+
+assembly door_r = mirror(door_l, about: mid(base, across))

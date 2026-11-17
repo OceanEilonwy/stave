@@ -10,7 +10,8 @@
 
 use stave_geom::collide::{Placement, boxes_overlap, placed_bounds, union};
 use stave_geom::sweep::{SlideHit, slide_contact, slide_reach, turn_contact, turn_reach};
-use stave_lang::units::Angle;
+use stave_lang::placement::Direction;
+use stave_lang::units::{Angle, Length};
 use stave_lang::{Code, Severity};
 use stave_model::solved::{AssemblyId, HardwareBase, Motion, WorldBox};
 
@@ -170,6 +171,102 @@ impl Checker<'_> {
         best
     }
 
+    /// The help for a hinge that hits something as soon as it opens: the
+    /// gap that clears it, found by moving the other item away along the
+    /// door's free side in steps of 0.5mm, said in the instance's own
+    /// terms when it has a mount.
+    fn clearance_help(
+        &self,
+        assembly: AssemblyId,
+        motion: &Motion,
+        scene_index: usize,
+        a: Item,
+        b: Item,
+    ) -> String {
+        let name = self.assembly_name(assembly);
+        let b_name = self.item_name(b);
+        let fallback = format!(
+            "{name} turns into {b_name} as soon as it opens; leave a gap between them, or move {b_name} out of its way"
+        );
+        let Motion::Turn {
+            pivot,
+            opening_angle,
+        } = *motion
+        else {
+            return fallback;
+        };
+        let (_, placements) = self.scene_moves(scene_index);
+        let body = |item: Item| self.bodies.iter().position(|x| x.item == item);
+        let (Some(ia), Some(ib)) = (body(a), body(b)) else {
+            return fallback;
+        };
+        let (Some(moving), Some(fixed), Some(Placement::Exact(offset))) = (
+            self.bodies.get(ia),
+            self.bodies.get(ib),
+            placements.get(ib).copied(),
+        ) else {
+            return fallback;
+        };
+        let free = pivot.free_side;
+        let axis = free.axis();
+        let placed = placed_bounds(&fixed.bounds, &Placement::Exact(offset));
+        let gap = if free.is_positive() {
+            placed.min().get(axis).nm() - moving.bounds.max().get(axis).nm()
+        } else {
+            moving.bounds.min().get(axis).nm() - placed.max().get(axis).nm()
+        };
+        let half_mm = 500_000;
+        let needed = (1..=40).map(|k| k * half_mm).find(|&total| {
+            let shift = total - gap;
+            if shift <= 0 {
+                return false;
+            }
+            let shift = if free.is_positive() { shift } else { -shift };
+            let moved = offset.with(
+                axis,
+                Length::from_nm(offset.get(axis).nm().saturating_add(shift)),
+            );
+            turn_contact(
+                &moving.solid,
+                &fixed.solid,
+                &Placement::Exact(moved),
+                &pivot,
+                opening_angle,
+            )
+            .is_none()
+        });
+        let Some(total) = needed else {
+            return fallback;
+        };
+        let total_text = length_text(Length::from_nm(total));
+        let more = length_text(Length::from_nm(total - gap));
+        let root = self.mirror_root(assembly);
+        let mount = self.instance_place(root).is_some_and(|p| p.mount);
+        let other = self.outer(b);
+        match other {
+            Some(other) if mount && self.mirror_root(other) == root => format!(
+                "leave at least {total_text} between {name} and {}: use meeting: -{} (each door)",
+                self.assembly_name(other),
+                length_text(Length::from_nm(total / 2))
+            ),
+            _ if mount => {
+                let field = match free {
+                    Direction::Right => "right",
+                    Direction::Left => "left",
+                    Direction::Up => "top",
+                    Direction::Down => "bottom",
+                    Direction::Front | Direction::Back => {
+                        return format!("leave at least {total_text} between {name} and {b_name}");
+                    }
+                };
+                format!(
+                    "leave at least {total_text} between {name} and {b_name}: make its {field} overlay {more} smaller"
+                )
+            }
+            _ => format!("leave at least {total_text} between {name} and {b_name}"),
+        }
+    }
+
     fn report_sweep(
         &mut self,
         assembly: AssemblyId,
@@ -188,9 +285,7 @@ impl Checker<'_> {
                     format!("{a_name} hits {b_name} when {name} is opened past {at}"),
                     vec![format!("the hinges open to {opening_angle}")],
                     if angle.microdeg() < 1_000_000 {
-                        format!(
-                            "{name} turns into {b_name} as soon as it opens; hinge it on the other edge, or move {b_name} out of its way"
-                        )
+                        self.clearance_help(assembly, motion, scene_index, a, b)
                     } else {
                         format!(
                             "open {name} no further than {at} (a smaller opening_angle), or move {b_name} out of its way"
@@ -227,9 +322,15 @@ impl Checker<'_> {
                 scene.name
             ));
         }
+        // The instance's line in the user's file (its mount, when it has
+        // one), where the mistake almost always is.
         let place = self
-            .motion_hardware(assembly)
-            .and_then(|hardware| self.hardware_place(hardware));
+            .instance_place(self.mirror_root(assembly))
+            .map(|p| (p.file, p.span))
+            .or_else(|| {
+                self.motion_hardware(assembly)
+                    .and_then(|hardware| self.hardware_place(hardware))
+            });
         self.report(
             Severity::Error,
             Code::Motion,

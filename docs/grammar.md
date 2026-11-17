@@ -1647,7 +1647,12 @@ Warnings and notes: `shadows-prelude`, `no-recipe`, `not-supported`,
 
 In an `overlap` message the parts of one joint pair are named in the
 joint's role order (`rail and leg`), a piece of hardware before a part, and
-otherwise in declaration order. In a `motion` message for a scene, `<open>`
+otherwise in declaration order. When parts of an assembly run into something
+outside it, that is one error for the assembly and the other item
+(`door_l and top overlap`), reported where the assembly is placed (its
+`Mount` argument when it has one, otherwise its name) with the
+component's parts labelled; its mirror image is a note on the same error.
+A motion that hits something is reported at the same place. In a `motion` message for a scene, `<open>`
 is the pose: `open`, `open 90deg` (a hinge turned to an angle) or
 `out 200mm` (a slide travelled a length); when two assemblies move, both are
 named (`door_l is open and drawer[top] is out 200mm`). For a motion swept

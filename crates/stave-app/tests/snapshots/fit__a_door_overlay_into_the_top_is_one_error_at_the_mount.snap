@@ -1,0 +1,16 @@
+---
+source: crates/stave-app/tests/fit.rs
+expression: "rendered(\"tests/broken/door_overlay_into_top\")"
+---
+error[overlap]: door_l and top overlap
+  --> tests/broken/door_overlay_into_top/project.stave:61:15
+   |
+61 |   mount:      overlay(left: 16mm, top: 10mm, bottom: 16mm, meeting: -1mm)
+   |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  ::: tests/broken/door_overlay_into_top/door.stave:11:8
+   |
+11 |   part panel : ply_18 {
+   |        ----- door_l.panel is part of door_l
+   = note: door_l.panel goes into top, 10mm deep at most
+   = note: the same happens to door_r, the mirror image of door_l
+   = help: door_l reaches 10mm into top; make its top overlay 10mm smaller
