@@ -2163,7 +2163,16 @@ circles' centres 0.1mm inside the sum of their radii and outside their
 difference, a line 0.1mm inside its circle. A step that comes closer, or
 whose paths no longer meet, is `error[motion]` at the hardware, naming the
 step's members and the first drive value where it happens ("`rod` and
-`slider` lock at 41.6deg"). A step that would jump to its other branch
+`slider` lock at 41.6deg"). Between samples the margin is not guessed but
+proven: from the declared lengths and how far each point is from what
+turns it, the checker bounds how fast each step's margin can change, and
+shows from the two samples either side that it stays at least 0.1mm over
+the whole interval, so a dead point narrower than one sample step is not
+missed. Where it can't show that, it halves the interval and tries again,
+down to 0.00005deg or 50nm; an interval still not shown clear is
+`error[motion]` at the hardware, naming the step's members and the sample
+nearest the dead point ("`rod` and `slider` may come within 0.1mm of
+locking near 44.968359deg"). A step that would jump to its other branch
 between two samples is `error[motion]` ("flip over at"), and so is a pin
 that runs past an end of its slot ("`lid`'s pin reaches the end of its slot
 in `stay` at <value>").
@@ -2617,7 +2626,7 @@ shape of their messages are fixed, because tests and AI tools match on them.
 | 4 | `no-contact` | `<joint or hardware>: <part> meets none of the parts it should join`, or for `contact(a, b)` `<a> and <b> don't touch` |
 | 4 | `overlap` | `<a> and <b> overlap` |
 | 4 | `adjust` | `<hardware>: the <member> would sit <offset> off its place on the <member>; it adjusts <d>`, or for an axis no `adjust` covers `<hardware>: the <member> would sit <offset> off its place <across>; it doesn't adjust that way` |
-| 5 | `motion` | `<a> hits <b> when <assembly> is <open>`; `<assembly>'s hardware doesn't move alike`; `<hardware>: <members> lock at <value>` |
+| 5 | `motion` | `<a> hits <b> when <assembly> is <open>`; `<assembly>'s hardware doesn't move alike`; `<hardware>: <members> lock at <value>`; `<hardware>: <members> may come within 0.1mm of locking near <value>` |
 | 6 | `require` | `'<name>' fails: <message>` |
 | 6 | `require-range` | `'<name>' does not hold for every allowed value: <message>` |
 | 6 | `range` | `<what> stops working when <param> <is below> <value>` |

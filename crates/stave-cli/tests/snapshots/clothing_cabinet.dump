@@ -183,11 +183,13 @@ door_l.hinges[lower]         euro_hinge       on door_l.stile[hinge] (back face)
     plate          19..30               622.5..672.5         19..55              
     arm            20.6..38.5           639.5..655.5         -12.4..55           
     opening angle 110deg, cup inset 5, plate setback 37, plate height 0, cup diameter 35, cup depth 12.8
+    arm set -0.5mm across
 door_l.hinges[upper]         euro_hinge       on door_l.stile[hinge] (back face)
     cup            6..41                1544.5..1579.5       -12.8..0            
     plate          19..30               1537..1587           19..55              
     arm            20.6..38.5           1554..1570           -12.4..55           
     opening angle 110deg, cup inset 5, plate setback 37, plate height 0, cup diameter 35, cup depth 12.8
+    arm set -0.5mm across
 door_l.handle                hw.brass_knob_26 on door_l.stile[latch] (front face)
     knob           406.25..432.25       1091.75..1117.75     -49..-19            
     screw          417.25..421.25       1102.75..1106.75     -19..0              
@@ -221,11 +223,13 @@ door_r.hinges[lower]         euro_hinge       on door_r.stile[hinge] (back face)
     plate          870..881             622.5..672.5         19..55              
     arm            861.5..879.4         639.5..655.5         -12.4..55           
     opening angle 110deg, cup inset 5, plate setback 37, plate height 0, cup diameter 35, cup depth 12.8
+    arm set -0.5mm across
 door_r.hinges[upper]         euro_hinge       on door_r.stile[hinge] (back face)
     cup            859..894             1544.5..1579.5       -12.8..0            
     plate          870..881             1537..1587           19..55              
     arm            861.5..879.4         1554..1570           -12.4..55           
     opening angle 110deg, cup inset 5, plate setback 37, plate height 0, cup diameter 35, cup depth 12.8
+    arm set -0.5mm across
 door_r.handle                hw.brass_knob_26 on door_r.stile[latch] (front face)
     knob           467.75..493.75       1091.75..1117.75     -49..-19            
     screw          478.75..482.75       1102.75..1106.75     -19..0              
