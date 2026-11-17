@@ -396,6 +396,23 @@ and `broken/<folder>` for a design in `tests/broken/`.
 | Every scene is collision checked, and every motion closed and fully open | `broken/scene_pose_clash`, `broken/door_hits_side`, `broken/doors_hit_each_other`, `broken/knob_hits_door`, `broken/drawer_hits_divider`, `broken/lid_hits_back`, `app/fit::every_motion_of_the_examples_is_clear_through_its_travel`, `geom/sweep::a_door_first_hits_a_post_at_the_angle_it_reaches_it`, `geom/sweep::a_drawer_hits_what_is_in_front_of_it` | covered |
 | `explode: true` draws parts moved out along the reverse of their joint's last insert step; never collision checked | `app/explode::an_exploded_side_table_pulls_the_legs_off_the_aprons`, `app/explode::hardware_explodes_with_its_part_and_scenes_say_when_they_explode` | covered |
 
+### Focus mode (the viewer)
+
+Not language rules, but the behaviour `docs/plan.md` asks focus mode for,
+pinned down the same way.
+
+| Rule | Tests | Status |
+|---|---|---|
+| Holes in round and turned parts are drawn (the stool's sockets) and cut from the solid | `app/focus::a_turned_leg_is_drawn_with_its_sockets_bored` | covered |
+| Faces a cut made are marked for tinting; the stock's own surface is not | `app/focus::cut_faces_are_marked_and_the_stock_surface_is_not` | covered |
+| A joint's insert steps are traced forwards from the same run the order check makes | `app/focus::a_joint_traces_its_steps_forwards` | covered |
+| Joint focus: the parts, cuts, fit and insert steps in words; the steps played from apart to together; the receiving part see-through, the rest ghosts; the home outlined | `app/focus::focus_on_a_socket_plays_the_rung_in`, `app/focus::focus_on_the_chidori_turns_the_lock_last`, `gtk/screenshot::focus_renders_offscreen` | covered |
+| Focus finds joints, pairs and hardware by name, and offers a selection's joints | `app/focus::focus_finds_joints_pairs_and_hardware_by_name` | covered |
+| Hardware focus: the kind's doc comment and numbered members, how far it opens, the swing check, the dotted path of the door's edge | `app/focus::focus_on_a_cup_hinge_names_its_members_and_measures_its_swing`, `app/focus::focus_on_a_slide_follows_the_drawer` | covered |
+| The smallest gap over a motion: exact for a slide, within 0.05mm for a swing; the closest approach marked | `geom/clearance::a_slide_past_a_box_is_exact`, `geom/clearance::a_swing_finds_the_closest_corner_to_within_the_bound`, `geom/clearance::box_distance_is_exact`, `app/focus::the_smallest_gap_over_a_swing_is_within_the_bound` | covered |
+| A flat view from above, cut just over a hinge's arm | `scene/camera::a_plan_looks_straight_down_flat_with_the_front_at_the_bottom`, `app/focus::focus_on_a_cup_hinge_names_its_members_and_measures_its_swing`, `gtk/screenshot::focus_renders_offscreen` | covered |
+| Overlay lines keep their dash pattern across joined pieces | `scene/focus::a_broken_line_keeps_its_pattern_across_joined_pieces` | covered |
+
 ### Checks and require
 
 | Rule | Tests | Status |

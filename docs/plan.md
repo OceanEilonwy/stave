@@ -157,6 +157,9 @@ exploded scenes.
 
 # Next: focus mode for joints and hardware (after the cup-hinge linkage lands)
 
+Status: done; `docs/STATUS.md` says what was built and what is left, and
+`docs/screenshots/focus/` holds the screenshots.
+
 Goal: a beginner can see exactly how any joint goes together and how any
 piece of hardware works. One focus mode serves both; the mockups are the
 "Joint focus with X-ray" and "Hinge detail" screens on the design canvas.
