@@ -227,6 +227,9 @@ pub struct Profile {
     pub stations: Vec<ProfileStation>,
     /// Draw one smooth curve through them (a turned profile's `smooth:`).
     pub smooth: bool,
+    /// The zones along the length a round tenon narrowed (local length
+    /// coordinates): their surface is a cut face.
+    pub narrowed: Vec<(Length, Length)>,
 }
 
 impl Profile {
@@ -283,6 +286,7 @@ impl Profile {
             push_zone(&mut stations, &zone);
         }
         self.stations = stations;
+        self.narrowed.push((start, end));
     }
 
     /// The profile as cylinders along the length, centred at `centre`, each
@@ -457,6 +461,7 @@ impl Solid {
                         },
                     ],
                     smooth: false,
+                    narrowed: Vec::new(),
                 }),
             ),
             Shape::Turned {
@@ -496,6 +501,7 @@ impl Solid {
                     Some(Profile {
                         stations: profile,
                         smooth: *smooth,
+                        narrowed: Vec::new(),
                     }),
                 )
             }
@@ -1048,6 +1054,7 @@ mod tests {
                 },
             ],
             smooth: false,
+            narrowed: Vec::new(),
         };
         profile.narrow(mm(80), mm(100), mm(22));
         let diameters: Vec<(i64, i64)> = profile

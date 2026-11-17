@@ -6,22 +6,12 @@
 //! is assembled around them). A pair with a cut the geometry can't make,
 //! or with a part already reported for an overlap, is left out.
 
-use stave_geom::sequence::{Member, Step, Undo, disassemble};
+use stave_geom::sequence::{Member, Step, disassemble, pair_members, pair_steps};
 use stave_lang::placement::PartAxis;
 use stave_lang::{Code, Severity};
 use stave_model::solved::{AssemblyStep, JointPair, PartId, StepAmount, StepKind};
 
 use crate::{Checker, Item, ordered};
-
-/// The axis a push's `angle:` turns toward: length → width → thickness →
-/// length.
-fn next_axis(axis: PartAxis) -> PartAxis {
-    match axis {
-        PartAxis::Length => PartAxis::Width,
-        PartAxis::Width => PartAxis::Thickness,
-        PartAxis::Thickness => PartAxis::Length,
-    }
-}
 
 impl Checker<'_> {
     pub(crate) fn sequences(&mut self) {
@@ -31,16 +21,7 @@ impl Checker<'_> {
                 if pair.insert.is_empty() {
                     continue;
                 }
-                let members: Vec<PartId> = {
-                    let mut all: Vec<PartId> = pair.roles.iter().map(|r| r.part).collect();
-                    for made in &pair.made_parts {
-                        if !all.contains(made) {
-                            all.push(*made);
-                        }
-                    }
-                    all.dedup();
-                    all
-                };
+                let members = pair_members(pair);
                 let left_out = members.iter().enumerate().any(|(i, a)| {
                     self.failed.contains(&Item::Part(*a))
                         || members
@@ -101,38 +82,7 @@ impl Checker<'_> {
         members: &[PartId],
         replace: Option<(usize, PartAxis)>,
     ) -> Option<Vec<Step>> {
-        pair.insert
-            .iter()
-            .enumerate()
-            .map(|(index, step)| {
-                let member = members.iter().position(|p| *p == step.part)?;
-                let orientation = self.design.part(step.part)?.pose.orientation;
-                let axis = match replace {
-                    Some((at, axis)) if at == index => axis,
-                    _ => step.axis,
-                };
-                let undo = match step.kind {
-                    StepKind::Push | StepKind::Drive => Undo::Push {
-                        along: orientation.direction(axis),
-                        turned: step
-                            .angle
-                            .map(|angle| (orientation.direction(next_axis(axis)), angle)),
-                        by: match step.by {
-                            Some(StepAmount::Length(length)) => Some(length),
-                            Some(StepAmount::Angle(_)) | None => None,
-                        },
-                    },
-                    StepKind::Rotate => Undo::Rotate {
-                        about: orientation.direction(axis),
-                        by: match step.by {
-                            Some(StepAmount::Angle(angle)) => angle,
-                            Some(StepAmount::Length(_)) | None => return None,
-                        },
-                    },
-                };
-                Some(Step { member, undo })
-            })
-            .collect()
+        pair_steps(self.design, pair, members, replace)
     }
 
     /// A step as the source writes it: `push(rail, along: width)`.

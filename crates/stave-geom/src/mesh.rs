@@ -36,8 +36,15 @@
 //! Round tenons and round sections on a board are lathe cylinders; a
 //! round section with flats is drawn as the prism of its outline
 //! ([`mesh_cut`]). Round stock and turned parts
-//! are lathe meshes of their profile; holes in them are not drawn (what
-//! fills them hides them).
+//! are lathe meshes of their profile, drilled where they have holes
+//! ([`mesh_drill`](crate::mesh_drill)).
+//!
+//! # Cut faces
+//!
+//! Every vertex says whether its face was made by a cut
+//! ([`Vertex::cut`](crate::Vertex::cut)): a board's faces off its cut box,
+//! hole walls and bottoms, angled slot walls, round tenons and round
+//! sections, and the zones of a turned part a round tenon narrowed.
 
 use std::f32::consts::TAU;
 
@@ -67,17 +74,20 @@ fn mm_nm(nm: i64) -> f32 {
 /// The mesh of a part with its cuts made.
 pub fn cut_part(part: &Part, solid: &Solid, grain: GrainAxes) -> Geometry {
     let frame = Frame::of_part(part);
+    let size = [part.cut.length, part.cut.width, part.cut.thickness].map(Length::nm);
+    let length = render::mm(part.cut.length);
     let mut pieces = Vec::new();
     if !solid.blocks().is_empty() {
-        pieces.push(board(&frame, solid, grain));
+        pieces.push(board(&frame, solid, grain, size));
     }
     for rod in solid.rods() {
         if rod.flats.is_some() {
             let mut builder = Builder::default();
+            builder.set_cut(true);
             mesh_cut::flatted_rod(&mut builder, &frame, grain, rod, segments());
             pieces.push(builder.finish());
         } else {
-            pieces.push(rod_mesh(&frame, rod, grain));
+            pieces.push(rod_mesh(&frame, rod, grain, length));
         }
     }
     if let Some(profile) = solid.profile() {
@@ -96,7 +106,19 @@ pub fn cut_part(part: &Part, solid: &Solid, grain: GrainAxes) -> Geometry {
             render::mm(part.cut.width) * 0.5,
             render::mm(part.cut.thickness) * 0.5,
         ];
-        pieces.push(build::lathe(&frame, centre, &points, corners, grain));
+        let zones = build::CutZones {
+            zones: profile
+                .narrowed
+                .iter()
+                .map(|(start, end)| (render::mm(*start), render::mm(*end)))
+                .collect(),
+            ends: Some((0.0, length)),
+        };
+        let mut turned = build::lathe_zoned(&frame, centre, &points, corners, grain, &zones);
+        for hole in solid.holes() {
+            crate::mesh_drill::drill(&mut turned, &frame, grain, hole);
+        }
+        pieces.push(turned);
     }
     merge(pieces)
 }
@@ -127,16 +149,29 @@ pub(crate) fn merge(pieces: Vec<Geometry>) -> Geometry {
     }
 }
 
-/// A round tenon or round section: a cylinder along its axis.
-fn rod_mesh(frame: &Frame, rod: &Rod, grain: GrainAxes) -> Geometry {
+/// A round tenon or round section: a cylinder along its axis, a cut face
+/// except where it ends at the part's own end (`length` along the part).
+fn rod_mesh(frame: &Frame, rod: &Rod, grain: GrainAxes, length: f32) -> Geometry {
     let axial = frame.first(rod.axis);
     let radius = render::mm(rod.diameter) * 0.5;
+    let (start, end) = (render::mm(rod.start), render::mm(rod.end));
     let profile = [
-        ProfilePoint::new(render::mm(rod.start), radius),
-        ProfilePoint::new(render::mm(rod.end), radius),
+        ProfilePoint::new(start, radius),
+        ProfilePoint::new(end, radius),
     ];
     let centre = [render::mm(rod.centre[0]), render::mm(rod.centre[1])];
-    build::lathe(&axial, centre, &profile, build::Corners::Sharp, grain)
+    let zones = build::CutZones {
+        zones: vec![(start, end)],
+        ends: Some((0.0, length)),
+    };
+    build::lathe_zoned(
+        &axial,
+        centre,
+        &profile,
+        build::Corners::Sharp,
+        grain,
+        &zones,
+    )
 }
 
 /// A hole's square and where it opens, in grid terms.
@@ -193,7 +228,12 @@ impl Grid {
     }
 }
 
-fn board(frame: &Frame, solid: &Solid, grain: GrainAxes) -> Geometry {
+/// The boundary of a board's blocks, with its holes and angled slots.
+/// `size` is the cut size in nanometres per local axis: faces on its box
+/// are the stock's own surface, every other face was made by a cut.
+fn board(frame: &Frame, solid: &Solid, grain: GrainAxes, size: [i64; 3]) -> Geometry {
+    let stock_plane =
+        |axis: usize, at: i64| at == 0 || size.get(axis).is_some_and(|edge| *edge == at);
     let holes: Vec<HoleShape> = solid.holes().iter().map(HoleShape::of).collect();
     let bands: Vec<Band> = solid.slots().iter().map(Band::of).collect();
     let mut lines: [Vec<i64>; 3] = Default::default();
@@ -342,6 +382,7 @@ fn board(frame: &Frame, solid: &Solid, grain: GrainAxes) -> Geometry {
                 normal[a] = if positive { 1.0 } else { -1.0 };
                 let world_normal = frame.vector(normal);
                 let w = grid.line(a, p);
+                builder.set_cut(!stock_plane(a, w));
                 for (i0, j0, i1, j1) in greedy(&mut mask, nu, nv) {
                     let corner = |i: usize, j: usize| {
                         let mut c = [0i64; 3];
@@ -454,8 +495,10 @@ fn board(frame: &Frame, solid: &Solid, grain: GrainAxes) -> Geometry {
             key: *key,
             high: *high,
         };
+        builder.set_cut(!stock_plane(key[0], grid.line(key[0], key[1])));
         opening(&mut builder, frame, grain, hole, place, &grid, &bands);
     }
+    builder.set_cut(true);
     for (index, hole) in holes.iter().enumerate() {
         if !drawn_holes.get(index).copied().unwrap_or(false) {
             continue;

@@ -44,11 +44,13 @@
 #![warn(missing_docs)]
 
 mod build;
+pub mod clearance;
 pub mod collide;
 pub mod hinge;
 pub mod linkage;
 mod mesh;
 mod mesh_cut;
+mod mesh_drill;
 pub mod render;
 mod sample;
 pub mod sequence;
@@ -73,6 +75,11 @@ pub struct Vertex {
     /// along the grain, then the other face axis, then the thickness. A
     /// wood shader draws grain from it; hardware leaves it at zero.
     pub grain: [f32; 3],
+    /// 1 on a face a cut made (the walls and bottom of a hole, mortise,
+    /// dado, rabbet or groove, a tenon's cheeks and shoulders, a round
+    /// tenon), 0 on the stock's own surface, so a viewer can tint the
+    /// joinery.
+    pub cut: f32,
 }
 
 /// A triangle mesh. Triangles are counter-clockwise seen from outside.

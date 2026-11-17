@@ -84,6 +84,14 @@ impl Frame {
         self.origin + a * local.x + b * local.y + c * local.z
     }
 
+    /// A render-frame point in this frame's local coordinates (the axes
+    /// are unit and at right angles).
+    pub(crate) fn local(&self, point: Vec3) -> Vec3 {
+        let [a, b, c] = self.axes;
+        let offset = point - self.origin;
+        Vec3::new(offset.dot(a), offset.dot(b), offset.dot(c))
+    }
+
     pub(crate) fn vector(&self, local: Vec3) -> Vec3 {
         let [a, b, c] = self.axes;
         a * local.x + b * local.y + c * local.z
@@ -116,15 +124,24 @@ impl GrainAxes {
 pub(crate) struct Builder {
     mesh: Mesh,
     edges: Edges,
+    /// Vertices added now are on a face a cut made.
+    cut: bool,
 }
 
 impl Builder {
+    /// Marks the vertices added from now on as on a face a cut made, or
+    /// on the stock's own surface.
+    pub(crate) fn set_cut(&mut self, cut: bool) {
+        self.cut = cut;
+    }
+
     pub(crate) fn vertex(&mut self, position: Vec3, normal: Vec3, grain: [f32; 3]) -> u32 {
         let index = u32::try_from(self.mesh.vertices.len()).unwrap_or(u32::MAX);
         self.mesh.vertices.push(Vertex {
             position: position.to_array(),
             normal: normal.normalize_or_zero().to_array(),
             grain,
+            cut: if self.cut { 1.0 } else { 0.0 },
         });
         index
     }
@@ -303,6 +320,48 @@ pub fn lathe(
     corners: Corners,
     grain: GrainAxes,
 ) -> Geometry {
+    lathe_zoned(frame, centre, profile, corners, grain, &CutZones::default())
+}
+
+/// Where a lathe mesh's surface is a face a cut made: spans whose middle
+/// lies in a zone (millimetres along the axis, ends included), and end
+/// caps except at the stock's own ends.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub(crate) struct CutZones {
+    /// Ranges along the axis.
+    pub zones: Vec<(f32, f32)>,
+    /// The stock's ends along the axis: caps there are its own surface.
+    pub ends: Option<(f32, f32)>,
+}
+
+impl CutZones {
+    fn covers(&self, along: f32) -> bool {
+        self.zones
+            .iter()
+            .any(|(low, high)| along >= *low - EPSILON && along <= *high + EPSILON)
+    }
+
+    fn cap_is_cut(&self, along: f32) -> bool {
+        match self.ends {
+            Some((low, high)) => {
+                (along - low).abs() > EPSILON
+                    && (along - high).abs() > EPSILON
+                    && self.covers(along)
+            }
+            None => false,
+        }
+    }
+}
+
+/// A lathe mesh whose surface is a cut face over `zones`.
+pub(crate) fn lathe_zoned(
+    frame: &Frame,
+    centre: [f32; 2],
+    profile: &[ProfilePoint],
+    corners: Corners,
+    grain: GrainAxes,
+    zones: &CutZones,
+) -> Geometry {
     let mut builder = Builder::default();
     // Drop repeated points: they make zero-length spans.
     let mut points: Vec<ProfilePoint> = Vec::with_capacity(profile.len());
@@ -355,6 +414,7 @@ pub fn lathe(
     for (index, (from, to, normal)) in spans.iter().enumerate() {
         let start_normal = smooth_at(index).unwrap_or(*normal);
         let end_normal = smooth_at(index + 1).unwrap_or(*normal);
+        builder.set_cut(zones.covers((from.along + to.along) * 0.5));
         let first = add_ring(&mut builder, *from, start_normal);
         let second = add_ring(&mut builder, *to, end_normal);
         for around in 0..first.len() {
@@ -380,6 +440,7 @@ pub fn lathe(
         if point.radius <= EPSILON {
             continue;
         }
+        builder.set_cut(zones.cap_is_cut(point.along));
         let normal = frame.vector(Vec3::new(outward, 0.0, 0.0));
         let middle_local = centre_local + Vec3::new(point.along, 0.0, 0.0);
         let middle = builder.vertex(frame.point(middle_local), normal, grain.apply(middle_local));

@@ -20,9 +20,11 @@
 //! the diagonal are proven, as `tools/joint-sim/chidori.py` does.
 
 use glam::{DMat4, DVec3};
-use stave_lang::placement::{Axis, Direction};
+use stave_lang::placement::{Axis, Direction, PartAxis};
 use stave_lang::units::{Angle, Length};
-use stave_model::solved::{Part, Point, WorldBox};
+use stave_model::solved::{
+    JointPair, Part, PartId, Point, SolvedDesign, StepAmount, StepKind, WorldBox,
+};
 
 use crate::collide::{
     CONTACT_TOLERANCE, Placement, WorldRod, WorldSolid, boxes_overlap, direction_vector,
@@ -88,9 +90,80 @@ pub struct Blocked {
     pub by: usize,
 }
 
+/// How undoing a step moves its part, in world nanometres, applied after
+/// where the part is when the step is done.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Moved {
+    /// Slid by a vector.
+    Slide(DVec3),
+    /// Turned about an axis through a point, by radians.
+    Turn {
+        /// A point on the axis.
+        centre: DVec3,
+        /// The unit axis.
+        axis: DVec3,
+        /// How far, radians (signed about `axis`).
+        angle: f64,
+    },
+}
+
+impl Moved {
+    /// The move part way: `0` not moved, `1` the whole move.
+    pub fn at(&self, amount: f64) -> DMat4 {
+        match *self {
+            Moved::Slide(vector) => DMat4::from_translation(vector * amount),
+            Moved::Turn {
+                centre,
+                axis,
+                angle,
+            } => {
+                DMat4::from_translation(centre)
+                    * DMat4::from_axis_angle(axis, angle * amount)
+                    * DMat4::from_translation(-centre)
+            }
+        }
+    }
+
+    /// How far the move goes: nanometres for a slide, radians for a turn.
+    pub fn amount(&self) -> f64 {
+        match *self {
+            Moved::Slide(vector) => vector.length(),
+            Moved::Turn { angle, .. } => angle.abs(),
+        }
+    }
+}
+
+/// One step of a sequence as it is undone: which member moves, where it is
+/// when the step is done (world nanometres to world nanometres), and the
+/// move that undoes it. Doing the step is the move backwards.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Traced {
+    /// Index into the members.
+    pub member: usize,
+    /// The member's placement with this step done.
+    pub done: DMat4,
+    /// The move that undoes the step.
+    pub moved: Moved,
+}
+
+impl Traced {
+    /// The member's placement part way through the step: `0` not yet
+    /// done (apart), `1` done.
+    pub fn placement(&self, progress: f64) -> DMat4 {
+        self.moved.at(1.0 - progress.clamp(0.0, 1.0)) * self.done
+    }
+}
+
 /// Runs `steps` backwards from the finished joint. `Err` names the first
 /// step (counting from the last) that is blocked both ways.
 pub fn disassemble(members: &[Member<'_>], steps: &[Step]) -> Result<(), Blocked> {
+    trace(members, steps).map(|_| ())
+}
+
+/// Runs `steps` backwards like [`disassemble`] and records how each one
+/// moves its part, in step order (the first step first). A viewer plays
+/// them forwards to show the joint going together.
+pub fn trace(members: &[Member<'_>], steps: &[Step]) -> Result<Vec<Traced>, Blocked> {
     let worlds: Vec<WorldSolid> = members
         .iter()
         .map(|m| WorldSolid::of_part(m.part, m.solid))
@@ -105,15 +178,95 @@ pub fn disassemble(members: &[Member<'_>], steps: &[Step]) -> Result<(), Blocked
         shapes: &shapes,
         members,
     };
+    let mut traced = Vec::with_capacity(steps.len());
     for (index, step) in steps.iter().enumerate().rev() {
-        let moved = state
+        let done = at.get(step.member).copied().unwrap_or(Placement::REST);
+        let (placement, moved) = state
             .undo(step, &at)
             .map_err(|by| Blocked { step: index, by })?;
+        traced.push(Traced {
+            member: step.member,
+            done: done.matrix(),
+            moved,
+        });
         if let Some(slot) = at.get_mut(step.member) {
-            *slot = moved;
+            *slot = placement;
         }
     }
-    Ok(())
+    traced.reverse();
+    Ok(traced)
+}
+
+/// The parts of a joint pair its sequence moves and checks: its roles'
+/// parts, then the parts it makes, each once.
+pub fn pair_members(pair: &JointPair) -> Vec<PartId> {
+    let mut all: Vec<PartId> = Vec::new();
+    for part in pair
+        .roles
+        .iter()
+        .map(|r| r.part)
+        .chain(pair.made_parts.iter().copied())
+    {
+        if !all.contains(&part) {
+            all.push(part);
+        }
+    }
+    all
+}
+
+/// The axis a push's `angle:` turns toward: length → width → thickness →
+/// length.
+fn next_axis(axis: PartAxis) -> PartAxis {
+    match axis {
+        PartAxis::Length => PartAxis::Width,
+        PartAxis::Width => PartAxis::Thickness,
+        PartAxis::Thickness => PartAxis::Length,
+    }
+}
+
+/// A joint pair's `insert` steps for [`trace`] and [`disassemble`], each
+/// step's axes as its part is placed in the finished joint; `members` is
+/// [`pair_members`]. `replace` swaps one step's axis (to find a push that
+/// would come apart, for a help line). `None` when a step names a part
+/// that isn't a member or a turn has no angle.
+pub fn pair_steps(
+    design: &SolvedDesign,
+    pair: &JointPair,
+    members: &[PartId],
+    replace: Option<(usize, PartAxis)>,
+) -> Option<Vec<Step>> {
+    pair.insert
+        .iter()
+        .enumerate()
+        .map(|(index, step)| {
+            let member = members.iter().position(|p| *p == step.part)?;
+            let orientation = design.part(step.part)?.pose.orientation;
+            let axis = match replace {
+                Some((at, axis)) if at == index => axis,
+                _ => step.axis,
+            };
+            let undo = match step.kind {
+                StepKind::Push | StepKind::Drive => Undo::Push {
+                    along: orientation.direction(axis),
+                    turned: step
+                        .angle
+                        .map(|angle| (orientation.direction(next_axis(axis)), angle)),
+                    by: match step.by {
+                        Some(StepAmount::Length(length)) => Some(length),
+                        Some(StepAmount::Angle(_)) | None => None,
+                    },
+                },
+                StepKind::Rotate => Undo::Rotate {
+                    about: orientation.direction(axis),
+                    by: match step.by {
+                        Some(StepAmount::Angle(angle)) => angle,
+                        Some(StepAmount::Length(_)) | None => return None,
+                    },
+                },
+            };
+            Some(Step { member, undo })
+        })
+        .collect()
 }
 
 /// A push turned by a multiple of 90deg is along an axis.
@@ -145,7 +298,7 @@ impl State<'_, '_> {
         Some(placed_bounds(&bounds, at.get(index)?))
     }
 
-    fn undo(&self, step: &Step, at: &[Placement]) -> Result<Placement, usize> {
+    fn undo(&self, step: &Step, at: &[Placement]) -> Result<(Placement, Moved), usize> {
         let m = step.member;
         let current = at.get(m).copied().unwrap_or(Placement::REST);
         match (step.undo, current) {
@@ -202,7 +355,7 @@ impl State<'_, '_> {
         along: Direction,
         by: Option<Length>,
         at: &[Placement],
-    ) -> Result<Placement, usize> {
+    ) -> Result<(Placement, Moved), usize> {
         let mover = self.worlds.get(m).ok_or(m)?.translated(offset);
         let others = self.others_exact(m, at);
         let tolerance = CONTACT_TOLERANCE.nm();
@@ -229,7 +382,8 @@ impl State<'_, '_> {
                         direction.axis(),
                         Length::from_nm(moved.get(direction.axis()).nm().saturating_add(step)),
                     );
-                    return Ok(Placement::Exact(moved));
+                    let vector = direction_vector(direction) * render::nm(Length::from_nm(amount));
+                    return Ok((Placement::Exact(moved), Moved::Slide(vector)));
                 }
                 Some((_, j)) => {
                     first_blocker.get_or_insert(j);
@@ -245,7 +399,7 @@ impl State<'_, '_> {
         v: DVec3,
         by: Option<Length>,
         at: &[Placement],
-    ) -> Result<Placement, usize> {
+    ) -> Result<(Placement, Moved), usize> {
         let current = at.get(m).copied().unwrap_or(Placement::REST).matrix();
         let mut first_blocker = None;
         for direction in [v, -v] {
@@ -256,7 +410,12 @@ impl State<'_, '_> {
             let count = (amount / STEP).ceil().max(1.0);
             let motion = |s: f64| DMat4::from_translation(direction * (amount * s / count));
             match self.sweep(m, &motion, count, at) {
-                None => return Ok(Placement::Turned(motion(count) * current)),
+                None => {
+                    return Ok((
+                        Placement::Turned(motion(count) * current),
+                        Moved::Slide(direction * amount),
+                    ));
+                }
                 Some(j) => {
                     first_blocker.get_or_insert(j);
                 }
@@ -271,7 +430,7 @@ impl State<'_, '_> {
         about: Direction,
         by: Angle,
         at: &[Placement],
-    ) -> Result<Placement, usize> {
+    ) -> Result<(Placement, Moved), usize> {
         let current = at.get(m).copied().unwrap_or(Placement::REST).matrix();
         let part = self.members.get(m).ok_or(m)?.part;
         let rest = part.cut_box();
@@ -300,7 +459,16 @@ impl State<'_, '_> {
                     * DMat4::from_translation(-centre)
             };
             match self.sweep(m, &motion, count, at) {
-                None => return Ok(Placement::Turned(motion(count) * current)),
+                None => {
+                    return Ok((
+                        Placement::Turned(motion(count) * current),
+                        Moved::Turn {
+                            centre,
+                            axis,
+                            angle: sign * total,
+                        },
+                    ));
+                }
                 Some(j) => {
                     first_blocker.get_or_insert(j);
                 }
