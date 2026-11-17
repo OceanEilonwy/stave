@@ -19,6 +19,7 @@ gtk = { package = "gtk4", version = "0.11", features = ["v4_16"] }
 adw = { package = "libadwaita", version = "0.9", features = ["v1_7"] }
 png = "0.18"
 pollster = "0.4"
+sourceview5 = { version = "=0.11.3", features = ["v5_22"] }
 stave-app = { path = "../stave-app" }
 stave-geom = { path = "../stave-geom" }
 stave-ide = { path = "../stave-ide" }

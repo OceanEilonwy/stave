@@ -103,6 +103,13 @@ shot $files/problem.png tests/broken/unknown_name --view files --theme light --f
 # type and the 3D link lets go.
 shot $files/typed_light.png $cabinet --view files --theme light --file doors.stave:11 --cursor side_l --type q
 shot $files/typed_dark.png $cabinet --view files --theme dark --file doors.stave:11 --cursor side_l --type q
+# Typing three keys and one Undo: the keys go as one step, the text is as
+# saved again and the tab has no unsaved dot.
+shot $files/undo.png $cabinet --view files --theme light --file doors.stave:11 --cursor side_l --type qrs --undo
+# Ctrl+F in the text: the search bar, "2 of 3", every match highlighted.
+shot $files/search.png $cabinet --view files --theme light --file doors.stave:9 --cursor door_l --search side
+# The cursor just inside a bracket: it and its partner are boxed, dark.
+shot $files/brackets_dark.png $cabinet --view files --theme dark --file doors.stave:18 --cursor door_l
 # The Files view in a narrow window.
 shot $files/narrow.png $cabinet --view files --theme light --size 760x900 --file doors.stave:9 --cursor door_l
 # A part selected in the 3D view opens the text that places it, dark

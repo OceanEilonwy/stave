@@ -46,11 +46,14 @@ opens a file at a line (relative to the folder, or `std/joinery/dado.stave`),
 `--cursor WORD` puts the cursor on the first `WORD` on that line, and once
 the names are worked out `--peek` peeks at its definition, `--hover` shows
 its card, `--uses` lists its uses, `--follow` follows it (F12), `--type
-TEXT` types at the cursor, and `--text-only` hides the 3D view:
+TEXT` types at the cursor a key at a time, `--undo` then undoes once,
+`--search TEXT` finds TEXT from the cursor (Ctrl+F), and `--text-only`
+hides the 3D view:
 
 ```
 tools/window-shot peek.png examples/clothing_cabinet --view files --file doors.stave:9 --cursor FramePanelDoor --peek
 tools/window-shot typed.png examples/clothing_cabinet --view files --file doors.stave:11 --cursor side_l --type q
+tools/window-shot search.png examples/clothing_cabinet --view files --file doors.stave:9 --cursor door_l --search side
 tools/window-shot linked.png examples/clothing_cabinet --view files --select 'door_l.stile[hinge]'
 ```
 
@@ -88,7 +91,7 @@ forwards what people do.
 | `stave-gtk` | `ui/problems.rs` | The Problems sidebar: filters and the problems tree. |
 | `stave-gtk` | `ui/view_tools.rs`, `slider.rs` | The 3D view's toolbar (Pull apart), camera buttons, the shared-wood key and focus mode's From above / In 3D switch; the design's slider (track, ring handle, a hatched blocked range). |
 | `stave-gtk` | `ui/focus_stage.rs`, `focus_panel.rs` | Focus mode in the 3D view's area (the step player, the caption, three small views, the swing card) and a problem's motion card; focus mode's side panel. |
-| `stave-gtk` | `ui/files.rs`, `editor.rs` | The Files view: the file sidebar, tabs, breadcrumbs, the uses panel and the 3D view's slot; the editor (a `GtkTextView` with its gutter, tags, lenses, peek and hover card). |
+| `stave-gtk` | `ui/files.rs`, `editor.rs` | The Files view: the file sidebar, tabs, breadcrumbs, the uses panel and the 3D view's slot; the editor (a GtkSourceView 5 with its gutter, tags, lenses, peek, hover card and search bar; the only file that knows it is a GtkSourceView). |
 | `stave-gtk` | `ui/icons.rs`, `style.rs` | The design's icons drawn from SVG path data in the text colour; one stylesheet whose colours are all libadwaita's named colours (`@headerbar_bg_color`, `@sidebar_bg_color`, `@card_bg_color`, `@accent_bg_color`, `@success_color`, ...), so light and dark both come from it and follow the style manager the moment it changes; only the code block is dark in both. |
 
 ## The session contract
@@ -331,7 +334,7 @@ options, from above, playing) and lays the 3D view's area out by kind
 FilesMode.dc.html: the text is the design, and the 3D view beside it
 follows it. Pictures in `docs/screenshots/files/` (`linked.png`,
 `peek.png`, `hover.png`, `uses_dark.png`, `problem.png`, `typed_dark.png`, `typed_light.png`,
-`selected_in_3d_dark.png`, `narrow.png`).
+`undo.png`, `search.png`, `brackets_dark.png`, `selected_in_3d_dark.png`, `narrow.png`).
 
 ```
 ┌ files ───────┐ ┌ tabs ─ doors.stave • ─ carcass.stave ──────── Text|Both ┐ ┌ 3D view ─────────┐
@@ -405,9 +408,17 @@ step and changes nothing in the interface.
   folds away (the title bar's sidebar button shows it).
 - **Breadcrumbs** follow the cursor. **Footer**: the shortcuts and the
   line.
-- **Editor**: colours from the semantic tokens (one source of truth: the
-  grammar's words through `stave-lang` and `stave-schema`), line numbers
-  with the cursor's in the accent colour, the cursor's line tinted, the
+- **Editor**: a GtkSourceView 5 (`editor.rs` is the only file that knows;
+  the page sees a `gtk::TextView` and `gtk::TextBuffer`s). Colours from
+  the semantic tokens (one source of truth: the grammar's words through
+  `stave-lang` and `stave-schema`), applied as buffer tags; line numbers
+  with the cursor's in the accent colour, the cursor's line tinted with
+  the design's blue bar at its left edge (a gutter renderer of ours,
+  which also draws the problem bars), matching brackets boxed, Enter
+  indenting two spaces more after an opening `{`, `(` or `[` and a
+  closing one typed first on a line going back out (as `stave fmt` lays
+  it out; a test checks the two agree on every example), Tab inserting
+  spaces, smart Home/End, undo that groups typing, the
   name under the cursor and its uses marked (its declaration stronger),
   wavy underlines from the fast tier and the last check (drawn by the
   text view itself, 1.6 px thick, in libadwaita's error and warning
@@ -418,7 +429,10 @@ step and changes nothing in the interface.
 - **Keys**: F12 or Ctrl+click follows a name; Alt+F12 peeks at its
   definition under the line (Open goes there; Escape closes); Shift+F12
   lists its uses in the panel under the editor (a row goes there);
-  Alt+←/→ walk the window's history; Ctrl+S saves; Ctrl+Shift+I lays the
+  Alt+←/→ walk the window's history; Ctrl+F with the keyboard in the
+  text opens the search bar over it (every match highlighted, "2 of 3",
+  Enter / Shift+Enter or the arrows step, Escape closes; Ctrl+F anywhere
+  else in the view still goes to "Go to file or name"); Ctrl+S saves; Ctrl+Shift+I lays the
   file out with `stave fmt` (never done unasked; Undo takes it back).
   Resting the pointer on a word shows its card: the problem there with
   its help line, or what the name is, its doc comment and where it is
@@ -450,17 +464,24 @@ step and changes nothing in the interface.
   by something else reloads when its buffer is clean and keeps unsaved
   changes otherwise (with a toast).
 
-**GtkSourceView 5** isn't installed on this machine (only GtkSourceView 4,
-the GTK 3 one; no `gtksourceview5` package), so the editor is a plain
-`GtkTextView`: the lenses, the peek and the hover card are overlay
-children (made once and hidden when not used: GTK can't take an overlay
-back out of a text view), placed in room that a tag's
-`pixels-above-lines` makes for them, and the line numbers are a gutter
-widget of our own. Moving to GtkSourceView later would change only
-`editor.rs`.
+**Highlighting stays single-sourced.** The buffer's own syntax
+highlighting is off and there is no `.lang` file: a GtkSourceView
+language definition would be a second list of the grammar's words that
+could drift from `stave-lang` and `stave-schema`, and it couldn't tell a
+part's name from a recipe's, which the semantic tokens do. The style
+scheme colours everything else: `stave-light` and `stave-dark`, derived
+from Adwaita and Adwaita-dark (`parent-scheme`) with the design's text
+colour, cursor-line tint and accent line number and a box round matched
+brackets, written to `~/.cache/stave/styles/` at start (GtkSourceView
+loads schemes only from folders; if that can't be written, plain Adwaita
+and Adwaita-dark). They follow libadwaita's light or dark style. The
+lenses, the peek and the hover card are overlay children of the text
+view (made once and hidden when not used: GTK can't take an overlay back
+out of a text view), placed in room that a tag's `pixels-above-lines`
+makes for them; the line numbers sit at the bottom of their line's room,
+level with the text.
 
 **Differences from the mockup**: the 3D view's "Pull apart" toolbar is
-lane 3's slot; the current line has a tint but not the mockup's blue bar
-at its left edge; the peek shows the doc comment, the declaration and the
+lane 3's slot; the peek shows the doc comment, the declaration and the
 four lines after it (the mockup skips to a later line); the editor's
 monospace font is Adwaita Mono where JetBrains Mono isn't installed.

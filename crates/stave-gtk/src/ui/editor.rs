@@ -1,26 +1,39 @@
-//! The code editor of the Files view (FilesMode.dc.html): a text view
+//! The code editor of the Files view (FilesMode.dc.html): a GtkSourceView
 //! with line numbers, `.stave` colours from the navigation layer's
 //! semantic tokens, wavy underlines for problems, the uses of the name
 //! under the cursor marked, lenses above declarations ("2 uses · show in
-//! 3D") and an inline peek of a definition under a line.
+//! 3D"), an inline peek of a definition under a line, and Ctrl+F search.
 //!
 //! It only displays: what to colour, underline, mark and show comes from
 //! the Files page (`files.rs`), which asks `stave-ide`. Positions arrive
 //! as byte offsets and are turned into lines and byte indexes here
 //! ([`LineStarts`]), the only place that knows GTK counts in characters.
+//! This is also the only file that knows the editor is a GtkSourceView: the
+//! page sees a `gtk::TextView` and `gtk::TextBuffer`s.
 //!
-//! GtkSourceView 5 isn't installed on the build machines (only the GTK 3
-//! version 4 is), so the editor is a plain `GtkTextView`: lenses and the
-//! peek are overlay children placed in the room a tag's
-//! `pixels-above-lines` / `pixels-below-lines` makes for them, and the line
-//! numbers are a gutter widget of our own.
+//! GtkSourceView does what it is good at: the line numbers, the cursor's
+//! line, bracket matching, indentation (two spaces, as `stave fmt` lays a
+//! file out), smart Home/End, undo and search. Colours do **not** come
+//! from a GtkSourceView language definition: a `.lang` file would be a
+//! second list of the grammar's words that could drift from it, and it
+//! couldn't tell a part's name from a recipe's. The buffer's own syntax
+//! highlighting is off; the page paints the semantic tokens as tags
+//! ([`Editor::paint`]), so `stave-lang` and `stave-schema` stay the one
+//! source of truth. The style scheme (Adwaita or Adwaita-dark, following
+//! libadwaita, with the design's tint for the cursor's line) colours
+//! everything else: the text, the gutter, matched brackets, search matches.
+//!
+//! Lenses and the peek are overlay children placed in the room a tag's
+//! `pixels-above-lines` / `pixels-below-lines` makes for them.
 
 use std::cell::{Cell, RefCell};
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 
 use adw::prelude::*;
 use gtk::glib;
 use gtk::subclass::prelude::*;
+use sourceview5::prelude::*;
+use sourceview5::subclass::prelude::*;
 use stave_ide::{SymbolId, SymbolKind, TokenClass};
 use stave_lang::Severity;
 
@@ -31,8 +44,13 @@ const LINE_SPACING: i32 = 3;
 /// The room a lens takes above its line.
 const LENS_HEIGHT: i32 = 20;
 
-/// The gutter's width.
-const GUTTER_WIDTH: i32 = 52;
+/// The width of the gutter's strip for the cursor's bar and problems'
+/// bars, left of the line numbers.
+const MARKS_WIDTH: i32 = 10;
+
+/// Spaces per indentation step: `stave fmt` indents two spaces per open
+/// `{` (rule 1 of `stave_lang::format`).
+const INDENT_WIDTH: usize = 2;
 
 /// Where each line of a text starts, in bytes, to turn the navigation
 /// layer's byte offsets into GTK's lines and byte indexes and back.
@@ -92,6 +110,131 @@ pub fn offset_of(lines: &LineStarts, iter: &gtk::TextIter) -> u32 {
     lines.offset(iter.line(), iter.line_index())
 }
 
+/// How wide a line's indentation is, in spaces (a tab counts as a step).
+fn indentation(line: &str) -> usize {
+    line.chars()
+        .map_while(|c| match c {
+            ' ' => Some(1),
+            '\t' => Some(INDENT_WIDTH),
+            _ => None,
+        })
+        .sum()
+}
+
+/// `true` if a line opens a block or a bracket it doesn't close.
+fn opens(line: &str) -> bool {
+    line.trim_end().ends_with(['{', '(', '['])
+}
+
+/// The indentation of a new line typed after `previous`: the same as
+/// `previous`, one step in after an opening `{`, `(` or `[`.
+pub fn indent_after(previous: &str) -> usize {
+    let width = indentation(previous);
+    if opens(previous) {
+        width.saturating_add(INDENT_WIDTH)
+    } else {
+        width
+    }
+}
+
+/// The indentation of a line that starts with a closing `}`, `)` or `]`,
+/// after `previous` (the nearest line above it that isn't blank): the
+/// opening line's when `previous` opened the block, one step out from
+/// `previous` otherwise.
+pub fn indent_closing(previous: &str) -> usize {
+    let width = indentation(previous);
+    if opens(previous) {
+        width
+    } else {
+        width.saturating_sub(INDENT_WIDTH)
+    }
+}
+
+/// The text of a buffer's line, without its line end.
+fn line_text(buffer: &gtk::TextBuffer, line: i32) -> Option<String> {
+    let start = buffer.iter_at_line(line)?;
+    let mut end = start;
+    if !end.ends_line() {
+        end.forward_to_line_end();
+    }
+    Some(buffer.text(&start, &end, false).to_string())
+}
+
+/// The style scheme for the light or dark style: Adwaita's, with the
+/// design's text colour on libadwaita's view background, its tint and
+/// accent colour for the cursor's line and number, and a box round matched
+/// brackets (`stave-light` and `stave-dark`, derived from
+/// Adwaita and Adwaita-dark), or Adwaita's own if those can't be loaded.
+fn style_scheme(dark: bool) -> Option<sourceview5::StyleScheme> {
+    thread_local! {
+        static LOADED: Cell<bool> = const { Cell::new(false) };
+    }
+    let manager = sourceview5::StyleSchemeManager::default();
+    if !LOADED.replace(true)
+        && let Some(folder) = write_style_schemes()
+        && let Some(folder) = folder.to_str()
+    {
+        manager.append_search_path(folder);
+    }
+    let (ours, adwaita) = if dark {
+        ("stave-dark", "Adwaita-dark")
+    } else {
+        ("stave-light", "Adwaita")
+    };
+    manager.scheme(ours).or_else(|| manager.scheme(adwaita))
+}
+
+/// The derived style schemes, as GtkSourceView reads them.
+const STYLE_SCHEMES: [(&str, &str); 2] = [
+    (
+        "stave-light.xml",
+        r##"<?xml version="1.0" encoding="UTF-8"?>
+<!-- Written by Stave: Adwaita with the Files view's colours. -->
+<style-scheme id="stave-light" name="Stave" version="1.0" parent-scheme="Adwaita">
+  <metadata>
+    <property name="variant">light</property>
+    <property name="dark-variant">stave-dark</property>
+  </metadata>
+  <style name="text" foreground="#222226" background="#ffffff"/>
+  <style name="current-line" background="#f1f6fd"/>
+  <style name="current-line-number" background="#f1f6fd" foreground="#1c71d8" bold="true"/>
+  <style name="bracket-match" background="#deddda" bold="true"/>
+</style-scheme>
+"##,
+    ),
+    (
+        "stave-dark.xml",
+        r##"<?xml version="1.0" encoding="UTF-8"?>
+<!-- Written by Stave: Adwaita-dark with the Files view's colours. -->
+<style-scheme id="stave-dark" name="Stave Dark" version="1.0" parent-scheme="Adwaita-dark">
+  <metadata>
+    <property name="variant">dark</property>
+    <property name="light-variant">stave-light</property>
+  </metadata>
+  <style name="text" foreground="#ffffff" background="#1d1d20"/>
+  <style name="current-line" background="#26303d"/>
+  <style name="current-line-number" background="#26303d" foreground="#78aeed" bold="true"/>
+  <style name="bracket-match" background="#4a4a50" bold="true"/>
+</style-scheme>
+"##,
+    ),
+];
+
+/// Writes the derived style schemes into the user's cache folder
+/// (GtkSourceView loads schemes only from folders), unless they are there
+/// already; the folder, or `None` if it can't be written.
+fn write_style_schemes() -> Option<std::path::PathBuf> {
+    let folder = glib::user_cache_dir().join("stave").join("styles");
+    std::fs::create_dir_all(&folder).ok()?;
+    for (name, text) in STYLE_SCHEMES {
+        let path = folder.join(name);
+        if std::fs::read_to_string(&path).ok().as_deref() != Some(text) {
+            std::fs::write(&path, text).ok()?;
+        }
+    }
+    Some(folder)
+}
+
 /// The tags every buffer shares.
 struct Tags {
     keyword: gtk::TextTag,
@@ -107,7 +250,6 @@ struct Tags {
     warning: gtk::TextTag,
     declared: gtk::TextTag,
     used: gtk::TextTag,
-    cursor_line: gtk::TextTag,
     lens: gtk::TextTag,
     peek: gtk::TextTag,
 }
@@ -120,7 +262,6 @@ impl Tags {
             tag
         };
         let tags = Tags {
-            cursor_line: tag("cursor-line"),
             used: tag("used"),
             declared: tag("declared"),
             keyword: tag("keyword"),
@@ -216,106 +357,76 @@ impl Tags {
             .set_background_rgba(Some(&rgba(if dark { "#1e3a5f" } else { "#d3e4f9" })));
         self.used
             .set_background_rgba(Some(&rgba(if dark { "#25344a" } else { "#e6eefa" })));
-        self.cursor_line
-            .set_paragraph_background_rgba(Some(&rgba(if dark { "#26303d" } else { "#f1f6fd" })));
     }
 }
 
 mod imp {
     use super::*;
 
-    /// The line numbers beside the text.
+    /// The strip of the gutter left of the line numbers: the accent bar of
+    /// the cursor's line and a bar beside each line with a problem.
     #[derive(Default)]
-    pub struct Gutter {
-        pub view: glib::WeakRef<gtk::TextView>,
-        /// The cursor's line, from 0, drawn in the accent colour.
-        pub current: Cell<i32>,
+    pub struct Marks {
         pub dark: Cell<bool>,
     }
 
     #[glib::object_subclass]
-    impl ObjectSubclass for Gutter {
-        const NAME: &'static str = "StaveGutter";
-        type Type = super::Gutter;
-        type ParentType = gtk::Widget;
+    impl ObjectSubclass for Marks {
+        const NAME: &'static str = "StaveGutterMarks";
+        type Type = super::Marks;
+        type ParentType = sourceview5::GutterRenderer;
     }
 
-    impl ObjectImpl for Gutter {}
+    impl ObjectImpl for Marks {}
 
-    impl WidgetImpl for Gutter {
+    impl WidgetImpl for Marks {
         fn measure(&self, orientation: gtk::Orientation, _for_size: i32) -> (i32, i32, i32, i32) {
             match orientation {
-                gtk::Orientation::Horizontal => (GUTTER_WIDTH, GUTTER_WIDTH, -1, -1),
+                gtk::Orientation::Horizontal => (MARKS_WIDTH, MARKS_WIDTH, -1, -1),
                 _ => (0, 0, -1, -1),
             }
         }
+    }
 
-        fn snapshot(&self, snapshot: &gtk::Snapshot) {
-            let Some(view) = self.view.upgrade() else {
-                return;
-            };
-            let widget = self.obj();
-            let buffer = view.buffer();
-            let visible = view.visible_rect();
-            let (mut iter, _) = view.line_at_y(visible.y());
-            let bottom = visible.y().saturating_add(visible.height());
-            let dim = {
-                let colour = widget.color();
-                gtk::gdk::RGBA::new(colour.red(), colour.green(), colour.blue(), 0.45)
-            };
-            let accent = gtk::gdk::RGBA::parse(if self.dark.get() {
-                "#78aeed"
-            } else {
-                "#1c71d8"
-            })
-            .unwrap_or(dim);
-            let width = widget.width();
-            for _ in 0..10_000 {
-                let location = view.iter_location(&iter);
-                if location.y() > bottom {
-                    break;
-                }
-                let (_, y) =
-                    view.buffer_to_window_coords(gtk::TextWindowType::Left, 0, location.y());
-                let line = iter.line();
-                let current = line == self.current.get();
-                let layout = widget.create_pango_layout(Some(&line.saturating_add(1).to_string()));
-                if current {
-                    let attributes = gtk::pango::AttrList::new();
-                    attributes.insert(gtk::pango::AttrInt::new_weight(
-                        gtk::pango::Weight::Semibold,
-                    ));
-                    layout.set_attributes(Some(&attributes));
-                }
-                let (text_width, text_height) = layout.pixel_size();
-                let x = width.saturating_sub(14).saturating_sub(text_width);
-                let y = y.saturating_add((location.height().saturating_sub(text_height)) / 2);
-                snapshot.save();
-                snapshot.translate(&gtk::graphene::Point::new(
-                    crate::convert::f32_of_int(x),
+    impl GutterRendererImpl for Marks {
+        fn snapshot_line(
+            &self,
+            snapshot: &gtk::Snapshot,
+            lines: &sourceview5::GutterLines,
+            line: u32,
+        ) {
+            let (y, height) =
+                lines.line_yrange(line, sourceview5::GutterRendererAlignmentMode::Cell);
+            let view = lines.view();
+            let dark = self.dark.get();
+            if lines.is_cursor(line) {
+                let accent = gtk::gdk::RGBA::parse(if dark { "#78aeed" } else { "#1c71d8" })
+                    .unwrap_or(gtk::gdk::RGBA::BLUE);
+                let bar = gtk::graphene::Rect::new(
+                    0.0,
                     crate::convert::f32_of_int(y),
-                ));
-                snapshot.append_layout(&layout, if current { &accent } else { &dim });
-                snapshot.restore();
-                if let Some(severity) = line_problem(&view, &iter) {
-                    let colour = problem_colour(severity, self.dark.get());
-                    let bar = gtk::graphene::Rect::new(
-                        4.0,
-                        crate::convert::f32_of_int(y),
-                        3.0,
-                        crate::convert::f32_of_int(text_height),
-                    );
-                    snapshot.append_color(&colour, &bar);
-                }
-                if !iter.forward_line() {
-                    break;
-                }
+                    3.0,
+                    crate::convert::f32_of_int(height),
+                );
+                snapshot.append_color(&accent, &bar);
             }
-            let _ = buffer;
+            let start = lines.iter_at_line(line);
+            if let Some(severity) = line_problem(&view, &start) {
+                // Beside the text, below any lens or peek above it.
+                let text = view.iter_location(&start).height();
+                let bottom = y.saturating_add(height).saturating_sub(LINE_SPACING);
+                let bar = gtk::graphene::Rect::new(
+                    5.0,
+                    crate::convert::f32_of_int(bottom.saturating_sub(text)),
+                    3.0,
+                    crate::convert::f32_of_int(text),
+                );
+                snapshot.append_color(&problem_colour(severity, dark), &bar);
+            }
         }
     }
 
-    /// The text view: a `GtkTextView` that draws problems' wavy
+    /// The text view: a `GtkSourceView` that draws problems' wavy
     /// underlines itself, thicker than Pango's, in libadwaita's error and
     /// warning colours.
     #[derive(Default)]
@@ -327,11 +438,12 @@ mod imp {
     impl ObjectSubclass for CodeView {
         const NAME: &'static str = "StaveCodeView";
         type Type = super::CodeView;
-        type ParentType = gtk::TextView;
+        type ParentType = sourceview5::View;
     }
 
     impl ObjectImpl for CodeView {}
     impl WidgetImpl for CodeView {}
+    impl ViewImpl for CodeView {}
 
     impl TextViewImpl for CodeView {
         fn snapshot_layer(&self, layer: gtk::TextViewLayer, snapshot: gtk::Snapshot) {
@@ -341,8 +453,7 @@ mod imp {
             }
             let view = self.obj();
             let view: &gtk::TextView = view.upcast_ref();
-            let buffer = view.buffer();
-            let table = buffer.tag_table();
+            let table = view.buffer().tag_table();
             let dark = self.dark.get();
             for (name, severity) in [("warning", Severity::Warning), ("error", Severity::Error)] {
                 let Some(tag) = table.lookup(name) else {
@@ -353,20 +464,103 @@ mod imp {
             }
         }
     }
+
+    /// Indents a new line as `stave fmt` would: one step in after an
+    /// opening bracket, and a closing bracket typed first on a line one
+    /// step back out.
+    #[derive(Default)]
+    pub struct BlockIndenter;
+
+    #[glib::object_subclass]
+    impl ObjectSubclass for BlockIndenter {
+        const NAME: &'static str = "StaveBlockIndenter";
+        type Type = super::BlockIndenter;
+        type ParentType = glib::Object;
+        type Interfaces = (sourceview5::Indenter,);
+    }
+
+    impl ObjectImpl for BlockIndenter {}
+
+    impl IndenterImpl for BlockIndenter {
+        fn is_trigger(
+            &self,
+            _view: &sourceview5::View,
+            _location: &gtk::TextIter,
+            state: gtk::gdk::ModifierType,
+            keyval: gtk::gdk::Key,
+        ) -> bool {
+            let plain = !state.intersects(
+                gtk::gdk::ModifierType::CONTROL_MASK | gtk::gdk::ModifierType::ALT_MASK,
+            );
+            plain
+                && matches!(
+                    keyval,
+                    gtk::gdk::Key::Return
+                        | gtk::gdk::Key::KP_Enter
+                        | gtk::gdk::Key::ISO_Enter
+                        | gtk::gdk::Key::braceright
+                        | gtk::gdk::Key::parenright
+                        | gtk::gdk::Key::bracketright
+                )
+        }
+
+        fn indent(&self, _view: &sourceview5::View, iter: &mut gtk::TextIter) {
+            let buffer = iter.buffer();
+            let line = iter.line();
+            if iter.starts_line() {
+                // A new line: indent it after the line above.
+                let Some(previous) = line_text(&buffer, line.saturating_sub(1)) else {
+                    return;
+                };
+                if line > 0 {
+                    buffer.insert(iter, &" ".repeat(indent_after(&previous)));
+                }
+                return;
+            }
+            // A closing bracket: if it is the first thing on its line, line
+            // it up with the line that opened the block.
+            let mut before = *iter;
+            before.backward_char();
+            let Some(mut start) = buffer.iter_at_line(line) else {
+                return;
+            };
+            if !buffer.text(&start, &before, false).trim().is_empty() {
+                return;
+            }
+            let previous = (0..line)
+                .rev()
+                .filter_map(|l| line_text(&buffer, l))
+                .find(|text| !text.trim().is_empty());
+            let Some(previous) = previous else {
+                return;
+            };
+            let width = indent_closing(&previous);
+            buffer.delete(&mut start, &mut before);
+            buffer.insert(&mut start, &" ".repeat(width));
+            *iter = start;
+            iter.forward_char();
+        }
+    }
 }
 
 glib::wrapper! {
-    /// The line numbers beside the editor's text.
-    pub struct Gutter(ObjectSubclass<imp::Gutter>)
-        @extends gtk::Widget,
+    /// The gutter's strip of bars: the cursor's line and problems.
+    pub struct Marks(ObjectSubclass<imp::Marks>)
+        @extends sourceview5::GutterRenderer, gtk::Widget,
         @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget;
 }
 
 glib::wrapper! {
     /// The editor's text view.
     pub struct CodeView(ObjectSubclass<imp::CodeView>)
-        @extends gtk::TextView, gtk::Widget,
+        @extends sourceview5::View, gtk::TextView, gtk::Widget,
         @implements gtk::Accessible, gtk::AccessibleText, gtk::Buildable, gtk::ConstraintTarget, gtk::Scrollable;
+}
+
+glib::wrapper! {
+    /// Indents as `stave fmt` lays a file out.
+    pub struct BlockIndenter(ObjectSubclass<imp::BlockIndenter>)
+        @implements sourceview5::Indenter;
 }
 
 /// The worst problem underlined on the line that starts at `line`.
@@ -485,15 +679,6 @@ fn wave(snapshot: &gtk::Snapshot, x0: f64, x1: f64, y: f64, colour: &gtk::gdk::R
     let _ = context.stroke();
 }
 
-impl Gutter {
-    fn new(view: &gtk::TextView) -> Gutter {
-        let gutter: Gutter = glib::Object::builder().build();
-        gutter.imp().view.set(Some(view));
-        gutter.add_css_class("stave-gutter");
-        gutter
-    }
-}
-
 /// A coloured run, as lines and byte indexes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Run {
@@ -503,15 +688,289 @@ pub struct Run {
     pub end: u32,
 }
 
+/// The search bar over the text (Ctrl+F in the editor), and the search of
+/// the buffer showing.
+struct Search {
+    revealer: gtk::Revealer,
+    entry: gtk::SearchEntry,
+    count: gtk::Label,
+    settings: sourceview5::SearchSettings,
+    /// The search of the buffer showing, while the bar is open.
+    context: RefCell<Option<sourceview5::SearchContext>>,
+    view: glib::WeakRef<gtk::TextView>,
+}
+
+impl Search {
+    fn new(view: &gtk::TextView) -> Rc<Search> {
+        let entry = gtk::SearchEntry::builder()
+            .placeholder_text("Find in this file")
+            .width_chars(22)
+            .build();
+        let count = gtk::Label::builder()
+            .css_classes(["dim-label", "numeric"])
+            .width_chars(9)
+            .xalign(1.0)
+            .build();
+        let button = |icon: &str, tooltip: &str| {
+            gtk::Button::builder()
+                .icon_name(icon)
+                .tooltip_text(tooltip)
+                .css_classes(["flat", "circular"])
+                .valign(gtk::Align::Center)
+                .build()
+        };
+        let previous = button("go-up-symbolic", "Previous match (Shift+Enter)");
+        let next = button("go-down-symbolic", "Next match (Enter)");
+        let close = button("window-close-symbolic", "Close the search (Escape)");
+        let bar = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing(4)
+            .css_classes(["card"])
+            .build();
+        for margin in [
+            gtk::Widget::set_margin_top,
+            gtk::Widget::set_margin_bottom,
+            gtk::Widget::set_margin_start,
+            gtk::Widget::set_margin_end,
+        ] {
+            margin(entry.upcast_ref(), 6);
+        }
+        entry.set_margin_end(0);
+        close.set_margin_end(6);
+        bar.append(&entry);
+        bar.append(&count);
+        bar.append(&previous);
+        bar.append(&next);
+        bar.append(&close);
+        let revealer = gtk::Revealer::builder()
+            .transition_type(gtk::RevealerTransitionType::SlideDown)
+            .halign(gtk::Align::End)
+            .valign(gtk::Align::Start)
+            .margin_end(18)
+            .margin_top(6)
+            .child(&bar)
+            .reveal_child(false)
+            .build();
+        // Hidden while closed, so it takes no pointer events.
+        revealer.set_visible(false);
+        let settings = sourceview5::SearchSettings::builder()
+            .wrap_around(true)
+            .case_sensitive(false)
+            .build();
+        let search = Rc::new(Search {
+            revealer,
+            entry,
+            count,
+            settings,
+            context: RefCell::new(None),
+            view: view.downgrade(),
+        });
+        search.connect(&previous, &next, &close);
+        search
+    }
+
+    fn connect(self: &Rc<Self>, previous: &gtk::Button, next: &gtk::Button, close: &gtk::Button) {
+        let weak = Rc::downgrade(self);
+        let with = move |action: fn(&Search)| {
+            let weak: Weak<Search> = weak.clone();
+            move || {
+                if let Some(search) = weak.upgrade() {
+                    action(&search);
+                }
+            }
+        };
+        let changed = with(Search::text_changed);
+        self.entry.connect_search_changed(move |_| changed());
+        let forward = with(Search::next);
+        self.entry.connect_activate(move |_| forward());
+        let forward = with(Search::next);
+        self.entry.connect_next_match(move |_| forward());
+        let backward = with(Search::previous);
+        self.entry.connect_previous_match(move |_| backward());
+        let stop = with(Search::close);
+        self.entry.connect_stop_search(move |_| stop());
+        let forward = with(Search::next);
+        next.connect_clicked(move |_| forward());
+        let backward = with(Search::previous);
+        previous.connect_clicked(move |_| backward());
+        let stop = with(Search::close);
+        close.connect_clicked(move |_| stop());
+        // Shift+Enter goes back.
+        let keys = gtk::EventControllerKey::new();
+        let backward = with(Search::previous);
+        keys.connect_key_pressed(move |_, key, _, modifiers| {
+            let shift = modifiers.contains(gtk::gdk::ModifierType::SHIFT_MASK);
+            if shift && matches!(key, gtk::gdk::Key::Return | gtk::gdk::Key::KP_Enter) {
+                backward();
+                return glib::Propagation::Stop;
+            }
+            glib::Propagation::Proceed
+        });
+        self.entry.add_controller(keys);
+    }
+
+    fn is_open(&self) -> bool {
+        self.revealer.reveals_child()
+    }
+
+    /// Opens the bar with the selection (one line of it) as the text to
+    /// find, or the last one.
+    fn open(&self) {
+        let Some(view) = self.view.upgrade() else {
+            return;
+        };
+        let buffer = view.buffer();
+        if let Some((start, end)) = buffer.selection_bounds()
+            && start.line() == end.line()
+        {
+            self.entry.set_text(&buffer.text(&start, &end, false));
+        }
+        self.revealer.set_visible(true);
+        self.revealer.set_reveal_child(true);
+        self.attach();
+        self.settings
+            .set_search_text(Some(self.entry.text().as_str()).filter(|t| !t.is_empty()));
+        self.refresh_count();
+        self.entry.grab_focus();
+        self.entry.select_region(0, -1);
+    }
+
+    /// Opens the bar and finds `text` from the cursor at once.
+    fn find(&self, text: &str) {
+        self.open();
+        self.entry.set_text(text);
+        self.text_changed();
+    }
+
+    fn close(&self) {
+        if !self.is_open() {
+            return;
+        }
+        self.revealer.set_reveal_child(false);
+        self.revealer.set_visible(false);
+        self.settings.set_search_text(None);
+        self.context.replace(None);
+        if let Some(view) = self.view.upgrade() {
+            view.grab_focus();
+        }
+    }
+
+    /// Searches the buffer showing, if the bar is open.
+    fn attach(&self) {
+        let buffer = self
+            .view
+            .upgrade()
+            .and_then(|view| view.buffer().downcast::<sourceview5::Buffer>().ok());
+        let context = buffer.filter(|_| self.is_open()).map(|buffer| {
+            let context = sourceview5::SearchContext::new(&buffer, Some(&self.settings));
+            context.set_highlight(true);
+            let search = self.view.clone();
+            let count = self.count.downgrade();
+            let entry = self.entry.downgrade();
+            context.connect_occurrences_count_notify(move |context| {
+                if let (Some(view), Some(count), Some(entry)) =
+                    (search.upgrade(), count.upgrade(), entry.upgrade())
+                {
+                    count.set_label(&count_text(context, &view.buffer(), &entry.text()));
+                }
+            });
+            context
+        });
+        self.context.replace(context);
+    }
+
+    /// The text to find changed: find it from the start of the selection,
+    /// so a longer text keeps the match it had.
+    fn text_changed(&self) {
+        let text = self.entry.text();
+        self.settings
+            .set_search_text(Some(text.as_str()).filter(|t| !t.is_empty()));
+        if !text.is_empty() {
+            self.step(true, true);
+        }
+        self.refresh_count();
+    }
+
+    fn next(&self) {
+        self.step(true, false);
+    }
+
+    fn previous(&self) {
+        self.step(false, false);
+    }
+
+    /// Selects the next (or previous) match and scrolls to it; `again`
+    /// starts from the selection's start, to keep the match there.
+    fn step(&self, forward: bool, again: bool) {
+        let (Some(view), Some(context)) = (self.view.upgrade(), self.context.borrow().clone())
+        else {
+            return;
+        };
+        let buffer = view.buffer();
+        let (start, end) = buffer.selection_bounds().unwrap_or_else(|| {
+            let cursor = buffer.iter_at_mark(&buffer.get_insert());
+            (cursor, cursor)
+        });
+        let found = match (forward, again) {
+            (true, true) => context.forward(&start),
+            (true, false) => context.forward(&end),
+            (false, _) => context.backward(&start),
+        };
+        if let Some((from, to, _)) = found {
+            buffer.select_range(&from, &to);
+            view.scroll_to_mark(&buffer.get_insert(), 0.2, false, 0.0, 0.0);
+        }
+        self.refresh_count();
+    }
+
+    fn refresh_count(&self) {
+        let (Some(view), Some(context)) = (self.view.upgrade(), self.context.borrow().clone())
+        else {
+            self.count.set_label("");
+            return;
+        };
+        self.count
+            .set_label(&count_text(&context, &view.buffer(), &self.entry.text()));
+    }
+}
+
+/// "3 of 12", "12 matches", "No matches", or nothing while counting.
+fn count_text(
+    context: &sourceview5::SearchContext,
+    buffer: &gtk::TextBuffer,
+    text: &str,
+) -> String {
+    let total = context.occurrences_count();
+    if text.is_empty() || total < 0 {
+        return String::new();
+    }
+    if total == 0 {
+        return "No matches".to_owned();
+    }
+    let position = buffer
+        .selection_bounds()
+        .map_or(0, |(start, end)| context.occurrence_position(&start, &end));
+    match (position, total) {
+        (1.., _) => format!("{position} of {total}"),
+        (_, 1) => "1 match".to_owned(),
+        _ => format!("{total} matches"),
+    }
+}
+
 /// The editor widget.
 pub struct Editor {
-    /// The editor, ready to pack: the text in a scrolled window.
-    pub root: gtk::ScrolledWindow,
+    /// The editor, ready to pack: the text in a scrolled window, with the
+    /// search bar over it.
+    pub root: gtk::Overlay,
     /// The text view.
     pub view: gtk::TextView,
+    code: CodeView,
+    scrolled: gtk::ScrolledWindow,
     table: gtk::TextTagTable,
     tags: Tags,
-    gutter: Gutter,
+    marks: Marks,
+    search: Rc<Search>,
+    dark: Cell<bool>,
     /// The lens rows, made as needed and kept (GTK can't take an overlay
     /// back out of a text view, so they are hidden when not used).
     lenses: RefCell<Vec<LensSlot>>,
@@ -559,7 +1018,7 @@ impl Editor {
     pub fn new() -> Editor {
         let table = gtk::TextTagTable::new();
         let tags = Tags::new(&table);
-        let view: gtk::TextView = glib::Object::builder::<CodeView>()
+        let code: CodeView = glib::Object::builder::<CodeView>()
             .property("monospace", true)
             .property("wrap-mode", gtk::WrapMode::None)
             .property("top-margin", 12)
@@ -568,27 +1027,46 @@ impl Editor {
             .property("right-margin", 16)
             .property("pixels-above-lines", LINE_SPACING)
             .property("pixels-below-lines", LINE_SPACING)
+            .property("show-line-numbers", true)
+            .property("highlight-current-line", true)
+            .property("auto-indent", true)
+            .property("indent-width", 2)
+            .property("tab-width", 2u32)
+            .property("insert-spaces-instead-of-tabs", true)
+            .property("indent-on-tab", true)
+            .property("smart-backspace", true)
+            .property("smart-home-end", sourceview5::SmartHomeEndType::Before)
             .property("css-classes", ["stave-editor"].to_value())
-            .build()
-            .upcast();
-        view.set_buffer(Some(&gtk::TextBuffer::new(Some(&table))));
-        let gutter = Gutter::new(&view);
-        view.set_gutter(gtk::TextWindowType::Left, Some(&gutter));
-        let root = gtk::ScrolledWindow::builder()
+            .build();
+        code.set_indenter(Some(&glib::Object::new::<BlockIndenter>()));
+        let view: gtk::TextView = code.clone().upcast();
+        let editor_buffer = sourceview5::Buffer::new(Some(&table));
+        editor_buffer.set_highlight_syntax(false);
+        view.set_buffer(Some(&editor_buffer));
+        let gutter = sourceview5::prelude::ViewExt::gutter(&code, gtk::TextWindowType::Left);
+        let marks: Marks = glib::Object::builder().build();
+        // Left of the line numbers (GtkSourceView puts them at -30).
+        gutter.insert(&marks, -40);
+        // The line numbers sit level with their text, below any lens, and
+        // a little way from it, as in the design.
+        let mut child = gutter.first_child();
+        while let Some(widget) = child {
+            if let Some(numbers) = widget.downcast_ref::<sourceview5::GutterRendererText>() {
+                numbers.set_yalign(1.0);
+                numbers.set_ypad(1);
+                numbers.set_xpad(12);
+            }
+            child = widget.next_sibling();
+        }
+        let scrolled = gtk::ScrolledWindow::builder()
             .child(&view)
             .vexpand(true)
             .hexpand(true)
             .build();
-        let redraw = gutter.downgrade();
-        root.vadjustment().connect_value_changed(move |_| {
-            if let Some(gutter) = redraw.upgrade() {
-                gutter.queue_draw();
-            }
-        });
         // A wider editor scrolls back to the start of the lines when the
         // cursor fits without scrolling.
         let text = view.downgrade();
-        root.hadjustment().connect_changed(move |horizontal| {
+        scrolled.hadjustment().connect_changed(move |horizontal| {
             let Some(view) = text.upgrade() else { return };
             let buffer = view.buffer();
             let cursor = view.iter_location(&buffer.iter_at_mark(&buffer.get_insert()));
@@ -606,12 +1084,19 @@ impl Editor {
             .visible(false)
             .build();
         view.add_overlay(&card_box, 0, 0);
+        let search = Search::new(&view);
+        let root = gtk::Overlay::builder().child(&scrolled).build();
+        root.add_overlay(&search.revealer);
         let editor = Editor {
             root,
             view,
+            code,
+            scrolled,
             table,
             tags,
-            gutter,
+            marks,
+            search,
+            dark: Cell::new(false),
             lenses: RefCell::new(Vec::new()),
             lenses_used: Cell::new(0),
             peek_box,
@@ -624,39 +1109,51 @@ impl Editor {
         editor
     }
 
-    /// A new buffer for a document, sharing the editor's tags.
+    /// The text's vertical scrolling.
+    pub fn vadjustment(&self) -> gtk::Adjustment {
+        self.scrolled.vadjustment()
+    }
+
+    /// A new buffer for a document, sharing the editor's tags. Its text
+    /// can't be undone back to empty.
     pub fn new_buffer(&self, text: &str) -> gtk::TextBuffer {
-        let buffer = gtk::TextBuffer::new(Some(&self.table));
+        let buffer = sourceview5::Buffer::new(Some(&self.table));
+        buffer.set_highlight_syntax(false);
+        buffer.set_highlight_matching_brackets(true);
+        buffer.begin_irreversible_action();
         buffer.set_text(text);
+        buffer.end_irreversible_action();
         buffer.place_cursor(&buffer.start_iter());
-        buffer.set_enable_undo(true);
-        let redraw = self.gutter.downgrade();
-        buffer.connect_changed(move |_| {
-            if let Some(gutter) = redraw.upgrade() {
-                gutter.queue_draw();
-            }
-        });
-        buffer
+        buffer.upcast()
     }
 
     /// Shows a buffer; read-only documents can't be typed in.
     pub fn show_buffer(&self, buffer: &gtk::TextBuffer, editable: bool) {
         self.clear_overlays();
+        if let Some(source) = buffer.downcast_ref::<sourceview5::Buffer>() {
+            source.set_style_scheme(style_scheme(self.dark.get()).as_ref());
+        }
         self.view.set_buffer(Some(buffer));
         self.view.set_editable(editable);
         self.view.set_cursor_visible(true);
-        self.gutter.queue_draw();
+        if self.search.is_open() {
+            self.search.attach();
+            self.search.refresh_count();
+        }
+        self.marks.queue_draw();
     }
 
     /// Follows the light or dark style.
     pub fn colour(&self, dark: bool) {
+        self.dark.set(dark);
         self.tags.colour(dark);
-        if let Some(code) = self.view.downcast_ref::<CodeView>() {
-            code.imp().dark.set(dark);
+        if let Ok(source) = self.view.buffer().downcast::<sourceview5::Buffer>() {
+            source.set_style_scheme(style_scheme(dark).as_ref());
         }
+        self.code.imp().dark.set(dark);
         self.view.queue_draw();
-        self.gutter.imp().dark.set(dark);
-        self.gutter.queue_draw();
+        self.marks.imp().dark.set(dark);
+        self.marks.queue_draw();
     }
 
     /// Colours a buffer by its tokens.
@@ -707,7 +1204,7 @@ impl Editor {
             }
             buffer.apply_tag(tag, &from, &to);
         }
-        self.gutter.queue_draw();
+        self.marks.queue_draw();
         self.view.queue_draw();
     }
 
@@ -739,19 +1236,34 @@ impl Editor {
         }
     }
 
-    /// Tints the cursor's line and its number.
-    pub fn mark_cursor_line(&self, buffer: &gtk::TextBuffer) {
-        let (start, end) = buffer.bounds();
-        buffer.remove_tag(&self.tags.cursor_line, &start, &end);
-        let cursor = buffer.iter_at_mark(&buffer.get_insert());
-        let line = cursor.line();
-        if let Some(from) = buffer.iter_at_line(line) {
-            let mut to = from;
-            to.forward_line();
-            buffer.apply_tag(&self.tags.cursor_line, &from, &to);
-        }
-        self.gutter.imp().current.set(line);
-        self.gutter.queue_draw();
+    /// `true` while the keyboard is in the text or its search bar.
+    pub fn has_focus(&self) -> bool {
+        self.view.has_focus()
+            || self
+                .view
+                .root()
+                .and_then(|root| root.focus())
+                .is_some_and(|focus| focus.is_ancestor(&self.search.revealer))
+    }
+
+    /// Opens the search bar (Ctrl+F in the text).
+    pub fn start_search(&self) {
+        self.search.open();
+    }
+
+    /// Opens the search bar and finds `text` from the cursor.
+    pub fn find(&self, text: &str) {
+        self.search.find(text);
+    }
+
+    /// `true` while the search bar is open.
+    pub fn has_search(&self) -> bool {
+        self.search.is_open()
+    }
+
+    /// Closes the search bar and its highlights.
+    pub fn close_search(&self) {
+        self.search.close();
     }
 
     fn clear_overlays(&self) {
@@ -908,10 +1420,11 @@ impl Editor {
         let Some(line) = self.peek_line.get() else {
             return;
         };
+        let gutter = sourceview5::prelude::ViewExt::gutter(&self.code, gtk::TextWindowType::Left);
         let width = self
-            .root
+            .scrolled
             .width()
-            .saturating_sub(GUTTER_WIDTH)
+            .saturating_sub(gutter.width())
             .saturating_sub(16)
             .max(400);
         if self.peek_box.width_request() != width {
@@ -997,7 +1510,7 @@ impl Editor {
         // Scroll once the text is laid out: up and down only, so the line
         // keeps its start in view, unless the cursor is off to the right.
         let view = self.view.downgrade();
-        let scrolled = self.root.downgrade();
+        let scrolled = self.scrolled.downgrade();
         glib::idle_add_local_once(move || {
             let (Some(view), Some(scrolled)) = (view.upgrade(), scrolled.upgrade()) else {
                 return;
@@ -1056,5 +1569,66 @@ mod tests {
         assert_eq!(lines.offset(1, 1), 4);
         assert_eq!(lines.offset(3, 0), 9);
         assert_eq!(lines.offset(99, 0), 0);
+    }
+
+    #[test]
+    fn a_new_line_is_indented_one_step_inside_a_block() {
+        assert_eq!(indent_after("part side_l : oak_19 {"), 2);
+        assert_eq!(indent_after("  length: 600 mm"), 2);
+        assert_eq!(indent_after("  joint dado(  "), 4);
+        assert_eq!(indent_after(""), 0);
+        assert_eq!(indent_after("\tx {"), 4);
+    }
+
+    #[test]
+    fn a_closing_bracket_goes_back_to_the_line_that_opened_it() {
+        assert_eq!(indent_closing("  length: 600 mm"), 0);
+        assert_eq!(indent_closing("    part a : b {"), 4);
+        assert_eq!(indent_closing("x"), 0);
+    }
+
+    /// The editor's indentation agrees with `stave fmt` on every line
+    /// right after an opening `{` and every `}` after a field, in the
+    /// formatted examples.
+    #[test]
+    fn indentation_matches_stave_fmt() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples");
+        let mut files = Vec::new();
+        let mut folders = vec![root];
+        while let Some(folder) = folders.pop() {
+            for entry in std::fs::read_dir(&folder).into_iter().flatten().flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    folders.push(path);
+                } else if path.extension().is_some_and(|e| e == "stave") {
+                    files.push(path);
+                }
+            }
+        }
+        assert!(!files.is_empty());
+        let mut checked = 0;
+        for path in files {
+            let text = std::fs::read_to_string(&path).unwrap();
+            let mut sources = stave_lang::SourceMap::new();
+            let file = sources
+                .add(path.display().to_string(), text.as_str())
+                .unwrap();
+            let formatted = stave_lang::format_file(file, &text).unwrap();
+            let lines: Vec<&str> = formatted.lines().collect();
+            for pair in lines.windows(2) {
+                let [previous, line] = pair else { continue };
+                if line.trim().is_empty() || !previous.trim_end().ends_with('{') {
+                    continue;
+                }
+                let wanted = if line.trim_start().starts_with('}') {
+                    indent_closing(previous)
+                } else {
+                    indent_after(previous)
+                };
+                assert_eq!(indentation(line), wanted, "{}: {line:?}", path.display());
+                checked += 1;
+            }
+        }
+        assert!(checked > 50, "only {checked} lines checked");
     }
 }
