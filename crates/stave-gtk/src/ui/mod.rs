@@ -383,6 +383,13 @@ impl Window {
         window.install_actions(options.theme);
         window.connect_events();
         window.watch();
+        // The keyboard starts in the 3D view, not in the first focusable
+        // widget GTK finds, which can be a problem's selectable `stave
+        // check` text in the inspector (it would show a text cursor).
+        gtk::prelude::GtkWindowExt::set_focus(
+            &window.widgets.window,
+            Some(window.widgets.viewport.upcast_ref::<gtk::Widget>()),
+        );
         window.widgets.window.present();
         window.show_folder();
         window.dispatch(Command::Check);
@@ -485,12 +492,17 @@ impl Window {
         widgets.problems.show(latest.clone());
         let empty = stave_app::empty::of(&self.session.borrow());
         if let Some(empty) = empty {
+            // The sidebar and the inspector say why too (for a library,
+            // what it defines and how to use it), not "Nothing selected".
+            widgets.inspector.show_idle(Some(empty.inspector()));
             self.show_empty(&empty.title, &empty.description, empty.offers_open);
+            widgets.tree.show_empty(empty);
             // The views that don't need the 3D view (the Files view) still
             // open as asked.
             self.apply_wanted();
             return;
         }
+        widgets.inspector.show_idle(None);
         let Some(shown) = shown else {
             return;
         };
@@ -1912,6 +1924,8 @@ impl Window {
             return;
         };
         let window = self.widgets.window.clone();
+        // What `--type` typed is never saved, and closing doesn't ask.
+        let files = self.widgets.files.clone();
         // The paintable follows the window's drawing from now on.
         let paintable = gtk::WidgetPaintable::new(Some(&window));
         let mut waited = 0;
@@ -1931,12 +1945,14 @@ impl Window {
                     return glib::ControlFlow::Continue;
                 }
                 eprintln!("error: the window drew nothing");
+                files.forget_unsaved();
                 window.close();
                 return glib::ControlFlow::Break;
             };
             if let Err(error) = save_node(&window, &node, &path) {
                 eprintln!("error: {error:#}");
             }
+            files.forget_unsaved();
             window.close();
             glib::ControlFlow::Break
         });
@@ -2224,6 +2240,12 @@ impl Window {
         widgets.tree.connect_select(move |selection| {
             if let Some(window) = window.upgrade() {
                 window.dispatch(Command::Select(Some(selection)));
+            }
+        });
+        let window = Rc::downgrade(self);
+        widgets.tree.connect_source(move |location| {
+            if let Some(window) = window.upgrade() {
+                window.dispatch(Command::GoToSource(location));
             }
         });
         let window = Rc::downgrade(self);

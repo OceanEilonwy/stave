@@ -43,6 +43,8 @@ button.stave-build { min-width: 36px; min-height: 34px; padding: 0; border-radiu
 .stave-tree .stave-assembly .stave-detail { font-weight: 500; }
 .stave-tree .stave-heading { padding: 10px 8px 6px 8px; font-size: 12px; font-weight: 700; letter-spacing: 0.02em; }
 .stave-tree .stave-heading.first { padding-top: 6px; }
+.stave-tree .stave-library-entry { padding: 4px 8px 5px 12px; border-spacing: 1px; }
+.stave-tree .stave-sidebar-note { padding: 4px 8px 0 8px; font-size: 13px; }
 
 .stave-inspector { padding: 18px 16px; }
 .stave-inspector-panel { min-width: 0; }
@@ -344,4 +346,9 @@ pub fn install(display: &gdk::Display) {
         &provider,
         gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
     );
+    // A selectable label (a problem's `stave check` text, focus mode's
+    // insert line) would otherwise select all its text whenever it takes
+    // the keyboard focus, so it looks highlighted for no reason. It can
+    // still be selected with the mouse to copy.
+    gtk::Settings::for_display(display).set_gtk_label_select_on_focus(false);
 }

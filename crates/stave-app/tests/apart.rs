@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use stave_app::apart::{self, Stage};
 use stave_app::check::{self, Checked, Outcome};
-use stave_app::empty::{self, Reason};
+use stave_app::empty::{self, LibraryGroup, Reason};
 use stave_app::session::{Command, Event, Session};
 
 fn workspace() -> PathBuf {
@@ -69,6 +69,13 @@ fn a_design_without_assemblies_has_only_its_parts_stage() {
     assert!(steps.iter().all(|step| step.stage == Stage::Parts));
     assert_eq!(steps[0].lead, "Carcass");
     assert!(steps[0].text.contains("out of"), "{}", steps[0].text);
+    // The rungs come out of their sockets as well as the legs off the seat.
+    assert!(steps[0].text.contains("leg[4]"), "{}", steps[0].text);
+    assert!(
+        steps[0].text.contains("side_rung[left, right]"),
+        "{}",
+        steps[0].text
+    );
 }
 
 #[test]
@@ -110,6 +117,60 @@ fn a_library_folder_says_so_instead_of_a_blank_view() {
     assert_eq!(state.title, "Nothing to show");
     assert!(state.description.contains("library"));
     assert!(state.offers_open);
+}
+
+#[test]
+fn a_library_folder_lists_what_it_defines_and_says_how_to_use_it() {
+    let session = session_for(workspace().join("examples/japanese_joinery"));
+    let state = empty::of(&session).expect("an empty state");
+    let library = state.library.as_ref().expect("the library's contents");
+    assert_eq!(library.title, "Japanese joinery samples");
+    assert_eq!(library.import_name, "japanese_joinery");
+    let groups: Vec<(LibraryGroup, Vec<&str>)> = library
+        .groups
+        .iter()
+        .map(|(group, items)| (*group, items.iter().map(|i| i.name.as_str()).collect()))
+        .collect();
+    assert_eq!(
+        groups,
+        vec![
+            (
+                LibraryGroup::Joints,
+                vec!["ari_tsugi", "chidori", "kanawa_tsugi"]
+            ),
+            (LibraryGroup::Tools, vec!["sumitsubo"]),
+            (LibraryGroup::Recipes, vec!["outline_with_sumitsubo"]),
+        ]
+    );
+    let sumitsubo = &library.groups[1].1[0];
+    assert_eq!(
+        sumitsubo.summary.as_deref(),
+        Some("An ink line: snaps a long, straight line along a beam.")
+    );
+    let location = sumitsubo.location.as_ref().expect("where it is written");
+    assert!(
+        location.path.ends_with("library.stave"),
+        "{}",
+        location.path
+    );
+    assert_eq!(location.line.get(), 18);
+    // The sidebar and the inspector say what is true for a library, not
+    // "Nothing selected".
+    assert_eq!(state.sidebar(), "A library has no parts. It defines:");
+    let note = state.inspector();
+    assert_eq!(note.title, "A library folder");
+    assert!(note.description.contains("no parts of its own"));
+    assert_eq!(
+        note.code.as_deref(),
+        Some("import \"../japanese_joinery\" as japanese_joinery")
+    );
+    let after = note.after.unwrap_or_default();
+    assert!(after.contains("japanese_joinery.ari_tsugi"), "{after}");
+    // A project has no library.
+    let broken = session_for(workspace().join("tests/broken/unknown_name"));
+    let state = empty::of(&broken).expect("an empty state");
+    assert_eq!(state.library, None);
+    assert_eq!(state.inspector().title, "Nothing to inspect yet");
 }
 
 #[test]

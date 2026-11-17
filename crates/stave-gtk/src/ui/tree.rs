@@ -1,21 +1,26 @@
 //! The Parts sidebar: a search field and the parts tree (the carcass's
 //! parts, then each assembly with its motion, its parts and hardware).
 //! Rows come from `stave_app::inspect::parts_tree`; activating one asks
-//! the window to select it.
+//! the window to select it. With no parts it says why
+//! (`stave_app::empty`), and for a library folder lists what the library
+//! defines; activating one of those opens its text.
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
 use adw::prelude::*;
+use stave_app::empty::{EmptyState, LibraryItem};
 use stave_app::inspect::{AssemblyNode, PartsTree, Swatch, SwatchShape, TreeEntry};
-use stave_app::session::Selection;
+use stave_app::session::{Selection, SourceLocation};
 use stave_model::solved::AssemblyId;
 
 use super::icons::{self, PathIcon};
 
 /// Called with what a row stands for when it is activated.
 type SelectCallback = Rc<dyn Fn(Selection)>;
+/// Called with where a library's item is written when it is activated.
+type SourceCallback = Rc<dyn Fn(SourceLocation)>;
 
 /// What a row of the list is.
 #[derive(Debug, Clone)]
@@ -29,6 +34,8 @@ enum RowKind {
         items: Vec<stave_scene::Item>,
     },
     Assembly(AssemblyId),
+    /// Something a library defines: where it is written.
+    Source(SourceLocation),
 }
 
 /// The Parts sidebar.
@@ -48,7 +55,10 @@ struct TreeState {
     /// are open when they hold the selection.
     toggled: BTreeMap<AssemblyId, bool>,
     selection: Option<Selection>,
+    /// Why there are no parts, when there are none.
+    empty: Option<EmptyState>,
     on_select: Option<SelectCallback>,
+    on_source: Option<SourceCallback>,
     /// Ignore row selection changes made while filling or syncing.
     syncing: bool,
 }
@@ -143,6 +153,12 @@ impl TreeSidebar {
                         callback(Selection::Assembly(id));
                     }
                 }
+                Some(RowKind::Source(location)) => {
+                    let callback = state.borrow().on_source.clone();
+                    if let Some(callback) = callback {
+                        callback(location);
+                    }
+                }
                 Some(RowKind::Heading) | None => {}
             }
         });
@@ -179,9 +195,36 @@ impl TreeSidebar {
         self.state.borrow_mut().on_select = Some(Rc::new(callback));
     }
 
+    /// Calls `callback` with where a library's item is written when its
+    /// row is chosen.
+    pub fn connect_source(&self, callback: impl Fn(SourceLocation) + 'static) {
+        self.state.borrow_mut().on_source = Some(Rc::new(callback));
+    }
+
     /// Shows a new tree, keeping the search and what is shut.
     pub fn show_tree(&self, tree: PartsTree) {
-        self.state.borrow_mut().tree = tree;
+        {
+            let mut state = self.state.borrow_mut();
+            state.tree = tree;
+            state.empty = None;
+        }
+        self.search.set_placeholder_text(Some("Find a part"));
+        fill(&self.list, &self.state, &self.search.text());
+    }
+
+    /// Shows why there are no parts; for a library, what it defines.
+    pub fn show_empty(&self, empty: EmptyState) {
+        let library = empty.library.is_some();
+        {
+            let mut state = self.state.borrow_mut();
+            state.tree = PartsTree::default();
+            state.empty = Some(empty);
+        }
+        self.search.set_placeholder_text(Some(if library {
+            "Find a name"
+        } else {
+            "Find a part"
+        }));
         fill(&self.list, &self.state, &self.search.text());
     }
 
@@ -227,10 +270,15 @@ fn fill(list: &gtk::ListBox, state: &Rc<RefCell<TreeState>>, query: &str) {
             );
         }
     }
+    if rows.is_empty()
+        && let Some(empty) = &state_ref.empty
+    {
+        empty_rows(empty, query, &mut rows);
+    }
     if rows.is_empty() {
         let label = gtk::Label::builder()
             .label(if searching {
-                "No part has that name"
+                "Nothing has that name"
             } else {
                 "Nothing to show yet"
             })
@@ -265,7 +313,13 @@ fn sync_selection(list: &gtk::ListBox, state: &Rc<RefCell<TreeState>>) {
                 Some(row.clone())
             }
             RowKind::Assembly(id) if *selection == Selection::Assembly(*id) => Some(row.clone()),
-            RowKind::Entry { .. } | RowKind::Assembly(_) | RowKind::Heading => None,
+            RowKind::Source(location) if *selection == Selection::Location(location.clone()) => {
+                Some(row.clone())
+            }
+            RowKind::Entry { .. }
+            | RowKind::Assembly(_)
+            | RowKind::Source(_)
+            | RowKind::Heading => None,
         })
     });
     match selected {
@@ -273,6 +327,89 @@ fn sync_selection(list: &gtk::ListBox, state: &Rc<RefCell<TreeState>>) {
         None => list.unselect_all(),
     }
     state.syncing = was;
+}
+
+/// The rows that say why there are no parts: a line, then for a library
+/// what it defines, by group (only the names matching a search).
+fn empty_rows(empty: &EmptyState, query: &str, rows: &mut Vec<(gtk::ListBoxRow, RowKind)>) {
+    let query = query.trim().to_lowercase();
+    if query.is_empty() {
+        let label = gtk::Label::builder()
+            .label(empty.sidebar())
+            .xalign(0.0)
+            .wrap(true)
+            .css_classes(["dim-label", "stave-sidebar-note"])
+            .build();
+        rows.push((
+            gtk::ListBoxRow::builder()
+                .child(&label)
+                .activatable(false)
+                .selectable(false)
+                .build(),
+            RowKind::Heading,
+        ));
+    }
+    let Some(library) = &empty.library else {
+        return;
+    };
+    for (group, items) in &library.groups {
+        let shown: Vec<&LibraryItem> = items
+            .iter()
+            .filter(|item| query.is_empty() || item.name.to_lowercase().contains(&query))
+            .collect();
+        if shown.is_empty() {
+            continue;
+        }
+        rows.push(heading(group.heading(), false));
+        for item in shown {
+            rows.push(library_row(item));
+        }
+    }
+}
+
+/// A row for something a library defines: its name and the first line of
+/// its doc comment.
+fn library_row(item: &LibraryItem) -> (gtk::ListBoxRow, RowKind) {
+    let content = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(1)
+        .css_classes(["stave-entry", "stave-library-entry"])
+        .build();
+    content.append(
+        &gtk::Label::builder()
+            .label(&item.name)
+            .xalign(0.0)
+            .ellipsize(gtk::pango::EllipsizeMode::End)
+            .build(),
+    );
+    if let Some(summary) = &item.summary {
+        content.append(
+            &gtk::Label::builder()
+                .label(summary)
+                .xalign(0.0)
+                .ellipsize(gtk::pango::EllipsizeMode::End)
+                .css_classes(["stave-detail"])
+                .build(),
+        );
+    }
+    let row = gtk::ListBoxRow::builder().child(&content).build();
+    row.update_property(&[gtk::accessible::Property::Label(&item.name)]);
+    let kind = match &item.location {
+        Some(location) => {
+            row.set_tooltip_text(Some(
+                item.summary
+                    .as_deref()
+                    .unwrap_or("Open its text in the Files view"),
+            ));
+            RowKind::Source(location.clone())
+        }
+        None => {
+            row.set_activatable(false);
+            row.set_selectable(false);
+            RowKind::Heading
+        }
+    };
+    (row, kind)
 }
 
 fn heading(text: &str, first: bool) -> (gtk::ListBoxRow, RowKind) {

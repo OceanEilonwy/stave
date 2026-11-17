@@ -27,12 +27,18 @@ fn offset(graph: &SceneGraph, name: &str) -> glam::Vec3 {
 #[test]
 fn an_exploded_side_table_pulls_the_legs_off_the_aprons() {
     let (_, graph) = graph("examples/side_table");
-    // An apron tenoned into two legs stays; the legs move away from it,
-    // out at the corner (left and toward the viewer for the front left
-    // leg), and the slats lift off the stretchers they are screwed to.
-    assert_eq!(offset(&graph, "apron_front"), glam::Vec3::ZERO);
+    // An apron tenoned into two legs is held: the legs move away from
+    // it, out at the corner (left and toward the viewer for the front left
+    // leg), and it goes out with them toward the viewer, not sideways, so
+    // its tenons still line up with their mortises. The slats lift off the
+    // stretchers they are screwed to.
     let leg = offset(&graph, "leg[front_left]");
     assert!(leg.x < -30.0 && leg.z > 30.0, "{leg}");
+    let apron = offset(&graph, "apron_front");
+    assert!(
+        apron.x.abs() < 1e-3 && (apron.z - leg.z).abs() < 1e-3,
+        "{apron}"
+    );
     let back_right = offset(&graph, "leg[back_right]");
     assert!(back_right.x > 30.0 && back_right.z < -30.0, "{back_right}");
     assert!(offset(&graph, "slat[0]").y > 30.0);
