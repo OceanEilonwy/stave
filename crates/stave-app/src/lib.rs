@@ -24,9 +24,12 @@
 
 use std::path::Path;
 
+pub mod apart;
 pub mod check;
+pub mod empty;
 pub mod focus;
 pub mod inspect;
+pub mod problems;
 pub mod session;
 pub mod view;
 

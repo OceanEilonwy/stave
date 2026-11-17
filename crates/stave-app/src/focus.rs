@@ -40,6 +40,7 @@ use stave_scene::{Aabb, Item, Look, MotionRange, NodeId, Overlay, Posed, SceneEn
 use stave_schema::kinds::MemberName;
 
 use crate::Opened;
+use crate::session::{LineNumber, SourceLocation};
 use crate::view::Row;
 
 /// What focus mode shows.
@@ -206,6 +207,13 @@ pub struct InsertText {
     pub text: String,
     /// `std/joinery/socket.stave:9`
     pub source: String,
+    /// Each step as written: `push(piece, along: length)`.
+    pub steps: Vec<String>,
+    /// The link to the kind: `std:joinery/socket` for the standard
+    /// library, the file's name for a project's own kind.
+    pub link: String,
+    /// The file and line, for the link.
+    pub location: Option<SourceLocation>,
 }
 
 /// A pose to show as a small picture beside the main view.
@@ -231,11 +239,18 @@ pub struct Focus {
     /// The kind's doc comment: its first sentence for a joint, all of it
     /// for hardware.
     pub description: Option<String>,
+    /// What the panel shows before "More": the doc comment's first
+    /// paragraph, at most two sentences. The same as `description` when
+    /// that is short.
+    pub summary: Option<String>,
     /// Labelled values: Goes in, Receives it, the cuts, Fit; or Opens to,
     /// Closest to, Swing check.
     pub rows: Vec<Row>,
     /// A joint kind's `insert:` as written.
     pub insert: Option<InsertText>,
+    /// The part that receives a joint (`leg[front_left]`), for "see into
+    /// it" beside X-ray.
+    pub receives: Option<String>,
     /// A hardware kind's members.
     pub members: Vec<MemberRow>,
     /// Small views beside the main one.
@@ -278,6 +293,33 @@ pub struct Frame {
 fn first_sentence(text: &str) -> String {
     let end = text.find(". ").map_or(text.len(), |index| index + 1);
     text.get(..end).unwrap_or(text).trim().to_owned()
+}
+
+/// A kind's doc comment's first paragraph, at most two sentences.
+fn summary_text(kind: &KindDef) -> Option<String> {
+    let paragraph: Vec<&str> = kind
+        .decl
+        .docs
+        .iter()
+        .map(|line| line.trim())
+        .skip_while(|line| line.is_empty())
+        .take_while(|line| !line.is_empty())
+        .collect();
+    let text = paragraph.join(" ");
+    let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if text.is_empty() {
+        return None;
+    }
+    let mut end = text.len();
+    let mut found = 0;
+    for (index, _) in text.match_indices(". ") {
+        found += 1;
+        if found == 2 {
+            end = index + 1;
+            break;
+        }
+    }
+    Some(text.get(..end).unwrap_or(&text).trim().to_owned())
 }
 
 /// A kind's doc comments as one paragraph.
@@ -565,9 +607,11 @@ fn joint_focus(
         context: format!("{} · Joint focus · {title}", design.project.title),
         title,
         heading,
+        summary: description.clone(),
         description,
         rows,
         insert,
+        receives: receiving.first().map(|id| part_name(design, *id)),
         members: Vec::new(),
         key_poses: vec![
             KeyPose {
@@ -639,9 +683,24 @@ fn insert_text(opened: &Opened, kind: &KindDef) -> Option<InsertText> {
         })
         .collect();
     let line = file.line_column(first.span.start()).line;
+    let path = file.path();
+    let link = match path.strip_prefix("std/") {
+        Some(inside) => format!("std:{}", inside.strip_suffix(".stave").unwrap_or(inside)),
+        None => std::path::Path::new(path).file_name().map_or_else(
+            || path.to_owned(),
+            |name| format!("{}:{line}", name.to_string_lossy()),
+        ),
+    };
+    let location = LineNumber::from_usize(line).map(|line| SourceLocation {
+        path: path.to_owned(),
+        line,
+    });
     Some(InsertText {
         text: format!("insert: [{}]", texts.join(", ")),
-        source: format!("{}:{line}", file.path()),
+        source: format!("{path}:{line}"),
+        steps: texts.iter().map(|text| (*text).to_owned()).collect(),
+        link,
+        location,
     })
 }
 
@@ -887,8 +946,10 @@ fn hardware_focus(
         title,
         heading: heading.to_owned(),
         description: kind.and_then(doc_text),
+        summary: kind.and_then(summary_text),
         rows,
         insert: None,
+        receives: None,
         members,
         key_poses: key_pose_rows,
         closest,

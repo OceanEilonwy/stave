@@ -217,6 +217,13 @@ fn focus_on_a_socket_plays_the_rung_in() {
         "{}",
         insert.source
     );
+    assert_eq!(insert.steps, ["push(piece, along: length)"]);
+    assert_eq!(insert.link, "std:joinery/socket");
+    let location = insert.location.as_ref().unwrap();
+    assert_eq!(location.path, "std/joinery/socket.stave");
+    assert_eq!(location.line.get(), 10);
+    assert_eq!(found.receives.as_deref(), Some("leg[front_left]"));
+    assert_eq!(found.summary, found.description);
     assert!(found.assembles());
     assert_eq!(found.step_count(), 1);
 
@@ -369,6 +376,13 @@ fn focus_on_a_cup_hinge_names_its_members_and_measures_its_swing() {
             .as_deref()
             .unwrap()
             .starts_with("A concealed 35mm cup hinge for an overlay door")
+    );
+    // The panel shows two sentences before "More".
+    assert_eq!(
+        found.summary.as_deref(),
+        Some(
+            "A concealed 35mm cup hinge for an overlay door (the common European clip-on kind). The cup is bored into the back of the door's hinge stile; the mounting plate screws to the inside face of the cabinet side, on the 37mm screw line of 32mm-system cabinets."
+        )
     );
     let members: Vec<(u8, &str)> = found.members.iter().map(|m| (m.number, m.name)).collect();
     assert_eq!(

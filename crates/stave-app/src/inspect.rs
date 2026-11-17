@@ -84,7 +84,7 @@ impl<T> NonEmpty<T> {
         false
     }
 
-    fn push(&mut self, item: T) {
+    pub(crate) fn push(&mut self, item: T) {
         self.rest.push(item);
     }
 }

@@ -108,6 +108,174 @@ pub const HAMMER: Shape = Shape {
     tilted: true,
 };
 
+/// Pull apart: arrows out from the middle.
+pub const PULL_APART: Shape = stroke(
+    1.5,
+    &[
+        "M8 1.5v4M8 10.5v4M1.5 8h4M10.5 8h4",
+        "M6 3.5L8 1.5L10 3.5",
+        "M6 12.5L8 14.5L10 12.5",
+        "M3.5 6L1.5 8L3.5 10",
+        "M12.5 6L14.5 8L12.5 10",
+    ],
+);
+/// Play: a triangle.
+pub const PLAY: Shape = Shape {
+    view_box: 16.0,
+    paint: Paint::Fill,
+    paths: &["M4 2.5v11l9-5.5z"],
+    tilted: false,
+};
+/// Pause: two bars.
+pub const PAUSE: Shape = Shape {
+    view_box: 16.0,
+    paint: Paint::Fill,
+    paths: &["M4 2.5h3v11h-3z", "M9 2.5h3v11h-3z"],
+    tilted: false,
+};
+/// Fit to view: four corners.
+pub const FIT: Shape = stroke(
+    1.5,
+    &[
+        "M2 5.5V2H5.5",
+        "M10.5 2H14V5.5",
+        "M14 10.5V14H10.5",
+        "M5.5 14H2V10.5",
+    ],
+);
+/// Front view: a square face on.
+pub const FRONT: Shape = stroke(
+    1.5,
+    &["M4 3h8a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1h-8a1 1 0 0 1-1-1v-8a1 1 0 0 1 1-1z"],
+);
+/// Turn to the back: a circling arrow.
+pub const TURN: Shape = stroke(1.5, &["M13 8a5 5 0 1 1-1.5-3.6", "M13 2.5v2.5h-2.5"]);
+/// From above: a plan of a box in a corner.
+pub const FROM_ABOVE: Shape = stroke(
+    1.5,
+    &[
+        "M3.5 2h9a1.5 1.5 0 0 1 1.5 1.5v9a1.5 1.5 0 0 1-1.5 1.5h-9a1.5 1.5 0 0 1-1.5-1.5v-9a1.5 1.5 0 0 1 1.5-1.5z",
+        "M2 10h7V2",
+    ],
+);
+/// Close: a cross.
+pub const CLOSE: Shape = stroke(2.0, &["M4 4L12 12M12 4L4 12"]);
+
+/// A motion problem: the door-swing plan symbol (the hinge dot, the
+/// closed leaf along the bottom, the open leaf upright, a dotted arc).
+pub const MOTION: Shape = stroke(
+    1.6,
+    &[
+        "M3 13.5V3",
+        "M3 13.5h10.5",
+        "M3.6 13.5a0.6 0.6 0 1 1-1.2 0a0.6 0.6 0 1 1 1.2 0z",
+        "M3.00 3.00A10.5 10.5 0 0 1 4.14 3.06",
+        "M5.51 3.31A10.5 10.5 0 0 1 6.60 3.64",
+        "M7.88 4.20A10.5 10.5 0 0 1 8.86 4.79",
+        "M9.96 5.64A10.5 10.5 0 0 1 10.77 6.44",
+        "M11.64 7.54A10.5 10.5 0 0 1 12.24 8.51",
+        "M12.82 9.78A10.5 10.5 0 0 1 13.16 10.86",
+        "M13.42 12.23A10.5 10.5 0 0 1 13.50 13.37",
+    ],
+);
+/// An overlap: two boxes sharing a corner.
+pub const OVERLAP: Shape = stroke(1.6, &["M2 2h8v8h-8z", "M6 6h8v8h-8z"]);
+/// No contact: two boxes with a gap between them.
+pub const NO_CONTACT: Shape = stroke(1.6, &["M1.5 4h5v8h-5z", "M9.5 4h5v8h-5z"]);
+/// A slide gap: a drawer box between two sides, a small gap each side.
+pub const SLIDE_GAP: Shape = stroke(1.6, &["M2 2v12", "M14 2v12", "M5 5h6v6.5h-6z"]);
+/// An order problem: two arrows in sequence.
+pub const ORDER: Shape = stroke(
+    1.6,
+    &[
+        "M1.5 8h4.5",
+        "M4.5 5.5L7 8L4.5 10.5",
+        "M9 8h4.5",
+        "M12 5.5L14.5 8L12 10.5",
+    ],
+);
+/// A hinge overlay problem: a door across the front edge of its side,
+/// seen from above.
+pub const HINGE_OVERLAY: Shape = stroke(1.6, &["M3 2.5h3.5v8.5h-3.5z", "M1.5 11h13v2.5h-13z"]);
+/// A requirement: a ruler.
+pub const REQUIREMENT: Shape = stroke(
+    1.6,
+    &["M1.5 5h13v6h-13z", "M4.5 5v2.5M7.5 5v3.5M10.5 5v2.5"],
+);
+/// A placement problem: cross hairs.
+pub const PLACEMENT: Shape = stroke(
+    1.6,
+    &[
+        "M13 8a5 5 0 1 1-10 0a5 5 0 1 1 10 0z",
+        "M8 1.5v3M8 11.5v3M1.5 8h3M11.5 8h3",
+    ],
+);
+/// A syntax problem: braces.
+pub const SYNTAX: Shape = stroke(
+    1.6,
+    &[
+        "M6 2.5c-1.5 0-2 0.5-2 2v1.5c0 1-0.5 2-1.5 2c1 0 1.5 1 1.5 2v1.5c0 1.5 0.5 2 2 2",
+        "M10 2.5c1.5 0 2 0.5 2 2v1.5c0 1 0.5 2 1.5 2c-1 0-1.5 1-1.5 2v1.5c0 1.5-0.5 2-2 2",
+    ],
+);
+/// A name problem: a tag.
+pub const NAME: Shape = stroke(
+    1.6,
+    &[
+        "M2 2.5h5.5l6.5 6.5l-5 5l-6.5-6.5z",
+        "M6 5.5a0.5 0.5 0 1 1-1 0a0.5 0.5 0 1 1 1 0z",
+    ],
+);
+/// A value problem: an equals sign that doesn't hold.
+pub const VALUE: Shape = stroke(1.6, &["M2.5 6h11M2.5 10h11", "M10 2.5L6 13.5"]);
+/// A cut problem: a saw.
+pub const CUT: Shape = stroke(
+    1.6,
+    &[
+        "M1.5 6.5h10v4h-10z",
+        "M11.5 5.5h3v6h-3z",
+        "M1.5 10.5l1.25 2l1.25-2l1.25 2l1.25-2l1.25 2l1.25-2l1.25 2l1.25-2",
+    ],
+);
+/// A hardware problem: a screw.
+pub const HARDWARE: Shape = stroke(
+    1.6,
+    &[
+        "M4.5 2.5h7v2.5h-7z",
+        "M6.5 5v6l1.5 2.5l1.5-2.5v-6",
+        "M6.5 7.5l3 1M6.5 9.5l3 1",
+    ],
+);
+/// Not supported yet: a circle struck through.
+pub const NOT_SUPPORTED: Shape = stroke(
+    1.6,
+    &[
+        "M13.5 8a5.5 5.5 0 1 1-11 0a5.5 5.5 0 1 1 11 0z",
+        "M4.2 11.8L11.8 4.2",
+    ],
+);
+
+/// The icon of a kind of problem.
+pub fn category(category: stave_app::problems::Category) -> Shape {
+    use stave_app::problems::Category;
+    match category {
+        Category::Motion => MOTION,
+        Category::Overlap => OVERLAP,
+        Category::NoContact => NO_CONTACT,
+        Category::SlideGap => SLIDE_GAP,
+        Category::HingeOverlay => HINGE_OVERLAY,
+        Category::Order => ORDER,
+        Category::Requirement => REQUIREMENT,
+        Category::Placement => PLACEMENT,
+        Category::Syntax => SYNTAX,
+        Category::Name => NAME,
+        Category::Value => VALUE,
+        Category::Cut => CUT,
+        Category::Hardware => HARDWARE,
+        Category::NotSupported => NOT_SUPPORTED,
+    }
+}
+
 mod imp {
     use super::*;
 

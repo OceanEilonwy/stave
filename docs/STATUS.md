@@ -98,16 +98,33 @@ the system or the main menu, the 3D backdrop with them.
   Files view, whose editor isn't built yet).
 - **Build button**: checks, then says "The build plan (PDF) isn't built
   yet"; disabled while the design has errors.
-- **Problems**: the list (opened by the pill) shows every diagnostic.
-  Choosing one the checks can show poses the design where it happens (its
-  scene, and a door or drawer stopped just past where it hits), tints the
-  parts red and draws the shared wood as translucent red boxes; the motion
-  bar swings a motion from closed to fully open.
+- **Problems**: the pill (or Ctrl+E, from any view) opens the Problems
+  sidebar: All / Errors / Warnings filters with their counts and the parts
+  tree showing only the parts with problems, each kind of problem one
+  compact row with its icon (`Motion`, `Overlap (2)`, `No contact`...) and
+  where it is written (`project.stave[82]`); the parts a problem only
+  involves (the wall a door hits) carry the same row, marked "involved";
+  problems not about a part (a misspelt name) come after the tree.
+  Choosing a row poses the design where it happens (its scene, and a door
+  or drawer stopped just past where it hits), tints the parts red and
+  draws the shared wood as translucent red boxes, with a "Shared wood at
+  first contact" key. The inspector gives the problem's details: "ERROR ·
+  MOTION", a plain title ("door hits wall as it opens"), the text exactly
+  as `stave check .` prints it (highlighted), the ways to fix it from its
+  help line, each with "Show in text", and that fixes are never applied
+  automatically. A door or drawer that hits something gets a motion card
+  ("Swing door to see where it hits") whose slider hatches the blocked
+  range red from the contact angle.
 - **Exploded views**: scenes with `explode: true` start apart (`--explode`
   sets any amount). The first half of the range moves each assembly out
   whole (drawers forward, doors off their hinges), the second pulls parts
-  apart along the reverse of their joints' last insert step. The view's
-  own "Pull apart" control is the next GUI lane's (`docs/gui.md`).
+  apart along the reverse of their joints' last insert step. The 3D
+  view's toolbar has "Pull apart": on, it grows a play button and a
+  "together … apart" slider, and the inspector says how it comes apart,
+  stage by stage, read off the exploded poses, with "Save this view as
+  glTF". The camera buttons fit the view, look at the front and turn to
+  the back. A library folder, or a design that doesn't solve, says so in
+  the view instead of leaving it blank.
 - **Cup hinges** are drawn as their mechanism: the steel cup with its
   rim and boss pins in the door, the plate, arm and arm pins on the side,
   and the two links, which turn about their arm pins as the door opens.
@@ -123,7 +140,14 @@ the system or the main menu, the 3D backdrop with them.
   darker, so the joinery reads at a glance.
 - **Focus mode**: selecting a part offers "See how it goes together" for
   each joint pair it is in; selecting hardware offers "See how it works".
-  Everything else fades to a ghost and the item is framed.
+  Everything else fades to a ghost and the item is framed. The window
+  lays focus out as the canvas's JointFocus and Hinge designs: a joint's
+  step player floats over the view and its side panel gives the joint,
+  the toggles and its insert steps with a link to the kind
+  (`std:joinery/socket`); hardware gets a page with a line saying what the
+  view looks at, a From above / In 3D switch, three small views at fixed
+  angles (click one to go there) and the swing card, and its side panel
+  "How a cup hinge works" with its numbered members.
   - A **joint** plays its own `insert:` steps (the steps the assembly
     check runs backwards) with a play button and a scrub slider from apart
     to together; the part that receives it is drawn see-through (X-ray,
@@ -190,7 +214,8 @@ the system or the main menu, the 3D backdrop with them.
 - **The real window, without a screen**: `tools/window-shot OUT.png
   FOLDER [options]` runs the viewer on a private GTK Broadway server and
   the window draws itself into the PNG (`--theme`, `--size`, `--select`,
-  `--focus`, `--diagnostic`, `--problems`, `--view`, `--checking`). See
+  `--focus` with `--plan`, `--in-3d` and `--step`, `--diagnostic`,
+  `--problems`, `--explode`, `--view`, `--checking`). See
   `docs/screenshots/window/`.
 
 What the window shows is worked out in `stave-app` (the session, the
@@ -199,12 +224,10 @@ through the window itself is not automated.
 
 ## Not done yet
 
-- **Window**: the Files view (the editor), the problems tree with its
-  filters and the problem details, the 3D view's own toolbar (Pull apart
-  and its slider, fit, front, turn) and the Cut list view are placeholders
-  with their slots ready (`docs/gui.md`); focus mode keeps its earlier
-  panel in the inspector rather than the canvas's JointFocus and Hinge
-  layouts.
+- **Window**: the Files view (the editor) and the Cut list view are
+  placeholders with their slots ready (`docs/gui.md`). A problem's ways
+  to fix it are its help line split at "or", and "Show in
+  text" goes to the problem's own line, not to each fix's.
 - **Build plan and cut list**: `stave build`, the work plan (recipes,
   order of operations, tool settings), the PDF and the CSV cut list
   (stave-workplan, stave-output) are not written yet; neither is layer 7's
