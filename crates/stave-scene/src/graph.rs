@@ -3,9 +3,10 @@
 use glam::{Mat4, Quat, Vec3};
 use stave_geom::solid::Solid;
 use stave_geom::{Aabb, Extent, Geometry, render};
+use stave_lang::placement::PartAxis;
 use stave_model::solved::{
-    AssemblyId, HardwareBase, HardwareId, Motion, Part, PartId, PoseValue, SceneId, SceneItem,
-    SolvedDesign,
+    AssemblyId, HardwareBase, HardwareData, HardwareId, Motion, Part, PartId, PoseValue, SceneId,
+    SceneItem, SolvedDesign,
 };
 use stave_schema::species::{Species, Srgb};
 use stave_schema::words::StockForm;
@@ -190,6 +191,28 @@ pub struct SceneGraph {
     pub scenes: Vec<SceneEntry>,
     /// Each assembly's motion, by [`AssemblyId`].
     motions: Vec<Option<RenderMotion>>,
+    /// Per node: where it goes in a fully exploded view, from rest
+    /// (millimetres, render frame).
+    explode: Vec<Vec3>,
+}
+
+/// What a viewer shows for a problem: nodes to tint and the shared
+/// volume to draw in red.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Highlight {
+    /// The nodes involved.
+    pub nodes: Vec<NodeId>,
+    /// The shared volumes, in the render frame, already posed.
+    pub volumes: Vec<Aabb>,
+}
+
+/// The range of an assembly's motion, for a slider.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MotionRange {
+    /// `true` for a hinge (radians), `false` for a slide (millimetres).
+    pub turns: bool,
+    /// Fully open.
+    pub full: f32,
 }
 
 /// Where every node is in one scene, and whether it is shown.
@@ -361,12 +384,66 @@ impl SceneGraph {
                 section: scene.section.is_some(),
             })
             .collect();
+        let parts = explode_offsets(design);
+        let explode = nodes
+            .iter()
+            .map(|node| match node.item {
+                Item::Part(id) => parts.get(id.index()).copied().unwrap_or(Vec3::ZERO),
+                Item::Hardware(id) => {
+                    // Hardware goes with the part it is on: the moving
+                    // member with its piece, a hinge's fixed member with
+                    // the part it is fixed to.
+                    let Some(hardware) = design.hardware.get(id.index()) else {
+                        return Vec3::ZERO;
+                    };
+                    let fixed = node.name != hardware.name;
+                    let part = match (fixed, hardware.data) {
+                        (false, _) => Some(hardware.piece),
+                        (
+                            true,
+                            HardwareData::Hinge { on, .. } | HardwareData::ButtHinge { on, .. },
+                        ) => Some(on),
+                        (true, HardwareData::Slide { .. } | HardwareData::Pull { .. }) => None,
+                    };
+                    part.and_then(|p| parts.get(p.index()).copied())
+                        .unwrap_or(Vec3::ZERO)
+                }
+            })
+            .collect();
         SceneGraph {
             title: design.project.title.clone(),
             nodes,
             scenes,
             motions,
+            explode,
         }
+    }
+
+    /// The range of an assembly's motion; `None` when it has none.
+    pub fn motion_range(&self, assembly: AssemblyId) -> Option<MotionRange> {
+        let motion = self.motions.get(assembly.index()).copied().flatten()?;
+        Some(match motion {
+            RenderMotion::Turn { opening, .. } => MotionRange {
+                turns: true,
+                full: opening,
+            },
+            RenderMotion::Travel { travel, .. } => MotionRange {
+                turns: false,
+                full: travel,
+            },
+        })
+    }
+
+    /// The amount (radians or millimetres) a pose value means for an
+    /// assembly's motion.
+    pub fn amount(&self, assembly: AssemblyId, value: PoseValue) -> Option<f32> {
+        let motion = self.motions.get(assembly.index()).copied().flatten()?;
+        Some(motion.amount(value))
+    }
+
+    /// Where a node goes in a fully exploded view, from rest.
+    pub fn explode_offset(&self, node: NodeId) -> Vec3 {
+        self.explode.get(node.0).copied().unwrap_or(Vec3::ZERO)
     }
 
     /// The node ids, in order.
@@ -404,10 +481,23 @@ impl SceneGraph {
     /// (outermost last, so a drawer inside a moving cabinet moves with it)
     /// and `show`/`hide` applied.
     pub fn pose(&self, scene: &SceneEntry) -> Posed {
+        self.pose_with(scene, &[], if scene.explode { 1.0 } else { 0.0 })
+    }
+
+    /// Every node posed for a scene, with some assemblies' motions set to
+    /// other amounts (radians or millimetres; a slider, a problem's pose
+    /// at contact), and pulled apart by `explode` (0 as built, 1 fully
+    /// exploded) along the directions its joints are assembled in.
+    pub fn pose_with(
+        &self,
+        scene: &SceneEntry,
+        overrides: &[(AssemblyId, f32)],
+        explode: f32,
+    ) -> Posed {
         let amount = |assembly: AssemblyId| {
-            scene
-                .moves
+            overrides
                 .iter()
+                .chain(&scene.moves)
                 .find(|(id, _)| *id == assembly)
                 .map(|(_, amount)| *amount)
         };
@@ -425,6 +515,8 @@ impl SceneGraph {
                     transform *= motion.transform(amount);
                 }
             }
+            let offset = self.explode.get(index).copied().unwrap_or(Vec3::ZERO);
+            transform = Mat4::from_translation(offset * explode.clamp(0.0, 1.0)) * transform;
             let shown = scene
                 .show
                 .as_ref()
@@ -461,4 +553,173 @@ impl SceneGraph {
             })
             .reduce(Aabb::union)
     }
+}
+
+/// The world direction an assembly step moves its part in, as a unit
+/// vector in the render frame (a push turned by `angle` leans toward the
+/// next axis).
+fn step_direction(part: &Part, axis: PartAxis, angle: Option<stave_lang::units::Angle>) -> Vec3 {
+    let o = part.pose.orientation;
+    let along = render::direction(o.direction(axis));
+    let next = match axis {
+        PartAxis::Length => PartAxis::Width,
+        PartAxis::Width => PartAxis::Thickness,
+        PartAxis::Thickness => PartAxis::Length,
+    };
+    match angle {
+        Some(angle) => {
+            let a = render::radians(angle);
+            along * a.cos() + render::direction(o.direction(next)) * a.sin()
+        }
+        None => along,
+    }
+}
+
+/// The middle of a part's cut box, render frame.
+fn middle(part: &Part) -> Vec3 {
+    let b = part.cut_box();
+    (render::point(b.min()) + render::point(b.max())) * 0.5
+}
+
+/// How far a part moves out along a direction: 30mm plus a third of its
+/// size that way, so the joinery shows.
+fn explode_distance(part: &Part, direction: Vec3) -> f32 {
+    let size = render::size(part.cut);
+    let o = part.pose.orientation;
+    let extent: f32 = [PartAxis::Length, PartAxis::Width, PartAxis::Thickness]
+        .iter()
+        .zip([size.x, size.y, size.z])
+        .map(|(axis, s)| s * render::direction(o.direction(*axis)).dot(direction).abs())
+        .sum();
+    30.0 + extent / 3.0
+}
+
+/// A direction signed to point away from `from`, seen from `part`; when
+/// they're centred on each other that way, toward the viewer, then up,
+/// then right.
+fn away_from(direction: Vec3, part: Vec3, from: Vec3) -> Vec3 {
+    let along = (part - from).dot(direction);
+    let flip = if along.abs() > 1.0 {
+        along < 0.0
+    } else {
+        direction.dot(Vec3::new(0.001, 0.01, 1.0)) < 0.0
+    };
+    if flip { -direction } else { direction }
+}
+
+/// Per part (by [`PartId`]): where it goes in a fully exploded view
+/// (grammar, "Scenes"), deterministically.
+///
+/// A part that is the moving part of a joint's last `insert` step moves
+/// out along the reverse of that step, away from the others of the pair.
+/// A part that would move out of two of its pairs in opposite directions
+/// (a rail tenoned into two stiles, an apron into two legs) stays, and the
+/// parts it is joined to move away from it instead. A part's moves in
+/// different directions add up (a table leg moves out diagonally from its
+/// two aprons), and a part moving out of a part that itself moves goes
+/// with it.
+fn explode_offsets(design: &SolvedDesign) -> Vec<Vec3> {
+    /// A part's moves (direction, distance) and the part it moves out of
+    /// first.
+    type Moves = (Vec<(Vec3, f32)>, Option<PartId>);
+    struct Move {
+        mover: PartId,
+        direction: Vec3,
+        partners: Vec<PartId>,
+    }
+    let mut moves: Vec<Move> = Vec::new();
+    for joint in &design.joints {
+        for pair in &joint.pairs {
+            let Some(step) = pair.insert.last() else {
+                continue;
+            };
+            let Some(part) = design.part(step.part) else {
+                continue;
+            };
+            let partners: Vec<PartId> = pair
+                .roles
+                .iter()
+                .map(|r| r.part)
+                .chain(pair.made_parts.iter().copied())
+                .filter(|p| *p != part.id)
+                .collect();
+            let centres: Vec<Vec3> = partners
+                .iter()
+                .filter_map(|p| design.part(*p))
+                .map(middle)
+                .collect();
+            let count = f32::from(u16::try_from(centres.len().max(1)).unwrap_or(u16::MAX));
+            let centre = centres.iter().fold(Vec3::ZERO, |a, b| a + *b) / count;
+            let direction = away_from(
+                step_direction(part, step.axis, step.angle),
+                middle(part),
+                centre,
+            );
+            moves.push(Move {
+                mover: part.id,
+                direction,
+                partners,
+            });
+        }
+    }
+    let pinned = |part: PartId| {
+        let directions: Vec<Vec3> = moves
+            .iter()
+            .filter(|m| m.mover == part)
+            .map(|m| m.direction)
+            .collect();
+        directions
+            .iter()
+            .enumerate()
+            .any(|(i, a)| directions.iter().skip(i + 1).any(|b| a.dot(*b) < -0.5))
+    };
+    // Per part: its moves (direction, distance) and the part it moves out
+    // of first.
+    let mut own: Vec<Moves> = vec![(Vec::new(), None); design.parts.len()];
+    let mut add = |part: &Part, direction: Vec3, parent: PartId| {
+        if let Some((list, first)) = own.get_mut(part.id.index()) {
+            let distance = explode_distance(part, direction);
+            match list.iter_mut().find(|(d, _)| d.dot(direction) > 0.99) {
+                Some(entry) => entry.1 = entry.1.max(distance),
+                None => list.push((direction, distance)),
+            }
+            first.get_or_insert(parent);
+        }
+    };
+    for m in &moves {
+        let Some(mover) = design.part(m.mover) else {
+            continue;
+        };
+        if pinned(m.mover) {
+            for partner in m.partners.iter().filter_map(|p| design.part(*p)) {
+                let direction = away_from(m.direction, middle(partner), middle(mover));
+                add(partner, direction, m.mover);
+            }
+        } else if let Some(parent) = m.partners.first() {
+            add(mover, m.direction, *parent);
+        }
+    }
+    // Compose along chains of parts moving out of moving parts.
+    (0..design.parts.len())
+        .map(|index| {
+            let mut offset = Vec3::ZERO;
+            let mut current = Some(index);
+            let mut seen = Vec::new();
+            while let Some(at) = current {
+                if seen.contains(&at) {
+                    break;
+                }
+                seen.push(at);
+                let Some((list, parent)) = own.get(at) else {
+                    break;
+                };
+                offset += list
+                    .iter()
+                    .map(|(d, distance)| *d * *distance)
+                    .fold(Vec3::ZERO, |a, b| a + b);
+                current = parent.map(PartId::index);
+            }
+            offset
+        })
+        .collect()
 }

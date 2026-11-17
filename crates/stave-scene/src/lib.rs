@@ -7,8 +7,13 @@
 //! up, `+z` toward the viewer). Exact values are converted once, while the
 //! graph is built, through [`stave_geom::render`].
 //!
-//! Not done yet: a scene's `explode` and `section` are carried
-//! ([`SceneEntry::explode`], [`SceneEntry::section`]) but not applied.
+//! Exploded views ([`SceneGraph::pose_with`]): every part moves out along
+//! the reverse of its joint's last insert step, by any amount from 0 to 1;
+//! a scene with `explode: true` is posed fully exploded. A [`Highlight`]
+//! is what a viewer tints and draws in red for a problem.
+//!
+//! Not done yet: a scene's `section` is carried ([`SceneEntry::section`])
+//! but not applied.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
@@ -19,6 +24,9 @@ mod graph;
 mod pick;
 
 pub use camera::{Orbit, Ray};
-pub use graph::{BuildOptions, Item, Material, Node, NodeId, Posed, SceneEntry, SceneGraph, Wood};
+pub use graph::{
+    BuildOptions, Highlight, Item, Material, MotionRange, Node, NodeId, Posed, SceneEntry,
+    SceneGraph, Wood,
+};
 pub use pick::Hit;
 pub use stave_geom::{Aabb, Extent, Geometry};

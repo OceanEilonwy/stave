@@ -11,10 +11,12 @@ stave-modules = { path = "../stave-modules" }
 stave-model = { path = "../stave-model" }
 stave-solve = { path = "../stave-solve" }
 stave-check = { path = "../stave-check" }
+stave-geom = { path = "../stave-geom" }
 stave-scene = { path = "../stave-scene" }
 thiserror = "2"
 
 [dev-dependencies]
+glam = "0.30"
 stave-geom = { path = "../stave-geom" }
 insta = "1"
 stave-lang = { path = "../stave-lang" }

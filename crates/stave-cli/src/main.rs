@@ -8,6 +8,7 @@
 //! stave fmt --check examples                # exit 1 if a file would change
 //! stave view examples/clothing_cabinet      # the 3D viewer (stave-gtk)
 //! stave export examples/clothing_cabinet --gltf cabinet.glb
+//! stave export examples/clothing_cabinet --gltf apart.glb --scene drawer_bench
 //! ```
 //!
 //! `check` runs the whole pipeline (through `stave-app`) on a module
@@ -67,14 +68,22 @@ enum Command {
         #[arg(long)]
         scene: Option<String>,
     },
-    /// Write the design (everything as built) as a binary glTF file, for
-    /// any glTF viewer or Blender.
+    /// Write the design as a binary glTF file, for any glTF viewer or
+    /// Blender: everything as built, or posed as a scene (exploded when the
+    /// scene says `explode: true`).
     Export {
         /// The project folder.
         path: PathBuf,
         /// The .glb file to write.
         #[arg(long, value_name = "FILE")]
         gltf: PathBuf,
+        /// The scene to pose it in (default: rest, everything as built).
+        #[arg(long)]
+        scene: Option<String>,
+        /// How far apart to pull the parts, from 0 (as built) to 1 (fully
+        /// exploded); default: the scene's own.
+        #[arg(long, value_name = "AMOUNT")]
+        explode: Option<f32>,
     },
     /// Lay out .stave files canonically, in place. Files with syntax errors
     /// are skipped.
@@ -94,7 +103,12 @@ fn main() -> ExitCode {
         Command::Dump { path, json } => dump(&path, json),
         Command::Fmt { path, check } => fmt(&path, check),
         Command::View { path, scene } => view(&path, scene.as_deref()),
-        Command::Export { path, gltf } => export(&path, &gltf),
+        Command::Export {
+            path,
+            gltf,
+            scene,
+            explode,
+        } => export(&path, &gltf, scene.as_deref(), explode),
     };
     match result {
         Ok(true) => ExitCode::SUCCESS,
@@ -268,9 +282,9 @@ fn view(path: &Path, scene: Option<&str>) -> Result<bool> {
     Ok(status.success())
 }
 
-/// Writes the design as rest-pose binary glTF. `Ok(false)` when the design
-/// has errors.
-fn export(path: &Path, output: &Path) -> Result<bool> {
+/// Writes the design as binary glTF, at rest or posed as a scene.
+/// `Ok(false)` when the design has errors.
+fn export(path: &Path, output: &Path, scene: Option<&str>, explode: Option<f32>) -> Result<bool> {
     let opened = open(path)?;
     let mut stderr = std::io::stderr().lock();
     write!(
@@ -284,14 +298,23 @@ fn export(path: &Path, output: &Path) -> Result<bool> {
         }
         return Ok(false);
     };
-    let scene = stave_app::view::scene(design);
-    let glb = scene.to_glb(&scene.rest())?;
+    let graph = stave_app::view::scene(design);
+    let entry = match scene {
+        Some(name) => graph.scene_named(name).with_context(|| {
+            let names: Vec<&str> = graph.scenes.iter().map(|s| s.name.as_str()).collect();
+            format!("no scene '{name}' (scenes: {})", names.join(", "))
+        })?,
+        None => graph.scenes.first().context("the design has no scenes")?,
+    };
+    let amount = explode.unwrap_or(if entry.explode { 1.0 } else { 0.0 });
+    let posed = graph.pose_with(entry, &[], amount);
+    let glb = graph.to_glb(&posed)?;
     std::fs::write(output, &glb).with_context(|| format!("can't write '{}'", output.display()))?;
     writeln!(
         stderr,
         "wrote {} ({} parts and pieces of hardware)",
         output.display(),
-        scene.nodes.len()
+        graph.nodes.len()
     )?;
     Ok(true)
 }

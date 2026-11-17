@@ -7,7 +7,11 @@ use std::path::Path;
 use stave_lang::units::Length;
 use stave_lang::{Diagnostic, Severity, SourceMap};
 use stave_model::solved::{Envelope, HardwareBase, HardwareData, Part, SolvedDesign};
-pub use stave_scene::{BuildOptions, Extent, Item, SceneGraph};
+pub use stave_scene::{
+    BuildOptions, Extent, Highlight, Item, MotionRange, Posed, SceneEntry, SceneGraph,
+};
+
+use crate::{Contact, ContactItem};
 
 use crate::Opened;
 
@@ -248,6 +252,8 @@ pub struct Problem {
     pub location: Option<String>,
     /// What to do about it.
     pub help: Option<String>,
+    /// What it is about in the design, for a viewer to pose and show.
+    pub contact: Option<Contact>,
 }
 
 fn problem(sources: &SourceMap, folder: &Path, diagnostic: &Diagnostic) -> Problem {
@@ -264,6 +270,7 @@ fn problem(sources: &SourceMap, folder: &Path, diagnostic: &Diagnostic) -> Probl
         message: diagnostic.message.clone(),
         location,
         help: diagnostic.help.clone(),
+        contact: None,
     }
 }
 
@@ -273,8 +280,75 @@ pub fn problems(opened: &Opened, folder: &Path) -> Vec<Problem> {
     opened
         .diagnostics
         .iter()
-        .map(|diagnostic| problem(&opened.sources, folder, diagnostic))
+        .map(|diagnostic| Problem {
+            contact: opened.contact(diagnostic).cloned(),
+            ..problem(&opened.sources, folder, diagnostic)
+        })
         .collect()
+}
+
+/// The scene a problem happens in: its scene, or `rest`.
+pub fn contact_scene<'g>(graph: &'g SceneGraph, contact: &Contact) -> Option<&'g SceneEntry> {
+    match contact.scene {
+        Some(id) => graph.scenes.iter().find(|scene| scene.id == id),
+        None => graph.scenes.first(),
+    }
+}
+
+/// The design posed where a problem happens: its scene's poses, and a
+/// motion stopped a little past where it first hits (where the shared
+/// volume is measured). `amount` overrides that motion (a slider), in
+/// radians or millimetres.
+pub fn pose_at_contact(
+    graph: &SceneGraph,
+    contact: &Contact,
+    amount: Option<f32>,
+) -> Option<Posed> {
+    let scene = contact_scene(graph, contact)?;
+    let overrides: Vec<_> = contact
+        .motion
+        .iter()
+        .filter_map(|motion| {
+            let value = amount.or_else(|| graph.amount(motion.assembly, motion.shown))?;
+            Some((motion.assembly, value))
+        })
+        .collect();
+    Some(graph.pose_with(scene, &overrides, 0.0))
+}
+
+/// The range a problem's motion can be scrubbed over, when it has one.
+pub fn contact_motion_range(graph: &SceneGraph, contact: &Contact) -> Option<MotionRange> {
+    graph.motion_range(contact.motion?.assembly)
+}
+
+/// What to tint and draw in red for a problem: every node of the items it
+/// is about, and the shared wood (measured in the pose of
+/// [`pose_at_contact`]).
+pub fn highlight(graph: &SceneGraph, contact: &Contact) -> Highlight {
+    let nodes = graph
+        .node_ids()
+        .filter(|id| {
+            graph.node(*id).is_some_and(|node| {
+                contact.items.iter().any(|item| match (item, node.item) {
+                    (ContactItem::Part(a), Item::Part(b)) => *a == b,
+                    (ContactItem::Hardware(a), Item::Hardware(b)) => *a == b,
+                    (ContactItem::Part(_), Item::Hardware(_))
+                    | (ContactItem::Hardware(_), Item::Part(_)) => false,
+                })
+            })
+        })
+        .collect();
+    let volumes = contact
+        .regions
+        .iter()
+        .filter_map(|region| {
+            stave_geom::Aabb::around([
+                stave_geom::render::point(region.min()),
+                stave_geom::render::point(region.max()),
+            ])
+        })
+        .collect();
+    Highlight { nodes, volumes }
 }
 
 #[cfg(test)]

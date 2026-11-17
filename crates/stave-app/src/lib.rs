@@ -31,6 +31,7 @@ use stave_model::Model;
 use stave_model::solved::SolvedDesign;
 use stave_modules::{FileSource, ModuleSet};
 
+pub use stave_check::{Contact, ContactItem, ContactMotion};
 pub use stave_modules::LoadError;
 
 /// A project folder after the pipeline ran.
@@ -45,11 +46,22 @@ pub struct Opened {
     pub design: Option<SolvedDesign>,
     /// Every diagnostic, sorted.
     pub diagnostics: Vec<Diagnostic>,
+    /// What the fit and motion diagnostics are about in the design: the
+    /// items, the shared wood, the pose at contact.
+    pub contacts: Vec<(Diagnostic, Contact)>,
     /// How many `.stave` files the folder itself holds.
     pub root_files: usize,
 }
 
 impl Opened {
+    /// What a diagnostic is about in the design, when the checks know.
+    pub fn contact(&self, diagnostic: &Diagnostic) -> Option<&Contact> {
+        self.contacts
+            .iter()
+            .find(|(d, _)| d == diagnostic)
+            .map(|(_, contact)| contact)
+    }
+
     /// The number of errors.
     pub fn error_count(&self) -> usize {
         self.diagnostics.iter().filter(|d| d.is_error()).count()
@@ -85,13 +97,18 @@ fn run(modules: ModuleSet) -> Result<Opened, LoadError> {
         .module(modules.root)
         .map_or(0, |module| module.files.len());
     let mut diagnostics = modules.diagnostics.clone();
-    let finish = |sources: SourceMap, model, design, mut diagnostics: Vec<Diagnostic>| {
+    let finish = |sources: SourceMap,
+                  model,
+                  design,
+                  mut diagnostics: Vec<Diagnostic>,
+                  contacts: Vec<(Diagnostic, Contact)>| {
         sort(&mut diagnostics);
         Ok(Opened {
             sources,
             model,
             design,
             diagnostics,
+            contacts,
             root_files,
         })
     };
@@ -105,7 +122,7 @@ fn run(modules: ModuleSet) -> Result<Opened, LoadError> {
         .iter()
         .any(|d| d.code == stave_lang::Code::ImportCycle);
     if !root_has_header || cycle {
-        return finish(modules.sources, None, None, diagnostics);
+        return finish(modules.sources, None, None, diagnostics, Vec::new());
     }
     let (defs, resolve_diagnostics) = stave_model::resolve(&modules);
     diagnostics.extend(resolve_diagnostics);
@@ -116,10 +133,16 @@ fn run(modules: ModuleSet) -> Result<Opened, LoadError> {
     // Fit and geometry (layer 4) and scene poses run only when nothing
     // before them found an error, so one mistake is one error. The design
     // is kept even when they find some, so a viewer can show the problem.
+    let mut contacts = Vec::new();
     if let Some(design) = &design
         && diagnostics.iter().all(|d| !d.is_error())
     {
-        diagnostics.extend(stave_check::check(&model, design));
+        for (diagnostic, contact) in stave_check::check_with_contacts(&model, design) {
+            if let Some(contact) = contact {
+                contacts.push((diagnostic.clone(), contact));
+            }
+            diagnostics.push(diagnostic);
+        }
     }
-    finish(modules.sources, Some(model), design, diagnostics)
+    finish(modules.sources, Some(model), design, diagnostics, contacts)
 }
