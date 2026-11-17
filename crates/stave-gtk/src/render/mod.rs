@@ -20,13 +20,44 @@ const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 const SAMPLES: u32 = 4;
 const SHADOW_SIZE: u32 = 2048;
 
-/// The light grey stage behind the design (#e7e3dd), linear.
-const BACKGROUND: wgpu::Color = wgpu::Color {
-    r: 0.7991,
-    g: 0.7681,
-    b: 0.7230,
-    a: 1.0,
-};
+/// The stage behind the design, light or dark.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Backdrop {
+    /// A light warm grey (#e8e5df), for the light style.
+    #[default]
+    Light,
+    /// A dark grey (#242428), for the dark style.
+    Dark,
+}
+
+impl Backdrop {
+    /// The ground shadow on it: a warm dark brown on the light stage,
+    /// black (and a little stronger) on the dark one, so it darkens both.
+    fn shadow(self) -> [f32; 4] {
+        match self {
+            Backdrop::Light => [0.10, 0.07, 0.04, 0.30],
+            Backdrop::Dark => [0.0, 0.0, 0.0, 0.45],
+        }
+    }
+
+    /// Its colour, linear.
+    fn colour(self) -> wgpu::Color {
+        match self {
+            Backdrop::Light => wgpu::Color {
+                r: 0.8069,
+                g: 0.7835,
+                b: 0.7379,
+                a: 1.0,
+            },
+            Backdrop::Dark => wgpu::Color {
+                r: 0.0176,
+                g: 0.0176,
+                b: 0.0212,
+                a: 1.0,
+            },
+        }
+    }
+}
 
 /// The selection accent (#2f6fd6), linear.
 const ACCENT: [f32; 3] = [0.0284, 0.1590, 0.6724];
@@ -50,6 +81,8 @@ struct Globals {
     floor: [f32; 4],
     /// xyz: the section's unit normal (zero: no section); w: its offset.
     section: [f32; 4],
+    /// rgb: the ground shadow's colour, linear; a: its strength.
+    shadow: [f32; 4],
 }
 
 #[repr(C)]
@@ -106,6 +139,8 @@ pub struct Frame<'a> {
     pub overlay: Option<&'a Overlay>,
     /// Draw the faces cuts made darker, so the joinery reads.
     pub tint_cut_faces: bool,
+    /// The stage behind the design.
+    pub backdrop: Backdrop,
     /// Pixels across.
     pub width: u32,
     /// Pixels down.
@@ -870,7 +905,7 @@ impl Renderer {
                     depth_slice: None,
                     resolve_target: Some(&target.resolved_view),
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(BACKGROUND),
+                        load: wgpu::LoadOp::Clear(frame.backdrop.colour()),
                         store: wgpu::StoreOp::Discard,
                     },
                 })],
@@ -1079,6 +1114,7 @@ impl Renderer {
             section: frame.section.map_or([0.0; 4], |section| {
                 section.normal.extend(section.offset).to_array()
             }),
+            shadow: frame.backdrop.shadow(),
         };
         self.queue
             .write_buffer(&self.globals, 0, bytemuck::bytes_of(&globals));

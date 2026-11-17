@@ -1757,6 +1757,7 @@ version = "0.1.0"
 dependencies = [
  "glam",
  "insta",
+ "notify",
  "stave-check",
  "stave-geom",
  "stave-lang",
@@ -1813,7 +1814,6 @@ dependencies = [
  "glam",
  "gtk4",
  "libadwaita",
- "notify",
  "png",
  "pollster",
  "stave-app",

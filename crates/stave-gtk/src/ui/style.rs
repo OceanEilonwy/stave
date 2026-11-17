@@ -1,0 +1,161 @@
+//! The window's look: libadwaita's, with the design's own sizes and
+//! colours for the title bar's switcher, pill and build button, the parts
+//! tree, the inspector's cards and the status bar. Colours come in a light
+//! and a dark set, swapped when the style changes.
+
+use gtk::gdk;
+
+/// Sizes and shapes, the same in light and dark.
+const SHARED: &str = r#"
+.stave-header { min-height: 50px; }
+.stave-header > windowhandle > box { padding: 0 8px; }
+.stave-header button.stave-icon-button { min-width: 34px; min-height: 34px; padding: 0; border-radius: 8px; }
+.stave-header button.stave-sidebar-toggle { min-width: 36px; min-height: 36px; }
+.stave-title { padding: 0 6px; }
+.stave-title .title { font-weight: 700; font-size: 14px; }
+.stave-title .subtitle { font-size: 12px; }
+
+.stave-switcher { padding: 3px; border-radius: 10px; font-size: 13px; font-weight: 600; }
+.stave-switcher > toggle { min-height: 32px; padding: 0 16px; border-radius: 8px; }
+.stave-switcher > toggle box { border-spacing: 6px; }
+.stave-switcher.compact > toggle { padding: 0 10px; }
+.stave-switcher > separator { background: none; min-width: 0; margin: 0; }
+
+menubutton.stave-scene > button { min-height: 34px; padding: 0 8px 0 10px; border-radius: 8px; font-size: 13px; font-weight: 600; }
+menubutton.stave-scene > button > box { border-spacing: 6px; }
+
+button.stave-pill { min-height: 34px; padding: 0 12px; border-radius: 17px; font-size: 13px; font-weight: 600; }
+button.stave-pill box { border-spacing: 6px; }
+button.stave-pill.open { outline: 2px solid currentColor; outline-offset: -2px; }
+
+button.stave-build { min-width: 36px; min-height: 34px; padding: 0; border-radius: 8px; }
+
+.stave-sidebar { padding: 12px 10px; }
+.stave-sidebar entry.stave-search { min-height: 34px; border-radius: 8px; font-size: 13px; }
+.stave-tree { background: none; font-size: 13px; }
+.stave-tree > row { padding: 0; border-radius: 6px; min-height: 0; margin: 0 0 1px 0; }
+.stave-tree .stave-entry { padding: 5px 8px 5px 20px; border-spacing: 8px; }
+.stave-tree .stave-entry.nested { padding-left: 34px; }
+.stave-tree .stave-entry.nested2 { padding-left: 48px; }
+.stave-tree .stave-assembly { padding: 5px 8px; border-spacing: 8px; font-weight: 600; }
+.stave-tree .stave-assembly.nested { padding-left: 22px; }
+.stave-tree .stave-detail { font-size: 12px; }
+.stave-tree .stave-assembly .stave-detail { font-weight: 500; }
+.stave-tree .stave-heading { padding: 10px 8px 6px 8px; font-size: 12px; font-weight: 700; letter-spacing: 0.02em; }
+.stave-tree .stave-heading.first { padding-top: 6px; }
+
+.stave-inspector { padding: 18px 16px; }
+.stave-inspector-panel { min-width: 0; }
+.stave-eyebrow { font-size: 12px; font-weight: 600; }
+.stave-inspector-title { font-size: 20px; font-weight: 700; }
+.stave-description { font-size: 13px; }
+.stave-card { border-radius: 12px; font-size: 13px; }
+.stave-card > .stave-card-row { padding: 11px 14px; border-spacing: 12px; }
+.stave-card > button.stave-card-row { padding: 10px 14px; border-radius: 0; min-height: 0; font-weight: normal; }
+.stave-card > :first-child { border-top-left-radius: 12px; border-top-right-radius: 12px; }
+.stave-card > :last-child { border-bottom-left-radius: 12px; border-bottom-right-radius: 12px; border-bottom: none; }
+.stave-card .stave-value { font-weight: 600; }
+.stave-section { font-size: 12px; font-weight: 700; letter-spacing: 0.02em; }
+.stave-link { font-size: 12px; font-weight: 600; padding: 0 2px; min-height: 0; }
+.stave-code { padding: 12px 14px; border-radius: 12px; font-family: "JetBrains Mono", "Adwaita Mono", monospace; font-size: 12px; }
+.stave-footnote { font-size: 12px; }
+
+.stave-statusbar { min-height: 30px; padding: 0 14px; font-size: 12px; border-spacing: 16px; }
+.stave-statusbar box { border-spacing: 6px; }
+
+.stave-floating { border-radius: 12px; padding: 8px 14px; font-size: 13px; border-spacing: 12px; }
+.stave-placeholder { font-size: 13px; }
+"#;
+
+/// The colours, from libadwaita's named colours, so the light and dark
+/// styles (Main.dc.html, MainDark.dc.html) both come from this one sheet
+/// and follow the style manager the moment it changes. Only the code
+/// block is dark in both styles, as the design has it.
+const COLOURS: &str = r#"
+.stave-header { background: @headerbar_bg_color; color: @headerbar_fg_color; box-shadow: inset 0 -1px @headerbar_shade_color; }
+.stave-header button.stave-icon-button:disabled { color: alpha(currentColor, 0.45); }
+.stave-header button.stave-sidebar-toggle:checked { background: alpha(currentColor, 0.1); }
+.stave-title .subtitle, .dim { color: alpha(currentColor, 0.7); }
+menubutton.stave-scene > button { background: alpha(currentColor, 0.08); }
+menubutton.stave-scene > button:hover { background: alpha(currentColor, 0.12); }
+button.stave-pill.clean { background: alpha(@success_color, 0.15); color: @success_color; }
+button.stave-pill.warnings { background: alpha(@warning_color, 0.18); color: @warning_color; }
+button.stave-pill.errors { background: alpha(@error_color, 0.14); color: @error_color; }
+button.stave-pill.unknown { background: alpha(currentColor, 0.08); color: alpha(currentColor, 0.7); }
+button.stave-build { background: @accent_bg_color; color: @accent_fg_color; }
+button.stave-build:hover { background: mix(@accent_bg_color, @accent_fg_color, 0.1); }
+button.stave-build:disabled { background: alpha(currentColor, 0.08); color: alpha(@headerbar_fg_color, 0.45); }
+button.stave-build.building:disabled { background: alpha(@accent_bg_color, 0.45); color: @accent_fg_color; }
+
+.stave-sidebar { background: @sidebar_bg_color; color: @sidebar_fg_color; box-shadow: inset -1px 0 @sidebar_shade_color; }
+.stave-sidebar entry.stave-search { background: @view_bg_color; color: @view_fg_color; }
+.stave-tree > row:hover { background: alpha(currentColor, 0.06); }
+.stave-tree > row:selected { background: @accent_bg_color; color: @accent_fg_color; }
+.stave-tree > row:selected .stave-detail { color: alpha(@accent_fg_color, 0.9); }
+.stave-tree .stave-detail, .stave-tree .stave-heading { color: alpha(currentColor, 0.7); }
+
+.stave-inspector-panel { background: @window_bg_color; color: @window_fg_color; box-shadow: inset 1px 0 @headerbar_shade_color; }
+.stave-eyebrow, .stave-description, .stave-section, .stave-footnote, .stave-key { color: alpha(currentColor, 0.7); }
+.stave-card { background: @card_bg_color; color: @card_fg_color; box-shadow: 0 0 0 1px @card_shade_color; }
+.stave-card > .stave-card-row { border-bottom: 1px solid alpha(currentColor, 0.08); }
+.stave-card > button.stave-card-row { background: transparent; color: inherit; }
+.stave-card > button.stave-card-row:hover { background: alpha(currentColor, 0.05); }
+.stave-link { color: @accent_color; }
+.stave-code { background: #1e1e24; color: #e7e5ea; }
+
+.stave-statusbar { background: @headerbar_bg_color; color: alpha(@headerbar_fg_color, 0.7); box-shadow: inset 0 1px @headerbar_shade_color; }
+.stave-floating { background: alpha(@view_bg_color, 0.94); color: @view_fg_color; box-shadow: 0 2px 10px alpha(black, 0.15); }
+"#;
+
+/// The snippet's colours: keyword, type or call, number, string, comment.
+pub struct CodeColours {
+    /// `assembly`.
+    pub keyword: &'static str,
+    /// `FramePanelDoor`, `overlay(`.
+    pub name: &'static str,
+    /// `18mm`.
+    pub number: &'static str,
+    /// Strings.
+    pub text: &'static str,
+    /// Comments.
+    pub comment: &'static str,
+}
+
+/// The snippet's colours on its dark background (both styles).
+pub const CODE: CodeColours = CodeColours {
+    keyword: "#f0a3c4",
+    name: "#8fd0ff",
+    number: "#ffcf80",
+    text: "#8ff0a4",
+    comment: "#9a9996",
+};
+
+/// The dot in the status bar: green, amber, red or grey.
+pub fn status_dot(tone: stave_app::session::Tone) -> gdk::RGBA {
+    use stave_app::session::Tone;
+    let (red, green, blue): (u8, u8, u8) = match tone {
+        Tone::Clean => (0x26, 0xa2, 0x69),
+        Tone::Warnings => (0xe5, 0xa5, 0x0a),
+        Tone::Errors => (0xc0, 0x1c, 0x28),
+        Tone::Unknown => (0x9a, 0x99, 0x96),
+    };
+    gdk::RGBA::new(
+        f32::from(red) / 255.0,
+        f32::from(green) / 255.0,
+        f32::from(blue) / 255.0,
+        1.0,
+    )
+}
+
+/// Installs the window's style for `display`. Every colour is one of
+/// libadwaita's named colours, so nothing needs swapping when the style
+/// turns light or dark.
+pub fn install(display: &gdk::Display) {
+    let provider = gtk::CssProvider::new();
+    provider.load_from_string(&format!("{SHARED}{COLOURS}"));
+    gtk::style_context_add_provider_for_display(
+        display,
+        &provider,
+        gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+    );
+}

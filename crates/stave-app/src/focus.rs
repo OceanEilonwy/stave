@@ -333,7 +333,7 @@ fn tenths(length: Length) -> String {
 }
 
 /// A cut for the panel: its label and size.
-fn cut_row(joint_kind: &str, kind: &CutKind) -> Row {
+pub(crate) fn cut_row(joint_kind: &str, kind: &CutKind) -> Row {
     let millimetres = tenths;
     let mm = |length: Length| format!("{} mm", millimetres(length));
     let deep = |depth: &Depth| match depth {

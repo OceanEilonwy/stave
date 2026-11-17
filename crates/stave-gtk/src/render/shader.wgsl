@@ -15,6 +15,8 @@ struct Globals {
     // xyz: a section's unit normal, toward the side cut away (zero: none);
     // w: its offset.
     section: vec4<f32>,
+    // rgb: the ground shadow's colour; a: its strength.
+    shadow: vec4<f32>,
 };
 
 // Is a point cut away by the section?
@@ -286,7 +288,7 @@ fn floor_fragment(in: FloorOut) -> @location(0) vec4<f32> {
     // Fade out toward the edge of the floor.
     let away = length(in.world.xz - globals.floor.xz) / globals.floor.w;
     let fade = 1.0 - smoothstep(0.5, 1.0, away);
-    return vec4<f32>(0.10, 0.07, 0.04, shadow * 0.30 * fade);
+    return vec4<f32>(globals.shadow.rgb, shadow * globals.shadow.a * fade);
 }
 
 // ---- a problem's shared volumes: red, on top of everything ----

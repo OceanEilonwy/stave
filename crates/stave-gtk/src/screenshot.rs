@@ -399,6 +399,7 @@ fn render_bounds(
         }
     };
     renderer.render(&Frame {
+        backdrop: crate::render::Backdrop::Light,
         scene,
         posed,
         orbit,
