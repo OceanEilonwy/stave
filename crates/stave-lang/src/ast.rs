@@ -1537,11 +1537,13 @@ pub enum BinaryOp {
     Mul,
     /// `/`
     Div,
+    /// `in`, between two numbers: a slope, `1 in 8`.
+    In,
 }
 
 impl BinaryOp {
     /// Every infix operator.
-    pub const ALL: [BinaryOp; 12] = [
+    pub const ALL: [BinaryOp; 13] = [
         BinaryOp::Or,
         BinaryOp::And,
         BinaryOp::Eq,
@@ -1554,6 +1556,7 @@ impl BinaryOp {
         BinaryOp::Sub,
         BinaryOp::Mul,
         BinaryOp::Div,
+        BinaryOp::In,
     ];
 
     /// Binding power; higher binds tighter. Shared by parser and formatter.
@@ -1569,6 +1572,7 @@ impl BinaryOp {
             | BinaryOp::Ge => 3,
             BinaryOp::Add | BinaryOp::Sub => 4,
             BinaryOp::Mul | BinaryOp::Div => 5,
+            BinaryOp::In => 6,
         }
     }
 
@@ -1593,6 +1597,7 @@ impl BinaryOp {
             BinaryOp::Sub => "-",
             BinaryOp::Mul => "*",
             BinaryOp::Div => "/",
+            BinaryOp::In => "in",
         }
     }
 }
@@ -2223,7 +2228,8 @@ mod tests {
         assert!(BinaryOp::And.precedence() > BinaryOp::Or.precedence());
         assert!(BinaryOp::Ge.is_comparison());
         assert!(!BinaryOp::Sub.is_comparison());
-        assert_eq!(BinaryOp::ALL.map(BinaryOp::symbol).len(), 12);
+        assert_eq!(BinaryOp::ALL.map(BinaryOp::symbol).len(), 13);
+        assert!(BinaryOp::In.precedence() > BinaryOp::Mul.precedence());
         assert_eq!(UnaryOp::Not.symbol(), "!");
     }
 

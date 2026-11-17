@@ -32,7 +32,7 @@ Each one is green and committable on its own.
   CARGO_TARGET_DIR=target/generalise cargo clippy --workspace --all-targets -- -D warnings
   CARGO_TARGET_DIR=target/generalise cargo test --workspace
   target/generalise/debug/stave fmt --check .
-  target/generalise/debug/stave check examples     # 0 errors, 2 not-supported warnings (0 warnings after stage 2a)
+  target/generalise/debug/stave check examples     # 0 errors, 0 warnings (since stage 2a)
   ```
 
 - **Commits.** Stage only the paths you own (`git add <paths>`, never
@@ -55,10 +55,10 @@ Each one is green and committable on its own.
 
 1. Every example behaves as it does now: the seven dump snapshots in
    `crates/stave-cli/tests/snapshots/` are byte-identical except for the
-   changes each stage lists; `stave check examples` gives 0 errors and the
-   same 2 `not-supported` warnings until stage 2a, which cuts them
-   (the `kanawa_tsugi` outline and the `ari_tsugi` dovetail in
-   `examples/joint_samples`) and leaves 0 warnings.
+   changes each stage lists; `stave check examples` gives 0 errors and 0
+   warnings (stage 2a cut the `kanawa_tsugi` outlines and the `ari_tsugi`
+   dovetail in `examples/joint_samples`, which were the 2 `not-supported`
+   warnings before it).
 2. `app/focus::no_cup_hinge_puts_steel_in_wood` passes through the generic
    path (stage 3 says how).
 3. Adding a 165° cup hinge needs one new kind in `std/hardware` and no

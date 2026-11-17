@@ -12,7 +12,7 @@ use stave_model::defs::{
 use stave_model::ids::{JointId, KindId, PartId, RecipeId, StockId};
 use stave_model::solved::{
     AssemblyStep, Contact, CutKind, CutPlace, Depth, End, LocalBox, LocalFace, LocalPoint, Mark,
-    Orientation, StepAmount, StepKind,
+    Orientation, Slope, StepAmount, StepKind,
 };
 use stave_model::value::{ExactBox, KindValue, Value};
 use stave_schema::CutOperation;
@@ -1092,12 +1092,12 @@ impl Solver<'_> {
             CutOperation::DovetailSocket => CutKind::DovetailSocket {
                 neck: length(self, "neck")?,
                 depth: length(self, "depth")?,
-                angle: angle(self, "angle")?,
+                slope: self.dovetail_slope(operation, &values, env)?,
             },
             CutOperation::DovetailTail => CutKind::DovetailTail {
                 neck: length(self, "neck")?,
                 depth: length(self, "depth")?,
-                angle: angle(self, "angle")?,
+                slope: self.dovetail_slope(operation, &values, env)?,
             },
             CutOperation::Outline => {
                 let mut marks = Vec::new();
@@ -1113,6 +1113,71 @@ impl Solver<'_> {
                 }
             }
         })
+    }
+
+    /// A dovetail's `angle:` or `slope:`: exactly one is given. A slope is
+    /// a positive ratio, `1 in 8`.
+    fn dovetail_slope(
+        &mut self,
+        operation: &OperationDef,
+        values: &[(String, Value, Span)],
+        env: &Env<'_>,
+    ) -> Solved<Slope> {
+        let get = |name: &str| {
+            values
+                .iter()
+                .find(|(n, _, _)| n == name)
+                .map(|(_, v, s)| (v.clone(), *s))
+        };
+        match (get("angle"), get("slope")) {
+            (Some((Value::Angle(angle), _)), None) => {
+                Ok(Slope::Angle(angle.to_nearest_angle().ok_or(Reported)?))
+            }
+            (Some((other, span)), None) => Err(self.error(
+                Code::UnitMismatch,
+                format!("'angle' needs an angle, found {}", other.description()),
+                env.file,
+                span,
+                "write an angle",
+            )),
+            (None, Some((value, span))) => match value.number() {
+                Some(ratio) if ratio > Rational::ZERO => Ok(Slope::Ratio(ratio)),
+                Some(_) => Err(self.error(
+                    Code::TypeMismatch,
+                    "a dovetail's slope must be more than 0",
+                    env.file,
+                    span,
+                    "write how far across for how far along: slope: 1 in 8",
+                )),
+                None => Err(self.error(
+                    Code::TypeMismatch,
+                    format!(
+                        "'slope' needs a slope such as 1 in 8, found {}",
+                        value.description()
+                    ),
+                    env.file,
+                    span,
+                    "write how far across for how far along: slope: 1 in 8",
+                )),
+            },
+            (Some(_), Some((_, span))) => Err(self.error(
+                Code::TypeMismatch,
+                "a dovetail takes 'angle' or 'slope', not both",
+                env.file,
+                span,
+                "remove 'angle' or 'slope'",
+            )),
+            (None, None) => Err(self.error(
+                Code::MissingField,
+                format!(
+                    "{} is missing 'angle' or 'slope'",
+                    operation.operation.word()
+                ),
+                env.file,
+                operation.span,
+                "add angle: 10deg, or slope: 1 in 8",
+            )),
+        }
     }
 
     /// The cuts of one `cut selector { }` entry for one pair.

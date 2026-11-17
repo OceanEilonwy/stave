@@ -47,7 +47,8 @@ pub(crate) fn overlap(checker: &Checker<'_>, a: Item, b: Item, found: &[Overlap]
         None => notes.push(format!("they share {size} (across × up × deep)")),
     }
     if let (Item::Part(x), Item::Part(y)) = (a, b)
-        && let Some(help) = cavity(checker, x, y, found, deepest)
+        && let Some(help) =
+            dovetail(checker, x, y, deepest).or_else(|| cavity(checker, x, y, found, deepest))
     {
         return Explanation { notes, help };
     }
@@ -129,6 +130,40 @@ pub(crate) fn whereabouts(part: &Part, region: &WorldBox) -> String {
         PartAxis::Thickness => "face",
     };
     format!("at the {} {word} of {}", side.face().word(), part.name)
+}
+
+/// A dovetail tail that doesn't fit its socket: the tail's sloped faces go
+/// into the socket's.
+fn dovetail(checker: &Checker<'_>, a: PartId, b: PartId, deepest: &Overlap) -> Option<String> {
+    let design = checker.design;
+    let ends = |part: PartId, other: PartId, socket: bool| {
+        design.part(part).is_some_and(|p| {
+            p.cuts.iter().any(|cut| {
+                let toward = matches!(cut.place, CutPlace::End { toward } if toward == other);
+                let kind = match cut.kind {
+                    CutKind::DovetailSocket { .. } => socket,
+                    CutKind::DovetailTail { .. } => !socket,
+                    CutKind::Notch { .. }
+                    | CutKind::Slot { .. }
+                    | CutKind::Pocket { .. }
+                    | CutKind::Tenon { .. }
+                    | CutKind::Spigot { .. }
+                    | CutKind::Round { .. }
+                    | CutKind::Drill { .. }
+                    | CutKind::Outline { .. } => false,
+                };
+                toward && kind
+            })
+        })
+    };
+    let (host, guest) = [(a, b), (b, a)]
+        .into_iter()
+        .find(|(host, guest)| ends(*host, *guest, true) && ends(*guest, *host, false))?;
+    let (host, guest) = (&design.part(host)?.name, &design.part(guest)?.name);
+    let depth = length_text(deepest.depth);
+    Some(format!(
+        "the sloped faces of the dovetail tail on {guest} go {depth} into the sloped sides of its socket in {host}; cut the tail and the socket with the same neck, depth and angle"
+    ))
 }
 
 /// The cavity a joint cut in one part for the other, and how the other

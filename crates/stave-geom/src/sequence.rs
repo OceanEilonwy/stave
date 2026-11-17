@@ -8,7 +8,13 @@
 //! wood ahead of the moving part across the direction of travel is in its
 //! way, except where a hole of one holds the other along that direction (a
 //! round tenon pulled out of its hole, a pin through a bore). A push
-//! without `by:` goes until the part's box is clear of the others'.
+//! without `by:` goes until the part's box is clear of the others'. Where
+//! an angled cut reaches a box, the box less its cuts is convex pieces
+//! ([`crate::piece`]), and a piece is in the way when the separating axis
+//! test finds the range of travel over which it goes deeper than the
+//! contact tolerance into another; those pieces are worked out in `f64`
+//! nanometres from exact inputs, and holes are left out of them (more wood
+//! than there is).
 //!
 //! A turn (`rotate`), a push on a diagonal (`angle:`), or any step of a
 //! part already turned is **sampled**: points on the boundaries of the
@@ -16,8 +22,10 @@
 //! 1mm) are tested against the other solid ([`Shape::contains`], deeper
 //! than the contact tolerance), at positions no more than 0.4mm of travel
 //! apart. A sliver of wood thinner than that spacing can slip between the
-//! samples; anything that blocks a step for real is far larger. That is how the chidori's quarter turn and its slide out along
-//! the diagonal are proven, as `tools/joint-sim/chidori.py` does.
+//! samples; anything that blocks a step for real is far larger. Angled
+//! cuts are open there: a point inside one is not wood. That is how the
+//! chidori's quarter turn and its slide out along the diagonal are proven,
+//! as `tools/joint-sim/chidori.py` does.
 
 use glam::{DMat4, DVec3};
 use stave_lang::placement::{Axis, Direction, PartAxis};
@@ -30,6 +38,7 @@ use crate::collide::{
     CONTACT_TOLERANCE, Placement, WorldRod, WorldSolid, boxes_overlap, direction_vector,
     disc_into_rectangle, placed_bounds, point_vector, translate_box,
 };
+use crate::piece::{self, Piece};
 use crate::render;
 use crate::sample::Shape;
 use crate::solid::Solid;
@@ -689,15 +698,14 @@ enum Section {
     Disc { centre: [f64; 2], radius: f64 },
 }
 
-fn pieces(solid: &WorldSolid, axis: Axis) -> Vec<(Section, (i64, i64))> {
+fn pieces(solid: &WorldSolid, boxes: &[WorldBox], axis: Axis) -> Vec<(Section, (i64, i64))> {
     let others = axis.others();
     let rect = |b: &WorldBox| Section::Rect {
         low: others.map(|o| render::nm(b.min().get(o))),
         high: others.map(|o| render::nm(b.max().get(o))),
     };
     let range = |b: &WorldBox| (b.min().get(axis).nm(), b.max().get(axis).nm());
-    let mut out: Vec<(Section, (i64, i64))> =
-        solid.boxes().iter().map(|b| (rect(b), range(b))).collect();
+    let mut out: Vec<(Section, (i64, i64))> = boxes.iter().map(|b| (rect(b), range(b))).collect();
     for rod in solid.rods() {
         if rod.axis == axis {
             out.push((
@@ -788,15 +796,38 @@ fn less_holes(
     parts
 }
 
+/// A solid's boxes no angled cut reaches, and the others less their cuts.
+fn split_by_cuts(solid: &WorldSolid) -> (Vec<WorldBox>, Vec<Piece>) {
+    let mut clean = Vec::new();
+    let mut cut = Vec::new();
+    for region in solid.boxes() {
+        let cuts = solid.cuts_meeting(region);
+        if cuts.is_empty() {
+            clean.push(*region);
+        } else {
+            cut.extend(piece::residual(region, &cuts));
+        }
+    }
+    (clean, cut)
+}
+
 /// How far `mover` can go along `direction` before its wood would go
-/// into `other`'s, exactly; `None` when nothing is in its way.
+/// into `other`'s, exactly where no angled cut is involved; `None` when
+/// nothing is in its way.
 fn push_contact(mover: &WorldSolid, other: &WorldSolid, direction: Direction) -> Option<i64> {
     let axis = direction.axis();
     let axes = axis.others();
     let tolerance = CONTACT_TOLERANCE.nm();
+    let (mover_clean, mover_cut) = split_by_cuts(mover);
+    let (other_clean, other_cut) = split_by_cuts(other);
     let mut best: Option<i64> = None;
-    for (p, p_range) in pieces(mover, axis) {
-        for (q, q_range) in pieces(other, axis) {
+    let mut consider = |gap: i64| {
+        if best.is_none_or(|b| gap < b) {
+            best = Some(gap);
+        }
+    };
+    for (p, p_range) in pieces(mover, &mover_clean, axis) {
+        for (q, q_range) in pieces(other, &other_clean, axis) {
             if !sections_meet(&p, &q, axes) {
                 continue;
             }
@@ -814,13 +845,45 @@ fn push_contact(mover: &WorldSolid, other: &WorldSolid, direction: Direction) ->
                         ps - qe
                     };
                     if gap >= -tolerance {
-                        let gap = gap.max(0);
-                        if best.is_none_or(|b| gap < b) {
-                            best = Some(gap);
-                        }
+                        consider(gap.max(0));
                     }
                 }
             }
+        }
+    }
+    if mover_cut.is_empty() && other_cut.is_empty() {
+        return best;
+    }
+    // Pairs where an angled cut is involved.
+    let plain = |solid: &WorldSolid, clean: &[WorldBox]| -> Vec<Piece> {
+        clean
+            .iter()
+            .copied()
+            .chain(solid.rods().iter().map(WorldRod::bounds))
+            .map(|region| Piece::of_box(&region, axis))
+            .collect()
+    };
+    let (mover_plain, other_plain) = (plain(mover, &mover_clean), plain(other, &other_clean));
+    let travel = direction_vector(direction);
+    let tolerance_f = render::nm(CONTACT_TOLERANCE);
+    let pairs = mover_cut
+        .iter()
+        .flat_map(|p| other_cut.iter().chain(&other_plain).map(move |q| (p, q)))
+        .chain(
+            mover_plain
+                .iter()
+                .flat_map(|p| other_cut.iter().map(move |q| (p, q))),
+        );
+    for (p, q) in pairs {
+        let Some((low, _)) = piece::push_interval(p, q, travel, tolerance_f) else {
+            continue;
+        };
+        // Already sharing wood (the static checks say so), or behind.
+        if low <= 0.0 {
+            continue;
+        }
+        if let Some(gap) = render::integer_from_f64((low - tolerance_f).max(0.0).floor()) {
+            consider(gap);
         }
     }
     best

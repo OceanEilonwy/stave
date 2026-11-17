@@ -16,17 +16,29 @@
 //! its socket) is cut back to where the hole doesn't hold it, and a block
 //! lying wholly inside a hole is cut back the same way.
 //!
+//! Angled cuts ([`WorldCut`], the slanted pieces of a part's
+//! [`Prism`](crate::solid::Prism)s) are taken out of the wood two boxes
+//! share before it is measured ([`crate::piece`]): what is left is convex
+//! pieces, each as deep as its narrowest width (or its length along the
+//! cut), worked out in `f64` nanometres from exact inputs. A tail that
+//! fills its socket leaves nothing, and touching is never overlap. Rods are
+//! tested against the boxes with the angled cuts left in (more wood than
+//! there is), and so is a part's contact with others where no box of it
+//! meets a cut.
+//!
 //! A solid turned by a hinge is no longer axis-aligned. [`overlaps_placed`]
 //! then tests oriented boxes with the separating axis test: each block and
 //! each rod (as the square prism around it) of one solid against those of
-//! the other. Holes are left out there, which only ever finds more wood
-//! than there is.
+//! the other. Holes and angled cuts are left out there, which only ever
+//! finds more wood than there is.
 
 use glam::{DMat4, DVec3};
 use stave_lang::placement::{Axis, Direction, PartAxis};
 use stave_lang::units::Length;
 use stave_model::solved::{Envelope, Motion, Part, Point, Pose, PoseValue, WorldBox};
 
+pub use crate::piece::WorldCut;
+use crate::piece::{self, Piece};
 use crate::render;
 use crate::solid::{Rod, Solid, across};
 
@@ -101,12 +113,13 @@ impl WorldRod {
 }
 
 /// A solid in world coordinates: boxes and rods of wood (or of a hardware
-/// envelope), less the holes drilled in it.
+/// envelope), less the holes drilled in it and the angled cuts.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct WorldSolid {
     boxes: Vec<WorldBox>,
     rods: Vec<WorldRod>,
     holes: Vec<WorldRod>,
+    cuts: Vec<WorldCut>,
 }
 
 impl WorldSolid {
@@ -116,6 +129,7 @@ impl WorldSolid {
             boxes,
             rods: Vec::new(),
             holes: Vec::new(),
+            cuts: Vec::new(),
         }
     }
 
@@ -141,7 +155,36 @@ impl WorldSolid {
             .iter()
             .map(|rod| world_rod(pose, rod))
             .collect();
-        WorldSolid { boxes, rods, holes }
+        let cuts = solid
+            .prisms()
+            .iter()
+            .flat_map(|prism| {
+                let [first, second] = across(prism.face_axis());
+                let (axis, a) = world_coordinate(pose, prism.face_axis(), prism.depth().from());
+                let (_, b) = world_coordinate(pose, prism.face_axis(), prism.depth().to());
+                let [o1, _] = axis.others();
+                prism.slanted_pieces().map(move |piece| WorldCut {
+                    axis,
+                    corners: piece
+                        .points()
+                        .iter()
+                        .map(|p| {
+                            let (w1, c1) = world_coordinate(pose, first, p.first);
+                            let (_, c2) = world_coordinate(pose, second, p.second);
+                            if w1 == o1 { [c1, c2] } else { [c2, c1] }
+                        })
+                        .collect(),
+                    start: a.min(b),
+                    end: a.max(b),
+                })
+            })
+            .collect();
+        WorldSolid {
+            boxes,
+            rods,
+            holes,
+            cuts,
+        }
     }
 
     /// A hardware envelope (a box, or a cylinder along its local
@@ -152,6 +195,7 @@ impl WorldSolid {
                 boxes: vec![pose.world_box(envelope.size())],
                 rods: Vec::new(),
                 holes: Vec::new(),
+                cuts: Vec::new(),
             },
             Envelope::Cylinder { diameter, length } => {
                 let half = Length::from_nm(diameter.nm().div_euclid(2));
@@ -167,6 +211,7 @@ impl WorldSolid {
                     boxes: Vec::new(),
                     rods: vec![world_rod(pose, &rod)],
                     holes: Vec::new(),
+                    cuts: Vec::new(),
                 }
             }
         }
@@ -187,6 +232,7 @@ impl WorldSolid {
             boxes: self.boxes.iter().map(|b| translate_box(b, by)).collect(),
             rods: self.rods.iter().map(|r| r.translated(by)).collect(),
             holes: self.holes.iter().map(|r| r.translated(by)).collect(),
+            cuts: self.cuts.iter().map(|c| c.translated(by)).collect(),
         }
     }
 
@@ -203,6 +249,22 @@ impl WorldSolid {
     /// The holes.
     pub fn holes(&self) -> &[WorldRod] {
         &self.holes
+    }
+
+    /// The angled cuts' slanted pieces: wood the boxes still hold but the
+    /// solid does not.
+    pub fn cuts(&self) -> &[WorldCut] {
+        &self.cuts
+    }
+
+    /// The cuts of this solid whose box shares a volume with `region`, as
+    /// pieces.
+    pub(crate) fn cuts_meeting(&self, region: &WorldBox) -> Vec<Piece> {
+        self.cuts
+            .iter()
+            .filter(|cut| cut.meets(region))
+            .map(WorldCut::piece)
+            .collect()
     }
 }
 
@@ -554,13 +616,24 @@ pub fn overlaps(a: &WorldSolid, b: &WorldSolid) -> Vec<Overlap> {
         for box_b in &b.boxes {
             if let Some(shared) = intersection(box_a, box_b) {
                 for piece in clear(shared, &holes) {
-                    let (depth, axis) = thinnest(&piece);
-                    if depth > CONTACT_TOLERANCE {
-                        found.push(Overlap {
-                            depth,
-                            axis,
-                            region: piece,
-                        });
+                    let mut cuts = a.cuts_meeting(&piece);
+                    cuts.extend(b.cuts_meeting(&piece));
+                    if cuts.is_empty() {
+                        let (depth, axis) = thinnest(&piece);
+                        if depth > CONTACT_TOLERANCE {
+                            found.push(Overlap {
+                                depth,
+                                axis,
+                                region: piece,
+                            });
+                        }
+                        continue;
+                    }
+                    for left in piece::residual(&piece, &cuts) {
+                        let (depth, axis) = left.depth();
+                        if let Some(region) = left.bounds() {
+                            found.extend(finish(depth, axis, region));
+                        }
                     }
                 }
             }
@@ -598,9 +671,52 @@ pub fn touches(a: &WorldSolid, b: &WorldSolid) -> bool {
         .map(|b| Shape::Box(*b))
         .chain(b.rods.iter().map(|r| Shape::Rod(*r)))
         .collect();
-    a_shapes
-        .iter()
-        .any(|x| b_shapes.iter().any(|y| distance(x, y) <= tolerance))
+    a_shapes.iter().any(|x| {
+        b_shapes
+            .iter()
+            .any(|y| distance(x, y) <= tolerance && !cut_apart(a, b, x, y))
+    })
+}
+
+/// Do the angled cuts take away all the wood where two boxes come within
+/// the contact tolerance of each other?
+fn cut_apart(a: &WorldSolid, b: &WorldSolid, x: &Shape, y: &Shape) -> bool {
+    let (Shape::Box(x), Shape::Box(y)) = (x, y) else {
+        return false;
+    };
+    let grow = |region: &WorldBox| {
+        let by = CONTACT_TOLERANCE.nm();
+        let shift = |p: Point, sign: i64| {
+            let mut out = p;
+            for axis in Axis::ALL {
+                out = out.with(
+                    axis,
+                    Length::from_nm(p.get(axis).nm().saturating_add(sign * by)),
+                );
+            }
+            out
+        };
+        WorldBox::new(shift(region.min(), -1), shift(region.max(), 1))
+    };
+    let Some(near) = intersection(&grow(x), &grow(y)) else {
+        return false;
+    };
+    let mut cuts = a.cuts_meeting(&near);
+    cuts.extend(b.cuts_meeting(&near));
+    if cuts.is_empty() {
+        return false;
+    }
+    // Wood of `x` and of `y` within the tolerance of each other, less the
+    // cuts: touching if any of it is left.
+    let (Some(near_x), Some(near_y)) = (intersection(&near, x), intersection(&near, y)) else {
+        return false;
+    };
+    let left = |region: &WorldBox| {
+        piece::residual(region, &cuts)
+            .iter()
+            .any(|p| p.depth().0 > 1.0)
+    };
+    !(left(&near_x) && left(&near_y))
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1008,6 +1124,7 @@ mod tests {
             boxes: vec![WorldBox::new(point(0, 0, 0), point(100, 30, 100))],
             rods: Vec::new(),
             holes: vec![rod(Axis::Up, [50, 50], 22, 0, 20)],
+            cuts: Vec::new(),
         };
         let tenon = WorldSolid {
             rods: vec![rod(Axis::Up, [50, 50], 22, -50, 20)],

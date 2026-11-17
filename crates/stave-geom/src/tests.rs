@@ -543,7 +543,7 @@ fn sampled_area(w: f64, h: f64, inside: impl Fn(f64, f64) -> bool) -> f64 {
 }
 
 #[test]
-fn a_slot_at_an_angle_is_drawn_cut() {
+fn an_angled_slot_is_cut() {
     // A 100 × 50 × 20 board, and a stick standing through its middle; a
     // slot 10mm wide runs from the middle out on the diagonal, through.
     let mut board = part(
@@ -586,10 +586,11 @@ fn a_slot_at_an_angle_is_drawn_cut() {
     ] {
         board.pose.orientation = orientation;
         let solid = solid::Solid::of(&board, &design);
-        assert_eq!(solid.slots().len(), 1);
+        assert_eq!(solid.prisms().len(), 1);
         let geometry = cut_part(&board, &solid);
         assert_outward(&geometry.mesh);
-        let band = mesh_cut::Band::of(&solid.slots()[0]);
+        let prism = &solid.prisms()[0];
+        let band = mesh_cut::Band::of(prism, &prism.pieces()[0]);
         let cut = sampled_area(100.0, 50.0, |x, y| {
             band.holds(Vec3::new(x as f32, y as f32, 10.0))
         });
@@ -600,6 +601,8 @@ fn a_slot_at_an_angle_is_drawn_cut() {
             "{volume} != {expected}"
         );
         assert!(cut > 300.0, "the slot cuts {cut}mm²");
+        let open = open_edges(&geometry.mesh);
+        assert!(open.is_empty(), "{} open edges", open.len());
     }
 }
 
@@ -652,4 +655,204 @@ fn a_round_section_keeps_its_flats() {
         (volume - expected).abs() < 30.0 * section * 0.01,
         "{volume} != {expected}"
     );
+}
+
+/// Every edge of a mesh, by the positions of its ends, that isn't used by
+/// exactly two triangles: none in a watertight mesh.
+fn open_edges(mesh: &Mesh) -> Vec<([u32; 3], [u32; 3], usize)> {
+    use std::collections::BTreeMap;
+    let key = |p: Vec3| p.to_array().map(|c| (c + 0.0).to_bits());
+    let mut counts: BTreeMap<([u32; 3], [u32; 3]), usize> = BTreeMap::new();
+    for &[a, b, c] in mesh.indices.as_chunks::<3>().0 {
+        let vertex = |i: u32| Vec3::from(mesh.vertices[i as usize].position);
+        let [a, b, c] = [vertex(a), vertex(b), vertex(c)];
+        if (b - a).cross(c - a).length_squared() < 1e-12 {
+            continue;
+        }
+        for (p, q) in [(a, b), (b, c), (c, a)] {
+            let (p, q) = (key(p), key(q));
+            let edge = if p <= q { (p, q) } else { (q, p) };
+            *counts.entry(edge).or_default() += 1;
+        }
+    }
+    counts
+        .into_iter()
+        .filter(|(_, count)| *count != 2)
+        .map(|((p, q), count)| (p, q, count))
+        .collect()
+}
+
+/// Two 60 × 40 beams meeting end to end along `across`: `beam_a` (100
+/// long) with a dovetail socket 30 deep in its right end, `beam_b` (130
+/// long, reaching 30 into `beam_a`) with the tail on its left end; necks
+/// 20 wide.
+fn dovetail_pair(
+    socket: stave_lang::units::Angle,
+    tail: stave_lang::units::Angle,
+) -> (SolvedDesign, solid::Solid, solid::Solid) {
+    dovetail_pair_sloped(
+        stave_model::solved::Slope::Angle(socket),
+        stave_model::solved::Slope::Angle(tail),
+    )
+}
+
+/// [`dovetail_pair`], with the slopes given either way.
+fn dovetail_pair_sloped(
+    socket: stave_model::solved::Slope,
+    tail: stave_model::solved::Slope,
+) -> (SolvedDesign, solid::Solid, solid::Solid) {
+    let orientation = frame(Direction::Right, Direction::Back);
+    let mut beam_a = part(orientation, point(0, 0, 0), size(100, 60, 40), Shape::Board);
+    let mut beam_b = part(
+        orientation,
+        point(70, 0, 0),
+        size(130, 60, 40),
+        Shape::Board,
+    );
+    beam_b.id = PartId::from_usize(1);
+    let source = CutSource::Hardware {
+        hardware: HardwareId::from_usize(0),
+    };
+    beam_a.cuts = vec![Cut {
+        source,
+        face: face(PartAxis::Length, End::End),
+        place: CutPlace::End { toward: beam_b.id },
+        kind: CutKind::DovetailSocket {
+            neck: mm(20),
+            depth: mm(30),
+            slope: socket,
+        },
+    }];
+    beam_b.cuts = vec![Cut {
+        source,
+        face: face(PartAxis::Length, End::Start),
+        place: CutPlace::End { toward: beam_a.id },
+        kind: CutKind::DovetailTail {
+            neck: mm(20),
+            depth: mm(30),
+            slope: tail,
+        },
+    }];
+    let mut design = design_of(&beam_a);
+    design.parts.push(beam_b);
+    let solids = design
+        .parts
+        .iter()
+        .map(|p| solid::Solid::of(p, &design))
+        .collect::<Vec<_>>();
+    let [a, b]: [solid::Solid; 2] = solids.try_into().unwrap();
+    (design, a, b)
+}
+
+fn world(design: &SolvedDesign, index: usize, solid: &solid::Solid) -> collide::WorldSolid {
+    collide::WorldSolid::of_part(&design.parts[index], solid)
+}
+
+#[test]
+fn a_dovetail_tail_fills_its_socket_exactly() {
+    let ten = stave_lang::units::Angle::from_deg(10);
+    let (design, socket, tail) = dovetail_pair(ten, ten);
+    assert!(socket.misshapen().is_empty() && tail.misshapen().is_empty());
+    assert_eq!(socket.prisms().len(), 1, "the socket is one trapezoid");
+    assert_eq!(tail.prisms().len(), 2, "a wedge either side of the tail");
+    let (a, b) = (world(&design, 0, &socket), world(&design, 1, &tail));
+    assert_eq!(
+        collide::overlaps(&a, &b),
+        vec![],
+        "the tail fills the socket"
+    );
+    assert_eq!(collide::overlaps(&b, &a), vec![]);
+    assert!(collide::touches(&a, &b));
+    // The tail is real wood: against a beam with no socket it overlaps
+    // by its whole length.
+    let uncut = solid::Solid::of(
+        &Part {
+            cuts: Vec::new(),
+            ..design.parts[0].clone()
+        },
+        &design,
+    );
+    let found = collide::overlaps(&world(&design, 0, &uncut), &b);
+    assert!(
+        found.iter().any(|o| o.depth >= mm(19)),
+        "the tail goes into an uncut beam: {found:?}"
+    );
+    // Both meshes are closed, and enclose the solids' volume: each beam
+    // less (or with only) the trapezoid 20 wide at the neck and 20 + 2 ×
+    // 30 tan 10deg at the other end, 30 long, 40 through.
+    let spread = 30.0 * 10f64.to_radians().tan();
+    let trapezoid = (20.0 + spread) * 30.0 * 40.0;
+    for (index, solid, expected) in [
+        (0, &socket, 100.0 * 60.0 * 40.0 - trapezoid),
+        (1, &tail, 100.0 * 60.0 * 40.0 + trapezoid),
+    ] {
+        let geometry = cut_part(&design.parts[index], solid);
+        assert_outward(&geometry.mesh);
+        let open = open_edges(&geometry.mesh);
+        assert!(
+            open.is_empty(),
+            "{} open edges, e.g. {:?}",
+            open.len(),
+            open.first()
+        );
+        let volume = f64::from(geometry.mesh.signed_volume());
+        assert!(
+            (volume - expected).abs() < expected * 1e-4,
+            "{volume} != {expected}"
+        );
+    }
+}
+
+#[test]
+fn a_tail_one_degree_wider_overlaps_its_socket() {
+    let (design, socket, tail) = dovetail_pair(
+        stave_lang::units::Angle::from_deg(10),
+        stave_lang::units::Angle::from_deg(11),
+    );
+    let found = collide::overlaps(&world(&design, 0, &socket), &world(&design, 1, &tail));
+    // Each sloped face goes 30 (tan 11deg - tan 10deg) = 0.54mm past the
+    // socket's at the tip: slivers along both slopes, none deeper than
+    // that.
+    assert!(!found.is_empty());
+    for overlap in &found {
+        assert!(overlap.depth < Length::from_nm(550_000), "{overlap:?}");
+        assert!(overlap.depth > collide::CONTACT_TOLERANCE);
+    }
+    let deepest = found.iter().map(|o| o.depth).max().unwrap();
+    assert!(deepest > Length::from_nm(400_000), "{found:?}");
+}
+
+#[test]
+fn a_dovetail_at_90_degrees_is_a_mistake() {
+    let (_, socket, _) = dovetail_pair(
+        stave_lang::units::Angle::from_deg(90),
+        stave_lang::units::Angle::from_deg(10),
+    );
+    assert_eq!(socket.misshapen().len(), 1);
+    assert_eq!(socket.misshapen()[0].error, solid::ShapeError::TooSteep);
+}
+
+#[test]
+fn a_slope_1_in_8_is_exact() {
+    // 30 deep at 1 in 8: each side spreads exactly 3.75mm, no rounding.
+    let one_in_eight =
+        stave_model::solved::Slope::Ratio(stave_lang::units::Rational::new(1, 8).unwrap());
+    let (design, socket, tail) = dovetail_pair_sloped(one_in_eight, one_in_eight);
+    let prism = &socket.prisms()[0];
+    let mut widths: Vec<i64> = Vec::new();
+    for at in [mm(70), mm(100)] {
+        let mut across: Vec<i64> = prism
+            .outline()
+            .points()
+            .iter()
+            .filter(|p| p.first == at)
+            .map(|p| p.second.nm())
+            .collect();
+        across.sort_unstable();
+        widths.push(across[1] - across[0]);
+    }
+    // Neck 20 at the end (100), 20 + 2 × 3.75 at the bottom (70).
+    assert_eq!(widths, vec![27_500_000, 20_000_000]);
+    let found = collide::overlaps(&world(&design, 0, &socket), &world(&design, 1, &tail));
+    assert_eq!(found, vec![]);
 }

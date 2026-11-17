@@ -11,7 +11,7 @@ use common::{
     the_diagnostic,
 };
 use stave_lang::placement::PartAxis;
-use stave_model::solved::{Contact, CutKind, CutPlace, Depth, PartOrigin, StepKind};
+use stave_model::solved::{Contact, CutKind, CutPlace, Depth, PartOrigin, Slope, StepKind};
 
 /// A side standing at the left end of the base and a shelf against it.
 const SIDE_AND_SHELF: &str = "part side : pine_19 {
@@ -719,6 +719,58 @@ joint j : k(shelf, into: side)",
         (&c.place, &c.kind),
         (CutPlace::End { .. }, CutKind::Tenon { .. })
     )));
+}
+
+#[test]
+fn a_dovetail_slope_is_written_1_in_n() {
+    let opened = with_parts(
+        "kind k : joint {
+  cut end(piece, facing: into) {
+    dovetail_tail(neck: 100mm, depth: 10mm, slope: 1 in 8)
+  }
+}
+joint j : k(shelf, into: side)",
+    );
+    let design = design(&opened);
+    let slopes: Vec<Slope> = part(design, "shelf")
+        .cuts
+        .iter()
+        .filter_map(|c| match c.kind {
+            CutKind::DovetailTail { slope, .. } => Some(slope),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        slopes,
+        [Slope::Ratio(
+            stave_lang::units::Rational::new(1, 8).unwrap()
+        )]
+    );
+    assert_eq!(slopes[0].to_string(), "slope 1 in 8");
+}
+
+#[test]
+fn a_dovetail_takes_an_angle_or_a_slope() {
+    let joint = |arguments: &str| {
+        with_parts(&format!(
+            "kind k : joint {{\n  cut end(piece, facing: into) {{\n    dovetail_tail(neck: 100mm, depth: 10mm{arguments})\n  }}\n}}\njoint j : k(shelf, into: side)"
+        ))
+    };
+    only_error(
+        &joint(", angle: 10deg, slope: 1 in 8"),
+        "type-mismatch",
+        "a dovetail takes 'angle' or 'slope', not both",
+    );
+    only_error(
+        &joint(""),
+        "missing-field",
+        "dovetail_tail is missing 'angle' or 'slope'",
+    );
+    only_error(
+        &joint(", slope: 0 in 8"),
+        "type-mismatch",
+        "a dovetail's slope must be more than 0",
+    );
 }
 
 #[test]

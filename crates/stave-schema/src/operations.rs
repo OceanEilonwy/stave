@@ -173,6 +173,7 @@ use ArgumentDefault as D;
 use Selector::{Crossing, End, Side};
 const LENGTH: ValueType = ValueType::Type(TypeName::Length);
 const ANGLE: ValueType = ValueType::Type(TypeName::Angle);
+const RATIO: ValueType = ValueType::Type(TypeName::Ratio);
 const COUNT: ValueType = ValueType::Type(TypeName::Count);
 const BOOL: ValueType = ValueType::Type(TypeName::Bool);
 const DEPTH: ValueType = ValueType::Depth;
@@ -269,17 +270,20 @@ pub fn cut_operation(cut: CutOperation) -> &'static OperationSpec {
         measurements: &["diameter", "depth"],
         removes: FaceRemoval::Never,
     };
+    // Exactly one of `angle` and `slope` is given; the solver says so when
+    // it isn't.
     const DOVETAIL_ARGUMENTS: &[ArgumentSpec] = &[
         argument("neck", LENGTH, D::Required),
         argument("depth", LENGTH, D::Required),
-        argument("angle", ANGLE, D::Required),
+        argument("angle", ANGLE, D::Absent),
+        argument("slope", RATIO, D::Absent),
     ];
     const DOVETAIL_SOCKET: OperationSpec = OperationSpec {
         operation: Operation::Cut(CutOperation::DovetailSocket),
         arguments: DOVETAIL_ARGUMENTS,
         selectors: &[End],
         features: &["walls", "floor", "waste", "outline"],
-        measurements: &["neck", "depth", "angle"],
+        measurements: &["neck", "depth", "angle", "slope"],
         removes: FaceRemoval::Never,
     };
     const DOVETAIL_TAIL: OperationSpec = OperationSpec {
@@ -287,7 +291,7 @@ pub fn cut_operation(cut: CutOperation) -> &'static OperationSpec {
         arguments: DOVETAIL_ARGUMENTS,
         selectors: &[End],
         features: &["cheeks", "shoulders", "waste", "outline"],
-        measurements: &["neck", "depth", "angle"],
+        measurements: &["neck", "depth", "angle", "slope"],
         removes: FaceRemoval::TheEnd,
     };
     const OUTLINE: OperationSpec = OperationSpec {

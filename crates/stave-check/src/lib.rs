@@ -8,9 +8,13 @@
 //!
 //! What is checked, in order:
 //!
-//! 1. **Cuts the geometry can't make yet** (`warning[not-supported]`): the
-//!    part is drawn uncut there, and the parts of that joint pair are left
-//!    out of the overlap check (a note says so).
+//! 1. **Cuts the geometry can't make yet** (`warning[not-supported]`: a
+//!    cut other than `drill` and `spigot` on a round or turned part): the
+//!    part is drawn uncut there and checked as drawn. **Cuts whose shape
+//!    is a mistake** (`error[type-mismatch]`: an `outline` that crosses
+//!    itself, a dovetail at 90deg): the part is drawn uncut there and left
+//!    out of the overlap check, which would only report the same mistake
+//!    again.
 //! 2. **Contact** (`error[no-contact]`): every part a joint lists must touch
 //!    at least one of its counterparts, after every cut.
 //! 3. **Spacing** (`error[overlap]`): an element spaced with `pitch` or
@@ -31,8 +35,9 @@
 //!    later step.
 //!
 //! **One mistake, one error.** The checker runs only on a design that
-//! solved without errors. A part reported for spacing, and a slide
-//! reported for its gap, are left out of the overlap checks, and an item with an error at rest is left out of the
+//! solved without errors. A part reported for spacing or for a misshapen
+//! cut, and a slide reported for its gap, are left out of the overlap
+//! checks, and an item with an error at rest is left out of the
 //! scene checks. When one line causes several problems (a component used
 //! twice, a joint applied to four pairs), they are reported once, at that
 //! line, with the others as notes.
@@ -136,6 +141,7 @@ pub fn check_with_contacts(
     design: &SolvedDesign,
 ) -> Vec<(Diagnostic, Option<Contact>)> {
     let mut checker = Checker::new(model, design);
+    checker.misshapen();
     checker.not_supported();
     checker.contact();
     checker.overruns();
@@ -176,11 +182,9 @@ struct Checker<'a> {
     design: &'a SolvedDesign,
     solids: Vec<Solid>,
     bodies: Vec<Body>,
-    /// Pairs of parts left out of the overlap check because a cut between
-    /// them can't be made yet.
-    uncut: BTreeSet<(PartId, PartId)>,
-    /// Parts already reported for their spacing.
-    overrun: BTreeSet<PartId>,
+    /// Parts already reported, for their spacing or for a cut whose shape
+    /// is a mistake: an overlap would report the same mistake again.
+    reported: BTreeSet<PartId>,
     /// Items with an error at rest.
     failed: BTreeSet<Item>,
     /// Items with an error at a scene's poses.
@@ -263,8 +267,7 @@ impl<'a> Checker<'a> {
             design,
             solids,
             bodies,
-            uncut: BTreeSet::new(),
-            overrun: BTreeSet::new(),
+            reported: BTreeSet::new(),
             failed: BTreeSet::new(),
             posed_failed: BTreeSet::new(),
             misfit_slides: BTreeSet::new(),
@@ -355,8 +358,53 @@ impl<'a> Checker<'a> {
     }
 
     // -----------------------------------------------------------------------
-    // 1. Cuts that can't be made yet
+    // 1. Cuts that can't be made yet, and cuts whose shape is a mistake
     // -----------------------------------------------------------------------
+
+    fn misshapen(&mut self) {
+        let mut found = Vec::new();
+        for (part, solid) in self.design.parts.iter().zip(&self.solids) {
+            for misshapen in solid.misshapen() {
+                if let Some(cut) = part.cuts.get(misshapen.cut) {
+                    found.push((part.id, cut.source, misshapen.error));
+                }
+            }
+        }
+        let mut seen: BTreeSet<(SourceKey, String)> = BTreeSet::new();
+        for (part, source, error) in found {
+            self.reported.insert(part);
+            self.failed.insert(Item::Part(part));
+            let key = SourceKey::of(source);
+            let message = error.to_string();
+            if !seen.insert((key, message.clone())) {
+                continue;
+            }
+            let (place, owner) = match key {
+                SourceKey::Joint(joint) => (self.joint_place(joint), self.joint_name(joint)),
+                SourceKey::Hardware(hardware) => (
+                    self.hardware_place(hardware),
+                    self.item_name(Item::Hardware(hardware)),
+                ),
+                SourceKey::Boards(part) => (
+                    self.part_place(part),
+                    format!("{}'s boards", self.part_name(part)),
+                ),
+            };
+            let note = format!(
+                "{owner}: {} is drawn without this cut until it is fixed",
+                self.part_name(part)
+            );
+            self.next_contact = Some(Contact::of(&[Item::Part(part)], &[]));
+            self.report(
+                Severity::Error,
+                Code::TypeMismatch,
+                format!("{owner}: {message}"),
+                place,
+                vec![note],
+                Some(error.help()),
+            );
+        }
+    }
 
     fn not_supported(&mut self) {
         // Per source: what can't be cut, and the parts drawn uncut.
@@ -373,24 +421,6 @@ impl<'a> Checker<'a> {
                 }
                 if !parts.contains(&part.id) {
                     parts.push(part.id);
-                }
-                if let CutSource::Joint { joint, pair } = cut.source
-                    && let Some(pair) = self
-                        .design
-                        .joints
-                        .get(joint.index())
-                        .and_then(|j| j.pairs.get(pair))
-                {
-                    let members = pair
-                        .roles
-                        .iter()
-                        .map(|r| r.part)
-                        .chain(pair.made_parts.iter().copied());
-                    for other in members {
-                        if other != part.id {
-                            self.uncut.insert(ordered(part.id, other));
-                        }
-                    }
                 }
             }
         }
@@ -409,12 +439,12 @@ impl<'a> Checker<'a> {
             };
             let note = if names.len() == 1 {
                 format!(
-                    "{owner}: {} is drawn uncut there, and its fit with the parts it joins is not checked until it is",
+                    "{owner}: {} is drawn uncut there, and its fit is checked as drawn",
                     names::list(&names)
                 )
             } else {
                 format!(
-                    "{owner}: {} are drawn uncut there, and their fit with each other is not checked until it is",
+                    "{owner}: {} are drawn uncut there, and their fit is checked as drawn",
                     names::list(&names)
                 )
             };
@@ -509,7 +539,7 @@ impl<'a> Checker<'a> {
 
     fn overruns(&mut self) {
         for overrun in &self.design.overruns {
-            self.overrun.insert(overrun.part);
+            self.reported.insert(overrun.part);
             let part = self.part_name(overrun.part);
             let to = match overrun.to {
                 AnchorItem::Part(id) => self.part_name(id),
@@ -647,8 +677,8 @@ impl<'a> Checker<'a> {
     // -----------------------------------------------------------------------
 
     /// Items that may share room: a hardware member and its own parts, the
-    /// two members of one piece of hardware, parts whose cut between them
-    /// can't be made yet, and parts already reported for their spacing.
+    /// two members of one piece of hardware, and parts already reported
+    /// (for their spacing, or for a cut whose shape is a mistake).
     fn exempt(&self, a: Item, b: Item) -> bool {
         let hardware_of = |item: Item| match item {
             Item::Hardware(h) | Item::Fixed(h) => Some(h),
@@ -676,9 +706,7 @@ impl<'a> Checker<'a> {
             }
         }
         if let (Item::Part(x), Item::Part(y)) = (a, b) {
-            return self.uncut.contains(&ordered(x, y))
-                || self.overrun.contains(&x)
-                || self.overrun.contains(&y);
+            return self.reported.contains(&x) || self.reported.contains(&y);
         }
         false
     }
@@ -1023,10 +1051,6 @@ impl SourceKey {
             CutSource::Boards { part, .. } => SourceKey::Boards(part),
         }
     }
-}
-
-fn ordered(a: PartId, b: PartId) -> (PartId, PartId) {
-    if a <= b { (a, b) } else { (b, a) }
 }
 
 fn ordered_items(a: Item, b: Item) -> (Item, Item) {

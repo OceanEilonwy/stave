@@ -432,7 +432,7 @@ fn mismatch(op: BinaryOp, lhs: &Value, rhs: &Value) -> ValueError {
         BinaryOp::Add => "add",
         BinaryOp::Sub => "subtract",
         BinaryOp::Mul => "multiply",
-        BinaryOp::Div => "divide",
+        BinaryOp::Div | BinaryOp::In => "divide",
         BinaryOp::And | BinaryOp::Or => "combine",
         BinaryOp::Eq | BinaryOp::Ne | BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge => {
             "compare"
@@ -540,6 +540,17 @@ pub fn binary(op: BinaryOp, lhs: &Value, rhs: &Value) -> Result<Value, ValueErro
                 (Some(x), Some(y)) => x.checked_mul(y).map(|r| number(a, b, r)).ok_or(overflow),
                 _ => Err(mismatch(op, lhs, rhs)),
             },
+        },
+        BinaryOp::In => match (lhs, rhs) {
+            (Value::Count(_) | Value::Ratio(_), Value::Count(_) | Value::Ratio(_)) => {
+                let (x, y) = (ratio(lhs), ratio(rhs));
+                match (x, y) {
+                    (Some(_), Some(y)) if y == Rational::ZERO => Err(ValueError::DivisionByZero),
+                    (Some(x), Some(y)) => x.checked_div(y).map(Value::Ratio).ok_or(overflow),
+                    _ => Err(mismatch(op, lhs, rhs)),
+                }
+            }
+            _ => Err(mismatch(op, lhs, rhs)),
         },
         BinaryOp::Div => {
             let zero = |r: Rational| r == Rational::ZERO;

@@ -37,12 +37,16 @@ kind kanawa_tsugi : joint {
   adds: [extend(piece, by: scarf / 2 + stub), extend(into, by: scarf / 2 + stub)]
 
   // Seen from the side, everything above the stepped line is cut away. The
-  // first stub length at the tip is the stub tenon (shaped below).
+  // line climbs from the tip's height at the stub to the full height less
+  // the tip at the root, so turned end for end it is the line the other half
+  // keeps below. The first stub length at the tip is the stub tenon (shaped
+  // below); the last tip of height at the root is the hidden recess's mouth.
   cut side(piece, normal: thickness, from: into) {
     outline(depth: through, marks: [
       mark(along: stub, across: tip),
-      mark(along: stub + scarf / 2, across: (piece.width - step) / 2),
-      mark(along: stub + scarf / 2, across: (piece.width + step) / 2),
+      mark(along: stub + scarf / 2 + pin_size / 2, across: (piece.width - step) / 2),
+      mark(along: stub + scarf / 2 + pin_size / 2, across: (piece.width + step) / 2),
+      mark(along: stub + scarf, across: piece.width - tip),
       mark(along: stub + scarf, across: piece.width),
       mark(along: 0mm, across: piece.width),
       mark(along: 0mm, across: tip),
@@ -72,13 +76,15 @@ kind kanawa_tsugi : joint {
     ])
   }
 
-  // The other half: the same shape turned over, with its step moved by the
-  // pin's size, which leaves the gap the pin is driven through.
+  // The other half: the same shape, turned end for end. Each step stands half
+  // the pin's size past the middle of the splice, so the two steps end up a
+  // pin's size apart, centred in the splice: the gap the pin is driven through.
   cut side(into, normal: thickness, from: piece, flip: true) {
     outline(depth: through, marks: [
       mark(along: stub, across: tip),
-      mark(along: stub + scarf / 2 + pin_size, across: (into.width - step) / 2),
-      mark(along: stub + scarf / 2 + pin_size, across: (into.width + step) / 2),
+      mark(along: stub + scarf / 2 + pin_size / 2, across: (into.width - step) / 2),
+      mark(along: stub + scarf / 2 + pin_size / 2, across: (into.width + step) / 2),
+      mark(along: stub + scarf, across: into.width - tip),
       mark(along: stub + scarf, across: into.width),
       mark(along: 0mm, across: into.width),
       mark(along: 0mm, across: tip),
