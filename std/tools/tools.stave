@@ -33,6 +33,7 @@ kind drill        : tool { title: "drill", powered: true }
 kind depth_stop   : tool { title: "drill depth stop" }
 kind router       : tool { title: "router", powered: true }
 kind straight_bit : tool { title: "straight router bit" }
+kind dovetail_bit : tool { title: "dovetail router bit" }
 kind table_saw    : tool { title: "table saw", powered: true }
 kind dado_stack   : tool { title: "dado stack" }
 kind bandsaw      : tool { title: "bandsaw", powered: true }

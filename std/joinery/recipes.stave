@@ -6,7 +6,9 @@ stave 1
 // For every cut, Stave keeps the recipes whose tools the project lists, then
 // takes the first one named in the joint's or the project's `methods:`, and
 // otherwise the one with the lowest `rank:`. Power-tool recipes here have
-// rank 10 and hand-tool recipes rank 20.
+// rank 10 and hand-tool recipes rank 20. Recipes for one use of an operation
+// (a sliding dovetail, the shallow socket of a butterfly key) rank 15: name
+// them in `methods:` to choose them over the general ones.
 
 // ---- notch: dados, rabbets, grooves, halvings ----
 
@@ -300,6 +302,42 @@ recipe dovetail_socket_by_hand : dovetail_socket {
   check: "the tail drops in under light hand pressure with no gaps at the walls"
 }
 
+/// A sliding dovetail housing (a batten across a panel, as in suitsuki
+/// zan): the waste hogged out with a straight bit, then the sloping walls
+/// cut in one pass with a dovetail bit along a clamped straightedge.
+recipe dovetail_socket_by_dovetail_bit : dovetail_socket {
+  tools: [marking_knife, square, marking_gauge, router, straight_bit, dovetail_bit, clamps]
+  rank:  15
+  needs: [flat_face]                     // the router base rides on the panel's face
+  mark {
+    knife(walls)                         // square the neck's two lines across the face
+    gauge(depth, on: floor)
+    hatch(waste)
+  }
+  cut {
+    rout(waste, to: depth, passes: 2, with: straight_bit)
+    rout(walls, to: depth, guide: walls, with: dovetail_bit)
+  }
+  check: "a scrap tongue cut with the same bit slides the whole length with hand pressure"
+}
+
+/// The tongue of a sliding dovetail along a batten, cut with the same
+/// dovetail bit as its housing, one pass each side, the batten held to a
+/// fence.
+recipe dovetail_tail_by_dovetail_bit : dovetail_tail {
+  tools: [marking_gauge, router, dovetail_bit, clamps]
+  rank:  15
+  needs: [flat_face]                     // the batten's face runs on the router table or under the base
+  mark {
+    gauge(depth, on: shoulders)
+    hatch(waste)
+  }
+  cut {
+    rout(cheeks, to: shoulders, passes: 2, guide: shoulders, with: dovetail_bit)
+  }
+  check: "the tongue slides into its housing with hand pressure along its whole length, with no rocking"
+}
+
 /// A dovetail tail sawn on the bandsaw and pared to the lines.
 recipe dovetail_tail_by_bandsaw : dovetail_tail {
   tools: [marking_knife, square, marking_gauge, sliding_bevel, bandsaw, chisel]
@@ -367,6 +405,24 @@ recipe outline_by_hand : outline {
     pare(outline)
   }
   check: "the cut faces are flat, square to the face and split the knife lines"
+}
+
+/// A shallow marked-out recess (the socket of a butterfly key) routed out
+/// close to the line and pared to it.
+recipe outline_by_router : outline {
+  tools: [marking_knife, router, straight_bit, chisel, mallet]
+  rank:  15
+  needs: [flat_face]                     // the router base rides on the face
+  mark {
+    knife(outline)                       // knife round the key itself, held in place
+    hatch(waste)
+  }
+  cut {
+    rout(waste, to: depth, with: straight_bit)
+    chop(outline, to: depth, with: chisel)
+    pare(outline, with: chisel)
+  }
+  check: "the key taps in flush with no gaps at its sides"
 }
 
 // ---- turning: a part turned to a profile ----

@@ -24,9 +24,12 @@ a line and a concrete help line for every problem:
    `max_width` is made of equal boards (in `--json`), joined by the edge
    joints its `boards:` names (or the project's, or `glued_edge`):
    `tongue_and_groove` widens each board by its tongue, `splined_edge` makes
-   a spline per seam, `glue: false` is kept. The collision checks see the
-   part's wood as its boards make it. A sheet wider than `max_width` is an
-   error, as a part longer than `max_length` is.
+   a spline per seam, `chigiri` lets a butterfly key into the face across
+   each seam, `suitsuki_zan` slides two battens into dovetail housings
+   across all the boards, `glue: false` is kept. The collision checks see
+   the part's wood as its boards make it, angled cuts included. A sheet
+   wider than `max_width` is an error, as a part longer than `max_length`
+   is.
 4. **Fit and geometry**: every part is cut into a solid (its cut box minus
    its cuts: exact boxes for axis-aligned cuts, exact cylinders for holes,
    round tenons and round sections, and exact prisms, a polygon on a face
@@ -190,9 +193,12 @@ the window calls.
   are assigned to its boards when the work plan exists. On a part with
   `grain: width`, an edge joint that cuts a tongue is refused (the seam is
   across the part's length there). Board joints that `uses:` fasteners
-  don't list them (`not-supported`), and only box-shaped cuts are made on
-  boards (`not-supported` for the rest). The text dump doesn't print boards
-  yet (CLI lane).
+  don't list them (`not-supported`), and holes, round tenons and round
+  sections are not made on boards (`not-supported`). `suitsuki_zan` cuts
+  each batten's tongue on the batten's reference face, which faces the
+  panel when the panel lies flat with its reference face up; under a
+  standing panel the tongue can be on the wrong face (the overlap check
+  reports it). The text dump doesn't print boards yet (CLI lane).
 - **Ranges**: `require` and the layer 3 and 4 checks hold only at the
   current values; checking over a param's whole `within` range (z3,
   `require-range`, `range`) is not built.
