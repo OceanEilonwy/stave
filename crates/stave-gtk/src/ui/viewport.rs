@@ -1,7 +1,9 @@
 //! The 3D view widget: shows the last rendered frame as a texture and
-//! reports its size in device pixels when it changes.
+//! reports its size in device pixels when it changes. Frames are rendered
+//! at that size, so they are drawn one texel to a device pixel, sharp on a
+//! HiDPI screen too.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 
 use gtk::glib;
 use gtk::prelude::*;
@@ -17,6 +19,7 @@ mod imp {
     pub struct Viewport {
         pub frame: RefCell<Option<gtk::gdk::Texture>>,
         pub on_resize: RefCell<Option<ResizeHandler>>,
+        pub sizing: Cell<super::Sizing>,
     }
 
     #[glib::object_subclass]
@@ -26,19 +29,59 @@ mod imp {
         type ParentType = gtk::Widget;
     }
 
-    impl ObjectImpl for Viewport {}
-
-    impl WidgetImpl for Viewport {
-        fn measure(&self, _orientation: gtk::Orientation, _for_size: i32) -> (i32, i32, i32, i32) {
-            (120, 640, -1, -1)
+    impl ObjectImpl for Viewport {
+        fn constructed(&self) {
+            self.parent_constructed();
+            // A window moved to a screen of another scale keeps its
+            // logical size: the device size changes all the same.
+            self.obj()
+                .connect_scale_factor_notify(|viewport| viewport.imp().report_size());
         }
+    }
 
-        fn size_allocate(&self, width: i32, height: i32, baseline: i32) {
-            self.parent_size_allocate(width, height, baseline);
+    impl Viewport {
+        fn report_size(&self) {
             let (width, height) = self.obj().device_size();
             if let Some(handler) = self.on_resize.borrow().as_ref() {
                 handler(width, height);
             }
+        }
+    }
+
+    impl WidgetImpl for Viewport {
+        fn request_mode(&self) -> gtk::SizeRequestMode {
+            match self.sizing.get() {
+                super::Sizing::View => gtk::SizeRequestMode::ConstantSize,
+                super::Sizing::Picture { .. } => gtk::SizeRequestMode::HeightForWidth,
+            }
+        }
+
+        fn measure(&self, orientation: gtk::Orientation, for_size: i32) -> (i32, i32, i32, i32) {
+            match self.sizing.get() {
+                super::Sizing::View => (120, 640, -1, -1),
+                super::Sizing::Picture {
+                    natural_width,
+                    minimum_height,
+                } => match orientation {
+                    gtk::Orientation::Vertical => {
+                        // 16:9 at the width given, but never lower than
+                        // the minimum.
+                        let width = if for_size > 0 {
+                            for_size
+                        } else {
+                            natural_width
+                        };
+                        let height = width.saturating_mul(9) / 16;
+                        (minimum_height, height.max(minimum_height), -1, -1)
+                    }
+                    _ => (0, natural_width, -1, -1),
+                },
+            }
+        }
+
+        fn size_allocate(&self, width: i32, height: i32, baseline: i32) {
+            self.parent_size_allocate(width, height, baseline);
+            self.report_size();
         }
 
         fn snapshot(&self, snapshot: &gtk::Snapshot) {
@@ -73,7 +116,35 @@ impl Default for Viewport {
     }
 }
 
+/// How a [`Viewport`] asks for room.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Sizing {
+    /// The 3D view: whatever room there is.
+    #[default]
+    View,
+    /// A small picture: as wide as its row gives it, 16:9 at that width
+    /// but at least `minimum_height` logical pixels high.
+    Picture {
+        /// The width it would like, in logical pixels.
+        natural_width: i32,
+        /// The least height, in logical pixels.
+        minimum_height: i32,
+    },
+}
+
 impl Viewport {
+    /// A small picture sized as `sizing` says, not expanding.
+    pub fn picture(sizing: Sizing) -> Viewport {
+        let viewport: Viewport = glib::Object::builder()
+            .property("hexpand", true)
+            .property("vexpand", false)
+            .property("can-target", false)
+            .build();
+        viewport.imp().sizing.set(sizing);
+        viewport.queue_resize();
+        viewport
+    }
+
     /// The display's scale (2 on a HiDPI screen, maybe 1.25 or 1.5).
     pub fn scale(&self) -> f64 {
         self.native()
@@ -95,7 +166,8 @@ impl Viewport {
         self.queue_draw();
     }
 
-    /// Calls `handler` with the size in device pixels whenever it changes.
+    /// Calls `handler` with the size in device pixels whenever it may have
+    /// changed (on every allocation and change of scale).
     pub fn connect_resized(&self, handler: impl Fn(u32, u32) + 'static) {
         self.imp().on_resize.replace(Some(Box::new(handler)));
     }

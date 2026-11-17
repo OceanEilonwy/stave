@@ -157,11 +157,13 @@ impl FocusPanel {
         show_section.append(&show_title);
         show_section.append(&toggles);
 
-        let insert_link = gtk::Button::builder()
-            .css_classes(["flat", "stave-link"])
-            .tooltip_text("Show the joint's kind in the text")
-            .valign(gtk::Align::Center)
-            .build();
+        let insert_link = super::style::as_link(
+            gtk::Button::builder()
+                .css_classes(["flat", "stave-link"])
+                .tooltip_text("Show the joint's kind in the text")
+                .valign(gtk::Align::Center)
+                .build(),
+        );
         let insert_head = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         let insert_title = label(&["stave-section"]);
         insert_title.set_label("HOW IT GOES TOGETHER");

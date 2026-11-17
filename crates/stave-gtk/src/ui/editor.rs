@@ -1288,15 +1288,19 @@ impl Editor {
             .spacing(4)
             .css_classes(["stave-lens"])
             .build();
-        let uses = gtk::Button::builder()
-            .css_classes(["flat", "stave-lens-link"])
-            .build();
+        let uses = super::style::as_link(
+            gtk::Button::builder()
+                .css_classes(["flat", "stave-lens-link"])
+                .build(),
+        );
         let dot = gtk::Label::new(Some("·"));
         dot.add_css_class("stave-lens-dot");
-        let show = gtk::Button::builder()
-            .label("show in 3D")
-            .css_classes(["flat", "stave-lens-link"])
-            .build();
+        let show = super::style::as_link(
+            gtk::Button::builder()
+                .label("show in 3D")
+                .css_classes(["flat", "stave-lens-link"])
+                .build(),
+        );
         root.append(&uses);
         root.append(&dot);
         root.append(&show);

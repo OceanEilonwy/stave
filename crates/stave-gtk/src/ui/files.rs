@@ -157,6 +157,9 @@ struct State {
     check_timer: Option<glib::SourceId>,
     link_timer: Option<glib::SourceId>,
     hover_timer: Option<glib::SourceId>,
+    /// The text the hover card is about, while it shows: the pointer
+    /// leaving it hides the card at once.
+    hover_span: Option<Span>,
     mode: Mode,
     expanded: BTreeSet<&'static str>,
     rows: Vec<RowTarget>,
@@ -853,10 +856,19 @@ impl FilesPage {
         let page = Rc::downgrade(self);
         motion.connect_leave(move |_| {
             if let Some(page) = page.upgrade() {
+                page.cancel_hover_timer();
                 page.hide_hover();
             }
         });
         view.add_controller(motion);
+        // Leaving the Files view (or hiding the window) takes the card too.
+        let page = Rc::downgrade(self);
+        view.connect_unmap(move |_| {
+            if let Some(page) = page.upgrade() {
+                page.cancel_hover_timer();
+                page.hide_hover();
+            }
+        });
 
         // Scrolling and resizing move the overlays with the text.
         let page = Rc::downgrade(self);
@@ -1520,11 +1532,13 @@ impl FilesPage {
         what.set_hexpand(true);
         what.set_ellipsize(gtk::pango::EllipsizeMode::End);
         head.append(&what);
-        let open = gtk::Button::builder()
-            .label("Open")
-            .css_classes(["flat", "stave-lens-link"])
-            .tooltip_text("Open the definition (F12)")
-            .build();
+        let open = super::style::as_link(
+            gtk::Button::builder()
+                .label("Open")
+                .css_classes(["flat", "stave-lens-link"])
+                .tooltip_text("Open the definition (F12)")
+                .build(),
+        );
         let page = Rc::downgrade(self);
         let target = location.clone();
         open.connect_clicked(move |_| {
@@ -1590,10 +1604,16 @@ impl FilesPage {
     // ---- the hover card ----
 
     fn pointer_moved(self: &Rc<Self>, x: f64, y: f64) {
-        if let Some(old) = self.state.borrow_mut().hover_timer.take() {
-            old.remove();
-        }
+        self.cancel_hover_timer();
         let offset = self.offset_at(x, y);
+        // Off the word the card is about (another word, past the end of a
+        // line, a blank line): the card goes now, not after the rest.
+        let shown = self.state.borrow().hover_span;
+        if let Some(span) = shown
+            && !offset.is_some_and(|offset| span.start() <= offset && offset <= span.end())
+        {
+            self.hide_hover();
+        }
         let page = Rc::downgrade(self);
         let timer = glib::timeout_add_local_once(HOVER_DELAY, move || {
             let Some(page) = page.upgrade() else { return };
@@ -1605,7 +1625,14 @@ impl FilesPage {
         self.state.borrow_mut().hover_timer = Some(timer);
     }
 
+    fn cancel_hover_timer(&self) {
+        if let Some(old) = self.state.borrow_mut().hover_timer.take() {
+            old.remove();
+        }
+    }
+
     fn hide_hover(&self) {
+        self.state.borrow_mut().hover_span = None;
         self.editor.hide_card();
     }
 
@@ -1625,7 +1652,7 @@ impl FilesPage {
             .css_classes(["stave-hover"])
             .width_request(280)
             .build();
-        let mut anchor: Option<u32> = None;
+        let mut anchor: Option<Span> = None;
         let fast: Vec<Problem> = analysis
             .diagnostics(file)
             .filter_map(|d| {
@@ -1662,7 +1689,7 @@ impl FilesPage {
                 help.set_max_width_chars(48);
                 card.append(&help);
             }
-            anchor.get_or_insert(problem.span.start());
+            anchor = Some(anchor.map_or(problem.span, |span| span.to(problem.span)));
         }
         if anchor.is_none()
             && let Some(hover) = analysis.hover(FilePosition { file, offset })
@@ -1684,13 +1711,14 @@ impl FilesPage {
                     &["stave-hover-where"],
                 ));
             }
-            anchor = Some(hover.span.start());
+            anchor = Some(hover.span);
         }
         let Some(anchor) = anchor else {
             return;
         };
+        self.state.borrow_mut().hover_span = Some(anchor);
         let lines = self.active_lines();
-        let iter = super::editor::iter_at(&buffer, &lines, anchor);
+        let iter = super::editor::iter_at(&buffer, &lines, anchor.start());
         let rect = self.editor.view.iter_location(&iter);
         self.editor.show_card(
             card.upcast_ref(),

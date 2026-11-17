@@ -76,6 +76,10 @@ const EXPLODE_PER_SECOND: f64 = 1.0 / 3.0;
 /// The front view looks a little down on the design (radians).
 const FRONT_PITCH: f32 = 0.12;
 
+/// How long hardware focus's small views wait for their size to settle
+/// before rendering again at it.
+const PICTURES_DELAY: Duration = Duration::from_millis(150);
+
 /// The light or dark style.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Theme {
@@ -305,6 +309,9 @@ struct State {
     /// Where the camera starts, applied once the view has a size and the
     /// command line's selection is made.
     start_camera: Option<StartCamera>,
+    /// Hardware focus's small views render again once their size has
+    /// settled (not on every frame of a resize).
+    pictures_timer: Option<glib::SourceId>,
 }
 
 /// The window's widgets.
@@ -380,6 +387,7 @@ impl Window {
                 }),
                 window_screenshot: options.window_screenshot,
                 start_camera: (options.camera != StartCamera::default()).then_some(options.camera),
+                pictures_timer: None,
                 renderer,
                 uploaded: None,
                 posed: None,
@@ -1173,12 +1181,62 @@ impl Window {
         });
     }
 
+    /// Renders hardware focus's small views again shortly, once their
+    /// size has stopped changing.
+    fn schedule_pictures(self: &Rc<Self>) {
+        let window = Rc::downgrade(self);
+        let timer = glib::timeout_add_local_once(PICTURES_DELAY, move || {
+            if let Some(window) = window.upgrade() {
+                window.state.borrow_mut().pictures_timer = None;
+                window.render_pictures();
+            }
+        });
+        if let Some(old) = self.state.borrow_mut().pictures_timer.replace(timer) {
+            old.remove();
+        }
+    }
+
     /// Renders hardware focus's small views offscreen, at fixed angles
     /// (closed, part way, fully open), in the view from above when there
-    /// is one.
+    /// is one, each at its slot's size in device pixels. Before the slots
+    /// have room they are only laid out: their first size renders them.
     fn render_pictures(self: &Rc<Self>) {
+        let captions: Vec<String> = {
+            let state = self.state.borrow();
+            match state.focus.as_ref() {
+                Some(focus) if !focus.focus.assembles() => focus
+                    .focus
+                    .key_poses
+                    .iter()
+                    .map(|pose| pose.caption.clone())
+                    .collect(),
+                Some(_) | None => Vec::new(),
+            }
+        };
+        let window = Rc::downgrade(self);
+        self.widgets.pictures.root.set_visible(!captions.is_empty());
+        self.widgets.pictures.show(&captions, move |index| {
+            let Some(window) = window.upgrade() else {
+                return;
+            };
+            let progress = window
+                .state
+                .borrow()
+                .focus
+                .as_ref()
+                .and_then(|f| f.focus.key_poses.get(index).map(|pose| pose.progress));
+            if let Some(progress) = progress {
+                window.update_focus(|focus| {
+                    focus.progress = progress;
+                    focus.playing = false;
+                });
+            }
+        });
+        let Some((width, height)) = self.widgets.pictures.device_size() else {
+            return;
+        };
         let backdrop = self.backdrop();
-        let pictures = {
+        let textures = {
             let session = self.session.borrow();
             let (Some((_, graph)), Some(entry)) = (session.drawable(), session.scene_entry())
             else {
@@ -1198,8 +1256,7 @@ impl Window {
             if focus.focus.assembles() {
                 return;
             }
-            let (width, height) = (320, 180);
-            let mut pictures = Vec::new();
+            let mut textures = Vec::new();
             for pose in &focus.focus.key_poses {
                 let frame = focus
                     .focus
@@ -1234,30 +1291,12 @@ impl Window {
                 });
                 let Ok(image) = image else { continue };
                 if let Some(texture) = texture(image) {
-                    pictures.push((texture, pose.caption.clone()));
+                    textures.push(texture);
                 }
             }
-            pictures
+            textures
         };
-        let window = Rc::downgrade(self);
-        self.widgets.pictures.root.set_visible(!pictures.is_empty());
-        self.widgets.pictures.show(pictures, None, move |index| {
-            let Some(window) = window.upgrade() else {
-                return;
-            };
-            let progress = window
-                .state
-                .borrow()
-                .focus
-                .as_ref()
-                .and_then(|f| f.focus.key_poses.get(index).map(|pose| pose.progress));
-            if let Some(progress) = progress {
-                window.update_focus(|focus| {
-                    focus.progress = progress;
-                    focus.playing = false;
-                });
-            }
-        });
+        self.widgets.pictures.show_textures(textures);
         self.show_progress();
     }
 
@@ -2544,6 +2583,12 @@ impl Window {
     }
 
     fn connect_viewport(self: &Rc<Self>) {
+        let window = Rc::downgrade(self);
+        self.widgets.pictures.connect_resized(move || {
+            if let Some(window) = window.upgrade() {
+                window.schedule_pictures();
+            }
+        });
         let viewport = &self.widgets.viewport;
         let window = self.clone();
         viewport.connect_resized(move |width, height| {
@@ -2749,6 +2794,17 @@ fn window_node(
     paintable: &gtk::WidgetPaintable,
 ) -> Option<gtk::gsk::RenderNode> {
     let snapshot = gtk::Snapshot::new();
+    // In device pixels (GDK_SCALE=2 doubles the picture), so a HiDPI
+    // window's sharpness can be checked.
+    let scale = window
+        .native()
+        .and_then(|native| native.surface())
+        .map_or_else(
+            || f64::from(window.scale_factor()),
+            |surface| surface.scale(),
+        );
+    let scale = crate::convert::f32_of(scale);
+    snapshot.scale(scale, scale);
     paintable.snapshot(
         &snapshot,
         f64::from(window.width()),
