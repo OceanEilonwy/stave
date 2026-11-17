@@ -207,7 +207,7 @@ fn while_checking_again_the_pill_keeps_its_last_colour_and_words() {
     assert_eq!(during.activity, Activity::Checking);
     assert_eq!(
         session.check_status().line(),
-        "Checking after your edit… last result: 1 error"
+        "Checking again… last result: 1 error"
     );
 }
 

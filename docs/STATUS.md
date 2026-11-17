@@ -70,28 +70,50 @@ exact message it must produce on its first line.
 
 ## The viewer
 
-`stave view <folder>` opens a libadwaita window: every part drawn with
-its cuts made (tenons, mortises, dados, rabbets, grooves, holes, hinge
-recesses, the chidori's diagonal slots and flats), species colours, orbit,
-zoom and pan, click to select a part or piece of hardware, and the
-project's scenes in a dropdown. It reloads when a file changes.
+`stave view <folder>` opens the libadwaita window of the design canvas
+(Main.dc.html; [gui.md](gui.md) describes how it is built): a title bar
+with back and forward (Alt+←/→), the project title, the Parts / Cut list /
+Files switcher, the scene menu, a status pill and the build button; the
+Parts view with the parts tree, the 3D view and the inspector; and a status
+bar. Every part is drawn with its cuts made (tenons, mortises, dados,
+rabbets, grooves, holes, hinge recesses, the chidori's diagonal slots and
+flats), in species colours, with orbit, zoom and pan. Light and dark follow
+the system or the main menu, the 3D backdrop with them.
 
-- **Problems**: the side panel lists every diagnostic. Clicking one the
-  checks can show poses the design where it happens (its scene, and a
-  door or drawer stopped just past where it hits), tints the parts red
-  and draws the shared wood as translucent red boxes. For a motion, a
-  slider swings it from closed to fully open.
-- **Exploded views**: any scene can be pulled apart with a slider (0 to
-  1) or the "Pull apart" toggle; scenes with `explode: true` start apart.
-  The first half of the range moves each assembly out whole (drawers
-  forward, doors off their hinges), the second pulls parts apart along
-  the reverse of their joints' last insert step.
+- **Background checks**: saving any `.stave` file checks the project again
+  on a worker thread once the folder is quiet (250 ms); the new result
+  replaces the old one whole, and the selection and back/forward history
+  follow their items by name. The pill says "No problems" (green), "N
+  problems" (red; amber for warnings only) and spins while a check runs,
+  keeping its last colour and words; clicking it opens the problems list.
+  A design that stops solving keeps its last good version on show under a
+  banner.
+- **Parts tree and inspector**: the carcass, then each assembly with its
+  motion ("turns 110°", "slides out 500 mm", "mirror of door_l"), its parts
+  and hardware, with stock swatches and search. Selecting in the tree or
+  the 3D view selects in both. The inspector gives the kind and assembly
+  ("PART · IN door_l"), the doc comment, stock, finished size, grain and
+  how it moves, its joints and hardware cuts (each opens focus mode), and
+  the declaration as written, highlighted, with a file:line link (to the
+  Files view, whose editor isn't built yet).
+- **Build button**: checks, then says "The build plan (PDF) isn't built
+  yet"; disabled while the design has errors.
+- **Problems**: the list (opened by the pill) shows every diagnostic.
+  Choosing one the checks can show poses the design where it happens (its
+  scene, and a door or drawer stopped just past where it hits), tints the
+  parts red and draws the shared wood as translucent red boxes; the motion
+  bar swings a motion from closed to fully open.
+- **Exploded views**: scenes with `explode: true` start apart (`--explode`
+  sets any amount). The first half of the range moves each assembly out
+  whole (drawers forward, doors off their hinges), the second pulls parts
+  apart along the reverse of their joints' last insert step. The view's
+  own "Pull apart" control is the next GUI lane's (`docs/gui.md`).
 - **Cup hinges** are drawn as their mechanism: the steel cup with its
   rim and boss pins in the door, the plate, arm and arm pins on the side,
   and the two links, which turn about their arm pins as the door opens.
   Selecting any part or piece of hardware of a door or drawer (a hinge
-  included) offers an "Open it" slider that opens it, the hinges'
-  mechanism moving with it; the side panel describes the linkage.
+  included) offers an "Open it" slider at the bottom of the 3D view that
+  opens it, the hinges' mechanism moving with it.
 - **Sections**: a scene's `section:` cuts the view at a plane; the wood
   it cuts is drawn flat (evenly lit).
 - **Every cut drawn**: holes in round and turned parts are bored too (the
@@ -165,13 +187,24 @@ project's scenes in a dropdown. It reloads when a file changes.
   socket, in release); opening focus 17ms for the hinge (its closest
   gaps) and 100ms for the chidori (its three steps traced).
 
-Not checked here: the interactive window itself (window screenshots time
-out in the build environment); everything it draws is checked offscreen,
-focus mode included, through the same `stave-app` and `stave-scene` code
-the window calls.
+- **The real window, without a screen**: `tools/window-shot OUT.png
+  FOLDER [options]` runs the viewer on a private GTK Broadway server and
+  the window draws itself into the PNG (`--theme`, `--size`, `--select`,
+  `--focus`, `--diagnostic`, `--problems`, `--view`, `--checking`). See
+  `docs/screenshots/window/`.
+
+What the window shows is worked out in `stave-app` (the session, the
+tree, the inspector, focus mode, problems) and tested headless; clicking
+through the window itself is not automated.
 
 ## Not done yet
 
+- **Window**: the Files view (the editor), the problems tree with its
+  filters and the problem details, the 3D view's own toolbar (Pull apart
+  and its slider, fit, front, turn) and the Cut list view are placeholders
+  with their slots ready (`docs/gui.md`); focus mode keeps its earlier
+  panel in the inspector rather than the canvas's JointFocus and Hinge
+  layouts.
 - **Build plan and cut list**: `stave build`, the work plan (recipes,
   order of operations, tool settings), the PDF and the CSV cut list
   (stave-workplan, stave-output) are not written yet; neither is layer 7's

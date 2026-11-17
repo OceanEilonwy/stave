@@ -317,7 +317,7 @@ impl CheckStatus {
     }
 
     /// The status bar's line: "Checked 10 files · 0 errors · 0 warnings ·
-    /// 26 ms", or "Checking after your edit… last result: 1 error".
+    /// 26 ms", or "Checking again… last result: 1 error".
     pub fn line(&self) -> String {
         match self {
             CheckStatus::Idle => "Not checked yet".to_owned(),
@@ -336,7 +336,7 @@ impl CheckStatus {
                     }
                     Verdict::CantOpen(_) => "the folder couldn't be opened".to_owned(),
                 };
-                format!("Checking after your edit… last result: {result}")
+                format!("Checking again… last result: {result}")
             }
             CheckStatus::Done(Verdict::Checked(summary)) => format!(
                 "Checked {} · {} · {} · {}",
