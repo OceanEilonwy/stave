@@ -249,8 +249,26 @@ syntax_kinds! {
     CUT,
     /// `makes part name : stock { ... }` in a kind
     MAKES,
-    /// `member name` in a hardware kind
+    /// `member name` or `member name { ... }` in a hardware kind
     MEMBER,
+    /// `shape name: call` in a member's body
+    SHAPE,
+    /// `mechanism { entries }` in a hardware kind
+    MECHANISM,
+    /// `mount { fields }` in a hardware kind or a member's body
+    MOUNT,
+    /// `adjust a on b: axis within d` in a hardware kind
+    ADJUST,
+    /// `pivot a, b at point(...)` in a mechanism
+    PIVOT,
+    /// `slot a, b from point(...) to point(...)` in a mechanism
+    SLOT,
+    /// `rail a, b along word` in a mechanism
+    RAIL,
+    /// `couple a to b: ratio` in a mechanism
+    COUPLE,
+    /// `stop: value "message"` in a mechanism
+    STOP,
     /// `mark { steps }` or `cut { steps }` in a recipe
     STEP_BLOCK,
     /// `at station: value` in a profile
@@ -319,6 +337,8 @@ syntax_kinds! {
     LIST_EXPR,
     /// `( expr )`
     PAREN_EXPR,
+    /// `lo..hi` as an argument of a member's shape
+    RANGE_EXPR,
 
     /// Source the parser could not make sense of, kept so no byte is lost.
     ERROR,
@@ -400,6 +420,7 @@ impl SyntaxKind {
                 | SyntaxKind::BINARY_EXPR
                 | SyntaxKind::LIST_EXPR
                 | SyntaxKind::PAREN_EXPR
+                | SyntaxKind::RANGE_EXPR
         )
     }
 

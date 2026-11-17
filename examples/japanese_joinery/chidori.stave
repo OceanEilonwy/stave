@@ -9,8 +9,8 @@ stave 1
 /// diagonal it slides into the node through the two slots; a quarter turn puts
 /// its full diameter across the slots and locks all three sticks.
 ///
-/// This geometry is verified by tools/joint-sim/chidori.py: the assembled node
-/// has no wood passing through wood, every stick is locked, the quarter turn
+/// This geometry is verified by Stave's own tests: the assembled node has
+/// no wood passing through wood, every stick is locked, the quarter turn
 /// is clear at every degree, and the node comes apart in reverse. The round
 /// section bears on the holes, so cut the holes and the rounding accurately
 /// (within about 0.1mm) and make a trial node first.

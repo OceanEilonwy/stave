@@ -16,14 +16,17 @@
 //!    result kept, so nothing is reported twice.
 
 mod expr;
+mod hardware;
 mod items;
 mod kinds;
+mod mechanism;
 
 use std::collections::{BTreeMap, HashMap};
 
 use stave_lang::ast::{self, Span};
 use stave_lang::{Code, Diagnostic, FileId, Label};
-use stave_modules::{ModuleHeader, ModuleId, ModuleSet};
+use stave_modules::{ModuleHeader, ModuleId, ModuleSet, ModuleSource};
+use stave_schema::fields::DEFAULT_BOARD_JOINT as DEFAULT_BOARDS;
 use stave_schema::functions::Builtin;
 use stave_schema::kinds::RoleType;
 
@@ -314,6 +317,10 @@ impl<'a> Resolver<'a> {
             recipes: take(out.recipes),
             components: take(out.components),
             scenes: take(out.scenes),
+            default_boards: match self.prelude.get(DEFAULT_BOARDS).map(|entry| entry.def) {
+                Some(DefId::Kind(kind)) => Some(kind),
+                _ => None,
+            },
         };
         let mut diagnostics = self.diagnostics;
         diagnostics.sort_by_key(|d| {
@@ -797,6 +804,7 @@ impl<'a> Resolver<'a> {
             }
             Symbol::KindParam(kind, index) => self.kind_param_ty(kind, index),
             Symbol::MadePart(..) => Ty::Part,
+            Symbol::Mount(..) => Ty::Anchor,
         }
     }
 
@@ -1020,6 +1028,12 @@ impl<'a> Resolver<'a> {
                 .entry(made.name.as_str().to_owned())
                 .or_insert(Symbol::MadePart(kind, index));
         }
+        if syntax.base.value.is_mounted_hardware() {
+            // `mount`: the mount face, as an anchor (grammar, "Adjustment").
+            names
+                .entry("mount".to_owned())
+                .or_insert(Symbol::Mount(kind));
+        }
         self.kind_names.insert(kind, names);
     }
 
@@ -1034,6 +1048,10 @@ impl<'a> Resolver<'a> {
             self.out.modules.push(ModuleDefs {
                 id: module.id,
                 name: module.name.clone(),
+                folder: match &module.source {
+                    ModuleSource::Local { folder } => Some(folder.clone()),
+                    ModuleSource::Std { .. } => None,
+                },
                 items: self
                     .module_items
                     .get(module.id.index())

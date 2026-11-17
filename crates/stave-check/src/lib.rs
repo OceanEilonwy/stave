@@ -8,31 +8,44 @@
 //!
 //! What is checked, in order:
 //!
-//! 1. **Cuts the geometry can't make yet** (`warning[not-supported]`): the
-//!    part is drawn uncut there, and the parts of that joint pair are left
-//!    out of the overlap check (a note says so).
+//! 1. **Cuts the geometry can't make yet** (`warning[not-supported]`: a
+//!    cut other than `drill` and `spigot` on a round or turned part): the
+//!    part is drawn uncut there and checked as drawn. **Cuts whose shape
+//!    is a mistake** (`error[type-mismatch]`: an `outline` that crosses
+//!    itself, a dovetail at 90deg): the part is drawn uncut there and left
+//!    out of the overlap check, which would only report the same mistake
+//!    again.
 //! 2. **Contact** (`error[no-contact]`): every part a joint lists must touch
 //!    at least one of its counterparts, after every cut.
 //! 3. **Spacing** (`error[overlap]`): an element spaced with `pitch` or
-//!    `gap` that runs past its `to` anchor. **Slide clearance**
-//!    (`error[slide-gap]`): the gap between a slide's piece and the side of
-//!    its opening is exactly the slide's `clearance`.
-//! 4. **Overlap at rest** (`error[overlap]`): every part's cut solid and
-//!    every hardware member against every other, except a hardware
-//!    member against its own parts (grammar, "Hardware": an envelope may
-//!    overlap its own role parts). A broad phase sorts bounding boxes along
-//!    `across` and sweeps (a fixed order, so the result is the same on
-//!    every run); the narrow phase measures the shared wood exactly
-//!    ([`stave_geom::collide`]). Touching within the 0.05mm contact
-//!    tolerance is fine.
+//!    `gap` that runs past its `to` anchor. Hardware whose kind's
+//!    `require` or `adjust` failed where the solver placed it
+//!    ([`Rules::Broken`], already reported) is left out of the overlap and
+//!    motion checks, for every kind alike.
+//! 4. **Overlap at rest** (`error[overlap]`): one body for every part's
+//!    cut solid and one for every hardware member's shapes, each against
+//!    every other (grammar, "One collision model"). A cup sits in its door
+//!    only because its kind bores the hole; the one rule for every kind is
+//!    that members of one piece of hardware are not checked against each
+//!    other. A broad phase sorts bounding boxes along `across` and sweeps
+//!    (a fixed order, so the result is the same on every run); the narrow
+//!    phase measures the shared wood exactly ([`stave_geom::collide`]).
+//!    Touching within the 0.05mm contact tolerance is fine.
 //! 5. **Scene poses** (`error[motion]`): each scene's poses applied, every
-//!    moved item against everything that moved differently. Motions are
-//!    checked at their poses only; sweeping them through their travel is a
-//!    later step.
+//!    moved body against everything that moved differently (a link its
+//!    hinge's mechanism turns moves differently from its door).
+//! 6. **Sweeps** (`error[motion]`, [`motion`]): every motion through its
+//!    whole travel, every body it moves against every body that moves
+//!    differently.
+//! 7. **Models** (`warning[model-mismatch]`): each hardware kind's `.glb`,
+//!    read from disk, against its text: every node the text declares, by
+//!    name, to 0.01mm, and the file against its `sha256:` pin. A model
+//!    that can't be read is not checked; no other check reads a model.
 //!
 //! **One mistake, one error.** The checker runs only on a design that
-//! solved without errors. A part reported for spacing, and a slide
-//! reported for its gap, are left out of the overlap checks, and an item with an error at rest is left out of the
+//! solved without errors. A part reported for spacing or for a misshapen
+//! cut, and a slide reported for its gap, are left out of the overlap
+//! checks, and an item with an error at rest is left out of the
 //! scene checks. When one line causes several problems (a component used
 //! twice, a joint applied to four pairs), they are reported once, at that
 //! line, with the others as notes.
@@ -41,8 +54,8 @@
 #![warn(missing_docs)]
 
 mod explain;
-mod hinges;
 mod instance;
+mod models;
 mod motion;
 mod names;
 mod sequence;
@@ -52,14 +65,15 @@ use std::collections::{BTreeMap, BTreeSet};
 use stave_geom::collide::{
     self, CONTACT_TOLERANCE, Overlap, Placement, WorldSolid, boxes_overlap, placed_bounds,
 };
+use stave_geom::planar::MechanismError;
 use stave_geom::solid::Solid;
+use stave_geom::sweep::Path;
 use stave_lang::ast::Span;
-use stave_lang::units::Length;
 use stave_lang::{Code, Diagnostic, FileId, Label, Severity};
 use stave_model::Model;
 use stave_model::solved::{
-    AnchorItem, AssemblyId, CutSource, FixedSpacing, HardwareData, HardwareId, PartId, PartOrigin,
-    PoseValue, SolvedDesign, WorldBox,
+    AnchorItem, AssemblyId, BodyCarrier, BodyRef, CutSource, FixedSpacing, HardwareId, MemberIndex,
+    PartId, PartOrigin, PoseValue, Rules, SolvedDesign, WorldBox,
 };
 
 use crate::names::{length_text, pose_text};
@@ -103,7 +117,7 @@ impl Contact {
     fn add_item(&mut self, item: Item) {
         let item = match item {
             Item::Part(part) => ContactItem::Part(part),
-            Item::Hardware(h) | Item::Fixed(h) => ContactItem::Hardware(h),
+            Item::Member(member) => ContactItem::Hardware(member.hardware),
         };
         if !self.items.contains(&item) {
             self.items.push(item);
@@ -136,30 +150,41 @@ pub fn check_with_contacts(
     design: &SolvedDesign,
 ) -> Vec<(Diagnostic, Option<Contact>)> {
     let mut checker = Checker::new(model, design);
+    checker.misfits();
+    checker.misshapen();
     checker.not_supported();
+    checker.mechanisms();
     checker.contact();
     checker.overruns();
-    checker.slide_gaps();
-    checker.hinge_overlays();
     checker.rest();
     checker.scenes();
     checker.sweeps();
-    checker.mechanisms();
     checker.sequences();
+    // Models are read from disk; one that can't be read is not checked.
+    for diagnostic in models::models(design, &|path| std::fs::read(path)) {
+        checker.diagnostics.push((diagnostic, None));
+    }
     checker.finish()
 }
 
 /// Something that takes up room: a part, or a member of a piece of
-/// hardware.
+/// hardware (grammar, "One collision model").
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 enum Item {
-    /// The member on the piece: a pull, a hinge's cup or leaf, a slide's
-    /// drawer member.
-    Hardware(HardwareId),
-    /// The member fixed to the carcass.
-    Fixed(HardwareId),
+    /// A member of a piece of hardware: all its shapes.
+    Member(BodyRef),
     /// A part.
     Part(PartId),
+}
+
+impl Item {
+    /// The piece of hardware a member belongs to.
+    fn hardware(self) -> Option<HardwareId> {
+        match self {
+            Item::Member(member) => Some(member.hardware),
+            Item::Part(_) => None,
+        }
+    }
 }
 
 /// An item's solid and where it moves.
@@ -169,6 +194,9 @@ struct Body {
     bounds: WorldBox,
     /// The assemblies it moves with, outermost first.
     chain: Vec<AssemblyId>,
+    /// For a member its assembly's mechanism places (a link): that
+    /// assembly, and which member of its mechanism.
+    link: Option<(AssemblyId, MemberIndex)>,
 }
 
 struct Checker<'a> {
@@ -176,18 +204,23 @@ struct Checker<'a> {
     design: &'a SolvedDesign,
     solids: Vec<Solid>,
     bodies: Vec<Body>,
-    /// Pairs of parts left out of the overlap check because a cut between
-    /// them can't be made yet.
-    uncut: BTreeSet<(PartId, PartId)>,
-    /// Parts already reported for their spacing.
-    overrun: BTreeSet<PartId>,
+    /// Each assembly's mechanism, run through its range, by assembly;
+    /// `None` for one nothing moves (or whose mechanism can't move,
+    /// reported by [`Checker::mechanisms`]).
+    paths: Vec<Option<Path>>,
+    /// The mechanisms that can't be run through their range.
+    broken: Vec<(AssemblyId, MechanismError)>,
+    /// Parts already reported, for their spacing or for a cut whose shape
+    /// is a mistake: an overlap would report the same mistake again.
+    reported: BTreeSet<PartId>,
     /// Items with an error at rest.
     failed: BTreeSet<Item>,
     /// Items with an error at a scene's poses.
     posed_failed: BTreeSet<Item>,
-    /// Slides reported for their gap: their members are left out of the
-    /// overlap checks, which would only report the same mistake again.
-    misfit_slides: BTreeSet<HardwareId>,
+    /// Hardware whose kind's rules failed where it is placed (reported by
+    /// the solver): its members are left out of the overlap and motion
+    /// checks, which would only report the same mistake again.
+    misfit: BTreeSet<HardwareId>,
     diagnostics: Vec<(Diagnostic, Option<Contact>)>,
     /// What the next reported diagnostic is about.
     next_contact: Option<Contact>,
@@ -221,53 +254,68 @@ impl<'a> Checker<'a> {
                     solid: world,
                     bounds,
                     chain: chain_of(part.assembly),
+                    link: None,
                 });
             }
         }
         for hardware in &design.hardware {
-            let world = WorldSolid::of_envelope(&hardware.envelope, &hardware.pose);
-            if let Some(bounds) = world.bounds() {
-                bodies.push(Body {
-                    item: Item::Hardware(hardware.id),
-                    solid: world,
-                    bounds,
-                    chain: chain_of(hardware.assembly),
-                });
-            }
-            if let Some(member) = &hardware.fixed {
-                // A cup hinge's arm and knuckle stay with its plate.
-                let world = match &hardware.mechanism {
-                    Some(mechanism) => WorldSolid::from_boxes(vec![
-                        member.bounds,
-                        mechanism.arm.bounds,
-                        mechanism.knuckle.bounds,
-                    ]),
-                    None => WorldSolid::of_envelope(&member.envelope, &member.pose),
+            for member in &hardware.members {
+                let (assembly, link) = match member.carrier {
+                    BodyCarrier::Part(part) => (design.part(part).and_then(|p| p.assembly), None),
+                    BodyCarrier::Region(region) => (
+                        design.regions.get(region.index()).and_then(|r| r.assembly),
+                        None,
+                    ),
+                    BodyCarrier::Link(link) => (
+                        hardware.assembly,
+                        hardware.assembly.map(|assembly| (assembly, link)),
+                    ),
                 };
-                let outside = hardware
-                    .assembly
-                    .and_then(|id| design.assemblies.get(id.index()))
-                    .and_then(|assembly| assembly.parent);
+                let world = WorldSolid::of_body(member);
                 if let Some(bounds) = world.bounds() {
                     bodies.push(Body {
-                        item: Item::Fixed(hardware.id),
+                        item: Item::Member(member.id),
                         solid: world,
                         bounds,
-                        chain: chain_of(outside),
+                        chain: chain_of(assembly),
+                        link,
                     });
                 }
             }
+        }
+        let mut paths = Vec::with_capacity(design.assemblies.len());
+        let mut broken = Vec::new();
+        for assembly in &design.assemblies {
+            paths.push(match &assembly.mechanism {
+                Some(mechanism) => match Path::new(mechanism) {
+                    Ok(path) => Some(path),
+                    Err(error) => {
+                        broken.push((assembly.id, error));
+                        None
+                    }
+                },
+                None => None,
+            });
         }
         Checker {
             model,
             design,
             solids,
             bodies,
-            uncut: BTreeSet::new(),
-            overrun: BTreeSet::new(),
+            paths,
+            broken,
+            reported: BTreeSet::new(),
             failed: BTreeSet::new(),
             posed_failed: BTreeSet::new(),
-            misfit_slides: BTreeSet::new(),
+            misfit: design
+                .hardware
+                .iter()
+                .filter(|hardware| match hardware.rules {
+                    Rules::Hold => false,
+                    Rules::Broken => true,
+                })
+                .map(|hardware| hardware.id)
+                .collect(),
             diagnostics: Vec::new(),
             next_contact: None,
         }
@@ -327,16 +375,47 @@ impl<'a> Checker<'a> {
         self.diagnostics.push((diagnostic, contact));
     }
 
+    /// A part's name, or a member's as `<hardware>'s <member>`.
     fn item_name(&self, item: Item) -> String {
         match item {
             Item::Part(part) => self.part_name(part),
-            Item::Hardware(hardware) | Item::Fixed(hardware) => self
-                .design
-                .hardware
-                .get(hardware.index())
-                .map(|h| h.name.clone())
-                .unwrap_or_default(),
+            Item::Member(member) => {
+                let hardware = self.design.hardware.get(member.hardware.index());
+                let name = hardware
+                    .and_then(|h| h.members.iter().find(|m| m.id == member))
+                    .map(|m| m.name.as_str())
+                    .unwrap_or_default();
+                format!("{}'s {name}", self.hardware_name(member.hardware))
+            }
         }
+    }
+
+    fn hardware_name(&self, hardware: HardwareId) -> String {
+        self.design
+            .hardware
+            .get(hardware.index())
+            .map(|h| h.name.clone())
+            .unwrap_or_default()
+    }
+
+    /// The members of hardware whose kind's rules failed have an error
+    /// already: later layers leave them out.
+    fn misfits(&mut self) {
+        let members: Vec<Item> = self
+            .misfit
+            .iter()
+            .flat_map(|hardware| self.members_of(*hardware))
+            .collect();
+        self.failed.extend(members);
+    }
+
+    /// Every member of a piece of hardware, as items.
+    fn members_of(&self, hardware: HardwareId) -> Vec<Item> {
+        self.design
+            .hardware
+            .get(hardware.index())
+            .map(|h| h.members.iter().map(|m| Item::Member(m.id)).collect())
+            .unwrap_or_default()
     }
 
     fn part_name(&self, part: PartId) -> String {
@@ -355,8 +434,52 @@ impl<'a> Checker<'a> {
     }
 
     // -----------------------------------------------------------------------
-    // 1. Cuts that can't be made yet
+    // 1. Cuts that can't be made yet, and cuts whose shape is a mistake
     // -----------------------------------------------------------------------
+
+    fn misshapen(&mut self) {
+        let mut found = Vec::new();
+        for (part, solid) in self.design.parts.iter().zip(&self.solids) {
+            for misshapen in solid.misshapen() {
+                if let Some(cut) = stave_geom::solid::cut_at(part, misshapen.cut) {
+                    found.push((part.id, cut.source, misshapen.error));
+                }
+            }
+        }
+        let mut seen: BTreeSet<(SourceKey, String)> = BTreeSet::new();
+        for (part, source, error) in found {
+            self.reported.insert(part);
+            self.failed.insert(Item::Part(part));
+            let key = SourceKey::of(source);
+            let message = error.to_string();
+            if !seen.insert((key, message.clone())) {
+                continue;
+            }
+            let (place, owner) = match key {
+                SourceKey::Joint(joint) => (self.joint_place(joint), self.joint_name(joint)),
+                SourceKey::Hardware(hardware) => {
+                    (self.hardware_place(hardware), self.hardware_name(hardware))
+                }
+                SourceKey::Boards(part) => (
+                    self.part_place(part),
+                    format!("{}'s boards", self.part_name(part)),
+                ),
+            };
+            let note = format!(
+                "{owner}: {} is drawn without this cut until it is fixed",
+                self.part_name(part)
+            );
+            self.next_contact = Some(Contact::of(&[Item::Part(part)], &[]));
+            self.report(
+                Severity::Error,
+                Code::TypeMismatch,
+                format!("{owner}: {message}"),
+                place,
+                vec![note],
+                Some(error.help()),
+            );
+        }
+    }
 
     fn not_supported(&mut self) {
         // Per source: what can't be cut, and the parts drawn uncut.
@@ -374,43 +497,28 @@ impl<'a> Checker<'a> {
                 if !parts.contains(&part.id) {
                     parts.push(part.id);
                 }
-                if let CutSource::Joint { joint, pair } = cut.source
-                    && let Some(pair) = self
-                        .design
-                        .joints
-                        .get(joint.index())
-                        .and_then(|j| j.pairs.get(pair))
-                {
-                    let members = pair
-                        .roles
-                        .iter()
-                        .map(|r| r.part)
-                        .chain(pair.made_parts.iter().copied());
-                    for other in members {
-                        if other != part.id {
-                            self.uncut.insert(ordered(part.id, other));
-                        }
-                    }
-                }
             }
         }
         for (key, (what, parts)) in found {
             let names: Vec<String> = parts.iter().map(|p| self.part_name(*p)).collect();
             let (place, owner) = match key {
                 SourceKey::Joint(joint) => (self.joint_place(joint), self.joint_name(joint)),
-                SourceKey::Hardware(hardware) => (
-                    self.hardware_place(hardware),
-                    self.item_name(Item::Hardware(hardware)),
+                SourceKey::Hardware(hardware) => {
+                    (self.hardware_place(hardware), self.hardware_name(hardware))
+                }
+                SourceKey::Boards(part) => (
+                    self.part_place(part),
+                    format!("{}'s boards", self.part_name(part)),
                 ),
             };
             let note = if names.len() == 1 {
                 format!(
-                    "{owner}: {} is drawn uncut there, and its fit with the parts it joins is not checked until it is",
+                    "{owner}: {} is drawn uncut there, and its fit is checked as drawn",
                     names::list(&names)
                 )
             } else {
                 format!(
-                    "{owner}: {} are drawn uncut there, and their fit with each other is not checked until it is",
+                    "{owner}: {} are drawn uncut there, and their fit is checked as drawn",
                     names::list(&names)
                 )
             };
@@ -505,7 +613,7 @@ impl<'a> Checker<'a> {
 
     fn overruns(&mut self) {
         for overrun in &self.design.overruns {
-            self.overrun.insert(overrun.part);
+            self.reported.insert(overrun.part);
             let part = self.part_name(overrun.part);
             let to = match overrun.to {
                 AnchorItem::Part(id) => self.part_name(id),
@@ -562,119 +670,27 @@ impl<'a> Checker<'a> {
     }
 
     // -----------------------------------------------------------------------
-    // Slide clearance
-    // -----------------------------------------------------------------------
-
-    /// A slide needs exactly its `clearance` between the piece's mount
-    /// face and the facing side of its opening.
-    fn slide_gaps(&mut self) {
-        let mut found = Vec::new();
-        for hardware in &self.design.hardware {
-            let HardwareData::Slide {
-                clearance, opening, ..
-            } = hardware.data
-            else {
-                continue;
-            };
-            let (Some(piece), Some(region)) = (
-                self.design.part(hardware.piece),
-                self.design.regions.get(opening.index()),
-            ) else {
-                continue;
-            };
-            let face = hardware.mount_face;
-            let mount = piece.drawn_box().face(face).nm();
-            let side = region.bounds.face(face).nm();
-            let gap = if face.is_positive() {
-                side.saturating_sub(mount)
-            } else {
-                mount.saturating_sub(side)
-            };
-            if gap != clearance.nm() {
-                found.push((hardware.id, piece.id, Length::from_nm(gap), clearance));
-            }
-        }
-        for (hardware, piece, gap, clearance) in found {
-            self.misfit_slides.insert(hardware);
-            let (name, piece_name) = (
-                self.item_name(Item::Hardware(hardware)),
-                self.part_name(piece),
-            );
-            let difference =
-                Length::from_nm(clearance.nm().saturating_sub(gap.nm()).saturating_abs());
-            let help = if gap < clearance {
-                format!(
-                    "make the drawer {} narrower on this side, so {piece_name} is {} from the side of the opening",
-                    length_text(difference),
-                    length_text(clearance)
-                )
-            } else {
-                format!(
-                    "make the drawer {} wider on this side, so {piece_name} is {} from the side of the opening",
-                    length_text(difference),
-                    length_text(clearance)
-                )
-            };
-            self.next_contact = Some(Contact::of(
-                &[
-                    Item::Hardware(hardware),
-                    Item::Fixed(hardware),
-                    Item::Part(piece),
-                ],
-                &[],
-            ));
-            self.report(
-                Severity::Error,
-                Code::SlideGap,
-                format!(
-                    "{name}: {piece_name} is {} from the opening, but the slide needs {}",
-                    length_text(gap),
-                    length_text(clearance)
-                ),
-                self.hardware_place(hardware),
-                Vec::new(),
-                Some(help),
-            );
-        }
-    }
-
-    // -----------------------------------------------------------------------
     // 4. Overlap at rest
     // -----------------------------------------------------------------------
 
-    /// Items that may share room: a hardware member and its own parts, the
-    /// two members of one piece of hardware, parts whose cut between them
-    /// can't be made yet, and parts already reported for their spacing.
+    /// Items that may share room: two members of one piece of hardware (a
+    /// kind's own members are not checked against each other, for every
+    /// kind alike), the members of hardware whose kind's rules failed,
+    /// and parts already reported (for their spacing, or for a cut whose
+    /// shape is a mistake). One mistake, one error.
     fn exempt(&self, a: Item, b: Item) -> bool {
-        let hardware_of = |item: Item| match item {
-            Item::Hardware(h) | Item::Fixed(h) => Some(h),
-            Item::Part(_) => None,
-        };
         if [a, b]
             .into_iter()
-            .filter_map(hardware_of)
-            .any(|h| self.misfit_slides.contains(&h))
+            .filter_map(Item::hardware)
+            .any(|h| self.misfit.contains(&h))
         {
             return true;
         }
-        if let (Some(x), Some(y)) = (hardware_of(a), hardware_of(b)) {
+        if let (Some(x), Some(y)) = (a.hardware(), b.hardware()) {
             return x == y;
         }
-        for (hardware, other) in [(a, b), (b, a)] {
-            if let (Some(hardware), Item::Part(part)) = (hardware_of(hardware), other)
-                && let Some(found) = self.design.hardware.get(hardware.index())
-            {
-                let on = match found.data {
-                    HardwareData::Hinge { on, .. } | HardwareData::ButtHinge { on, .. } => Some(on),
-                    HardwareData::Slide { .. } | HardwareData::Pull { .. } => None,
-                };
-                return found.piece == part || on == Some(part);
-            }
-        }
         if let (Item::Part(x), Item::Part(y)) = (a, b) {
-            return self.uncut.contains(&ordered(x, y))
-                || self.overrun.contains(&x)
-                || self.overrun.contains(&y);
+            return self.reported.contains(&x) || self.reported.contains(&y);
         }
         false
     }
@@ -749,8 +765,8 @@ impl<'a> Checker<'a> {
                 Some((joint, _)) => self.joint_place(joint),
                 None => self.part_place(x.max(y)),
             },
-            (Item::Hardware(h) | Item::Fixed(h), _) | (_, Item::Hardware(h) | Item::Fixed(h)) => {
-                self.hardware_place(h)
+            (Item::Member(member), _) | (_, Item::Member(member)) => {
+                self.hardware_place(member.hardware)
             }
         };
         let explanation = explain::overlap(self, a, b, found);
@@ -769,7 +785,8 @@ impl<'a> Checker<'a> {
     // 5. Scene poses
     // -----------------------------------------------------------------------
 
-    /// Per body, in one scene: the poses that move it (outermost first) and
+    /// Per body, in one scene: the poses that move it (outermost first),
+    /// with the link it is when its own assembly's linkage turns it, and
     /// its placement. Index 0 is the built-in `rest`.
     fn scene_moves(&self, scene_index: usize) -> (Vec<Moves>, Vec<Placement>) {
         let Some(scene) = self.design.scenes.get(scene_index) else {
@@ -787,30 +804,34 @@ impl<'a> Checker<'a> {
             .bodies
             .iter()
             .map(|body| {
-                body.chain
+                let steps: Vec<(AssemblyId, PoseValue)> = body
+                    .chain
                     .iter()
                     .filter_map(|assembly| {
                         let value = pose_of(*assembly)?;
-                        self.design
-                            .assemblies
-                            .get(assembly.index())?
-                            .motion
-                            .map(|_| (*assembly, value))
+                        self.path(*assembly).map(|_| (*assembly, value))
                     })
-                    .collect()
+                    .collect();
+                // A link is turned by its own assembly's linkage only when
+                // that assembly is the innermost one posed.
+                let link = body
+                    .link
+                    .filter(|(assembly, _)| steps.last().map(|(a, _)| a) == Some(assembly))
+                    .map(|(_, link)| link);
+                Moves { steps, link }
             })
             .collect();
         let placements = moves
             .iter()
-            .map(|chain: &Moves| {
-                let motions: Vec<_> = chain
+            .map(|moves: &Moves| {
+                let chain: Vec<_> = moves
+                    .steps
                     .iter()
                     .filter_map(|(assembly, value)| {
-                        let motion = self.design.assemblies.get(assembly.index())?.motion?;
-                        Some((motion, *value))
+                        Some((self.path(*assembly)?.mechanism(), *value))
                     })
                     .collect();
-                Placement::of_motions(&motions)
+                Placement::of_mechanisms(&chain, moves.link)
             })
             .collect();
         (moves, placements)
@@ -820,7 +841,7 @@ impl<'a> Checker<'a> {
         let mut reported: BTreeSet<(Item, Item)> = BTreeSet::new();
         for (scene_index, _) in self.design.scenes.iter().enumerate().skip(1) {
             let (moves, placements) = self.scene_moves(scene_index);
-            if moves.iter().all(Vec::is_empty) {
+            if moves.iter().all(Moves::is_empty) {
                 continue;
             }
             let boxes: Vec<WorldBox> = self
@@ -851,11 +872,11 @@ impl<'a> Checker<'a> {
                 let found = collide::overlaps_placed(&a.solid, pa, &b.solid, pb);
                 if !found.is_empty() {
                     // The item that moved (or moved further) comes first.
-                    let swap = ma.is_empty() || (!mb.is_empty() && mb.len() > ma.len());
+                    let swap = ma.is_empty() || (!mb.is_empty() && mb.steps.len() > ma.steps.len());
                     let (first, second, moved, other_moves) = if swap {
-                        (b.item, a.item, mb.clone(), ma.clone())
+                        (b.item, a.item, mb.steps.clone(), ma.steps.clone())
                     } else {
-                        (a.item, b.item, ma.clone(), mb.clone())
+                        (a.item, b.item, ma.steps.clone(), mb.steps.clone())
                     };
                     clashes.push((first, second, moved, other_moves, found));
                 }
@@ -1000,14 +1021,27 @@ impl<'a> Checker<'a> {
     }
 }
 
-/// The poses that move a body in a scene, outermost assembly first.
-type Moves = Vec<(AssemblyId, PoseValue)>;
+/// The poses that move a body in a scene, outermost assembly first, and
+/// the link it is when the innermost one turns it on its linkage.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+struct Moves {
+    steps: Vec<(AssemblyId, PoseValue)>,
+    link: Option<MemberIndex>,
+}
+
+impl Moves {
+    /// Nothing moves it.
+    fn is_empty(&self) -> bool {
+        self.steps.is_empty()
+    }
+}
 
 /// A cut's source, for grouping warnings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum SourceKey {
     Joint(stave_model::solved::JointId),
     Hardware(HardwareId),
+    Boards(PartId),
 }
 
 impl SourceKey {
@@ -1015,12 +1049,9 @@ impl SourceKey {
         match source {
             CutSource::Joint { joint, .. } => SourceKey::Joint(joint),
             CutSource::Hardware { hardware } => SourceKey::Hardware(hardware),
+            CutSource::Boards { part, .. } => SourceKey::Boards(part),
         }
     }
-}
-
-fn ordered(a: PartId, b: PartId) -> (PartId, PartId) {
-    if a <= b { (a, b) } else { (b, a) }
 }
 
 fn ordered_items(a: Item, b: Item) -> (Item, Item) {

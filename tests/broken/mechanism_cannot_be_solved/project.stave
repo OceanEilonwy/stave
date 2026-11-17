@@ -1,0 +1,124 @@
+// expect: error[mechanism] triad_hinge's mechanism: this mechanism can't be solved one step at a time from its drive; left over: `plate`, `first`, `second` and `third`
+stave 1
+
+// A hinge kind whose plate hangs on three links: one from the leaf on the
+// door, two from the fixed leaf on the cabinet side. The pieces add up to one
+// freedom, which the door's angle takes, but no link has both its ends
+// placed or a partner to cross with: the plate and its three links can
+// only be placed all at once. Stave places a mechanism one closed-form
+// step at a time (two links meeting at a pin, a link and a slot), so it
+// can't solve this one.
+
+project "Mechanism cannot be solved" {
+  units: mm
+}
+
+stock ply_18 { species: birch, form: plywood, thickness: 18mm }
+
+part base : ply_18 {
+  length: 600mm
+  width:  400mm
+  place {
+    ground
+  }
+}
+
+part side_l : ply_18 {
+  length: 700mm
+  width:  400mm
+  place {
+    orient(length: up, width: back)
+    against(base.top)
+    flush(base.left)
+    flush(base.back)
+  }
+}
+
+part side_r = mirror(side_l, about: mid(base, across))
+
+region bay = opening(
+  left:   side_l.right,
+  right:  side_r.left,
+  bottom: base.top,
+  top:    side_l.top,
+  front:  base.front,
+  back:   base.back,
+)
+
+component Door {
+  param opening    : Region
+  param hinge_side : Part
+
+  region face = cover(opening, overlay(left: 18mm, right: 18mm), thickness: ply_18.thickness)
+
+  part panel : ply_18 {
+    length: face.up
+    width:  face.across
+    place {
+      orient(length: up, width: right)
+      flush(face.left)
+      flush(face.bottom)
+      flush(face.front)
+    }
+  }
+
+  hardware hinge : triad_hinge(panel, on: hinge_side) {
+    place {
+      flush(panel.bottom, inset: 80mm)
+    }
+  }
+}
+
+assembly door : Door {
+  opening:    bay
+  hinge_side: side_l
+}
+
+/// A made-up hinge: a plate on three links.
+kind triad_hinge : hinge {
+  roles {
+    piece: Part
+    on:    Part
+  }
+  param opening_angle = 90deg within 0deg..90deg
+
+  mount {
+    face:   back
+    across: from(edge(piece, nearer: on))
+    along:  open
+  }
+
+  /// Against the inside of the cabinet side.
+  member fixed_leaf {
+    with:  on
+    shape: box(along: 20mm, across: 18mm..24mm, depth: -30mm..-2mm)
+  }
+  /// On the back of the door.
+  member leaf {
+    with:  piece
+    shape: box(along: 20mm, across: 40mm..60mm, depth: -2mm..0mm)
+  }
+  member plate {
+    shape: bar(from: point(across: 32mm, depth: -12mm), to: point(across: 36mm, depth: -12mm), thickness: 2mm, along: 4mm)
+  }
+  member first {
+    shape: bar(from: point(across: 26mm, depth: -20mm), to: point(across: 32mm, depth: -12mm), thickness: 1mm, along: 4mm)
+  }
+  member second {
+    shape: bar(from: point(across: 26mm, depth: -6mm), to: point(across: 34mm, depth: -12mm), thickness: 1mm, along: 4mm)
+  }
+  member third {
+    shape: bar(from: point(across: 44mm, depth: -6mm), to: point(across: 36mm, depth: -12mm), thickness: 1mm, along: 4mm)
+  }
+
+  mechanism {
+    pivot leaf, fixed_leaf at point(across: 18mm, depth: -2mm)
+    pivot first, fixed_leaf at point(across: 26mm, depth: -20mm)
+    pivot second, fixed_leaf at point(across: 26mm, depth: -6mm)
+    pivot third, leaf at point(across: 44mm, depth: -6mm)
+    pivot first, plate at point(across: 32mm, depth: -12mm)
+    pivot second, plate at point(across: 34mm, depth: -12mm)
+    pivot third, plate at point(across: 36mm, depth: -12mm)
+    drive: turn(leaf, from: 0deg, to: opening_angle)
+  }
+}

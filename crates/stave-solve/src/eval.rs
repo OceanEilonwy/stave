@@ -4,7 +4,7 @@ use std::cell::RefCell;
 
 use stave_lang::ast::Span;
 use stave_lang::placement::{Axis, Face};
-use stave_lang::units::{ExactLength, Length, Rational};
+use stave_lang::units::{ExactLength, Rational};
 use stave_lang::{Code, FileId};
 use stave_model::defs::{
     ArrayDef, DefId, Index, Member, RExpr, RExprKind, StockField, Symbol, Text, TextPart, Word,
@@ -12,11 +12,10 @@ use stave_model::defs::{
 use stave_model::ids::{InstanceId, KindId, PartId, StockId};
 use stave_model::instance::{Ctx, ItemSlot, ParamSource, Slot};
 use stave_model::value::{
-    self, AnchorOwner, AnchorValue, Envelope, ExactBox, KindValue, ModelAlign, ModelRef, Mount,
-    RegionOrigin, RegionValue, Spacing, Value,
+    self, AnchorOwner, AnchorValue, Envelope, ExactBox, KindValue, ModelRef, Mount, RegionOrigin,
+    RegionValue, Spacing, Value,
 };
 use stave_schema::functions::Builtin;
-use stave_schema::kinds::DEFAULT_SCREW_DIAMETER_NM;
 use stave_schema::words::StockForm;
 
 use crate::{Frame, Memo, Reported, Solved, Solver};
@@ -32,6 +31,9 @@ pub(crate) struct KindEnv {
     pub params: RefCell<Vec<Option<Value>>>,
     /// Parts the kind made for this pair.
     pub made: Vec<PartId>,
+    /// For a piece of hardware once it is placed: its mount face, as an
+    /// anchor (`mount` in its kind's rules).
+    pub mount: Option<AnchorValue>,
 }
 
 impl KindEnv {
@@ -47,6 +49,7 @@ impl KindEnv {
             settings,
             params: RefCell::new(vec![None; param_count]),
             made: Vec::new(),
+            mount: None,
         }
     }
 }
@@ -125,10 +128,6 @@ fn slot_value(slot: &ItemSlot, element: Option<usize>) -> Option<Value> {
         ItemSlot::Hardware(Slot::Many(all)) => Value::Hardware(pick(all, element)?),
         ItemSlot::Param(_) | ItemSlot::Let(_) | ItemSlot::Require(_) => return None,
     })
-}
-
-pub(crate) fn mm(nanometres: i64) -> ExactLength {
-    Length::from_nm(nanometres).to_exact()
 }
 
 impl Solver<'_> {
@@ -370,6 +369,11 @@ impl Solver<'_> {
                 .and_then(|k| k.made.get(index).copied())
                 .map(Value::Part)
                 .ok_or_else(|| self.eval_error(env, span, "the made part doesn't exist yet here", "refer to made parts only in cuts and assembly steps")),
+            Symbol::Mount(_) => env
+                .kind
+                .and_then(|k| k.mount)
+                .map(Value::Anchor)
+                .ok_or_else(|| self.eval_error(env, span, "the mount face is known only where the hardware is placed", "use mount in the kind's require entries")),
         }
     }
 
@@ -748,9 +752,6 @@ impl Solver<'_> {
             };
             return self.eval(&value_expr, &env);
         }
-        if name == "screw_diameter" && kind.base == stave_lang::ast::BaseKind::Pull {
-            return Ok(Value::Length(mm(DEFAULT_SCREW_DIAMETER_NM)));
-        }
         let kind_name = self.model.defs.kind_display(kind_value.kind, Some(file));
         Err(self.error(
             Code::UnknownField,
@@ -782,6 +783,9 @@ impl Solver<'_> {
         match (base, member) {
             (Value::Part(part), Member::Size(axis)) => {
                 Ok(Value::Length(self.drawn_size(*part, *axis)?))
+            }
+            (Value::Parts(parts), Member::Size(axis)) => {
+                self.parts_size(parts, *axis).map(Value::Length)
             }
             (Value::Part(part), Member::Diameter) => {
                 self.part_diameter(*part, env, span).map(Value::Length)
@@ -836,6 +840,15 @@ impl Solver<'_> {
                     (Value::Part(_), "thickness") => {
                         Some(Member::Size(stave_lang::placement::PartAxis::Thickness))
                     }
+                    (Value::Parts(_), "length") => {
+                        Some(Member::Size(stave_lang::placement::PartAxis::Length))
+                    }
+                    (Value::Parts(_), "width") => {
+                        Some(Member::Size(stave_lang::placement::PartAxis::Width))
+                    }
+                    (Value::Parts(_), "thickness") => {
+                        Some(Member::Size(stave_lang::placement::PartAxis::Thickness))
+                    }
                     (Value::Part(_), "diameter") => Some(Member::Diameter),
                     (Value::Part(_), "stock") => Some(Member::PartStock),
                     (Value::Part(_) | Value::Region(_), word)
@@ -865,6 +878,31 @@ impl Solver<'_> {
                 format!("{} has no such field", value.description()),
                 "check what this refers to",
             )),
+        }
+    }
+
+    /// The size of the box around several parts along an axis of the
+    /// first: a kind's only `Parts` role read as one (grammar, "Roles and
+    /// pairs").
+    fn parts_size(
+        &mut self,
+        parts: &[PartId],
+        axis: stave_lang::placement::PartAxis,
+    ) -> Solved<ExactLength> {
+        let Some(first) = parts.first().copied() else {
+            return Err(Reported);
+        };
+        let world = self.part_orientation(first)?.direction(axis).axis();
+        let mut low: Option<ExactLength> = None;
+        let mut high: Option<ExactLength> = None;
+        for part in parts {
+            let bounds = self.drawn_box(*part)?;
+            low = Some(low.map_or(bounds.min(world), |l| l.min(bounds.min(world))));
+            high = Some(high.map_or(bounds.max(world), |h| h.max(bounds.max(world))));
+        }
+        match (low, high) {
+            (Some(low), Some(high)) => high.checked_sub(low).ok_or(Reported),
+            _ => Err(Reported),
         }
     }
 
@@ -1317,6 +1355,54 @@ impl Solver<'_> {
                 Some(Value::Profile(profile)) => Ok(Value::Turned(profile)),
                 _ => Err(Reported),
             },
+            Builtin::Joined => {
+                let Some(expr) = Self::arg(args, "by") else {
+                    return Err(Reported);
+                };
+                let kinds = match self.eval(expr, env)? {
+                    Value::Kind(kind) => vec![kind],
+                    Value::List(items) => {
+                        let mut kinds = Vec::new();
+                        for item in items {
+                            match item {
+                                Value::Kind(kind) => kinds.push(kind),
+                                other => {
+                                    return Err(self.error(
+                                        Code::TypeMismatch,
+                                        format!(
+                                            "'by' needs joint kinds, found {}",
+                                            other.description()
+                                        ),
+                                        env.file,
+                                        expr.span,
+                                        "list joint kinds such as glued_edge or tongue_and_groove",
+                                    ));
+                                }
+                            }
+                        }
+                        kinds
+                    }
+                    other => {
+                        return Err(self.error(
+                            Code::TypeMismatch,
+                            format!("'by' needs a joint kind, found {}", other.description()),
+                            env.file,
+                            expr.span,
+                            "name a joint kind such as glued_edge or tongue_and_groove",
+                        ));
+                    }
+                };
+                match stave_model::nonempty::NonEmpty::new(kinds) {
+                    Some(by) => Ok(Value::Boards(stave_model::value::Joining { by })),
+                    None => Err(self.error(
+                        Code::TypeMismatch,
+                        "'by' needs at least one joint kind",
+                        env.file,
+                        expr.span,
+                        "name a joint kind such as glued_edge",
+                    )),
+                }
+            }
             Builtin::Box => Ok(Value::Envelope(Envelope::Box {
                 length: length(self, "length")?.ok_or(Reported)?,
                 width: length(self, "width")?.ok_or(Reported)?,
@@ -1342,10 +1428,32 @@ impl Solver<'_> {
                     .map(|e| self.eval(e, env))
                     .transpose()?
                 {
-                    Some(Value::Text(node)) => ModelAlign::Node(node),
-                    _ => ModelAlign::Bounds,
+                    Some(Value::Text(node)) => Some(node),
+                    _ => None,
                 };
-                Ok(Value::Model(ModelRef { source, align }))
+                let sha256 = match Self::arg(args, "sha256") {
+                    Some(expr) => match self.eval(expr, env)? {
+                        Value::Text(text) => match text.parse::<value::Sha256>() {
+                            Ok(digest) => Some(digest),
+                            Err(why) => {
+                                return Err(self.error(
+                                    Code::TypeMismatch,
+                                    format!("'sha256' needs 64 hexadecimal digits: {why}"),
+                                    env.file,
+                                    expr.span,
+                                    "copy the file's SHA-256 whole (`sha256sum model.glb` prints it), or leave sha256: out",
+                                ));
+                            }
+                        },
+                        _ => return Err(Reported),
+                    },
+                    None => None,
+                };
+                Ok(Value::Model(ModelRef {
+                    source,
+                    align,
+                    sha256,
+                }))
             }
             Builtin::Ends => Ok(Value::Spacing(Spacing::Ends(
                 length(self, "inset")?.unwrap_or(ExactLength::ZERO),
@@ -1407,6 +1515,25 @@ impl Solver<'_> {
                         ))
                     }
                 }
+            }
+            (Value::Anchor(anchor), Value::Region(region))
+            | (Value::Region(region), Value::Anchor(anchor)) => {
+                // From a face to the same side of the region.
+                let Some(face) = anchor.face else {
+                    return Err(self.eval_error(
+                        env,
+                        span,
+                        "'between' needs a face to measure to a region, found a mid-plane",
+                        "name a face, such as side.left: it is measured to the region's same side",
+                    ));
+                };
+                let side = self.region_value(*region)?.bounds.face(face);
+                let distance = anchor.position.checked_sub(side).ok_or(Reported)?;
+                Ok(if distance < ExactLength::ZERO {
+                    distance.checked_neg().ok_or(Reported)?
+                } else {
+                    distance
+                })
             }
             (Value::Anchor(a), Value::Anchor(b)) => {
                 if a.axis != b.axis {

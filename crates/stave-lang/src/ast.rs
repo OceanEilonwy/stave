@@ -664,7 +664,10 @@ impl KindBody {
             | KindEntry::Makes(_)
             | KindEntry::Member(_)
             | KindEntry::Roles(_)
-            | KindEntry::Cut(_) => None,
+            | KindEntry::Cut(_)
+            | KindEntry::Mount(_)
+            | KindEntry::Mechanism(_)
+            | KindEntry::Adjust(_) => None,
         })
     }
 }
@@ -695,16 +698,159 @@ pub enum KindEntry {
     Roles(RolesBlock),
     /// `cut end(piece, facing: into) { tenon(...) }`
     Cut(Cut),
+    /// `mount { face: back, across: ..., along: open }`
+    Mount(MountBlock),
+    /// `mechanism { pivot arm, inner_link at point(...) ... }`
+    Mechanism(MechanismBlock),
+    /// `adjust arm on plate: across within 2mm`
+    Adjust(Adjust),
     /// `insert: ...`, `adds: ...`, `envelope: ...`
     Field(Field),
 }
 
-/// `member cup`: one named piece of a hardware kind (a cup hinge's cup,
-/// plate, arm and links), documented by the doc comments above it.
+/// `adjust a on b: axis within d`: member `a` can be set up to `d` either
+/// way on member `b`, along one axis of the kind's frame.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Adjust {
+    /// The member that is set.
+    pub member: Ident,
+    /// The member it is set on.
+    pub on: Ident,
+    /// The frame axis, as written (`across`).
+    pub axis: Ident,
+    /// How far either way.
+    pub within: Expr,
+    /// The whole entry.
+    pub span: Span,
+}
+
+/// `mount { ... }`: where a piece of hardware sits on its piece, or where
+/// one of its members sits; each entry a field (`face: back`,
+/// `across: from(...)`, `along: open`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct MountBlock {
+    /// Entries in source order.
+    pub fields: Vec<Field>,
+    /// The `mount` word and its block.
+    pub span: Span,
+}
+
+/// `member cup` or `member arm { with: on, shape: box(...) }`: one named
+/// piece of a hardware kind, documented by the doc comments above it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct KindMember {
-    /// The member's name: one of its base's member words.
+    /// The member's name: a member word of its base, or any name for a
+    /// member with a body.
     pub name: Ident,
+    /// Its shapes and fields, when it has a block.
+    pub body: Option<MemberBody>,
+}
+
+/// The `{ ... }` of a member: its shapes and fields.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MemberBody {
+    /// Entries in source order.
+    pub entries: Vec<MemberEntry>,
+    /// The braces and everything between them.
+    pub span: Span,
+}
+
+/// One entry of a member's body.
+#[derive(Debug, Clone, PartialEq)]
+pub enum MemberEntry {
+    /// `shape: box(...)` or `shape knuckle: box(...)`
+    Shape(ShapeEntry),
+    /// `mount { depth: from(face(on, toward: piece)) }`
+    Mount(MountBlock),
+    /// `with: piece`
+    Field(Field),
+}
+
+/// `shape: box(...)` (unnamed) or `shape knuckle: box(...)` (named).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ShapeEntry {
+    /// The shape's name, when written.
+    pub name: Option<Name>,
+    /// The shape: a call such as `box(along: 16mm, ...)`.
+    pub value: Expr,
+    /// The whole entry.
+    pub span: Span,
+}
+
+/// `mechanism { ... }`: how a hardware kind's members move.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MechanismBlock {
+    /// Entries in source order.
+    pub entries: Vec<MechanismEntry>,
+    /// The `mechanism` word and its block.
+    pub span: Span,
+}
+
+/// One entry of a `mechanism` block.
+#[derive(Debug, Clone, PartialEq)]
+pub enum MechanismEntry {
+    /// `pivot a, b at point(...)`
+    Pivot {
+        /// The two members on the pin.
+        members: [Ident; 2],
+        /// Where the pin is.
+        at: Expr,
+        /// The whole entry.
+        span: Span,
+    },
+    /// `slot a, b from point(...) to point(...)`
+    Slot {
+        /// The member carrying the pin, then the member with the slot.
+        members: [Ident; 2],
+        /// One end of the slot.
+        from: Expr,
+        /// The other end.
+        to: Expr,
+        /// The whole entry.
+        span: Span,
+    },
+    /// `rail a, b along word`
+    Rail {
+        /// The member that runs, then the member it runs along.
+        members: [Ident; 2],
+        /// The direction word, as written.
+        along: Ident,
+        /// The whole entry.
+        span: Span,
+    },
+    /// `couple a to b: ratio`
+    Couple {
+        /// The member that follows.
+        member: Ident,
+        /// The member it follows.
+        to: Ident,
+        /// The share of `to`'s travel.
+        ratio: Expr,
+        /// The whole entry.
+        span: Span,
+    },
+    /// `drive: turn(m, from:, to:)` or `drive: travel(m, from:, to:)`
+    Drive {
+        /// The `drive` word.
+        key: Name,
+        /// The call.
+        value: Expr,
+        /// The whole entry.
+        span: Span,
+    },
+    /// `stop: value "message"`
+    Stop {
+        /// The `stop` word.
+        key: Name,
+        /// Where the drive stops.
+        value: Expr,
+        /// What stops it, for a beginner.
+        message: StringLit,
+        /// The whole entry.
+        span: Span,
+    },
+    /// Any other `name: value`, such as `pin_diameter: 3mm`.
+    Field(Field),
 }
 
 /// `roles { lock: Part, first: Part, second: Part }`
@@ -732,6 +878,9 @@ pub struct Role {
 /// `cut end(piece, facing: into) { tenon(...) }`
 #[derive(Debug, Clone, PartialEq)]
 pub struct Cut {
+    /// `dado` in `cut dado: crossing(into, piece) { ... }`: what messages
+    /// call the cut.
+    pub name: Option<Name>,
     /// Face selector: `end(...)`, `side(...)` or `crossing(...)`.
     pub selector: Call,
     /// Cut operations, one per line: `notch(depth: depth)`, `outline(...)`.
@@ -1439,6 +1588,13 @@ pub enum ExprKind {
     List(Vec<Expr>),
     /// `( expr )`, kept so the formatter can preserve intent.
     Paren(Box<Expr>),
+    /// `lo..hi`: a range, allowed only as an argument of a member's shape.
+    Range {
+        /// The low end.
+        lo: Box<Expr>,
+        /// The high end.
+        hi: Box<Expr>,
+    },
 }
 
 impl Expr {
@@ -1467,7 +1623,8 @@ impl Expr {
                 | ExprKind::Unary { .. }
                 | ExprKind::Binary { .. }
                 | ExprKind::List(_)
-                | ExprKind::Paren(_) => None,
+                | ExprKind::Paren(_)
+                | ExprKind::Range { .. } => None,
             }
         }
         let mut segments = Vec::new();
@@ -1537,11 +1694,13 @@ pub enum BinaryOp {
     Mul,
     /// `/`
     Div,
+    /// `in`, between two numbers: a slope, `1 in 8`.
+    In,
 }
 
 impl BinaryOp {
     /// Every infix operator.
-    pub const ALL: [BinaryOp; 12] = [
+    pub const ALL: [BinaryOp; 13] = [
         BinaryOp::Or,
         BinaryOp::And,
         BinaryOp::Eq,
@@ -1554,6 +1713,7 @@ impl BinaryOp {
         BinaryOp::Sub,
         BinaryOp::Mul,
         BinaryOp::Div,
+        BinaryOp::In,
     ];
 
     /// Binding power; higher binds tighter. Shared by parser and formatter.
@@ -1569,6 +1729,7 @@ impl BinaryOp {
             | BinaryOp::Ge => 3,
             BinaryOp::Add | BinaryOp::Sub => 4,
             BinaryOp::Mul | BinaryOp::Div => 5,
+            BinaryOp::In => 6,
         }
     }
 
@@ -1593,6 +1754,7 @@ impl BinaryOp {
             BinaryOp::Sub => "-",
             BinaryOp::Mul => "*",
             BinaryOp::Div => "/",
+            BinaryOp::In => "in",
         }
     }
 }
@@ -1757,6 +1919,8 @@ pub enum TypeName {
     Mount,
     /// `turned(profile)`.
     Shape,
+    /// `joined(by: ...)`: how the boards of a part are joined.
+    Boards,
     /// `box(...)` or `cylinder(...)`.
     Envelope,
     /// `model(...)`.
@@ -1783,7 +1947,7 @@ pub enum TypeName {
 
 impl TypeName {
     /// Every type, in the order the grammar's type table lists them.
-    pub const ALL: [TypeName; 27] = [
+    pub const ALL: [TypeName; 28] = [
         TypeName::Length,
         TypeName::Angle,
         TypeName::Ratio,
@@ -1800,6 +1964,7 @@ impl TypeName {
         TypeName::Direction,
         TypeName::Mount,
         TypeName::Shape,
+        TypeName::Boards,
         TypeName::Envelope,
         TypeName::Model,
         TypeName::Spacing,
@@ -1832,6 +1997,7 @@ impl TypeName {
             TypeName::Direction => "Direction",
             TypeName::Mount => "Mount",
             TypeName::Shape => "Shape",
+            TypeName::Boards => "Boards",
             TypeName::Envelope => "Envelope",
             TypeName::Model => "Model",
             TypeName::Spacing => "Spacing",
@@ -2219,7 +2385,8 @@ mod tests {
         assert!(BinaryOp::And.precedence() > BinaryOp::Or.precedence());
         assert!(BinaryOp::Ge.is_comparison());
         assert!(!BinaryOp::Sub.is_comparison());
-        assert_eq!(BinaryOp::ALL.map(BinaryOp::symbol).len(), 12);
+        assert_eq!(BinaryOp::ALL.map(BinaryOp::symbol).len(), 13);
+        assert!(BinaryOp::In.precedence() > BinaryOp::Mul.precedence());
         assert_eq!(UnaryOp::Not.symbol(), "!");
     }
 

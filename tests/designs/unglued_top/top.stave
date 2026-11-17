@@ -1,0 +1,40 @@
+stave 1
+
+// A wide top made of three boards joined by tongue and groove, left dry so
+// the panel can move with the seasons. Two battens screwed on underneath
+// keep it flat.
+
+project "Unglued top" {
+  goal:  "A tabletop of three oak boards, tongue and groove without glue, held flat by two battens"
+  units: mm
+}
+
+stock oak_19 { species: white_oak, form: solid, thickness: 19mm, max_width: 150mm }
+stock oak_25 { species: white_oak, form: solid, thickness: 25mm }
+
+/// The top: 420mm across the grain, so it is made of three boards of 140mm.
+part top : oak_19 {
+  length: 600mm
+  width:  420mm
+  boards: joined(by: tongue_and_groove(glue: false))
+  place {
+    ground
+  }
+}
+
+/// The battens run across the grain, under each end of the top.
+part batten_left : oak_25 {
+  length: 380mm
+  width:  50mm
+  note:   "Slot the screw holes across the grain so the top can move"
+  place {
+    orient(length: back, width: right)
+    against(top.bottom)
+    flush(top.left, inset: 60mm)
+    center(top, deep)
+  }
+}
+
+part batten_right = mirror(batten_left, about: mid(top, across))
+
+joint batten_screws : screw([batten_left, batten_right], into: top, length: 35mm, count: 3, glue: false)

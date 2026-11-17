@@ -1,36 +1,43 @@
 //! Putting it together: runs every step in order and writes the
 //! [`SolvedDesign`].
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
-use stave_lang::placement::{Axis, Direction, PartAxis};
+use stave_lang::placement::{Axis, PartAxis};
 use stave_lang::units::{ExactLength, Length};
 use stave_lang::{Code, Diagnostic, Label};
-use stave_model::defs::{DefId, Word};
+use stave_model::defs::{BodyId, DefId, Word};
 use stave_model::ids::{AssemblyId, HardwareId, JointId, PartId, RegionId, SceneId, StockId};
 use stave_model::instance::Ctx;
+use stave_model::mechanism::MemberIndex;
 use stave_model::solved::{
-    self, Assembly, Cut, CutKind, CutPlace, CutSource, Depth, FastenerUse, Hardware, HardwareBase,
-    HardwareData, Joint, JointPair, LocalBox, LocalPoint, Motion, PartOrigin, Pivot, Point,
-    PoseValue, ProjectInfo, Region, RequireResult, RoleBinding, Scene, SceneItem, ScenePose, Shape,
-    Size3, SolvedDesign, Station, Stock, Tool,
+    self, Assembly, Cut, CutPlace, CutSource, FastenerUse, Hardware, HardwareBase, HardwareData,
+    Joint, JointPair, LocalBox, LocalPoint, PartOrigin, Point, PoseValue, ProjectInfo, Region,
+    RequireResult, RoleBinding, Scene, SceneItem, ScenePose, Shape, Size3, SolvedDesign, Station,
+    Stock, Tool,
 };
 use stave_model::value::{Envelope as ExactEnvelope, ExactBox, Value};
 use stave_schema::words::{Grain, MotionWord, StockForm};
 
-use crate::eval::Env;
-use crate::hardware::{Data, MotionExact, Placed, Recess, world_index};
+use crate::eval::{Env, midpoint};
+use crate::hardware::{
+    HardwareCut, MemberCarrier, Placed, PlacedMember, RoleBound, WorldShape, world_index,
+};
 use crate::joints::{GeomTable, JointWork, PartGeom, local_slot, round_length};
+use crate::legacy::{CupParts, Data, LegacyMotion, legacy_assembly_motion};
+use crate::mechanism::AssemblyMechanism;
 use crate::place::reflect;
 use crate::{Reported, Solved, Solver};
 
 /// A part a joint made.
-struct MadeInfo {
-    joint: JointId,
-    pair: usize,
-    name: String,
-    stock: StockId,
-    note: Option<String>,
+pub(crate) struct MadeInfo {
+    /// Which joint and pair, or which part's boards, made it.
+    pub origin: PartOrigin,
+    /// The assembly it belongs to: its joint's, or its part's.
+    pub assembly: Option<AssemblyId>,
+    pub name: String,
+    pub stock: StockId,
+    pub note: Option<String>,
 }
 
 fn point(values: [ExactLength; 3]) -> Solved<Point> {
@@ -56,6 +63,207 @@ fn world_box(bounds: &ExactBox) -> Solved<solved::WorldBox> {
     Ok(solved::WorldBox::new(low, high))
 }
 
+/// A world point reflected across the plane at `plane` on `axis`.
+fn reflect_point(
+    point: [ExactLength; 3],
+    axis: Axis,
+    plane: ExactLength,
+) -> Solved<[ExactLength; 3]> {
+    let mut out = point;
+    if let Some(slot) = out.get_mut(world_index(axis)) {
+        let twice = plane.checked_add(plane).ok_or(Reported)?;
+        *slot = twice.checked_sub(*slot).ok_or(Reported)?;
+    }
+    Ok(out)
+}
+
+/// A piece of hardware's members reflected, each carried by what the
+/// reflected roles bind (the links stay links).
+fn reflect_members(
+    members: &[PlacedMember],
+    source_roles: &[(String, RoleBound)],
+    roles: &[(String, RoleBound)],
+    axis: Axis,
+    plane: ExactLength,
+) -> Solved<Vec<PlacedMember>> {
+    let rebound = |carrier: MemberCarrier| -> Solved<MemberCarrier> {
+        let was = match carrier {
+            MemberCarrier::Part(part) => RoleBound::Part(part),
+            MemberCarrier::Region(region) => RoleBound::Region(region),
+            MemberCarrier::Link(_) => return Ok(carrier),
+        };
+        let index = source_roles
+            .iter()
+            .position(|(_, bound)| *bound == was)
+            .ok_or(Reported)?;
+        match roles.get(index).map(|(_, bound)| *bound) {
+            Some(RoleBound::Part(part)) => Ok(MemberCarrier::Part(part)),
+            Some(RoleBound::Region(region)) => Ok(MemberCarrier::Region(region)),
+            None => Err(Reported),
+        }
+    };
+    let shape = |shape: &WorldShape| -> Solved<WorldShape> {
+        Ok(match shape {
+            WorldShape::Box(bounds) => WorldShape::Box(reflect_box(bounds, axis, plane)?),
+            WorldShape::Cylinder {
+                axis: along,
+                bounds,
+            } => WorldShape::Cylinder {
+                axis: *along,
+                bounds: reflect_box(bounds, axis, plane)?,
+            },
+            WorldShape::Prism {
+                axis: along,
+                points,
+                bounds,
+            } => WorldShape::Prism {
+                axis: *along,
+                points: points
+                    .iter()
+                    .map(|point| reflect_point(*point, axis, plane))
+                    .collect::<Solved<Vec<_>>>()?,
+                bounds: reflect_box(bounds, axis, plane)?,
+            },
+            WorldShape::Bar {
+                axis: along,
+                from,
+                to,
+                thickness,
+                bounds,
+            } => WorldShape::Bar {
+                axis: *along,
+                from: reflect_point(*from, axis, plane)?,
+                to: reflect_point(*to, axis, plane)?,
+                thickness: *thickness,
+                bounds: reflect_box(bounds, axis, plane)?,
+            },
+        })
+    };
+    members
+        .iter()
+        .map(|member| {
+            Ok(PlacedMember {
+                carrier: rebound(member.carrier)?,
+                shapes: member
+                    .shapes
+                    .iter()
+                    .map(shape)
+                    .collect::<Solved<Vec<_>>>()?,
+                ..member.clone()
+            })
+        })
+        .collect()
+}
+
+/// A member's shape in the solved design, to the nearest nanometre.
+fn member_shape(shape: &WorldShape) -> Solved<solved::MemberShape> {
+    let pair = |axis: Axis, point: [ExactLength; 3]| -> Solved<[Length; 2]> {
+        let [first, second] = axis.others();
+        let at = |on: Axis| point.get(world_index(on)).copied().ok_or(Reported);
+        Ok([round_length(at(first)?)?, round_length(at(second)?)?])
+    };
+    let ends = |axis: Axis, bounds: &ExactBox| -> Solved<(Length, Length)> {
+        Ok((
+            round_length(bounds.min(axis))?,
+            round_length(bounds.max(axis))?,
+        ))
+    };
+    Ok(match shape {
+        WorldShape::Box(bounds) => solved::MemberShape::Box(world_box(bounds)?),
+        WorldShape::Cylinder { axis, bounds } => {
+            let [first, second] = axis.others();
+            let centre = |on: Axis| -> Solved<Length> {
+                round_length(midpoint(bounds.min(on), bounds.max(on)).ok_or(Reported)?)
+            };
+            let diameter = bounds
+                .max(first)
+                .checked_sub(bounds.min(first))
+                .ok_or(Reported)?;
+            let (start, end) = ends(*axis, bounds)?;
+            solved::MemberShape::Cylinder {
+                axis: *axis,
+                centre: [centre(first)?, centre(second)?],
+                diameter: round_length(diameter)?,
+                start,
+                end,
+            }
+        }
+        WorldShape::Prism {
+            axis,
+            points,
+            bounds,
+        } => {
+            let (start, end) = ends(*axis, bounds)?;
+            solved::MemberShape::Prism {
+                axis: *axis,
+                points: points
+                    .iter()
+                    .map(|point| pair(*axis, *point))
+                    .collect::<Solved<Vec<_>>>()?,
+                start,
+                end,
+            }
+        }
+        WorldShape::Bar {
+            axis,
+            from,
+            to,
+            thickness,
+            bounds,
+        } => {
+            let (start, end) = ends(*axis, bounds)?;
+            solved::MemberShape::Bar {
+                axis: *axis,
+                from: pair(*axis, *from)?,
+                to: pair(*axis, *to)?,
+                thickness: round_length(*thickness)?,
+                start,
+                end,
+            }
+        }
+    })
+}
+/// A piece of hardware's members in the solved design.
+/// A piece of hardware's members in the solved design.
+/// A placed member that its kind's mechanism places is the member of its
+/// assembly's mechanism it became; with no mechanism moving it (hardware
+/// outside a moving assembly) it stays with the piece.
+fn members(
+    hardware: HardwareId,
+    placed: &[PlacedMember],
+    placed_by: &BTreeMap<(HardwareId, BodyId), MemberIndex>,
+    piece: PartId,
+) -> Solved<Vec<solved::Body>> {
+    placed
+        .iter()
+        .map(|member| {
+            let carrier = match member.carrier {
+                MemberCarrier::Part(part) => solved::BodyCarrier::Part(part),
+                MemberCarrier::Region(region) => solved::BodyCarrier::Region(region),
+                MemberCarrier::Link(body) => match placed_by.get(&(hardware, body)) {
+                    Some(index) => solved::BodyCarrier::Link(*index),
+                    None => solved::BodyCarrier::Part(piece),
+                },
+            };
+            let shapes = member
+                .shapes
+                .iter()
+                .map(member_shape)
+                .collect::<Solved<Vec<_>>>()?;
+            solved::Body::new(
+                solved::BodyRef {
+                    hardware,
+                    body: member.body,
+                },
+                member.name.clone(),
+                carrier,
+                shapes,
+            )
+            .ok_or(Reported)
+        })
+        .collect()
+}
+
 fn reflect_box(bounds: &ExactBox, axis: Axis, plane: ExactLength) -> Solved<ExactBox> {
     let (low, high) = reflect(bounds.min(axis), bounds.max(axis), plane)?;
     Ok(bounds.with(axis, low, high))
@@ -76,14 +284,6 @@ fn pose_origin(bounds: &ExactBox, orientation: &solved::Orientation) -> [ExactLe
         }
     }
     origin
-}
-
-fn reflect_direction(direction: Direction, axis: Axis) -> Direction {
-    if direction.axis() == axis {
-        direction.opposite()
-    } else {
-        direction
-    }
 }
 
 pub(crate) fn build(solver: &mut Solver<'_>) -> Option<SolvedDesign> {
@@ -181,17 +381,10 @@ pub(crate) fn build(solver: &mut Solver<'_>) -> Option<SolvedDesign> {
             continue;
         }
         if let Ok(hw) = solver.place_hardware(hardware) {
-            if let Some(bore) = &hw.bore
-                && let (Some(geom), Some(list)) =
-                    (geoms.get(hw.piece), cuts.get_mut(hw.piece.index()))
-                && let Ok(cut) = bore_cut(geom, &hw, bore, hardware)
-            {
-                list.push(cut);
-            }
-            for recess in &hw.recesses {
+            for cut in &hw.cuts {
                 if let (Some(geom), Some(list)) =
-                    (geoms.get(recess.part), cuts.get_mut(recess.part.index()))
-                    && let Ok(cut) = recess_cut(geom, recess, hardware)
+                    (geoms.get(cut.part), cuts.get_mut(cut.part.index()))
+                    && let Ok(cut) = hardware_cut(geom, cut, hardware)
                 {
                     list.push(cut);
                 }
@@ -211,7 +404,13 @@ pub(crate) fn build(solver: &mut Solver<'_>) -> Option<SolvedDesign> {
         &mut placed,
     );
 
-    // 7. Requires at the current values.
+    // 6b. Parts wider than their stock: boards and the joints between them.
+    let boards = solver.make_boards(&mut geoms, &mut cuts, &mut memberships, &mut made);
+
+    // 7. Every assembly's mechanism, from the hardware that moves it.
+    let mechanisms = solver.assembly_mechanisms(&placed);
+
+    // 8. Requires at the current values.
     let mut requires = Vec::new();
     for index in 0..solver.model.requires.len() {
         let Some(inst) = solver.model.requires.get(index).cloned() else {
@@ -268,12 +467,14 @@ pub(crate) fn build(solver: &mut Solver<'_>) -> Option<SolvedDesign> {
         return None;
     }
 
-    // 8. Write everything out.
-    let parts = solver.write_parts(&geoms, cuts, memberships, &made).ok()?;
-    let hardware = solver.write_hardware(&placed).ok()?;
+    // 9. Write everything out.
+    let parts = solver
+        .write_parts(&geoms, cuts, memberships, &made, boards)
+        .ok()?;
+    let hardware = solver.write_hardware(&placed, &mechanisms).ok()?;
     let regions = solver.write_regions().ok()?;
-    let assemblies = solver.write_assemblies(&placed).ok()?;
-    let scenes = solver.write_scenes().ok()?;
+    let assemblies = solver.write_assemblies(&placed, &mechanisms).ok()?;
+    let scenes = solver.write_scenes(&mechanisms).ok()?;
     let project = solver.write_project().ok()?;
     let joints: Vec<Joint> = joints.into_iter().collect::<Option<Vec<_>>>()?;
     if solver.diagnostics.iter().filter(|d| d.is_error()).count() > errors_before {
@@ -298,53 +499,17 @@ pub(crate) fn build(solver: &mut Solver<'_>) -> Option<SolvedDesign> {
     })
 }
 
-fn bore_cut(
-    geom: &PartGeom,
-    placed: &Placed,
-    bore: &crate::hardware::Bore,
-    hardware: HardwareId,
-) -> Solved<Cut> {
-    let face_axis = placed.mount_face.axis();
-    let face = geom.face_toward(face_axis, placed.mount_face.is_positive());
-    let mut local = [ExactLength::ZERO; 3];
-    for axis in PartAxis::ALL {
-        let world = geom.orientation.direction(axis).axis();
-        let value = bore
-            .centre
-            .get(world_index(world))
-            .copied()
-            .ok_or(Reported)?;
-        if let Some(slot) = local.get_mut(local_slot(axis)) {
-            *slot = geom.local(axis, value)?;
-        }
+/// A cut a piece of hardware makes: its member's shape where it meets the
+/// part, from the face the solver chose.
+fn hardware_cut(geom: &PartGeom, cut: &HardwareCut, hardware: HardwareId) -> Solved<Cut> {
+    let face = geom.face_toward(cut.face.axis(), cut.face.is_positive());
+    let mut region = cut.shape;
+    for axis in Axis::ALL {
+        let low = region.min(axis).max(geom.cut_box.min(axis));
+        let high = region.max(axis).min(geom.cut_box.max(axis));
+        region = region.with(axis, low, high.max(low));
     }
-    let [l, w, t] = local;
-    let centre = LocalPoint {
-        length: round_length(l)?,
-        width: round_length(w)?,
-        thickness: round_length(t)?,
-    };
-    let depth = match bore.depth {
-        Some(depth) => Depth::Length(round_length(depth)?),
-        None => Depth::Through,
-    };
-    let centres = bore.centres.map(round_length).transpose()?;
-    Ok(Cut {
-        source: CutSource::Hardware { hardware },
-        face,
-        place: CutPlace::Mount { centre, centres },
-        kind: CutKind::Drill {
-            diameter: round_length(bore.diameter)?,
-            depth,
-            count: bore.count,
-        },
-    })
-}
-
-/// The notch a recess cuts: the member's region, from the face it is cut into.
-fn recess_cut(geom: &PartGeom, recess: &Recess, hardware: HardwareId) -> Solved<Cut> {
-    let face = geom.face_toward(recess.face.axis(), recess.face.is_positive());
-    let local = geom.local_box(&recess.bounds)?;
+    let local = geom.local_box(&region)?;
     let [length, width, thickness] = local;
     let corner = |pick: fn(&(ExactLength, ExactLength)) -> ExactLength| -> Solved<LocalPoint> {
         Ok(LocalPoint {
@@ -355,16 +520,17 @@ fn recess_cut(geom: &PartGeom, recess: &Recess, hardware: HardwareId) -> Solved<
     };
     Ok(Cut {
         source: CutSource::Hardware { hardware },
+        name: cut.name.clone(),
         face,
-        place: CutPlace::Recess {
+        place: CutPlace::Member {
+            hardware,
+            body: cut.body,
             footprint: LocalBox {
                 min: corner(|p| p.0)?,
                 max: corner(|p| p.1)?,
             },
         },
-        kind: CutKind::Notch {
-            depth: Depth::Length(round_length(recess.depth)?),
-        },
+        kind: cut.kind.clone(),
     })
 }
 
@@ -382,31 +548,6 @@ fn exact_envelope(envelope: &ExactEnvelope) -> Solved<solved::Envelope> {
         ExactEnvelope::Cylinder { diameter, length } => solved::Envelope::Cylinder {
             diameter: round_length(*diameter)?,
             length: round_length(*length)?,
-        },
-    })
-}
-
-fn motion(motion: &MotionExact) -> Solved<Motion> {
-    Ok(match motion {
-        MotionExact::Turn {
-            axis,
-            through,
-            free_side,
-            swing_toward,
-            angle,
-        } => Motion::Turn {
-            pivot: Pivot {
-                axis: *axis,
-                through: point(*through)?,
-                free_side: *free_side,
-                swing_toward: *swing_toward,
-            },
-            opening_angle: angle.to_nearest_angle().ok_or(Reported)?,
-        },
-        MotionExact::Linkage(linkage) => Motion::Linkage { linkage: *linkage },
-        MotionExact::Travel { toward, travel } => Motion::Travel {
-            toward: *toward,
-            travel: round_length(*travel)?,
         },
     })
 }
@@ -468,8 +609,11 @@ impl Solver<'_> {
                     list.push(joint);
                 }
                 made.push(MadeInfo {
-                    joint,
-                    pair: pair_index,
+                    origin: PartOrigin::Made {
+                        joint,
+                        pair: pair_index,
+                    },
+                    assembly: inst.assembly,
                     name,
                     stock: placed.stock,
                     note: note_text,
@@ -499,6 +643,7 @@ impl Solver<'_> {
                                 joint,
                                 pair: pair_index,
                             },
+                            name: cut.name.clone(),
                             face,
                             place,
                             kind: cut_kind,
@@ -559,15 +704,30 @@ impl Solver<'_> {
             {
                 note = Some(self.format_text(text, &env)?);
             }
-            let roles = kind
-                .roles
-                .iter()
-                .zip(&pair.parts)
-                .map(|(role, part)| RoleBinding {
-                    role: role.name.clone(),
-                    part: *part,
-                })
-                .collect();
+            let roles = if pair.across {
+                // One `Parts` role: every part is bound to it.
+                let name = kind
+                    .roles
+                    .first()
+                    .map(|r| r.name.clone())
+                    .unwrap_or_default();
+                pair.parts
+                    .iter()
+                    .map(|part| RoleBinding {
+                        role: name.clone(),
+                        part: *part,
+                    })
+                    .collect()
+            } else {
+                kind.roles
+                    .iter()
+                    .zip(&pair.parts)
+                    .map(|(role, part)| RoleBinding {
+                        role: role.name.clone(),
+                        part: *part,
+                    })
+                    .collect()
+            };
             pairs.push(JointPair {
                 roles,
                 contact: pair.contact,
@@ -684,6 +844,10 @@ impl Solver<'_> {
                         CutSource::Hardware { hardware } => CutSource::Hardware {
                             hardware: *hardware_map.get(&hardware).unwrap_or(&hardware),
                         },
+                        CutSource::Boards { part, seam } => CutSource::Boards {
+                            part: *part_map.get(&part).unwrap_or(&part),
+                            seam,
+                        },
                     };
                     cut.place = match cut.place {
                         CutPlace::End { toward } => CutPlace::End {
@@ -704,8 +868,15 @@ impl Solver<'_> {
                             other: *part_map.get(&other).unwrap_or(&other),
                             footprint,
                         },
-                        recess @ CutPlace::Recess { .. } => recess,
-                        mount @ CutPlace::Mount { .. } => mount,
+                        CutPlace::Member {
+                            hardware,
+                            body,
+                            footprint,
+                        } => CutPlace::Member {
+                            hardware: *hardware_map.get(&hardware).unwrap_or(&hardware),
+                            body,
+                            footprint,
+                        },
                     };
                     cut
                 })
@@ -799,108 +970,40 @@ impl Solver<'_> {
             let Ok((axis, plane)) = self.assembly_mirror_plane(assembly) else {
                 continue;
             };
-            let Ok(bounds) = reflect_box(&source_placed.bounds, axis, plane) else {
+            // Every role re-bound, whatever its name.
+            let mut roles = Vec::new();
+            let mut unbound = false;
+            for (role, bound) in &source_placed.roles {
+                let rebound = match *bound {
+                    RoleBound::Part(part) => match part_map.get(&part) {
+                        Some(mapped) => Ok(RoleBound::Part(*mapped)),
+                        None => self
+                            .rebind_part(part, axis, plane, assembly)
+                            .map(RoleBound::Part),
+                    },
+                    RoleBound::Region(region) => self
+                        .rebind_region(region, axis, plane, assembly)
+                        .map(RoleBound::Region),
+                };
+                match rebound {
+                    Ok(rebound) => roles.push((role.clone(), rebound)),
+                    Err(_) => {
+                        unbound = true;
+                        break;
+                    }
+                }
+            }
+            if unbound {
+                continue;
+            }
+            let Some((_, RoleBound::Part(piece))) = roles.first().cloned() else {
                 continue;
             };
-            let piece = match part_map.get(&source_placed.piece) {
-                Some(piece) => *piece,
-                None => match self.rebind_part(source_placed.piece, axis, plane, assembly) {
-                    Ok(piece) => piece,
-                    Err(_) => continue,
-                },
-            };
-            let data = match source_placed.data.clone() {
-                Data::ButtHinge { opening_angle, on } => {
-                    let on = match part_map.get(&on) {
-                        Some(mapped) => *mapped,
-                        None => match self.rebind_part(on, axis, plane, assembly) {
-                            Ok(found) => found,
-                            Err(_) => continue,
-                        },
-                    };
-                    Data::ButtHinge { opening_angle, on }
-                }
-                Data::Hinge {
-                    opening_angle,
-                    cup_diameter,
-                    cup_depth,
-                    cup_inset,
-                    on,
-                    overlay,
-                    overlay_range,
-                } => {
-                    let on = match part_map.get(&on) {
-                        Some(mapped) => *mapped,
-                        None => match self.rebind_part(on, axis, plane, assembly) {
-                            Ok(found) => found,
-                            Err(_) => continue,
-                        },
-                    };
-                    Data::Hinge {
-                        opening_angle,
-                        cup_diameter,
-                        cup_depth,
-                        cup_inset,
-                        on,
-                        overlay,
-                        overlay_range,
-                    }
-                }
-                Data::Slide {
-                    length,
-                    clearance,
-                    travel,
-                    opening,
-                } => {
-                    let Ok(opening) = self.rebind_region(opening, axis, plane, assembly) else {
-                        continue;
-                    };
-                    Data::Slide {
-                        length,
-                        clearance,
-                        travel,
-                        opening,
-                    }
-                }
-                pull @ Data::Pull { .. } => pull,
-            };
-            let reflected_motion = source_placed.motion.and_then(|m| match m {
-                MotionExact::Turn {
-                    axis: pivot_axis,
-                    through,
-                    free_side,
-                    swing_toward,
-                    angle,
-                } => {
-                    let mut through = through;
-                    if let Some(slot) = through.get_mut(world_index(axis)) {
-                        let twice = plane.checked_add(plane).unwrap_or(plane);
-                        *slot = twice.checked_sub(*slot).unwrap_or(*slot);
-                    }
-                    Some(MotionExact::Turn {
-                        axis: pivot_axis,
-                        through,
-                        free_side: reflect_direction(free_side, axis),
-                        swing_toward: reflect_direction(swing_toward, axis),
-                        angle,
-                    })
-                }
-                MotionExact::Linkage(linkage) => {
-                    // The linkage's points in its own frame stay; its frame
-                    // is reflected, the origin exactly, then to the nearest
-                    // nanometre.
-                    let at = linkage.frame().origin().get(axis).to_exact();
-                    let twice = plane.checked_add(plane)?;
-                    let origin = twice.checked_sub(at)?.to_nearest_length()?;
-                    Some(MotionExact::Linkage(
-                        linkage.in_frame(linkage.frame().reflected(axis, origin)),
-                    ))
-                }
-                MotionExact::Travel { toward, travel } => Some(MotionExact::Travel {
-                    toward: reflect_direction(toward, axis),
-                    travel,
-                }),
-            });
+            let data =
+                Solver::legacy_rebound(&source_placed.legacy.data, &source_placed.roles, &roles);
+            let reflected_motion = source_placed
+                .motion
+                .and_then(|motion| motion.reflected(axis, plane));
             if source_placed.motion.is_some() && reflected_motion.is_none() {
                 continue;
             }
@@ -909,48 +1012,60 @@ impl Solver<'_> {
             } else {
                 source_placed.mount_face
             };
-            let fixed = match &source_placed.fixed {
-                Some(member) => match reflect_box(&member.bounds, axis, plane) {
-                    Ok(bounds) => Some(crate::hardware::Member {
-                        envelope: member.envelope,
-                        bounds,
-                        orientation: member.orientation.mirrored(axis),
-                    }),
+            let reflect_member = |member: &crate::legacy::Member| {
+                reflect_box(&member.bounds, axis, plane).map(|bounds| crate::legacy::Member {
+                    envelope: member.envelope,
+                    bounds,
+                    orientation: member.orientation.mirrored(axis),
+                })
+            };
+            let Ok(moving) = reflect_member(&source_placed.legacy.moving) else {
+                continue;
+            };
+            let fixed = match &source_placed.legacy.fixed {
+                Some(member) => match reflect_member(member) {
+                    Ok(member) => Some(member),
                     Err(_) => continue,
                 },
                 None => None,
             };
+            let cup = match &source_placed.cup {
+                Some(cup) => match (reflect_member(&cup.arm), reflect_member(&cup.knuckle)) {
+                    (Ok(arm), Ok(knuckle)) => Some(CupParts {
+                        arm,
+                        knuckle,
+                        ..cup.clone()
+                    }),
+                    _ => continue,
+                },
+                None => None,
+            };
+            // The mechanism's plane is reflected; its points stay.
             let mechanism = match &source_placed.mechanism {
-                Some(mechanism) => {
-                    let reflect = |member: &crate::hardware::Member| {
-                        reflect_box(&member.bounds, axis, plane).map(|bounds| {
-                            crate::hardware::Member {
-                                envelope: member.envelope,
-                                bounds,
-                                orientation: member.orientation.mirrored(axis),
-                            }
-                        })
-                    };
-                    match (reflect(&mechanism.arm), reflect(&mechanism.knuckle)) {
-                        (Ok(arm), Ok(knuckle)) => Some(crate::hardware::Mechanism {
-                            arm,
-                            knuckle,
-                            ..mechanism.clone()
-                        }),
-                        _ => continue,
+                Some(mechanism) => match mechanism.reflected(axis, plane) {
+                    Some(reflected) => Some(reflected),
+                    None => continue,
+                },
+                None => None,
+            };
+            let own = match &mechanism {
+                Some(reflected) => {
+                    let kind_name = source_placed.kind_name.clone();
+                    match self.check_mechanism(hardware, &roles, reflected, &kind_name) {
+                        Ok(own) => own,
+                        Err(_) => continue,
                     }
                 }
                 None => None,
             };
-            // Recesses: the one in the piece came with the mirrored part's
-            // cuts; one in a part outside the assembly is cut in the part
-            // that occupies the reflected place.
-            let mut recesses = Vec::new();
-            let mut unbound = false;
-            for recess in &source_placed.recesses {
-                let (part, outside) = match part_map.get(&recess.part) {
+            // Cuts: those in a part inside the assembly came with the
+            // mirrored part's cuts; one in a part outside it is cut in the
+            // part that occupies the reflected place.
+            let mut reflected_cuts = Vec::new();
+            for cut in &source_placed.cuts {
+                let (part, outside) = match part_map.get(&cut.part) {
                     Some(mapped) => (*mapped, false),
-                    None => match self.rebind_part(recess.part, axis, plane, assembly) {
+                    None => match self.rebind_part(cut.part, axis, plane, assembly) {
                         Ok(found) => (found, true),
                         Err(_) => {
                             unbound = true;
@@ -958,42 +1073,55 @@ impl Solver<'_> {
                         }
                     },
                 };
-                let Ok(recess_bounds) = reflect_box(&recess.bounds, axis, plane) else {
+                let Ok(shape) = reflect_box(&cut.shape, axis, plane) else {
                     unbound = true;
                     break;
                 };
-                let reflected_recess = Recess {
+                let reflected_cut = HardwareCut {
                     part,
-                    face: if recess.face.axis() == axis {
-                        recess.face.opposite()
+                    face: if cut.face.axis() == axis {
+                        cut.face.opposite()
                     } else {
-                        recess.face
+                        cut.face
                     },
-                    bounds: recess_bounds,
-                    depth: recess.depth,
+                    shape,
+                    ..cut.clone()
                 };
                 if outside
                     && let (Some(geom), Some(list)) = (geoms.get(part), cuts.get_mut(part.index()))
-                    && let Ok(cut) = recess_cut(geom, &reflected_recess, hardware)
+                    && let Ok(cut) = hardware_cut(geom, &reflected_cut, hardware)
                 {
                     list.push(cut);
                 }
-                recesses.push(reflected_recess);
+                reflected_cuts.push(reflected_cut);
             }
             if unbound {
                 continue;
             }
+            let Ok(members) = reflect_members(
+                &source_placed.members,
+                &source_placed.roles,
+                &roles,
+                axis,
+                plane,
+            ) else {
+                continue;
+            };
             let reflected = Placed {
                 piece,
                 mount_face,
-                bounds,
-                fixed,
-                orientation: source_placed.orientation.mirrored(axis),
-                data,
-                bore: None,
-                recesses,
+                roles,
+                cuts: reflected_cuts,
                 motion: reflected_motion,
                 mechanism,
+                own,
+                cup,
+                legacy: crate::legacy::Legacy {
+                    moving,
+                    fixed,
+                    data,
+                },
+                members,
                 ..source_placed
             };
             if let Some(entry) = placed.get_mut(hardware.index()) {
@@ -1001,7 +1129,6 @@ impl Solver<'_> {
             }
         }
     }
-
     /// The part that occupies the reflected place of an outside part.
     fn rebind_part(
         &mut self,
@@ -1118,6 +1245,7 @@ impl Solver<'_> {
         cuts: Vec<Vec<Cut>>,
         memberships: Vec<Vec<JointId>>,
         made: &[MadeInfo],
+        mut boards: Vec<Option<solved::Boards>>,
     ) -> Solved<Vec<solved::Part>> {
         let mut parts = Vec::new();
         let mut cuts = cuts.into_iter();
@@ -1203,18 +1331,10 @@ impl Solver<'_> {
                     )
                 } else {
                     let info = made.get(index - self.model.parts.len()).ok_or(Reported)?;
-                    let assembly = self
-                        .model
-                        .joints
-                        .get(info.joint.index())
-                        .and_then(|j| j.assembly);
                     (
                         info.name.clone(),
-                        assembly,
-                        PartOrigin::Made {
-                            joint: info.joint,
-                            pair: info.pair,
-                        },
+                        info.assembly,
+                        info.origin,
                         info.stock,
                         Shape::Board,
                         Grain::Length,
@@ -1269,12 +1389,22 @@ impl Solver<'_> {
                 cuts: part_cuts,
                 joints: part_joints,
                 note,
+                boards: boards.get_mut(index).and_then(Option::take),
             });
         }
         Ok(parts)
     }
 
-    fn write_hardware(&mut self, placed: &[Option<Placed>]) -> Solved<Vec<Hardware>> {
+    fn write_hardware(
+        &mut self,
+        placed: &[Option<Placed>],
+        mechanisms: &[Option<AssemblyMechanism>],
+    ) -> Solved<Vec<Hardware>> {
+        let placed_by: BTreeMap<(HardwareId, BodyId), MemberIndex> = mechanisms
+            .iter()
+            .flatten()
+            .flat_map(|m| m.bodies.iter().map(|(key, index)| (*key, *index)))
+            .collect();
         let mut out = Vec::new();
         for (index, entry) in placed.iter().enumerate() {
             let Some(hw) = entry else {
@@ -1284,8 +1414,9 @@ impl Solver<'_> {
                 return Err(Reported);
             };
             let base = HardwareBase::from_base(hw.base).ok_or(Reported)?;
-            let origin = pose_origin(&hw.bounds, &hw.orientation);
-            let member = |member: &crate::hardware::Member| -> Solved<solved::HardwareMember> {
+            let moving = &hw.legacy.moving;
+            let origin = pose_origin(&moving.bounds, &moving.orientation);
+            let member = |member: &crate::legacy::Member| -> Solved<solved::HardwareMember> {
                 Ok(solved::HardwareMember {
                     envelope: exact_envelope(&member.envelope)?,
                     pose: solved::Pose {
@@ -1295,21 +1426,20 @@ impl Solver<'_> {
                     bounds: world_box(&member.bounds)?,
                 })
             };
-            let fixed = hw.fixed.as_ref().map(member).transpose()?;
-            let mechanism = match (&hw.mechanism, &hw.motion) {
-                (Some(mechanism), Some(MotionExact::Linkage(linkage))) => {
-                    Some(solved::CupMechanism {
-                        linkage: *linkage,
-                        arm: member(&mechanism.arm)?,
-                        knuckle: member(&mechanism.knuckle)?,
-                        links: mechanism.links,
-                        pin_diameter: mechanism.pin_diameter,
-                        pin_length: mechanism.pin_length,
-                    })
-                }
+            let fixed = hw.legacy.fixed.as_ref().map(member).transpose()?;
+            let linkage = hw.motion.as_ref().and_then(LegacyMotion::linkage);
+            let mechanism = match (&hw.cup, linkage) {
+                (Some(cup_parts), Some(linkage)) => Some(solved::CupMechanism {
+                    linkage,
+                    arm: member(&cup_parts.arm)?,
+                    knuckle: member(&cup_parts.knuckle)?,
+                    links: cup_parts.links,
+                    pin_diameter: cup_parts.pin_diameter,
+                    pin_length: cup_parts.pin_length,
+                }),
                 _ => None,
             };
-            let data = match &hw.data {
+            let data = match &hw.legacy.data {
                 Data::Slide {
                     length,
                     clearance,
@@ -1332,7 +1462,6 @@ impl Solver<'_> {
                     cup_inset,
                     on,
                     overlay,
-                    overlay_range,
                 } => HardwareData::Hinge {
                     opening_angle: opening_angle.to_nearest_angle().ok_or(Reported)?,
                     cup_diameter: round_length(*cup_diameter)?,
@@ -1340,15 +1469,6 @@ impl Solver<'_> {
                     cup_inset: round_length(*cup_inset)?,
                     on: *on,
                     overlay: round_length(*overlay)?,
-                    overlay_range: overlay_range
-                        .map(|range| -> Solved<solved::OverlayRange> {
-                            Ok(solved::OverlayRange {
-                                base: round_length(range.base)?,
-                                plate_height: round_length(range.plate_height)?,
-                                adjustment: round_length(range.adjustment)?,
-                            })
-                        })
-                        .transpose()?,
                 },
                 Data::Pull {
                     centres,
@@ -1369,22 +1489,66 @@ impl Solver<'_> {
                 assembly: inst.assembly,
                 piece: hw.piece,
                 mount_face: hw.mount_face,
-                envelope: exact_envelope(&hw.envelope)?,
+                envelope: exact_envelope(&moving.envelope)?,
                 pose: solved::Pose {
                     origin: point(origin)?,
-                    orientation: hw.orientation,
+                    orientation: moving.orientation,
                 },
-                bounds: world_box(&hw.bounds)?,
+                bounds: world_box(&moving.bounds)?,
                 fixed,
                 data,
                 mechanism,
-                model: hw.model.as_ref().map(|m| solved::Model {
-                    source: m.source.clone(),
-                    node: match &m.align {
-                        stave_model::value::ModelAlign::Node(node) => Some(node.clone()),
-                        stave_model::value::ModelAlign::Bounds => None,
-                    },
-                }),
+                model: hw.model.clone(),
+                roles: hw
+                    .roles
+                    .iter()
+                    .filter_map(|(name, bound)| {
+                        let value = match bound {
+                            RoleBound::Part(part) => solved::RoleValue::Part(*part),
+                            RoleBound::Region(region) => solved::RoleValue::Region(*region),
+                        };
+                        solved::RoleName::new(name).map(|name| (name, value))
+                    })
+                    .collect(),
+                fasteners: hw.fasteners.clone(),
+                members: members(inst.id, &hw.members, &placed_by, hw.piece)?,
+                own_mechanism: hw.own.clone(),
+                settings: hw
+                    .settings
+                    .iter()
+                    .map(|setting| -> Solved<solved::Setting> {
+                        Ok(solved::Setting {
+                            body: solved::BodyRef {
+                                hardware: inst.id,
+                                body: setting.body,
+                            },
+                            axis: setting.axis,
+                            offset: round_length(setting.offset)?,
+                        })
+                    })
+                    .collect::<Solved<Vec<_>>>()?,
+                rules: hw.rules,
+                entries: hw
+                    .entries
+                    .iter()
+                    .filter_map(|(name, value)| {
+                        let value = match value {
+                            Value::Length(length) => {
+                                solved::EntryValue::Length(length.to_nearest_length()?)
+                            }
+                            Value::Angle(angle) => {
+                                solved::EntryValue::Angle(angle.to_nearest_angle()?)
+                            }
+                            Value::Count(count) if count.is_integer() => {
+                                solved::EntryValue::Count(u32::try_from(count.numerator()).ok()?)
+                            }
+                            Value::Bool(value) => solved::EntryValue::Bool(*value),
+                            Value::Text(text) => solved::EntryValue::Text(text.clone()),
+                            _ => return None,
+                        };
+                        Some((solved::EntryName::new(name)?, value))
+                    })
+                    .collect(),
             });
         }
         Ok(out)
@@ -1408,7 +1572,7 @@ impl Solver<'_> {
         Ok(out)
     }
 
-    fn within(&self, assembly: Option<AssemblyId>, target: AssemblyId) -> bool {
+    pub(crate) fn within(&self, assembly: Option<AssemblyId>, target: AssemblyId) -> bool {
         let mut current = assembly;
         while let Some(id) = current {
             if id == target {
@@ -1419,9 +1583,34 @@ impl Solver<'_> {
         false
     }
 
-    fn write_assemblies(&mut self, placed: &[Option<Placed>]) -> Solved<Vec<Assembly>> {
+    fn write_assemblies(
+        &mut self,
+        placed: &[Option<Placed>],
+        mechanisms: &[Option<AssemblyMechanism>],
+    ) -> Solved<Vec<Assembly>> {
         let mut out = Vec::new();
         for inst in &self.model.assemblies {
+            let mechanism = mechanisms
+                .get(inst.id.index())
+                .and_then(Option::as_ref)
+                .map(|m| m.mechanism.clone());
+            // The old contract's motion: the first driver's.
+            let assembly_motion = match mechanism
+                .as_ref()
+                .and_then(|m| m.hardware().first())
+                .and_then(|first| placed.get(first.index()))
+                .and_then(Option::as_ref)
+                .and_then(|p| p.motion.as_ref())
+            {
+                Some(motion) => {
+                    let extent = mechanism
+                        .as_ref()
+                        .map(|m| m.drive().extent())
+                        .ok_or(Reported)?;
+                    Some(legacy_assembly_motion(motion, extent)?)
+                }
+                None => None,
+            };
             let parts = self
                 .model
                 .parts
@@ -1436,26 +1625,6 @@ impl Solver<'_> {
                 .filter(|h| self.within(h.assembly, inst.id))
                 .map(|h| h.id)
                 .collect();
-            let motions: Vec<MotionExact> = self
-                .model
-                .hardware
-                .iter()
-                .filter(|h| h.assembly == Some(inst.id))
-                .filter_map(|h| {
-                    placed
-                        .get(h.id.index())
-                        .and_then(|p| p.as_ref())
-                        .and_then(|p| p.motion)
-                })
-                .collect();
-            let turns = motions
-                .iter()
-                .filter(|m| matches!(m, MotionExact::Turn { .. }))
-                .count();
-            let assembly_motion = match motions.first() {
-                Some(first) if turns == 0 || turns == motions.len() => Some(motion(first)?),
-                _ => None,
-            };
             let component = self
                 .model
                 .defs
@@ -1471,6 +1640,7 @@ impl Solver<'_> {
                 parts,
                 hardware,
                 motion: assembly_motion,
+                mechanism,
             });
         }
         Ok(out)
@@ -1492,7 +1662,7 @@ impl Solver<'_> {
         }
     }
 
-    fn write_scenes(&mut self) -> Solved<Vec<Scene>> {
+    fn write_scenes(&mut self, mechanisms: &[Option<AssemblyMechanism>]) -> Solved<Vec<Scene>> {
         let mut scenes = vec![Scene {
             id: SceneId::from_usize(0),
             name: stave_schema::REST_SCENE.to_owned(),
@@ -1545,6 +1715,13 @@ impl Solver<'_> {
                     Value::Length(length) => PoseValue::Travel(round_length(length)?),
                     _ => return Err(Reported),
                 };
+                let mechanism = mechanisms
+                    .get(assembly.index())
+                    .and_then(Option::as_ref)
+                    .map(|m| &m.mechanism);
+                if let Some(mechanism) = mechanism {
+                    self.pose_within(assembly, mechanism, value, def.decl.file, pose.span)?;
+                }
                 poses.push(ScenePose { assembly, value });
             }
             let show = match &def.show {

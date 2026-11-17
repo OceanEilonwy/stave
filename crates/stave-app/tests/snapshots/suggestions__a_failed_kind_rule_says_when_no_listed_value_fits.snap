@@ -1,0 +1,15 @@
+---
+source: crates/stave-app/tests/suggestions.rs
+expression: "broken(\"require_no_fit\")"
+---
+error[require]: 'thirds' fails: the slot is a third of the post's thickness
+  --> tests/broken/require_no_fit/project.stave:43:16
+   |
+43 | joint corner : slot_joint(rail, into: post)
+   |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  ::: tests/broken/require_no_fit/project.stave:18:3
+   |
+18 |   require thirds : slot * 3 == into.thickness "the slot is a third of the post's thickness"
+   |   ----------------------------------------------------------------------------------------- the kind's rule
+   = note: for rail and post in corner
+   = help: no value in the kind's lists makes this hold (slot within [6mm, 8mm, 10mm, 12mm]); change the parts' sizes

@@ -227,6 +227,34 @@ impl LinkagePath {
         Some(DVec2::from_angle(theta).rotate(rest) + self.offset(theta)?)
     }
 
+    /// A link's motion at `theta`, in the plane: its turn about its arm pin
+    /// as `(cos, sin)`, then the offset that keeps that pin in place.
+    pub fn link_motion(&self, link: usize, theta: f64) -> Option<(DVec2, DVec2)> {
+        let ground = *self.ground.get(link)?;
+        let coupler = *self.coupler.get(link)?;
+        if theta == 0.0 {
+            return Some((DVec2::X, DVec2::ZERO));
+        }
+        let now = DVec2::from_angle(theta).rotate(coupler) + self.offset(theta)? - ground;
+        let rotation = DVec2::from_angle((coupler - ground).angle_to(now));
+        Some((rotation, ground - rotation.rotate(ground)))
+    }
+
+    /// A link's arm pin, in the plane.
+    pub fn ground_pin_of(&self, link: usize) -> Option<DVec2> {
+        self.ground.get(link).copied()
+    }
+
+    /// The fastest a point of a link `radius` from its arm pin moves, in
+    /// nanometres per radian of opening, given
+    /// [`LinkagePath::offset_speed`]: the link turns as fast as its boss
+    /// pin moves over its length.
+    pub fn link_speed(&self, link: usize, radius: f64, offset_speed: f64) -> Option<f64> {
+        let coupler = self.coupler.get(link)?;
+        let length = *self.lengths.get(link)?;
+        (length > 0.0).then(|| radius * (coupler.length() + offset_speed) / length)
+    }
+
     /// The boss's turn and offset at `theta`, in the plane.
     pub fn plane_pose(&self, theta: f64) -> Option<(DVec2, DVec2)> {
         Some((DVec2::from_angle(theta), self.offset(theta)?))
@@ -239,20 +267,28 @@ mod tests {
     use stave_lang::placement::{Axis, Direction};
     use stave_lang::units::{Angle, Length};
     use stave_model::solved::{Link, LinkageFrame, PlanePoint, Point};
-    use stave_schema::hinges::{CUP_HINGE_110, CupPoint};
 
-    /// The built-in cup hinge on a 19mm door with its cup 5mm from the edge,
-    /// in a frame at the door's front hinge corner.
+    /// The pins of `euro_hinge` (`std/hardware/hinges.stave`), in
+    /// nanometres across from the cup's centre and in from the door's
+    /// back: the arm's pin, then the cup's, for the inner link and then the
+    /// outer link.
+    const PINS: [[(i64, i64); 2]; 2] = [
+        [(13_500_000, 10_900_000), (-8_800_000, 7_330_000)],
+        [(13_280_000, 3_560_000), (-9_540_000, 1_390_000)],
+    ];
+
+    /// The cup hinge on a 19mm door with its cup 5mm from the edge, in a
+    /// frame at the door's front hinge corner.
     fn cup_hinge(opening: Angle) -> Linkage {
-        let place = |p: CupPoint| {
+        let place = |(across, depth): (i64, i64)| {
             PlanePoint::new(
-                Length::from_nm(22_500_000 + p.x),
-                Length::from_nm(p.y - 19_000_000),
+                Length::from_nm(22_500_000 + across),
+                Length::from_nm(depth - 19_000_000),
             )
         };
-        let links = CUP_HINGE_110.links.map(|link| Link {
-            ground: place(link.arm),
-            coupler: place(link.boss),
+        let links = PINS.map(|[arm, cup]| Link {
+            ground: place(arm),
+            coupler: place(cup),
         });
         let frame = LinkageFrame::new(
             Axis::Up,
@@ -283,7 +319,7 @@ mod tests {
         }
         // At 90deg the door's front hinge corner (the frame's origin) is
         // 5.54mm further across and 9.27mm further back than closed, as
-        // tools/hinge-sim/linkage.py has it; its back corner, which rested
+        // docs/hardware/cup-hinge-linkage.md has it; its back corner, which rested
         // on the cabinet's front (deep 19mm here), is 10mm in front of it:
         // the door was pushed out as it turned.
         let door = path.coupler(90f64.to_radians()).unwrap();

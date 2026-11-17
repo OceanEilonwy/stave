@@ -193,7 +193,7 @@ mod tests {
                 .map(|t| t.word().to_owned())
                 .collect::<Vec<_>>()
         );
-        let hardware = between(GRAMMAR, "hardware's envelope. ", " don't apply");
+        let hardware = between(GRAMMAR, "(`with:` its first role). ", " don't apply");
         for term in PlacementTerm::ALL {
             assert_eq!(
                 hardware.contains(&format!("`{}`", term.word())),

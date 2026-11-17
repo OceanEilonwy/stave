@@ -40,9 +40,10 @@ const fn argument(name: &'static str, ty: ValueType, default: ArgumentDefault) -
 /// The three face selectors.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Selector {
-    /// `end(p, facing: q)`
+    /// `end(p, facing: q)`; `facing:` may be left out
     End,
-    /// `side(p, normal: width | thickness, from: q)`
+    /// `side(p, normal: width | thickness, from: q)`; `from:` may be left
+    /// out
     Side,
     /// `crossing(p, q)`
     Crossing,
@@ -75,13 +76,16 @@ impl Selector {
         const BOOL: ValueType = ValueType::Type(TypeName::Bool);
         match self {
             Selector::End => {
-                const LIST: &[ArgumentSpec] = &[argument("facing", PART, Required)];
+                const LIST: &[ArgumentSpec] = &[
+                    argument("facing", PART, Absent),
+                    argument("opposite", BOOL, Bool(false)),
+                ];
                 LIST
             }
             Selector::Side => {
                 const LIST: &[ArgumentSpec] = &[
                     argument("normal", NORMAL, Required),
-                    argument("from", PART, Required),
+                    argument("from", PART, Absent),
                     argument("opposite", BOOL, Bool(false)),
                     argument("flip", BOOL, Bool(false)),
                 ];
@@ -111,7 +115,7 @@ impl Selector {
 pub enum FaceRemoval {
     /// Never removes a face.
     Never,
-    /// Removes the end it is cut on.
+    /// Removes the face it is cut on: the end, or the edge for a tongue.
     TheEnd,
     /// A `through` outline removes the edges it crosses.
     EdgesWhenThrough,
@@ -173,6 +177,7 @@ use ArgumentDefault as D;
 use Selector::{Crossing, End, Side};
 const LENGTH: ValueType = ValueType::Type(TypeName::Length);
 const ANGLE: ValueType = ValueType::Type(TypeName::Angle);
+const RATIO: ValueType = ValueType::Type(TypeName::Ratio);
 const COUNT: ValueType = ValueType::Type(TypeName::Count);
 const BOOL: ValueType = ValueType::Type(TypeName::Bool);
 const DEPTH: ValueType = ValueType::Depth;
@@ -229,7 +234,7 @@ pub fn cut_operation(cut: CutOperation) -> &'static OperationSpec {
             argument("width", LENGTH, D::Required),
             argument("thickness", LENGTH, D::Required),
         ],
-        selectors: &[End],
+        selectors: &[End, Crossing],
         features: &["cheeks", "shoulders", "waste"],
         measurements: &["length", "width", "thickness"],
         removes: FaceRemoval::TheEnd,
@@ -269,25 +274,28 @@ pub fn cut_operation(cut: CutOperation) -> &'static OperationSpec {
         measurements: &["diameter", "depth"],
         removes: FaceRemoval::Never,
     };
+    // Exactly one of `angle` and `slope` is given; the solver says so when
+    // it isn't.
     const DOVETAIL_ARGUMENTS: &[ArgumentSpec] = &[
         argument("neck", LENGTH, D::Required),
         argument("depth", LENGTH, D::Required),
-        argument("angle", ANGLE, D::Required),
+        argument("angle", ANGLE, D::Absent),
+        argument("slope", RATIO, D::Absent),
     ];
     const DOVETAIL_SOCKET: OperationSpec = OperationSpec {
         operation: Operation::Cut(CutOperation::DovetailSocket),
         arguments: DOVETAIL_ARGUMENTS,
-        selectors: &[End],
+        selectors: &[End, Crossing],
         features: &["walls", "floor", "waste", "outline"],
-        measurements: &["neck", "depth", "angle"],
+        measurements: &["neck", "depth", "angle", "slope"],
         removes: FaceRemoval::Never,
     };
     const DOVETAIL_TAIL: OperationSpec = OperationSpec {
         operation: Operation::Cut(CutOperation::DovetailTail),
         arguments: DOVETAIL_ARGUMENTS,
-        selectors: &[End],
+        selectors: &[End, Crossing],
         features: &["cheeks", "shoulders", "waste", "outline"],
-        measurements: &["neck", "depth", "angle"],
+        measurements: &["neck", "depth", "angle", "slope"],
         removes: FaceRemoval::TheEnd,
     };
     const OUTLINE: OperationSpec = OperationSpec {

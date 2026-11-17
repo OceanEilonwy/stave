@@ -11,7 +11,7 @@ kind socket : joint {
   cut_first: into
   adds:      extend(piece, by: depth)        // the rod is cut longer by the depth at each end
 
-  cut crossing(into, piece) {
+  cut socket: crossing(into, piece) {
     drill(diameter: piece.diameter, depth: depth)
   }
 

@@ -8,8 +8,7 @@ use stave_lang::placement::PartAxis;
 use stave_lang::{Code, Diagnostic, Label};
 use stave_schema::fields::{self, Requirement};
 use stave_schema::kinds::{
-    BUTT_HINGE_ENTRIES, CUP_HINGE_ENTRIES, JOINT_DEFAULT_ROLES, MemberName,
-    RESERVED_JOINT_SETTINGS, RoleType, base, members_of,
+    JOINT_DEFAULT_ROLES, MemberName, RESERVED_JOINT_SETTINGS, RoleType, base, members_of,
 };
 use stave_schema::operations::{ArgumentDefault, MARK, Selector, cut_operation, operation};
 use stave_schema::placement::{AssemblyStepKind, EXTEND, MadePartTerm};
@@ -21,9 +20,10 @@ use super::expr::Expect;
 use super::items::kind_ids;
 use super::{Body, Cx, Origin, Resolver};
 use crate::defs::{
-    CutDef, CutStepDef, DefId, ExtendDef, JointKindDef, JointMember, KindDef, MadePartDef,
-    MadeTerm, MadeTermKind, MarkStepDef, MemberDef, Need, OperationDef, ParamDef, RExpr, RExprKind,
-    RecipeDef, RequireDef, RoleDef, SelectorDef, Setting, StepDef, Symbol, UseDef, Word,
+    CutDef, CutName, CutStepDef, DefId, ExtendDef, HardwareKindDef, JointKindDef, JointMember,
+    KindDef, MadePartDef, MadeTerm, MadeTermKind, MarkStepDef, MemberDef, Need, OperationDef,
+    ParamDef, RExpr, RExprKind, RecipeDef, RequireDef, RoleDef, SelectorDef, Setting, StepDef,
+    Symbol, UseDef, Word,
 };
 use crate::ids::KindId;
 use crate::types::Ty;
@@ -35,25 +35,30 @@ pub(crate) fn role_specs(syntax: &ast::Kind) -> Vec<(String, RoleType, Span)> {
         _ => None,
     });
     match (syntax.base.value, declared) {
-        (BaseKind::Joint, Some(roles)) => roles
-            .roles
-            .iter()
-            .map(|role| {
-                let ty = ast::TypeName::from_word(role.ty.as_str())
-                    .and_then(RoleType::from_type)
-                    .unwrap_or(RoleType::Parts);
-                (role.name.as_str().to_owned(), ty, role.span)
-            })
-            .collect(),
+        (BaseKind::Joint | BaseKind::Slide | BaseKind::Hinge | BaseKind::Pull, Some(roles)) => {
+            roles
+                .roles
+                .iter()
+                .map(|role| {
+                    let ty = ast::TypeName::from_word(role.ty.as_str())
+                        .and_then(RoleType::from_type)
+                        .unwrap_or(RoleType::Parts);
+                    (role.name.as_str().to_owned(), ty, role.span)
+                })
+                .collect()
+        }
         (BaseKind::Joint, None) => JOINT_DEFAULT_ROLES
             .iter()
             .map(|role| (role.name.to_owned(), role.ty, syntax.name.span()))
             .collect(),
-        (other, _) => base(other)
-            .roles
-            .iter()
-            .map(|role| (role.name.to_owned(), role.ty, syntax.name.span()))
-            .collect(),
+        (
+            BaseKind::Slide
+            | BaseKind::Hinge
+            | BaseKind::Pull
+            | BaseKind::Fastener
+            | BaseKind::Tool,
+            _,
+        ) => Vec::new(),
     }
 }
 
@@ -154,10 +159,43 @@ impl Resolver<'_> {
         let mut joint = (base_kind == BaseKind::Joint).then(JointKindDef::default);
         let mut seen_fields: BTreeMap<String, Span> = BTreeMap::new();
         let mut written_members: Vec<&ast::Documented<ast::KindMember>> = Vec::new();
+        let mut mechanisms: Vec<&ast::MechanismBlock> = Vec::new();
+        let mounted = base_kind.is_mounted_hardware();
+        let mut mounts: Vec<&ast::MountBlock> = Vec::new();
+        let mut hardware_cuts: Vec<&ast::Cut> = Vec::new();
+        let mut adjusts: Vec<&ast::Adjust> = Vec::new();
+        let mut hardware_uses = JointKindDef::default();
         for entry in &syntax.body.entries {
             match entry {
                 ast::KindEntry::Param(_) => {}
+                ast::KindEntry::Mount(block) => {
+                    if mounted {
+                        mounts.push(block);
+                    } else {
+                        self.error_help(
+                            Code::UnknownField,
+                            format!("a {} kind has no field 'mount'", base_kind.word()),
+                            cx.file,
+                            block.span,
+                            "only slide, hinge and pull kinds are mounted on a part",
+                        );
+                    }
+                }
                 ast::KindEntry::Member(member) => written_members.push(member),
+                ast::KindEntry::Mechanism(block) => mechanisms.push(block),
+                ast::KindEntry::Adjust(adjust) => {
+                    if mounted {
+                        adjusts.push(adjust);
+                    } else {
+                        self.error_help(
+                            Code::UnknownField,
+                            format!("a {} kind has no field 'adjust'", base_kind.word()),
+                            cx.file,
+                            adjust.span,
+                            "only slide, hinge and pull kinds have members that are set on each other",
+                        );
+                    }
+                }
                 ast::KindEntry::Require(require) => {
                     let condition = self.value(
                         &cx,
@@ -180,13 +218,13 @@ impl Resolver<'_> {
                     });
                 }
                 ast::KindEntry::Roles(roles) => {
-                    if base_kind != BaseKind::Joint {
+                    if base_kind != BaseKind::Joint && !mounted {
                         self.error_help(
                             Code::UnknownField,
                             format!("a {} kind has no field 'roles'", base_kind.word()),
                             cx.file,
                             roles.span,
-                            "only joint kinds declare their roles",
+                            "only joint, slide, hinge and pull kinds declare their roles",
                         );
                     }
                 }
@@ -196,12 +234,13 @@ impl Resolver<'_> {
                             joint.cuts.push(lowered);
                         }
                     }
+                    None if mounted => hardware_cuts.push(cut),
                     None => self.error_help(
                         Code::UnknownField,
                         format!("a {} kind has no field 'cut'", base_kind.word()),
                         cx.file,
                         cut.span,
-                        "only joint kinds cut parts",
+                        "only joint, slide, hinge and pull kinds cut parts",
                     ),
                 },
                 ast::KindEntry::Makes(made) => match &mut joint {
@@ -235,6 +274,36 @@ impl Resolver<'_> {
                     match &mut joint {
                         Some(joint_def) => {
                             self.lower_joint_field(&cx, id, field, joint_def, &what);
+                        }
+                        None if mounted && key == "uses" => {
+                            self.lower_joint_field(&cx, id, field, &mut hardware_uses, &what);
+                        }
+                        None if mounted && fields::find(fields::JOINT_KIND, key).is_some() => {
+                            self.error_help(
+                                Code::UnknownField,
+                                format!("a {} kind has no field '{key}'", base_kind.word()),
+                                cx.file,
+                                field.key.span(),
+                                "insert, cut_first, adds and note are a joint kind's entries",
+                            );
+                        }
+                        None if mounted && base(base_kind).entry(key).is_none() => {
+                            // Catalogue data: any field the kind likes.
+                            if kind_params(syntax).iter().any(|p| p.name.as_str() == key) {
+                                self.error(
+                                    Code::DuplicateName,
+                                    format!("'{key}' is declared twice"),
+                                    cx.file,
+                                    field.key.span(),
+                                );
+                                continue;
+                            }
+                            let value = self.value(&cx, &field.value, &Expect::any().named(key));
+                            kind_fields.push(Setting {
+                                name: key.to_owned(),
+                                name_span: field.key.span(),
+                                value,
+                            });
                         }
                         None => {
                             let Some(spec) = base(base_kind).entry(key) else {
@@ -302,55 +371,6 @@ impl Resolver<'_> {
                     );
                 }
             }
-            if base_kind == BaseKind::Hinge {
-                let written = |name: &str| {
-                    kind_fields.iter().any(|f| f.name == name)
-                        || params.iter().any(|p| p.decl.name == name)
-                };
-                let cup: Vec<&str> = CUP_HINGE_ENTRIES
-                    .into_iter()
-                    .filter(|name| written(name))
-                    .collect();
-                let butt = BUTT_HINGE_ENTRIES.into_iter().any(written);
-                if butt && !cup.is_empty() {
-                    self.error_help(
-                        Code::TypeMismatch,
-                        format!(
-                            "{what} has both a leaf and a cup; a hinge is a cup hinge or a butt hinge"
-                        ),
-                        cx.file,
-                        syntax.body.span,
-                        format!(
-                            "remove 'leaf' for a cup hinge, or {} for a butt hinge",
-                            cup.iter()
-                                .map(|name| format!("'{name}'"))
-                                .collect::<Vec<_>>()
-                                .join(", ")
-                        ),
-                    );
-                } else if !butt && cup.is_empty() {
-                    self.error_help(
-                        Code::MissingField,
-                        format!("{what} is missing 'leaf'"),
-                        cx.file,
-                        syntax.body.span,
-                        "a butt hinge needs leaf: box(...); a cup hinge needs cup_diameter, cup_depth, cup_inset, plate_setback and plate",
-                    );
-                } else if !butt {
-                    for name in CUP_HINGE_ENTRIES
-                        .into_iter()
-                        .filter(|name| !cup.contains(name))
-                    {
-                        self.error_help(
-                            Code::MissingField,
-                            format!("{what} is missing '{name}'"),
-                            cx.file,
-                            syntax.body.span,
-                            format!("write {name}: ... or declare param {name}; a cup hinge needs all of its cup entries"),
-                        );
-                    }
-                }
-            }
             for param in &params {
                 if let Some(spec) = base(base_kind).entry(&param.decl.name)
                     && let Some(wanted) = Ty::from_value_type(spec.ty)
@@ -368,10 +388,28 @@ impl Resolver<'_> {
                 }
             }
         }
-        let cup = CUP_HINGE_ENTRIES.into_iter().any(|name| {
-            kind_fields.iter().any(|f| f.name == name) || params.iter().any(|p| p.decl.name == name)
-        });
-        let members = self.lower_members(&cx, base_kind, cup, &written_members);
+        let members = self.lower_members(&cx, base_kind, &written_members);
+        let bodies = if members_of(base_kind).is_empty() {
+            // Already reported: this kind has no members at all.
+            None
+        } else {
+            self.lower_bodies(&cx, &roles, &written_members)
+        };
+        let mechanism = self.kind_mechanism(&cx, syntax, base_kind, bodies.as_deref(), &mechanisms);
+        let hardware = if mounted {
+            self.hardware_kind(
+                &cx,
+                syntax,
+                &roles,
+                bodies.as_deref(),
+                &mounts,
+                &hardware_cuts,
+                &adjusts,
+                hardware_uses.uses,
+            )
+        } else {
+            None
+        };
         KindDef {
             decl: self.decl(DefId::Kind(id), &syntax.name, origin),
             base: base_kind,
@@ -381,7 +419,124 @@ impl Resolver<'_> {
             fields: kind_fields,
             joint,
             members,
+            bodies: bodies.unwrap_or_default(),
+            mechanism,
+            hardware,
         }
+    }
+
+    /// A slide, hinge or pull kind's roles, `mount { }`, cuts, `adjust`
+    /// entries and `uses:`.
+    /// `None` (reported) when one of them is missing or doesn't lower.
+    #[allow(clippy::too_many_arguments)]
+    fn hardware_kind(
+        &mut self,
+        cx: &Cx,
+        syntax: &ast::Kind,
+        roles: &[RoleDef],
+        bodies: Option<&[crate::defs::BodyDef]>,
+        mounts: &[&ast::MountBlock],
+        cuts: &[&ast::Cut],
+        adjusts: &[&ast::Adjust],
+        uses: Vec<UseDef>,
+    ) -> Option<HardwareKindDef> {
+        let what = format!("kind '{}'", syntax.name.as_str());
+        let piece_is_part = roles.first().map(|role| role.ty);
+        if piece_is_part != Some(RoleType::Part) {
+            let help = if roles.is_empty() {
+                "declare the parts it joins: roles { piece: Part, on: Part }; the first is the part it is mounted on"
+            } else {
+                "make the first role the part it is mounted on: piece: Part"
+            };
+            self.error_help(
+                Code::MissingField,
+                format!("{what} is missing 'roles'"),
+                cx.file,
+                syntax.name.span(),
+                help,
+            );
+        }
+        for role in roles {
+            if role.ty == RoleType::Parts {
+                self.error_help(
+                    Code::TypeMismatch,
+                    format!("'{}' needs Part or Region, found 'Parts'", role.name),
+                    cx.file,
+                    role.span,
+                    "a piece of hardware joins single parts: write Part (or Region for an opening)",
+                );
+            }
+        }
+        let (first, rest) = match mounts.split_first() {
+            Some(split) => split,
+            None => {
+                self.error_help(
+                    Code::MissingField,
+                    format!("{what} is missing 'mount'"),
+                    cx.file,
+                    syntax.name.span(),
+                    "say where it sits on its piece: mount { face: ..., across: ..., along: ... }",
+                );
+                return None;
+            }
+        };
+        for again in rest {
+            self.duplicate("mount", again.span, first.span, cx);
+        }
+        let mount = self.lower_mount(cx, roles, first);
+        let bodies = bodies.unwrap_or_default();
+        let mut lowered = Vec::new();
+        for cut in cuts {
+            if let Some(cut) = self.lower_hardware_cut(cx, roles, bodies, cut) {
+                lowered.push(cut);
+            }
+        }
+        let adjusts = self.lower_adjusts(cx, syntax.name.as_str(), bodies, adjusts);
+        Some(HardwareKindDef {
+            mount: mount?,
+            cuts: lowered,
+            uses,
+            adjusts,
+        })
+    }
+
+    /// A kind's one `mechanism`, where its base may have one. Version 1
+    /// solves only a cup hinge's (grammar, "Mechanisms").
+    fn kind_mechanism(
+        &mut self,
+        cx: &Cx,
+        syntax: &ast::Kind,
+        base_kind: BaseKind,
+        bodies: Option<&[crate::defs::BodyDef]>,
+        mechanisms: &[&ast::MechanismBlock],
+    ) -> Option<crate::defs::MechanismDef> {
+        let (first, rest) = mechanisms.split_first()?;
+        for again in rest {
+            self.report(
+                Diagnostic::error(
+                    Code::DuplicateName,
+                    "'mechanism' is declared twice",
+                    Label::new(cx.file, again.span),
+                )
+                .with_label(Label::with_message(
+                    cx.file,
+                    first.span,
+                    "first written here",
+                ))
+                .with_help("write one mechanism block; put every entry in it"),
+            );
+        }
+        if !base_kind.is_mounted_hardware() {
+            self.error_help(
+                Code::UnknownField,
+                format!("a {} kind has no field 'mechanism'", base_kind.word()),
+                cx.file,
+                first.span,
+                "only hinge, slide and pull kinds have members that move",
+            );
+            return None;
+        }
+        self.lower_mechanism(cx, syntax.name.as_str(), bodies?, first)
     }
 
     /// A hardware kind's `member` entries: each a member word of its base,
@@ -390,21 +545,35 @@ impl Resolver<'_> {
         &mut self,
         cx: &Cx,
         base_kind: BaseKind,
-        cup: bool,
         written: &[&ast::Documented<ast::KindMember>],
     ) -> Vec<MemberDef> {
-        let allowed = members_of(base_kind, cup);
-        let what = match base_kind {
-            BaseKind::Hinge if cup => "a cup hinge".to_owned(),
-            BaseKind::Hinge => "a butt hinge".to_owned(),
-            other => format!("a {} kind", other.word()),
-        };
+        let allowed = members_of(base_kind);
+        let what = format!("a {} kind", base_kind.word());
         let mut members: Vec<MemberDef> = Vec::new();
+        let mut seen: BTreeMap<&str, Span> = BTreeMap::new();
         for member in written {
             let word = member.node.name.as_str();
             let span = member.node.name.span();
+            if let Some(first) = seen.get(word) {
+                self.report(
+                    Diagnostic::error(
+                        Code::DuplicateName,
+                        format!("'{word}' is declared twice"),
+                        Label::new(cx.file, span),
+                    )
+                    .with_label(Label::with_message(cx.file, *first, "first written here"))
+                    .with_help(format!("write 'member {word}' once; remove one of them")),
+                );
+                continue;
+            }
+            seen.insert(word, span);
             let Some(name) = MemberName::from_word(word).filter(|name| allowed.contains(name))
             else {
+                if member.node.body.is_some() && !allowed.is_empty() {
+                    // A member with a body may have any name; it joins the
+                    // viewer's list only under one of its base's words.
+                    continue;
+                }
                 if allowed.is_empty() {
                     self.error_help(
                         Code::UnknownField,
@@ -427,22 +596,6 @@ impl Resolver<'_> {
                 }
                 continue;
             };
-            if let Some(first) = members.iter().find(|m| m.name == name) {
-                self.report(
-                    Diagnostic::error(
-                        Code::DuplicateName,
-                        format!("'{word}' is declared twice"),
-                        Label::new(cx.file, span),
-                    )
-                    .with_label(Label::with_message(
-                        cx.file,
-                        first.span,
-                        "first written here",
-                    ))
-                    .with_help(format!("write 'member {word}' once; remove one of them")),
-                );
-                continue;
-            }
             members.push(MemberDef {
                 name,
                 span,
@@ -468,30 +621,43 @@ impl Resolver<'_> {
                 if let ast::KindEntry::Roles(block) = entry {
                     for role in &block.roles {
                         names.push((role.name.as_str().to_owned(), role.name.span()));
+                        let joint = syntax.base.value == BaseKind::Joint;
                         let valid = ast::TypeName::from_word(role.ty.as_str())
-                            .and_then(RoleType::from_type);
+                            .and_then(RoleType::from_type)
+                            .filter(|ty| !joint || *ty != RoleType::Region);
                         if valid.is_none() {
+                            let (wanted, help) = if joint {
+                                (
+                                    "Part or Parts",
+                                    "a role is Part (exactly one part) or Parts (one or more)",
+                                )
+                            } else {
+                                (
+                                    "Part or Region",
+                                    "a hardware role is Part (exactly one part) or Region (an opening)",
+                                )
+                            };
                             self.error_help(
                                 Code::TypeMismatch,
                                 format!(
-                                    "'{}' needs Part or Parts, found '{}'",
+                                    "'{}' needs {wanted}, found '{}'",
                                     role.name.as_str(),
                                     role.ty.as_str()
                                 ),
                                 cx.file,
                                 role.ty.span(),
-                                "a role is Part (exactly one part) or Parts (one or more)",
+                                help,
                             );
                         }
                     }
                 }
             }
             let has_parts = roles.iter().any(|(_, ty, _)| *ty == RoleType::Parts);
-            if has_parts && roles.len() != 2 {
+            if has_parts && roles.len() > 2 {
                 self.error_help(
                     Code::TypeMismatch,
                     format!(
-                        "kind '{}' has a Parts role, so it needs exactly two roles",
+                        "kind '{}' has a Parts role, so it has one role or two",
                         syntax.name.as_str()
                     ),
                     cx.file,
@@ -840,21 +1006,21 @@ impl Resolver<'_> {
             return None;
         };
         let part = self.joint_member(cx, first, head.as_str())?;
-        let other_expr = match selector {
+        // `facing:` and `from:` may be left out: the selector then names the
+        // part against itself (grammar, "Faces to cut").
+        let other = match selector {
             Selector::End => parsed.get("facing"),
             Selector::Side => parsed.get("from"),
             Selector::Crossing => parsed.positional.get(1).copied(),
         };
-        let Some(other_expr) = other_expr else {
-            let wanted = match selector {
-                Selector::End => "facing:",
-                Selector::Side => "from:",
-                Selector::Crossing => "a second part",
-            };
-            self.missing_argument(cx, head.as_str(), wanted, span);
-            return None;
+        let other = match (selector, other) {
+            (_, Some(other_expr)) => self.joint_member(cx, other_expr, head.as_str())?,
+            (Selector::End | Selector::Side, None) => part,
+            (Selector::Crossing, None) => {
+                self.missing_argument(cx, head.as_str(), "a second part", span);
+                return None;
+            }
         };
-        let other = self.joint_member(cx, other_expr, head.as_str())?;
         let normal = match parsed.get("normal") {
             Some(e) => match self.part_axis(cx, e, "normal") {
                 Some(PartAxis::Length) => {
@@ -898,19 +1064,40 @@ impl Resolver<'_> {
             &cut.selector.args,
             cut.selector.span,
         )?;
+        let operations = self.lower_operations(cx, selector.selector, &cut.operations);
+        let name = match &cut.name {
+            Some(name) => Some(CutName::new(name.as_str())?),
+            None => None,
+        };
+        Some(CutDef {
+            name,
+            selector,
+            operations,
+            span: cut.span,
+        })
+    }
+
+    /// The operations of a `cut` block, each checked against the selector
+    /// it is written under.
+    pub(super) fn lower_operations(
+        &mut self,
+        cx: &Cx,
+        selector: stave_schema::operations::Selector,
+        calls: &[ast::Call],
+    ) -> Vec<OperationDef> {
         let mut operations = Vec::new();
-        for call in &cut.operations {
+        for call in calls {
             let head = call.head.as_str();
             let Some(op) = CutOperation::from_word(head) else {
                 self.unknown(Code::UnknownName, format!("unknown name '{head}'"), cx.file, call.head.span(), head, CutOperation::ALL.map(CutOperation::word), "a cut operation is one of notch, slot, pocket, tenon, spigot, round, drill, dovetail_socket, dovetail_tail, outline");
                 continue;
             };
             let spec = cut_operation(op);
-            if !spec.selectors.contains(&selector.selector) {
+            if !spec.selectors.contains(&selector) {
                 let allowed: Vec<&str> = spec.selectors.iter().map(|s| s.word()).collect();
                 self.error_help(
                     Code::TypeMismatch,
-                    format!("'{head}' can't be cut on {}", selector.selector.word()),
+                    format!("'{head}' can't be cut on {}", selector.word()),
                     cx.file,
                     call.span,
                     format!("'{head}' is cut on {}", allowed.join(" or ")),
@@ -950,11 +1137,7 @@ impl Resolver<'_> {
                 span: call.span,
             });
         }
-        Some(CutDef {
-            selector,
-            operations,
-            span: cut.span,
-        })
+        operations
     }
 
     fn lower_marks(&mut self, cx: &Cx, value: &ast::Expr) -> Vec<(RExpr, RExpr)> {

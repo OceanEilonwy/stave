@@ -73,12 +73,17 @@ use std::fmt;
 use serde::Serialize;
 use stave_lang::ast::{BaseKind, CutOperation};
 use stave_lang::placement::{Axis, Direction, Face, PartAxis};
-use stave_lang::units::{Angle, Length};
+use stave_lang::units::{Angle, Length, Rational};
 use stave_schema::species::Species;
 use stave_schema::words::{Grain, Measure, OutputUnit, StockForm};
+use std::collections::BTreeMap;
+
+pub use crate::defs::{BodyId, CutName};
 
 pub use crate::ids::{AssemblyId, HardwareId, JointId, KindId, PartId, RegionId, SceneId};
 pub use crate::linkage::{Branch, Link, Linkage, LinkageError, LinkageFrame, PlanePoint};
+pub use crate::mechanism::{Mechanism, MemberIndex};
+pub use crate::nonempty::NonEmpty;
 
 // ---------------------------------------------------------------------------
 // Geometry
@@ -443,9 +448,12 @@ impl SolvedDesign {
 
     /// The parts joints made.
     pub fn made_parts(&self) -> impl Iterator<Item = &Part> {
-        self.parts
-            .iter()
-            .filter(|p| matches!(p.origin, PartOrigin::Made { .. }))
+        self.parts.iter().filter(|p| {
+            matches!(
+                p.origin,
+                PartOrigin::Made { .. } | PartOrigin::Boards { .. }
+            )
+        })
     }
 
     /// The lowest point of any part: where the floor is.
@@ -531,6 +539,15 @@ pub enum PartOrigin {
         /// The pair (index into [`Joint::pairs`]).
         pair: usize,
     },
+    /// A part a board joint makes (a spline): once per seam of a part made
+    /// of boards, or once for a kind with one `Parts` role.
+    Boards {
+        /// The part made of boards.
+        part: PartId,
+        /// The seam (index into [`Boards::seams`]); `None` for a kind
+        /// across all of the part's boards.
+        seam: Option<usize>,
+    },
 }
 
 /// A turned profile's station: a diameter at a distance from the start.
@@ -608,6 +625,81 @@ pub struct Part {
     pub joints: Vec<JointId>,
     /// `note:`
     pub note: Option<String>,
+    /// The boards it is made of, when it is wider than its stock's
+    /// `max_width` (grammar, "Boards"). Derived, never written.
+    pub boards: Option<Boards>,
+}
+
+/// The number of a board within its part: 1 is the board at the
+/// reference edge (at the start of the length when `grain: width`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[serde(transparent)]
+pub struct BoardIndex(std::num::NonZeroU32);
+
+impl BoardIndex {
+    /// The board numbered `number`; `None` for 0.
+    pub fn new(number: u32) -> Option<BoardIndex> {
+        std::num::NonZeroU32::new(number).map(BoardIndex)
+    }
+
+    /// Its number, from 1.
+    pub fn get(self) -> u32 {
+        self.0.get()
+    }
+}
+
+/// The boards a part is made of, how they are joined and where the seams
+/// are. Lengths along `axis` are in the part's own frame.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Boards {
+    /// The part's axis across the grain that the boards divide: `width`,
+    /// or `length` when `grain: width`.
+    pub axis: PartAxis,
+    /// The boards, numbered from 1 at the reference edge.
+    pub boards: NonEmpty<Board>,
+    /// The seams between neighbouring boards, from the reference edge.
+    pub seams: Vec<Seam>,
+    /// The joint kinds the seams are joined by, as `boards:` lists them.
+    pub methods: NonEmpty<BoardMethod>,
+    /// The board joints' requires, per seam (`top.seam[1].fits`) or across
+    /// all boards (`top.boards.fits`). A failing one is also an error.
+    pub requires: Vec<RequireResult>,
+}
+
+/// One board of a part.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Board {
+    /// Its number.
+    pub index: BoardIndex,
+    /// Its cut width across the grain: an equal share of the part's,
+    /// plus what its edge joints add (a tongue).
+    pub width: Length,
+    /// Where its cut width starts along [`Boards::axis`].
+    pub offset: Length,
+    /// The cuts its edge joints make, measured on the board itself (its
+    /// own frame starts at `offset`). A neighbouring board is named by the
+    /// part it belongs to.
+    pub cuts: Vec<Cut>,
+}
+
+/// A seam between two neighbouring boards.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct Seam {
+    /// The boards on either side: the one nearer the reference edge first.
+    pub between: (BoardIndex, BoardIndex),
+    /// Where the boards meet along [`Boards::axis`], before joints add.
+    pub at: Length,
+}
+
+/// One joint kind a part's boards are joined by.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct BoardMethod {
+    /// The kind.
+    pub kind: KindId,
+    /// Its name as written.
+    pub name: String,
+    /// `false` when the kind value says `glue: false`.
+    pub glue: bool,
 }
 
 impl Part {
@@ -633,10 +725,18 @@ pub enum CutSource {
         /// The pair.
         pair: usize,
     },
-    /// A hinge cup, a hinge leaf's mortise or the screw holes of a pull.
+    /// A `cut` of a hardware kind, for one piece of hardware.
     Hardware {
         /// The hardware.
         hardware: HardwareId,
+    },
+    /// A `cut` of a joint kind that joins the boards of a part.
+    Boards {
+        /// The part made of boards.
+        part: PartId,
+        /// The seam (index into [`Boards::seams`]); `None` for a kind
+        /// across all of the part's boards.
+        seam: Option<usize>,
     },
 }
 
@@ -648,6 +748,30 @@ pub enum Depth {
     Length(Length),
     /// All the way through the part.
     Through,
+}
+
+/// How steeply a dovetail's sides slope away from straight.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Slope {
+    /// `angle: 10deg`: the angle from straight.
+    Angle(Angle),
+    /// `slope: 1 in 8`: across for every one along, exactly (the ratio
+    /// `1/8`, always positive).
+    Ratio(Rational),
+}
+
+impl fmt::Display for Slope {
+    /// `angle 10deg` or `slope 1 in 8` (a ratio's numerator and
+    /// denominator, in lowest terms).
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Slope::Angle(angle) => write!(f, "angle {angle}"),
+            Slope::Ratio(ratio) => {
+                write!(f, "slope {} in {}", ratio.numerator(), ratio.denominator())
+            }
+        }
+    }
 }
 
 /// A point of an `outline`, measured on the face.
@@ -728,8 +852,8 @@ pub enum CutKind {
         neck: Length,
         /// Depth.
         depth: Length,
-        /// Slope.
-        angle: Angle,
+        /// How steeply its sides slope.
+        slope: Slope,
     },
     /// Everything around a dovetail tail.
     DovetailTail {
@@ -737,8 +861,8 @@ pub enum CutKind {
         neck: Length,
         /// Depth.
         depth: Length,
-        /// Slope.
-        angle: Angle,
+        /// How steeply its sides slope.
+        slope: Slope,
     },
     /// A marked-out shape.
     Outline {
@@ -802,18 +926,17 @@ pub enum CutPlace {
         /// The region both cut boxes share, in this part's frame.
         footprint: LocalBox,
     },
-    /// A hardware recess, such as a butt hinge's leaf mortise: the region
-    /// the hardware fills, in this part's local coordinates.
-    Recess {
-        /// The region the hardware fills.
+    /// `crossing(p, member)` in a hardware kind: where one shape of a
+    /// member of a piece of hardware meets this part. The footprint is the
+    /// region the shape's box and the part's cut box share, in this part's
+    /// local coordinates.
+    Member {
+        /// The piece of hardware.
+        hardware: HardwareId,
+        /// The member, in its kind's list of members with a body.
+        body: BodyId,
+        /// The region the shape and the part share, in this part's frame.
         footprint: LocalBox,
-    },
-    /// A hardware cut, centred at a point on the face.
-    Mount {
-        /// The centre, on the face.
-        centre: LocalPoint,
-        /// For two holes: their distance apart along the length.
-        centres: Option<Length>,
     },
 }
 
@@ -822,6 +945,8 @@ pub enum CutPlace {
 pub struct Cut {
     /// Where it comes from.
     pub source: CutSource,
+    /// The name its kind gives it (`cut dado: ...`): what messages call it.
+    pub name: Option<CutName>,
     /// The face it is cut from.
     pub face: LocalFace,
     /// Where on the face.
@@ -1138,9 +1263,6 @@ pub enum HardwareData {
         /// `on` to the face of `on` the plate is screwed to (negative when
         /// the edge is short of it).
         overlay: Length,
-        /// What the catalogue says about the overlay, when the kind gives
-        /// its `base_overlay`.
-        overlay_range: Option<OverlayRange>,
     },
     /// A pull.
     Pull {
@@ -1153,39 +1275,116 @@ pub enum HardwareData {
     },
 }
 
-/// The overlays a cup hinge can give: `base + cup_inset - plate_height`,
-/// give or take `adjustment` on the arm's side screw.
+/// The rest setting of one `adjust` of a piece of hardware (grammar,
+/// "Adjustment"): how far a member sits from its nominal place on the
+/// member its kind's `adjust` names, along one axis of the kind's frame.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-pub struct OverlayRange {
-    /// The overlay with the cup at the door's edge on a 0mm plate (the
-    /// catalogue's base or fixed distance).
-    pub base: Length,
-    /// The mounting plate's height (the catalogue's distance).
-    pub plate_height: Length,
-    /// How far the side screw moves the door, each way.
-    pub adjustment: Length,
+pub struct Setting {
+    /// The member that is set.
+    pub body: BodyRef,
+    /// The axis of the kind's frame.
+    pub axis: crate::defs::FrameAxis,
+    /// How far from its nominal place, signed along the axis.
+    pub offset: Length,
 }
 
-impl OverlayRange {
-    /// The overlay at the side screw's middle setting, for a cup this far
-    /// from the door's edge.
-    pub fn nominal(&self, cup_inset: Length) -> Length {
-        Length::from_nm(
-            self.base
-                .nm()
-                .saturating_add(cup_inset.nm())
-                .saturating_sub(self.plate_height.nm()),
-        )
-    }
+/// Whether a piece of hardware keeps its kind's rules where it is placed:
+/// every `require` holds and every member sits within its adjustments.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Rules {
+    /// Every rule holds.
+    Hold,
+    /// A `require` or an adjustment failed, and was reported: the
+    /// hardware is not where it can be, so the overlap and motion checks
+    /// leave it out.
+    Broken,
 }
 
-/// A model for looks.
+/// A model for looks, with what the text says its nodes are (grammar,
+/// "Checked against the text").
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Model {
     /// The source as written.
     pub source: String,
-    /// `align: node("name")`; `None` for `align: bounds`.
+    /// `align: node("name")`: the node on the kind's origin; `None` for the
+    /// model's own origin.
     pub node: Option<String>,
+    /// The file, when it is on this computer: the source, relative to the
+    /// folder of the file that declares the kind. `None` for a model in a
+    /// standard module or at a remote source, which is not read.
+    pub path: Option<std::path::PathBuf>,
+    /// `sha256:`: the one file it is pinned to.
+    pub sha256: Option<crate::value::Sha256>,
+    /// The file the `model(...)` is written in.
+    #[serde(skip)]
+    pub file: stave_lang::FileId,
+    /// Where the `model(...)` is written.
+    #[serde(skip)]
+    pub span: stave_lang::ast::Span,
+    /// Every node the text says the model has, in the kind's order: its
+    /// shapes', then its pivots' and slots'.
+    pub nodes: Vec<DeclaredNode>,
+}
+
+/// A node a hardware kind's text says its model has, and where.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct DeclaredNode {
+    /// Its name: `arm knuckle`, `knob`, `arm inner_link`.
+    pub name: String,
+    /// What the text says about it.
+    pub value: DeclaredValue,
+}
+
+/// What a kind's text says about one node of its model, in the kind's
+/// frame with the hardware closed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case", tag = "kind")]
+pub enum DeclaredValue {
+    /// A pivot's pin or a slot's end: the node's origin.
+    Point(FramePoint),
+    /// A member's shapes (one named shape, or its unnamed shapes
+    /// together): the bounds of the node's mesh. Never empty.
+    Shapes(Vec<FrameShape>),
+}
+
+/// A point in a hardware kind's frame (grammar, "The kind's frame").
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct FramePoint {
+    /// Along the piece.
+    pub along: Length,
+    /// Across the mount face.
+    pub across: Length,
+    /// Into the piece from the mount face.
+    pub depth: Length,
+}
+
+/// A shape of a hardware kind's member in the kind's frame, as declared
+/// (before the member's own `mount { }`), as far as its bounds need.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case", tag = "kind")]
+pub enum FrameShape {
+    /// A box, a cylinder or a prism: its bounds, exact, each range low end
+    /// first.
+    Bounds {
+        /// Along the piece.
+        along: [Length; 2],
+        /// Across the mount face.
+        across: [Length; 2],
+        /// Into the piece.
+        depth: [Length; 2],
+    },
+    /// A bar, whose bounds depend on the angle it lies at.
+    Bar {
+        /// One end's centre, `[across, depth]`.
+        from: [Length; 2],
+        /// The other end's centre, `[across, depth]`.
+        to: [Length; 2],
+        /// How thick it is; it reaches half of it past each centre.
+        thickness: Length,
+        /// Its extent along the piece, low end first.
+        along: [Length; 2],
+    },
 }
 
 /// A piece of mounted hardware.
@@ -1229,6 +1428,216 @@ pub struct Hardware {
     pub mechanism: Option<CupMechanism>,
     /// A model, when the kind has one.
     pub model: Option<Model>,
+    /// The parts and regions it joins, in its kind's role order.
+    pub roles: Vec<(RoleName, RoleValue)>,
+    /// Its kind's params and fields for this piece of hardware, by name:
+    /// the ones whose value is a length, an angle, a count, a truth value
+    /// or a text.
+    pub entries: BTreeMap<EntryName, EntryValue>,
+    /// The fasteners its kind's `uses:` names: counted, never placed.
+    pub fasteners: Vec<HardwareFastener>,
+    /// Its members with a body, in its kind's order: every shape the
+    /// checks see and the viewer draws (grammar, "One collision model").
+    pub members: Vec<Body>,
+    /// Its kind's mechanism counted on its own, in its own plane, when it
+    /// has a drive: what the checks run through its range when no
+    /// assembly moves it. Its assembly's motion is
+    /// [`Assembly::mechanism`].
+    pub own_mechanism: Option<crate::mechanism::Mechanism>,
+    /// The settings its kind's `adjust` entries give it at rest, in the
+    /// kind's order.
+    pub settings: Vec<Setting>,
+    /// Whether its kind's rules hold where it is placed.
+    pub rules: Rules,
+}
+
+/// A member of one piece of hardware: which piece, and which of its kind's
+/// members.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
+pub struct BodyRef {
+    /// The piece of hardware.
+    pub hardware: HardwareId,
+    /// The member, among its kind's members with a body.
+    pub body: BodyId,
+}
+
+/// What moves a member.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case", tag = "kind", content = "id")]
+pub enum BodyCarrier {
+    /// It moves with this part (`with:` a role bound to a part, or riding
+    /// on a member that does).
+    Part(PartId),
+    /// It moves with the assembly this region belongs to (`with:` a role
+    /// bound to a region).
+    Region(RegionId),
+    /// Its assembly's mechanism places it as the assembly moves: this
+    /// member of [`Assembly::mechanism`] (a link, or a member riding on
+    /// one).
+    Link(MemberIndex),
+}
+
+/// One convex shape of a member, at rest, in world coordinates.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case", tag = "kind")]
+pub enum MemberShape {
+    /// A box.
+    Box(WorldBox),
+    /// A cylinder along a world axis.
+    Cylinder {
+        /// The axis it runs along.
+        #[serde(serialize_with = "serialize_axis")]
+        axis: Axis,
+        /// Its centre on the two other axes, in [`Axis::others`] order.
+        centre: [Length; 2],
+        /// Its diameter.
+        diameter: Length,
+        /// Its low end along `axis`.
+        start: Length,
+        /// Its high end along `axis`.
+        end: Length,
+    },
+    /// A convex outline on the plane across a world axis, extruded along it.
+    Prism {
+        /// The axis it is extruded along.
+        #[serde(serialize_with = "serialize_axis")]
+        axis: Axis,
+        /// The outline's corners in order around it, each on the two other
+        /// axes in [`Axis::others`] order.
+        points: Vec<[Length; 2]>,
+        /// Its low end along `axis`.
+        start: Length,
+        /// Its high end along `axis`.
+        end: Length,
+    },
+    /// A straight bar on the plane across a world axis: `thickness` wide,
+    /// reaching half its thickness past each end's centre, extruded along
+    /// the axis.
+    Bar {
+        /// The axis it is extruded along.
+        #[serde(serialize_with = "serialize_axis")]
+        axis: Axis,
+        /// One end's centre, on the two other axes in [`Axis::others`]
+        /// order.
+        from: [Length; 2],
+        /// The other end's centre.
+        to: [Length; 2],
+        /// How thick it is.
+        thickness: Length,
+        /// Its low end along `axis`.
+        start: Length,
+        /// Its high end along `axis`.
+        end: Length,
+    },
+}
+
+/// A member of a piece of hardware with its shapes: a body of the design
+/// (grammar, "One collision model").
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Body {
+    /// Which member of which piece of hardware.
+    pub id: BodyRef,
+    /// The member's name in its kind: `cup`, `inner_link`.
+    pub name: String,
+    /// What moves it.
+    pub carrier: BodyCarrier,
+    /// Its shapes, in its kind's order; never empty.
+    shapes: Vec<MemberShape>,
+}
+
+impl Body {
+    /// A member with its shapes; `None` when it has none.
+    pub fn new(
+        id: BodyRef,
+        name: String,
+        carrier: BodyCarrier,
+        shapes: Vec<MemberShape>,
+    ) -> Option<Body> {
+        (!shapes.is_empty()).then_some(Body {
+            id,
+            name,
+            carrier,
+            shapes,
+        })
+    }
+
+    /// Its shapes, in its kind's order (at least one).
+    pub fn shapes(&self) -> &[MemberShape] {
+        &self.shapes
+    }
+}
+
+/// Fasteners a piece of hardware consumes (its kind's `uses:`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct HardwareFastener {
+    /// The fastener kind's name.
+    pub kind: String,
+    /// Its diameter.
+    pub diameter: Length,
+    /// Its length.
+    pub length: Length,
+    /// How many.
+    pub count: u32,
+}
+
+/// The name of a role of a kind, as the kind writes it: `piece`, `on`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
+pub struct RoleName(String);
+
+impl RoleName {
+    /// The name, if `word` is a word (letters, digits and `_`, not starting
+    /// with a digit).
+    pub fn new(word: &str) -> Option<RoleName> {
+        stave_lang::ast::is_word(word).then(|| RoleName(word.to_owned()))
+    }
+
+    /// The name as written.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// What a role of a piece of hardware is bound to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case", tag = "kind", content = "id")]
+pub enum RoleValue {
+    /// A part.
+    Part(PartId),
+    /// A region.
+    Region(RegionId),
+}
+
+/// The name of a param or field of a kind, as the kind writes it.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
+pub struct EntryName(String);
+
+impl EntryName {
+    /// The name, if `word` is a word (letters, digits and `_`, not starting
+    /// with a digit).
+    pub fn new(word: &str) -> Option<EntryName> {
+        stave_lang::ast::is_word(word).then(|| EntryName(word.to_owned()))
+    }
+
+    /// The name as written.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// The value of a kind's param or field for one piece of hardware.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case", tag = "kind", content = "value")]
+pub enum EntryValue {
+    /// A length, rounded to the nanometre.
+    Length(Length),
+    /// An angle.
+    Angle(Angle),
+    /// A count.
+    Count(u32),
+    /// A truth value.
+    Bool(bool),
+    /// A text.
+    Text(String),
 }
 
 /// The mechanism of a cup hinge: the arm on the mounting plate, and two
@@ -1378,8 +1787,12 @@ pub struct Assembly {
     pub parts: Vec<PartId>,
     /// Every piece of hardware inside it.
     pub hardware: Vec<HardwareId>,
-    /// Its motion, from its hinges or slides.
+    /// Its motion, from its hinges or slides (the old contract, filled
+    /// from `mechanism` until its readers move to it).
     pub motion: Option<Motion>,
+    /// Its mechanism: the hardware with a drive that moves it, and any
+    /// that follow (grammar, "Mechanisms"). `None` when nothing moves it.
+    pub mechanism: Option<crate::mechanism::Mechanism>,
 }
 
 /// A region.

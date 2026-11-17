@@ -2,10 +2,10 @@
 source: crates/stave-app/tests/fit.rs
 expression: "rendered(\"tests/broken/knob_hits_top\")"
 ---
-error[overlap]: handle and top overlap
+error[overlap]: handle's knob and top overlap
   --> tests/broken/knob_hits_top/project.stave:43:19
    |
 43 | hardware handle : knob(front, diameter: 50mm, projection: 25mm) {
    |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
    = note: they share 50 × 5 × 25mm (across × up × deep) at the front edge of top
-   = help: handle goes 5mm into top; move handle 5mm down, or move top out of its way
+   = help: handle's knob goes 5mm into top; move handle's knob 5mm down, or move top out of its way

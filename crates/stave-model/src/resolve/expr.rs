@@ -89,10 +89,9 @@ pub(crate) fn make_word(set: WordSet, text: &str) -> Option<Word> {
         WordSet::Motion => Word::Motion(MotionWord::from_word(text)?),
         WordSet::Grain => Word::Grain(Grain::from_word(text)?),
         WordSet::Through if text == "through" => Word::Through,
-        WordSet::Bounds if text == "bounds" => Word::Bounds,
         WordSet::Spacing if text == "evenly" => Word::Evenly,
         WordSet::Spacing if text == "ends" => Word::Ends,
-        WordSet::Through | WordSet::Bounds | WordSet::Spacing => return None,
+        WordSet::Through | WordSet::Spacing => return None,
     })
 }
 
@@ -109,7 +108,6 @@ fn word_ty(word: Word) -> Ty {
         Word::Motion(_) => Ty::Word(WordSet::Motion),
         Word::Grain(_) => Ty::Word(WordSet::Grain),
         Word::Through => Ty::Word(WordSet::Through),
-        Word::Bounds => Ty::Word(WordSet::Bounds),
         Word::Evenly | Word::Ends => Ty::Spacing,
     }
 }
@@ -119,7 +117,7 @@ fn verb(op: BinaryOp) -> &'static str {
         BinaryOp::Add => "add",
         BinaryOp::Sub => "subtract",
         BinaryOp::Mul => "multiply",
-        BinaryOp::Div => "divide",
+        BinaryOp::Div | BinaryOp::In => "divide",
         BinaryOp::Eq | BinaryOp::Ne | BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge => {
             "compare"
         }
@@ -142,6 +140,7 @@ pub(crate) fn binary_ty(op: BinaryOp, lhs: &Ty, rhs: &Ty) -> Option<Ty> {
             | BinaryOp::Gt
             | BinaryOp::Ge => Bool,
             BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div => Unknown,
+            BinaryOp::In => Ratio,
         });
     }
     let number = |t: &Ty| matches!(t, Count | Ratio);
@@ -178,6 +177,7 @@ pub(crate) fn binary_ty(op: BinaryOp, lhs: &Ty, rhs: &Ty) -> Option<Ty> {
             (a, b) if number(a) && number(b) => Some(Ratio),
             _ => None,
         },
+        BinaryOp::In => (number(lhs) && number(rhs)).then_some(Ratio),
     }
 }
 
@@ -396,6 +396,16 @@ impl Resolver<'_> {
                 make(RExprKind::List(lowered), ty)
             }
             ExprKind::Paren(inner) => self.raw(cx, inner, expect),
+            ExprKind::Range { .. } => {
+                self.error_help(
+                    Code::Syntax,
+                    "a range lo..hi is written only as an argument of a member's shape",
+                    cx.file,
+                    span,
+                    "write one value here; ranges size a hardware member's shape, as in box(across: -3mm..15mm, ...)",
+                );
+                RExpr::error(span)
+            }
         }
     }
 
@@ -945,6 +955,21 @@ impl Resolver<'_> {
             let item_ty = item.map(|symbol| self.symbol_ty(symbol));
             let is_kind = matches!(item_ty, Some(Ty::Kind(_)));
             if !is_kind {
+                if item.is_none()
+                    && stave_schema::functions::is_member_only_function(ident.as_str())
+                {
+                    self.error_help(
+                        Code::Syntax,
+                        format!(
+                            "{}(...) is written only inside a hardware kind's member or mechanism",
+                            ident.as_str()
+                        ),
+                        cx.file,
+                        span,
+                        "points and member shapes are measurements within the hardware, in the kind's own frame; a design places things with relationships",
+                    );
+                    return RExpr::error(span);
+                }
                 if let Some(builtin) = Builtin::from_word(ident.as_str()) {
                     return self.builtin(cx, builtin, args, span, expect);
                 }
@@ -1182,9 +1207,6 @@ impl Resolver<'_> {
                 continue;
             }
             let mut expect = Expect::value_type(parameter.ty).named(parameter.name);
-            if builtin == Builtin::Model && parameter.name == "align" {
-                expect = Expect::any().with_words(&[WordSet::Bounds]).named("align");
-            }
             // `extent(into, thickness, of: piece)`: with `of:`, the axis is
             // one of that part's own axes.
             if builtin == Builtin::Extent
@@ -1240,14 +1262,16 @@ impl Resolver<'_> {
     fn check_item_argument(&mut self, cx: &Cx, builtin: Builtin, value: &RExpr) {
         let fits = match builtin {
             Builtin::Mid => matches!(value.ty, Ty::Part | Ty::Region | Ty::Unknown),
-            Builtin::Between => matches!(value.ty, Ty::Part | Ty::Anchor | Ty::Unknown),
+            Builtin::Between => {
+                matches!(value.ty, Ty::Part | Ty::Anchor | Ty::Region | Ty::Unknown)
+            }
             Builtin::Extent => value.ty.fits(&Ty::Parts),
             _ => true,
         };
         if !fits {
             let wanted = match builtin {
                 Builtin::Mid => "a part or a region",
-                Builtin::Between => "a part or a face",
+                Builtin::Between => "a part, a face or a region",
                 _ => "parts",
             };
             self.error(
@@ -1298,6 +1322,7 @@ fn describe_symbol(symbol: Symbol) -> &'static str {
         Symbol::Role(..) => "role",
         Symbol::KindParam(..) => "param",
         Symbol::MadePart(..) => "made part",
+        Symbol::Mount(..) => "mount face",
     }
 }
 

@@ -1834,9 +1834,11 @@ version = "0.1.0"
 dependencies = [
  "bytemuck",
  "glam",
+ "serde_json",
  "stave-lang",
  "stave-model",
  "stave-schema",
+ "thiserror",
 ]
 
 [[package]]

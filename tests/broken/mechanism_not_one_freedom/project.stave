@@ -1,0 +1,114 @@
+// expect: error[mechanism] loose_hinge's mechanism has 3 freedoms; it needs exactly one
+stave 1
+
+// A cup hinge kind whose outer link is pinned to the arm but not to the
+// cup. Its members are the arm (held by the side), the cup (turned by the
+// door) and two links: three freedoms for each of the cup and the two
+// links, less two for each of the three pins, leaves three. It needs
+// exactly one, so the door's angle decides where everything is.
+
+project "Mechanism not one freedom" {
+  units: mm
+}
+
+stock ply_18 { species: birch, form: plywood, thickness: 18mm }
+
+/// The common cup hinge, with one pin left out.
+kind loose_hinge : hinge {
+  roles {
+    piece: Part
+    on:    Part
+  }
+  opening_angle: 110deg
+  cup_diameter:  35mm
+  cup_depth:     12.8mm
+  cup_inset:     5mm
+  mount {
+    face:   back
+    across: from(edge(piece, nearer: on), inset: 22.5mm)
+    along:  open
+  }
+
+  /// The plate, on the side.
+  member plate {
+    with:  on
+    shape: box(along: 50mm, across: 0mm..11mm, depth: 36mm)
+    mount {
+      across: from(face(on, toward: piece))
+      depth:  from(face(on, toward: piece), inset: 37mm)
+    }
+  }
+
+  /// The arm, clipped to the plate on the side.
+  member arm {
+    with:          on
+    shape body:    box(along: 16mm, across: -2.9mm..15mm, depth: -55mm..0mm)
+    shape knuckle: box(along: 16mm, across: 8mm..15mm, depth: 0mm..12.4mm)
+  }
+  /// The cup, in the door.
+  member cup {
+    with:  piece
+    shape: cylinder(diameter: 35mm, depth: 0mm..12.8mm)
+  }
+  /// The inner link.
+  member inner_link {
+    shape: bar(
+      from:      point(across: 13.5mm, depth: 10.9mm),
+      to:        point(across: -8.8mm, depth: 7.33mm),
+      thickness: 1.5mm,
+      along:     9mm,
+    )
+  }
+  /// The outer link.
+  member outer_link {
+    shape: bar(
+      from:      point(across: 13.28mm, depth: 3.56mm),
+      to:        point(across: -9.54mm, depth: 1.39mm),
+      thickness: 1.5mm,
+      along:     14mm,
+    )
+  }
+
+  mechanism {
+    pivot arm, inner_link at point(across: 13.5mm, depth: 10.9mm)
+    pivot cup, inner_link at point(across: -8.8mm, depth: 7.33mm)
+    pivot arm, outer_link at point(across: 13.28mm, depth: 3.56mm)
+    drive: turn(cup, from: 0deg, to: 110deg)
+  }
+}
+
+part base : ply_18 {
+  length: 600mm
+  width:  400mm
+  place {
+    ground
+  }
+}
+
+part side : ply_18 {
+  length: 700mm
+  width:  400mm
+  place {
+    orient(length: up, width: back)
+    against(base.top)
+    flush(base.left)
+    flush(base.back)
+  }
+}
+
+part door : ply_18 {
+  length: 700mm
+  width:  300mm
+  place {
+    orient(length: up, width: right)
+    against(base.top)
+    flush(side.left, inset: 0.5mm)
+    against(side.front)
+  }
+}
+
+hardware hinge : loose_hinge(door, on: side) {
+  place {
+    flush(door.bottom, inset: 80mm)
+  }
+}

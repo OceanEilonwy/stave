@@ -11,7 +11,7 @@ use common::{
     the_diagnostic,
 };
 use stave_lang::placement::PartAxis;
-use stave_model::solved::{Contact, CutKind, CutPlace, Depth, PartOrigin, StepKind};
+use stave_model::solved::{Contact, CutKind, CutPlace, Depth, PartOrigin, Slope, StepKind};
 
 /// A side standing at the left end of the base and a shelf against it.
 const SIDE_AND_SHELF: &str = "part side : pine_19 {
@@ -228,11 +228,11 @@ fn roles_default_to_piece_and_into() {
 }
 
 #[test]
-fn a_kind_with_a_parts_role_has_exactly_two_roles() {
+fn a_kind_with_a_parts_role_has_one_role_or_two() {
     the_diagnostic(
         &open("kind k : joint {\n  roles {\n    a: Parts\n    b: Part\n    c: Part\n  }\n}"),
         "type-mismatch",
-        "kind 'k' has a Parts role, so it needs exactly two roles",
+        "kind 'k' has a Parts role, so it has one role or two",
     );
     the_diagnostic(
         &open("kind k : joint {\n  roles {\n    a: Region\n    b: Part\n  }\n}"),
@@ -250,6 +250,92 @@ fn a_kind_with_three_part_roles_is_one_connection() {
     assert_eq!(j.pairs.len(), 1);
     assert_eq!(j.pairs[0].contact, Contact::Connection);
     assert_eq!(j.pairs[0].roles.len(), 3);
+}
+
+/// Three boards side by side on the base, edge to edge.
+const THREE_BOARDS: &str = "part plank[a, b, c] : pine_19 {
+  length: 300mm
+  width:  100mm
+  place {
+    orient(length: back, width: right)
+    against(base.top)
+    spaced(gap(0mm), from: base.left, to: base.right)
+    flush(base.front)
+  }
+}
+";
+
+#[test]
+fn a_kind_with_one_parts_role_is_one_connection_across_its_parts() {
+    let opened = open(&format!(
+        "{THREE_BOARDS}kind clamped : joint {{\n  roles {{\n    boards: Parts\n  }}\n}}\njoint glue_up : clamped([plank[a], plank[b], plank[c]])"
+    ));
+    let design = design(&opened);
+    let j = joint(design, "glue_up");
+    assert_eq!(j.pairs.len(), 1);
+    assert_eq!(j.pairs[0].contact, Contact::Connection);
+    let bound: Vec<(&str, &str)> = j.pairs[0]
+        .roles
+        .iter()
+        .map(|r| (r.role.as_str(), design.part(r.part).unwrap().name.as_str()))
+        .collect();
+    assert_eq!(
+        bound,
+        [
+            ("boards", "plank[a]"),
+            ("boards", "plank[b]"),
+            ("boards", "plank[c]")
+        ]
+    );
+    // Every part must meet at least one of the others.
+    let opened = open(&format!(
+        "{THREE_BOARDS}kind clamped : joint {{\n  roles {{\n    boards: Parts\n  }}\n}}\njoint glue_up : clamped([plank[a], plank[c]])"
+    ));
+    the_diagnostic(
+        &opened,
+        "no-contact",
+        "glue_up: plank[a] meets none of the parts it should join",
+    );
+    assert!(
+        opened.diagnostics[0]
+            .notes
+            .iter()
+            .any(|n| n.contains("plank[c]"))
+    );
+}
+
+#[test]
+fn a_tongue_is_a_tenon_on_an_edge() {
+    // Two boards written as parts, joined by the same kind a part's boards
+    // use: the tongue fills the groove exactly, so the fit checks pass.
+    let opened = open(&format!(
+        "{THREE_BOARDS}joint seam : tongue_and_groove(plank[a], into: plank[b], depth: 6mm, thickness: 6mm)"
+    ));
+    let design = design(&opened);
+    assert!(opened.diagnostics.is_empty(), "{:?}", diagnostics(&opened));
+    let tongue = part(design, "plank[a]");
+    assert_eq!(tongue.cut.width, mm("106"));
+    let cut = &tongue.cuts[0];
+    assert_eq!(cut.face.axis, PartAxis::Width);
+    assert!(matches!(cut.place, CutPlace::Crossing { .. }));
+    assert_eq!(
+        cut.kind,
+        CutKind::Tenon {
+            length: mm("6"),
+            width: mm("300"),
+            thickness: mm("6")
+        }
+    );
+    // Where the other part meets this one on its end, it is a type
+    // mismatch.
+    let opened = with_parts(
+        "kind lap : joint {\n  cut crossing(piece, into) {\n    tenon(length: 5mm, width: 50mm, thickness: 5mm)\n  }\n}\njoint j : lap(shelf, into: side)",
+    );
+    the_diagnostic(
+        &opened,
+        "type-mismatch",
+        "a tenon on crossing is a tongue along an edge, but side meets this part on its end",
+    );
 }
 
 #[test]
@@ -307,6 +393,96 @@ fn a_kind_require_is_checked_per_pair_and_reported_at_the_joint() {
     );
     let diagnostic = the_diagnostic(&opened, "require", "'thin' fails: piece shelf is too thick");
     assert_eq!(body_line(&opened, diagnostic), 23, "the joint's line");
+}
+
+/// A pin whose diameter must be half the 19mm shelf's thickness, from two
+/// lists; `call` is the joint's settings after the roles.
+fn pin_rule(params: &str, condition: &str, call: &str) -> stave_app::Opened {
+    with_parts(&format!(
+        "kind k : joint {{\n{params}\n  require half : {condition} \"the pin is half the board\"\n}}\njoint j : k(shelf, into: side{call})"
+    ))
+}
+
+const PIN_LISTS: &str =
+    "  param pin   = 6mm within [6mm, 8mm, 9.5mm, 10mm]\n  param depth = 5mm within [5mm, 10mm]";
+
+#[test]
+fn a_failed_equality_rule_offers_the_values_from_the_kinds_lists_that_fit() {
+    let opened = pin_rule(PIN_LISTS, "pin * 2 == piece.thickness", "");
+    the_diagnostic(
+        &opened,
+        "require",
+        "'half' fails: the pin is half the board",
+    );
+    assert_eq!(
+        common::help(&opened),
+        "use pin: 9.5mm, from the kind's list"
+    );
+}
+
+#[test]
+fn the_search_tries_one_param_at_a_time_with_the_others_as_given() {
+    let lists = "  param pin   = 6mm within [6mm, 8mm, 9.5mm, 10mm]\n  param depth = 5mm within [5mm, 7mm, 9mm]";
+    let rule = "pin + depth == piece.thickness - 4mm";
+    // 8mm + 9mm is 17mm, not 15mm: pin 6mm fits with depth as given, and
+    // depth 7mm fits with pin as given. Both are offered, in the order the
+    // params and their lists are written.
+    let opened = pin_rule(lists, rule, ", pin: 8mm, depth: 9mm");
+    the_diagnostic(
+        &opened,
+        "require",
+        "'half' fails: the pin is half the board",
+    );
+    assert_eq!(
+        common::help(&opened),
+        "use pin: 6mm or depth: 7mm, from the kind's lists"
+    );
+    // 9.5mm + the default 5mm is 14.5mm: pin 10mm fits; depth 5.5mm would
+    // too, but it isn't in the list, so it isn't offered.
+    let opened = pin_rule(lists, rule, ", pin: 9.5mm");
+    assert_eq!(common::help(&opened), "use pin: 10mm, from the kind's list");
+}
+
+#[test]
+fn a_failed_equality_rule_says_when_no_listed_value_fits() {
+    let opened = pin_rule(PIN_LISTS, "pin * 3 == piece.thickness", "");
+    the_diagnostic(
+        &opened,
+        "require",
+        "'half' fails: the pin is half the board",
+    );
+    assert_eq!(
+        common::help(&opened),
+        "no value in the kind's lists makes this hold (pin within [6mm, 8mm, 9.5mm, 10mm], depth within [5mm, 10mm]); change the parts' sizes"
+    );
+}
+
+#[test]
+fn the_search_only_offers_listed_values_and_only_for_equality() {
+    // A range is never searched: 9.5mm is inside it, but only lists are
+    // offered.
+    let opened = pin_rule(
+        "  param pin = 6mm within 4mm..12mm",
+        "pin * 2 == piece.thickness",
+        "",
+    );
+    assert_eq!(
+        common::help(&opened),
+        "change the joint's settings or the parts' sizes so the rule holds"
+    );
+    // A rule that compares for order, or joins an equality with `||`,
+    // keeps the general help.
+    for condition in [
+        "pin * 2 >= piece.thickness",
+        "pin * 2 == piece.thickness || depth == pin",
+    ] {
+        let opened = pin_rule(PIN_LISTS, condition, "");
+        assert_eq!(
+            common::help(&opened),
+            "change the joint's settings or the parts' sizes so the rule holds",
+            "{condition}"
+        );
+    }
 }
 
 #[test]
@@ -533,10 +709,10 @@ fn side_names_the_face_across_the_width_or_thickness() {
 fn each_operation_is_cut_on_its_own_selectors() {
     for (selector, operation, message, help) in [
         (
-            "crossing(into, piece)",
+            "side(piece, normal: width, from: into)",
             "tenon(length: 3mm, width: 3mm, thickness: 3mm)",
-            "'tenon' can't be cut on crossing",
-            "'tenon' is cut on end",
+            "'tenon' can't be cut on side",
+            "'tenon' is cut on end or crossing",
         ),
         (
             "end(piece, facing: into)",
@@ -636,6 +812,58 @@ joint j : k(shelf, into: side)",
 }
 
 #[test]
+fn a_dovetail_slope_is_written_1_in_n() {
+    let opened = with_parts(
+        "kind k : joint {
+  cut end(piece, facing: into) {
+    dovetail_tail(neck: 100mm, depth: 10mm, slope: 1 in 8)
+  }
+}
+joint j : k(shelf, into: side)",
+    );
+    let design = design(&opened);
+    let slopes: Vec<Slope> = part(design, "shelf")
+        .cuts
+        .iter()
+        .filter_map(|c| match c.kind {
+            CutKind::DovetailTail { slope, .. } => Some(slope),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        slopes,
+        [Slope::Ratio(
+            stave_lang::units::Rational::new(1, 8).unwrap()
+        )]
+    );
+    assert_eq!(slopes[0].to_string(), "slope 1 in 8");
+}
+
+#[test]
+fn a_dovetail_takes_an_angle_or_a_slope() {
+    let joint = |arguments: &str| {
+        with_parts(&format!(
+            "kind k : joint {{\n  cut end(piece, facing: into) {{\n    dovetail_tail(neck: 100mm, depth: 10mm{arguments})\n  }}\n}}\njoint j : k(shelf, into: side)"
+        ))
+    };
+    only_error(
+        &joint(", angle: 10deg, slope: 1 in 8"),
+        "type-mismatch",
+        "a dovetail takes 'angle' or 'slope', not both",
+    );
+    only_error(
+        &joint(""),
+        "missing-field",
+        "dovetail_tail is missing 'angle' or 'slope'",
+    );
+    only_error(
+        &joint(", slope: 0 in 8"),
+        "type-mismatch",
+        "a dovetail's slope must be more than 0",
+    );
+}
+
+#[test]
 fn a_count_argument_is_a_count() {
     only_error(
         &open(
@@ -650,61 +878,139 @@ fn a_count_argument_is_a_count() {
 // Hardware kinds
 // ---------------------------------------------------------------------------
 
+/// What a pull kind needs: the part it is mounted on and where it sits.
+const PULL_HEAD: &str = "  roles {\n    piece: Part\n  }\n  mount {\n    face:   front\n    across: open\n    along:  open\n  }\n";
+
+/// A slide, hinge or pull kind declares the parts it joins, the first the
+/// part it is mounted on, and where it sits; a fastener still has its fixed
+/// entries. (Before, a base fixed the roles and required entries such as a
+/// slide's travel and a pull's envelope.)
 #[test]
-fn a_hardware_kind_needs_its_bases_required_entries() {
-    for (base, entries, missing) in [
-        (
-            "slide",
-            "length: 500mm\n  clearance: 12.7mm\n  envelope: box(length: 500mm, width: 45mm, thickness: 12.7mm)",
-            "travel",
-        ),
-        ("pull", "diameter: 10mm", "envelope"),
-        ("fastener", "diameter: 3mm", "length"),
-    ] {
-        the_diagnostic(
-            &open(&format!("kind thing : {base} {{\n  {entries}\n}}")),
-            "missing-field",
-            &format!("kind 'thing' is missing '{missing}'"),
-        );
-    }
+fn a_hardware_kind_declares_its_roles() {
+    let no_roles = open(
+        "kind thing : slide {\n  mount {\n    face:   left\n    across: open\n    along:  open\n  }\n}",
+    );
+    the_diagnostic(
+        &no_roles,
+        "missing-field",
+        "kind 'thing' is missing 'roles'",
+    );
+    let region_first = open(&format!(
+        "kind thing : slide {{\n  roles {{\n    in:    Region\n    piece: Part\n  }}\n{}\n}}",
+        "  mount {\n    face:   left\n    across: open\n    along:  open\n  }"
+    ));
+    let diagnostic = the_diagnostic(
+        &region_first,
+        "missing-field",
+        "kind 'thing' is missing 'roles'",
+    );
+    assert_eq!(
+        diagnostic.help.as_deref(),
+        Some("make the first role the part it is mounted on: piece: Part")
+    );
+    let several = open(&format!(
+        "kind thing : pull {{\n  roles {{\n    piece: Parts\n  }}\n{}\n}}",
+        "  mount {\n    face:   front\n    across: open\n    along:  open\n  }"
+    ));
+    assert!(
+        diagnostics(&several)
+            .contains(&"type-mismatch: 'piece' needs Part or Region, found 'Parts'".to_owned()),
+        "{:?}",
+        diagnostics(&several)
+    );
+    the_diagnostic(
+        &open("kind thing : pull {\n  roles {\n    piece: Part\n  }\n}"),
+        "missing-field",
+        "kind 'thing' is missing 'mount'",
+    );
+    the_diagnostic(
+        &open("kind thing : fastener {\n  diameter: 3mm\n}"),
+        "missing-field",
+        "kind 'thing' is missing 'length'",
+    );
+    // The roles are bound by the call like a joint's.
+    let opened = open(
+        "part front : pine_19 {\n  length: 300mm\n  width:  150mm\n  place {\n    orient(length: right, width: up)\n    against(base.top)\n    flush(base.left)\n    flush(base.front)\n  }\n}\nhardware a : knob(front) {\n  place {\n    center(front, across)\n    center(front, up)\n  }\n}",
+    );
+    let design = design(&opened);
+    let knob = common::hardware(design, "a");
+    assert_eq!(
+        knob.roles,
+        [(
+            stave_model::solved::RoleName::new("piece").unwrap(),
+            stave_model::solved::RoleValue::Part(part(design, "front").id)
+        )]
+    );
+    assert_eq!(
+        knob.entries
+            .get(&stave_model::solved::EntryName::new("diameter").unwrap()),
+        Some(&stave_model::solved::EntryValue::Length(mm("30")))
+    );
 }
 
 #[test]
 fn a_required_entry_may_be_a_param_and_every_entry_is_readable() {
     holds(
-        "kind runner : slide {\n  param length = 400mm\n  clearance: 12.7mm\n  travel:    length\n  envelope:  box(length: length, width: 45mm, thickness: 12.7mm)\n}\nlet short = runner(length: 300mm)\nrequire r : short.travel == 300mm && short.clearance == 12.7mm \"readable\"",
+        "kind runner : slide {\n  roles {\n    piece: Part\n    in:    Region\n  }\n  param length = 400mm\n  clearance: 12.7mm\n  travel:    length\n  mount {\n    face:   face(piece, nearer: in)\n    across: center(piece)\n    along:  from(end(piece, toward: front))\n  }\n}\nlet short = runner(length: 300mm)\nrequire r : short.travel == 300mm && short.clearance == 12.7mm \"readable\"",
+    );
+}
+
+/// A pull's screw is the size its kind says. (Before, a pull's
+/// `screw_diameter` was 4mm when the kind didn't say: a base default.)
+#[test]
+fn a_pulls_screw_diameter_is_its_kinds_own() {
+    holds("require r : knob.screw_diameter == 4mm \"the standard knob's\"");
+    only_error(
+        &open(&format!(
+            "kind p : pull {{\n{PULL_HEAD}}}\nrequire r : p.screw_diameter == 4mm \"none\""
+        )),
+        "unknown-field",
+        "a pull kind has no field 'screw_diameter'",
     );
 }
 
 #[test]
-fn a_pulls_screw_diameter_defaults_to_4mm() {
-    holds(
-        "kind p : pull {\n  envelope: cylinder(diameter: 10mm, length: 20mm)\n}\nrequire r : p.screw_diameter == 4mm \"default\"",
-    );
-}
-
-#[test]
-fn hardware_kinds_have_no_roles_cuts_or_joint_fields() {
-    for (entry, message) in [
+fn hardware_kinds_have_no_joint_fields_and_cut_where_a_member_is() {
+    for (entry, code, message) in [
         (
             "roles {\n    a: Part\n  }",
-            "a pull kind has no field 'roles'",
+            "unknown-field",
+            "a fastener kind has no field 'roles'",
         ),
         (
-            "cut end(piece, facing: piece) {\n    drill(diameter: 3mm, depth: 3mm)\n  }",
-            "a pull kind has no field 'cut'",
+            "mount {\n    face: front\n  }",
+            "unknown-field",
+            "a fastener kind has no field 'mount'",
         ),
-        (
-            "adds: extend(piece, by: 3mm)",
-            "a pull kind has no field 'adds'",
-        ),
-        ("moving: \"door\"", "a pull kind has no field 'moving'"),
     ] {
         only_error(
             &open(&format!(
-                "kind p : pull {{\n  envelope: cylinder(diameter: 10mm, length: 20mm)\n  {entry}\n}}"
+                "kind f : fastener {{\n  diameter: 3mm\n  length:   20mm\n  {entry}\n}}"
             )),
+            code,
+            message,
+        );
+    }
+    for (entry, code, message) in [
+        (
+            "cut end(piece, facing: piece) {\n    drill(diameter: 3mm, depth: 3mm)\n  }",
+            "type-mismatch",
+            "a hardware kind cuts on crossing, found 'end'",
+        ),
+        (
+            "cut crossing(piece, knob) {\n    drill(diameter: 3mm, depth: 3mm)\n  }",
+            "unknown-name",
+            "'crossing' needs a member of the kind, found 'knob'",
+        ),
+        (
+            "adds: extend(piece, by: 3mm)",
             "unknown-field",
+            "a pull kind has no field 'adds'",
+        ),
+    ] {
+        only_error(
+            &open(&format!("kind p : pull {{\n{PULL_HEAD}  {entry}\n}}")),
+            code,
             message,
         );
     }
@@ -713,7 +1019,7 @@ fn hardware_kinds_have_no_roles_cuts_or_joint_fields() {
 #[test]
 fn an_envelope_is_a_box_or_a_cylinder() {
     only_error(
-        &open("kind p : pull {\n  envelope: 3mm\n}"),
+        &open("kind f : fastener {\n  diameter: 3mm\n  length:   20mm\n  envelope: 3mm\n}"),
         "type-mismatch",
         "'envelope' needs an envelope, found a length",
     );
@@ -721,11 +1027,22 @@ fn an_envelope_is_a_box_or_a_cylinder() {
 
 #[test]
 fn a_model_is_for_looks_only() {
-    // A missing model file is drawn as its envelope: no diagnostic.
-    let opened = open(
-        "kind p : pull {\n  envelope: cylinder(diameter: 10mm, length: 20mm)\n  model:    model(\"./models/knob.glb\", align: node(\"mount\"))\n  license:  \"CC0\"\n}\nkind q : pull {\n  envelope: cylinder(diameter: 10mm, length: 20mm)\n  model:    model(\"./models/knob.glb\", align: bounds)\n}",
-    );
+    // A missing model file is drawn as its members: no diagnostic. `align:`
+    // and `sha256:` are both optional (tests/models.rs checks a model that
+    // is there against the text).
+    let opened = open(&format!(
+        "kind p : pull {{\n{PULL_HEAD}  model:    model(\"./models/knob.glb\", align: node(\"mount\"))\n  license:  \"CC0\"\n  moving:   \"knob\"\n}}\nkind q : pull {{\n{PULL_HEAD}  model:    model(\"./models/knob.glb\", sha256: \"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\")\n}}\nkind r : pull {{\n{PULL_HEAD}  model:    model(\"./models/knob.glb\")\n}}"
+    ));
     assert!(opened.diagnostics.is_empty(), "{:?}", diagnostics(&opened));
+    // A model is no longer fitted to its bounds: the text is checked
+    // against its named nodes instead.
+    only_error(
+        &open(&format!(
+            "kind q : pull {{\n{PULL_HEAD}  model:    model(\"./models/knob.glb\", align: bounds)\n}}"
+        )),
+        "unknown-name",
+        "unknown name 'bounds'",
+    );
 }
 
 #[test]
@@ -748,28 +1065,48 @@ fn a_pull_bores_one_hole_or_two_holes_centres_apart() {
     let opened = open(&format!(
         "{front}\nhardware a : knob(front) {place}\nhardware b : bar_pull(front, centres: 96mm) {place}"
     ));
-    let cuts = &part(solved(&opened), "front").cuts;
-    let holes: Vec<Option<stave_lang::units::Length>> = cuts
+    let design = solved(&opened);
+    let cuts = &part(design, "front").cuts;
+    // Each hole: the piece of hardware that drills it and its centre along
+    // the front's length.
+    let holes: Vec<(String, stave_lang::units::Length)> = cuts
         .iter()
         .filter_map(|c| match (&c.place, &c.kind) {
             (
-                CutPlace::Mount { centres, .. },
+                CutPlace::Member {
+                    hardware,
+                    footprint,
+                    ..
+                },
                 CutKind::Drill {
                     diameter,
                     depth: Depth::Through,
-                    ..
+                    count: 1,
                 },
-            ) if *diameter == mm("4") => Some(*centres),
+            ) if *diameter == mm("4") => Some((
+                design.hardware[hardware.index()].name.clone(),
+                stave_lang::units::Length::from_nm(
+                    (footprint.min.length.nm() + footprint.max.length.nm()) / 2,
+                ),
+            )),
             _ => None,
         })
         .collect();
-    assert_eq!(holes, [None, Some(mm("96"))]);
+    // One hole in the middle for the knob; two 96mm apart for the bar.
+    assert_eq!(
+        holes,
+        [
+            ("a".to_owned(), mm("150")),
+            ("b".to_owned(), mm("102")),
+            ("b".to_owned(), mm("198")),
+        ]
+    );
 }
 
 #[test]
 fn a_cup_hinge_bores_its_cup_in_the_mount_face() {
     let opened = open(
-        "/// A cup hinge for an inset door, with no catalogue overlay (so its\n/// overlay isn't checked).\nkind inset_cup_hinge : hinge {\n  opening_angle: 110deg\n  cup_diameter:  35mm\n  cup_depth:     13mm\n  cup_inset:     5mm\n  plate_setback: 37mm\n  plate:         box(length: 50mm, width: 36mm, thickness: 11mm)\n}\npart side : pine_19 {\n  length: 400mm\n  width:  300mm\n  place {\n    orient(length: up, width: back)\n    against(base.top)\n    flush(base.left)\n    flush(base.front)\n  }\n}\npart door : pine_19 {\n  length: 300mm\n  width:  200mm\n  place {\n    orient(length: up, width: right)\n    against(base.top)\n    against(side.right)\n    against(base.front)\n  }\n}\nhardware h : inset_cup_hinge(door, on: side) {\n  place {\n    flush(door.bottom, inset: 50mm)\n  }\n}",
+        "/// A cup hinge for an inset door, whose plate has no adjustment: it\n/// is drawn where this design puts it.\nkind inset_cup_hinge : hinge {\n  roles {\n    piece: Part\n    on:    Part\n  }\n  opening_angle: 110deg\n  cup_diameter:  35mm\n  cup_depth:     13mm\n  cup_inset:     5mm\n  mount {\n    face:   back\n    across: from(edge(piece, nearer: on), inset: 22.5mm)\n    along:  open\n  }\n  member plate {\n    with:  on\n    shape: box(along: 50mm, across: -22.5mm..-11.5mm, depth: -55mm..-19mm)\n    mount {\n      across: from(face(on, toward: piece), inset: -22.5mm)\n      depth:  from(face(on, toward: piece))\n    }\n  }\n  member cup {\n    with:  piece\n    shape: cylinder(diameter: 35mm, depth: 0mm..13mm)\n  }\n  cut crossing(piece, cup) { drill(diameter: 35mm, depth: 13mm) }\n}\npart side : pine_19 {\n  length: 400mm\n  width:  300mm\n  place {\n    orient(length: up, width: back)\n    against(base.top)\n    flush(base.left)\n    flush(base.front)\n  }\n}\npart door : pine_19 {\n  length: 300mm\n  width:  200mm\n  place {\n    orient(length: up, width: right)\n    against(base.top)\n    against(side.right)\n    against(base.front)\n  }\n}\nhardware h : inset_cup_hinge(door, on: side) {\n  place {\n    flush(door.bottom, inset: 50mm)\n  }\n}",
     );
     let design = design(&opened);
     let door = part(design, "door");
@@ -926,5 +1263,195 @@ fn roles_params_and_made_parts_of_a_kind_share_one_namespace() {
     assert_eq!(
         diagnostic.help.as_deref(),
         Some("roles, params and made parts of a kind share one namespace")
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Hardware mounts, selectors and cuts
+// ---------------------------------------------------------------------------
+
+fn plus(a: stave_lang::units::Length, b: stave_lang::units::Length) -> stave_lang::units::Length {
+    a.checked_add(b).unwrap()
+}
+
+fn minus(a: stave_lang::units::Length, b: stave_lang::units::Length) -> stave_lang::units::Length {
+    a.checked_sub(b).unwrap()
+}
+
+/// A front standing on the base, its length running right.
+const FRONT: &str = "part front : pine_19 {\n  length: 300mm\n  width:  150mm\n  place {\n    orient(length: right, width: up)\n    against(base.top)\n    flush(base.left)\n    flush(base.front)\n  }\n}\n";
+
+/// A knob whose kind centres it up and down and leaves the axis along the
+/// front to the design.
+const CENTRED_KNOB: &str = "kind centred_knob : pull {\n  roles {\n    piece: Part\n  }\n  mount {\n    face:   front\n    across: center(piece)\n    along:  open\n  }\n  member knob {\n    with:  piece\n    shape: cylinder(diameter: 20mm, depth: -20mm..0mm)\n  }\n}\n";
+
+#[test]
+fn mount_axes_left_open_are_set_by_place() {
+    let knob = |place: &str| {
+        open(&format!(
+            "{FRONT}{CENTRED_KNOB}hardware a : centred_knob(front){place}"
+        ))
+    };
+    let opened = knob(" {\n  place {\n    flush(front.left, inset: 30mm)\n  }\n}");
+    let design = design(&opened);
+    let bounds = common::hardware(design, "a").bounds;
+    let [across, up, _] = extent(part(design, "front"));
+    // Along the front: where the design puts it.
+    assert_eq!(
+        (bounds.min().across, bounds.max().across),
+        (plus(across.0, mm("30")), plus(across.0, mm("50")))
+    );
+    // Up and down: where the kind puts it, centred on the front.
+    let middle = stave_lang::units::Length::from_nm((up.0.nm() + up.1.nm()) / 2);
+    assert_eq!(
+        (bounds.min().up, bounds.max().up),
+        (minus(middle, mm("10")), plus(middle, mm("10")))
+    );
+    // An axis the kind fixes can't be set again; the open one must be.
+    only_error(
+        &knob(" {\n  place {\n    flush(front.left, inset: 30mm)\n    center(front, up)\n  }\n}"),
+        "axis-set-twice",
+        "a: position along 'up' is set twice",
+    );
+    only_error(
+        &knob(""),
+        "axis-not-set",
+        "a: position along 'across' is not set",
+    );
+}
+
+/// A side standing on the base and a flap against its right face, the
+/// flap's front edge flush with the side's front; the side's middle is
+/// nearer the flap's back edge.
+const FLAP: &str = "part side : pine_19 {\n  length: 300mm\n  width:  300mm\n  place {\n    orient(length: up, width: back)\n    against(base.top)\n    flush(base.left)\n    flush(base.front)\n  }\n}\npart flap : pine_19 {\n  length: 200mm\n  width:  100mm\n  place {\n    orient(length: up, width: back)\n    against(base.top)\n    against(side.right)\n    flush(side.front)\n  }\n}\n";
+
+#[test]
+fn edge_flush_with_picks_the_flush_edge() {
+    let hung = |kind: &str| {
+        open(&format!(
+            "{FLAP}{kind}hardware h : {}(flap, on: side, face: left) {{\n  place {{\n    flush(flap.bottom, inset: 20mm)\n  }}\n}}",
+            if kind.is_empty() {
+                "butt_hinge"
+            } else {
+                "nearer_hinge"
+            }
+        ))
+    };
+    // The standard butt hinge's pin is on the flush edge: the front.
+    let opened = hung("");
+    let design = design(&opened);
+    let leaf = common::hardware(design, "h").bounds;
+    let [_, _, deep] = extent(part(design, "flap"));
+    assert_eq!(
+        (leaf.min().deep, leaf.max().deep),
+        (deep.0, plus(deep.0, mm("12")))
+    );
+    // The same hinge measured from the edge nearer the side's middle sits
+    // at the back.
+    let nearer = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std/hardware/hinges.stave"),
+    )
+    .unwrap();
+    let start = nearer.find("kind butt_hinge : hinge {").unwrap();
+    let kind = nearer[start..]
+        .replacen("kind butt_hinge", "kind nearer_hinge", 1)
+        .replacen("edge(piece, flush_with: on)", "edge(piece, nearer: on)", 1);
+    let opened = hung(&format!("{kind}\n"));
+    let design = common::design(&opened);
+    let leaf = common::hardware(design, "h").bounds;
+    assert_eq!(
+        (leaf.min().deep, leaf.max().deep),
+        (minus(deep.1, mm("12")), deep.1)
+    );
+}
+
+/// A slide whose drawer pulls out to the right, so its drawer side's
+/// thickness runs front to back.
+const SIDEWAYS_SLIDE: &str = "kind sideways_slide : slide {\n  roles {\n    piece: Part\n    in:    Region\n  }\n  length:    250mm\n  clearance: 12.7mm\n  travel:    250mm\n  mount {\n    face:   face(piece, nearer: in)\n    across: center(piece)\n    along:  from(end(piece, toward: right))\n  }\n  member cabinet_member {\n    with:  in\n    shape: box(along: 0mm..250mm, across: 45mm, depth: -12.7mm..-6.35mm)\n  }\n  member drawer_member {\n    with:  piece\n    shape: box(along: 0mm..250mm, across: 45mm, depth: -6.35mm..0mm)\n  }\n}\n";
+
+#[test]
+fn face_nearer_works_on_any_axis() {
+    let opened = open(&format!(
+        "{SIDEWAYS_SLIDE}part back_wall : pine_19 {{\n  length: 600mm\n  width:  200mm\n  place {{\n    orient(length: right, width: up)\n    against(base.top)\n    flush(base.left)\n    flush(base.back)\n  }}\n}}\nregion bay = opening(left: base.left, right: base.right, bottom: base.top, top: back_wall.top, front: base.front, back: back_wall.front)\npart drawer_side : pine_12 {{\n  length: 300mm\n  width:  100mm\n  place {{\n    orient(length: right, width: up)\n    against(base.top)\n    against(back_wall.front, gap: 12.7mm)\n    flush(base.right)\n  }}\n}}\nhardware runner : sideways_slide(drawer_side, in: bay)"
+    ));
+    let design = design(&opened);
+    let runner = common::hardware(design, "runner");
+    // The drawer side's back face is the one nearer a side of the bay.
+    assert_eq!(runner.mount_face, stave_lang::placement::Face::Back);
+    let [across, _, deep] = extent(part(design, "drawer_side"));
+    // From the side's right end, 250mm along it, standing off its back.
+    assert_eq!(
+        (runner.bounds.min().across, runner.bounds.max().across),
+        (minus(across.1, mm("250")), across.1)
+    );
+    assert_eq!(
+        (runner.bounds.min().deep, runner.bounds.max().deep),
+        (deep.1, plus(deep.1, mm("6.35")))
+    );
+    // A drawer side whose length doesn't run that way can't be measured
+    // from such an end.
+    let opened = open(&format!(
+        "{SIDEWAYS_SLIDE}part drawer_side : pine_12 {{\n  length: 300mm\n  width:  100mm\n  place {{\n    orient(length: back, width: up)\n    against(base.top)\n    flush(base.left)\n    flush(base.front)\n  }}\n}}\nregion bay = opening(left: base.left, right: base.right, bottom: base.top, top: drawer_side.top, front: base.front, back: base.back)\nhardware runner : sideways_slide(drawer_side, in: bay)"
+    ));
+    let diagnostic = the_diagnostic(
+        &opened,
+        "type-mismatch",
+        "end(drawer_side, toward: right) needs drawer_side's length to run right, but it runs along 'deep'",
+    );
+    assert!(diagnostic.help.is_some());
+}
+
+#[test]
+fn a_named_cut_is_called_by_its_name() {
+    let opened = with_parts(
+        "kind trench : joint {\n  adds: extend(piece, by: 6mm)\n  cut trench: crossing(into, piece) {\n    notch(depth: 3mm)\n  }\n}\njoint housing : trench(shelf, into: side)",
+    );
+    let solved = common::solved(&opened);
+    let cut = &part(solved, "side").cuts[0];
+    assert_eq!(cut.name.as_ref().map(|n| n.as_str()), Some("trench"));
+    // Messages call the cut by its name.
+    let overlap = opened
+        .diagnostics
+        .iter()
+        .find(|d| d.code == stave_lang::Code::Overlap)
+        .expect("the shelf goes past the bottom of its trench");
+    let help = overlap.help.as_deref().unwrap_or("");
+    assert!(help.contains("its trench in side"), "{help}");
+    // A standard dado's cut is called a dado; a hardware kind's cut keeps
+    // its name too.
+    let opened = with_parts("joint housing : dado(shelf, into: side)");
+    assert_eq!(
+        part(design(&opened), "side").cuts[0]
+            .name
+            .as_ref()
+            .map(|n| n.as_str()),
+        Some("dado")
+    );
+    let opened = open(&format!(
+        "{FRONT}hardware a : knob(front) {{\n  place {{\n    center(front, across)\n    center(front, up)\n  }}\n}}"
+    ));
+    assert_eq!(
+        part(design(&opened), "front").cuts[0]
+            .name
+            .as_ref()
+            .map(|n| n.as_str()),
+        Some("hole")
+    );
+}
+
+#[test]
+fn a_hardware_kind_counts_the_fasteners_it_uses() {
+    let opened = open(&format!(
+        "{FRONT}kind screwed_knob : pull {{\n{PULL_HEAD}  uses: wood_screw(length: 25mm, count: 2)\n  member knob {{\n    with:  piece\n    shape: cylinder(diameter: 20mm, depth: -20mm..0mm)\n  }}\n}}\nhardware a : screwed_knob(front) {{\n  place {{\n    center(front, across)\n    center(front, up)\n  }}\n}}"
+    ));
+    let fasteners = &common::hardware(design(&opened), "a").fasteners;
+    assert_eq!(
+        fasteners,
+        &[stave_model::solved::HardwareFastener {
+            kind: "wood_screw".to_owned(),
+            diameter: mm("4"),
+            length: mm("25"),
+            count: 2,
+        }]
     );
 }

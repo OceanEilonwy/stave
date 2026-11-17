@@ -44,15 +44,6 @@ pub fn open(body: &str) -> Opened {
     open_files(&[("project.stave", &format!("{HEADER}\n{body}"))])
 }
 
-/// `true` for the one kind of diagnostic a clean example may have: a
-/// `not-supported` warning for a cut the geometry can't make yet (the
-/// Japanese joints' dovetails, outlines and angled slots).
-pub fn is_geometry_not_supported(diagnostic: &stave_lang::Diagnostic) -> bool {
-    diagnostic.severity == stave_lang::Severity::Warning
-        && diagnostic.code == stave_lang::Code::NotSupported
-        && diagnostic.message.starts_with("cutting ")
-}
-
 /// The diagnostics as `code: message`.
 pub fn diagnostics(opened: &Opened) -> Vec<String> {
     opened

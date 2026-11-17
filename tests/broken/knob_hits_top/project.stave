@@ -1,4 +1,4 @@
-// expect: error[overlap] handle and top overlap
+// expect: error[overlap] handle's knob and top overlap
 stave 1
 
 // A 50mm knob centred on a front only 40mm high: it reaches 5mm above the

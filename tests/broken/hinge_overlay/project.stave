@@ -1,4 +1,4 @@
-// expect: error[hinge-overlay] door.hinges[bottom]: door.panel overlays side_l by 9mm, but the hinge gives 15.5mm to 19.5mm
+// expect: error[adjust] door.hinges[bottom]: the arm would sit 8.5mm off its place on the plate; it adjusts 2mm
 stave 1
 
 // A door that covers only half of the side it is hinged on, on cup hinges

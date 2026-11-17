@@ -1,0 +1,49 @@
+// expect: error[type-mismatch] splice: the outline crosses itself between mark 3 and mark 4
+stave 1
+
+// The marks of an outline go round the shape in order. Here the second and
+// third are swapped, so the shape is a bow tie whose sides cross.
+
+project "Outline crosses itself" {
+  units: mm
+}
+
+stock pine_90 { species: pine, form: solid, thickness: 90mm, width: 90mm }
+
+part beam_a : pine_90 {
+  length: 500mm
+  place {
+    ground
+  }
+}
+
+part beam_b : pine_90 {
+  length: 500mm
+  place {
+    against(beam_a.right)
+    flush(beam_a.bottom)
+    flush(beam_a.front)
+  }
+}
+
+/// A half lap marked out by hand, with two marks in the wrong order.
+kind marked_lap : joint {
+  roles {
+    piece: Part
+    into:  Part
+  }
+  param lap = piece.width
+
+  adds: extend(piece, by: lap)
+
+  cut side(piece, normal: width, from: into) {
+    outline(depth: through, marks: [
+      mark(along: 0mm, across: 0mm),
+      mark(along: lap, across: piece.thickness / 2),
+      mark(along: lap, across: 0mm),
+      mark(along: 0mm, across: piece.thickness / 2),
+    ])
+  }
+}
+
+joint splice : marked_lap(beam_b, into: beam_a)

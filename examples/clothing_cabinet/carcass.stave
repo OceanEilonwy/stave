@@ -5,7 +5,7 @@ stave 1
 
 part base : oak_19 {
   length: cabinet_width
-  width:  cabinet_depth          // wider than oak_19's max_width: the cut list plans a glue-up
+  width:  cabinet_depth          // wider than oak_19's max_width: made of boards, glued edge to edge
   place {
     ground
   }

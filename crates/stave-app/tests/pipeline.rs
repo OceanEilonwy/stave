@@ -50,10 +50,7 @@ fn every_example_and_standard_module_checks_clean() {
     for folder in folders {
         let opened = stave_app::open(&folder).unwrap();
         assert!(
-            opened
-                .diagnostics
-                .iter()
-                .all(common::is_geometry_not_supported),
+            opened.diagnostics.is_empty(),
             "{}:\n{}",
             folder.display(),
             render_diagnostics(&opened.sources, &opened.diagnostics)
@@ -536,7 +533,14 @@ fn the_clothing_cabinet_is_where_the_design_says() {
         .iter()
         .find(|c| matches!(c.kind, CutKind::Drill { diameter, .. } if diameter == mm("35")))
         .unwrap();
-    assert!(matches!(cup.place, CutPlace::Mount { centre, .. } if centre.width == mm("22.5")));
+    // Centred 22.5mm from the stile's edge: cup_inset and half the cup.
+    let CutPlace::Member { footprint, .. } = cup.place else {
+        panic!("the cup's bore is not a hardware cut: {:?}", cup.place);
+    };
+    assert_eq!(
+        (footprint.min.width, footprint.max.width),
+        (mm("5"), mm("40"))
+    );
 
     // Requires hold and scenes are there.
     assert!(design.requires.iter().all(|r| r.holds));
@@ -553,8 +557,9 @@ fn the_clothing_cabinet_is_where_the_design_says() {
 
 /// The door's hinge edge, front corner, as the left door of the cabinet
 /// opens on its cup hinges' linkage: exactly where it is placed when
-/// closed, then pushed forward and out, as `tools/hinge-sim/linkage.py`
-/// computes for the same hinge (19mm door, 18mm overlay, boring distance
+/// closed, then pushed forward and out, as
+/// `oracle_hinge::the_front_edge_moves_forward_and_out` measures for the
+/// same hinge (19mm door, 18mm overlay, boring distance
 /// 5mm).
 #[test]
 fn the_cabinet_doors_move_on_their_hinges_linkage() {

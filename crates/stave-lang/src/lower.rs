@@ -559,9 +559,16 @@ fn kind(node: &SyntaxNode) -> Option<Kind> {
                     docs,
                     node: KindMember {
                         name: ident(&child(&entry, SyntaxKind::NAME)?)?,
+                        body: match child(&entry, SyntaxKind::BLOCK) {
+                            Some(block) => Some(member_body(&block)?),
+                            None => None,
+                        },
                     },
                     span,
                 })
+            }
+            SyntaxKind::MECHANISM => {
+                KindEntry::Mechanism(mechanism(&entry, &child(&entry, SyntaxKind::BLOCK)?)?)
             }
             SyntaxKind::ROLES => {
                 let roles_block = child(&entry, SyntaxKind::BLOCK)?;
@@ -579,7 +586,22 @@ fn kind(node: &SyntaxNode) -> Option<Kind> {
                     span: span_of(&entry),
                 })
             }
+            SyntaxKind::MOUNT => KindEntry::Mount(mount(&entry)?),
+            SyntaxKind::ADJUST => {
+                let mut names = children(&entry, SyntaxKind::NAME);
+                KindEntry::Adjust(Adjust {
+                    member: ident(&names.next()?)?,
+                    on: ident(&names.next()?)?,
+                    axis: ident(&names.next()?)?,
+                    within: expr(&exprs(&entry).next()?)?,
+                    span: span_of(&entry),
+                })
+            }
             SyntaxKind::CUT => KindEntry::Cut(Cut {
+                name: match child(&entry, SyntaxKind::NAME) {
+                    Some(node) => Some(name(&node)?),
+                    None => None,
+                },
                 selector: call(&child(&entry, SyntaxKind::CALL)?)?,
                 operations: calls(&child(&entry, SyntaxKind::BLOCK)?)?,
                 span: span_of(&entry),
@@ -598,6 +620,127 @@ fn kind(node: &SyntaxNode) -> Option<Kind> {
             entries,
             span: span_of(&block),
         },
+    })
+}
+
+/// `mount { fields }`.
+fn mount(entry: &SyntaxNode) -> Option<MountBlock> {
+    let block = child(entry, SyntaxKind::BLOCK)?;
+    let fields = block
+        .children()
+        .map(|node| field(&node))
+        .collect::<Option<_>>()?;
+    Some(MountBlock {
+        fields,
+        span: span_of(entry),
+    })
+}
+
+/// A member's `{ ... }`: named shapes, `shape:` fields (unnamed shapes) and
+/// other fields.
+fn member_body(block: &SyntaxNode) -> Option<MemberBody> {
+    let entries = block
+        .children()
+        .map(|entry| match entry.kind() {
+            SyntaxKind::MOUNT => Some(MemberEntry::Mount(mount(&entry)?)),
+            SyntaxKind::SHAPE => Some(MemberEntry::Shape(ShapeEntry {
+                name: Some(name(&child(&entry, SyntaxKind::NAME)?)?),
+                value: expr(&exprs(&entry).next()?)?,
+                span: span_of(&entry),
+            })),
+            SyntaxKind::FIELD => {
+                let field = field(&entry)?;
+                Some(if field.key.as_str() == "shape" {
+                    MemberEntry::Shape(ShapeEntry {
+                        name: None,
+                        value: field.value,
+                        span: field.span,
+                    })
+                } else {
+                    MemberEntry::Field(field)
+                })
+            }
+            _ => None,
+        })
+        .collect::<Option<_>>()?;
+    Some(MemberBody {
+        entries,
+        span: span_of(block),
+    })
+}
+
+/// `mechanism { ... }`.
+fn mechanism(node: &SyntaxNode, block: &SyntaxNode) -> Option<MechanismBlock> {
+    let pair = |entry: &SyntaxNode| -> Option<[Ident; 2]> {
+        let mut names = children(entry, SyntaxKind::NAME);
+        Some([ident(&names.next()?)?, ident(&names.next()?)?])
+    };
+    let entries = block
+        .children()
+        .map(|entry| {
+            let span = span_of(&entry);
+            let mut values = exprs(&entry);
+            Some(match entry.kind() {
+                SyntaxKind::PIVOT => MechanismEntry::Pivot {
+                    members: pair(&entry)?,
+                    at: expr(&values.next()?)?,
+                    span,
+                },
+                SyntaxKind::SLOT => MechanismEntry::Slot {
+                    members: pair(&entry)?,
+                    from: expr(&values.next()?)?,
+                    to: expr(&values.next()?)?,
+                    span,
+                },
+                SyntaxKind::RAIL => {
+                    let mut names = children(&entry, SyntaxKind::NAME);
+                    MechanismEntry::Rail {
+                        members: [ident(&names.next()?)?, ident(&names.next()?)?],
+                        along: ident(&names.next()?)?,
+                        span,
+                    }
+                }
+                SyntaxKind::COUPLE => {
+                    let [member, to] = pair(&entry)?;
+                    MechanismEntry::Couple {
+                        member,
+                        to,
+                        ratio: expr(&values.next()?)?,
+                        span,
+                    }
+                }
+                SyntaxKind::STOP => {
+                    let value = expr(&values.next()?)?;
+                    let message = values.next()?;
+                    if message.kind() != SyntaxKind::STRING {
+                        return None;
+                    }
+                    MechanismEntry::Stop {
+                        key: name(&child(&entry, SyntaxKind::NAME)?)?,
+                        value,
+                        message: string(&message)?,
+                        span,
+                    }
+                }
+                SyntaxKind::FIELD => {
+                    let field = field(&entry)?;
+                    if field.key.as_str() == "drive" {
+                        MechanismEntry::Drive {
+                            key: field.key,
+                            value: field.value,
+                            span: field.span,
+                        }
+                    } else {
+                        MechanismEntry::Field(field)
+                    }
+                }
+                _ => return None,
+            })
+        })
+        .collect::<Option<_>>()?;
+    Some(MechanismBlock {
+        entries,
+        span: span_of(node),
     })
 }
 
@@ -934,7 +1077,12 @@ fn expr(node: &SyntaxNode) -> Option<Expr> {
             let op = node
                 .children_with_tokens()
                 .filter_map(|element| element.into_token())
-                .find_map(|token| binary_op(token.kind()))?;
+                .find_map(|token| {
+                    binary_op(token.kind()).or_else(|| {
+                        (token.kind() == SyntaxKind::IDENT && token.text() == "in")
+                            .then_some(BinaryOp::In)
+                    })
+                })?;
             ExprKind::Binary {
                 op,
                 lhs: Box::new(lhs),
@@ -945,6 +1093,13 @@ fn expr(node: &SyntaxNode) -> Option<Expr> {
             ExprKind::List(exprs(node).map(|item| expr(&item)).collect::<Option<_>>()?)
         }
         SyntaxKind::PAREN_EXPR => ExprKind::Paren(Box::new(expr(&exprs(node).next()?)?)),
+        SyntaxKind::RANGE_EXPR => {
+            let mut ends = exprs(node);
+            ExprKind::Range {
+                lo: Box::new(expr(&ends.next()?)?),
+                hi: Box::new(expr(&ends.next()?)?),
+            }
+        }
         _ => return None,
     };
     Some(Expr { kind, span })

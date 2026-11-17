@@ -2,11 +2,11 @@
 source: crates/stave-app/tests/fit.rs
 expression: "rendered(\"tests/broken/hinge_overlay\")"
 ---
-error[hinge-overlay]: door.hinges[bottom]: door.panel overlays side_l by 9mm, but the hinge gives 15.5mm to 19.5mm
+error[adjust]: door.hinges[bottom]: the arm would sit 8.5mm off its place on the plate; it adjusts 2mm
   --> tests/broken/hinge_overlay/project.stave:62:34
    |
 62 |   hardware hinges[bottom, top] : euro_hinge(panel, on: hinge_side) {
    |                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-   = note: base_overlay 12.5mm + cup_inset 5mm - plate_height 0mm = 17.5mm
+   = note: the arm's setting across is 8.5mm; adjust arm on plate: across within 2mm
    = note: the same for door.hinges[top]
-   = help: use a mounting plate with plate_height: 8.5mm (a taller plate holds the door less far over side_l), or make the door overlay it by 15.5mm to 19.5mm
+   = help: use plate_height: 9mm, from the kind's list

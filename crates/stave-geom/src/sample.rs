@@ -4,7 +4,8 @@
 //! [`Shape::contains`] says whether a point lies inside the solid deeper
 //! than a margin (the contact tolerance), so surfaces that touch don't
 //! count. The solid is the blocks and rods of wood (round sections with
-//! their flats), less the holes and the angled slots. The margin is
+//! their flats), less the holes and the slanted pieces of the angled
+//! cuts ([`Prism`]). The margin is
 //! applied by testing the point and the 26 points `margin` away along the
 //! part's axes and their diagonals: a point deeper than the margin passes
 //! them all, a point on a surface, an edge or a corner fails at least one.
@@ -25,10 +26,12 @@ use stave_model::solved::Part;
 
 use crate::collide::direction_vector;
 use crate::render;
-use crate::solid::{AngledSlot, Rod, Solid, across};
+use crate::solid::{Point2, Prism, Rod, Solid, across};
 
 /// Lengths below this (nanometres) count as on a surface.
 const NUDGE: f64 = 1_000.0;
+/// A point this close to a side of an angled cut (nanometres) is on it.
+const ON_SIDE: f64 = 1.0;
 
 /// The 26 unit directions to the neighbours of a cube's centre: along the
 /// axes, the face diagonals and the corner diagonals.
@@ -128,7 +131,7 @@ impl<'a> Shape<'a> {
             })
         }) || self.rods.iter().any(|rod| in_rod(rod, p, true));
         wood && !self.solid.holes().iter().any(|hole| in_rod(hole, p, false))
-            && !self.solid.slots().iter().any(|slot| in_slot(slot, p))
+            && !self.solid.prisms().iter().any(|prism| in_prism(prism, p))
     }
 
     /// Is a local point inside the solid deeper than `margin`?
@@ -251,20 +254,61 @@ impl<'a> Shape<'a> {
                 }
             }
         }
-        // Walls of angled slots, across the whole part.
-        let reach = self.size.length();
-        for slot in self.solid.slots() {
-            let (u, v) = slot_frame(slot);
-            let centre = local(slot);
-            let face = unit(slot.face_axis);
-            let half = render::nm(slot.width) / 2.0;
-            let (d0, d1) = (render::nm(slot.depth.0), render::nm(slot.depth.1));
-            let start = if slot.from_centre { 0.0 } else { -reach };
-            for side in [-1.0, 1.0] {
-                for along in steps(start, reach, spacing) {
+        // Walls and floors of the angled cuts: every side of each outline
+        // over its depth, and the slanted pieces at each end of the depth.
+        for prism in self.solid.prisms() {
+            let face = index(prism.face_axis());
+            let [a, b] = across(prism.face_axis()).map(index);
+            let (d0, d1) = (
+                render::nm(prism.depth().from()),
+                render::nm(prism.depth().to()),
+            );
+            let at = |point: Point2, depth: f64| {
+                let mut p = DVec3::ZERO;
+                p[a] = render::nm(point.first);
+                p[b] = render::nm(point.second);
+                p[face] = depth;
+                p
+            };
+            let points = prism.outline().points();
+            for (i, from) in points.iter().enumerate() {
+                let Some(to) = points.get((i + 1) % points.len()) else {
+                    continue;
+                };
+                let (start, end) = (at(*from, 0.0), at(*to, 0.0));
+                let run = end - start;
+                let length = run.length();
+                if length <= 0.0 {
+                    continue;
+                }
+                // Outward from the wood is into the cut: to the left of a
+                // counter-clockwise side.
+                let mut normal = DVec3::ZERO;
+                normal[a] = -run[b] / length;
+                normal[b] = run[a] / length;
+                for along in steps(0.0, length, spacing) {
                     for depth in steps(d0, d1, spacing) {
-                        let p = centre + u * along + v * (half * side) + face * depth;
-                        keep(p, -v * side, &mut out);
+                        let mut p = start + run * (along / length);
+                        p[face] = depth;
+                        keep(p, normal, &mut out);
+                    }
+                }
+            }
+            {
+                let (low, high) = outline_bounds(points);
+                for (plane, sign) in [(d0, 1.0), (d1, -1.0)] {
+                    let mut normal = DVec3::ZERO;
+                    normal[face] = sign;
+                    for x in steps(render::nm(low.first), render::nm(high.first), spacing) {
+                        for y in steps(render::nm(low.second), render::nm(high.second), spacing) {
+                            let mut p = DVec3::ZERO;
+                            p[a] = x;
+                            p[b] = y;
+                            p[face] = plane;
+                            if outline_holds(points, x, y) {
+                                keep(p, normal, &mut out);
+                            }
+                        }
                     }
                 }
             }
@@ -311,37 +355,63 @@ fn in_rod(rod: &Rod, p: DVec3, wood: bool) -> bool {
     }
 }
 
-/// The unit vectors along and across an angled slot, in local axes.
-fn slot_frame(slot: &AngledSlot) -> (DVec3, DVec3) {
-    let signed = |(axis, positive): (PartAxis, bool)| {
-        if positive { unit(axis) } else { -unit(axis) }
-    };
-    let (base, next) = (signed(slot.base), signed(slot.next));
-    let angle = render::radians_f64(slot.angle);
-    let u = base * angle.cos() + next * angle.sin();
-    let v = next * angle.cos() - base * angle.sin();
-    (u, v)
+/// The box around an outline's points: (low, high).
+fn outline_bounds(points: &[Point2]) -> (Point2, Point2) {
+    let mut low = points.first().copied().unwrap_or(Point2::new(
+        stave_lang::units::Length::ZERO,
+        stave_lang::units::Length::ZERO,
+    ));
+    let mut high = low;
+    for p in points {
+        low = Point2::new(low.first.min(p.first), low.second.min(p.second));
+        high = Point2::new(high.first.max(p.first), high.second.max(p.second));
+    }
+    (low, high)
 }
 
-fn local(slot: &AngledSlot) -> DVec3 {
-    DVec3::new(
-        render::nm(slot.centre.length),
-        render::nm(slot.centre.width),
-        render::nm(slot.centre.thickness),
-    )
+/// Is a point (two coordinates on the outline's plane) strictly inside an
+/// outline, not on one of its sides? Even-odd crossings of a ray along
+/// the first axis.
+fn outline_holds(points: &[Point2], x: f64, y: f64) -> bool {
+    let count = points.len();
+    let mut inside = false;
+    for i in 0..count {
+        let (Some(p), Some(q)) = (points.get(i), points.get((i + 1) % count)) else {
+            continue;
+        };
+        let (px, py) = (render::nm(p.first), render::nm(p.second));
+        let (qx, qy) = (render::nm(q.first), render::nm(q.second));
+        // On this side: not inside.
+        let cross = (qx - px) * (y - py) - (qy - py) * (x - px);
+        let length = ((qx - px).powi(2) + (qy - py).powi(2)).sqrt();
+        if cross.abs() <= ON_SIDE * length
+            && x >= px.min(qx) - ON_SIDE
+            && x <= px.max(qx) + ON_SIDE
+            && y >= py.min(qy) - ON_SIDE
+            && y <= py.max(qy) + ON_SIDE
+        {
+            return false;
+        }
+        if (py > y) != (qy > y) {
+            let at = px + (y - py) * (qx - px) / (qy - py);
+            if at > x {
+                inside = !inside;
+            }
+        }
+    }
+    inside
 }
 
-/// Is a local point in an angled slot (open, so its walls count as wood)?
-fn in_slot(slot: &AngledSlot, p: DVec3) -> bool {
-    let depth = p[index(slot.face_axis)];
-    if depth < render::nm(slot.depth.0) || depth > render::nm(slot.depth.1) {
+/// Is a local point inside an angled cut? Its sides count as wood; its
+/// ends are open, so where it runs out through a face, the face is not
+/// wood there.
+fn in_prism(prism: &Prism, p: DVec3) -> bool {
+    let depth = p[index(prism.face_axis())];
+    if depth < render::nm(prism.depth().from()) || depth > render::nm(prism.depth().to()) {
         return false;
     }
-    let (u, v) = slot_frame(slot);
-    let mut relative = p - local(slot);
-    relative[index(slot.face_axis)] = 0.0;
-    let across = relative.dot(v).abs();
-    across < render::nm(slot.width) / 2.0 && (!slot.from_centre || relative.dot(u) > 0.0)
+    let [a, b] = across(prism.face_axis()).map(index);
+    outline_holds(prism.outline().points(), p[a], p[b])
 }
 
 #[cfg(test)]

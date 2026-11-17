@@ -2,8 +2,8 @@ use glam::Vec3;
 use stave_lang::placement::{Axis, Direction, PartAxis};
 use stave_lang::units::Length;
 use stave_model::solved::{
-    End, Envelope, Hardware, HardwareBase, HardwareData, HardwareId, LocalFace, Orientation, Part,
-    PartId, PartOrigin, Point, Pose, Shape, Size3, Station, Stock, WorldBox,
+    Body, BodyCarrier, BodyRef, End, HardwareId, LocalFace, MemberShape, Orientation, Part, PartId,
+    PartOrigin, Point, Pose, Shape, Size3, Station, Stock, WorldBox,
 };
 use stave_schema::species::Species;
 use stave_schema::words::{Grain, Measure, StockForm};
@@ -70,6 +70,7 @@ fn part(orientation: Orientation, origin: Point, cut: Size3, shape: Shape) -> Pa
         cuts: Vec::new(),
         joints: Vec::new(),
         note: None,
+        boards: None,
     }
 }
 
@@ -268,66 +269,71 @@ fn a_dowel_is_a_cylinder() {
     assert!((geometry.mesh.signed_volume() / volume - 1.0).abs() < 0.01);
 }
 
-fn knob(orientation: Orientation, origin: Point, envelope: Envelope) -> Hardware {
-    let pose = Pose {
-        origin,
-        orientation,
-    };
-    Hardware {
-        id: HardwareId::from_usize(0),
-        name: "handle".into(),
-        kind: "knob".into(),
-        kind_id: stave_model::solved::KindId::from_usize(0),
-        base: HardwareBase::Pull,
-        assembly: None,
-        piece: PartId::from_usize(0),
-        mount_face: stave_lang::placement::Face::Front,
-        envelope,
-        pose,
-        bounds: pose.world_box(envelope.size()),
-        fixed: None,
-        data: HardwareData::Pull {
-            centres: None,
-            diameter: Some(mm(26)),
-            screw_diameter: mm(4),
+/// A member of a knob with these shapes.
+fn knob_member(shapes: Vec<MemberShape>) -> Body {
+    Body::new(
+        BodyRef {
+            hardware: HardwareId::from_usize(0),
+            body: stave_model::solved::BodyId::new(0).unwrap(),
         },
-        mechanism: None,
-        model: None,
-    }
+        "knob".into(),
+        BodyCarrier::Part(PartId::from_usize(0)),
+        shapes,
+    )
+    .unwrap()
 }
 
+/// A member is drawn as exactly its shapes: a cylinder, a box, a bar and
+/// a prism each fill their bounds, wound outward.
 #[test]
-fn hardware_envelopes_fill_their_bounds() {
-    // A knob on a door's front face: thickness stands off toward the front.
-    let standing_off = Orientation::new(Direction::Up, Direction::Right, Direction::Front).unwrap();
-    let cylinder = knob(
-        standing_off,
-        point(406, 1091, -19),
-        Envelope::Cylinder {
-            diameter: mm(26),
-            length: mm(30),
-        },
-    );
-    let geometry = hardware(&cylinder);
-    assert_close(geometry.bounds, expected(cylinder.bounds));
+fn member_shapes_fill_their_bounds() {
+    // A knob on a door's front face, standing off toward the front.
+    let knob = knob_member(vec![MemberShape::Cylinder {
+        axis: Axis::Deep,
+        centre: [mm(406), mm(1091)],
+        diameter: mm(26),
+        start: mm(-49),
+        end: mm(-19),
+    }]);
+    let geometry = body(&knob);
     assert_outward(&geometry.mesh);
-    // The axis stands off the face: along +z, from -(-19) = 19 to 49.
+    // Front is -deep, which the render frame's z points along.
     assert!((geometry.bounds.min.z - 19.0).abs() < 1e-3);
     assert!((geometry.bounds.max.z - 49.0).abs() < 1e-3);
+    let volume = std::f32::consts::PI * 13.0 * 13.0 * 30.0;
+    assert!((geometry.mesh.signed_volume() / volume - 1.0).abs() < 0.01);
 
-    let mirrored = knob(
-        standing_off.mirrored(Axis::Across),
-        point(406, 1091, -19),
-        Envelope::Box {
-            length: mm(50),
-            width: mm(65),
-            thickness: mm(20),
-        },
-    );
-    let geometry = hardware(&mirrored);
-    assert_close(geometry.bounds, expected(mirrored.bounds));
+    let region = WorldBox::new(point(0, 0, 0), point(50, 65, 20));
+    let plate = knob_member(vec![MemberShape::Box(region)]);
+    let geometry = body(&plate);
+    assert_close(geometry.bounds, expected(region));
     assert_outward(&geometry.mesh);
     assert_normals_leave_centre(&geometry);
+
+    // A 1.5mm bar from (0, 0) to (20, 0) across the up axis, 9mm long:
+    // 21.5mm by 1.5mm by 9mm.
+    let bar = knob_member(vec![MemberShape::Bar {
+        axis: Axis::Up,
+        from: [mm(0), mm(0)],
+        to: [mm(20), mm(0)],
+        thickness: Length::from_nm(1_500_000),
+        start: mm(0),
+        end: mm(9),
+    }]);
+    let geometry = body(&bar);
+    assert_outward(&geometry.mesh);
+    assert!((geometry.mesh.signed_volume() - 21.5 * 1.5 * 9.0).abs() < 1e-2);
+
+    // A right triangle 10mm by 10mm, 5mm long.
+    let wedge = knob_member(vec![MemberShape::Prism {
+        axis: Axis::Across,
+        points: vec![[mm(0), mm(0)], [mm(10), mm(0)], [mm(0), mm(10)]],
+        start: mm(0),
+        end: mm(5),
+    }]);
+    let geometry = body(&wedge);
+    assert_outward(&geometry.mesh);
+    assert!((geometry.mesh.signed_volume() - 250.0).abs() < 1e-2);
 }
 
 #[test]
@@ -393,10 +399,16 @@ fn hardware_cut(face: LocalFace, place: CutPlace, kind: CutKind) -> Cut {
         source: CutSource::Hardware {
             hardware: HardwareId::from_usize(0),
         },
+        name: None,
         face,
         place,
         kind,
     }
+}
+
+/// The first member of a hardware kind.
+fn member() -> stave_model::solved::BodyId {
+    stave_model::solved::BodyId::new(0).unwrap()
 }
 
 fn face(axis: PartAxis, end: End) -> LocalFace {
@@ -432,7 +444,9 @@ fn a_dado_outlines_only_where_the_surface_bends() {
     // A housing straight across the width, in the top face.
     let dado = hardware_cut(
         face(PartAxis::Thickness, End::End),
-        CutPlace::Recess {
+        CutPlace::Member {
+            hardware: HardwareId::from_usize(0),
+            body: member(),
             footprint: LocalBox {
                 min: local_point(40, 0, 14),
                 max: local_point(60, 50, 20),
@@ -469,7 +483,9 @@ fn a_tenon_and_a_mortise_keep_their_volume() {
     );
     let pocket = hardware_cut(
         face(PartAxis::Thickness, End::End),
-        CutPlace::Recess {
+        CutPlace::Member {
+            hardware: HardwareId::from_usize(0),
+            body: member(),
             footprint: LocalBox {
                 min: local_point(10, 10, 0),
                 max: local_point(40, 40, 20),
@@ -495,9 +511,15 @@ fn a_hole_opens_in_its_face() {
     );
     board.cuts = vec![hardware_cut(
         face(PartAxis::Thickness, End::End),
-        CutPlace::Mount {
-            centre: local_point(50, 25, 20),
-            centres: None,
+        CutPlace::Member {
+            hardware: HardwareId::from_usize(0),
+            body: member(),
+            // The hole's shape: 10mm across, centred at (50, 25) on the
+            // top face.
+            footprint: LocalBox {
+                min: local_point(45, 20, 12),
+                max: local_point(55, 30, 20),
+            },
         },
         CutKind::Drill {
             diameter: mm(10),
@@ -542,7 +564,7 @@ fn sampled_area(w: f64, h: f64, inside: impl Fn(f64, f64) -> bool) -> f64 {
 }
 
 #[test]
-fn a_slot_at_an_angle_is_drawn_cut() {
+fn an_angled_slot_is_cut() {
     // A 100 × 50 × 20 board, and a stick standing through its middle; a
     // slot 10mm wide runs from the middle out on the diagonal, through.
     let mut board = part(
@@ -562,6 +584,7 @@ fn a_slot_at_an_angle_is_drawn_cut() {
         source: CutSource::Hardware {
             hardware: HardwareId::from_usize(0),
         },
+        name: None,
         face: face(PartAxis::Thickness, End::End),
         place: CutPlace::Crossing {
             other: stick.id,
@@ -585,10 +608,11 @@ fn a_slot_at_an_angle_is_drawn_cut() {
     ] {
         board.pose.orientation = orientation;
         let solid = solid::Solid::of(&board, &design);
-        assert_eq!(solid.slots().len(), 1);
+        assert_eq!(solid.prisms().len(), 1);
         let geometry = cut_part(&board, &solid);
         assert_outward(&geometry.mesh);
-        let band = mesh_cut::Band::of(&solid.slots()[0]);
+        let prism = &solid.prisms()[0];
+        let band = mesh_cut::Band::of(prism, &prism.pieces()[0]);
         let cut = sampled_area(100.0, 50.0, |x, y| {
             band.holds(Vec3::new(x as f32, y as f32, 10.0))
         });
@@ -599,6 +623,8 @@ fn a_slot_at_an_angle_is_drawn_cut() {
             "{volume} != {expected}"
         );
         assert!(cut > 300.0, "the slot cuts {cut}mm²");
+        let open = open_edges(&geometry.mesh);
+        assert!(open.is_empty(), "{} open edges", open.len());
     }
 }
 
@@ -621,6 +647,7 @@ fn a_round_section_keeps_its_flats() {
         source: CutSource::Hardware {
             hardware: HardwareId::from_usize(0),
         },
+        name: None,
         face: face(PartAxis::Width, End::Start),
         place: CutPlace::Crossing {
             other: other.id,
@@ -651,4 +678,206 @@ fn a_round_section_keeps_its_flats() {
         (volume - expected).abs() < 30.0 * section * 0.01,
         "{volume} != {expected}"
     );
+}
+
+/// Every edge of a mesh, by the positions of its ends, that isn't used by
+/// exactly two triangles: none in a watertight mesh.
+fn open_edges(mesh: &Mesh) -> Vec<([u32; 3], [u32; 3], usize)> {
+    use std::collections::BTreeMap;
+    let key = |p: Vec3| p.to_array().map(|c| (c + 0.0).to_bits());
+    let mut counts: BTreeMap<([u32; 3], [u32; 3]), usize> = BTreeMap::new();
+    for &[a, b, c] in mesh.indices.as_chunks::<3>().0 {
+        let vertex = |i: u32| Vec3::from(mesh.vertices[i as usize].position);
+        let [a, b, c] = [vertex(a), vertex(b), vertex(c)];
+        if (b - a).cross(c - a).length_squared() < 1e-12 {
+            continue;
+        }
+        for (p, q) in [(a, b), (b, c), (c, a)] {
+            let (p, q) = (key(p), key(q));
+            let edge = if p <= q { (p, q) } else { (q, p) };
+            *counts.entry(edge).or_default() += 1;
+        }
+    }
+    counts
+        .into_iter()
+        .filter(|(_, count)| *count != 2)
+        .map(|((p, q), count)| (p, q, count))
+        .collect()
+}
+
+/// Two 60 × 40 beams meeting end to end along `across`: `beam_a` (100
+/// long) with a dovetail socket 30 deep in its right end, `beam_b` (130
+/// long, reaching 30 into `beam_a`) with the tail on its left end; necks
+/// 20 wide.
+fn dovetail_pair(
+    socket: stave_lang::units::Angle,
+    tail: stave_lang::units::Angle,
+) -> (SolvedDesign, solid::Solid, solid::Solid) {
+    dovetail_pair_sloped(
+        stave_model::solved::Slope::Angle(socket),
+        stave_model::solved::Slope::Angle(tail),
+    )
+}
+
+/// [`dovetail_pair`], with the slopes given either way.
+fn dovetail_pair_sloped(
+    socket: stave_model::solved::Slope,
+    tail: stave_model::solved::Slope,
+) -> (SolvedDesign, solid::Solid, solid::Solid) {
+    let orientation = frame(Direction::Right, Direction::Back);
+    let mut beam_a = part(orientation, point(0, 0, 0), size(100, 60, 40), Shape::Board);
+    let mut beam_b = part(
+        orientation,
+        point(70, 0, 0),
+        size(130, 60, 40),
+        Shape::Board,
+    );
+    beam_b.id = PartId::from_usize(1);
+    let source = CutSource::Hardware {
+        hardware: HardwareId::from_usize(0),
+    };
+    beam_a.cuts = vec![Cut {
+        source,
+        name: None,
+        face: face(PartAxis::Length, End::End),
+        place: CutPlace::End { toward: beam_b.id },
+        kind: CutKind::DovetailSocket {
+            neck: mm(20),
+            depth: mm(30),
+            slope: socket,
+        },
+    }];
+    beam_b.cuts = vec![Cut {
+        source,
+        name: None,
+        face: face(PartAxis::Length, End::Start),
+        place: CutPlace::End { toward: beam_a.id },
+        kind: CutKind::DovetailTail {
+            neck: mm(20),
+            depth: mm(30),
+            slope: tail,
+        },
+    }];
+    let mut design = design_of(&beam_a);
+    design.parts.push(beam_b);
+    let solids = design
+        .parts
+        .iter()
+        .map(|p| solid::Solid::of(p, &design))
+        .collect::<Vec<_>>();
+    let [a, b]: [solid::Solid; 2] = solids.try_into().unwrap();
+    (design, a, b)
+}
+
+fn world(design: &SolvedDesign, index: usize, solid: &solid::Solid) -> collide::WorldSolid {
+    collide::WorldSolid::of_part(&design.parts[index], solid)
+}
+
+#[test]
+fn a_dovetail_tail_fills_its_socket_exactly() {
+    let ten = stave_lang::units::Angle::from_deg(10);
+    let (design, socket, tail) = dovetail_pair(ten, ten);
+    assert!(socket.misshapen().is_empty() && tail.misshapen().is_empty());
+    assert_eq!(socket.prisms().len(), 1, "the socket is one trapezoid");
+    assert_eq!(tail.prisms().len(), 2, "a wedge either side of the tail");
+    let (a, b) = (world(&design, 0, &socket), world(&design, 1, &tail));
+    assert_eq!(
+        collide::overlaps(&a, &b),
+        vec![],
+        "the tail fills the socket"
+    );
+    assert_eq!(collide::overlaps(&b, &a), vec![]);
+    assert!(collide::touches(&a, &b));
+    // The tail is real wood: against a beam with no socket it overlaps
+    // by its whole length.
+    let uncut = solid::Solid::of(
+        &Part {
+            cuts: Vec::new(),
+            ..design.parts[0].clone()
+        },
+        &design,
+    );
+    let found = collide::overlaps(&world(&design, 0, &uncut), &b);
+    assert!(
+        found.iter().any(|o| o.depth >= mm(19)),
+        "the tail goes into an uncut beam: {found:?}"
+    );
+    // Both meshes are closed, and enclose the solids' volume: each beam
+    // less (or with only) the trapezoid 20 wide at the neck and 20 + 2 ×
+    // 30 tan 10deg at the other end, 30 long, 40 through.
+    let spread = 30.0 * 10f64.to_radians().tan();
+    let trapezoid = (20.0 + spread) * 30.0 * 40.0;
+    for (index, solid, expected) in [
+        (0, &socket, 100.0 * 60.0 * 40.0 - trapezoid),
+        (1, &tail, 100.0 * 60.0 * 40.0 + trapezoid),
+    ] {
+        let geometry = cut_part(&design.parts[index], solid);
+        assert_outward(&geometry.mesh);
+        let open = open_edges(&geometry.mesh);
+        assert!(
+            open.is_empty(),
+            "{} open edges, e.g. {:?}",
+            open.len(),
+            open.first()
+        );
+        let volume = f64::from(geometry.mesh.signed_volume());
+        assert!(
+            (volume - expected).abs() < expected * 1e-4,
+            "{volume} != {expected}"
+        );
+    }
+}
+
+#[test]
+fn a_tail_one_degree_wider_overlaps_its_socket() {
+    let (design, socket, tail) = dovetail_pair(
+        stave_lang::units::Angle::from_deg(10),
+        stave_lang::units::Angle::from_deg(11),
+    );
+    let found = collide::overlaps(&world(&design, 0, &socket), &world(&design, 1, &tail));
+    // Each sloped face goes 30 (tan 11deg - tan 10deg) = 0.54mm past the
+    // socket's at the tip: slivers along both slopes, none deeper than
+    // that.
+    assert!(!found.is_empty());
+    for overlap in &found {
+        assert!(overlap.depth < Length::from_nm(550_000), "{overlap:?}");
+        assert!(overlap.depth > collide::CONTACT_TOLERANCE);
+    }
+    let deepest = found.iter().map(|o| o.depth).max().unwrap();
+    assert!(deepest > Length::from_nm(400_000), "{found:?}");
+}
+
+#[test]
+fn a_dovetail_at_90_degrees_is_a_mistake() {
+    let (_, socket, _) = dovetail_pair(
+        stave_lang::units::Angle::from_deg(90),
+        stave_lang::units::Angle::from_deg(10),
+    );
+    assert_eq!(socket.misshapen().len(), 1);
+    assert_eq!(socket.misshapen()[0].error, solid::ShapeError::TooSteep);
+}
+
+#[test]
+fn a_slope_1_in_8_is_exact() {
+    // 30 deep at 1 in 8: each side spreads exactly 3.75mm, no rounding.
+    let one_in_eight =
+        stave_model::solved::Slope::Ratio(stave_lang::units::Rational::new(1, 8).unwrap());
+    let (design, socket, tail) = dovetail_pair_sloped(one_in_eight, one_in_eight);
+    let prism = &socket.prisms()[0];
+    let mut widths: Vec<i64> = Vec::new();
+    for at in [mm(70), mm(100)] {
+        let mut across: Vec<i64> = prism
+            .outline()
+            .points()
+            .iter()
+            .filter(|p| p.first == at)
+            .map(|p| p.second.nm())
+            .collect();
+        across.sort_unstable();
+        widths.push(across[1] - across[0]);
+    }
+    // Neck 20 at the end (100), 20 + 2 × 3.75 at the bottom (70).
+    assert_eq!(widths, vec![27_500_000, 20_000_000]);
+    let found = collide::overlaps(&world(&design, 0, &socket), &world(&design, 1, &tail));
+    assert_eq!(found, vec![]);
 }

@@ -135,7 +135,7 @@ exploded scenes.
 5. **Assembly sequences**. A joint's `insert` steps, run in reverse from the
    finished joint, must be clear: `push` uses the slide sweep, `rotate` the
    hinge sweep. The chidori's quarter turn and slide-out must pass (they are
-   proven by `tools/joint-sim/chidori.py`), and a broken variant must fail.
+   proven by `stave-app/tests/oracle_chidori.rs`), and a broken variant must fail.
 6. **Viewer**. A diagnostic carries the motion and its contact angle or
    distance. Selecting it poses the design at contact and tints the overlap
    red; a slider swings the motion. **Exploded view**: scenes with

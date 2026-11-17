@@ -3,102 +3,39 @@
 //! thing it hits is reported with the angle or distance where it hits.
 //!
 //! The moving assembly starts closed; everything else stands where the
-//! scene puts it. Each assembly is reported once: the first start (rest,
-//! then the scenes in order) at which it hits something, with its first
-//! contact. An assembly inside another that moves, or with an item already
-//! reported at rest or at a scene's poses, is left out.
+//! scene puts it. Every body the motion moves (its parts, the hardware on
+//! them, and the links its hardware's mechanism turns) is swept against
+//! every body that moves differently, the same way for every kind
+//! (grammar, "One collision model"). Each assembly is reported once: the
+//! first start (rest, then the scenes in order) at which it hits
+//! something, with its first contact. An assembly inside another that
+//! moves, or with an item already reported at rest or at a scene's poses,
+//! is left out.
 
 use stave_geom::collide::{Placement, boxes_overlap, overlaps_placed, placed_bounds, union};
-use stave_geom::sweep::{
-    LinkageSweep, SlideHit, linkage_contact, linkage_reach, slide_contact, slide_reach,
-    turn_contact, turn_reach,
-};
+use stave_geom::mechanism::Shape;
+use std::collections::BTreeSet;
+
+use stave_geom::planar::{MechanismError, MechanismErrorKind};
+use stave_geom::sweep::{Mover, Path, Reach, first_contact};
 use stave_lang::placement::Direction;
 use stave_lang::units::{Angle, Length};
 use stave_lang::{Code, Severity};
-use stave_model::solved::{AssemblyId, HardwareBase, Motion, PoseValue, WorldBox};
+use stave_model::mechanism::DriveValue;
+use stave_model::solved::{AssemblyId, PoseValue, WorldBox};
 
 use crate::names::length_text;
 use crate::{Checker, Contact, ContactMotion, Item};
 
-/// Where a motion first hits something.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Reach {
-    /// A slide, this far out.
-    Distance(SlideHit),
-    /// A hinge, opened this far.
-    Angle(Angle),
-}
-
-impl Reach {
-    /// What decides which hit comes first: the distance or angle, then
-    /// parts before hardware (a drawer side rather than the slide on it).
-    fn key(&self, a: Item, b: Item) -> (i64, bool, bool, Item, Item) {
-        let amount = match self {
-            Reach::Distance(hit) => hit.distance.nm(),
-            Reach::Angle(angle) => angle.microdeg(),
-        };
-        let hardware = |item: Item| !matches!(item, Item::Part(_));
-        (amount, hardware(a), hardware(b), a, b)
-    }
-}
-
-/// A motion ready to sweep: a cup hinge's linkage solved once.
-enum Sweeper {
-    Turn {
-        pivot: stave_model::solved::Pivot,
-        opening: Angle,
-    },
-    Linkage(Box<LinkageSweep>),
-    Travel {
-        toward: Direction,
-        travel: Length,
-    },
-}
-
-impl Sweeper {
-    fn of(motion: &Motion) -> Sweeper {
-        match *motion {
-            Motion::Turn {
-                pivot,
-                opening_angle,
-            } => Sweeper::Turn {
-                pivot,
-                opening: opening_angle,
-            },
-            Motion::Linkage { linkage } => Sweeper::Linkage(Box::new(LinkageSweep::new(&linkage))),
-            Motion::Travel { toward, travel } => Sweeper::Travel { toward, travel },
-        }
-    }
-
-    /// The box a solid can reach over the motion.
-    fn reach(&self, solid: &stave_geom::collide::WorldSolid) -> Option<WorldBox> {
-        match self {
-            Sweeper::Turn { pivot, .. } => turn_reach(solid, pivot),
-            Sweeper::Linkage(sweep) => linkage_reach(solid, sweep),
-            Sweeper::Travel { toward, travel } => slide_reach(solid, *toward, *travel),
-        }
-    }
-
-    /// The first contact of a moving solid with a fixed one.
-    fn contact(
-        &self,
-        moving: &stave_geom::collide::WorldSolid,
-        fixed: &stave_geom::collide::WorldSolid,
-        placement: &Placement,
-    ) -> Option<Reach> {
-        match self {
-            Sweeper::Turn { pivot, opening } => {
-                turn_contact(moving, fixed, placement, pivot, *opening).map(Reach::Angle)
-            }
-            Sweeper::Linkage(sweep) => {
-                linkage_contact(moving, fixed, placement, sweep).map(Reach::Angle)
-            }
-            Sweeper::Travel { toward, travel } => {
-                slide_contact(moving, fixed, placement, *toward, *travel).map(Reach::Distance)
-            }
-        }
-    }
+/// What decides which hit comes first: the distance or angle, then parts
+/// before hardware (a drawer side rather than the slide on it).
+fn reach_key(reach: &Reach, a: Item, b: Item) -> (i64, bool, bool, Item, Item) {
+    let amount = match reach {
+        Reach::Distance(hit) => hit.distance.nm(),
+        Reach::Angle(angle) => angle.microdeg(),
+    };
+    let hardware = |item: Item| !matches!(item, Item::Part(_));
+    (amount, hardware(a), hardware(b), a, b)
 }
 
 /// An angle rounded down to a tenth of a degree: `87.3deg`.
@@ -108,32 +45,114 @@ fn angle_text(angle: Angle) -> String {
 }
 
 impl Checker<'_> {
-    /// The hinge or slide of an assembly that gives it its motion.
+    /// An assembly's mechanism, ready to pose and sweep; `None` when
+    /// nothing moves it.
+    pub(crate) fn path(&self, assembly: AssemblyId) -> Option<&Path> {
+        self.paths.get(assembly.index())?.as_ref()
+    }
+
+    /// The piece of hardware with a drive that gives an assembly its
+    /// motion (the first, when several move it alike).
     fn motion_hardware(&self, assembly: AssemblyId) -> Option<stave_model::solved::HardwareId> {
         let found = self.design.assemblies.get(assembly.index())?;
-        found.hardware.iter().copied().find(|id| {
-            self.design.hardware.get(id.index()).is_some_and(|h| {
-                matches!(h.base, HardwareBase::Hinge | HardwareBase::Slide)
-                    && h.assembly == Some(assembly)
-            })
-        })
+        found.mechanism.as_ref()?.hardware().first().copied()
+    }
+
+    /// Mechanisms that can't move through their range (grammar, "How a
+    /// mechanism is solved"): a dead point, a branch that flips or a pin
+    /// that runs off its slot is `error[motion]` at the hardware; a
+    /// mechanism with no order of steps is `error[mechanism]` at its kind.
+    pub(crate) fn mechanisms(&mut self) {
+        let mut errors: Vec<(stave_model::solved::HardwareId, MechanismError)> = Vec::new();
+        for (assembly, error) in &self.broken {
+            if let Some(hardware) = self.motion_hardware(*assembly) {
+                errors.push((hardware, error.clone()));
+            }
+        }
+        // Hardware no assembly moves is still run through its own range.
+        for hardware in &self.design.hardware {
+            let Some(own) = &hardware.own_mechanism else {
+                continue;
+            };
+            let covered = hardware.assembly.is_some_and(|assembly| {
+                self.path(assembly).is_some() || self.broken.iter().any(|(a, _)| *a == assembly)
+            });
+            if covered {
+                continue;
+            }
+            if let Err(error) = Path::new(own) {
+                errors.push((hardware.id, error));
+            }
+        }
+        let mut kinds: BTreeSet<String> = BTreeSet::new();
+        for (hardware, error) in errors {
+            let Some(found) = self.design.hardware.get(hardware.index()) else {
+                continue;
+            };
+            let (hardware_name, kind) = (found.name.clone(), found.kind.clone());
+            match error.kind() {
+                MechanismErrorKind::Motion => {
+                    let place = self.hardware_place(hardware);
+                    self.report(
+                        Severity::Error,
+                        Code::Motion,
+                        format!("{hardware_name}: {error}"),
+                        place,
+                        Vec::new(),
+                        Some(
+                            "give it a smaller range (its kind's opening_angle or travel), or move its pins so they don't line up"
+                                .to_owned(),
+                        ),
+                    );
+                }
+                MechanismErrorKind::Mechanism => {
+                    if !kinds.insert(kind.clone()) {
+                        continue;
+                    }
+                    let place = self
+                        .kind_mechanism_place(hardware)
+                        .or_else(|| self.hardware_place(hardware));
+                    self.report(
+                        Severity::Error,
+                        Code::Mechanism,
+                        format!("{kind}'s mechanism: {error}"),
+                        place,
+                        Vec::new(),
+                        Some(
+                            "pin each member to one that is held or driven, or to one pinned to those, so the members can be placed one step at a time"
+                                .to_owned(),
+                        ),
+                    );
+                }
+            }
+        }
+    }
+
+    /// Where the kind of a piece of hardware writes its mechanism.
+    fn kind_mechanism_place(
+        &self,
+        hardware: stave_model::solved::HardwareId,
+    ) -> Option<(stave_lang::FileId, stave_lang::ast::Span)> {
+        let kind_id = self.design.hardware.get(hardware.index())?.kind_id;
+        let kind = self.model.defs.kind(kind_id)?;
+        Some((kind.decl.file, kind.mechanism.as_ref()?.span))
     }
 
     pub(crate) fn sweeps(&mut self) {
         let mut found = Vec::new();
         for assembly in &self.design.assemblies {
-            let Some(motion) = assembly.motion else {
+            let Some(path) = self.path(assembly.id) else {
                 continue;
             };
             // Inside another assembly that moves: its path isn't a sweep
-            // about one fixed line.
+            // in one fixed plane.
             let mut parent = assembly.parent;
             let mut nested = false;
             while let Some(id) = parent {
                 let Some(outer) = self.design.assemblies.get(id.index()) else {
                     break;
                 };
-                nested |= outer.motion.is_some();
+                nested |= self.path(id).is_some();
                 parent = outer.parent;
             }
             if nested {
@@ -156,39 +175,54 @@ impl Checker<'_> {
             }
             for scene_index in 0..self.design.scenes.len() {
                 let (moves, placements) = self.scene_moves(scene_index);
-                if scene_index > 0 && moves.iter().all(Vec::is_empty) {
+                if scene_index > 0 && moves.iter().all(crate::Moves::is_empty) {
                     continue;
                 }
-                if let Some(hit) = self.first_hit(assembly.id, &motion, &moving, &placements) {
-                    found.push((assembly.id, motion, scene_index, hit));
+                if let Some(hit) = self.first_hit(assembly.id, path, &moving, &placements) {
+                    found.push((assembly.id, scene_index, hit));
                     break;
                 }
             }
         }
-        for (assembly, motion, scene_index, (reach, a, b)) in found {
-            self.report_sweep(assembly, &motion, scene_index, reach, a, b);
+        for (assembly, scene_index, (reach, a, b)) in found {
+            self.report_sweep(assembly, scene_index, reach, a, b);
+        }
+    }
+
+    /// How a body moves when `assembly` moves: a member its own
+    /// assembly's mechanism places, or one piece with the assembly.
+    fn mover<'p>(&self, index: usize, assembly: AssemblyId, path: &'p Path) -> Mover<'p> {
+        match self.bodies.get(index).and_then(|body| body.link) {
+            Some((own, link)) if own == assembly => Mover::Member(path, link),
+            _ => Mover::Rigid(path),
         }
     }
 
     /// The first contact of an assembly's motion with everything else at
-    /// `placements`: how far, and the moving and the fixed item.
+    /// `placements`, and between the bodies it moves differently (a link
+    /// and its door): how far, and the moving and the other item.
     fn first_hit(
         &self,
         assembly: AssemblyId,
-        motion: &Motion,
+        path: &Path,
         moving: &[usize],
         placements: &[Placement],
     ) -> Option<(Reach, Item, Item)> {
-        let sweeper = Sweeper::of(motion);
-        let reach_of = |index: usize| -> Option<WorldBox> {
-            let body = self.bodies.get(index)?;
-            sweeper.reach(&body.solid)
-        };
         let reach = moving
             .iter()
-            .filter_map(|&i| reach_of(i))
+            .filter_map(|&i| {
+                let body = self.bodies.get(i)?;
+                path.reach(&body.solid, &self.mover(i, assembly, path))
+            })
             .reduce(|a, b| union(&a, &b))?;
         let mut best: Option<(Reach, Item, Item)> = None;
+        let mut consider = |hit: Option<Reach>, a: Item, b: Item| {
+            if let Some(hit) = hit
+                && best.is_none_or(|(r, x, y)| reach_key(&hit, a, b) < reach_key(&r, x, y))
+            {
+                best = Some((hit, a, b));
+            }
+        };
         for (j, fixed) in self.bodies.iter().enumerate() {
             if fixed.chain.contains(&assembly)
                 || self.failed.contains(&fixed.item)
@@ -209,12 +243,32 @@ impl Checker<'_> {
                 if self.exempt(body.item, fixed.item) {
                     continue;
                 }
-                let hit = sweeper.contact(&body.solid, &fixed.solid, &placement);
-                if let Some(hit) = hit
-                    && best.is_none_or(|(b, x, y)| hit.key(body.item, fixed.item) < b.key(x, y))
-                {
-                    best = Some((hit, body.item, fixed.item));
+                let hit = first_contact(
+                    &body.solid,
+                    self.mover(i, assembly, path),
+                    &fixed.solid,
+                    Mover::Fixed(placement),
+                );
+                consider(hit, body.item, fixed.item);
+            }
+        }
+        // Bodies the motion moves differently: the member a mechanism
+        // turns comes first.
+        for (position, &i) in moving.iter().enumerate() {
+            for &j in moving.iter().skip(position + 1) {
+                let (mi, mj) = (self.mover(i, assembly, path), self.mover(j, assembly, path));
+                let (Some(x), Some(y)) = (self.bodies.get(i), self.bodies.get(j)) else {
+                    continue;
+                };
+                if mi == mj || self.exempt(x.item, y.item) {
+                    continue;
                 }
+                let ((a, ma), (b, mb)) = if matches!(mj, Mover::Member(..)) {
+                    ((y, mj), (x, mi))
+                } else {
+                    ((x, mi), (y, mj))
+                };
+                consider(first_contact(&a.solid, ma, &b.solid, mb), a.item, b.item);
             }
         }
         best
@@ -224,17 +278,10 @@ impl Checker<'_> {
     /// gap that clears it, found by moving the other item away along the
     /// door's free side in steps of 0.5mm, said in the instance's own
     /// terms when it has a mount.
-    fn clearance_help(
-        &self,
-        assembly: AssemblyId,
-        motion: &Motion,
-        scene_index: usize,
-        a: Item,
-        b: Item,
-    ) -> String {
+    fn clearance_help(&self, assembly: AssemblyId, scene_index: usize, a: Item, b: Item) -> String {
         let name = self.assembly_name(assembly);
         let b_name = self.item_name(b);
-        self.clearance(assembly, motion, scene_index, a, b).unwrap_or_else(|| {
+        self.clearance(assembly, scene_index, a, b).unwrap_or_else(|| {
             format!(
                 "{name} turns into {b_name} as soon as it opens; leave a gap between them, or move {b_name} out of its way"
             )
@@ -249,18 +296,27 @@ impl Checker<'_> {
     fn clearance(
         &self,
         assembly: AssemblyId,
-        motion: &Motion,
         scene_index: usize,
         a: Item,
         b: Item,
     ) -> Option<String> {
         let name = self.assembly_name(assembly);
         let b_name = self.item_name(b);
-        let (free, _) = motion.swing()?;
-        let sweeper = Sweeper::of(motion);
+        let path = self.path(assembly)?;
+        let (free, _) = path.mechanism().swing()?;
         let (_, placements) = self.scene_moves(scene_index);
         let body = |item: Item| self.bodies.iter().position(|x| x.item == item);
         let (ia, ib) = (body(a)?, body(b)?);
+        // Only something the motion doesn't move can be moved out of its
+        // way.
+        if self
+            .bodies
+            .get(ib)
+            .is_some_and(|fixed| fixed.chain.contains(&assembly))
+        {
+            return None;
+        }
+        let mover = self.mover(ia, assembly, path);
         let (Some(moving), Some(fixed), Some(Placement::Exact(offset))) = (
             self.bodies.get(ia),
             self.bodies.get(ib),
@@ -293,9 +349,13 @@ impl Checker<'_> {
                 axis,
                 Length::from_nm(offset.get(axis).nm().saturating_add(shift)),
             );
-            sweeper
-                .contact(&moving.solid, &fixed.solid, &Placement::Exact(moved))
-                .is_none()
+            first_contact(
+                &moving.solid,
+                mover,
+                &fixed.solid,
+                Mover::Fixed(Placement::Exact(moved)),
+            )
+            .is_none()
         });
         let total = needed?;
         let total_text = length_text(Length::from_nm(total));
@@ -349,14 +409,16 @@ impl Checker<'_> {
     fn sweep_contact(
         &self,
         assembly: AssemblyId,
-        motion: &Motion,
         scene_index: usize,
         reach: Reach,
         a: Item,
         b: Item,
     ) -> Contact {
-        let (at, shown) = match (reach, motion.opening_angle()) {
-            (Reach::Angle(angle), Some(opening_angle)) => (
+        let Some(path) = self.path(assembly) else {
+            return Contact::default();
+        };
+        let (at, shown) = match (reach, path.mechanism().extent()) {
+            (Reach::Angle(angle), DriveValue::Turn(opening_angle)) => (
                 PoseValue::Angle(angle),
                 PoseValue::Angle(Angle::from_microdeg(
                     angle
@@ -365,33 +427,46 @@ impl Checker<'_> {
                         .min(opening_angle.microdeg()),
                 )),
             ),
-            (Reach::Distance(hit), None) => {
-                let Motion::Travel { travel, .. } = *motion else {
-                    return Contact::default();
-                };
-                (
-                    PoseValue::Travel(hit.distance),
-                    PoseValue::Travel(Length::from_nm(
-                        hit.distance.nm().saturating_add(2_000_000).min(travel.nm()),
-                    )),
-                )
-            }
+            (Reach::Distance(hit), DriveValue::Travel(travel)) => (
+                PoseValue::Travel(hit.distance),
+                PoseValue::Travel(Length::from_nm(
+                    hit.distance.nm().saturating_add(2_000_000).min(travel.nm()),
+                )),
+            ),
             // A reach always matches its motion.
-            (Reach::Angle(_), None) | (Reach::Distance(_), Some(_)) => {
+            (Reach::Angle(_), DriveValue::Travel(_))
+            | (Reach::Distance(_), DriveValue::Turn(_)) => {
                 return Contact::default();
             }
         };
         let (_, placements) = self.scene_moves(scene_index);
         let body = |item: Item| self.bodies.iter().position(|x| x.item == item);
+        // Where the motion puts a body it moves, at `shown`.
+        let shown_at = |index: usize| {
+            let link = self
+                .bodies
+                .get(index)
+                .and_then(|body| body.link)
+                .filter(|(own, _)| *own == assembly)
+                .map(|(_, link)| link);
+            Placement::of_mechanisms(&[(path.mechanism(), shown)], link)
+        };
+        let moves = |index: usize| {
+            self.bodies
+                .get(index)
+                .is_some_and(|body| body.chain.contains(&assembly))
+        };
         let found = match (body(a), body(b)) {
             (Some(ia), Some(ib)) => {
-                match (self.bodies.get(ia), self.bodies.get(ib), placements.get(ib)) {
-                    (Some(x), Some(y), Some(pb)) => overlaps_placed(
-                        &x.solid,
-                        &Placement::of_motions(&[(*motion, shown)]),
-                        &y.solid,
-                        pb,
-                    ),
+                let pb = if moves(ib) {
+                    Some(shown_at(ib))
+                } else {
+                    placements.get(ib).copied()
+                };
+                match (self.bodies.get(ia), self.bodies.get(ib), pb) {
+                    (Some(x), Some(y), Some(pb)) => {
+                        overlaps_placed(&x.solid, &shown_at(ia), &y.solid, &pb)
+                    }
                     _ => Vec::new(),
                 }
             }
@@ -412,7 +487,6 @@ impl Checker<'_> {
     fn report_sweep(
         &mut self,
         assembly: AssemblyId,
-        motion: &Motion,
         scene_index: usize,
         reach: Reach,
         a: Item,
@@ -420,22 +494,26 @@ impl Checker<'_> {
     ) {
         let name = self.assembly_name(assembly);
         let (a_name, b_name) = (self.item_name(a), self.item_name(b));
-        let (message, mut notes, help) = match (reach, *motion) {
-            (Reach::Angle(angle), Motion::Turn { .. } | Motion::Linkage { .. }) => {
-                let opening_angle = motion.opening_angle().unwrap_or_default();
+        let Some(path) = self.path(assembly) else {
+            return;
+        };
+        let extent = path.mechanism().extent();
+        // A door that doesn't turn about one fixed line (a cup hinge's)
+        // swings its edges out as it starts to open: an early hit is
+        // cleared by a gap.
+        let swings_out = !matches!(path.mechanism().shape(), Shape::Turn { .. });
+        let (message, mut notes, help) = match (reach, extent) {
+            (Reach::Angle(angle), DriveValue::Turn(opening_angle)) => {
                 let at = angle_text(angle);
                 (
                     format!("{a_name} hits {b_name} when {name} is opened past {at}"),
                     vec![format!("the hinges open to {opening_angle}")],
                     if angle.microdeg() < 1_000_000 {
-                        self.clearance_help(assembly, motion, scene_index, a, b)
+                        self.clearance_help(assembly, scene_index, a, b)
                     } else {
-                        // A cup hinge swings the door's edges out as it
-                        // starts to open: an early hit is cleared by a gap.
-                        let early =
-                            matches!(motion, Motion::Linkage { .. }) && angle < Angle::from_deg(30);
+                        let early = swings_out && angle < Angle::from_deg(30);
                         early
-                            .then(|| self.clearance(assembly, motion, scene_index, a, b))
+                            .then(|| self.clearance(assembly, scene_index, a, b))
                             .flatten()
                             .unwrap_or_else(|| format!(
                                 "open {name} no further than {at} (a smaller opening_angle), or move {b_name} out of its way"
@@ -443,7 +521,7 @@ impl Checker<'_> {
                     },
                 )
             }
-            (Reach::Distance(hit), Motion::Travel { travel, .. }) => {
+            (Reach::Distance(hit), DriveValue::Travel(travel)) => {
                 let at = length_text(hit.distance);
                 (
                     format!("{a_name} hits {b_name} when {name} is pulled out past {at}"),
@@ -459,8 +537,8 @@ impl Checker<'_> {
                 )
             }
             // A reach always matches its motion.
-            (Reach::Angle(_), Motion::Travel { .. })
-            | (Reach::Distance(_), Motion::Turn { .. } | Motion::Linkage { .. }) => {
+            (Reach::Angle(_), DriveValue::Travel(_))
+            | (Reach::Distance(_), DriveValue::Turn(_)) => {
                 return;
             }
         };
@@ -481,7 +559,7 @@ impl Checker<'_> {
                 self.motion_hardware(assembly)
                     .and_then(|hardware| self.hardware_place(hardware))
             });
-        self.next_contact = Some(self.sweep_contact(assembly, motion, scene_index, reach, a, b));
+        self.next_contact = Some(self.sweep_contact(assembly, scene_index, reach, a, b));
         self.report(
             Severity::Error,
             Code::Motion,

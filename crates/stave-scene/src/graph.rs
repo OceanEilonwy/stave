@@ -1,13 +1,16 @@
 //! Nodes, materials and scene poses.
 
+use std::sync::Arc;
+
 use glam::{Mat4, Quat, Vec3};
-use stave_geom::linkage::LinkagePath;
+use stave_geom::mechanism::{MechanismPath, Shape};
 use stave_geom::solid::Solid;
 use stave_geom::{Aabb, Extent, Geometry, render};
 use stave_lang::placement::PartAxis;
+use stave_model::mechanism::{DriveValue, MemberIndex};
 use stave_model::solved::{
-    AssemblyId, HardwareBase, HardwareData, HardwareId, Motion, Part, PartId, PoseValue, SceneId,
-    SceneItem, SolvedDesign, StepKind,
+    AssemblyId, BodyCarrier, BodyRef, HardwareId, Part, PartId, PoseValue, SceneId, SceneItem,
+    SolvedDesign, StepKind,
 };
 use stave_schema::species::{Species, Srgb};
 use stave_schema::words::StockForm;
@@ -84,47 +87,54 @@ pub struct Node {
     pub material: Material,
     /// The assemblies it is inside, outermost first.
     pub assemblies: Vec<AssemblyId>,
-    /// A cup hinge's link: it turns about its arm pin as the hinge's
-    /// assembly opens, on top of what its own assemblies do.
-    pub follows: Option<LinkFollower>,
+    /// A member its assembly's mechanism places (a link): it follows its
+    /// own assembly's mechanism, on top of what its other assemblies do.
+    pub follows: Option<MemberFollower>,
+    /// For a hardware member: which member, and what moves it.
+    pub member: Option<(BodyRef, BodyCarrier)>,
 }
 
-/// How a cup hinge's link moves: with the linkage of its hinge, at the
-/// amount its door's assembly is opened.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct LinkFollower {
-    /// The assembly the hinge opens (the door).
+/// How a member its assembly's mechanism places moves: as that member of
+/// the mechanism, at the amount its assembly is opened.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MemberFollower {
+    /// The assembly whose mechanism places it (the door).
     pub assembly: AssemblyId,
-    /// The hinge's linkage.
-    path: LinkagePath,
-    /// Which link (0 or 1).
-    link: usize,
+    /// That assembly's mechanism.
+    path: Arc<MechanismPath>,
+    /// Which member it is.
+    member: MemberIndex,
 }
 
-impl LinkFollower {
-    /// The link's transform with its assembly opened by `amount` radians.
+impl MemberFollower {
+    /// The member's transform with its assembly opened by `amount`
+    /// (radians or millimetres).
     fn transform(&self, amount: f32) -> Mat4 {
-        let theta = f64::from(amount).clamp(0.0, self.path.opening());
         self.path
-            .pose(theta)
-            .and_then(|pose| pose.links.get(self.link).copied())
+            .matrix(self.member, solver_amount(&self.path, amount))
             .map_or(Mat4::IDENTITY, render::transform)
     }
 }
 
-/// A motion with its amounts in render units.
-#[derive(Debug, Clone, Copy, PartialEq)]
-enum RenderMotion {
+/// A render amount (radians or millimetres) as the solver's (radians or
+/// nanometres), within the range.
+fn solver_amount(path: &MechanismPath, amount: f32) -> f64 {
+    let amount = if path.turns() {
+        f64::from(amount)
+    } else {
+        f64::from(amount) * 1_000_000.0
+    };
+    amount.clamp(0.0, path.limit())
+}
+
+/// A motion with its amounts in render units: a turn about one line and a
+/// slide's travel exactly, any other mechanism from the solver.
+#[derive(Debug, Clone, PartialEq)]
+enum AssemblyMove {
     Turn {
         through: Vec3,
         /// Unit axis; turning by a positive angle opens.
         axis: Vec3,
-        /// Radians.
-        opening: f32,
-    },
-    /// A cup hinge's four-bar linkage.
-    Linkage {
-        path: LinkagePath,
         /// Radians.
         opening: f32,
     },
@@ -133,69 +143,80 @@ enum RenderMotion {
         /// Millimetres.
         travel: f32,
     },
+    /// Posed by the solver (a cup hinge's linkage).
+    General {
+        path: Arc<MechanismPath>,
+        /// Radians or millimetres.
+        full: f32,
+    },
 }
 
-impl RenderMotion {
-    fn from_motion(motion: &Motion) -> RenderMotion {
-        match *motion {
-            Motion::Turn {
-                pivot,
-                opening_angle,
-            } => {
+impl AssemblyMove {
+    fn of_path(path: &Arc<MechanismPath>) -> AssemblyMove {
+        match path.shape() {
+            Shape::Turn { pivot, opening } => {
                 // Turning about free × swing carries the free side toward
                 // the swing side.
                 let free = render::direction(pivot.free_side);
                 let swing = render::direction(pivot.swing_toward);
-                RenderMotion::Turn {
+                AssemblyMove::Turn {
                     through: render::point(pivot.through),
                     axis: free.cross(swing).normalize_or(render::axis(pivot.axis)),
-                    opening: render::radians(opening_angle),
+                    opening: render::radians(opening),
                 }
             }
-            Motion::Linkage { linkage } => RenderMotion::Linkage {
-                path: LinkagePath::new(&linkage),
-                opening: render::radians(linkage.opening_angle()),
-            },
-            Motion::Travel { toward, travel } => RenderMotion::Travel {
+            Shape::Travel { toward, travel } => AssemblyMove::Travel {
                 toward: render::direction(toward),
                 travel: render::mm(travel),
             },
+            Shape::General => AssemblyMove::General {
+                path: Arc::clone(path),
+                full: match path.extent() {
+                    DriveValue::Turn(angle) => render::radians(angle),
+                    DriveValue::Travel(length) => render::mm(length),
+                },
+            },
+        }
+    }
+
+    /// `true` for a motion that turns.
+    fn turns(&self) -> bool {
+        match self {
+            AssemblyMove::Turn { .. } => true,
+            AssemblyMove::Travel { .. } => false,
+            AssemblyMove::General { path, .. } => path.turns(),
         }
     }
 
     /// The amount a pose value means for this motion (radians or mm).
     fn amount(&self, value: PoseValue) -> f32 {
-        match (self, value) {
+        let full = match self {
+            AssemblyMove::Turn { opening, .. } => *opening,
+            AssemblyMove::Travel { travel, .. } => *travel,
+            AssemblyMove::General { full, .. } => *full,
+        };
+        match (self.turns(), value) {
             (_, PoseValue::Closed) => 0.0,
-            (
-                RenderMotion::Turn { opening, .. } | RenderMotion::Linkage { opening, .. },
-                PoseValue::Open,
-            ) => *opening,
-            (RenderMotion::Travel { travel, .. }, PoseValue::Open) => *travel,
-            (RenderMotion::Turn { .. } | RenderMotion::Linkage { .. }, PoseValue::Angle(angle)) => {
-                render::radians(angle)
-            }
-            (RenderMotion::Travel { .. }, PoseValue::Travel(length)) => render::mm(length),
+            (_, PoseValue::Open) => full,
+            (true, PoseValue::Angle(angle)) => render::radians(angle),
+            (false, PoseValue::Travel(length)) => render::mm(length),
             // A value of the other kind is a type error the checker
             // reports; it doesn't move anything.
-            (RenderMotion::Turn { .. } | RenderMotion::Linkage { .. }, PoseValue::Travel(_))
-            | (RenderMotion::Travel { .. }, PoseValue::Angle(_)) => 0.0,
+            (true, PoseValue::Travel(_)) | (false, PoseValue::Angle(_)) => 0.0,
         }
     }
 
     fn transform(&self, amount: f32) -> Mat4 {
-        match *self {
-            RenderMotion::Turn { through, axis, .. } => {
-                Mat4::from_translation(through)
-                    * Mat4::from_quat(Quat::from_axis_angle(axis, amount))
-                    * Mat4::from_translation(-through)
+        match self {
+            AssemblyMove::Turn { through, axis, .. } => {
+                Mat4::from_translation(*through)
+                    * Mat4::from_quat(Quat::from_axis_angle(*axis, amount))
+                    * Mat4::from_translation(-*through)
             }
-            RenderMotion::Linkage { path, .. } => {
-                let theta = f64::from(amount).clamp(0.0, path.opening());
-                path.coupler(theta)
-                    .map_or(Mat4::IDENTITY, render::transform)
-            }
-            RenderMotion::Travel { toward, .. } => Mat4::from_translation(toward * amount),
+            AssemblyMove::General { path, .. } => path
+                .matrix(path.moving(), solver_amount(path, amount))
+                .map_or(Mat4::IDENTITY, render::transform),
+            AssemblyMove::Travel { toward, .. } => Mat4::from_translation(*toward * amount),
         }
     }
 }
@@ -272,13 +293,13 @@ pub struct BuildOptions {
 pub struct SceneGraph {
     /// The project's title.
     pub title: String,
-    /// Parts first (in part order), then hardware: each piece's member on
-    /// its piece, followed by its fixed member when it has one.
+    /// Parts first (in part order), then hardware: each piece's members,
+    /// in its kind's order.
     pub nodes: Vec<Node>,
     /// The scenes; the first is the built-in `rest`.
     pub scenes: Vec<SceneEntry>,
     /// Each assembly's motion, by [`AssemblyId`].
-    motions: Vec<Option<RenderMotion>>,
+    motions: Vec<Option<AssemblyMove>>,
     /// Per node: how far its assembly moves out in an exploded view, the
     /// first stage (millimetres, render frame).
     explode_assembly: Vec<Vec3>,
@@ -418,72 +439,59 @@ impl SceneGraph {
                 material,
                 assemblies: assemblies_of(part.assembly),
                 follows: None,
+                member: None,
             });
         }
+        // Every assembly's mechanism, run once.
+        let paths: Vec<Option<Arc<MechanismPath>>> = design
+            .assemblies
+            .iter()
+            .map(|assembly| {
+                let mechanism = assembly.mechanism.as_ref()?;
+                MechanismPath::new(mechanism).ok().map(Arc::new)
+            })
+            .collect();
+        // Every member of every piece of hardware, drawn as its shapes and
+        // named `<hardware> <member>`.
         for hardware in &design.hardware {
-            nodes.push(Node {
-                item: Item::Hardware(hardware.id),
-                name: hardware.name.clone(),
-                geometry: stave_geom::hardware(hardware),
-                material: Material::Metal,
-                assemblies: assemblies_of(hardware.assembly),
-                follows: None,
-            });
-            // The member screwed to the carcass stays put when the assembly
-            // the hardware moves moves: it belongs to the assembly outside.
-            if let Some(geometry) = stave_geom::hardware_fixed(hardware) {
-                let outside = hardware
-                    .assembly
-                    .and_then(|id| design.assemblies.get(id.index()))
-                    .and_then(|assembly| assembly.parent);
-                let member = match hardware.base {
-                    HardwareBase::Hinge if hardware.is_butt_hinge() => "fixed leaf",
-                    HardwareBase::Hinge if hardware.mechanism.is_some() => "plate and arm",
-                    HardwareBase::Hinge => "plate",
-                    HardwareBase::Slide => "cabinet member",
-                    HardwareBase::Pull => "fixed member",
+            for member in &hardware.members {
+                let (assembly, follows) = match member.carrier {
+                    BodyCarrier::Part(part) => (design.part(part).and_then(|p| p.assembly), None),
+                    BodyCarrier::Region(region) => (
+                        design.regions.get(region.index()).and_then(|r| r.assembly),
+                        None,
+                    ),
+                    // A link stays with what is outside its assembly and
+                    // follows the assembly's mechanism.
+                    BodyCarrier::Link(member) => {
+                        let own = hardware
+                            .assembly
+                            .and_then(|id| design.assemblies.get(id.index()));
+                        let follows = own.and_then(|assembly| {
+                            let path = paths.get(assembly.id.index())?.as_ref()?;
+                            Some(MemberFollower {
+                                assembly: assembly.id,
+                                path: Arc::clone(path),
+                                member,
+                            })
+                        });
+                        (own.and_then(|assembly| assembly.parent), follows)
+                    }
                 };
                 nodes.push(Node {
                     item: Item::Hardware(hardware.id),
-                    name: format!("{} {member}", hardware.name),
-                    geometry,
+                    name: format!("{} {}", hardware.name, member.name),
+                    geometry: stave_geom::body(member),
                     material: Material::Metal,
-                    assemblies: assemblies_of(outside),
-                    follows: None,
+                    assemblies: assemblies_of(assembly),
+                    follows,
+                    member: Some((member.id, member.carrier)),
                 });
-                // A cup hinge's links: each turns about its pin in the arm as
-                // the door opens.
-                if let (Some(links), Some(mechanism), Some(assembly)) = (
-                    stave_geom::hardware_links(hardware),
-                    hardware.mechanism.as_ref(),
-                    hardware.assembly,
-                ) {
-                    let path = LinkagePath::new(&mechanism.linkage);
-                    for (link, (geometry, label)) in links
-                        .into_iter()
-                        .zip(["inner link", "outer link"])
-                        .enumerate()
-                    {
-                        nodes.push(Node {
-                            item: Item::Hardware(hardware.id),
-                            name: format!("{} {label}", hardware.name),
-                            geometry,
-                            material: Material::Metal,
-                            assemblies: assemblies_of(outside),
-                            follows: Some(LinkFollower {
-                                assembly,
-                                path,
-                                link,
-                            }),
-                        });
-                    }
-                }
             }
         }
-        let motions: Vec<Option<RenderMotion>> = design
-            .assemblies
+        let motions: Vec<Option<AssemblyMove>> = paths
             .iter()
-            .map(|assembly| assembly.motion.as_ref().map(RenderMotion::from_motion))
+            .map(|path| path.as_ref().map(AssemblyMove::of_path))
             .collect();
         let scenes = design
             .scenes
@@ -523,17 +531,19 @@ impl SceneGraph {
 
     /// The range of an assembly's motion; `None` when it has none.
     pub fn motion_range(&self, assembly: AssemblyId) -> Option<MotionRange> {
-        let motion = self.motions.get(assembly.index()).copied().flatten()?;
+        let motion = self.motions.get(assembly.index())?.as_ref()?;
         Some(match motion {
-            RenderMotion::Turn { opening, .. } | RenderMotion::Linkage { opening, .. } => {
-                MotionRange {
-                    turns: true,
-                    full: opening,
-                }
-            }
-            RenderMotion::Travel { travel, .. } => MotionRange {
+            AssemblyMove::Turn { opening, .. } => MotionRange {
+                turns: true,
+                full: *opening,
+            },
+            AssemblyMove::Travel { travel, .. } => MotionRange {
                 turns: false,
-                full: travel,
+                full: *travel,
+            },
+            AssemblyMove::General { full, .. } => MotionRange {
+                turns: motion.turns(),
+                full: *full,
             },
         })
     }
@@ -541,14 +551,14 @@ impl SceneGraph {
     /// Where an assembly's motion moves it at an amount (radians or
     /// millimetres), from rest; `None` when it doesn't move.
     pub fn motion_transform(&self, assembly: AssemblyId, amount: f32) -> Option<Mat4> {
-        let motion = self.motions.get(assembly.index()).copied().flatten()?;
+        let motion = self.motions.get(assembly.index())?.as_ref()?;
         Some(motion.transform(amount))
     }
 
     /// The amount (radians or millimetres) a pose value means for an
     /// assembly's motion.
     pub fn amount(&self, assembly: AssemblyId, value: PoseValue) -> Option<f32> {
-        let motion = self.motions.get(assembly.index()).copied().flatten()?;
+        let motion = self.motions.get(assembly.index())?.as_ref()?;
         Some(motion.amount(value))
     }
 
@@ -637,12 +647,12 @@ impl SceneGraph {
         for (index, node) in self.nodes.iter().enumerate() {
             let mut transform = Mat4::IDENTITY;
             for assembly in &node.assemblies {
-                let motion = self.motions.get(assembly.index()).copied().flatten();
+                let motion = self.motions.get(assembly.index()).and_then(Option::as_ref);
                 if let (Some(motion), Some(amount)) = (motion, amount(*assembly)) {
                     transform *= motion.transform(amount);
                 }
             }
-            if let Some(follower) = node.follows
+            if let Some(follower) = &node.follows
                 && let Some(amount) = amount(follower.assembly)
             {
                 transform *= follower.transform(amount);
@@ -1019,20 +1029,26 @@ impl Exploded {
         let Some(bounds) = bounds_of(members()) else {
             return Vec3::ZERO;
         };
-        match assembly.motion {
-            Some(Motion::Travel { toward, .. }) => {
+        let path = assembly
+            .mechanism
+            .as_ref()
+            .and_then(|mechanism| MechanismPath::new(mechanism).ok());
+        let travel = path.as_ref().and_then(|path| match path.shape() {
+            Shape::Travel { toward, .. } => Some(toward),
+            Shape::Turn { .. } | Shape::General => None,
+        });
+        let swing = path.as_ref().and_then(MechanismPath::swing);
+        match (travel, swing) {
+            (Some(toward), _) => {
                 let direction = render::direction(toward);
                 direction * (extent_along(&bounds, direction) + base)
             }
-            Some(motion @ (Motion::Turn { .. } | Motion::Linkage { .. })) => {
-                let Some((free, swing)) = motion.swing() else {
-                    return Vec3::ZERO;
-                };
+            (None, Some((free, swing))) => {
                 let direction = render::direction(swing);
                 let across = render::direction(free);
                 direction * (extent_along(&bounds, across) * 0.5 + base)
             }
-            None => {
+            (None, None) => {
                 // The first joint between a part inside and one outside.
                 for joint in &design.joints {
                     for pair in &joint.pairs {
@@ -1089,28 +1105,32 @@ impl Exploded {
                 let Some(hardware) = design.hardware.get(id.index()) else {
                     return (Vec3::ZERO, Vec3::ZERO);
                 };
-                // The member on the piece goes with the piece; the fixed
-                // member with the part it is fixed to: a hinge's `on`, the
-                // side a slide's cabinet member is against.
-                if node.name == hardware.name {
-                    return of_part(hardware.piece);
-                }
-                let fixed_to = match hardware.data {
-                    HardwareData::Hinge { on, .. } | HardwareData::ButtHinge { on, .. } => Some(on),
-                    HardwareData::Slide { .. } => hardware.fixed.as_ref().and_then(|member| {
-                        design
-                            .parts
-                            .iter()
-                            .filter(|p| {
-                                hardware
-                                    .assembly
-                                    .and_then(|a| design.assemblies.get(a.index()))
-                                    .is_none_or(|a| !a.parts.contains(&p.id))
-                            })
-                            .find(|p| touching(&p.cut_box(), &member.bounds))
-                            .map(|p| p.id)
-                    }),
-                    HardwareData::Pull { .. } => None,
+                // A member goes with the part it is `with:`; a link with
+                // the piece; a member `with:` a region with the part
+                // outside its assembly that it lies against (the side a
+                // slide's cabinet member is screwed to).
+                let fixed_to = match node.member.map(|(_, carrier)| carrier) {
+                    Some(BodyCarrier::Part(part)) => Some(part),
+                    Some(BodyCarrier::Link(_)) | None => Some(hardware.piece),
+                    Some(BodyCarrier::Region(_)) => {
+                        let bounds = node.member.and_then(|(member, _)| {
+                            let body = hardware.members.iter().find(|m| m.id == member)?;
+                            stave_geom::collide::WorldSolid::of_body(body).bounds()
+                        });
+                        bounds.and_then(|bounds| {
+                            design
+                                .parts
+                                .iter()
+                                .filter(|p| {
+                                    hardware
+                                        .assembly
+                                        .and_then(|a| design.assemblies.get(a.index()))
+                                        .is_none_or(|a| !a.parts.contains(&p.id))
+                                })
+                                .find(|p| touching(&p.cut_box(), &bounds))
+                                .map(|p| p.id)
+                        })
+                    }
                 };
                 fixed_to.map_or((Vec3::ZERO, Vec3::ZERO), of_part)
             }

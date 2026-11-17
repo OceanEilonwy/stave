@@ -25,7 +25,7 @@ back                         ply_6          521 x 430 x 6              19..431  
     drawn 521 x 412 x 6, starting 0 x 9 x 0 into the cut size
 drawer.front                 cherry_19      408 x 146 x 19             21..429              433..579             0..19                right/up/back
     cut drill 4 x diameter 3 depth 13 on thickness end: where drawer.sub_front meets it, local 16.7..391.3 x 13..136 x 19..19
-    cut drill 1 x diameter 4 depth through on thickness start: centred at local 204, 73, 0
+    cut drill 1 x diameter 4 depth through on thickness start: where drawer.pull meets it, local 202..206 x 71..75 x 0..19
 drawer.side[left]            maple_12       350 x 123 x 12             31.7..43.7           446..569             19..369              back/up/right
     cut notch depth 6 on thickness end: where drawer.sub_front meets it, local 0..12 x 0..123 x 6..12
     cut notch depth 6 on thickness end: where drawer.back meets it, local 338..350 x 0..123 x 6..12

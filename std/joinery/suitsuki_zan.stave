@@ -1,0 +1,70 @@
+stave 1
+
+/// Suitsuki zan: two battens slid into dovetail housings across the back
+/// of a panel, one near each end. They keep the panel flat, and since
+/// nothing is glued the boards can still swell and shrink across them. The
+/// joint makes the battens, each as long as the panel is wide, on the face
+/// opposite the panel's reference face (underneath, for a top).
+kind suitsuki_zan : joint {
+  roles {
+    boards: Parts                          // every board of the panel
+  }
+  /// What the battens are cut from.
+  param batten_stock : Stock
+  /// How wide each batten is.
+  param batten_width = 3 * boards.thickness
+  /// How deep each housing is cut into the panel.
+  param depth = boards.thickness / 4
+  /// The dovetail's width at the panel's face; it widens inside the housing.
+  param neck = batten_width / 2
+  /// How steeply the dovetail's sides lean, as on a dovetail marker.
+  param slope = 1 in 6
+  /// How far each batten is from its end of the panel.
+  param inset = boards.length / 6
+  require panel_stands : depth <= boards.thickness / 3 "the housings are too deep: they would leave less than two thirds of the panel"
+  require tail_fits    : neck + 2 * depth * slope < batten_width "the dovetail is as wide as the batten: make the neck narrower or the batten wider"
+  require apart        : inset + batten_width < boards.length / 2 "the battens are too close to the middle: they would meet"
+
+  insert: [drive(batten_start, along: length), drive(batten_end, along: length)]
+
+  // A housing in every board for each batten, and the dovetail tongue
+  // along each batten.
+  cut crossing(boards, batten_start, normal: thickness, opposite: true) {
+    dovetail_socket(neck: neck, depth: depth, slope: slope)
+  }
+  cut crossing(boards, batten_end, normal: thickness, opposite: true) {
+    dovetail_socket(neck: neck, depth: depth, slope: slope)
+  }
+  cut crossing(batten_start, boards, normal: thickness) {
+    dovetail_tail(neck: neck, depth: depth, slope: slope)
+  }
+  cut crossing(batten_end, boards, normal: thickness) {
+    dovetail_tail(neck: neck, depth: depth, slope: slope)
+  }
+
+  /// The batten near the start of the panel's length.
+  makes part batten_start : batten_stock {
+    length: boards.width
+    width:  batten_width
+    place {
+      orient(length: width, width: length, of: boards)
+      center(side(boards, normal: thickness, opposite: true), width)
+      flush(end(boards, opposite: true), inset: inset)
+      against(side(boards, normal: thickness, opposite: true), gap: -depth)   // sunk into its housing
+    }
+  }
+
+  /// The batten near the end of the panel's length.
+  makes part batten_end : batten_stock {
+    length: boards.width
+    width:  batten_width
+    place {
+      orient(length: width, width: length, of: boards)
+      center(side(boards, normal: thickness, opposite: true), width)
+      flush(end(boards), inset: inset)
+      against(side(boards, normal: thickness, opposite: true), gap: -depth)   // sunk into its housing
+    }
+  }
+
+  note: "Slide each batten in dry from the edge, so the panel can move across it"
+}

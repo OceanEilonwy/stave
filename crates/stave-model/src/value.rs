@@ -209,22 +209,85 @@ pub enum Spacing {
     Gap(ExactLength),
 }
 
-/// How a model is aligned to its envelope.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum ModelAlign {
-    /// `align: bounds`
-    Bounds,
-    /// `align: node("name")`
-    Node(String),
-}
-
-/// `model(source, align:)`
+/// `model(source, align:, sha256:)`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ModelRef {
     /// The source as written.
     pub source: String,
-    /// How it is aligned.
-    pub align: ModelAlign,
+    /// `align: node("name")`: the node put on the kind's origin; `None`
+    /// puts the model's own origin there.
+    pub align: Option<String>,
+    /// `sha256: "..."`: the one file the model is pinned to.
+    pub sha256: Option<Sha256>,
+}
+
+/// A SHA-256 digest: the pin of `model(..., sha256: "...")`. Written as 64
+/// hexadecimal digits; parsing accepts either case and shows lower case.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct Sha256([u8; 32]);
+
+impl Sha256 {
+    /// The digest with these bytes.
+    pub const fn from_bytes(bytes: [u8; 32]) -> Sha256 {
+        Sha256(bytes)
+    }
+
+    /// Its bytes.
+    pub const fn bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
+/// Why a text is not a SHA-256 digest.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum Sha256Error {
+    /// Not 64 characters long.
+    #[error("it has {0} characters, not 64")]
+    Length(usize),
+    /// A character that is not a hexadecimal digit.
+    #[error("'{0}' is not a hexadecimal digit")]
+    Digit(char),
+}
+
+impl std::str::FromStr for Sha256 {
+    type Err = Sha256Error;
+
+    fn from_str(text: &str) -> Result<Sha256, Sha256Error> {
+        let count = text.chars().count();
+        if count != 64 {
+            return Err(Sha256Error::Length(count));
+        }
+        let mut bytes = [0u8; 32];
+        let mut digits = text.chars();
+        for byte in &mut bytes {
+            let mut value = 0u8;
+            for _ in 0..2 {
+                let digit = digits.next().ok_or(Sha256Error::Length(count))?;
+                let nibble = digit
+                    .to_digit(16)
+                    .and_then(|n| u8::try_from(n).ok())
+                    .ok_or(Sha256Error::Digit(digit))?;
+                value = (value << 4) | nibble;
+            }
+            *byte = value;
+        }
+        Ok(Sha256(bytes))
+    }
+}
+
+impl fmt::Display for Sha256 {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for byte in &self.0 {
+            write!(f, "{byte:02x}")?;
+        }
+        Ok(())
+    }
+}
+
+impl serde::Serialize for Sha256 {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(self)
+    }
 }
 
 /// Where a region came from, as far as `cover`'s `meeting:` needs it.
@@ -274,6 +337,14 @@ impl KindValue {
     }
 }
 
+/// How the boards of a part are joined: `joined(by: ...)` (grammar,
+/// "Boards"). Every kind is a joint kind value; all of them are used.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Joining {
+    /// The joint kinds, in the order written.
+    pub by: crate::nonempty::NonEmpty<KindValue>,
+}
+
 /// An evaluated value.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
@@ -309,6 +380,8 @@ pub enum Value {
     Mount(Mount),
     /// `turned(profile)`.
     Turned(ProfileId),
+    /// `joined(by: ...)`.
+    Boards(Joining),
     /// An envelope.
     Envelope(Envelope),
     /// A model.
@@ -374,6 +447,7 @@ impl Value {
             Value::Word(_) => "a word",
             Value::Mount(_) => "a mount",
             Value::Turned(_) => "a shape",
+            Value::Boards(_) => "a way of joining boards",
             Value::Envelope(_) => "an envelope",
             Value::Model(_) => "a model",
             Value::Spacing(_) => "a spacing",
@@ -421,7 +495,7 @@ fn mismatch(op: BinaryOp, lhs: &Value, rhs: &Value) -> ValueError {
         BinaryOp::Add => "add",
         BinaryOp::Sub => "subtract",
         BinaryOp::Mul => "multiply",
-        BinaryOp::Div => "divide",
+        BinaryOp::Div | BinaryOp::In => "divide",
         BinaryOp::And | BinaryOp::Or => "combine",
         BinaryOp::Eq | BinaryOp::Ne | BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge => {
             "compare"
@@ -529,6 +603,17 @@ pub fn binary(op: BinaryOp, lhs: &Value, rhs: &Value) -> Result<Value, ValueErro
                 (Some(x), Some(y)) => x.checked_mul(y).map(|r| number(a, b, r)).ok_or(overflow),
                 _ => Err(mismatch(op, lhs, rhs)),
             },
+        },
+        BinaryOp::In => match (lhs, rhs) {
+            (Value::Count(_) | Value::Ratio(_), Value::Count(_) | Value::Ratio(_)) => {
+                let (x, y) = (ratio(lhs), ratio(rhs));
+                match (x, y) {
+                    (Some(_), Some(y)) if y == Rational::ZERO => Err(ValueError::DivisionByZero),
+                    (Some(x), Some(y)) => x.checked_div(y).map(Value::Ratio).ok_or(overflow),
+                    _ => Err(mismatch(op, lhs, rhs)),
+                }
+            }
+            _ => Err(mismatch(op, lhs, rhs)),
         },
         BinaryOp::Div => {
             let zero = |r: Rational| r == Rational::ZERO;
@@ -690,5 +775,16 @@ mod tests {
         let crossing = ExactBox::new(at(10, 20), at(10, 20), at(10, 20));
         assert!(base.meets(&crossing));
         assert_eq!(base.touching_axis(&crossing), None);
+    }
+
+    #[test]
+    fn a_sha256_is_64_hexadecimal_digits() {
+        let text = "BA7816BF8F01CFEA414140DE5DAE2223B00361A396177A9CB410FF61F20015AD";
+        let digest: Sha256 = text.parse().unwrap();
+        assert_eq!(digest.to_string(), text.to_ascii_lowercase());
+        assert_eq!(digest.bytes()[0], 0xba);
+        assert_eq!("abc".parse::<Sha256>(), Err(Sha256Error::Length(3)));
+        let wrong = format!("{}g", &text[..63]);
+        assert_eq!(wrong.parse::<Sha256>(), Err(Sha256Error::Digit('g')));
     }
 }

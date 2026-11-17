@@ -20,17 +20,31 @@ a line and a concrete help line for every problem:
    (`member cup` with a `///` doc comment; grammar, "Hardware members"):
    the standard hinges, slides, knob and bar pull do, and a misnamed member is
    `unknown-field` with the nearest word.
+   **Boards**: a `solid` part wider across the grain than its stock's
+   `max_width` is made of equal boards (in `--json`), joined by the edge
+   joints its `boards:` names (or the project's, or `glued_edge`):
+   `tongue_and_groove` widens each board by its tongue, `splined_edge` makes
+   a spline per seam, `chigiri` lets a butterfly key into the face across
+   each seam, `suitsuki_zan` slides two battens into dovetail housings
+   across all the boards, `glue: false` is kept. The collision checks see
+   the part's wood as its boards make it, angled cuts included. A sheet
+   wider than `max_width` is an error, as a part longer than `max_length`
+   is.
 4. **Fit and geometry**: every part is cut into a solid (its cut box minus
    its cuts: exact boxes for axis-aligned cuts, exact cylinders for holes,
-   round tenons and round sections, the chidori's angled slots). Wood
+   round tenons and round sections, and exact prisms, a polygon on a face
+   cut straight down, for dovetails, `outline`s and the chidori's angled
+   slots; an outline that crosses itself is `type-mismatch`). Wood
    passing through wood beyond the 0.05mm contact tolerance is `overlap`,
    with what goes where and by how much ("the tenon on rail goes 3mm past
    the bottom of its mortise in leg"); a joint's parts that don't touch are
    `no-contact`; a spacing that runs past `to` is `overlap`; a slide's gap
    is `slide-gap`; a door overlaying its side by more or less than its
    cup hinges' catalogue allows is `hinge-overlay` (with the `cup_inset`
-   or `plate_height` that fits). Hardware envelopes count, except against
-   their own parts. A clash between an assembly (a door, a drawer) and something
+   or `plate_height` that fits). Every shape of every hardware member is a
+   body and counts like wood, against its own parts too (a cut it makes is
+   room for it); a kind's own members are not checked against each other.
+   A part made of boards counts as its boards make it. A clash between an assembly (a door, a drawer) and something
    outside it is one error at the line that placed the assembly, in the
    assembly's own terms ("make its top overlay 10mm smaller").
 5. **Motion**: every scene's poses are collision checked; every door and
@@ -48,7 +62,7 @@ a line and a concrete help line for every problem:
 7. **Assembly sequences**: every joint's `insert` steps are run backwards
    from the finished joint and swept; a step that can't be undone is
    `order`. The chidori's quarter turn and diagonal slide come apart as
-   `tools/joint-sim/chidori.py` proves, and fail without its flats.
+   `stave-app/tests/oracle_chidori.rs` proves, and fail without its flats.
 
 **Formatting** (`stave fmt`), **dumping** the solved design (`stave dump`,
 `--json`), **glTF export** (`stave export`, posed in any scene, exploded or
@@ -261,24 +275,42 @@ through the window itself is not automated.
   order of operations, tool settings), the PDF and the CSV cut list
   (stave-workplan, stave-output) are not written yet; neither is layer 7's
   buildability check (`order` for cuts, `no-recipe`).
+- **Boards**: boards are of equal width. The cuts other joints make on a
+  part made of boards (a dado across a wide side) stay on the part; they
+  are assigned to its boards when the work plan exists. On a part with
+  `grain: width`, an edge joint that cuts a tongue is refused (the seam is
+  across the part's length there). Board joints that `uses:` fasteners
+  don't list them (`not-supported`), and holes, round tenons and round
+  sections are not made on boards (`not-supported`). `suitsuki_zan` cuts
+  each batten's tongue on the batten's reference face, which faces the
+  panel when the panel lies flat with its reference face up; under a
+  standing panel the tongue can be on the wrong face (the overlap check
+  reports it). The text dump doesn't print boards yet (CLI lane).
 - **Ranges**: `require` and the layer 3 and 4 checks hold only at the
   current values; checking over a param's whole `within` range (z3,
   `require-range`, `range`) is not built.
-- **Geometry**: dovetails and `outline` cuts are drawn uncut and their
-  joints' fit isn't checked (`not-supported` warnings). The overlap checks
-  leave the chidori's angled slots uncut and its lock's round section
-  without its flats (more wood than there is); assembly sequences use both.
-  Turned and rotated steps are checked by dense sampling (1mm, 0.4mm of
-  travel), not exactly.
+- **Geometry**: cuts on round and turned parts other than holes and round
+  tenons are drawn uncut (`not-supported`). The overlap checks keep the
+  chidori's lock's round section without its flats (more wood than there
+  is); assembly sequences use the flats. Where an angled cut is involved,
+  overlaps and straight pushes are worked out in floats from exact inputs
+  (well under a nanometre against the 0.05mm tolerance); motion sweeps and
+  rods leave angled cuts in (more wood than there is). Turned and rotated
+  steps are checked by dense sampling (1mm, 0.4mm of travel), not exactly.
 - **Motion**: an assembly inside another moving assembly is not swept; the
   rule that an assembly's hinges share one pivot (`motion`) is not checked.
-  Every cup hinge moves on the one built-in 110° full-overlay linkage:
-  half-overlay, inset and wide-angle (155°, 165°) hinges have other
-  mechanisms, not modelled (a door that needs one is `hinge-overlay`, an
-  opening over 110° `out-of-range`). The hinge stops at 110° on its
+  A cup hinge moves on the mechanism its kind declares; version 1 solves
+  only the four-bar form (a driven cup hung on two links from a held
+  arm), and `std` has one, the 110° full-overlay `euro_hinge`:
+  half-overlay, inset and wide-angle (155°, 165°) hinges need their own
+  kinds, not written yet (a door that needs one is `hinge-overlay`; an
+  opening over 110° is out of `euro_hinge`'s range). The hinge stops at 110° on its
   limiter (steel on steel, not modelled as a shape); nothing models the soft-close damper or the
   spring.
-- **Hardware models**: `.glb` models are not read (`model-mismatch`).
+- **Hardware models**: a kind's `.glb` is read only to check it against the text
+  (`model-mismatch`: named nodes to 0.01mm, and an optional `sha256:` pin); it
+  is not drawn yet, and a model in a standard module or at a remote source
+  is not read.
 - **Focus mode**: the PDF work cards that will reuse flat views don't
   exist yet. Ghosts and see-through parts are sorted back to front by
   part, not by triangle. A joint's view from above exists only when one

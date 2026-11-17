@@ -3,15 +3,15 @@
 //! both ways is `error[order]`, naming the step and the part in its way.
 //!
 //! The parts of a pair are checked by themselves (the rest of the design
-//! is assembled around them). A pair with a cut the geometry can't make,
-//! or with a part already reported for an overlap, is left out.
+//! is assembled around them). A pair with a part already reported (for an
+//! overlap, or for a cut whose shape is a mistake) is left out.
 
 use stave_geom::sequence::{Member, Step, disassemble, pair_members, pair_steps};
 use stave_lang::placement::PartAxis;
 use stave_lang::{Code, Severity};
 use stave_model::solved::{AssemblyStep, JointPair, PartId, StepAmount, StepKind};
 
-use crate::{Checker, Item, ordered};
+use crate::{Checker, Item};
 
 impl Checker<'_> {
     pub(crate) fn sequences(&mut self) {
@@ -22,13 +22,9 @@ impl Checker<'_> {
                     continue;
                 }
                 let members = pair_members(pair);
-                let left_out = members.iter().enumerate().any(|(i, a)| {
-                    self.failed.contains(&Item::Part(*a))
-                        || members
-                            .iter()
-                            .skip(i + 1)
-                            .any(|b| self.uncut.contains(&ordered(*a, *b)))
-                });
+                let left_out = members
+                    .iter()
+                    .any(|a| self.failed.contains(&Item::Part(*a)));
                 if left_out {
                     continue;
                 }

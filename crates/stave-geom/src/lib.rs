@@ -29,12 +29,10 @@
 //! - **Round stock** is a cylinder along the length; **turned parts** are
 //!   lathe meshes of their profile, with smooth normals except at shoulders
 //!   and sharp corners.
-//! - **Hardware** is its envelope: a box, or a cylinder standing off the
-//!   mount face (a hinge's cup is sunk into it); hinges and slides also
-//!   have a member fixed to the carcass ([`hardware_fixed`]). A cup hinge
-//!   is drawn as its mechanism ([`hinge`]): the steel cup with its rim and
-//!   boss pins, the plate, arm and arm pins, and two links
-//!   ([`hardware_links`]).
+//! - **Hardware** is its members ([`body`]): exactly the shapes its kind
+//!   declares (boxes, cylinders, prisms and bars), the same shapes the
+//!   checks see. Nothing is drawn that is not declared, so nothing drawn
+//!   goes unchecked (grammar, "One collision model").
 //!
 //! Mirrored parts have left-handed frames. Every triangle is wound so its
 //! geometric normal agrees with the outward normal it was built from, so
@@ -46,11 +44,18 @@
 mod build;
 pub mod clearance;
 pub mod collide;
-pub mod hinge;
+pub mod glb;
+mod legacy;
 pub mod linkage;
+pub mod mechanism;
 mod mesh;
 mod mesh_cut;
 mod mesh_drill;
+mod mesh_prism;
+mod piece;
+pub mod planar;
+mod plane;
+mod prism;
 pub mod render;
 mod sample;
 pub mod sequence;
@@ -58,7 +63,9 @@ pub mod solid;
 pub mod sweep;
 
 use glam::{Mat4, Vec3};
-use stave_model::solved::{Envelope, Hardware, Part, Shape, Size3};
+use stave_lang::placement::Axis;
+use stave_lang::units::Length;
+use stave_model::solved::{Body, MemberShape, Part, Point, Shape, Size3};
 use stave_schema::words::Grain;
 
 pub use build::LATHE_SEGMENTS;
@@ -362,63 +369,124 @@ fn centre_of(part: &Part) -> [f32; 2] {
     ]
 }
 
-/// The mesh of the member of a piece of hardware on its piece: the whole
-/// of a pull, a hinge's cup (with a cup hinge's rim and boss pins), a
-/// slide's drawer member.
-pub fn hardware(hardware: &Hardware) -> Geometry {
-    match hinge::mechanism(hardware) {
-        Some(mechanism) => mechanism.cup,
-        None => envelope(&hardware.envelope, &hardware.pose),
-    }
+/// The mesh of a member of a piece of hardware at rest: its shapes, each a
+/// box, a cylinder, or an outline extruded along its axis.
+pub fn body(body: &Body) -> Geometry {
+    mesh::merge(body.shapes().iter().map(member_shape).collect())
 }
 
-/// The mesh of the member fixed to the carcass (a hinge's plate, with a
-/// cup hinge's arm and arm pins; a slide's cabinet member), when the
-/// hardware has one.
-pub fn hardware_fixed(hardware: &Hardware) -> Option<Geometry> {
-    if let Some(mechanism) = hinge::mechanism(hardware) {
-        return Some(mechanism.fixed);
-    }
-    hardware
-        .fixed
-        .as_ref()
-        .map(|member| envelope(&member.envelope, &member.pose))
+/// The render-frame point of a world point given on an axis and the two
+/// others (in [`Axis::others`] order).
+fn axis_point(axis: Axis, at: Length, [a, b]: [Length; 2]) -> glam::Vec3 {
+    let [first, second] = axis.others();
+    render::point(
+        Point::default()
+            .with(axis, at)
+            .with(first, a)
+            .with(second, b),
+    )
 }
 
-/// The meshes of a cup hinge's two links at rest; `None` for any other
-/// hardware.
-pub fn hardware_links(hardware: &Hardware) -> Option<[Geometry; 2]> {
-    hinge::mechanism(hardware).map(|mechanism| mechanism.links)
-}
-
-/// A box or a cylinder (along the local thickness) at a pose.
-fn envelope(envelope: &Envelope, pose: &stave_model::solved::Pose) -> Geometry {
-    let frame = build::Frame::of_pose(pose);
-    match *envelope {
-        Envelope::Box { .. } => build::cuboid(
-            &frame,
-            glam::Vec3::ZERO,
-            render::size(envelope.size()),
-            build::GrainAxes::LENGTH,
-        ),
-        Envelope::Cylinder { diameter, length } => {
-            // The cylinder's own axis is the local thickness: turn the frame
-            // so the lathe's axis (its first axis) is the thickness.
-            let radius = render::mm(diameter) * 0.5;
-            let axial = frame.thickness_first();
-            let profile = [
-                build::ProfilePoint::new(0.0, radius),
-                build::ProfilePoint::new(render::mm(length), radius),
-            ];
+fn member_shape(shape: &MemberShape) -> Geometry {
+    match shape {
+        MemberShape::Box(region) => {
+            let frame = build::Frame::new(
+                render::point(region.min()),
+                [Axis::Across, Axis::Up, Axis::Deep].map(render::axis),
+            );
+            let size = glam::Vec3::new(
+                render::mm(region.size(Axis::Across)),
+                render::mm(region.size(Axis::Up)),
+                render::mm(region.size(Axis::Deep)),
+            );
+            build::cuboid(&frame, glam::Vec3::ZERO, size, build::GrainAxes::LENGTH)
+        }
+        MemberShape::Cylinder {
+            axis,
+            centre,
+            diameter,
+            start,
+            end,
+        } => {
+            let [first, second] = axis.others();
+            let frame = build::Frame::new(
+                axis_point(*axis, *start, *centre),
+                [*axis, first, second].map(render::axis),
+            );
+            let radius = render::mm(*diameter) * 0.5;
+            let length = render::mm(Length::from_nm(end.nm().saturating_sub(start.nm())));
             build::lathe(
-                &axial,
-                [radius, radius],
-                &profile,
+                &frame,
+                [0.0, 0.0],
+                &[
+                    build::ProfilePoint::new(0.0, radius),
+                    build::ProfilePoint::new(length, radius),
+                ],
                 build::Corners::Sharp,
                 build::GrainAxes::LENGTH,
             )
         }
+        MemberShape::Prism {
+            axis,
+            points,
+            start,
+            end,
+        } => extrude(*axis, points, *start, *end),
+        MemberShape::Bar {
+            axis,
+            from,
+            to,
+            thickness,
+            start,
+            end,
+        } => {
+            let bar = collide::WorldPrism::bar(*axis, *from, *to, *thickness, *start, *end);
+            extrude(*axis, &bar.corners, *start, *end)
+        }
     }
+}
+
+/// A convex outline on the plane across `axis`, extruded from `start` to
+/// `end`, with flat faces and its edges.
+fn extrude(axis: Axis, points: &[[Length; 2]], start: Length, end: Length) -> Geometry {
+    let mut builder = build::Builder::default();
+    let low: Vec<glam::Vec3> = points.iter().map(|p| axis_point(axis, start, *p)).collect();
+    let high: Vec<glam::Vec3> = points.iter().map(|p| axis_point(axis, end, *p)).collect();
+    let middle = low.iter().chain(&high).copied().sum::<glam::Vec3>()
+        / f32::from(u16::try_from(low.len() * 2).unwrap_or(u16::MAX).max(1));
+    let along = render::axis(axis);
+    let grain = [0.0; 3];
+    // Ends.
+    for (ring, normal) in [(&low, -along), (&high, along)] {
+        let indices: Vec<u32> = ring
+            .iter()
+            .map(|p| builder.vertex(*p, normal, grain))
+            .collect();
+        if let Some((first, rest)) = indices.split_first() {
+            for pair in rest.windows(2) {
+                if let [b, c] = pair {
+                    builder.triangle(*first, *b, *c);
+                }
+            }
+        }
+    }
+    // Sides, each facing away from the middle.
+    let next = low.iter().zip(&high).cycle().skip(1);
+    for ((a, b), (c, d)) in low.iter().zip(&high).zip(next) {
+        let face_middle = (*a + *b + *c + *d) * 0.25;
+        let edge = *c - *a;
+        let mut normal = edge.cross(along).normalize_or_zero();
+        if normal.dot(face_middle - middle) < 0.0 {
+            normal = -normal;
+        }
+        let quad = [*a, *c, *d, *b].map(|p| builder.vertex(p, normal, grain));
+        builder.triangle(quad[0], quad[1], quad[2]);
+        builder.triangle(quad[0], quad[2], quad[3]);
+        builder.edge(*a, *c);
+        builder.edge(*b, *d);
+        builder.edge(*a, *b);
+    }
+    builder.finish()
 }
 
 #[cfg(test)]

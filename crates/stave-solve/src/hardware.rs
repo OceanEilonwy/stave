@@ -1,138 +1,315 @@
-//! Hardware: mounting a slide, hinge or pull on a face of its piece, the
-//! cuts it makes and the motion it gives its assembly.
+//! Hardware: mounting a slide, hinge or pull on a face of its piece where
+//! its kind's `mount { }` and the design's `place { }` say, placing its
+//! members' shapes, the cuts its kind makes and the motion it gives its
+//! assembly. Nothing here knows a base or a member by name; what the old
+//! contract reads by name is filled in [`crate::legacy`].
+
+use std::collections::BTreeMap;
 
 use stave_lang::ast::{BaseKind, Span};
 use stave_lang::placement::{Axis, Direction, Face, PartAxis};
 use stave_lang::units::Length;
 use stave_lang::units::{ExactAngle, ExactLength, Rational};
 use stave_lang::{Code, Diagnostic, Label};
-use stave_model::defs::DefId;
+use stave_model::defs::{
+    AxisRule, BodyId, Carrier, CutName, DefId, FaceRule, FrameAxis, FromTerm, KindDef, KindPoint,
+    MountSelector, MountTerm, RExpr, RangeDef, RoleIndex, ShapeDef,
+};
 use stave_model::ids::{HardwareId, KindId, PartId, RegionId};
 use stave_model::instance::ItemSlot;
-use stave_model::solved::{
-    Link, LinkBar, Linkage, LinkageError, LinkageFrame, Orientation, PlanePoint, Point,
-};
-use stave_model::value::{Envelope, ExactBox, ModelRef, Value};
-use stave_schema::hinges::{CUP_HINGE_110, CupPoint};
-use stave_schema::kinds::{MountRule, OpenAxes, base};
+use stave_model::solved::CutKind;
+use stave_model::solved::Rules;
+use stave_model::value::{AnchorOwner, AnchorValue, ExactBox, Value};
 
-use crate::eval::{Env, KindEnv, midpoint, mm};
+use crate::eval::{Env, KindEnv, midpoint};
 use crate::joints::Binding;
+use crate::legacy::{CupParts, Input, Legacy, LegacyMotion};
+use crate::mechanism::{ExactPoint, HardwareMechanism};
 use crate::place::Siblings;
+use crate::rules::{AdjustSetting, Call, Offset};
 use crate::{Memo, Reported, Solved, Solver};
 
-/// Catalog data of a placed piece of hardware, exact.
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) enum Data {
-    Slide {
-        length: ExactLength,
-        clearance: ExactLength,
-        travel: ExactLength,
-        opening: RegionId,
-    },
-    ButtHinge {
-        opening_angle: ExactAngle,
-        on: PartId,
-    },
-    Hinge {
-        opening_angle: ExactAngle,
-        cup_diameter: ExactLength,
-        cup_depth: ExactLength,
-        cup_inset: ExactLength,
-        on: PartId,
-        /// From the piece's edge nearer `on` to the face of `on` the plate
-        /// is on.
-        overlay: ExactLength,
-        overlay_range: Option<OverlayRangeExact>,
-    },
-    Pull {
-        centres: Option<ExactLength>,
-        diameter: Option<ExactLength>,
-        screw_diameter: ExactLength,
-    },
+/// What a role of a placed piece of hardware is bound to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RoleBound {
+    Part(PartId),
+    Region(RegionId),
 }
 
-/// A cup hinge's catalogue overlay data.
+/// The kind's frame placed in the world (grammar, "The kind's frame"):
+/// its origin and the world direction of each of its axes.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) struct OverlayRangeExact {
-    pub base: ExactLength,
-    pub plate_height: ExactLength,
-    pub adjustment: ExactLength,
+pub(crate) struct Frame {
+    /// The origin, in world coordinates.
+    pub origin: [ExactLength; 3],
+    pub along: Direction,
+    pub across: Direction,
+    /// Into the piece.
+    pub depth: Direction,
+    /// The edge `across` is measured from, when the kind's mount measures
+    /// it from one: its world coordinate on the `across` axis.
+    pub across_edge: Option<ExactLength>,
 }
 
-/// A cup hinge's arm and links, beside its linkage (which is its motion).
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) struct Mechanism {
-    pub arm: Member,
-    pub knuckle: Member,
-    pub links: [LinkBar; 2],
-    pub pin_diameter: Length,
-    pub pin_length: Length,
-}
+impl Frame {
+    /// The world direction of a frame axis.
+    pub fn direction(&self, axis: FrameAxis) -> Direction {
+        match axis {
+            FrameAxis::Along => self.along,
+            FrameAxis::Across => self.across,
+            FrameAxis::Depth => self.depth,
+        }
+    }
 
-/// A hole hardware bores in its piece.
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) struct Bore {
-    /// Centre on the mount face, in world coordinates.
-    pub centre: [ExactLength; 3],
-    pub diameter: ExactLength,
-    /// `None`: through.
-    pub depth: Option<ExactLength>,
-    pub count: u32,
-    pub centres: Option<ExactLength>,
-}
+    /// The origin's coordinate along a world axis.
+    pub fn origin_on(&self, axis: Axis) -> ExactLength {
+        self.origin
+            .get(world_index(axis))
+            .copied()
+            .unwrap_or(ExactLength::ZERO)
+    }
 
-/// A mortise hardware is housed in (a butt hinge's leaf): a notch the size
-/// of the member, cut into one face of a part.
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) struct Recess {
-    pub part: PartId,
-    /// The world face of the part the notch is cut into.
-    pub face: Face,
-    /// The region the member fills, in world coordinates.
-    pub bounds: ExactBox,
-    pub depth: ExactLength,
-}
+    /// A frame range on a frame axis, as a world extent.
+    fn world_extent(
+        &self,
+        axis: FrameAxis,
+        (low, high): (ExactLength, ExactLength),
+    ) -> Solved<(ExactLength, ExactLength)> {
+        let direction = self.direction(axis);
+        let origin = self.origin_on(direction.axis());
+        Ok(if direction.is_positive() {
+            (
+                origin.checked_add(low).ok_or(Reported)?,
+                origin.checked_add(high).ok_or(Reported)?,
+            )
+        } else {
+            (
+                origin.checked_sub(high).ok_or(Reported)?,
+                origin.checked_sub(low).ok_or(Reported)?,
+            )
+        })
+    }
 
-/// Which kind of hinge a hinge kind is.
-#[derive(Debug, Clone, Copy, PartialEq)]
-enum HingeStyle {
-    /// A cup bored into the piece and a plate on `on`.
-    Cup {
-        diameter: ExactLength,
+    /// The frame coordinate of a world plane across a frame axis.
+    fn coordinate(&self, axis: FrameAxis, world: ExactLength) -> Solved<ExactLength> {
+        let direction = self.direction(axis);
+        let offset = world
+            .checked_sub(self.origin_on(direction.axis()))
+            .ok_or(Reported)?;
+        if direction.is_positive() {
+            Ok(offset)
+        } else {
+            offset.checked_neg().ok_or(Reported)
+        }
+    }
+
+    /// A point in the frame, in the world.
+    pub fn world_point(
+        &self,
+        along: ExactLength,
+        across: ExactLength,
         depth: ExactLength,
-        inset: ExactLength,
-    },
-    /// Two leaves on a pin, each housed in a mortise.
-    Butt { leaf: Envelope },
+    ) -> Solved<[ExactLength; 3]> {
+        let mut out = [ExactLength::ZERO; 3];
+        for (axis, value) in [
+            (FrameAxis::Along, along),
+            (FrameAxis::Across, across),
+            (FrameAxis::Depth, depth),
+        ] {
+            let direction = self.direction(axis);
+            let origin = self.origin_on(direction.axis());
+            let world = if direction.is_positive() {
+                origin.checked_add(value)
+            } else {
+                origin.checked_sub(value)
+            }
+            .ok_or(Reported)?;
+            if let Some(slot) = out.get_mut(world_index(direction.axis())) {
+                *slot = world;
+            }
+        }
+        Ok(out)
+    }
+
+    /// A box in the frame, in the world.
+    pub fn world_box(&self, frame_box: &FrameBox) -> Solved<ExactBox> {
+        let mut extents = [(ExactLength::ZERO, ExactLength::ZERO); 3];
+        for (axis, range) in [
+            (FrameAxis::Along, frame_box.along),
+            (FrameAxis::Across, frame_box.across),
+            (FrameAxis::Depth, frame_box.depth),
+        ] {
+            let extent = self.world_extent(axis, range)?;
+            if let Some(slot) = extents.get_mut(world_index(self.direction(axis).axis())) {
+                *slot = extent;
+            }
+        }
+        let [x, y, z] = extents;
+        Ok(ExactBox::new(x, y, z))
+    }
 }
 
-/// The motion a piece of hardware gives its assembly.
+/// A box in the kind's frame: each extent low end first.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) enum MotionExact {
-    Turn {
-        axis: Axis,
-        through: [ExactLength; 3],
-        free_side: Direction,
-        swing_toward: Direction,
-        angle: ExactAngle,
-    },
-    /// A cup hinge's four-bar linkage, checked and in whole nanometres.
-    Linkage(Linkage),
-    Travel {
-        toward: Direction,
-        travel: ExactLength,
+pub(crate) struct FrameBox {
+    pub along: (ExactLength, ExactLength),
+    pub across: (ExactLength, ExactLength),
+    pub depth: (ExactLength, ExactLength),
+}
+
+impl FrameBox {
+    fn range(&self, axis: FrameAxis) -> (ExactLength, ExactLength) {
+        match axis {
+            FrameAxis::Along => self.along,
+            FrameAxis::Across => self.across,
+            FrameAxis::Depth => self.depth,
+        }
+    }
+
+    fn with(mut self, axis: FrameAxis, range: (ExactLength, ExactLength)) -> FrameBox {
+        match axis {
+            FrameAxis::Along => self.along = range,
+            FrameAxis::Across => self.across = range,
+            FrameAxis::Depth => self.depth = range,
+        }
+        self
+    }
+
+    /// The smallest box holding both.
+    fn union(&self, other: &FrameBox) -> FrameBox {
+        let join = |(a, b): (ExactLength, ExactLength), (c, d): (ExactLength, ExactLength)| {
+            (a.min(c), b.max(d))
+        };
+        FrameBox {
+            along: join(self.along, other.along),
+            across: join(self.across, other.across),
+            depth: join(self.depth, other.depth),
+        }
+    }
+}
+
+/// One shape of a placed member, at rest.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct PlacedShape {
+    /// Its box in the kind's frame, after the member's own mount.
+    pub frame: FrameBox,
+    /// Its box in the world.
+    pub world: ExactBox,
+    /// The frame axis a cylinder's axis runs along.
+    pub cylinder: Option<FrameAxis>,
+    /// A prism's or a bar's outline on the across/depth plane, after the
+    /// member's own mount.
+    pub outline: Option<Outline>,
+}
+
+/// The outline of a prism or a bar on the kind's across/depth plane, each
+/// point `[across, depth]`; it is extruded along `along`.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum Outline {
+    /// A convex outline, its corners in order around it.
+    Prism(Vec<[ExactLength; 2]>),
+    /// A bar between two centres, `thickness` wide.
+    Bar {
+        from: [ExactLength; 2],
+        to: [ExactLength; 2],
+        thickness: ExactLength,
     },
 }
 
-/// The member of a piece of hardware that is fixed to the carcass and stays
-/// put when the assembly moves: a hinge's mounting plate, a slide's cabinet
-/// member.
+impl Outline {
+    /// Moved by `across` and `depth` in the frame.
+    fn moved(&self, across: ExactLength, depth: ExactLength) -> Solved<Outline> {
+        let shift = |[a, d]: [ExactLength; 2]| -> Solved<[ExactLength; 2]> {
+            Ok([
+                a.checked_add(across).ok_or(Reported)?,
+                d.checked_add(depth).ok_or(Reported)?,
+            ])
+        };
+        Ok(match self {
+            Outline::Prism(points) => Outline::Prism(
+                points
+                    .iter()
+                    .map(|point| shift(*point))
+                    .collect::<Solved<Vec<_>>>()?,
+            ),
+            Outline::Bar {
+                from,
+                to,
+                thickness,
+            } => Outline::Bar {
+                from: shift(*from)?,
+                to: shift(*to)?,
+                thickness: *thickness,
+            },
+        })
+    }
+}
+
+/// A member's shape at rest in the world, exact.
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct Member {
-    pub envelope: Envelope,
-    pub bounds: ExactBox,
-    pub orientation: Orientation,
+pub(crate) enum WorldShape {
+    Box(ExactBox),
+    /// A cylinder along `axis`, filling `bounds` across it.
+    Cylinder {
+        axis: Axis,
+        bounds: ExactBox,
+    },
+    /// A convex outline across `axis`, extruded over `bounds` along it;
+    /// each point is a world point (its coordinate on `axis` carries no
+    /// meaning).
+    Prism {
+        axis: Axis,
+        points: Vec<[ExactLength; 3]>,
+        bounds: ExactBox,
+    },
+    /// A bar across `axis` between two world points, over `bounds` along
+    /// it.
+    Bar {
+        axis: Axis,
+        from: [ExactLength; 3],
+        to: [ExactLength; 3],
+        thickness: ExactLength,
+        bounds: ExactBox,
+    },
+}
+
+/// What moves a placed member.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MemberCarrier {
+    Part(PartId),
+    Region(RegionId),
+    /// Placed by its kind's mechanism: this member (with no `with:`) of it.
+    Link(BodyId),
+}
+
+/// A member with a body, at rest in the world.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct PlacedMember {
+    pub body: BodyId,
+    pub name: String,
+    pub carrier: MemberCarrier,
+    pub shapes: Vec<WorldShape>,
+}
+
+/// A member with a body, placed at rest.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct PlacedBody {
+    pub body: BodyId,
+    /// One per shape, in the kind's order.
+    pub shapes: Vec<PlacedShape>,
+}
+
+/// A cut a piece of hardware makes in one part: one shape of one member.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct HardwareCut {
+    pub part: PartId,
+    pub body: BodyId,
+    pub name: Option<CutName>,
+    /// The world face of the part it is cut from.
+    pub face: Face,
+    /// The shape's world box; the footprint is where it meets the part.
+    pub shape: ExactBox,
+    pub kind: CutKind,
 }
 
 /// A placed piece of hardware.
@@ -144,21 +321,47 @@ pub(crate) struct Placed {
     pub base: BaseKind,
     pub piece: PartId,
     pub mount_face: Face,
-    /// The member on the piece (it moves with the piece's assembly): a
-    /// hinge's cup, a slide's drawer member, the whole of a pull.
-    pub envelope: Envelope,
-    pub bounds: ExactBox,
-    pub orientation: Orientation,
-    /// The member fixed to the carcass, for hinges and slides.
-    pub fixed: Option<Member>,
-    pub data: Data,
-    pub bore: Option<Bore>,
-    /// Mortises the hardware is housed in.
-    pub recesses: Vec<Recess>,
-    pub motion: Option<MotionExact>,
-    /// A cup hinge's arm and links.
-    pub mechanism: Option<Mechanism>,
-    pub model: Option<ModelRef>,
+    /// The roles, by name, in the kind's order.
+    pub roles: Vec<(String, RoleBound)>,
+    /// The kind's params and fields for this piece of hardware.
+    pub entries: BTreeMap<String, Value>,
+    /// The cuts it makes, in the kind's order, one per shape.
+    pub cuts: Vec<HardwareCut>,
+    /// The fasteners its kind uses: name, diameter, length and count.
+    pub fasteners: Vec<stave_model::solved::HardwareFastener>,
+    /// Its kind's mechanism, exact, in its own plane.
+    pub mechanism: Option<HardwareMechanism>,
+    /// That mechanism counted on its own, when it has a drive.
+    pub own: Option<stave_model::mechanism::Mechanism>,
+    /// The old contract's motion, read from the mechanism's shape.
+    pub motion: Option<LegacyMotion>,
+    /// The old contract's arm and links of a four-bar linkage.
+    pub cup: Option<CupParts>,
+    pub model: Option<stave_model::solved::Model>,
+    /// The old contract.
+    pub legacy: Legacy,
+    /// Its members with a body, in its kind's order.
+    pub members: Vec<PlacedMember>,
+    /// The settings its kind's `adjust` entries give it at rest.
+    pub settings: Vec<AdjustSetting>,
+    /// Whether its kind's rules hold where it is placed.
+    pub rules: Rules,
+}
+
+/// Where a piece of hardware sits at rest, before its cuts and motion.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Rest {
+    pub piece: PartId,
+    pub piece_box: ExactBox,
+    pub piece_orientation: stave_model::solved::Orientation,
+    pub mount_face: Face,
+    /// The mount face as an anchor: `mount` in the kind's rules.
+    pub mount: AnchorValue,
+    pub frame: Frame,
+    pub bodies: Vec<PlacedBody>,
+    /// Each member's offset from its nominal place on each axis its own
+    /// mount sets, in the kind's order.
+    pub offsets: Vec<Offset>,
 }
 
 pub(crate) fn world_index(axis: Axis) -> usize {
@@ -177,84 +380,20 @@ fn positive_direction(axis: Axis) -> Direction {
     }
 }
 
+/// Each shape of a member in the kind's frame, with the axis of a cylinder
+/// and the outline of a prism or a bar.
+pub(crate) type FrameShapes = Vec<(FrameBox, Option<FrameAxis>, Option<Outline>)>;
+
+/// The world plane an anchor names, and which way is into the part it
+/// belongs to.
+#[derive(Debug, Clone, Copy)]
+struct Plane {
+    at: ExactLength,
+    /// `true` when the part lies on the positive side of the plane.
+    inward_positive: bool,
+}
+
 impl Solver<'_> {
-    fn hardware_entry(
-        &mut self,
-        binding: &Binding,
-        name: &str,
-        env: &Env<'_>,
-        span: Span,
-    ) -> Solved<Option<Value>> {
-        if let Some((_, value)) = binding.settings.iter().find(|(n, _)| n == name) {
-            return Ok(Some(value.clone()));
-        }
-        let Some(kind) = self.model.defs.kind(binding.kind).cloned() else {
-            return Err(Reported);
-        };
-        let kind_env = KindEnv::new(
-            binding.kind,
-            binding.roles.clone(),
-            binding.settings.clone(),
-            kind.params.len(),
-        );
-        if let Some(index) = kind.param(name) {
-            return self.kind_param(&kind_env, index, env.file, span).map(Some);
-        }
-        if let Some(field) = kind.field(name) {
-            let Some(ctx) = self.module_ctx(DefId::Kind(binding.kind)) else {
-                return Err(Reported);
-            };
-            let kind_eval = Env {
-                ctx,
-                file: kind.decl.file,
-                kind: Some(&kind_env),
-                array: None,
-            };
-            return self.eval(&field.value, &kind_eval).map(Some);
-        }
-        Ok(None)
-    }
-
-    fn hardware_length(
-        &mut self,
-        binding: &Binding,
-        name: &str,
-        env: &Env<'_>,
-        span: Span,
-    ) -> Solved<Option<ExactLength>> {
-        match self.hardware_entry(binding, name, env, span)? {
-            Some(Value::Length(length)) => Ok(Some(length)),
-            Some(other) => Err(self.error(
-                Code::UnitMismatch,
-                format!("'{name}' needs a length, found {}", other.description()),
-                env.file,
-                span,
-                "write a length",
-            )),
-            None => Ok(None),
-        }
-    }
-
-    fn required_length(
-        &mut self,
-        binding: &Binding,
-        name: &str,
-        env: &Env<'_>,
-        span: Span,
-        kind_name: &str,
-    ) -> Solved<ExactLength> {
-        match self.hardware_length(binding, name, env, span)? {
-            Some(length) => Ok(length),
-            None => Err(self.error(
-                Code::MissingField,
-                format!("kind '{kind_name}' is missing '{name}'"),
-                env.file,
-                span,
-                format!("give the kind {name}: ..."),
-            )),
-        }
-    }
-
     /// Places a piece of hardware (once).
     pub(crate) fn place_hardware(&mut self, hardware: HardwareId) -> Solved<Placed> {
         match self.hardware.get(hardware.index()) {
@@ -318,197 +457,246 @@ impl Solver<'_> {
                 "mount hardware with a kind of base slide, hinge or pull",
             ));
         }
-        let spec = base(kind.base);
+        // Reported where the kind is resolved.
+        let Some(hardware_kind) = kind.hardware.clone() else {
+            return Err(Reported);
+        };
+        let roles = self.hardware_roles(&kind, &binding)?;
+        let entries = self.hardware_entries(&binding, &kind, env.file, span)?;
+        let fasteners = self.hardware_fasteners(&binding, &kind, &hardware_kind.uses)?;
+        let model = match entries.get("model") {
+            Some(Value::Model(model)) => {
+                let declared = self.declared_shapes(&binding, &kind)?;
+                Some(self.hardware_model(&binding, &kind, model, &declared)?)
+            }
+            _ => None,
+        };
+        let Rest {
+            piece,
+            piece_box,
+            piece_orientation,
+            mount_face,
+            mount: mount_anchor,
+            frame,
+            bodies,
+            offsets,
+        } = self.rest(hardware, &binding)?;
+        self.check_contact(&name, &kind, &roles, &bodies, piece, env.file, span)?;
+        let cuts = self.hardware_cuts(
+            &binding,
+            &kind,
+            &hardware_kind.cuts,
+            &roles,
+            &bodies,
+            &frame,
+            &name,
+            env.file,
+            span,
+        )?;
+        let input = Input {
+            kind: &kind,
+            kind_name: &kind_name,
+            base: kind.base,
+            piece_orientation,
+            mount_face,
+            frame: &frame,
+            roles: &roles,
+            entries: &entries,
+            bodies: &bodies,
+            cuts: &cuts,
+            file: env.file,
+            span,
+        };
+        let legacy = self.legacy(&input)?;
+        // The kind's mechanism moves it, counted on its own first.
+        let (mechanism, own) = match &kind.mechanism {
+            Some(def) => {
+                let mechanism = self.kind_mechanism(&binding, &kind, &kind_name, def, &frame)?;
+                let own = self.check_mechanism(hardware, &roles, &mechanism, &kind_name)?;
+                (Some(mechanism), own)
+            }
+            None => (None, None),
+        };
+        let (motion, cup) = self.legacy_motion(
+            &input,
+            &piece_box,
+            mechanism.as_ref(),
+            &binding,
+            &name,
+            &env,
+            span,
+        )?;
+        let members = self.placed_members(&kind, &roles, &bodies, &frame)?;
+        // The kind's rules where it is placed: its adjustments and requires.
+        let (settings, rules) = self.hardware_rules(
+            Call {
+                hardware,
+                name: &name,
+                file: env.file,
+                span,
+            },
+            &binding,
+            &kind,
+            &hardware_kind.adjusts,
+            &offsets,
+            mount_anchor,
+        )?;
+        Ok(Placed {
+            kind: binding.kind,
+            kind_name: binding.name.clone(),
+            base: kind.base,
+            piece,
+            mount_face,
+            roles,
+            entries,
+            cuts,
+            fasteners,
+            mechanism,
+            own,
+            motion,
+            cup,
+            model,
+            legacy,
+            members,
+            settings,
+            rules,
+        })
+    }
+
+    /// Each member's shapes in the kind's frame, as declared: before a
+    /// member's own mount and before the frame is placed on the open axes.
+    pub(crate) fn declared_shapes(
+        &mut self,
+        binding: &Binding,
+        kind: &KindDef,
+    ) -> Solved<Vec<(BodyId, FrameShapes)>> {
+        let mut frame_bodies: Vec<(BodyId, FrameShapes)> = Vec::new();
+        for (index, body) in kind.bodies.iter().enumerate() {
+            let id = BodyId::new(index).ok_or(Reported)?;
+            let shapes: Vec<ShapeDef> = body.shapes.iter().map(|s| s.shape.clone()).collect();
+            let boxes = self.in_kind(binding, kind, |solver, kind_env| {
+                shapes
+                    .iter()
+                    .map(|shape| solver.shape_box(shape, kind_env))
+                    .collect::<Solved<Vec<_>>>()
+            })?;
+            frame_bodies.push((id, boxes));
+        }
+        Ok(frame_bodies)
+    }
+
+    /// Where a piece of hardware sits at rest, from its call `binding`:
+    /// its frame, its members with their own mounts, and each member's
+    /// offset from its nominal place (grammar, "Hardware placement"). The
+    /// help search places it again with other settings.
+    pub(crate) fn rest(&mut self, hardware: HardwareId, binding: &Binding) -> Solved<Rest> {
+        let Some(inst) = self.model.hardware.get(hardware.index()).cloned() else {
+            return Err(Reported);
+        };
+        let Some(def) = self.model.defs.hardware_def(inst.def).cloned() else {
+            return Err(Reported);
+        };
+        let array = def.array.as_ref().map(|_| {
+            (
+                DefId::Hardware(inst.def),
+                self.array_len(DefId::Hardware(inst.def), inst.ctx),
+            )
+        });
+        let env = Env {
+            ctx: inst.ctx,
+            file: def.decl.file,
+            kind: None,
+            array,
+        };
+        let name = inst.name.clone();
+        let Some(kind) = self.model.defs.kind(binding.kind).cloned() else {
+            return Err(Reported);
+        };
+        let kind_name = binding.name.clone();
+        let Some(hardware_kind) = kind.hardware.clone() else {
+            return Err(Reported);
+        };
         let Some(Value::Part(piece)) = binding.roles.first().cloned() else {
             return Err(Reported);
         };
         let piece_box = self.drawn_box(piece)?;
         let piece_orientation = self.part_orientation(piece)?;
-        // A hinge's member on the piece is its cup or its leaf, sunk into
-        // the mount face; every other base declares its envelope.
-        let hinge_style = if kind.base == BaseKind::Hinge {
-            match self.hardware_entry(&binding, "leaf", &env, span)? {
-                Some(Value::Envelope(leaf @ Envelope::Box { .. })) => {
-                    Some(HingeStyle::Butt { leaf })
-                }
-                Some(Value::Envelope(Envelope::Cylinder { .. })) => {
-                    return Err(self.error(
-                        Code::TypeMismatch,
-                        format!("kind '{kind_name}': a hinge's leaf is a box"),
-                        env.file,
-                        span,
-                        "write leaf: box(length: ..., width: ..., thickness: ...)",
-                    ));
-                }
-                _ => Some(HingeStyle::Cup {
-                    diameter: self.required_length(
-                        &binding,
-                        "cup_diameter",
-                        &env,
-                        span,
-                        &kind_name,
-                    )?,
-                    depth: self.required_length(&binding, "cup_depth", &env, span, &kind_name)?,
-                    inset: self.required_length(&binding, "cup_inset", &env, span, &kind_name)?,
-                }),
-            }
-        } else {
-            None
-        };
-        let envelope = match hinge_style {
-            Some(HingeStyle::Cup {
-                diameter, depth, ..
-            }) => Envelope::Cylinder {
-                diameter,
-                length: depth,
-            },
-            Some(HingeStyle::Butt { leaf }) => leaf,
-            None => match self.hardware_entry(&binding, "envelope", &env, span)? {
-                Some(Value::Envelope(envelope)) => envelope,
-                _ => {
-                    return Err(self.error(
-                        Code::MissingField,
-                        format!("kind '{kind_name}' is missing 'envelope'"),
-                        env.file,
-                        span,
-                        "give the kind envelope: box(...) or cylinder(...)",
-                    ));
-                }
-            },
-        };
-        let model = match self.hardware_entry(&binding, "model", &env, span)? {
-            Some(Value::Model(model)) => Some(model),
-            _ => None,
-        };
-        // The mount face.
-        let mount_face = match (binding.face, spec.mount) {
+        // The mount face fixes the depth axis: the origin lies on it.
+        let mount = &hardware_kind.mount;
+        let mount_face = match (binding.face, mount.face) {
             (Some(face), _) => face,
-            (None, Some(MountRule::Face(face))) => face,
-            (None, Some(MountRule::NearerRegionSide)) => {
-                let Some(Value::Region(region)) = binding.roles.get(1).cloned() else {
-                    return Err(Reported);
-                };
-                let region_box = self.region_value(region)?.bounds;
-                let left = piece_box
-                    .min(Axis::Across)
-                    .checked_sub(region_box.min(Axis::Across))
-                    .ok_or(Reported)?;
-                let right = region_box
-                    .max(Axis::Across)
-                    .checked_sub(piece_box.max(Axis::Across))
-                    .ok_or(Reported)?;
-                if abs(right)? < abs(left)? {
-                    Face::Right
-                } else {
-                    Face::Left
-                }
-            }
-            (None, None) => return Err(Reported),
+            (None, FaceRule::Word(face)) => face,
+            (None, FaceRule::Nearer { part, region }) => self.face_nearer(binding, part, region)?,
         };
-        // The envelope's frame on the face: its thickness stands off the
-        // face, except a hinge cup's or leaf's, which runs into the piece.
-        let mount_direction = mount_face.direction();
-        let thickness_direction = if hinge_style.is_some() {
-            mount_direction.opposite()
-        } else {
-            mount_direction
-        };
-        let piece_length = piece_orientation.direction(PartAxis::Length);
-        let length_direction = if piece_length.axis() == thickness_direction.axis() {
-            piece_orientation.direction(PartAxis::Width)
-        } else {
-            piece_length
-        };
-        let Some(width_axis) = length_direction.axis().third(thickness_direction.axis()) else {
-            return Err(Reported);
-        };
-        let size = match envelope {
-            Envelope::Box {
-                length,
-                width,
-                thickness,
-            } => [length, width, thickness],
-            Envelope::Cylinder { diameter, length } => [diameter, diameter, length],
-        };
-        let [env_length, env_width, env_thickness] = size;
-        let mut lows: [Option<ExactLength>; 3] = [None, None, None];
-        let face_axis = thickness_direction.axis();
+        let face_axis = mount_face.axis();
         let face_position = if mount_face.is_positive() {
             piece_box.max(face_axis)
         } else {
             piece_box.min(face_axis)
         };
-        let face_low = if thickness_direction.is_positive() {
-            face_position
+        let piece_length = piece_orientation.direction(PartAxis::Length);
+        let length_direction = if piece_length.axis() == face_axis {
+            piece_orientation.direction(PartAxis::Width)
         } else {
-            face_position.checked_sub(env_thickness).ok_or(Reported)?
+            piece_length
         };
-        if let Some(slot) = lows.get_mut(world_index(face_axis)) {
-            *slot = Some(face_low);
+        let along_axis = length_direction.axis();
+        let Some(across_axis) = along_axis.third(face_axis) else {
+            return Err(Reported);
+        };
+        let mut frame = Frame {
+            origin: [ExactLength::ZERO; 3],
+            along: length_direction,
+            across: positive_direction(across_axis),
+            depth: mount_face.direction().opposite(),
+            across_edge: None,
+        };
+        if let Some(slot) = frame.origin.get_mut(world_index(face_axis)) {
+            *slot = face_position;
         }
-        let mut width_direction = positive_direction(width_axis);
-        let length_axis = length_direction.axis();
-        let mut on_part = None;
-        let mut mechanism = None;
-        match kind.base {
-            BaseKind::Slide => {
-                let low = piece_box.min(length_axis);
-                let centre = midpoint(piece_box.min(width_axis), piece_box.max(width_axis))
-                    .ok_or(Reported)?;
-                if let Some(slot) = lows.get_mut(world_index(length_axis)) {
-                    *slot = Some(low);
-                }
-                if let Some(slot) = lows.get_mut(world_index(width_axis)) {
-                    *slot = Some(centre.checked_sub(half(env_width)?).ok_or(Reported)?);
-                }
-            }
-            BaseKind::Hinge => {
-                let Some(Value::Part(on)) = binding.roles.get(1).cloned() else {
-                    return Err(Reported);
-                };
-                on_part = Some(on);
-                let on_box = self.drawn_box(on)?;
-                let on_centre =
-                    midpoint(on_box.min(width_axis), on_box.max(width_axis)).ok_or(Reported)?;
-                let (low_edge, high_edge) = (piece_box.min(width_axis), piece_box.max(width_axis));
-                let low_distance = abs(on_centre.checked_sub(low_edge).ok_or(Reported)?)?;
-                let high_distance = abs(on_centre.checked_sub(high_edge).ok_or(Reported)?)?;
-                let nearer_low = low_distance <= high_distance;
-                // A cup is `cup_inset` in from the edge nearer `on`. A butt
-                // hinge's leaves start at the pin edge: the one where the
-                // piece is flush with a face of `on`.
-                let (inset, at_low) = match hinge_style {
-                    Some(HingeStyle::Cup { inset, .. }) => (inset, nearer_low),
-                    Some(HingeStyle::Butt { .. }) => {
-                        let flush = |edge: ExactLength| {
-                            edge == on_box.min(width_axis) || edge == on_box.max(width_axis)
-                        };
-                        let at_low = match (flush(low_edge), flush(high_edge)) {
-                            (true, false) => true,
-                            (false, true) => false,
-                            (true, true) | (false, false) => nearer_low,
-                        };
-                        (ExactLength::ZERO, at_low)
+        // The kind's terms for `across` and `along`; the design's
+        // `place { }` for the axes it leaves open.
+        let mut open: Vec<FrameAxis> = Vec::new();
+        for (axis, rule) in [
+            (FrameAxis::Across, &mount.across),
+            (FrameAxis::Along, &mount.along),
+        ] {
+            let world = frame.direction(axis).axis();
+            match rule {
+                AxisRule::Open => open.push(axis),
+                AxisRule::Term(MountTerm::Centre { part }) => {
+                    let part = self.role_part(binding, *part)?;
+                    let part_box = self.drawn_box(part)?;
+                    let centre =
+                        midpoint(part_box.min(world), part_box.max(world)).ok_or(Reported)?;
+                    if let Some(slot) = frame.origin.get_mut(world_index(world)) {
+                        *slot = centre;
                     }
-                    None => (ExactLength::ZERO, nearer_low),
-                };
-                let low = if at_low {
-                    width_direction = positive_direction(width_axis);
-                    low_edge.checked_add(inset).ok_or(Reported)?
-                } else {
-                    width_direction = positive_direction(width_axis).opposite();
-                    high_edge
-                        .checked_sub(inset)
-                        .and_then(|edge| edge.checked_sub(env_width))
-                        .ok_or(Reported)?
-                };
-                if let Some(slot) = lows.get_mut(world_index(width_axis)) {
-                    *slot = Some(low);
+                }
+                AxisRule::Term(MountTerm::From(from)) => {
+                    let (plane, at) = self.term_plane(binding, &kind, mount_face, world, from)?;
+                    let inward = if plane.inward_positive {
+                        positive_direction(world)
+                    } else {
+                        positive_direction(world).opposite()
+                    };
+                    match axis {
+                        FrameAxis::Across => {
+                            frame.across = inward;
+                            frame.across_edge = Some(plane.at);
+                        }
+                        FrameAxis::Along => frame.along = inward,
+                        FrameAxis::Depth => {}
+                    }
+                    if let Some(slot) = frame.origin.get_mut(world_index(world)) {
+                        *slot = at;
+                    }
                 }
             }
-            BaseKind::Pull | BaseKind::Joint | BaseKind::Fastener | BaseKind::Tool => {}
         }
-        // The place { } terms for the axes the base leaves open.
+        // Each member's shapes in the frame, before the frame is placed on
+        // the open axes.
+        let frame_bodies = self.declared_shapes(binding, &kind)?;
         let label = inst.ctx.element.and_then(|element| {
             match self.model.defs.array(DefId::Hardware(inst.def)) {
                 Some(stave_model::defs::ArrayDef::Labels(labels)) => {
@@ -519,33 +707,32 @@ impl Solver<'_> {
             }
         });
         let terms = self.sort_terms(&def.place, &env, &name, label.as_deref(), true)?;
-        let open: Vec<Axis> = match spec.open_axes {
-            Some(OpenAxes::None) | None => Vec::new(),
-            Some(OpenAxes::AlongPieceLength) => vec![length_axis],
-            Some(OpenAxes::Both) => vec![length_axis, width_axis],
-        };
-        let size_along = |axis: Axis| -> ExactLength {
-            if axis == length_axis {
-                env_length
-            } else if axis == width_axis {
-                env_width
-            } else {
-                env_thickness
-            }
-        };
-        for axis in Axis::ALL {
-            let term = terms.axis(axis).cloned();
-            match (term, open.contains(&axis)) {
+        let piece_role = RoleIndex::new(0).ok_or(Reported)?;
+        // `place { }` positions the box around the members on the piece.
+        let carried: Option<FrameBox> = frame_bodies
+            .iter()
+            .filter(|(id, _)| {
+                kind.bodies.get(id.index()).map(|body| body.with) == Some(Carrier::Role(piece_role))
+            })
+            .flat_map(|(_, boxes)| boxes.iter().map(|(b, _, _)| *b))
+            .reduce(|a, b| a.union(&b));
+        for world in Axis::ALL {
+            let term = terms.axis(world).cloned();
+            let frame_axis = [FrameAxis::Along, FrameAxis::Across, FrameAxis::Depth]
+                .into_iter()
+                .find(|axis| frame.direction(*axis).axis() == world)
+                .ok_or(Reported)?;
+            match (term, open.contains(&frame_axis)) {
                 (Some(term), false) => {
-                    let why = if axis == face_axis {
+                    let why = if world == face_axis {
                         "the mount face already fixes it"
                     } else {
-                        "the hardware's base already fixes it"
+                        "the hardware's kind already fixes it"
                     };
                     self.report(
                         Diagnostic::error(
                             Code::AxisSetTwice,
-                            format!("{name}: position along '{}' is set twice", axis.word()),
+                            format!("{name}: position along '{}' is set twice", world.word()),
                             Label::new(env.file, term.span),
                         )
                         .with_help(format!("remove this term: {why}")),
@@ -553,622 +740,744 @@ impl Solver<'_> {
                     return Err(Reported);
                 }
                 (Some(term), true) => {
+                    let Some(carried) = carried else {
+                        return Err(self.error(
+                            Code::MissingField,
+                            format!(
+                                "kind '{kind_name}' leaves '{}' open but has no member on its piece to place",
+                                frame_axis.word()
+                            ),
+                            env.file,
+                            term.span,
+                            "give the kind a member with: piece and a shape, or set the axis in its mount",
+                        ));
+                    };
+                    let (low, high) = carried.range(frame_axis);
+                    let size = high.checked_sub(low).ok_or(Reported)?;
                     let count = self.hardware_siblings(hardware);
                     let siblings = Siblings {
                         index: inst.ctx.element.unwrap_or(0),
-                        sizes: vec![size_along(axis); count],
+                        sizes: vec![size; count],
                         part: None,
                     };
-                    let low =
-                        self.term_low(&term, axis, size_along(axis), &env, Some(&siblings))?;
-                    if let Some(slot) = lows.get_mut(world_index(axis)) {
-                        *slot = Some(low);
+                    let placed_low = self.term_low(&term, world, size, &env, Some(&siblings))?;
+                    let origin = if frame.direction(frame_axis).is_positive() {
+                        placed_low.checked_sub(low)
+                    } else {
+                        placed_low.checked_add(high)
+                    }
+                    .ok_or(Reported)?;
+                    if let Some(slot) = frame.origin.get_mut(world_index(world)) {
+                        *slot = origin;
                     }
                 }
                 (None, true) => {
                     let place_span = def.place_span.unwrap_or(def.decl.span);
-                    return Err(self.axis_not_set(&name, axis, env.file, place_span));
+                    return Err(self.axis_not_set(&name, world, env.file, place_span));
                 }
                 (None, false) => {}
             }
         }
-        let mut extents = Vec::new();
-        for axis in [Axis::Across, Axis::Up, Axis::Deep] {
-            let low = lows
-                .get(world_index(axis))
-                .copied()
-                .flatten()
-                .ok_or(Reported)?;
-            extents.push((low, low.checked_add(size_along(axis)).ok_or(Reported)?));
-        }
-        let [across, up, deep] = extents.as_slice() else {
-            return Err(Reported);
-        };
-        let bounds = ExactBox::new(*across, *up, *deep);
-        let orientation = Orientation::new(length_direction, width_direction, thickness_direction)
-            .map_err(|_| Reported)?;
-        // Data, bores and motion.
-        let centre_of = |axis: Axis| midpoint(bounds.min(axis), bounds.max(axis)).ok_or(Reported);
-        let mut centre = [ExactLength::ZERO; 3];
-        for axis in Axis::ALL {
-            if let Some(slot) = centre.get_mut(world_index(axis)) {
-                *slot = if axis == face_axis {
-                    face_position
-                } else {
-                    centre_of(axis)?
-                };
+        // Every member at rest: its own mount, then the frame.
+        let mut all_offsets = Vec::new();
+        let mut bodies = Vec::new();
+        for (id, boxes) in &frame_bodies {
+            let Some(body) = kind.bodies.get(id.index()) else {
+                return Err(Reported);
+            };
+            let mut offsets: Vec<(FrameAxis, ExactLength)> = Vec::new();
+            for placement in &body.mount {
+                let world = frame.direction(placement.axis).axis();
+                let (_, at) =
+                    self.term_plane(binding, &kind, mount_face, world, &placement.from)?;
+                let offset = frame.coordinate(placement.axis, at)?;
+                offsets.push((placement.axis, offset));
+                all_offsets.push((*id, placement.axis, offset));
             }
-        }
-        let mut fixed = None;
-        let mut recesses = Vec::new();
-        let mut envelope = envelope;
-        let mut bounds = bounds;
-        let (data, bore, motion) = match kind.base {
-            BaseKind::Slide => {
-                // Two members, each half the thickness: the drawer member
-                // against the piece, the cabinet member outside it.
-                if let Envelope::Box {
-                    length,
-                    width,
-                    thickness,
-                } = envelope
-                {
-                    let half_thickness = half(thickness)?;
-                    let middle =
-                        midpoint(bounds.min(face_axis), bounds.max(face_axis)).ok_or(Reported)?;
-                    let (near, far) = if mount_direction.is_positive() {
-                        (
-                            (bounds.min(face_axis), middle),
-                            (middle, bounds.max(face_axis)),
-                        )
-                    } else {
-                        (
-                            (middle, bounds.max(face_axis)),
-                            (bounds.min(face_axis), middle),
-                        )
-                    };
-                    envelope = Envelope::Box {
-                        length,
-                        width,
-                        thickness: half_thickness,
-                    };
-                    fixed = Some(Member {
-                        envelope,
-                        bounds: bounds.with(face_axis, far.0, far.1),
-                        orientation,
-                    });
-                    bounds = bounds.with(face_axis, near.0, near.1);
-                }
-                let Some(Value::Region(opening)) = binding.roles.get(1).cloned() else {
-                    return Err(Reported);
-                };
-                let travel = self.required_length(&binding, "travel", &env, span, &kind_name)?;
-                let data = Data::Slide {
-                    length: self.required_length(&binding, "length", &env, span, &kind_name)?,
-                    clearance: self.required_length(
-                        &binding,
-                        "clearance",
-                        &env,
-                        span,
-                        &kind_name,
-                    )?,
-                    travel,
-                    opening,
-                };
-                (
-                    data,
-                    None,
-                    Some(MotionExact::Travel {
-                        toward: Direction::Front,
-                        travel,
-                    }),
-                )
-            }
-            BaseKind::Hinge => {
-                let on = on_part.ok_or(Reported)?;
-                let angle = match self.hardware_entry(&binding, "opening_angle", &env, span)? {
-                    Some(Value::Angle(angle)) => angle,
-                    _ => {
-                        return Err(self.error(
-                            Code::MissingField,
-                            format!("kind '{kind_name}' is missing 'opening_angle'"),
-                            env.file,
-                            span,
-                            "give the kind opening_angle: ...",
-                        ));
-                    }
-                };
-                // The door's edge nearer `on` (a butt hinge's pin edge): the
-                // cup or leaf is measured from it and the door turns about it.
-                let edge = if width_direction.is_positive() {
-                    piece_box.min(width_axis)
-                } else {
-                    piece_box.max(width_axis)
-                };
-                if let Some(HingeStyle::Butt { leaf }) = hinge_style {
-                    let leaf = self.butt_hinge(
-                        &name,
-                        piece,
-                        on,
-                        mount_face,
-                        face_position,
-                        bounds,
-                        &env,
-                        span,
-                        leaf,
-                    )?;
-                    let mut through = [ExactLength::ZERO; 3];
-                    for axis in Axis::ALL {
-                        if let Some(slot) = through.get_mut(world_index(axis)) {
-                            *slot = if axis == face_axis {
-                                face_position
-                            } else if axis == width_axis {
-                                edge
-                            } else {
-                                piece_box.min(axis)
-                            };
-                        }
-                    }
-                    let (fixed_bounds, depth) = leaf;
-                    fixed = Some(Member {
-                        envelope,
-                        bounds: fixed_bounds,
-                        orientation: Orientation::new(
-                            length_direction,
-                            width_direction,
-                            mount_direction,
-                        )
-                        .map_err(|_| Reported)?,
-                    });
-                    recesses = vec![
-                        Recess {
-                            part: piece,
-                            face: mount_face,
-                            bounds,
-                            depth,
-                        },
-                        Recess {
-                            part: on,
-                            face: mount_face.opposite(),
-                            bounds: fixed_bounds,
-                            depth,
-                        },
-                    ];
-                    let motion = MotionExact::Turn {
-                        axis: length_axis,
-                        through,
-                        free_side: width_direction,
-                        swing_toward: mount_face.opposite().direction(),
-                        angle,
-                    };
-                    (
-                        Data::ButtHinge {
-                            opening_angle: angle,
-                            on,
-                        },
-                        None,
-                        Some(motion),
-                    )
-                } else {
-                    let Some(HingeStyle::Cup {
-                        diameter: cup_diameter,
-                        depth: cup_depth,
-                        inset: cup_inset,
-                    }) = hinge_style
-                    else {
-                        return Err(Reported);
-                    };
-                    let offset = cup_inset.checked_add(half(cup_diameter)?).ok_or(Reported)?;
-                    let cup_centre = if width_direction.is_positive() {
-                        edge.checked_add(offset)
-                    } else {
-                        edge.checked_sub(offset)
-                    }
-                    .ok_or(Reported)?;
-                    let mut bore_centre = centre;
-                    if let Some(slot) = bore_centre.get_mut(world_index(width_axis)) {
-                        *slot = cup_centre;
-                    }
-                    let opposite_face = mount_face.opposite();
-                    let opposite_position = if opposite_face.is_positive() {
-                        piece_box.max(face_axis)
-                    } else {
-                        piece_box.min(face_axis)
-                    };
-                    let mut through = [ExactLength::ZERO; 3];
-                    for axis in Axis::ALL {
-                        if let Some(slot) = through.get_mut(world_index(axis)) {
-                            *slot = if axis == face_axis {
-                                opposite_position
-                            } else if axis == width_axis {
-                                edge
-                            } else {
-                                piece_box.min(axis)
-                            };
-                        }
-                    }
-                    let length_centre = centre_of(length_axis)?;
-                    let plate = self.hinge_plate(
-                        &binding,
-                        &env,
-                        span,
-                        &kind_name,
-                        on,
-                        HingeFrame {
-                            length_direction,
-                            length_centre,
-                            toward_door_middle: width_direction,
-                            mount_direction,
-                        },
-                    )?;
-                    // The piece's thickness at the mount face: the frame's
-                    // origin is on its opposite face.
-                    let thickness = abs(opposite_position
-                        .checked_sub(face_position)
-                        .ok_or(Reported)?)?;
-                    if let Some(slot) = through.get_mut(world_index(length_axis)) {
-                        *slot = length_centre;
-                    }
-                    let linkage = self.cup_linkage(
-                        &name,
-                        CupFrame {
-                            axis: length_axis,
-                            origin: through,
-                            free_side: width_direction,
-                            swing_toward: opposite_face.direction(),
-                            cup_x: offset,
-                            thickness,
-                        },
-                        angle,
-                        &env,
-                        span,
-                    )?;
-                    let (arm, knuckle) = cup_arm(
-                        &plate,
-                        CupArmFrame {
-                            length_direction,
-                            length_centre,
-                            width_direction,
-                            cup_centre,
-                            mount_direction,
-                            face_position,
-                        },
-                    )?;
-                    let widest = CUP_HINGE_110
-                        .links
+            let mut shapes = Vec::new();
+            for (frame_box, cylinder, outline) in boxes {
+                let mut moved = *frame_box;
+                let offset_on = |axis: FrameAxis| {
+                    offsets
                         .iter()
-                        .map(|link| link.width)
-                        .max()
-                        .unwrap_or(0);
-                    mechanism = Some(Mechanism {
-                        arm,
-                        knuckle,
-                        links: CUP_HINGE_110.links.map(|link| LinkBar {
-                            width: Length::from_nm(link.width),
-                            thickness: Length::from_nm(CUP_HINGE_110.link_thickness),
-                            slot: Length::from_nm(link.slot),
-                        }),
-                        pin_diameter: Length::from_nm(CUP_HINGE_110.pin_diameter),
-                        pin_length: Length::from_nm(widest),
-                    });
-                    // The overlay: from the piece's edge nearer `on` to the
-                    // face of `on` the plate is screwed to.
-                    let on_box = self.drawn_box(on)?;
-                    let inside_face = if width_direction.is_positive() {
-                        on_box.max(width_axis)
-                    } else {
-                        on_box.min(width_axis)
-                    };
-                    let overlay = if width_direction.is_positive() {
-                        inside_face.checked_sub(edge)
-                    } else {
-                        edge.checked_sub(inside_face)
-                    }
-                    .ok_or(Reported)?;
-                    let overlay_range =
-                        match self.hardware_length(&binding, "base_overlay", &env, span)? {
-                            Some(base) => Some(OverlayRangeExact {
-                                base,
-                                plate_height: self
-                                    .hardware_length(&binding, "plate_height", &env, span)?
-                                    .unwrap_or(ExactLength::ZERO),
-                                adjustment: self
-                                    .hardware_length(&binding, "overlay_adjustment", &env, span)?
-                                    .unwrap_or(ExactLength::ZERO),
-                            }),
-                            None => None,
-                        };
-                    fixed = Some(plate);
-                    let data = Data::Hinge {
-                        opening_angle: angle,
-                        cup_diameter,
-                        cup_depth,
-                        cup_inset,
-                        on,
-                        overlay,
-                        overlay_range,
-                    };
-                    let bore = Bore {
-                        centre: bore_centre,
-                        diameter: cup_diameter,
-                        depth: Some(cup_depth),
-                        count: 1,
-                        centres: None,
-                    };
-                    (data, Some(bore), Some(MotionExact::Linkage(linkage)))
-                }
-            }
-            BaseKind::Pull | BaseKind::Joint | BaseKind::Fastener | BaseKind::Tool => {
-                let centres = self.hardware_length(&binding, "centres", &env, span)?;
-                let diameter = self.hardware_length(&binding, "diameter", &env, span)?;
-                let screw_diameter = self
-                    .hardware_length(&binding, "screw_diameter", &env, span)?
-                    .unwrap_or_else(|| mm(stave_schema::kinds::DEFAULT_SCREW_DIAMETER_NM));
-                let bore = Bore {
-                    centre,
-                    diameter: screw_diameter,
-                    depth: None,
-                    count: if centres.is_some() { 2 } else { 1 },
-                    centres,
+                        .filter(|(on, _)| *on == axis)
+                        .map(|(_, by)| *by)
+                        .try_fold(ExactLength::ZERO, |sum, by| sum.checked_add(by))
+                        .ok_or(Reported)
                 };
-                (
-                    Data::Pull {
-                        centres,
-                        diameter,
-                        screw_diameter,
-                    },
-                    Some(bore),
-                    None,
-                )
+                let outline = match outline {
+                    Some(outline) => Some(
+                        outline
+                            .moved(offset_on(FrameAxis::Across)?, offset_on(FrameAxis::Depth)?)?,
+                    ),
+                    None => None,
+                };
+                for (axis, offset) in &offsets {
+                    let (low, high) = moved.range(*axis);
+                    moved = moved.with(
+                        *axis,
+                        (
+                            low.checked_add(*offset).ok_or(Reported)?,
+                            high.checked_add(*offset).ok_or(Reported)?,
+                        ),
+                    );
+                }
+                shapes.push(PlacedShape {
+                    frame: moved,
+                    world: frame.world_box(&moved)?,
+                    cylinder: *cylinder,
+                    outline,
+                });
             }
+            bodies.push(PlacedBody { body: *id, shapes });
+        }
+        let mount = AnchorValue {
+            axis: face_axis,
+            position: face_position,
+            face: Some(mount_face),
+            owner: AnchorOwner::Part(piece),
         };
-        Ok(Placed {
-            kind: binding.kind,
-            kind_name: binding.name.clone(),
-            base: kind.base,
+        Ok(Rest {
             piece,
+            piece_box,
+            piece_orientation,
             mount_face,
-            envelope,
-            bounds,
-            orientation,
-            fixed,
-            data,
-            bore,
-            recesses,
-            motion,
-            mechanism,
-            model,
+            mount,
+            frame,
+            bodies,
+            offsets: all_offsets,
         })
     }
 
-    /// A cup hinge's linkage: the built-in mechanism's pins, placed
-    /// relative to the cup, checked over the opening angle.
-    fn cup_linkage(
+    /// Every member with a body at rest in the world, with what moves it.
+    fn placed_members(
         &mut self,
-        name: &str,
-        frame: CupFrame,
-        angle: ExactAngle,
-        env: &Env<'_>,
-        span: Span,
-    ) -> Solved<Linkage> {
-        let near = |value: ExactLength| value.to_nearest_length().ok_or(Reported);
-        let coordinate = |axis: Axis| -> Solved<Length> {
-            near(*frame.origin.get(world_index(axis)).ok_or(Reported)?)
-        };
-        let origin = Point {
-            across: coordinate(Axis::Across)?,
-            up: coordinate(Axis::Up)?,
-            deep: coordinate(Axis::Deep)?,
-        };
-        let world = LinkageFrame::new(frame.axis, origin, frame.free_side, frame.swing_toward)
-            .map_err(|_| Reported)?;
-        let place = |point: CupPoint| -> Solved<PlanePoint> {
-            let x = frame
-                .cup_x
-                .checked_add(Length::from_nm(point.x).to_exact())
-                .ok_or(Reported)?;
-            let y = Length::from_nm(point.y)
-                .to_exact()
-                .checked_sub(frame.thickness)
-                .ok_or(Reported)?;
-            Ok(PlanePoint::new(near(x)?, near(y)?))
-        };
-        let [inner, outer] = CUP_HINGE_110.links;
-        let links = [
-            Link {
-                ground: place(inner.arm)?,
-                coupler: place(inner.boss)?,
-            },
-            Link {
-                ground: place(outer.arm)?,
-                coupler: place(outer.boss)?,
-            },
-        ];
-        let opening = angle.to_nearest_angle().ok_or(Reported)?;
-        let widest = stave_lang::units::Angle::from_microdeg(CUP_HINGE_110.max_opening);
-        if opening > widest {
-            return Err(self.error(
-                Code::OutOfRange,
-                format!(
-                    "'opening_angle' must be within 0deg..{widest} for a cup hinge, found {opening}"
-                ),
-                env.file,
-                span,
-                format!(
-                    "give {name} an opening_angle of at most {widest}: Stave models the common {widest} cup hinge; wide-angle hinges have a different mechanism, not modelled yet"
-                ),
-            ));
-        }
-        match Linkage::new(world, links, opening) {
-            Ok(linkage) => Ok(linkage),
-            Err(LinkageError::DeadPoint(_) | LinkageError::Angle) => {
-                Err(self.error(
-                    Code::Motion,
-                    format!(
-                        "{name}: a cup hinge's links lock before it opens {opening}"
-                    ),
-                    env.file,
-                    span,
-                    format!(
-                        "give the hinge an opening_angle of at most {widest} (wider hinges have a mechanism Stave doesn't model yet)"
-                    ),
-                ))
-            }
-            Err(_) => Err(Reported),
-        }
-    }
-
-    /// A butt hinge's second leaf: the moving leaf (`leaf_bounds`, sunk
-    /// into the piece's mount face) reflected through the mount face's
-    /// plane into `on`, which must lie against that face. Returns the
-    /// fixed leaf's bounds and the depth of both mortises.
-    #[allow(clippy::too_many_arguments)]
-    fn butt_hinge(
-        &mut self,
-        name: &str,
-        piece: PartId,
-        on: PartId,
-        mount_face: Face,
-        face_position: ExactLength,
-        leaf_bounds: ExactBox,
-        env: &Env<'_>,
-        span: Span,
-        leaf: Envelope,
-    ) -> Solved<(ExactBox, ExactLength)> {
-        let Envelope::Box { thickness, .. } = leaf else {
-            return Err(Reported);
-        };
-        let face_axis = mount_face.axis();
-        let on_box = self.drawn_box(on)?;
-        if on_box.min(face_axis) != face_position && on_box.max(face_axis) != face_position {
-            let (piece_name, on_name) = (self.part_name(piece), self.part_name(on));
-            return Err(self.error(
-                Code::NoContact,
-                format!("{name}: {piece_name} meets none of the parts it should join"),
-                env.file,
-                span,
-                format!(
-                    "a butt hinge's leaves meet where the {} face of {piece_name} lies against {on_name}; place them together, or name the face that does with face: ...",
-                    mount_face.word()
-                ),
-            ));
-        }
-        let twice = face_position
-            .checked_mul(Rational::from(2i64))
-            .ok_or(Reported)?;
-        let low = twice
-            .checked_sub(leaf_bounds.max(face_axis))
-            .ok_or(Reported)?;
-        let high = twice
-            .checked_sub(leaf_bounds.min(face_axis))
-            .ok_or(Reported)?;
-        Ok((leaf_bounds.with(face_axis, low, high), thickness))
-    }
-
-    /// A hinge's mounting plate: on the face of `on` that looks toward the
-    /// middle of the door, centred on the cup along the door's length, its
-    /// middle `plate_setback` back from the face of `on` the door closes
-    /// against.
-    fn hinge_plate(
-        &mut self,
-        binding: &Binding,
-        env: &Env<'_>,
-        span: Span,
-        kind_name: &str,
-        on: PartId,
-        frame: HingeFrame,
-    ) -> Solved<Member> {
-        let setback = self.required_length(binding, "plate_setback", env, span, kind_name)?;
-        let envelope = match self.hardware_entry(binding, "plate", env, span)? {
-            Some(Value::Envelope(envelope @ Envelope::Box { .. })) => envelope,
-            Some(Value::Envelope(Envelope::Cylinder { .. })) => {
-                return Err(self.error(
-                    Code::TypeMismatch,
-                    format!("kind '{kind_name}': a hinge's plate is a box"),
-                    env.file,
-                    span,
-                    "write plate: box(length: ..., width: ..., thickness: ...)",
-                ));
-            }
-            _ => {
+        kind: &KindDef,
+        roles: &[(String, RoleBound)],
+        bodies: &[PlacedBody],
+        frame: &Frame,
+    ) -> Solved<Vec<PlacedMember>> {
+        let mut members = Vec::with_capacity(bodies.len());
+        for placed in bodies {
+            let body = kind.bodies.get(placed.body.index()).ok_or(Reported)?;
+            let Some(carrier) = member_carrier(kind, roles, placed.body) else {
                 return Err(self.error(
                     Code::MissingField,
-                    format!("kind '{kind_name}' is missing 'plate'"),
-                    env.file,
+                    format!(
+                        "member '{}' has no 'with:' and nothing in its kind moves it",
+                        body.name.as_str()
+                    ),
+                    kind.decl.file,
+                    body.span,
+                    "give it with: a role or another member, or pin it in the kind's mechanism",
+                ));
+            };
+            let shapes = placed
+                .shapes
+                .iter()
+                .map(|shape| world_shape(shape, frame))
+                .collect::<Solved<Vec<_>>>()?;
+            members.push(PlacedMember {
+                body: placed.body,
+                name: body.name.as_str().to_owned(),
+                carrier,
+                shapes,
+            });
+        }
+        Ok(members)
+    }
+
+    /// The fasteners a kind's `uses:` names, for one piece of hardware.
+    fn hardware_fasteners(
+        &mut self,
+        binding: &Binding,
+        kind: &KindDef,
+        uses: &[stave_model::defs::UseDef],
+    ) -> Solved<Vec<stave_model::solved::HardwareFastener>> {
+        let file = kind.decl.file;
+        let uses = uses.to_vec();
+        self.in_kind(binding, kind, |solver, kind_env| {
+            let mut out = Vec::new();
+            for used in &uses {
+                let Value::Kind(fastener) = solver.eval(&used.fastener, kind_env)? else {
+                    return Err(Reported);
+                };
+                let count = match &used.count {
+                    Some(count) => solver.eval_count(count, kind_env)?,
+                    None => 1,
+                };
+                let mut size = |name: &str| -> Solved<Length> {
+                    match solver.kind_entry(&fastener, name, file, used.span)? {
+                        Value::Length(length) => length.to_nearest_length().ok_or(Reported),
+                        _ => Err(Reported),
+                    }
+                };
+                let diameter = size("diameter")?;
+                let length = size("length")?;
+                let name = solver
+                    .model
+                    .defs
+                    .kind(fastener.kind)
+                    .map(|k| k.decl.name.clone())
+                    .unwrap_or_default();
+                out.push(stave_model::solved::HardwareFastener {
+                    kind: name,
+                    diameter,
+                    length,
+                    count,
+                });
+            }
+            Ok(out)
+        })
+    }
+
+    /// The roles of a piece of hardware, by name, in the kind's order.
+    fn hardware_roles(
+        &mut self,
+        kind: &KindDef,
+        binding: &Binding,
+    ) -> Solved<Vec<(String, RoleBound)>> {
+        kind.roles
+            .iter()
+            .zip(&binding.roles)
+            .map(|(role, value)| match value {
+                Value::Part(part) => Ok((role.name.clone(), RoleBound::Part(*part))),
+                Value::Region(region) => Ok((role.name.clone(), RoleBound::Region(*region))),
+                _ => Err(Reported),
+            })
+            .collect()
+    }
+
+    /// Every param and field of the kind, for one piece of hardware.
+    fn hardware_entries(
+        &mut self,
+        binding: &Binding,
+        kind: &KindDef,
+        file: stave_lang::FileId,
+        span: Span,
+    ) -> Solved<BTreeMap<String, Value>> {
+        let kind_env = KindEnv::new(
+            binding.kind,
+            binding.roles.clone(),
+            binding.settings.clone(),
+            kind.params.len(),
+        );
+        let mut entries = BTreeMap::new();
+        for (index, param) in kind.params.iter().enumerate() {
+            let value = self.kind_param(&kind_env, index, file, span)?;
+            entries.insert(param.decl.name.clone(), value);
+        }
+        let Some(ctx) = self.module_ctx(DefId::Kind(binding.kind)) else {
+            return Err(Reported);
+        };
+        let kind_eval = Env {
+            ctx,
+            file: kind.decl.file,
+            kind: Some(&kind_env),
+            array: None,
+        };
+        for field in &kind.fields {
+            let value = self.eval(&field.value, &kind_eval)?;
+            entries.insert(field.name.clone(), value);
+        }
+        Ok(entries)
+    }
+
+    /// The part a role of the hardware is bound to.
+    fn role_part(&mut self, binding: &Binding, role: RoleIndex) -> Solved<PartId> {
+        match binding.roles.get(role.index()) {
+            Some(Value::Part(part)) => Ok(*part),
+            _ => Err(Reported),
+        }
+    }
+
+    /// The box of the part or region a role is bound to.
+    fn role_box(&mut self, binding: &Binding, role: RoleIndex) -> Solved<ExactBox> {
+        match binding.roles.get(role.index()).cloned() {
+            Some(Value::Part(part)) => self.drawn_box(part),
+            Some(Value::Region(region)) => Ok(self.region_value(region)?.bounds),
+            _ => Err(Reported),
+        }
+    }
+
+    /// `face(piece, nearer: region)`: of the two faces across the piece's
+    /// thickness, the one nearer the same-named face of the region; the
+    /// lower one when they are equally near.
+    fn face_nearer(
+        &mut self,
+        binding: &Binding,
+        part: RoleIndex,
+        region: RoleIndex,
+    ) -> Solved<Face> {
+        let part_id = self.role_part(binding, part)?;
+        let part_box = self.drawn_box(part_id)?;
+        let region_box = self.role_box(binding, region)?;
+        let axis = self
+            .part_orientation(part_id)?
+            .direction(PartAxis::Thickness)
+            .axis();
+        let low = part_box
+            .min(axis)
+            .checked_sub(region_box.min(axis))
+            .ok_or(Reported)?;
+        let high = region_box
+            .max(axis)
+            .checked_sub(part_box.max(axis))
+            .ok_or(Reported)?;
+        let positive = abs(high)? < abs(low)?;
+        Face::ALL
+            .into_iter()
+            .find(|face| face.axis() == axis && face.is_positive() == positive)
+            .ok_or(Reported)
+    }
+
+    /// The plane a `from(anchor, inset: d)` names across a world axis, and
+    /// the origin's coordinate on it.
+    fn term_plane(
+        &mut self,
+        binding: &Binding,
+        kind: &KindDef,
+        mount_face: Face,
+        axis: Axis,
+        from: &FromTerm,
+    ) -> Solved<(Plane, ExactLength)> {
+        let plane = self.anchor_plane(binding, kind, mount_face, axis, &from.anchor, from.span)?;
+        let inset = match &from.inset {
+            Some(inset) => {
+                let inset = inset.clone();
+                self.in_kind(binding, kind, |solver, kind_env| {
+                    solver.kind_length(&inset, kind_env)
+                })?
+            }
+            None => ExactLength::ZERO,
+        };
+        let at = if plane.inward_positive {
+            plane.at.checked_add(inset)
+        } else {
+            plane.at.checked_sub(inset)
+        }
+        .ok_or(Reported)?;
+        Ok((plane, at))
+    }
+
+    /// The world plane of an anchor, across a world axis.
+    fn anchor_plane(
+        &mut self,
+        binding: &Binding,
+        kind: &KindDef,
+        mount_face: Face,
+        axis: Axis,
+        anchor: &MountSelector,
+        span: Span,
+    ) -> Solved<Plane> {
+        let file = kind.decl.file;
+        let side = |part_box: &ExactBox, high: bool| Plane {
+            at: if high {
+                part_box.max(axis)
+            } else {
+                part_box.min(axis)
+            },
+            inward_positive: !high,
+        };
+        let middle = |b: &ExactBox| midpoint(b.min(axis), b.max(axis)).ok_or(Reported);
+        let nearer_high = |part_box: &ExactBox, target: ExactLength| -> Solved<bool> {
+            let low = abs(target.checked_sub(part_box.min(axis)).ok_or(Reported)?)?;
+            let high = abs(target.checked_sub(part_box.max(axis)).ok_or(Reported)?)?;
+            Ok(high < low)
+        };
+        let across_the_face = |solver: &mut Self, what: &str| -> Solved<()> {
+            if axis == mount_face.axis() {
+                return Err(solver.error(
+                    Code::TypeMismatch,
+                    format!("{what} is not across this axis"),
+                    file,
                     span,
-                    "give the kind plate: box(length: ..., width: ..., thickness: ...)",
+                    "an edge or an end of the mount face places across or along it, not into it",
                 ));
             }
+            Ok(())
         };
-        let Envelope::Box {
-            length,
-            width,
-            thickness,
-        } = envelope
+        match *anchor {
+            MountSelector::EdgeNearer { part, other } => {
+                across_the_face(self, "an edge")?;
+                let part_box = self.role_box(binding, part)?;
+                let target = middle(&self.role_box(binding, other)?)?;
+                Ok(side(&part_box, nearer_high(&part_box, target)?))
+            }
+            MountSelector::EdgeFlushWith { part, other } => {
+                across_the_face(self, "an edge")?;
+                let part_box = self.role_box(binding, part)?;
+                let other_box = self.role_box(binding, other)?;
+                let flush =
+                    |edge: ExactLength| edge == other_box.min(axis) || edge == other_box.max(axis);
+                let high = match (flush(part_box.min(axis)), flush(part_box.max(axis))) {
+                    (true, false) => false,
+                    (false, true) => true,
+                    (true, true) | (false, false) => nearer_high(&part_box, middle(&other_box)?)?,
+                };
+                Ok(side(&part_box, high))
+            }
+            MountSelector::EndToward { part, toward } => {
+                let part_id = self.role_part(binding, part)?;
+                let length = self
+                    .part_orientation(part_id)?
+                    .direction(PartAxis::Length)
+                    .axis();
+                if length != toward.axis() {
+                    let name = self.part_name(part_id);
+                    return Err(self.error(
+                        Code::TypeMismatch,
+                        format!(
+                            "end({name}, toward: {}) needs {name}'s length to run {}, but it runs along '{}'",
+                            toward.word(),
+                            toward.word(),
+                            length.word()
+                        ),
+                        file,
+                        span,
+                        "name a direction the part's length runs in, or turn the part so its length runs that way",
+                    ));
+                }
+                if toward.axis() != axis {
+                    return Err(self.error(
+                        Code::TypeMismatch,
+                        format!(
+                            "an end toward {} places along '{}', not along '{}'",
+                            toward.word(),
+                            toward.axis().word(),
+                            axis.word()
+                        ),
+                        file,
+                        span,
+                        "measure along from an end, and across from an edge",
+                    ));
+                }
+                let part_box = self.drawn_box(part_id)?;
+                Ok(side(&part_box, toward.is_positive()))
+            }
+            MountSelector::FaceToward { part, other } => {
+                let part_box = self.role_box(binding, part)?;
+                let target = middle(&self.role_box(binding, other)?)?;
+                Ok(side(&part_box, nearer_high(&part_box, target)?))
+            }
+            MountSelector::Crossing { part, other } => {
+                let part_box = self.role_box(binding, part)?;
+                let other_box = self.role_box(binding, other)?;
+                let within =
+                    |at: ExactLength| at >= other_box.min(axis) && at <= other_box.max(axis);
+                let high = match (within(part_box.min(axis)), within(part_box.max(axis))) {
+                    (true, false) => false,
+                    (false, true) => true,
+                    (true, true) | (false, false) => nearer_high(&part_box, middle(&other_box)?)?,
+                };
+                Ok(side(&part_box, high))
+            }
+        }
+    }
+
+    /// A shape's box in the kind's frame, the axis of a cylinder and the
+    /// outline of a prism or a bar.
+    fn shape_box(
+        &mut self,
+        shape: &ShapeDef,
+        env: &Env<'_>,
+    ) -> Solved<(FrameBox, Option<FrameAxis>, Option<Outline>)> {
+        match shape {
+            ShapeDef::Box { .. } => Ok((self.frame_box(shape, env)?, None, None)),
+            ShapeDef::Cylinder {
+                diameter,
+                extent,
+                at,
+                axis,
+            } => {
+                let radius = half(self.kind_length(diameter, env)?)?;
+                let centre = self.kind_point(at, env)?;
+                let range = self.frame_range(extent, env)?;
+                let around = |value: ExactLength| -> Solved<(ExactLength, ExactLength)> {
+                    Ok((
+                        value.checked_sub(radius).ok_or(Reported)?,
+                        value.checked_add(radius).ok_or(Reported)?,
+                    ))
+                };
+                let frame_box = FrameBox {
+                    along: if *axis == FrameAxis::Along {
+                        range
+                    } else {
+                        around(centre.along)?
+                    },
+                    across: if *axis == FrameAxis::Across {
+                        range
+                    } else {
+                        around(centre.across)?
+                    },
+                    depth: if *axis == FrameAxis::Depth {
+                        range
+                    } else {
+                        around(centre.depth)?
+                    },
+                };
+                Ok((frame_box, Some(*axis), None))
+            }
+            ShapeDef::Prism { points, along } => {
+                let mut points_out = Vec::new();
+                for point in points.iter() {
+                    points_out.push(self.kind_point(point, env)?);
+                }
+                let along = self.frame_range(along, env)?;
+                let bounds = |pick: fn(&ExactPoint) -> ExactLength| {
+                    let values: Vec<ExactLength> = points_out.iter().map(pick).collect();
+                    match (values.iter().min(), values.iter().max()) {
+                        (Some(low), Some(high)) => Ok((*low, *high)),
+                        _ => Err(Reported),
+                    }
+                };
+                let outline =
+                    Outline::Prism(points_out.iter().map(|p| [p.across, p.depth]).collect());
+                Ok((
+                    FrameBox {
+                        along,
+                        across: bounds(|p| p.across)?,
+                        depth: bounds(|p| p.depth)?,
+                    },
+                    None,
+                    Some(outline),
+                ))
+            }
+            ShapeDef::Bar {
+                from,
+                to,
+                thickness,
+                along,
+            } => {
+                // Conservative: the segment's box grown by the bar's whole
+                // thickness holds the bar whichever way it lies.
+                let from = self.kind_point(from, env)?;
+                let to = self.kind_point(to, env)?;
+                let grow = self.kind_length(thickness, env)?;
+                let span = |a: ExactLength, b: ExactLength| -> Solved<(ExactLength, ExactLength)> {
+                    Ok((
+                        a.min(b).checked_sub(grow).ok_or(Reported)?,
+                        a.max(b).checked_add(grow).ok_or(Reported)?,
+                    ))
+                };
+                Ok((
+                    FrameBox {
+                        along: self.frame_range(along, env)?,
+                        across: span(from.across, to.across)?,
+                        depth: span(from.depth, to.depth)?,
+                    },
+                    None,
+                    Some(Outline::Bar {
+                        from: [from.across, from.depth],
+                        to: [to.across, to.depth],
+                        thickness: grow,
+                    }),
+                ))
+            }
+        }
+    }
+
+    /// Every part the hardware joins must meet it: at least one member that
+    /// part carries touches or enters it at rest.
+    #[allow(clippy::too_many_arguments)]
+    fn check_contact(
+        &mut self,
+        name: &str,
+        kind: &KindDef,
+        roles: &[(String, RoleBound)],
+        bodies: &[PlacedBody],
+        piece: PartId,
+        file: stave_lang::FileId,
+        span: Span,
+    ) -> Solved<()> {
+        for (index, (_, bound)) in roles.iter().enumerate() {
+            let RoleBound::Part(part) = bound else {
+                continue;
+            };
+            let role = RoleIndex::new(index).ok_or(Reported)?;
+            let carried: Vec<&PlacedBody> = bodies
+                .iter()
+                .filter(|placed| {
+                    kind.bodies
+                        .get(placed.body.index())
+                        .is_some_and(|body| body.with == Carrier::Role(role))
+                })
+                .collect();
+            if carried.is_empty() {
+                continue;
+            }
+            let part_box = self.drawn_box(*part)?;
+            let meets = carried
+                .iter()
+                .flat_map(|placed| placed.shapes.iter())
+                .any(|shape| meets(&shape.world, &part_box));
+            if !meets {
+                let piece_name = self.part_name(piece);
+                let part_name = self.part_name(*part);
+                let members: Vec<&str> = carried
+                    .iter()
+                    .filter_map(|placed| kind.bodies.get(placed.body.index()))
+                    .map(|body| body.name.as_str())
+                    .collect();
+                return Err(self.error(
+                    Code::NoContact,
+                    format!("{name}: {piece_name} meets none of the parts it should join"),
+                    file,
+                    span,
+                    format!(
+                        "its {} must touch {part_name}: place {piece_name} so its mount face lies where the kind needs it, or name the face that does with face: ...",
+                        members.join(" and ")
+                    ),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// The cuts a kind makes for one piece of hardware: one per shape of
+    /// the member each cut names.
+    #[allow(clippy::too_many_arguments)]
+    fn hardware_cuts(
+        &mut self,
+        binding: &Binding,
+        kind: &KindDef,
+        cuts: &[stave_model::defs::HardwareCutDef],
+        roles: &[(String, RoleBound)],
+        bodies: &[PlacedBody],
+        frame: &Frame,
+        name: &str,
+        file: stave_lang::FileId,
+        span: Span,
+    ) -> Solved<Vec<HardwareCut>> {
+        let mut out = Vec::new();
+        for cut in cuts {
+            let Some((_, RoleBound::Part(part))) = roles.get(cut.part.index()).cloned() else {
+                return Err(Reported);
+            };
+            let Some(placed) = bodies.iter().find(|placed| placed.body == cut.body) else {
+                return Err(Reported);
+            };
+            let operations = cut.operations.clone();
+            let kinds = self.in_kind(binding, kind, |solver, kind_env| {
+                operations
+                    .iter()
+                    .map(|operation| solver.cut_kind(operation, kind_env))
+                    .collect::<Solved<Vec<_>>>()
+            })?;
+            let part_box = self.drawn_box(part)?;
+            for shape in &placed.shapes {
+                let Some(face) = crossing_face(&shape.world, &part_box, frame) else {
+                    let part_name = self.part_name(part);
+                    let member = kind
+                        .bodies
+                        .get(cut.body.index())
+                        .map(|body| body.name.as_str().to_owned())
+                        .unwrap_or_default();
+                    return Err(self.error(
+                        Code::NoContact,
+                        format!("{name}: {member} meets none of the parts it should join"),
+                        file,
+                        span,
+                        format!(
+                            "its {member} must touch or enter {part_name} for the kind's cut there"
+                        ),
+                    ));
+                };
+                for kind_of_cut in &kinds {
+                    out.push(HardwareCut {
+                        part,
+                        body: cut.body,
+                        name: cut.name.clone(),
+                        face,
+                        shape: shape.world,
+                        kind: kind_of_cut.clone(),
+                    });
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// The environment a hardware kind's own expressions are evaluated
+    /// in, for one piece of hardware, handed to `body`.
+    pub(crate) fn in_kind<T>(
+        &mut self,
+        binding: &Binding,
+        kind: &KindDef,
+        body: impl FnOnce(&mut Self, &Env<'_>) -> Solved<T>,
+    ) -> Solved<T> {
+        let kind_env = KindEnv::new(
+            binding.kind,
+            binding.roles.clone(),
+            binding.settings.clone(),
+            kind.params.len(),
+        );
+        let Some(ctx) = self.module_ctx(DefId::Kind(binding.kind)) else {
+            return Err(Reported);
+        };
+        let env = Env {
+            ctx,
+            file: kind.decl.file,
+            kind: Some(&kind_env),
+            array: None,
+        };
+        body(self, &env)
+    }
+
+    pub(crate) fn kind_length(&mut self, expr: &RExpr, env: &Env<'_>) -> Solved<ExactLength> {
+        match self.eval(expr, env)? {
+            Value::Length(length) => Ok(length),
+            _ => Err(Reported),
+        }
+    }
+
+    pub(crate) fn kind_angle(&mut self, expr: &RExpr, env: &Env<'_>) -> Solved<ExactAngle> {
+        match self.eval(expr, env)? {
+            Value::Angle(angle) => Ok(angle),
+            _ => Err(Reported),
+        }
+    }
+
+    pub(crate) fn kind_point(&mut self, point: &KindPoint, env: &Env<'_>) -> Solved<ExactPoint> {
+        Ok(ExactPoint {
+            along: self.kind_length(&point.along, env)?,
+            across: self.kind_length(&point.across, env)?,
+            depth: self.kind_length(&point.depth, env)?,
+        })
+    }
+
+    /// A range in the kind's frame, low end first.
+    pub(crate) fn frame_range(
+        &mut self,
+        range: &RangeDef,
+        env: &Env<'_>,
+    ) -> Solved<(ExactLength, ExactLength)> {
+        let (low, high) = match range {
+            RangeDef::Centred(size) => {
+                let half = half(self.kind_length(size, env)?)?;
+                (half.checked_neg().ok_or(Reported)?, half)
+            }
+            RangeDef::Between { low, high } => {
+                (self.kind_length(low, env)?, self.kind_length(high, env)?)
+            }
+        };
+        Ok((low.min(high), low.max(high)))
+    }
+
+    /// A box shape's three ranges.
+    pub(crate) fn frame_box(&mut self, shape: &ShapeDef, env: &Env<'_>) -> Solved<FrameBox> {
+        let ShapeDef::Box {
+            along,
+            across,
+            depth,
+        } = shape
         else {
             return Err(Reported);
         };
-        let on_box = self.drawn_box(on)?;
-        let HingeFrame {
-            length_direction,
-            length_centre,
-            toward_door_middle,
-            mount_direction,
-        } = frame;
-        let span_from = |start: ExactLength, size: ExactLength, positive: bool| {
-            if positive {
-                start.checked_add(size).map(|end| (start, end))
-            } else {
-                start.checked_sub(size).map(|end| (end, start))
-            }
-        };
-        // Across the door: standing off the inside face of `on`.
-        let inside_axis = toward_door_middle.axis();
-        let inside_face = if toward_door_middle.is_positive() {
-            on_box.max(inside_axis)
-        } else {
-            on_box.min(inside_axis)
-        };
-        let across =
-            span_from(inside_face, thickness, toward_door_middle.is_positive()).ok_or(Reported)?;
-        // Along the door's length: centred on the cup.
-        let along = (
-            length_centre.checked_sub(half(length)?).ok_or(Reported)?,
-            length_centre.checked_add(half(length)?).ok_or(Reported)?,
-        );
-        // Back from the face of `on` the door closes against.
-        let depth_axis = mount_direction.axis();
-        let closing_face = if mount_direction.is_positive() {
-            on_box.min(depth_axis)
-        } else {
-            on_box.max(depth_axis)
-        };
-        let middle = if mount_direction.is_positive() {
-            closing_face.checked_add(setback)
-        } else {
-            closing_face.checked_sub(setback)
-        }
-        .ok_or(Reported)?;
-        let back = (
-            middle.checked_sub(half(width)?).ok_or(Reported)?,
-            middle.checked_add(half(width)?).ok_or(Reported)?,
-        );
-        let mut extents = [(ExactLength::ZERO, ExactLength::ZERO); 3];
-        for (axis, extent) in [
-            (inside_axis, across),
-            (length_direction.axis(), along),
-            (depth_axis, back),
-        ] {
-            if let Some(slot) = extents.get_mut(world_index(axis)) {
-                *slot = extent;
-            }
-        }
-        let [x, y, z] = extents;
-        Ok(Member {
-            envelope,
-            bounds: ExactBox::new(x, y, z),
-            orientation: Orientation::new(length_direction, mount_direction, toward_door_middle)
-                .map_err(|_| Reported)?,
+        Ok(FrameBox {
+            along: self.frame_range(along, env)?,
+            across: self.frame_range(across, env)?,
+            depth: self.frame_range(depth, env)?,
         })
     }
 
@@ -1183,129 +1492,124 @@ impl Solver<'_> {
     }
 }
 
-/// Where a cup hinge's linkage goes: its frame, and where the cup is in
-/// it.
-struct CupFrame {
-    axis: Axis,
-    /// The frame's origin: on the door's edge nearer `on`, on the face
-    /// opposite the mount face, at the cup's centre along the door.
-    origin: [ExactLength; 3],
-    free_side: Direction,
-    swing_toward: Direction,
-    /// The cup's centre, from the door's edge.
-    cup_x: ExactLength,
-    /// The door's thickness: the mount face is this far behind the origin.
-    thickness: ExactLength,
-}
-
-/// Where a cup hinge's arm goes.
-struct CupArmFrame {
-    length_direction: Direction,
-    length_centre: ExactLength,
-    /// From the hinge edge toward the middle of the door.
-    width_direction: Direction,
-    /// The cup's centre across the door.
-    cup_centre: ExactLength,
-    /// Out of the door's back.
-    mount_direction: Direction,
-    /// The mount face's position along `mount_direction`'s axis.
-    face_position: ExactLength,
-}
-
-/// A cup hinge's arm, as two boxes: its body, from the back of its plate
-/// to the door's back face, and its knuckle, which reaches into the cup
-/// and carries the arm pins. Both are centred on the cup along the door.
-fn cup_arm(plate: &Member, frame: CupArmFrame) -> Solved<(Member, Member)> {
-    let mm = |nm: i64| Length::from_nm(nm).to_exact();
-    let width_axis = frame.width_direction.axis();
-    let across = |(low, high): (i64, i64)| -> Solved<(ExactLength, ExactLength)> {
-        Ok(if frame.width_direction.is_positive() {
-            (
-                frame.cup_centre.checked_add(mm(low)).ok_or(Reported)?,
-                frame.cup_centre.checked_add(mm(high)).ok_or(Reported)?,
-            )
-        } else {
-            (
-                frame.cup_centre.checked_sub(mm(high)).ok_or(Reported)?,
-                frame.cup_centre.checked_sub(mm(low)).ok_or(Reported)?,
-            )
-        })
-    };
-    let depth_axis = frame.mount_direction.axis();
-    let front = mm(CUP_HINGE_110.knuckle_front);
-    let (knuckle_front, far) = if frame.mount_direction.is_positive() {
-        (
-            frame.face_position.checked_sub(front).ok_or(Reported)?,
-            plate.bounds.max(depth_axis),
-        )
-    } else {
-        (
-            frame.face_position.checked_add(front).ok_or(Reported)?,
-            plate.bounds.min(depth_axis),
-        )
-    };
-    let ordered = |a: ExactLength, b: ExactLength| (a.min(b), a.max(b));
-    let half_width = half(mm(CUP_HINGE_110.arm_width))?;
-    let along = (
-        frame
-            .length_centre
-            .checked_sub(half_width)
-            .ok_or(Reported)?,
-        frame
-            .length_centre
-            .checked_add(half_width)
-            .ok_or(Reported)?,
-    );
-    let member = |across: (ExactLength, ExactLength), depth: (ExactLength, ExactLength)| {
-        let mut extents = [(ExactLength::ZERO, ExactLength::ZERO); 3];
-        for (axis, extent) in [
-            (width_axis, across),
-            (frame.length_direction.axis(), along),
-            (depth_axis, depth),
-        ] {
-            if let Some(slot) = extents.get_mut(world_index(axis)) {
-                *slot = extent;
+/// What moves a member: the part or region of the role it is `with:`
+/// (following the members it rides on), or the member the kind's
+/// mechanism places that it is (or rides on). `None` for a member nothing
+/// moves.
+fn member_carrier(
+    kind: &KindDef,
+    roles: &[(String, RoleBound)],
+    body: BodyId,
+) -> Option<MemberCarrier> {
+    let mut current = body;
+    // A member rides on at most every other member.
+    for _ in 0..=kind.bodies.len() {
+        match kind.bodies.get(current.index())?.with {
+            Carrier::Role(role) => {
+                return roles.get(role.index()).map(|(_, bound)| match *bound {
+                    RoleBound::Part(part) => MemberCarrier::Part(part),
+                    RoleBound::Region(region) => MemberCarrier::Region(region),
+                });
+            }
+            Carrier::Body(other) => current = other,
+            Carrier::Mechanism => {
+                return kind
+                    .mechanism
+                    .is_some()
+                    .then_some(MemberCarrier::Link(current));
             }
         }
-        let size = |(a, b): (ExactLength, ExactLength)| b.checked_sub(a).ok_or(Reported);
-        let envelope = Envelope::Box {
-            length: size(along)?,
-            width: size(depth)?,
-            thickness: size(across)?,
-        };
-        let [x, y, z] = extents;
-        Ok(Member {
-            envelope,
-            bounds: ExactBox::new(x, y, z),
-            orientation: Orientation::new(
-                frame.length_direction,
-                frame.mount_direction,
-                frame.width_direction,
-            )
-            .map_err(|_| Reported)?,
-        })
-    };
-    Ok((
-        member(
-            across(CUP_HINGE_110.arm_x)?,
-            ordered(frame.face_position, far),
-        )?,
-        member(
-            across(CUP_HINGE_110.knuckle_x)?,
-            ordered(frame.face_position, knuckle_front),
-        )?,
-    ))
+    }
+    None
 }
 
-/// Where a hinge's plate goes, from the placed cup.
-struct HingeFrame {
-    length_direction: Direction,
-    /// The cup's centre along the door's length.
-    length_centre: ExactLength,
-    /// From the hinge edge toward the middle of the door.
-    toward_door_middle: Direction,
-    /// The mount face's outward direction (out of the door's back).
-    mount_direction: Direction,
+/// A placed shape in the world, exactly.
+fn world_shape(shape: &PlacedShape, frame: &Frame) -> Solved<WorldShape> {
+    let along = frame.along.axis();
+    let low = shape.frame.along.0;
+    let point = |[across, depth]: [ExactLength; 2]| frame.world_point(low, across, depth);
+    Ok(match (&shape.outline, shape.cylinder) {
+        (Some(Outline::Prism(points)), _) => WorldShape::Prism {
+            axis: along,
+            points: points
+                .iter()
+                .map(|p| point(*p))
+                .collect::<Solved<Vec<_>>>()?,
+            bounds: shape.world,
+        },
+        (
+            Some(Outline::Bar {
+                from,
+                to,
+                thickness,
+            }),
+            _,
+        ) => WorldShape::Bar {
+            axis: along,
+            from: point(*from)?,
+            to: point(*to)?,
+            thickness: *thickness,
+            bounds: shape.world,
+        },
+        (None, Some(axis)) => WorldShape::Cylinder {
+            axis: frame.direction(axis).axis(),
+            bounds: shape.world,
+        },
+        (None, None) => WorldShape::Box(shape.world),
+    })
+}
+
+/// `true` when two boxes touch over an area or overlap.
+fn meets(a: &ExactBox, b: &ExactBox) -> bool {
+    let mut strict = 0;
+    for axis in Axis::ALL {
+        let low = a.min(axis).max(b.min(axis));
+        let high = a.max(axis).min(b.max(axis));
+        if low > high {
+            return false;
+        }
+        if low < high {
+            strict += 1;
+        }
+    }
+    strict >= 2
+}
+
+/// The face of a part a shape touches or enters (grammar, "Faces to
+/// cut"): across the frame's depth first, then across the other axes; on
+/// one axis, the face nearer the frame's origin when the shape passes
+/// right through.
+fn crossing_face(shape: &ExactBox, part: &ExactBox, frame: &Frame) -> Option<Face> {
+    let depth = frame.depth.axis();
+    let order = std::iter::once(depth).chain(Axis::ALL.into_iter().filter(|a| *a != depth));
+    for axis in order {
+        let area = Axis::ALL.into_iter().filter(|a| *a != axis).all(|other| {
+            shape.min(other).max(part.min(other)) < shape.max(other).min(part.max(other))
+        });
+        if !area {
+            continue;
+        }
+        let within = |at: ExactLength| at >= shape.min(axis) && at <= shape.max(axis);
+        let origin = frame.origin_on(axis);
+        let distance = |at: ExactLength| {
+            let d = at.checked_sub(origin)?;
+            if d < ExactLength::ZERO {
+                d.checked_neg()
+            } else {
+                Some(d)
+            }
+        };
+        let high = match (within(part.min(axis)), within(part.max(axis))) {
+            (true, false) => false,
+            (false, true) => true,
+            (true, true) => distance(part.max(axis))? < distance(part.min(axis))?,
+            (false, false) => continue,
+        };
+        return Face::ALL
+            .into_iter()
+            .find(|face| face.axis() == axis && face.is_positive() == high);
+    }
+    None
 }
 
 fn half(value: ExactLength) -> Solved<ExactLength> {

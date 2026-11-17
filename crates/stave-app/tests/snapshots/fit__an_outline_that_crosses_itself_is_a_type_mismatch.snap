@@ -1,0 +1,11 @@
+---
+source: crates/stave-app/tests/fit.rs
+expression: "rendered(\"tests/broken/outline_crosses_itself\")"
+---
+error[type-mismatch]: splice: the outline crosses itself between mark 3 and mark 4
+  --> tests/broken/outline_crosses_itself/project.stave:49:16
+   |
+49 | joint splice : marked_lap(beam_b, into: beam_a)
+   |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = note: splice: beam_b is drawn without this cut until it is fixed
+   = help: the marks go round the shape in order; the side from mark 3 to mark 4 meets the side from mark 1 to mark 2, so reorder the marks or move one

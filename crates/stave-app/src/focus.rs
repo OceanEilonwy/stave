@@ -29,8 +29,8 @@ use stave_lang::placement::Direction;
 use stave_lang::units::Length;
 use stave_model::defs::KindDef;
 use stave_model::solved::{
-    AssemblyId, CutKind, CutSource, Depth, Hardware, HardwareBase, HardwareData, HardwareId,
-    JointId, Motion, Part, PartId, SolvedDesign, StepAmount, StepKind,
+    AssemblyId, BodyCarrier, CutKind, CutSource, Depth, Hardware, HardwareBase, HardwareData,
+    HardwareId, JointId, Motion, Part, PartId, SolvedDesign, StepAmount, StepKind,
 };
 use stave_scene::focus::{
     Anchor, GapMark, MotionPlay, Plan, Play, StepPlay, amount_text, around, edge_point, hinge_view,
@@ -995,25 +995,22 @@ fn member_anchor(
     member: MemberName,
     nodes: &[NodeId],
 ) -> Option<Anchor> {
-    let suffix_of = |id: &NodeId| {
-        graph
-            .node(*id)
-            .and_then(|node| node.name.strip_prefix(hardware.name.as_str()))
-            .map(str::trim)
-    };
-    let pick = |test: &dyn Fn(&str) -> bool| -> Vec<NodeId> {
+    // What moves each of the hardware's nodes: the piece, a link of its
+    // mechanism, or something else.
+    let carrier_of = |id: &NodeId| graph.node(*id).and_then(|node| node.member).map(|(_, c)| c);
+    let on_piece = |carrier: BodyCarrier| carrier == BodyCarrier::Part(hardware.piece);
+    let is_link = |carrier: BodyCarrier| matches!(carrier, BodyCarrier::Link(_));
+    let pick = |test: &dyn Fn(BodyCarrier) -> bool| -> Vec<NodeId> {
         nodes
             .iter()
             .copied()
-            .filter(|id| suffix_of(id).is_some_and(test))
+            .filter(|id| carrier_of(id).is_some_and(test))
             .collect()
     };
     Some(match member {
-        MemberName::Cup | MemberName::Leaves => Anchor::Nodes(pick(&|rest| rest.is_empty()), None),
+        MemberName::Cup | MemberName::Leaves => Anchor::Nodes(pick(&on_piece), None),
         // A slide's drawer member is long: its number goes near its front.
-        MemberName::DrawerMember => {
-            Anchor::Nodes(pick(&|rest| rest.is_empty()), Some(Direction::Front))
-        }
+        MemberName::DrawerMember => Anchor::Nodes(pick(&on_piece), Some(Direction::Front)),
         // Seen from above the arm lies over the plate: the plate's number
         // goes at its back end, the arm's at its front.
         MemberName::Plate => Anchor::Box(hardware.fixed.as_ref()?.bounds, Some(Direction::Back)),
@@ -1021,16 +1018,13 @@ fn member_anchor(
             hardware.mechanism.as_ref()?.arm.bounds,
             Some(Direction::Front),
         ),
-        MemberName::Links => Anchor::Nodes(pick(&|rest| rest.ends_with("link")), None),
+        MemberName::Links => Anchor::Nodes(pick(&is_link), None),
         // A slide's cabinet member is long: its number goes near its
         // front, where the view from above looks.
         MemberName::CabinetMember => {
             Anchor::Box(hardware.fixed.as_ref()?.bounds, Some(Direction::Front))
         }
-        MemberName::Pin => Anchor::Nodes(
-            pick(&|rest| !rest.is_empty() && !rest.ends_with("link")),
-            None,
-        ),
+        MemberName::Pin => Anchor::Nodes(pick(&|c| !on_piece(c) && !is_link(c)), None),
         // A pull stands off its face: what you hold is at the outer end,
         // the screws at the end against the door.
         MemberName::Knob | MemberName::Bar => {

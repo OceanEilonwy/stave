@@ -56,13 +56,13 @@ door_l.stile[hinge]          oak_19         1149.5 x 60 x 19           1..61    
     cut pocket 60 x 6 depth 10 on width end: where door_l.rail[bottom] meets it, local 0..60 x 50..60 x 0..19
     cut pocket 60 x 6 depth 10 on width end: where door_l.rail[top] meets it, local 1089.5..1149.5 x 50..60 x 0..19
     cut notch depth 10 on width end: where door_l.panel meets it, local 52..1097.5 x 52..60 x 6.5..12.5
-    cut drill 1 x diameter 35 depth 12.8 on thickness end: centred at local 117.5, 22.5, 19
-    cut drill 1 x diameter 35 depth 12.8 on thickness end: centred at local 1032, 22.5, 19
+    cut drill 1 x diameter 35 depth 12.8 on thickness end: where door_l.hinges[lower] meets it, local 100..135 x 5..40 x 6.2..19
+    cut drill 1 x diameter 35 depth 12.8 on thickness end: where door_l.hinges[upper] meets it, local 1014.5..1049.5 x 5..40 x 6.2..19
 door_l.stile[latch]          oak_19         1149.5 x 60 x 19           389.25..449.25       530..1679.5          -19..0               up/right/back
     cut pocket 60 x 6 depth 10 on width start: where door_l.rail[bottom] meets it, local 0..60 x 0..10 x 0..19
     cut pocket 60 x 6 depth 10 on width start: where door_l.rail[top] meets it, local 1089.5..1149.5 x 0..10 x 0..19
     cut notch depth 10 on width start: where door_l.panel meets it, local 52..1097.5 x 0..8 x 6.5..12.5
-    cut drill 1 x diameter 4 depth through on thickness start: centred at local 574.75, 30, 0
+    cut drill 1 x diameter 4 depth through on thickness start: where door_l.handle meets it, local 572.75..576.75 x 28..32 x 0..19
 door_l.rail[bottom]          oak_19         348.25 x 60 x 19           61..389.25           530..590             -19..0               right/up/back
     drawn 328.25 x 60 x 19, starting 10 x 0 x 0 into the cut size
     cut tenon 10 x 60 x 6 on length start: end toward door_l.stile[hinge]
@@ -77,7 +77,8 @@ door_l.panel                 oak_6          1045.5 x 344.25 x 6        61..389.2
     drawn 1029.5 x 328.25 x 6, starting 8 x 8 x 0 into the cut size
 drawer[bottom].front         oak_19         898 x 257.25 x 19          1..899               11..268.25           -19..0               right/up/back
     cut drill 4 x diameter 3 depth 13 on thickness end: where drawer[bottom].sub_front meets it, local 36.7..861.3 x 23..243 x 19..19
-    cut drill 2 x diameter 4 depth through on thickness start: centred at local 449, 128.625, 0
+    cut drill 1 x diameter 4 depth through on thickness start: where drawer[bottom].pull meets it, local 367..371 x 126.625..130.625 x 0..19
+    cut drill 1 x diameter 4 depth through on thickness start: where drawer[bottom].pull meets it, local 527..531 x 126.625..130.625 x 0..19
 drawer[bottom].side[left]    maple_12       500 x 220 x 12             31.7..43.7           34..254              0..500               back/up/right
     cut notch depth 6 on thickness end: where drawer[bottom].sub_front meets it, local 0..12 x 0..220 x 6..12
     cut notch depth 6 on thickness end: where drawer[bottom].back meets it, local 488..500 x 0..220 x 6..12
@@ -97,7 +98,8 @@ drawer[bottom].bottom        ply_6          824.6 x 488 x 6            43.7..856
     drawn 812.6 x 476 x 6, starting 6 x 6 x 0 into the cut size
 drawer[top].front            oak_19         898 x 257.25 x 19          1..899               269.75..527          -19..0               right/up/back
     cut drill 4 x diameter 3 depth 13 on thickness end: where drawer[top].sub_front meets it, local 36.7..861.3 x 14.25..234.25 x 19..19
-    cut drill 2 x diameter 4 depth through on thickness start: centred at local 449, 128.625, 0
+    cut drill 1 x diameter 4 depth through on thickness start: where drawer[top].pull meets it, local 367..371 x 126.625..130.625 x 0..19
+    cut drill 1 x diameter 4 depth through on thickness start: where drawer[top].pull meets it, local 527..531 x 126.625..130.625 x 0..19
 drawer[top].side[left]       maple_12       500 x 220 x 12             31.7..43.7           284..504             0..500               back/up/right
     cut notch depth 6 on thickness end: where drawer[top].sub_front meets it, local 0..12 x 0..220 x 6..12
     cut notch depth 6 on thickness end: where drawer[top].back meets it, local 488..500 x 0..220 x 6..12
@@ -119,13 +121,13 @@ door_r.stile[hinge]          oak_19         1149.5 x 60 x 19           839..899 
     cut pocket 60 x 6 depth 10 on width end: where door_r.rail[bottom] meets it, local 0..60 x 50..60 x 0..19
     cut pocket 60 x 6 depth 10 on width end: where door_r.rail[top] meets it, local 1089.5..1149.5 x 50..60 x 0..19
     cut notch depth 10 on width end: where door_r.panel meets it, local 52..1097.5 x 52..60 x 6.5..12.5
-    cut drill 1 x diameter 35 depth 12.8 on thickness end: centred at local 117.5, 22.5, 19
-    cut drill 1 x diameter 35 depth 12.8 on thickness end: centred at local 1032, 22.5, 19
+    cut drill 1 x diameter 35 depth 12.8 on thickness end: where door_r.hinges[lower] meets it, local 100..135 x 5..40 x 6.2..19
+    cut drill 1 x diameter 35 depth 12.8 on thickness end: where door_r.hinges[upper] meets it, local 1014.5..1049.5 x 5..40 x 6.2..19
 door_r.stile[latch]          oak_19         1149.5 x 60 x 19           450.75..510.75       530..1679.5          -19..0               up/left/back
     cut pocket 60 x 6 depth 10 on width start: where door_r.rail[bottom] meets it, local 0..60 x 0..10 x 0..19
     cut pocket 60 x 6 depth 10 on width start: where door_r.rail[top] meets it, local 1089.5..1149.5 x 0..10 x 0..19
     cut notch depth 10 on width start: where door_r.panel meets it, local 52..1097.5 x 0..8 x 6.5..12.5
-    cut drill 1 x diameter 4 depth through on thickness start: centred at local 574.75, 30, 0
+    cut drill 1 x diameter 4 depth through on thickness start: where door_r.handle meets it, local 572.75..576.75 x 28..32 x 0..19
 door_r.rail[bottom]          oak_19         348.25 x 60 x 19           510.75..839          530..590             -19..0               left/up/back
     drawn 328.25 x 60 x 19, starting 10 x 0 x 0 into the cut size
     cut tenon 10 x 60 x 6 on length start: end toward door_r.stile[hinge]

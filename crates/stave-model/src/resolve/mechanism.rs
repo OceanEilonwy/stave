@@ -1,0 +1,987 @@
+//! Lowering a hardware kind's members with bodies, their shapes, and its
+//! `mechanism` (grammar, "Shapes" and "Mechanisms").
+//!
+//! Everything here is written in the kind's own frame (grammar, "The kind's
+//! frame"): measurements within the hardware, never positions in a design.
+//! Values stay expressions over the kind's params; the solver evaluates
+//! them for each piece of hardware.
+
+use std::collections::BTreeMap;
+
+use stave_lang::ast::{self, ExprKind, Span};
+use stave_lang::units::ExactLength;
+use stave_lang::{Code, Diagnostic, Label};
+use stave_schema::functions::{POINT, POINT_ARGUMENTS, ShapeFunction};
+
+use super::expr::Expect;
+use super::{Cx, Resolver};
+use crate::defs::{
+    AdjustDef, BodyDef, BodyId, BodyName, Carrier, ConstraintDef, CouplingDef, DriveDef, FrameAxis,
+    KindPoint, MechanismDef, NamedShape, NonEmpty, RExpr, RExprKind, RangeDef, RoleDef, RoleIndex,
+    ShapeDef, StopDef,
+};
+use crate::types::Ty;
+
+/// The named arguments of a call, by name.
+type Arguments<'a> = BTreeMap<&'a str, &'a ast::Arg>;
+
+/// `turn` and `travel`: the two drives.
+const DRIVES: [&str; 2] = ["turn", "travel"];
+
+/// A `with:` before the list of bodies is final.
+#[derive(Clone, Copy)]
+enum Pending<'a> {
+    Role(RoleIndex),
+    Body(&'a str),
+    Mechanism,
+}
+
+impl Resolver<'_> {
+    /// A hardware kind's members with a body, in source order; `None`
+    /// (reported) when one of them doesn't lower.
+    pub(super) fn lower_bodies(
+        &mut self,
+        cx: &Cx,
+        roles: &[RoleDef],
+        written: &[&ast::Documented<ast::KindMember>],
+    ) -> Option<Vec<BodyDef>> {
+        // A member written twice is reported where the members are listed;
+        // only its first is a body.
+        let mut unique: Vec<&str> = Vec::new();
+        let first_written: Vec<&ast::Documented<ast::KindMember>> = written
+            .iter()
+            .copied()
+            .filter(|member| {
+                let word = member.node.name.as_str();
+                let first = !unique.contains(&word);
+                unique.push(word);
+                first
+            })
+            .collect();
+        let with_body: Vec<(&ast::Documented<ast::KindMember>, &ast::MemberBody)> = first_written
+            .iter()
+            .filter_map(|member| member.node.body.as_ref().map(|body| (*member, body)))
+            .collect();
+        let names: Vec<&str> = with_body
+            .iter()
+            .map(|(member, _)| member.node.name.as_str())
+            .collect();
+        let mut bodies: Vec<(BodyDef, Option<&str>)> = Vec::new();
+        for (member, body) in &with_body {
+            let member_name = member.node.name.as_str();
+            let Some(name) = BodyName::new(member_name) else {
+                continue;
+            };
+            let mut with = Pending::Mechanism;
+            let mut with_span: Option<Span> = None;
+            let mut shapes: Vec<NamedShape> = Vec::new();
+            let mut shape_names: BTreeMap<Option<String>, Span> = BTreeMap::new();
+            let mut mount = Vec::new();
+            let mut mount_span: Option<Span> = None;
+            for entry in &body.entries {
+                match entry {
+                    ast::MemberEntry::Mount(block) => {
+                        if let Some(first) = mount_span {
+                            self.duplicate("mount", block.span, first, cx);
+                            continue;
+                        }
+                        mount_span = Some(block.span);
+                        mount = self.member_mount(cx, roles, block);
+                    }
+                    ast::MemberEntry::Field(field) if field.key.as_str() == "with" => {
+                        if let Some(first) = with_span {
+                            self.duplicate("with", field.key.span(), first, cx);
+                            continue;
+                        }
+                        with_span = Some(field.key.span());
+                        if let Some(carrier) = self.carrier(cx, roles, &names, member_name, field) {
+                            with = carrier;
+                        }
+                    }
+                    ast::MemberEntry::Field(field) => {
+                        let key = field.key.as_str();
+                        self.unknown(
+                            Code::UnknownField,
+                            format!("member '{member_name}' has no field '{key}'"),
+                            cx.file,
+                            field.key.span(),
+                            key,
+                            ["with", "shape", "mount"],
+                            "a member's body holds its shapes (shape: box(...)), what carries it (with: ...) and its own mount { }",
+                        );
+                    }
+                    ast::MemberEntry::Shape(shape) => {
+                        let shape_name = shape.name.as_ref().map(|name| name.as_str().to_owned());
+                        let at = shape.name.as_ref().map_or(shape.span, ast::Name::span);
+                        if let Some(first) = shape_names.get(&shape_name) {
+                            let word = shape_name.as_deref().unwrap_or("shape");
+                            self.duplicate(word, at, *first, cx);
+                            continue;
+                        }
+                        shape_names.insert(shape_name.clone(), at);
+                        if let Some(solid) = self.shape(cx, &shape.value) {
+                            shapes.push(NamedShape {
+                                name: shape_name,
+                                span: shape.span,
+                                shape: solid,
+                            });
+                        }
+                    }
+                }
+            }
+            let has_shape = body
+                .entries
+                .iter()
+                .any(|entry| matches!(entry, ast::MemberEntry::Shape(_)));
+            if !has_shape {
+                self.error_help(
+                    Code::MissingField,
+                    format!("member '{member_name}' is missing 'shape'"),
+                    cx.file,
+                    member.node.name.span(),
+                    "give it what it is made of: shape: box(along: ..., across: ..., depth: ...)",
+                );
+            }
+            // A shape that failed to resolve was reported; the member is
+            // left out so nothing downstream sees half of it.
+            let Some(shapes) = NonEmpty::new(shapes) else {
+                continue;
+            };
+            let (carrier, rides_on) = match with {
+                Pending::Role(role) => (Carrier::Role(role), None),
+                Pending::Body(other) => (Carrier::Mechanism, Some(other)),
+                Pending::Mechanism => (Carrier::Mechanism, None),
+            };
+            bodies.push((
+                BodyDef {
+                    name,
+                    span: member.node.name.span(),
+                    docs: member.docs.clone(),
+                    with: carrier,
+                    shapes,
+                    mount,
+                },
+                rides_on,
+            ));
+        }
+        // `with: other` is looked up in the final list. A member that was
+        // left out has been reported, and whatever rides on it is left out
+        // too, so no id points at the wrong member.
+        let names: Vec<String> = bodies
+            .iter()
+            .map(|(body, _)| body.name.as_str().to_owned())
+            .collect();
+        let mut lowered = Vec::new();
+        for (mut body, rides_on) in bodies {
+            if let Some(other) = rides_on {
+                match names
+                    .iter()
+                    .position(|name| name == other)
+                    .and_then(BodyId::new)
+                {
+                    Some(id) => body.with = Carrier::Body(id),
+                    None => continue,
+                }
+            }
+            lowered.push(body);
+        }
+        // Ids would shift past a member left out; its errors are reported.
+        (lowered.len() == with_body.len()).then_some(lowered)
+    }
+
+    /// `with: piece` or `with: plate`.
+    fn carrier<'a>(
+        &mut self,
+        cx: &Cx,
+        roles: &[RoleDef],
+        names: &[&'a str],
+        member: &str,
+        field: &ast::Field,
+    ) -> Option<Pending<'a>> {
+        let ExprKind::Name(ident) = &field.value.kind else {
+            self.error_help(
+                Code::TypeMismatch,
+                format!("'with' of member '{member}' needs a role or a member"),
+                cx.file,
+                field.value.span,
+                "name the part it moves with (with: piece) or the member it rides on (with: plate)",
+            );
+            return None;
+        };
+        let word = ident.as_str();
+        if let Some(index) = roles.iter().position(|role| role.name == word) {
+            return RoleIndex::new(index).map(Pending::Role);
+        }
+        if word == member {
+            self.error_help(
+                Code::TypeMismatch,
+                format!("member '{member}' can't ride on itself"),
+                cx.file,
+                field.value.span,
+                "name a role (with: piece) or another member",
+            );
+            return None;
+        }
+        if let Some(name) = names.iter().find(|name| **name == word) {
+            return Some(Pending::Body(name));
+        }
+        let candidates: Vec<&str> = roles
+            .iter()
+            .map(|role| role.name.as_str())
+            .chain(names.iter().copied())
+            .collect();
+        self.unknown(
+            Code::UnknownName,
+            format!("unknown name '{word}'"),
+            cx.file,
+            ident.span(),
+            word,
+            candidates.iter().copied(),
+            "name one of the kind's roles or a member with a body",
+        );
+        None
+    }
+
+    pub(super) fn duplicate(&mut self, word: &str, at: Span, first: Span, cx: &Cx) {
+        self.report(
+            Diagnostic::error(
+                Code::DuplicateName,
+                format!("'{word}' is declared twice"),
+                Label::new(cx.file, at),
+            )
+            .with_label(Label::with_message(cx.file, first, "first written here"))
+            .with_help(format!("write '{word}' once; remove one of them")),
+        );
+    }
+
+    /// The named arguments of a call to `function`, each one it takes and
+    /// at most once. `None` (reported) when one isn't.
+    fn arguments<'a>(
+        &mut self,
+        cx: &Cx,
+        function: &str,
+        args: &'a [ast::Arg],
+        allowed: &[&str],
+    ) -> Option<Arguments<'a>> {
+        let mut found: Arguments<'a> = BTreeMap::new();
+        let mut ok = true;
+        for arg in args {
+            let Some(name) = &arg.name else {
+                self.error_help(
+                    Code::Syntax,
+                    format!("{function}(...) takes only named arguments"),
+                    cx.file,
+                    arg.span,
+                    format!("name each argument: {}", argument_list(allowed)),
+                );
+                ok = false;
+                continue;
+            };
+            let word = name.as_str();
+            if !allowed.contains(&word) {
+                self.unknown(
+                    Code::UnknownField,
+                    format!("{function}(...) has no argument '{word}'"),
+                    cx.file,
+                    name.span(),
+                    word,
+                    allowed.iter().copied(),
+                    format!("its arguments are {}", argument_list(allowed)),
+                );
+                ok = false;
+                continue;
+            }
+            if let Some(first) = found.get(word) {
+                self.duplicate(word, name.span(), first.span, cx);
+                ok = false;
+                continue;
+            }
+            found.insert(word, arg);
+        }
+        ok.then_some(found)
+    }
+
+    /// The argument `name` of `function`, or `missing-field`.
+    fn required<'a>(
+        &mut self,
+        cx: &Cx,
+        function: &str,
+        found: &Arguments<'a>,
+        name: &str,
+        span: Span,
+    ) -> Option<&'a ast::Expr> {
+        match found.get(name) {
+            Some(arg) => Some(&arg.value),
+            None => {
+                self.error_help(
+                    Code::MissingField,
+                    format!("{function}(...) is missing '{name}'"),
+                    cx.file,
+                    span,
+                    format!("write {name}: ... inside the parentheses"),
+                );
+                None
+            }
+        }
+    }
+
+    /// A length in the kind's frame: a range is an error here.
+    fn frame_length(&mut self, cx: &Cx, expr: &ast::Expr, what: &str) -> RExpr {
+        self.value(cx, expr, &Expect::ty(Ty::Length).named(what))
+    }
+
+    /// A shape's range argument: `lo..hi` or one length.
+    fn range(&mut self, cx: &Cx, expr: &ast::Expr, what: &str) -> RangeDef {
+        match &expr.kind {
+            ExprKind::Range { lo, hi } => RangeDef::Between {
+                low: self.frame_length(cx, lo, what),
+                high: self.frame_length(cx, hi, what),
+            },
+            _ => RangeDef::Centred(self.frame_length(cx, expr, what)),
+        }
+    }
+
+    /// `point(along:, across:, depth:)`.
+    fn point(&mut self, cx: &Cx, expr: &ast::Expr, what: &str) -> Option<KindPoint> {
+        let ExprKind::Call { callee, args } = &expr.kind else {
+            return self.not_a_point(cx, expr, what);
+        };
+        let ExprKind::Name(head) = &callee.kind else {
+            return self.not_a_point(cx, expr, what);
+        };
+        if head.as_str() != POINT {
+            return self.not_a_point(cx, expr, what);
+        }
+        let found = self.arguments(cx, POINT, args, &POINT_ARGUMENTS)?;
+        let coordinate = |resolver: &mut Self, name: &str| match found.get(name) {
+            Some(arg) => resolver.frame_length(cx, &arg.value, name),
+            None => zero(expr.span),
+        };
+        Some(KindPoint {
+            along: coordinate(self, "along"),
+            across: coordinate(self, "across"),
+            depth: coordinate(self, "depth"),
+        })
+    }
+
+    fn not_a_point<T>(&mut self, cx: &Cx, expr: &ast::Expr, what: &str) -> Option<T> {
+        self.error_help(
+            Code::TypeMismatch,
+            format!("'{what}' needs a point"),
+            cx.file,
+            expr.span,
+            "write point(across: ..., depth: ...) in the kind's frame",
+        );
+        None
+    }
+
+    /// `box(...)`, `cylinder(...)`, `prism(...)` or `bar(...)`.
+    fn shape(&mut self, cx: &Cx, expr: &ast::Expr) -> Option<ShapeDef> {
+        let shape = match &expr.kind {
+            ExprKind::Call { callee, args } => match &callee.kind {
+                ExprKind::Name(head) => ShapeFunction::from_word(head.as_str()).map(|s| (s, args)),
+                _ => None,
+            },
+            _ => None,
+        };
+        let Some((function, args)) = shape else {
+            self.error_help(
+                Code::TypeMismatch,
+                "'shape' needs a shape",
+                cx.file,
+                expr.span,
+                "write box(...), cylinder(...), prism(...) or bar(...)",
+            );
+            return None;
+        };
+        let word = function.word();
+        let found = self.arguments(cx, word, args, function.arguments())?;
+        let span = expr.span;
+        match function {
+            ShapeFunction::Box => {
+                let along = self.required(cx, word, &found, "along", span);
+                let across = self.required(cx, word, &found, "across", span);
+                let depth = self.required(cx, word, &found, "depth", span);
+                let (along, across, depth) = (along?, across?, depth?);
+                Some(ShapeDef::Box {
+                    along: self.range(cx, along, "along"),
+                    across: self.range(cx, across, "across"),
+                    depth: self.range(cx, depth, "depth"),
+                })
+            }
+            ShapeFunction::Cylinder => {
+                let axis = match found.get("axis") {
+                    None => FrameAxis::Depth,
+                    Some(arg) => {
+                        let parsed = match &arg.value.kind {
+                            ExprKind::Name(ident) => FrameAxis::from_word(ident.as_str()),
+                            _ => None,
+                        };
+                        let Some(axis) = parsed else {
+                            self.error_help(
+                                Code::TypeMismatch,
+                                "'axis' needs along, across or depth",
+                                cx.file,
+                                arg.value.span,
+                                "write axis: along, axis: across, or leave it out for depth",
+                            );
+                            return None;
+                        };
+                        axis
+                    }
+                };
+                for other in FrameAxis::ALL.into_iter().filter(|other| *other != axis) {
+                    if let Some(arg) = found.get(other.word()) {
+                        self.error_help(
+                            Code::TypeMismatch,
+                            format!(
+                                "a cylinder along '{}' has no '{}' range",
+                                axis.word(),
+                                other.word()
+                            ),
+                            cx.file,
+                            arg.span,
+                            format!(
+                                "its diameter sets its size across; write its range as {}: ...",
+                                axis.word()
+                            ),
+                        );
+                        return None;
+                    }
+                }
+                let diameter = self.required(cx, word, &found, "diameter", span);
+                let extent = self.required(cx, word, &found, axis.word(), span);
+                let (diameter, extent) = (diameter?, extent?);
+                let at = match found.get("at") {
+                    Some(arg) => self.point(cx, &arg.value, "at")?,
+                    None => origin(span),
+                };
+                Some(ShapeDef::Cylinder {
+                    diameter: self.frame_length(cx, diameter, "diameter"),
+                    extent: self.range(cx, extent, axis.word()),
+                    at: Box::new(at),
+                    axis,
+                })
+            }
+            ShapeFunction::Prism => {
+                let points = self.required(cx, word, &found, "points", span);
+                let along = self.required(cx, word, &found, "along", span);
+                let (points, along) = (points?, along?);
+                let ExprKind::List(items) = &points.kind else {
+                    self.error_help(
+                        Code::TypeMismatch,
+                        "'points' needs a list of points",
+                        cx.file,
+                        points.span,
+                        "write points: [point(...), point(...), point(...)], in order around the outline",
+                    );
+                    return None;
+                };
+                if items.len() < 3 {
+                    self.error_help(
+                        Code::TypeMismatch,
+                        format!(
+                            "a prism's outline needs at least 3 points, found {}",
+                            items.len()
+                        ),
+                        cx.file,
+                        points.span,
+                        "list the corners of the outline in order around it",
+                    );
+                    return None;
+                }
+                let mut corners = Vec::new();
+                for item in items {
+                    corners.push(self.point(cx, item, "points"));
+                }
+                let corners: Option<Vec<KindPoint>> = corners.into_iter().collect();
+                Some(ShapeDef::Prism {
+                    points: NonEmpty::new(corners?)?,
+                    along: self.range(cx, along, "along"),
+                })
+            }
+            ShapeFunction::Bar => {
+                let from = self.required(cx, word, &found, "from", span);
+                let to = self.required(cx, word, &found, "to", span);
+                let thickness = self.required(cx, word, &found, "thickness", span);
+                let along = self.required(cx, word, &found, "along", span);
+                let (from, to, thickness, along) = (from?, to?, thickness?, along?);
+                let from = self.point(cx, from, "from");
+                let to = self.point(cx, to, "to");
+                Some(ShapeDef::Bar {
+                    from: Box::new(from?),
+                    to: Box::new(to?),
+                    thickness: self.frame_length(cx, thickness, "thickness"),
+                    along: self.range(cx, along, "along"),
+                })
+            }
+        }
+    }
+
+    /// A kind's `mechanism { }`, over its bodies.
+    pub(super) fn lower_mechanism(
+        &mut self,
+        cx: &Cx,
+        kind: &str,
+        bodies: &[BodyDef],
+        block: &ast::MechanismBlock,
+    ) -> Option<MechanismDef> {
+        let mut constraints = Vec::new();
+        let mut couplings = Vec::new();
+        let mut drive: Option<DriveDef> = None;
+        let mut stop: Option<(&ast::Expr, &ast::StringLit, Span)> = None;
+        let mut pin_diameter: Option<RExpr> = None;
+        let mut seen: BTreeMap<&str, Span> = BTreeMap::new();
+        let mut ok = true;
+        for entry in &block.entries {
+            match entry {
+                ast::MechanismEntry::Pivot { members, at, span } => {
+                    let pair = self.pair(cx, kind, bodies, members, "pivot");
+                    let at = self.point(cx, at, "at");
+                    match (pair, at) {
+                        (Some(bodies), Some(at)) => constraints.push(ConstraintDef::Pivot {
+                            bodies,
+                            at: Box::new(at),
+                            span: *span,
+                        }),
+                        _ => ok = false,
+                    }
+                }
+                ast::MechanismEntry::Slot {
+                    members,
+                    from,
+                    to,
+                    span,
+                } => {
+                    let pair = self.pair(cx, kind, bodies, members, "slot");
+                    let from = self.point(cx, from, "from");
+                    let to = self.point(cx, to, "to");
+                    match (pair, from, to) {
+                        (Some(bodies), Some(from), Some(to)) => {
+                            constraints.push(ConstraintDef::Slot {
+                                bodies,
+                                from: Box::new(from),
+                                to: Box::new(to),
+                                span: *span,
+                            });
+                        }
+                        _ => ok = false,
+                    }
+                }
+                ast::MechanismEntry::Rail {
+                    members,
+                    along,
+                    span,
+                } => {
+                    let pair = self.pair(cx, kind, bodies, members, "rail");
+                    let axis = FrameAxis::from_word(along.as_str());
+                    if axis.is_none() {
+                        self.error_help(
+                            Code::TypeMismatch,
+                            format!("a rail runs along along, across or depth, found '{along}'"),
+                            cx.file,
+                            along.span(),
+                            "write rail a, b along along (or across, or depth)",
+                        );
+                    }
+                    match (pair, axis) {
+                        (Some(bodies), Some(along)) => constraints.push(ConstraintDef::Rail {
+                            bodies,
+                            along,
+                            span: *span,
+                        }),
+                        _ => ok = false,
+                    }
+                }
+                ast::MechanismEntry::Couple {
+                    member,
+                    to,
+                    ratio,
+                    span,
+                } => {
+                    let pair = self.pair(cx, kind, bodies, &[member.clone(), to.clone()], "couple");
+                    let ratio = self.value(cx, ratio, &Expect::ty(Ty::Ratio).named("couple"));
+                    match pair {
+                        Some([body, to]) => couplings.push(CouplingDef {
+                            body,
+                            to,
+                            ratio,
+                            span: *span,
+                        }),
+                        None => ok = false,
+                    }
+                }
+                ast::MechanismEntry::Drive { key, value, span } => {
+                    if let Some(first) = seen.insert("drive", key.span()) {
+                        self.duplicate("drive", key.span(), first, cx);
+                        continue;
+                    }
+                    match self.drive(cx, kind, bodies, value, *span) {
+                        Some(lowered) => drive = Some(lowered),
+                        None => ok = false,
+                    }
+                }
+                ast::MechanismEntry::Stop {
+                    key,
+                    value,
+                    message,
+                    span,
+                } => {
+                    if let Some(first) = seen.insert("stop", key.span()) {
+                        self.duplicate("stop", key.span(), first, cx);
+                        continue;
+                    }
+                    stop = Some((value, message, *span));
+                }
+                ast::MechanismEntry::Field(field) => {
+                    let key = field.key.as_str();
+                    if key != "pin_diameter" {
+                        self.unknown(
+                            Code::UnknownField,
+                            format!("a mechanism has no field '{key}'"),
+                            cx.file,
+                            field.key.span(),
+                            key,
+                            ["drive", "stop", "pin_diameter"],
+                            "a mechanism holds pivot, slot, rail and couple entries, drive:, stop: and pin_diameter:",
+                        );
+                        ok = false;
+                        continue;
+                    }
+                    if let Some(first) = seen.insert("pin_diameter", field.key.span()) {
+                        self.duplicate(key, field.key.span(), first, cx);
+                        continue;
+                    }
+                    pin_diameter = Some(self.frame_length(cx, &field.value, key));
+                }
+            }
+        }
+        if drive.is_none() && seen.contains_key("drive") {
+            // Written, but it didn't lower (reported).
+            return None;
+        }
+        // A mechanism without a drive follows the hardware that drives its
+        // assembly (a lid stay); its stop is an angle or a length, as that
+        // drive's values are.
+        let stop = stop.map(|(value, message, span)| {
+            let expect = match drive {
+                Some(DriveDef::Turn { .. }) => Expect::ty(Ty::Angle),
+                Some(DriveDef::Travel { .. }) => Expect::ty(Ty::Length),
+                None => Expect::any(),
+            };
+            StopDef {
+                value: self.value(cx, value, &expect.named("stop")),
+                message: self.text(cx, message),
+                span,
+            }
+        });
+        ok.then_some(MechanismDef {
+            span: block.span,
+            constraints,
+            couplings,
+            drive,
+            stop,
+            pin_diameter,
+        })
+    }
+
+    /// The body a mechanism entry names.
+    fn body(
+        &mut self,
+        cx: &Cx,
+        kind: &str,
+        bodies: &[BodyDef],
+        ident: &ast::Ident,
+    ) -> Option<BodyId> {
+        let word = ident.as_str();
+        if let Some(index) = bodies.iter().position(|body| body.name.as_str() == word) {
+            return BodyId::new(index);
+        }
+        self.unknown(
+            Code::UnknownName,
+            format!("unknown name '{word}'"),
+            cx.file,
+            ident.span(),
+            word,
+            bodies.iter().map(|body| body.name.as_str()),
+            format!("a mechanism names members with a body declared in kind '{kind}'"),
+        );
+        None
+    }
+
+    /// A hardware kind's `adjust` entries (grammar, "Adjustment"): each
+    /// names two members with a body and an axis of the frame on which
+    /// exactly one of them has its own mount; each member is adjusted on an
+    /// axis at most once. Entries that don't lower are reported and left
+    /// out.
+    pub(super) fn lower_adjusts(
+        &mut self,
+        cx: &Cx,
+        kind: &str,
+        bodies: &[BodyDef],
+        adjusts: &[&ast::Adjust],
+    ) -> Vec<AdjustDef> {
+        let mut lowered = Vec::new();
+        let mut seen: BTreeMap<(BodyId, FrameAxis), Span> = BTreeMap::new();
+        for adjust in adjusts {
+            let within = self.frame_length(cx, &adjust.within, "within");
+            let named = |this: &mut Self, ident: &ast::Ident| -> Option<BodyId> {
+                let word = ident.as_str();
+                if let Some(index) = bodies.iter().position(|body| body.name.as_str() == word) {
+                    return BodyId::new(index);
+                }
+                this.unknown(
+                    Code::UnknownName,
+                    format!("unknown name '{word}'"),
+                    cx.file,
+                    ident.span(),
+                    word,
+                    bodies.iter().map(|body| body.name.as_str()),
+                    format!("an adjust names members with a body declared in kind '{kind}'"),
+                );
+                None
+            };
+            let body = named(self, &adjust.member);
+            let on = named(self, &adjust.on);
+            let axis = FrameAxis::from_word(adjust.axis.as_str());
+            if axis.is_none() {
+                self.error_help(
+                    Code::TypeMismatch,
+                    format!(
+                        "an adjust is along along, across or depth, found '{}'",
+                        adjust.axis
+                    ),
+                    cx.file,
+                    adjust.axis.span(),
+                    "write adjust a on b: across within 2mm (or along, or depth)",
+                );
+            }
+            let (Some(body), Some(on), Some(axis)) = (body, on, axis) else {
+                continue;
+            };
+            if body == on {
+                self.error_help(
+                    Code::DuplicateName,
+                    format!("'{}' is named twice in one adjust", adjust.on),
+                    cx.file,
+                    adjust.on.span(),
+                    "an adjust sets one member on another",
+                );
+                continue;
+            }
+            let mounted = |id: BodyId| {
+                bodies
+                    .get(id.index())
+                    .is_some_and(|b| b.mount.iter().any(|placement| placement.axis == axis))
+            };
+            match (mounted(body), mounted(on)) {
+                (true, false) | (false, true) => {}
+                (false, false) => {
+                    self.error_help(
+                        Code::MissingField,
+                        format!(
+                            "adjust {} on {}: neither has a mount on '{}', so nothing would ever be set",
+                            adjust.member,
+                            adjust.on,
+                            axis.word()
+                        ),
+                        cx.file,
+                        adjust.span,
+                        format!(
+                            "give one of them a mount {{ {}: from(...) }}, or remove this adjust",
+                            axis.word()
+                        ),
+                    );
+                    continue;
+                }
+                (true, true) => {
+                    self.error_help(
+                        Code::TypeMismatch,
+                        format!(
+                            "adjust {} on {}: both have a mount on '{}', so the setting is fixed by the design twice",
+                            adjust.member,
+                            adjust.on,
+                            axis.word()
+                        ),
+                        cx.file,
+                        adjust.span,
+                        format!(
+                            "mount only one of them on '{}'; the other is drawn where the kind puts it",
+                            axis.word()
+                        ),
+                    );
+                    continue;
+                }
+            }
+            let mut again = None;
+            for id in [body, on] {
+                if let Some(first) = seen.get(&(id, axis)) {
+                    again = Some((id, *first));
+                    break;
+                }
+            }
+            if let Some((id, first)) = again {
+                let name = bodies
+                    .get(id.index())
+                    .map(|b| b.name.as_str().to_owned())
+                    .unwrap_or_default();
+                self.report(
+                    Diagnostic::error(
+                        Code::DuplicateName,
+                        format!("'{name}' is adjusted twice {}", axis.word()),
+                        Label::new(cx.file, adjust.span),
+                    )
+                    .with_label(Label::with_message(cx.file, first, "first written here"))
+                    .with_help("write one adjust for a member on each axis"),
+                );
+                continue;
+            }
+            seen.insert((body, axis), adjust.span);
+            seen.insert((on, axis), adjust.span);
+            lowered.push(AdjustDef {
+                body,
+                on,
+                axis,
+                within,
+                span: adjust.span,
+            });
+        }
+        lowered
+    }
+
+    /// The two different bodies of a mechanism entry.
+    fn pair(
+        &mut self,
+        cx: &Cx,
+        kind: &str,
+        bodies: &[BodyDef],
+        members: &[ast::Ident; 2],
+        entry: &str,
+    ) -> Option<[BodyId; 2]> {
+        let [a, b] = members;
+        let first = self.body(cx, kind, bodies, a);
+        let second = self.body(cx, kind, bodies, b);
+        let (first, second) = (first?, second?);
+        if first == second {
+            self.error_help(
+                Code::DuplicateName,
+                format!("'{a}' is named twice in one {entry}"),
+                cx.file,
+                b.span(),
+                format!("a {entry} joins two different members"),
+            );
+            return None;
+        }
+        Some([first, second])
+    }
+
+    /// `turn(m, from:, to:)` or `travel(m, from:, to:)`.
+    fn drive(
+        &mut self,
+        cx: &Cx,
+        kind: &str,
+        bodies: &[BodyDef],
+        value: &ast::Expr,
+        span: Span,
+    ) -> Option<DriveDef> {
+        let call = match &value.kind {
+            ExprKind::Call { callee, args } => match &callee.kind {
+                ExprKind::Name(head) if DRIVES.contains(&head.as_str()) => Some((head, args)),
+                _ => None,
+            },
+            _ => None,
+        };
+        let Some((head, args)) = call else {
+            self.error_help(
+                Code::TypeMismatch,
+                "'drive' needs turn(...) or travel(...)",
+                cx.file,
+                value.span,
+                "write drive: turn(member, from: 0deg, to: ...) or drive: travel(member, from: 0mm, to: ...)",
+            );
+            return None;
+        };
+        let function = head.as_str();
+        let (positional, named): (Vec<&ast::Arg>, Vec<&ast::Arg>) =
+            args.iter().partition(|arg| arg.name.is_none());
+        let member = match positional.as_slice() {
+            [only] => match &only.value.kind {
+                ExprKind::Name(ident) => self.body(cx, kind, bodies, ident),
+                _ => {
+                    self.error_help(
+                        Code::TypeMismatch,
+                        format!("{function}(...) needs the member it moves first"),
+                        cx.file,
+                        only.value.span,
+                        format!("write {function}(member, from: ..., to: ...)"),
+                    );
+                    None
+                }
+            },
+            _ => {
+                self.error_help(
+                    Code::MissingField,
+                    format!("{function}(...) needs the member it moves first"),
+                    cx.file,
+                    value.span,
+                    format!("write {function}(member, from: ..., to: ...)"),
+                );
+                None
+            }
+        };
+        let named: Vec<ast::Arg> = named.into_iter().cloned().collect();
+        let found = self.arguments(cx, function, &named, &["from", "to"])?;
+        let from = self.required(cx, function, &found, "from", value.span);
+        let to = self.required(cx, function, &found, "to", value.span);
+        let (body, from, to) = (member?, from?, to?);
+        let ty = if function == "turn" {
+            Ty::Angle
+        } else {
+            Ty::Length
+        };
+        let from = self.value(cx, from, &Expect::ty(ty.clone()).named("from"));
+        let to = self.value(cx, to, &Expect::ty(ty).named("to"));
+        Some(if function == "turn" {
+            DriveDef::Turn {
+                body,
+                from,
+                to,
+                span,
+            }
+        } else {
+            DriveDef::Travel {
+                body,
+                from,
+                to,
+                span,
+            }
+        })
+    }
+}
+
+/// `0mm`, written nowhere: an unwritten coordinate.
+fn zero(span: Span) -> RExpr {
+    RExpr {
+        kind: RExprKind::Length(ExactLength::ZERO),
+        ty: Ty::Length,
+        span,
+    }
+}
+
+/// The frame's origin.
+fn origin(span: Span) -> KindPoint {
+    KindPoint {
+        along: zero(span),
+        across: zero(span),
+        depth: zero(span),
+    }
+}
+
+/// `along:, across:, depth:` for a help line.
+fn argument_list(names: &[&str]) -> String {
+    names
+        .iter()
+        .map(|name| format!("{name}:"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}

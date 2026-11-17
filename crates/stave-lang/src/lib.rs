@@ -213,8 +213,36 @@ pub const KEYWORDS: &[&str] = &[
 /// position. `joint` is a base kind too, but it is a keyword and so is not
 /// listed here.
 pub const CONTEXTUAL_WORDS: &[&str] = &[
-    "as", "mirror", "about", "slide", "hinge", "pull", "fastener", "tool", "roles", "cut", "makes",
-    "member", "mark", "same", "to", "in", "replace", "unset", "rename",
+    "as",
+    "mirror",
+    "about",
+    "slide",
+    "hinge",
+    "pull",
+    "fastener",
+    "tool",
+    "roles",
+    "cut",
+    "makes",
+    "member",
+    "mechanism",
+    "mount",
+    "shape",
+    "pivot",
+    "slot",
+    "rail",
+    "couple",
+    "adjust",
+    "on",
+    "from",
+    "along",
+    "mark",
+    "same",
+    "to",
+    "in",
+    "replace",
+    "unset",
+    "rename",
 ];
 
 /// The tokens after which the lexer drops a newline, besides dropping every
@@ -228,8 +256,8 @@ pub const LINE_CONTINUATION_TOKENS: &[&str] = &[
 /// Built-in functions (grammar, "Built-in functions"): looked up when a bare
 /// name is called.
 pub const BUILTIN_FUNCTIONS: &[&str] = &[
-    "between", "extent", "mid", "opening", "split", "cover", "overlay", "inset", "turned", "box",
-    "cylinder", "model", "ends", "pitch", "gap",
+    "between", "extent", "mid", "opening", "split", "cover", "overlay", "inset", "turned",
+    "joined", "box", "cylinder", "model", "ends", "pitch", "gap",
 ];
 
 /// Current version written in the `stave <version>` header.
@@ -580,7 +608,7 @@ mod tests {
             "axis-set-twice",
             "axis-not-set",
             "require-range",
-            "slide-gap",
+            "adjust",
             "order",
         ] {
             assert!(

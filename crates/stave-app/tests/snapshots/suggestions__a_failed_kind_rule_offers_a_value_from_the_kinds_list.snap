@@ -1,0 +1,15 @@
+---
+source: crates/stave-app/tests/suggestions.rs
+expression: "broken(\"require_help\")"
+---
+error[require]: 'thirds' fails: the slot is a third of the post's thickness
+  --> tests/broken/require_help/project.stave:43:16
+   |
+43 | joint corner : slot_joint(rail, into: post)
+   |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  ::: tests/broken/require_help/project.stave:18:3
+   |
+18 |   require thirds : slot * 3 == into.thickness "the slot is a third of the post's thickness"
+   |   ----------------------------------------------------------------------------------------- the kind's rule
+   = note: for rail and post in corner
+   = help: use slot: 8mm, from the kind's list

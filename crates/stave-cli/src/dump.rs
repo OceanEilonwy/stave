@@ -120,21 +120,17 @@ fn cut_kind(kind: &CutKind) -> String {
         CutKind::DovetailSocket {
             neck,
             depth: d,
-            angle,
+            slope,
         } => format!(
-            "dovetail socket neck {} depth {} angle {angle}",
+            "dovetail socket neck {} depth {} {slope}",
             mm(*neck),
             mm(*d)
         ),
         CutKind::DovetailTail {
             neck,
             depth: d,
-            angle,
-        } => format!(
-            "dovetail tail neck {} depth {} angle {angle}",
-            mm(*neck),
-            mm(*d)
-        ),
+            slope,
+        } => format!("dovetail tail neck {} depth {} {slope}", mm(*neck), mm(*d)),
         CutKind::Outline {
             marks,
             depth: d,
@@ -226,20 +222,22 @@ pub fn table(design: &SolvedDesign) -> String {
                     mm(footprint.min.thickness),
                     mm(footprint.max.thickness)
                 ),
-                CutPlace::Recess { footprint } => format!(
-                    "recess local {}..{} x {}..{} x {}..{}",
+                CutPlace::Member {
+                    hardware,
+                    footprint,
+                    ..
+                } => format!(
+                    "where {} meets it, local {}..{} x {}..{} x {}..{}",
+                    design
+                        .hardware
+                        .get(hardware.index())
+                        .map_or("", |h| h.name.as_str()),
                     mm(footprint.min.length),
                     mm(footprint.max.length),
                     mm(footprint.min.width),
                     mm(footprint.max.width),
                     mm(footprint.min.thickness),
                     mm(footprint.max.thickness)
-                ),
-                CutPlace::Mount { centre, .. } => format!(
-                    "centred at local {}, {}, {}",
-                    mm(centre.length),
-                    mm(centre.width),
-                    mm(centre.thickness)
                 ),
             };
             let _ = writeln!(

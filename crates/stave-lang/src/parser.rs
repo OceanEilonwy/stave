@@ -148,6 +148,10 @@ enum Body {
     Scene,
     /// `name: Type` roles.
     Roles,
+    /// A member's shapes and fields.
+    Member,
+    /// A mechanism's entries.
+    Mechanism,
     /// One call per entry.
     Calls(CallKind),
     /// Patch operations.
@@ -168,6 +172,8 @@ impl Body {
             | Body::Profile
             | Body::Scene
             | Body::Roles
+            | Body::Member
+            | Body::Mechanism
             | Body::Calls(_)
             | Body::Patch => false,
         }
@@ -1401,7 +1407,18 @@ impl<'t> Parser<'t> {
                     return Ok(());
                 }
             }
-            p.expr()
+            let checkpoint = p.checkpoint();
+            p.expr()?;
+            if p.at(DOT2) {
+                p.node_at(checkpoint, RANGE_EXPR, |p| {
+                    p.bump();
+                    if p.at_value_end() {
+                        return Err(p.expected(&["an expression"]));
+                    }
+                    p.expr()
+                })?;
+            }
+            Ok(())
         })
     }
 
@@ -1545,6 +1562,8 @@ impl<'t> Parser<'t> {
                 }
             }
             Body::Roles => self.role(),
+            Body::Member => self.member_entry(),
+            Body::Mechanism => self.mechanism_entry(),
             Body::Calls(call) => self.call(call),
             Body::Patch => self.patch_op(),
         };
@@ -1629,6 +1648,29 @@ impl<'t> Parser<'t> {
                 Some("doc comments go right before a declaration; use // for other comments"),
             ));
         }
+        if self.at_mount() {
+            return self.mount(owner);
+        }
+        if self.at_entry_word("mechanism") {
+            return self.node(MECHANISM, |p| {
+                p.bump();
+                p.block(Body::Mechanism, owner)
+            });
+        }
+        if self.at_entry_word("adjust") {
+            return self.node(ADJUST, |p| {
+                p.bump();
+                p.root_name()?;
+                p.expect_word("on")?;
+                p.root_name()?;
+                p.expect(COLON, "':'")?;
+                let name = p.nth_text(0);
+                let at = p.span(0);
+                p.root_name()?;
+                p.expect(KW_WITHIN, "'within'")?;
+                p.value(name, at)
+            });
+        }
         if self.at_entry_word("roles") {
             return self.node(ROLES, |p| {
                 p.bump();
@@ -1638,6 +1680,11 @@ impl<'t> Parser<'t> {
         if self.at_entry_word("cut") {
             return self.node(CUT, |p| {
                 p.bump();
+                if p.nth(0) == IDENT && p.nth(1) == COLON {
+                    // `cut dado: crossing(...) { }`: a named cut.
+                    p.wrap(NAME);
+                    p.bump();
+                }
                 p.call(CallKind::Selector)?;
                 if !p.at(L_BRACE)
                     && let Some(help) = p.missing_parentheses_help(Some(CallKind::Selector))
@@ -1666,15 +1713,129 @@ impl<'t> Parser<'t> {
         })
     }
 
-    /// `{ DOC } member name`
+    /// `{ DOC } member name [ { entries } ]`
     fn member(&mut self) -> PResult {
         self.node(MEMBER, |p| {
             while p.at(DOC) {
                 p.bump();
             }
             p.bump();
-            p.declared_name()
+            p.declared_name()?;
+            if p.at(L_BRACE) {
+                let owner = format!("member '{}'", p.previous_text());
+                p.block(Body::Member, &owner)?;
+            }
+            Ok(())
         })
+    }
+
+    /// `mount { fields }`: where a piece of hardware, or one of its
+    /// members, sits.
+    fn mount(&mut self, owner: &str) -> PResult {
+        self.node(MOUNT, |p| {
+            p.bump();
+            p.block(Body::Fields, owner)
+        })
+    }
+
+    /// `true` at `mount {`, the start of a mount block.
+    fn at_mount(&self) -> bool {
+        self.at_word("mount") && self.nth(1) == L_BRACE
+    }
+
+    /// `shape name: call`, `mount { }` or a field, in a member's body.
+    fn member_entry(&mut self) -> PResult {
+        if self.at_mount() {
+            return self.mount("a member's mount");
+        }
+        if self.at_word("shape") && self.nth(1) == IDENT && self.nth(2) == COLON {
+            return self.node(SHAPE, |p| {
+                p.bump();
+                let name = p.nth_text(0);
+                let at = p.span(0).to(p.span(1));
+                p.wrap(NAME);
+                p.bump();
+                p.value(name, at)
+            });
+        }
+        self.field()
+    }
+
+    /// One entry of a `mechanism` block.
+    fn mechanism_entry(&mut self) -> PResult {
+        if self.at_entry_word("pivot") {
+            return self.node(PIVOT, |p| {
+                p.bump();
+                p.member_pair()?;
+                p.expect(KW_AT, "'at'")?;
+                p.expr()
+            });
+        }
+        if self.at_entry_word("slot") {
+            return self.node(SLOT, |p| {
+                p.bump();
+                p.member_pair()?;
+                p.expect_word("from")?;
+                p.expr()?;
+                p.expect_word("to")?;
+                p.expr()
+            });
+        }
+        if self.at_entry_word("rail") {
+            return self.node(RAIL, |p| {
+                p.bump();
+                p.member_pair()?;
+                p.expect_word("along")?;
+                p.root_name()
+            });
+        }
+        if self.at_entry_word("couple") {
+            return self.node(COUPLE, |p| {
+                p.bump();
+                p.root_name()?;
+                p.expect_word("to")?;
+                let name = p.nth_text(0);
+                let at = p.span(0).to(p.span(1));
+                p.root_name()?;
+                p.expect(COLON, "':'")?;
+                p.value(name, at)
+            });
+        }
+        if self.at_word("stop") && self.nth(1) == COLON {
+            return self.node(STOP, |p| {
+                let at = p.span(0).to(p.span(1));
+                p.wrap(NAME);
+                p.bump();
+                p.value("stop", at)?;
+                if !p.at(STRING_QUOTE) {
+                    return Err(p.expected_with_help(
+                        &["a string"],
+                        Some("a stop is written: stop: value \"what stops it there\""),
+                    ));
+                }
+                p.string();
+                Ok(())
+            });
+        }
+        self.field()
+    }
+
+    /// `a, b`: the two members of a mechanism entry.
+    fn member_pair(&mut self) -> PResult {
+        self.root_name()?;
+        self.expect(COMMA, "','")?;
+        self.root_name()
+    }
+
+    /// The contextual word `word`.
+    fn expect_word(&mut self, word: &str) -> PResult {
+        if self.at_word(word) {
+            self.bump();
+            Ok(())
+        } else {
+            let what = format!("'{word}'");
+            Err(self.expected(&[what.as_str()]))
+        }
     }
 
     /// `name: Type`
@@ -1938,6 +2099,19 @@ impl<'t> Parser<'t> {
 
     fn primary(&mut self) -> PResult {
         match self.current() {
+            INT_NUMBER | DECIMAL_NUMBER
+                if self.nth(1) == IDENT
+                    && self.nth_text(1) == "in"
+                    && matches!(self.nth(2), INT_NUMBER | DECIMAL_NUMBER) =>
+            {
+                // A slope: `1 in 8`.
+                self.node(BINARY_EXPR, |p| {
+                    p.wrap(LITERAL);
+                    p.bump();
+                    p.wrap(LITERAL);
+                    Ok(())
+                })
+            }
             QUANTITY | INT_NUMBER | DECIMAL_NUMBER | KW_TRUE | KW_FALSE | KW_FIT => {
                 self.wrap(LITERAL);
                 Ok(())

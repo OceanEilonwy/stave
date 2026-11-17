@@ -27,10 +27,13 @@
 //! reaches through (a notch floor too), and its wall is drawn only where
 //! it passes through wood.
 //!
-//! # Slots turned by an angle
+//! # Angled cuts
 //!
-//! Faces are clipped to the outside of the slot and its walls drawn
-//! through each wood cell ([`mesh_cut`]).
+//! A board whose angled cuts ([`Prism`](crate::solid::Prism)s) all run along
+//! one axis, with no holes or round features, is drawn by
+//! [`mesh_prism`](crate::mesh_prism): cells and slabs instead of a grid,
+//! watertight. Otherwise the grid is drawn and each slanted piece clips the
+//! faces it reaches, its walls drawn through each wood cell ([`mesh_cut`]).
 //!
 //! # Round features
 //!
@@ -44,7 +47,7 @@
 //!
 //! Every vertex says whether its face was made by a cut
 //! ([`Vertex::cut`](crate::Vertex::cut)): a board's faces off its cut box,
-//! hole walls and bottoms, angled slot walls, round tenons and round
+//! hole walls and bottoms, the walls and floors of angled cuts, round tenons and round
 //! sections, and the zones of a turned part a round tenon narrowed.
 
 use std::f32::consts::TAU;
@@ -79,7 +82,10 @@ pub fn cut_part(part: &Part, solid: &Solid, grain: GrainAxes) -> Geometry {
     let length = render::mm(part.cut.length);
     let mut pieces = Vec::new();
     if !solid.blocks().is_empty() {
-        pieces.push(board(&frame, solid, grain, size));
+        match crate::mesh_prism::shared_axis(solid) {
+            Some(axis) => pieces.push(crate::mesh_prism::board(&frame, solid, grain, size, axis)),
+            None => pieces.push(board(&frame, solid, grain, size)),
+        }
     }
     for rod in solid.rods() {
         if rod.flats.is_some() {
@@ -243,7 +249,15 @@ fn board(frame: &Frame, solid: &Solid, grain: GrainAxes, size: [i64; 3]) -> Geom
     let stock_plane =
         |axis: usize, at: i64| at == 0 || size.get(axis).is_some_and(|edge| *edge == at);
     let holes: Vec<HoleShape> = solid.holes().iter().map(HoleShape::of).collect();
-    let bands: Vec<Band> = solid.slots().iter().map(Band::of).collect();
+    let bands: Vec<Band> = solid
+        .prisms()
+        .iter()
+        .flat_map(|prism| {
+            prism
+                .slanted_pieces()
+                .map(move |piece| Band::of(prism, piece))
+        })
+        .collect();
     let mut lines: [Vec<i64>; 3] = Default::default();
     for block in solid.blocks().iter() {
         for axis in PartAxis::ALL {

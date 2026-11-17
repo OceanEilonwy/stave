@@ -118,9 +118,6 @@ impl OutputUnit {
 /// The word `through`: a depth that goes all the way through a part.
 pub const THROUGH: &str = "through";
 
-/// The word `bounds`: a model aligned by its bounding box.
-pub const BOUNDS: &str = "bounds";
-
 /// The bare spacing words of `spaced` (the other spacings are calls).
 pub const SPACING_WORDS: [&str; 2] = ["evenly", "ends"];
 
@@ -149,15 +146,13 @@ pub enum WordSet {
     Grain,
     /// `through`.
     Through,
-    /// `bounds`.
-    Bounds,
     /// `evenly`, `ends`.
     Spacing,
 }
 
 impl WordSet {
     /// Every word list.
-    pub const ALL: [WordSet; 13] = [
+    pub const ALL: [WordSet; 12] = [
         WordSet::Axis,
         WordSet::Direction,
         WordSet::Face,
@@ -169,7 +164,6 @@ impl WordSet {
         WordSet::Motion,
         WordSet::Grain,
         WordSet::Through,
-        WordSet::Bounds,
         WordSet::Spacing,
     ];
 
@@ -187,7 +181,6 @@ impl WordSet {
             WordSet::Motion => MotionWord::from_word(word).is_some(),
             WordSet::Grain => Grain::from_word(word).is_some(),
             WordSet::Through => word == THROUGH,
-            WordSet::Bounds => word == BOUNDS,
             WordSet::Spacing => SPACING_WORDS.contains(&word),
         }
     }
@@ -206,7 +199,6 @@ impl WordSet {
             WordSet::Motion => MotionWord::ALL.iter().map(|motion| motion.word()).collect(),
             WordSet::Grain => Grain::ALL.iter().map(|grain| grain.word()).collect(),
             WordSet::Through => vec![THROUGH],
-            WordSet::Bounds => vec![BOUNDS],
             WordSet::Spacing => SPACING_WORDS.to_vec(),
         }
     }
@@ -225,7 +217,6 @@ impl WordSet {
             WordSet::Motion => "'open' or 'closed'",
             WordSet::Grain => "'length' or 'width'",
             WordSet::Through => "'through'",
-            WordSet::Bounds => "'bounds'",
             WordSet::Spacing => "a spacing",
         }
     }
@@ -266,7 +257,7 @@ mod tests {
         let pose = between(GRAMMAR, "| `pose <target> = <value>` | ", " |");
         assert!(ticked(pose).starts_with(&["open".to_owned(), "closed".to_owned()]));
         assert!(GRAMMAR.contains("`through` as a depth means all the way through"));
-        assert!(GRAMMAR.contains("`align: bounds`"));
+        assert!(GRAMMAR.contains("`align: node(\"mount\")` (optional)"));
     }
 
     #[test]

@@ -7,7 +7,9 @@ mod common;
 use common::{
     body_line, design, diagnostics, holds, mm, only_error, open, open_files, part, the_diagnostic,
 };
-use stave_model::solved::{PoseValue, SceneItem, Shape};
+use stave_lang::ast::CutOperation;
+use stave_lang::placement::PartAxis;
+use stave_model::solved::{Boards, End, PartOrigin, PoseValue, SceneItem, Shape, SolvedDesign};
 use stave_schema::words::{Grain, OutputUnit};
 
 /// A whole project file with its own `project` block.
@@ -106,7 +108,7 @@ fn an_unknown_project_field_lists_the_fields() {
     );
     assert_eq!(
         common::help(&opened),
-        "the fields are: goal, units, resolution, style, tools, methods"
+        "the fields are: goal, units, resolution, style, tools, methods, boards"
     );
 }
 
@@ -254,12 +256,246 @@ joint housings : dado(shelf, into: [side[left], side[right]], depth: 5mm)",
     );
 }
 
+/// A stock 50mm wide at most, and a part of it 300mm wide on the base,
+/// with extra fields.
+const NARROW: &str =
+    "stock narrow { species: pine, form: solid, thickness: 19mm, max_width: 50mm }";
+
+fn wide_part(fields: &str) -> String {
+    format!(
+        "{NARROW}\npart p : narrow {{\n  length: 100mm\n  width:  300mm\n{fields}\n  place {{\n    against(base.top)\n    flush(base.left)\n    flush(base.front)\n  }}\n}}"
+    )
+}
+
+/// The boards of a part, or a panic.
+fn boards_of<'d>(design: &'d SolvedDesign, name: &str) -> &'d Boards {
+    part(design, name)
+        .boards
+        .as_ref()
+        .unwrap_or_else(|| panic!("{name} is not made of boards"))
+}
+
+/// The names of the kinds a part's boards are joined by, with their glue.
+fn methods(boards: &Boards) -> Vec<(String, bool)> {
+    boards
+        .methods
+        .iter()
+        .map(|m| (m.name.clone(), m.glue))
+        .collect()
+}
+
 #[test]
 fn a_wider_part_than_max_width_is_planned_as_a_glue_up() {
-    let opened = open(
-        "stock narrow { species: pine, form: solid, thickness: 19mm, max_width: 50mm }\npart p : narrow {\n  length: 100mm\n  width:  300mm\n  place {\n    against(base.top)\n    flush(base.left)\n    flush(base.front)\n  }\n}",
-    );
+    // Before: only that a too-wide part gave no error. Now: the part is
+    // made of ceil(300 / 50) = 6 equal boards, with a seam between each
+    // neighbouring pair, along the grain.
+    let opened = open(&wide_part(""));
     assert!(opened.diagnostics.is_empty(), "{:?}", diagnostics(&opened));
+    let design = design(&opened);
+    let p = part(design, "p");
+    let boards = boards_of(design, "p");
+    assert_eq!(boards.axis, PartAxis::Width);
+    assert_eq!(boards.boards.count(), 6);
+    let numbers: Vec<u32> = boards.boards.iter().map(|b| b.index.get()).collect();
+    assert_eq!(numbers, [1, 2, 3, 4, 5, 6]);
+    assert!(boards.boards.iter().all(|b| b.width == mm("50")));
+    assert!(boards.boards.iter().all(|b| b.cuts.is_empty()));
+    let mut offsets: Vec<_> = boards.boards.iter().map(|b| b.offset).collect();
+    offsets.sort();
+    assert_eq!(offsets, ["0", "50", "100", "150", "200", "250"].map(mm));
+    // Board 1 is at the reference edge.
+    let at_reference = match p.reference_edge.end {
+        End::Start => mm("0"),
+        End::End => mm("250"),
+    };
+    assert_eq!(boards.boards.first().offset, at_reference);
+    assert_eq!(boards.seams.len(), 5);
+    for (n, seam) in (1u32..).zip(&boards.seams) {
+        assert_eq!((seam.between.0.get(), seam.between.1.get()), (n, n + 1));
+    }
+    let mut seams: Vec<_> = boards.seams.iter().map(|s| s.at).collect();
+    seams.sort();
+    assert_eq!(seams, ["50", "100", "150", "200", "250"].map(mm));
+    // Unequal shares stay exact until they are stored: 290mm makes six
+    // boards of 48.333...mm.
+    let opened = open(&wide_part("").replace("300mm", "290mm"));
+    let boards = boards_of(common::design(&opened), "p");
+    assert_eq!(boards.boards.count(), 6);
+    assert!(boards.boards.iter().all(|b| b.width == mm("48.333333")));
+    // A part no wider than max_width is one board, as written.
+    let opened = open(&wide_part("").replace("300mm", "50mm"));
+    assert!(part(common::design(&opened), "p").boards.is_none());
+}
+
+#[test]
+fn boards_are_joined_by_the_projects_default() {
+    // Left out everywhere: glued_edge.
+    let opened = open(&wide_part(""));
+    assert_eq!(
+        methods(boards_of(design(&opened), "p")),
+        [("glued_edge".to_owned(), true)]
+    );
+    // The project's boards: for every part that doesn't say.
+    let opened = open_files(&[(
+        "project.stave",
+        &with_project("  boards: joined(by: tongue_and_groove)", &wide_part("")),
+    )]);
+    assert!(opened.diagnostics.is_empty(), "{:?}", diagnostics(&opened));
+    assert_eq!(
+        methods(boards_of(design(&opened), "p")),
+        [("tongue_and_groove".to_owned(), true)]
+    );
+}
+
+#[test]
+fn a_part_names_its_own_joining() {
+    let opened = open_files(&[(
+        "project.stave",
+        &with_project(
+            "  boards: joined(by: tongue_and_groove)",
+            &wide_part("  boards: joined(by: splined_edge)"),
+        ),
+    )]);
+    assert!(opened.diagnostics.is_empty(), "{:?}", diagnostics(&opened));
+    assert_eq!(
+        methods(boards_of(design(&opened), "p")),
+        [("splined_edge".to_owned(), true)]
+    );
+    // A part that isn't made of boards ignores it.
+    let opened = open(&board("  boards: joined(by: splined_edge)"));
+    assert!(opened.diagnostics.is_empty(), "{:?}", diagnostics(&opened));
+    assert!(part(design(&opened), "p").boards.is_none());
+    // Anything but joint kinds is a type mismatch.
+    let opened = open(&wide_part("  boards: joined(by: 3mm)"));
+    assert_eq!(
+        diagnostics(&opened),
+        ["type-mismatch: 'by' needs a list of joint kinds, found a length"]
+    );
+}
+
+#[test]
+fn a_list_combines_edge_joints() {
+    let opened = open(&wide_part(
+        "  boards: joined(by: [glued_edge, splined_edge(depth: 5mm)])",
+    ));
+    assert!(opened.diagnostics.is_empty(), "{:?}", diagnostics(&opened));
+    let design = design(&opened);
+    let boards = boards_of(design, "p");
+    assert_eq!(
+        methods(boards),
+        [
+            ("glued_edge".to_owned(), true),
+            ("splined_edge".to_owned(), true)
+        ]
+    );
+    // Both kinds join every seam: each kind's requires are checked at
+    // each of the five seams, and a middle board has a spline groove at
+    // each of its two seams.
+    let names: Vec<&str> = boards.requires.iter().map(|r| r.name.as_str()).collect();
+    assert_eq!(names.len(), 15);
+    assert!(names.contains(&"p.seam[5].same_thickness"));
+    assert!(names.contains(&"p.seam[5].walls_stand"));
+    let middle = boards.boards.get(2).unwrap();
+    let operations: Vec<_> = middle.cuts.iter().map(|c| c.kind.operation()).collect();
+    assert_eq!(operations, [CutOperation::Slot, CutOperation::Slot]);
+    // The splines are made, one per seam, at the setting given.
+    assert_eq!(design.made_parts().count(), 5);
+    assert_eq!(part(design, "p.spline[1]").drawn.width, mm("10"));
+    // Kinds that put wood in the same place are caught like any joint: a
+    // spline where the tongue already is overlaps it.
+    let opened = open(&wide_part(
+        "  boards: joined(by: [tongue_and_groove(glue: false), splined_edge])",
+    ));
+    assert_eq!(diagnostics(&opened), ["overlap: p and p.spline[1] overlap"]);
+}
+
+#[test]
+fn tongue_and_groove_needs_no_glue() {
+    let opened = open(&wide_part(
+        "  boards: joined(by: tongue_and_groove(glue: false))",
+    ));
+    assert!(opened.diagnostics.is_empty(), "{:?}", diagnostics(&opened));
+    let design = design(&opened);
+    let boards = boards_of(design, "p");
+    assert_eq!(methods(boards), [("tongue_and_groove".to_owned(), false)]);
+    // Every board but the last carries a tongue 19 / 3 mm long, so it is
+    // cut that much wider; every board but the first has the groove.
+    let wider = mm("56.333333");
+    let widths: Vec<_> = boards.boards.iter().map(|b| b.width).collect();
+    assert_eq!(widths, [wider, wider, wider, wider, wider, mm("50")]);
+    let first = boards.boards.first();
+    assert_eq!(
+        first
+            .cuts
+            .iter()
+            .map(|c| c.kind.operation())
+            .collect::<Vec<_>>(),
+        [CutOperation::Tenon]
+    );
+    assert!(boards.requires.iter().all(|r| r.holds));
+    assert_eq!(boards.requires.len(), 10);
+    assert_eq!(boards.requires[0].name, "p.seam[1].same_thickness");
+    // The part is still one part: its cut size is what was drawn.
+    assert_eq!(part(design, "p").cut.width, mm("300"));
+}
+
+#[test]
+fn a_sheet_wider_than_max_width_is_an_error() {
+    let opened = open(
+        "stock sheet { species: birch, form: plywood, thickness: 18mm, max_width: 1220mm }\npart p : sheet {\n  length: 500mm\n  width:  1300mm\n  place {\n    against(base.top)\n    flush(base.left)\n    flush(base.front)\n  }\n}",
+    );
+    let diagnostic = the_diagnostic(
+        &opened,
+        "type-mismatch",
+        "p: its width across the grain works out as 1300mm, which is more than its stock's max_width of 1220mm",
+    );
+    assert_eq!(body_line(&opened, diagnostic), 4);
+    assert_eq!(
+        common::help(&opened),
+        "a sheet isn't glued up from boards: choose a sheet wider than 'sheet', or make the part from several parts"
+    );
+}
+
+#[test]
+fn a_longer_part_names_an_end_joint() {
+    let opened = open(
+        "stock short { species: pine, form: solid, thickness: 19mm, max_length: 500mm }\npart p : short {\n  length: 600mm\n  width:  100mm\n  place {\n    against(base.top)\n    flush(base.left)\n    flush(base.front)\n  }\n}",
+    );
+    assert_eq!(
+        common::help(&opened),
+        "stock 'short' comes no longer than 500mm; make it from two parts joined end to end (for example ari_tsugi), or buy longer stock"
+    );
+}
+
+#[test]
+fn a_spline_is_a_made_part_per_seam() {
+    let opened = open(&wide_part("  boards: joined(by: splined_edge)"));
+    assert!(opened.diagnostics.is_empty(), "{:?}", diagnostics(&opened));
+    let design = design(&opened);
+    let p = part(design, "p");
+    let splines: Vec<_> = design.made_parts().collect();
+    assert_eq!(splines.len(), 5);
+    for (n, spline) in splines.iter().enumerate() {
+        assert_eq!(spline.name, format!("p.spline[{}]", n + 1));
+        assert_eq!(
+            spline.origin,
+            PartOrigin::Boards {
+                part: p.id,
+                seam: Some(n)
+            }
+        );
+        // As long as the seam, reaching 9.5mm into each board, a third of
+        // the board thick.
+        assert_eq!(spline.drawn.length, mm("100"));
+        assert_eq!(spline.drawn.width, mm("19"));
+        assert_eq!(spline.drawn.thickness, mm("6.333333"));
+        assert_eq!(spline.stock.name, "narrow");
+    }
+    // Every board has a groove at each of its seams; none is widened.
+    let boards = boards_of(design, "p");
+    let grooves: Vec<usize> = boards.boards.iter().map(|b| b.cuts.len()).collect();
+    assert_eq!(grooves, [1, 2, 2, 2, 2, 1]);
+    assert!(boards.boards.iter().all(|b| b.width == mm("50")));
 }
 
 // ---------------------------------------------------------------------------
@@ -597,15 +833,35 @@ fn poses_are_open_closed_an_angle_or_a_length() {
     flush(base.front)
   }
 }
-/// A cup hinge for an inset door, with no catalogue overlay (so its
-/// overlay isn't checked).
+/// A cup hinge for an inset door, whose plate has no adjustment: it
+/// is drawn where this design puts it.
 kind inset_cup_hinge : hinge {
+  roles {
+    piece: Part
+    on:    Part
+  }
   opening_angle: 110deg
   cup_diameter:  35mm
   cup_depth:     13mm
   cup_inset:     5mm
-  plate_setback: 37mm
-  plate:         box(length: 50mm, width: 36mm, thickness: 11mm)
+  mount {
+    face:   back
+    across: from(edge(piece, nearer: on), inset: 22.5mm)
+    along:  open
+  }
+  member plate {
+    with:  on
+    shape: box(along: 50mm, across: -3.5mm..7.5mm, depth: -55mm..-19mm)
+    mount {
+      across: from(face(on, toward: piece), inset: -3.5mm)
+      depth:  from(face(on, toward: piece))
+    }
+  }
+  member cup {
+    with:  piece
+    shape: cylinder(diameter: 35mm, depth: 0mm..13mm)
+  }
+  cut crossing(piece, cup) { drill(diameter: 35mm, depth: 13mm) }
 }
 component Flap {
   part leaf : pine_19 {
@@ -614,8 +870,8 @@ component Flap {
     place {
       orient(length: up, width: right)
       against(base.top)
-      against(wall.right)
-      against(base.front)
+      flush(wall.left)
+      against(wall.front)
     }
   }
   hardware hinge : inset_cup_hinge(leaf, on: wall) {
@@ -702,7 +958,7 @@ fn an_array_of_assemblies_takes_its_arguments_per_element() {
 /// A slide kind with extra entries.
 fn slide_kind(entries: &str) -> String {
     format!(
-        "kind small_slide : slide {{\n  length:    300mm\n  clearance: 12.7mm\n  travel:    300mm\n  envelope:  box(length: 300mm, width: 45mm, thickness: 12.7mm)\n{entries}\n}}"
+        "kind small_slide : slide {{\n  roles {{\n    piece: Part\n    in:    Region\n  }}\n  length:    300mm\n  clearance: 12.7mm\n  travel:    300mm\n  mount {{\n    face:   face(piece, nearer: in)\n    across: center(piece)\n    along:  from(end(piece, toward: front))\n  }}\n{entries}\n}}"
     )
 }
 
@@ -808,11 +1064,255 @@ fn a_fastener_has_no_members_and_a_member_is_written_once() {
     );
     // A pull names its knob and screw, or its bar and screws.
     let opened = open(
-        "kind small_knob : pull {\n  envelope: cylinder(diameter: 20mm, length: 20mm)\n  /// Hold it.\n  member knob\n  member screw\n}",
+        "kind small_knob : pull {\n  roles {\n    piece: Part\n  }\n  mount {\n    face:   front\n    across: open\n    along:  open\n  }\n  /// Hold it.\n  member knob\n  member screw\n}",
     );
     assert!(
         diagnostics(&opened).is_empty(),
         "{:?}",
         diagnostics(&opened)
+    );
+}
+
+/// A cup hinge kind written out with its members and `mechanism` (the
+/// standard hinge's arm, cup, links and pins), and a door hung on it.
+fn hung_door(mechanism: &str) -> String {
+    format!(
+        "kind test_hinge : hinge {{
+  roles {{
+    piece: Part
+    on:    Part
+  }}
+  opening_angle: 110deg
+  cup_diameter:  35mm
+  cup_depth:     12.8mm
+  cup_inset:     5mm
+  mount {{
+    face:   back
+    across: from(edge(piece, nearer: on), inset: 22.5mm)
+    along:  open
+  }}
+  member plate {{
+    with:  on
+    shape: box(along: 50mm, across: -4mm..7mm, depth: -55mm..-19mm)
+    mount {{
+      across: from(face(on, toward: piece), inset: -4mm)
+      depth:  from(face(on, toward: piece))
+    }}
+  }}
+  member links
+  member arm {{
+    with:          on
+    shape body:    box(along: 16mm, across: -2.9mm..15mm, depth: -55mm..0mm)
+    shape knuckle: box(along: 16mm, across: 8mm..15mm, depth: 0mm..12.4mm)
+  }}
+  member cup {{ with: piece, shape: cylinder(diameter: 35mm, depth: 0mm..12.8mm) }}
+  member inner_link {{
+    shape: bar(from: point(across: 13.5mm, depth: 10.9mm), to: point(across: -8.8mm, depth: 7.33mm), thickness: 1.5mm, along: 9mm)
+  }}
+  member outer_link {{
+    shape: bar(from: point(across: 13.28mm, depth: 3.56mm), to: point(across: -9.54mm, depth: 1.39mm), thickness: 1.5mm, along: 14mm)
+  }}
+  mechanism {{
+{mechanism}
+  }}
+  cut bore: crossing(piece, cup) {{ drill(diameter: 35mm, depth: 12.8mm) }}
+}}
+part side : pine_19 {{
+  length: 400mm
+  width:  300mm
+  place {{
+    orient(length: up, width: back)
+    against(base.top)
+    flush(base.left)
+    flush(base.back)
+  }}
+}}
+part door : pine_19 {{
+  length: 400mm
+  width:  200mm
+  place {{
+    orient(length: up, width: right)
+    against(base.top)
+    flush(side.left, inset: 0.5mm)
+    against(side.front)
+  }}
+}}
+hardware hinge : test_hinge(door, on: side) {{
+  place {{
+    flush(door.bottom, inset: 80mm)
+  }}
+}}"
+    )
+}
+
+const FOUR_PINS: &str = "    pivot arm, inner_link at point(across: 13.5mm, depth: 10.9mm)
+    pivot cup, inner_link at point(across: -8.8mm, depth: 7.33mm)
+    pivot arm, outer_link at point(across: 13.28mm, depth: 3.56mm)
+    pivot cup, outer_link at point(across: -9.54mm, depth: 1.39mm)
+    drive: turn(cup, from: 0deg, to: 110deg)";
+
+#[test]
+fn a_cup_hinge_moves_on_the_mechanism_its_kind_declares() {
+    let opened = open(&hung_door(FOUR_PINS));
+    assert!(
+        diagnostics(&opened).is_empty(),
+        "{:?}",
+        diagnostics(&opened)
+    );
+    let model = opened.model.as_ref().unwrap();
+    let kind = model
+        .defs
+        .kinds
+        .iter()
+        .find(|k| k.decl.name == "test_hinge")
+        .unwrap();
+    let bodies: Vec<&str> = kind.bodies.iter().map(|b| b.name.as_str()).collect();
+    assert_eq!(bodies, ["plate", "arm", "cup", "inner_link", "outer_link"]);
+    // The viewer's list keeps the base's words only.
+    let members: Vec<&str> = kind.members.iter().map(|m| m.name.word()).collect();
+    assert_eq!(members, ["plate", "links", "arm", "cup"]);
+    let mechanism = kind.mechanism.as_ref().unwrap();
+    assert_eq!(mechanism.constraints.len(), 4);
+    // The hinge's links are the kind's bars, its pins the kind's pivots.
+    let hinge = common::hardware(design(&opened), "hinge")
+        .mechanism
+        .unwrap();
+    assert_eq!(
+        hinge.links.map(|link| (link.width, link.thickness)),
+        [(mm("9"), mm("1.5")), (mm("14"), mm("1.5"))]
+    );
+    assert_eq!(
+        hinge.linkage.opening_angle(),
+        stave_lang::units::Angle::from_deg(110)
+    );
+}
+
+#[test]
+fn point_is_an_error_outside_a_kind() {
+    let opened = open("param spot = point(across: 3mm)");
+    let diagnostic = the_diagnostic(
+        &opened,
+        "syntax",
+        "point(...) is written only inside a hardware kind's member or mechanism",
+    );
+    assert_eq!(body_line(&opened, diagnostic), 1);
+    // So is a range anywhere but a member's shape.
+    let opened = open(
+        "kind small_knob : pull {\n  roles {\n    piece: Part\n  }\n  mount {\n    face:   front\n    across: open\n    along:  open\n  }\n  envelope: box(length: 10mm..20mm, width: 20mm, thickness: 20mm)\n}",
+    );
+    the_diagnostic(
+        &opened,
+        "syntax",
+        "a range lo..hi is written only as an argument of a member's shape",
+    );
+}
+
+#[test]
+fn a_mechanism_needs_exactly_one_freedom() {
+    // Leaving out the outer link's pin in the cup leaves three: the cup and
+    // the two links move (nine), less two for each of three pins.
+    let three_pins = FOUR_PINS.replace(
+        "    pivot cup, outer_link at point(across: -9.54mm, depth: 1.39mm)\n",
+        "",
+    );
+    let opened = open(&hung_door(&three_pins));
+    the_diagnostic(
+        &opened,
+        "mechanism",
+        "test_hinge's mechanism has 3 freedoms; it needs exactly one",
+    );
+    // One pin too many takes the last freedom away.
+    let five_pins =
+        format!("{FOUR_PINS}\n    pivot inner_link, outer_link at point(across: 2mm, depth: 5mm)");
+    let opened = open(&hung_door(&five_pins));
+    the_diagnostic(
+        &opened,
+        "mechanism",
+        "test_hinge's mechanism has -1 freedoms; it needs exactly one",
+    );
+    // One freedom that can't be solved one step at a time: a couple
+    // between members that run on no rail. (Before the general solver this
+    // was not-supported: only the four-bar form was solved.)
+    let slot = FOUR_PINS.replace(
+        "    pivot cup, outer_link at point(across: -9.54mm, depth: 1.39mm)\n",
+        "    slot cup, outer_link from point(across: -9.54mm, depth: 1.39mm) to point(across: -9.54mm, depth: 5mm)\n    couple outer_link to cup: 1/2\n",
+    );
+    let opened = open(&hung_door(&slot));
+    the_diagnostic(
+        &opened,
+        "mechanism",
+        "test_hinge's mechanism: `outer_link` travels, but runs on no rail",
+    );
+}
+
+#[test]
+fn a_pivot_names_two_declared_members() {
+    let misspelt = FOUR_PINS.replace("pivot arm, inner_link", "pivot ram, inner_link");
+    let opened = open(&hung_door(&misspelt));
+    let diagnostic = the_diagnostic(&opened, "unknown-name", "unknown name 'ram'");
+    assert_eq!(diagnostic.help.as_deref(), Some("did you mean 'arm'?"));
+    // A member without a body has nothing to pin.
+    let bare = FOUR_PINS.replace("pivot arm, inner_link", "pivot links, inner_link");
+    let opened = open(&hung_door(&bare));
+    the_diagnostic(&opened, "unknown-name", "unknown name 'links'");
+    // And the two are different members.
+    let twice = FOUR_PINS.replace("pivot arm, inner_link", "pivot arm, arm");
+    let opened = open(&hung_door(&twice));
+    the_diagnostic(
+        &opened,
+        "duplicate-name",
+        "'arm' is named twice in one pivot",
+    );
+}
+
+/// A hinge kind with no `mechanism` doesn't move: nothing about a hinge is
+/// built in, so how it moves is only what its kind declares. (It used to
+/// turn about the edge its mount measures from, read from its base.) With
+/// no mechanism to place them, the links ride on the door
+/// (`with: piece`).
+#[test]
+fn a_hinge_kind_without_a_mechanism_does_not_move() {
+    let opened = open(&format!(
+        "{}\ncomponent Door {{\n  part panel : pine_19 {{\n    length: 300mm\n    width:  200mm\n    place {{\n      orient(length: up, width: right)\n      against(base.top)\n      against(side.right)\n      against(base.front)\n    }}\n  }}\n}}",
+        without_mechanism()
+            .replace(
+                "member inner_link {",
+                "member inner_link {\n    with: piece"
+            )
+            .replace(
+                "member outer_link {",
+                "member outer_link {\n    with: piece"
+            )
+    ));
+    assert!(
+        diagnostics(&opened).is_empty(),
+        "{:?}",
+        diagnostics(&opened)
+    );
+    let hinge = common::hardware(design(&opened), "hinge");
+    assert!(hinge.mechanism.is_none() && hinge.own_mechanism.is_none());
+    assert!(
+        design(&opened)
+            .assemblies
+            .iter()
+            .all(|a| a.mechanism.is_none())
+    );
+}
+
+/// `hung_door` with its `mechanism` block taken out.
+fn without_mechanism() -> String {
+    hung_door(FOUR_PINS).replace(&format!("  mechanism {{\n{FOUR_PINS}\n  }}\n"), "")
+}
+
+/// A member with no `with:` is placed by the mechanism; in a kind with no
+/// mechanism nothing moves it, which is `error[missing-field]` at the
+/// member.
+#[test]
+fn a_member_nothing_moves_is_a_missing_field() {
+    let opened = open(&without_mechanism());
+    the_diagnostic(
+        &opened,
+        "missing-field",
+        "member 'inner_link' has no 'with:' and nothing in its kind moves it",
     );
 }

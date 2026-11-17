@@ -14,9 +14,7 @@
 //! - a [`Placement`] has one [`Translation`] per world axis, so an axis can't
 //!   be missing or set twice once a part is lowered;
 //! - an [`Orientation`] is always two perpendicular directions;
-//! - an [`ArraySlot`] is always inside its array;
-//! - a [`HardwarePlacement`] never has a term on the axis its mount face
-//!   already fixes.
+//! - an [`ArraySlot`] is always inside its array.
 //!
 //! Arrays are lowered **per element**: every element is its own part with its
 //! own [`Placement`]. `spaced` becomes a [`Translation::Spaced`] carrying the
@@ -707,121 +705,6 @@ impl Placement {
     }
 }
 
-/// A placement term for hardware, with the world axis it fixes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct AxisTerm {
-    /// The axis the term fixes.
-    pub axis: Axis,
-    /// The term.
-    pub translation: Translation,
-}
-
-/// The terms a hardware `place { }` holds, by how many axes the base kind
-/// leaves open.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum HardwareTerms {
-    /// The base kind fixes everything (a slide).
-    Fixed,
-    /// One axis is open (a hinge: along the piece's length).
-    One(AxisTerm),
-    /// Both axes of the mount face are open (a pull).
-    Two(AxisTerm, AxisTerm),
-}
-
-/// Why a hardware placement is invalid.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HardwarePlacementError {
-    /// A term fixes the axis the mount face already fixes.
-    AxisFixedByMountFace(Axis),
-    /// Two terms fix the same axis.
-    AxisSetTwice(Axis),
-}
-
-impl fmt::Display for HardwarePlacementError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            HardwarePlacementError::AxisFixedByMountFace(axis) => {
-                write!(
-                    f,
-                    "position along '{}' is already set by the mount face",
-                    axis.word()
-                )
-            }
-            HardwarePlacementError::AxisSetTwice(axis) => {
-                write!(f, "position along '{}' is set twice", axis.word())
-            }
-        }
-    }
-}
-
-impl std::error::Error for HardwarePlacementError {}
-
-/// The fully lowered placement of one piece of hardware: the face of its
-/// `piece` it is mounted on, and the terms for the axes that leaves open.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct HardwarePlacement {
-    piece: PartId,
-    face: Face,
-    terms: HardwareTerms,
-}
-
-impl HardwarePlacement {
-    /// Checks that no term fixes the mount face's own axis and that two terms
-    /// fix different axes.
-    pub fn new(
-        piece: PartId,
-        face: Face,
-        terms: HardwareTerms,
-    ) -> Result<Self, HardwarePlacementError> {
-        let fixed = face.axis();
-        let check = |term: AxisTerm| {
-            if term.axis == fixed {
-                Err(HardwarePlacementError::AxisFixedByMountFace(fixed))
-            } else {
-                Ok(())
-            }
-        };
-        match terms {
-            HardwareTerms::Fixed => {}
-            HardwareTerms::One(term) => check(term)?,
-            HardwareTerms::Two(first, second) => {
-                check(first)?;
-                check(second)?;
-                if first.axis == second.axis {
-                    return Err(HardwarePlacementError::AxisSetTwice(first.axis));
-                }
-            }
-        }
-        Ok(Self { piece, face, terms })
-    }
-
-    /// The part the hardware is mounted on.
-    pub fn piece(self) -> PartId {
-        self.piece
-    }
-
-    /// The face of the piece it is mounted on. It fixes the axis it is
-    /// normal to.
-    pub fn face(self) -> Face {
-        self.face
-    }
-
-    /// The terms for the axes the mount face leaves open.
-    pub fn terms(self) -> HardwareTerms {
-        self.terms
-    }
-
-    /// The term that fixes an axis, if the `place { }` block has one for it.
-    pub fn translation(self, axis: Axis) -> Option<Translation> {
-        let pick = |term: AxisTerm| (term.axis == axis).then_some(term.translation);
-        match self.terms {
-            HardwareTerms::Fixed => None,
-            HardwareTerms::One(term) => pick(term),
-            HardwareTerms::Two(first, second) => pick(first).or_else(|| pick(second)),
-        }
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Motion (used by scenes)
 // ---------------------------------------------------------------------------
@@ -1073,41 +956,6 @@ mod tests {
                 Some(axis)
             );
         }
-    }
-
-    #[test]
-    fn hardware_terms_stay_off_the_mount_face_axis() {
-        let term = |axis, side| AxisTerm {
-            axis,
-            translation: Translation::Flush {
-                anchor: face(side),
-                inset: Length::ZERO,
-            },
-        };
-        let up = term(Axis::Up, Face::Bottom);
-        let across = term(Axis::Across, Face::Left);
-        let deep = term(Axis::Deep, Face::Front);
-
-        let pull =
-            HardwarePlacement::new(BASE, Face::Front, HardwareTerms::Two(across, up)).unwrap();
-        assert_eq!((pull.piece(), pull.face()), (BASE, Face::Front));
-        assert_eq!(pull.translation(Axis::Up), Some(up.translation));
-        assert_eq!(pull.translation(Axis::Across), Some(across.translation));
-        assert_eq!(pull.translation(Axis::Deep), None);
-
-        let slide = HardwarePlacement::new(BASE, Face::Left, HardwareTerms::Fixed).unwrap();
-        assert_eq!(slide.terms(), HardwareTerms::Fixed);
-        assert_eq!(slide.translation(Axis::Up), None);
-
-        assert!(HardwarePlacement::new(BASE, Face::Back, HardwareTerms::One(up)).is_ok());
-        assert_eq!(
-            HardwarePlacement::new(BASE, Face::Back, HardwareTerms::One(deep)),
-            Err(HardwarePlacementError::AxisFixedByMountFace(Axis::Deep))
-        );
-        let error =
-            HardwarePlacement::new(BASE, Face::Front, HardwareTerms::Two(up, up)).unwrap_err();
-        assert_eq!(error, HardwarePlacementError::AxisSetTwice(Axis::Up));
-        assert_eq!(error.to_string(), "position along 'up' is set twice");
     }
 
     #[test]

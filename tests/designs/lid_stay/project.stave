@@ -1,0 +1,117 @@
+stave 1
+
+// A lid on two butt hinges, held open by a sliding stay: an arm pinned
+// under the lid whose other end runs in a slot screwed inside the back.
+// The hinges drive the lid; the stay has no drive of its own and follows
+// it, and its slot stops the lid upright, sooner than the hinges would.
+
+project "Lid stay" {
+  units: mm
+}
+
+stock pine_12 { species: pine, form: solid, thickness: 12mm }
+
+part base : pine_12 {
+  length: 300mm
+  width:  200mm
+  place {
+    ground
+  }
+}
+
+part back : pine_12 {
+  length: 300mm
+  width:  100mm
+  place {
+    orient(length: right, width: up)
+    against(base.top)
+    flush(base.left)
+    flush(base.back)
+  }
+}
+
+region outline = opening(
+  left:   base.left,
+  right:  base.right,
+  bottom: base.bottom,
+  top:    back.top,
+  front:  base.front,
+  back:   base.back,
+)
+
+component Lid {
+  param outline  : Region
+  param hinge_on : Part
+
+  part panel : pine_12 {
+    length: outline.across
+    width:  outline.deep
+    place {
+      against(outline.top)
+      flush(outline.left)
+      flush(outline.front)
+    }
+  }
+
+  hardware hinges[left, right] : butt_hinge(panel, on: hinge_on, face: bottom, length: 30mm) {
+    place {
+      spaced(ends(inset: 30mm), from: panel.left, to: panel.right)
+    }
+  }
+
+  hardware stay : sliding_stay(panel, on: hinge_on, face: bottom) {
+    place {
+      flush(panel.left, inset: 120mm)
+    }
+  }
+}
+
+assembly lid : Lid {
+  outline:  outline
+  hinge_on: back
+}
+
+scene lid_open "Lid open" {
+  pose lid = open
+}
+
+/// A sliding lid stay: an arm pinned to a bracket under the lid, its lower
+/// end running in a slot in a bracket screwed inside the back. It has no
+/// drive: it follows the lid as the hinges turn it, and stops it upright.
+kind sliding_stay : hinge {
+  roles {
+    piece: Part                      // the lid
+    on:    Part                      // the back the slot is screwed to
+  }
+  /// How far it lets the lid open.
+  param opening_angle = 90deg within 90deg..90deg
+
+  // Under the lid, measured from its edge nearer the back, like the
+  // hinges.
+  mount {
+    face:   back
+    across: from(edge(piece, nearer: on))
+    along:  open
+  }
+
+  /// The bracket under the lid that carries the arm's pin.
+  member leaf {
+    with:  piece
+    shape: box(along: 10mm, across: 55mm..65mm, depth: -8mm..0mm)
+  }
+  /// The slotted bracket screwed to the inside of the back.
+  member fixed_leaf {
+    with:  on
+    shape: box(along: 10mm, across: 12mm..28mm, depth: -85mm..-12mm)
+  }
+  /// The arm, pinned under the lid at one end, its other end in the slot.
+  member arm {
+    shape: bar(from: point(across: 60mm, depth: -5mm), to: point(across: 24mm, depth: -80mm), thickness: 2mm, along: 4mm)
+  }
+
+  mechanism {
+    pivot arm, leaf at point(across: 60mm, depth: -5mm)
+    slot arm, fixed_leaf from point(across: 24mm, depth: -80mm) to point(across: 24mm, depth: -15mm)
+    stop: opening_angle "the stay's slot holds the lid upright"
+  }
+}

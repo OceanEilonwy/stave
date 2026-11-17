@@ -50,7 +50,7 @@ kind ply_dado : joint {
   cut_first: into
   adds:      extend(piece, by: depth)
 
-  cut crossing(into, piece) {
+  cut dado: crossing(into, piece) {
     slot(width: width, depth: depth)
   }
 }

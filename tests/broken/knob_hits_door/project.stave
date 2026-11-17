@@ -1,4 +1,4 @@
-// expect: error[motion] door_r.panel hits door_l.handle when door_r is opened past 106.8deg
+// expect: error[motion] door_r.panel hits door_l.handle's knob when door_r is opened past 106.8deg
 stave 1
 
 // Two bays side by side, each door hinged on its left. The left door's knob

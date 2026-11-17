@@ -26,7 +26,7 @@ use stave_lang::placement::{Axis, Direction};
 use stave_lang::units::Length;
 use stave_model::solved::{Motion, PoseValue, WorldBox};
 
-use crate::collide::{CONTACT_TOLERANCE, Placement, WorldRod, WorldSolid, point_vector};
+use crate::collide::{CONTACT_TOLERANCE, WorldRod, WorldSolid, point_vector};
 use crate::render;
 
 /// A swing is refined until no point moves more than this between
@@ -713,33 +713,24 @@ pub fn closest_for(
     motion: &Motion,
     prefer: Option<DVec3>,
 ) -> Option<Closest> {
-    match *motion {
-        Motion::Travel { toward, travel } => {
-            closest_near(moving, fixed, &Travel::Slide { toward, travel }, prefer)
-        }
-        Motion::Turn { .. } | Motion::Linkage { .. } => {
-            let range = render::radians_f64(motion.opening_angle()?);
-            let pose = |radians: f64| {
-                let angle = render::angle_from_radians_floor(radians)?;
-                Some(Placement::of_motions(&[(*motion, PoseValue::Angle(angle))]).matrix())
-            };
-            let about = match *motion {
-                Motion::Turn { pivot, .. } => Some(pivot.axis),
-                Motion::Linkage { linkage } => Some(linkage.frame().axis()),
-                Motion::Travel { .. } => None,
-            };
-            closest_near(
-                moving,
-                fixed,
-                &Travel::Swing {
-                    pose: &pose,
-                    range,
-                    about,
-                },
-                prefer,
-            )
-        }
+    if let Some((toward, travel)) = crate::legacy::travel(motion) {
+        return closest_near(moving, fixed, &Travel::Slide { toward, travel }, prefer);
     }
+    let range = render::radians_f64(motion.opening_angle()?);
+    let pose = |radians: f64| {
+        let angle = render::angle_from_radians_floor(radians)?;
+        Some(crate::legacy::placement(motion, PoseValue::Angle(angle)).matrix())
+    };
+    closest_near(
+        moving,
+        fixed,
+        &Travel::Swing {
+            pose: &pose,
+            range,
+            about: crate::legacy::turning_axis(motion),
+        },
+        prefer,
+    )
 }
 
 #[cfg(test)]

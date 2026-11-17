@@ -544,15 +544,35 @@ region bay[low, high] = split(space, up, at: shelf)",
 fn mirrored_assemblies_rebind_outside_parts() {
     let opened = open(
         "part wall[left, right] : pine_19 {\n  length: 200mm\n  width: 300mm\n  place {\n    orient(length: up, width: back)\n    against(base.top)\n    spaced(ends, from: base.left, to: base.right)\n    flush(base.front)\n  }\n}
-/// A cup hinge for an inset door, with no catalogue overlay (so its
-/// overlay isn't checked).
+/// A cup hinge for an inset door, whose plate has no adjustment: it
+/// is drawn where this design puts it.
 kind inset_cup_hinge : hinge {
-  opening_angle: 110deg
+  roles {
+    piece: Part
+    on:    Part
+  }
+  opening_angle: 90deg
   cup_diameter:  35mm
   cup_depth:     13mm
   cup_inset:     5mm
-  plate_setback: 37mm
-  plate:         box(length: 50mm, width: 36mm, thickness: 11mm)
+  mount {
+    face:   back
+    across: from(edge(piece, nearer: on), inset: 22.5mm)
+    along:  open
+  }
+  member plate {
+    with:  on
+    shape: box(along: 50mm, across: -22.5mm..-11.5mm, depth: -55mm..-19mm)
+    mount {
+      across: from(face(on, toward: piece), inset: -22.5mm)
+      depth:  from(face(on, toward: piece))
+    }
+  }
+  member cup {
+    with:  piece
+    shape: cylinder(diameter: 35mm, depth: 0mm..13mm)
+  }
+  cut crossing(piece, cup) { drill(diameter: 35mm, depth: 13mm) }
 }
 component Flap {
   param hinge_side : Part
@@ -597,15 +617,54 @@ assembly flap_r = mirror(flap_l, about: mid(base, across))",
 fn a_mirror_without_a_counterpart_is_an_error() {
     let opened = open(
         "part wall : pine_19 {\n  length: 200mm\n  width: 300mm\n  place {\n    orient(length: up, width: back)\n    against(base.top)\n    flush(base.left)\n    flush(base.front)\n  }\n}
-/// A cup hinge for an inset door, with no catalogue overlay (so its
-/// overlay isn't checked).
+/// A cup hinge for an inset door, whose plate has no adjustment: it
+/// is drawn where this design puts it.
 kind inset_cup_hinge : hinge {
+  roles {
+    piece: Part
+    on:    Part
+  }
   opening_angle: 110deg
   cup_diameter:  35mm
   cup_depth:     13mm
   cup_inset:     5mm
-  plate_setback: 37mm
-  plate:         box(length: 50mm, width: 36mm, thickness: 11mm)
+  mount {
+    face:   back
+    across: from(edge(piece, nearer: on), inset: 22.5mm)
+    along:  open
+  }
+  member plate {
+    with:  on
+    shape: box(along: 50mm, across: -22.5mm..-11.5mm, depth: -55mm..-19mm)
+    mount {
+      across: from(face(on, toward: piece), inset: -22.5mm)
+      depth:  from(face(on, toward: piece))
+    }
+  }
+  cut crossing(piece, cup) { drill(diameter: 35mm, depth: 13mm) }
+  member arm {
+    with:          on
+    shape body:    box(along: 16mm, across: -2.9mm..15mm, depth: -55mm..0mm)
+    shape knuckle: box(along: 16mm, across: 8mm..15mm, depth: 0mm..12.4mm)
+  }
+  member cup {
+    with:  piece
+    shape: cylinder(diameter: 35mm, depth: 0mm..13mm)
+  }
+  member inner_link {
+    shape: bar(from: point(across: 13.5mm, depth: 10.9mm), to: point(across: -8.8mm, depth: 7.33mm), thickness: 1.5mm, along: 9mm)
+  }
+  member outer_link {
+    shape near: bar(from: point(across: 13.28mm, depth: 3.56mm), to: point(across: -9.54mm, depth: 1.39mm), thickness: 1.5mm, along: 5.5mm..7mm)
+    shape far:  bar(from: point(across: 13.28mm, depth: 3.56mm), to: point(across: -9.54mm, depth: 1.39mm), thickness: 1.5mm, along: -7mm..-5.5mm)
+  }
+  mechanism {
+    pivot arm, inner_link at point(across: 13.5mm, depth: 10.9mm)
+    pivot cup, inner_link at point(across: -8.8mm, depth: 7.33mm)
+    pivot arm, outer_link at point(across: 13.28mm, depth: 3.56mm)
+    pivot cup, outer_link at point(across: -9.54mm, depth: 1.39mm)
+    drive: turn(cup, from: 0deg, to: 110deg)
+  }
 }
 component Flap {
   param hinge_side : Part
@@ -972,13 +1031,13 @@ fn a_misspelt_field_is_one_error_not_two() {
         "{LEFT_SIDE}\npart shelf : pine_19 {{\n  length: 200mm\n  width: 300mm\n  place {{\n    against(base.top, gap: 100mm)\n    against(side.right)\n    flush(base.front)\n  }}\n}}\njoint housing : dado(shelf, int: side)"
     ));
     only_error(&role, "unknown-field", "the kind 'dado' has no field 'int'");
-    let entry = open(
-        "kind runner : slide {\n  lenght: 500mm\n  clearance: 12.7mm\n  travel: 500mm\n  envelope: box(length: 500mm, width: 45mm, thickness: 12.7mm)\n}",
-    );
+    // A fastener's entries are fixed; a slide's catalogue data is any
+    // field it likes, so only a fastener's misspelling is caught here.
+    let entry = open("kind peg : fastener {\n  lenght:   30mm\n  diameter: 6mm\n}");
     only_error(
         &entry,
         "unknown-field",
-        "a slide kind has no field 'lenght'",
+        "a fastener kind has no field 'lenght'",
     );
 }
 
@@ -1062,9 +1121,10 @@ fn butt_hinge_leaves_are_housed_in_both_parts_at_the_flush_edge() {
             .cuts
             .iter()
             .filter_map(|cut| match (&cut.place, &cut.kind) {
-                (stave_model::solved::CutPlace::Recess { footprint }, CutKind::Notch { depth }) => {
-                    Some((*footprint, *depth))
-                }
+                (
+                    stave_model::solved::CutPlace::Member { footprint, .. },
+                    CutKind::Notch { depth },
+                ) => Some((*footprint, *depth)),
                 _ => None,
             })
             .collect()
@@ -1083,14 +1143,17 @@ fn butt_hinge_leaves_are_housed_in_both_parts_at_the_flush_edge() {
         (mm("98.5"), mm("100"))
     );
     assert_eq!(recesses("lid.panel").len(), 2);
-    // The lid turns about its pin edge, lifting its front.
+    // The lid turns about its pin, in the middle of the knuckle: in the
+    // face the parts close on, the knuckle's radius (2.5mm) behind the
+    // flush edge. (It turned about the edge itself before the knuckle was
+    // declared.)
     let lid = design.assemblies.iter().find(|a| a.name == "lid").unwrap();
     let Some(stave_model::solved::Motion::Turn { pivot, .. }) = lid.motion else {
         panic!("the lid has no turn: {:?}", lid.motion);
     };
     assert_eq!(
         (pivot.through.up, pivot.through.deep),
-        (mm("119"), mm("300"))
+        (mm("119"), mm("302.5"))
     );
     assert_eq!(pivot.free_side, Direction::Front);
     assert_eq!(pivot.swing_toward, Direction::Up);
@@ -1129,7 +1192,7 @@ assembly flap_r = mirror(flap_l, about: mid(base, across))",
             .cuts
             .iter()
             .find_map(|cut| match cut.place {
-                stave_model::solved::CutPlace::Recess { footprint } => Some(footprint),
+                stave_model::solved::CutPlace::Member { footprint, .. } => Some(footprint),
                 _ => None,
             })
             .unwrap_or_else(|| panic!("{name} has no recess"))
@@ -1162,30 +1225,24 @@ assembly flap_r = mirror(flap_l, about: mid(base, across))",
     recess("flap_r.leaf");
 }
 
+/// A hinge kind is no longer a cup hinge or a butt hinge by its entries:
+/// it says which parts it joins and where it sits, and any entry is its
+/// catalogue data. (This test used to pin the cup-or-butt rule and its
+/// three errors, which are gone.)
 #[test]
-fn a_hinge_kind_is_a_cup_hinge_or_a_butt_hinge() {
+fn a_hinge_kind_says_what_it_joins_and_where_it_sits() {
     let neither = open("kind flap_hinge : hinge {\n  opening_angle: 90deg\n}");
-    only_error(
-        &neither,
-        "missing-field",
-        "kind 'flap_hinge' is missing 'leaf'",
+    assert_eq!(
+        diagnostics(&neither),
+        [
+            "missing-field: kind 'flap_hinge' is missing 'mount'",
+            "missing-field: kind 'flap_hinge' is missing 'roles'",
+        ]
     );
     let both = open(
-        "kind odd_hinge : hinge {\n  opening_angle: 90deg\n  cup_diameter:  35mm\n  leaf:          box(length: 40mm, width: 12mm, thickness: 1.5mm)\n}",
+        "kind odd_hinge : hinge {\n  roles {\n    piece: Part\n    on:    Part\n  }\n  opening_angle: 90deg\n  cup_diameter:  35mm\n  leaf_width:    12mm\n  mount {\n    face:   back\n    across: from(edge(piece, flush_with: on))\n    along:  open\n  }\n}",
     );
-    only_error(
-        &both,
-        "type-mismatch",
-        "kind 'odd_hinge' has both a leaf and a cup; a hinge is a cup hinge or a butt hinge",
-    );
-    let half_cup = open(
-        "kind odd_hinge : hinge {\n  opening_angle: 90deg\n  cup_diameter:  35mm\n  cup_depth:     13mm\n  cup_inset:     5mm\n  plate_setback: 37mm\n}",
-    );
-    only_error(
-        &half_cup,
-        "missing-field",
-        "kind 'odd_hinge' is missing 'plate'",
-    );
+    assert!(diagnostics(&both).is_empty(), "{:?}", diagnostics(&both));
 }
 
 #[test]

@@ -2,10 +2,16 @@
 source: crates/stave-app/tests/fit.rs
 expression: "rendered(\"tests/broken/drawer_does_not_fit\")"
 ---
-error[slide-gap]: slides[left]: side[left] is 10mm from the opening, but the slide needs 12.7mm
+error[require]: 'gap' fails: the slide needs exactly this much beside the drawer
   --> tests/broken/drawer_does_not_fit/project.stave:66:32
    |
 66 | hardware slides[left, right] : side_mount_slide(side[same], in: drawer_opening, length: 400mm)
    |                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-   = note: the same line also causes: slides[right]: side[right] is 10mm from the opening, but the slide needs 12.7mm
-   = help: make the drawer 2.7mm narrower on this side, so side[left] is 12.7mm from the side of the opening
+  ::: std/hardware/slides.stave:17:3
+   |
+17 |   require gap : between(mount, in) == 12.7mm "the slide needs exactly this much beside the drawer"
+   |   ------------------------------------------------------------------------------------------------ the kind's rule
+   = note: for slides[left]
+   = note: the rule measures 10mm and needs 12.7mm
+   = note: the same for slides[right]
+   = help: no value in the kind's lists makes this hold (length within [250mm, 300mm, 350mm, 400mm, 450mm, 500mm, 550mm, 600mm]); change the parts' sizes

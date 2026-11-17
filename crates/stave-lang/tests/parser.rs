@@ -392,11 +392,16 @@ fn contextual_words_in_their_positions() {
          \x20 roles: 3\n\
          \x20 cut end(piece, facing: in) { tenon(length: 3mm) }\n\
          \x20 cut: 4\n\
+         \x20 cut dado: crossing(piece, in) { notch(depth: 1mm) }\n\
+         \x20 mount { face: back, along: open }\n\
+         \x20 mount: 7\n\
          \x20 makes part key : s { length: 1mm }\n\
          \x20 makes: 5\n\
          \x20 /// The cup.\n\
          \x20 member cup\n\
          \x20 member: 6\n\
+         \x20 adjust cup on plate: across within 2mm\n\
+         \x20 adjust: 8\n\
          }\n\
          recipe r : notch {\n\
          \x20 mark { knife(walls) }\n\
@@ -416,7 +421,17 @@ fn contextual_words_in_their_positions() {
         .iter()
         .map(|entry| match entry {
             KindEntry::Roles(_) => "roles",
-            KindEntry::Cut(_) => "cut",
+            KindEntry::Cut(cut) => match &cut.name {
+                Some(name) => {
+                    assert_eq!(name.as_str(), "dado");
+                    "named cut"
+                }
+                None => "cut",
+            },
+            KindEntry::Mount(mount) => {
+                assert_eq!(mount.fields.len(), 2);
+                "mount"
+            }
             KindEntry::Makes(_) => "makes",
             KindEntry::Member(member) => {
                 assert_eq!(member.docs, ["The cup."]);
@@ -424,13 +439,32 @@ fn contextual_words_in_their_positions() {
                 "member"
             }
             KindEntry::Field(field) => field.key.as_str(),
+            KindEntry::Mechanism(_) => "mechanism",
+            KindEntry::Adjust(adjust) => {
+                assert_eq!(adjust.member.as_str(), "cup");
+                assert_eq!(adjust.on.as_str(), "plate");
+                assert_eq!(adjust.axis.as_str(), "across");
+                "adjust"
+            }
             KindEntry::Param(_) | KindEntry::Require(_) => "other",
         })
         .collect();
     assert_eq!(
         entries,
         [
-            "roles", "roles", "cut", "cut", "makes", "makes", "member", "member"
+            "roles",
+            "roles",
+            "cut",
+            "cut",
+            "named cut",
+            "mount",
+            "mount",
+            "makes",
+            "makes",
+            "member",
+            "member",
+            "adjust",
+            "adjust"
         ]
     );
     let ItemKind::Recipe(recipe) = &file.items[3].kind else {
@@ -453,6 +487,121 @@ fn contextual_words_in_their_positions() {
     assert!(matches!(index("opening"), Index::Same(_)));
     assert!(matches!(index("all"), Index::All(_)));
     assert!(matches!(index("one"), Index::At(_)));
+}
+
+#[test]
+fn members_with_bodies_shapes_and_every_mechanism_entry() {
+    let file = clean(
+        "stave 1\n\
+         kind h : hinge {\n\
+         \x20 /// The plate.\n\
+         \x20 member plate\n\
+         \x20 /// The arm.\n\
+         \x20 member arm {\n\
+         \x20   with:          on\n\
+         \x20   shape body:    box(along: 16mm, across: -2.9mm..15mm, depth: -(s + 18mm)..0mm)\n\
+         \x20   shape knuckle: box(along: 16mm, across: 8mm..15mm, depth: 0mm..12.4mm)\n\
+         \x20 }\n\
+         \x20 member cup { with: piece, shape: cylinder(diameter: 35mm, depth: 0mm..13mm) }\n\
+         \x20 mechanism {\n\
+         \x20   pivot arm, link at point(across: 13.5mm, depth: 10.9mm)\n\
+         \x20   slot cup, link from point(depth: 1mm) to point(depth: 2mm)\n\
+         \x20   rail cup, arm along along\n\
+         \x20   couple cup to arm: 1/2\n\
+         \x20   pin_diameter: 3mm\n\
+         \x20   drive: turn(cup, from: 0deg, to: 110deg)\n\
+         \x20   stop:  110deg \"the limiter stops it\"\n\
+         \x20 }\n\
+         }\n",
+    );
+    let ItemKind::Kind(kind) = &file.items[0].kind else {
+        panic!()
+    };
+    let members: Vec<&Documented<KindMember>> = kind
+        .body
+        .entries
+        .iter()
+        .filter_map(|entry| match entry {
+            KindEntry::Member(member) => Some(member),
+            _ => None,
+        })
+        .collect();
+    assert!(members[0].node.body.is_none());
+    assert_eq!(members[1].docs, ["The arm."]);
+    let arm = members[1].node.body.as_ref().unwrap();
+    let MemberEntry::Field(with) = &arm.entries[0] else {
+        panic!()
+    };
+    assert_eq!(with.key.as_str(), "with");
+    let MemberEntry::Shape(body) = &arm.entries[1] else {
+        panic!()
+    };
+    assert_eq!(body.name.as_ref().unwrap().as_str(), "body");
+    let ExprKind::Call { args, .. } = &body.value.kind else {
+        panic!()
+    };
+    assert!(matches!(args[1].value.kind, ExprKind::Range { .. }));
+    assert!(matches!(args[2].value.kind, ExprKind::Range { .. }));
+    // `shape:` is a field and gives the member's one unnamed shape.
+    let cup = members[2].node.body.as_ref().unwrap();
+    assert!(matches!(&cup.entries[1], MemberEntry::Shape(shape) if shape.name.is_none()));
+    let Some(KindEntry::Mechanism(mechanism)) = kind.body.entries.last() else {
+        panic!()
+    };
+    let entries: Vec<&str> = mechanism
+        .entries
+        .iter()
+        .map(|entry| match entry {
+            MechanismEntry::Pivot { members, .. } => {
+                assert_eq!(members.each_ref().map(Ident::as_str), ["arm", "link"]);
+                "pivot"
+            }
+            MechanismEntry::Slot { .. } => "slot",
+            MechanismEntry::Rail { along, .. } => {
+                assert_eq!(along.as_str(), "along");
+                "rail"
+            }
+            MechanismEntry::Couple { member, to, .. } => {
+                assert_eq!((member.as_str(), to.as_str()), ("cup", "arm"));
+                "couple"
+            }
+            MechanismEntry::Drive { .. } => "drive",
+            MechanismEntry::Stop { message, .. } => {
+                assert!(matches!(&message.parts[..], [StringPart::Text { text, .. }] if text == "the limiter stops it"));
+                "stop"
+            }
+            MechanismEntry::Field(field) => field.key.as_str(),
+        })
+        .collect();
+    assert_eq!(
+        entries,
+        [
+            "pivot",
+            "slot",
+            "rail",
+            "couple",
+            "pin_diameter",
+            "drive",
+            "stop"
+        ]
+    );
+}
+
+#[test]
+fn a_mechanism_entry_missing_a_word_is_one_error() {
+    let missing_at = parse(
+        "stave 1\nkind h : hinge {\n  mechanism {\n    pivot arm, link point(across: 1mm)\n  }\n}\n",
+    );
+    assert_eq!(
+        messages(&missing_at),
+        ["syntax: expected 'at', found 'point'"]
+    );
+    let missing_message =
+        parse("stave 1\nkind h : hinge {\n  mechanism {\n    stop: 110deg\n  }\n}\n");
+    assert_eq!(
+        messages(&missing_message),
+        ["syntax: expected a string, found end of line"]
+    );
 }
 
 #[test]
@@ -598,6 +747,31 @@ fn precedence_and_associativity() {
         shape(&binding.value),
         "(((((1 - 2) - ((3 * 4) / 5)) < 6) && !x) || y)"
     );
+}
+
+#[test]
+fn a_slope_is_a_number_in_a_number() {
+    let file = clean("stave 1\nlet a = 2 * 1 in 8\nlet b = in_ + 1\n");
+    fn shape(expr: &Expr) -> String {
+        match &expr.kind {
+            ExprKind::Binary { op, lhs, rhs } => {
+                format!("({} {} {})", shape(lhs), op.symbol(), shape(rhs))
+            }
+            ExprKind::Number(Number::Integer(n)) => n.to_string(),
+            ExprKind::Name(name) => name.to_string(),
+            other => format!("{other:?}"),
+        }
+    }
+    let shapes: Vec<String> = file
+        .items
+        .iter()
+        .map(|item| match design(item) {
+            DesignItem::Let(binding) => shape(&binding.value),
+            _ => panic!(),
+        })
+        .collect();
+    // `1 in 8` binds tighter than anything: it is one value.
+    assert_eq!(shapes, ["(2 * (1 in 8))", "(in_ + 1)"]);
 }
 
 #[test]

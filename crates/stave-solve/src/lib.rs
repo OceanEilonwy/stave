@@ -29,11 +29,17 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+mod boards;
 mod build;
 mod eval;
 mod hardware;
+mod help;
 mod joints;
+mod legacy;
+mod mechanism;
+mod models;
 mod place;
+mod rules;
 
 use std::collections::HashMap;
 
@@ -58,6 +64,14 @@ pub fn solve(model: &Model) -> (Option<SolvedDesign>, Vec<Diagnostic>) {
     let mut solver = Solver::new(model, project.file, project.span);
     let design = solver.run();
     let mut diagnostics = solver.diagnostics;
+    // The rules of hardware kinds are fit (layer 4): reported only when no
+    // earlier layer found an error, so one mistake is one error.
+    if !diagnostics
+        .iter()
+        .any(|d| d.is_error() && d.code.layer() < Code::Adjust.layer())
+    {
+        diagnostics.extend(solver.deferred);
+    }
     diagnostics.sort_by_key(|d| {
         d.primary()
             .map(|label| (label.file, label.span.start(), label.span.end()))
@@ -120,6 +134,17 @@ pub(crate) struct Solver<'m> {
     pub(crate) skipped: bool,
     /// Spaced elements that run past their `to` anchor.
     pub(crate) overruns: Vec<stave_model::solved::Overrun>,
+    /// Hardware kinds whose mechanism has been reported (a kind's mechanism
+    /// is checked for each piece of hardware, and reported once).
+    pub(crate) reported_mechanisms: std::collections::BTreeSet<stave_model::ids::KindId>,
+    /// What the rules of hardware kinds found (layer 4), in the order the
+    /// hardware was placed: reported only when no earlier layer found an
+    /// error.
+    pub(crate) deferred: Vec<Diagnostic>,
+    /// The boards of a part made of boards, while its board joints are
+    /// worked out: each stands in for a part under its own id (see
+    /// [`boards::BOARD_ID_BASE`]).
+    pub(crate) boards: std::collections::BTreeMap<PartId, boards::BoardPart>,
 }
 
 impl<'m> Solver<'m> {
@@ -143,6 +168,9 @@ impl<'m> Solver<'m> {
             reported_cycles: Vec::new(),
             skipped: false,
             overruns: Vec::new(),
+            reported_mechanisms: std::collections::BTreeSet::new(),
+            deferred: Vec::new(),
+            boards: std::collections::BTreeMap::new(),
         }
     }
 
@@ -278,6 +306,13 @@ impl<'m> Solver<'m> {
     }
 
     pub(crate) fn part_name(&self, part: PartId) -> String {
+        if let Some(board) = self.boards.get(&part) {
+            return format!(
+                "{}.board[{}]",
+                self.part_name(board.part),
+                board.index.get()
+            );
+        }
         self.model
             .parts
             .get(part.index())
