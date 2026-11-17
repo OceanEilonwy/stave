@@ -154,3 +154,41 @@ exploded scenes.
 - Screenshots of cut solids, a highlighted collision and an exploded scene for
   the cabinet and at least two other examples, looked at.
 - Checks stay fast: `stave check examples` in release well under a second.
+
+# Next: focus mode for joints and hardware (after the cup-hinge linkage lands)
+
+Goal: a beginner can see exactly how any joint goes together and how any
+piece of hardware works. One focus mode serves both; the mockups are the
+"Joint focus with X-ray" and "Hinge detail" screens on the design canvas.
+
+1. **Every cut drawn on every shape.** Holes in round and turned parts (the
+   stool's sockets), and cut faces tinted (holes, mortises, dados, rabbets,
+   grooves, hinge recesses) so joinery reads at a glance.
+2. **Focus mode** (`stave-app` command, `stave-scene` logic, `stave-gtk` shows
+   it): selecting a joint or a piece of hardware fades every other part to a
+   ghost, frames the item, and gives it a side panel and one scrub slider.
+   - Joints: the slider and a play button run the joint's own `insert:` steps
+     (the same steps the assembly check runs backwards); the panel names the
+     current step ("push rung along its length, 15 mm into leg[0]").
+   - Hardware: the slider drives the assembly's one motion (a door's angle);
+     every member follows (cup hinge: plate, arm, two links, cup and boss).
+3. **X-ray:** in focus, the receiving part is drawn see-through so a tenon in
+   its mortise or a rung in its socket shows without pulling anything apart.
+4. **Named, documented hardware members in the language.** A hardware kind
+   declares its members with short names and doc comments in `std/hardware`
+   (not in Rust), and the panel shows them; spec change in
+   `docs/grammar.md` plus tests.
+5. **Flat views:** an orthographic camera and a section plane, so focus can
+   show "looking down on the top hinge, through the cabinet top". Built so
+   the PDF work cards' line drawings can reuse it.
+6. **Motion path overlay and minimum clearance:** `stave-geom` samples a
+   motion and reports the smallest gap to fixed parts over its travel
+   ("closest to the side: 1.4 mm"); `stave-scene` draws the path of a chosen
+   point (the door's edge) as a dotted line.
+7. **Poses at fixed angles** for small side-by-side views (0°, 45°, 100°),
+   offscreen and in the panel.
+
+Done when: the stool, side table, cabinet and chidori are verified by
+screenshots of focus mode (X-ray on, a step mid-way), the cabinet's top hinge
+is shown from above at 0°, 45° and 110° with its edge path and minimum gap,
+every new behaviour has tests, and the gate is green.
