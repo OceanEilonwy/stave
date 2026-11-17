@@ -309,6 +309,96 @@ fn a_kind_require_is_checked_per_pair_and_reported_at_the_joint() {
     assert_eq!(body_line(&opened, diagnostic), 23, "the joint's line");
 }
 
+/// A pin whose diameter must be half the 19mm shelf's thickness, from two
+/// lists; `call` is the joint's settings after the roles.
+fn pin_rule(params: &str, condition: &str, call: &str) -> stave_app::Opened {
+    with_parts(&format!(
+        "kind k : joint {{\n{params}\n  require half : {condition} \"the pin is half the board\"\n}}\njoint j : k(shelf, into: side{call})"
+    ))
+}
+
+const PIN_LISTS: &str =
+    "  param pin   = 6mm within [6mm, 8mm, 9.5mm, 10mm]\n  param depth = 5mm within [5mm, 10mm]";
+
+#[test]
+fn a_failed_equality_rule_offers_the_values_from_the_kinds_lists_that_fit() {
+    let opened = pin_rule(PIN_LISTS, "pin * 2 == piece.thickness", "");
+    the_diagnostic(
+        &opened,
+        "require",
+        "'half' fails: the pin is half the board",
+    );
+    assert_eq!(
+        common::help(&opened),
+        "use pin: 9.5mm, from the kind's list"
+    );
+}
+
+#[test]
+fn the_search_tries_one_param_at_a_time_with_the_others_as_given() {
+    let lists = "  param pin   = 6mm within [6mm, 8mm, 9.5mm, 10mm]\n  param depth = 5mm within [5mm, 7mm, 9mm]";
+    let rule = "pin + depth == piece.thickness - 4mm";
+    // 8mm + 9mm is 17mm, not 15mm: pin 6mm fits with depth as given, and
+    // depth 7mm fits with pin as given. Both are offered, in the order the
+    // params and their lists are written.
+    let opened = pin_rule(lists, rule, ", pin: 8mm, depth: 9mm");
+    the_diagnostic(
+        &opened,
+        "require",
+        "'half' fails: the pin is half the board",
+    );
+    assert_eq!(
+        common::help(&opened),
+        "use pin: 6mm or depth: 7mm, from the kind's lists"
+    );
+    // 9.5mm + the default 5mm is 14.5mm: pin 10mm fits; depth 5.5mm would
+    // too, but it isn't in the list, so it isn't offered.
+    let opened = pin_rule(lists, rule, ", pin: 9.5mm");
+    assert_eq!(common::help(&opened), "use pin: 10mm, from the kind's list");
+}
+
+#[test]
+fn a_failed_equality_rule_says_when_no_listed_value_fits() {
+    let opened = pin_rule(PIN_LISTS, "pin * 3 == piece.thickness", "");
+    the_diagnostic(
+        &opened,
+        "require",
+        "'half' fails: the pin is half the board",
+    );
+    assert_eq!(
+        common::help(&opened),
+        "no value in the kind's lists makes this hold (pin within [6mm, 8mm, 9.5mm, 10mm], depth within [5mm, 10mm]); change the parts' sizes"
+    );
+}
+
+#[test]
+fn the_search_only_offers_listed_values_and_only_for_equality() {
+    // A range is never searched: 9.5mm is inside it, but only lists are
+    // offered.
+    let opened = pin_rule(
+        "  param pin = 6mm within 4mm..12mm",
+        "pin * 2 == piece.thickness",
+        "",
+    );
+    assert_eq!(
+        common::help(&opened),
+        "change the joint's settings or the parts' sizes so the rule holds"
+    );
+    // A rule that compares for order, or joins an equality with `||`,
+    // keeps the general help.
+    for condition in [
+        "pin * 2 >= piece.thickness",
+        "pin * 2 == piece.thickness || depth == pin",
+    ] {
+        let opened = pin_rule(PIN_LISTS, condition, "");
+        assert_eq!(
+            common::help(&opened),
+            "change the joint's settings or the parts' sizes so the rule holds",
+            "{condition}"
+        );
+    }
+}
+
 #[test]
 fn a_kind_note_fills_in_its_roles() {
     let opened = with_parts("joint housing : dado(shelf, into: side)");

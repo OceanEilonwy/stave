@@ -24,8 +24,8 @@
 //! apart. A sliver of wood thinner than that spacing can slip between the
 //! samples; anything that blocks a step for real is far larger. Angled
 //! cuts are open there: a point inside one is not wood. That is how the
-//! chidori's quarter turn and its slide out along the diagonal are proven,
-//! as `tools/joint-sim/chidori.py` does.
+//! chidori's quarter turn and its slide out along the diagonal are proven
+//! (`stave-app/tests/oracle_chidori.rs`).
 
 use glam::{DMat4, DVec3};
 use stave_lang::placement::{Axis, Direction, PartAxis};

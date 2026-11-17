@@ -1714,6 +1714,29 @@ error[require-range]: 'hanger_room' does not hold for every allowed value: room 
    = help: tighten the range: param cabinet_depth = 560mm within 546mm..650mm
 ```
 
+**When a kind's rule fails, the help searches the kind's lists.** A `require`
+of a kind that fails, and whose condition compares for equality (it is
+`a == b`, or conditions joined by `&&` with at least one `a == b` among
+them), gets a help line found by search: the checker tries every value of
+each of the kind's `within` lists, one param at a time with the others as
+given, and prints the values that make the rule hold, in the order the params
+and their lists are written. It never prints a value the kind would reject:
+
+```
+error[require]: 'thirds' fails: the slot is a third of the post's thickness
+  --> project.stave:44:14
+   = note: for rail and post in corner
+   = help: use slot: 8mm, from the kind's list
+```
+
+When no value of any list makes the rule hold, the help says so and names the
+lists that were tried:
+`help: no value in the kind's lists makes this hold (slot within [6mm, 8mm,
+10mm, 12mm]); change the parts' sizes`. Only lists are searched: a param
+`within` a range (`within 2mm..9mm`) is left as it is. A rule that only
+compares for order (`<`, `>=`), or a kind with no `within` list, keeps the
+general help.
+
 Requires are what an AI patch or a smart edit is judged against: a change that
 breaks one is rejected, with the message.
 

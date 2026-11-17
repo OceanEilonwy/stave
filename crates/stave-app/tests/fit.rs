@@ -207,7 +207,7 @@ fn broken_text(name: &str) -> String {
 
 #[test]
 fn the_chidori_comes_apart_as_the_simulation_proves() {
-    // tools/joint-sim/chidori.py: with its flats and its rounding the node
+    // As oracle_chidori checks: with its flats and its rounding the node
     // comes apart (a quarter turn back, out along the diagonal, the second
     // stick lifted off); without the flats the lock can't slide out, and
     // without the rounding it doesn't fit in the holes at all.
