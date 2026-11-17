@@ -63,6 +63,12 @@ ADW_DEBUG_COLOR_SCHEME=prefer-light tools/window-shot light.png examples/clothin
 ADW_DEBUG_COLOR_SCHEME=prefer-dark  tools/window-shot dark.png  examples/clothing_cabinet --theme system
 ```
 
+All the screenshots in `docs/screenshots/window/` and
+`docs/screenshots/files/` are made by `tools/gui-screenshots`, which says
+what each one shows; run it after a change to the window (or
+`tools/gui-screenshots library` for the shots whose path contains
+"library") and look at every picture that changed before committing it.
+
 ## Layers
 
 All behaviour lives in `stave-app`; `stave-gtk` only lays out widgets and
@@ -203,6 +209,17 @@ a design whose errors stop it solving, a library of kinds with no parts
 ("Nothing to show: this folder is a library of kinds and components, with
 no parts to place"), or a project without parts yet. (AdwStatusPage drew
 nothing in this layout; the page is the window's own.)
+
+The parts sidebar and the inspector say what is true for the same state
+(`EmptyState::sidebar`, `EmptyState::inspector`), never "Nothing selected
+/ Click a part…" when there is nothing to click. For a library folder,
+`empty::library` reads what it defines from the resolved model: the
+sidebar lists its public kinds (joints, hardware, fasteners, tools),
+recipes, components, stock and profiles by group, each with the first
+line of its doc comment (choosing one opens its text in the Files view,
+`Command::GoToSource`), and the inspector says what a library folder is,
+with the line that imports it (`import "../japanese_joinery" as
+japanese_joinery`) and an example name through it.
 
 Light and dark come from AdwStyleManager's colour scheme only: the old
 GTK 3 `gtk-application-prefer-dark-theme` switch that some desktops write

@@ -112,7 +112,8 @@ the system or the main menu, the 3D backdrop with them.
   the text: the cursor on a part, assembly or piece of hardware selects
   it there, and selecting in 3D or the tree moves the editor to the line
   that places it ("Linked to the text · door_l, line 9"). See
-  `docs/screenshots/files/`.
+  `docs/screenshots/files/`; `tools/gui-screenshots` regenerates every
+  window and Files view screenshot.
 - **Navigation layer** (`stave-ide`, no GTK): definition, uses, hover,
   breadcrumbs, semantic tokens, lenses, search and the fast diagnostics
   at a byte offset, plus open buffers and saving; the future language
@@ -139,13 +140,19 @@ the system or the main menu, the 3D backdrop with them.
 - **Exploded views**: scenes with `explode: true` start apart (`--explode`
   sets any amount). The first half of the range moves each assembly out
   whole (drawers forward, doors off their hinges), the second pulls parts
-  apart along the reverse of their joints' last insert step. The 3D
+  apart along the reverse of their joints' last insert step; a part held
+  from both ends (a rung, an apron) goes with the parts it is held
+  between, so the stool's rungs drop with its legs and the legs pull off
+  their ends. The 3D
   view's toolbar has "Pull apart": on, it grows a play button and a
   "together … apart" slider, and the inspector says how it comes apart,
   stage by stage, read off the exploded poses, with "Save this view as
   glTF". The camera buttons fit the view, look at the front and turn to
   the back. A library folder, or a design that doesn't solve, says so in
-  the view instead of leaving it blank.
+  the view instead of leaving it blank, and so do the sidebar and the
+  inspector: a library's sidebar lists the kinds, recipes and components
+  it defines (each opens its text) and its inspector explains what a
+  library folder is and the line that imports it.
 - **Cup hinges** are drawn as their mechanism: the steel cup with its
   rim and boss pins in the door, the plate, arm and arm pins on the side,
   and the two links, which turn about their arm pins as the door opens.

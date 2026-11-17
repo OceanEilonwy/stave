@@ -1,0 +1,112 @@
+#!/bin/sh
+# Regenerates every screenshot of the desktop window in docs/screenshots/
+# (window/ and files/) with tools/window-shot, so they can be checked
+# against the design after a change to the GUI.
+#
+#   tools/gui-screenshots            build stave-gtk, then take every shot
+#   tools/gui-screenshots NAME...    only the shots whose path contains NAME
+#                                    (e.g. 'library' or 'files/')
+#
+# CARGO_TARGET_DIR is honoured (and passed on to tools/window-shot), so a
+# lane can use its own build. Each shot below says what it shows; look at
+# every one that changed before committing it.
+set -eu
+
+cd "$(dirname "$0")/.."
+
+cargo build --quiet -p stave-gtk
+
+window=docs/screenshots/window
+files=docs/screenshots/files
+cabinet=examples/clothing_cabinet
+hinge='door_l.hinges[upper]'
+failed=0
+filters="$*"
+
+shot() {
+    out=$1
+    shift
+    if [ -n "$filters" ]; then
+        wanted=no
+        for filter in $filters; do
+            case $out in *"$filter"*) wanted=yes ;; esac
+        done
+        [ "$wanted" = yes ] || return 0
+    fi
+    if ! tools/window-shot "$out" "$@"; then
+        echo "error: couldn't take $out" >&2
+        failed=1
+    fi
+}
+
+# ---- the window (docs/screenshots/window) ----
+
+# The main window, light and dark: the parts tree, a hinge stile selected
+# in the 3D view, and the inspector's account of it (Main / MainDark).
+shot $window/main_light.png $cabinet --theme light --select 'door_l.stile[hinge]'
+shot $window/main_dark.png $cabinet --theme dark --select 'door_l.stile[hinge]'
+# A narrow window: the sidebar folds away and the inspector lies over the
+# 3D view while something is selected.
+shot $window/narrow.png $cabinet --theme light --select 'door_l.stile[hinge]' --size 760x900
+shot $window/narrow_dark.png $cabinet --theme dark --select 'door_l.stile[hinge]' --size 760x900
+# The title bar's pill while a check runs (the spinner keeps the last
+# result's tone), with the problems list open.
+shot $window/checking.png tests/broken/door_hits_side --theme light --checking --problems
+# The build button pressed: its check running.
+shot $window/building.png examples/stool --theme light --select 'leg[front_left]' --building
+# Pulled apart, light and dark: drawers and doors out first, then every
+# part out of its joints, and "How it comes apart" (Exploded).
+shot $window/exploded.png $cabinet --theme light --explode 1
+shot $window/exploded_dark.png $cabinet --theme dark --explode 1
+# The stool pulled apart: the legs drop off the seat and out at their
+# corners, and the rungs drop with them, out of their sockets.
+shot $window/exploded_stool.png examples/stool --theme light --explode 1
+# Focus mode on a joint: the stool's rung socket, part way through its
+# insert step (JointFocus).
+shot $window/focus.png examples/stool --theme light --focus rung_sockets --step 0.6
+# Focus mode on a cup hinge, in 3D and from above, light and dark, and in
+# a narrow window (Hinge).
+shot $window/hinge_3d.png $cabinet --theme light --focus "$hinge" --step 0.41
+shot $window/hinge_plan.png $cabinet --theme light --focus "$hinge" --plan --step 0.41
+shot $window/hinge_dark.png $cabinet --theme dark --focus "$hinge" --plan --step 0.41
+shot $window/hinge_narrow.png $cabinet --theme light --focus "$hinge" --step 0.41 --size 760x700
+# A problem selected: the door posed where it first hits the wall, the
+# shared wood in red, the motion card, and the details with the `stave
+# check` text (its code block must not look selected) and the ways to fix
+# it (Problems), light and dark.
+shot $window/problem.png tests/broken/door_hits_side --theme light --problems --diagnostic 0
+shot $window/problem_dark.png tests/broken/door_hits_side --theme dark --problems --diagnostic 0
+# The problems list with several problems of several kinds, one selected;
+# and the same in a narrow window.
+shot $window/problems_several.png crates/stave-app/tests/projects/several_problems --theme light --problems --diagnostic 2
+shot $window/problems_narrow.png crates/stave-app/tests/projects/several_problems --theme light --problems --diagnostic 0 --size 760x900
+# A library folder: nothing to draw, so the view says so; the sidebar
+# lists what the library defines and the inspector says what a library is
+# and how to import it, light and dark.
+shot $window/library.png examples/japanese_joinery --theme light
+shot $window/library_dark.png examples/japanese_joinery --theme dark
+
+# ---- the Files view (docs/screenshots/files) ----
+
+# The cursor on a name in the text: the 3D view follows it ("Linked to the
+# text") (EditorLinked).
+shot $files/linked.png $cabinet --view files --theme light --file doors.stave:9 --cursor door_l
+# Peeking at a definition in place (EditorOverlay).
+shot $files/peek.png $cabinet --view files --theme light --file doors.stave:9 --cursor FramePanelDoor --peek
+# A name's hover card.
+shot $files/hover.png $cabinet --view files --theme light --file doors.stave:9 --cursor FramePanelDoor --hover
+# The uses of a name in the uses panel, dark.
+shot $files/uses_dark.png $cabinet --view files --theme dark --file doors.stave:18 --cursor door_l --uses
+# A problem in the text: its underline, gutter mark and hover card.
+shot $files/problem.png tests/broken/unknown_name --view files --theme light --file project.stave:10 --cursor pine_18 --hover
+# A typo typed into the text, light and dark: the problem shows as you
+# type and the 3D link lets go.
+shot $files/typed_light.png $cabinet --view files --theme light --file doors.stave:11 --cursor side_l --type q
+shot $files/typed_dark.png $cabinet --view files --theme dark --file doors.stave:11 --cursor side_l --type q
+# The Files view in a narrow window.
+shot $files/narrow.png $cabinet --view files --theme light --size 760x900 --file doors.stave:9 --cursor door_l
+# A part selected in the 3D view opens the text that places it, dark
+# (EditorSplit).
+shot $files/selected_in_3d_dark.png $cabinet --view files --theme dark --select 'door_l.stile[hinge]'
+
+exit $failed
