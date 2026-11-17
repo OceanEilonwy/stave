@@ -208,6 +208,12 @@ fn dump_writes_json() {
     assert_eq!(json["parts"][0]["name"], "base");
     assert_eq!(json["parts"][0]["cut"]["length"], 900_000_000);
     assert_eq!(json["project"]["units"], "mm");
+    // Each hardware's solved `adjust` settings: the cabinet's first hinge
+    // has its arm (member 1) set -0.5mm across.
+    let setting = &json["hardware"][0]["settings"][0];
+    assert_eq!(setting["body"]["body"], 1);
+    assert_eq!(setting["axis"], "Across");
+    assert_eq!(setting["offset"], -500_000);
 }
 
 #[test]

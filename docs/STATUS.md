@@ -70,7 +70,10 @@ a line and a concrete help line for every problem:
    `stave-app/tests/oracle_chidori.rs` proves, and fail without its flats.
 
 **Formatting** (`stave fmt`), **dumping** the solved design (`stave dump`,
-`--json`), **glTF export** (`stave export`, posed in any scene, exploded or
+`--json`; under each piece of hardware whose kind has `adjust` entries the
+text dump prints one line of its solved settings in the kind's own words,
+`arm set -0.5mm across`, joined with `, ` when there are several; the
+JSON carries them as `settings`), **glTF export** (`stave export`, posed in any scene, exploded or
 not), and the **viewer** (`stave view`).
 
 ## How to try it

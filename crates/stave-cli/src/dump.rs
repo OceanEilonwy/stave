@@ -187,6 +187,25 @@ fn entries_in_kind_order(hardware: &Hardware, kind: Option<&KindDef>) -> Vec<Str
         .collect()
 }
 
+/// A piece of hardware's solved settings, one for each of its kind's
+/// `adjust` entries in the kind's order, each as `<member> set <offset>
+/// <axis>`: `arm set -0.5mm across`. The member and axis words are the
+/// kind's own.
+fn settings(hardware: &Hardware) -> Vec<String> {
+    hardware
+        .settings
+        .iter()
+        .map(|setting| {
+            let member = hardware
+                .members
+                .iter()
+                .find(|body| body.id == setting.body)
+                .map_or_else(|| "?".to_owned(), |body| words(&body.name));
+            format!("{member} set {} {}", setting.offset, setting.axis.word())
+        })
+        .collect()
+}
+
 /// A point in a mechanism's plane.
 fn frame_point(point: FramePoint) -> String {
     format!("{}, {}", mm(point.across), mm(point.depth))
@@ -423,6 +442,10 @@ pub fn table(design: &SolvedDesign, model: Option<&Model>) -> String {
             entries_in_kind_order(hardware, model.and_then(|m| m.defs.kind(hardware.kind_id)));
         if !entries.is_empty() {
             let _ = writeln!(out, "    {}", entries.join(", "));
+        }
+        let settings = settings(hardware);
+        if !settings.is_empty() {
+            let _ = writeln!(out, "    {}", settings.join(", "));
         }
     }
     let _ = writeln!(out);
