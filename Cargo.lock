@@ -1814,7 +1814,6 @@ dependencies = [
  "glam",
  "gtk4",
  "libadwaita",
- "notify",
  "png",
  "pollster",
  "stave-app",

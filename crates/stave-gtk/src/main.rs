@@ -6,6 +6,8 @@
 //! stave-gtk examples/wall_shelf --screenshot back.png --turn 180     (seen from behind)
 //! stave-gtk examples/side_table --screenshot apart.png --explode 1   (pulled apart)
 //! stave-gtk tests/broken/door_hits_side --screenshot hit.png --diagnostic 0
+//! stave-gtk examples/clothing_cabinet --window-screenshot main.png --theme dark \
+//!     --select 'door_l.stile[hinge]'                    (the real window, see tools/window-shot)
 //! stave-gtk examples/clothing_cabinet --screenshot hinge.png --open door_l=45 \
 //!     --frame 'door_l.hinges[lower]' --pitch 90 --section up=660   (a hinge from above)
 //! ```
@@ -43,12 +45,31 @@ struct Arguments {
     #[arg(long, value_name = "NAME")]
     select: Option<String>,
     /// Save the whole window to this PNG once the design is drawn, then
-    /// close (for checking the window without looking at a screen).
-    #[arg(long, value_name = "PNG", hide = true)]
+    /// close (for checking the window without looking at a screen; see
+    /// `tools/window-shot`).
+    #[arg(long, value_name = "PNG")]
     window_screenshot: Option<PathBuf>,
-    /// The screenshot's size in pixels.
-    #[arg(long, value_name = "WIDTHxHEIGHT", default_value = "1600x1000", value_parser = parse_size)]
-    size: (u32, u32),
+    /// The size in pixels: of the screenshot (default 1600x1000), or of
+    /// the window (default 1440x900).
+    #[arg(long, value_name = "WIDTHxHEIGHT", value_parser = parse_size)]
+    size: Option<(u32, u32)>,
+    /// The window's style: system, light or dark.
+    #[arg(long, value_name = "STYLE", default_value = "system", value_parser = parse_theme)]
+    theme: ui::Theme,
+    /// The view the window starts in: parts, cut-list or files.
+    #[arg(long, value_name = "VIEW", default_value = "parts", value_parser = parse_view)]
+    view: stave_app::session::View,
+    /// Open the window with the problems list showing.
+    #[arg(long)]
+    problems: bool,
+    /// With --window-screenshot: check again and capture the window while
+    /// that check runs (the status pill's spinner).
+    #[arg(long)]
+    checking: bool,
+    /// With --window-screenshot: press the build button and capture the
+    /// window while it checks.
+    #[arg(long, hide = true)]
+    building: bool,
     /// Turn the screenshot's camera this many degrees about the up axis
     /// from the default view (positive toward the right; 180 shows the back).
     #[arg(
@@ -124,6 +145,16 @@ struct Arguments {
     no_tint: bool,
 }
 
+fn parse_theme(text: &str) -> Result<ui::Theme> {
+    ui::Theme::from_word(text.trim())
+        .ok_or_else(|| anyhow::anyhow!("the style is system, light or dark"))
+}
+
+fn parse_view(text: &str) -> Result<stave_app::session::View> {
+    stave_app::session::View::from_word(text.trim())
+        .ok_or_else(|| anyhow::anyhow!("the view is parts, cut-list or files"))
+}
+
 fn parse_open(text: &str) -> Result<(String, f32)> {
     let Some((name, amount)) = text.split_once('=') else {
         bail!("write it as ASSEMBLY=AMOUNT, for example door_l=45");
@@ -191,15 +222,22 @@ fn main() -> ExitCode {
                 }),
             },
             arguments.diagnostic,
-            arguments.size,
+            arguments.size.unwrap_or((1600, 1000)),
         ),
         None => ui::run(ui::Options {
             folder: arguments.folder,
             scene: arguments.scene,
             select: arguments.select,
-            window_screenshot: arguments.window_screenshot,
+            focus: arguments.focus,
             problem: arguments.diagnostic,
             explode: arguments.explode,
+            view: arguments.view,
+            problems: arguments.problems,
+            theme: arguments.theme,
+            window_screenshot: arguments.window_screenshot,
+            size: arguments.size.unwrap_or((1440, 900)),
+            checking: arguments.checking,
+            building: arguments.building,
         }),
     };
     match result {
