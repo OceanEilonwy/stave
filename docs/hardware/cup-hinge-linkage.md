@@ -3,8 +3,10 @@
 How Stave moves a door on concealed 35mm cup hinges, where the numbers come
 from, and how they are checked. The mechanism's data is
 `crates/stave-schema/src/hinges.rs` (`CUP_HINGE_110`); the check is
-`tools/hinge-sim/linkage.py` (run it: exit code 0 when every target is met)
-and the fit that found the pins is `tools/hinge-sim/fit.py`.
+`crates/stave-app/tests/oracle_hinge.rs`, which measures every number
+below on small cabinets Stave solves, and the fit that found the pins is
+the ignored test `refit_the_cup_hinge` in the same file (run by hand,
+see "How it was found").
 
 ## What a cup hinge is
 
@@ -103,7 +105,7 @@ turns that instant centre moves in.
 
 A four-bar has eight numbers (two pins on each member). They were found by
 differential evolution with feasibility rules (constraints first, then the
-fit; `tools/hinge-sim/fit.py`), over:
+fit), over:
 
 - pins: boss pins inside the cup (1.5mm clear of its wall, at least 0.6mm
   in from its mouth), arm pins inside the knuckle (1.5mm clear of its
@@ -133,22 +135,53 @@ is checked free of wood all the way to it. The knuckle was widened from
 5.8mm to 7mm so the arm pins can sit nearer the cup's far wall, which
 keeps the links inside the cup's mouth as they fold out.
 
+The fit is a model of the mechanism in millimetres (the side and the
+door as half-planes, the members sampled), seeded so a run repeats:
+
+```
+cargo test --release -p stave-app --test oracle_hinge -- --ignored --nocapture refit_the_cup_hinge
+```
+
+`STAVE_REFIT_GENERATIONS` (default 300) and `STAVE_REFIT_SEED` (default
+1) choose the run; it prints the pins rounded to hundredths, how they
+score once rounded, and whether they are today's, and fails only if it
+finds nothing feasible or nothing as good as today's pins (which are the
+first candidate). The model is the one the pins were found with: a
+regular test, `the_refit_scores_todays_pins_as_the_script_did`, checks
+that it scores today's pins 0.26394, as the original Python fit (numpy)
+did. The random numbers differ from that script's, so the run differs
+too: from seed 1 the Python fit kept today's pins over 300 generations,
+while the Rust run ends at 0.263 with pins on the edge of the 0.1mm
+steel clearance (rounded to hundredths they miss it by 2e-14mm). Today's
+pins stay as they are.
+
 ## How well it fits
 
-`python3 tools/hinge-sim/linkage.py`:
+Each line is a test in `crates/stave-app/tests/oracle_hinge.rs`, run on
+cabinets Stave solves (a 19mm side, one door on two `euro_hinge`s):
 
-- closed is exact (offset 0 at 0°); in Stave the door's pose at 0° is the
-  identity, no float involved;
-- the links reach a dead point only past 130° (1.0mm of margin at 110°);
-- overlay = C + 12.5mm for C = 3–7mm (by construction);
-- minimum reveal (edge radius 1mm) for 18–20mm doors within 0.25mm of the
-  table (20mm door, C = 3: 0.8mm against 1.1mm); thinner doors swing out a
-  little more than the table (15mm: 0.6 against 0.2), thicker ones less
-  (24mm, C = 5: 1.1 against 3.0);
-- door protrusion at 110° (C = 3): 8.6mm against 8.5mm;
-- no steel goes into wood for doors 16–22mm (checked at 16, 18, 19, 20 and
-  22), C = 3–7mm (every millimetre) and the side screw at −2, −1, 0, +0.5,
-  +1 and +2mm, every 0.05° from 0° to 110°.
+- `closed_is_exact`: closed, the door is exactly where it is placed (its
+  pose at 0° is the identity, no float involved), its hinge edge exactly
+  the overlay past the side's inside face;
+- `the_links_reach_past_110_degrees_with_a_millimetre_to_spare`: links
+  22.58mm and 22.92mm; at least 1.02mm from a dead point (at 5.4°), and
+  still more than a millimetre at 130°;
+- `the_overlay_is_the_catalogues_for_every_boring_distance`: overlay =
+  C + 12.5mm for C = 3–7mm (by construction: the cup's centre 5mm in from
+  the side, C + 17.5mm from the door's edge);
+- `the_hinge_edge_swings_out_as_the_catalogue_says`: minimum reveal (edge
+  radius 1mm) for 18–20mm doors within 0.25mm of the table (20mm door,
+  C = 3: 0.85mm against 1.1mm); thinner doors swing out a little more than
+  the table (15mm: 0.6 against 0.2), thicker ones less (24mm, C = 5: 1.1
+  against 3.0); every cell is pinned to 0.01mm;
+- `the_door_stands_8_6mm_into_the_opening_at_110_degrees`: door protrusion
+  at 110° (C = 3): 8.64mm against 8.5mm;
+- `nothing_passes_through_wood_at_any_side_screw_setting`: Stave's own
+  checks find nothing in wood for doors 16, 18, 19, 20 and 22mm, C = 3–7mm
+  (every millimetre) and the side screw at −2, −1, 0, +0.5, +1 and +2mm (a
+  23mm or 24mm door with C = 7 reaches the side just before 110°, at 109.3°
+  and 108.4°, and Stave says so);
+- `the_front_edge_moves_forward_and_out`: the table below, to 0.01mm.
 
 The example cabinet's left door (19mm, 18mm overlay, C = 5, so the side
 screw at +0.5mm), its front hinge corner (`x`, `y` as above; world across =

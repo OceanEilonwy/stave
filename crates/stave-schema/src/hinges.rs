@@ -10,7 +10,7 @@
 //! mechanism with the cup, as it does in the real hinge.
 //!
 //! The numbers are derived in `docs/hardware/cup-hinge-linkage.md` and
-//! checked by `tools/hinge-sim/linkage.py`: closed, the door rests exactly
+//! checked by `stave-app/tests/oracle_hinge.rs`: closed, the door rests exactly
 //! where it is placed; it opens to 110° without the links crossing or
 //! reaching a dead point; its hinge edge swings out no more than the
 //! catalogue's minimum reveal; and nothing passes through wood.

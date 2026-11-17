@@ -48,7 +48,7 @@ a line and a concrete help line for every problem:
 7. **Assembly sequences**: every joint's `insert` steps are run backwards
    from the finished joint and swept; a step that can't be undone is
    `order`. The chidori's quarter turn and diagonal slide come apart as
-   `tools/joint-sim/chidori.py` proves, and fail without its flats.
+   `stave-app/tests/oracle_chidori.rs` proves, and fail without its flats.
 
 **Formatting** (`stave fmt`), **dumping** the solved design (`stave dump`,
 `--json`), **glTF export** (`stave export`, posed in any scene, exploded or

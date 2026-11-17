@@ -553,8 +553,9 @@ fn the_clothing_cabinet_is_where_the_design_says() {
 
 /// The door's hinge edge, front corner, as the left door of the cabinet
 /// opens on its cup hinges' linkage: exactly where it is placed when
-/// closed, then pushed forward and out, as `tools/hinge-sim/linkage.py`
-/// computes for the same hinge (19mm door, 18mm overlay, boring distance
+/// closed, then pushed forward and out, as
+/// `oracle_hinge::the_front_edge_moves_forward_and_out` measures for the
+/// same hinge (19mm door, 18mm overlay, boring distance
 /// 5mm).
 #[test]
 fn the_cabinet_doors_move_on_their_hinges_linkage() {
