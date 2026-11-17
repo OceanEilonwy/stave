@@ -7,7 +7,9 @@ mod common;
 use common::{
     body_line, design, diagnostics, holds, mm, only_error, open, open_files, part, the_diagnostic,
 };
-use stave_model::solved::{PoseValue, SceneItem, Shape};
+use stave_lang::ast::CutOperation;
+use stave_lang::placement::PartAxis;
+use stave_model::solved::{Boards, End, PartOrigin, PoseValue, SceneItem, Shape, SolvedDesign};
 use stave_schema::words::{Grain, OutputUnit};
 
 /// A whole project file with its own `project` block.
@@ -106,7 +108,7 @@ fn an_unknown_project_field_lists_the_fields() {
     );
     assert_eq!(
         common::help(&opened),
-        "the fields are: goal, units, resolution, style, tools, methods"
+        "the fields are: goal, units, resolution, style, tools, methods, boards"
     );
 }
 
@@ -254,12 +256,246 @@ joint housings : dado(shelf, into: [side[left], side[right]], depth: 5mm)",
     );
 }
 
+/// A stock 50mm wide at most, and a part of it 300mm wide on the base,
+/// with extra fields.
+const NARROW: &str =
+    "stock narrow { species: pine, form: solid, thickness: 19mm, max_width: 50mm }";
+
+fn wide_part(fields: &str) -> String {
+    format!(
+        "{NARROW}\npart p : narrow {{\n  length: 100mm\n  width:  300mm\n{fields}\n  place {{\n    against(base.top)\n    flush(base.left)\n    flush(base.front)\n  }}\n}}"
+    )
+}
+
+/// The boards of a part, or a panic.
+fn boards_of<'d>(design: &'d SolvedDesign, name: &str) -> &'d Boards {
+    part(design, name)
+        .boards
+        .as_ref()
+        .unwrap_or_else(|| panic!("{name} is not made of boards"))
+}
+
+/// The names of the kinds a part's boards are joined by, with their glue.
+fn methods(boards: &Boards) -> Vec<(String, bool)> {
+    boards
+        .methods
+        .iter()
+        .map(|m| (m.name.clone(), m.glue))
+        .collect()
+}
+
 #[test]
 fn a_wider_part_than_max_width_is_planned_as_a_glue_up() {
-    let opened = open(
-        "stock narrow { species: pine, form: solid, thickness: 19mm, max_width: 50mm }\npart p : narrow {\n  length: 100mm\n  width:  300mm\n  place {\n    against(base.top)\n    flush(base.left)\n    flush(base.front)\n  }\n}",
-    );
+    // Before: only that a too-wide part gave no error. Now: the part is
+    // made of ceil(300 / 50) = 6 equal boards, with a seam between each
+    // neighbouring pair, along the grain.
+    let opened = open(&wide_part(""));
     assert!(opened.diagnostics.is_empty(), "{:?}", diagnostics(&opened));
+    let design = design(&opened);
+    let p = part(design, "p");
+    let boards = boards_of(design, "p");
+    assert_eq!(boards.axis, PartAxis::Width);
+    assert_eq!(boards.boards.count(), 6);
+    let numbers: Vec<u32> = boards.boards.iter().map(|b| b.index.get()).collect();
+    assert_eq!(numbers, [1, 2, 3, 4, 5, 6]);
+    assert!(boards.boards.iter().all(|b| b.width == mm("50")));
+    assert!(boards.boards.iter().all(|b| b.cuts.is_empty()));
+    let mut offsets: Vec<_> = boards.boards.iter().map(|b| b.offset).collect();
+    offsets.sort();
+    assert_eq!(offsets, ["0", "50", "100", "150", "200", "250"].map(mm));
+    // Board 1 is at the reference edge.
+    let at_reference = match p.reference_edge.end {
+        End::Start => mm("0"),
+        End::End => mm("250"),
+    };
+    assert_eq!(boards.boards.first().offset, at_reference);
+    assert_eq!(boards.seams.len(), 5);
+    for (n, seam) in (1u32..).zip(&boards.seams) {
+        assert_eq!((seam.between.0.get(), seam.between.1.get()), (n, n + 1));
+    }
+    let mut seams: Vec<_> = boards.seams.iter().map(|s| s.at).collect();
+    seams.sort();
+    assert_eq!(seams, ["50", "100", "150", "200", "250"].map(mm));
+    // Unequal shares stay exact until they are stored: 290mm makes six
+    // boards of 48.333...mm.
+    let opened = open(&wide_part("").replace("300mm", "290mm"));
+    let boards = boards_of(common::design(&opened), "p");
+    assert_eq!(boards.boards.count(), 6);
+    assert!(boards.boards.iter().all(|b| b.width == mm("48.333333")));
+    // A part no wider than max_width is one board, as written.
+    let opened = open(&wide_part("").replace("300mm", "50mm"));
+    assert!(part(common::design(&opened), "p").boards.is_none());
+}
+
+#[test]
+fn boards_are_joined_by_the_projects_default() {
+    // Left out everywhere: glued_edge.
+    let opened = open(&wide_part(""));
+    assert_eq!(
+        methods(boards_of(design(&opened), "p")),
+        [("glued_edge".to_owned(), true)]
+    );
+    // The project's boards: for every part that doesn't say.
+    let opened = open_files(&[(
+        "project.stave",
+        &with_project("  boards: joined(by: tongue_and_groove)", &wide_part("")),
+    )]);
+    assert!(opened.diagnostics.is_empty(), "{:?}", diagnostics(&opened));
+    assert_eq!(
+        methods(boards_of(design(&opened), "p")),
+        [("tongue_and_groove".to_owned(), true)]
+    );
+}
+
+#[test]
+fn a_part_names_its_own_joining() {
+    let opened = open_files(&[(
+        "project.stave",
+        &with_project(
+            "  boards: joined(by: tongue_and_groove)",
+            &wide_part("  boards: joined(by: splined_edge)"),
+        ),
+    )]);
+    assert!(opened.diagnostics.is_empty(), "{:?}", diagnostics(&opened));
+    assert_eq!(
+        methods(boards_of(design(&opened), "p")),
+        [("splined_edge".to_owned(), true)]
+    );
+    // A part that isn't made of boards ignores it.
+    let opened = open(&board("  boards: joined(by: splined_edge)"));
+    assert!(opened.diagnostics.is_empty(), "{:?}", diagnostics(&opened));
+    assert!(part(design(&opened), "p").boards.is_none());
+    // Anything but joint kinds is a type mismatch.
+    let opened = open(&wide_part("  boards: joined(by: 3mm)"));
+    assert_eq!(
+        diagnostics(&opened),
+        ["type-mismatch: 'by' needs a list of joint kinds, found a length"]
+    );
+}
+
+#[test]
+fn a_list_combines_edge_joints() {
+    let opened = open(&wide_part(
+        "  boards: joined(by: [glued_edge, splined_edge(depth: 5mm)])",
+    ));
+    assert!(opened.diagnostics.is_empty(), "{:?}", diagnostics(&opened));
+    let design = design(&opened);
+    let boards = boards_of(design, "p");
+    assert_eq!(
+        methods(boards),
+        [
+            ("glued_edge".to_owned(), true),
+            ("splined_edge".to_owned(), true)
+        ]
+    );
+    // Both kinds join every seam: each kind's requires are checked at
+    // each of the five seams, and a middle board has a spline groove at
+    // each of its two seams.
+    let names: Vec<&str> = boards.requires.iter().map(|r| r.name.as_str()).collect();
+    assert_eq!(names.len(), 15);
+    assert!(names.contains(&"p.seam[5].same_thickness"));
+    assert!(names.contains(&"p.seam[5].walls_stand"));
+    let middle = boards.boards.get(2).unwrap();
+    let operations: Vec<_> = middle.cuts.iter().map(|c| c.kind.operation()).collect();
+    assert_eq!(operations, [CutOperation::Slot, CutOperation::Slot]);
+    // The splines are made, one per seam, at the setting given.
+    assert_eq!(design.made_parts().count(), 5);
+    assert_eq!(part(design, "p.spline[1]").drawn.width, mm("10"));
+    // Kinds that put wood in the same place are caught like any joint: a
+    // spline where the tongue already is overlaps it.
+    let opened = open(&wide_part(
+        "  boards: joined(by: [tongue_and_groove(glue: false), splined_edge])",
+    ));
+    assert_eq!(diagnostics(&opened), ["overlap: p and p.spline[1] overlap"]);
+}
+
+#[test]
+fn tongue_and_groove_needs_no_glue() {
+    let opened = open(&wide_part(
+        "  boards: joined(by: tongue_and_groove(glue: false))",
+    ));
+    assert!(opened.diagnostics.is_empty(), "{:?}", diagnostics(&opened));
+    let design = design(&opened);
+    let boards = boards_of(design, "p");
+    assert_eq!(methods(boards), [("tongue_and_groove".to_owned(), false)]);
+    // Every board but the last carries a tongue 19 / 3 mm long, so it is
+    // cut that much wider; every board but the first has the groove.
+    let wider = mm("56.333333");
+    let widths: Vec<_> = boards.boards.iter().map(|b| b.width).collect();
+    assert_eq!(widths, [wider, wider, wider, wider, wider, mm("50")]);
+    let first = boards.boards.first();
+    assert_eq!(
+        first
+            .cuts
+            .iter()
+            .map(|c| c.kind.operation())
+            .collect::<Vec<_>>(),
+        [CutOperation::Tenon]
+    );
+    assert!(boards.requires.iter().all(|r| r.holds));
+    assert_eq!(boards.requires.len(), 10);
+    assert_eq!(boards.requires[0].name, "p.seam[1].same_thickness");
+    // The part is still one part: its cut size is what was drawn.
+    assert_eq!(part(design, "p").cut.width, mm("300"));
+}
+
+#[test]
+fn a_sheet_wider_than_max_width_is_an_error() {
+    let opened = open(
+        "stock sheet { species: birch, form: plywood, thickness: 18mm, max_width: 1220mm }\npart p : sheet {\n  length: 500mm\n  width:  1300mm\n  place {\n    against(base.top)\n    flush(base.left)\n    flush(base.front)\n  }\n}",
+    );
+    let diagnostic = the_diagnostic(
+        &opened,
+        "type-mismatch",
+        "p: its width across the grain works out as 1300mm, which is more than its stock's max_width of 1220mm",
+    );
+    assert_eq!(body_line(&opened, diagnostic), 4);
+    assert_eq!(
+        common::help(&opened),
+        "a sheet isn't glued up from boards: choose a sheet wider than 'sheet', or make the part from several parts"
+    );
+}
+
+#[test]
+fn a_longer_part_names_an_end_joint() {
+    let opened = open(
+        "stock short { species: pine, form: solid, thickness: 19mm, max_length: 500mm }\npart p : short {\n  length: 600mm\n  width:  100mm\n  place {\n    against(base.top)\n    flush(base.left)\n    flush(base.front)\n  }\n}",
+    );
+    assert_eq!(
+        common::help(&opened),
+        "stock 'short' comes no longer than 500mm; make it from two parts joined end to end (for example ari_tsugi), or buy longer stock"
+    );
+}
+
+#[test]
+fn a_spline_is_a_made_part_per_seam() {
+    let opened = open(&wide_part("  boards: joined(by: splined_edge)"));
+    assert!(opened.diagnostics.is_empty(), "{:?}", diagnostics(&opened));
+    let design = design(&opened);
+    let p = part(design, "p");
+    let splines: Vec<_> = design.made_parts().collect();
+    assert_eq!(splines.len(), 5);
+    for (n, spline) in splines.iter().enumerate() {
+        assert_eq!(spline.name, format!("p.spline[{}]", n + 1));
+        assert_eq!(
+            spline.origin,
+            PartOrigin::Boards {
+                part: p.id,
+                seam: Some(n)
+            }
+        );
+        // As long as the seam, reaching 9.5mm into each board, a third of
+        // the board thick.
+        assert_eq!(spline.drawn.length, mm("100"));
+        assert_eq!(spline.drawn.width, mm("19"));
+        assert_eq!(spline.drawn.thickness, mm("6.333333"));
+        assert_eq!(spline.stock.name, "narrow");
+    }
+    // Every board has a groove at each of its seams; none is widened.
+    let boards = boards_of(design, "p");
+    let grooves: Vec<usize> = boards.boards.iter().map(|b| b.cuts.len()).collect();
+    assert_eq!(grooves, [1, 2, 2, 2, 2, 1]);
+    assert!(boards.boards.iter().all(|b| b.width == mm("50")));
 }
 
 // ---------------------------------------------------------------------------

@@ -1,0 +1,27 @@
+stave 1
+
+/// Tongue and groove: a tongue along the edge of one board fits a groove
+/// cut in the edge of the next. It lines the boards up and keeps them flat,
+/// so it holds without glue and lets an unglued panel move with the
+/// seasons.
+kind tongue_and_groove : joint {
+  /// How far the tongue reaches into the groove.
+  param depth = piece.thickness / 3
+  /// The tongue's thickness, which is the groove's width.
+  param thickness = piece.thickness / 3
+  require same_thickness : piece.thickness == into.thickness "boards joined by a tongue and groove need the same thickness"
+  require walls_stand    : thickness <= into.thickness / 2 "the tongue is too thick: the groove's walls would be thinner than a quarter of the board"
+
+  insert:    [push(piece, along: width)]
+  cut_first: into                          // cut the groove first, then fit the tongue to it
+  adds:      extend(piece, by: depth)      // the board with the tongue is cut wider by the tongue
+
+  cut crossing(into, piece) {
+    slot(width: thickness, depth: depth)
+  }
+  cut crossing(piece, into) {
+    tenon(length: depth, width: piece.length, thickness: thickness)
+  }
+
+  note: "Fit each tongue to its groove along its whole length; leave the seams dry if the panel must move"
+}

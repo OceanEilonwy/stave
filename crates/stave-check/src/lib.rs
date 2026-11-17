@@ -402,6 +402,10 @@ impl<'a> Checker<'a> {
                     self.hardware_place(hardware),
                     self.item_name(Item::Hardware(hardware)),
                 ),
+                SourceKey::Boards(part) => (
+                    self.part_place(part),
+                    format!("{}'s boards", self.part_name(part)),
+                ),
             };
             let note = if names.len() == 1 {
                 format!(
@@ -1008,6 +1012,7 @@ type Moves = Vec<(AssemblyId, PoseValue)>;
 enum SourceKey {
     Joint(stave_model::solved::JointId),
     Hardware(HardwareId),
+    Boards(PartId),
 }
 
 impl SourceKey {
@@ -1015,6 +1020,7 @@ impl SourceKey {
         match source {
             CutSource::Joint { joint, .. } => SourceKey::Joint(joint),
             CutSource::Hardware { hardware } => SourceKey::Hardware(hardware),
+            CutSource::Boards { part, .. } => SourceKey::Boards(part),
         }
     }
 }

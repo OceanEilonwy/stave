@@ -180,7 +180,11 @@ and `broken/<folder>` for a design in `tests/broken/`.
 | Every stock field is readable | `app/spec_declarations::every_stock_field_is_readable` | covered |
 | Parts cut from stock with a `width:` take that width | `app/spec_declarations::a_part_cut_from_stock_with_a_width_takes_that_width` | covered |
 | A part whose cut length is over the stock's `max_length` is `type-mismatch` | `app/spec_declarations::a_part_longer_than_its_stocks_max_length_is_a_type_mismatch` | covered |
-| Parts wider than `max_width` are planned as glue-ups | `app/spec_declarations::a_wider_part_than_max_width_is_planned_as_a_glue_up` | partial: no error, as the spec says; the glue-up plan is the work plan's (a later step) |
+| Parts wider than `max_width` are planned as glue-ups | `app/spec_declarations::a_wider_part_than_max_width_is_planned_as_a_glue_up` | covered |
+| Boards are joined by the part's `boards:`, else the project's, else `glued_edge`; a list uses every kind | `app/spec_declarations::boards_are_joined_by_the_projects_default`, `app/spec_declarations::a_part_names_its_own_joining`, `app/spec_declarations::a_list_combines_edge_joints` | covered |
+| Edge joints: `adds:` widens a board, cuts are made on the boards, `glue: false` is kept, the part's wood is its boards' | `app/spec_declarations::tongue_and_groove_needs_no_glue`, `app/designs::unglued_top_is_three_boards_in_tongue_and_groove_held_by_battens` | covered |
+| A board joint's made parts are made once per seam | `app/spec_declarations::a_spline_is_a_made_part_per_seam` | covered |
+| A sheet wider than `max_width` is `type-mismatch`; a part over `max_length` names an end joint | `app/spec_declarations::a_sheet_wider_than_max_width_is_an_error`, `app/spec_declarations::a_longer_part_names_an_end_joint` | covered |
 | `part`: length, width (unless the stock's or a dowel) and place required | `app/spec_declarations::a_part_needs_length_width_and_place`, `app/spec_declarations::only_round_parts_have_a_diameter` | covered |
 | A part is cut from a stock | `app/spec_declarations::a_part_is_cut_from_a_stock` | covered |
 | `thickness`: thinner than the stock, never thicker | `app/spec_declarations::a_part_may_be_thinner_than_its_stock_but_not_thicker` | covered |
@@ -296,9 +300,11 @@ and `broken/<folder>` for a design in `tests/broken/`.
 | A role or setting given twice is `duplicate-name` | `app/spec_joints::a_role_or_setting_given_twice_is_a_duplicate_name` | covered |
 | A joint needs a joint kind; hardware a slide, hinge or pull kind | `app/spec_joints::a_joint_needs_a_joint_kind_and_hardware_a_hardware_kind`, `app/features::hardware_named_after_its_kind_is_explained` | covered |
 | A kind value carries settings; the call adds roles; its settings are readable | `app/spec_joints::a_kind_value_supplies_settings_and_the_call_adds_roles`, `app/features::kind_values_carry_settings_and_are_readable` | covered |
-| A role is `Part` or `Parts` | `app/spec_joints::a_part_role_takes_one_part_and_a_parts_role_one_or_a_list`, `app/spec_joints::a_kind_with_a_parts_role_has_exactly_two_roles` | covered |
-| A kind with a `Parts` role has exactly two roles and applies to the pairs that meet | `app/spec_joints::a_kind_with_a_parts_role_has_exactly_two_roles`, `app/spec_joints::a_joint_applies_to_the_pairs_that_meet` | covered |
+| A role is `Part` or `Parts` | `app/spec_joints::a_part_role_takes_one_part_and_a_parts_role_one_or_a_list`, `app/spec_joints::a_kind_with_a_parts_role_has_one_role_or_two` | covered |
+| A kind with a `Parts` role has one role or two; with two it applies to the pairs that meet | `app/spec_joints::a_kind_with_a_parts_role_has_one_role_or_two`, `app/spec_joints::a_joint_applies_to_the_pairs_that_meet` | covered |
+| A kind with one `Parts` role is one connection across its parts, each meeting another | `app/spec_joints::a_kind_with_one_parts_role_is_one_connection_across_its_parts` | covered |
 | A kind with three or more `Part` roles is one connection | `app/spec_joints::a_kind_with_three_part_roles_is_one_connection` | covered |
+| `tenon` on `crossing` is a tongue along an edge, only for parts that butt edge to edge | `app/spec_joints::a_tongue_is_a_tenon_on_an_edge`, `app/spec_joints::each_operation_is_cut_on_its_own_selectors` | covered |
 | Parts meet when their boxes touch over an area or overlap (butt, cross) | `model/value::boxes_meet_when_they_touch_over_an_area`, `app/features::extend_follows_the_contact_and_fit_comes_from_joints`, `app/spec_joints::extend_on_parts_that_cross_is_a_type_mismatch` | covered |
 | Every listed part must meet a counterpart (`no-contact`) | `app/spec_joints::a_joint_applies_to_the_pairs_that_meet`, `broken/joint_does_not_meet`, `broken/joint_parts_apart`, `app/fit::a_joint_whose_parts_never_touch` | covered |
 | Everything in a kind is evaluated per pair | `app/features::joint_kinds_are_evaluated_per_pair`, `app/spec_joints::a_kind_require_is_checked_per_pair_and_reported_at_the_joint` | covered |

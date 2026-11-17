@@ -228,11 +228,11 @@ fn roles_default_to_piece_and_into() {
 }
 
 #[test]
-fn a_kind_with_a_parts_role_has_exactly_two_roles() {
+fn a_kind_with_a_parts_role_has_one_role_or_two() {
     the_diagnostic(
         &open("kind k : joint {\n  roles {\n    a: Parts\n    b: Part\n    c: Part\n  }\n}"),
         "type-mismatch",
-        "kind 'k' has a Parts role, so it needs exactly two roles",
+        "kind 'k' has a Parts role, so it has one role or two",
     );
     the_diagnostic(
         &open("kind k : joint {\n  roles {\n    a: Region\n    b: Part\n  }\n}"),
@@ -250,6 +250,92 @@ fn a_kind_with_three_part_roles_is_one_connection() {
     assert_eq!(j.pairs.len(), 1);
     assert_eq!(j.pairs[0].contact, Contact::Connection);
     assert_eq!(j.pairs[0].roles.len(), 3);
+}
+
+/// Three boards side by side on the base, edge to edge.
+const THREE_BOARDS: &str = "part plank[a, b, c] : pine_19 {
+  length: 300mm
+  width:  100mm
+  place {
+    orient(length: back, width: right)
+    against(base.top)
+    spaced(gap(0mm), from: base.left, to: base.right)
+    flush(base.front)
+  }
+}
+";
+
+#[test]
+fn a_kind_with_one_parts_role_is_one_connection_across_its_parts() {
+    let opened = open(&format!(
+        "{THREE_BOARDS}kind clamped : joint {{\n  roles {{\n    boards: Parts\n  }}\n}}\njoint glue_up : clamped([plank[a], plank[b], plank[c]])"
+    ));
+    let design = design(&opened);
+    let j = joint(design, "glue_up");
+    assert_eq!(j.pairs.len(), 1);
+    assert_eq!(j.pairs[0].contact, Contact::Connection);
+    let bound: Vec<(&str, &str)> = j.pairs[0]
+        .roles
+        .iter()
+        .map(|r| (r.role.as_str(), design.part(r.part).unwrap().name.as_str()))
+        .collect();
+    assert_eq!(
+        bound,
+        [
+            ("boards", "plank[a]"),
+            ("boards", "plank[b]"),
+            ("boards", "plank[c]")
+        ]
+    );
+    // Every part must meet at least one of the others.
+    let opened = open(&format!(
+        "{THREE_BOARDS}kind clamped : joint {{\n  roles {{\n    boards: Parts\n  }}\n}}\njoint glue_up : clamped([plank[a], plank[c]])"
+    ));
+    the_diagnostic(
+        &opened,
+        "no-contact",
+        "glue_up: plank[a] meets none of the parts it should join",
+    );
+    assert!(
+        opened.diagnostics[0]
+            .notes
+            .iter()
+            .any(|n| n.contains("plank[c]"))
+    );
+}
+
+#[test]
+fn a_tongue_is_a_tenon_on_an_edge() {
+    // Two boards written as parts, joined by the same kind a part's boards
+    // use: the tongue fills the groove exactly, so the fit checks pass.
+    let opened = open(&format!(
+        "{THREE_BOARDS}joint seam : tongue_and_groove(plank[a], into: plank[b], depth: 6mm, thickness: 6mm)"
+    ));
+    let design = design(&opened);
+    assert!(opened.diagnostics.is_empty(), "{:?}", diagnostics(&opened));
+    let tongue = part(design, "plank[a]");
+    assert_eq!(tongue.cut.width, mm("106"));
+    let cut = &tongue.cuts[0];
+    assert_eq!(cut.face.axis, PartAxis::Width);
+    assert!(matches!(cut.place, CutPlace::Crossing { .. }));
+    assert_eq!(
+        cut.kind,
+        CutKind::Tenon {
+            length: mm("6"),
+            width: mm("300"),
+            thickness: mm("6")
+        }
+    );
+    // Where the other part meets this one on its end, it is a type
+    // mismatch.
+    let opened = with_parts(
+        "kind lap : joint {\n  cut crossing(piece, into) {\n    tenon(length: 5mm, width: 50mm, thickness: 5mm)\n  }\n}\njoint j : lap(shelf, into: side)",
+    );
+    the_diagnostic(
+        &opened,
+        "type-mismatch",
+        "a tenon on crossing is a tongue along an edge, but side meets this part on its end",
+    );
 }
 
 #[test]
@@ -533,10 +619,10 @@ fn side_names_the_face_across_the_width_or_thickness() {
 fn each_operation_is_cut_on_its_own_selectors() {
     for (selector, operation, message, help) in [
         (
-            "crossing(into, piece)",
+            "side(piece, normal: width, from: into)",
             "tenon(length: 3mm, width: 3mm, thickness: 3mm)",
-            "'tenon' can't be cut on crossing",
-            "'tenon' is cut on end",
+            "'tenon' can't be cut on side",
+            "'tenon' is cut on end or crossing",
         ),
         (
             "end(piece, facing: into)",

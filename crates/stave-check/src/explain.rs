@@ -165,6 +165,11 @@ fn cavity(
             .map(|j| j.kind.clone())
             .unwrap_or_default(),
         stave_model::solved::CutSource::Hardware { .. } => String::new(),
+        stave_model::solved::CutSource::Boards { part, .. } => design
+            .part(part)
+            .and_then(|p| p.boards.as_ref())
+            .map(|b| b.methods.first().name.clone())
+            .unwrap_or_default(),
     };
     let noun = cavity_noun(cut.kind.operation(), &kind);
     let (feature, short) = guest_part

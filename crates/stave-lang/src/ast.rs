@@ -1757,6 +1757,8 @@ pub enum TypeName {
     Mount,
     /// `turned(profile)`.
     Shape,
+    /// `joined(by: ...)`: how the boards of a part are joined.
+    Boards,
     /// `box(...)` or `cylinder(...)`.
     Envelope,
     /// `model(...)`.
@@ -1783,7 +1785,7 @@ pub enum TypeName {
 
 impl TypeName {
     /// Every type, in the order the grammar's type table lists them.
-    pub const ALL: [TypeName; 27] = [
+    pub const ALL: [TypeName; 28] = [
         TypeName::Length,
         TypeName::Angle,
         TypeName::Ratio,
@@ -1800,6 +1802,7 @@ impl TypeName {
         TypeName::Direction,
         TypeName::Mount,
         TypeName::Shape,
+        TypeName::Boards,
         TypeName::Envelope,
         TypeName::Model,
         TypeName::Spacing,
@@ -1832,6 +1835,7 @@ impl TypeName {
             TypeName::Direction => "Direction",
             TypeName::Mount => "Mount",
             TypeName::Shape => "Shape",
+            TypeName::Boards => "Boards",
             TypeName::Envelope => "Envelope",
             TypeName::Model => "Model",
             TypeName::Spacing => "Spacing",

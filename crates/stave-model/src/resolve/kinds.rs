@@ -487,11 +487,11 @@ impl Resolver<'_> {
                 }
             }
             let has_parts = roles.iter().any(|(_, ty, _)| *ty == RoleType::Parts);
-            if has_parts && roles.len() != 2 {
+            if has_parts && roles.len() > 2 {
                 self.error_help(
                     Code::TypeMismatch,
                     format!(
-                        "kind '{}' has a Parts role, so it needs exactly two roles",
+                        "kind '{}' has a Parts role, so it has one role or two",
                         syntax.name.as_str()
                     ),
                     cx.file,

@@ -33,7 +33,8 @@ use stave_lang::ast::CutOperation;
 use stave_lang::placement::PartAxis;
 use stave_lang::units::{Angle, Length};
 use stave_model::solved::{
-    Cut, CutKind, CutPlace, Depth, End, LocalBox, LocalFace, Part, Shape, Size3, SolvedDesign,
+    Boards, Cut, CutKind, CutPlace, Depth, End, LocalBox, LocalFace, Part, Shape, Size3,
+    SolvedDesign,
 };
 
 /// A point in a part's own frame, in nanometres.
@@ -113,8 +114,9 @@ impl Block {
     }
 }
 
-/// Disjoint blocks: a box minus boxes. The only ways to make one are a
-/// single block and subtraction, so the blocks never overlap.
+/// Disjoint blocks: boxes added and removed. The only ways to make one are
+/// a single block, adding a block (only what isn't there yet is added) and
+/// subtraction, so the blocks never overlap.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Blocks {
     blocks: Vec<Block>,
@@ -139,6 +141,37 @@ impl Blocks {
             return;
         }
         self.blocks = self.blocks.iter().flat_map(|b| b.minus(cut)).collect();
+    }
+
+    /// Adds a box: the part of it not already covered.
+    pub fn add(&mut self, block: Block) {
+        let mut pieces = vec![block];
+        for existing in &self.blocks {
+            if pieces.iter().any(|p| p.intersection(existing).is_some()) {
+                pieces = pieces.iter().flat_map(|p| p.minus(existing)).collect();
+            }
+        }
+        self.blocks.extend(pieces);
+    }
+
+    /// The blocks moved `by` along `axis`.
+    fn shifted(&self, axis: PartAxis, by: Length) -> Blocks {
+        let shift = |point: Local| {
+            point.with(
+                axis,
+                point.get(axis).checked_add(by).unwrap_or(point.get(axis)),
+            )
+        };
+        Blocks {
+            blocks: self
+                .blocks
+                .iter()
+                .map(|b| Block {
+                    min: shift(b.min),
+                    max: shift(b.max),
+                })
+                .collect(),
+        }
     }
 
     /// The blocks.
@@ -444,7 +477,12 @@ impl Solid {
         let centre = [half(size.width), half(size.thickness)];
         let (blocks, profile) = match &part.shape {
             Shape::Board => (
-                Block::new(Local::default(), size).map_or_else(Blocks::empty, Blocks::new),
+                match &part.boards {
+                    Some(boards) if boards_change_the_wood(part, boards) => {
+                        board_blocks(part, boards, design)
+                    }
+                    _ => Block::new(Local::default(), size).map_or_else(Blocks::empty, Blocks::new),
+                },
                 None,
             ),
             Shape::Round { diameter } => (
@@ -667,32 +705,40 @@ impl Solid {
                 width,
                 thickness,
             } => {
+                // On an end, the tenon's width and thickness are across the
+                // part's; on an edge (a tongue, from `crossing`), its width
+                // runs along the part's length. Either way it is centred on
+                // the place: the end, or the footprint.
+                let face_axis = cut.face.axis;
+                let (width_axis, thickness_axis) = match face_axis {
+                    PartAxis::Length => (PartAxis::Width, PartAxis::Thickness),
+                    PartAxis::Width => (PartAxis::Length, PartAxis::Thickness),
+                    PartAxis::Thickness => (PartAxis::Length, PartAxis::Width),
+                };
                 let (start, end) = depth_range(size, cut.face, Depth::Length(*length));
                 let zone = |min: Local, max: Local| {
-                    Block::new(
-                        min.with(PartAxis::Length, start),
-                        max.with(PartAxis::Length, end),
-                    )
+                    Block::new(min.with(face_axis, start), max.with(face_axis, end))
                 };
-                let w0 = centred_low(half(size.width), *width).max(Length::ZERO);
-                let w1 = w0.checked_add(*width).unwrap_or(size.width).min(size.width);
-                let t0 = centred_low(half(size.thickness), *thickness).max(Length::ZERO);
-                let t1 = t0
-                    .checked_add(*thickness)
-                    .unwrap_or(size.thickness)
-                    .min(size.thickness);
+                let middle = place_centre(part, &cut.place, face_axis);
+                let span = |axis: PartAxis, extent: Length| {
+                    let full = size.get(axis);
+                    let low = centred_low(middle.get(axis), extent).max(Length::ZERO);
+                    (low, low.checked_add(extent).unwrap_or(full).min(full))
+                };
+                let (w0, w1) = span(width_axis, *width);
+                let (t0, t1) = span(thickness_axis, *thickness);
                 let around = [
-                    zone(Local::default(), size.with(PartAxis::Width, w0)),
-                    zone(Local::default().with(PartAxis::Width, w1), size),
+                    zone(Local::default(), size.with(width_axis, w0)),
+                    zone(Local::default().with(width_axis, w1), size),
                     zone(
-                        Local::default().with(PartAxis::Width, w0),
-                        size.with(PartAxis::Width, w1).with(PartAxis::Thickness, t0),
+                        Local::default().with(width_axis, w0),
+                        size.with(width_axis, w1).with(thickness_axis, t0),
                     ),
                     zone(
                         Local::default()
-                            .with(PartAxis::Width, w0)
-                            .with(PartAxis::Thickness, t1),
-                        size.with(PartAxis::Width, w1),
+                            .with(width_axis, w0)
+                            .with(thickness_axis, t1),
+                        size.with(width_axis, w1),
                     ),
                 ];
                 for block in around.into_iter().flatten() {
@@ -783,6 +829,36 @@ impl Solid {
             self.blocks.subtract(&block);
         }
     }
+}
+
+/// `true` when a part's boards make its wood differ from its cut box: a
+/// board has cuts, or a joint widened one (a tongue).
+fn boards_change_the_wood(part: &Part, boards: &Boards) -> bool {
+    let widths = boards
+        .boards
+        .iter()
+        .try_fold(Length::ZERO, |sum, board| sum.checked_add(board.width));
+    boards.boards.iter().any(|board| !board.cuts.is_empty())
+        || widths != Some(part.cut.get(boards.axis))
+}
+
+/// A part's wood as its boards make it (grammar, "Boards"): each board's
+/// box with its edge joints' cuts made, in the part's frame, together.
+/// Only box-shaped cuts are made on boards; the solver warns about the
+/// others.
+fn board_blocks(part: &Part, boards: &Boards, design: &SolvedDesign) -> Blocks {
+    let mut all = Blocks::empty();
+    for board in boards.boards.iter() {
+        let mut alone = part.clone();
+        alone.cut = part.cut.with(boards.axis, board.width);
+        alone.cuts.clone_from(&board.cuts);
+        alone.boards = None;
+        let solid = Solid::of(&alone, design);
+        for block in solid.blocks.shifted(boards.axis, board.offset).iter() {
+            all.add(*block);
+        }
+    }
+    all
 }
 
 /// Half a length, rounded down to the nanometre.

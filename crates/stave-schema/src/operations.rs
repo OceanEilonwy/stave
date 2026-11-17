@@ -111,7 +111,7 @@ impl Selector {
 pub enum FaceRemoval {
     /// Never removes a face.
     Never,
-    /// Removes the end it is cut on.
+    /// Removes the face it is cut on: the end, or the edge for a tongue.
     TheEnd,
     /// A `through` outline removes the edges it crosses.
     EdgesWhenThrough,
@@ -229,7 +229,7 @@ pub fn cut_operation(cut: CutOperation) -> &'static OperationSpec {
             argument("width", LENGTH, D::Required),
             argument("thickness", LENGTH, D::Required),
         ],
-        selectors: &[End],
+        selectors: &[End, Crossing],
         features: &["cheeks", "shoulders", "waste"],
         measurements: &["length", "width", "thickness"],
         removes: FaceRemoval::TheEnd,

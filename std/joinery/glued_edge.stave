@@ -1,0 +1,13 @@
+stave 1
+
+/// A glued edge joint (a rub joint): two boards planed straight and square
+/// along their edges and glued edge to edge. It is how a wide panel is made
+/// from narrow boards, and the way a part's boards are joined unless its
+/// `boards:` says otherwise.
+kind glued_edge : joint {
+  require same_thickness : piece.thickness == into.thickness "boards glued edge to edge need the same thickness"
+
+  insert: [push(piece, along: width)]
+
+  note: "Plane each pair of edges straight and square together, then clamp the boards with cauls across the faces to keep them flat"
+}

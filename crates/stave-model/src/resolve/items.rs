@@ -329,6 +329,9 @@ impl<'a> Resolver<'a> {
                         recipe_ids(&value)
                     })
                     .unwrap_or_default();
+                let boards = found
+                    .get("boards")
+                    .map(|f| self.field_value(&cx, f, fields::PROJECT));
                 (
                     Some(ProjectDef {
                         title,
@@ -338,6 +341,7 @@ impl<'a> Resolver<'a> {
                         style,
                         tools,
                         methods,
+                        boards,
                         file,
                         span: item.span,
                     }),
@@ -806,6 +810,9 @@ impl<'a> Resolver<'a> {
                 None
             }
         });
+        let boards = found
+            .get("boards")
+            .map(|f| self.field_value(cx, f, fields::PART));
         (
             PartBodyDef {
                 stock: stock_expr,
@@ -817,6 +824,7 @@ impl<'a> Resolver<'a> {
                 face_side,
                 face_edge,
                 note,
+                boards,
                 place: Vec::new(),
                 place_span: None,
                 span: body.span,

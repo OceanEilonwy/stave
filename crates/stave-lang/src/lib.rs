@@ -228,8 +228,8 @@ pub const LINE_CONTINUATION_TOKENS: &[&str] = &[
 /// Built-in functions (grammar, "Built-in functions"): looked up when a bare
 /// name is called.
 pub const BUILTIN_FUNCTIONS: &[&str] = &[
-    "between", "extent", "mid", "opening", "split", "cover", "overlay", "inset", "turned", "box",
-    "cylinder", "model", "ends", "pitch", "gap",
+    "between", "extent", "mid", "opening", "split", "cover", "overlay", "inset", "turned",
+    "joined", "box", "cylinder", "model", "ends", "pitch", "gap",
 ];
 
 /// Current version written in the `stave <version>` header.

@@ -1,0 +1,38 @@
+stave 1
+
+/// A splined edge joint: a groove along each edge and a thin strip, the
+/// spline, glued into both. It lines the boards up and gives the glue more
+/// to hold. The joint makes the spline, one for every seam.
+kind splined_edge : joint {
+  /// How deep each groove is.
+  param depth = piece.thickness / 2
+  /// The spline's thickness, which is the grooves' width.
+  param thickness = piece.thickness / 3
+  /// What the spline is cut from.
+  param spline_stock : Stock = piece.stock
+  require same_thickness : piece.thickness == into.thickness "boards joined by a spline need the same thickness"
+  require walls_stand    : thickness <= piece.thickness / 2 "the spline is too thick: the grooves' walls would be thinner than a quarter of the board"
+
+  insert:    [push(piece, along: width)]
+  cut_first: [piece, into]                 // both grooves first; the spline comes last
+
+  cut crossing(piece, into) {
+    slot(width: thickness, depth: depth)
+  }
+  cut crossing(into, piece) {
+    slot(width: thickness, depth: depth)
+  }
+
+  /// The spline: as long as the seam, reaching to the bottom of both grooves.
+  makes part spline : spline_stock {
+    length:    piece.length
+    width:     2 * depth
+    thickness: thickness
+    place {
+      orient(length: length, width: width, of: piece)
+      center(crossing(piece, into))
+    }
+  }
+
+  note: "Glue the spline into one board first, then bring the next board onto it"
+}

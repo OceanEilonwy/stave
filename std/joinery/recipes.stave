@@ -149,6 +149,24 @@ recipe tenon_by_hand : tenon {
   check: "the tenon pushes into its mortise by hand and the shoulders close all round"
 }
 
+/// A tenon or a tongue cut with a router: each cheek routed down to the
+/// tenon's thickness, the router's guide against the shoulder. This is the
+/// usual way to cut the long tongue of a tongue and groove.
+recipe tenon_by_router : tenon {
+  tools: [pencil, marking_gauge, router, straight_bit, clamps]
+  rank:  10
+  needs: [flat_face]                     // the router base rides on each cheek's face
+  mark {
+    gauge(length, on: shoulders)
+    gauge(thickness, on: cheeks)
+    hatch(waste)
+  }
+  cut {
+    rout(waste, to: cheeks, passes: 2, guide: shoulders)
+  }
+  check: "the tongue slides into its groove by hand along its whole length"
+}
+
 // ---- spigot: round tenons ----
 
 /// A round tenon turned on the lathe.

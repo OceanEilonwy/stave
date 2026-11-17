@@ -159,7 +159,12 @@ pub(crate) struct JointWork {
 
 /// One pair of a joint.
 pub(crate) struct PairWork {
+    /// One part per role; for a kind with one `Parts` role, every part of
+    /// that role.
     pub parts: Vec<PartId>,
+    /// `true` for a kind with one `Parts` role: one connection across all
+    /// of `parts`.
+    pub across: bool,
     pub contact: Contact,
     pub env: KindEnv,
     pub extensions: Vec<stave_model::solved::Extension>,
@@ -429,7 +434,11 @@ impl Solver<'_> {
             .get(joint.index())
             .map(|j| j.name.clone())
             .unwrap_or_default();
-        let pairwise = kind.roles.iter().any(|r| r.ty == RoleType::Parts);
+        let has_parts = kind.roles.iter().any(|r| r.ty == RoleType::Parts);
+        // Two roles with a `Parts` role: pairs. One `Parts` role: one
+        // connection across all of its parts (grammar, "Roles and pairs").
+        let pairwise = has_parts && kind.roles.len() == 2;
+        let across = has_parts && kind.roles.len() == 1;
         let mut plans: Vec<(Vec<PartId>, Contact)> = Vec::new();
         let mut unmatched = Vec::new();
         let role_parts: Vec<Vec<PartId>> = binding
@@ -464,6 +473,23 @@ impl Solver<'_> {
                     unmatched.push(*part);
                 }
             }
+        } else if across {
+            let parts = role_parts.first().cloned().unwrap_or_default();
+            for (index, part) in parts.iter().enumerate() {
+                let mut meets = false;
+                for (other_index, other) in parts.iter().enumerate() {
+                    if index != other_index
+                        && self.drawn_box(*part)?.meets(&self.drawn_box(*other)?)
+                    {
+                        meets = true;
+                        break;
+                    }
+                }
+                if !meets && !unmatched.contains(part) {
+                    unmatched.push(*part);
+                }
+            }
+            plans.push((parts, Contact::Connection));
         } else {
             let parts: Vec<PartId> = role_parts
                 .iter()
@@ -488,7 +514,11 @@ impl Solver<'_> {
         let mut pairs = Vec::new();
         let mut requires = Vec::new();
         for (parts, contact) in plans {
-            let roles: Vec<Value> = parts.iter().map(|p| Value::Part(*p)).collect();
+            let roles: Vec<Value> = if across {
+                vec![Value::Parts(parts.clone())]
+            } else {
+                parts.iter().map(|p| Value::Part(*p)).collect()
+            };
             let env = KindEnv::new(
                 binding.kind,
                 roles,
@@ -540,12 +570,17 @@ impl Solver<'_> {
             if let Some(joint_def) = &kind.joint {
                 for extend in &joint_def.adds {
                     let by = self.eval_length(&extend.by, &kind_env)?;
-                    let Some(part) = parts.get(extend.role).copied() else {
-                        continue;
+                    let members: Vec<PartId> = if across {
+                        parts.clone()
+                    } else {
+                        parts.get(extend.role).copied().into_iter().collect()
                     };
-                    let others: Vec<PartId> =
-                        parts.iter().copied().filter(|p| *p != part).collect();
-                    for other in others {
+                    for (part, other) in members.iter().flat_map(|part| {
+                        parts
+                            .iter()
+                            .filter(move |other| *other != part)
+                            .map(move |other| (*part, *other))
+                    }) {
                         let (a, b) = (self.drawn_box(part)?, self.drawn_box(other)?);
                         if !a.meets(&b) {
                             continue;
@@ -581,6 +616,7 @@ impl Solver<'_> {
             }
             pairs.push(PairWork {
                 parts,
+                across,
                 contact,
                 env,
                 extensions,
@@ -714,7 +750,7 @@ impl Solver<'_> {
             file,
             span,
             format!(
-                "stock '{stock_name}' comes no longer than {}; make the part shorter or choose longer stock",
+                "stock '{stock_name}' comes no longer than {}; make it from two parts joined end to end (for example ari_tsugi), or buy longer stock",
                 stave_model::value::format_length(max_length)
             ),
         ))
@@ -808,15 +844,18 @@ impl Solver<'_> {
     }
 
     /// The face a selector names and where on it.
+    /// `target` overrides the part the selector names (one part of a
+    /// kind's only `Parts` role).
     pub(crate) fn selector_place(
         &mut self,
         selector: &SelectorDef,
         pair: &PairWork,
         geoms: &GeomTable,
         file: FileId,
+        target: Option<PartId>,
     ) -> Solved<(PartId, LocalFace, CutPlace)> {
         let (Some(p), Some(q)) = (
-            Self::member_part(pair, selector.part),
+            target.or_else(|| Self::member_part(pair, selector.part)),
             Self::member_part(pair, selector.other),
         ) else {
             return Err(Reported);
@@ -1084,13 +1123,69 @@ impl Solver<'_> {
         geoms: &GeomTable,
         env: &Env<'_>,
     ) -> Solved<Vec<(PartId, LocalFace, CutPlace, CutKind)>> {
-        let (part, face, place) = self.selector_place(&cut.selector, pair, geoms, env.file)?;
+        // A cut on a kind's only `Parts` role is made on each of its parts
+        // that meets the other part of the selector.
+        let targets: Vec<Option<PartId>> = if pair.across
+            && cut.selector.part == JointMember::Role(0)
+        {
+            let other = Self::member_part(pair, cut.selector.other);
+            pair.parts
+                .iter()
+                .filter(|part| {
+                    let (Some(a), Some(b)) = (geoms.get(**part), other.and_then(|o| geoms.get(o)))
+                    else {
+                        return false;
+                    };
+                    Some(**part) != other && a.cut_box.meets(&b.cut_box)
+                })
+                .map(|part| Some(*part))
+                .collect()
+        } else {
+            vec![None]
+        };
         let mut out = Vec::new();
-        for operation in &cut.operations {
-            let kind = self.cut_kind(operation, env)?;
-            out.push((part, face, place.clone(), kind));
+        for target in targets {
+            let (part, face, place) =
+                self.selector_place(&cut.selector, pair, geoms, env.file, target)?;
+            for operation in &cut.operations {
+                let kind = self.cut_kind(operation, env)?;
+                self.check_tongue(operation, &place, face, env)?;
+                out.push((part, face, place.clone(), kind));
+            }
         }
         Ok(out)
+    }
+
+    /// A tenon on `crossing` is a tongue along an edge, for parts that
+    /// butt edge to edge: the face must be across the part's width
+    /// (grammar, "Cut operations").
+    fn check_tongue(
+        &mut self,
+        operation: &OperationDef,
+        place: &CutPlace,
+        face: LocalFace,
+        env: &Env<'_>,
+    ) -> Solved<()> {
+        let CutPlace::Crossing { other, .. } = place else {
+            return Ok(());
+        };
+        if operation.operation != CutOperation::Tenon || face.axis == PartAxis::Width {
+            return Ok(());
+        }
+        Err(self.error(
+            Code::TypeMismatch,
+            format!(
+                "a tenon on crossing is a tongue along an edge, but {} meets this part on its {}",
+                self.part_name(*other),
+                match face.axis {
+                    PartAxis::Length => "end",
+                    PartAxis::Width | PartAxis::Thickness => "face",
+                }
+            ),
+            env.file,
+            operation.span,
+            "use crossing only for parts that butt edge to edge, or cut the tenon on end(...)",
+        ))
     }
 
     /// The assembly steps of a pair.
@@ -1274,7 +1369,7 @@ impl Solver<'_> {
             let (Some(gp), Some(gq)) = (geoms.get(p).cloned(), geoms.get(q).cloned()) else {
                 return Err(Reported);
             };
-            let (_, face, _) = self.selector_place(selector, pair, geoms, env.file)?;
+            let (_, face, _) = self.selector_place(selector, pair, geoms, env.file, None)?;
             let (face_axis, _, positive) = gp.face_plane(face);
             // The plane: the contact plane of the drawn boxes for parts that
             // butt; the middle of their overlap for parts that cross.
@@ -1424,14 +1519,23 @@ pub(crate) struct MadeGeom {
 #[derive(Default)]
 pub(crate) struct GeomTable {
     pub parts: Vec<Option<PartGeom>>,
+    /// The boards of a part made of boards, while they are worked out.
+    pub boards: std::collections::BTreeMap<PartId, PartGeom>,
 }
 
 impl GeomTable {
     pub fn get(&self, part: PartId) -> Option<&PartGeom> {
+        if crate::boards::is_board(part) {
+            return self.boards.get(&part);
+        }
         self.parts.get(part.index()).and_then(Option::as_ref)
     }
 
     pub fn set(&mut self, part: PartId, geom: PartGeom) {
+        if crate::boards::is_board(part) {
+            self.boards.insert(part, geom);
+            return;
+        }
         if self.parts.len() <= part.index() {
             self.parts.resize(part.index() + 1, None);
         }

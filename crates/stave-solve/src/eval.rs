@@ -1317,6 +1317,54 @@ impl Solver<'_> {
                 Some(Value::Profile(profile)) => Ok(Value::Turned(profile)),
                 _ => Err(Reported),
             },
+            Builtin::Joined => {
+                let Some(expr) = Self::arg(args, "by") else {
+                    return Err(Reported);
+                };
+                let kinds = match self.eval(expr, env)? {
+                    Value::Kind(kind) => vec![kind],
+                    Value::List(items) => {
+                        let mut kinds = Vec::new();
+                        for item in items {
+                            match item {
+                                Value::Kind(kind) => kinds.push(kind),
+                                other => {
+                                    return Err(self.error(
+                                        Code::TypeMismatch,
+                                        format!(
+                                            "'by' needs joint kinds, found {}",
+                                            other.description()
+                                        ),
+                                        env.file,
+                                        expr.span,
+                                        "list joint kinds such as glued_edge or tongue_and_groove",
+                                    ));
+                                }
+                            }
+                        }
+                        kinds
+                    }
+                    other => {
+                        return Err(self.error(
+                            Code::TypeMismatch,
+                            format!("'by' needs a joint kind, found {}", other.description()),
+                            env.file,
+                            expr.span,
+                            "name a joint kind such as glued_edge or tongue_and_groove",
+                        ));
+                    }
+                };
+                match stave_model::nonempty::NonEmpty::new(kinds) {
+                    Some(by) => Ok(Value::Boards(stave_model::value::Joining { by })),
+                    None => Err(self.error(
+                        Code::TypeMismatch,
+                        "'by' needs at least one joint kind",
+                        env.file,
+                        expr.span,
+                        "name a joint kind such as glued_edge",
+                    )),
+                }
+            }
             Builtin::Box => Ok(Value::Envelope(Envelope::Box {
                 length: length(self, "length")?.ok_or(Reported)?,
                 width: length(self, "width")?.ok_or(Reported)?,

@@ -28,6 +28,8 @@ pub enum Builtin {
     Inset,
     /// `turned(profile)`: a shape.
     Turned,
+    /// `joined(by:)`: how the boards of a part are joined.
+    Joined,
     /// `box(length:, width:, thickness:)`: an envelope.
     Box,
     /// `cylinder(diameter:, length:)`: an envelope.
@@ -81,7 +83,7 @@ const ITEM: ValueType = ValueType::Items;
 
 impl Builtin {
     /// Every built-in, in the order the grammar lists them.
-    pub const ALL: [Builtin; 15] = [
+    pub const ALL: [Builtin; 16] = [
         Builtin::Between,
         Builtin::Extent,
         Builtin::Mid,
@@ -91,6 +93,7 @@ impl Builtin {
         Builtin::Overlay,
         Builtin::Inset,
         Builtin::Turned,
+        Builtin::Joined,
         Builtin::Box,
         Builtin::Cylinder,
         Builtin::Model,
@@ -111,6 +114,7 @@ impl Builtin {
             Builtin::Overlay => "overlay",
             Builtin::Inset => "inset",
             Builtin::Turned => "turned",
+            Builtin::Joined => "joined",
             Builtin::Box => "box",
             Builtin::Cylinder => "cylinder",
             Builtin::Model => "model",
@@ -134,6 +138,7 @@ impl Builtin {
             Builtin::Opening | Builtin::Split | Builtin::Cover => TypeName::Region,
             Builtin::Overlay | Builtin::Inset => TypeName::Mount,
             Builtin::Turned => TypeName::Shape,
+            Builtin::Joined => TypeName::Boards,
             Builtin::Box | Builtin::Cylinder => TypeName::Envelope,
             Builtin::Model => TypeName::Model,
             Builtin::Ends | Builtin::Pitch | Builtin::Gap => TypeName::Spacing,
@@ -202,6 +207,11 @@ impl Builtin {
             }
             Builtin::Turned => {
                 const LIST: &[Parameter] = &[positional("profile", Type(TypeName::Profile))];
+                LIST
+            }
+            Builtin::Joined => {
+                const JOINT_KIND: ValueType = Type(TypeName::JointKind);
+                const LIST: &[Parameter] = &[named("by", ValueType::ListOf(&JOINT_KIND), true)];
                 LIST
             }
             Builtin::Box => {
