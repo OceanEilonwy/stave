@@ -1076,14 +1076,17 @@ project "Side table" {
 
 Left out everywhere, it is `joined(by: glued_edge)`. `by:` takes a joint
 kind value, or a list of them, which are all used. Each is an ordinary
-`kind ... : joint` (`std:joinery` has `glued_edge`, `tongue_and_groove` and
-`splined_edge`), applied as for a joint between parts:
+`kind ... : joint` (`std:joinery` has `glued_edge`, `tongue_and_groove`,
+`splined_edge`, `chigiri` (butterfly keys across each seam) and
+`suitsuki_zan` (battens in sliding dovetail housings across all the boards);
+the last three need no glue), applied as for a joint between parts:
 
 - A kind with **two roles** joins each **seam**: its first role is the board
   nearer the reference edge, its second the next board. The two butt edge to
   edge, so `crossing(piece, into)` is `piece`'s edge at the seam.
 - A kind with **one `Parts` role** is one connection across all of the
-  part's boards.
+  part's boards: the boards together are the whole part (see "Roles and
+  pairs"), so the battens of `suitsuki_zan` are as long as the part is wide.
 - Requires are checked for every seam; a failing one is an error on the
   `boards:` line (on the part, when the default is used), naming the boards.
 - `adds:` widens a board toward its neighbour (the tongue of a tongue and
@@ -1092,9 +1095,11 @@ kind value, or a list of them, which are all used. Each is an ordinary
   cut list as `<part>.<name>[n]`, one per seam (`n` counts seams from 1), or
   `<part>.<name>` for a kind with one `Parts` role.
 - `glue: false` in the kind value says the seam is not glued.
-- Fasteners a board joint `uses:` aren't listed yet, and only box-shaped
-  cuts (`notch`, `slot` along an axis, `pocket`, `tenon`) are made on boards
-  yet: anything else is `warning[not-supported]`.
+- Fasteners a board joint `uses:` aren't listed yet. Every cut a solid
+  part can have is made on boards: the box-shaped ones (`notch`, `slot`,
+  `pocket`, `tenon`) and the angled ones (`outline`, `dovetail_socket`,
+  `dovetail_tail`, a `slot` at an angle). `drill`, `spigot` and `round` are
+  not made on boards yet: they are `warning[not-supported]`.
 
 A part that is not made of boards ignores `boards:`. A part a joint makes,
 a turned part and a dowel are never made of boards. Two limits stay errors,
@@ -1210,6 +1215,12 @@ and may add settings. Giving the same setting twice is
   thickness of this pair's `into` part, param defaults and `require`s are
   worked out for each pair, and cuts are made for each pair. A setting given
   in the call is the same for all pairs.
+- In a kind with **one `Parts` role**, the role's parts together count as
+  one where one is needed: `boards.width` (and `.length`, `.thickness`) is
+  the size of the box around all of them, along the first part's axes, and
+  in a made part's `orient` and `place` the role names that box (a batten
+  as long as the whole panel is wide). A cut on the role is made on each of
+  its parts that the other part of the selector meets.
 - A failing `require` of a kind is an error on the line that uses the joint.
 
 ### Defining joints
@@ -1275,13 +1286,14 @@ pair. It is declared like any part, appears in the cut list as
 | `orient(length: a, width: b, of: role)` | the made part's length runs along the role part's axis `a`, its width along axis `b` (`length`, `width` or `thickness`). Required |
 | `center(selector)` | centred, on all three axes, in the place a face selector names |
 | `center(selector, axis)` | centred there along one axis of the `of` part |
-| `against(selector)`, `against(selector, gap: d)`, `flush(selector)`, `flush(selector, inset: d)` | as for parts, against the face the selector names |
+| `against(selector)`, `against(selector, gap: d)`, `flush(selector)`, `flush(selector, inset: d)` | as for parts, against the face the selector names. A negative `gap` sinks the made part into the face by that much (a batten in its housing) |
 
 Each axis must be fixed exactly once, as everywhere else. The place a
-selector names is a plane and a footprint: for parts that butt, the plane
-is where their drawn boxes touch; for parts that cross, it is the middle of
-their overlap along the face's axis. Along the face, `center` centres on the
-overlap of the two parts' cut boxes.
+selector names is a plane and a footprint. For `crossing`, the plane is
+where the two parts' drawn boxes touch when they butt, and the middle of
+their overlap along the face's axis when they cross. For `end` and `side`,
+the plane is that face of the first part's drawn box. Along the face,
+`center` centres on the overlap of the two parts' cut boxes.
 
 ```
 makes part key : key_stock {
@@ -1324,8 +1336,8 @@ part can choose with `face_side:` and `face_edge:`.
 
 | Selector | The face | Measuring |
 |---|---|---|
-| `end(p, facing: q)` | the end of `p` nearest `q` | `width` and `thickness` across the end; depth runs along `p`'s length |
-| `side(p, normal: width \| thickness, from: q)` | the reference face (`normal: thickness`) or reference edge (`normal: width`) of `p`; `opposite: true` takes the face opposite to it | `along` from the end nearest `q`; `across` from the reference edge (or reference face); `flip: true` measures `across` from the opposite edge |
+| `end(p, facing: q)` | the end of `p` nearest `q`; without `facing:`, the end at the end of `p`'s length (`opposite: true` takes the start) | `width` and `thickness` across the end; depth runs along `p`'s length |
+| `side(p, normal: width \| thickness, from: q)` | the reference face (`normal: thickness`) or reference edge (`normal: width`) of `p`; `opposite: true` takes the face opposite to it | `along` from the end nearest `q` (without `from:`, from the start of `p`'s length); `across` from the reference edge (or reference face); `flip: true` measures `across` from the opposite edge |
 | `crossing(p, q)` | the face of `p` that `q` touches or enters. The **footprint** is the outline of `q`'s cut-size box on that face | within the footprint, in `q`'s own axes |
 
 When `p` and `q` cross right through each other, `crossing(p, q)` is `p`'s
@@ -1349,8 +1361,8 @@ opposite to the chosen one.
 | `spigot(length:, diameter:)` | end | everything around a centred round tenon |
 | `round(diameter:, flats:, flats_angle:)` | crossing | turns the part round, to `diameter`, over the length where the other part passes (the footprint's extent along this part's length), leaving square sections either side. With `flats:` it keeps two flat faces that distance apart, their normal at `flats_angle` (default `0deg`) from the part's width axis toward its thickness axis |
 | `drill(diameter:, depth:, count:)` | crossing, end, side | `count` round holes (default 1), evenly spaced along the longer side of the footprint or end (equal gaps, including before the first and after the last, as `spaced(evenly)`) and centred across it |
-| `dovetail_socket(neck:, depth:, angle:, slope:)` | end | a dovetail socket: `neck` wide at the end, `depth` deep, widening by its spread each side to its bottom, cut straight through the part (see "Angled cuts") |
-| `dovetail_tail(neck:, depth:, angle:, slope:)` | end | everything around a dovetail tail: over the last `depth` of the part, the wood either side of a tail `neck` wide at its shoulder and wider by its spread each side at the end, cut straight through the part |
+| `dovetail_socket(neck:, depth:, angle:, slope:)` | end, crossing | a dovetail socket: `neck` wide at the face, `depth` deep, widening by its spread each side to its bottom, cut straight through the part (see "Angled cuts"). On `crossing` it is a **housing** for a sliding dovetail, running along the entering part's length |
+| `dovetail_tail(neck:, depth:, angle:, slope:)` | end, crossing | everything around a dovetail tail: over the last `depth` of the part, the wood either side of a tail `neck` wide at its shoulder and wider by its spread each side at the face, cut straight through the part. On `crossing` it is the **tongue** of a sliding dovetail, running along the part's own length |
 | `outline(marks: [...], depth:, from_depth:)` | side | the shape marked out with `mark(along:, across:)` points, in order round the shape, cut from `from_depth` (default `0mm`, the face itself) to `depth` below the face. With `from_depth` greater than zero the cut is hidden inside the part: a recess for a hidden stub tenon |
 
 **Angled cuts.** `dovetail_socket`, `dovetail_tail`, `outline` and a `slot`
@@ -1380,6 +1392,19 @@ between two depths. They are cut, drawn and checked like every other cut.
   end; what is cut away is the wood either side of it. A tail and a socket
   with the same `neck`, `depth` and slope fill each other exactly. Where the
   tail is wider than the part, the part's own edge is its side.
+- **A sliding dovetail** is the same two shapes on `crossing`, for a part
+  that enters the face of another along its whole length (a batten housed
+  across the underside of a panel). `dovetail_socket` on `crossing(p, q)` is
+  a housing in `p`'s face: its sides lie across `q`'s width, centred on the
+  footprint, `neck` wide at the face and `neck + 2 × spread` at its floor,
+  `depth` in, and it runs along `q`'s length straight through `p` and out
+  past its edges. `dovetail_tail` on `crossing(p, q)` is the tongue along
+  `p`'s own length: its sides lie across `p`'s width, centred on the
+  footprint, `neck` wide at its shoulder `depth` below the face and wider by
+  the spread each side at the face; the wood either side of it is cut away
+  over that `depth`, the whole length of `p`. A housing and a tongue with the
+  same `neck`, `depth` and slope, cut on the faces where the two parts meet,
+  fill each other exactly, and the tongue can only slide in along its length.
 - **A dovetail's slope** is given one of two ways, never both
   (`error[type-mismatch]`) and never neither (`error[missing-field]`):
   `angle: 10deg`, from straight, for a spread of `depth × tan(angle)` each

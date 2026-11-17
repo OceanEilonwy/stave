@@ -881,7 +881,7 @@ impl Solver<'_> {
                     kind: cut_kind,
                 };
                 if is_board(target) {
-                    if !is_block_cut(&cut.kind) {
+                    if !made_on_boards(&cut.kind) {
                         self.not_on_boards(&cut.kind, &part_name, cut_def.span, kind.decl.file);
                     }
                     board_cuts.entry(target).or_default().push(cut);
@@ -897,7 +897,7 @@ impl Solver<'_> {
     fn not_on_boards(&mut self, kind: &CutKind, part_name: &str, span: Span, file: FileId) {
         let noun = match kind.operation() {
             CutOperation::Notch => "a notch",
-            CutOperation::Slot => "a slot at an angle",
+            CutOperation::Slot => "a slot",
             CutOperation::Pocket => "a mortise",
             CutOperation::Tenon => "a tenon",
             CutOperation::Spigot => "a round tenon",
@@ -921,18 +921,18 @@ impl Solver<'_> {
     }
 }
 
-/// `true` for the cuts the geometry makes on a board as boxes (grammar,
-/// "Boards": the collision checks see a part's wood as its boards make
-/// it).
-pub(crate) fn is_block_cut(kind: &CutKind) -> bool {
+/// `true` for the cuts the geometry makes on a board: the box-shaped ones
+/// and the angled ones (grammar, "Boards": the collision checks see a
+/// part's wood as its boards make it).
+pub(crate) fn made_on_boards(kind: &CutKind) -> bool {
     match kind {
-        CutKind::Notch { .. } | CutKind::Pocket { .. } | CutKind::Tenon { .. } => true,
-        CutKind::Slot { angle, .. } => angle.microdeg().rem_euclid(90_000_000) == 0,
-        CutKind::Spigot { .. }
-        | CutKind::Round { .. }
-        | CutKind::Drill { .. }
+        CutKind::Notch { .. }
+        | CutKind::Pocket { .. }
+        | CutKind::Tenon { .. }
+        | CutKind::Slot { .. }
         | CutKind::DovetailSocket { .. }
         | CutKind::DovetailTail { .. }
-        | CutKind::Outline { .. } => false,
+        | CutKind::Outline { .. } => true,
+        CutKind::Spigot { .. } | CutKind::Round { .. } | CutKind::Drill { .. } => false,
     }
 }

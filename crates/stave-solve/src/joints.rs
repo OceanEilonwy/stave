@@ -843,6 +843,57 @@ impl Solver<'_> {
         }
     }
 
+    /// The geometry a made part's place reads for a member: its part's,
+    /// or, for a kind's only `Parts` role, the box around all of its parts
+    /// in the first part's axes (grammar, "Roles and pairs").
+    fn member_geom(
+        pair: &PairWork,
+        member: JointMember,
+        geoms: &GeomTable,
+    ) -> Solved<(PartId, PartGeom)> {
+        let part = Self::member_part(pair, member).ok_or(Reported)?;
+        let mut geom = geoms.get(part).cloned().ok_or(Reported)?;
+        if !(pair.across && member == JointMember::Role(0)) {
+            return Ok((part, geom));
+        }
+        for other in pair.parts.iter().skip(1) {
+            let other = geoms.get(*other).ok_or(Reported)?;
+            geom.drawn_box = hull(&geom.drawn_box, &other.drawn_box);
+            geom.cut_box = hull(&geom.cut_box, &other.cut_box);
+        }
+        for axis in PartAxis::ALL {
+            let direction = geom.orientation.direction(axis);
+            let world = direction.axis();
+            let low = geom
+                .drawn_box
+                .min(world)
+                .checked_sub(geom.cut_box.min(world))
+                .ok_or(Reported)?;
+            let high = geom
+                .cut_box
+                .max(world)
+                .checked_sub(geom.drawn_box.max(world))
+                .ok_or(Reported)?;
+            let (start, end) = if direction.is_positive() {
+                (low, high)
+            } else {
+                (high, low)
+            };
+            let slot = local_slot(axis);
+            let size = geom.drawn_box.size(world).ok_or(Reported)?;
+            if let (Some(d), Some(s), Some(e)) = (
+                geom.drawn.get_mut(slot),
+                geom.start.get_mut(slot),
+                geom.end.get_mut(slot),
+            ) {
+                *d = size;
+                *s = start;
+                *e = end;
+            }
+        }
+        Ok((part, geom))
+    }
+
     /// The face a selector names and where on it.
     /// `target` overrides the part the selector names (one part of a
     /// kind's only `Parts` role).
@@ -863,105 +914,8 @@ impl Solver<'_> {
         let (Some(gp), Some(gq)) = (geoms.get(p), geoms.get(q)) else {
             return Err(Reported);
         };
-        let (gp, gq) = (gp.clone(), gq.clone());
-        let length_world = gp.orientation.direction(PartAxis::Length).axis();
-        let q_centre = midpoint(
-            gq.drawn_box.min(length_world),
-            gq.drawn_box.max(length_world),
-        )
-        .ok_or(Reported)?;
-        let p_centre = midpoint(
-            gp.drawn_box.min(length_world),
-            gp.drawn_box.max(length_world),
-        )
-        .ok_or(Reported)?;
-        let near_end = gp.face_toward(length_world, q_centre >= p_centre);
         let _ = file;
-        match selector.selector {
-            Selector::End => {
-                let face = if selector.opposite {
-                    LocalFace {
-                        axis: PartAxis::Length,
-                        end: flip(near_end.end),
-                    }
-                } else {
-                    near_end
-                };
-                Ok((p, face, CutPlace::End { toward: q }))
-            }
-            Selector::Side => {
-                let normal = selector.normal.unwrap_or(PartAxis::Thickness);
-                let (face_ref, across_ref) = match normal {
-                    PartAxis::Width => (gp.reference_edge, gp.reference_face),
-                    PartAxis::Thickness | PartAxis::Length => {
-                        (gp.reference_face, gp.reference_edge)
-                    }
-                };
-                let face = if selector.opposite {
-                    LocalFace {
-                        axis: face_ref.axis,
-                        end: flip(face_ref.end),
-                    }
-                } else {
-                    face_ref
-                };
-                let across_from = if selector.flip {
-                    flip(across_ref.end)
-                } else {
-                    across_ref.end
-                };
-                Ok((
-                    p,
-                    face,
-                    CutPlace::Side {
-                        from: q,
-                        along_from: near_end.end,
-                        across_axis: across_ref.axis,
-                        across_from,
-                    },
-                ))
-            }
-            Selector::Crossing => {
-                let face = match selector.normal {
-                    Some(PartAxis::Thickness) => gp.reference_face,
-                    Some(PartAxis::Width) => gp.reference_edge,
-                    Some(PartAxis::Length) => near_end,
-                    None => match gp.drawn_box.touching_axis(&gq.drawn_box) {
-                        Some(axis) => {
-                            let toward_positive = gp.drawn_box.max(axis) == gq.drawn_box.min(axis);
-                            gp.face_toward(axis, toward_positive)
-                        }
-                        None => {
-                            let q_length = gq.orientation.direction(PartAxis::Length).axis();
-                            let p_thickness = gp.orientation.direction(PartAxis::Thickness).axis();
-                            if q_length != p_thickness {
-                                gp.reference_face
-                            } else {
-                                gp.reference_edge
-                            }
-                        }
-                    },
-                };
-                let face = if selector.opposite {
-                    LocalFace {
-                        axis: face.axis,
-                        end: flip(face.end),
-                    }
-                } else {
-                    face
-                };
-                let local = gp.local_box(&gq.cut_box.intersection(&gp.cut_box))?;
-                let footprint = local_box(&local)?;
-                Ok((
-                    p,
-                    face,
-                    CutPlace::Crossing {
-                        other: q,
-                        footprint,
-                    },
-                ))
-            }
-        }
+        selector_on(selector, p, gp, q, gq)
     }
 
     fn depth(&mut self, value: Value, env: &Env<'_>, span: Span) -> Solved<Depth> {
@@ -1424,33 +1378,28 @@ impl Solver<'_> {
                 | MadeTermKind::Against { selector, .. }
                 | MadeTermKind::Flush { selector, .. } => selector,
             };
-            let (p, q) = match (
-                Self::member_part(pair, selector.part),
-                Self::member_part(pair, selector.other),
-            ) {
-                (Some(p), Some(q)) => (p, q),
-                _ => return Err(Reported),
-            };
-            let (Some(gp), Some(gq)) = (geoms.get(p).cloned(), geoms.get(q).cloned()) else {
-                return Err(Reported);
-            };
-            let (_, face, _) = self.selector_place(selector, pair, geoms, env.file, None)?;
+            let (p, gp) = Self::member_geom(pair, selector.part, geoms)?;
+            let (q, gq) = Self::member_geom(pair, selector.other, geoms)?;
+            let (_, face, _) = selector_on(selector, p, &gp, q, &gq)?;
             let (face_axis, _, positive) = gp.face_plane(face);
-            // The plane: the contact plane of the drawn boxes for parts that
-            // butt; the middle of their overlap for parts that cross.
-            let plane = match gp.drawn_box.touching_axis(&gq.drawn_box) {
-                Some(axis) if axis == face_axis => {
-                    if positive {
-                        gp.drawn_box.max(axis)
-                    } else {
-                        gp.drawn_box.min(axis)
+            let drawn_face = if positive {
+                gp.drawn_box.max(face_axis)
+            } else {
+                gp.drawn_box.min(face_axis)
+            };
+            // The plane: for `end` and `side`, that face of the first part;
+            // for `crossing`, the contact plane of the drawn boxes for parts
+            // that butt, the middle of their overlap for parts that cross.
+            let plane = match selector.selector {
+                Selector::End | Selector::Side => drawn_face,
+                Selector::Crossing => match gp.drawn_box.touching_axis(&gq.drawn_box) {
+                    Some(axis) if axis == face_axis => drawn_face,
+                    _ => {
+                        let low = gp.drawn_box.min(face_axis).max(gq.drawn_box.min(face_axis));
+                        let high = gp.drawn_box.max(face_axis).min(gq.drawn_box.max(face_axis));
+                        midpoint(low, high).ok_or(Reported)?
                     }
-                }
-                _ => {
-                    let low = gp.drawn_box.min(face_axis).max(gq.drawn_box.min(face_axis));
-                    let high = gp.drawn_box.max(face_axis).min(gq.drawn_box.max(face_axis));
-                    midpoint(low, high).ok_or(Reported)?
-                }
+                },
             };
             let centre_of = |axis: Axis| {
                 midpoint(
@@ -1628,4 +1577,135 @@ fn local_box(local: &[(ExactLength, ExactLength); 3]) -> Solved<LocalBox> {
         min: point(|p| p.0)?,
         max: point(|p| p.1)?,
     })
+}
+
+/// The face a selector names and where on it, given the geometry of its
+/// two parts (`gp` may stand for all the parts of a kind's only `Parts`
+/// role together). A selector that names a part against itself (`end(p)`,
+/// `side(p, normal: ..)`) measures from the start of `p`'s length, and
+/// `end(p)` is the end at the end of it.
+fn selector_on(
+    selector: &SelectorDef,
+    p: PartId,
+    gp: &PartGeom,
+    q: PartId,
+    gq: &PartGeom,
+) -> Solved<(PartId, LocalFace, CutPlace)> {
+    let alone = selector.part == selector.other;
+    let near_end = if alone {
+        LocalFace {
+            axis: PartAxis::Length,
+            end: End::End,
+        }
+    } else {
+        let length_world = gp.orientation.direction(PartAxis::Length).axis();
+        let q_centre = midpoint(
+            gq.drawn_box.min(length_world),
+            gq.drawn_box.max(length_world),
+        )
+        .ok_or(Reported)?;
+        let p_centre = midpoint(
+            gp.drawn_box.min(length_world),
+            gp.drawn_box.max(length_world),
+        )
+        .ok_or(Reported)?;
+        gp.face_toward(length_world, q_centre >= p_centre)
+    };
+    let along_from = if alone { End::Start } else { near_end.end };
+    match selector.selector {
+        Selector::End => {
+            let face = if selector.opposite {
+                LocalFace {
+                    axis: PartAxis::Length,
+                    end: flip(near_end.end),
+                }
+            } else {
+                near_end
+            };
+            Ok((p, face, CutPlace::End { toward: q }))
+        }
+        Selector::Side => {
+            let normal = selector.normal.unwrap_or(PartAxis::Thickness);
+            let (face_ref, across_ref) = match normal {
+                PartAxis::Width => (gp.reference_edge, gp.reference_face),
+                PartAxis::Thickness | PartAxis::Length => (gp.reference_face, gp.reference_edge),
+            };
+            let face = if selector.opposite {
+                LocalFace {
+                    axis: face_ref.axis,
+                    end: flip(face_ref.end),
+                }
+            } else {
+                face_ref
+            };
+            let across_from = if selector.flip {
+                flip(across_ref.end)
+            } else {
+                across_ref.end
+            };
+            Ok((
+                p,
+                face,
+                CutPlace::Side {
+                    from: q,
+                    along_from,
+                    across_axis: across_ref.axis,
+                    across_from,
+                },
+            ))
+        }
+        Selector::Crossing => {
+            let face = match selector.normal {
+                Some(PartAxis::Thickness) => gp.reference_face,
+                Some(PartAxis::Width) => gp.reference_edge,
+                Some(PartAxis::Length) => near_end,
+                None => match gp.drawn_box.touching_axis(&gq.drawn_box) {
+                    Some(axis) => {
+                        let toward_positive = gp.drawn_box.max(axis) == gq.drawn_box.min(axis);
+                        gp.face_toward(axis, toward_positive)
+                    }
+                    None => {
+                        let q_length = gq.orientation.direction(PartAxis::Length).axis();
+                        let p_thickness = gp.orientation.direction(PartAxis::Thickness).axis();
+                        if q_length != p_thickness {
+                            gp.reference_face
+                        } else {
+                            gp.reference_edge
+                        }
+                    }
+                },
+            };
+            let face = if selector.opposite {
+                LocalFace {
+                    axis: face.axis,
+                    end: flip(face.end),
+                }
+            } else {
+                face
+            };
+            let local = gp.local_box(&gq.cut_box.intersection(&gp.cut_box))?;
+            let footprint = local_box(&local)?;
+            Ok((
+                p,
+                face,
+                CutPlace::Crossing {
+                    other: q,
+                    footprint,
+                },
+            ))
+        }
+    }
+}
+
+/// The smallest box holding both boxes.
+fn hull(a: &ExactBox, b: &ExactBox) -> ExactBox {
+    let mut out = *a;
+    for axis in Axis::ALL {
+        out = out.with(
+            axis,
+            a.min(axis).min(b.min(axis)),
+            a.max(axis).max(b.max(axis)),
+        );
+    }
+    out
 }

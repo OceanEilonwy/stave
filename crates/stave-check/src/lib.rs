@@ -365,7 +365,7 @@ impl<'a> Checker<'a> {
         let mut found = Vec::new();
         for (part, solid) in self.design.parts.iter().zip(&self.solids) {
             for misshapen in solid.misshapen() {
-                if let Some(cut) = part.cuts.get(misshapen.cut) {
+                if let Some(cut) = stave_geom::solid::cut_at(part, misshapen.cut) {
                     found.push((part.id, cut.source, misshapen.error));
                 }
             }

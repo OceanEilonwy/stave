@@ -473,7 +473,7 @@ impl ShapeError {
 /// A cut that was left unmade because its shape is a mistake.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Misshapen {
-    /// Its index in [`Part::cuts`].
+    /// Its index among the part's cuts (see [`cut_at`]).
     pub cut: usize,
     /// What is wrong with it.
     pub error: ShapeError,
@@ -515,11 +515,13 @@ impl Solid {
     pub fn of(part: &Part, design: &SolvedDesign) -> Solid {
         let size = part.cut;
         let centre = [half(size.width), half(size.thickness)];
+        let mut from_boards = BoardWood::default();
         let (blocks, profile) = match &part.shape {
             Shape::Board => (
                 match &part.boards {
                     Some(boards) if boards_change_the_wood(part, boards) => {
-                        board_blocks(part, boards, design)
+                        from_boards = board_wood(part, boards, design);
+                        std::mem::take(&mut from_boards.blocks)
                     }
                     _ => Block::new(Local::default(), size).map_or_else(Blocks::empty, Blocks::new),
                 },
@@ -589,9 +591,9 @@ impl Solid {
             rods: Vec::new(),
             profile,
             holes: Vec::new(),
-            prisms: Vec::new(),
+            prisms: from_boards.prisms,
             skipped: Vec::new(),
-            misshapen: Vec::new(),
+            misshapen: from_boards.misshapen,
         };
         for (index, cut) in part.cuts.iter().enumerate() {
             match solid.make(part, cut, design, centre) {
@@ -947,12 +949,24 @@ fn boards_change_the_wood(part: &Part, boards: &Boards) -> bool {
         || widths != Some(part.cut.get(boards.axis))
 }
 
+/// A part's wood as its boards make it.
+#[derive(Default)]
+struct BoardWood {
+    blocks: Blocks,
+    /// The boards' angled cuts with a slanted piece, in the part's frame.
+    prisms: Vec<Prism>,
+    /// The boards' cuts whose shape is a mistake, numbered after the
+    /// part's own cuts (see [`cut_at`]).
+    misshapen: Vec<Misshapen>,
+}
+
 /// A part's wood as its boards make it (grammar, "Boards"): each board's
-/// box with its edge joints' cuts made, in the part's frame, together.
-/// Only box-shaped cuts are made on boards; the solver warns about the
-/// others.
-fn board_blocks(part: &Part, boards: &Boards, design: &SolvedDesign) -> Blocks {
-    let mut all = Blocks::empty();
+/// box with its edge joints' cuts made, box-shaped and angled, in the
+/// part's frame, together. Holes, round tenons and round sections are not
+/// made on boards; the solver warns about them.
+fn board_wood(part: &Part, boards: &Boards, design: &SolvedDesign) -> BoardWood {
+    let mut wood = BoardWood::default();
+    let mut numbered = part.cuts.len();
     for board in boards.boards.iter() {
         let mut alone = part.clone();
         alone.cut = part.cut.with(boards.axis, board.width);
@@ -960,10 +974,35 @@ fn board_blocks(part: &Part, boards: &Boards, design: &SolvedDesign) -> Blocks {
         alone.boards = None;
         let solid = Solid::of(&alone, design);
         for block in solid.blocks.shifted(boards.axis, board.offset).iter() {
-            all.add(*block);
+            wood.blocks.add(*block);
         }
+        wood.prisms.extend(
+            solid
+                .prisms
+                .iter()
+                .filter_map(|prism| prism.shifted(boards.axis, board.offset)),
+        );
+        wood.misshapen
+            .extend(solid.misshapen.iter().map(|misshapen| Misshapen {
+                cut: numbered.saturating_add(misshapen.cut),
+                error: misshapen.error,
+            }));
+        numbered = numbered.saturating_add(board.cuts.len());
     }
-    all
+    wood
+}
+
+/// A part's cut by its index in [`Solid::misshapen`]: the part's own cuts
+/// first, then its boards' cuts, board by board.
+pub fn cut_at(part: &Part, index: usize) -> Option<&Cut> {
+    part.cuts.get(index).or_else(|| {
+        let boards = part.boards.as_ref()?;
+        boards
+            .boards
+            .iter()
+            .flat_map(|board| board.cuts.iter())
+            .nth(index.checked_sub(part.cuts.len())?)
+    })
 }
 
 /// Half a length, rounded down to the nanometre.
@@ -1212,12 +1251,13 @@ impl TurnedSlot {
     }
 }
 
-/// A dovetail on the end of a part: the axis it runs into the part along,
-/// the axis its sides lie across, and the axis it is cut straight through.
+/// A dovetail on the end of a part, or a sliding dovetail on the face a
+/// crossing part enters: the axis it runs into the part along, the axis
+/// its sides lie across, and the axis it is cut straight through.
 struct Dovetail {
     depth_axis: PartAxis,
     through: PartAxis,
-    /// The end face, on the depth axis.
+    /// The face it is cut from, on the depth axis.
     face_at: Length,
     /// The bottom of the socket, or the tail's shoulder.
     inner: Length,
@@ -1236,8 +1276,9 @@ struct Dovetail {
 
 impl Dovetail {
     /// A socket's sides lie across the entering part's width; a tail's
-    /// across its own part's width. Both are centred across the end and
-    /// cut through the part's third axis.
+    /// across its own part's width. Both are centred across the face (on
+    /// the footprint, for a sliding dovetail on `crossing`) and cut
+    /// through the part's third axis.
     fn of(
         part: &Part,
         cut: &Cut,
@@ -1279,7 +1320,8 @@ impl Dovetail {
             End::End => (high, low),
         };
         let width = size.get(width_axis);
-        let neck_low = centred_low(half(width), neck);
+        let middle = place_centre(part, &cut.place, depth_axis).get(width_axis);
+        let neck_low = centred_low(middle, neck);
         let run = minus(high, low);
         let offset = match slope {
             Slope::Angle(angle) => {

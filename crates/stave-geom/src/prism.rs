@@ -542,6 +542,48 @@ impl Prism {
     pub fn depth(&self) -> DepthRange {
         self.depth
     }
+
+    /// The same prism moved `by` along a part axis (a board's cut moved
+    /// into its part's frame). Moving keeps every shape as it is, so
+    /// nothing is checked again; `None` if a coordinate would overflow.
+    pub fn shifted(&self, axis: PartAxis, by: Length) -> Option<Prism> {
+        let move_by = |value: Length| value.checked_add(by);
+        if axis == self.face_axis {
+            let depth = DepthRange::new(move_by(self.depth.from)?, move_by(self.depth.to)?)?;
+            return Some(Prism {
+                depth,
+                ..self.clone()
+            });
+        }
+        let [first, _] = crate::solid::across(self.face_axis);
+        let move_point = |p: &Point2| -> Option<Point2> {
+            Some(if axis == first {
+                Point2::new(move_by(p.first)?, p.second)
+            } else {
+                Point2::new(p.first, move_by(p.second)?)
+            })
+        };
+        let move_ring =
+            |points: &[Point2]| -> Option<Vec<Point2>> { points.iter().map(move_point).collect() };
+        Some(Prism {
+            face_axis: self.face_axis,
+            outline: Polygon {
+                points: move_ring(&self.outline.points)?,
+            },
+            pieces: self
+                .pieces
+                .iter()
+                .map(|piece| {
+                    Some(ConvexPolygon {
+                        polygon: Polygon {
+                            points: move_ring(&piece.polygon.points)?,
+                        },
+                    })
+                })
+                .collect::<Option<_>>()?,
+            depth: self.depth,
+        })
+    }
 }
 
 #[cfg(test)]
@@ -550,6 +592,40 @@ mod tests {
 
     fn p(first: i64, second: i64) -> Point2 {
         Point2::new(Length::from_mm(first), Length::from_mm(second))
+    }
+
+    #[test]
+    fn a_shifted_prism_moves_its_outline_or_its_depth() {
+        // A trapezoid on the plane across the thickness, 0..19 deep.
+        let trapezoid = Polygon::new(vec![p(0, 0), p(10, 0), p(8, 5), p(2, 5)]).unwrap();
+        let depth = DepthRange::new(Length::ZERO, Length::from_mm(19)).unwrap();
+        let prism = Prism::new(PartAxis::Thickness, trapezoid, depth).unwrap();
+        // Along the width (the second axis on the face): every point moves.
+        let moved = prism
+            .shifted(PartAxis::Width, Length::from_mm(140))
+            .unwrap();
+        assert_eq!(
+            moved.outline().points(),
+            Prism::new(
+                PartAxis::Thickness,
+                Polygon::new(vec![p(0, 140), p(10, 140), p(8, 145), p(2, 145)]).unwrap(),
+                depth
+            )
+            .unwrap()
+            .outline()
+            .points()
+        );
+        assert_eq!(moved.pieces().len(), prism.pieces().len());
+        assert_eq!(moved.depth(), depth);
+        // Along its own axis: only the depth moves.
+        let deeper = prism
+            .shifted(PartAxis::Thickness, Length::from_mm(5))
+            .unwrap();
+        assert_eq!(deeper.outline(), prism.outline());
+        assert_eq!(
+            (deeper.depth().from(), deeper.depth().to()),
+            (Length::from_mm(5), Length::from_mm(24))
+        );
     }
 
     #[test]

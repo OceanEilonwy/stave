@@ -783,6 +783,9 @@ impl Solver<'_> {
             (Value::Part(part), Member::Size(axis)) => {
                 Ok(Value::Length(self.drawn_size(*part, *axis)?))
             }
+            (Value::Parts(parts), Member::Size(axis)) => {
+                self.parts_size(parts, *axis).map(Value::Length)
+            }
             (Value::Part(part), Member::Diameter) => {
                 self.part_diameter(*part, env, span).map(Value::Length)
             }
@@ -836,6 +839,15 @@ impl Solver<'_> {
                     (Value::Part(_), "thickness") => {
                         Some(Member::Size(stave_lang::placement::PartAxis::Thickness))
                     }
+                    (Value::Parts(_), "length") => {
+                        Some(Member::Size(stave_lang::placement::PartAxis::Length))
+                    }
+                    (Value::Parts(_), "width") => {
+                        Some(Member::Size(stave_lang::placement::PartAxis::Width))
+                    }
+                    (Value::Parts(_), "thickness") => {
+                        Some(Member::Size(stave_lang::placement::PartAxis::Thickness))
+                    }
                     (Value::Part(_), "diameter") => Some(Member::Diameter),
                     (Value::Part(_), "stock") => Some(Member::PartStock),
                     (Value::Part(_) | Value::Region(_), word)
@@ -865,6 +877,31 @@ impl Solver<'_> {
                 format!("{} has no such field", value.description()),
                 "check what this refers to",
             )),
+        }
+    }
+
+    /// The size of the box around several parts along an axis of the
+    /// first: a kind's only `Parts` role read as one (grammar, "Roles and
+    /// pairs").
+    fn parts_size(
+        &mut self,
+        parts: &[PartId],
+        axis: stave_lang::placement::PartAxis,
+    ) -> Solved<ExactLength> {
+        let Some(first) = parts.first().copied() else {
+            return Err(Reported);
+        };
+        let world = self.part_orientation(first)?.direction(axis).axis();
+        let mut low: Option<ExactLength> = None;
+        let mut high: Option<ExactLength> = None;
+        for part in parts {
+            let bounds = self.drawn_box(*part)?;
+            low = Some(low.map_or(bounds.min(world), |l| l.min(bounds.min(world))));
+            high = Some(high.map_or(bounds.max(world), |h| h.max(bounds.max(world))));
+        }
+        match (low, high) {
+            (Some(low), Some(high)) => high.checked_sub(low).ok_or(Reported),
+            _ => Err(Reported),
         }
     }
 
