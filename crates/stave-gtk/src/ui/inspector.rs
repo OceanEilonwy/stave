@@ -3,12 +3,15 @@
 //! and cuts (each opens focus mode), and where it is written in the text
 //! (the link opens the Files view there). In focus mode it shows focus
 //! mode's own panel; for a selected problem it is the slot lane 3 fills.
+//! When there is nothing to select (a library folder, a design that
+//! doesn't solve) it says why, from `stave_app::empty`.
 
 use std::cell::RefCell;
 use std::rc::Rc;
 
 use adw::prelude::*;
 use stave_app::apart::{Stage, Step};
+use stave_app::empty::Note;
 use stave_app::focus::Target;
 use stave_app::inspect::{Inspection, Snippet, TokenClass};
 use stave_app::problems::Details;
@@ -31,6 +34,9 @@ pub struct Inspector {
     pub focus: FocusPanel,
     problem: gtk::Box,
     apart: gtk::Box,
+    /// Why there is nothing to select, shown instead of "Nothing selected".
+    note: gtk::Box,
+    idle: RefCell<Option<Note>>,
     callbacks: Rc<RefCell<Callbacks>>,
 }
 
@@ -97,9 +103,17 @@ impl Inspector {
             .css_classes(["stave-inspector"])
             .build();
         root.add_named(&scrolled(&apart), Some("apart"));
+        let note = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .spacing(12)
+            .css_classes(["stave-inspector"])
+            .build();
+        root.add_named(&scrolled(&note), Some("note"));
         root.set_visible_child_name("empty");
         Inspector {
             apart,
+            note,
+            idle: RefCell::new(None),
             root,
             details,
             focus,
@@ -309,10 +323,53 @@ impl Inspector {
         link
     }
 
+    /// Sets what to say when nothing is selected because there is nothing
+    /// to select (`None`: the usual "Nothing selected" hint), and shows it
+    /// if nothing is shown.
+    pub fn show_idle(&self, note: Option<Note>) {
+        if let Some(note) = &note {
+            clear(&self.note);
+            let head = gtk::Box::new(gtk::Orientation::Vertical, 6);
+            head.append(&label(&note.title, &["stave-inspector-title"]));
+            if !note.description.is_empty() {
+                head.append(&label(&note.description, &["stave-description"]));
+            }
+            self.note.append(&head);
+            if let Some(code) = &note.code {
+                let block = gtk::Box::builder()
+                    .orientation(gtk::Orientation::Vertical)
+                    .css_classes(["stave-code"])
+                    .build();
+                block.append(
+                    &gtk::Label::builder()
+                        .use_markup(true)
+                        .label(line_markup(&stave_app::inspect::highlight(code)))
+                        .xalign(0.0)
+                        .wrap(true)
+                        .wrap_mode(gtk::pango::WrapMode::Char)
+                        .build(),
+                );
+                self.note.append(&block);
+            }
+            if let Some(after) = &note.after {
+                self.note.append(&label(after, &["stave-description"]));
+            }
+        }
+        let idle = note.is_some();
+        self.idle.replace(note);
+        let showing = self.root.visible_child_name();
+        if matches!(showing.as_deref(), Some("empty" | "note")) {
+            self.root
+                .set_visible_child_name(if idle { "note" } else { "empty" });
+        }
+    }
+
     /// Shows an inspection, or the hint when nothing is selected.
     pub fn show(&self, inspection: Option<&Inspection>) {
         let Some(inspection) = inspection else {
-            self.root.set_visible_child_name("empty");
+            let idle = self.idle.borrow().is_some();
+            self.root
+                .set_visible_child_name(if idle { "note" } else { "empty" });
             return;
         };
         clear(&self.details);
