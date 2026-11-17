@@ -1924,6 +1924,8 @@ impl Window {
             return;
         };
         let window = self.widgets.window.clone();
+        // What `--type` typed is never saved, and closing doesn't ask.
+        let files = self.widgets.files.clone();
         // The paintable follows the window's drawing from now on.
         let paintable = gtk::WidgetPaintable::new(Some(&window));
         let mut waited = 0;
@@ -1943,12 +1945,14 @@ impl Window {
                     return glib::ControlFlow::Continue;
                 }
                 eprintln!("error: the window drew nothing");
+                files.forget_unsaved();
                 window.close();
                 return glib::ControlFlow::Break;
             };
             if let Err(error) = save_node(&window, &node, &path) {
                 eprintln!("error: {error:#}");
             }
+            files.forget_unsaved();
             window.close();
             glib::ControlFlow::Break
         });
