@@ -19,7 +19,7 @@ use stave_model::ids::{HardwareId, KindId, PartId, RegionId};
 use stave_model::instance::ItemSlot;
 use stave_model::solved::CutKind;
 use stave_model::solved::Rules;
-use stave_model::value::{AnchorOwner, AnchorValue, ExactBox, ModelRef, Value};
+use stave_model::value::{AnchorOwner, AnchorValue, ExactBox, Value};
 
 use crate::eval::{Env, KindEnv, midpoint};
 use crate::joints::Binding;
@@ -337,7 +337,7 @@ pub(crate) struct Placed {
     pub motion: Option<LegacyMotion>,
     /// The old contract's arm and links of a four-bar linkage.
     pub cup: Option<CupParts>,
-    pub model: Option<ModelRef>,
+    pub model: Option<stave_model::solved::Model>,
     /// The old contract.
     pub legacy: Legacy,
     /// Its members with a body, in its kind's order.
@@ -382,7 +382,7 @@ fn positive_direction(axis: Axis) -> Direction {
 
 /// Each shape of a member in the kind's frame, with the axis of a cylinder
 /// and the outline of a prism or a bar.
-type FrameShapes = Vec<(FrameBox, Option<FrameAxis>, Option<Outline>)>;
+pub(crate) type FrameShapes = Vec<(FrameBox, Option<FrameAxis>, Option<Outline>)>;
 
 /// The world plane an anchor names, and which way is into the part it
 /// belongs to.
@@ -465,7 +465,10 @@ impl Solver<'_> {
         let entries = self.hardware_entries(&binding, &kind, env.file, span)?;
         let fasteners = self.hardware_fasteners(&binding, &kind, &hardware_kind.uses)?;
         let model = match entries.get("model") {
-            Some(Value::Model(model)) => Some(model.clone()),
+            Some(Value::Model(model)) => {
+                let declared = self.declared_shapes(&binding, &kind)?;
+                Some(self.hardware_model(&binding, &kind, model, &declared)?)
+            }
             _ => None,
         };
         let Rest {
@@ -558,6 +561,28 @@ impl Solver<'_> {
             settings,
             rules,
         })
+    }
+
+    /// Each member's shapes in the kind's frame, as declared: before a
+    /// member's own mount and before the frame is placed on the open axes.
+    pub(crate) fn declared_shapes(
+        &mut self,
+        binding: &Binding,
+        kind: &KindDef,
+    ) -> Solved<Vec<(BodyId, FrameShapes)>> {
+        let mut frame_bodies: Vec<(BodyId, FrameShapes)> = Vec::new();
+        for (index, body) in kind.bodies.iter().enumerate() {
+            let id = BodyId::new(index).ok_or(Reported)?;
+            let shapes: Vec<ShapeDef> = body.shapes.iter().map(|s| s.shape.clone()).collect();
+            let boxes = self.in_kind(binding, kind, |solver, kind_env| {
+                shapes
+                    .iter()
+                    .map(|shape| solver.shape_box(shape, kind_env))
+                    .collect::<Solved<Vec<_>>>()
+            })?;
+            frame_bodies.push((id, boxes));
+        }
+        Ok(frame_bodies)
     }
 
     /// Where a piece of hardware sits at rest, from its call `binding`:
@@ -671,18 +696,7 @@ impl Solver<'_> {
         }
         // Each member's shapes in the frame, before the frame is placed on
         // the open axes.
-        let mut frame_bodies: Vec<(BodyId, FrameShapes)> = Vec::new();
-        for (index, body) in kind.bodies.iter().enumerate() {
-            let id = BodyId::new(index).ok_or(Reported)?;
-            let shapes: Vec<ShapeDef> = body.shapes.iter().map(|s| s.shape.clone()).collect();
-            let boxes = self.in_kind(binding, &kind, |solver, kind_env| {
-                shapes
-                    .iter()
-                    .map(|shape| solver.shape_box(shape, kind_env))
-                    .collect::<Solved<Vec<_>>>()
-            })?;
-            frame_bodies.push((id, boxes));
-        }
+        let frame_bodies = self.declared_shapes(binding, &kind)?;
         let label = inst.ctx.element.and_then(|element| {
             match self.model.defs.array(DefId::Hardware(inst.def)) {
                 Some(stave_model::defs::ArrayDef::Labels(labels)) => {

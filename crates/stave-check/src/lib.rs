@@ -37,6 +37,10 @@
 //! 6. **Sweeps** (`error[motion]`, [`motion`]): every motion through its
 //!    whole travel, every body it moves against every body that moves
 //!    differently.
+//! 7. **Models** (`warning[model-mismatch]`): each hardware kind's `.glb`,
+//!    read from disk, against its text: every node the text declares, by
+//!    name, to 0.01mm, and the file against its `sha256:` pin. A model
+//!    that can't be read is not checked; no other check reads a model.
 //!
 //! **One mistake, one error.** The checker runs only on a design that
 //! solved without errors. A part reported for spacing or for a misshapen
@@ -51,6 +55,7 @@
 
 mod explain;
 mod instance;
+mod models;
 mod motion;
 mod names;
 mod sequence;
@@ -155,6 +160,10 @@ pub fn check_with_contacts(
     checker.scenes();
     checker.sweeps();
     checker.sequences();
+    // Models are read from disk; one that can't be read is not checked.
+    for diagnostic in models::models(design, &|path| std::fs::read(path)) {
+        checker.diagnostics.push((diagnostic, None));
+    }
     checker.finish()
 }
 

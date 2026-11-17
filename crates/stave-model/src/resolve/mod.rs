@@ -25,7 +25,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use stave_lang::ast::{self, Span};
 use stave_lang::{Code, Diagnostic, FileId, Label};
-use stave_modules::{ModuleHeader, ModuleId, ModuleSet};
+use stave_modules::{ModuleHeader, ModuleId, ModuleSet, ModuleSource};
 use stave_schema::functions::Builtin;
 use stave_schema::kinds::RoleType;
 
@@ -1043,6 +1043,10 @@ impl<'a> Resolver<'a> {
             self.out.modules.push(ModuleDefs {
                 id: module.id,
                 name: module.name.clone(),
+                folder: match &module.source {
+                    ModuleSource::Local { folder } => Some(folder.clone()),
+                    ModuleSource::Std { .. } => None,
+                },
                 items: self
                     .module_items
                     .get(module.id.index())

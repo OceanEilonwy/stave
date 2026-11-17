@@ -89,10 +89,9 @@ pub(crate) fn make_word(set: WordSet, text: &str) -> Option<Word> {
         WordSet::Motion => Word::Motion(MotionWord::from_word(text)?),
         WordSet::Grain => Word::Grain(Grain::from_word(text)?),
         WordSet::Through if text == "through" => Word::Through,
-        WordSet::Bounds if text == "bounds" => Word::Bounds,
         WordSet::Spacing if text == "evenly" => Word::Evenly,
         WordSet::Spacing if text == "ends" => Word::Ends,
-        WordSet::Through | WordSet::Bounds | WordSet::Spacing => return None,
+        WordSet::Through | WordSet::Spacing => return None,
     })
 }
 
@@ -109,7 +108,6 @@ fn word_ty(word: Word) -> Ty {
         Word::Motion(_) => Ty::Word(WordSet::Motion),
         Word::Grain(_) => Ty::Word(WordSet::Grain),
         Word::Through => Ty::Word(WordSet::Through),
-        Word::Bounds => Ty::Word(WordSet::Bounds),
         Word::Evenly | Word::Ends => Ty::Spacing,
     }
 }
@@ -1209,9 +1207,6 @@ impl Resolver<'_> {
                 continue;
             }
             let mut expect = Expect::value_type(parameter.ty).named(parameter.name);
-            if builtin == Builtin::Model && parameter.name == "align" {
-                expect = Expect::any().with_words(&[WordSet::Bounds]).named("align");
-            }
             // `extent(into, thickness, of: piece)`: with `of:`, the axis is
             // one of that part's own axes.
             if builtin == Builtin::Extent

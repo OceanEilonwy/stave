@@ -1716,17 +1716,55 @@ model would clear, never the reverse. A slide's travel and a turn about one
 fixed line are swept exactly; a linkage, and every member its mechanism
 moves, by conservative advancement to the contact tolerance.
 
-**Models are for looks only.**
+**Models are for looks; the text is checked against them.** The `.stave`
+numbers are the truth: a model is drawn, never measured, and no check
+reads it. What Stave does read is enough to tell when the two disagree.
 
 - **Format:** glTF 2.0 binary (`.glb`), one file, at most 20 MB.
 - **Sources:** the same forms as imports. A relative path is relative to the
-  file that declares the kind.
-- `align: bounds` sets the model's bounding box onto the envelope (a mismatch
-  over 0.5mm is `warning[model-mismatch]`); `align: node("mount")` uses a named
-  node as the mounting point. glTF's convention is used: +Y is `up`, +Z is
-  `front`, +X is `right`, units are metres.
+  file that declares the kind. A model in a standard module or at a remote
+  source is not read in this version.
+- **Frame:** the model is drawn in the [kind's frame](#the-kinds-frame),
+  closed, in glTF's convention: units are metres, +X is `along`, +Y stands
+  off the mount face (it is `-depth`), +Z is `across`. Modelled in Blender
+  (Z up), the hardware sits on the ground plane with its mount face on it,
+  `along` Blender's +X and `across` Blender's -Y; Blender's glTF exporter
+  with "+Y Up" turns that into the convention above.
+- `align: node("mount")` (optional) puts the node named `mount` on the
+  kind's origin; without it the model's own origin is the kind's origin.
 - `moving:` names the node that moves with the hardware's motion.
-- A missing model is drawn as its envelope with a label.
+- A missing model is drawn as its members, with a label, and is not a
+  diagnostic.
+
+**Checked against the text** (`warning[model-mismatch]`, once for each
+piece of hardware whose kind has a model it can read, with its params as
+that piece of hardware sets them). Each node is found by name:
+
+| Node name | Is compared with |
+|---|---|
+| `<member> <shape>` (`arm knuckle`) | the bounds of that named shape of the member |
+| `<member>` (`knob`) | the bounds of the member's unnamed shapes together |
+| `<a> <b>` (`arm inner_link`) | the point of `pivot a, b at point(...)`, the two names in the order written |
+| `<a> <b> from`, `<a> <b> to` | the two ends of `slot a, b from ... to ...` |
+
+A node's point is its origin and its bounds are those of its own mesh,
+after every transform above it; a shape's bounds are its smallest box in
+the kind's frame (a bar's, round its corners). A point or a corner of
+the bounds more than **0.01mm** from the text is a warning that gives both
+values, and the help names the usual cause: glTF is metres with +Y up,
+while Blender is Z up and is often set up in millimetres, and an object's
+scale or rotation that was not applied (Ctrl+A in Blender) is exported as
+a transform. When the model would match turned Z up, or 1000 times larger
+or smaller, the help says that one. A node the text needs that the model
+lacks is a warning listing every missing name (a shape's node also needs
+a mesh). A file that is not a glTF 2.0 binary, or is over 20 MB, is a
+warning too.
+
+**Pinning a file.** `model("./knob.glb", sha256: "<64 hex digits>")` pins
+the model to one file: when the file's SHA-256 differs, that is
+`warning[model-mismatch]` giving the file's hash, so a changed model is
+looked at before its pin is updated. A `sha256:` that is not 64
+hexadecimal digits is `error[type-mismatch]`.
 
 #### Shapes
 
@@ -2114,7 +2152,7 @@ These are looked up when a bare name is called (see [Names](#names), rule 3).
 | `turned(profile)` | `Shape` | turned on a lathe to a profile |
 | `box(length:, width:, thickness:)` | `Envelope` | a hardware envelope |
 | `cylinder(diameter:, length:)` | `Envelope` | a hardware envelope; its axis stands off the mount face |
-| `model(source, align:)` | `Model` | a `.glb` model; `align: bounds` or `align: node("name")` |
+| `model(source, align:, sha256:)` | `Model` | a `.glb` model; optional `align: node("name")` and `sha256: "<hex>"` (see [Hardware](#hardware)) |
 | `ends(inset:)`, `pitch(d)`, `gap(d)` | `Spacing` | used by `spaced`, with the bare words `evenly` and `ends` |
 
 Inside a hardware kind's `member` and `mechanism` only, written in the
@@ -2307,6 +2345,13 @@ shape of their messages are fixed, because tests and AI tools match on them.
 
 Warnings and notes: `shadows-prelude`, `no-recipe`, `not-supported`,
 `model-mismatch`.
+
+A model mismatch (layer 4) is reported at the kind's
+`model(...)` and says one of `<kind>'s model puts '<node>' at <point>, but
+the kind says <point>`, `<kind>'s model has '<node>' over <bounds>, but
+the kind says <bounds>`, `<kind>'s model has no node <names>`, `<kind>'s
+model is not the pinned file: its SHA-256 is <hex>` or `can't read
+<kind>'s model: <reason>` (see [Hardware](#hardware)).
 
 In an `overlap` message the parts of one joint pair are named in the
 joint's role order (`rail and leg`), a piece of hardware before a part, and

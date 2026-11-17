@@ -199,7 +199,10 @@ the window calls.
   opening over 110° is out of `euro_hinge`'s range). The hinge stops at 110° on its
   limiter (steel on steel, not modelled as a shape); nothing models the soft-close damper or the
   spring.
-- **Hardware models**: `.glb` models are not read (`model-mismatch`).
+- **Hardware models**: a kind's `.glb` is read only to check it against the text
+  (`model-mismatch`: named nodes to 0.01mm, and an optional `sha256:` pin); it
+  is not drawn yet, and a model in a standard module or at a remote source
+  is not read.
 - **Focus mode**: the PDF work cards that will reuse flat views don't
   exist yet. Ghosts and see-through parts are sorted back to front by
   part, not by triangle. A joint's view from above exists only when one

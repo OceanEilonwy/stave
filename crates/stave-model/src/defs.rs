@@ -113,8 +113,6 @@ pub enum Word {
     Grain(Grain),
     /// `through`
     Through,
-    /// `bounds`
-    Bounds,
     /// `evenly`
     Evenly,
     /// `ends`
@@ -1601,6 +1599,9 @@ pub struct ModuleDefs {
     pub id: ModuleId,
     /// Its default name.
     pub name: String,
+    /// The folder its files are in, for a module on this computer; `None`
+    /// for a standard module. A kind's `model(...)` path is relative to it.
+    pub folder: Option<std::path::PathBuf>,
     /// Its items in file order, then source order.
     pub items: Vec<DefId>,
     /// Its `project` item, for a project module.

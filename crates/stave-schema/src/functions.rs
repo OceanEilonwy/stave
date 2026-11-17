@@ -222,7 +222,8 @@ impl Builtin {
             Builtin::Model => {
                 const LIST: &[Parameter] = &[
                     positional("source", Type(TypeName::Text)),
-                    named("align", Words(WordSet::Bounds), true),
+                    named("align", Type(TypeName::Text), false),
+                    named("sha256", Type(TypeName::Text), false),
                 ];
                 LIST
             }
@@ -238,7 +239,7 @@ impl Builtin {
     }
 }
 
-/// `node("name")`: the other form of `model(..., align:)`.
+/// `node("name")`: the node `model(..., align:)` puts on the kind's origin.
 pub const MODEL_NODE: &str = "node";
 
 /// `point(along:, across:, depth:)`: a point in a hardware kind's frame,
