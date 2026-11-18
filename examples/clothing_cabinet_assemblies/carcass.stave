@@ -1,0 +1,101 @@
+stave 1
+
+import "std:casework"
+
+// The box. The base, the two sides and the top are written out as parts;
+// everything else is an assembly of a std:casework component, the way the
+// editor writes it: the back, the divider, the hat shelf, the hanging rail
+// and the feet. The divider's two spaces are the openings that the drawers
+// and doors fill.
+
+part base : oak_19 {
+  length: cabinet_width
+  width:  cabinet_depth          // wider than oak_19's max_width: made of boards, glued edge to edge
+  place {
+    ground
+  }
+}
+
+part side_l : oak_19 {
+  length: cabinet_height - base.thickness - top.thickness
+  width:  cabinet_depth
+  place {
+    orient(length: up, width: back)
+    against(base.top)            // stands on the base
+    flush(base.left)
+    flush(base.back)
+  }
+}
+
+part side_r = mirror(side_l, about: mid(base, across))
+
+part top : oak_19 {
+  length: cabinet_width + 2 * overhang
+  width:  cabinet_depth + overhang
+  place {
+    against(side_l.top)          // sits on the sides
+    center(base, across)
+    flush(base.back)             // so it overhangs the front and both ends
+  }
+}
+
+joint base_dowels : dowel([side_l, side_r], into: base, count: 4)
+joint top_dowels  : dowel([side_l, side_r], into: top, count: 4)
+
+// Stands on the base behind the divider and shelf, housed in a rabbet in each side.
+assembly back : casework.Back {
+  sides:       [side_l, side_r]
+  stands_on:   base
+  under:       top
+  panel_stock: ply_6
+}
+
+// ---- the space inside, in front of the back ----
+region front_opening = opening(
+  left:   side_l.right,
+  right:  side_r.left,
+  bottom: base.top,
+  top:    top.bottom,
+  front:  side_l.front,
+  back:   back.panel.front,
+)
+
+// Separates the hanging space from the drawers.
+assembly divider : casework.Divider {
+  space:       front_opening
+  sides:       [side_l, side_r]
+  panel_stock: oak_19
+  height:      drawer_zone
+}
+
+assembly shelf : casework.Shelf {
+  space:       divider.above
+  sides:       [side_l, side_r]
+  panel_stock: oak_19
+  headroom:    160mm
+}
+
+assembly hanging_rail : casework.HangingRail {
+  under:      shelf.board
+  sides:      [side_l, side_r]
+  rail_stock: oak_dowel_28
+}
+
+assembly feet : casework.Feet {
+  under:        base
+  foot_stock:   oak_75_sq
+  foot_profile: bun_foot
+}
+
+/// The foot you see. Its round tenon is not drawn here: the joint adds it.
+profile bun_foot {
+  measure: diameter
+  smooth:  true
+  at 0mm:  70mm
+  at 34mm: 70mm
+  at 80mm: 40mm
+}
+
+// ---- openings ----
+region drawer_bay[bottom, top] = split(divider.below, up)
+region door_bay[left, right]   = split(divider.above, across)

@@ -1,0 +1,10 @@
+stave 1
+
+// What you buy. A part wider than max_width is made of boards glued edge to edge.
+
+stock oak_19       { species: white_oak, form: solid, thickness: 19mm, max_width: 200mm, max_length: 2700mm }
+stock oak_6        { species: white_oak, form: solid, thickness: 6mm, max_width: 200mm, max_length: 2700mm }
+stock maple_12     { species: hard_maple, form: solid, thickness: 12mm, max_width: 150mm, max_length: 2400mm }
+stock ply_6        { species: birch, form: plywood, thickness: 6mm, max_length: 2440mm }
+stock oak_dowel_28 { species: white_oak, form: dowel, diameter: 28mm }
+stock oak_75_sq    { species: white_oak, form: solid, thickness: 75mm, width: 75mm, max_length: 2700mm }

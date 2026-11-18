@@ -1,0 +1,47 @@
+stave 1
+
+/// A fixed shelf hung a set distance below the top of a space, such as a hat shelf.
+/// It reaches from the front of the space to its back and fits between the
+/// sides, housed in a dado in each; the dado depth is added by the joint.
+component Shelf {
+  param space       : Region         // the space it sits in, from side to side
+  param sides       : Parts          // the cabinet sides it is housed in
+  param panel_stock : Stock
+  param headroom    = 300mm          // from the top of the shelf up to the top of the space
+  param joinery     : JointKind = dado
+  param depth       = 9mm            // how far the dados are cut into the sides
+
+  require shelf_inside : headroom + panel_stock.thickness <= space.up "the shelf is lower than the bottom of its space; make the headroom smaller"
+
+  part board : panel_stock {
+    length: fit                      // between the sides; the dado depth is added by the joint
+    width:  space.deep
+    place {
+      flush(space.top, inset: headroom)
+      center(space, across)
+      flush(space.front)
+    }
+  }
+
+  joint housing : joinery(board, into: sides, depth: depth)
+
+  /// The space under the shelf: a hanging rail, clothes.
+  region below = opening(
+    left:   space.left,
+    right:  space.right,
+    bottom: space.bottom,
+    top:    board.bottom,
+    front:  space.front,
+    back:   space.back,
+  )
+
+  /// The space over the shelf, up to the top of the space.
+  region above = opening(
+    left:   space.left,
+    right:  space.right,
+    bottom: board.top,
+    top:    space.top,
+    front:  space.front,
+    back:   space.back,
+  )
+}

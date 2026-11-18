@@ -1,0 +1,8 @@
+stave 1
+
+// Shop hardware. 'hardware' is a reserved word, so a project imports this
+// folder under another name: import "./hardware" as hw, then hw.brass_knob_26.
+// Each kind has an exact envelope for the checks. Until a kind has a model,
+// Stave draws its envelope as a labelled shape and every check still runs.
+
+library "Shop hardware"

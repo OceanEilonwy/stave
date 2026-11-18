@@ -1,0 +1,45 @@
+stave 1
+
+/// A fixed panel across a space that splits it into a space below and a space above.
+/// It reaches from the front of the space to its back and fits between the
+/// sides, housed in a dado in each; the dado depth is added by the joint.
+component Divider {
+  param space       : Region         // the space it divides, from side to side
+  param sides       : Parts          // the cabinet sides it is housed in
+  param panel_stock : Stock
+  param height      = space.up / 2   // from the bottom of the space to the underside of the divider
+  param joinery     : JointKind = dado
+  param depth       = 9mm            // how far the dados are cut into the sides
+
+  part panel : panel_stock {
+    length: fit                      // between the sides; the dado depth is added by the joint
+    width:  space.deep
+    place {
+      flush(space.bottom, inset: height)
+      center(space, across)
+      flush(space.front)
+    }
+  }
+
+  joint housing : joinery(panel, into: sides, depth: depth)
+
+  /// The space under the divider: drawers, or another divider.
+  region below = opening(
+    left:   space.left,
+    right:  space.right,
+    bottom: space.bottom,
+    top:    panel.bottom,
+    front:  space.front,
+    back:   space.back,
+  )
+
+  /// The space over the divider: doors, a shelf, a hanging rail.
+  region above = opening(
+    left:   space.left,
+    right:  space.right,
+    bottom: panel.top,
+    top:    space.top,
+    front:  space.front,
+    back:   space.back,
+  )
+}
