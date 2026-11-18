@@ -6,7 +6,7 @@ stave 1
 // joinery.dado(...)).
 //
 // Joints:  dado, rabbet, groove, dowel, round_tenon, socket, screw,
-//          cope_and_stick, mortise_tenon, half_lap
+//          cope_and_stick, mortise_tenon, half_lap, glued_face
 // Edge joints, for wide parts made of boards (see "Boards" in the grammar):
 //          glued_edge (the default), tongue_and_groove, splined_edge,
 //          chigiri (butterfly keys), suitsuki_zan (sliding dovetail battens)

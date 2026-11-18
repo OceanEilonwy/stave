@@ -1,0 +1,10 @@
+---
+source: crates/stave-app/tests/walls.rs
+expression: "rendered(\"tests/broken/groove_through_the_wall\")"
+---
+error[cut-size]: bottom_slots: its slot in front is 12mm deep, but front is only 12mm thick there
+  --> tests/broken/groove_through_the_wall/project.stave:42:22
+   |
+42 | joint bottom_slots : housing(bottom, into: front)
+   |                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = help: a cut with a depth stops inside the part and leaves wood behind it; make the slot less than 12mm deep, or write depth: through if it should go right through

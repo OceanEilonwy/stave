@@ -54,11 +54,13 @@
 #![warn(missing_docs)]
 
 mod explain;
+mod held;
 mod instance;
 mod models;
 mod motion;
 mod names;
 mod sequence;
+mod walls;
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -170,13 +172,21 @@ pub fn check_with_contacts(
     checker.misfits();
     checker.misshapen();
     checker.not_supported();
+    checker.cut_sizes();
     checker.mechanisms();
     checker.contact();
     checker.overruns();
     checker.rest();
+    checker.walls();
     checker.scenes();
     checker.sweeps();
     checker.sequences();
+    // Held is a question about the whole project, asked once nothing
+    // else is wrong: a part with an error may be the one that would join
+    // the rest.
+    if !checker.diagnostics.iter().any(|(d, _)| d.is_error()) {
+        checker.held();
+    }
     // Models are read from disk; one that can't be read is not checked.
     for diagnostic in models::models(design, &|path| std::fs::read(path)) {
         checker.diagnostics.push((diagnostic, None));
@@ -247,6 +257,13 @@ struct Checker<'a> {
     /// the solver): its members are left out of the overlap and motion
     /// checks, which would only report the same mistake again.
     misfit: BTreeSet<HardwareId>,
+    /// The joint pairs and hardware whose cuts already have an error for
+    /// the wood round them (a kind's wall rule, a cut too big or too
+    /// deep): the backstops leave their cuts alone.
+    wall_failed: Vec<CutSource>,
+    /// Cuts too big or too deep that a wall rule of their own kind
+    /// measures: reported after the wall rules, only if those didn't.
+    held_back: Vec<walls::SizeProblem>,
     diagnostics: Vec<(Diagnostic, Option<Contact>)>,
     /// What the next reported diagnostic is about.
     next_contact: Option<Contact>,
@@ -364,6 +381,8 @@ impl<'a> Checker<'a> {
                 })
                 .map(|hardware| hardware.id)
                 .collect(),
+            wall_failed: Vec::new(),
+            held_back: Vec::new(),
             diagnostics: Vec::new(),
             next_contact: None,
         }

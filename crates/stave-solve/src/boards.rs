@@ -689,6 +689,11 @@ impl Solver<'_> {
             None => format!("{part_name}.boards"),
         };
         for require in &kind.requires {
+            // The wall round a cut between boards isn't measured yet
+            // (grammar, "Walls"): such a rule is left out here.
+            if crate::walls::wall_comparison(&require.condition).is_some() {
+                continue;
+            }
             let holds = self.eval_bool(&require.condition, &kind_env)?;
             let message = self.format_text(&require.message, &kind_env)?;
             if !holds && report {

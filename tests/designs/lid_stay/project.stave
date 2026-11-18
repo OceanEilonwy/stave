@@ -30,6 +30,9 @@ part back : pine_12 {
   }
 }
 
+// The back stands on the base on small dowels.
+joint back_dowels : dowel(back, into: base, diameter: 6mm, depth: 6mm, wall: 3mm)
+
 region outline = opening(
   left:   base.left,
   right:  base.right,

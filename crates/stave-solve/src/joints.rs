@@ -567,7 +567,14 @@ impl Solver<'_> {
             };
             // Requires, at the current values, for this pair.
             let mut results = Vec::new();
-            for require in &kind.requires {
+            let source = stave_model::solved::CutSource::Joint {
+                joint,
+                pair: pairs.len(),
+            };
+            for (index, require) in kind.requires.iter().enumerate() {
+                if self.defer_wall_rule(source, binding.kind, index, require, &kind_env)? {
+                    continue;
+                }
                 let holds = self.eval_bool(&require.condition, &kind_env)?;
                 let message = self.format_text(&require.message, &kind_env)?;
                 if !holds {

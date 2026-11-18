@@ -405,3 +405,123 @@ vocabulary, the standing rule). What changed in stage 2 for it:
   joint-member rules it held are under "Joint members".
 - Helps no longer name a kind (`dowel_pin`, `screws`), for the standing
   rule.
+
+## Resolution: stage 3
+
+- **`wall(cut)`** (grammar, "Walls") is a built-in `Length`: the least
+  wood between one of the kind's named cuts and the part's faces and other
+  cuts, whichever joint or hardware makes them. It names a cut of its own
+  kind, is read only in a joint or hardware kind's `require`, and the rule
+  is one comparison with `wall(cut)` alone on one side, so everything but
+  the wall is worked out when the kind's rules run. Resolver:
+  `RExprKind::Wall(CutName)` (`stave-model/src/resolve/expr.rs`,
+  `kinds.rs`); solver: `stave-solve/src/walls.rs` keeps each such rule,
+  with its message and the other side rounded once, as a
+  `solved::WallRule` in `SolvedDesign::wall_rules`; the fit check measures
+  and reports it at the joint's or hardware's call, as `error[require]`
+  with the kind's rule as a second label, `the rule measures X and needs
+  at least Y`, `the same for` notes and a help that says where the least
+  wood is (`the socket in side_l leaves 0mm of wood at the dado that
+  shelf_dados cuts in side_l; ...`, or `runs 8mm past ...`).
+- **Where it lives.** Measurement: `stave-geom/src/wall.rs` (new;
+  `Walls::of(part, design, solid)`, `wall`, `too_deep`, `oversize`). It
+  reuses where the solid puts a cut (`face_extent`, `place_centre`,
+  `depth_range`, `entering_axes`, `slot_run`, `Profile::diameter_at`
+  became `pub(crate)` in `solid.rs`; nothing else there changed) and keeps
+  its own copy of the drill spreading until stage 4 retires
+  `drill(count:)`. Exact between boxes, to flat faces and between parallel
+  holes in line; a rounded-down square root on a slant; alternating
+  projections in `f64` for two holes square to each other. Checks:
+  `stave-check/src/walls.rs` (wall rules and the three backstops) and
+  `held.rs`.
+- **Engine backstops** (grammar, "Cuts stay in their part"), at the
+  joint's or hardware's call: `error[cut-size]` for a tenon or spigot
+  bigger than its part (`rail_stubs: its stub on rail is 25mm thick, but
+  rail is only 19mm thick`; `... is 80mm across, but foot is only 70mm
+  across at that end`) and for a depth that doesn't stop inside the part
+  (`bottom_slots: its slot in front is 12mm deep, but front is only 12mm
+  thick there`, help ending `or write depth: through if it should go
+  right through`); `error[wall]` for a `drill` or `pocket` with no wood
+  between it and a face it isn't aimed at (`side_pegs: its peg hole in
+  base breaks out of the left end of base`) or a closed cut of another
+  pair or piece of hardware (`post_a_bore: its bore in base runs into the
+  bore of post_b_bore`; `meets` when they only touch). Gap (d), a dowel
+  or screw into another joint's empty hole, is caught by the dowel's and
+  screw's own `wall()` rules, or by the backstop for a kind without one.
+- **Which error wins.** A kind's own rule first: one that fails in the
+  solver stops the design, so std's `tenon_thin`, `tenon_fits` and
+  `not_too_deep` still speak for the review's tenon, spigot and groove
+  cases, alone (`app/walls::a_kinds_own_rule_speaks_before_the_backstop`);
+  a cut too big or too deep that a `wall()` rule of its own kind measures
+  waits for that rule. A cut too big or too deep marks its part, so the
+  overlap check doesn't report the parts that no longer fit. An overlap
+  beats a wall: a wall rule or backstop is not reported for a part or
+  member that already overlaps (a pin running into another joint's tenon
+  stays one `overlap`, as stage 2 wrote it), because the overlap names the
+  things that collide. Two closed cuts that run into each other are one
+  error, for the first.
+- **Two false positives found and fixed in the check**, not the examples:
+  the first backstop held closed cuts to every other cut, which flagged
+  the cabinet doors' stub-tenon pockets running into their panel grooves.
+  A cut inside another is now not a wall to it, and the backstop compares
+  closed cuts only with other closed cuts: how near a hole may come to a
+  groove or dado is a kind's judgement, written with `wall()`.
+- **One kind fixed, found by the backstop:** `cope_and_stick` cut its
+  sticking as a closed `pocket` that, with the rails flush with the ends
+  of the stiles, broke out of the stile's end. Cope and stick runs the
+  groove the whole stile, out of both ends; the kind now cuts it as a
+  `slot`.
+- **Held** (grammar, "Held"): `warning[loose-part]` for every group of
+  parts that joints and hardware don't join to the ground part, once, at
+  its first part: `slat[0] is loose: no joint or hardware joins it to top
+  or to anything joined to top`, or `leg[front_left], leg[front_right],
+  leg[back_left], leg[back_right] and 13 more are joined only to each
+  other: ...`, with a help that names the held part it touches most (`join
+  slat[0] to stretcher_front, which it touches, with a joint or hardware,
+  or write loose: true in the part if it is meant to lift out`). Hardware
+  holds its piece, its roles' parts, the parts carrying its members and
+  the parts its members touch (a slide's runner on a region). The opt-out
+  is the part field **`loose: true`**: a group with a loose part lifts out
+  together. It is asked only of a design with no errors.
+- **std.** `wall()` replaces the ad-hoc "stops 3mm short of the far side"
+  rules: `dowel` `hole_wall: wall(hole) >= wall` (for `hole_stops`),
+  `round_tenon` `hole_wall: wall(hole) >= wall` with `param wall = 3mm`
+  (for `hole_stops`), `mortise_tenon` `mortise_wall: wall(mortise) >=
+  wall` with `param wall = 6mm` (for `mortise_stops`), `screw`
+  `pilot_wall: wall(pilot_hole) >= 3mm` (for `stays_inside`, and its
+  `bite` param, which only that rule read, is gone). `socket` gains
+  `socket_wall: wall(socket) >= wall`, `param wall = 6mm`. New
+  `glued_face` (two parts glued face to face, nothing cut, no insert step).
+- **Examples.** All check clean. `stool`: `rungs_miss` removed; socket's
+  wall rule covers it. At `high_rung = 172mm` the rung holes are 2mm
+  apart on the slant between their bottom corners, not edge to edge (the
+  sockets are 15mm deep in a 40mm leg, so they don't reach each other's
+  centre lines), and `socket_wall` fails there (`broken/rung_holes_too_close`).
+  Real bugs the new checks found: `side_table`'s cleats were glued to the
+  aprons only in a note, so the whole base was loose from the top (now
+  `joint cleat_glue : glued_face(...)`); its 25mm apron tenons left 0.47mm
+  between the two mortises in each leg (now 20mm, 7.5mm of wood);
+  `clothing_cabinet`'s drawer had four front screws, one 1.1mm from a bar
+  pull's bolt hole (now two, clear of both the bar pull and the
+  nightstand's centred knob). `joint_samples`' two back samples stand
+  alone on the bench and say `loose: true`. Test rigs in `tests/designs`
+  and `tests/broken` that left a part unjoined got a joint.
+- **Tests.** New `tests/broken`: `socket_at_the_edge`,
+  `socket_against_dado`, `mortise_open_at_the_top`, `mortise_wall_too_thin`
+  (the review's 0.5mm wall, reached with a 0.5mm shoulder: its own route,
+  an 18mm tenon at a 0mm setback, is `tenon_thin` since stage 1),
+  `rung_holes_too_close`, `top_held_by_nothing`, `slats_held_by_nothing`,
+  `hole_breaks_out`, `holes_run_together`, `dowel_into_empty_hole`,
+  `tenon_bigger_than_part`, `groove_through_the_wall`, each with a snapshot
+  in `app/walls`, which also pins `wall()`'s exactness and its resolver
+  errors and the held opt-out; unit tests in `geom/wall` and
+  `solve/walls`. The app test harness leaves `loose-part` out of its
+  fragment projects (`common::open_files`; `open_files_with_every_warning`
+  keeps it), and `common::solved` allows `wall` and `cut-size` as fit
+  errors.
+- **Not closed here.** The range layer doesn't measure walls (still no
+  z3). Dovetails, outlines, angled slots and the cuts between boards aren't
+  measured: a rule about one is left out with `warning[not-supported]`.
+  `stave dump` lists requires at the current values, so the wall rules
+  (measured later, by the check) no longer appear in its REQUIRES list.
+  Wood movement and strength remain a separate design.

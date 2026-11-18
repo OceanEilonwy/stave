@@ -433,6 +433,10 @@ pub struct SolvedDesign {
     /// Elements spaced with `pitch` or `gap` that run past their `to`
     /// anchor (the fit check reports them as `overlap`).
     pub overruns: Vec<Overrun>,
+    /// The kinds' rules that read `wall(cut)`, for every pair or piece of
+    /// hardware: measured by the fit check once every cut is made
+    /// (grammar, "Walls").
+    pub wall_rules: Vec<WallRule>,
 }
 
 impl SolvedDesign {
@@ -628,6 +632,9 @@ pub struct Part {
     /// The boards it is made of, when it is wider than its stock's
     /// `max_width` (grammar, "Boards"). Derived, never written.
     pub boards: Option<Boards>,
+    /// `loose: true`: meant to lift out, so nothing needs to hold it
+    /// (grammar, "Held").
+    pub loose: bool,
 }
 
 /// The number of a board within its part: 1 is the board at the
@@ -1093,6 +1100,76 @@ pub struct RequireResult {
     pub holds: bool,
     /// Its message, with values filled in.
     pub message: String,
+}
+
+/// How a rule compares `wall(cut)` with what it needs, with the wall on
+/// the left (`3mm <= wall(hole)` is `wall(hole) >= 3mm`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WallCompare {
+    /// `>=`
+    AtLeast,
+    /// `>`
+    MoreThan,
+    /// `<=`
+    AtMost,
+    /// `<`
+    LessThan,
+    /// `==`
+    Exactly,
+    /// `!=`
+    Not,
+}
+
+impl WallCompare {
+    /// `true` when a wall of `wall` keeps the rule against `needs`.
+    pub fn holds(self, wall: Length, needs: Length) -> bool {
+        match self {
+            WallCompare::AtLeast => wall >= needs,
+            WallCompare::MoreThan => wall > needs,
+            WallCompare::AtMost => wall <= needs,
+            WallCompare::LessThan => wall < needs,
+            WallCompare::Exactly => wall == needs,
+            WallCompare::Not => wall != needs,
+        }
+    }
+
+    /// How a message says what the rule needs: `at least`, `exactly`.
+    pub fn phrase(self) -> &'static str {
+        match self {
+            WallCompare::AtLeast => "at least",
+            WallCompare::MoreThan => "more than",
+            WallCompare::AtMost => "at most",
+            WallCompare::LessThan => "less than",
+            WallCompare::Exactly => "exactly",
+            WallCompare::Not => "anything but",
+        }
+    }
+}
+
+/// A kind's `require` that reads `wall(cut)`, for one pair of a joint or
+/// one piece of hardware: everything but the wall is worked out when the
+/// kind's rules run; the wall is measured once every cut is made
+/// (grammar, "Walls").
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct WallRule {
+    /// The pair or piece of hardware whose cut it measures.
+    pub source: CutSource,
+    /// The kind the rule belongs to.
+    #[serde(skip)]
+    pub kind: KindId,
+    /// The rule, in the kind's list of requires.
+    pub require: usize,
+    /// The rule's name.
+    pub name: String,
+    /// Its message, with values filled in.
+    pub message: String,
+    /// The cut it measures.
+    pub cut: CutName,
+    /// How the wall must compare with `needs`.
+    pub compare: WallCompare,
+    /// The other side of the comparison, rounded once.
+    pub needs: Length,
 }
 
 /// A fastener a joint uses.

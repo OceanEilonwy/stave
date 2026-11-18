@@ -85,7 +85,7 @@ REGIONS (0)
 
 ASSEMBLIES (0)
 
-REQUIRES (22)
+REQUIRES (20)
 book_room                                    holds
 shelf_span                                   holds
 top_rabbets.not_too_deep                     holds
@@ -101,11 +101,9 @@ shelf_dados.not_too_deep                     holds
 back_rabbets.not_too_deep                    holds
 back_rabbets.not_too_deep                    holds
 kick_dowels.pin_fits_piece                   holds
-kick_dowels.hole_stops                       holds
 kick_dowels.seat_wide                        holds
 kick_dowels.seat_long                        holds
 kick_dowels.pin_fits_piece                   holds
-kick_dowels.hole_stops                       holds
 kick_dowels.seat_wide                        holds
 kick_dowels.seat_long                        holds
 

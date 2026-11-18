@@ -124,6 +124,12 @@ pub(crate) struct Resolver<'a> {
     component_names: Vec<BTreeMap<String, Entry>>,
     /// Role, param and made-part names per kind.
     kind_names: HashMap<KindId, BTreeMap<String, Symbol>>,
+    /// The names of each kind's named cuts, in source order: what
+    /// `wall(cut)` may name (grammar, "Walls").
+    kind_cut_names: HashMap<KindId, Vec<String>>,
+    /// `true` while a kind's `require` condition is lowered: the only
+    /// place `wall(cut)` may be written.
+    in_kind_require: bool,
     /// Imports per file.
     imports: HashMap<FileId, BTreeMap<String, ModuleId>>,
     /// Public items of the standard modules.
@@ -231,6 +237,8 @@ impl<'a> Resolver<'a> {
             module_names: vec![BTreeMap::new(); count],
             component_names: Vec::new(),
             kind_names: HashMap::new(),
+            kind_cut_names: HashMap::new(),
+            in_kind_require: false,
             imports: HashMap::new(),
             prelude: BTreeMap::new(),
             module_items: vec![Vec::new(); count],

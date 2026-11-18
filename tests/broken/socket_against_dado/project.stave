@@ -1,0 +1,57 @@
+// expect: error[require] 'socket_wall' fails: the socket comes too close to a face of the board or another cut
+stave 1
+
+// The clothing cabinet's rod hung right under the shelf (gap: 0mm): the
+// rod's socket in each side runs up to the shelf's dado, with nothing
+// between them (docs/reviews/2026-11-17-checks-gaps.md, gap 4).
+
+project "A socket against a dado" {
+  units: mm
+}
+
+stock oak_19       { species: white_oak, form: solid, thickness: 19mm }
+stock oak_dowel_28 { species: white_oak, form: dowel, diameter: 28mm }
+
+part base : oak_19 {
+  length: 900mm
+  width:  560mm
+  place {
+    ground
+  }
+}
+
+part side_l : oak_19 {
+  length: 1600mm
+  width:  560mm
+  place {
+    orient(length: up, width: back)
+    against(base.top)
+    flush(base.left)
+    flush(base.back)
+  }
+}
+
+part side_r = mirror(side_l, about: mid(base, across))
+
+part shelf : oak_19 {
+  length: fit
+  width:  540mm
+  place {
+    against(base.top, gap: 1400mm)
+    center(base, across)
+    flush(side_l.front)
+  }
+}
+
+part rod : oak_dowel_28 {
+  length: fit
+  place {
+    against(shelf.bottom, gap: 0mm)
+    center(base, across)
+    center(from: side_l.front, to: side_l.back)
+  }
+}
+
+joint base_dowels : dowel([side_l, side_r], into: base, count: 4)
+joint shelf_dados : dado(shelf, into: [side_l, side_r], depth: 9mm)
+joint rod_sockets : socket(rod, into: [side_l, side_r], depth: 9mm)

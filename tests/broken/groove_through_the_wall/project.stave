@@ -1,0 +1,42 @@
+// expect: error[cut-size] bottom_slots: its slot in front is 12mm deep, but front is only 12mm thick there
+stave 1
+
+// A kind with no rule of its own about its depth: a 12mm deep slot for a
+// bottom in a 12mm wall, which cuts the wall in two. A cut with a depth
+// stops inside the part; only `through` goes through: the engine's
+// backstop catches it. (std's groove says so first, with its not_too_deep
+// rule.)
+
+project "A groove through the wall" {
+  units: mm
+}
+
+/// A housing for a bottom panel: no rules.
+kind housing : joint {
+  insert: [push(piece, along: thickness)]
+  cut slot: crossing(into, piece) { notch(depth: 12mm) }
+}
+
+stock oak_12 { species: white_oak, form: solid, thickness: 12mm }
+stock ply_6  { species: birch, form: plywood, thickness: 6mm }
+
+part front : oak_12 {
+  length: 300mm
+  width:  100mm
+  place {
+    ground
+    orient(length: right, width: up)
+  }
+}
+
+part bottom : ply_6 {
+  length: 300mm
+  width:  12mm
+  place {
+    against(front.back)
+    flush(front.left)
+    flush(front.bottom, inset: 10mm)
+  }
+}
+
+joint bottom_slots : housing(bottom, into: front)

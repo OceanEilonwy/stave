@@ -10,16 +10,18 @@ kind dowel : joint {
   /// Depth of the hole in each part; a pin is twice this long.
   param depth = 15mm
   /// Wood left beside each hole: to the edges of the patch where the
-  /// parts touch, and between neighbouring holes. Less and the wood beside
-  /// a hole splits when the glued pin swells.
+  /// parts touch, between neighbouring holes, and round the hole in the
+  /// other part (to its faces and its other cuts). Less and the wood
+  /// beside a hole splits when the glued pin swells.
   param wall = 4mm
 
   // The pins are centred across the patch where the parts touch and
   // spread evenly along it, so the patch must be a hole and a wall each
   // side wide, and long enough for every hole with a wall between and
-  // beyond them.
+  // beyond them. hole_wall: the hole in the other part keeps a wall to
+  // every face of that part (its far side too) and to its other cuts.
   require pin_fits_piece : diameter <= piece.thickness / 2 "the dowel is too thick for this board"
-  require hole_stops     : depth <= extent(into, length, of: piece) - 3mm "the dowel hole would come through the other side"
+  require hole_wall      : wall(hole) >= wall "the dowel hole comes too close to a face of the board or another cut"
   require seat_wide      : contact(piece, into).width >= diameter + 2 * wall "the parts overlap too little for these dowels"
   require seat_long      : contact(piece, into).length >= count * (diameter + wall) + wall "too many dowels for this joint"
 

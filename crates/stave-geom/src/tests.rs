@@ -71,6 +71,7 @@ fn part(orientation: Orientation, origin: Point, cut: Size3, shape: Shape) -> Pa
         joints: Vec::new(),
         note: None,
         boards: None,
+        loose: false,
     }
 }
 
@@ -385,6 +386,7 @@ fn design_of(part: &Part) -> SolvedDesign {
         scenes: Vec::new(),
         requires: Vec::new(),
         overruns: Vec::new(),
+        wall_rules: Vec::new(),
     }
 }
 

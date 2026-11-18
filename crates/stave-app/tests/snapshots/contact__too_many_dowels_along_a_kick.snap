@@ -7,9 +7,9 @@ error[require]: 'seat_long' fails: too many dowels for this joint
    |
 35 | joint kick_dowels : dowel(kick, into: [side_l, side_r], count: 9)
    |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  ::: std/joinery/dowel.stave:24:3
+  ::: std/joinery/dowel.stave:26:3
    |
-24 |   require seat_long      : contact(piece, into).length >= count * (diameter + wall) + wall "too many dowels for this joint"
+26 |   require seat_long      : contact(piece, into).length >= count * (diameter + wall) + wall "too many dowels for this joint"
    |   ------------------------------------------------------------------------------------------------------------------------- the kind's rule
    = note: for kick and side_l in kick_dowels
    = note: the rule measures 70mm and needs at least 112mm

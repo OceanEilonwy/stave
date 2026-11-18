@@ -7,9 +7,9 @@ error[require]: 'tenon_fits' fails: the tenon is too thick for the end of the pa
    |
 43 | joint foot_tenon : round_tenon(foot, into: base, diameter: 80mm, length: 16mm)
    |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  ::: std/joinery/round_tenon.stave:17:3
+  ::: std/joinery/round_tenon.stave:20:3
    |
-17 |   require tenon_fits : diameter <= contact(piece, into).width - 2 * shoulder "the tenon is too thick for the end of the part"
+20 |   require tenon_fits : diameter <= contact(piece, into).width - 2 * shoulder "the tenon is too thick for the end of the part"
    |   --------------------------------------------------------------------------------------------------------------------------- the kind's rule
    = note: for foot and base in foot_tenon
    = note: the rule measures 80mm and needs at most 64mm

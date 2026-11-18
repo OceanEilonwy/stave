@@ -282,7 +282,7 @@ pub struct Profile {
 impl Profile {
     /// The diameter at a local length coordinate, on straight lines
     /// between stations.
-    fn diameter_at(&self, at: Length) -> Length {
+    pub(crate) fn diameter_at(&self, at: Length) -> Length {
         let mut previous: Option<ProfileStation> = None;
         for station in &self.stations {
             if station.at >= at {
@@ -1006,17 +1006,17 @@ pub fn cut_at(part: &Part, index: usize) -> Option<&Cut> {
 }
 
 /// Half a length, rounded down to the nanometre.
-fn half(length: Length) -> Length {
+pub(crate) fn half(length: Length) -> Length {
     Length::from_nm(length.nm().div_euclid(2))
 }
 
 /// The low edge of something `extent` wide centred at `centre`.
-fn centred_low(centre: Length, extent: Length) -> Length {
+pub(crate) fn centred_low(centre: Length, extent: Length) -> Length {
     Length::from_nm(centre.nm().saturating_sub(extent.nm().div_euclid(2)))
 }
 
 /// The range along a face's axis that a depth below the face covers.
-fn depth_range(size: Size3, face: LocalFace, depth: Depth) -> (Length, Length) {
+pub(crate) fn depth_range(size: Size3, face: LocalFace, depth: Depth) -> (Length, Length) {
     let full = size.get(face.axis);
     let depth = match depth {
         Depth::Through => full,
@@ -1040,7 +1040,7 @@ fn local_get(point: &stave_model::solved::LocalPoint, axis: PartAxis) -> Length 
 /// whole shape (so a member's holes in two parts share their centres even
 /// where the shape runs past the edge of one), the footprint's, or the
 /// whole part's.
-fn face_extent(part: &Part, place: &CutPlace, axis: PartAxis) -> (Length, Length) {
+pub(crate) fn face_extent(part: &Part, place: &CutPlace, axis: PartAxis) -> (Length, Length) {
     let extent = match place {
         CutPlace::Member { shape, .. } => Some(shape),
         CutPlace::Crossing { footprint, .. } => Some(footprint),
@@ -1053,7 +1053,7 @@ fn face_extent(part: &Part, place: &CutPlace, axis: PartAxis) -> (Length, Length
 }
 
 /// The centre of a cut's place on its face (the face axis is left at 0).
-fn place_centre(part: &Part, place: &CutPlace, face_axis: PartAxis) -> Local {
+pub(crate) fn place_centre(part: &Part, place: &CutPlace, face_axis: PartAxis) -> Local {
     let mut centre = Local::default();
     for axis in across(face_axis) {
         let (low, high) = face_extent(part, place, axis);
@@ -1075,7 +1075,7 @@ fn entering_part<'d>(place: &CutPlace, design: &'d SolvedDesign) -> Option<&'d P
 
 /// The local axes of this part that the entering part's width and
 /// thickness lie along, both on the face; for a pocket.
-fn entering_axes(
+pub(crate) fn entering_axes(
     part: &Part,
     place: &CutPlace,
     design: &SolvedDesign,
@@ -1104,7 +1104,7 @@ fn entering_axes(
 /// The local axis a slot runs along and whether it runs toward the
 /// positive end of it (for `from_centre`). `turns` is the slot's angle in
 /// quarter turns.
-fn slot_run(
+pub(crate) fn slot_run(
     part: &Part,
     place: &CutPlace,
     design: &SolvedDesign,

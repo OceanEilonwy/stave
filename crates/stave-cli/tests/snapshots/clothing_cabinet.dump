@@ -77,14 +77,14 @@ foot[back_right]             oak_75_sq      96 x 70 x 70               770..840 
     turned to bun_foot: 0:70 34:70 80:40
     cut spigot length 16 diameter 19 on length start: end toward base
 door_l.stile[hinge]          oak_19         1149.5 x 60 x 19           1..61                530..1679.5          -19..0               up/right/back
-    cut pocket 60 x 6 depth 10 on width end: where door_l.rail[bottom] meets it, local 0..60 x 50..60 x 0..19
-    cut pocket 60 x 6 depth 10 on width end: where door_l.rail[top] meets it, local 1089.5..1149.5 x 50..60 x 0..19
+    cut slot width 6 depth 10 angle 0deg on width end: where door_l.rail[bottom] meets it, local 0..60 x 50..60 x 0..19
+    cut slot width 6 depth 10 angle 0deg on width end: where door_l.rail[top] meets it, local 1089.5..1149.5 x 50..60 x 0..19
     cut notch depth 10 on width end: where door_l.panel meets it, local 52..1097.5 x 52..60 x 6.5..12.5
     cut drill 1 x diameter 35 depth 12.8 on thickness end: where door_l.hinges[lower]'s cup meets it, local 100..135 x 5..40 x 6.2..19
     cut drill 1 x diameter 35 depth 12.8 on thickness end: where door_l.hinges[upper]'s cup meets it, local 1014.5..1049.5 x 5..40 x 6.2..19
 door_l.stile[latch]          oak_19         1149.5 x 60 x 19           389.25..449.25       530..1679.5          -19..0               up/right/back
-    cut pocket 60 x 6 depth 10 on width start: where door_l.rail[bottom] meets it, local 0..60 x 0..10 x 0..19
-    cut pocket 60 x 6 depth 10 on width start: where door_l.rail[top] meets it, local 1089.5..1149.5 x 0..10 x 0..19
+    cut slot width 6 depth 10 angle 0deg on width start: where door_l.rail[bottom] meets it, local 0..60 x 0..10 x 0..19
+    cut slot width 6 depth 10 angle 0deg on width start: where door_l.rail[top] meets it, local 1089.5..1149.5 x 0..10 x 0..19
     cut notch depth 10 on width start: where door_l.panel meets it, local 52..1097.5 x 0..8 x 6.5..12.5
     cut drill 1 x diameter 4 depth through on thickness start: where door_l.handle's screw meets it, local 572.75..576.75 x 28..32 x 0..19
 door_l.rail[bottom]          oak_19         348.25 x 60 x 19           61..389.25           530..590             -19..0               right/up/back
@@ -100,10 +100,8 @@ door_l.rail[top]             oak_19         348.25 x 60 x 19           61..389.2
 door_l.panel                 oak_6          1045.5 x 344.25 x 6        61..389.25           590..1619.5          -12.5..-6.5          up/right/back
     drawn 1029.5 x 328.25 x 6, starting 8 x 8 x 0 into the cut size
 drawer[bottom].front         oak_19         898 x 257.25 x 19          1..899               11..268.25           -19..0               right/up/back
-    cut drill 1 x diameter 3 depth 13 on thickness end: where drawer[bottom].front_screws's screw meets it, local 202.82..205.82 x 131.5..134.5 x 6..19
-    cut drill 1 x diameter 3 depth 13 on thickness end: where drawer[bottom].front_screws's screw meets it, local 365.94..368.94 x 131.5..134.5 x 6..19
-    cut drill 1 x diameter 3 depth 13 on thickness end: where drawer[bottom].front_screws's screw meets it, local 529.06..532.06 x 131.5..134.5 x 6..19
-    cut drill 1 x diameter 3 depth 13 on thickness end: where drawer[bottom].front_screws's screw meets it, local 692.18..695.18 x 131.5..134.5 x 6..19
+    cut drill 1 x diameter 3 depth 13 on thickness end: where drawer[bottom].front_screws's screw meets it, local 311.566667..314.566667 x 131.5..134.5 x 6..19
+    cut drill 1 x diameter 3 depth 13 on thickness end: where drawer[bottom].front_screws's screw meets it, local 583.433333..586.433333 x 131.5..134.5 x 6..19
     cut drill 1 x diameter 4 depth through on thickness start: where drawer[bottom].pull's screws meets it, local 367..371 x 126.625..130.625 x 0..19
     cut drill 1 x diameter 4 depth through on thickness start: where drawer[bottom].pull's screws meets it, local 527..531 x 126.625..130.625 x 0..19
 drawer[bottom].side[left]    maple_12       500 x 220 x 12             31.7..43.7           34..254              0..500               back/up/right
@@ -117,20 +115,16 @@ drawer[bottom].side[right]   maple_12       500 x 220 x 12             856.3..86
 drawer[bottom].sub_front     maple_12       824.6 x 220 x 12           43.7..856.3          34..254              0..12                right/up/back
     drawn 812.6 x 220 x 12, starting 6 x 0 x 0 into the cut size
     cut notch depth 6 on thickness end: where drawer[bottom].bottom meets it, local 0..824.6 x 10..16 x 6..12
-    cut drill 1 x diameter 4.5 depth through on thickness start: where drawer[bottom].front_screws's screw meets it, local 166.12..169.12 x 108.5..111.5 x 0..12
-    cut drill 1 x diameter 4.5 depth through on thickness start: where drawer[bottom].front_screws's screw meets it, local 329.24..332.24 x 108.5..111.5 x 0..12
-    cut drill 1 x diameter 4.5 depth through on thickness start: where drawer[bottom].front_screws's screw meets it, local 492.36..495.36 x 108.5..111.5 x 0..12
-    cut drill 1 x diameter 4.5 depth through on thickness start: where drawer[bottom].front_screws's screw meets it, local 655.48..658.48 x 108.5..111.5 x 0..12
+    cut drill 1 x diameter 4.5 depth through on thickness start: where drawer[bottom].front_screws's screw meets it, local 274.866667..277.866667 x 108.5..111.5 x 0..12
+    cut drill 1 x diameter 4.5 depth through on thickness start: where drawer[bottom].front_screws's screw meets it, local 546.733333..549.733333 x 108.5..111.5 x 0..12
 drawer[bottom].back          maple_12       824.6 x 220 x 12           43.7..856.3          34..254              488..500             right/up/back
     drawn 812.6 x 220 x 12, starting 6 x 0 x 0 into the cut size
     cut notch depth 6 on thickness start: where drawer[bottom].bottom meets it, local 0..824.6 x 10..16 x 0..6
 drawer[bottom].bottom        ply_6          824.6 x 488 x 6            43.7..856.3          44..50               12..488              right/back/up
     drawn 812.6 x 476 x 6, starting 6 x 6 x 0 into the cut size
 drawer[top].front            oak_19         898 x 257.25 x 19          1..899               269.75..527          -19..0               right/up/back
-    cut drill 1 x diameter 3 depth 13 on thickness end: where drawer[top].front_screws's screw meets it, local 202.82..205.82 x 122.75..125.75 x 6..19
-    cut drill 1 x diameter 3 depth 13 on thickness end: where drawer[top].front_screws's screw meets it, local 365.94..368.94 x 122.75..125.75 x 6..19
-    cut drill 1 x diameter 3 depth 13 on thickness end: where drawer[top].front_screws's screw meets it, local 529.06..532.06 x 122.75..125.75 x 6..19
-    cut drill 1 x diameter 3 depth 13 on thickness end: where drawer[top].front_screws's screw meets it, local 692.18..695.18 x 122.75..125.75 x 6..19
+    cut drill 1 x diameter 3 depth 13 on thickness end: where drawer[top].front_screws's screw meets it, local 311.566667..314.566667 x 122.75..125.75 x 6..19
+    cut drill 1 x diameter 3 depth 13 on thickness end: where drawer[top].front_screws's screw meets it, local 583.433333..586.433333 x 122.75..125.75 x 6..19
     cut drill 1 x diameter 4 depth through on thickness start: where drawer[top].pull's screws meets it, local 367..371 x 126.625..130.625 x 0..19
     cut drill 1 x diameter 4 depth through on thickness start: where drawer[top].pull's screws meets it, local 527..531 x 126.625..130.625 x 0..19
 drawer[top].side[left]       maple_12       500 x 220 x 12             31.7..43.7           284..504             0..500               back/up/right
@@ -144,24 +138,22 @@ drawer[top].side[right]      maple_12       500 x 220 x 12             856.3..86
 drawer[top].sub_front        maple_12       824.6 x 220 x 12           43.7..856.3          284..504             0..12                right/up/back
     drawn 812.6 x 220 x 12, starting 6 x 0 x 0 into the cut size
     cut notch depth 6 on thickness end: where drawer[top].bottom meets it, local 0..824.6 x 10..16 x 6..12
-    cut drill 1 x diameter 4.5 depth through on thickness start: where drawer[top].front_screws's screw meets it, local 166.12..169.12 x 108.5..111.5 x 0..12
-    cut drill 1 x diameter 4.5 depth through on thickness start: where drawer[top].front_screws's screw meets it, local 329.24..332.24 x 108.5..111.5 x 0..12
-    cut drill 1 x diameter 4.5 depth through on thickness start: where drawer[top].front_screws's screw meets it, local 492.36..495.36 x 108.5..111.5 x 0..12
-    cut drill 1 x diameter 4.5 depth through on thickness start: where drawer[top].front_screws's screw meets it, local 655.48..658.48 x 108.5..111.5 x 0..12
+    cut drill 1 x diameter 4.5 depth through on thickness start: where drawer[top].front_screws's screw meets it, local 274.866667..277.866667 x 108.5..111.5 x 0..12
+    cut drill 1 x diameter 4.5 depth through on thickness start: where drawer[top].front_screws's screw meets it, local 546.733333..549.733333 x 108.5..111.5 x 0..12
 drawer[top].back             maple_12       824.6 x 220 x 12           43.7..856.3          284..504             488..500             right/up/back
     drawn 812.6 x 220 x 12, starting 6 x 0 x 0 into the cut size
     cut notch depth 6 on thickness start: where drawer[top].bottom meets it, local 0..824.6 x 10..16 x 0..6
 drawer[top].bottom           ply_6          824.6 x 488 x 6            43.7..856.3          294..300             12..488              right/back/up
     drawn 812.6 x 476 x 6, starting 6 x 6 x 0 into the cut size
 door_r.stile[hinge]          oak_19         1149.5 x 60 x 19           839..899             530..1679.5          -19..0               up/left/back
-    cut pocket 60 x 6 depth 10 on width end: where door_r.rail[bottom] meets it, local 0..60 x 50..60 x 0..19
-    cut pocket 60 x 6 depth 10 on width end: where door_r.rail[top] meets it, local 1089.5..1149.5 x 50..60 x 0..19
+    cut slot width 6 depth 10 angle 0deg on width end: where door_r.rail[bottom] meets it, local 0..60 x 50..60 x 0..19
+    cut slot width 6 depth 10 angle 0deg on width end: where door_r.rail[top] meets it, local 1089.5..1149.5 x 50..60 x 0..19
     cut notch depth 10 on width end: where door_r.panel meets it, local 52..1097.5 x 52..60 x 6.5..12.5
     cut drill 1 x diameter 35 depth 12.8 on thickness end: where door_r.hinges[lower]'s cup meets it, local 100..135 x 5..40 x 6.2..19
     cut drill 1 x diameter 35 depth 12.8 on thickness end: where door_r.hinges[upper]'s cup meets it, local 1014.5..1049.5 x 5..40 x 6.2..19
 door_r.stile[latch]          oak_19         1149.5 x 60 x 19           450.75..510.75       530..1679.5          -19..0               up/left/back
-    cut pocket 60 x 6 depth 10 on width start: where door_r.rail[bottom] meets it, local 0..60 x 0..10 x 0..19
-    cut pocket 60 x 6 depth 10 on width start: where door_r.rail[top] meets it, local 1089.5..1149.5 x 0..10 x 0..19
+    cut slot width 6 depth 10 angle 0deg on width start: where door_r.rail[bottom] meets it, local 0..60 x 0..10 x 0..19
+    cut slot width 6 depth 10 angle 0deg on width start: where door_r.rail[top] meets it, local 1089.5..1149.5 x 0..10 x 0..19
     cut notch depth 10 on width start: where door_r.panel meets it, local 52..1097.5 x 0..8 x 6.5..12.5
     cut drill 1 x diameter 4 depth through on thickness start: where door_r.handle's screw meets it, local 572.75..576.75 x 28..32 x 0..19
 door_r.rail[bottom]          oak_19         348.25 x 60 x 19           510.75..839          530..590             -19..0               left/up/back
@@ -324,10 +316,8 @@ drawer[bottom].bottom_groove groove
         adds 6 to the width end of drawer[bottom].bottom
 drawer[bottom].front_screws  screw, no glue
     piece: drawer[bottom].sub_front, into: drawer[bottom].front (butt across deep)
-        screw cylinder deep diameter 3, deep -13..12, centre up 144 x across 205.32
-        screw cylinder deep diameter 3, deep -13..12, centre up 144 x across 368.44
-        screw cylinder deep diameter 3, deep -13..12, centre up 144 x across 531.56
-        screw cylinder deep diameter 3, deep -13..12, centre up 144 x across 694.68
+        screw cylinder deep diameter 3, deep -13..12, centre up 144 x across 314.066667
+        screw cylinder deep diameter 3, deep -13..12, centre up 144 x across 585.933333
 drawer[top].box_dados        dado
     piece: drawer[top].sub_front, into: drawer[top].side[left] (butt across across)
         adds 6 to the length start of drawer[top].sub_front
@@ -348,10 +338,8 @@ drawer[top].bottom_groove    groove
         adds 6 to the width end of drawer[top].bottom
 drawer[top].front_screws     screw, no glue
     piece: drawer[top].sub_front, into: drawer[top].front (butt across deep)
-        screw cylinder deep diameter 3, deep -13..12, centre up 394 x across 205.32
-        screw cylinder deep diameter 3, deep -13..12, centre up 394 x across 368.44
-        screw cylinder deep diameter 3, deep -13..12, centre up 394 x across 531.56
-        screw cylinder deep diameter 3, deep -13..12, centre up 394 x across 694.68
+        screw cylinder deep diameter 3, deep -13..12, centre up 394 x across 314.066667
+        screw cylinder deep diameter 3, deep -13..12, centre up 394 x across 585.933333
 door_r.frame_joints          cope_and_stick
     piece: door_r.rail[bottom], into: door_r.stile[hinge] (butt across across)
         adds 10 to the length start of door_r.rail[bottom]
@@ -374,8 +362,8 @@ door_r.panel_groove          groove, no glue
 FASTENERS
 base_dowels                  8 x dowel_pin (8 x 30)
 top_dowels                   8 x dowel_pin (8 x 30)
-drawer[bottom].front_screws  4 x wood_screw (4 x 25)
-drawer[top].front_screws     4 x wood_screw (4 x 25)
+drawer[bottom].front_screws  2 x wood_screw (4 x 25)
+drawer[top].front_screws     2 x wood_screw (4 x 25)
 
 REGIONS (11)
 front_opening                19..881              19..1681             0..554              
@@ -396,7 +384,7 @@ drawer[bottom]               Drawer (6 parts): travels 500 toward the front
 drawer[top]                  Drawer (6 parts): travels 500 toward the front
 door_r                       FramePanelDoor (5 parts, mirror of door_l): turns up to 110deg on its mechanism across the up axis from (876.5, 647.5, 0), across left, depth front; pivot arm and inner_link at (13.5, 10.9), pivot cup and inner_link at (-8.8, 7.33), pivot arm and outer_link at (13.28, 3.56), pivot cup and outer_link at (-9.54, 1.39)
 
-REQUIRES (95)
+REQUIRES (85)
 hanger_room                                  holds
 overall_height                               holds
 door_l.stile_holds_cup                       holds
@@ -411,30 +399,22 @@ shelf_dados.not_too_deep                     holds
 back_rabbets.not_too_deep                    holds
 back_rabbets.not_too_deep                    holds
 base_dowels.pin_fits_piece                   holds
-base_dowels.hole_stops                       holds
 base_dowels.seat_wide                        holds
 base_dowels.seat_long                        holds
 base_dowels.pin_fits_piece                   holds
-base_dowels.hole_stops                       holds
 base_dowels.seat_wide                        holds
 base_dowels.seat_long                        holds
 top_dowels.pin_fits_piece                    holds
-top_dowels.hole_stops                        holds
 top_dowels.seat_wide                         holds
 top_dowels.seat_long                         holds
 top_dowels.pin_fits_piece                    holds
-top_dowels.hole_stops                        holds
 top_dowels.seat_wide                         holds
 top_dowels.seat_long                         holds
 rod_sockets.not_too_deep                     holds
 rod_sockets.not_too_deep                     holds
-foot_tenons.hole_stops                       holds
 foot_tenons.tenon_fits                       holds
-foot_tenons.hole_stops                       holds
 foot_tenons.tenon_fits                       holds
-foot_tenons.hole_stops                       holds
 foot_tenons.tenon_fits                       holds
-foot_tenons.hole_stops                       holds
 foot_tenons.tenon_fits                       holds
 door_l.frame_joints.tongue_fits              holds
 door_l.frame_joints.tongue_fits              holds
@@ -460,7 +440,6 @@ drawer[bottom].bottom_groove.panel_is_held   holds
 drawer[bottom].bottom_groove.not_too_deep    holds
 drawer[bottom].bottom_groove.panel_is_held   holds
 drawer[bottom].bottom_groove.not_too_deep    holds
-drawer[bottom].front_screws.stays_inside     holds
 drawer[bottom].front_screws.bites            holds
 drawer[bottom].front_screws.seat_wide        holds
 drawer[bottom].front_screws.seat_long        holds
@@ -476,7 +455,6 @@ drawer[top].bottom_groove.panel_is_held      holds
 drawer[top].bottom_groove.not_too_deep       holds
 drawer[top].bottom_groove.panel_is_held      holds
 drawer[top].bottom_groove.not_too_deep       holds
-drawer[top].front_screws.stays_inside        holds
 drawer[top].front_screws.bites               holds
 drawer[top].front_screws.seat_wide           holds
 drawer[top].front_screws.seat_long           holds

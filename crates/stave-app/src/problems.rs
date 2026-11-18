@@ -33,7 +33,8 @@ pub enum Category {
     Motion,
     /// Wood passes through wood (`overlap`).
     Overlap,
-    /// A joint's parts don't meet (`no-contact`).
+    /// A joint's parts don't meet (`no-contact`), or a part nothing joins
+    /// to the rest (`loose-part`).
     NoContact,
     /// A piece of hardware can't be set within its adjustment to fit
     /// where it is placed (`adjust`).
@@ -54,8 +55,9 @@ pub enum Category {
     Name,
     /// A value is the wrong kind, unit or size (`type-mismatch`, ...).
     Value,
-    /// A cut no recipe can make with the project's tools (`no-recipe`), or
-    /// a kind's cut with no name (`unnamed-cut`).
+    /// A cut no recipe can make with the project's tools (`no-recipe`), a
+    /// kind's cut with no name (`unnamed-cut`), a cut that leaves no wood
+    /// round it (`wall`), or one bigger than its part (`cut-size`).
     Cut,
     /// A hardware model doesn't match its envelope (`model-mismatch`).
     Hardware,
@@ -69,7 +71,7 @@ impl Category {
         match code {
             Code::Motion => Category::Motion,
             Code::Overlap => Category::Overlap,
-            Code::NoContact => Category::NoContact,
+            Code::NoContact | Code::LoosePart => Category::NoContact,
             Code::Adjust => Category::Adjust,
             Code::Mechanism => Category::Mechanism,
             Code::Order => Category::Order,
@@ -98,7 +100,7 @@ impl Category {
             | Code::UnknownField
             | Code::MissingField
             | Code::OutOfRange => Category::Value,
-            Code::NoRecipe | Code::UnnamedCut => Category::Cut,
+            Code::NoRecipe | Code::UnnamedCut | Code::Wall | Code::CutSize => Category::Cut,
             Code::ModelMismatch => Category::Hardware,
             Code::NotSupported => Category::NotSupported,
         }

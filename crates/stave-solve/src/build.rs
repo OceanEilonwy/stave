@@ -571,6 +571,7 @@ pub(crate) fn build(solver: &mut Solver<'_>) -> Option<SolvedDesign> {
             overruns.dedup();
             overruns
         },
+        wall_rules: std::mem::take(&mut solver.wall_rules),
     })
 }
 
@@ -1521,7 +1522,7 @@ impl Solver<'_> {
             let Some(geom) = geoms.get(id).cloned() else {
                 return Err(Reported);
             };
-            let (name, assembly, origin, stock, shape, grain, note) =
+            let (name, assembly, origin, stock, shape, grain, note, loose) =
                 if let Some(inst) = self.model.parts.get(index).cloned() {
                     let mirror = self.mirror_source(id)?;
                     let origin = match (inst.mirror_of, mirror) {
@@ -1583,6 +1584,13 @@ impl Solver<'_> {
                         }
                         None => None,
                     };
+                    let loose = match body.as_ref().and_then(|b| b.loose.clone()) {
+                        Some(expr) => {
+                            let env = self.part_env(source_body).ok_or(Reported)?;
+                            self.eval_bool(&expr, &env)?
+                        }
+                        None => false,
+                    };
                     (
                         inst.name.clone(),
                         inst.assembly,
@@ -1591,6 +1599,7 @@ impl Solver<'_> {
                         shape,
                         grain,
                         note,
+                        loose,
                     )
                 } else {
                     let info = made.get(index - self.model.parts.len()).ok_or(Reported)?;
@@ -1602,6 +1611,7 @@ impl Solver<'_> {
                         Shape::Board,
                         Grain::Length,
                         info.note.clone(),
+                        false,
                     )
                 };
             let stock = self.write_stock(stock)?;
@@ -1653,6 +1663,7 @@ impl Solver<'_> {
                 joints: part_joints,
                 note,
                 boards: boards.get_mut(index).and_then(Option::take),
+                loose,
             });
         }
         Ok(parts)

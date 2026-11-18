@@ -45,4 +45,5 @@ part top : oak_19 {
   }
 }
 
-joint top_dowels : dowel([side_l, side_r], into: top, count: 4)
+joint base_dowels : dowel([side_l, side_r], into: base, count: 4)
+joint top_dowels  : dowel([side_l, side_r], into: top, count: 4)

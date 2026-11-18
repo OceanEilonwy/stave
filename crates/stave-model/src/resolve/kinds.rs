@@ -170,6 +170,16 @@ impl Resolver<'_> {
         let mut hardware_uses = JointKindDef::default();
         let mut joint_cuts: Vec<&ast::Cut> = Vec::new();
         self.check_cut_names(&cx, &syntax.body.entries);
+        let cut_names: Vec<String> = syntax
+            .body
+            .entries
+            .iter()
+            .filter_map(|entry| match entry {
+                ast::KindEntry::Cut(cut) => cut.name.as_ref().map(|n| n.as_str().to_owned()),
+                _ => None,
+            })
+            .collect();
+        self.kind_cut_names.insert(id, cut_names);
         for entry in &syntax.body.entries {
             match entry {
                 ast::KindEntry::Param(_) => {}
@@ -202,11 +212,14 @@ impl Resolver<'_> {
                     }
                 }
                 ast::KindEntry::Require(require) => {
+                    self.in_kind_require = true;
                     let condition = self.value(
                         &cx,
                         &require.node.condition,
                         &Expect::ty(Ty::Bool).named(require.node.name.as_str()),
                     );
+                    self.in_kind_require = false;
+                    self.check_wall_comparison(&cx, &condition);
                     let message = self.text(&cx, &require.node.message);
                     requires.push(RequireDef {
                         decl: crate::defs::Decl {

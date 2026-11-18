@@ -32,10 +32,8 @@ divider                      cherry_19      428 x 394 x 19             19..431  
 back                         ply_6          521 x 430 x 6              19..431              60..581              394..400             up/right/back
     drawn 521 x 412 x 6, starting 0 x 9 x 0 into the cut size
 drawer.front                 cherry_19      408 x 146 x 19             21..429              433..579             0..19                right/up/back
-    cut drill 1 x diameter 3 depth 13 on thickness end: where drawer.front_screws's screw meets it, local 92.82..95.82 x 73..76 x 6..19
-    cut drill 1 x diameter 3 depth 13 on thickness end: where drawer.front_screws's screw meets it, local 165.94..168.94 x 73..76 x 6..19
-    cut drill 1 x diameter 3 depth 13 on thickness end: where drawer.front_screws's screw meets it, local 239.06..242.06 x 73..76 x 6..19
-    cut drill 1 x diameter 3 depth 13 on thickness end: where drawer.front_screws's screw meets it, local 312.18..315.18 x 73..76 x 6..19
+    cut drill 1 x diameter 3 depth 13 on thickness end: where drawer.front_screws's screw meets it, local 141.566667..144.566667 x 73..76 x 6..19
+    cut drill 1 x diameter 3 depth 13 on thickness end: where drawer.front_screws's screw meets it, local 263.433333..266.433333 x 73..76 x 6..19
     cut drill 1 x diameter 4 depth through on thickness start: where drawer.pull's screw meets it, local 202..206 x 71..75 x 0..19
 drawer.side[left]            maple_12       350 x 123 x 12             31.7..43.7           446..569             19..369              back/up/right
     cut notch depth 6 on thickness end: where drawer.sub_front meets it, local 0..12 x 0..123 x 6..12
@@ -48,10 +46,8 @@ drawer.side[right]           maple_12       350 x 123 x 12             406.3..41
 drawer.sub_front             maple_12       374.6 x 123 x 12           43.7..406.3          446..569             19..31               right/up/back
     drawn 362.6 x 123 x 12, starting 6 x 0 x 0 into the cut size
     cut notch depth 6 on thickness end: where drawer.bottom meets it, local 0..374.6 x 10..16 x 6..12
-    cut drill 1 x diameter 4.5 depth through on thickness start: where drawer.front_screws's screw meets it, local 76.12..79.12 x 60..63 x 0..12
-    cut drill 1 x diameter 4.5 depth through on thickness start: where drawer.front_screws's screw meets it, local 149.24..152.24 x 60..63 x 0..12
-    cut drill 1 x diameter 4.5 depth through on thickness start: where drawer.front_screws's screw meets it, local 222.36..225.36 x 60..63 x 0..12
-    cut drill 1 x diameter 4.5 depth through on thickness start: where drawer.front_screws's screw meets it, local 295.48..298.48 x 60..63 x 0..12
+    cut drill 1 x diameter 4.5 depth through on thickness start: where drawer.front_screws's screw meets it, local 124.866667..127.866667 x 60..63 x 0..12
+    cut drill 1 x diameter 4.5 depth through on thickness start: where drawer.front_screws's screw meets it, local 246.733333..249.733333 x 60..63 x 0..12
 drawer.back                  maple_12       374.6 x 123 x 12           43.7..406.3          446..569             357..369             right/up/back
     drawn 362.6 x 123 x 12, starting 6 x 0 x 0 into the cut size
     cut notch depth 6 on thickness start: where drawer.bottom meets it, local 0..374.6 x 10..16 x 0..6
@@ -116,14 +112,12 @@ drawer.bottom_groove         groove
         adds 6 to the width end of drawer.bottom
 drawer.front_screws          screw, no glue
     piece: drawer.sub_front, into: drawer.front (butt across deep)
-        screw cylinder deep diameter 3, deep 6..31, centre up 507.5 x across 115.32
-        screw cylinder deep diameter 3, deep 6..31, centre up 507.5 x across 188.44
-        screw cylinder deep diameter 3, deep 6..31, centre up 507.5 x across 261.56
-        screw cylinder deep diameter 3, deep 6..31, centre up 507.5 x across 334.68
+        screw cylinder deep diameter 3, deep 6..31, centre up 507.5 x across 164.066667
+        screw cylinder deep diameter 3, deep 6..31, centre up 507.5 x across 285.933333
 
 FASTENERS
 top_dowels                   6 x dowel_pin (8 x 30)
-drawer.front_screws          4 x wood_screw (4 x 25)
+drawer.front_screws          2 x wood_screw (4 x 25)
 
 REGIONS (4)
 inside                       19..431              79..581              0..394              
@@ -134,7 +128,7 @@ drawer.face                  21..429              433..579             0..19
 ASSEMBLIES (1)
 drawer                       Drawer (6 parts): travels 350 toward the front
 
-REQUIRES (34)
+REQUIRES (31)
 drawer_room                                  holds
 shelf_room                                   holds
 drawer.slide_fits                            holds
@@ -146,11 +140,9 @@ shelf_dados.not_too_deep                     holds
 back_rabbets.not_too_deep                    holds
 back_rabbets.not_too_deep                    holds
 top_dowels.pin_fits_piece                    holds
-top_dowels.hole_stops                        holds
 top_dowels.seat_wide                         holds
 top_dowels.seat_long                         holds
 top_dowels.pin_fits_piece                    holds
-top_dowels.hole_stops                        holds
 top_dowels.seat_wide                         holds
 top_dowels.seat_long                         holds
 drawer.box_dados.not_too_deep                holds
@@ -165,7 +157,6 @@ drawer.bottom_groove.panel_is_held           holds
 drawer.bottom_groove.not_too_deep            holds
 drawer.bottom_groove.panel_is_held           holds
 drawer.bottom_groove.not_too_deep            holds
-drawer.front_screws.stays_inside             holds
 drawer.front_screws.bites                    holds
 drawer.front_screws.seat_wide                holds
 drawer.front_screws.seat_long                holds

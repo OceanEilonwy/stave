@@ -1,0 +1,10 @@
+stave 1
+
+/// A glued face joint: two parts glued face to face, with nothing cut: a
+/// cleat glued inside an apron, a lining, a leg doubled up from two boards.
+/// It holds the parts together, so neither is loose.
+kind glued_face : joint {
+  // Nothing is pushed in: the parts are laid together and clamped.
+
+  note: "Spread glue thinly on both faces, then clamp them together with even pressure until the glue sets"
+}

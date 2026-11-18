@@ -129,10 +129,11 @@ part slat[5] : oak_19 {
 }
 
 // ---- joints ----
-joint apron_tenons     : mortise_tenon([apron_front, apron_back, apron_left, apron_right], into: leg[*], length: 25mm)
+joint apron_tenons     : mortise_tenon([apron_front, apron_back, apron_left, apron_right], into: leg[*], length: 20mm)
 joint stretcher_tenons : mortise_tenon([stretcher_front, stretcher_back], into: [leg[front_left], leg[front_right], leg[back_left], leg[back_right]], length: 25mm)
 joint top_screws       : screw([cleat_front, cleat_back], into: top, count: 3, glue: false)
 joint slat_screws      : screw(slat[*], into: [stretcher_front, stretcher_back], length: 40mm)
+joint cleat_glue       : glued_face([cleat_front, cleat_back], into: [apron_front, apron_back])
 
 // ---- scenes ----
 scene frame "Without the top" {

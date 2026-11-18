@@ -67,6 +67,8 @@ part side_l : side_19 {{
 
 part side_r = mirror(side_l, about: mid(base, across))
 
+joint side_dowels : dowel([side_l, side_r], into: base, depth: 12mm)
+
 region bay = opening(
   left:   side_l.right,
   right:  side_r.left,

@@ -1,0 +1,17 @@
+---
+source: crates/stave-app/tests/walls.rs
+expression: "rendered(\"tests/broken/socket_at_the_edge\")"
+---
+error[require]: 'socket_wall' fails: the socket comes too close to a face of the board or another cut
+  --> tests/broken/socket_at_the_edge/project.stave:46:21
+   |
+46 | joint rod_sockets : socket(rod, into: [side_l, side_r], depth: 9mm)
+   |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  ::: std/joinery/socket.stave:23:3
+   |
+23 |   require socket_wall : wall(socket) >= wall "the socket comes too close to a face of the board or another cut"
+   |   ------------------------------------------------------------------------------------------------------------- the kind's rule
+   = note: for rod and side_l in rod_sockets
+   = note: the rule measures 0mm and needs at least 6mm
+   = note: the same for rod and side_r in rod_sockets
+   = help: the socket in side_l leaves 0mm of wood at the front edge of side_l; move the parts so the socket has more wood round it, or change the joint's settings

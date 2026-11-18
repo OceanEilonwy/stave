@@ -38,8 +38,11 @@ part beam_b : hinoki_105 {
 joint splice : japanese.kanawa_tsugi(beam_b, into: beam_a)
 
 // ---- ari tsugi: a dovetailed end joint, behind the splice ----
+// Each sample stands on its own on the bench: `loose: true` says nothing
+// joins it to the splice in front (grammar, "Held").
 part beam_c : hinoki_105 {
   length: 600mm
+  loose:  true
   place {
     flush(beam_a.left)
     flush(beam_a.bottom)
@@ -61,6 +64,7 @@ joint end_dovetail : japanese.ari_tsugi(beam_d, into: beam_c, angle: 12deg)
 // ---- chidori: three sticks meeting in one node, behind that ----
 part stick_z : hinoki_30 {
   length: 300mm
+  loose:  true
   place {
     orient(length: up, width: back)
     flush(beam_a.bottom)

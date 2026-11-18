@@ -15,5 +15,12 @@ kind socket : joint {
     drill(diameter: piece.diameter, depth: depth)
   }
 
+  /// Wood left round the hole: to every face of the board and to its other
+  /// cuts, such as a dado or another socket. Less and the wood between two
+  /// sockets in a leg, or between a socket and the edge of a board, splits
+  /// when the rod or rung is driven home.
+  param wall = 6mm
+  require socket_wall : wall(socket) >= wall "the socket comes too close to a face of the board or another cut"
+
   note: "A rod between two sockets goes in while the case is glued up, not afterwards"
 }

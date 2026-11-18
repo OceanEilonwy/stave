@@ -31,6 +31,8 @@ part front : pine_19 {
   }
 }
 
+joint front_dowels : dowel(front, into: base)
+
 /// A 26mm brass knob on one screw from behind.
 kind brass_knob : pull {
   roles {

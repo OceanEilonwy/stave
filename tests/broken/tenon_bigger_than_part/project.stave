@@ -1,0 +1,58 @@
+// expect: error[cut-size] rail_stubs: its stub on rail is 25mm thick, but rail is only 19mm thick
+stave 1
+
+// A kind with no rule of its own about its tenon's size: a 25mm stub tenon
+// on a 19mm rail. A tenon is the wood left when the wood round it is cut
+// away, so it can't be thicker than the rail: the engine's backstop catches
+// it. (std's mortise_tenon says so first, with its tenon_thin rule.)
+
+project "A tenon bigger than its part" {
+  units: mm
+}
+
+/// A stub tenon and its mortise: no rules.
+kind stub_tenon : joint {
+  insert:    [push(piece, along: length)]
+  cut_first: into
+  adds:      extend(piece, by: 10mm)
+  cut stub: end(piece, facing: into) {
+    tenon(length: 10mm, width: piece.width - 20mm, thickness: 25mm)
+  }
+  cut stub_mortise: crossing(into, piece) {
+    pocket(width: piece.width - 20mm, thickness: 25mm, depth: 12mm)
+  }
+}
+
+stock oak_19    { species: white_oak, form: solid, thickness: 19mm }
+stock oak_45_sq { species: white_oak, form: solid, thickness: 45mm, width: 45mm }
+
+part leg_l : oak_45_sq {
+  length: 575mm
+  place {
+    ground
+    orient(length: up, width: right)
+  }
+}
+
+part leg_r : oak_45_sq {
+  length: 575mm
+  place {
+    orient(length: up, width: right)
+    against(leg_l.right, gap: 400mm)
+    flush(leg_l.bottom)
+    flush(leg_l.front)
+  }
+}
+
+part rail : oak_19 {
+  length: between(leg_l, leg_r)
+  width:  60mm
+  place {
+    orient(length: right, width: up)
+    against(leg_l.right)
+    flush(leg_l.bottom, inset: 100mm)
+    flush(leg_l.front, inset: 13mm)
+  }
+}
+
+joint rail_stubs : stub_tenon(rail, into: [leg_l, leg_r])

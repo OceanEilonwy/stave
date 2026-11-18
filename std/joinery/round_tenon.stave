@@ -10,10 +10,13 @@ kind round_tenon : joint {
   /// The ring of end grain left round the tenon, which the part seats
   /// on: less and the shoulder crushes or splits when it is glued home.
   param shoulder = 3mm
+  /// Wood left round the hole: to every face of the other part (its far
+  /// side too) and to its other cuts.
+  param wall = 3mm
 
   // tenon_fits: the patch where the parts touch is as wide as the end of
   // the piece; for a turned piece, its profile's diameter at that end.
-  require hole_stops : length <= extent(into, length, of: piece) - 3mm "the hole for the tenon would come through the other side"
+  require hole_wall  : wall(hole) >= wall "the hole for the tenon comes too close to a face of the board or another cut"
   require tenon_fits : diameter <= contact(piece, into).width - 2 * shoulder "the tenon is too thick for the end of the part"
 
   insert:    [push(piece, along: length)]
