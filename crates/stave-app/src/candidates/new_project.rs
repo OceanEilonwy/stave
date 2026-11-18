@@ -42,6 +42,9 @@ pub struct NewProject {
     /// The tools the maker has, by their kind's name; empty means every
     /// tool is assumed, and the `tools:` field is left out.
     pub tools: Vec<Ident>,
+    /// The modules the project imports, by their source as written in an
+    /// `import` (`std:casework`), in order: what the menu then offers.
+    pub imports: Vec<String>,
 }
 
 /// One stock item of a new project.
@@ -146,6 +149,12 @@ pub fn new_project_text(project: &NewProject) -> Result<String, NewProjectError>
     }
 
     let mut text = String::from("stave 1\n\n");
+    for import in &project.imports {
+        text.push_str(&format!("import {}\n", quoted(import)));
+    }
+    if !project.imports.is_empty() {
+        text.push('\n');
+    }
     text.push_str(&format!("project {} {{\n", quoted(&project.title)));
     text.push_str("  units: mm\n");
     if !project.tools.is_empty() {
@@ -269,6 +278,7 @@ mod tests {
                 },
             ],
             tools: vec![name("saw"), name("chisel")],
+            imports: Vec::new(),
         }
     }
 

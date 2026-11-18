@@ -1080,7 +1080,10 @@ assembly tray : Tray {
 
     /// Writes a tried patch's files into `files`, as a commit would.
     pub(crate) fn commit(files: &mut MemoryFiles, tried: &Tried) {
-        tried.commit(files).unwrap();
+        assert!(tried.fits());
+        for file in tried.changed() {
+            files.insert(&file.path, file.text.clone());
+        }
     }
 
     /// A base for the project in `folder`, asserting it opens with no

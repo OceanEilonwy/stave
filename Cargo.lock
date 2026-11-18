@@ -1861,6 +1861,7 @@ dependencies = [
  "stave-lang",
  "stave-model",
  "stave-modules",
+ "stave-schema",
 ]
 
 [[package]]

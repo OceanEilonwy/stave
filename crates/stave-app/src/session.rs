@@ -24,8 +24,9 @@ use stave_model::solved::{AssemblyId, HardwareId, JointId, PairMember, PartId, S
 use stave_modules::{DiskFiles, FileSource};
 use stave_scene::{Item, SceneEntry, SceneGraph};
 
+use crate::change::{Change, ChangeError, ChangeRequest, MirrorOffer};
 use crate::check::{Checked, Outcome, Summary};
-use crate::editing::{Edit, EditCommand, EditEvent, Rejection, WriteEdits};
+use crate::editing::{Commit, Edit, EditCommand, EditEvent, FileEdit, Rejection, WriteEdits};
 use crate::empty::Reason;
 use crate::focus::Target;
 use crate::scratch::DiskWriter;
@@ -584,6 +585,11 @@ pub struct Session {
     shown: Option<Rc<Checked>>,
     /// The edit in progress.
     edit: Option<Edit>,
+    /// The change of the design in progress (never at the same time as
+    /// an edit).
+    change: Option<Change>,
+    /// What the last commit wrote.
+    last_commit: Vec<FileEdit>,
     /// Where it reads and writes.
     ports: EditPorts,
 }
@@ -606,6 +612,8 @@ impl Session {
             latest: None,
             shown: None,
             edit: None,
+            change: None,
+            last_commit: Vec::new(),
             ports: EditPorts::default(),
         }
     }
@@ -626,6 +634,27 @@ impl Session {
     /// The edit in progress, if any.
     pub fn edit(&self) -> Option<&Edit> {
         self.edit.as_ref()
+    }
+
+    /// The change of the design in progress (a repeat, a shares grip, a
+    /// mirror, a held rule, a removal, a rename), if any.
+    pub fn change(&self) -> Option<&Change> {
+        self.change.as_ref()
+    }
+
+    /// The files the last commit (an edit's or a change's Add) wrote, in
+    /// path order; empty before the first.
+    pub fn last_commit(&self) -> &[FileEdit] {
+        &self.last_commit
+    }
+
+    /// What adding the mirror image of the assembly `item` would do, when
+    /// it has one: the offer the card makes, read from the project as the
+    /// edit files give it. `None` when it has none or the project doesn't
+    /// place.
+    pub fn mirror_offer(&self, item: &str) -> Option<MirrorOffer> {
+        let opened = crate::open_with(&self.folder, self.ports.files.as_ref()).ok()?;
+        crate::change::mirror_offer(&self.folder, self.ports.files.as_ref(), &opened, item)
     }
 
     /// Works out whether each entry of the edit's menu applies, as
@@ -967,14 +996,12 @@ impl Session {
         finish(events)
     }
 
-    /// Does an edit command: starting, adding and cancelling here, the
-    /// rest in the edit itself.
+    /// Does an edit command: starting, adding and cancelling here, and the
+    /// changes of the design; the rest in the edit itself.
     fn edit_command(&mut self, command: EditCommand, events: &mut Vec<Event>) {
         match command {
             EditCommand::Start(picked) => {
-                if self.edit.take().is_some() {
-                    events.push(Event::Edit(EditEvent::Cancelled));
-                }
+                self.drop_edit(events);
                 match Edit::start(&self.folder, self.ports.files.clone(), picked) {
                     Ok(edit) => {
                         self.edit = Some(edit);
@@ -986,30 +1013,22 @@ impl Session {
                 }
             }
             EditCommand::Cancel => {
-                if self.edit.take().is_some() {
-                    events.push(Event::Edit(EditEvent::Cancelled));
-                } else {
+                if !self.drop_edit(events) {
                     events.push(Event::Edit(EditEvent::Rejected(Rejection::NoEdit)));
                 }
             }
             EditCommand::Add => {
-                let Some(edit) = self.edit.as_mut() else {
+                let started = std::time::Instant::now();
+                let result = if let Some(change) = self.change.as_mut() {
+                    change.commit(self.ports.writer.as_mut())
+                } else if let Some(edit) = self.edit.as_mut() {
+                    edit.commit(self.ports.writer.as_mut())
+                } else {
                     events.push(Event::Edit(EditEvent::Rejected(Rejection::NoEdit)));
                     return;
                 };
-                let started = std::time::Instant::now();
-                match edit.commit(self.ports.writer.as_mut()) {
-                    Ok(commit) => {
-                        self.edit = None;
-                        events.push(Event::Edit(EditEvent::Committed));
-                        let checked = crate::check::checked(&self.folder, commit.opened, started);
-                        let verdict = Verdict::Checked(checked.summary);
-                        self.adopt(Rc::new(checked), events);
-                        if self.running.is_none() {
-                            self.status = CheckStatus::Done(verdict);
-                            events.push(Event::CheckStatusChanged);
-                        }
-                    }
+                match result {
+                    Ok(commit) => self.committed(commit, started, events),
                     Err(crate::editing::CommitError::NothingChosen) => {
                         events.push(Event::Edit(EditEvent::Rejected(Rejection::NothingChosen)));
                     }
@@ -1021,15 +1040,96 @@ impl Session {
                     ),
                 }
             }
+            EditCommand::RepeatItem { item, count, axis } => self.start_change(
+                ChangeRequest::Repeat {
+                    item,
+                    count,
+                    axis,
+                    shares: None,
+                },
+                events,
+            ),
+            EditCommand::MoveShares {
+                region,
+                lower,
+                boundary,
+            } => self.start_change(
+                ChangeRequest::MoveShares {
+                    region,
+                    lower,
+                    boundary,
+                },
+                events,
+            ),
+            EditCommand::Mirror(item) => self.start_change(ChangeRequest::Mirror { item }, events),
+            EditCommand::Hold(request) => self.start_change(ChangeRequest::Hold(request), events),
+            EditCommand::Remove(item) => self.start_change(ChangeRequest::Remove { item }, events),
+            EditCommand::RenameItem { item, to } => {
+                self.start_change(ChangeRequest::Rename { item, to }, events);
+            }
+            EditCommand::IncludeDependants => match self.change.as_mut() {
+                Some(change) => {
+                    events.extend(change.include_dependants().into_iter().map(Event::Edit));
+                }
+                None => events.push(Event::Edit(EditEvent::Rejected(
+                    Rejection::NothingToInclude,
+                ))),
+            },
+            EditCommand::ApplyFix { problem, fix } if self.change.is_some() => {
+                if let Some(change) = self.change.as_mut() {
+                    events.extend(change.apply_fix(problem, fix).into_iter().map(Event::Edit));
+                }
+            }
             command @ (EditCommand::CheckMenu
             | EditCommand::Choose(_)
             | EditCommand::Bind(_)
             | EditCommand::Set { .. }
             | EditCommand::Rename(_)
+            | EditCommand::Repeat(_)
             | EditCommand::ApplyFix { .. }) => match self.edit.as_mut() {
                 Some(edit) => events.extend(edit.apply(command).into_iter().map(Event::Edit)),
                 None => events.push(Event::Edit(EditEvent::Rejected(Rejection::NoEdit))),
             },
+        }
+    }
+
+    /// Drops the edit or change in progress, saying so; `false` when there
+    /// was none.
+    fn drop_edit(&mut self, events: &mut Vec<Event>) -> bool {
+        let dropped = self.edit.take().is_some() | self.change.take().is_some();
+        if dropped {
+            events.push(Event::Edit(EditEvent::Cancelled));
+        }
+        dropped
+    }
+
+    /// Starts a change of the design, dropping what was in progress.
+    fn start_change(&mut self, request: ChangeRequest, events: &mut Vec<Event>) {
+        self.drop_edit(events);
+        match Change::start(&self.folder, self.ports.files.clone(), request) {
+            Ok(change) => {
+                self.change = Some(change);
+                events.push(Event::Edit(EditEvent::ChangeStarted));
+                events.push(Event::Edit(EditEvent::VerdictChanged));
+            }
+            Err(error @ (ChangeError::Start(_) | ChangeError::Unwritable(_))) => events.push(
+                Event::Edit(EditEvent::Rejected(Rejection::CantStart(error.to_string()))),
+            ),
+        }
+    }
+
+    /// Shows the design a commit made, as after a check.
+    fn committed(&mut self, commit: Commit, started: std::time::Instant, events: &mut Vec<Event>) {
+        self.edit = None;
+        self.change = None;
+        self.last_commit = commit.files;
+        events.push(Event::Edit(EditEvent::Committed));
+        let checked = crate::check::checked(&self.folder, commit.opened, started);
+        let verdict = Verdict::Checked(checked.summary);
+        self.adopt(Rc::new(checked), events);
+        if self.running.is_none() {
+            self.status = CheckStatus::Done(verdict);
+            events.push(Event::CheckStatusChanged);
         }
     }
 

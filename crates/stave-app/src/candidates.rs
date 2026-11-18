@@ -24,6 +24,7 @@
 //! box.
 
 pub mod applicability;
+pub mod describe;
 pub mod new_project;
 pub mod print;
 #[cfg(test)]
@@ -180,7 +181,7 @@ impl<'a> EditScope<'a> {
     /// the prelude's standard modules ([`MenuGroup::Standard`]), which are
     /// in scope without an import. This is the grouping
     /// [`crate::edit::clothing_cabinet_fixture`] shows.
-    fn modules_in_scope(&self) -> Vec<(ModuleId, MenuGroup)> {
+    pub(crate) fn modules_in_scope(&self) -> Vec<(ModuleId, MenuGroup)> {
         let defs = &self.model.defs;
         let mut out = vec![(self.model.root, MenuGroup::Project)];
         let seen =
@@ -233,6 +234,8 @@ impl<'a> EditScope<'a> {
                 Some(slot) => place.push(PlaceParam {
                     name: Name::new(param.decl.name.as_str(), Span::default()).ok()?,
                     slot,
+                    prompt: String::new(),
+                    text: None,
                 }),
                 None => {
                     let name = Ident::new(param.decl.name.as_str(), Span::default()).ok()?;
@@ -248,7 +251,7 @@ impl<'a> EditScope<'a> {
                         self.copied(id, *param_id, &param.decl.name)
                             .unwrap_or(SettingValue::Unset)
                     };
-                    settings.push(SettingParam { name, ty, value });
+                    settings.push(SettingParam::new(name, ty, value));
                 }
             }
         }
@@ -261,6 +264,7 @@ impl<'a> EditScope<'a> {
             place,
             settings,
             applicability: Applicability::NotChecked,
+            generated_name: None,
         })
     }
 
@@ -283,7 +287,12 @@ impl<'a> EditScope<'a> {
                 RoleType::Parts => PlaceSlot::Parts(None),
                 RoleType::Region => PlaceSlot::Region(None),
             };
-            place.push(PlaceParam { name, slot });
+            place.push(PlaceParam {
+                name,
+                slot,
+                prompt: String::new(),
+                text: None,
+            });
         }
         if !bind_kind(&mut place, picked) {
             return None;
@@ -295,6 +304,7 @@ impl<'a> EditScope<'a> {
             place,
             settings,
             applicability: Applicability::NotChecked,
+            generated_name: None,
         })
     }
 
@@ -388,15 +398,15 @@ fn type_name(ty: &Ty) -> Option<TypeName> {
 /// copied only from assemblies, so a kind's are never copied.
 fn kind_setting(param: &ParamDef) -> Option<SettingParam> {
     let ty = type_name(&param.ty)?;
-    Some(SettingParam {
-        name: Ident::new(param.decl.name.as_str(), Span::default()).ok()?,
+    Some(SettingParam::new(
+        Ident::new(param.decl.name.as_str(), Span::default()).ok()?,
         ty,
-        value: if param.default.is_some() {
+        if param.default.is_some() {
             SettingValue::Default
         } else {
             SettingValue::Unset
         },
-    })
+    ))
 }
 
 fn menu_entry(name: &str, docs: &[String], group: &MenuGroup) -> Option<MenuEntry> {

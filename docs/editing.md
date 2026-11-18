@@ -9,11 +9,13 @@ else (see [`gui.md`](gui.md)). The language it writes is
 grammar is the authority.
 
 The contract types are in `crates/stave-app/src/edit.rs` (`stave_app::edit`):
-the typed selection, a candidate, a verdict, a fix and a grip, with a
-hand-built fixture for the clothing cabinet. The behaviour is built on
-them: signature matching and applicability in `stave_app::candidates`,
-the scratch check in `stave_app::scratch`, and the edit in progress, which
-joins them, in `stave_app::editing` (see [The edit in
+the typed selection, a candidate, a verdict, a fix and a grip, with what
+the card shows (see [The card](#the-card)) and a hand-built fixture for
+the clothing cabinet. The behaviour is built on them: signature matching
+and applicability in `stave_app::candidates`, the scratch check in
+`stave_app::scratch`, the edit in progress, which joins them, in
+`stave_app::editing`, and the changes of the design that don't come from
+the menu in `stave_app::change` (see [The edit in
 progress](#the-edit-in-progress)).
 
 ## The idea
@@ -69,7 +71,9 @@ A candidate's verdict is one of three, and nothing else:
 refused. The card shows the error and the checker's
 [fixes](grammar.md#fixes) before anything is written; choosing a fix adds
 its patch to the candidate, which is tried again and, once the fix has
-made it check, fits. Warnings never block: a candidate with warnings and
+made it check, fits. Each of a refusal's problems carries the fixes its
+diagnostic holds, as patches (`Problem::fixes`), and its text as `stave
+check` prints it, source excerpt included (`Problem::rendered`). Warnings never block: a candidate with warnings and
 no error fits, and the warnings are shown on the card. There is no third
 "unfinished" verdict: a candidate that is not yet complete (a place param
 still to point at, a setting still to choose) is not tried until it is.
@@ -195,32 +199,51 @@ A pick writes an assembly (see below); a kind writes a `joint` or a
 
 ## The edit in progress
 
-The edit in progress is session state (`stave_app::editing::Edit`, held
-by `stave_app::session::Session`). The window drives it with
-`Command::Edit(EditCommand)` and redraws what the returned
-`Event::Edit(EditEvent)`s name, as for every other command.
+The edit in progress is session state, held by
+`stave_app::session::Session`: either an **edit** from a selection and
+its menu (`stave_app::editing::Edit`, `Session::edit`) or a **change**
+of the design that doesn't come from the menu (`stave_app::change::Change`,
+`Session::change`): a repeat, the shares grip, a mirror, a held distance,
+a removal, a rename. Never both: starting one drops the other. The window
+drives them with `Command::Edit(EditCommand)` and redraws what the
+returned `Event::Edit(EditEvent)`s name, as for every other command.
 
 | Command | Does |
 |---|---|
-| `Start(Picked)` | starts an edit from a selection (dropping one in progress) and lists its menu |
+| `Start(Picked)` | starts an edit from a selection (dropping what is in progress) and lists its menu |
 | `CheckMenu` | works out each entry's applicability (`Session::check_edit_menu` does the same and can be stopped) |
 | `Choose(index)` | chooses a menu entry |
 | `Bind(Picked)` | binds the next place param still to point at with a further pick |
-| `Set { name, value }` | sets a setting to a value typed in the card |
+| `Set { name, value }` | sets a setting to a value typed in the card (an `Expr`; `editing::parse_value` reads one) |
 | `Rename(name)` | names the new item, in place of the generated name |
-| `ApplyFix { problem, fix }` | adds one of the refusal's fixes to the candidate |
-| `Add` | writes the candidate into the text, only when it fits |
-| `Cancel` | drops the edit, writing nothing |
+| `Repeat(Option<Repeat>)` | makes the chosen entry `count` pieces filling its region, split along `axis` (`candidates::Repeat { count: RepeatCount, axis: Axis }`), or one again (`None`) |
+| `RepeatItem { item, count, axis }` | starts a change: repeats an assembly of the project that fills a region `count` times, or changes the count of one already repeated (`axis: Option<Axis>`, needed for a first repeat only) |
+| `MoveShares { region, lower, boundary }` | starts a change: moves the boundary between pieces `lower` and `lower + 1` (from 0, in label order) of a split, so piece `lower` is `boundary` (a `Length`) long along the split |
+| `Mirror(item)` | starts a change: adds the mirror image of an assembly, renaming it with its side |
+| `Hold(HoldRequest)` | starts a change: holds a measured distance as a `require` (see [Hold this](#hold-this)) |
+| `Remove(item)` | starts a change: removes an item; while something depends on it the change *needs a choice*, naming what does |
+| `IncludeDependants` | a removal waiting on its dependants removes them too |
+| `RenameItem { item, to }` | starts a change: renames an item of the project everywhere it is used |
+| `ApplyFix { problem, fix }` | adds one of the refusal's fixes to the candidate or the change (both counted from 0) |
+| `Add` | writes the candidate or the change into the text, only when it fits |
+| `Cancel` | drops the edit or the change, writing nothing |
+
+`Session::mirror_offer(item)` says, without trying anything, whether an
+assembly has a mirror image and what adding it would name (a
+`MirrorOffer { source, renamed, image, about }`): the card offers
+**Mirror** when it is `Some`.
 
 | Event | Says |
 |---|---|
 | `Started` | an edit began; the menu is listed |
 | `MenuChanged` | entries' applicability, or their order, changed |
-| `Chosen`, `PlaceBound`, `SettingChanged`, `Renamed`, `FixApplied` | the candidate changed in that way |
-| `VerdictChanged` | the candidate's verdict, or what is still to choose, changed |
-| `Committed` | the candidate was written; the committed design is the session's result (with `ResultChanged`) |
-| `Cancelled` | the edit was dropped |
-| `Rejected(why)` | the command couldn't be done (a name already used, a pick that fills nothing the card asks for, Add on a candidate that doesn't fit, a design that doesn't place); nothing changed |
+| `Chosen`, `PlaceBound`, `SettingChanged`, `Renamed`, `RepeatChanged`, `FixApplied` | the candidate changed in that way |
+| `ChangeStarted` | a change began and has been tried; `VerdictChanged` follows |
+| `DependantsIncluded` | a removal now takes what depends on the item too |
+| `VerdictChanged` | the candidate's or the change's verdict, or what is still to choose, changed |
+| `Committed` | the candidate or change was written; the committed design is the session's result (with `ResultChanged`); `Session::last_commit` lists the files written |
+| `Cancelled` | the edit or change was dropped |
+| `Rejected(why)` | the command couldn't be done (a name already used, a pick that fills nothing the card asks for, Add on something that doesn't fit, a design that doesn't place, a change that can't be written for this design, `IncludeDependants` with no removal waiting: `NothingToInclude`); nothing changed |
 
 Each change to the candidate writes its patch again (the candidate's
 `add`, then each fix applied) and re-runs the scratch check, so the
@@ -232,14 +255,66 @@ already used in the project, or is a word of the language, is refused.
 the patch gives them) through the open buffers when the window has the
 file open, so the editor shows the change unsaved and its undo can take
 it back; on the command line, to disk. The session then shows the
-committed design. Add never overwrites a change made since the edit
-began: every file is checked before any is written, and when one no
-longer holds the text the edit started from (a change saved in the
-editor or elsewhere, or a file the patch would create that now exists)
-Add writes nothing and is rejected (`CantWrite`), the change is kept, and
-the edit stays open to be cancelled or started again. **Cancel** leaves
-no trace: nothing was written, so every file is as it was, byte for
-byte.
+committed design. **One writer**: every commit (an edit's, a change's,
+the command line's `--patch --commit`, a new project's file) goes
+through `editing::write_all` and a `WriteEdits`, which checks every file
+before it writes any. When one no longer holds the text the edit started
+from (a change saved in the editor or elsewhere, or a file the patch
+would create that now exists) nothing is written and Add is rejected
+(`CantWrite`), the change is kept, and the edit stays open to be
+cancelled or started again. **Cancel** leaves no trace: nothing was
+written, so every file is as it was, byte for byte.
+
+### Changes of the design
+
+A change is written by its pure function and judged by the same scratch
+check as a menu pick: `repeat::repeat_assembly` (repeat),
+`repeat::move_shares` (the shares grip), `repeat::mirror_assembly`
+(mirror), `hold::hold_patch` (hold, given the opened design, which says
+which faces a part and a region are measured between), `remove::removal`
+and `remove::patch_for` (remove), and the navigation layer's rename
+(`stave_ide::Analysis::rename`). The patcher doesn't apply `rename` (it
+needs every use), so a rename, and the rename a mirror makes, comes as
+whole-file texts: the change is tried on a scratch copy with those texts
+in place, then its patch on top. A rename alone fits when the renamed
+design places and has no more errors than before. What a commit writes
+is, per file, the one edit from the text the change began from to the
+final text.
+
+`Change::summary` says what it does ("Make 3 of drawer"),
+`Change::detail` what it found (`ChangeDetail::Mirror { renamed, image,
+about }`, `Hold { name, condition }`, `Remove { removal, dependants }`,
+`Rename { from, to }`, or `Repeat`), `Change::progress` where it stands
+(the same `Progress` as an edit's chosen candidate), `Change::patch` the
+patch tried, `Change::renamed_files` the files a rename rewrites, and
+`Change::ghost` the design it would make.
+
+### The card
+
+The contract (`stave_app::edit`) carries everything the card shows, each
+field filled where candidates and verdicts are made
+(`EditScope::describe`, run when the menu is listed and after every
+change to the chosen candidate):
+
+| Field | Holds |
+|---|---|
+| `Candidate::generated_name` | the name the new item takes unless one is typed (`drawer_2`) |
+| `PlaceParam::prompt` | the sentence the card asks for an unbound place param with: the first sentence of the param's own `///` doc comment, or "Point at the hinge side." from its name |
+| `PlaceParam::text` | what fills it, as written (`door_bay[left]`, `side_l.right`, `[side_l, side_r]`) |
+| `SettingParam::text` | the value it has now as `.stave` text: chosen, copied, or the default as written |
+| `SettingParam::default_text` | the value its default stands for, as the declaration writes it (`15mm`, `opening.up - bottom_gap - top_gap`) |
+| `SettingParam::copied_from` | the assembly a copied value was read from (`drawer[top]`) |
+| `SettingParam::options` | what it can be set to, by its type, each a `SettingOption { text, hint }`: the stocks in scope for a `Stock`; the mounts the project's assemblies write, then `overlay()` and `inset(reveal: 2mm)`, for a `Mount`; the kinds of that class in scope for a kind type (`side_mount_slide`, `hw.brass_knob_26`); the values of a `within [..]` list for a quantity; `true` and `false` for a `Bool` |
+| `SettingParam::range` | the two ends of a `within low..high`, as written (`ValueRange { low, high }`) |
+| `Problem::rendered` | the error as `stave check` prints it: message, place, source excerpt, notes, help and fixes |
+| `Problem::fixes` | the fixes the diagnostic holds, as patches (`Fix::patch`, labelled by `Fix::label`) |
+
+Names in scope are written as the project would write them: bare for the
+project's own declarations and the prelude's, through the import's name
+for an imported module's (`casework.oak_19`). `edit::value_text` prints
+any value expression as exact `.stave` text, and `edit::Names` gives the
+names of the regions, parts and assemblies the contract's ids refer to
+(`region`, `part`, `assembly`, `face`, `slot`, `grip_target`).
 
 ## The command line
 
@@ -261,27 +336,108 @@ The menu lists each entry as `casework.Shelf` (the bare label for the
 project's own declarations) with `applies`, `needs a choice: <names>`
 or `refused` and the checker's errors under it. `--choose` takes the
 label or the label with its group, and prints the card: what fills each
-param, the verdict, the checker's words and the patch.
+param, the verdict, the checker's words and the patch. `--patch
+--commit` writes each patch that fits through the editor's one writer.
 
-A script holds one step a line (`#` starts a comment); each is echoed
-(`> list`) before what it prints:
+### Scripts
+
+A script is a whole build with no window: every step is a command to
+the same session a window drives. It holds one step a line; `#` starts a
+comment (except inside a quoted string). Each step is echoed (`> list`)
+before what it prints.
+
+| Step | Does |
+|---|---|
+| `new "<title>" <width> <height> <depth>` | begins a new project from its overall sizes |
+| `import <source>` | the new project imports a module (`import std:casework`) |
+| `stock <name> <species> solid\|plywood\|mdf <thickness> [width <w>] [max_width <w>] max_length <l>` | a stock item of the new project |
+| `stock <name> <species> dowel <diameter>` | a dowel stock of the new project |
+| `tools <tool> ...` | the new project's tools (left out: every tool) |
+| `create` | writes the new project to `<folder>/<title_in_lower_case>.stave` (never over a file that is there) and checks it; fails on an error |
+| `select <selection>` | starts an edit: `region <name>`, `face <part>.<face>`, `between <part> <part>`, `parts <part> ...` |
+| `list` | the menu, each entry's applicability worked out |
+| `choose <entry>` | chooses an entry by its label or `group.label` |
+| `bind <selection>` | points at what the card asks for |
+| `set <name> = <value>` | sets a setting |
+| `name <name>` | names the new item |
+| `repeat <count> <axis>` | makes the chosen entry `count` pieces split along `across`, `up` or `deep`; `repeat 1` makes it one again |
+| `repeat <assembly> <count> [<axis>]` | change: repeats an assembly, or changes its count |
+| `shares <region> <piece> <length>` | change: moves the boundary above piece `<piece>` (from 1) so that piece is `<length>` long |
+| `offer mirror <assembly>` | says whether it has a mirror image and what adding it would name |
+| `mirror <assembly>` | change: adds its mirror image |
+| `hold <a> <b> min\|max <length> "<reason>"` | change: holds the distance between two things, each a part or region by its whole name (`drawer[top].front`), else a face of one (`case.top.bottom`) |
+| `remove <item>` | change: removes an item, or says what uses it |
+| `include dependants` | the removal takes what uses the item too |
+| `rename <item> <new name>` | change: renames an item everywhere |
+| `fix <problem> <fix>` | applies a refusal's fix, both counted from 1 as `show` numbers them |
+| `show` | the card: of the chosen entry, or of the change |
+| `commit` or `add` | writes the candidate or the change |
+| `cancel` | drops it, writing nothing |
 
 ```
-select region divider.above      # or: face <part>.<face>, between <a> <b>, parts <a> <b> ...
-list
-choose casework.Shelf
-bind parts side_l side_r         # a selection, as for select
-set headroom = 400mm
-name hat_shelf
-fix 1 1                          # a refusal's fix: problem, fix, from 1
-show
-commit                           # or: cancel
+# A small chest from nothing
+new "Small chest" 700mm 1000mm 480mm
+import std:casework
+stock oak_19 white_oak solid 19mm max_width 200mm max_length 2700mm
+stock maple_12 hard_maple solid 12mm max_width 150mm max_length 2400mm
+stock ply_6 birch plywood 6mm max_length 2440mm
+create
+
+select region envelope
+choose casework.Case
+set panel_stock = oak_19
+add
+
+select region case.inside
+choose casework.Divider
+bind parts case.side[left] case.side[right]
+set panel_stock = oak_19
+add
+
+select region divider.below
+choose casework.Drawer
+set mount = overlay(left: 18mm, right: 18mm, top: -1.5mm, bottom: 8mm, meeting: -0.75mm)
+set front_stock = oak_19
+set box_stock = maple_12
+set bottom_stock = ply_6
+set slide = side_mount_slide(length: 400mm)
+repeat 2 up
+add
+
+repeat drawer 3          # changes of the design
+add
+shares drawer_bay 1 180mm
+add
 ```
+
+What each step prints:
+
+- `new`: `new project "<title>": <w> wide, <h> high, <d> deep`; `import`,
+  `stock` and `tools` print nothing; `create`: `created <path>` and `the
+  project checks with <n> errors`, with the errors as `stave check`
+  prints them.
+- `select`: `<heading>: <selection>` and `<n> menu entries`; `list`: one
+  entry a line, `  1. casework.Shelf  applies`.
+- `choose`, `bind`, `set`, `name`, `repeat <count>`, `fix`, `include
+  dependants`: where the candidate (or change) stands, in one line:
+  `fits`, `fits, with 1 warning`, `refused: 2 errors`, `needs a choice:
+  sides`.
+- A change step: `<summary>: <where it stands>` (`Make 3 of drawer:
+  fits`); a removal waiting on what uses the item: `Remove back: used by
+  drawer_bay, drawer; 'include dependants' removes them too`.
+- `show`: the card. For a change: its summary, what it found (indented),
+  `verdict: ...`, each error as `stave check` prints it and `fix <p> <f>:
+  <label>` for each fix, then `patch:` and the patch.
+- `commit`/`add`: `wrote <path>` (or `created`) per file, then
+  `committed: the design checks with <n> errors`; or `not committed:
+  <why>` and the run stops.
+- A rejected command prints `rejected: <why>`; a step that can't run
+  prints `error: <why>`.
 
 The run stops at the first step that fails (a name not in the design, a
-command the edit rejects, a commit of a candidate that doesn't fit) and
-exits with 1; a script line that is not a step exits with 2 before
-anything runs.
+command the edit rejects, a commit of something that doesn't fit, a new
+project that doesn't check) and exits with 1; a script line that is not
+a step exits with 2 before anything runs.
 
 ## Generated text
 
@@ -319,8 +475,9 @@ what was pointed at and its setting params as chosen, never a bare
 - **Files.** One file per project until the user splits it. Once split,
   an added item goes to the file of the first item it refers to, as a
   patch's `add` does.
-- Every generated name is shown on the card and can be retyped there,
-  before or after the commit; retyping is a `rename` patch.
+- Every generated name is shown on the card (`Candidate::generated_name`)
+  and can be retyped there: before the commit with `Rename`, after it with
+  `RenameItem`, which renames the item everywhere it is used.
 
 A generated name that is already taken in its scope takes the next
 number (`drawer_3`); one that is a keyword or a built-in function's name
@@ -342,7 +499,12 @@ assembly drawer[bottom, top] : Drawer {
 ```
 
 A grip between two neighbouring pieces edits their two shares, keeping
-their sum, so only those two pieces change size.
+their sum, so only those two pieces change size. The boundary is snapped
+to whole millimetres, and the shares are written as whole numbers in the
+same proportions (`100 / 181` and `262 / 181` become `50` and `131`), so
+a later grip reads them back as plain numbers. When the pieces' sizes
+are not whole millimetres themselves (a split of an odd size), those
+whole numbers can be large; they are exact.
 
 **Mirror.** When the selection has a mirror image in the design (a
 component placed against one of two parts that are mirror images, or in
@@ -363,12 +525,34 @@ The value pinned is the distance as it is now, and the user may type
 another; the message is the reason the user types. Like any edit it is
 tried first: a rule that already fails is refused.
 
+The request (`hold::HoldRequest`) is the two things measured (each a
+`Measured::Item` by its path, `slat[0]`, `drawer[top].front`,
+`divider.below`, or a `Measured::Face` of one, `apron_front.back`), the
+bound (`Bound::Min` writes `>=` and `_min`, `Bound::Max` writes `<=` and
+`_max`), the value and the reason. `hold_patch(scope, design, request)`
+takes the opened design too, because the distance is written in a form
+`between` accepts from where the design has the two things: opposite
+faces of one part or region are its own size (`inside.deep`,
+`extent(base, up)`); two parts are `between(a, b)`; a part and a region,
+or two regions, apart along one axis are the two faces that look at each
+other; a part inside a region is its face nearest the same side. It
+refuses (`HoldError`) an empty reason (`NoReason`), the same thing twice
+(`SameThing`), a name that is not an item of the project
+(`UnknownItem`), a thing that is not a part or region of the design, an
+assembly say (`NotMeasurable`), two faces that are not parallel
+(`NotParallel`), and two things apart along more than one axis
+(`NotOneAxis`: pick two faces instead).
+
 ## Remove
 
 Removing an item lists what depends on it (every item whose text names
 it, and what depends on those) and offers to remove those too, as one
 patch. Otherwise it is refused: removing an item that something still
-names would leave an error, which strict commit never writes.
+names would leave an error, which strict commit never writes. In the
+session, `Remove(item)` starts the change; while anything depends on the
+item it *needs a choice* naming each dependant, nearest first, and Add is
+refused; `IncludeDependants` then removes them too (furthest first, the
+item last), and the whole is tried as one patch.
 
 ## Grips
 

@@ -1,0 +1,78 @@
+stave 1
+
+project "Door hits the wall" {
+  units: mm
+}
+
+stock ply_18 { species: birch, form: plywood, thickness: 18mm, max_length: 2440mm }
+
+part base : ply_18 {
+  length: 600mm
+  width:  400mm
+  place {
+    ground
+  }
+}
+
+part side_l : ply_18 {
+  length: 700mm
+  width:  400mm
+  place {
+    orient(length: up, width: back)
+    against(base.top)
+    flush(base.left)
+    flush(base.back)
+  }
+}
+
+/// The wall beside the cabinet, as far forward as the front of a door.
+part wall : ply_18 {
+  length: 800mm
+  width:  418mm
+  place {
+    orient(length: up, width: back)
+    against(base.top)
+    against(side_l.left)
+    flush(base.back)
+  }
+}
+
+part side_r = mirror(side_l, about: mid(base, across))
+
+region bay = opening(
+  left:   side_l.right,
+  right:  side_r.left,
+  bottom: base.top,
+  top:    side_l.top,
+  front:  base.front,
+  back:   base.back,
+)
+
+/// A flat door on cup hinges.
+component Door {
+  param opening : Region
+  /// Point at the side the hinges are screwed to.
+  param hinge_side  : Part
+  param mount       : Mount
+  param hinge_inset = 80mm within 60mm..120mm
+  param panel       : Stock = ply_18
+
+  region face = cover(opening, mount, thickness: panel.thickness)
+
+  part leaf : panel {
+    length: face.up
+    width:  face.across
+    place {
+      orient(length: up, width: right)
+      flush(face.left)
+      flush(face.bottom)
+      flush(face.front)
+    }
+  }
+
+  hardware hinges[bottom, top] : euro_hinge(leaf, on: hinge_side) {
+    place {
+      spaced(ends(inset: hinge_inset), from: leaf.bottom, to: leaf.top)
+    }
+  }
+}
