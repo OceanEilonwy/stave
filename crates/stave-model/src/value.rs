@@ -346,6 +346,20 @@ pub struct Joining {
     pub by: crate::nonempty::NonEmpty<KindValue>,
 }
 
+/// Where a part too long for its stock is spliced end to end:
+/// `spliced(by: ..., at: ..., from: ...)` (grammar, "Splices").
+#[derive(Debug, Clone, PartialEq)]
+pub struct Splicing {
+    /// The joint kind every splice is made with.
+    pub by: KindValue,
+    /// Where each splice is, as written: a distance along the part from
+    /// the end `from` names, on its drawn length.
+    pub at: crate::nonempty::NonEmpty<ExactLength>,
+    /// The end of the part the distances are measured from, as a face of
+    /// the part once placed.
+    pub from: Face,
+}
+
 /// Where two parts touch: what `contact(a, b)` gives (grammar, "Built-in
 /// functions"). A rectangle square to one world axis, its `normal`, with a
 /// longer side (`length`) and a shorter one (`width`), both more than zero.
@@ -484,6 +498,8 @@ pub enum Value {
     Turned(ProfileId),
     /// `joined(by: ...)`.
     Boards(Joining),
+    /// `spliced(by: ..., at: ..., from: ...)`.
+    Splices(Splicing),
     /// An envelope.
     Envelope(Envelope),
     /// A model.
@@ -552,6 +568,7 @@ impl Value {
             Value::Mount(_) => "a mount",
             Value::Turned(_) => "a shape",
             Value::Boards(_) => "a way of joining boards",
+            Value::Splices(_) => "a way of splicing a part",
             Value::Envelope(_) => "an envelope",
             Value::Model(_) => "a model",
             Value::Spacing(_) => "a spacing",
@@ -785,11 +802,14 @@ pub fn unary(op: UnaryOp, operand: &Value) -> Result<Value, ValueError> {
 }
 
 /// Formats an exact length in millimetres, trailing zeros trimmed; a value
-/// that isn't a whole number of nanometres is shown as a fraction.
+/// that isn't a whole number of nanometres is shown to the nearest one, as
+/// "about 133.333333mm".
 pub fn format_length(length: ExactLength) -> String {
-    match length.to_length() {
-        Some(whole) => whole.to_string(),
-        None => format!("{}nm", length.value()),
+    match (length.to_length(), length.to_nearest_length()) {
+        (Some(whole), _) => whole.to_string(),
+        // A third of a millimetre, say: to the nearest nanometre.
+        (None, Some(nearest)) => format!("about {nearest}"),
+        (None, None) => format!("{}nm", length.value()),
     }
 }
 

@@ -39,6 +39,7 @@ mod joints;
 mod mechanism;
 mod members;
 mod models;
+mod pieces;
 mod place;
 mod rules;
 mod walls;
@@ -313,8 +314,12 @@ impl<'m> Solver<'m> {
 
     pub(crate) fn part_name(&self, part: PartId) -> String {
         if let Some(board) = self.boards.get(&part) {
+            let word = match board.division {
+                boards::Division::Board => "board",
+                boards::Division::Piece => "piece",
+            };
             return format!(
-                "{}.board[{}]",
+                "{}.{word}[{}]",
                 self.part_name(board.part),
                 board.index.get()
             );

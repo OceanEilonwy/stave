@@ -36,7 +36,7 @@ recipe hole_after_notches : drill {
   check: "the hole is square to the face"
 }
 
-stock pine_19  { species: pine, form: solid, thickness: 19mm }
+stock pine_19  { species: pine, form: solid, thickness: 19mm, max_length: 2400mm }
 stock dowel_20 { species: beech, form: dowel, diameter: 20mm }
 
 part board : pine_19 {

@@ -59,6 +59,8 @@ pub enum Ty {
     Shape,
     /// `joined(by: ...)`.
     Boards,
+    /// `spliced(by: ..., at: ..., from: ...)`.
+    Splices,
     /// `box(...)` or `cylinder(...)`.
     Envelope,
     /// `model(...)`.
@@ -118,6 +120,7 @@ impl Ty {
             TypeName::Mount => Ty::Mount,
             TypeName::Shape => Ty::Shape,
             TypeName::Boards => Ty::Boards,
+            TypeName::Splices => Ty::Splices,
             TypeName::Envelope => Ty::Envelope,
             TypeName::Model => Ty::Model,
             TypeName::Spacing => Ty::Spacing,
@@ -164,8 +167,10 @@ impl Ty {
             (Ty::Part, Ty::Parts) => true,
             (Ty::List(inner), Ty::Parts) => inner.fits(&Ty::Parts),
             (Ty::Parts, Ty::List(inner)) => Ty::Part.fits(inner),
-            // `joined(by:)` takes one joint kind or a list of them.
+            // `joined(by:)` takes one joint kind or a list of them, and
+            // `spliced(at:)` one length or a list of them.
             (Ty::Kind(_), Ty::List(inner)) if matches!(**inner, Ty::Kind(_)) => self.fits(inner),
+            (Ty::Length, Ty::List(inner)) if **inner == Ty::Length => true,
             (Ty::Word(found), Ty::Word(wanted)) => {
                 found == wanted || (*found == WordSet::Grain && *wanted == WordSet::PartAxis)
             }
@@ -213,6 +218,7 @@ impl Ty {
             Ty::Mount => "a mount".into(),
             Ty::Shape => "a shape".into(),
             Ty::Boards => "a way of joining boards".into(),
+            Ty::Splices => "a way of splicing a part".into(),
             Ty::Envelope => "an envelope".into(),
             Ty::Model => "a model".into(),
             Ty::Spacing => "a spacing".into(),

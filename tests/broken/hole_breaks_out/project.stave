@@ -16,7 +16,7 @@ kind big_peg : joint {
   cut peg_hole: crossing(into, piece) { drill(diameter: 30mm, depth: 10mm) }
 }
 
-stock oak_19 { species: white_oak, form: solid, thickness: 19mm }
+stock oak_19 { species: white_oak, form: solid, thickness: 19mm, max_length: 2700mm }
 
 part base : oak_19 {
   length: 600mm

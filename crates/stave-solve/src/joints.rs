@@ -753,6 +753,11 @@ impl Solver<'_> {
         {
             return Ok(());
         }
+        // A spliced part's pieces are measured once they are cut
+        // (grammar, "Splices").
+        if self.part_body(part).is_some_and(|b| b.lengths.is_some()) {
+            return Ok(());
+        }
         let stock = self.part_stock(part)?;
         let Some(max_length) =
             self.stock_length(stock, stave_model::defs::StockField::MaxLength)?
@@ -775,6 +780,8 @@ impl Solver<'_> {
             .stock(stock)
             .map(|s| s.decl.name.clone())
             .unwrap_or_default();
+        let drawn = geom.drawn.get(slot).copied().unwrap_or(cut_length);
+        let suggestion = self.splice_suggestion(part, drawn, max_length);
         let (file, span) = match (self.part_body(part).cloned(), self.part_env(part)) {
             (Some(body), Some(env)) => match &body.length {
                 stave_model::defs::Size::Expr(expr) => (env.file, expr.span),
@@ -791,10 +798,16 @@ impl Solver<'_> {
             ),
             file,
             span,
-            format!(
-                "stock '{stock_name}' comes no longer than {}; make it from two parts joined end to end with a splice joint, or buy longer stock",
-                stave_model::value::format_length(max_length)
-            ),
+            match suggestion {
+                Some(splice) => format!(
+                    "stock '{stock_name}' comes no longer than {}: splice it end to end with {splice}, choosing the end joint and leaving each piece room for what its splices add, or buy longer stock",
+                    stave_model::value::format_length(max_length)
+                ),
+                None => format!(
+                    "stock '{stock_name}' comes no longer than {}: splice it end to end with lengths:, or buy longer stock",
+                    stave_model::value::format_length(max_length)
+                ),
+            },
         ))
     }
 

@@ -11,7 +11,7 @@ project "Mechanism not one freedom" {
   units: mm
 }
 
-stock ply_18 { species: birch, form: plywood, thickness: 18mm }
+stock ply_18 { species: birch, form: plywood, thickness: 18mm, max_length: 2440mm }
 
 /// The common cup hinge, with one pin left out.
 kind loose_hinge : hinge {

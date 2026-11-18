@@ -1,0 +1,15 @@
+---
+source: crates/stave-app/tests/splices.rs
+expression: "rendered(\"tests/broken/dado_across_a_splice\")"
+---
+error[wall]: shelf_dados: its dado in side_l crosses the splice between side_l.piece[1] and side_l.piece[2]
+  --> tests/broken/dado_across_a_splice/project.stave:17:12
+   |
+17 |   lengths: spliced(by: lap_splice(lap: 300mm), at: 1500mm, from: bottom)
+   |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  ::: tests/broken/dado_across_a_splice/project.stave:45:21
+   |
+45 | joint shelf_dados : dado(shelf, into: [side_l, side_r])
+   |                     ----------------------------------- the dado is cut here
+   = note: measured from side_l's bottom end, the dado runs from 1450mm to 1469mm and the splice from 1350mm to 1650mm
+   = help: a splice needs its wood whole: move the splice with at: in side_l's lengths: so it clears the dado, or move shelf_dados

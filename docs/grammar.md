@@ -691,7 +691,17 @@ A named value. Not a knob: it has no range and can't be passed in.
 | `diameter` | `Length` | `dowel` only, required | yes | diameter of round stock |
 | `width` | `Length` | no | yes | stock sold at a fixed width (a square blank, a strip). Parts cut from it take this width |
 | `max_width` | `Length` | no | yes | the widest board you can get. A `solid` part wider than this is made of boards (see [Boards](#boards)); a `plywood` or `mdf` part wider than this is `error[type-mismatch]` |
-| `max_length` | `Length` | no | yes | the longest board you can get; a part whose cut length is longer is `error[type-mismatch]` (length is never split: see [Boards](#boards)) |
+| `max_length` | `Length` | no, but see the warning below | yes | the longest board (or sheet) you can get; a part whose cut length is longer is `error[type-mismatch]`, unless its `lengths:` splices it into pieces that each fit (see [Splices](#splices)) |
+
+A `solid`, `plywood` or `mdf` stock that a part is cut from and that has no
+`max_length` is `warning[missing-field]` at the stock, once: `oak_19 doesn't
+say how long its boards are, so Stave can't check part lengths` (`sheets`
+for plywood and MDF), with the help `add the longest board you can buy to
+oak_19, for example max_length: 2400mm` (`sheet` and `2440mm` for sheets).
+Without it no part's length can be checked. Sheets get no default size: a
+part may lie either way on a sheet, and `max_width` and `max_length` are
+measured along the part's grain, so a standard sheet isn't one clean pair of
+limits. Round stock (`dowel`) is left out.
 
 ### `part name : stock { }` and `makes part name : stock { }`
 
@@ -706,6 +716,7 @@ A named value. Not a knob: it has no range and can't be passed in.
 | `face_edge` | face word | no | no | the reference edge |
 | `note` | `Text` | no | no | printed on the part's work card |
 | `boards` | `Boards` | no (default: the project's) | no | how its boards are joined, when it is made of boards; see [Boards](#boards) |
+| `lengths` | `Splices` | no | no | where it is spliced end to end into pieces, and by what joint, when it is longer than its stock: `spliced(by: kind, at: d, from: end)`; see [Splices](#splices) |
 | `loose` | `Bool` | no (default `false`) | no | `true` for a part meant to lift out (a loose shelf, a tray), which nothing needs to hold; see [Held](#held) |
 | `place { }` | | yes | | see [Placement](#placement) |
 
@@ -1193,13 +1204,110 @@ A part that is not made of boards ignores `boards:`. A part a joint makes,
 a turned part and a dowel are never made of boards. Two limits stay errors,
 because the fix is a design choice:
 
-- **Length is not split.** A part longer than its stock's `max_length` is
-  `error[type-mismatch]`, with the help "make it from two parts joined end
-  to end (for example `ari_tsugi`), or buy longer stock": an end joint
-  carries load.
+- **Length is not split by itself.** A part longer than its stock's
+  `max_length` is `error[type-mismatch]` unless its `lengths:` says where
+  to splice it: an end joint carries load, so where it goes is a design
+  choice (see [Splices](#splices)).
 - **Sheets are not split.** A `plywood` or `mdf` part wider than its stock's
   `max_width` is `error[type-mismatch]`: a sheet isn't glued up from boards.
   Choose a larger sheet, or make the part from several parts.
+
+### Splices
+
+A part longer than the boards you can buy is made of **pieces** joined end
+to end. The part says where and with what, in its `lengths:` field, the
+way a wide part names its edge joint in `boards:`:
+
+```
+part rail : oak_19 {
+  length:  3000mm
+  width:   90mm
+  lengths: spliced(by: lap_splice, at: 1500mm, from: left)
+  ...
+}
+```
+
+`spliced(by:, at:, from:)` takes:
+
+- `by:` the joint kind every splice is made with, as a kind value with its
+  own settings (`lap_splice(lap: 300mm)`, `kanawa_tsugi`). It is an
+  ordinary `kind ... : joint` with two roles that are parts (the first is
+  the piece nearer the `from` end, the second the next piece), applied as
+  for a joint between parts: its rules, `adds:`, cuts, made parts,
+  `insert:` steps, `cut_first:` and `note:` all work. `std:joinery` has
+  `lap_splice` (a half-lap end joint, glued) and `kanawa_tsugi` (a stepped
+  scarf with a draw pin).
+- `at:` where each splice is: one `Length` or a list of them
+  (`at: [2400mm, 4800mm]`), each measured along the part's drawn length
+  from the end `from:` names. Each must be more than `0mm` and less than
+  the drawn length (`error[out-of-range]`), and no two the same
+  (`error[duplicate-name]`).
+- `from:` the end of the part the distances are measured from, as a face
+  word of the part once placed: a rail along `across` has the ends `left`
+  and `right`, a standing side `bottom` and `top`. A face that isn't an end
+  of the part is `error[type-mismatch]`, naming its two ends.
+
+**Why a distance from an end is not a coordinate.** The language places
+nothing by coordinates (principle 3). A splice's place is a relationship
+between the splice and an end of its own part, of the same sort as
+`flush(base.left, inset: 20mm)` or a mark on a cut: it measures within the
+part, from a face the part names, and stays right wherever the part is
+placed and whatever its size. A mirror image is spliced at the same
+distance from its mirrored end. A distance that depends on other parts is
+written with the usual measures and sizes (`at: between(leg_l, leg_m) +
+leg_l.width + leg_m.width / 2` for a rail flush with `leg_l`'s outer face
+puts the splice over the middle of `leg_m`), so it follows them.
+
+What Stave does with it:
+
+- The part is placed, joined and fitted with hardware as one part. Then
+  it is cut into pieces at the splices, numbered from 1 at the `from` end:
+  `rail.piece[1]`, `rail.piece[2]`, ... Each piece is a part of its own in
+  the solved design (the cut list, the checks, the 3D view, focus mode and
+  the pulled-apart view), with the part's stock, grain and note; the
+  first keeps the part's place in the source. Each splice is a joint of
+  its own, `rail.splice[1]`, ... (splice `n` joins piece `n` to piece
+  `n + 1`); its made parts are `rail.splice[1].pin`.
+- The splice's `adds:` lengthens its pieces past the splice (a lap's
+  overlap), as a joint lengthens any part. **Each piece must fit its
+  stock's `max_length`** once its splices and the part's own joints have
+  added to it: `rail.piece[1]: its cut length works out as 2645mm, which
+  is more than its stock's max_length of 2400mm` (`error[type-mismatch]`
+  at `lengths:`), with the help to move the splices, add one, or buy longer
+  stock.
+- **A splice needs its wood whole.** The cuts other joints and hardware
+  make in the part are each made on the piece they fall on. A cut that
+  reaches into a splice, where both pieces' wood belongs to the splice, is
+  `error[wall]` at `lengths:` (a backstop, see [Cuts stay in their
+  part](#cuts-stay-in-their-part)): `shelf_dados: its dado in side_l
+  crosses the splice between side_l.piece[1] and side_l.piece[2]`, with a
+  note saying where both run, measured from the `from` end, and the help
+  `a splice needs its wood whole: move the splice with at: in side_l's
+  lengths: so it clears the dado, or move shelf_dados`. A cut beside the
+  splice is the splice kind's judgement, written with `wall()` (std's
+  `lap_splice` keeps half the board's thickness between its laps and any
+  other cut); a hinge, a pull or a dowel near a splice is measured the
+  same way, by the same rules as anywhere else.
+- A joint pair or piece of hardware that named the part is joined to the
+  piece it cuts (or, if it cuts none, the piece it touches most); an
+  assembly or scene that lists the part lists every piece.
+- The splices' rules are checked for every splice; a failing one is
+  reported at `lengths:`, naming the pieces.
+
+A part without `lengths:` that is longer than its stock is
+`error[type-mismatch]`, with the help suggesting splices that would give
+pieces within `max_length`, measured from the start of its length:
+`stock 'pine_19' comes no longer than 2400mm: splice it end to end with
+lengths: spliced(by: <an end joint>, at: [2250mm, 4500mm, 6750mm], from:
+bottom), choosing the end joint and leaving each piece room for what its
+splices add, or buy longer stock`. A part shorter than its stock may
+still be spliced (to use up short boards). Only `solid` board parts are
+spliced: a turned part, a sheet (`plywood`, `mdf`) or round stock with
+`lengths:` is `error[type-mismatch]`. A part a joint makes is never
+spliced. Not yet supported, each `warning[not-supported]` at `lengths:`:
+a splice kind's members and `uses:` fasteners (not placed or listed), and
+a spliced part wider than its stock's `max_width` (its pieces are drawn
+as single boards).
 
 ---
 
@@ -2409,6 +2517,7 @@ These are looked up when a bare name is called (see [Names](#names), rule 3).
 | `overlay(...)`, `inset(reveal:)` | `Mount` | see [Regions](#regions) |
 | `turned(profile)` | `Shape` | turned on a lathe to a profile |
 | `joined(by:)` | `Boards` | how the boards of a part are joined: `by:` is a joint kind value or a list of them; see [Boards](#boards) |
+| `spliced(by:, at:, from:)` | `Splices` | where a part is spliced end to end into pieces: `by:` a joint kind value, `at:` a length or a list of them, measured from the end `from:` names; see [Splices](#splices) |
 | `box(length:, width:, thickness:)` | `Envelope` | a hardware envelope |
 | `cylinder(diameter:, length:)` | `Envelope` | a hardware envelope; its axis stands off the mount face |
 | `model(source, align:, sha256:)` | `Model` | a `.glb` model; optional `align: node("name")` and `sha256: "<hex>"` (see [Hardware](#hardware)) |
@@ -2691,9 +2800,10 @@ error[require]: 'socket_wall' fails: the socket comes too close to a face of the
 
 ### Cuts stay in their part
 
-Three backstops hold for every kind, whatever its rules, because no kind
-should be able to get them wrong. Each is reported at the joint's or
-hardware's call, in layer 4:
+Four backstops hold for every kind, whatever its rules, because no kind
+should be able to get them wrong. The first three are reported at the
+joint's or hardware's call, in layer 4, the fourth at the part's
+`lengths:`:
 
 - **Cuts only remove wood** (`error[cut-size]`). A `tenon` wider or
   thicker than the part across its end (for a tongue, along its edge), or
@@ -2724,6 +2834,12 @@ hardware's call, in layer 4:
   `wall()` rule: its own hole runs into the other. How near a hole may come
   to a groove or dado is a kind's judgement, not a backstop: write it with
   `wall()`.
+- **A splice needs its wood whole** (`error[wall]`). On a spliced part
+  (see [Splices](#splices)) every cut of another joint or piece of
+  hardware is made on one piece, and none may reach into a splice, where
+  both pieces' wood belongs to the splice: `shelf_dados: its dado in
+  side_l crosses the splice between side_l.piece[1] and side_l.piece[2]`.
+  How near a cut may come to a splice is the splice kind's `wall()` rule.
 
 One mistake, one error. A kind's own rule says it first: when one fails
 the design isn't checked further, so std's `tenon_thin` speaks for a tenon
@@ -2786,7 +2902,7 @@ shape of their messages are fixed, because tests and AI tools match on them.
 | 2 | `unit-mismatch` | `can't <add> <a length> and <an angle>`, or `'<field>' needs <a length>, found <a count>` |
 | 2, 4 | `type-mismatch` | `'<field>' needs <a part>, found <a region>`, or for a cut's shape `<joint>: the outline crosses itself between mark <n> and mark <n + 1>` |
 | 2 | `unknown-field` | `<a part> has no field '<name>'` |
-| 2 | `missing-field` | `<what> is missing '<name>'` |
+| 2 | `missing-field` | `<what> is missing '<name>'`; a warning for a stock with no `max_length`: `<stock> doesn't say how long its <boards> are, so Stave can't check part lengths` |
 | 2 | `out-of-range` | `'<param>' must be within <domain>, found <value>` |
 | 2 | `not-in-library` | `a library can't contain a <part> at the top level` |
 | 2 | `import-cycle` | `modules import each other: <a> -> <b> -> <a>` |
@@ -2803,7 +2919,7 @@ shape of their messages are fixed, because tests and AI tools match on them.
 | 4 | `no-contact` | `<joint or hardware>: <part> meets none of the parts it should join`, or for `contact(a, b)` `<a> and <b> don't touch` |
 | 4 | `overlap` | `<a> and <b> overlap` |
 | 4 | `adjust` | `<hardware>: the <member> would sit <offset> off its place on the <member>; it adjusts <d>`, or for an axis no `adjust` covers `<hardware>: the <member> would sit <offset> off its place <across>; it doesn't adjust that way` |
-| 4 | `wall` | `<joint>: its <hole> in <part> breaks out of the <left end> of <part>`, or `<joint>: its <bore> in <part> runs into the <bore> of <other>` (`meets` when they only touch); see [Cuts stay in their part](#cuts-stay-in-their-part) |
+| 4 | `wall` | `<joint>: its <hole> in <part> breaks out of the <left end> of <part>`, `<joint>: its <bore> in <part> runs into the <bore> of <other>` (`meets` when they only touch), or `<joint>: its <dado> in <part> crosses the splice between <part>.piece[1] and <part>.piece[2]`; see [Cuts stay in their part](#cuts-stay-in-their-part) |
 | 4 | `cut-size` | `<joint>: its <tenon> on <part> is <25mm> <thick>, but <part> is only <19mm> <thick>`, `... is <80mm> across, but <part> is only <70mm> across at that end`, or `<joint>: its <groove> in <part> is <12mm> deep, but <part> is only <12mm> <thick> there` |
 | 5 | `motion` | `<a> hits <b> when <assembly> is <open>`; `<assembly>'s hardware doesn't move alike`; `<hardware>: <members> lock at <value>`; `<hardware>: <members> may come within 0.1mm of locking near <value>` |
 | 6 | `require` | `'<name>' fails: <message>` |
@@ -2813,6 +2929,9 @@ shape of their messages are fixed, because tests and AI tools match on them.
 
 Warnings and notes: `shadows-prelude`, `no-recipe`, `not-supported`,
 `model-mismatch`, `unnamed-cut`, `loose-part`.
+
+A stock with no `max_length` is the one `missing-field` that is a warning
+(see [`stock`](#stock-name--)): the design can still be checked and built.
 
 A model mismatch (layer 4) is reported at the kind's
 `model(...)` and says one of `<kind>'s model puts '<node>' at <point>, but
@@ -3013,6 +3132,7 @@ The complete list of types. A `param` may name any of them.
 | `Mount` | `overlay(...)`, `inset(...)` |
 | `Shape` | `turned(profile)` |
 | `Boards` | `joined(by: ...)` |
+| `Splices` | `spliced(by: ..., at: ..., from: ...)` |
 | `Envelope` | `box(...)`, `cylinder(...)` |
 | `Model` | `model(...)` |
 | `Spacing` | `evenly`, `ends`, `ends(inset: d)`, `pitch(d)`, `gap(d)` |

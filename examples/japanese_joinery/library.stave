@@ -1,17 +1,21 @@
 stave 1
 
-// Three Japanese joints, written to prove that joint kinds are pluggable:
+// Two Japanese joints, written to prove that joint kinds are pluggable:
 // nothing here needs code in Stave itself.
 //
 //   ari_tsugi     simple: one cut per beam, one assembly step
-//   kanawa_tsugi  complex: marked-out outlines, a key the joint makes, two steps
 //   chidori       complex: three named roles in one node and a quarter turn to lock
+//
+// The third sample, kanawa_tsugi (marked-out outlines, a key the joint
+// makes, two steps), was promoted to std:joinery as a splice for long
+// parts (grammar, "Splices"); the samples project uses it from there.
+// ari_tsugi works as a splice too: lengths: spliced(by: japanese.ari_tsugi, ...).
 //
 // These are samples for the format. Check a joinery reference (and make a
 // trial piece) before cutting good timber from them.
 
 library "Japanese joinery samples" {
-  about: "Sample joint kinds: ari tsugi, kanawa tsugi and chidori"
+  about: "Sample joint kinds: ari tsugi and chidori"
 }
 
 /// An ink line: snaps a long, straight line along a beam.

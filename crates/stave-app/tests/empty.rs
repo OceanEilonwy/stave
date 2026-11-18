@@ -50,10 +50,7 @@ fn a_library_folder_lists_what_it_defines_and_says_how_to_use_it() {
     assert_eq!(
         groups,
         vec![
-            (
-                LibraryGroup::Joints,
-                vec!["ari_tsugi", "chidori", "kanawa_tsugi"]
-            ),
+            (LibraryGroup::Joints, vec!["ari_tsugi", "chidori"]),
             (LibraryGroup::Tools, vec!["sumitsubo"]),
             (LibraryGroup::Recipes, vec!["outline_with_sumitsubo"]),
         ]
@@ -69,7 +66,7 @@ fn a_library_folder_lists_what_it_defines_and_says_how_to_use_it() {
         "{}",
         location.path
     );
-    assert_eq!(location.line.get(), 18);
+    assert_eq!(location.line.get(), 22);
     // The sidebar and the inspector say what is true for a library, not
     // "Nothing selected".
     assert_eq!(state.sidebar(), "A library has no parts. It defines:");

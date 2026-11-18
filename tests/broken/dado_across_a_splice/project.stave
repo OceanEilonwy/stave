@@ -1,0 +1,45 @@
+// expect: error[wall] shelf_dados: its dado in side_l crosses the splice between side_l.piece[1] and side_l.piece[2]
+stave 1
+
+// A tall side spliced 1500mm up with a lap splice, and a shelf housed in a
+// dado 1450mm up: the dado would be cut through the lap, where both pieces'
+// wood belongs to the splice.
+
+project "Dado across a splice" {
+  units: mm
+}
+
+stock pine_19 { species: pine, form: solid, thickness: 19mm, max_length: 2400mm }
+
+part side_l : pine_19 {
+  length:  3000mm
+  width:   280mm
+  lengths: spliced(by: lap_splice(lap: 300mm), at: 1500mm, from: bottom)
+  place {
+    ground
+    orient(length: up, width: back)
+  }
+}
+
+part side_r : pine_19 {
+  length: 2000mm
+  width:  280mm
+  place {
+    orient(length: up, width: back)
+    against(side_l.right, gap: 600mm)
+    flush(side_l.bottom)
+    flush(side_l.front)
+  }
+}
+
+part shelf : pine_19 {
+  length: fit
+  width:  280mm
+  place {
+    flush(side_l.bottom, inset: 1450mm)
+    center(from: side_l.right, to: side_r.left)
+    flush(side_l.front)
+  }
+}
+
+joint shelf_dados : dado(shelf, into: [side_l, side_r])

@@ -72,6 +72,7 @@ fn part(orientation: Orientation, origin: Point, cut: Size3, shape: Shape) -> Pa
         note: None,
         boards: None,
         loose: false,
+        pieces: None,
     }
 }
 

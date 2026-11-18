@@ -5,7 +5,7 @@ project "Member without a shape" {
   units: mm
 }
 
-stock oak_19 { species: white_oak, form: solid, thickness: 19mm }
+stock oak_19 { species: white_oak, form: solid, thickness: 19mm, max_length: 2700mm }
 
 /// A hinge whose cup is named but not drawn: every member is drawn and
 /// checked, so every member says what it is made of.

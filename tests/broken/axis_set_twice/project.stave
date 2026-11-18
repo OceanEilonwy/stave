@@ -8,7 +8,7 @@ project "Axis set twice" {
   units: mm
 }
 
-stock pine_19 { species: pine, form: solid, thickness: 19mm }
+stock pine_19 { species: pine, form: solid, thickness: 19mm, max_length: 2400mm }
 
 part base : pine_19 {
   length: 600mm

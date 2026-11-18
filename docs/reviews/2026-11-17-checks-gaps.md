@@ -640,3 +640,107 @@ vocabulary, the standing rule). What changed in stage 2 for it:
   pegged side pushed square to its pegs (the step still comes apart), so
   it needs its own look at how a carried pin is swept against the hole it
   sits in, and was left for a follow-up.
+
+## Resolution: stage 5
+
+Stock lengths, extended by the owner's decisions to splices along the
+length.
+
+- **Missing `max_length`** is `warning[missing-field]`, once per stock that
+  a declared part is cut from, at the stock's name: `oak_19 doesn't say how
+  long its boards are, so Stave can't check part lengths` (help: `add the
+  longest board you can buy to oak_19, for example max_length: 2400mm`).
+  Plywood and MDF get the same warning with `sheets`/`sheet`/`2440mm`:
+  a default sheet size would not fit the spec cleanly, because a part may
+  lie either way on a sheet and `max_width`/`max_length` are measured along
+  the part's grain. Round stock is left out. It is the only `missing-field`
+  that is a warning (grammar, `stock` and "Diagnostics"). Every example,
+  `tests/designs` and `tests/broken` stock now sets a realistic
+  `max_length` (pine, walnut, cherry, maple, ash 2400mm; white oak 2700mm;
+  hinoki 4000mm; birch plywood 2440mm). Code:
+  `stave-solve/src/pieces.rs::warn_missing_max_length`.
+- **Splices** (grammar, "Splices"). A part's new field `lengths:` takes
+  `spliced(by: kind, at: d | [d, ...], from: end)` (new built-in, new type
+  `Splices`), the way `boards:` takes `joined(by:)`. `by:` is any joint
+  kind value with two part roles, with its own settings
+  (`lap_splice(lap: 300mm)`); `at:` one or more distances along the drawn
+  length from the end `from:` names; `from:` a face word that must be an
+  end of the part. **Why `at:` is not a coordinate:** it measures within
+  the part from a face the part names, like `inset:` or a cut's marks, so
+  it stays right wherever the part is placed or however it is sized, and a
+  mirror image is spliced at the same distance from its mirrored end;
+  distances that depend on other parts are written with the usual measures.
+  The bare `kind(at: ...)` shape was refined to the wrapper so the kind
+  value stays only the kind's own settings (no reserved `at`/`from` names
+  for every joint kind) and so it mirrors `boards: joined(by:)`.
+- **How it works** (`stave-solve/src/pieces.rs`, run after mirrored
+  assemblies and before boards). The part is placed, joined and fitted as
+  one part; then each piece stands in for a part (the boards' stand-in
+  mechanism, `boards::Division::Piece`), the splice kind's rules (wall
+  rules deferred to the fit check), `adds:`, made parts, cuts and `insert:`
+  steps run on the stand-ins, and the pieces become parts of the solved
+  design: the first keeps the part's id and is renamed `<part>.piece[1]`
+  with `Part::pieces` listing all, the others are appended with
+  `PartOrigin::Piece`. Each splice is a `solved::Joint` with
+  `JointOrigin::Splice` (`<part>.splice[n]`, made parts
+  `<part>.splice[n].pin`), so the overlap check, `wall()`, held, the scene,
+  focus mode, the pulled-apart view, the parts tree, the inspector and
+  `stave dump` treat pieces and splices like any parts and joints, with no
+  new code there beyond places: `stave-check`'s `joint_place`/`part_place`
+  point at `lengths:`, the inspector's source and "PIECE OF A SPLICED PART".
+  `rebind_pieces` then points joint pairs and hardware that named the part
+  at the piece they cut (else the piece they touch most), extensions at the
+  end pieces, other parts' cuts naming the part, and assemblies and scenes
+  at every piece.
+- **Generic checks at a splice.** The other cuts on the part are handed to
+  the piece they fall on, in its frame; a cut that reaches into a splice
+  (where both pieces' wood is the splice's) is the fourth backstop,
+  `error[wall]`: `shelf_dados: its dado in side_l crosses the splice between
+  side_l.piece[1] and side_l.piece[2]` (note: where both run, measured from
+  the `from` end; help: `a splice needs its wood whole: move the splice
+  with at: in side_l's lengths: so it clears the dado, or move
+  shelf_dados`). Any cut works the same, a hinge's cup or a dowel's hole
+  included. A cut near a splice is the splice kind's own `wall()` rule,
+  measured by stage 3's machinery on the real pieces: std's `lap_splice`
+  keeps half the board's thickness (`'lap_clear' fails: another cut comes
+  too close to the lap`, `the lap in side_l.piece[1] leaves 6mm of wood at
+  the dado that shelf_dados cuts in side_l.piece[1]`).
+- **Lengths.** Every piece must fit `max_length` once its splices add:
+  `rail.piece[1]: its cut length works out as 2645mm, which is more than its
+  stock's max_length of 2400mm` (help: `stock 'pine_19' comes no longer
+  than 2400mm, and each piece includes the wood its splices add: move the
+  splices with at:, add another splice, or buy longer stock`). A part too
+  long without `lengths:` keeps its error, whose help now suggests
+  splices: `... splice it end to end with lengths: spliced(by: <an end
+  joint>, at: [2250mm, 4500mm, 6750mm], from: bottom), choosing the end
+  joint and leaving each piece room for what its splices add, or buy longer
+  stock` (no kind is named, for the standing rule). Other errors at
+  `lengths:`: `'from' needs an end of rail, but front is one of its sides`,
+  a splice outside the part (`out-of-range`), two at one place
+  (`duplicate-name`), turned, sheet and round parts (`type-mismatch`).
+- **std.** New `lap_splice` (half lap, glued; `lap = piece.width`, `wall =
+  piece.thickness / 2`, `lap_clear`/`mating_clear` wall rules).
+  `kanawa_tsugi` moved from `examples/japanese_joinery` to `std:joinery`;
+  `joint_samples` uses it unqualified and is unchanged otherwise; the
+  Japanese library keeps `ari_tsugi` (usable as a splice from there) and
+  `chidori`.
+- **Small change on the way:** `format_length` shows a length that isn't a
+  whole number of nanometres as `about 133.333333mm`, not `400000000/3nm`.
+- **Tests.** `tests/broken`: `side_longer_than_its_stock` (the 9m side),
+  `piece_longer_than_its_stock`, `dado_across_a_splice`,
+  `dado_beside_a_lap`, `stock_without_max_length`, `splice_from_a_side`,
+  each with an `app/splices` snapshot. `tests/designs`: `spliced_bench`
+  (a 3.2m oak seat, lap splice, six doweled legs landing on the right
+  pieces) and `spliced_beam` (a 6m hinoki beam, kanawa tsugi with its pin),
+  with `stave dump` snapshots (`cli::dump_of_the_spliced_designs_...`).
+  `app/splices` also pins the pieces and rebinding, focus playing the
+  kanawa tsugi's three steps, the pulled-apart pieces, the parts tree and
+  a mirrored spliced rail. The app harness leaves the stock warning out of
+  its fragment projects, as it does `loose-part`. No existing dump
+  snapshot changed (the dump doesn't print stock lengths).
+- **Not done.** A splice kind's members and `uses:` aren't placed or listed
+  (`warning[not-supported]`), and a spliced part wider than its stock's
+  `max_width` has single-board pieces (`warning[not-supported]`). Side
+  cuts other than outlines on a spliced part are taken as spanning its
+  whole length (so they always cross a splice). There is still no cut list
+  crate: the pieces' cut lengths are in the solved design and the dump.

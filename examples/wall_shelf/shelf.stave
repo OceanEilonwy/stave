@@ -38,9 +38,9 @@ let drop          = 200mm              // how far the brackets reach down the wa
 // ---- stock: the wood you buy ----
 // A stock says what the boards are made of and how thick they are. Parts are
 // cut from a stock.
-stock pine_19 { species: pine, form: solid, thickness: 19mm }
+stock pine_19 { species: pine, form: solid, thickness: 19mm, max_length: 2400mm }
 // Strips sold 19mm thick and 40mm wide: parts cut from it are 40mm wide.
-stock pine_strip { species: pine, form: solid, thickness: 19mm, width: 40mm }
+stock pine_strip { species: pine, form: solid, thickness: 19mm, width: 40mm, max_length: 2400mm }
 
 // ---- parts ----
 

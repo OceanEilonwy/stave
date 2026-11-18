@@ -1,0 +1,21 @@
+stave 1
+
+// A six-metre beam from four-metre timbers: its lengths: splices it in the
+// middle with a kanawa tsugi (grammar, "Splices"). The splice is an ordinary
+// joint kind from std:joinery, so its draw pin is made, its stepped scarf is
+// cut on both pieces, and its insert steps (lay down, slide home, drive the
+// pin) are the splice joint's own.
+
+project "Spliced beam" {
+  units: mm
+}
+
+stock hinoki_105 { species: hinoki, form: solid, thickness: 105mm, width: 105mm, max_length: 4000mm }
+
+part beam : hinoki_105 {
+  length:  6000mm
+  lengths: spliced(by: kanawa_tsugi, at: 3000mm, from: left)
+  place {
+    ground
+  }
+}

@@ -5,7 +5,7 @@ project "A slot the wrong size" {
   units: mm
 }
 
-stock oak_24 { species: white_oak, form: solid, thickness: 24mm }
+stock oak_24 { species: white_oak, form: solid, thickness: 24mm, max_length: 2700mm }
 
 /// A rail housed in a slot cut with one straight router bit. The slot is
 /// a third of the post's thickness, and the bit comes in four sizes.

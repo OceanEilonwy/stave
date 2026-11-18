@@ -11,6 +11,9 @@ stave 1
 ///
 /// Proportions follow common practice: the splice about three times the beam's
 /// height, the stubs about an eighth of it. Make a trial joint first.
+///
+/// Use it between two beams, or name it in a long part's `lengths:` to splice
+/// it into pieces (see "Splices" in the grammar).
 kind kanawa_tsugi : joint {
   roles {
     piece: Part

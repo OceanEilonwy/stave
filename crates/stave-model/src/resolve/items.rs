@@ -818,6 +818,9 @@ impl<'a> Resolver<'a> {
         let boards = found
             .get("boards")
             .map(|f| self.field_value(cx, f, fields::PART));
+        let lengths = found
+            .get("lengths")
+            .map(|f| self.field_value(cx, f, fields::PART));
         let loose = found
             .get("loose")
             .map(|f| self.field_value(cx, f, fields::PART));
@@ -833,6 +836,7 @@ impl<'a> Resolver<'a> {
                 face_edge,
                 note,
                 boards,
+                lengths,
                 loose,
                 place: Vec::new(),
                 place_span: None,

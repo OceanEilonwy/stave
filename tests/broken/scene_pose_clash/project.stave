@@ -8,8 +8,8 @@ project "Lid hits the wall" {
   units: mm
 }
 
-stock pine_12 { species: pine, form: solid, thickness: 12mm }
-stock pine_19 { species: pine, form: solid, thickness: 19mm }
+stock pine_12 { species: pine, form: solid, thickness: 12mm, max_length: 2400mm }
+stock pine_19 { species: pine, form: solid, thickness: 19mm, max_length: 2400mm }
 
 part base : pine_12 {
   length: 300mm

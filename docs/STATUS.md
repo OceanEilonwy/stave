@@ -30,7 +30,13 @@ a line and a concrete help line for every problem:
    across all the boards, `glue: false` is kept. The collision checks see
    the part's wood as its boards make it, angled cuts included. A sheet
    wider than `max_width` is an error, as a part longer than `max_length`
-   is.
+   is, unless it is spliced. **Splices**: a part's `lengths:
+   spliced(by: kind, at: d, from: end)` makes it pieces joined end to end
+   by an ordinary joint kind (`lap_splice`, `kanawa_tsugi` in std), each
+   piece a part and each splice a joint, so the checks, focus mode and the
+   pulled-apart view work on them; every piece must fit `max_length`, and a
+   cut of another joint reaching into a splice is `wall`. A stock with no
+   `max_length` is a warning.
 4. **Fit and geometry**: every part is cut into a solid (its cut box minus
    its cuts: exact boxes for axis-aligned cuts, exact cylinders for holes,
    round tenons and round sections, and exact prisms, a polygon on a face

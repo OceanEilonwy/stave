@@ -96,6 +96,8 @@ fn assembly_path(
 fn describe_part(design: &SolvedDesign, part: &Part) -> Description {
     use stave_model::solved::{PartOrigin, Shape};
     let kind = match part.origin {
+        _ if part.pieces.is_some() => "Piece of a spliced part",
+        PartOrigin::Piece { .. } => "Piece of a spliced part",
         PartOrigin::Declared => "Part",
         PartOrigin::Mirror { .. } | PartOrigin::MirroredAssembly { .. } => "Mirror image",
         PartOrigin::Made { .. } | PartOrigin::Boards { .. } => "Made part",

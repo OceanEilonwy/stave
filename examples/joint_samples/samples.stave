@@ -3,8 +3,9 @@ stave 1
 import "../japanese_joinery" as japanese
 
 // Practice pieces for three Japanese joints, laid out side by side on the bench.
-// Proves the joint library works from a project: every joint here comes from
-// another module and is used qualified, as japanese.*
+// Proves the joint library works from a project: ari tsugi and chidori come
+// from another module and are used qualified, as japanese.*; kanawa tsugi is
+// in std:joinery (it is also a splice for parts longer than their stock).
 
 project "Japanese joint samples" {
   goal:       "Practice pieces for ari tsugi, kanawa tsugi and chidori"
@@ -15,8 +16,8 @@ project "Japanese joint samples" {
   methods:    [japanese.outline_with_sumitsubo]    // prefer the ink line wherever an outline is cut
 }
 
-stock hinoki_105 { species: hinoki, form: solid, thickness: 105mm, width: 105mm }
-stock hinoki_30  { species: hinoki, form: solid, thickness: 30mm, width: 30mm }
+stock hinoki_105 { species: hinoki, form: solid, thickness: 105mm, width: 105mm, max_length: 4000mm }
+stock hinoki_30  { species: hinoki, form: solid, thickness: 30mm, width: 30mm, max_length: 4000mm }
 
 // ---- kanawa tsugi: two beams spliced end to end ----
 part beam_a : hinoki_105 {
@@ -35,7 +36,7 @@ part beam_b : hinoki_105 {
   }
 }
 
-joint splice : japanese.kanawa_tsugi(beam_b, into: beam_a)
+joint splice : kanawa_tsugi(beam_b, into: beam_a)
 
 // ---- ari tsugi: a dovetailed end joint, behind the splice ----
 // Each sample stands on its own on the bench: `loose: true` says nothing

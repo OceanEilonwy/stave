@@ -13,7 +13,7 @@ project "Mechanism cannot be solved" {
   units: mm
 }
 
-stock ply_18 { species: birch, form: plywood, thickness: 18mm }
+stock ply_18 { species: birch, form: plywood, thickness: 18mm, max_length: 2440mm }
 
 part base : ply_18 {
   length: 600mm

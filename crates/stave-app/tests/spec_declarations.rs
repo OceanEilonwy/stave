@@ -480,7 +480,7 @@ fn a_longer_part_names_an_end_joint() {
     );
     assert_eq!(
         common::help(&opened),
-        "stock 'short' comes no longer than 500mm; make it from two parts joined end to end with a splice joint, or buy longer stock"
+        "stock 'short' comes no longer than 500mm: splice it end to end with lengths: spliced(by: <an end joint>, at: 300mm, from: left), choosing the end joint and leaving each piece room for what its splices add, or buy longer stock"
     );
 }
 

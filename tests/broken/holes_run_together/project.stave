@@ -17,7 +17,7 @@ kind bored : joint {
   cut bore: crossing(into, piece) { drill(diameter: 20mm, depth: 12mm) }
 }
 
-stock oak_19 { species: white_oak, form: solid, thickness: 19mm }
+stock oak_19 { species: white_oak, form: solid, thickness: 19mm, max_length: 2700mm }
 
 part base : oak_19 {
   length: 600mm

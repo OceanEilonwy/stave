@@ -1,0 +1,10 @@
+---
+source: crates/stave-app/tests/splices.rs
+expression: "rendered(\"tests/broken/piece_longer_than_its_stock\")"
+---
+error[type-mismatch]: rail.piece[1]: its cut length works out as 2645mm, which is more than its stock's max_length of 2400mm
+  --> tests/broken/piece_longer_than_its_stock/project.stave:25:12
+   |
+25 |   lengths: spliced(by: lap_splice, at: 2600mm, from: left)
+   |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = help: stock 'pine_19' comes no longer than 2400mm, and each piece includes the wood its splices add: move the splices with at:, add another splice, or buy longer stock

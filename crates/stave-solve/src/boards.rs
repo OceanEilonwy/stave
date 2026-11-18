@@ -47,12 +47,25 @@ pub(crate) fn is_board(part: PartId) -> bool {
     part.get() >= BOARD_ID_BASE
 }
 
+/// What a stand-in is a share of its part along: its width (a board) or
+/// its length (a piece of a spliced part, see [`crate::pieces`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Division {
+    /// A board, edge to edge with its neighbours.
+    Board,
+    /// A piece, end to end with its neighbours.
+    Piece,
+}
+
 /// A board standing in for a part while its part's board joints are worked
-/// out: what placement would know about a part.
+/// out: what placement would know about a part. A piece of a spliced part
+/// stands in the same way while its splices are worked out.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct BoardPart {
     /// The part it belongs to.
     pub part: PartId,
+    /// Board or piece.
+    pub division: Division,
     /// Its number.
     pub index: BoardIndex,
     /// The part's orientation.
@@ -104,11 +117,16 @@ impl Solver<'_> {
         cuts: &mut Vec<Vec<Cut>>,
         memberships: &mut Vec<Vec<JointId>>,
         made: &mut Vec<MadeInfo>,
+        spliced: &[crate::pieces::Split],
     ) -> Vec<Option<solved::Boards>> {
         let count = self.model.parts.len();
         let mut boards = vec![None; count];
         for index in 0..count {
             let part = PartId::from_usize(index);
+            if let Some(split) = spliced.iter().find(|split| split.whole == part) {
+                self.spliced_boards(split, geoms);
+                continue;
+            }
             let Some(geom) = geoms.get(part).cloned() else {
                 continue;
             };
@@ -349,7 +367,7 @@ impl Solver<'_> {
 
     /// The part whose body a part uses: itself, or the source of a mirror
     /// image.
-    fn body_source(&mut self, part: PartId) -> Solved<PartId> {
+    pub(crate) fn body_source(&mut self, part: PartId) -> Solved<PartId> {
         let mut current = part;
         while let Some((source, _, _)) = self.mirror_source(current)? {
             current = source;
@@ -369,7 +387,7 @@ impl Solver<'_> {
     }
 
     /// The span of a part's size field along `axis`, if written.
-    fn size_span(&self, part: PartId, axis: PartAxis) -> Option<Span> {
+    pub(crate) fn size_span(&self, part: PartId, axis: PartAxis) -> Option<Span> {
         let body = self.part_body(part)?;
         let size = match axis {
             PartAxis::Length => Some(&body.length),
@@ -612,6 +630,7 @@ impl Solver<'_> {
                 id,
                 BoardPart {
                     part,
+                    division: Division::Board,
                     index,
                     orientation: geom.orientation,
                     drawn,

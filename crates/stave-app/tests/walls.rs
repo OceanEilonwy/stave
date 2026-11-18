@@ -176,7 +176,11 @@ const SHELF: &str = "part shelf : pine_19 {
 ";
 
 fn with_every_warning(body: &str) -> Vec<String> {
-    let opened = open_files_with_every_warning(&[("project.stave", &format!("{HEADER}\n{body}"))]);
+    let mut opened =
+        open_files_with_every_warning(&[("project.stave", &format!("{HEADER}\n{body}"))]);
+    opened
+        .diagnostics
+        .retain(|d| !common::is_no_max_length_warning(d));
     diagnostics(&opened)
 }
 

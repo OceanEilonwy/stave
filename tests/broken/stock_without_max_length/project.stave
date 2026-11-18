@@ -1,0 +1,19 @@
+// expect: warning[missing-field] pine_19 doesn't say how long its boards are, so Stave can't check part lengths
+stave 1
+
+// A stock with no max_length: no part's length can be checked against the
+// boards you can buy, so Stave says so, once, at the stock.
+
+project "Stock without a length" {
+  units: mm
+}
+
+stock pine_19 { species: pine, form: solid, thickness: 19mm }
+
+part base : pine_19 {
+  length: 600mm
+  width:  300mm
+  place {
+    ground
+  }
+}

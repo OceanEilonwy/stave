@@ -260,7 +260,7 @@ fn the_deepest_expression_the_parser_accepts_checks_without_overflowing() {
             memory.insert(
                 "/project/project.stave",
                 format!(
-                    "stave 1\n\nproject \"T\" {{\n  units: mm\n}}\n\nstock s {{ species: pine, form: solid, thickness: 19mm }}\n\npart base : s {{\n  length: 1mm\n  width:  1mm\n  place {{\n    ground\n  }}\n}}\n{body}\n"
+                    "stave 1\n\nproject \"T\" {{\n  units: mm\n}}\n\nstock s {{ species: pine, form: solid, thickness: 19mm, max_length: 2400mm }}\n\npart base : s {{\n  length: 1mm\n  width:  1mm\n  place {{\n    ground\n  }}\n}}\n{body}\n"
                 ),
             );
             let opened = stave_app::open_with(Path::new("/project"), &memory).unwrap();
