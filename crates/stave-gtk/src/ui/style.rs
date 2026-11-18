@@ -184,6 +184,11 @@ button.stave-problem-step { min-width: 28px; min-height: 28px; padding: 0; borde
 /// with an edge, on the dark style's dark panels).
 const COLOURS: &str = r#"
 .stave-header { background: @headerbar_bg_color; color: @headerbar_fg_color; box-shadow: inset 0 -1px @headerbar_shade_color; }
+/* Solid whether or not the window has focus: libadwaita fades an
+   unfocused window's header bar, which let the desktop show through. */
+headerbar.stave-header:backdrop { background-color: @headerbar_bg_color; transition: none; }
+headerbar.stave-header:backdrop > windowhandle { filter: none; }
+window.stave-window { background-color: @window_bg_color; }
 .stave-header button.stave-icon-button:disabled { color: alpha(currentColor, 0.45); }
 .stave-header button.stave-sidebar-toggle:checked { background: alpha(currentColor, 0.1); }
 .stave-title .subtitle, .dim { color: alpha(currentColor, 0.7); }

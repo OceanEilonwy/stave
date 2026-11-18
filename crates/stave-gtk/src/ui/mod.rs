@@ -75,6 +75,12 @@ use viewport::Viewport;
 /// is a click, not a drag.
 const CLICK_SLOP: f64 = 4.0;
 
+/// A mouse's Back button (the thumb button nearer the wrist), as GDK
+/// numbers it.
+const MOUSE_BACK: u32 = 8;
+/// A mouse's Forward button.
+const MOUSE_FORWARD: u32 = 9;
+
 /// How fast focus mode plays: the whole way in 2.5 seconds.
 const PLAY_PER_SECOND: f64 = 0.4;
 
@@ -496,9 +502,6 @@ impl Window {
     /// other views see it.
     fn handle(self: &Rc<Self>, events: Vec<Event>) {
         let result = events.contains(&Event::ResultChanged);
-        // Choosing something frames it at once; a new result keeps the
-        // camera where people left it.
-        let reframe = !result && events.contains(&Event::SelectionChanged);
         if result {
             self.result_changed();
         }
@@ -530,9 +533,14 @@ impl Window {
                 }
             }
         }
-        if reframe {
-            self.frame_selection();
-        }
+    }
+
+    /// Selects something and frames it: for the parts list, the finder,
+    /// "show in 3D" and the command line. Clicking in the 3D view selects
+    /// without moving the camera (`pick`).
+    fn select_and_frame(self: &Rc<Self>, selection: Option<Selection>) {
+        self.dispatch(Command::Select(selection));
+        self.frame_selection();
     }
 
     /// Runs a check on a worker thread and hands its outcome back.
@@ -717,7 +725,7 @@ impl Window {
             self.dispatch(Command::SetExplode(Explode::clamped(explode)));
         }
         if let Some(selection) = select {
-            self.dispatch(Command::Select(Some(selection)));
+            self.select_and_frame(Some(selection));
         }
         if let Some(target) = target {
             self.state.borrow_mut().focus_start = Some((plan, wanted.step));
@@ -2112,10 +2120,11 @@ impl Window {
         });
     }
 
-    /// How each node looks outside focus mode: with something chosen, the
-    /// rest fades (see-through with X-ray on); a posed problem fades what
-    /// it doesn't involve; X-ray alone makes everything see-through.
-    /// `None` draws every node as usual.
+    /// How each node looks outside focus mode. Choosing something only
+    /// outlines it: the rest stays solid, so clicking around never switches
+    /// the view between solid and see-through. With X-ray on everything
+    /// but the selection is see-through; a posed problem fades what it
+    /// doesn't involve. `None` draws every node as usual.
     fn looks(&self, selection: &[NodeId]) -> Option<Vec<Look>> {
         let session = self.session.borrow();
         let state = self.state.borrow();
@@ -2123,11 +2132,9 @@ impl Window {
         let count = graph.node_ids().count();
         let kept: &[NodeId] = match state.problem.as_ref() {
             Some(problem) => &problem.highlight.nodes,
-            None => selection,
+            None if state.xray => selection,
+            None => return None,
         };
-        if kept.is_empty() && !state.xray {
-            return None;
-        }
         let rest = if state.xray { Look::XRay } else { Look::Dim };
         let mut looks = vec![rest; count];
         for node in kept {
@@ -2800,7 +2807,7 @@ impl Window {
         let window = Rc::downgrade(self);
         widgets.tree.connect_select(move |selection| {
             if let Some(window) = window.upgrade() {
-                window.dispatch(Command::Select(Some(selection)));
+                window.select_and_frame(Some(selection));
             }
         });
         let window = Rc::downgrade(self);
@@ -3010,7 +3017,7 @@ impl Window {
                 })
             };
             match selection {
-                Some(selection) => window.dispatch(Command::Select(Some(selection))),
+                Some(selection) => window.select_and_frame(Some(selection)),
                 None => window.widgets.toasts.add_toast(
                     adw::Toast::builder()
                         .title("It isn't in the design the 3D view shows")
@@ -3094,7 +3101,7 @@ impl Window {
                 }
                 (Goal::Select(_) | Goal::Open(_), Choice::Preview) => {}
                 (Goal::Select(selection), Choice::Go) => {
-                    window.dispatch(Command::Select(Some(selection)));
+                    window.select_and_frame(Some(selection));
                 }
                 (Goal::Select(selection), Choice::OpenText) => {
                     let placed = {
@@ -3103,7 +3110,7 @@ impl Window {
                             .shown()
                             .and_then(|shown| link::placed_at(shown, &selection))
                     };
-                    window.dispatch(Command::Select(Some(selection)));
+                    window.select_and_frame(Some(selection));
                     if let Some(placed) = placed {
                         window.dispatch(Command::GoToSource(placed));
                     }
@@ -3224,6 +3231,24 @@ impl Window {
             }
         });
         self.widgets.window.add_controller(keys);
+
+        // A mouse's Back and Forward buttons (8 and 9) anywhere in the
+        // window, before the widget under the pointer sees them.
+        let history = gtk::GestureClick::builder()
+            .button(0)
+            .propagation_phase(gtk::PropagationPhase::Capture)
+            .build();
+        let window = self.clone();
+        history.connect_pressed(move |gesture, _, _, _| {
+            let action = match gesture.current_button() {
+                MOUSE_BACK => "win.back",
+                MOUSE_FORWARD => "win.forward",
+                _ => return,
+            };
+            gesture.set_state(gtk::EventSequenceState::Claimed);
+            let _ = WidgetExt::activate_action(&window.widgets.window, action, None);
+        });
+        self.widgets.window.add_controller(history);
     }
 
     /// The part of a drag not applied yet.
