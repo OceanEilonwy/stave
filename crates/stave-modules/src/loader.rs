@@ -19,7 +19,11 @@ use crate::{
 
 /// Loads the project in `folder`. See the crate docs for the rules and the
 /// order.
-pub(crate) fn load(folder: &Path, files: &dyn FileSource) -> Result<ModuleSet, LoadError> {
+pub(crate) fn load(
+    folder: &Path,
+    files: &dyn FileSource,
+    prior: Option<&ModuleSet>,
+) -> Result<ModuleSet, LoadError> {
     let canonical = files
         .canonical(folder)
         .map_err(|source| root_folder_error(folder, source))?;
@@ -33,7 +37,7 @@ pub(crate) fn load(folder: &Path, files: &dyn FileSource) -> Result<ModuleSet, L
         });
     }
 
-    let mut loader = Loader::new(files);
+    let mut loader = Loader::new(files, prior);
     let standard = STD_MODULES
         .into_iter()
         .find(|module| is_same_as_std(&texts, module));
@@ -249,11 +253,41 @@ struct Loader<'a> {
     by_std: BTreeMap<&'static str, ModuleId>,
     /// The modules whose imports are being followed, outermost first.
     stack: Vec<ModuleId>,
+    /// A previous load whose parses may be reused ([`Loader::reusable`]).
+    prior: Option<Prior<'a>>,
+}
+
+/// A previous load: its sources and its parsed files by id.
+struct Prior<'a> {
+    sources: &'a SourceMap,
+    /// Its module files that had no diagnostic at all, by id.
+    clean: BTreeMap<FileId, &'a ModuleFile>,
+}
+
+impl<'a> Prior<'a> {
+    fn of(modules: &'a ModuleSet) -> Self {
+        let mut clean: BTreeMap<FileId, &'a ModuleFile> = modules
+            .modules
+            .iter()
+            .flat_map(|module| &module.files)
+            .map(|file| (file.file, file))
+            .collect();
+        for diagnostic in &modules.diagnostics {
+            for label in &diagnostic.labels {
+                clean.remove(&label.file);
+            }
+        }
+        Prior {
+            sources: &modules.sources,
+            clean,
+        }
+    }
 }
 
 impl<'a> Loader<'a> {
-    fn new(files: &'a dyn FileSource) -> Self {
+    fn new(files: &'a dyn FileSource, prior: Option<&'a ModuleSet>) -> Self {
         Self {
+            prior: prior.map(Prior::of),
             files,
             sources: SourceMap::new(),
             modules: Vec::new(),
@@ -289,6 +323,26 @@ impl<'a> Loader<'a> {
             .map_or("", |module| module.name.as_str())
     }
 
+    /// The parse of a file the previous load parsed without any
+    /// diagnostic, when the file has the same id, display path and text:
+    /// parsing is a function of those, so parsing again would give the
+    /// same tree and again no diagnostic.
+    fn reusable(&self, file: FileId, path: &str, text: &str) -> Option<ModuleFile> {
+        let prior = self.prior.as_ref()?;
+        let before = prior.clean.get(&file)?;
+        let same_text = prior
+            .sources
+            .get(file)
+            .is_some_and(|source| source.path() == path && source.text() == text);
+        (same_text && before.path == path).then(|| ModuleFile {
+            file,
+            path: path.to_owned(),
+            ast: before.ast.clone(),
+            imports: Vec::new(),
+            broken: before.broken.clone(),
+        })
+    }
+
     /// Adds a module's files to the source map, parses them and checks its
     /// header. Its imports are followed later, by [`Loader::visit`].
     fn add_module(
@@ -308,7 +362,9 @@ impl<'a> Loader<'a> {
             let file = self.sources.add(path.clone(), text)?;
             first_file.get_or_insert(file);
             let text = self.sources.get(file).map_or("", SourceFile::text);
-            if is_patch_source(text) {
+            if let Some(reused) = self.reusable(file, &path, text) {
+                files.push(reused);
+            } else if is_patch_source(text) {
                 let parse = parse_patch_file(file, text);
                 self.diagnostics.extend(parse.diagnostics);
             } else {

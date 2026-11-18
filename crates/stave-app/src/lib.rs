@@ -35,8 +35,8 @@ pub mod session;
 pub mod view;
 
 use stave_lang::{Diagnostic, SourceMap};
-use stave_model::Model;
 use stave_model::solved::SolvedDesign;
+use stave_model::{Defs, Model, ResolvedLibraries};
 use stave_modules::{FileSource, ModuleSet};
 
 pub use stave_check::{Contact, ContactItem, ContactMotion};
@@ -78,12 +78,57 @@ impl Opened {
 
 /// Opens a project (or library) folder from disk and runs the pipeline.
 pub fn open(folder: &Path) -> Result<Opened, LoadError> {
-    run(ModuleSet::load(folder)?)
+    run(ModuleSet::load(folder)?, stave_model::resolve)
 }
 
 /// Opens a folder through a [`FileSource`] (for editors and tests).
 pub fn open_with(folder: &Path, files: &dyn FileSource) -> Result<Opened, LoadError> {
-    run(ModuleSet::load_with(folder, files)?)
+    run(ModuleSet::load_with(folder, files)?, stave_model::resolve)
+}
+
+/// A project opened once, kept so that changed copies of it open quickly:
+/// the parsed files, and the standard modules and imported libraries
+/// resolved. [`Prepared::reopen`] parses and resolves only what changed.
+#[derive(Debug, Clone)]
+pub struct Prepared {
+    modules: ModuleSet,
+    libraries: Option<ResolvedLibraries>,
+}
+
+/// [`open_with`], also keeping what a [`Prepared::reopen`] reuses.
+pub fn prepare(folder: &Path, files: &dyn FileSource) -> Result<(Opened, Prepared), LoadError> {
+    let modules = ModuleSet::load_with(folder, files)?;
+    let kept = modules.clone();
+    let mut libraries = None;
+    let opened = run(modules, |modules| {
+        let (defs, diagnostics, kept) = stave_model::resolve_keeping(modules);
+        libraries = kept;
+        (defs, diagnostics)
+    })?;
+    Ok((
+        opened,
+        Prepared {
+            modules: kept,
+            libraries,
+        },
+    ))
+}
+
+impl Prepared {
+    /// Opens a changed copy of the prepared project, read through `files`
+    /// (the project's own files changed, as in an editor's scratch copy):
+    /// files whose text is unchanged are not parsed again, and when the
+    /// libraries are unchanged only the project is resolved again. The
+    /// result is the same as [`open_with`]'s.
+    pub fn reopen(&self, folder: &Path, files: &dyn FileSource) -> Result<Opened, LoadError> {
+        let modules = self.modules.reload_with(folder, files)?;
+        run(modules, |modules| {
+            self.libraries
+                .as_ref()
+                .and_then(|libraries| stave_model::resolve_reusing(modules, libraries))
+                .unwrap_or_else(|| stave_model::resolve(modules))
+        })
+    }
 }
 
 fn sort(diagnostics: &mut Vec<Diagnostic>) {
@@ -100,7 +145,10 @@ fn sort(diagnostics: &mut Vec<Diagnostic>) {
     diagnostics.dedup();
 }
 
-fn run(modules: ModuleSet) -> Result<Opened, LoadError> {
+fn run(
+    modules: ModuleSet,
+    resolve: impl FnOnce(&ModuleSet) -> (Defs, Vec<Diagnostic>),
+) -> Result<Opened, LoadError> {
     let root_files = modules
         .module(modules.root)
         .map_or(0, |module| module.files.len());
@@ -132,7 +180,7 @@ fn run(modules: ModuleSet) -> Result<Opened, LoadError> {
     if !root_has_header || cycle {
         return finish(modules.sources, None, None, diagnostics, Vec::new());
     }
-    let (defs, resolve_diagnostics) = stave_model::resolve(&modules);
+    let (defs, resolve_diagnostics) = resolve(&modules);
     diagnostics.extend(resolve_diagnostics);
     let (model, instance_diagnostics) = stave_model::instance::instantiate(defs, modules.root);
     diagnostics.extend(instance_diagnostics);
