@@ -1,7 +1,10 @@
-//! The libadwaita window (Main.dc.html): a title bar with back and
-//! forward, the Parts / Cut list / Files switcher, the scene menu, the
-//! status pill and the build button; the Parts view (the parts tree, the
-//! 3D view and the inspector); and a status bar.
+//! The libadwaita window (the V2-C canvas, option A): a title bar with
+//! back and forward, the finder's field (Ctrl+K), the Design / Cut list
+//! switcher, the problems chip and the build button; and the design: the
+//! 3D view filling the window, the model tree floating at its top left,
+//! the selection's card beside the part, problems pinned where they
+//! happen, the dock at the bottom, and at the right edge the rail of open
+//! files with the editor that slides in beside the view.
 //!
 //! All state that views share lives in a `stave_app::session::Session`:
 //! the window sends it commands and redraws what the events it returns
@@ -15,14 +18,16 @@
 //! camera, picking); this module only wires widgets to them.
 
 mod chrome;
+mod dock;
 mod editor;
 mod files;
+mod finder;
 mod focus_panel;
 mod focus_stage;
 mod header;
 mod icons;
 mod inspector;
-mod problems;
+mod sideways;
 mod slider;
 mod style;
 mod tree;
@@ -39,11 +44,13 @@ use anyhow::{Context as _, Result, bail};
 use gtk::{gdk, gio, glib};
 use stave_app::Contact;
 use stave_app::check::{self, Checked, Watcher};
+use stave_app::finder::{self as finding, Goal};
 use stave_app::focus::{self, Focus, Target};
 use stave_app::inspect;
 use stave_app::link;
+use stave_app::problems::{Mark, Marks};
 use stave_app::session::{
-    Build, Command, Event, Explode, LineNumber, ProblemIndex, Selection, Session, Sidebar,
+    Build, Command, Editor, Event, Explode, LineNumber, ProblemIndex, Selection, Session,
     SourceLocation, View,
 };
 use stave_app::view::{self, Highlight};
@@ -51,13 +58,14 @@ use stave_model::solved::AssemblyId;
 use stave_scene::{Look, NodeId, Orbit, Overlay, Posed};
 
 use crate::render::{Backdrop, Frame, Renderer};
-use chrome::{MotionBar, StatusBar};
+use chrome::MotionBar;
+use dock::Dock;
+use files::FilesPage;
 pub use files::Wish;
-use files::{FilesPage, Mode};
+use finder::{Choice, Finder};
 use focus_stage::{Caption, Pictures, ProblemCard, StepCard, SwingCard};
 use header::Header;
 use inspector::Inspector;
-use problems::ProblemsSidebar;
 use stave_app::problems::MotionCard;
 use tree::TreeSidebar;
 use view_tools::{CameraToolbar, PlanSwitch, ViewToolbar};
@@ -79,6 +87,25 @@ const FRONT_PITCH: f32 = 0.12;
 /// How long hardware focus's small views wait for their size to settle
 /// before rendering again at it.
 const PICTURES_DELAY: Duration = Duration::from_millis(150);
+
+/// The editor's width, in logical pixels.
+const EDITOR_WIDTH: i32 = 600;
+
+/// The selection's card's width, in logical pixels.
+const CARD_WIDTH: i32 = 380;
+
+/// How far the card stands off the part it is about, in logical pixels.
+const CARD_GAP: f32 = 48.0;
+
+/// The space kept clear round the floating panels, in logical pixels.
+const EDGE: i32 = 14;
+
+/// The most problems pinned on the model at once.
+const PIN_LIMIT: usize = 12;
+
+/// How much room a chosen part is framed with: the camera stands this many
+/// times farther back than the tightest fit, so what is round it shows.
+const FRAME_ROOM: f32 = 1.6;
 
 /// The light or dark style.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -143,8 +170,12 @@ pub struct Options {
     pub explode: Option<f32>,
     /// The view to start in.
     pub view: View,
-    /// Open the problems list.
-    pub problems: bool,
+    /// Open the editor beside the 3D view.
+    pub editor: bool,
+    /// Open the finder with this typed (screenshots).
+    pub finder: Option<String>,
+    /// Start with X-ray on.
+    pub xray: bool,
     /// Light, dark or the system's.
     pub theme: Theme,
     /// Save the window to this PNG once drawn, then close.
@@ -157,12 +188,10 @@ pub struct Options {
     /// For the screenshot: press the build button and hold its check
     /// running, to show the building state.
     pub building: bool,
-    /// The file to open in the Files view, as `doors.stave:9`.
+    /// The file to open in the editor, as `doors.stave:9`.
     pub file: Option<String>,
-    /// What the Files view shows once the names are in (screenshots).
+    /// What the editor shows once the names are in (screenshots).
     pub wish: Wish,
-    /// The Files view shows the text alone.
-    pub text_only: bool,
     /// Where the camera starts (screenshots of a close view).
     pub camera: StartCamera,
 }
@@ -230,12 +259,13 @@ struct Wanted {
     problem: Option<usize>,
     explode: Option<f32>,
     view: View,
-    problems: bool,
+    editor: bool,
+    finder: Option<String>,
+    xray: bool,
     checking: bool,
     building: bool,
     file: Option<String>,
     wish: Wish,
-    text_only: bool,
 }
 
 /// A problem posed in the view.
@@ -275,6 +305,15 @@ struct Opening {
     turns: bool,
 }
 
+/// A problem to pin on the model, and where it shows (logical pixels in
+/// the 3D view; `None` behind the camera).
+struct Pin {
+    index: ProblemIndex,
+    mark: Mark,
+    message: String,
+    point: Option<(f32, f32)>,
+}
+
 /// What only the 3D view needs.
 struct State {
     wanted: Option<Wanted>,
@@ -312,6 +351,12 @@ struct State {
     /// Hardware focus's small views render again once their size has
     /// settled (not on every frame of a resize).
     pictures_timer: Option<glib::SourceId>,
+    /// X-ray: everything but the selection see-through.
+    xray: bool,
+    /// The latest check's marks, when its ids are the shown design's.
+    marks: Marks,
+    /// Where the card was put last (left and top margins).
+    card_place: Option<(i32, i32)>,
 }
 
 /// The window's widgets.
@@ -321,12 +366,22 @@ struct Widgets {
     toasts: adw::ToastOverlay,
     banner: adw::Banner,
     views: gtk::Stack,
-    outer: adw::OverlaySplitView,
-    inner: adw::OverlaySplitView,
-    sidebar: gtk::Stack,
+    /// The 3D view with everything that floats over it.
+    design: gtk::Overlay,
     tree: TreeSidebar,
-    problems: ProblemsSidebar,
     inspector: Inspector,
+    /// The selection's card, floating beside the part.
+    card: gtk::Box,
+    dock: Rc<Dock>,
+    /// The editor's panel, sliding in from the right.
+    editor_panel: gtk::Revealer,
+    /// A short line at the top of the view: focus mode, posed problems.
+    hint: gtk::Label,
+    hint_box: gtk::Box,
+    /// The problems pinned off screen: one chip at the view's edge.
+    edge_pin: gtk::Button,
+    edge_label: gtk::Label,
+    finder: Rc<Finder>,
     view_stack: gtk::Stack,
     empty: view_tools::EmptyView,
     viewport: Viewport,
@@ -342,13 +397,15 @@ struct Widgets {
     pictures: Pictures,
     problem_card: ProblemCard,
     files: Rc<FilesPage>,
-    status: StatusBar,
 }
 
 struct Window {
     widgets: Widgets,
     session: RefCell<Session>,
     state: RefCell<State>,
+    /// The problems pinned on the model, as overlay children of the
+    /// design (made again whenever the view changes).
+    pins: RefCell<Vec<gtk::Widget>>,
     /// Kept alive for as long as the window: dropping it stops watching.
     watcher: RefCell<Option<Watcher>>,
 }
@@ -378,12 +435,13 @@ impl Window {
                     problem: options.problem,
                     explode: options.explode,
                     view: options.view,
-                    problems: options.problems,
+                    editor: options.editor,
+                    finder: options.finder,
+                    xray: options.xray,
                     checking: options.checking,
                     building: options.building,
                     file: options.file,
                     wish: options.wish,
-                    text_only: options.text_only,
                 }),
                 window_screenshot: options.window_screenshot,
                 start_camera: (options.camera != StartCamera::default()).then_some(options.camera),
@@ -404,7 +462,11 @@ impl Window {
                 focus_start: None,
                 hold_checks: false,
                 linking: false,
+                xray: false,
+                marks: Marks::default(),
+                card_place: None,
             }),
+            pins: RefCell::new(Vec::new()),
             watcher: RefCell::new(None),
         });
         window.install_actions(options.theme);
@@ -412,7 +474,7 @@ impl Window {
         window.watch();
         // The keyboard starts in the 3D view, not in the first focusable
         // widget GTK finds, which can be a problem's selectable `stave
-        // check` text in the inspector (it would show a text cursor).
+        // check` text in the card (it would show a text cursor).
         gtk::prelude::GtkWindowExt::set_focus(
             &window.widgets.window,
             Some(window.widgets.viewport.upcast_ref::<gtk::Widget>()),
@@ -433,7 +495,11 @@ impl Window {
     /// Redraws what the events name. A new result is taken first, so the
     /// other views see it.
     fn handle(self: &Rc<Self>, events: Vec<Event>) {
-        if events.contains(&Event::ResultChanged) {
+        let result = events.contains(&Event::ResultChanged);
+        // Choosing something frames it at once; a new result keeps the
+        // camera where people left it.
+        let reframe = !result && events.contains(&Event::SelectionChanged);
+        if result {
             self.result_changed();
         }
         for event in events {
@@ -450,7 +516,7 @@ impl Window {
                 }
                 Event::SceneChanged => self.scene_changed(),
                 Event::ExplodeChanged => self.explode_changed(),
-                Event::SidebarChanged => self.sidebar_changed(),
+                Event::EditorChanged => self.editor_changed(),
                 Event::CheckStatusChanged => self.check_status_changed(),
                 Event::BuildChanged => self.build_changed(),
                 Event::CheckStarted(ticket) => self.run_check(ticket),
@@ -463,6 +529,9 @@ impl Window {
                     );
                 }
             }
+        }
+        if reframe {
+            self.frame_selection();
         }
     }
 
@@ -522,7 +591,20 @@ impl Window {
         self.show_title();
         let widgets = &self.widgets;
         widgets.files.show_result(latest.as_deref());
-        widgets.problems.show(latest.clone());
+        // The dots: by file always; by part only when the latest result is
+        // the one shown (its ids are the tree's).
+        let marks = latest
+            .as_deref()
+            .map(stave_app::problems::marks)
+            .unwrap_or_default();
+        widgets.files.show_marks(marks.clone());
+        let tree_marks = if showing_older {
+            Marks::default()
+        } else {
+            marks
+        };
+        self.state.borrow_mut().marks = tree_marks.clone();
+        widgets.tree.show_marks(tree_marks);
         let empty = stave_app::empty::of(&self.session.borrow());
         if let Some(empty) = empty {
             // The sidebar and the inspector say why too (for a library,
@@ -530,8 +612,9 @@ impl Window {
             widgets.inspector.show_idle(Some(empty.inspector()));
             self.show_empty(&empty.title, &empty.description, empty.offers_open);
             widgets.tree.show_empty(empty);
-            // The views that don't need the 3D view (the Files view) still
-            // open as asked.
+            self.show_card();
+            // What doesn't need the 3D view (the editor) still opens as
+            // asked.
             self.apply_wanted();
             return;
         }
@@ -574,6 +657,7 @@ impl Window {
         let index = self.session.borrow().scene_index();
         widgets.header.show_scenes(&titles, index);
         widgets.view_stack.set_visible_child_name("view");
+        self.show_moves();
         self.repose();
         if first {
             let mut state = self.state.borrow_mut();
@@ -662,14 +746,14 @@ impl Window {
                 index,
             )))));
         }
-        if wanted.problems {
-            self.dispatch(Command::ShowSidebar(Sidebar::Problems));
-        }
-        if wanted.view != View::Parts {
+        if wanted.view != View::Design {
             self.dispatch(Command::ShowView(wanted.view));
         }
-        if wanted.text_only {
-            self.widgets.files.set_mode(Mode::Text);
+        if wanted.xray {
+            self.widgets.dock.xray.set_active(true);
+        }
+        if wanted.editor && wanted.file.is_none() {
+            self.dispatch(Command::ShowEditor(Editor::Open));
         }
         if let Some(file) = &wanted.file {
             let folder = self.session.borrow().folder().to_path_buf();
@@ -700,82 +784,76 @@ impl Window {
                 Command::Check
             });
         }
+        if let Some(query) = &wanted.finder {
+            self.widgets
+                .finder
+                .present(&self.widgets.window, query.as_str());
+        }
     }
 
     fn view_changed(self: &Rc<Self>) {
         let view = self.session.borrow().view();
         self.widgets.header.show_view(view);
         self.widgets.views.set_visible_child_name(view.word());
-        self.place_viewport();
         self.sync_files();
+        self.request_render();
     }
 
-    /// `true` when the 3D view is on screen: the Parts view, or the Files
-    /// view beside the text.
+    /// `true` when the 3D view is on screen: the design.
     fn shows_3d(&self) -> bool {
         match self.session.borrow().view() {
-            View::Parts => true,
+            View::Design => true,
             View::CutList => false,
-            View::Files => self.widgets.files.mode() == Mode::Both,
         }
     }
 
-    /// Puts the 3D view where it shows: in the Parts view, or beside the
-    /// text in the Files view (Both). It is one widget, moved between the
-    /// two, so the camera and everything posed stay as they are.
-    fn place_viewport(self: &Rc<Self>) {
-        let view_stack = &self.widgets.view_stack;
-        let in_files =
-            self.session.borrow().view() == View::Files && self.widgets.files.mode() == Mode::Both;
-        let slot = &self.widgets.files.view_slot;
-        let in_slot = view_stack
-            .parent()
-            .is_some_and(|parent| parent == *slot.upcast_ref::<gtk::Widget>());
-        if in_files && !in_slot {
-            self.widgets.inner.set_content(None::<&gtk::Widget>);
-            slot.set_child(Some(view_stack));
-            self.request_render();
-        } else if !in_files && in_slot {
-            slot.set_child(None::<&gtk::Widget>);
-            self.widgets.inner.set_content(Some(view_stack));
-            self.request_render();
+    /// The editor opened or closed: slides it in or out, and shows where
+    /// the selection is written.
+    fn editor_changed(self: &Rc<Self>) {
+        let open = self.session.borrow().editor() == Editor::Open;
+        // Hidden while closed, so it takes no room; it slides out first.
+        if open {
+            self.widgets.editor_panel.set_visible(true);
         }
+        self.widgets.editor_panel.set_reveal_child(open);
+        self.widgets.files.show_open(open);
+        if open {
+            self.sync_files();
+            self.widgets.files.focus_text();
+        } else {
+            gtk::prelude::GtkWindowExt::set_focus(
+                &self.widgets.window,
+                Some(self.widgets.viewport.upcast_ref::<gtk::Widget>()),
+            );
+        }
+        // The view's width changes as the panel slides: the card and the
+        // pins follow on the next frames.
+        self.show_card();
+        self.request_render();
     }
 
-    /// The Files view follows the selection: a place in a file is shown;
-    /// a part, assembly or piece of hardware selected elsewhere moves the
-    /// text to the line that places it, and the chip names it.
+    /// The editor follows the selection while it is open: a place in a
+    /// file is shown; a part, assembly or piece of hardware selected in
+    /// the 3D view, the model tree or the finder moves the text to the
+    /// line that places it.
     fn sync_files(self: &Rc<Self>) {
-        let (view, selection, placed, chip) = {
+        let (open, selection, placed) = {
             let session = self.session.borrow();
             let selection = session.selection().cloned();
             let placed = session
                 .shown()
                 .zip(selection.as_ref())
                 .and_then(|(shown, selection)| link::placed_at(shown, selection));
-            let chip = session
-                .drawable()
-                .zip(selection.as_ref())
-                .zip(placed.as_ref())
-                .and_then(|(((design, _), selection), placed)| {
-                    link::chip(design, selection, placed)
-                });
-            (session.view(), selection, placed, chip)
+            (session.editor() == Editor::Open, selection, placed)
         };
-        if view != View::Files {
+        if !open {
             return;
         }
         let files = &self.widgets.files;
         match (&selection, placed) {
             (Some(Selection::Location(location)), _) => files.show_location(location),
-            (Some(_), Some(placed)) => {
-                if self.state.borrow().linking {
-                    files.set_chip(chip.as_deref());
-                } else {
-                    files.reveal(&placed, chip.as_deref());
-                }
-            }
-            _ => files.set_chip(None),
+            (Some(_), Some(placed)) if !self.state.borrow().linking => files.reveal(&placed),
+            _ => {}
         }
     }
 
@@ -814,7 +892,7 @@ impl Window {
     }
 
     fn selection_changed(self: &Rc<Self>) {
-        let (selection, inspection, problem, name, focused) = {
+        let (selection, inspection, problem, joints, focused) = {
             let session = self.session.borrow();
             let selection = session.selection().cloned();
             let inspection = session
@@ -829,40 +907,35 @@ impl Window {
             } else {
                 None
             };
-            let name = selection.as_ref().and_then(|selection| {
-                let (design, _) = session.drawable()?;
-                selection_name(design, selection)
-            });
+            // The joints a selected part is in, listed under it in the
+            // tree.
+            let joints = selection
+                .as_ref()
+                .and_then(Selection::item)
+                .zip(session.drawable())
+                .map(|(item, (design, _))| focus::targets_of(design, item))
+                .unwrap_or_default();
             (
                 selection,
                 inspection,
                 problem.zip(details),
-                name,
+                joints,
                 session.focus().is_some(),
             )
         };
         let widgets = &self.widgets;
-        widgets.tree.show_selection(selection.as_ref());
-        widgets.problems.show_selection(selection.as_ref());
-        if !focused {
-            let explode = self.session.borrow().explode().get();
-            widgets.status.show_selected(&match name {
-                Some(name) => format!("Selected: {name}"),
-                None if explode > 0.0 => {
-                    format!("Pulled apart · {}%", view_tools::percent(explode))
-                }
-                None => String::new(),
-            });
-        }
+        widgets.tree.show_selection(selection.as_ref(), joints);
         self.sync_files();
-        // A narrow window shows the inspector over the view while
-        // something is selected.
-        if widgets.inner.is_collapsed() {
-            widgets.inner.set_show_sidebar(selection.is_some());
-        }
         if focused {
+            self.show_card();
             return;
         }
+        let explode = self.session.borrow().explode().get();
+        self.show_hint(&if explode > 0.0 && selection.is_none() {
+            format!("Pulled apart · {}%", view_tools::percent(explode))
+        } else {
+            String::new()
+        });
         match &problem {
             Some((_, details)) => widgets.inspector.show_problem(details),
             None => widgets.inspector.show(inspection.as_ref()),
@@ -873,10 +946,78 @@ impl Window {
             None => {
                 self.state.borrow_mut().problem = None;
                 self.show_problem_controls(None);
-                self.update_opening(inspection.and_then(|i| i.moves_with));
+                let moves_with = match &selection {
+                    Some(Selection::Assembly(id)) => Some(*id),
+                    _ => inspection.and_then(|i| i.moves_with),
+                };
+                self.update_opening(moves_with);
             }
         }
+        self.show_card();
+        self.show_moves();
         self.request_render();
+    }
+
+    /// The card shows while there is something to say: a selection, focus
+    /// mode, or why there is nothing to select. With the editor open the
+    /// text says it (V2C_EditorOpen.dc.html), so only focus mode keeps its
+    /// card. Its place follows the part (`place_card`).
+    fn show_card(self: &Rc<Self>) {
+        let shows = {
+            let session = self.session.borrow();
+            let editing = session.editor() == Editor::Open;
+            session.focus().is_some()
+                || (!editing
+                    && (session.selection().is_some() || stave_app::empty::of(&session).is_some()))
+        };
+        self.widgets.card.set_visible(shows);
+        self.state.borrow_mut().card_place = None;
+        // Placed again once laid out: with nothing to draw (a library) no
+        // frame of the 3D view places it.
+        let window = Rc::downgrade(self);
+        self.widgets.card.add_tick_callback(move |_, _| {
+            if let Some(window) = window.upgrade() {
+                window.place_card();
+            }
+            glib::ControlFlow::Break
+        });
+    }
+
+    /// A short line at the top of the 3D view ("Focused on one joint · Esc
+    /// to go back"); empty hides it.
+    fn show_hint(&self, text: &str) {
+        self.widgets.hint.set_label(text);
+        self.widgets.hint_box.set_visible(!text.is_empty());
+    }
+
+    /// The dock's chips: every assembly that moves, with its mark, the
+    /// one the motion slider shows marked current.
+    fn show_moves(self: &Rc<Self>) {
+        let (moving, current, sliding) = {
+            let session = self.session.borrow();
+            let state = self.state.borrow();
+            let moving: Vec<(AssemblyId, String, Option<Mark>)> = session
+                .drawable()
+                .map(|(design, graph)| {
+                    design
+                        .assemblies
+                        .iter()
+                        .filter(|a| a.parent.is_none() && graph.motion_range(a.id).is_some())
+                        .map(|a| (a.id, a.name.clone(), state.marks.assembly(a.id)))
+                        .collect()
+                })
+                .unwrap_or_default();
+            (
+                moving,
+                state.opening.map(|o| o.assembly),
+                self.widgets.motion.root.is_visible(),
+            )
+        };
+        // While the selection's own slider shows, the chips step aside
+        // (V2C_Spatial.dc.html): there isn't room for both.
+        self.widgets
+            .dock
+            .show_moves(if sliding { &[] } else { &moving }, current);
     }
 
     // ---- focus mode ----
@@ -932,6 +1073,7 @@ impl Window {
         self.widgets.motion.show(None);
         self.show_problem_controls(None);
         self.layout_for_focus(moving_name.as_deref());
+        self.hide_pins();
         let texts = self.repose();
         self.frame_focus();
         {
@@ -957,7 +1099,7 @@ impl Window {
             .focus
             .as_ref()
             .is_some_and(|f| f.focus.assembles());
-        self.widgets.status.show_selected(if assembles {
+        self.show_hint(if assembles {
             "Focused on one joint · Esc to go back"
         } else {
             "Focused on one piece of hardware · Esc to go back"
@@ -1023,7 +1165,16 @@ impl Window {
             .root
             .set_visible(focus.is_some_and(|f| f.focus.plan().is_some()));
         widgets.camera.root.set_visible(focus.is_none());
-        widgets.view_toolbar.root.set_visible(focus.is_none());
+        widgets.dock.root.set_visible(focus.is_none());
+        widgets.tree.root.set_visible(!page);
+        // A hardware page keeps clear of the card and the rail beside it.
+        widgets.stage.set_margin_end(if page {
+            CARD_WIDTH
+                .saturating_add(EDGE.saturating_mul(2))
+                .saturating_add(widgets.files.rail.width())
+        } else {
+            0
+        });
         drop(state);
         self.show_caption();
     }
@@ -1048,6 +1199,7 @@ impl Window {
         self.state.borrow_mut().focus = None;
         self.widgets.inspector.focus.show(None);
         self.layout_for_focus(None);
+        self.show_hint("");
         self.repose();
         self.selection_changed();
     }
@@ -1370,9 +1522,11 @@ impl Window {
             .collect()
     }
 
-    /// F: frames the selection, or everything.
+    /// F: frames the selection (every part of a selected assembly), or
+    /// everything.
     fn frame(self: &Rc<Self>) {
-        let node = self.selected_node();
+        let nodes = self.selected_nodes();
+        let shift = self.free_centre_shift();
         {
             let session = self.session.borrow();
             let Some(shown) = session.shown() else {
@@ -1380,14 +1534,74 @@ impl Window {
             };
             let mut state = self.state.borrow_mut();
             let aspect = Self::aspect(&state);
-            let selected = node.and_then(|id| {
-                let (_, graph) = shown.drawable()?;
-                let bounds = graph.bounds_of(state.posed.as_ref()?, &[id])?;
-                Some(state.orbit?.framed(bounds, aspect))
-            });
+            let selected = (!nodes.is_empty())
+                .then(|| {
+                    let (_, graph) = shown.drawable()?;
+                    let bounds = graph.bounds_of(state.posed.as_ref()?, &nodes)?;
+                    let framed = state.orbit?.framed(bounds, aspect);
+                    let roomy = Orbit {
+                        distance: framed.distance * FRAME_ROOM,
+                        ..framed
+                    };
+                    // In the middle of the room the model tree leaves.
+                    let height = crate::convert::f32_of_int(self.widgets.viewport.height());
+                    Some(roomy.panned(shift, 0.0, height))
+                })
+                .flatten();
             state.orbit = selected.or_else(|| Self::frame_all(&state, shown));
+            state.card_place = None;
         }
         self.request_render();
+    }
+
+    /// How far right of the view's middle the middle of the free room is,
+    /// in logical pixels: between the model tree on the left and the card
+    /// and the rail on the right. What is framed goes there, not under
+    /// them.
+    fn free_centre_shift(&self) -> f32 {
+        let width = self.widgets.viewport.width();
+        if width <= 1 {
+            return 0.0;
+        }
+        let tree = &self.widgets.tree.root;
+        let left = if tree.is_visible() {
+            tree.width().saturating_add(EDGE.saturating_mul(2))
+        } else {
+            0
+        };
+        let card = if self.widgets.card.is_visible() {
+            CARD_WIDTH.saturating_add(EDGE.saturating_mul(2))
+        } else {
+            0
+        };
+        let right = width
+            .saturating_sub(card)
+            .saturating_sub(self.widgets.files.rail.width());
+        if right.saturating_sub(left) < width / 3 {
+            return 0.0;
+        }
+        let middle = crate::convert::f32_of_int(left.saturating_add(right)) / 2.0;
+        middle - crate::convert::f32_of_int(width) / 2.0
+    }
+
+    /// Choosing something frames it at once: a part, a piece of hardware
+    /// or an assembly, or everything again when nothing is chosen. A
+    /// problem frames itself where it is posed; focus mode frames its
+    /// joint; a place in the text leaves the camera alone.
+    fn frame_selection(self: &Rc<Self>) {
+        let reframes = {
+            let session = self.session.borrow();
+            session.focus().is_none()
+                && matches!(
+                    session.selection(),
+                    None | Some(
+                        Selection::Part(_) | Selection::Hardware(_) | Selection::Assembly(_)
+                    )
+                )
+        };
+        if reframes {
+            self.frame();
+        }
     }
 
     /// Moves the camera where the command line asked, once the view has a
@@ -1538,9 +1752,9 @@ impl Window {
         self.request_render();
     }
 
-    /// "Posed at contact · door at 0.6°" in the status bar.
+    /// "Posed at contact · door at 0.6°" at the top of the view.
     fn show_posed_status(&self, card: &MotionCard, amount: f32) {
-        self.widgets.status.show_selected(&format!(
+        self.show_hint(&format!(
             "Posed at contact · {} at {}",
             card.name,
             card.amount_text(amount)
@@ -1559,7 +1773,10 @@ impl Window {
         let shared = problem.is_some_and(|(_, _, shared)| shared);
         let focused = self.state.borrow().focus.is_some();
         widgets.contact_key.set_visible(shared && !focused);
-        widgets.view_toolbar.root.set_visible(!posed && !focused);
+        widgets.dock.root.set_visible(!posed && !focused);
+        if !posed && !focused {
+            self.show_hint("");
+        }
     }
 
     /// Poses the design where a problem happens and frames its parts.
@@ -1609,9 +1826,9 @@ impl Window {
             None => {
                 self.widgets.problem_card.show(None, 0.0);
                 self.widgets.contact_key.set_visible(shared);
-                self.widgets.view_toolbar.root.set_visible(false);
+                self.widgets.dock.root.set_visible(false);
                 if shared {
-                    self.widgets.status.show_selected("Posed at contact");
+                    self.show_hint("Posed at contact");
                 }
             }
         }
@@ -1790,7 +2007,7 @@ impl Window {
             state.focus.is_none() && state.problem.is_none()
         };
         if quiet && self.session.borrow().selection().is_none() {
-            self.widgets.status.show_selected(&if explode > 0.0 {
+            self.show_hint(&if explode > 0.0 {
                 format!("Pulled apart · {}%", view_tools::percent(explode))
             } else {
                 String::new()
@@ -1912,9 +2129,40 @@ impl Window {
         });
     }
 
+    /// How each node looks outside focus mode: with something chosen, the
+    /// rest fades (see-through with X-ray on); a posed problem fades what
+    /// it doesn't involve; X-ray alone makes everything see-through.
+    /// `None` draws every node as usual.
+    fn looks(&self, selection: &[NodeId]) -> Option<Vec<Look>> {
+        let session = self.session.borrow();
+        let state = self.state.borrow();
+        let (_, graph) = session.drawable()?;
+        let count = graph.node_ids().count();
+        let kept: &[NodeId] = match state.problem.as_ref() {
+            Some(problem) => &problem.highlight.nodes,
+            None => selection,
+        };
+        if kept.is_empty() && !state.xray {
+            return None;
+        }
+        let rest = if state.xray { Look::XRay } else { Look::Dim };
+        let mut looks = vec![rest; count];
+        for node in kept {
+            if let Some(look) = looks.get_mut(node.index()) {
+                *look = Look::Normal;
+            }
+        }
+        Some(looks)
+    }
+
     fn render_now(self: &Rc<Self>) {
         let selection = self.selected_nodes();
         let backdrop = self.backdrop();
+        let looks = if self.state.borrow().focus.is_some() {
+            None
+        } else {
+            self.looks(&selection)
+        };
         let rendered = {
             let session = self.session.borrow();
             let mut state = self.state.borrow_mut();
@@ -1961,7 +2209,7 @@ impl Window {
                 section: plan
                     .map(|p| p.section)
                     .or_else(|| session.scene_entry().and_then(|entry| entry.section)),
-                looks: focus.map(|f| f.looks.as_slice()),
+                looks: focus.map(|f| f.looks.as_slice()).or(looks.as_deref()),
                 overlay: focus.map(|f| &f.overlay),
                 tint_cut_faces: focus.is_none_or(|f| f.options.tint_cut_faces),
                 backdrop,
@@ -1974,6 +2222,8 @@ impl Window {
                 if let Some(texture) = texture(image) {
                     self.widgets.viewport.show_frame(texture);
                 }
+                self.place_card();
+                self.show_pins();
                 // Save the window once a frame of the view's real size is up.
                 let settled = {
                     let state = self.state.borrow();
@@ -1988,6 +2238,239 @@ impl Window {
                 self.show_status("Can't draw in 3D", &message);
             }
         }
+    }
+
+    /// Where a set of nodes shows in the 3D view, in logical pixels from
+    /// its top left (the middle of their bounds as posed); `None` when it
+    /// can't be worked out (nothing drawn yet, behind the camera).
+    fn screen_point(&self, nodes: &[NodeId]) -> Option<(f32, f32)> {
+        let session = self.session.borrow();
+        let state = self.state.borrow();
+        let (_, graph) = session.drawable()?;
+        let bounds = graph.bounds_of(state.posed.as_ref()?, nodes)?;
+        self.project(&state, bounds.centre())
+    }
+
+    /// Where a point of the scene shows in the 3D view, in logical pixels.
+    fn project(&self, state: &State, point: glam::Vec3) -> Option<(f32, f32)> {
+        let viewport = &self.widgets.viewport;
+        state.orbit?.project(
+            point,
+            crate::convert::f32_of_int(viewport.width()),
+            crate::convert::f32_of_int(viewport.height()),
+        )
+    }
+
+    /// Puts the card beside the selected part: to its right when the part
+    /// is in the left half of the view, to its left otherwise, a little
+    /// above it, always inside the view. Without a part to stand by (a
+    /// problem, focus mode, a library), the card sits at the top right.
+    fn place_card(&self) {
+        let card = &self.widgets.card;
+        if !card.is_visible() {
+            return;
+        }
+        let (width, height) = (self.widgets.design.width(), self.widgets.design.height());
+        if width <= 1 {
+            return;
+        }
+        let anchored = {
+            let session = self.session.borrow();
+            session.focus().is_none() && !matches!(session.selection(), Some(Selection::Problem(_)))
+        };
+        let point = anchored
+            .then(|| self.screen_point(&self.selected_nodes()))
+            .flatten();
+        let card_height = card.height().max(200);
+        // The card keeps clear of the model tree at the top left.
+        let tree = &self.widgets.tree.root;
+        let left_most = if tree.is_visible() {
+            tree.width().saturating_add(EDGE.saturating_mul(2))
+        } else {
+            EDGE
+        };
+        // ...and of the rail of open files at the right.
+        let rail = self.widgets.files.rail.width();
+        // Never past the right edge: in a narrow window the card lies over
+        // the tree rather than off the window.
+        let right_most = width
+            .saturating_sub(CARD_WIDTH)
+            .saturating_sub(EDGE)
+            .saturating_sub(rail)
+            .max(EDGE);
+        let left_most = left_most.min(right_most);
+        let lowest = height
+            .saturating_sub(card_height)
+            .saturating_sub(90)
+            .max(EDGE);
+        let place = match point {
+            Some((x, y)) => {
+                let card_width = crate::convert::f32_of_int(CARD_WIDTH);
+                let after = x + CARD_GAP;
+                let before = x - CARD_GAP - card_width;
+                // Beside the part on the side with room for the card;
+                // the right when both have.
+                let fits_after = after + card_width
+                    <= crate::convert::f32_of_int(right_most.saturating_add(CARD_WIDTH));
+                let fits_before = before >= crate::convert::f32_of_int(left_most);
+                let left = match (fits_after, fits_before) {
+                    (true, _) => after,
+                    (false, true) => before,
+                    (false, false) => crate::convert::f32_of_int(right_most),
+                };
+                (
+                    crate::convert::int_of_f32(left.round()).clamp(left_most, right_most),
+                    crate::convert::int_of_f32((y - 160.0).round()).clamp(EDGE, lowest),
+                )
+            }
+            None => (right_most, EDGE),
+        };
+        let mut state = self.state.borrow_mut();
+        if state.card_place != Some(place) {
+            state.card_place = Some(place);
+            card.set_margin_start(place.0);
+            card.set_margin_top(place.1);
+        }
+    }
+
+    /// Takes every pin off the model.
+    fn hide_pins(&self) {
+        for pin in self.pins.borrow_mut().drain(..) {
+            self.widgets.design.remove_overlay(&pin);
+        }
+        self.widgets.edge_pin.set_visible(false);
+    }
+
+    /// Pins each problem where it happens (its shared wood, or the parts
+    /// it is about), the first few; a problem whose place is off screen is
+    /// named on the chip at the view's edge instead. A posed problem shows
+    /// only its own pin; focus mode and an older design show none.
+    fn show_pins(self: &Rc<Self>) {
+        self.hide_pins();
+        let found: Vec<Pin> = {
+            let session = self.session.borrow();
+            let state = self.state.borrow();
+            if state.focus.is_some() || session.showing_older() || session.view() != View::Design {
+                return;
+            }
+            let Some((_, graph)) = session.drawable() else {
+                return;
+            };
+            let posed_problem = match session.selection() {
+                Some(Selection::Problem(index)) => Some(*index),
+                _ => None,
+            };
+            session
+                .problems()
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| posed_problem.is_none_or(|p| p.0 == *index))
+                .filter_map(|(index, problem)| {
+                    let contact = problem.contact.as_ref()?;
+                    let mark = Mark::of(problem.severity)?;
+                    let highlight = view::highlight(graph, contact);
+                    let point = match highlight.volumes.first() {
+                        Some(volume) => self.project(&state, volume.centre()),
+                        None => state.posed.as_ref().and_then(|posed| {
+                            let bounds = graph.bounds_of(posed, &highlight.nodes)?;
+                            self.project(&state, bounds.centre())
+                        }),
+                    };
+                    Some(Pin {
+                        index: ProblemIndex(index),
+                        mark,
+                        message: problem.message.clone(),
+                        point,
+                    })
+                })
+                .take(PIN_LIMIT)
+                .collect()
+        };
+        let (width, height) = (
+            crate::convert::f32_of_int(self.widgets.viewport.width()),
+            crate::convert::f32_of_int(self.widgets.viewport.height()),
+        );
+        let mut off_screen: Vec<(ProblemIndex, Mark, String)> = Vec::new();
+        for Pin {
+            index,
+            mark,
+            message,
+            point,
+        } in found
+        {
+            let on_screen =
+                point.filter(|(x, y)| (0.0..width).contains(x) && (0.0..height).contains(y));
+            let Some((x, y)) = on_screen else {
+                off_screen.push((index, mark, message));
+                continue;
+            };
+            let pin = self.pin(index, mark, &message);
+            pin.set_margin_start(crate::convert::int_of_f32((x - 12.0).round()).max(0));
+            pin.set_margin_top(crate::convert::int_of_f32((y - 24.0).round()).max(0));
+            self.widgets.design.add_overlay(&pin);
+            self.pins.borrow_mut().push(pin.upcast());
+        }
+        if let Some((index, mark, message)) = off_screen.first() {
+            let more = off_screen.len().saturating_sub(1);
+            let words = match mark {
+                Mark::Warning => "warning",
+                Mark::Error | Mark::Involved => "error",
+            };
+            let text = if more == 0 {
+                format!("Off screen: {words} · {message}")
+            } else {
+                format!("Off screen: {words} · {message} · {more} more")
+            };
+            self.widgets.edge_label.set_label(&text);
+            self.widgets.edge_pin.set_visible(true);
+            let index = *index;
+            self.widgets
+                .edge_pin
+                .set_action_target_value(Some(&u64::try_from(index.0).unwrap_or(0).to_variant()));
+        }
+    }
+
+    /// One pin: its mark's "!" and the problem's words, choosing it
+    /// selects the problem (posed where it happens).
+    fn pin(self: &Rc<Self>, index: ProblemIndex, mark: Mark, message: &str) -> gtk::Box {
+        let warning = mark == Mark::Warning;
+        let button = gtk::Button::builder()
+            .label("!")
+            .css_classes(if warning {
+                vec!["stave-pin", "warning"]
+            } else {
+                vec!["stave-pin"]
+            })
+            .tooltip_text(message)
+            .build();
+        button.update_property(&[gtk::accessible::Property::Label(&format!(
+            "Show the problem: {message}"
+        ))]);
+        let label = gtk::Label::builder()
+            .label(message)
+            .ellipsize(gtk::pango::EllipsizeMode::End)
+            .max_width_chars(28)
+            .css_classes(if warning {
+                vec!["stave-pin-label", "warning"]
+            } else {
+                vec!["stave-pin-label"]
+            })
+            .build();
+        let window = Rc::downgrade(self);
+        button.connect_clicked(move |_| {
+            if let Some(window) = window.upgrade() {
+                window.dispatch(Command::Select(Some(Selection::Problem(index))));
+            }
+        });
+        let pin = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing(6)
+            .halign(gtk::Align::Start)
+            .valign(gtk::Align::Start)
+            .build();
+        pin.append(&button);
+        pin.append(&label);
+        pin
     }
 
     fn show_status(&self, title: &str, description: &str) {
@@ -2010,6 +2493,8 @@ impl Window {
         let window = self.widgets.window.clone();
         // What `--type` typed is never saved, and closing doesn't ask.
         let files = self.widgets.files.clone();
+        // An open finder would keep the window from closing.
+        let finder = self.widgets.finder.dialog.clone();
         // The paintable follows the window's drawing from now on.
         let paintable = gtk::WidgetPaintable::new(Some(&window));
         let mut waited = 0;
@@ -2030,34 +2515,21 @@ impl Window {
                 }
                 eprintln!("error: the window drew nothing");
                 files.forget_unsaved();
-                window.close();
+                finder.force_close();
+                close_for_good(&window);
                 return glib::ControlFlow::Break;
             };
             if let Err(error) = save_node(&window, &node, &path) {
                 eprintln!("error: {error:#}");
             }
             files.forget_unsaved();
-            window.close();
+            finder.force_close();
+            close_for_good(&window);
             glib::ControlFlow::Break
         });
     }
 
     // ---- the rest of the session's events ----
-
-    fn sidebar_changed(&self) {
-        let session = self.session.borrow();
-        let sidebar = session.sidebar();
-        self.widgets.sidebar.set_visible_child_name(match sidebar {
-            Sidebar::Parts => "parts",
-            Sidebar::Problems => "problems",
-        });
-        if sidebar == Sidebar::Problems {
-            self.widgets.outer.set_show_sidebar(true);
-        }
-        self.widgets
-            .header
-            .show_pill(&session.check_status().pill(), sidebar == Sidebar::Problems);
-    }
 
     fn check_status_changed(&self) {
         {
@@ -2065,8 +2537,7 @@ impl Window {
             let status = session.check_status();
             self.widgets
                 .header
-                .show_pill(&status.pill(), session.sidebar() == Sidebar::Problems);
-            self.widgets.status.show_check(status);
+                .show_pill(&status.pill(), session.problems().len(), &status.line());
         }
         self.build_changed();
     }
@@ -2106,54 +2577,48 @@ impl Window {
         add("export-view", Box::new(move || this.export_view()));
         let this = self.clone();
         add(
-            "problems",
-            Box::new(move || {
-                // The list lives in the Parts view: from another view it
-                // opens there.
-                let (open, view) = {
-                    let session = this.session.borrow();
-                    (session.sidebar() == Sidebar::Problems, session.view())
-                };
-                if view != View::Parts {
-                    this.dispatch(Command::ShowView(View::Parts));
-                    this.dispatch(Command::ShowSidebar(Sidebar::Problems));
-                    this.widgets.outer.set_show_sidebar(true);
-                    return;
-                }
-                this.dispatch(Command::ShowSidebar(if open {
-                    Sidebar::Parts
-                } else {
-                    Sidebar::Problems
-                }));
-            }),
+            "next-problem",
+            Box::new(move || this.dispatch(Command::NextProblem)),
+        );
+        let this = self.clone();
+        add(
+            "previous-problem",
+            Box::new(move || this.dispatch(Command::PreviousProblem)),
+        );
+        let this = self.clone();
+        add(
+            "find",
+            Box::new(move || this.widgets.finder.present(&this.widgets.window, "")),
         );
         let this = self.clone();
         add(
             "search",
             Box::new(move || {
-                // The Files view searches files and names; the others the
-                // parts tree.
-                if this.session.borrow().view() == View::Files {
-                    this.widgets.files.focus_search();
-                    return;
+                // In the text, its own search bar; anywhere else, the
+                // finder.
+                if !this.widgets.files.focus_search() {
+                    this.widgets.finder.present(&this.widgets.window, "");
                 }
-                this.dispatch(Command::ShowSidebar(Sidebar::Parts));
-                this.widgets.outer.set_show_sidebar(true);
-                this.widgets.tree.focus_search();
             }),
         );
+        let this = self.clone();
+        add(
+            "editor",
+            Box::new(move || {
+                let open = this.session.borrow().editor() == Editor::Open;
+                this.dispatch(Command::ShowEditor(if open {
+                    Editor::Closed
+                } else {
+                    Editor::Open
+                }));
+            }),
+        );
+        let this = self.clone();
+        add("model", Box::new(move || this.widgets.tree.toggle()));
         let this = self.clone();
         add("save", Box::new(move || this.widgets.files.save()));
         let this = self.clone();
         add("format", Box::new(move || this.widgets.files.format()));
-        let this = self.clone();
-        add(
-            "sidebar",
-            Box::new(move || {
-                let outer = &this.widgets.outer;
-                outer.set_show_sidebar(!outer.shows_sidebar());
-            }),
-        );
         let this = self.clone();
         add("open", Box::new(move || this.choose_folder()));
         for view in View::ALL {
@@ -2175,6 +2640,21 @@ impl Window {
                 }
             }),
         );
+        // The chip at the view's edge names a problem off screen.
+        let off_screen = gio::SimpleAction::new("show-problem", Some(glib::VariantTy::UINT64));
+        let this = self.clone();
+        off_screen.connect_activate(move |_, parameter| {
+            let Some(index) = parameter
+                .and_then(|p| p.get::<u64>())
+                .and_then(|index| usize::try_from(index).ok())
+            else {
+                return;
+            };
+            this.dispatch(Command::Select(Some(Selection::Problem(ProblemIndex(
+                index,
+            )))));
+        });
+        window.add_action(&off_screen);
         let style = gio::SimpleAction::new_stateful(
             "style",
             Some(glib::VariantTy::STRING),
@@ -2197,12 +2677,14 @@ impl Window {
                 ("win.build", &["<Control>b"]),
                 ("win.check", &["<Control>r"]),
                 ("win.search", &["<Control>f"]),
-                ("win.sidebar", &["F9"]),
+                ("win.find", &["<Control>k"]),
+                ("win.model", &["F9"]),
                 ("win.open", &["<Control>o"]),
-                ("win.problems", &["<Control>e"]),
-                ("win.view-parts", &["<Control>1"]),
+                ("win.editor", &["<Control>e"]),
+                ("win.next-problem", &["F8"]),
+                ("win.previous-problem", &["<Shift>F8"]),
+                ("win.view-design", &["<Control>1"]),
                 ("win.view-cut-list", &["<Control>2"]),
-                ("win.view-files", &["<Control>3"]),
                 ("win.save", &["<Control>s"]),
                 ("win.format", &["<Control><Shift>i"]),
             ] {
@@ -2297,7 +2779,6 @@ impl Window {
         header.back.set_action_name(Some("win.back"));
         header.forward.set_action_name(Some("win.forward"));
         header.open.set_action_name(Some("win.open"));
-        header.pill.set_action_name(Some("win.problems"));
 
         let window = self.clone();
         header.switcher.connect_active_name_notify(move |group| {
@@ -2336,16 +2817,33 @@ impl Window {
             }
         });
         let window = Rc::downgrade(self);
-        widgets.problems.connect_problem(move |index| {
+        widgets.tree.connect_focus(move |target| {
             if let Some(window) = window.upgrade() {
-                window.dispatch(Command::Select(Some(Selection::Problem(index))));
+                window.dispatch(Command::Focus(target));
             }
         });
-        let window = self.clone();
+        let window = Rc::downgrade(self);
+        widgets.dock.connect_move(move |assembly| {
+            if let Some(window) = window.upgrade() {
+                window.dispatch(Command::Select(Some(Selection::Assembly(assembly))));
+            }
+        });
+        // Once the editor has slid in or out, the view's width has
+        // changed: the selection is framed again in what is left.
+        let window = Rc::downgrade(self);
         widgets
-            .problems
-            .close
-            .connect_clicked(move |_| window.dispatch(Command::ShowSidebar(Sidebar::Parts)));
+            .editor_panel
+            .connect_child_revealed_notify(move |_| {
+                if let Some(window) = window.upgrade() {
+                    window.frame_selection();
+                }
+            });
+        let window = self.clone();
+        widgets.dock.xray.connect_toggled(move |button| {
+            window.state.borrow_mut().xray = button.is_active();
+            window.request_render();
+        });
+        self.connect_finder();
         let window = Rc::downgrade(self);
         widgets.inspector.connect_focus(move |target| {
             if let Some(window) = window.upgrade() {
@@ -2480,8 +2978,8 @@ impl Window {
         self.connect_viewport();
     }
 
-    /// The Files view tells the window where the cursor is, where to go,
-    /// when typing has paused and which way it shows the 3D view.
+    /// The editor tells the window where the cursor is, where to go,
+    /// when typing has paused and when a tab on the rail was chosen.
     fn connect_files(self: &Rc<Self>) {
         let files = &self.widgets.files;
         let window = Rc::downgrade(self);
@@ -2518,9 +3016,6 @@ impl Window {
                     link::selection_for(design, &analysis, symbol, session.selection())
                 })
             };
-            if window.widgets.files.mode() == Mode::Text {
-                window.widgets.files.set_mode(Mode::Both);
-            }
             match selection {
                 Some(selection) => window.dispatch(Command::Select(Some(selection))),
                 None => window.widgets.toasts.add_toast(
@@ -2532,10 +3027,9 @@ impl Window {
             }
         });
         let window = Rc::downgrade(self);
-        files.connect_mode(move |_| {
+        files.connect_open(move || {
             if let Some(window) = window.upgrade() {
-                window.place_viewport();
-                window.sync_files();
+                window.dispatch(Command::ShowEditor(Editor::Open));
             }
         });
         let window = Rc::downgrade(self);
@@ -2547,23 +3041,6 @@ impl Window {
                     .add_toast(adw::Toast::builder().title(text).timeout(4).build());
             }
         });
-        // The title bar's sidebar button shows the files in the Files view.
-        let window = Rc::downgrade(self);
-        self.widgets
-            .header
-            .sidebar
-            .connect_active_notify(move |button| {
-                let Some(window) = window.upgrade() else {
-                    return;
-                };
-                if window.session.borrow().view() == View::Files {
-                    window
-                        .widgets
-                        .files
-                        .root
-                        .set_show_sidebar(button.is_active());
-                }
-            });
         // Closing the window asks about unsaved changes first.
         let window = Rc::downgrade(self);
         self.widgets.window.connect_close_request(move |_| {
@@ -2579,6 +3056,69 @@ impl Window {
                 closing.widgets.window.close();
             });
             glib::Propagation::Stop
+        });
+    }
+
+    /// The finder finds through `stave_app::finder` and goes where a hit
+    /// says: a part is selected (and framed), a problem posed, a place in
+    /// the text opened in the editor.
+    fn connect_finder(self: &Rc<Self>) {
+        let window = Rc::downgrade(self);
+        self.widgets.finder.connect_search(move |query| {
+            let Some(window) = window.upgrade() else {
+                return Vec::new();
+            };
+            let analysis = window.widgets.files.analysis();
+            let session = window.session.borrow();
+            finding::search(
+                finding::Sources {
+                    shown: session.shown().map(|c| &**c),
+                    latest: session.latest().map(|c| &**c),
+                    analysis: analysis.as_deref(),
+                },
+                query,
+            )
+        });
+        let window = Rc::downgrade(self);
+        self.widgets.finder.connect_hit(move |hit, choice| {
+            let Some(window) = window.upgrade() else {
+                return;
+            };
+            match (hit.goal, choice) {
+                // Resting on a part shows it, without going there.
+                (
+                    Goal::Select(
+                        selection @ (Selection::Part(_)
+                        | Selection::Hardware(_)
+                        | Selection::Assembly(_)),
+                    ),
+                    Choice::Preview,
+                ) => {
+                    window.state.borrow_mut().linking = true;
+                    window.dispatch(Command::Link(Some(selection)));
+                    window.state.borrow_mut().linking = false;
+                    window.frame();
+                }
+                (Goal::Select(_) | Goal::Open(_), Choice::Preview) => {}
+                (Goal::Select(selection), Choice::Go) => {
+                    window.dispatch(Command::Select(Some(selection)));
+                }
+                (Goal::Select(selection), Choice::OpenText) => {
+                    let placed = {
+                        let session = window.session.borrow();
+                        session
+                            .shown()
+                            .and_then(|shown| link::placed_at(shown, &selection))
+                    };
+                    window.dispatch(Command::Select(Some(selection)));
+                    if let Some(placed) = placed {
+                        window.dispatch(Command::GoToSource(placed));
+                    }
+                }
+                (Goal::Open(location), Choice::Go | Choice::OpenText) => {
+                    window.dispatch(Command::GoToSource(location));
+                }
+            }
         });
     }
 
@@ -2604,6 +3144,11 @@ impl Window {
                 (changed, first)
             };
             let (changed, first) = changed;
+            // ...and anything chosen by then is framed again at the real
+            // size.
+            if first && window.state.borrow().focus.is_none() {
+                window.frame_selection();
+            }
             if first && window.state.borrow().focus.is_some() {
                 window.frame_focus();
             }
@@ -2713,14 +3258,16 @@ impl Window {
         match watcher {
             Ok(watcher) => {
                 self.watcher.replace(Some(watcher));
-                self.widgets.status.show_watching("Watching for changes");
             }
             Err(error) => {
                 self.watcher.replace(None);
                 eprintln!("warning: {error}");
-                self.widgets
-                    .status
-                    .show_watching("Not watching for changes");
+                self.widgets.toasts.add_toast(
+                    adw::Toast::builder()
+                        .title("Not watching the folder for changes: check again with Ctrl+R")
+                        .timeout(6)
+                        .build(),
+                );
                 return;
             }
         }
@@ -2736,6 +3283,16 @@ impl Window {
     }
 }
 
+/// Closes the window after a screenshot and stops the application, so
+/// nothing left open (a dialog) keeps it running.
+fn close_for_good(window: &adw::ApplicationWindow) {
+    let application = window.application();
+    window.close();
+    if let Some(application) = application {
+        application.quit();
+    }
+}
+
 /// A rendered image as a texture for GTK.
 fn texture(image: crate::render::Image) -> Option<gdk::Texture> {
     let stride = usize::try_from(image.width).ok()?.checked_mul(4)?;
@@ -2745,30 +3302,6 @@ fn texture(image: crate::render::Image) -> Option<gdk::Texture> {
     let texture =
         gdk::MemoryTexture::new(width, height, gdk::MemoryFormat::R8g8b8a8, &bytes, stride);
     Some(texture.upcast())
-}
-
-/// The name of what is selected, for the status bar.
-fn selection_name(
-    design: &stave_model::solved::SolvedDesign,
-    selection: &Selection,
-) -> Option<String> {
-    match selection {
-        Selection::Part(id) => design.part(*id).map(|p| p.name.clone()),
-        Selection::Hardware(id) => design.hardware.get(id.index()).map(|h| h.name.clone()),
-        Selection::Assembly(id) => design.assemblies.get(id.index()).map(|a| a.name.clone()),
-        Selection::Joint { joint, .. } => design.joints.get(joint.index()).map(|j| j.name.clone()),
-        Selection::Location(location) => Some(format!(
-            "{}:{}",
-            Path::new(&location.path).file_name().map_or_else(
-                || location.path.clone(),
-                |n| n.to_string_lossy().into_owned()
-            ),
-            location.line
-        )),
-        Selection::Problem(ProblemIndex(index)) => {
-            Some(format!("problem {}", index.saturating_add(1)))
-        }
-    }
 }
 
 /// A folder as people read it: relative to where Stave was started when it
@@ -2868,22 +3401,16 @@ fn build_widgets(application: &adw::Application, options: &Options) -> Widgets {
     );
     let header = Header::new(&folder_name, &main_menu());
 
-    // The Parts view: the tree, the 3D view, the inspector.
-    let tree = TreeSidebar::new();
-    let problems = ProblemsSidebar::new();
-    let sidebar = gtk::Stack::new();
-    sidebar.add_named(&tree.root, Some("parts"));
-    sidebar.add_named(&problems.root, Some("problems"));
-    sidebar.set_visible_child_name("parts");
-
-    // The 3D view with its floating controls: the view toolbar (Pull
-    // apart) at the top left, the camera buttons at the top right, the
-    // motion bar, a problem's motion card and a joint's step player at the
-    // bottom, and focus mode's From above / In 3D switch.
+    // The 3D view with the controls that belong to the view itself: the
+    // camera buttons, the shared-wood key, focus mode's From above / In 3D
+    // switch, a joint's step player and a problem's motion card.
     let viewport = Viewport::default();
     let motion = MotionBar::new();
     let view_toolbar = ViewToolbar::new();
     let camera = CameraToolbar::new();
+    camera.root.set_valign(gtk::Align::End);
+    camera.root.set_margin_top(0);
+    camera.root.set_margin_bottom(18);
     let contact_key = view_tools::contact_key();
     let plan_switch = PlanSwitch::new();
     let step_card = StepCard::new();
@@ -2895,9 +3422,7 @@ fn build_widgets(application: &adw::Application, options: &Options) -> Widgets {
         .css_classes(["stave-viewport", "stave-figure"])
         .build();
     for overlaid in [
-        motion.root.upcast_ref::<gtk::Widget>(),
-        view_toolbar.root.upcast_ref(),
-        camera.root.upcast_ref(),
+        camera.root.upcast_ref::<gtk::Widget>(),
         contact_key.upcast_ref(),
         plan_switch.root.upcast_ref(),
         step_card.root.upcast_ref(),
@@ -2924,41 +3449,97 @@ fn build_widgets(application: &adw::Application, options: &Options) -> Widgets {
     view_stack.add_named(&empty.root, Some("status"));
     view_stack.set_visible_child_name("status");
 
+    // What floats over the view: the model tree at the top left, the
+    // selection's card beside the part, the dock at the bottom, a short
+    // line at the top, and the chip naming a problem off screen.
+    let tree = TreeSidebar::new();
+    tree.root.set_margin_start(EDGE);
+    tree.root.set_margin_top(EDGE);
     let inspector = Inspector::new();
-    let inner = adw::OverlaySplitView::builder()
-        .content(&view_stack)
-        .sidebar(&inspector.root)
-        .sidebar_position(gtk::PackType::End)
-        .min_sidebar_width(300.0)
-        .max_sidebar_width(360.0)
-        .sidebar_width_fraction(0.25)
-        .show_sidebar(true)
+    let card = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .css_classes(["stave-card-panel"])
+        .width_request(CARD_WIDTH)
+        .halign(gtk::Align::Start)
+        .valign(gtk::Align::Start)
+        .margin_top(EDGE)
+        .visible(false)
+        .overflow(gtk::Overflow::Hidden)
         .build();
-    let outer = adw::OverlaySplitView::builder()
-        .content(&inner)
-        .sidebar(&sidebar)
-        .min_sidebar_width(260.0)
-        .max_sidebar_width(300.0)
-        .sidebar_width_fraction(0.2)
-        .show_sidebar(true)
+    card.append(&inspector.root);
+    let dock = Dock::new(&header.scene, &view_toolbar, &motion);
+    let hint = gtk::Label::new(None);
+    let hint_box = gtk::Box::builder()
+        .css_classes(["stave-chip"])
+        .halign(gtk::Align::Center)
+        .valign(gtk::Align::Start)
+        .margin_top(EDGE)
+        .visible(false)
         .build();
-    header
-        .sidebar
-        .bind_property("active", &outer, "show-sidebar")
-        .bidirectional()
-        .sync_create()
+    hint_box.append(&hint);
+    let edge_label = gtk::Label::new(None);
+    edge_label.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    edge_label.set_max_width_chars(60);
+    let edge_content = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    edge_content.append(&gtk::Image::from_icon_name("go-down-symbolic"));
+    edge_content.append(&edge_label);
+    let edge_pin = gtk::Button::builder()
+        .child(&edge_content)
+        .css_classes(["stave-edge-pin"])
+        .halign(gtk::Align::Center)
+        .valign(gtk::Align::End)
+        .margin_bottom(76)
+        .action_name("win.show-problem")
+        .tooltip_text("Show the problem off screen")
+        .visible(false)
         .build();
+    let design = gtk::Overlay::builder()
+        .child(&view_stack)
+        .hexpand(true)
+        .overflow(gtk::Overflow::Hidden)
+        .build();
+    for overlaid in [
+        tree.root.upcast_ref::<gtk::Widget>(),
+        card.upcast_ref(),
+        dock.root.upcast_ref(),
+        hint_box.upcast_ref(),
+        edge_pin.upcast_ref(),
+    ] {
+        design.add_overlay(overlaid);
+    }
 
+    // At the right edge: the editor sliding in, and the rail of open
+    // files beside it.
     let files = FilesPage::new();
-    files.keep_chip_above(&motion.root);
+    files.root.add_css_class("stave-editor-panel");
+    files.root.set_width_request(EDITOR_WIDTH);
+    let editor_panel = gtk::Revealer::builder()
+        .transition_type(gtk::RevealerTransitionType::SlideLeft)
+        .child(&files.root)
+        .reveal_child(false)
+        .visible(false)
+        .build();
+    editor_panel.connect_child_revealed_notify(|revealer| {
+        if !revealer.is_child_revealed() && !revealer.reveals_child() {
+            revealer.set_visible(false);
+        }
+    });
+    // The rail floats at the view's right edge, so it rides on the
+    // editor's edge while the editor is open.
+    files.rail.set_halign(gtk::Align::End);
+    files.rail.set_valign(gtk::Align::Center);
+    design.add_overlay(&files.rail);
+    let design_row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    design_row.append(&design);
+    design_row.append(&editor_panel);
+
     let views = gtk::Stack::builder()
         .transition_type(gtk::StackTransitionType::Crossfade)
         .vexpand(true)
         .build();
-    views.add_named(&outer, Some(View::Parts.word()));
+    views.add_named(&design_row, Some(View::Design.word()));
     views.add_named(&chrome::cut_list_page(), Some(View::CutList.word()));
-    views.add_named(&files.root, Some(View::Files.word()));
-    views.set_visible_child_name(View::Parts.word());
+    views.set_visible_child_name(View::Design.word());
 
     let banner = adw::Banner::new("");
     let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
@@ -2967,10 +3548,8 @@ fn build_widgets(application: &adw::Application, options: &Options) -> Widgets {
     let toasts = adw::ToastOverlay::new();
     toasts.set_child(Some(&content));
 
-    let status = StatusBar::new();
     let toolbar = adw::ToolbarView::new();
     toolbar.add_top_bar(&header.bar);
-    toolbar.add_bottom_bar(&status.root);
     toolbar.set_content(Some(&toasts));
 
     let (width, height) = options.size;
@@ -2992,33 +3571,19 @@ fn build_widgets(application: &adw::Application, options: &Options) -> Widgets {
         window.set_size_request(width, height);
     }
 
-    // Narrower windows fold the parts tree away first, then the inspector
-    // (it slides over the view while something is selected), then words.
-    let medium = breakpoint(1100.0);
-    medium.add_setter(&outer, "collapsed", Some(&true.to_value()));
-    medium.add_setter(&outer, "show-sidebar", Some(&false.to_value()));
-    medium.add_setter(&files.root, "collapsed", Some(&true.to_value()));
-    medium.add_setter(&files.root, "show-sidebar", Some(&false.to_value()));
-    window.add_breakpoint(medium);
-    for (width, tiny) in [(860.0, false), (600.0, true)] {
+    // Narrower windows drop words first, then the finder's field (Ctrl+K
+    // still opens it), the title, the open button and forward.
+    for (width, tiny) in [(1100.0, false), (860.0, false), (600.0, true)] {
         let narrow = breakpoint(width);
-        narrow.add_setter(&outer, "collapsed", Some(&true.to_value()));
-        narrow.add_setter(&outer, "show-sidebar", Some(&false.to_value()));
-        narrow.add_setter(&inner, "collapsed", Some(&true.to_value()));
-        narrow.add_setter(&inner, "show-sidebar", Some(&false.to_value()));
-        narrow.add_setter(&files.root, "collapsed", Some(&true.to_value()));
-        narrow.add_setter(&files.root, "show-sidebar", Some(&false.to_value()));
-        narrow.add_setter(
-            files.paned(),
-            "orientation",
-            Some(&gtk::Orientation::Vertical.to_value()),
-        );
-        for label in header.switcher_labels() {
-            narrow.add_setter(label, "visible", Some(&false.to_value()));
-        }
-        narrow.add_setter(header.scene_label(), "visible", Some(&false.to_value()));
         narrow.add_setter(header.subtitle(), "visible", Some(&false.to_value()));
-        narrow.add_setter(&header.open, "visible", Some(&false.to_value()));
+        narrow.add_setter(&files.root, "width-request", Some(&360.to_value()));
+        if width < 1000.0 {
+            for label in header.switcher_labels() {
+                narrow.add_setter(label, "visible", Some(&false.to_value()));
+            }
+            narrow.add_setter(header.find_box(), "visible", Some(&false.to_value()));
+            narrow.add_setter(&header.open, "visible", Some(&false.to_value()));
+        }
         if tiny {
             narrow.add_setter(&header.title_box, "visible", Some(&false.to_value()));
             narrow.add_setter(&header.forward, "visible", Some(&false.to_value()));
@@ -3031,18 +3596,25 @@ fn build_widgets(application: &adw::Application, options: &Options) -> Widgets {
         window.add_breakpoint(narrow);
     }
 
+    let finder = Finder::new();
+
     Widgets {
         window,
         header,
         toasts,
         banner,
         views,
-        outer,
-        inner,
-        sidebar,
+        design,
         tree,
-        problems,
         inspector,
+        card,
+        dock,
+        editor_panel,
+        hint,
+        hint_box,
+        edge_pin,
+        edge_label,
+        finder,
         view_stack,
         empty,
         viewport,
@@ -3058,7 +3630,6 @@ fn build_widgets(application: &adw::Application, options: &Options) -> Widgets {
         pictures,
         problem_card,
         files,
-        status,
     }
 }
 

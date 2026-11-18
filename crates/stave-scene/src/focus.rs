@@ -21,6 +21,9 @@ pub enum Look {
     Normal,
     /// Faded to a pale ghost: there, but not what this is about.
     Ghost,
+    /// Dimmed, still reading as wood: the rest of the design while
+    /// something in it is chosen.
+    Dim,
     /// See-through, so what is inside it shows (a rung in its socket, a
     /// tenon in its mortise), with its cut faces showing through.
     XRay,

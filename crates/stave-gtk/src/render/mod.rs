@@ -1430,6 +1430,7 @@ impl Renderer {
                 {
                     Look::Normal => [1.0, 0.0, cut_tint, 1.0],
                     Look::Ghost => [0.16, 0.85, 0.0, 0.18],
+                    Look::Dim => [0.55, 0.5, cut_tint * 0.5, 0.6],
                     Look::XRay => [0.38, 0.1, cut_tint * 1.4, 0.9],
                 };
                 let in_problem = frame.highlight.is_some_and(|h| h.nodes.contains(&id));

@@ -29,45 +29,56 @@ use crate::view::Problem;
 /// The most places the back and forward lists keep.
 pub const HISTORY_LIMIT: usize = 100;
 
-/// The window's three views.
+/// The window's two views.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
 pub enum View {
-    /// The parts tree, the 3D view and the inspector.
+    /// The design: the 3D view filling the window, the model tree over it,
+    /// the selection's card and the editor that slides in from the right.
     #[default]
-    Parts,
+    Design,
     /// The cut list.
     CutList,
-    /// The project's files and the editor.
-    Files,
 }
 
 impl View {
     /// Every view, in the switcher's order.
-    pub const ALL: [View; 3] = [View::Parts, View::CutList, View::Files];
+    pub const ALL: [View; 2] = [View::Design, View::CutList];
 
-    /// Its name in the switcher: "Parts", "Cut list", "Files".
+    /// Its name in the switcher: "Design", "Cut list".
     pub fn title(self) -> &'static str {
         match self {
-            View::Parts => "Parts",
+            View::Design => "Design",
             View::CutList => "Cut list",
-            View::Files => "Files",
         }
     }
 
-    /// A stable word for it (`parts`, `cut-list`, `files`), for actions and
-    /// the command line.
+    /// A stable word for it (`design`, `cut-list`), for actions and the
+    /// command line.
     pub fn word(self) -> &'static str {
         match self {
-            View::Parts => "parts",
+            View::Design => "design",
             View::CutList => "cut-list",
-            View::Files => "files",
         }
     }
 
-    /// The view a word names.
+    /// The view a word names. The words of the older views, `parts` and
+    /// `files`, both name the design (the text now opens beside it).
     pub fn from_word(word: &str) -> Option<View> {
-        View::ALL.into_iter().find(|view| view.word() == word)
+        match word {
+            "parts" | "files" => Some(View::Design),
+            _ => View::ALL.into_iter().find(|view| view.word() == word),
+        }
     }
+}
+
+/// Whether the editor is open beside the 3D view.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
+pub enum Editor {
+    /// Closed: only the rail of open files shows at the right edge.
+    #[default]
+    Closed,
+    /// Open: the text slides in from the right.
+    Open,
 }
 
 /// A line number in a file, from 1.
@@ -181,18 +192,10 @@ pub struct Place {
     pub view: View,
     /// What is selected.
     pub selection: Option<Selection>,
-    /// Focus mode on a joint or a piece of hardware, in the Parts view.
+    /// Focus mode on a joint or a piece of hardware, in the design.
     pub focus: Option<Target>,
-}
-
-/// What the Parts view's left sidebar shows.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
-pub enum Sidebar {
-    /// The parts tree.
-    #[default]
-    Parts,
-    /// The problems list (opened by the status pill).
-    Problems,
+    /// Whether the editor is open.
+    pub editor: Editor,
 }
 
 /// How far the parts are pulled apart: 0 (as built) to 1 (fully apart).
@@ -443,7 +446,7 @@ pub enum Command {
     ShowView(View),
     /// Select something, or nothing.
     Select(Option<Selection>),
-    /// Focus on a joint or a piece of hardware (the Parts view).
+    /// Focus on a joint or a piece of hardware (the design).
     Focus(Target),
     /// Leave focus mode, keeping the selection.
     LeaveFocus,
@@ -451,9 +454,11 @@ pub enum Command {
     Back,
     /// Go forward again (Alt+→).
     Forward,
-    /// Show a place in a file: switches to the Files view with it
-    /// selected (a "Defined in the text" link).
+    /// Show a place in a file: opens the editor with it selected (a
+    /// "Defined in the text" link).
     GoToSource(SourceLocation),
+    /// Open or close the editor, without a history entry.
+    ShowEditor(Editor),
     /// The editor's cursor is on this item (or on nothing the views can
     /// show): select it where the window is, without a history entry, so
     /// the 3D view follows the text as the cursor moves.
@@ -462,8 +467,12 @@ pub enum Command {
     ShowScene(String),
     /// Pull the parts apart this far.
     SetExplode(Explode),
-    /// Show the parts tree or the problems list in the sidebar.
-    ShowSidebar(Sidebar),
+    /// Select the next problem, from the first again after the last
+    /// (F8).
+    NextProblem,
+    /// Select the previous problem, from the last again before the first
+    /// (Shift+F8).
+    PreviousProblem,
     /// Check the project again now.
     Check,
     /// Build the plan (Ctrl+B): checks first.
@@ -486,8 +495,8 @@ pub enum Event {
     SceneChanged,
     /// [`Session::explode`] changed.
     ExplodeChanged,
-    /// [`Session::sidebar`] changed.
-    SidebarChanged,
+    /// [`Session::editor`] changed.
+    EditorChanged,
     /// [`Session::check_status`] changed.
     CheckStatusChanged,
     /// [`Session::build`] changed.
@@ -500,6 +509,14 @@ pub enum Event {
     CheckStarted(CheckTicket),
     /// Show this message.
     Notice(Notice),
+}
+
+/// Which way [`Command::NextProblem`] and [`Command::PreviousProblem`]
+/// step.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Step {
+    Next,
+    Previous,
 }
 
 /// Whether another check was asked for while one runs.
@@ -518,7 +535,6 @@ pub struct Session {
     forward: Vec<Place>,
     scene: Option<String>,
     explode: Explode,
-    sidebar: Sidebar,
     status: CheckStatus,
     build: Build,
     next_ticket: u64,
@@ -540,7 +556,6 @@ impl Session {
             forward: Vec::new(),
             scene: None,
             explode: Explode::TOGETHER,
-            sidebar: Sidebar::Parts,
             status: CheckStatus::Idle,
             build: Build::Idle,
             next_ticket: 0,
@@ -617,9 +632,9 @@ impl Session {
         self.explode
     }
 
-    /// What the sidebar shows.
-    pub fn sidebar(&self) -> Sidebar {
-        self.sidebar
+    /// Whether the editor is open.
+    pub fn editor(&self) -> Editor {
+        self.place.editor
     }
 
     /// How the background check is going.
@@ -745,19 +760,20 @@ impl Session {
             Command::Select(selection) => {
                 if selection != self.place.selection || self.place.focus.is_some() {
                     let place = Place {
-                        view: self.place.view,
                         selection,
                         focus: None,
+                        ..self.place.clone()
                     };
                     self.go(place, &mut events);
                 }
             }
             Command::Focus(target) => {
-                if self.place.focus != Some(target) || self.place.view != View::Parts {
+                if self.place.focus != Some(target) || self.place.view != View::Design {
                     let place = Place {
-                        view: View::Parts,
+                        view: View::Design,
                         selection: Some(Selection::of_target(target)),
                         focus: Some(target),
+                        editor: self.place.editor,
                     };
                     self.go(place, &mut events);
                 }
@@ -787,12 +803,19 @@ impl Session {
             }
             Command::GoToSource(location) => {
                 let place = Place {
-                    view: View::Files,
+                    view: View::Design,
                     selection: Some(Selection::Location(location)),
                     focus: None,
+                    editor: Editor::Open,
                 };
                 if place != self.place {
                     self.go(place, &mut events);
+                }
+            }
+            Command::ShowEditor(editor) => {
+                if editor != self.place.editor {
+                    self.place.editor = editor;
+                    events.push(Event::EditorChanged);
                 }
             }
             Command::Link(selection) => {
@@ -832,12 +855,8 @@ impl Session {
                     events.push(Event::ExplodeChanged);
                 }
             }
-            Command::ShowSidebar(sidebar) => {
-                if sidebar != self.sidebar {
-                    self.sidebar = sidebar;
-                    events.push(Event::SidebarChanged);
-                }
-            }
+            Command::NextProblem => self.step_problem(Step::Next, &mut events),
+            Command::PreviousProblem => self.step_problem(Step::Previous, &mut events),
             Command::Check => self.request_check(&mut events),
             Command::Build => {
                 if self.build == Build::Idle && self.buildable().is_ok() {
@@ -888,6 +907,37 @@ impl Session {
             }));
         }
         finish(events)
+    }
+
+    /// Selects the problem after (or before) the selected one, wrapping
+    /// round; from anything else, the first (or the last). Leaves focus
+    /// and shows the design.
+    fn step_problem(&mut self, step: Step, events: &mut Vec<Event>) {
+        let count = self.problems().len();
+        let Some(last) = count.checked_sub(1) else {
+            return;
+        };
+        let current = match self.place.selection {
+            Some(Selection::Problem(ProblemIndex(index))) if index < count => Some(index),
+            _ => None,
+        };
+        let index = match (step, current) {
+            (Step::Next, None) => 0,
+            (Step::Previous, None) => last,
+            (Step::Next, Some(index)) if index >= last => 0,
+            (Step::Next, Some(index)) => index.saturating_add(1),
+            (Step::Previous, Some(0)) => last,
+            (Step::Previous, Some(index)) => index.saturating_sub(1),
+        };
+        let place = Place {
+            view: View::Design,
+            selection: Some(Selection::Problem(ProblemIndex(index))),
+            focus: None,
+            editor: self.place.editor,
+        };
+        if place != self.place {
+            self.go(place, events);
+        }
     }
 
     /// Starts a check, or asks for another once the running one is done.
@@ -975,6 +1025,7 @@ impl Session {
             Event::ViewChanged,
             Event::SelectionChanged,
             Event::FocusChanged,
+            Event::EditorChanged,
             Event::HistoryChanged,
         ]);
     }
@@ -988,6 +1039,9 @@ impl Session {
         }
         if before.focus != self.place.focus {
             events.push(Event::FocusChanged);
+        }
+        if before.editor != self.place.editor {
+            events.push(Event::EditorChanged);
         }
         events.push(Event::HistoryChanged);
     }
@@ -1029,6 +1083,7 @@ impl Carry<'_> {
             view: place.view,
             selection,
             focus,
+            editor: place.editor,
         }
     }
 
@@ -1130,6 +1185,8 @@ mod tests {
             assert_eq!(View::from_word(view.word()), Some(view));
         }
         assert_eq!(View::from_word("cut-list"), Some(View::CutList));
+        assert_eq!(View::from_word("parts"), Some(View::Design));
+        assert_eq!(View::from_word("files"), Some(View::Design));
     }
 
     #[test]

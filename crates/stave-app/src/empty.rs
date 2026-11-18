@@ -296,7 +296,7 @@ pub fn of(session: &Session) -> Option<EmptyState> {
             reason: Reason::Errors,
             title: "Nothing to show yet".to_owned(),
             description: format!(
-                "The design has {}, so it can't be put together yet. The status pill lists them.",
+                "The design has {}, so it can't be put together yet. The problems chip at the top steps through them (F8).",
                 plural(latest.summary.errors, "error", "errors")
             ),
             offers_open: false,
