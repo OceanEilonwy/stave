@@ -32,6 +32,17 @@
 //! text above, the text doesn't). Diagnostics are compared as a multiset,
 //! so a second copy of an error the base had once is caused. Warnings
 //! never refuse; a fit carries the warnings the edit caused.
+//!
+//! **The checks always run when there is a design.** [`crate::open`] runs
+//! the fit and geometry checks (layer 4) only when nothing before them
+//! found an error, so one mistake is one error. The edit loop can't: a
+//! design that already has an error (a failing `require`, say) would then
+//! never be checked again, and every edit would fit. Here the gate is
+//! judged against the base instead: the checks run on a candidate unless
+//! the edit itself caused an error before them (the edit is refused for
+//! that anyway, and its own mistake stays one error), and the base's
+//! diagnostics are taken with the checks run the same way, so the errors
+//! they find in the base are not counted against the edit.
 
 use std::collections::BTreeMap;
 use std::io;
@@ -96,7 +107,7 @@ impl<'f> EditBase<'f> {
         prepared: Prepared,
     ) -> Self {
         let target = Target::of(&prepared.modules, folder);
-        let known = count(&opened.sources, &opened.diagnostics);
+        let known = count(&opened.sources, &base_diagnostics(&opened));
         Self {
             folder: folder.to_path_buf(),
             files,
@@ -173,7 +184,7 @@ impl<'f> EditBase<'f> {
             overrides,
             sources,
         };
-        let state = if let Some((model, design)) = stages.checkable() {
+        let state = if let Some((model, design)) = self.checkable(&stages) {
             let fast = stave_check::check_fast(model, design);
             let mut so_far = stages.diagnostics.clone();
             so_far.extend(fast.diagnostics.iter().map(|(d, _)| d.clone()));
@@ -243,6 +254,17 @@ impl<'f> EditBase<'f> {
         Ok(())
     }
 
+    /// The design of a scratch copy, when the checks are to run on it: it
+    /// was placed, and the edit caused no error before the checks. An
+    /// error the base already had there doesn't stop them.
+    fn checkable<'s>(&self, stages: &'s Stages) -> Option<(&'s Model, &'s SolvedDesign)> {
+        let found = stages.model.as_ref().zip(stages.design.as_ref())?;
+        self.caused(&stages.modules.sources, &stages.diagnostics)
+            .errors
+            .is_empty()
+            .then_some(found)
+    }
+
     /// The diagnostics in `diagnostics` that the base doesn't have,
     /// split into errors and warnings, in their order.
     fn caused<'d>(&self, sources: &SourceMap, diagnostics: &'d [Diagnostic]) -> Caused<'d> {
@@ -274,7 +296,11 @@ impl<'f> EditBase<'f> {
     ) -> Tried {
         crate::sort(&mut diagnostics);
         let caused = self.caused(&stages.modules.sources, &diagnostics);
-        let verdict = verdict(caused.errors, caused.warnings);
+        let unplaced = unplaced(&stages, &diagnostics, &caused);
+        let verdict = match &unplaced {
+            Some(unplaced) => verdict(vec![unplaced], Vec::new()),
+            None => verdict(caused.errors, caused.warnings),
+        };
         let opened = Opened {
             sources: stages.modules.sources.clone(),
             model: stages.model,
@@ -313,6 +339,37 @@ fn verdict(errors: Vec<&Diagnostic>, warnings: Vec<&Diagnostic>) -> Verdict {
             Err(_) => Verdict::Checking,
         },
     }
+}
+
+/// Why a candidate that caused no error still can't fit: it has no design
+/// to check, because of an error the base already had (a failing
+/// `require`, say, stops the solver writing the design). Its fit and
+/// geometry can't be checked, and strict commit never writes what wasn't
+/// checked, so it is refused, pointing at the first such error. `None`
+/// when the candidate has a design, caused an error itself, or has no
+/// error at all (a library, which has nothing to place).
+fn unplaced(
+    stages: &Stages,
+    diagnostics: &[Diagnostic],
+    caused: &Caused<'_>,
+) -> Option<Diagnostic> {
+    if stages.design.is_some() || !caused.errors.is_empty() {
+        return None;
+    }
+    let blocking = diagnostics.iter().find(|d| d.is_error())?;
+    let mut unplaced = blocking.clone();
+    unplaced.code = Code::NotSupported;
+    unplaced.message = "the edit can't be checked: the design already has this error, which \
+                        stops it being placed"
+        .to_owned();
+    unplaced.labels.truncate(1);
+    unplaced.notes = vec![format!(
+        "the error: error[{}]: {}",
+        blocking.code, blocking.message
+    )];
+    unplaced.help =
+        Some("fix that error first; until the design places, no edit can be checked".to_owned());
+    Some(unplaced)
 }
 
 /// The fixes a diagnostic holds. The checker's diagnostics carry none
@@ -408,7 +465,7 @@ impl Scratch<'_, '_> {
                 pending,
             } => (stages, fast, pending),
         };
-        let Some((model, design)) = stages.checkable() else {
+        let Some((model, design)) = self.base.checkable(&stages) else {
             // `Checking` is only made when the checks may run.
             let diagnostics = stages.diagnostics.clone();
             return Ok(self.base.tried(stages, diagnostics, Vec::new(), pending));
@@ -477,7 +534,9 @@ impl Tried {
 
     /// The scratch copy as checked, for the ghost; `None` when the patch
     /// couldn't be applied. After a refusal by the fast tier its
-    /// diagnostics are what the fast tier found.
+    /// diagnostics are what the fast tier found. Unlike [`crate::open`],
+    /// the checks ran even when an error came before them, unless the
+    /// edit caused that error (see the module's notes).
     pub fn opened(&self) -> Option<&Opened> {
         self.scratch.as_ref().map(|scratch| &scratch.opened)
     }
@@ -803,6 +862,26 @@ impl FileSource for Overlay<'_> {
     }
 }
 
+/// The base's diagnostics as the edit loop takes them: with the checks run
+/// whenever there is a design. [`crate::open`] leaves them out when an
+/// error came before them, so they are run here for such a base.
+fn base_diagnostics(opened: &Opened) -> Vec<Diagnostic> {
+    let mut diagnostics = opened.diagnostics.clone();
+    if opened.error_count() > 0
+        && let Some((model, design)) = opened.model.as_ref().zip(opened.design.as_ref())
+    {
+        // When the checks did run, what they find again is already there;
+        // sorting drops the copies.
+        diagnostics.extend(
+            stave_check::check_with_contacts(model, design)
+                .into_iter()
+                .map(|(diagnostic, _)| diagnostic),
+        );
+        crate::sort(&mut diagnostics);
+    }
+    diagnostics
+}
+
 /// A scratch copy loaded, resolved and placed, before the checks of this
 /// crate's tiers.
 struct Stages {
@@ -811,19 +890,6 @@ struct Stages {
     design: Option<SolvedDesign>,
     diagnostics: Vec<Diagnostic>,
     root_files: usize,
-}
-
-impl Stages {
-    /// The design, when the checks may run on it: it was placed and
-    /// nothing before the checks found an error (one mistake, one error,
-    /// as [`crate::open`] runs them).
-    fn checkable(&self) -> Option<(&Model, &SolvedDesign)> {
-        let found = self.model.as_ref().zip(self.design.as_ref())?;
-        self.diagnostics
-            .iter()
-            .all(|d| !d.is_error())
-            .then_some(found)
-    }
 }
 
 /// The pipeline of [`crate::open`] up to the checks, reusing what
@@ -1054,8 +1120,9 @@ patch "Add a shelf through the divider" {
         assert_eq!(written, files);
     }
 
-    #[test]
-    fn an_error_the_design_had_does_not_refuse_an_unrelated_edit() {
+    /// The cabinet with a `require` added to `cabinet.stave` that fails:
+    /// an error from the solver, which then writes no design.
+    fn cabinet_with_a_failing_require() -> MemoryFiles {
         let mut files = cabinet();
         let project = Path::new(FOLDER).join("cabinet.stave");
         let text = files_text(&files, &project);
@@ -1063,12 +1130,99 @@ patch "Add a shelf through the divider" {
             &project,
             format!("{text}\nrequire too_narrow : cabinet_width >= 1000mm \"a wide cabinet\"\n"),
         );
+        files
+    }
+
+    /// The cabinet with the shelf through the divider already in it: an
+    /// error of the checks themselves, with a design.
+    fn cabinet_with_an_overlap() -> MemoryFiles {
+        let clean = cabinet();
+        let through = try_patch(
+            &EditBase::new(Path::new(FOLDER), &clean).unwrap(),
+            THROUGH_DIVIDER,
+        );
+        let mut files = clean.clone();
+        for file in through.changed() {
+            files.insert(&file.path, file.text.clone());
+        }
+        files
+    }
+
+    #[test]
+    fn an_error_the_design_had_does_not_refuse_an_unrelated_edit() {
+        let files = cabinet_with_an_overlap();
+        let base = EditBase::new(Path::new(FOLDER), &files).unwrap();
+        assert!(base.opened().design.is_some());
+        assert!(
+            base.opened()
+                .diagnostics
+                .iter()
+                .any(|d| d.is_error() && d.code == Code::Overlap)
+        );
+        let tried = try_patch(&base, ADD_SHELF);
+        assert_eq!(
+            refused_codes(&tried),
+            None,
+            "{}",
+            render_diagnostics(tried.sources(), &tried.shown())
+        );
+        assert_eq!(
+            tried.opened().unwrap().error_count(),
+            base.opened().error_count()
+        );
+        let mut written = files.clone();
+        tried.commit(&mut written).unwrap();
+        assert_ne!(written, files);
+    }
+
+    #[test]
+    fn an_error_the_design_had_does_not_hide_one_the_edit_causes() {
+        // A second shelf through the divider, beside the one already there:
+        // its own overlap refuses it.
+        let files = cabinet_with_an_overlap();
+        let base = EditBase::new(Path::new(FOLDER), &files).unwrap();
+        let another = THROUGH_DIVIDER.replace("shelf_3", "shelf_4");
+        let tried = try_patch(&base, &another);
+        let shown = render_diagnostics(tried.sources(), &tried.shown());
+        let codes = refused_codes(&tried).expect("refused");
+        assert!(codes.contains(&Code::Overlap), "{shown}");
+        assert!(shown.contains("shelf_4"), "{shown}");
+        let mut written = files.clone();
+        assert!(matches!(
+            tried.commit(&mut written),
+            Err(CommitError::Refused)
+        ));
+        assert_eq!(written, files);
+    }
+
+    #[test]
+    fn a_design_that_cannot_be_placed_refuses_edits_it_cannot_check() {
+        // The failing `require` stops the solver writing a design, so no
+        // candidate's fit can be checked: none fits, not even one that
+        // would pass through the divider, and nothing is written.
+        let files = cabinet_with_a_failing_require();
         let base = EditBase::new(Path::new(FOLDER), &files).unwrap();
         assert_eq!(base.opened().error_count(), 1);
-        let tried = try_patch(&base, ADD_SHELF);
-        assert_eq!(refused_codes(&tried), None);
-        assert_eq!(tried.opened().unwrap().error_count(), 1);
-        // A second, new error is the edit's own.
+        assert!(base.opened().design.is_none());
+        for text in [ADD_SHELF, THROUGH_DIVIDER] {
+            let tried = try_patch(&base, text);
+            assert_eq!(refused_codes(&tried), Some(vec![Code::NotSupported]));
+            let shown = render_diagnostics(tried.sources(), &tried.shown());
+            assert!(
+                shown.starts_with(
+                    "error[not-supported]: the edit can't be checked: the design already has this error, which stops it being placed\n  --> scratch/clothing_cabinet/cabinet.stave:"
+                ),
+                "{shown}"
+            );
+            assert!(
+                shown.contains("= note: the error: error[require]: "),
+                "{shown}"
+            );
+            let mut written = files.clone();
+            assert!(tried.commit(&mut written).is_err());
+            assert_eq!(written, files);
+        }
+        // A new error is the edit's own, and refuses as itself.
         let tried = try_patch(
             &base,
             "stave 1\n\npatch \"Another rule\" {\n  add require too_shallow : cabinet_depth >= 600mm \"deep\" in \"cabinet.stave\"\n}\n",

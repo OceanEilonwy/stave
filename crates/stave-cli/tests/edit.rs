@@ -154,6 +154,40 @@ fn a_part_through_another_is_refused_and_nothing_is_written() {
 }
 
 #[test]
+fn an_edit_to_a_design_that_cannot_be_placed_is_refused() {
+    // A failing `require` stops the design being placed, so the shelf
+    // through the divider can't be checked for fit: it is refused, not
+    // let through, and nothing is written.
+    let folder = copy_of_the_cabinet("unplaced");
+    let text = read(&folder, "cabinet/cabinet.stave");
+    std::fs::write(
+        folder.join("cabinet/cabinet.stave"),
+        format!("{text}\nrequire too_narrow : cabinet_width >= 1000mm \"a wide cabinet\"\n"),
+    )
+    .unwrap();
+    patch_file(&folder, "through.stave", &[THROUGH_DIVIDER]);
+    let before = read(&folder, "cabinet/carcass.stave");
+
+    let output = stave(
+        &folder,
+        &["edit", "cabinet", "--patch", "through.stave", "--commit"],
+    );
+    assert_eq!(output.status.code(), Some(1), "{}", stdout(&output));
+    let printed = stdout(&output);
+    assert!(
+        printed.starts_with(
+            "patch \"Add a shelf through the divider\": refused\nerror[not-supported]: the edit can't be checked: the design already has this error, which stops it being placed\n  --> cabinet/cabinet.stave:"
+        ),
+        "{printed}"
+    );
+    assert!(
+        printed.ends_with("\nchecked 1 of 1 patch: 0 fit, 1 refused, wrote 0 files\n"),
+        "{printed}"
+    );
+    assert_eq!(read(&folder, "cabinet/carcass.stave"), before);
+}
+
+#[test]
 fn patches_apply_in_order_and_stop_at_the_first_refusal() {
     let folder = copy_of_the_cabinet("order");
     patch_file(&folder, "three.stave", &[ADD_SHELF, THROUGH_DIVIDER, WIDER]);
