@@ -191,16 +191,19 @@ const COLOURS: &str = r#"
 headerbar.stave-header:backdrop { background-color: @headerbar_bg_color; transition: none; }
 headerbar.stave-header:backdrop > windowhandle { filter: none; }
 window.stave-window { background-color: @window_bg_color; }
-/* The panels' tabs read in both styles, focused or not. */
-panelframetabbar tabbar tab, panelframetabbar tabbar tab label { color: @window_fg_color; opacity: 1; filter: none; }
-/* Slim headers, as in an IDE: a thin strip of small tabs, so the panels
-   keep their room. */
-panelframetabbar tabbar .box { min-height: 0; padding: 2px 4px; }
-panelframetabbar tabbar tab { min-height: 24px; padding: 0 4px; font-size: 12px; font-weight: 600; }
-panelframetabbar tabbar tab button, panelframetabbar button { min-height: 20px; min-width: 20px; padding: 0; }
-panelframetabbar tabbar tab image { -gtk-icon-size: 12px; }
-panelframetabbar, panelframetabbar > box, panelframetabbar tabbar, panelframetabbar tabbar tabbox { min-height: 0; padding-top: 0; padding-bottom: 0; margin-top: 0; margin-bottom: 0; }
-panelframetabbar tabbar tabbox > tabboxchild, panelframetabbar tabbar tab { margin-top: 0; margin-bottom: 0; }
+/* The panels' headers (TabStrip): a slim strip of flush tabs, as in an
+   IDE; the shown tab carries an accent line, the others are dimmer. */
+stavetabstrip { min-height: 28px; background: @headerbar_bg_color; color: @headerbar_fg_color; box-shadow: inset 0 -1px @headerbar_shade_color; }
+stavetabstrip .stave-tab { border-radius: 0; color: alpha(currentColor, 0.65); }
+stavetabstrip .stave-tab:hover { background: alpha(currentColor, 0.05); color: currentColor; }
+stavetabstrip .stave-tab.shown { color: currentColor; background: alpha(currentColor, 0.06); box-shadow: inset 0 -2px @accent_bg_color; }
+stavetabstrip button.stave-tab-show { min-height: 28px; padding: 0 4px 0 10px; border-radius: 0; background: transparent; color: inherit; font-size: 12px; font-weight: 600; }
+stavetabstrip button.stave-tab-show image { -gtk-icon-size: 14px; }
+stavetabstrip button.stave-tab-close { min-height: 18px; min-width: 18px; margin: 0 6px 0 0; padding: 0; border-radius: 4px; opacity: 0; }
+stavetabstrip .stave-tab.shown button.stave-tab-close, stavetabstrip .stave-tab:hover button.stave-tab-close { opacity: 0.7; }
+stavetabstrip button.stave-tab-close:hover { opacity: 1; background: alpha(currentColor, 0.1); }
+stavetabstrip button.stave-tab-close image { -gtk-icon-size: 12px; }
+stavetabstrip .stave-tab-end button { min-height: 24px; min-width: 24px; padding: 0; margin: 2px 4px; border-radius: 5px; }
 .stave-header button.stave-icon-button:disabled { color: alpha(currentColor, 0.45); }
 .stave-header button.stave-sidebar-toggle:checked { background: alpha(currentColor, 0.1); }
 .stave-title .subtitle, .dim { color: alpha(currentColor, 0.7); }
@@ -311,7 +314,7 @@ button.stave-play:hover { background: mix(@accent_bg_color, @accent_fg_color, 0.
 .stave-dock button.stave-move.error { box-shadow: inset 0 0 0 1px alpha(@error_color, 0.6); }
 .stave-dock button.stave-move.warning { box-shadow: inset 0 0 0 1px alpha(@warning_color, 0.7); }
 .stave-dock button.stave-move.current { background: alpha(@accent_bg_color, 0.2); color: @accent_color; }
-.stave-controls { padding: 8px; color: @window_fg_color; }
+.stave-controls { padding: 6px 8px; color: @headerbar_fg_color; background: @headerbar_bg_color; box-shadow: inset 0 1px @headerbar_shade_color; }
 .stave-controls .stave-camera, .stave-controls .stave-plan-switch { background: transparent; padding: 0; box-shadow: none; }
 .stave-controls-hint { font-weight: 600; color: @accent_color; padding: 0 4px; }
 .stave-code-head { background: @headerbar_bg_color; box-shadow: inset 0 -1px @headerbar_shade_color; }

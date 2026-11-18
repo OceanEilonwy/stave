@@ -208,7 +208,7 @@ PDF doesn't exist yet, and the button says so honestly.
 │ CARCASS            │                                                          │                             │
 │  base     oak_19   │                        3D view                           │                             │
 │ ASSEMBLIES         │                     (problem pins)                       │                             │
-├ Details ───────────┼ 3D Tools ────────────────────────────────────────────────┤                             │
+├ Details ───────────┤ (tool strip, no header)                                  │                             │
 │ PART · IN door_l   │ scene ▾ · Pull apart · X-ray · door_l ──── 110° · Move: … · [fit][front][turn]          │
 │ stile[hinge]       ├ Code │ Problems ─────────────────────────────────────────┤                             │
 │ Stock  oak_19 …    │ doors.stave │ carcass.stave                               │                             │
@@ -219,7 +219,7 @@ PDF doesn't exist yet, and the button says so honestly.
 ```
 
 Every part of the window is a panel, docked with libpanel (`Workbench`):
-the 3D View, its 3D Tools, Parts, Files, Details, Code and Problems.
+the 3D View, Parts, Files, Details, Code and Problems.
 Nothing but the problem pins sits over the model. Each panel is a
 `panel::Widget` in a `panel::Frame` (tabs along the top,
 `panel::FrameTabBar`); drag a tab to an edge, into the centre (a
@@ -228,7 +228,7 @@ the 3D view) or into another frame, or pick "Move to the Right" (left,
 bottom, top, middle) from its tab's menu; close it with its ×; show an edge
 again from the status bar's toggles. The default layout is board B
 (`Layout::default`): Parts and Files above Details on the left, the 3D
-View over its 3D Tools in the centre, Code and Problems at the
+View in the centre, Code and Problems at the
 bottom, the right edge empty and hidden. The layout is remembered per
 user in `~/.config/stave/layout` (saved on every drop and when the
 window closes; one line per panel, `code centre 1 0 0` for side, column,
@@ -236,19 +236,28 @@ frame and tab, and one per edge, `show end true`; a broken file means
 the default) and never in a `.stave` file. "Reset Layout" in the main
 menu puts board B back.
 
-- **3D View** is the view and nothing else (the problem pins and the chip
-  for a problem off screen sit on it).
-- **3D Tools** holds what used to float over or under the view: the
-  scene menu, Pull apart, X-ray, the "Open it" slider, the Move chips, the
-  camera buttons, focus mode's From above / In 3D switch, the shared-wood
-  key, a short line ("Focused on one joint · Esc to go back"), a posed
-  problem's swing card and a joint's step player. The buttons and sliders
-  sit in an `adw::WrapBox`: in a wide, short frame they make a row and wrap
-  onto more as it narrows; in a narrow side frame they stack; the panel
-  scrolls when even that doesn't fit. Focus mode brings it forward.
+- **3D View** is the view, with the camera buttons (frame, front, reset)
+  as small buttons on its top right corner, the problem pins and the chip
+  for a problem off screen on it, and its tools in a strip along its foot
+  (part of the panel, no header of their own, so they go where the view
+  goes): the scene menu, Pull apart, X-ray, the "Open it" slider, the Move
+  chips, focus mode's From above / In 3D switch, the shared-wood key, a
+  short line ("Focused on one joint · Esc to go back"), a posed problem's
+  swing card and a joint's step player. The buttons and sliders sit in an
+  `adw::WrapBox`, wrapping onto more rows (or stacking) as the panel
+  narrows.
+- **Headers** are a slim strip of flush tabs (`TabStrip`, our own
+  `panel::FrameHeader`): a tab as wide as its title, the shown one with an
+  accent line and its ×, and the shown panel's menu (▾: "Move to the
+  Right", ...) at the end. Dragging a tab docks its panel elsewhere.
+- **Panels** (the status bar's button, and the main menu) shows any closed
+  panel again, back where it was, and resets the layout.
 
 - **Code panel** holds the open files as its own tabs, so a file always
-  opens wherever the Code panel is docked (board B2: dragged to the right
+  opens wherever the Code panel is docked. Choosing a part, assembly or
+  piece of hardware anywhere opens the file that places it, at that line
+  (the panel comes forward unless it shares a frame with the 3D View; the
+  keyboard stays where it is) (board B2: dragged to the right
   edge, files open on the right). With no file open it shows "No file
   open" and stays where it is. Ctrl+E ("Show the Code Panel") brings it
   back where it last was if it was closed, and puts the keyboard in the
