@@ -44,6 +44,11 @@
 //!   removing any one of the named items would leave the rest satisfiable.
 //! - [`Outcome::TimedOut`]: the problem's time limit ran out.
 //!
+//! [`Problem::reach`] answers a second question about the same problem: the
+//! least and greatest values a linear sum of the unknowns can take while
+//! every domain and constraint holds ([`Reach`]). A drag asks it of the
+//! dragged size, to know which targets can be reached at all.
+//!
 //! # Determinism
 //!
 //! The same problem gives the same answer on every run and every machine,
@@ -78,22 +83,35 @@
 //! new `CARGO_TARGET_DIR`) pays it once more, and a `cargo clean` throws it
 //! away. Parallel agents each building z3 at once will each be much slower.
 //!
-//! In the `dev` and `test` profiles the `cmake` crate builds z3 as CMake's
-//! `Debug` (unoptimised, with z3's internal assertions), because it follows
-//! the opt-level of the `z3-sys` package. Solving is then slow: about 100 ms
-//! for a problem of six unknowns, and the determinism test takes several
-//! seconds (an optimised z3 should be many times faster; that was not
-//! measured here). The cure is a profile override in the workspace root
-//! `Cargo.toml` (the only place Cargo reads one), which this crate does not
-//! own:
+//! z3's C++ is compiled by the build script of `z3-sys` (the `z3-src`
+//! crate is only the source and the CMake call), and the `cmake` crate picks
+//! CMake's build type from that package's profile: at the `dev` profile's
+//! opt-level 0 it builds z3 as `Debug`, unoptimised and with z3's internal
+//! assertions. The workspace root `Cargo.toml` therefore sets
 //!
 //! ```toml
 //! [profile.dev.package.z3-sys]
 //! opt-level = 3
 //! debug = false
+//!
+//! [profile.dev.package.z3]
+//! opt-level = 3
 //! ```
 //!
-//! It makes CMake build z3 as `Release` and costs one more full z3 build.
+//! which makes CMake build z3 as `Release` in the `dev` profile and in the
+//! `test` profile, which inherits it. Measured on the owner's machine
+//! (2026-11-18), a small smart edit (six unknowns over ranges, one
+//! equality, one inequality; median of ten solves):
+//!
+//! | z3 built as | one solve | this crate's tests | `stave_app::solve_edit`'s tests |
+//! |---|---|---|---|
+//! | `Debug` (before) | 92 ms (81 to 99) | 5.6 s (14 tests) | 3.6 s (7 tests) |
+//! | `Release` (after) | 7.2 ms (6.7 to 12.6) | 0.5 s (17 tests, 0.2 s of it a timeout) | 1.1 s (9 tests) |
+//!
+//! The rebuild of z3 as `Release` took 4 minutes 7 seconds of wall time.
+//!
+//! The override costs one more full z3 build in each target directory that
+//! had the `Debug` one; Stave's own crates stay unoptimised.
 //!
 //! # Example
 //!
@@ -247,7 +265,48 @@ impl Solution {
     }
 }
 
+/// The result of [`Problem::reach`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Reach {
+    /// The least and greatest values the sum takes over every answer that
+    /// keeps every domain and constraint, both reached.
+    Between {
+        /// The least value.
+        lowest: Rational,
+        /// The greatest value.
+        highest: Rational,
+    },
+    /// No answer at all: a smallest conflicting set, as for
+    /// [`Outcome::Unsatisfiable`].
+    Unsatisfiable(Vec<Conflict>),
+    /// The time limit ran out.
+    TimedOut,
+}
+
 impl Problem {
+    /// How far a linear sum of the unknowns (`(name, coefficient)` pairs)
+    /// can go: its least and greatest values over every answer that keeps
+    /// every domain and constraint, ignoring the unknowns' current values.
+    /// A smart edit's drag asks this of the dragged size to know which
+    /// targets can be reached at all. Every domain is bounded, so both
+    /// ends always exist when there is an answer at all. The time limit
+    /// covers both ends.
+    ///
+    /// # Errors
+    ///
+    /// As for [`Problem::solve`], and [`SmtError::UndeclaredUnknown`] when
+    /// the sum names an unknown the problem does not have.
+    pub fn reach<Name: AsRef<str>>(
+        &self,
+        terms: impl IntoIterator<Item = (Name, Rational)>,
+    ) -> Result<Reach, SmtError> {
+        let terms: Vec<(String, Rational)> = terms
+            .into_iter()
+            .map(|(name, coefficient)| (name.as_ref().to_owned(), coefficient))
+            .collect();
+        solve::reach(self, &terms)
+    }
+
     /// Solves the problem: the best answer, the conflict that rules every
     /// answer out, or a timeout. See the [crate documentation](crate) for
     /// what "best" means.

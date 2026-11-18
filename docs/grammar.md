@@ -3394,9 +3394,16 @@ or a measure is not. The trace and rule 2's inversion
 are built (`stave_solve::trace`, `stave_model::trace::invert`); the
 editor does not use them yet.
 
-Not built yet. The first build moves plain numbers (rule 1) and single
-params (rule 2) only; z3 over solved params (rule 3) is a later stage, and
-until it is built a `solved param` is edited as a plain one.
+Rule 3 is built headless (`stave_app::solve_edit`): a solve from a
+target to a patch, snapped to the project's `resolution:` and judged by
+the scratch check, and a drag that works the values out between solves by
+exact arithmetic. The solve's constraints are the `require`s whose two
+sides are linear in the solved params; a `require` that is not, a kind's
+`require` and the geometric checks are applied to its answer by the
+scratch check, which refuses it if one fails. A solved param of one
+element of an array, or of an assembly inside a component, is held: no
+single `set` reaches it alone. The editor's grips do not use rule 3 yet;
+until they do, a `solved param` is edited there as a plain one.
 
 ---
 

@@ -41,6 +41,7 @@ pub mod remove;
 pub mod repeat;
 pub mod scratch;
 pub mod session;
+pub mod solve_edit;
 pub mod view;
 
 use stave_lang::{Diagnostic, SourceMap};
