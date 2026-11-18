@@ -41,8 +41,15 @@ shot() {
 
 # ---- the window (docs/screenshots/window) ----
 
-# The main window, light and dark: the parts tree, a hinge stile selected
-# in the 3D view, and the inspector's account of it (Main / MainDark).
+# The design with nothing chosen: the 3D view filling the window, the model
+# tree floating at its top left, the dock at the bottom, the rail of open
+# files at the right edge (V2C_Home); and a project with problems, each
+# pinned where it happens and dotted in the tree.
+shot $window/home.png $cabinet --theme light
+shot $window/home_problems.png crates/stave-app/tests/projects/several_problems --theme light
+# A hinge stile chosen, light and dark: the camera frames it between the
+# tree and its card, the rest of the design dims, the tree lists the
+# joints it is in, and the card beside it says what it is (V2C_Spatial).
 shot $window/main_light.png $cabinet --theme light --select 'door_l.stile[hinge]'
 shot $window/main_dark.png $cabinet --theme dark --select 'door_l.stile[hinge]'
 # A selection close up: the mirrored door's latch stile with its accent
@@ -51,17 +58,17 @@ shot $window/main_dark.png $cabinet --theme dark --select 'door_l.stile[hinge]'
 shot $window/selected_close.png $cabinet --theme light --select 'door_r.stile[latch]' --zoom 3.5 --turn 15
 shot $window/selected_close_dark.png $cabinet --theme dark --select 'door_r.stile[latch]' --zoom 3.5 --turn 15
 shot $window/selected_assembly.png $cabinet --theme light --select door_l
-# A narrow window: the sidebar folds away and the inspector lies over the
-# 3D view while something is selected.
+# A narrow window: the finder's field and the switcher's words go; the
+# tree and the card still float over the view.
 shot $window/narrow.png $cabinet --theme light --select 'door_l.stile[hinge]' --size 760x900
 shot $window/narrow_dark.png $cabinet --theme dark --select 'door_l.stile[hinge]' --size 760x900
-# The title bar's pill while a check runs (the spinner keeps the last
-# result's tone), with the problems list open.
-shot $window/checking.png tests/broken/door_hits_side --theme light --checking --problems
+# The problems chip while a check runs (the spinner keeps the last
+# result's tone).
+shot $window/checking.png tests/broken/door_hits_side --theme light --checking
 # The build button pressed: its check running.
 shot $window/building.png examples/stool --theme light --select 'leg[front_left]' --building
 # Pulled apart, light and dark: drawers and doors out first, then every
-# part out of its joints; the inspector stays as it is with nothing selected.
+# part out of its joints; the dock grows its play button and slider.
 shot $window/exploded.png $cabinet --theme light --explode 1
 shot $window/exploded_dark.png $cabinet --theme dark --explode 1
 # The stool pulled apart: the legs drop off the seat and out at their
@@ -88,30 +95,39 @@ shot $window/hinge_3d.png $cabinet --theme light --focus "$hinge" --step 0.41
 shot $window/hinge_plan.png $cabinet --theme light --focus "$hinge" --plan --step 0.41
 shot $window/hinge_dark.png $cabinet --theme dark --focus "$hinge" --plan --step 0.41
 shot $window/hinge_narrow.png $cabinet --theme light --focus "$hinge" --step 0.41 --size 760x700
-# A problem selected: the door posed where it first hits the wall, the
-# shared wood in red, the motion card, and the details with the `stave
-# check` text (its code block must not look selected) and the ways to fix
-# it (Problems), light and dark.
-shot $window/problem.png tests/broken/door_hits_side --theme light --problems --diagnostic 0
-shot $window/problem_dark.png tests/broken/door_hits_side --theme dark --problems --diagnostic 0
+# A problem chosen (its pin, or F8): the door posed where it first hits
+# the wall, the shared wood in red, what it doesn't involve dimmed, the
+# motion card, and the card with the `stave check` text (its code block
+# must not look selected) and the ways to fix it (V2C_Problem), light and
+# dark.
+shot $window/problem.png tests/broken/door_hits_side --theme light --diagnostic 0
+shot $window/problem_dark.png tests/broken/door_hits_side --theme dark --diagnostic 0
 # A problem about a joint's member: the peg that runs past the bottom of
-# its hole, listed as its own row, posed with the shared wood in red and
-# the parts it sits in see-through.
-shot $window/problem_pin.png tests/broken/pin_past_its_hole --theme light --problems --diagnostic 0
-# The problems list with several problems of several kinds, one selected;
-# and the same in a narrow window.
-shot $window/problems_several.png crates/stave-app/tests/projects/several_problems --theme light --problems --diagnostic 2
-shot $window/problems_narrow.png crates/stave-app/tests/projects/several_problems --theme light --problems --diagnostic 0 --size 760x900
-# A library folder: nothing to draw, so the view says so; the sidebar
-# lists what the library defines and the inspector says what a library is
-# and how to import it, light and dark.
+# its hole, posed with the shared wood in red and the parts it sits in
+# see-through.
+shot $window/problem_pin.png tests/broken/pin_past_its_hole --theme light --diagnostic 0
+# Several problems of several kinds, one chosen: the chip's arrows step
+# through them (F8); and the same in a narrow window.
+shot $window/problems_several.png crates/stave-app/tests/projects/several_problems --theme light --diagnostic 2
+shot $window/problems_narrow.png crates/stave-app/tests/projects/several_problems --theme light --diagnostic 0 --size 760x900
+# X-ray from the dock: everything but the chosen part see-through.
+shot $window/xray.png $cabinet --theme light --select 'door_l.panel' --xray
+# The finder (Ctrl+K) with "hinge" typed: parts, names and lines, grouped,
+# with a filter per kind (V2C_Finder), light and dark.
+shot $window/finder.png $cabinet --theme light --finder hinge
+shot $window/finder_dark.png $cabinet --theme dark --finder door
+# A library folder: nothing to draw, so the view says so; the tree lists
+# what the library defines and the card says what a library is and how to
+# import it, light and dark.
 shot $window/library.png examples/japanese_joinery --theme light
 shot $window/library_dark.png examples/japanese_joinery --theme dark
 
-# ---- the Files view (docs/screenshots/files) ----
+# ---- the editor (docs/screenshots/files) ----
+# `--view files` opens the editor beside the 3D view, sliding in from the
+# right with the file's tab on the rail (V2C_EditorOpen).
 
-# The cursor on a name in the text: the 3D view follows it ("Linked to the
-# text") (EditorLinked).
+# The cursor on a name in the text: the 3D view follows it, framing what
+# the name means.
 shot $files/linked.png $cabinet --view files --theme light --file doors.stave:9 --cursor door_l
 # Peeking at a definition in place (EditorOverlay).
 shot $files/peek.png $cabinet --view files --theme light --file doors.stave:9 --cursor FramePanelDoor --peek
@@ -132,10 +148,10 @@ shot $files/undo.png $cabinet --view files --theme light --file doors.stave:11 -
 shot $files/search.png $cabinet --view files --theme light --file doors.stave:9 --cursor door_l --search side
 # The cursor just inside a bracket: it and its partner are boxed, dark.
 shot $files/brackets_dark.png $cabinet --view files --theme dark --file doors.stave:18 --cursor door_l
-# The Files view in a narrow window.
+# The editor in a narrow window.
 shot $files/narrow.png $cabinet --view files --theme light --size 760x900 --file doors.stave:9 --cursor door_l
-# A part selected in the 3D view opens the text that places it, dark
-# (EditorSplit).
+# A part chosen with the editor open: the text goes to the line that
+# places it and the camera frames it in the room the editor leaves, dark.
 shot $files/selected_in_3d_dark.png $cabinet --view files --theme dark --select 'door_l.stile[hinge]'
 
 exit $failed

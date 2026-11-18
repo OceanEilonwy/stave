@@ -1,7 +1,9 @@
-//! The Files view (FilesMode.dc.html): the project's files and the
-//! standard library in a sidebar with "Go to file or name", editor tabs
-//! with a Text | Both switch, breadcrumbs, the editor, the uses panel and
-//! a footer; beside it, in Both, the 3D view, linked to the text.
+//! The text (V2C_EditorOpen.dc.html, option A): a rail of the open files
+//! at the window's right edge, one tab each with a dot for its worst
+//! problem, and the editor that slides in from the right beside the 3D
+//! view: the file's name, breadcrumbs, the editor, the uses panel and a
+//! footer. Files are opened with the finder (Ctrl+K) or by following a
+//! link; the 3D view stays the window's own.
 //!
 //! Everything it knows about the text comes from `stave-ide`: the open
 //! buffers ([`Buffers`]), and an [`Analysis`] built again on a worker
@@ -11,8 +13,7 @@
 //! where to go ([`FilesPage::connect_go`]) and when typing has paused
 //! ([`FilesPage::connect_check`]), and it calls back with a place to show.
 
-use std::cell::{Cell, RefCell};
-use std::collections::BTreeSet;
+use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -38,29 +39,8 @@ const CHECK_DELAY: Duration = Duration::from_millis(700);
 const LINK_DELAY: Duration = Duration::from_millis(120);
 /// How long the pointer must rest on a word before its card shows.
 const HOVER_DELAY: Duration = Duration::from_millis(450);
-/// The most results "Go to file or name" lists.
-const SEARCH_LIMIT: usize = 40;
 
-/// The editor alone, or beside the 3D view.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum Mode {
-    /// The editor only.
-    Text,
-    /// The editor beside the 3D view.
-    #[default]
-    Both,
-}
-
-impl Mode {
-    fn word(self) -> &'static str {
-        match self {
-            Mode::Text => "text",
-            Mode::Both => "both",
-        }
-    }
-}
-
-/// What the screenshot asks the Files view to show, once the names are in.
+/// What the screenshot asks the editor to show, once the names are in.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Wish {
     /// Put the cursor on the first occurrence of this word on the line.
@@ -103,7 +83,7 @@ struct Callbacks {
     on_go: Option<GoCallback>,
     on_check: Option<Rc<dyn Fn()>>,
     on_show_in_3d: Option<SymbolCallback>,
-    on_mode: Option<Rc<dyn Fn(Mode)>>,
+    on_open: Option<Rc<dyn Fn()>>,
     on_notice: Option<Rc<dyn Fn(String)>>,
 }
 
@@ -114,6 +94,8 @@ struct Tab {
     lines: LineStarts,
     button: gtk::Button,
     label: gtk::Label,
+    /// The dot for the file's worst problem.
+    dot: gtk::Box,
 }
 
 /// A problem the last check found, where it is.
@@ -124,15 +106,6 @@ struct Problem {
     severity: Severity,
     message: String,
     help: Option<String>,
-}
-
-/// What a sidebar row does.
-#[derive(Debug, Clone)]
-enum RowTarget {
-    Nothing,
-    Open(Document),
-    Expand(&'static str),
-    Found(Location),
 }
 
 #[derive(Default)]
@@ -160,9 +133,8 @@ struct State {
     /// The text the hover card is about, while it shows: the pointer
     /// leaving it hides the card at once.
     hover_span: Option<Span>,
-    mode: Mode,
-    expanded: BTreeSet<&'static str>,
-    rows: Vec<RowTarget>,
+    /// The worst problem in each file, by its source path.
+    marks: stave_app::problems::Marks,
     wish: Option<Wish>,
     /// The symbol whose uses the panel lists.
     listed: Option<SymbolId>,
@@ -173,28 +145,25 @@ struct State {
     relink: bool,
 }
 
-/// The Files view.
+/// The open files' rail and the editor beside the 3D view.
 pub struct FilesPage {
-    /// The page, for the view stack.
-    pub root: adw::OverlaySplitView,
-    search: gtk::SearchEntry,
-    list: gtk::ListBox,
-    tab_row: gtk::Box,
-    mode_toggle: adw::ToggleGroup,
+    /// The editor's panel, which the window slides in from the right.
+    pub root: gtk::Box,
+    /// The rail of open files at the window's right edge.
+    pub rail: gtk::Box,
+    /// The rail's button that opens or closes the editor.
+    pub toggle: gtk::Button,
+    toggle_icon: gtk::Image,
+    tab_list: gtk::Box,
+    title: gtk::Label,
     crumbs: gtk::Box,
     editor: Editor,
     uses: gtk::Revealer,
     uses_title: gtk::Label,
     uses_list: gtk::ListBox,
     line: gtk::Label,
-    paned: gtk::Paned,
-    /// Where the window puts the 3D view in Both.
-    pub view_slot: gtk::Overlay,
-    chip: gtk::Box,
-    chip_label: gtk::Label,
     state: RefCell<State>,
     callbacks: RefCell<Callbacks>,
-    placed: Cell<bool>,
 }
 
 fn label(text: &str, classes: &[&str]) -> gtk::Label {
@@ -216,60 +185,62 @@ fn escape(text: &str) -> String {
 }
 
 impl FilesPage {
-    /// An empty Files view.
+    /// An empty rail and editor.
     pub fn new() -> Rc<FilesPage> {
-        // The sidebar.
-        let search = gtk::SearchEntry::builder()
-            .placeholder_text("Go to file or name")
-            .css_classes(["stave-search"])
+        // The rail: open or close the editor, the open files, "+".
+        let toggle_icon = gtk::Image::from_icon_name("go-previous-symbolic");
+        let toggle = gtk::Button::builder()
+            .child(&toggle_icon)
+            .tooltip_text("Open the text (Ctrl+E)")
+            .action_name("win.editor")
+            .css_classes(["flat", "stave-rail-button"])
             .build();
-        let list = gtk::ListBox::builder()
-            .selection_mode(gtk::SelectionMode::Single)
-            .css_classes(["stave-tree", "stave-files"])
-            .build();
-        let sidebar = gtk::Box::builder()
+        let tab_list = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
-            .spacing(8)
-            .css_classes(["stave-sidebar"])
+            .spacing(4)
+            .css_classes(["stave-rail-tabs"])
             .build();
-        sidebar.append(&search);
-        sidebar.append(
+        let add = gtk::Button::builder()
+            .icon_name("list-add-symbolic")
+            .tooltip_text("Open another file (Ctrl+K)")
+            .action_name("win.find")
+            .css_classes(["flat", "stave-rail-button"])
+            .build();
+        let rail = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .spacing(4)
+            .css_classes(["stave-rail"])
+            .build();
+        rail.append(&toggle);
+        rail.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+        rail.append(
             &gtk::ScrolledWindow::builder()
                 .hscrollbar_policy(gtk::PolicyType::Never)
-                .child(&list)
+                .propagate_natural_height(true)
                 .vexpand(true)
+                .child(&tab_list)
                 .build(),
         );
+        rail.append(&add);
 
-        // The tab row: tabs, then Text | Both.
-        let tab_row = gtk::Box::builder()
+        // The panel's head: the file's name and the close button.
+        let title = label("", &["stave-editor-title"]);
+        title.set_hexpand(true);
+        title.set_max_width_chars(10);
+        title.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
+        let close = gtk::Button::builder()
+            .icon_name("go-next-symbolic")
+            .tooltip_text("Close the text (Ctrl+E)")
+            .action_name("win.editor")
+            .css_classes(["flat", "circular"])
+            .build();
+        let head = gtk::Box::builder()
             .orientation(gtk::Orientation::Horizontal)
-            .spacing(2)
-            .hexpand(true)
+            .spacing(8)
+            .css_classes(["stave-editor-head"])
             .build();
-        let mode_toggle = adw::ToggleGroup::builder()
-            .css_classes(["stave-mode"])
-            .valign(gtk::Align::Center)
-            .build();
-        for (mode, title) in [(Mode::Text, "Text"), (Mode::Both, "Both")] {
-            mode_toggle.add(
-                adw::Toggle::builder()
-                    .name(mode.word())
-                    .label(title)
-                    .tooltip(match mode {
-                        Mode::Text => "The text alone",
-                        Mode::Both => "The text beside the 3D view",
-                    })
-                    .build(),
-            );
-        }
-        mode_toggle.set_active_name(Some(Mode::Both.word()));
-        let tabs = gtk::Box::builder()
-            .orientation(gtk::Orientation::Horizontal)
-            .css_classes(["stave-tabs"])
-            .build();
-        tabs.append(&tab_row);
-        tabs.append(&mode_toggle);
+        head.append(&title);
+        head.append(&close);
 
         let crumbs = gtk::Box::builder()
             .orientation(gtk::Orientation::Horizontal)
@@ -323,6 +294,7 @@ impl FilesPage {
         );
         hint.set_hexpand(true);
         hint.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        hint.set_max_width_chars(10);
         let line = label("", &["stave-footer-line"]);
         let footer = gtk::Box::builder()
             .orientation(gtk::Orientation::Horizontal)
@@ -337,72 +309,27 @@ impl FilesPage {
             .css_classes(["stave-editor-column"])
             .width_request(320)
             .build();
-        column.append(&tabs);
+        column.append(&head);
         column.append(&crumbs);
         column.append(&editor.root);
         column.append(&uses);
         column.append(&footer);
 
-        // The 3D view's place, with the chip that says it follows the text.
-        let chip_label = label("", &[]);
-        let chip = gtk::Box::builder()
-            .orientation(gtk::Orientation::Horizontal)
-            .spacing(6)
-            .halign(gtk::Align::Start)
-            .valign(gtk::Align::End)
-            .margin_start(12)
-            .margin_bottom(12)
-            .css_classes(["stave-chip"])
-            .visible(false)
-            .build();
-        chip.append(&super::icons::PathIcon::new(super::icons::LINK, 16));
-        chip.append(&chip_label);
-        let view_slot = gtk::Overlay::builder()
-            .css_classes(["stave-viewport"])
-            .width_request(300)
-            .build();
-        view_slot.add_overlay(&chip);
-
-        let paned = gtk::Paned::builder()
-            .orientation(gtk::Orientation::Horizontal)
-            .start_child(&column)
-            .end_child(&view_slot)
-            .resize_start_child(true)
-            .resize_end_child(true)
-            .shrink_start_child(false)
-            .shrink_end_child(false)
-            .wide_handle(false)
-            .css_classes(["stave-files-split"])
-            .build();
-
-        let root = adw::OverlaySplitView::builder()
-            .sidebar(&sidebar)
-            .content(&paned)
-            .min_sidebar_width(200.0)
-            .max_sidebar_width(230.0)
-            .sidebar_width_fraction(0.16)
-            .show_sidebar(true)
-            .build();
-
         let page = Rc::new(FilesPage {
-            root,
-            search,
-            list,
-            tab_row,
-            mode_toggle,
+            root: column,
+            rail,
+            toggle,
+            toggle_icon,
+            tab_list,
+            title,
             crumbs,
             editor,
             uses,
             uses_title,
             uses_list,
             line,
-            paned,
-            view_slot,
-            chip,
-            chip_label,
             state: RefCell::new(State::default()),
             callbacks: RefCell::new(Callbacks::default()),
-            placed: Cell::new(false),
         });
         page.connect(&uses_close);
         page
@@ -430,9 +357,9 @@ impl FilesPage {
         self.callbacks.borrow_mut().on_show_in_3d = Some(Rc::new(callback));
     }
 
-    /// Text | Both changed.
-    pub fn connect_mode(&self, callback: impl Fn(Mode) + 'static) {
-        self.callbacks.borrow_mut().on_mode = Some(Rc::new(callback));
+    /// A tab on the rail was chosen: open the editor.
+    pub fn connect_open(&self, callback: impl Fn() + 'static) {
+        self.callbacks.borrow_mut().on_open = Some(Rc::new(callback));
     }
 
     /// Something to tell people (a failed save).
@@ -449,14 +376,28 @@ impl FilesPage {
 
     // ---- what the window asks ----
 
-    /// Text or Both.
-    pub fn mode(&self) -> Mode {
-        self.state.borrow().mode
+    /// Shows the rail's button and the editor as open or closed.
+    pub fn show_open(&self, open: bool) {
+        self.toggle_icon.set_icon_name(Some(if open {
+            "go-next-symbolic"
+        } else {
+            "go-previous-symbolic"
+        }));
+        self.toggle.set_tooltip_text(Some(if open {
+            "Close the text (Ctrl+E)"
+        } else {
+            "Open the text (Ctrl+E)"
+        }));
+        if open {
+            self.rail.add_css_class("open");
+        } else {
+            self.rail.remove_css_class("open");
+        }
     }
 
-    /// Switches Text | Both.
-    pub fn set_mode(&self, mode: Mode) {
-        self.mode_toggle.set_active_name(Some(mode.word()));
+    /// Puts the keyboard in the text.
+    pub fn focus_text(&self) {
+        self.editor.view.grab_focus();
     }
 
     /// Opens a project folder: closes every tab (the window has asked
@@ -472,13 +413,13 @@ impl FilesPage {
             state.problems.clear();
             state.listed = None;
         }
-        while let Some(child) = self.tab_row.first_child() {
-            self.tab_row.remove(&child);
+        while let Some(child) = self.tab_list.first_child() {
+            self.tab_list.remove(&child);
         }
         self.editor.show_buffer(&self.editor.new_buffer(""), false);
         self.uses.set_reveal_child(false);
+        self.title.set_label("");
         self.show_crumbs(&[]);
-        self.fill_sidebar();
         self.analyse_now();
     }
 
@@ -509,7 +450,6 @@ impl FilesPage {
     pub fn save_all(self: &Rc<Self>) -> bool {
         let result = self.state.borrow_mut().buffers.save_all();
         self.refresh_markers();
-        self.fill_sidebar();
         match result {
             Ok(()) => true,
             Err(error) => {
@@ -535,7 +475,6 @@ impl FilesPage {
             self.notice(error.to_string());
         }
         self.refresh_markers();
-        self.fill_sidebar();
     }
 
     /// Lays the document showing out with `stave fmt`, as one step that
@@ -579,21 +518,25 @@ impl FilesPage {
         self.state.borrow_mut().buffers = Buffers::new();
     }
 
-    /// The split between the editor and the 3D view, for the window's
-    /// narrow layout.
-    pub fn paned(&self) -> &gtk::Paned {
-        &self.paned
-    }
-
-    /// Ctrl+F: in the text, opens its search bar; anywhere else, puts the
-    /// keyboard in "Go to file or name".
-    pub fn focus_search(&self) {
+    /// Ctrl+F in the text: opens its search bar. `false` when the
+    /// keyboard isn't in the text.
+    pub fn focus_search(&self) -> bool {
         if self.editor.has_focus() {
             self.editor.start_search();
-            return;
+            return true;
         }
-        self.root.set_show_sidebar(true);
-        self.search.grab_focus();
+        false
+    }
+
+    /// The latest analysis of the project, for the finder.
+    pub fn analysis(&self) -> Option<Arc<Analysis>> {
+        self.state.borrow().analysis.clone()
+    }
+
+    /// Takes the latest check's marks for the dots on the tabs.
+    pub fn show_marks(&self, marks: stave_app::problems::Marks) {
+        self.state.borrow_mut().marks = marks;
+        self.refresh_markers();
     }
 
     /// Takes the last check's problems for the underlines and the cards,
@@ -642,35 +585,12 @@ impl FilesPage {
     /// (or on the exact name a "go to" asked for).
     pub fn show_location(self: &Rc<Self>, location: &SourceLocation) {
         self.show_place(location, true);
-        self.set_chip(None);
     }
 
-    /// Shows where a selection made in the 3D view or the parts tree is
-    /// placed, with the chip's words, without telling the window the
-    /// cursor moved.
-    pub fn reveal(self: &Rc<Self>, location: &SourceLocation, chip: Option<&str>) {
+    /// Shows where a selection made in the 3D view or the model tree is
+    /// placed, without telling the window the cursor moved.
+    pub fn reveal(self: &Rc<Self>, location: &SourceLocation) {
         self.show_place(location, false);
-        self.set_chip(chip);
-    }
-
-    /// Keeps the chip clear of a bar at the bottom of the 3D view (the
-    /// motion bar) while that bar shows.
-    pub fn keep_chip_above(&self, bar: &impl IsA<gtk::Widget>) {
-        bar.bind_property("visible", &self.chip, "margin-bottom")
-            .transform_to(|_, visible: bool| Some(if visible { 84 } else { 12 }))
-            .sync_create()
-            .build();
-    }
-
-    /// Shows or hides the chip on the 3D view.
-    pub fn set_chip(&self, chip: Option<&str>) {
-        match chip {
-            Some(text) => {
-                self.chip_label.set_label(text);
-                self.chip.set_visible(true);
-            }
-            None => self.chip.set_visible(false),
-        }
     }
 
     /// Asks for screenshot wishes once the names are in.
@@ -689,94 +609,11 @@ impl FilesPage {
 
     fn connect(self: &Rc<Self>, uses_close: &gtk::Button) {
         let page = Rc::downgrade(self);
-        self.list.connect_row_activated(move |_, row| {
-            let Some(page) = page.upgrade() else { return };
-            let target = usize::try_from(row.index())
-                .ok()
-                .and_then(|i| page.state.borrow().rows.get(i).cloned());
-            match target {
-                Some(RowTarget::Open(document)) => page.open_document(&document),
-                Some(RowTarget::Expand(module)) => {
-                    {
-                        let mut state = page.state.borrow_mut();
-                        if !state.expanded.remove(module) {
-                            state.expanded.insert(module);
-                        }
-                    }
-                    page.fill_sidebar();
-                }
-                Some(RowTarget::Found(location)) => {
-                    page.search.set_text("");
-                    page.go(&location);
-                }
-                Some(RowTarget::Nothing) | None => {}
-            }
-        });
-        let page = Rc::downgrade(self);
-        self.search.connect_search_changed(move |_| {
-            if let Some(page) = page.upgrade() {
-                page.fill_sidebar();
-            }
-        });
-        let page = Rc::downgrade(self);
-        self.search.connect_activate(move |_| {
-            let Some(page) = page.upgrade() else { return };
-            let first = page
-                .state
-                .borrow()
-                .rows
-                .iter()
-                .position(|r| matches!(r, RowTarget::Found(_) | RowTarget::Open(_)));
-            if let Some(row) = first
-                .and_then(|i| i32::try_from(i).ok())
-                .and_then(|i| page.list.row_at_index(i))
-            {
-                row.activate();
-            }
-        });
-        let page = Rc::downgrade(self);
-        self.mode_toggle.connect_active_name_notify(move |toggle| {
-            let Some(page) = page.upgrade() else { return };
-            let mode = match toggle.active_name().as_deref() {
-                Some("text") => Mode::Text,
-                _ => Mode::Both,
-            };
-            page.state.borrow_mut().mode = mode;
-            page.view_slot.set_visible(mode == Mode::Both);
-            let callback = page.callbacks.borrow().on_mode.clone();
-            if let Some(callback) = callback {
-                callback(mode);
-            }
-        });
-        let page = Rc::downgrade(self);
         uses_close.connect_clicked(move |_| {
             if let Some(page) = page.upgrade() {
                 page.uses.set_reveal_child(false);
                 page.state.borrow_mut().listed = None;
             }
-        });
-        // The 3D view takes what the editor doesn't need at first: about
-        // 460 pixels, as in the design, once the split has its width.
-        let page = Rc::downgrade(self);
-        self.paned.add_tick_callback(move |paned, _| {
-            let Some(page) = page.upgrade() else {
-                return glib::ControlFlow::Break;
-            };
-            let width = paned.width();
-            if page.placed.get() {
-                return glib::ControlFlow::Break;
-            }
-            if width > 1 && paned.is_mapped() {
-                page.placed.set(true);
-                let along = if paned.orientation() == gtk::Orientation::Horizontal {
-                    width.saturating_sub(460).max(width / 2)
-                } else {
-                    paned.height() / 2
-                };
-                paned.set_position(along);
-                return glib::ControlFlow::Break;
-            }
-            glib::ControlFlow::Continue
         });
         self.connect_editor();
     }
@@ -861,7 +698,7 @@ impl FilesPage {
             }
         });
         view.add_controller(motion);
-        // Leaving the Files view (or hiding the window) takes the card too.
+        // Closing the editor (or hiding the window) takes the card too.
         let page = Rc::downgrade(self);
         view.connect_unmap(move |_| {
             if let Some(page) = page.upgrade() {
@@ -977,10 +814,21 @@ impl FilesPage {
         };
         let buffer = self.editor.new_buffer(&text);
         let name = document.file_name();
-        let tab_label = label(&name, &[]);
+        let tab_label = label(&name, &["stave-rail-name"]);
+        let dot = gtk::Box::builder()
+            .css_classes(["stave-mark"])
+            .halign(gtk::Align::Center)
+            .visible(false)
+            .build();
+        let column = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .spacing(8)
+            .build();
+        column.append(&dot);
+        column.append(&super::sideways::Sideways::new(&tab_label));
         let button = gtk::Button::builder()
-            .child(&tab_label)
-            .css_classes(["stave-tab"])
+            .child(&column)
+            .css_classes(["stave-rail-tab"])
             .tooltip_text(document.display(&self.state.borrow().folder))
             .build();
         let page = Rc::downgrade(self);
@@ -988,9 +836,13 @@ impl FilesPage {
         button.connect_clicked(move |_| {
             if let Some(page) = page.upgrade() {
                 page.open_document(&key);
+                let callback = page.callbacks.borrow().on_open.clone();
+                if let Some(callback) = callback {
+                    callback();
+                }
             }
         });
-        self.tab_row.append(&button);
+        self.tab_list.append(&button);
         let page = Rc::downgrade(self);
         let key = document.clone();
         buffer.connect_changed(move |buffer| {
@@ -1011,6 +863,7 @@ impl FilesPage {
             buffer,
             button,
             label: tab_label,
+            dot,
         });
         Some(state.tabs.len().saturating_sub(1))
     }
@@ -1018,11 +871,6 @@ impl FilesPage {
     fn activate(self: &Rc<Self>, index: usize) {
         let found = {
             let mut state = self.state.borrow_mut();
-            // A standard file shows its module's files in the sidebar.
-            if let Some(Document::Std { module, .. }) = state.tabs.get(index).map(|t| &t.document) {
-                let module = *module;
-                state.expanded.insert(module);
-            }
             if state.active == Some(index) {
                 None
             } else {
@@ -1039,7 +887,6 @@ impl FilesPage {
             self.editor.show_buffer(&buffer, !read_only);
             self.state.borrow_mut().quiet = false;
             self.refresh_markers();
-            self.fill_sidebar();
             self.refresh_view();
         }
     }
@@ -1088,9 +935,8 @@ impl FilesPage {
         };
         self.editor.set_peek(None);
         self.hide_hover();
-        self.refresh_markers();
         if was_dirty != dirty {
-            self.fill_sidebar();
+            self.refresh_markers();
         }
         self.schedule_analysis();
         self.schedule_check();
@@ -1167,7 +1013,6 @@ impl FilesPage {
             if again {
                 page.analyse_now();
             }
-            page.fill_sidebar_if_new();
             page.refresh_view();
             page.grant_wish();
         });
@@ -1345,23 +1190,35 @@ impl FilesPage {
             };
             let crumb = label(crumb, classes);
             crumb.set_ellipsize(gtk::pango::EllipsizeMode::End);
+            crumb.set_max_width_chars(24);
             self.crumbs.append(&crumb);
         }
     }
 
-    /// Marks unsaved tabs and files.
+    /// Marks unsaved tabs, the active one, each file's worst problem, and
+    /// names the active file over the text.
     fn refresh_markers(&self) {
         let state = self.state.borrow();
         for (index, tab) in state.tabs.iter().enumerate() {
             let dirty = state.buffers.is_dirty(&tab.document);
             let name = tab.document.file_name();
-            tab.label
-                .set_label(&if dirty { format!("{name} •") } else { name });
+            tab.label.set_label(&if dirty {
+                format!("{name} •")
+            } else {
+                name.clone()
+            });
             if Some(index) == state.active {
                 tab.button.add_css_class("active");
+                self.title.set_label(&if dirty {
+                    format!("{name} • not saved")
+                } else {
+                    name
+                });
             } else {
                 tab.button.remove_css_class("active");
             }
+            let mark = state.marks.file(&tab.document.source_path());
+            super::style::show_mark(&tab.dot, mark);
             tab.button.set_tooltip_text(Some(&if dirty {
                 format!(
                     "{} — not saved (Ctrl+S saves)",
@@ -1725,195 +1582,6 @@ impl FilesPage {
             rect.x(),
             rect.y().saturating_add(rect.height()).saturating_add(6),
         );
-    }
-
-    // ---- the sidebar ----
-
-    fn fill_sidebar_if_new(self: &Rc<Self>) {
-        if self.state.borrow().rows.is_empty() {
-            self.fill_sidebar();
-        }
-    }
-
-    /// Lists the project's files by folder and the standard library, or
-    /// what "Go to file or name" finds.
-    fn fill_sidebar(self: &Rc<Self>) {
-        while let Some(child) = self.list.first_child() {
-            self.list.remove(&child);
-        }
-        let query = self.search.text().to_string();
-        let (folder, analysis, active, expanded) = {
-            let state = self.state.borrow();
-            (
-                state.folder.clone(),
-                state.analysis.clone(),
-                state
-                    .active
-                    .and_then(|i| state.tabs.get(i))
-                    .map(|t| t.document.clone()),
-                state.expanded.clone(),
-            )
-        };
-        let mut rows: Vec<RowTarget> = Vec::new();
-        let mut selected: Option<usize> = None;
-        let heading = |text: &str, first: bool| {
-            gtk::ListBoxRow::builder()
-                .child(&label(
-                    text,
-                    if first {
-                        &["stave-heading", "first"]
-                    } else {
-                        &["stave-heading"]
-                    },
-                ))
-                .activatable(false)
-                .selectable(false)
-                .build()
-        };
-        if !query.trim().is_empty() {
-            let found = analysis
-                .as_ref()
-                .map(|a| a.search(&query, SEARCH_LIMIT))
-                .unwrap_or_default();
-            if found.is_empty() {
-                self.list.append(&heading("NOTHING FOUND", true));
-                rows.push(RowTarget::Nothing);
-            }
-            for found in found {
-                let entry = gtk::Box::builder()
-                    .orientation(gtk::Orientation::Vertical)
-                    .css_classes(["stave-file", "found"])
-                    .build();
-                let name = label(&found.label, &[]);
-                name.set_ellipsize(gtk::pango::EllipsizeMode::End);
-                entry.append(&name);
-                let detail = label(&found.detail, &["stave-detail"]);
-                detail.set_ellipsize(gtk::pango::EllipsizeMode::End);
-                entry.append(&detail);
-                self.list
-                    .append(&gtk::ListBoxRow::builder().child(&entry).build());
-                rows.push(RowTarget::Found(found.location));
-            }
-            self.state.borrow_mut().rows = rows;
-            return;
-        }
-        // The project's own files, by folder.
-        self.list.append(&heading("PROJECT", true));
-        rows.push(RowTarget::Nothing);
-        let files = stave_ide::project_files(&folder);
-        let dirty: Vec<Document> = self.state.borrow().buffers.dirty().cloned().collect();
-        let mut last_folder: Option<PathBuf> = None;
-        // Files in the folder itself first, then each subfolder.
-        let mut ordered: Vec<&PathBuf> = files
-            .iter()
-            .filter(|f| f.parent() == Some(folder.as_path()))
-            .collect();
-        ordered.extend(
-            files
-                .iter()
-                .filter(|f| f.parent() != Some(folder.as_path())),
-        );
-        for path in ordered {
-            let parent = path.parent().map(Path::to_path_buf);
-            let nested = parent.as_deref() != Some(folder.as_path());
-            if nested && parent != last_folder {
-                let shown = parent
-                    .as_deref()
-                    .and_then(|p| p.strip_prefix(&folder).ok())
-                    .map_or_else(String::new, |p| format!("{}/", p.display()));
-                let row = gtk::ListBoxRow::builder()
-                    .child(&label(&shown, &["stave-folder"]))
-                    .activatable(false)
-                    .selectable(false)
-                    .build();
-                self.list.append(&row);
-                rows.push(RowTarget::Nothing);
-            }
-            last_folder = parent;
-            let document = Document::File(path.clone());
-            let name = document.file_name();
-            let unsaved = dirty.contains(&document);
-            let entry = gtk::Box::builder()
-                .orientation(gtk::Orientation::Horizontal)
-                .spacing(6)
-                .css_classes(if nested {
-                    vec!["stave-file", "nested"]
-                } else {
-                    vec!["stave-file"]
-                })
-                .build();
-            let name_label = label(&name, &[]);
-            name_label.set_hexpand(true);
-            name_label.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
-            entry.append(&name_label);
-            if unsaved {
-                entry.append(&label("•", &["stave-unsaved"]));
-                entry.set_tooltip_text(Some("Not saved"));
-            }
-            if active.as_ref() == Some(&document) {
-                selected = Some(rows.len());
-            }
-            self.list
-                .append(&gtk::ListBoxRow::builder().child(&entry).build());
-            rows.push(RowTarget::Open(document));
-        }
-        // The standard library, read only.
-        self.list.append(&heading("STANDARD LIBRARY", false));
-        rows.push(RowTarget::Nothing);
-        for module in stave_modules::STD_MODULES {
-            let open = expanded.contains(module);
-            let entry = gtk::Box::builder()
-                .orientation(gtk::Orientation::Horizontal)
-                .spacing(6)
-                .css_classes(["stave-file", "standard"])
-                .build();
-            entry.append(&super::icons::PathIcon::new(
-                if open {
-                    super::icons::EXPANDED
-                } else {
-                    super::icons::COLLAPSED
-                },
-                10,
-            ));
-            let name = label(module, &[]);
-            name.set_hexpand(true);
-            entry.append(&name);
-            if module == "joinery" {
-                entry.append(&label("read only", &["stave-detail", "stave-read-only"]));
-            }
-            self.list.append(
-                &gtk::ListBoxRow::builder()
-                    .child(&entry)
-                    .selectable(false)
-                    .tooltip_text("Part of Stave: read only")
-                    .build(),
-            );
-            rows.push(RowTarget::Expand(module));
-            if open {
-                for document in Document::std_documents()
-                    .filter(|d| matches!(d, Document::Std { module: m, .. } if *m == module))
-                {
-                    let entry = gtk::Box::builder()
-                        .css_classes(["stave-file", "nested", "standard"])
-                        .build();
-                    entry.append(&label(&document.file_name(), &[]));
-                    if active.as_ref() == Some(&document) {
-                        selected = Some(rows.len());
-                    }
-                    self.list
-                        .append(&gtk::ListBoxRow::builder().child(&entry).build());
-                    rows.push(RowTarget::Open(document));
-                }
-            }
-        }
-        self.state.borrow_mut().rows = rows;
-        match selected
-            .and_then(|i| i32::try_from(i).ok())
-            .and_then(|i| self.list.row_at_index(i))
-        {
-            Some(row) => self.list.select_row(Some(&row)),
-            None => self.list.unselect_all(),
-        }
     }
 
     /// Reloads open documents changed on disk; unsaved changes are kept.

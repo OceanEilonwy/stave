@@ -14,7 +14,7 @@
 //! line), and, for a door or drawer that hits something, what the motion
 //! card needs: where along its travel it is blocked.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use stave_lang::{Code, Diagnostic, Severity, render_diagnostic};
@@ -426,6 +426,117 @@ fn about_and_involved(
     } else {
         (about, involved)
     }
+}
+
+// ---------------------------------------------------------------------------
+// Marks: the dots on the model tree's rows and the open files' tabs
+// ---------------------------------------------------------------------------
+
+/// How a row of the model tree, or a file, is marked for its problems.
+/// Ordered worst first, so the smaller of two marks is the one to show.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum Mark {
+    /// At least one error is about it: a red dot.
+    Error,
+    /// At least one warning is about it, and no error: an amber dot.
+    Warning,
+    /// A problem involves it without being about it (the side a door
+    /// hits): a red ring.
+    Involved,
+}
+
+impl Mark {
+    /// The mark a problem of this severity gives what it is about; notes
+    /// mark nothing.
+    pub fn of(severity: Severity) -> Option<Mark> {
+        match severity {
+            Severity::Error => Some(Mark::Error),
+            Severity::Warning => Some(Mark::Warning),
+            Severity::Note => None,
+        }
+    }
+
+    /// The worse of two marks.
+    pub fn worse(self, other: Mark) -> Mark {
+        self.min(other)
+    }
+}
+
+/// Every mark of one check's result: by part or piece of hardware, by
+/// assembly (the worst inside it, at any depth) and by file (the worst
+/// problem written in it).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Marks {
+    items: BTreeMap<Item, Mark>,
+    assemblies: BTreeMap<AssemblyId, Mark>,
+    files: BTreeMap<String, Mark>,
+}
+
+impl Marks {
+    /// A part's or a piece of hardware's mark.
+    pub fn item(&self, item: Item) -> Option<Mark> {
+        self.items.get(&item).copied()
+    }
+
+    /// An assembly's mark: the worst of everything inside it.
+    pub fn assembly(&self, assembly: AssemblyId) -> Option<Mark> {
+        self.assemblies.get(&assembly).copied()
+    }
+
+    /// A file's mark, by its path as the source map names it.
+    pub fn file(&self, path: &str) -> Option<Mark> {
+        self.files.get(path).copied()
+    }
+
+    /// A tree row's mark: the worst of the items it stands for.
+    pub fn entry(&self, entry: &TreeEntry) -> Option<Mark> {
+        entry
+            .items
+            .iter()
+            .filter_map(|item| self.item(*item))
+            .reduce(Mark::worse)
+    }
+
+    fn add<K: Ord>(map: &mut BTreeMap<K, Mark>, key: K, mark: Mark) {
+        map.entry(key)
+            .and_modify(|old| *old = old.worse(mark))
+            .or_insert(mark);
+    }
+}
+
+/// The marks of a check's result. A problem marks what it is about with
+/// its severity, what it only involves with [`Mark::Involved`], every
+/// assembly round those, and the file it is written in. Items are those
+/// of the result's own design, so they match its ids.
+pub fn marks(checked: &Checked) -> Marks {
+    let mut marks = Marks::default();
+    for (problem, diagnostic) in checked.problems.iter().zip(&checked.opened.diagnostics) {
+        let Some(severity_mark) = Mark::of(problem.severity) else {
+            continue;
+        };
+        if let Some(path) = diagnostic
+            .primary()
+            .and_then(|label| checked.opened.sources.get(label.file))
+            .map(|file| file.path().to_owned())
+        {
+            Marks::add(&mut marks.files, path, severity_mark);
+        }
+        let (Some(design), Some(contact)) = (checked.design(), &problem.contact) else {
+            continue;
+        };
+        let (about, involved) = about_and_involved(design, Category::of(diagnostic.code), contact);
+        for (items, mark) in [(&about, severity_mark), (&involved, Mark::Involved)] {
+            for item in items {
+                Marks::add(&mut marks.items, *item, mark);
+                for assembly in &design.assemblies {
+                    if inside(design, *item, assembly.id) {
+                        Marks::add(&mut marks.assemblies, assembly.id, mark);
+                    }
+                }
+            }
+        }
+    }
+    marks
 }
 
 /// A part of the tree being filled: an entry and the problems found so far.

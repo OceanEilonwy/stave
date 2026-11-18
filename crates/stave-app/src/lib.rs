@@ -27,6 +27,7 @@ use std::path::Path;
 pub mod check;
 pub mod empty;
 pub mod export_view;
+pub mod finder;
 pub mod focus;
 pub mod inspect;
 pub mod link;

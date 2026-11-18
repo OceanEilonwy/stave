@@ -1,4 +1,4 @@
-//! The code editor of the Files view (FilesMode.dc.html): a GtkSourceView
+//! The code editor (V2C_EditorOpen.dc.html): a GtkSourceView
 //! with line numbers, `.stave` colours from the navigation layer's
 //! semantic tokens, wavy underlines for problems, the uses of the name
 //! under the cursor marked, lenses above declarations ("2 uses · show in
@@ -189,7 +189,7 @@ const STYLE_SCHEMES: [(&str, &str); 2] = [
     (
         "stave-light.xml",
         r##"<?xml version="1.0" encoding="UTF-8"?>
-<!-- Written by Stave: Adwaita with the Files view's colours. -->
+<!-- Written by Stave: Adwaita with the editor's colours. -->
 <style-scheme id="stave-light" name="Stave" version="1.0" parent-scheme="Adwaita">
   <metadata>
     <property name="variant">light</property>
@@ -205,7 +205,7 @@ const STYLE_SCHEMES: [(&str, &str); 2] = [
     (
         "stave-dark.xml",
         r##"<?xml version="1.0" encoding="UTF-8"?>
-<!-- Written by Stave: Adwaita-dark with the Files view's colours. -->
+<!-- Written by Stave: Adwaita-dark with the editor's colours. -->
 <style-scheme id="stave-dark" name="Stave Dark" version="1.0" parent-scheme="Adwaita-dark">
   <metadata>
     <property name="variant">dark</property>
@@ -979,6 +979,10 @@ pub struct Editor {
     /// Where the peek goes, and the line it sits under while it shows.
     peek_box: gtk::Box,
     peek_line: Cell<Option<i32>>,
+    /// The line and room the peek's tag was last applied for: applied
+    /// again only when they change, since every change lays the text out
+    /// again.
+    peek_tagged: Cell<Option<(i32, i32)>>,
     /// Where the hover card goes.
     card_box: gtk::Box,
     on_uses: LensCallback,
@@ -1101,6 +1105,7 @@ impl Editor {
             lenses_used: Cell::new(0),
             peek_box,
             peek_line: Cell::new(None),
+            peek_tagged: Cell::new(None),
             card_box,
             on_uses: Rc::new(RefCell::new(None)),
             on_show: Rc::new(RefCell::new(None)),
@@ -1374,6 +1379,7 @@ impl Editor {
         let buffer = self.view.buffer();
         let (start, end) = buffer.bounds();
         buffer.remove_tag(&self.tags.peek, &start, &end);
+        self.peek_tagged.set(None);
         match peek {
             Some((widget, line)) => {
                 self.peek_box.append(&widget);
@@ -1447,6 +1453,10 @@ impl Editor {
         if lens_below {
             room = room.saturating_add(LENS_HEIGHT);
         }
+        if self.peek_tagged.get() == Some((line, room)) {
+            return;
+        }
+        self.peek_tagged.set(Some((line, room)));
         let buffer = self.view.buffer();
         let (start, end) = buffer.bounds();
         buffer.remove_tag(&self.tags.peek, &start, &end);

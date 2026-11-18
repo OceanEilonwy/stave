@@ -1,7 +1,7 @@
 //! The inspector: what the selection is (from
 //! `stave_app::inspect::inspect`), its stock, size and motion, its joints
 //! and cuts (each opens focus mode), and where it is written in the text
-//! (the link opens the Files view there). In focus mode it shows focus
+//! (the link opens the editor there). In focus mode it shows focus
 //! mode's own panel; for a selected problem it is the slot lane 3 fills.
 //! When there is nothing to select (a library folder, a design that
 //! doesn't solve) it says why, from `stave_app::empty`.
@@ -54,11 +54,14 @@ fn label(text: &str, classes: &[&str]) -> gtk::Label {
         .build()
 }
 
+/// A page of the card: as tall as it needs, scrolling past the room the
+/// view leaves it.
 fn scrolled(child: &impl IsA<gtk::Widget>) -> gtk::ScrolledWindow {
     gtk::ScrolledWindow::builder()
         .hscrollbar_policy(gtk::PolicyType::Never)
+        .propagate_natural_height(true)
+        .max_content_height(640)
         .child(child)
-        .vexpand(true)
         .build()
 }
 
@@ -89,6 +92,8 @@ impl Inspector {
         let root = gtk::Stack::builder()
             .css_classes(["stave-inspector-panel"])
             .width_request(300)
+            .vhomogeneous(false)
+            .interpolate_size(true)
             .build();
         root.add_named(&empty, Some("empty"));
         root.add_named(&scrolled(&details), Some("details"));
@@ -209,7 +214,7 @@ impl Inspector {
                 .label("Show in text")
                 .css_classes(["flat", "stave-link"])
                 .valign(gtk::Align::Center)
-                .tooltip_text("Show where to change it, in the Files view")
+                .tooltip_text("Show where to change it, in the editor")
                 .build(),
         );
         let callbacks = self.callbacks.clone();
@@ -383,7 +388,7 @@ impl Inspector {
             gtk::Button::builder()
                 .label(&source.label)
                 .css_classes(["flat", "stave-link"])
-                .tooltip_text("Show it in the Files view")
+                .tooltip_text("Show it in the editor")
                 .build(),
         );
         let location = source.location.clone();

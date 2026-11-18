@@ -9,8 +9,8 @@ use stave_app::empty::Reason;
 use stave_app::focus::Target;
 use stave_app::inspect::{self, SwatchShape};
 use stave_app::session::{
-    Activity, Build, CheckStatus, Command, Event, Explode, Notice, ProblemIndex, Selection,
-    Session, Sidebar, SourceLocation, Tone, Verdict, View,
+    Activity, Build, CheckStatus, Command, Editor, Event, Explode, Notice, ProblemIndex, Selection,
+    Session, SourceLocation, Tone, Verdict, View,
 };
 use stave_modules::MemoryFiles;
 
@@ -51,7 +51,8 @@ fn part(session: &Session, name: &str) -> Selection {
 #[test]
 fn a_new_session_has_nothing_checked() {
     let session = Session::new(example("stool"));
-    assert_eq!(session.view(), View::Parts);
+    assert_eq!(session.view(), View::Design);
+    assert_eq!(session.editor(), Editor::Closed);
     assert_eq!(session.selection(), None);
     assert!(!session.can_go_back());
     assert!(!session.can_go_forward());
@@ -107,13 +108,13 @@ fn views_switch_and_are_remembered() {
     let events = session.apply(Command::ShowView(View::CutList));
     assert_eq!(session.view(), View::CutList);
     assert!(events.contains(&Event::ViewChanged));
-    session.apply(Command::ShowView(View::Parts));
+    session.apply(Command::ShowView(View::Design));
     session.apply(Command::Back);
     assert_eq!(session.view(), View::CutList);
 }
 
 #[test]
-fn a_source_link_opens_the_files_view_there() {
+fn a_source_link_opens_the_editor_there() {
     let mut session = checked_session(example("clothing_cabinet"));
     let stile = part(&session, "door_l.stile[hinge]");
     session.apply(Command::Select(Some(stile.clone())));
@@ -123,14 +124,15 @@ fn a_source_link_opens_the_files_view_there() {
     assert_eq!(source.label, "doors.stave:9");
 
     let events = session.apply(Command::GoToSource(source.location.clone()));
-    assert!(events.contains(&Event::ViewChanged));
-    assert_eq!(session.view(), View::Files);
+    assert!(events.contains(&Event::EditorChanged));
+    assert_eq!(session.view(), View::Design);
+    assert_eq!(session.editor(), Editor::Open);
     assert_eq!(
         session.selection(),
         Some(&Selection::Location(source.location))
     );
     session.apply(Command::Back);
-    assert_eq!(session.view(), View::Parts);
+    assert_eq!(session.editor(), Editor::Closed);
     assert_eq!(session.selection(), Some(&stile));
 }
 
@@ -279,16 +281,57 @@ fn scenes_bring_their_own_explode_amount() {
 }
 
 #[test]
-fn the_pill_opens_the_problems_list() {
+fn the_editor_opens_and_closes_without_a_history_entry() {
+    let mut session = checked_session(example("stool"));
+    let events = session.apply(Command::ShowEditor(Editor::Open));
+    assert_eq!(events, vec![Event::EditorChanged]);
+    assert_eq!(session.editor(), Editor::Open);
+    assert!(!session.can_go_back());
+    assert!(session.apply(Command::ShowEditor(Editor::Open)).is_empty());
+    // It stays open while the selection changes.
+    let seat = part(&session, "seat");
+    session.apply(Command::Select(Some(seat)));
+    assert_eq!(session.editor(), Editor::Open);
+    session.apply(Command::ShowEditor(Editor::Closed));
+    assert_eq!(session.editor(), Editor::Closed);
+}
+
+#[test]
+fn f8_steps_through_the_problems_and_wraps_round() {
     let mut session = checked_session(workspace().join("tests/broken/door_hits_side"));
-    let events = session.apply(Command::ShowSidebar(Sidebar::Problems));
-    assert_eq!(events, vec![Event::SidebarChanged]);
-    assert_eq!(session.sidebar(), Sidebar::Problems);
-    session.apply(Command::Select(Some(Selection::Problem(ProblemIndex(0)))));
+    let count = session.problems().len();
+    assert!(count >= 1);
+    let last = ProblemIndex(count - 1);
+    let events = session.apply(Command::NextProblem);
+    assert!(events.contains(&Event::SelectionChanged));
+    assert_eq!(
+        session.selection(),
+        Some(&Selection::Problem(ProblemIndex(0)))
+    );
     assert_eq!(
         session.selected_problem().map(|p| p.code.as_str()),
         Some("motion")
     );
+    // Before the first comes the last; after the last, the first again.
+    session.apply(Command::PreviousProblem);
+    assert_eq!(session.selection(), Some(&Selection::Problem(last)));
+    session.apply(Command::NextProblem);
+    assert_eq!(
+        session.selection(),
+        Some(&Selection::Problem(ProblemIndex(0)))
+    );
+    // From anything else, Previous goes to the last.
+    session.apply(Command::Select(None));
+    session.apply(Command::PreviousProblem);
+    assert_eq!(session.selection(), Some(&Selection::Problem(last)));
+}
+
+#[test]
+fn stepping_does_nothing_without_problems() {
+    let mut session = checked_session(example("stool"));
+    assert!(session.problems().is_empty());
+    assert!(session.apply(Command::NextProblem).is_empty());
+    assert!(session.apply(Command::PreviousProblem).is_empty());
 }
 
 const PROJECT: &str = "stave 1

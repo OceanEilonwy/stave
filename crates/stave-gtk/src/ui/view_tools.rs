@@ -189,10 +189,9 @@ pub fn contact_key() -> gtk::Box {
     let root = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
         .spacing(6)
-        .halign(gtk::Align::Start)
+        .halign(gtk::Align::Center)
         .valign(gtk::Align::Start)
-        .margin_top(14)
-        .margin_start(14)
+        .margin_top(52)
         .css_classes(["stave-contact-key"])
         .visible(false)
         .build();
