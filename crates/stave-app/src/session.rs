@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::Duration;
 
-use stave_model::solved::{AssemblyId, HardwareId, JointId, PartId, SolvedDesign};
+use stave_model::solved::{AssemblyId, HardwareId, JointId, PairMember, PartId, SolvedDesign};
 use stave_scene::{Item, SceneEntry, SceneGraph};
 
 use crate::check::{Checked, Outcome, Summary};
@@ -136,6 +136,8 @@ pub enum Selection {
         /// The pair's index in the joint.
         pair: usize,
     },
+    /// The member a joint lays out on one pair (a dowel's pins).
+    Member(PairMember),
     /// An assembly (a door, a drawer).
     Assembly(AssemblyId),
     /// A place in a file.
@@ -150,14 +152,17 @@ impl Selection {
         match item {
             Item::Part(id) => Selection::Part(id),
             Item::Hardware(id) => Selection::Hardware(id),
+            Item::Member(member) => Selection::Member(member),
         }
     }
 
-    /// The scene item it is, when it is a part or a piece of hardware.
+    /// The scene item it is, when it is a part, a piece of hardware or a
+    /// joint's member.
     pub fn item(&self) -> Option<Item> {
         match self {
             Selection::Part(id) => Some(Item::Part(*id)),
             Selection::Hardware(id) => Some(Item::Hardware(*id)),
+            Selection::Member(member) => Some(Item::Member(*member)),
             Selection::Joint { .. }
             | Selection::Assembly(_)
             | Selection::Location(_)
@@ -727,6 +732,28 @@ impl Session {
         }
     }
 
+    /// How each node of the shown design is drawn outside focus mode: when
+    /// a joint's member is selected, or a selected problem is about one,
+    /// the parts it sits in are see-through so it shows
+    /// ([`crate::view::see_into`]). `None` draws every node as usual.
+    pub fn looks(&self) -> Option<Vec<stave_scene::Look>> {
+        let (design, graph) = self.drawable()?;
+        let items: Vec<Item> = match self.selected_problem() {
+            Some(problem) => problem
+                .contact
+                .iter()
+                .flat_map(|contact| contact.items.iter().copied())
+                .map(crate::view::contact_item)
+                .collect(),
+            None => self
+                .selection()
+                .and_then(Selection::item)
+                .into_iter()
+                .collect(),
+        };
+        crate::view::see_into(design, graph, &items)
+    }
+
     // ---- changing ----
 
     /// Does what a view asks and says what changed.
@@ -1089,6 +1116,20 @@ impl Carry<'_> {
                         pair: *pair,
                     })
             }
+            Selection::Member(member) => {
+                let joint = &old.joints.get(member.joint.index())?.name;
+                let body = &old.pair_member(*member)?.name;
+                new.pair_members()
+                    .find(|(found, found_body)| {
+                        found.pair == member.pair
+                            && &found_body.name == body
+                            && new
+                                .joints
+                                .get(found.joint.index())
+                                .is_some_and(|j| &j.name == joint)
+                    })
+                    .map(|(found, _)| Selection::Member(found))
+            }
             Selection::Location(_) | Selection::Problem(_) => None,
         }
     }
@@ -1098,6 +1139,7 @@ impl Carry<'_> {
             Selection::Joint { joint, pair } => Some(Target::Joint { joint, pair }),
             Selection::Hardware(id) => Some(Target::Hardware(id)),
             Selection::Part(_)
+            | Selection::Member(_)
             | Selection::Assembly(_)
             | Selection::Location(_)
             | Selection::Problem(_) => None,

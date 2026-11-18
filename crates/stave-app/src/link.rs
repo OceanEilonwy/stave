@@ -24,6 +24,10 @@ fn assemblies_around(design: &SolvedDesign, selection: Option<&Selection>) -> Ve
         Some(Selection::Part(id)) => design.part(*id).and_then(|p| p.assembly),
         Some(Selection::Hardware(id)) => design.hardware.get(id.index()).and_then(|h| h.assembly),
         Some(Selection::Assembly(id)) => Some(*id),
+        Some(Selection::Member(member)) => design
+            .pair_member(*member)
+            .and_then(|body| design.part(body.carried_by()?))
+            .and_then(|p| p.assembly),
         Some(Selection::Joint { .. } | Selection::Location(_) | Selection::Problem(_)) | None => {
             None
         }
@@ -122,6 +126,38 @@ pub fn selection_for(
     None
 }
 
+/// The part, piece of hardware, assembly or joint pair's member with a
+/// name as the window shows it (`door_l.stile[hinge]`, `door_l`,
+/// `top_dowels's pin between side_l and top`), for the command line's
+/// `--select`.
+pub fn selection_named(design: &SolvedDesign, name: &str) -> Option<Selection> {
+    design
+        .parts
+        .iter()
+        .find(|p| p.name == name)
+        .map(|p| Selection::Part(p.id))
+        .or_else(|| {
+            design
+                .hardware
+                .iter()
+                .find(|h| h.name == name)
+                .map(|h| Selection::Hardware(h.id))
+        })
+        .or_else(|| {
+            design
+                .assemblies
+                .iter()
+                .find(|a| a.name == name)
+                .map(|a| Selection::Assembly(a.id))
+        })
+        .or_else(|| {
+            design
+                .pair_members()
+                .find(|(member, _)| design.pair_member_name(*member).as_deref() == Some(name))
+                .map(|(member, _)| Selection::Member(member))
+        })
+}
+
 /// The line in the project's own files that places a selection: a part's
 /// or a piece of hardware's declaration, or, for one inside a component
 /// from a library, the declaration of its assembly (the inspector's
@@ -132,7 +168,8 @@ pub fn placed_at(checked: &Checked, selection: &Selection) -> Option<SourceLocat
         Selection::Part(_)
         | Selection::Hardware(_)
         | Selection::Assembly(_)
-        | Selection::Joint { .. } => crate::inspect::inspect(checked, selection)?
+        | Selection::Joint { .. }
+        | Selection::Member(_) => crate::inspect::inspect(checked, selection)?
             .source
             .map(|snippet| snippet.location),
         Selection::Problem(_) => None,
@@ -151,6 +188,10 @@ pub fn chip(
         Selection::Hardware(id) => design.hardware.get(id.index()).map(|h| h.name.as_str()),
         Selection::Assembly(id) => design.assemblies.get(id.index()).map(|a| a.name.as_str()),
         Selection::Joint { joint, .. } => design.joints.get(joint.index()).map(|j| j.name.as_str()),
+        Selection::Member(member) => design
+            .joints
+            .get(member.joint.index())
+            .map(|j| j.name.as_str()),
         Selection::Location(_) | Selection::Problem(_) => None,
     }?;
     Some(format!(

@@ -1060,23 +1060,6 @@ impl Solver<'_> {
             CutOperation::Drill => CutKind::Drill {
                 diameter: length(self, "diameter")?,
                 depth: depth(self, "depth")?,
-                count: match get("count") {
-                    Some((value, span)) => match value.number() {
-                        Some(n) if n.is_integer() && !n.is_negative() => {
-                            u32::try_from(n.numerator()).map_err(|_| Reported)?
-                        }
-                        _ => {
-                            return Err(self.error(
-                                Code::TypeMismatch,
-                                "'count' needs a whole number",
-                                env.file,
-                                span,
-                                "write a count such as 4",
-                            ));
-                        }
-                    },
-                    None => 1,
-                },
             },
             CutOperation::DovetailSocket => CutKind::DovetailSocket {
                 neck: length(self, "neck")?,

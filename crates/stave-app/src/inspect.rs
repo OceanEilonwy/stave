@@ -10,7 +10,8 @@ use stave_model::Model;
 use stave_model::defs::Decl;
 use stave_model::mechanism::{DriveValue, Mechanism};
 use stave_model::solved::{
-    AssemblyId, CutKind, CutSource, HardwareBase, Part, PartId, PartOrigin, Shape, SolvedDesign,
+    AssemblyId, Body, CutSource, HardwareBase, PairMember, Part, PartId, PartOrigin, Shape,
+    SolvedDesign,
 };
 use stave_scene::Item;
 use stave_schema::species::Srgb;
@@ -257,6 +258,17 @@ fn hardware_swatch() -> Swatch {
     }
 }
 
+/// The swatch of a joint's member: its wood, or steel.
+fn member_swatch(body: &Body) -> Swatch {
+    match body.item.as_ref().and_then(|item| item.wood) {
+        Some(species) => Swatch {
+            shape: SwatchShape::Round,
+            colour: species.colour(),
+        },
+        None => hardware_swatch(),
+    }
+}
+
 /// `rail` and `top` for `rail[top]`; the whole name and `None` otherwise.
 fn split_index(name: &str) -> (&str, Option<&str>) {
     match name.strip_suffix(']').and_then(|n| n.rsplit_once('[')) {
@@ -277,6 +289,10 @@ enum Sameness {
     Hardware {
         base: String,
         kind: String,
+    },
+    Member {
+        joint: stave_model::solved::JointId,
+        member: String,
     },
 }
 
@@ -413,7 +429,53 @@ pub fn parts_tree(design: &SolvedDesign) -> PartsTree {
                     mirror_of: None,
                 }
             });
-        parts.chain(hardware).collect()
+        // Each joint pair's members (a dowel's pins), with the part that
+        // carries them: a row for every pair, grouped by joint, saying how
+        // many copies the joint places in all.
+        let members = design
+            .pair_members()
+            .filter(move |(_, body)| {
+                body.carried_by()
+                    .and_then(|part| design.part(part))
+                    .is_some_and(|part| part.assembly == assembly)
+            })
+            .filter_map(|(member, body)| {
+                let joint = design.joints.get(member.joint.index())?;
+                let base = format!(
+                    "{}'s {}",
+                    relative(design, &joint.name, assembly),
+                    body.name
+                );
+                let label = if joint.pairs.len() > 1 {
+                    format!("{base}[{}]", member.pair)
+                } else {
+                    base
+                };
+                let copies: u32 = design
+                    .pair_members()
+                    .filter(|(other, found)| other.joint == member.joint && found.name == body.name)
+                    .map(|(_, found)| found.copies())
+                    .sum();
+                let what = body
+                    .item
+                    .as_ref()
+                    .map_or_else(|| body.name.replace('_', " "), |item| item.kind.clone());
+                Some(Single {
+                    item: Item::Member(member),
+                    same: Sameness::Member {
+                        joint: member.joint,
+                        member: body.name.clone(),
+                    },
+                    full: design
+                        .pair_member_name(member)
+                        .unwrap_or_else(|| label.clone()),
+                    label,
+                    detail: Some(format!("{what} × {copies}")),
+                    swatch: member_swatch(body),
+                    mirror_of: None,
+                })
+            });
+        parts.chain(hardware).chain(members).collect()
     };
     fn node(
         design: &SolvedDesign,
@@ -739,6 +801,7 @@ pub fn inspect(checked: &Checked, selection: &Selection) -> Option<Inspection> {
         Selection::Hardware(id) => inspect_hardware(checked, design, *id),
         Selection::Assembly(id) => inspect_assembly(checked, design, *id),
         Selection::Joint { joint, pair } => inspect_joint(checked, design, *joint, *pair),
+        Selection::Member(member) => inspect_member(checked, design, *member),
         Selection::Location(_) | Selection::Problem(_) => None,
     }
 }
@@ -899,23 +962,7 @@ fn inspect_part(checked: &Checked, design: &SolvedDesign, id: PartId) -> Option<
         if design.hardware.get(hardware.index()).is_none() {
             continue;
         }
-        // Holes are counted one by one: a pull's two screw holes are two.
-        let (single, holes) = match &cut.kind {
-            CutKind::Drill {
-                diameter,
-                depth,
-                count,
-            } => (
-                CutKind::Drill {
-                    diameter: *diameter,
-                    depth: *depth,
-                    count: 1,
-                },
-                usize::try_from(*count).unwrap_or(1).max(1),
-            ),
-            other => (other.clone(), 1),
-        };
-        let row = focus::cut_row("", &single);
+        let row = focus::cut_row("", &cut.kind);
         // The name the kind gives the cut (`cut bore: ...`), or else what
         // the cut is.
         let what = match &cut.name {
@@ -928,7 +975,7 @@ fn inspect_part(checked: &Checked, design: &SolvedDesign, id: PartId) -> Option<
             .find(|cut| cut.what == what && cut.value == row.value)
         {
             Some(cut) => {
-                cut.count = cut.count.saturating_add(holes);
+                cut.count = cut.count.saturating_add(1);
                 if !cut.hardware.contains(&hardware) {
                     cut.hardware.push(hardware);
                 }
@@ -936,7 +983,7 @@ fn inspect_part(checked: &Checked, design: &SolvedDesign, id: PartId) -> Option<
             None => cuts.push(HardwareCut {
                 what,
                 value: row.value,
-                count: holes,
+                count: 1,
                 hardware: vec![hardware],
             }),
         }
@@ -1081,6 +1128,89 @@ fn inspect_assembly(
     })
 }
 
+/// The declaration of a joint.
+fn joint_decl(model: &Model, id: stave_model::solved::JointId) -> Option<&Decl> {
+    let instance = model.joints.get(id.index()).filter(|j| j.id == id)?;
+    model.defs.joint(instance.def).map(|d| &d.decl)
+}
+
+/// A joint pair's member (a dowel's pins): which joint placed it and
+/// where that joint is written, what it is and how many copies.
+fn inspect_member(
+    checked: &Checked,
+    design: &SolvedDesign,
+    member: PairMember,
+) -> Option<Inspection> {
+    let joint = design.joints.get(member.joint.index())?;
+    let body = design.pair_member(member)?;
+    let model = checked.opened.model.as_ref();
+    // The member's own doc comment in its kind (`/// The pins: ...`).
+    let description = model
+        .and_then(|m| m.defs.kind(joint.kind_id))
+        .and_then(|kind| kind.bodies.get(member.body.index()))
+        .and_then(|def| {
+            let text = def.docs.join(" ");
+            let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+            (!text.is_empty()).then_some(text)
+        });
+    let target = Target::Joint {
+        joint: member.joint,
+        pair: member.pair,
+    };
+    let mut rows = vec![
+        Row {
+            label: "Placed by",
+            value: format!("{} ({})", joint.name, joint.kind),
+        },
+        Row {
+            label: "Pair",
+            value: focus::title(design, target),
+        },
+    ];
+    rows.extend(body.item.as_ref().map(|item| Row {
+        label: "Fastener",
+        value: crate::view::item_text(item),
+    }));
+    rows.push(Row {
+        label: "Copies",
+        value: body.copies().to_string(),
+    });
+    rows.push(Row {
+        label: "Each",
+        value: crate::view::copy_text(body),
+    });
+    let carrier = body.carried_by().and_then(|part| design.part(part));
+    if let Some(part) = carrier {
+        rows.push(Row {
+            label: "Goes in with",
+            value: part.name.clone(),
+        });
+    }
+    let assembly = carrier.and_then(|part| part.assembly);
+    let moves_with = moving(design, assembly);
+    rows.extend(moves_row(design, moves_with));
+    let source = source_of(checked, |m| joint_decl(m, member.joint), joint.assembly);
+    Some(Inspection {
+        eyebrow: eyebrow(design, "JOINT MEMBER", assembly),
+        title: format!(
+            "{}'s {}",
+            relative(design, &joint.name, joint.assembly),
+            body.name
+        ),
+        description,
+        rows,
+        connections_title: "How it goes together",
+        connections: vec![Connection {
+            swatch: member_swatch(body),
+            lead: "See how it goes together".to_owned(),
+            rest: String::new(),
+            target: Some(target),
+        }],
+        moves_with,
+        source,
+    })
+}
+
 fn inspect_joint(
     checked: &Checked,
     design: &SolvedDesign,
@@ -1103,14 +1233,7 @@ fn inspect_joint(
             value: focus::title(design, target),
         },
     ];
-    let source = source_of(
-        checked,
-        |model| {
-            let instance = model.joints.get(id.index()).filter(|j| j.id == id)?;
-            model.defs.joint(instance.def).map(|d| &d.decl)
-        },
-        joint.assembly,
-    );
+    let source = source_of(checked, |model| joint_decl(model, id), joint.assembly);
     Some(Inspection {
         eyebrow: eyebrow(design, "JOINT", joint.assembly),
         title: relative(design, &joint.name, joint.assembly).to_owned(),

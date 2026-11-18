@@ -11,8 +11,8 @@ side_l                       pine_19        1200 x 280 x 19            0..19    
     cut notch depth 9 on thickness end: where shelf[1] meets it, local 625.5..644.5 x 0..274 x 10..19
     cut notch depth 9 on thickness end: where shelf[2] meets it, local 903.25..922.25 x 0..274 x 10..19
     cut notch depth 9 on thickness end: where back meets it, local 70..1200 x 274..280 x 10..19
-    cut drill 1 x diameter 8 depth 15 on thickness end: where kick_dowels's pin meets it, local 18..26 x 25.5..33.5 x 4..19
-    cut drill 1 x diameter 8 depth 15 on thickness end: where kick_dowels's pin meets it, local 44..52 x 25.5..33.5 x 4..19
+    cut drill diameter 8 depth 15 on thickness end: where kick_dowels's pin meets it, local 18..26 x 25.5..33.5 x 4..19
+    cut drill diameter 8 depth 15 on thickness end: where kick_dowels's pin meets it, local 44..52 x 25.5..33.5 x 4..19
 side_r                       pine_19        1200 x 280 x 19            781..800             0..1200              0..280               up/back/right
     cut notch depth 9 on thickness start: where top meets it, local 1181..1200 x 0..274 x 0..9
     cut notch depth 9 on thickness start: where bottom meets it, local 70..89 x 0..274 x 0..9
@@ -20,8 +20,8 @@ side_r                       pine_19        1200 x 280 x 19            781..800 
     cut notch depth 9 on thickness start: where shelf[1] meets it, local 625.5..644.5 x 0..274 x 0..9
     cut notch depth 9 on thickness start: where shelf[2] meets it, local 903.25..922.25 x 0..274 x 0..9
     cut notch depth 9 on thickness start: where back meets it, local 70..1200 x 274..280 x 0..9
-    cut drill 1 x diameter 8 depth 15 on thickness start: where kick_dowels's pin meets it, local 18..26 x 25.5..33.5 x 0..15
-    cut drill 1 x diameter 8 depth 15 on thickness start: where kick_dowels's pin meets it, local 44..52 x 25.5..33.5 x 0..15
+    cut drill diameter 8 depth 15 on thickness start: where kick_dowels's pin meets it, local 18..26 x 25.5..33.5 x 0..15
+    cut drill diameter 8 depth 15 on thickness start: where kick_dowels's pin meets it, local 44..52 x 25.5..33.5 x 0..15
 top                          pine_19        780 x 274 x 19             19..781              1181..1200           0..274               right/back/up
     drawn 762 x 274 x 19, starting 9 x 0 x 0 into the cut size
 bottom                       pine_19        780 x 274 x 19             19..781              70..89               0..274               right/back/up
@@ -35,10 +35,10 @@ shelf[2]                     pine_19        780 x 274 x 19             19..781  
 back                         ply_6          1130 x 780 x 6             19..781              70..1200             274..280             up/right/back
     drawn 1130 x 762 x 6, starting 0 x 9 x 0 into the cut size
 kick                         pine_19        762 x 70 x 19              19..781              0..70                20..39               right/up/back
-    cut drill 1 x diameter 8 depth 15 on length start: where kick_dowels's pin meets it, local 0..15 x 18..26 x 5.5..13.5
-    cut drill 1 x diameter 8 depth 15 on length start: where kick_dowels's pin meets it, local 0..15 x 44..52 x 5.5..13.5
-    cut drill 1 x diameter 8 depth 15 on length end: where kick_dowels's pin meets it, local 747..762 x 18..26 x 5.5..13.5
-    cut drill 1 x diameter 8 depth 15 on length end: where kick_dowels's pin meets it, local 747..762 x 44..52 x 5.5..13.5
+    cut drill diameter 8 depth 15 on length start: where kick_dowels's pin meets it, local 0..15 x 18..26 x 5.5..13.5
+    cut drill diameter 8 depth 15 on length start: where kick_dowels's pin meets it, local 0..15 x 44..52 x 5.5..13.5
+    cut drill diameter 8 depth 15 on length end: where kick_dowels's pin meets it, local 747..762 x 18..26 x 5.5..13.5
+    cut drill diameter 8 depth 15 on length end: where kick_dowels's pin meets it, local 747..762 x 44..52 x 5.5..13.5
 
 HARDWARE (0)
 
@@ -72,11 +72,13 @@ back_rabbets                 rabbet
         adds 9 to the width end of back
 kick_dowels                  dowel
     piece: kick, into: side_l (butt across across)
-        pin cylinder across diameter 8, across 4..34, centre up 22 x deep 29.5
-        pin cylinder across diameter 8, across 4..34, centre up 48 x deep 29.5
+        pin: 2 x dowel_pin (beech), moves with kick
+            1 cylinder across diameter 8, across 4..34, centre up 22 x deep 29.5
+            2 cylinder across diameter 8, across 4..34, centre up 48 x deep 29.5
     piece: kick, into: side_r (butt across across)
-        pin cylinder across diameter 8, across 766..796, centre up 22 x deep 29.5
-        pin cylinder across diameter 8, across 766..796, centre up 48 x deep 29.5
+        pin: 2 x dowel_pin (beech), moves with kick
+            1 cylinder across diameter 8, across 766..796, centre up 22 x deep 29.5
+            2 cylinder across diameter 8, across 766..796, centre up 48 x deep 29.5
 
 FASTENERS
 kick_dowels                  4 x dowel_pin (8 x 30)

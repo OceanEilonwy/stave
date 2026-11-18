@@ -174,10 +174,21 @@ impl SceneGraph {
             .collect()
     }
 
-    /// Moves a part's nodes by a render-frame transform, on top of where
-    /// they are posed.
+    /// Every node that moves with a part: its own, and the members it
+    /// carries (a joint's pins, a hinge's cup).
+    pub fn carried_nodes(&self, part: PartId) -> Vec<NodeId> {
+        self.node_ids()
+            .filter(|id| {
+                self.node(*id)
+                    .is_some_and(|node| node.carried_by() == Some(part))
+            })
+            .collect()
+    }
+
+    /// Moves a part's nodes, and the members it carries, by a
+    /// render-frame transform, on top of where they are posed.
     pub fn move_part(&self, posed: &mut Posed, part: PartId, transform: Mat4) {
-        for id in self.nodes_of(Item::Part(part)) {
+        for id in self.carried_nodes(part) {
             if let Some(slot) = posed.transforms.get_mut(id.index()) {
                 *slot = transform * *slot;
             }
@@ -228,6 +239,19 @@ impl SceneGraph {
         Some(Aabb {
             min: (low - Vec3::splat(grow)).max(all.min),
             max: (high + Vec3::splat(grow)).min(all.max),
+        })
+    }
+
+    /// The box to frame a joint's members in (a dowel's pins, a screwed
+    /// joint's screws): around them at rest, grown by 60mm or a quarter
+    /// of their largest size, whichever is more, so the ends of the parts
+    /// they join show around them and they stay in view as they go in.
+    pub fn members_zone(&self, nodes: &[NodeId]) -> Option<Aabb> {
+        let bounds = self.bounds_of(&self.rest(), nodes)?;
+        let grow = Vec3::splat((bounds.size().max_element() * 0.25).max(60.0));
+        Some(Aabb {
+            min: bounds.min - grow,
+            max: bounds.max + grow,
         })
     }
 

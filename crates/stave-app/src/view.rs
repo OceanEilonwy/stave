@@ -9,10 +9,11 @@ use stave_lang::units::Length;
 use stave_lang::{Diagnostic, Severity, SourceMap};
 use stave_model::mechanism::{DriveValue, Mechanism, MechanismEntry};
 use stave_model::solved::{
-    Body, BodyCarrier, Hardware, HardwareBase, MemberShape, Part, SolvedDesign, WorldBox,
+    Body, BodyCarrier, Hardware, HardwareBase, MemberItem, MemberShape, Part, SolvedDesign,
+    WorldBox,
 };
 pub use stave_scene::{
-    BuildOptions, Extent, Highlight, Item, MotionRange, Posed, SceneEntry, SceneGraph,
+    BuildOptions, Extent, Highlight, Item, Look, MotionRange, NodeId, Posed, SceneEntry, SceneGraph,
 };
 
 use crate::{Contact, ContactItem};
@@ -159,10 +160,38 @@ fn describe_part(design: &SolvedDesign, part: &Part) -> Description {
     }
 }
 
-/// Describes a part or piece of hardware for the selection panel.
+/// Describes a part, piece of hardware or joint's member for the
+/// selection panel.
 pub fn describe(design: &SolvedDesign, item: Item) -> Option<Description> {
     match item {
         Item::Part(id) => design.part(id).map(|part| describe_part(design, part)),
+        Item::Member(member) => {
+            let body = design.pair_member(member)?;
+            let joint = design.joints.get(member.joint.index())?;
+            let mut rows = vec![Row {
+                label: "Placed by",
+                value: format!("{} ({})", joint.name, joint.kind),
+            }];
+            rows.extend(body.item.as_ref().map(|item| Row {
+                label: "Fastener",
+                value: item_text(item),
+            }));
+            rows.push(Row {
+                label: "Copies",
+                value: body.copies().to_string(),
+            });
+            rows.push(Row {
+                label: "Each",
+                value: copy_text(body),
+            });
+            Some(Description {
+                name: design
+                    .pair_member_name(member)
+                    .unwrap_or_else(|| body.name.clone()),
+                kind: "Joint member",
+                rows,
+            })
+        }
         Item::Hardware(id) => {
             let hardware = design.hardware.get(id.index())?;
             let kind = match hardware.base {
@@ -205,6 +234,85 @@ pub fn describe(design: &SolvedDesign, item: Item) -> Option<Description> {
             })
         }
     }
+}
+
+/// What a joint's member is in words: "dowel_pin, beech", "wood_screw,
+/// steel".
+pub fn item_text(item: &MemberItem) -> String {
+    let made_of = item.wood.map_or("steel", |species| species.title());
+    format!("{}, {}", item.kind, made_of.to_lowercase())
+}
+
+/// One copy of a joint's member in words, from its shapes: "cylinder 8 mm
+/// across, 30 mm long".
+pub fn copy_text(body: &Body) -> String {
+    let shapes = body.copy_shapes().next().unwrap_or(body.shapes());
+    match shapes {
+        [
+            MemberShape::Cylinder {
+                diameter,
+                start,
+                end,
+                ..
+            },
+        ] => format!(
+            "cylinder {} mm across, {} mm long",
+            millimetres(*diameter),
+            millimetres(Length::from_nm(end.nm().saturating_sub(start.nm())))
+        ),
+        [MemberShape::Bar { thickness, .. }] => {
+            format!("bar {} mm thick", millimetres(*thickness))
+        }
+        [MemberShape::Prism { .. }] => "outline".to_owned(),
+        [MemberShape::Box(region)] => {
+            let mut sizes = Axis::ALL.map(|axis| region.size(axis));
+            sizes.sort_unstable_by(|a, b| b.cmp(a));
+            let [length, width, thickness] = sizes;
+            format!("box {}", size_text(length, width, thickness))
+        }
+        [] | [_, _, ..] => format!("{} shapes", shapes.len()),
+    }
+}
+
+/// The scene item a problem's item is.
+pub fn contact_item(item: ContactItem) -> Item {
+    match item {
+        ContactItem::Part(id) => Item::Part(id),
+        ContactItem::Hardware(id) => Item::Hardware(id),
+        ContactItem::Member(member) => Item::Member(member),
+    }
+}
+
+/// How each node is drawn outside focus mode, when a joint's member is
+/// among `shown` (what is selected, or what a problem is about): the parts
+/// of its pair see-through, so the pins inside them show; everything else
+/// as usual. `None` when no member is shown.
+pub fn see_into(design: &SolvedDesign, graph: &SceneGraph, shown: &[Item]) -> Option<Vec<Look>> {
+    let parts: Vec<stave_model::solved::PartId> = shown
+        .iter()
+        .filter_map(|item| match item {
+            Item::Member(member) => design
+                .joints
+                .get(member.joint.index())?
+                .pairs
+                .get(member.pair),
+            Item::Part(_) | Item::Hardware(_) => None,
+        })
+        .flat_map(|pair| pair.roles.iter().map(|role| role.part))
+        .collect();
+    if parts.is_empty() {
+        return None;
+    }
+    let xray: Vec<NodeId> = graph
+        .node_ids()
+        .filter(|id| {
+            graph.node(*id).is_some_and(|node| match node.item {
+                Item::Part(part) => parts.contains(&part),
+                Item::Hardware(_) | Item::Member(_) => false,
+            })
+        })
+        .collect();
+    Some(graph.looks(&[], &xray, false))
 }
 
 /// `true` when `inner` lies inside `outer`.
@@ -422,12 +530,10 @@ pub fn highlight(graph: &SceneGraph, contact: &Contact) -> Highlight {
         .node_ids()
         .filter(|id| {
             graph.node(*id).is_some_and(|node| {
-                contact.items.iter().any(|item| match (item, node.item) {
-                    (ContactItem::Part(a), Item::Part(b)) => *a == b,
-                    (ContactItem::Hardware(a), Item::Hardware(b)) => *a == b,
-                    (ContactItem::Part(_), Item::Hardware(_))
-                    | (ContactItem::Hardware(_), Item::Part(_)) => false,
-                })
+                contact
+                    .items
+                    .iter()
+                    .any(|item| contact_item(*item) == node.item)
             })
         })
         .collect();

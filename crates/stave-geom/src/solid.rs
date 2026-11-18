@@ -668,22 +668,16 @@ impl Solid {
         let operation = cut.kind.operation();
         let round_part = self.profile.is_some();
         match &cut.kind {
-            CutKind::Drill {
-                diameter,
-                depth,
-                count,
-            } => {
+            CutKind::Drill { diameter, depth } => {
                 let range = depth_range(size, cut.face, *depth);
-                for centre in hole_centres(part, cut, *count) {
-                    self.holes.push(Rod {
-                        axis: cut.face.axis,
-                        centre,
-                        diameter: *diameter,
-                        start: range.0,
-                        end: range.1,
-                        flats: None,
-                    });
-                }
+                self.holes.push(Rod {
+                    axis: cut.face.axis,
+                    centre: hole_centre(part, cut),
+                    diameter: *diameter,
+                    start: range.0,
+                    end: range.1,
+                    flats: None,
+                });
                 return Ok(());
             }
             CutKind::Spigot { length, diameter } => {
@@ -1466,28 +1460,16 @@ fn outline_range(
     }
 }
 
-/// Where the holes of a `drill` go, on the two axes across the face's.
-fn hole_centres(part: &Part, cut: &Cut, count: u32) -> Vec<[Length; 2]> {
-    let [first, second] = across(cut.face.axis);
-    let count = count.max(1);
-    let (a0, a1) = face_extent(part, &cut.place, first);
-    let (b0, b1) = face_extent(part, &cut.place, second);
-    let long_is_first = (a1.nm() - a0.nm()) >= (b1.nm() - b0.nm());
-    let middle = |low: Length, high: Length| Length::from_nm((low.nm() + high.nm()).div_euclid(2));
-    let spread = |low: Length, high: Length, index: u32| {
-        let span = i128::from(high.nm() - low.nm());
-        let step = span * i128::from(index + 1) / i128::from(count + 1);
-        Length::from_nm(low.nm().saturating_add(i64::try_from(step).unwrap_or(0)))
+/// Where a `drill`'s hole goes, on the two axes across the face's: the
+/// middle of its footprint, or of the member's shape it is drilled for.
+fn hole_centre(part: &Part, cut: &Cut) -> [Length; 2] {
+    let middle = |(low, high): (Length, Length)| {
+        Length::from_nm(
+            i64::try_from((i128::from(low.nm()) + i128::from(high.nm())).div_euclid(2))
+                .unwrap_or(low.nm()),
+        )
     };
-    (0..count)
-        .map(|index| {
-            if long_is_first {
-                [spread(a0, a1, index), middle(b0, b1)]
-            } else {
-                [middle(a0, a1), spread(b0, b1, index)]
-            }
-        })
-        .collect()
+    across(cut.face.axis).map(|axis| middle(face_extent(part, &cut.place, axis)))
 }
 
 #[cfg(test)]
