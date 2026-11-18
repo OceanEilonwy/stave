@@ -1,0 +1,1581 @@
+//! Repeat and mirror (`docs/editing.md`, "Repeat and mirror"), as pure
+//! functions from a project and a request to a patch in the `.stave`
+//! grammar, which the scratch check ([`crate::scratch`]) then judges.
+//!
+//! - [`repeat_assembly`] turns an assembly that fills a region into an
+//!   array of them: it splits the region into a `<component>_bay` array
+//!   (equal, or with `shares:`) and binds each element with `[same]`. The
+//!   array is labelled from the direction of the split for two or three
+//!   pieces and counted for four or more ([`crate::naming::repeat_array`]).
+//!   On an assembly that is already such an array, it changes the count of
+//!   the same two declarations instead of adding a second set.
+//! - [`repeat_part`] turns a part into an array spaced along a span with
+//!   `spaced(evenly, from:, to:)`, or changes the count of one.
+//! - [`move_shares`] is the grip between two neighbouring pieces of a
+//!   split: it sets their two shares so the boundary between them lands
+//!   where it was dragged (snapped to whole millimetres), keeping the sum
+//!   of the two, so no other piece changes size.
+//! - [`mirror_assembly`] finds the mirror image of an assembly about the
+//!   mid-plane of what it is placed against or in, renames the assembly to
+//!   its side (`door_left`) and adds its image (`door_right =
+//!   mirror(door_left, about: ...)`).
+//!
+//! A patch here is text and its parse ([`GeneratedPatch`]). The patcher
+//! doesn't apply `rename` (it needs every reference, which only the
+//! navigation layer knows), so a mirror comes as the rename's text edits
+//! ([`stave_ide::Analysis::rename`]) and a patch that applies after them.
+
+use std::num::NonZeroU32;
+
+use stave_ide::{Analysis, RenameEdit, RenameError};
+use stave_lang::ast::{
+    self, Arg, AssemblyDef, DesignItem, Expr, ExprKind, Ident, ItemKind, PartDef,
+};
+use stave_lang::placement::{Axis, Face};
+use stave_lang::units::{Length, Rational, number_to_rational};
+use stave_lang::{Diagnostic, Parse, SourceMap};
+use stave_model::defs::{AssemblyKind, DefId};
+use stave_model::solved::SolvedDesign;
+use stave_model::types::Ty;
+
+use crate::candidates::print::quoted;
+use crate::candidates::{EditScope, ProjectFile};
+use crate::naming::{NamingError, RepeatCount, TakenNames, bay_name, mirrored_pair, repeat_array};
+
+// ---------------------------------------------------------------------------
+// A generated patch
+// ---------------------------------------------------------------------------
+
+/// A patch the editor wrote: one `patch` in a patch file, as text and
+/// parsed.
+#[derive(Debug, Clone)]
+pub struct GeneratedPatch {
+    /// What the patch does, as the card shows it: "Make drawer 3".
+    pub summary: String,
+    /// The patch file's text: `stave 1` and one patch.
+    pub text: String,
+    /// The text parsed; it has no errors.
+    pub parse: Parse<ast::PatchFile>,
+}
+
+/// A generated patch didn't parse: a bug in the writer.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("the written patch doesn't parse; please report this as a bug")]
+pub struct PatchBuildError(pub Vec<Diagnostic>);
+
+impl GeneratedPatch {
+    /// A patch with this summary and these operations, one per entry (an
+    /// operation may span lines).
+    ///
+    /// # Errors
+    ///
+    /// [`PatchBuildError`] when the text doesn't parse.
+    pub fn new(summary: &str, ops: &[String]) -> Result<Self, PatchBuildError> {
+        let mut text = format!("stave 1\n\npatch {} {{\n", quoted(summary));
+        for op in ops {
+            for line in op.lines() {
+                text.push_str("  ");
+                text.push_str(line);
+                text.push('\n');
+            }
+        }
+        text.push_str("}\n");
+        let mut sources = SourceMap::new();
+        let file = sources
+            .add("patch.stave", text.as_str())
+            .map_err(|_| PatchBuildError(Vec::new()))?;
+        let parse = stave_lang::parse_patch_file(file, &text);
+        if parse.has_errors() {
+            return Err(PatchBuildError(parse.diagnostics));
+        }
+        Ok(Self {
+            summary: summary.to_owned(),
+            text,
+            parse,
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Errors
+// ---------------------------------------------------------------------------
+
+/// Why a repeat, a shares grip or a mirror can't be written.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum RepeatError {
+    /// The project has no top-level item by that name.
+    #[error("there is no item named '{0}' in this project")]
+    UnknownItem(String),
+    /// The item isn't of the sort the request needs.
+    #[error("'{name}' can't be repeated this way: {reason}")]
+    NotRepeatable {
+        /// The item.
+        name: String,
+        /// Why, in words.
+        reason: String,
+    },
+    /// The repeat already has that many pieces.
+    #[error("'{name}' already has {count} pieces")]
+    SameCount {
+        /// The item.
+        name: String,
+        /// Its count.
+        count: usize,
+    },
+    /// A first repeat needs the axis to split along.
+    #[error("say which way to split the space for '{0}': across, up or deep")]
+    NoAxis(String),
+    /// `shares:` with the wrong number of entries.
+    #[error("{pieces} pieces need {pieces} shares, found {found}")]
+    SharesCount {
+        /// How many pieces.
+        pieces: usize,
+        /// How many shares were given.
+        found: usize,
+    },
+    /// The split's shares are not plain numbers, so a grip can't move them.
+    #[error("the shares of '{0}' are not plain numbers, so they can't be moved by a grip")]
+    SharesNotNumbers(String),
+    /// The grip names pieces the split doesn't have.
+    #[error("'{region}' has no pieces {lower} and {upper}")]
+    NoSuchPieces {
+        /// The region.
+        region: String,
+        /// The first piece's index.
+        lower: usize,
+        /// The second's.
+        upper: usize,
+    },
+    /// The boundary is dragged onto or past the far side of a piece.
+    #[error(
+        "the boundary must leave both pieces more than 0mm; it can move between 0mm and {pair}"
+    )]
+    BoundaryOutside {
+        /// The two pieces' sizes together.
+        pair: Length,
+    },
+    /// The design has no solved region by that name (it didn't solve).
+    #[error("the design has no solved space named '{0}'; it must solve before a grip can move it")]
+    NotSolved(String),
+    /// No mirror image was found for the assembly.
+    #[error(
+        "'{0}' isn't placed against a part that has a mirror image, or in one of two matching spaces, so it has no mirror image to add"
+    )]
+    NoMirror(String),
+    /// The rename a mirror makes was refused.
+    #[error(transparent)]
+    Rename(#[from] RenameError),
+    /// A generated name couldn't be made.
+    #[error(transparent)]
+    Naming(#[from] NamingError),
+    /// Arithmetic that doesn't fit the exact numbers (a bug, or sizes of
+    /// kilometres).
+    #[error("the sizes are too large to work with exactly")]
+    Overflow,
+    /// The written patch didn't parse: a bug.
+    #[error(transparent)]
+    Build(#[from] PatchBuildError),
+}
+
+// ---------------------------------------------------------------------------
+// Reading the project's text
+// ---------------------------------------------------------------------------
+
+/// A top-level item of the project, with the text of its file.
+struct Found<'s> {
+    file: &'s ProjectFile,
+    text: String,
+    item: &'s ast::Item,
+}
+
+impl Found<'_> {
+    fn slice(&self, span: ast::Span) -> Option<&str> {
+        slice(&self.text, span)
+    }
+}
+
+pub(crate) fn slice(text: &str, span: ast::Span) -> Option<&str> {
+    let start = usize::try_from(span.start()).ok()?;
+    let end = usize::try_from(span.end()).ok()?;
+    text.get(start..end)
+}
+
+/// The project's top-level item named `name`.
+fn find<'s>(scope: &'s EditScope<'_>, name: &str) -> Option<Found<'s>> {
+    scope.files().iter().find_map(|file| {
+        let item = file
+            .parse
+            .ast
+            .as_ref()?
+            .items
+            .iter()
+            .find(|item| item.kind.name().is_some_and(|n| n.as_str() == name))?;
+        Some(Found {
+            file,
+            text: file.parse.syntax().to_string(),
+            item,
+        })
+    })
+}
+
+/// A `split(region, axis, ...)` call, read from the text.
+struct Split<'e> {
+    source: &'e Expr,
+    axis: Axis,
+    shares: Option<&'e Expr>,
+    at: bool,
+}
+
+fn split_of(expr: &Expr) -> Option<Split<'_>> {
+    let ExprKind::Call { callee, args } = &expr.kind else {
+        return None;
+    };
+    let ExprKind::Name(head) = &callee.kind else {
+        return None;
+    };
+    if head.as_str() != "split" {
+        return None;
+    }
+    let mut positional = args.iter().filter(|arg| arg.name.is_none());
+    let source = &positional.next()?.value;
+    let axis = match &positional.next()?.value.kind {
+        ExprKind::Name(word) => Axis::from_word(word.as_str())?,
+        _ => return None,
+    };
+    let named = |key: &str| {
+        args.iter()
+            .find(|arg| arg.name.as_ref().is_some_and(|n| n.as_str() == key))
+            .map(|arg: &Arg| &arg.value)
+    };
+    Some(Split {
+        source,
+        axis,
+        shares: named("shares"),
+        at: named("at").is_some(),
+    })
+}
+
+/// The shares of a split as exact numbers, when each is a plain number.
+fn share_values(shares: &Expr) -> Option<Vec<Rational>> {
+    let ExprKind::List(items) = &shares.kind else {
+        return None;
+    };
+    items
+        .iter()
+        .map(|item| match &item.kind {
+            ExprKind::Number(number) => number_to_rational(*number).ok(),
+            _ => None,
+        })
+        .collect()
+}
+
+/// How many elements an array declaration has, when it is written as
+/// labels or a whole number.
+fn array_count(spec: &ast::ArraySpec) -> Option<usize> {
+    match spec {
+        ast::ArraySpec::Labels(labels) => Some(labels.as_slice().len()),
+        ast::ArraySpec::Count(expr) => match &expr.kind {
+            ExprKind::Number(ast::Number::Integer(n)) => usize::try_from(*n).ok(),
+            _ => None,
+        },
+    }
+}
+
+/// The element names of an array declaration, in order: its labels, or
+/// its numbers from 0.
+fn array_indexes(spec: &ast::ArraySpec) -> Option<Vec<String>> {
+    match spec {
+        ast::ArraySpec::Labels(labels) => Some(
+            labels
+                .as_slice()
+                .iter()
+                .map(|label| label.as_str().to_owned())
+                .collect(),
+        ),
+        ast::ArraySpec::Count(_) => {
+            array_count(spec).map(|count| (0..count).map(|n| n.to_string()).collect())
+        }
+    }
+}
+
+/// The name of the first `Region` param of the component an assembly of
+/// the project's module is an instance of.
+fn region_param(scope: &EditScope<'_>, assembly: &str) -> Option<String> {
+    let model = scope.model();
+    let defs = &model.defs;
+    let module = defs.modules.get(model.root.index())?;
+    let component = module.items.iter().find_map(|item| match item {
+        DefId::Assembly(id) => {
+            let def = defs.assembly(*id)?;
+            if def.decl.name != assembly {
+                return None;
+            }
+            match &def.kind {
+                AssemblyKind::Instance { component, .. } => Some(*component),
+                AssemblyKind::Mirror(_) | AssemblyKind::Invalid => None,
+            }
+        }
+        _ => None,
+    })?;
+    defs.component(component)?
+        .params
+        .iter()
+        .filter_map(|param| defs.param(*param))
+        .find(|param| param.ty == Ty::Region)
+        .map(|param| param.decl.name.clone())
+}
+
+/// `, shares: [a, b, c]`, or nothing.
+fn shares_text(shares: Option<&[NonZeroU32]>) -> String {
+    shares.map_or_else(String::new, |shares| {
+        let list: Vec<String> = shares.iter().map(ToString::to_string).collect();
+        format!(", shares: [{}]", list.join(", "))
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Repeat
+// ---------------------------------------------------------------------------
+
+/// A repeat of an assembly that fills a region.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RepeatRequest<'a> {
+    /// The assembly: a single one, or the array of an earlier repeat.
+    pub assembly: &'a str,
+    /// How many pieces it becomes.
+    pub count: RepeatCount,
+    /// The axis to split the region along. A first repeat needs it; on an
+    /// existing repeat the split's own axis is kept and this is ignored.
+    pub axis: Option<Axis>,
+    /// Relative sizes of the pieces, one per piece in label order; `None`
+    /// for equal pieces.
+    pub shares: Option<&'a [NonZeroU32]>,
+}
+
+/// The patch that turns an assembly into `count` of them filling its
+/// region, or changes the count of an existing repeat (see the module's
+/// notes). Labels are regenerated for the new count by the naming rule;
+/// an existing repeat's `shares:` are dropped unless new ones are given,
+/// since they were for a different number of pieces.
+///
+/// # Errors
+///
+/// An unknown item, an item that isn't an assembly filling a region, a
+/// repeat to the count it already has, a first repeat with no axis, or
+/// shares of the wrong number; see [`RepeatError`].
+pub fn repeat_assembly(
+    scope: &EditScope<'_>,
+    request: RepeatRequest<'_>,
+) -> Result<GeneratedPatch, RepeatError> {
+    let name = request.assembly;
+    let not = |reason: &str| RepeatError::NotRepeatable {
+        name: name.to_owned(),
+        reason: reason.to_owned(),
+    };
+    let found = find(scope, name).ok_or_else(|| RepeatError::UnknownItem(name.to_owned()))?;
+    let ItemKind::Design(DesignItem::Assembly(assembly)) = &found.item.kind else {
+        return Err(not("only an assembly of a component fills a space"));
+    };
+    let AssemblyDef::Instance { component, body } = &assembly.def else {
+        return Err(not("it is a mirror image; repeat the assembly it mirrors"));
+    };
+    if let Some(shares) = request.shares
+        && shares.len() != request.count.get()
+    {
+        return Err(RepeatError::SharesCount {
+            pieces: request.count.get(),
+            found: shares.len(),
+        });
+    }
+    let param = region_param(scope, name)
+        .ok_or_else(|| not("its component has no space (Region) param to fill"))?;
+    let field = body
+        .field(&param)
+        .ok_or_else(|| not("its space param is not written"))?;
+    let component_text = found.slice(component.span).ok_or(RepeatError::Overflow)?;
+    let body_text = found.slice(body.span).ok_or(RepeatError::Overflow)?;
+
+    match &assembly.array {
+        None => {
+            let axis = request
+                .axis
+                .ok_or_else(|| RepeatError::NoAxis(name.to_owned()))?;
+            let array = repeat_array(axis, request.count);
+            let source = found.slice(field.value.span).ok_or(RepeatError::Overflow)?;
+            let mut taken = TakenNames::of_project(scope.model());
+            taken.insert(name);
+            let component_name = component
+                .rest
+                .last()
+                .map_or(component.root.as_str(), ast::Name::as_str);
+            let bay = bay_name(component_name, &taken)?;
+            let declaration = array.declaration();
+            let ops = vec![
+                format!(
+                    "add region {}{declaration} = split({source}, {}{})",
+                    bay.as_str(),
+                    axis.word(),
+                    shares_text(request.shares)
+                ),
+                format!("replace assembly {name}{declaration} : {component_text} {body_text}"),
+                format!("set {name}.{param} = {}[same]", bay.as_str()),
+            ];
+            let summary = format!("Make {} of {name}", request.count.get());
+            Ok(GeneratedPatch::new(&summary, &ops)?)
+        }
+        Some(spec) => {
+            // An earlier repeat: the region it fills is `bay[same]`.
+            let ExprKind::Index {
+                base,
+                index: ast::Index::Same(_),
+            } = &field.value.kind
+            else {
+                return Err(not(
+                    "its space is not an element of a split, bound with [same]",
+                ));
+            };
+            let ExprKind::Name(bay) = &base.kind else {
+                return Err(not("its space is not a split of this project"));
+            };
+            let region = find(scope, bay.as_str())
+                .ok_or_else(|| not("its space is not a split of this project"))?;
+            let ItemKind::Design(DesignItem::Region(region_item)) = &region.item.kind else {
+                return Err(not("its space is not a region"));
+            };
+            let split = split_of(&region_item.value)
+                .filter(|split| !split.at)
+                .ok_or_else(|| not("its space is not an even split or a split with shares"))?;
+            let current =
+                array_count(spec).ok_or_else(|| not("its count is not a fixed number"))?;
+            if current == request.count.get() && request.shares.is_none() {
+                return Err(RepeatError::SameCount {
+                    name: name.to_owned(),
+                    count: current,
+                });
+            }
+            let array = repeat_array(split.axis, request.count);
+            let declaration = array.declaration();
+            let source = region
+                .slice(split.source.span)
+                .ok_or(RepeatError::Overflow)?;
+            let ops = vec![
+                format!(
+                    "replace region {}{declaration} = split({source}, {}{})",
+                    bay.as_str(),
+                    split.axis.word(),
+                    shares_text(request.shares)
+                ),
+                format!("replace assembly {name}{declaration} : {component_text} {body_text}"),
+            ];
+            let summary = format!("Make {} of {name}", request.count.get());
+            Ok(GeneratedPatch::new(&summary, &ops)?)
+        }
+    }
+}
+
+/// A repeat of a part spaced along a span.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SpacedRequest<'a> {
+    /// The part: a single one, or an array.
+    pub part: &'a str,
+    /// How many it becomes.
+    pub count: RepeatCount,
+    /// The axis the pieces are spaced along, which names the array's
+    /// labels for two or three.
+    pub axis: Axis,
+    /// The anchor the span starts at: `apron_l.right`.
+    pub from: &'a str,
+    /// The anchor it ends at: `apron_r.left`.
+    pub to: &'a str,
+}
+
+/// The patch that turns a part into `count` of them spaced evenly from one
+/// anchor to another: the part becomes an array (same stock, same body)
+/// and its placement term on the axis becomes `spaced(evenly, from:,
+/// to:)`. On a part that is already an array it changes the count of the
+/// same declaration.
+///
+/// # Errors
+///
+/// An unknown item, or one that isn't a part cut from stock; see
+/// [`RepeatError`].
+pub fn repeat_part(
+    scope: &EditScope<'_>,
+    request: SpacedRequest<'_>,
+) -> Result<GeneratedPatch, RepeatError> {
+    let name = request.part;
+    let not = |reason: &str| RepeatError::NotRepeatable {
+        name: name.to_owned(),
+        reason: reason.to_owned(),
+    };
+    let found = find(scope, name).ok_or_else(|| RepeatError::UnknownItem(name.to_owned()))?;
+    let ItemKind::Design(DesignItem::Part(part)) = &found.item.kind else {
+        return Err(not("only a part can be spaced along a span"));
+    };
+    let PartDef::FromStock { stock, body } = &part.def else {
+        return Err(not("it is a mirror image; repeat the part it mirrors"));
+    };
+    if let Some(spec) = &part.array
+        && array_count(spec) == Some(request.count.get())
+    {
+        return Err(RepeatError::SameCount {
+            name: name.to_owned(),
+            count: request.count.get(),
+        });
+    }
+    let declaration = repeat_array(request.axis, request.count).declaration();
+    let stock_text = found.slice(stock.span).ok_or(RepeatError::Overflow)?;
+    let body_text = found.slice(body.span).ok_or(RepeatError::Overflow)?;
+    let ops = vec![
+        format!("replace part {name}{declaration} : {stock_text} {body_text}"),
+        format!(
+            "set {name}.place.{} = spaced(evenly, from: {}, to: {})",
+            request.axis.word(),
+            request.from,
+            request.to
+        ),
+    ];
+    let summary = format!("Make {} of {name}", request.count.get());
+    Ok(GeneratedPatch::new(&summary, &ops)?)
+}
+
+// ---------------------------------------------------------------------------
+// The shares grip
+// ---------------------------------------------------------------------------
+
+/// The grip between two neighbouring pieces of a split, let go.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SharesMove<'a> {
+    /// The region array the split makes: `drawer_bay`.
+    pub region: &'a str,
+    /// The index of the first of the two pieces, in label order; the
+    /// other is the next one.
+    pub lower: usize,
+    /// Where the boundary between them goes: the new size of the first
+    /// piece along the split's axis, from its start. Snapped to whole
+    /// millimetres.
+    pub boundary: Length,
+}
+
+/// The patch that moves the boundary between two neighbouring pieces of
+/// a split: the region's declaration again with only those two shares
+/// changed and their sum kept, so the pieces around them keep their
+/// sizes. A split without `shares:` counts as all ones. The boundary is
+/// snapped to whole millimetres; the two pieces' sizes come from the
+/// solved design. A share that is not a whole number is written as a
+/// division of two whole numbers, which is exact.
+///
+/// # Errors
+///
+/// An unknown region, one that is not a split array, shares that are not
+/// plain numbers, pieces it doesn't have, a region the design didn't
+/// solve, or a boundary that leaves a piece 0mm or less; see
+/// [`RepeatError`].
+pub fn move_shares(
+    scope: &EditScope<'_>,
+    design: &SolvedDesign,
+    grip: SharesMove<'_>,
+) -> Result<GeneratedPatch, RepeatError> {
+    let name = grip.region;
+    let not = |reason: &str| RepeatError::NotRepeatable {
+        name: name.to_owned(),
+        reason: reason.to_owned(),
+    };
+    let found = find(scope, name).ok_or_else(|| RepeatError::UnknownItem(name.to_owned()))?;
+    let ItemKind::Design(DesignItem::Region(region)) = &found.item.kind else {
+        return Err(not("only a region split into pieces has shares"));
+    };
+    let spec = region
+        .array
+        .as_ref()
+        .ok_or_else(|| not("it is one space, not split into pieces"))?;
+    let split = split_of(&region.value)
+        .filter(|split| !split.at)
+        .ok_or_else(|| not("it is not an even split or a split with shares"))?;
+    let indexes = array_indexes(spec).ok_or_else(|| not("its count is not a fixed number"))?;
+    let mut shares = match split.shares {
+        None => vec![Rational::from_int(1); indexes.len()],
+        Some(expr) => {
+            share_values(expr).ok_or_else(|| RepeatError::SharesNotNumbers(name.to_owned()))?
+        }
+    };
+    let upper = grip.lower.checked_add(1).ok_or(RepeatError::Overflow)?;
+    let no_pieces = || RepeatError::NoSuchPieces {
+        region: name.to_owned(),
+        lower: grip.lower,
+        upper,
+    };
+    let (Some(lower_label), Some(upper_label)) = (indexes.get(grip.lower), indexes.get(upper))
+    else {
+        return Err(no_pieces());
+    };
+    let size = |label: &str| {
+        let piece = format!("{name}[{label}]");
+        design
+            .regions
+            .iter()
+            .find(|region| region.name == piece)
+            .map(|region| region.bounds.size(split.axis))
+            .ok_or(RepeatError::NotSolved(piece))
+    };
+    let pair = size(lower_label)?
+        .checked_add(size(upper_label)?)
+        .ok_or(RepeatError::Overflow)?;
+    let millimetre = Length::from_mm(1).nm();
+    let snapped = grip
+        .boundary
+        .nm()
+        .checked_add(millimetre / 2)
+        .and_then(|nm| nm.checked_div(millimetre))
+        .and_then(|mm| mm.checked_mul(millimetre))
+        .ok_or(RepeatError::Overflow)?;
+    if snapped <= 0 || snapped >= pair.nm() {
+        return Err(RepeatError::BoundaryOutside { pair });
+    }
+    let (Some(a), Some(b)) = (shares.get(grip.lower), shares.get(upper)) else {
+        return Err(no_pieces());
+    };
+    let sum = a.checked_add(*b).ok_or(RepeatError::Overflow)?;
+    let fraction =
+        Rational::new(i128::from(snapped), i128::from(pair.nm())).ok_or(RepeatError::Overflow)?;
+    let new_lower = sum.checked_mul(fraction).ok_or(RepeatError::Overflow)?;
+    let new_upper = sum.checked_sub(new_lower).ok_or(RepeatError::Overflow)?;
+    if let Some(slot) = shares.get_mut(grip.lower) {
+        *slot = new_lower;
+    }
+    if let Some(slot) = shares.get_mut(upper) {
+        *slot = new_upper;
+    }
+    let list: Vec<String> = shares.iter().map(|share| share_text(*share)).collect();
+    // The whole declaration is replaced: the patcher doesn't reach into a
+    // region's call by `set <region>.shares` yet.
+    let declaration = match spec {
+        ast::ArraySpec::Labels(_) => format!("[{}]", indexes.join(", ")),
+        ast::ArraySpec::Count(_) => format!("[{}]", indexes.len()),
+    };
+    let source = found
+        .slice(split.source.span)
+        .ok_or(RepeatError::Overflow)?;
+    let ops = vec![format!(
+        "replace region {name}{declaration} = split({source}, {}, shares: [{}])",
+        split.axis.word(),
+        list.join(", ")
+    )];
+    let summary =
+        format!("Move the boundary between {name}[{lower_label}] and {name}[{upper_label}]");
+    Ok(GeneratedPatch::new(&summary, &ops)?)
+}
+
+/// A share as text: a whole number, a short decimal when it is one, or
+/// `p / q`.
+fn share_text(share: Rational) -> String {
+    let (numerator, denominator) = (share.numerator(), share.denominator());
+    if denominator == 1 {
+        return numerator.to_string();
+    }
+    // A decimal of up to four places, when the share is one exactly.
+    for (scale, places) in [(10i128, 1usize), (100, 2), (1000, 3), (10_000, 4)] {
+        if let Some(scaled) = numerator.checked_mul(scale)
+            && scaled % denominator == 0
+        {
+            let digits = scaled / denominator;
+            let whole = digits / scale;
+            let fraction = digits % scale;
+            return format!("{whole}.{fraction:0places$}");
+        }
+    }
+    format!("{numerator} / {denominator}")
+}
+
+// ---------------------------------------------------------------------------
+// Mirror
+// ---------------------------------------------------------------------------
+
+/// A mirror of an assembly: the rename of the original to its side, and
+/// the patch that adds its image, which applies to the files as the
+/// rename leaves them.
+#[derive(Debug, Clone)]
+pub struct MirrorPlan {
+    /// The assembly's name before.
+    pub source: String,
+    /// The name it takes: `door_left`.
+    pub renamed: Ident,
+    /// The image's name: `door_right`.
+    pub image: Ident,
+    /// The axis it is mirrored across.
+    pub axis: Axis,
+    /// The plane it is mirrored about, as written: `mid(base, across)`.
+    pub about: String,
+    /// The rename's edits, per file.
+    pub rename: Vec<RenameEdit>,
+    /// The patch adding the image; apply it after [`MirrorPlan::rename`].
+    pub patch: GeneratedPatch,
+}
+
+/// The mirror image of an assembly, when it has one: it is placed against
+/// a part that has a mirror image (`side_r = mirror(side_l, about: M)`, so
+/// about `M`), or fills a piece of a split whose matching piece lies at
+/// the same place from the other end (`door_bay[left]` of an even split
+/// across, about the split region's mid-plane). Parts are looked for in
+/// every place param before regions are. The original is renamed with
+/// its side and the image takes the other (`door_left`, `door_right`).
+///
+/// # Errors
+///
+/// An unknown item, one that isn't an assembly of a component, one with
+/// no mirror image, or a rename that is refused; see [`RepeatError`].
+pub fn mirror_assembly(
+    scope: &EditScope<'_>,
+    analysis: &Analysis,
+    design: &SolvedDesign,
+    assembly: &str,
+) -> Result<MirrorPlan, RepeatError> {
+    let not = |reason: &str| RepeatError::NotRepeatable {
+        name: assembly.to_owned(),
+        reason: reason.to_owned(),
+    };
+    let found =
+        find(scope, assembly).ok_or_else(|| RepeatError::UnknownItem(assembly.to_owned()))?;
+    let ItemKind::Design(DesignItem::Assembly(item)) = &found.item.kind else {
+        return Err(not("only an assembly is mirrored this way"));
+    };
+    if item.array.is_some() {
+        return Err(not("it is an array; mirror a single assembly"));
+    }
+    let AssemblyDef::Instance { body, .. } = &item.def else {
+        return Err(not("it is already a mirror image"));
+    };
+    let (axis, about, first_side) = body
+        .fields
+        .iter()
+        .find_map(|field| part_mirror(scope, design, &field.value))
+        .or_else(|| {
+            body.fields
+                .iter()
+                .find_map(|field| split_mirror(scope, &field.value))
+        })
+        .ok_or_else(|| RepeatError::NoMirror(assembly.to_owned()))?;
+
+    let taken = TakenNames::of_project(scope.model());
+    let (first, last) = mirrored_pair(assembly, axis, &taken)?;
+    let (renamed, image) = if first_side {
+        (first, last)
+    } else {
+        (last, first)
+    };
+    let symbol = analysis
+        .project_symbol(assembly)
+        .ok_or_else(|| RepeatError::UnknownItem(assembly.to_owned()))?;
+    let rename = analysis.rename(symbol.id, renamed.as_str())?;
+    let ops = vec![format!(
+        "add assembly {} = mirror({}, about: {about}) in {}",
+        image.as_str(),
+        renamed.as_str(),
+        quoted(&found.file.name)
+    )];
+    let summary = format!("Add the mirror image of {assembly}");
+    let patch = GeneratedPatch::new(&summary, &ops)?;
+    Ok(MirrorPlan {
+        source: assembly.to_owned(),
+        renamed,
+        image,
+        axis,
+        about,
+        rename,
+        patch,
+    })
+}
+
+/// A place param bound to a part (or a face of one) that has a mirror
+/// image: the axis, the plane as written, and whether the part is on the
+/// side nearer the start of the axis.
+fn part_mirror(
+    scope: &EditScope<'_>,
+    design: &SolvedDesign,
+    value: &Expr,
+) -> Option<(Axis, String, bool)> {
+    let path = value.as_path()?;
+    let name = path.root.as_str();
+    // Only a part by its own name, or a face of one.
+    match path.segments.as_slice() {
+        [] => {}
+        [ast::PathSegment::Member(member)] if Face::from_word(member.as_str()).is_some() => {}
+        _ => return None,
+    }
+    let found = find(scope, name)?;
+    let ItemKind::Design(DesignItem::Part(part)) = &found.item.kind else {
+        return None;
+    };
+    // `name = mirror(other, about: M)`, or `other = mirror(name, about: M)`.
+    let (other, about) = match &part.def {
+        PartDef::Mirror(mirror) => {
+            let source = mirror.source.as_path()?;
+            (
+                source.root.as_str().to_owned(),
+                found.slice(mirror.about.span)?.to_owned(),
+            )
+        }
+        PartDef::FromStock { .. } => scope.files().iter().find_map(|file| {
+            let text = file.parse.syntax().to_string();
+            file.parse.ast.as_ref()?.items.iter().find_map(|item| {
+                let ItemKind::Design(DesignItem::Part(other)) = &item.kind else {
+                    return None;
+                };
+                let PartDef::Mirror(mirror) = &other.def else {
+                    return None;
+                };
+                let source = mirror.source.as_path()?;
+                (source.root.as_str() == name && source.segments.is_empty()).then(|| {
+                    Some((
+                        other.name.as_str().to_owned(),
+                        slice(&text, mirror.about.span)?.to_owned(),
+                    ))
+                })?
+            })
+        })?,
+    };
+    let axis = plane_axis(&about)?;
+    let centre = |part: &str| {
+        let part = design.part_named(part)?;
+        let bounds = part.pose.world_box(part.drawn);
+        bounds
+            .min()
+            .get(axis)
+            .nm()
+            .checked_add(bounds.max().get(axis).nm())
+    };
+    Some((axis, about, centre(name)? < centre(&other)?))
+}
+
+/// A place param bound to a piece of an even split that has a matching
+/// piece at the other end: the axis, the plane, and whether the piece is
+/// on the first side.
+fn split_mirror(scope: &EditScope<'_>, value: &Expr) -> Option<(Axis, String, bool)> {
+    let ExprKind::Index {
+        base,
+        index: ast::Index::At(label),
+    } = &value.kind
+    else {
+        return None;
+    };
+    let ExprKind::Name(region_name) = &base.kind else {
+        return None;
+    };
+    let ExprKind::Name(label) = &label.kind else {
+        return None;
+    };
+    let found = find(scope, region_name.as_str())?;
+    let ItemKind::Design(DesignItem::Region(region)) = &found.item.kind else {
+        return None;
+    };
+    let split = split_of(&region.value).filter(|split| !split.at)?;
+    let indexes = array_indexes(region.array.as_ref()?)?;
+    let position = indexes.iter().position(|index| index == label.as_str())?;
+    let last = indexes.len().checked_sub(1)?;
+    let partner = last.checked_sub(position)?;
+    if partner == position {
+        return None;
+    }
+    if let Some(shares) = split.shares {
+        let values = share_values(shares)?;
+        if values.iter().ne(values.iter().rev()) {
+            return None;
+        }
+    }
+    let source = found.slice(split.source.span)?;
+    Some((
+        split.axis,
+        format!("mid({source}, {})", split.axis.word()),
+        position < partner,
+    ))
+}
+
+/// The axis of a mid-plane as written: `mid(base, across)`.
+fn plane_axis(about: &str) -> Option<Axis> {
+    let inner = about.trim().strip_prefix("mid(")?.strip_suffix(')')?;
+    let word = inner.rsplit(',').next()?.trim();
+    Axis::from_word(word)
+}
+
+// ---------------------------------------------------------------------------
+// Test support: projects in memory, shared with `hold` and `remove`
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+pub(crate) mod test_support {
+    use std::path::{Path, PathBuf};
+    use std::sync::atomic::AtomicBool;
+
+    use stave_lang::render_diagnostics;
+    use stave_modules::MemoryFiles;
+
+    use super::GeneratedPatch;
+    use crate::scratch::{EditBase, Tried};
+
+    /// Where the copy of `examples/clothing_cabinet_assemblies` lives in
+    /// memory.
+    pub(crate) const ASSEMBLIES: &str = "d4/clothing_cabinet_assemblies";
+
+    /// A copy of `examples/clothing_cabinet_assemblies` (its `hardware`
+    /// module included), in memory under [`ASSEMBLIES`].
+    pub(crate) fn assemblies() -> MemoryFiles {
+        let example = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../examples/clothing_cabinet_assemblies");
+        let mut files = MemoryFiles::new();
+        let mut folders = vec![(example, PathBuf::from(ASSEMBLIES))];
+        while let Some((from, to)) = folders.pop() {
+            for entry in std::fs::read_dir(&from).unwrap() {
+                let path = entry.unwrap().path();
+                let name = path.file_name().unwrap().to_owned();
+                if path.is_dir() {
+                    folders.push((path, to.join(name)));
+                } else if path.extension().is_some_and(|e| e == "stave") {
+                    files.insert(to.join(name), std::fs::read_to_string(&path).unwrap());
+                }
+            }
+        }
+        files
+    }
+
+    /// The text of a file of a project in memory.
+    pub(crate) fn text(files: &MemoryFiles, folder: &str, name: &str) -> String {
+        use stave_modules::FileSource;
+        files.read(&Path::new(folder).join(name)).unwrap()
+    }
+
+    /// A small case built in the test: a base, two sides (one the mirror
+    /// of the other), a top, the space inside, and a tray of the project's
+    /// own `Tray` component filling it. `extra` is added to the end of
+    /// `case.stave`.
+    pub(crate) fn small_project(extra: &[&str]) -> (String, MemoryFiles) {
+        let folder = "d4/small_case".to_owned();
+        let mut main = SMALL.to_owned();
+        for text in extra {
+            main.push('\n');
+            main.push_str(text);
+            main.push('\n');
+        }
+        let mut files = MemoryFiles::new();
+        files.insert(Path::new(&folder).join("case.stave"), main);
+        (folder, files)
+    }
+
+    const SMALL: &str = r#"stave 1
+
+project "Small case" {
+  units:      mm
+  resolution: 0.5mm
+}
+
+param width  = 400mm
+param height = 500mm
+param depth  = 300mm
+
+stock oak_19 { species: white_oak, form: solid, thickness: 19mm, max_width: 400mm, max_length: 2700mm }
+
+part base : oak_19 {
+  length: width
+  width:  depth
+  place {
+    ground
+  }
+}
+
+part side_l : oak_19 {
+  length: height
+  width:  depth
+  place {
+    orient(length: up, width: back)
+    against(base.top)
+    flush(base.left)
+    flush(base.back)
+  }
+}
+
+part side_r = mirror(side_l, about: mid(base, across))
+
+part top : oak_19 {
+  length: width
+  width:  depth
+  place {
+    against(side_l.top)
+    center(base, across)
+    flush(base.back)
+  }
+}
+
+joint base_dowels : dowel([side_l, side_r], into: base, count: 4)
+joint top_dowels  : dowel([side_l, side_r], into: top, count: 4)
+
+region inside = opening(
+  left:   side_l.right,
+  right:  side_r.left,
+  bottom: base.top,
+  top:    top.bottom,
+  front:  side_l.front,
+  back:   side_l.back,
+)
+
+/// A loose board lying on the bottom of a space.
+component Tray {
+  param opening     : Region
+  param board_stock : Stock
+
+  part board : board_stock {
+    length: opening.across - 10mm
+    width:  opening.deep - 10mm
+    place {
+      flush(opening.bottom)
+      center(opening, across)
+      center(opening, deep)
+    }
+  }
+}
+
+assembly tray : Tray {
+  opening:     inside
+  board_stock: oak_19
+}
+"#;
+
+    /// Tries a generated patch on the project in `folder` and asserts it
+    /// fits and the result has no error; returns what was tried.
+    pub(crate) fn fits(folder: &str, files: &MemoryFiles, patch: &GeneratedPatch) -> Tried {
+        let tried = try_on(folder, files, patch);
+        let rendered = tried
+            .opened()
+            .map(|opened| render_diagnostics(&opened.sources, &opened.diagnostics))
+            .unwrap_or_default();
+        assert!(
+            tried.fits(),
+            "{}\n{}\n{rendered}",
+            patch.text,
+            render_diagnostics(tried.sources(), &tried.shown())
+        );
+        let opened = tried.opened().unwrap();
+        assert_eq!(opened.error_count(), 0, "{}\n{rendered}", patch.text);
+        tried
+    }
+
+    /// Tries a generated patch on the project in `folder`.
+    pub(crate) fn try_on(folder: &str, files: &MemoryFiles, patch: &GeneratedPatch) -> Tried {
+        let base = EditBase::new(Path::new(folder), files).unwrap();
+        base.try_patch("generated.stave", &patch.parse, &AtomicBool::new(false))
+            .unwrap()
+    }
+
+    /// Writes a tried patch's files into `files`, as a commit would.
+    pub(crate) fn commit(files: &mut MemoryFiles, tried: &Tried) {
+        tried.commit(files).unwrap();
+    }
+
+    /// A base for the project in `folder`, asserting it opens with no
+    /// error.
+    pub(crate) fn clean_base<'f>(folder: &str, files: &'f MemoryFiles) -> EditBase<'f> {
+        let base = EditBase::new(Path::new(folder), files).unwrap();
+        let opened = base.opened();
+        assert_eq!(
+            opened.error_count(),
+            0,
+            "{}",
+            render_diagnostics(&opened.sources, &opened.diagnostics)
+        );
+        base
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::num::NonZeroU32;
+    use std::path::Path;
+
+    use stave_ide::{Analysis, Document};
+    use stave_lang::placement::Axis;
+    use stave_lang::units::Length;
+    use stave_modules::MemoryFiles;
+
+    use super::test_support::{
+        ASSEMBLIES, assemblies, clean_base, commit, fits, small_project, text,
+    };
+    use super::*;
+    use crate::candidates::EditScope;
+    use crate::naming::RepeatCount;
+
+    fn count(n: usize) -> RepeatCount {
+        RepeatCount::new(n).unwrap()
+    }
+
+    #[test]
+    fn the_small_project_and_the_cabinet_check_clean() {
+        let (folder, files) = small_project(&[]);
+        clean_base(&folder, &files);
+        let files = assemblies();
+        clean_base(ASSEMBLIES, &files);
+    }
+
+    #[test]
+    fn two_drawers_become_three() {
+        let mut files = assemblies();
+        let base = clean_base(ASSEMBLIES, &files);
+        let scope = EditScope::new(base.opened()).unwrap();
+        let patch = repeat_assembly(
+            &scope,
+            RepeatRequest {
+                assembly: "drawer",
+                count: count(3),
+                axis: None,
+                shares: None,
+            },
+        )
+        .unwrap();
+        // The same two declarations change: no second set.
+        assert!(
+            patch.text.contains(
+                "replace region drawer_bay[bottom, middle, top] = split(divider.below, up)"
+            )
+        );
+        assert!(
+            patch
+                .text
+                .contains("replace assembly drawer[bottom, middle, top] : casework.Drawer {")
+        );
+        assert!(!patch.text.contains("add "));
+        let tried = fits(ASSEMBLIES, &files, &patch);
+        let design = tried.opened().and_then(|o| o.design.as_ref()).unwrap();
+        let fronts: Vec<&str> = design
+            .parts
+            .iter()
+            .map(|p| p.name.as_str())
+            .filter(|n| n.starts_with("drawer[") && n.ends_with("].front"))
+            .collect();
+        assert_eq!(
+            fronts,
+            [
+                "drawer[bottom].front",
+                "drawer[middle].front",
+                "drawer[top].front"
+            ]
+        );
+        drop(scope);
+        drop(base);
+        commit(&mut files, &tried);
+        let drawers = text(&files, ASSEMBLIES, "drawers.stave");
+        assert!(drawers.contains("assembly drawer[bottom, middle, top] : casework.Drawer {"));
+        // The comment inside the body is kept.
+        assert!(drawers.contains("// drawer[bottom] gets drawer_bay[bottom], and so on"));
+
+        // The same count again is not a patch.
+        let base = clean_base(ASSEMBLIES, &files);
+        let scope = EditScope::new(base.opened()).unwrap();
+        assert!(matches!(
+            repeat_assembly(
+                &scope,
+                RepeatRequest {
+                    assembly: "drawer",
+                    count: count(3),
+                    axis: None,
+                    shares: None
+                }
+            ),
+            Err(RepeatError::SameCount { count: 3, .. })
+        ));
+    }
+
+    #[test]
+    fn a_single_assembly_becomes_a_split_array() {
+        let (folder, files) = small_project(&[]);
+        let base = clean_base(&folder, &files);
+        let scope = EditScope::new(base.opened()).unwrap();
+        let shares = [NonZeroU32::new(1).unwrap(), NonZeroU32::new(2).unwrap()];
+        let patch = repeat_assembly(
+            &scope,
+            RepeatRequest {
+                assembly: "tray",
+                count: count(2),
+                axis: Some(Axis::Up),
+                shares: Some(&shares),
+            },
+        )
+        .unwrap();
+        assert!(
+            patch
+                .text
+                .contains("add region tray_bay[bottom, top] = split(inside, up, shares: [1, 2])"),
+            "{}",
+            patch.text
+        );
+        assert!(patch.text.contains("set tray.opening = tray_bay[same]"));
+        let tried = fits(&folder, &files, &patch);
+        let design = tried.opened().and_then(|o| o.design.as_ref()).unwrap();
+        assert!(design.part_named("tray[bottom].board").is_some());
+        assert!(design.part_named("tray[top].board").is_some());
+
+        // Four or more are counted; the wrong number of shares is refused.
+        let four = repeat_assembly(
+            &scope,
+            RepeatRequest {
+                assembly: "tray",
+                count: count(4),
+                axis: Some(Axis::Up),
+                shares: None,
+            },
+        )
+        .unwrap();
+        assert!(
+            four.text
+                .contains("add region tray_bay[4] = split(inside, up)")
+        );
+        fits(&folder, &files, &four);
+        assert!(matches!(
+            repeat_assembly(
+                &scope,
+                RepeatRequest {
+                    assembly: "tray",
+                    count: count(3),
+                    axis: Some(Axis::Up),
+                    shares: Some(&shares)
+                }
+            ),
+            Err(RepeatError::SharesCount {
+                pieces: 3,
+                found: 2
+            })
+        ));
+        assert!(matches!(
+            repeat_assembly(
+                &scope,
+                RepeatRequest {
+                    assembly: "tray",
+                    count: count(2),
+                    axis: None,
+                    shares: None
+                }
+            ),
+            Err(RepeatError::NoAxis(_))
+        ));
+        assert!(matches!(
+            repeat_assembly(
+                &scope,
+                RepeatRequest {
+                    assembly: "base",
+                    count: count(2),
+                    axis: Some(Axis::Up),
+                    shares: None
+                }
+            ),
+            Err(RepeatError::NotRepeatable { .. })
+        ));
+    }
+
+    #[test]
+    fn a_part_is_spaced_along_a_span() {
+        let slat = r#"part slat : oak_19 {
+  length: depth - 20mm
+  width:  40mm
+  place {
+    orient(length: back, width: right)
+    against(top.top)
+    center(top, across)
+    center(top, deep)
+  }
+}"#;
+        let (folder, mut files) = small_project(&[slat]);
+        let base = clean_base(&folder, &files);
+        let scope = EditScope::new(base.opened()).unwrap();
+        let patch = repeat_part(
+            &scope,
+            SpacedRequest {
+                part: "slat",
+                count: count(5),
+                axis: Axis::Across,
+                from: "top.left",
+                to: "top.right",
+            },
+        )
+        .unwrap();
+        assert!(patch.text.contains("replace part slat[5] : oak_19 {"));
+        assert!(
+            patch
+                .text
+                .contains("set slat.place.across = spaced(evenly, from: top.left, to: top.right)")
+        );
+        let tried = fits(&folder, &files, &patch);
+        let design = tried.opened().and_then(|o| o.design.as_ref()).unwrap();
+        let slats = design
+            .parts
+            .iter()
+            .filter(|p| p.name.starts_with("slat["))
+            .count();
+        assert_eq!(slats, 5);
+        drop(scope);
+        drop(base);
+        commit(&mut files, &tried);
+        // Changing the count is a patch on the same part.
+        let base = clean_base(&folder, &files);
+        let scope = EditScope::new(base.opened()).unwrap();
+        let three = repeat_part(
+            &scope,
+            SpacedRequest {
+                part: "slat",
+                count: count(3),
+                axis: Axis::Across,
+                from: "top.left",
+                to: "top.right",
+            },
+        )
+        .unwrap();
+        assert!(
+            three
+                .text
+                .contains("replace part slat[left, middle, right] : oak_19 {")
+        );
+        let tried = fits(&folder, &files, &three);
+        let design = tried.opened().and_then(|o| o.design.as_ref()).unwrap();
+        assert!(design.part_named("slat[middle]").is_some());
+    }
+
+    #[test]
+    fn a_shares_grip_moves_two_shares_and_keeps_their_sum() {
+        let bays = r#"region shelf_bay[a, b, c] = split(inside, up, shares: [100, 200, 100])"#;
+        let (folder, files) = small_project(&[bays]);
+        let base = clean_base(&folder, &files);
+        let scope = EditScope::new(base.opened()).unwrap();
+        let design = base.opened().design.as_ref().unwrap();
+        // The inside is 500mm tall, less nothing: the sides stand on the
+        // base and carry the top. Pieces a and b are 125mm and 250mm.
+        let piece = |label: &str| {
+            design
+                .regions
+                .iter()
+                .find(|r| r.name == format!("shelf_bay[{label}]"))
+                .unwrap()
+                .bounds
+                .size(Axis::Up)
+        };
+        assert_eq!(piece("a"), Length::from_mm(125));
+        // Drag the boundary between a and b up to 150.2mm: it snaps to 150mm.
+        let grip = SharesMove {
+            region: "shelf_bay",
+            lower: 0,
+            boundary: Length::from_nm(150_200_000),
+        };
+        let patch = move_shares(&scope, design, grip).unwrap();
+        assert!(
+            patch.text.contains(
+                "replace region shelf_bay[a, b, c] = split(inside, up, shares: [120, 180, 100])"
+            ),
+            "{}",
+            patch.text
+        );
+        let tried = fits(&folder, &files, &patch);
+        let moved = tried.opened().and_then(|o| o.design.as_ref()).unwrap();
+        let size = |label: &str| {
+            moved
+                .regions
+                .iter()
+                .find(|r| r.name == format!("shelf_bay[{label}]"))
+                .unwrap()
+                .bounds
+                .size(Axis::Up)
+        };
+        assert_eq!(size("a"), Length::from_mm(150));
+        assert_eq!(size("b"), Length::from_mm(225));
+        assert_eq!(size("c"), Length::from_mm(125));
+
+        // Equal pieces count as ones; a share that isn't whole stays exact.
+        let even = r#"region box_bay[left, right] = split(inside, across)"#;
+        let (folder, files) = small_project(&[even]);
+        let base = clean_base(&folder, &files);
+        let scope = EditScope::new(base.opened()).unwrap();
+        let design = base.opened().design.as_ref().unwrap();
+        let grip = SharesMove {
+            region: "box_bay",
+            lower: 0,
+            boundary: Length::from_mm(100),
+        };
+        let patch = move_shares(&scope, design, grip).unwrap();
+        // The inside is 400 - 2 * 19 = 362mm wide: 2 * 100 / 362.
+        assert!(
+            patch.text.contains(
+                "replace region box_bay[left, right] = split(inside, across, shares: [100 / 181, 262 / 181])"
+            ),
+            "{}",
+            patch.text
+        );
+        let tried = fits(&folder, &files, &patch);
+        let moved = tried.opened().and_then(|o| o.design.as_ref()).unwrap();
+        let left = moved
+            .regions
+            .iter()
+            .find(|r| r.name == "box_bay[left]")
+            .unwrap();
+        assert_eq!(left.bounds.size(Axis::Across), Length::from_mm(100));
+        assert!(matches!(
+            move_shares(
+                &scope,
+                design,
+                SharesMove {
+                    region: "box_bay",
+                    lower: 0,
+                    boundary: Length::from_mm(362)
+                }
+            ),
+            Err(RepeatError::BoundaryOutside { .. })
+        ));
+        assert!(matches!(
+            move_shares(
+                &scope,
+                design,
+                SharesMove {
+                    region: "box_bay",
+                    lower: 1,
+                    boundary: Length::from_mm(10)
+                }
+            ),
+            Err(RepeatError::NoSuchPieces { .. })
+        ));
+    }
+
+    /// The assemblies cabinet with one door, not yet mirrored: the door is
+    /// `frame_panel_door`, and the scene poses it by that name.
+    fn one_door_cabinet() -> MemoryFiles {
+        let mut files = assemblies();
+        let doors = text(&files, ASSEMBLIES, "doors.stave")
+            .replace("assembly door_l :", "assembly frame_panel_door :")
+            .replace(
+                "assembly door_r = mirror(door_l, about: mid(base, across))\n",
+                "",
+            );
+        files.insert(Path::new(ASSEMBLIES).join("doors.stave"), doors);
+        let cabinet = text(&files, ASSEMBLIES, "cabinet.stave").replace(
+            "  pose door_l = open\n  pose door_r = open\n",
+            "  pose frame_panel_door = open\n",
+        );
+        files.insert(Path::new(ASSEMBLIES).join("cabinet.stave"), cabinet);
+        files
+    }
+
+    #[test]
+    fn a_door_on_a_mirrored_side_gets_its_mirror_image() {
+        let files = one_door_cabinet();
+        let base = clean_base(ASSEMBLIES, &files);
+        let scope = EditScope::new(base.opened()).unwrap();
+        let analysis = Analysis::load(Path::new(ASSEMBLIES), &files).unwrap();
+        let design = base.opened().design.as_ref().unwrap();
+        let plan = mirror_assembly(&scope, &analysis, design, "frame_panel_door").unwrap();
+        assert_eq!(plan.renamed.as_str(), "frame_panel_door_left");
+        assert_eq!(plan.image.as_str(), "frame_panel_door_right");
+        assert_eq!(plan.about, "mid(base, across)");
+        assert!(plan.patch.text.contains(
+            "add assembly frame_panel_door_right = mirror(frame_panel_door_left, about: mid(base, across)) in \"doors.stave\""
+        ));
+        // The rename reaches the scene in another file.
+        assert_eq!(plan.rename.len(), 2);
+
+        // Apply the rename, then try the patch on the renamed copy.
+        let mut renamed = files.clone();
+        for edit in &plan.rename {
+            let Document::File(path) = &edit.document else {
+                panic!("a standard file was renamed in");
+            };
+            renamed.insert(path.clone(), edit.text.clone());
+        }
+        let cabinet = text(&renamed, ASSEMBLIES, "cabinet.stave");
+        assert!(cabinet.contains("pose frame_panel_door_left = open"));
+        let tried = fits(ASSEMBLIES, &renamed, &plan.patch);
+        let design = tried.opened().and_then(|o| o.design.as_ref()).unwrap();
+        assert!(
+            design
+                .parts
+                .iter()
+                .any(|p| p.name.starts_with("frame_panel_door_right."))
+        );
+    }
+
+    #[test]
+    fn a_piece_of_an_even_split_mirrors_about_the_split() {
+        let (folder, files) =
+            small_project(&["region tray_bay[left, right] = split(inside, across)"]);
+        let mut files = files;
+        let case = text(&files, &folder, "case.stave")
+            .replace("opening:     inside", "opening:     tray_bay[left]");
+        files.insert(Path::new(&folder).join("case.stave"), case);
+        let base = clean_base(&folder, &files);
+        let scope = EditScope::new(base.opened()).unwrap();
+        let analysis = Analysis::load(Path::new(&folder), &files).unwrap();
+        let design = base.opened().design.as_ref().unwrap();
+        let plan = mirror_assembly(&scope, &analysis, design, "tray").unwrap();
+        assert_eq!(plan.about, "mid(inside, across)");
+        assert_eq!(
+            (plan.renamed.as_str(), plan.image.as_str()),
+            ("tray_left", "tray_right")
+        );
+        let mut renamed = files.clone();
+        for edit in &plan.rename {
+            let Document::File(path) = &edit.document else {
+                panic!("a standard file was renamed in");
+            };
+            renamed.insert(path.clone(), edit.text.clone());
+        }
+        let tried = fits(&folder, &renamed, &plan.patch);
+        let design = tried.opened().and_then(|o| o.design.as_ref()).unwrap();
+        assert!(design.part_named("tray_right.board").is_some());
+        // Nothing to mirror: the tray filling the whole inside.
+        let (folder, files) = small_project(&[]);
+        let base = clean_base(&folder, &files);
+        let scope = EditScope::new(base.opened()).unwrap();
+        let analysis = Analysis::load(Path::new(&folder), &files).unwrap();
+        let design = base.opened().design.as_ref().unwrap();
+        assert!(matches!(
+            mirror_assembly(&scope, &analysis, design, "tray"),
+            Err(RepeatError::NoMirror(_))
+        ));
+    }
+
+    #[test]
+    fn a_rename_checks_clean_and_leaves_no_use_of_the_old_name() {
+        let files = assemblies();
+        let analysis = Analysis::load(Path::new(ASSEMBLIES), &files).unwrap();
+        let divider = analysis.project_symbol("divider").unwrap().id;
+        let uses = analysis.uses(divider).unwrap().count();
+        // A clash is refused.
+        assert!(analysis.rename(divider, "shelf").is_err());
+        let edits = analysis.rename(divider, "middle_panel").unwrap();
+        let mut renamed = files.clone();
+        for edit in &edits {
+            let Document::File(path) = &edit.document else {
+                panic!("a standard file was renamed in");
+            };
+            renamed.insert(path.clone(), edit.text.clone());
+            // Outside comments, the old name is gone as a word.
+            for line in edit.text.lines() {
+                let code = line.split("//").next().unwrap_or("");
+                let words = code.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'));
+                assert!(!words.into_iter().any(|w| w == "divider"), "{line}");
+            }
+        }
+        let opened = crate::open_with(Path::new(ASSEMBLIES), &renamed).unwrap();
+        assert_eq!(
+            opened.error_count(),
+            0,
+            "{}",
+            stave_lang::render_diagnostics(&opened.sources, &opened.diagnostics)
+        );
+        let design = opened.design.as_ref().unwrap();
+        assert!(design.part_named("middle_panel.panel").is_some());
+        let again = Analysis::load(Path::new(ASSEMBLIES), &renamed).unwrap();
+        assert!(again.project_symbol("divider").is_none());
+        let panel = again.project_symbol("middle_panel").unwrap().id;
+        assert_eq!(again.uses(panel).unwrap().count(), uses);
+    }
+
+    #[test]
+    fn shares_are_written_exactly() {
+        let r = |n, d| Rational::new(n, d).unwrap();
+        assert_eq!(share_text(r(3, 1)), "3");
+        assert_eq!(share_text(r(1, 2)), "0.5");
+        assert_eq!(share_text(r(24, 25)), "0.96");
+        assert_eq!(share_text(r(5, 4)), "1.25");
+        assert_eq!(share_text(r(1, 3)), "1 / 3");
+    }
+}
