@@ -613,6 +613,23 @@ fn add_an_item_after_the_last_of_its_kind() {
 }
 
 #[test]
+fn add_an_item_with_a_longer_name_realigns_its_run() {
+    // A longer name moves the `=` of every line of the run, as `stave fmt`
+    // would: the lines already there are laid out again too.
+    let text = applied(
+        CABINET,
+        "add region drawer_bay[bottom, top] = split(bay, up)",
+    );
+    assert!(
+        text.contains(
+            "region bay                     = between(base, top)\nregion drawer_bay[bottom, top] = split(bay, up)\n"
+        ),
+        "{text}"
+    );
+    assert_eq!(format(&text), text);
+}
+
+#[test]
 fn add_a_multi_line_item_is_laid_out() {
     let text = applied(
         CABINET,

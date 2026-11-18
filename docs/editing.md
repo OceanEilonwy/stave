@@ -220,6 +220,8 @@ returned `Event::Edit(EditEvent)`s name, as for every other command.
 | `RepeatItem { item, count, axis }` | starts a change: repeats an assembly of the project that fills a region `count` times, or changes the count of one already repeated (`axis: Option<Axis>`, needed for a first repeat only) |
 | `MoveShares { region, lower, boundary }` | starts a change: moves the boundary between pieces `lower` and `lower + 1` (from 0, in label order) of a split, so piece `lower` is `boundary` (a `Length`) long along the split |
 | `Mirror(item)` | starts a change: adds the mirror image of an assembly, renaming it with its side |
+| `MirrorSplit { item, axis }` | starts a change: makes an assembly that fills a whole space a mirrored pair, splitting the space in two along `axis` (see [Repeat and mirror](#repeat-and-mirror)) |
+| `SetParam { item, param, value }` | starts a change: sets a param of an assembly of the project, as a grip does when it is let go (`set apron_front.setback = 3mm`) |
 | `Hold(HoldRequest)` | starts a change: holds a measured distance as a `require` (see [Hold this](#hold-this)) |
 | `Remove(item)` | starts a change: removes an item; while something depends on it the change *needs a choice*, naming what does |
 | `IncludeDependants` | a removal waiting on its dependants removes them too |
@@ -367,6 +369,8 @@ before what it prints.
 | `shares <region> <piece> <length>` | change: moves the boundary above piece `<piece>` (from 1) so that piece is `<length>` long |
 | `offer mirror <assembly>` | says whether it has a mirror image and what adding it would name |
 | `mirror <assembly>` | change: adds its mirror image |
+| `mirror <assembly> <axis>` | change: makes an assembly that fills a whole space a mirrored pair, the space split in two along `across`, `up` or `deep` |
+| `set <assembly>.<param> = <value>` | change: sets a param of an assembly of the project, as a grip does (a `set` whose name has a dot) |
 | `hold <a> <b> min\|max <length> "<reason>"` | change: holds the distance between two things, each a part or region by its whole name (`drawer[top].front`), else a face of one (`case.top.bottom`) |
 | `remove <item>` | change: removes an item, or says what uses it |
 | `include dependants` | the removal takes what uses the item too |
@@ -512,7 +516,30 @@ whole numbers can be large; they are exact.
 component placed against one of two parts that are mirror images, or in
 one of two regions of a split across), the tool offers it, and writes the
 pair with `mirror(...)` about the mid-plane between them, renaming the
-source with its side (`door_left`).
+source with its side (`door_left`). Failing those, a component placed
+against parts that each have a part of the same size at the same place
+from the other side of one plane has a mirror image too: an apron
+between the two front legs of a `Legs`, whose back legs are the front
+ones reflected front to back, is mirrored `about: mid(top.board, deep)`,
+the plane written as the mid-plane of a part it names (else of a region)
+that the plane halves. A plane the component itself lies astride (the
+apron's mid-plane across) is not offered: its image would be itself.
+
+**A mirrored pair from one.** A component that fills a whole space (a
+door filling the space above a divider) is made a pair by splitting the
+space in two (`mirror door across`): the space becomes `<component>_bay`
+as a repeat of two would make it, the original is renamed with the first
+side and fills the first piece, and its mirror image fills the other,
+about the space's mid-plane:
+
+```
+region frame_panel_door_bay[left, right] = split(divider.above, across)
+assembly frame_panel_door_left : casework.FramePanelDoor { opening: frame_panel_door_bay[left] ... }
+assembly frame_panel_door_right = mirror(frame_panel_door_left, about: mid(divider.above, across))
+```
+
+A plain repeat across would hang both doors on the side the first was
+hinged to; the mirror hangs the second on the other side.
 
 ## Hold this
 

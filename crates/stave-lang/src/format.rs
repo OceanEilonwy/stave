@@ -409,6 +409,9 @@ struct Aligned {
     count: usize,
     /// The width the key, lead included, is padded to: the longest in its run.
     key_width: usize,
+    /// Which run the line is in, numbered in the order runs are found: a
+    /// line added to a run changes how the rest of it is padded.
+    run: usize,
 }
 
 /// The width of a param line's prefix (`private`, `locked`, `solved`), with
@@ -477,7 +480,7 @@ fn alignment(lines: &[Line]) -> Vec<Option<Aligned>> {
     let run_key = |line: &Line| {
         key(line).or_else(|| declaration(line).map(|(count, scope, _)| (count, scope)))
     };
-    for run in runs {
+    for (run_number, run) in runs.into_iter().enumerate() {
         let longest_prefix = run
             .iter()
             .filter_map(|&index| param_prefix_width(lines.get(index)?))
@@ -510,6 +513,7 @@ fn alignment(lines: &[Line]) -> Vec<Option<Aligned>> {
                     lead,
                     count,
                     key_width: longest,
+                    run: run_number,
                 });
             }
         }
@@ -564,6 +568,9 @@ pub(crate) struct LaidOutLine {
     /// The line laid out canonically, indentation included, without a
     /// newline.
     pub text: String,
+    /// The aligned run the line is in, if any: lines with the same number
+    /// are padded together, so laying out one means laying out them all.
+    pub run: Option<usize>,
 }
 
 /// Every non-blank line of a file that parses, with the layout the
@@ -571,6 +578,7 @@ pub(crate) struct LaidOutLine {
 /// exactly as `stave fmt` would, leaving every other line alone.
 pub(crate) fn laid_out_lines(root: &SyntaxNode, text: &str) -> Vec<LaidOutLine> {
     let lines = lines(root, text);
+    let aligned = alignment(&lines);
     render(&lines)
         .into_iter()
         .filter_map(|(index, rendered)| {
@@ -585,6 +593,11 @@ pub(crate) fn laid_out_lines(root: &SyntaxNode, text: &str) -> Vec<LaidOutLine> 
                 start,
                 end,
                 text: rendered,
+                run: aligned
+                    .get(index)
+                    .copied()
+                    .flatten()
+                    .map(|aligned| aligned.run),
             })
         })
         .collect()

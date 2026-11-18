@@ -140,7 +140,8 @@ committed: the design checks with 0 errors
     let text = std::fs::read_to_string(folder.join("chest/small_chest.stave")).unwrap();
     for expected in [
         "import \"std:casework\"\n",
-        "region envelope = box(across: overall_width, up: overall_height, deep: overall_depth)\n",
+        // The two regions are one aligned run, as `stave fmt` lays it out.
+        "region envelope                = box(across: overall_width, up: overall_height, deep: overall_depth)\n",
         "region drawer_bay[bottom, top] = split(divider.below, up)\n",
         "assembly case : casework.Case {\n",
         "assembly divider : casework.Divider {\n",
