@@ -196,7 +196,21 @@ impl ModuleSet {
 
     /// Loads the project in `folder`, reading files from `files`.
     pub fn load_with(folder: &Path, files: &dyn FileSource) -> Result<ModuleSet, LoadError> {
-        loader::load(folder, files)
+        loader::load(folder, files, None)
+    }
+
+    /// Loads the project in `folder` again, reading files from `files`,
+    /// and reuses this load's parse of every file whose id, display path
+    /// and text are unchanged and that had no diagnostic. The result is
+    /// the same as [`ModuleSet::load_with`]'s; only the work differs (an
+    /// editor checking a changed copy of a project parses the standard
+    /// library once).
+    pub fn reload_with(
+        &self,
+        folder: &Path,
+        files: &dyn FileSource,
+    ) -> Result<ModuleSet, LoadError> {
+        loader::load(folder, files, Some(self))
     }
 
     /// `true` if any diagnostic is an error.
