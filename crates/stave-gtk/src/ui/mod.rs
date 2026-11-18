@@ -19,6 +19,9 @@
 
 mod chrome;
 mod dock;
+mod edit_card;
+mod edit_demo;
+mod edit_menu;
 mod editor;
 mod files;
 mod finder;
@@ -60,6 +63,7 @@ use stave_scene::{Look, NodeId, Orbit, Overlay, Posed};
 use crate::render::{Backdrop, Frame, Renderer};
 use chrome::MotionBar;
 use dock::Dock;
+pub use edit_demo::Showcase;
 use files::FilesPage;
 pub use files::Wish;
 use finder::{Choice, Finder};
@@ -194,6 +198,8 @@ pub struct Options {
     pub wish: Wish,
     /// Where the camera starts (screenshots of a close view).
     pub camera: StartCamera,
+    /// Show the editing menu or card from the contract's fixture.
+    pub edit_fixture: Option<edit_demo::Showcase>,
 }
 
 /// Where the 3D view's camera starts, from the command line.
@@ -469,6 +475,9 @@ impl Window {
             pins: RefCell::new(Vec::new()),
             watcher: RefCell::new(None),
         });
+        if let Some(showcase) = options.edit_fixture {
+            edit_demo::show(&window.widgets.design, showcase);
+        }
         window.install_actions(options.theme);
         window.connect_events();
         window.watch();

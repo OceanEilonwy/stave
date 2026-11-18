@@ -193,6 +193,16 @@ struct Arguments {
     /// (2: half as far away).
     #[arg(long, value_name = "FACTOR", value_parser = parse_zoom)]
     zoom: Option<f32>,
+    /// For the window: show the editing menu or card from the contract's
+    /// fixture over the design (menu, greyed, refused, fits, choose or point).
+    #[arg(long, value_name = "STATE", value_parser = parse_edit_fixture)]
+    edit_fixture: Option<ui::Showcase>,
+}
+
+fn parse_edit_fixture(text: &str) -> Result<ui::Showcase> {
+    ui::Showcase::from_word(text.trim()).ok_or_else(|| {
+        anyhow::anyhow!("the editing state is menu, greyed, refused, fits, choose or point")
+    })
 }
 
 fn parse_zoom(text: &str) -> Result<f32> {
@@ -321,6 +331,7 @@ fn main() -> ExitCode {
                 frame_selection: arguments.frame_selection,
                 zoom: arguments.zoom,
             },
+            edit_fixture: arguments.edit_fixture,
         }),
     };
     match result {

@@ -106,6 +106,7 @@ forwards what people do.
 | `stave-gtk` | `ui/view_tools.rs`, `slider.rs` | The Pull apart toolbar (shown in the dock), camera buttons, the shared-wood key and focus mode's From above / In 3D switch; the design's slider (track, ring handle, a hatched blocked range). |
 | `stave-gtk` | `ui/focus_stage.rs`, `focus_panel.rs` | Focus mode in the 3D view's area (the step player, the caption, three small views, the swing card) and a problem's motion card; focus mode's side panel. |
 | `stave-gtk` | `ui/files.rs`, `editor.rs`, `sideways.rs` | The rail of open files (a tab each, turned to read downward by `Sideways`, with its dot) and the editor's panel (the file's name, breadcrumbs, the uses panel, the footer); the editor (a GtkSourceView 5 with its gutter, tags, lenses, peek, hover card and search bar; the only file that knows it is a GtkSourceView). |
+| `stave-gtk` | `ui/edit_menu.rs`, `edit_card.rs`, `edit_demo.rs` | The editing menu for a selection and the card for a chosen candidate (below), drawn from `stave_app::edit`'s contract values; `edit_demo` shows them from the contract's fixture (`--edit-fixture`). |
 | `stave-gtk` | `ui/icons.rs`, `style.rs` | The design's icons drawn from SVG path data in the text colour; one stylesheet whose colours are all libadwaita's named colours (`@headerbar_bg_color`, `@sidebar_bg_color`, `@card_bg_color`, `@accent_bg_color`, `@success_color`, ...), so light and dark both come from it and follow the style manager the moment it changes; only the code block is dark in both. |
 
 ## The session contract
@@ -405,6 +406,65 @@ right (V2C_Joint, V2C_Hinge), and the dock steps aside.
   anything / Swing check.
 - Leaving (Esc, the panel's close button, Back) puts the design's layout
   back.
+
+## Editing: the menu and the card
+
+The two widgets of [editing in the 3D view](editing.md), built ahead of
+the edit loop against its contract (`stave_app::edit`). They take
+contract values and report what the user does; they decide nothing.
+
+- **The menu** (`EditMenu`, `.stave-edit-menu` on `.stave-card-panel`):
+  `show(Heading, &[MenuItem])`, where a `MenuItem` is a `&Candidate` and
+  `Checked::Done` or `Checked::Pending` (the contract's `Applicability`
+  has no "not checked yet"). The heading is `Heading::text` ("In this
+  space"); entries are grouped by `MenuGroup`, the project's own first,
+  then imported modules by name, then the standard ones ("Standard ·
+  joinery"), and within a group the ones that fit, then those being
+  checked (a spinner and "Checking whether it fits here…"), then the
+  greyed ones (the checker's messages in the error colour), each in name
+  order. Each entry is a real button with its label and hint; one that
+  can't be chosen stays focusable so its reason can be read, is marked
+  disabled for assistive technology and never reports.
+  `connect_chosen(Fn(Declaration))` reports the entry chosen.
+- **The card** (`EditCard`, `.stave-edit-card`): `show(&CardModel,
+  &dyn Words)`. `CardModel` is the heading, the `&Candidate`, the
+  generated name and the `Option<&Verdict>` (`None` while the candidate
+  isn't complete). `Words` is the caller's: an expression as written,
+  an assembly's name and what a bound place param holds, which the
+  contract carries as ids and parsed expressions. From the top: the
+  eyebrow ("IN THIS SPACE · CASEWORK"), the name and hint; the name in a
+  `gtk::EditableLabel`; the place params ("POINT AT": each unbound one
+  says "Click a part on the model for hinge side"); the verdict
+  (Checking with a spinner, "It fits" in green with any warnings, or
+  "It doesn't fit: 1 problem" in red with each problem as `stave check`
+  words it, `error[overlap]: …`, its notes and `help:` line, and a
+  button per fix labelled `Fix::label`); then the settings, those that
+  need a choice first (marked in the warning colour), then those with a
+  value (each an entry with its type and "copied from drawer[top]" or
+  "your choice"), and the ones at their defaults folded under "5 more
+  settings, at their defaults". Cancel and Add sit at the bottom; Add is
+  enabled only on Fits with nothing to point at or choose
+  (`can_add`), and its tooltip says why not (`add_blocked_reason`).
+  `connect_action(Fn(CardAction))` reports `Rename(text)`,
+  `Choose { param, text }` (Enter in a setting's entry, the text as
+  typed), `Fix { problem, fix }` (indexes in the refusal), `Add` and
+  `Cancel`. Enter adds when Add is enabled; Escape cancels.
+
+To see them, `--edit-fixture menu|greyed|refused|fits|choose|point`
+puts one over the design from `clothing_cabinet_fixture()` (the menu
+near the left door, the card at the top right) and prints what is done
+on it:
+
+```
+tools/window-shot menu.png examples/clothing_cabinet --edit-fixture menu
+tools/window-shot refused.png examples/clothing_cabinet --edit-fixture refused
+tools/window-shot fits.png examples/clothing_cabinet --edit-fixture fits --theme dark
+```
+
+The pictures are `docs/screenshots/window/edit_*.png`. The greyed
+entry's reason in `--edit-fixture greyed` is illustrative: the fixture
+has no greyed candidate. Their own few colours (all libadwaita's named
+colours) are a stylesheet in `edit_card.rs`, installed once per display.
 
 ## Slots for the next lanes
 
