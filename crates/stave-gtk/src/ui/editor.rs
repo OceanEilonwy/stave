@@ -105,6 +105,43 @@ pub fn iter_at(buffer: &gtk::TextBuffer, lines: &LineStarts, offset: u32) -> gtk
         .unwrap_or_else(|| buffer.end_iter())
 }
 
+/// How many frames a scroll waits for the text to be given its size.
+const SCROLL_WAIT_FRAMES: u32 = 120;
+
+/// A scrolled view's vertical extent, in pixels.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Page {
+    /// The top of what shows.
+    value: f64,
+    /// How much shows.
+    size: f64,
+    /// The smallest top.
+    lower: f64,
+    /// The bottom of everything.
+    upper: f64,
+}
+
+impl Page {
+    /// `true` once the view has a height to show text in.
+    fn is_laid_out(self) -> bool {
+        self.size > 1.0
+    }
+
+    /// The top that shows the span from `top` to `bottom`, about a third
+    /// of the way down, or `None` when it already shows (or there is no
+    /// page yet to scroll).
+    fn scroll_to_show(self, top: f64, bottom: f64) -> Option<f64> {
+        if !self.is_laid_out() {
+            return None;
+        }
+        if top >= self.value && bottom <= self.value + self.size {
+            return None;
+        }
+        let highest = (self.upper - self.size).max(self.lower);
+        Some((top - self.size * 0.3).clamp(self.lower, highest))
+    }
+}
+
 /// The byte offset of an iterator.
 pub fn offset_of(lines: &LineStarts, iter: &gtk::TextIter) -> u32 {
     lines.offset(iter.line(), iter.line_index())
@@ -985,6 +1022,9 @@ pub struct Editor {
     peek_tagged: Cell<Option<(i32, i32)>>,
     /// Where the hover card goes.
     card_box: gtk::Box,
+    /// Counts go-tos, so a scroll still waiting for the text's size gives
+    /// way to a newer one.
+    scroll_ticket: Rc<Cell<u64>>,
     on_uses: LensCallback,
     on_show: LensCallback,
 }
@@ -1107,6 +1147,7 @@ impl Editor {
             peek_line: Cell::new(None),
             peek_tagged: Cell::new(None),
             card_box,
+            scroll_ticket: Rc::new(Cell::new(0)),
             on_uses: Rc::new(RefCell::new(None)),
             on_show: Rc::new(RefCell::new(None)),
         };
@@ -1534,37 +1575,62 @@ impl Editor {
 
     /// Puts the cursor at a byte offset and scrolls it into view, about a
     /// third of the way down.
+    ///
+    /// The scroll waits until the text has been given its size: a file
+    /// opened into a panel that was showing "No file open" (or one behind
+    /// another tab) has no height yet and its lines have no real places,
+    /// so a scroll worked out then lands anywhere.
     pub fn go_to(&self, lines: &LineStarts, offset: u32) {
         let buffer = self.view.buffer();
         let iter = iter_at(&buffer, lines, offset);
         buffer.place_cursor(&iter);
         let mark = buffer.get_insert();
-        // Scroll once the text is laid out: up and down only, so the line
-        // keeps its start in view, unless the cursor is off to the right.
-        let view = self.view.downgrade();
+        // A newer go-to replaces one still waiting.
+        let ticket = self.scroll_ticket.get().wrapping_add(1);
+        self.scroll_ticket.set(ticket);
+        let tickets = Rc::clone(&self.scroll_ticket);
         let scrolled = self.scrolled.downgrade();
-        glib::idle_add_local_once(move || {
-            let (Some(view), Some(scrolled)) = (view.upgrade(), scrolled.upgrade()) else {
-                return;
+        let frames = Cell::new(0u32);
+        // Ticks come once a frame, and not while the view is off screen.
+        self.view.add_tick_callback(move |view, _| {
+            let Some(scrolled) = scrolled.upgrade() else {
+                return glib::ControlFlow::Break;
             };
-            let buffer = view.buffer();
-            let cursor = buffer.iter_at_mark(&mark);
-            let location = view.iter_location(&cursor);
+            if tickets.get() != ticket || mark.buffer().as_ref() != Some(&view.buffer()) {
+                return glib::ControlFlow::Break;
+            }
+            frames.set(frames.get().saturating_add(1));
             let vertical = scrolled.vadjustment();
-            let page = vertical.page_size();
-            let wanted = f64::from(location.y()) - page * 0.3;
-            let top = f64::from(location.y()) >= vertical.value()
-                && f64::from(location.y() + location.height()) <= vertical.value() + page;
-            if !top || page <= 1.0 {
-                vertical
-                    .set_value(wanted.clamp(vertical.lower(), (vertical.upper() - page).max(0.0)));
+            let page = Page {
+                value: vertical.value(),
+                size: vertical.page_size(),
+                lower: vertical.lower(),
+                upper: vertical.upper(),
+            };
+            if !page.is_laid_out() || view.height() <= 1 {
+                return if frames.get() < SCROLL_WAIT_FRAMES {
+                    glib::ControlFlow::Continue
+                } else {
+                    glib::ControlFlow::Break
+                };
             }
+            let cursor = view.buffer().iter_at_mark(&mark);
+            let location = view.iter_location(&cursor);
+            if let Some(value) = page.scroll_to_show(
+                f64::from(location.y()),
+                f64::from(location.y().saturating_add(location.height())),
+            ) {
+                vertical.set_value(value);
+            }
+            // Up and down only, so the line keeps its start in view,
+            // unless the cursor is off to the right.
             let horizontal = scrolled.hadjustment();
-            let right = f64::from(location.x() + 24);
-            let page = horizontal.page_size();
-            if page > 50.0 {
-                horizontal.set_value(if right > page { right - page } else { 0.0 });
+            let right = f64::from(location.x().saturating_add(24));
+            let width = horizontal.page_size();
+            if width > 50.0 {
+                horizontal.set_value(if right > width { right - width } else { 0.0 });
             }
+            glib::ControlFlow::Break
         });
     }
 
@@ -1590,6 +1656,50 @@ impl Editor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_view_with_no_height_yet_is_not_scrolled() {
+        // A file opened into a panel that was showing "No file open": the
+        // text has no height, and its line places are not real yet.
+        let no_height = Page {
+            value: 0.0,
+            size: 0.0,
+            lower: 0.0,
+            upper: 556.0,
+        };
+        assert!(!no_height.is_laid_out());
+        assert_eq!(no_height.scroll_to_show(215.0, 233.0), None);
+    }
+
+    #[test]
+    fn a_line_already_showing_stays_where_it_is() {
+        let page = Page {
+            value: 0.0,
+            size: 703.0,
+            lower: 0.0,
+            upper: 703.0,
+        };
+        assert_eq!(page.scroll_to_show(199.0, 215.0), None);
+    }
+
+    #[test]
+    fn a_line_out_of_sight_comes_a_third_of_the_way_down() {
+        let page = Page {
+            value: 0.0,
+            size: 300.0,
+            lower: 0.0,
+            upper: 2000.0,
+        };
+        assert_eq!(page.scroll_to_show(1000.0, 1020.0), Some(910.0));
+        // Never past the end of the text.
+        assert_eq!(page.scroll_to_show(1990.0, 2000.0), Some(1700.0));
+        // Nor above its start.
+        let scrolled = Page {
+            value: 500.0,
+            ..page
+        };
+        assert_eq!(scrolled.scroll_to_show(20.0, 40.0), Some(0.0));
+    }
 
     #[test]
     fn byte_offsets_turn_into_lines_and_back() {
