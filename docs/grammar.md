@@ -3202,8 +3202,8 @@ error[require-range]: 'hanger_room' does not hold for every allowed value: room 
   its `// pending:` line); the corpus test then requires the diagnostic's
   first fix to be exactly that patch.
 
-Not built yet: diagnostics carry their help as words only, and the corpus
-test doesn't read `// fix:` lines.
+Not built yet: a diagnostic can carry fixes, and the corpus test reads
+`// fix:` lines, but no check offers a fix yet.
 
 ---
 

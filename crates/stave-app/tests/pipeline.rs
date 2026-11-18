@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 use common::{extent, mm, part, ranges};
 use stave_lang::placement::{Axis, Direction, Face, PartAxis};
-use stave_lang::{Code, Severity, render_diagnostics};
+use stave_lang::{Code, Fix, Severity, render_diagnostics};
 use stave_model::mechanism::{DriveValue, MotionShape};
 use stave_model::solved::{Contact, CutKind, CutPlace, Depth, End, PartOrigin, RoleValue, Shape};
 
@@ -80,6 +80,8 @@ struct Expectation {
     message: String,
     /// `// pending: <reason>`: the check isn't built yet.
     pending: Option<String>,
+    /// `// fix: patch "..." { ... }`: the diagnostic's first fix.
+    fix: Option<Fix>,
 }
 
 fn broken_designs() -> Vec<(PathBuf, Expectation)> {
@@ -105,10 +107,18 @@ fn broken_designs() -> Vec<(PathBuf, Expectation)> {
             };
             let (code, message) = rest.split_once("] ").unwrap();
             let code = Code::from_str_code(code).unwrap();
-            let pending = lines
-                .next()
+            let mut next = lines.next();
+            let pending = next
                 .and_then(|line| line.strip_prefix("// pending: "))
                 .map(str::to_owned);
+            if pending.is_some() {
+                next = lines.next();
+            }
+            let fix = next
+                .and_then(|line| line.strip_prefix("// fix: "))
+                .map(|fix| {
+                    Fix::parse(fix).unwrap_or_else(|error| panic!("{}: {error}", folder.display()))
+                });
             (
                 folder,
                 Expectation {
@@ -116,6 +126,7 @@ fn broken_designs() -> Vec<(PathBuf, Expectation)> {
                     code,
                     message: message.to_owned(),
                     pending,
+                    fix,
                 },
             )
         })
@@ -165,6 +176,14 @@ fn broken_designs_produce_exactly_their_expected_diagnostic() {
             "{}: every diagnostic has a help line",
             folder.display()
         );
+        if let Some(fix) = &expected.fix {
+            assert_eq!(
+                only.fixes.first(),
+                Some(fix),
+                "{}: the first fix\n{rendered}",
+                folder.display()
+            );
+        }
     }
     assert!(checked >= 27, "only {checked} broken designs checked");
 }

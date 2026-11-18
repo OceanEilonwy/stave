@@ -127,3 +127,15 @@ pub(super) fn ref_words(reference: &SyntaxNode) -> Vec<String> {
         .filter_map(|name| word(&name))
         .collect()
 }
+
+/// Where an item starts after its doc comments: the offset of its first
+/// element that is not a doc comment, a newline or trivia. `None` when the
+/// item has no such element.
+pub(super) fn after_docs(item: &SyntaxNode) -> Option<usize> {
+    item.children_with_tokens()
+        .find(|element| {
+            let kind = element.kind();
+            !(kind == SyntaxKind::DOC || kind == SyntaxKind::NEWLINE || kind.is_trivia())
+        })
+        .map(|element| usize::from(element.text_range().start()))
+}

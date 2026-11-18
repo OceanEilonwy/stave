@@ -875,6 +875,7 @@ impl<'a> Checker<'a> {
                         length_text(overrun.past)
                     )],
                     help: Some(help),
+                    fixes: Vec::new(),
                 },
                 Some(contact),
             ));

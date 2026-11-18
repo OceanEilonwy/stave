@@ -3,7 +3,9 @@
 //! A patch (grammar, "Patches") is how an AI, a suggestion or a mouse tool
 //! changes a design. [`apply_patch`] takes the parsed files of the
 //! project's module (and of the local modules it imports) and a parsed
-//! patch file, and returns the new text of every file the patch changed.
+//! patch file, and returns the new text of every file the patch changed,
+//! with the smallest [`TextEdit`]s that turn the old text into the new, so
+//! an open editor buffer and its undo can take the change.
 //!
 //! The patcher edits text, guided by the lossless syntax tree:
 //!
@@ -19,12 +21,14 @@
 //! Operations apply in order, each to the result of the one before, so a
 //! later operation can refer to what an earlier one added. A patch that
 //! refers to something that doesn't exist is refused with a
-//! [`PatchErrorKind`] naming it, and nothing is changed. `replace` and
-//! `rename` are not applied yet ([`PatchErrorKind::NotSupported`]).
+//! [`PatchErrorKind`] naming it, and nothing is changed. `rename` is not
+//! applied ([`PatchErrorKind::NotSupported`]): it needs name resolution,
+//! which this crate doesn't have.
 //!
 //! The patcher checks only what it needs to place the text: the patched
 //! design is to be checked again as a whole, as for any edit.
 
+mod diff;
 mod placement;
 mod text;
 mod tree;
@@ -34,10 +38,13 @@ use std::fmt;
 
 use crate::ast::{self, ItemTag, Span};
 use crate::diagnostics::{Diagnostic, FileId};
+use crate::placement::Axis;
 use crate::syntax::{SyntaxKind, SyntaxNode};
 use crate::{FORMAT_VERSION, Parse, parse_file};
 
-use placement::{TermAddress, fixes};
+pub use diff::{TextEdit, apply_text_edits};
+pub use placement::{TermAddress, TermFixes};
+use placement::{fixes, term_text_fixes};
 use text::{
     Edit, indentation, is_space, line_end, range, reindent, relayout, remove_entry, tokens,
 };
@@ -58,6 +65,28 @@ impl fmt::Display for ModuleKey {
         match self {
             ModuleKey::Project => f.write_str("the project"),
             ModuleKey::Local(name) => write!(f, "module '{name}'"),
+        }
+    }
+}
+
+/// Where a patch looked for an item, or where an item already is.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Scope {
+    /// The top level of a module.
+    Module(ModuleKey),
+    /// The body of a component, by its name (`Drawer`).
+    Component(String),
+    /// The local modules the patch was given, when a path's first word is
+    /// none of them.
+    LocalModules,
+}
+
+impl fmt::Display for Scope {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Scope::Module(module) => module.fmt(f),
+            Scope::Component(name) => write!(f, "component '{name}'"),
+            Scope::LocalModules => f.write_str("the local modules"),
         }
     }
 }
@@ -113,6 +142,11 @@ pub struct PatchedFile {
     pub text: String,
     /// `true` for a file the patch created (`add ... in "new.stave"`).
     pub created: bool,
+    /// The smallest edits that turn the file's old text (empty for a file
+    /// the patch created) into [`PatchedFile::text`], last in the file
+    /// first: applied in this order, each edit's range is still a range of
+    /// the old text. See [`apply_text_edits`].
+    pub edits: Vec<TextEdit>,
 }
 
 /// Why a patch was not applied: what went wrong, and the operation it went
@@ -138,9 +172,8 @@ pub enum PatchErrorKind {
     UnknownItem {
         /// The name the patch used.
         name: String,
-        /// Where it was looked for: "the project", "module 'casework'",
-        /// "component 'Drawer'".
-        scope: String,
+        /// Where it was looked for.
+        scope: Scope,
     },
     /// The patch names something inside an item that isn't there.
     #[error("'{item}' has no {what} named '{name}'")]
@@ -174,8 +207,8 @@ pub enum PatchErrorKind {
     AlreadyExists {
         /// The name.
         name: String,
-        /// Where: "the project", "component 'Drawer'".
-        scope: String,
+        /// Where.
+        scope: Scope,
     },
     /// A path that names nothing a patch can change.
     #[error("'{path}' can't be changed by a patch: {reason}")]
@@ -223,6 +256,35 @@ pub enum PatchErrorKind {
         import: String,
         /// The file.
         file: String,
+    },
+    /// `set <item>.place.<axis>` with a term that fixes another axis (or
+    /// the orientation): the term would not be the one the path names.
+    #[error("'{term}' fixes {fixes}, not {addressed}, so it can't be set as '{path}'")]
+    WrongTerm {
+        /// The path, as the patch wrote it.
+        path: String,
+        /// The new term, as the patch wrote it.
+        term: String,
+        /// What the path names.
+        addressed: TermAddress,
+        /// What the new term fixes.
+        fixes: TermFixes,
+    },
+    /// `set <item>.place.<axis>` with a term that also fixes an axis
+    /// another of the item's terms fixes (`corners` where a `flush` fixes
+    /// `deep`): the axis would be set twice.
+    #[error(
+        "'{term}' also fixes {}, which '{other}' already fixes; unset that term first, so each \
+         axis has one term",
+        .axis.word()
+    )]
+    TermClash {
+        /// The new term, as the patch wrote it.
+        term: String,
+        /// The axis both fix.
+        axis: Axis,
+        /// The term already written, as the file writes it.
+        other: String,
     },
     /// An operation the patcher doesn't apply yet.
     #[error("'{0}' is not supported yet")]
@@ -366,9 +428,12 @@ enum Slot {
         arg: Option<SyntaxNode>,
     },
     /// The placement term that fixes an axis, or the `orient` term.
+    /// `others` are the item's other terms.
     Term {
         item: SyntaxNode,
         term: Option<SyntaxNode>,
+        address: TermAddress,
+        others: Vec<SyntaxNode>,
     },
 }
 
@@ -418,6 +483,7 @@ impl<'p> Applier<'p> {
                 module: key.module,
                 name: key.name,
                 created: state.original.is_none(),
+                edits: diff::text_edits(state.original.as_deref().unwrap_or(""), &state.text),
                 text: state.text,
             })
             .collect()
@@ -427,7 +493,7 @@ impl<'p> Applier<'p> {
         match &op.kind {
             ast::PatchOpKind::Add { item, to, file } => self.add(item, to.as_ref(), file.as_ref()),
             ast::PatchOpKind::AddImport { import, file } => self.add_import(import, file.as_ref()),
-            ast::PatchOpKind::Replace { .. } => Err(PatchErrorKind::NotSupported("replace")),
+            ast::PatchOpKind::Replace { item } => self.replace(item),
             ast::PatchOpKind::Set { target, value } => self.set(target, value),
             ast::PatchOpKind::Unset { target } => self.unset(target),
             ast::PatchOpKind::Remove { tag, target } => self.remove(*tag, target),
@@ -522,7 +588,7 @@ impl<'p> Applier<'p> {
                 if !self.modules.contains(&module) {
                     return Err(PatchErrorKind::UnknownItem {
                         name: root.to_owned(),
-                        scope: ModuleKey::Project.to_string(),
+                        scope: Scope::Module(ModuleKey::Project),
                     });
                 }
                 let Some(Segment::Member(name)) = segments.first() else {
@@ -535,7 +601,7 @@ impl<'p> Applier<'p> {
                 self.find_item(&module, name)
                     .ok_or_else(|| PatchErrorKind::UnknownItem {
                         name: name.clone(),
-                        scope: module.to_string(),
+                        scope: Scope::Module(module.clone()),
                     })?
             }
         };
@@ -548,7 +614,7 @@ impl<'p> Applier<'p> {
                 .and_then(|body| tree::item_named(&body, name))
                 .ok_or_else(|| PatchErrorKind::UnknownItem {
                     name: name.clone(),
-                    scope: format!("component '{component}'"),
+                    scope: Scope::Component(component.clone()),
                 })?;
             used += 1;
         }
@@ -619,15 +685,14 @@ impl<'p> Applier<'p> {
                 if item.kind() == SyntaxKind::PART {
                     body("a place block")?;
                 }
-                let terms: Vec<SyntaxNode> = tree::block(item)
+                let (terms, others): (Vec<SyntaxNode>, Vec<SyntaxNode>) = tree::block(item)
                     .and_then(|body| tree::place(&body))
                     .and_then(|place| tree::block(&place))
                     .map(|block| {
                         block
                             .children()
                             .filter(|child| child.kind() == SyntaxKind::CALL)
-                            .filter(|term| address.matches(fixes(term)))
-                            .collect()
+                            .partition(|term| address.matches(fixes(term)))
                     })
                     .unwrap_or_default();
                 if terms.len() > 1 {
@@ -640,6 +705,8 @@ impl<'p> Applier<'p> {
                 Ok(Slot::Term {
                     item: item.clone(),
                     term: terms.into_iter().next(),
+                    address,
+                    others,
                 })
             }
             (SyntaxKind::PART | SyntaxKind::HARDWARE, [Segment::Member(place), ..])
@@ -726,6 +793,12 @@ impl<'p> Applier<'p> {
         let slot = self.slot(&located, path)?;
         let text = &self.state(&located.file)?.text;
         let value_text = self.snippet(value.span);
+        if let Slot::Term {
+            address, others, ..
+        } = &slot
+        {
+            check_term(self.slice(path.span), &value_text, *address, others, text)?;
+        }
         let replace = |node: &SyntaxNode| -> Vec<Edit> {
             let old = range(node);
             let old_text = text.get(old.clone()).unwrap_or("");
@@ -797,7 +870,9 @@ impl<'p> Applier<'p> {
                 name,
                 arg: None,
             } => vec![append_arg(text, &args, &format!("{name}: {value_text}"))],
-            Slot::Term { item, term: None } => vec![add_term(text, &item, &value_text)],
+            Slot::Term {
+                item, term: None, ..
+            } => vec![add_term(text, &item, &value_text)],
         };
         let key = located.file;
         self.edit(&key, edits)
@@ -839,6 +914,51 @@ impl<'p> Applier<'p> {
             Slot::Term { term, .. } => remove_entry(text, range(&term.ok_or_else(not_set)?)),
         };
         let key = located.file;
+        self.edit(&key, vec![edit])
+    }
+
+    // ---- replace ----
+
+    /// Replaces the item of the same kind and name at the top level of the
+    /// project's module. The old item's doc comment stays unless the new
+    /// item writes its own; a comment after its last line stays too.
+    fn replace(&mut self, item: &ast::Item) -> Result<(), PatchErrorKind> {
+        let entry = self.snippet(item.span);
+        let Some(name) = item.kind.name().map(|name| name.as_str().to_owned()) else {
+            return Err(PatchErrorKind::Unaddressable {
+                path: entry.lines().next().unwrap_or("").to_owned(),
+                reason: "replace finds the item to replace by its name, and this has none"
+                    .to_owned(),
+            });
+        };
+        let (key, old) = self.find_item(&ModuleKey::Project, &name).ok_or_else(|| {
+            PatchErrorKind::UnknownItem {
+                name: name.clone(),
+                scope: Scope::Module(ModuleKey::Project),
+            }
+        })?;
+        let found = tree::tag_of(old.kind());
+        let wanted = item.kind.tag();
+        if found != wanted {
+            return Err(PatchErrorKind::WrongTag {
+                path: name,
+                expected: wanted.map_or("declaration", ItemTag::keyword),
+                found: found.map_or("declaration", ItemTag::keyword),
+            });
+        }
+        let text = &self.state(&key)?.text;
+        let whole = range(&old);
+        let old_range = if item.docs.is_empty() {
+            tree::after_docs(&old).unwrap_or(whole.start)..whole.end
+        } else {
+            whole
+        };
+        let old_text = text.get(old_range.clone()).unwrap_or("");
+        if tokens(old_text) == tokens(&entry) {
+            return Ok(());
+        }
+        let indent = indentation(text, old_range.start).to_owned();
+        let edit = Edit::replace(old_range, indent_lines(&entry, &indent));
         self.edit(&key, vec![edit])
     }
 
@@ -889,7 +1009,7 @@ impl<'p> Applier<'p> {
         {
             return Err(PatchErrorKind::AlreadyExists {
                 name: name.clone(),
-                scope: ModuleKey::Project.to_string(),
+                scope: Scope::Module(ModuleKey::Project),
             });
         }
         let key = match requested {
@@ -938,7 +1058,7 @@ impl<'p> Applier<'p> {
             [] => self.find_item(&ModuleKey::Project, root).ok_or_else(|| {
                 PatchErrorKind::UnknownItem {
                     name: root.to_owned(),
-                    scope: ModuleKey::Project.to_string(),
+                    scope: Scope::Module(ModuleKey::Project),
                 }
             })?,
             [inner] => {
@@ -946,13 +1066,13 @@ impl<'p> Applier<'p> {
                 if !self.modules.contains(&module) {
                     return Err(PatchErrorKind::UnknownItem {
                         name: root.to_owned(),
-                        scope: "the local modules".to_owned(),
+                        scope: Scope::LocalModules,
                     });
                 }
                 self.find_item(&module, inner.as_str()).ok_or_else(|| {
                     PatchErrorKind::UnknownItem {
                         name: inner.as_str().to_owned(),
-                        scope: module.to_string(),
+                        scope: Scope::Module(module.clone()),
                     }
                 })?
             }
@@ -1001,7 +1121,7 @@ impl<'p> Applier<'p> {
         {
             return Err(PatchErrorKind::AlreadyExists {
                 name,
-                scope: format!("component '{component_name}'"),
+                scope: Scope::Component(component_name),
             });
         }
         let text = &self.state(&key)?.text;
@@ -1161,6 +1281,42 @@ impl<'p> Applier<'p> {
     }
 }
 
+/// Refuses a placement term that doesn't fix what the path names, or that
+/// also fixes an axis another term of the item fixes. A term whose axes
+/// can't be read from its text (an `Anchor` param) is let through: the
+/// patched design is checked again as a whole.
+fn check_term(
+    path: &str,
+    term: &str,
+    address: TermAddress,
+    others: &[SyntaxNode],
+    text: &str,
+) -> Result<(), PatchErrorKind> {
+    let new = term_text_fixes(term);
+    if new == TermFixes::Unknown {
+        return Ok(());
+    }
+    if !address.matches(new) {
+        return Err(PatchErrorKind::WrongTerm {
+            path: path.to_owned(),
+            term: term.to_owned(),
+            addressed: address,
+            fixes: new,
+        });
+    }
+    for other in others {
+        let other_axes = fixes(other).axes();
+        if let Some(axis) = new.axes().iter().find(|axis| other_axes.contains(axis)) {
+            return Err(PatchErrorKind::TermClash {
+                term: term.to_owned(),
+                axis: *axis,
+                other: text.get(range(other)).unwrap_or("").to_owned(),
+            });
+        }
+    }
+    Ok(())
+}
+
 /// Indents every line of `text` after the first by `indent`.
 fn indent_lines(text: &str, indent: &str) -> String {
     let mut out = String::with_capacity(text.len());
@@ -1259,6 +1415,9 @@ fn add_entry(
                 Edit::replace(open_end..close_start, format!(" {entry} "))
             };
         }
+        if entry.contains('\n') {
+            return explode(text, block, anchor, entry, blank, &base);
+        }
         let last = anchor.cloned().or_else(|| block.children().last());
         let at = last.map_or(open_end, |node| range(&node).end);
         return Edit::insert(at, format!(", {}", indent_lines(entry, &inside)));
@@ -1284,6 +1443,49 @@ fn add_entry(
             format!("\n{inside}{}", indent_lines(entry, &inside)),
         ),
     }
+}
+
+/// The edit that adds a multi-line entry to a block written on one line:
+/// the block is written out as the formatter lays out a multi-line block,
+/// one entry to a line, with the new entry after `anchor` (after a blank
+/// line when `blank` is set), or at the top without one.
+fn explode(
+    text: &str,
+    block: &SyntaxNode,
+    anchor: Option<&SyntaxNode>,
+    entry: &str,
+    blank: bool,
+    base: &str,
+) -> Edit {
+    let block_range = range(block);
+    let open_end = block_range.start + 1;
+    let close_start = block
+        .last_token()
+        .filter(|token| token.kind() == SyntaxKind::R_BRACE)
+        .map_or(block_range.end, |token| {
+            usize::from(token.text_range().start())
+        });
+    let inside = format!("{base}  ");
+    let entry = indent_lines(entry, &inside);
+    let mut out = String::new();
+    if anchor.is_none() {
+        out.push('\n');
+        out.push_str(&inside);
+        out.push_str(&entry);
+    }
+    for child in block.children() {
+        out.push('\n');
+        out.push_str(&inside);
+        out.push_str(text.get(range(&child)).unwrap_or("").trim());
+        if anchor == Some(&child) {
+            out.push_str(if blank { "\n\n" } else { "\n" });
+            out.push_str(&inside);
+            out.push_str(&entry);
+        }
+    }
+    out.push('\n');
+    out.push_str(base);
+    Edit::replace(open_end..close_start, out)
 }
 
 /// The edit that adds a named argument at the end of an argument list.
