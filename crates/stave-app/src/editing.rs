@@ -740,6 +740,11 @@ impl Edit {
         chosen.patch = patch;
         chosen.item_name = item_name;
         chosen.tried = tried;
+        crate::candidates::describe::fill_default_values(
+            &mut chosen.candidate,
+            chosen.item_name.as_ref(),
+            chosen.tried.as_ref().and_then(Tried::opened),
+        );
         if chosen.progress != before {
             events.push(EditEvent::VerdictChanged);
         }

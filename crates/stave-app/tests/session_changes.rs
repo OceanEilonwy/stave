@@ -195,6 +195,26 @@ fn a_door_that_hits_the_wall_is_refused_with_its_fix_and_the_fix_makes_it_fit() 
             .as_deref(),
         Some("overlay(left: 17.8mm, right: 17.8mm)")
     );
+    // Once tried, a default stands for a value: worked out for a
+    // quantity, its own text for one that names a value; a chosen value
+    // has none.
+    let tried_setting = |name: &str| {
+        chosen
+            .candidate()
+            .settings
+            .iter()
+            .find(|s| s.name.as_str() == name)
+            .unwrap()
+    };
+    assert_eq!(
+        tried_setting("hinge_inset").default_value.as_deref(),
+        Some("80mm")
+    );
+    assert_eq!(
+        tried_setting("panel").default_value.as_deref(),
+        Some("ply_18")
+    );
+    assert_eq!(tried_setting("mount").default_value, None);
     let Progress::Tried(Verdict::Refused(refusal)) = chosen.progress() else {
         panic!("the door hits the wall: {:#?}", chosen.progress());
     };
@@ -301,6 +321,30 @@ fn a_setting_copied_from_another_assembly_names_it_and_lists_what_it_can_be() {
     // Names for the ids the contract holds.
     let names = Names::new(edit.base().model.as_ref().unwrap());
     assert_eq!(names.region(below), Some("drawer_bay[top]"));
+    // Listed, a default worked out from other values has no value yet;
+    // chosen and tried, it stands for the length the scratch copy gives.
+    let box_height = setting("box_height");
+    assert_eq!(
+        box_height.default_text.as_deref(),
+        Some("opening.up - bottom_gap - top_gap")
+    );
+    assert_eq!(box_height.default_value, None);
+    let index = entry(edit.menu(), "casework.Drawer");
+    send(&mut session, EditCommand::Choose(index));
+    let chosen = session.edit().unwrap().chosen().unwrap();
+    let box_height = chosen
+        .candidate()
+        .settings
+        .iter()
+        .find(|s| s.name.as_str() == "box_height")
+        .unwrap();
+    assert!(matches!(box_height.value, SettingValue::Default));
+    assert_eq!(
+        box_height.text.as_deref(),
+        Some("opening.up - bottom_gap - top_gap")
+    );
+    // Even refused (it overlaps the drawer above), the copy was solved.
+    assert_eq!(box_height.default_value.as_deref(), Some("220mm"));
 }
 
 // ---------------------------------------------------------------------------

@@ -9,12 +9,17 @@
 //! the menu is listed and again after every change to the chosen
 //! candidate, so the texts always say what the candidate now holds.
 
-use stave_lang::ast::{self, BaseKind, Expr, ExprKind, Span, TypeName};
+use stave_lang::ast::{self, BaseKind, Expr, ExprKind, Ident, Span, TypeName};
 use stave_lang::{FileId, SourceMap};
-use stave_model::defs::{DefId, Domain, ParamDef, Scope};
+use stave_model::defs::{DefId, Domain, ParamDef, RExprKind, Scope, Symbol};
+use stave_model::ids::ParamId;
+use stave_model::trace::{Amount, Quantity};
+use stave_model::value::Value;
+use stave_solve::trace::TraceError;
 
 use super::print::expr_text;
 use super::{EditScope, first_sentence};
+use crate::Opened;
 use crate::edit::{
     Candidate, Declaration, MenuGroup, Names, SettingOption, SettingParam, SettingValue, ValueRange,
 };
@@ -254,6 +259,106 @@ impl EditScope<'_> {
             .map(|text| SettingOption { text, hint: None })
             .collect()
     }
+}
+
+/// Fills each [`SettingParam::default_value`] of `candidate` from
+/// `tried`, the scratch copy the candidate was tried in, where the new
+/// item is named `item`; clears them when there is no such copy. A
+/// setting left at its default gets the value its param has in the new
+/// assembly (the first element of a repeat), worked out by the solver; a
+/// default that names a value rather than working one out (`ply_18`,
+/// `butt_hinge(length: 40mm)`, `overlay()`) gets its own text. Every
+/// other setting gets `None`.
+pub fn fill_default_values(
+    candidate: &mut Candidate,
+    item: Option<&Ident>,
+    tried: Option<&Opened>,
+) {
+    for setting in &mut candidate.settings {
+        setting.default_value = None;
+    }
+    let (Some(item), Some(model)) = (item, tried.and_then(|opened| opened.model.as_ref())) else {
+        return;
+    };
+    let defs = &model.defs;
+    // The new assembly's component instance: the first assembly whose
+    // declaration has the new item's name.
+    let Some(instance) = model
+        .assemblies
+        .iter()
+        .find(|assembly| {
+            defs.assembly(assembly.def)
+                .is_some_and(|def| def.decl.name == item.as_str())
+        })
+        .map(|assembly| assembly.inner)
+    else {
+        return;
+    };
+    let wanted: Vec<(usize, ParamId, Option<&ParamDef>)> = candidate
+        .settings
+        .iter()
+        .enumerate()
+        .filter(|(_, setting)| setting.value == SettingValue::Default)
+        .filter_map(|(index, setting)| {
+            model
+                .params
+                .iter()
+                .find(|param| {
+                    param.instance == instance
+                        && defs
+                            .param(param.def)
+                            .is_some_and(|def| def.decl.name == setting.name.as_str())
+                })
+                .map(|param| (index, param.id, defs.param(param.def)))
+        })
+        .collect();
+    if wanted.is_empty() {
+        return;
+    }
+    let quantities: Vec<Quantity> = wanted
+        .iter()
+        .map(|(_, param, _)| Quantity::Param(*param))
+        .collect();
+    let traces = stave_solve::trace::trace_all(model, &quantities);
+    for ((index, _, def), trace) in wanted.into_iter().zip(traces) {
+        let Some(setting) = candidate.settings.get_mut(index) else {
+            continue;
+        };
+        setting.default_value = match trace {
+            Ok(trace) => Some(amount_text(trace.value)),
+            Err(TraceError::NotAQuantity) if def.is_some_and(names_a_value) => {
+                setting.default_text.clone()
+            }
+            Err(_) => None,
+        };
+    }
+}
+
+/// An exact amount as `.stave` text: `132mm`, `90deg`, `3`.
+fn amount_text(amount: Amount) -> String {
+    let value = match amount {
+        Amount::Length(length) => Value::Length(length),
+        Amount::Angle(angle) => Value::Angle(angle),
+        Amount::Count(n) => Value::Count(n),
+        Amount::Ratio(n) => Value::Ratio(n),
+    };
+    value.to_string()
+}
+
+/// `true` when a param's default is itself a value, not worked out from
+/// another param or `let`: a stock, a kind or a mount written by name or
+/// called.
+fn names_a_value(def: &ParamDef) -> bool {
+    def.default.as_ref().is_some_and(|default| {
+        !matches!(
+            default.kind,
+            RExprKind::Symbol(Symbol::Def(DefId::Param(_) | DefId::Let(_)))
+                | RExprKind::Member { .. }
+                | RExprKind::Index { .. }
+                | RExprKind::Unary { .. }
+                | RExprKind::Binary { .. }
+        )
+    })
 }
 
 /// `true` for a call of one of the language's mount functions.

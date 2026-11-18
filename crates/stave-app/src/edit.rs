@@ -293,10 +293,20 @@ pub struct SettingParam {
     /// chosen or copied, or, for [`SettingValue::Default`], the default as
     /// the declaration writes it. `None` while [`SettingValue::Unset`].
     pub text: Option<String>,
-    /// The value its default stands for, as the declaration writes it
-    /// (`15mm`, `opening.up - bottom_gap - top_gap`, `dado`); `None` when
-    /// the param has no default.
+    /// The param's default as the declaration writes it (`15mm`,
+    /// `opening.up - bottom_gap - top_gap`, `dado`); `None` when the param
+    /// has no default. For the value it works out to, see
+    /// [`SettingParam::default_value`].
     pub default_text: Option<String>,
+    /// The value the default stands for in this candidate, as `.stave`
+    /// text, while the setting is [`SettingValue::Default`]: the
+    /// default worked out in the scratch copy the chosen candidate was
+    /// tried in (`opening.up - bottom_gap - top_gap` gives `132mm`), or,
+    /// for a default that names a value (`ply_18`, `butt_hinge(length:
+    /// 40mm)`), that text. `None` until the candidate is chosen and tried
+    /// far enough to be solved, while the setting holds a chosen or
+    /// copied value, and when the default's value can't be worked out.
+    pub default_value: Option<String>,
     /// For [`SettingValue::Copied`], the name of the assembly it was
     /// copied from (`drawer[top]`).
     pub copied_from: Option<String>,
@@ -323,6 +333,7 @@ impl SettingParam {
             value,
             text: None,
             default_text: None,
+            default_value: None,
             copied_from: None,
             options: Vec::new(),
             range: None,
@@ -897,6 +908,7 @@ pub fn clothing_cabinet_fixture() -> Option<Fixture> {
             value,
             text,
             default_text: None,
+            default_value: None,
             copied_from: None,
             options: Vec::new(),
             range: None,

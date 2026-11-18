@@ -294,7 +294,8 @@ patch tried, `Change::renamed_files` the files a rename rewrites, and
 The contract (`stave_app::edit`) carries everything the card shows, each
 field filled where candidates and verdicts are made
 (`EditScope::describe`, run when the menu is listed and after every
-change to the chosen candidate):
+change to the chosen candidate; `default_value` is filled after each try,
+by `candidates::describe::fill_default_values`):
 
 | Field | Holds |
 |---|---|
@@ -302,7 +303,8 @@ change to the chosen candidate):
 | `PlaceParam::prompt` | the sentence the card asks for an unbound place param with: the first sentence of the param's own `///` doc comment, or "Point at the hinge side." from its name |
 | `PlaceParam::text` | what fills it, as written (`door_bay[left]`, `side_l.right`, `[side_l, side_r]`) |
 | `SettingParam::text` | the value it has now as `.stave` text: chosen, copied, or the default as written |
-| `SettingParam::default_text` | the value its default stands for, as the declaration writes it (`15mm`, `opening.up - bottom_gap - top_gap`) |
+| `SettingParam::default_text` | the param's default as the declaration writes it (`15mm`, `opening.up - bottom_gap - top_gap`) |
+| `SettingParam::default_value` | the value the default stands for, while the setting is left at its default: worked out by the solver in the scratch copy the chosen candidate was tried in (`opening.up - bottom_gap - top_gap` gives `220mm` for a 250mm drawer bay), or, for a default that names a value (`ply_18`, `butt_hinge(length: 40mm)`), that text. `None` on a menu entry not yet chosen, before the candidate is tried (a place param still to point at), when the copy could not be solved, and for a chosen or copied value |
 | `SettingParam::copied_from` | the assembly a copied value was read from (`drawer[top]`) |
 | `SettingParam::options` | what it can be set to, by its type, each a `SettingOption { text, hint }`: the stocks in scope for a `Stock`; the mounts the project's assemblies write, then `overlay()` and `inset(reveal: 2mm)`, for a `Mount`; the kinds of that class in scope for a kind type (`side_mount_slide`, `hw.brass_knob_26`); the values of a `within [..]` list for a quantity; `true` and `false` for a `Bool` |
 | `SettingParam::range` | the two ends of a `within low..high`, as written (`ValueRange { low, high }`) |
