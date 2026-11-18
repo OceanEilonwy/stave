@@ -49,6 +49,9 @@ shot $window/home.png $cabinet --theme light
 shot $window/home_problems.png crates/stave-app/tests/projects/several_problems --theme light
 # The Code panel dragged to the right edge (board B2): files open there.
 shot $window/code_right.png $cabinet --theme dark --editor --select 'door_l.stile[hinge]' --layout tools/layouts/code_right.layout
+# Code split beside the 3D view in the centre, and the view's controls
+# docked in the narrow right edge, wrapped onto rows.
+shot $window/side_by_side.png $cabinet --theme dark --editor --select door_l --layout tools/layouts/side_by_side.layout
 # A hinge stile chosen, light and dark: the camera frames it between the
 # tree and its card, the rest of the design dims, the tree lists the
 # joints it is in, and the card beside it says what it is (V2C_Spatial).

@@ -1,14 +1,16 @@
 //! The docked window (docs/superpowers/specs/2026-11-18-docked-window-design.md):
-//! a libpanel dock with the 3D view in the centre and the panels round it
-//! (Parts, Files, Details, Code and Problems), each of which can be
-//! dragged to another edge or into another panel's tabs, closed and
-//! brought back. Nothing floats over the 3D view.
+//! a libpanel dock whose every part is a panel: the 3D view, its controls,
+//! Parts, Files, Details, Code and Problems. Each can be dragged to an
+//! edge, into the centre (which splits into columns and rows), or into
+//! another panel's tabs; closed; and brought back. Nothing floats over the
+//! model but the problem pins.
 //!
 //! The default layout is the canvas's board B: Parts (with Files) above
-//! Details on the left, Code and Problems along the bottom, the right edge
-//! empty and hidden. Where the panels are is remembered per user in
-//! `~/.config/stave/layout` (never in a `.stave` file); [`Layout`] is that
-//! record, read leniently so an old or broken file only means the default.
+//! Details on the left; the 3D view in the centre with its controls under
+//! it; Code and Problems along the bottom; the right edge empty and hidden.
+//! Where the panels are is remembered per user in `~/.config/stave/layout`
+//! (never in a `.stave` file); [`Layout`] is that record, read leniently so
+//! an old or broken file only means the default.
 //!
 //! The Code panel holds the open files as its own tabs, so a file always
 //! opens wherever the Code panel is.
@@ -26,6 +28,11 @@ use panel::prelude::*;
 /// One of the window's panels.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum PanelId {
+    /// The 3D view.
+    View,
+    /// The 3D view's controls: scene, Pull apart, X-ray, the sliders, the
+    /// camera buttons, a posed problem's swing and focus mode's steps.
+    Controls,
     /// The parts tree.
     Parts,
     /// The project's files.
@@ -39,8 +46,10 @@ pub enum PanelId {
 }
 
 impl PanelId {
-    /// Every panel, in the order the default layout adds them.
-    pub const ALL: [PanelId; 5] = [
+    /// Every panel, in the order the menu lists them.
+    pub const ALL: [PanelId; 7] = [
+        PanelId::View,
+        PanelId::Controls,
         PanelId::Parts,
         PanelId::Files,
         PanelId::Details,
@@ -51,6 +60,8 @@ impl PanelId {
     /// The word the layout file and the actions use.
     pub fn word(self) -> &'static str {
         match self {
+            PanelId::View => "view",
+            PanelId::Controls => "controls",
             PanelId::Parts => "parts",
             PanelId::Files => "files",
             PanelId::Details => "details",
@@ -67,6 +78,8 @@ impl PanelId {
     /// The panel's tab title.
     pub fn title(self) -> &'static str {
         match self {
+            PanelId::View => "3D View",
+            PanelId::Controls => "View Controls",
             PanelId::Parts => "Parts",
             PanelId::Files => "Files",
             PanelId::Details => "Details",
@@ -78,6 +91,8 @@ impl PanelId {
     /// The panel's tab icon.
     fn icon_name(self) -> &'static str {
         match self {
+            PanelId::View => "view-reveal-symbolic",
+            PanelId::Controls => "preferences-system-symbolic",
             PanelId::Parts => "view-list-symbolic",
             PanelId::Files => "folder-symbolic",
             PanelId::Details => "dialog-information-symbolic",
@@ -87,66 +102,93 @@ impl PanelId {
     }
 }
 
-/// An edge of the window a panel can be docked at.
+/// Where in the window a panel can be docked: an edge or the centre.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum Edge {
-    /// The left (in left-to-right languages).
+pub enum Side {
+    /// The left edge (in left-to-right languages).
     Start,
-    /// The right.
+    /// The right edge.
     End,
     /// Along the top, under the header.
     Top,
     /// Along the bottom.
     Bottom,
+    /// The middle, in columns and rows.
+    Centre,
 }
 
-impl Edge {
-    /// Every edge.
-    pub const ALL: [Edge; 4] = [Edge::Start, Edge::End, Edge::Top, Edge::Bottom];
+impl Side {
+    /// Every side.
+    pub const ALL: [Side; 5] = [
+        Side::Start,
+        Side::End,
+        Side::Top,
+        Side::Bottom,
+        Side::Centre,
+    ];
+    /// The edges, which can be hidden (the centre always shows).
+    pub const EDGES: [Side; 4] = [Side::Start, Side::End, Side::Top, Side::Bottom];
 
     fn word(self) -> &'static str {
         match self {
-            Edge::Start => "start",
-            Edge::End => "end",
-            Edge::Top => "top",
-            Edge::Bottom => "bottom",
+            Side::Start => "start",
+            Side::End => "end",
+            Side::Top => "top",
+            Side::Bottom => "bottom",
+            Side::Centre => "centre",
         }
     }
 
-    fn from_word(word: &str) -> Option<Edge> {
-        Edge::ALL.into_iter().find(|edge| edge.word() == word)
+    fn from_word(word: &str) -> Option<Side> {
+        Side::ALL.into_iter().find(|side| side.word() == word)
     }
 
     fn area(self) -> panel::Area {
         match self {
-            Edge::Start => panel::Area::Start,
-            Edge::End => panel::Area::End,
-            Edge::Top => panel::Area::Top,
-            Edge::Bottom => panel::Area::Bottom,
+            Side::Start => panel::Area::Start,
+            Side::End => panel::Area::End,
+            Side::Top => panel::Area::Top,
+            Side::Bottom => panel::Area::Bottom,
+            Side::Centre => panel::Area::Center,
         }
     }
 
-    fn of_area(area: panel::Area) -> Option<Edge> {
+    fn of_area(area: panel::Area) -> Option<Side> {
         match area {
-            panel::Area::Start => Some(Edge::Start),
-            panel::Area::End => Some(Edge::End),
-            panel::Area::Top => Some(Edge::Top),
-            panel::Area::Bottom => Some(Edge::Bottom),
+            panel::Area::Start => Some(Side::Start),
+            panel::Area::End => Some(Side::End),
+            panel::Area::Top => Some(Side::Top),
+            panel::Area::Bottom => Some(Side::Bottom),
+            panel::Area::Center => Some(Side::Centre),
             _ => None,
         }
     }
 }
 
-/// Where one panel is: an edge, which frame along it (from 0) and which
+/// Where one panel is: a side, the column and frame there (from 0; at an
+/// edge the column is always 0 and the frame counts along it) and the
 /// tab in that frame.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Place {
-    /// The edge.
-    pub edge: Edge,
-    /// The frame along the edge, from 0.
+    /// The side.
+    pub side: Side,
+    /// The column, from 0 (the centre's; 0 at an edge).
+    pub column: u32,
+    /// The frame in the column or along the edge, from 0.
     pub frame: u32,
     /// The tab in the frame, from 0.
     pub tab: u32,
+}
+
+impl Place {
+    fn new(side: Side, column: u32, frame: u32, tab: u32) -> Place {
+        Place {
+            side,
+            column,
+            frame,
+            tab,
+        }
+    }
 }
 
 /// Where the panels are and which edges show: what is remembered between
@@ -156,104 +198,130 @@ pub struct Layout {
     /// Each open panel's place.
     pub places: BTreeMap<PanelId, Place>,
     /// The edges that show.
-    pub revealed: BTreeMap<Edge, bool>,
+    pub revealed: BTreeMap<Side, bool>,
 }
 
 impl Default for Layout {
-    /// Board B: Parts and Files above Details on the left, Code and
-    /// Problems at the bottom, nothing on the right.
+    /// Board B: Parts and Files above Details on the left, the 3D view
+    /// over its controls in the centre, Code and Problems at the bottom,
+    /// nothing on the right.
     fn default() -> Layout {
-        let place = |edge, frame, tab| Place { edge, frame, tab };
         Layout {
             places: BTreeMap::from([
-                (PanelId::Parts, place(Edge::Start, 0, 0)),
-                (PanelId::Files, place(Edge::Start, 0, 1)),
-                (PanelId::Details, place(Edge::Start, 1, 0)),
-                (PanelId::Code, place(Edge::Bottom, 0, 0)),
-                (PanelId::Problems, place(Edge::Bottom, 0, 1)),
+                (PanelId::View, Place::new(Side::Centre, 0, 0, 0)),
+                (PanelId::Controls, Place::new(Side::Centre, 0, 1, 0)),
+                (PanelId::Parts, Place::new(Side::Start, 0, 0, 0)),
+                (PanelId::Files, Place::new(Side::Start, 0, 0, 1)),
+                (PanelId::Details, Place::new(Side::Start, 0, 1, 0)),
+                (PanelId::Code, Place::new(Side::Bottom, 0, 0, 0)),
+                (PanelId::Problems, Place::new(Side::Bottom, 0, 0, 1)),
             ]),
             revealed: BTreeMap::from([
-                (Edge::Start, true),
-                (Edge::End, false),
-                (Edge::Top, false),
-                (Edge::Bottom, true),
+                (Side::Start, true),
+                (Side::End, false),
+                (Side::Top, false),
+                (Side::Bottom, true),
             ]),
         }
     }
 }
 
 impl Layout {
-    /// The layout as the file holds it: one line per panel
-    /// (`parts start 0 0`) and one per edge (`show end false`).
+    /// The layout as the file holds it: one line per open panel
+    /// (`view centre 0 0 0`: side, column, frame, tab), one per closed one
+    /// (`closed files`) and one per edge (`show end false`).
     pub fn to_text(&self) -> String {
         let mut text =
             String::from("# Where Stave's panels are. Delete this file to start again.\n");
         for (id, place) in &self.places {
             let _ = writeln!(
                 text,
-                "{} {} {} {}",
+                "{} {} {} {} {}",
                 id.word(),
-                place.edge.word(),
+                place.side.word(),
+                place.column,
                 place.frame,
                 place.tab
             );
         }
-        for (edge, shown) in &self.revealed {
-            let _ = writeln!(text, "show {} {shown}", edge.word());
+        for id in PanelId::ALL {
+            if !self.places.contains_key(&id) {
+                let _ = writeln!(text, "closed {}", id.word());
+            }
+        }
+        for (side, shown) in &self.revealed {
+            let _ = writeln!(text, "show {} {shown}", side.word());
         }
         text
     }
 
-    /// Reads a layout file. Lines it doesn't understand are left out; a
-    /// file naming no panel at all gives the default.
+    /// Reads a layout file. Lines it doesn't understand are left out (a
+    /// line without a column, `code end 0 0`, means column 0); a panel the
+    /// file doesn't mention at all (one newer than the file) goes where
+    /// the default puts it; a file naming no panel gives the default.
     pub fn from_text(text: &str) -> Layout {
         let mut places = BTreeMap::new();
+        let mut closed = Vec::new();
         let mut revealed = Layout::default().revealed;
         for line in text.lines() {
             let words: Vec<&str> = line.split_whitespace().collect();
-            match words.as_slice() {
-                ["show", edge, shown] => {
-                    if let (Some(edge), Ok(shown)) = (Edge::from_word(edge), shown.parse()) {
-                        revealed.insert(edge, shown);
+            let (id, side, numbers) = match words.as_slice() {
+                ["show", side, shown] => {
+                    if let (Some(side), Ok(shown)) = (Side::from_word(side), shown.parse())
+                        && side != Side::Centre
+                    {
+                        revealed.insert(side, shown);
                     }
+                    continue;
                 }
-                [id, edge, frame, tab] => {
-                    if let (Some(id), Some(edge), Ok(frame), Ok(tab)) = (
-                        PanelId::from_word(id),
-                        Edge::from_word(edge),
-                        frame.parse(),
-                        tab.parse(),
-                    ) {
-                        places.insert(id, Place { edge, frame, tab });
-                    }
+                ["closed", id] => {
+                    closed.extend(PanelId::from_word(id));
+                    continue;
                 }
-                _ => {}
+                [id, side, frame, tab] => (*id, *side, ["0", *frame, *tab]),
+                [id, side, column, frame, tab] => (*id, *side, [*column, *frame, *tab]),
+                _ => continue,
+            };
+            let [Ok(column), Ok(frame), Ok(tab)] = numbers.map(str::parse::<u32>) else {
+                continue;
+            };
+            if let (Some(id), Some(side)) = (PanelId::from_word(id), Side::from_word(side)) {
+                let column = if side == Side::Centre { column } else { 0 };
+                places.insert(id, Place::new(side, column, frame, tab));
             }
         }
         if places.is_empty() {
             return Layout::default();
         }
+        for (id, place) in Layout::default().places {
+            if !closed.contains(&id) {
+                places.entry(id).or_insert(place);
+            }
+        }
         Layout { places, revealed }
     }
 
-    /// The panels at an edge, frame by frame, each frame's in tab order.
-    fn frames(&self, edge: Edge) -> Vec<Vec<PanelId>> {
-        let mut at: BTreeMap<u32, Vec<(u32, PanelId)>> = BTreeMap::new();
+    /// The panels at a side, frame by frame (keyed by column and frame),
+    /// each frame's in tab order.
+    fn frames(&self, side: Side) -> BTreeMap<(u32, u32), Vec<PanelId>> {
+        let mut at: BTreeMap<(u32, u32), Vec<(u32, PanelId)>> = BTreeMap::new();
         for (id, place) in &self.places {
-            if place.edge == edge {
-                at.entry(place.frame).or_default().push((place.tab, *id));
+            if place.side == side {
+                at.entry((place.column, place.frame))
+                    .or_default()
+                    .push((place.tab, *id));
             }
         }
-        at.into_values()
-            .map(|mut tabs| {
+        at.into_iter()
+            .map(|(key, mut tabs)| {
                 tabs.sort();
-                tabs.into_iter().map(|(_, id)| id).collect()
+                (key, tabs.into_iter().map(|(_, id)| id).collect())
             })
             .collect()
     }
 }
 
-/// The dock's skeleton: an empty pane per edge and a box for the centre.
+/// The dock's skeleton: an empty pane per edge and a grid for the centre.
 const DOCK_UI: &str = r#"<interface>
   <object class="PanelDock" id="dock">
     <property name="vexpand">true</property>
@@ -261,11 +329,7 @@ const DOCK_UI: &str = r#"<interface>
     <property name="start-width">300</property>
     <property name="end-width">460</property>
     <property name="bottom-height">280</property>
-    <child>
-      <object class="GtkBox" id="centre">
-        <property name="orientation">vertical</property>
-      </object>
-    </child>
+    <child><object class="PanelGrid" id="grid"></object></child>
     <child type="start"><object class="PanelPaned" id="start"><property name="orientation">vertical</property></object></child>
     <child type="end"><object class="PanelPaned" id="end"><property name="orientation">vertical</property></object></child>
     <child type="top"><object class="PanelPaned" id="top"><property name="orientation">horizontal</property></object></child>
@@ -294,7 +358,8 @@ pub struct Workbench {
     /// The dock above the status bar, for the window's content.
     pub root: gtk::Box,
     dock: panel::Dock,
-    paneds: BTreeMap<Edge, panel::Paned>,
+    grid: panel::Grid,
+    paneds: BTreeMap<Side, panel::Paned>,
     panels: BTreeMap<PanelId, panel::Widget>,
     /// The status bar's start, for a line about the selection.
     pub status: gtk::Label,
@@ -306,35 +371,34 @@ pub struct Workbench {
 }
 
 impl Workbench {
-    /// A dock with `centre` in the middle and each panel's content in its
-    /// panel, laid out as last time (or as board B).
+    /// A dock with each panel's content in its panel, laid out as last
+    /// time (or as board B).
     pub fn new(
-        centre: &impl IsA<gtk::Widget>,
         contents: Vec<(PanelId, gtk::Widget)>,
         remember: Remember,
     ) -> anyhow::Result<Rc<Workbench>> {
         panel::init();
         // libpanel takes the dock's children the way a UI file gives them:
-        // a pane of frames per edge, and the centre.
+        // a pane of frames per edge, and the centre's grid.
         let builder = gtk::Builder::new();
         builder
             .add_from_string(DOCK_UI)
             .map_err(|error| anyhow::anyhow!("can't lay out the window's panels: {error}"))?;
-        let (Some(dock), Some(centre_box)) = (
+        let (Some(dock), Some(grid)) = (
             builder.object::<panel::Dock>("dock"),
-            builder.object::<gtk::Box>("centre"),
+            builder.object::<panel::Grid>("grid"),
         ) else {
             anyhow::bail!("can't lay out the window's panels: the dock is missing");
         };
-        centre_box.append(centre);
-        let paneds: BTreeMap<Edge, panel::Paned> = Edge::ALL
+        let paneds: BTreeMap<Side, panel::Paned> = Side::EDGES
             .into_iter()
-            .filter_map(|edge| Some((edge, builder.object::<panel::Paned>(edge.word())?)))
+            .filter_map(|side| Some((side, builder.object::<panel::Paned>(side.word())?)))
             .collect();
 
-        // Frames libpanel makes itself (a panel dropped on an empty edge)
+        // Frames libpanel makes itself (a panel dropped somewhere empty)
         // get tabs too.
         dock.connect_create_frame(|_, _| new_frame());
+        grid.connect_create_frame(|_| new_frame());
 
         let panels = contents
             .into_iter()
@@ -382,6 +446,7 @@ impl Workbench {
         let workbench = Rc::new(Workbench {
             root,
             dock,
+            grid,
             paneds,
             panels,
             status,
@@ -406,61 +471,75 @@ impl Workbench {
         for widget in self.panels.values() {
             detach(widget);
         }
-        for (edge, paned) in &self.paneds {
+        for (side, paned) in &self.paneds {
             while let Some(child) = paned.nth_child(0) {
                 paned.remove(&child);
             }
-            for tabs in layout.frames(*edge) {
+            for tabs in layout.frames(*side).into_values() {
                 let frame = new_frame();
-                for id in tabs {
-                    if let Some(widget) = self.panels.get(&id) {
-                        frame.add(widget);
-                    }
-                }
                 paned.append(&frame);
+                self.fill(&frame, &tabs);
             }
         }
-        for edge in Edge::ALL {
-            let shown = layout.revealed.get(&edge).copied().unwrap_or(false)
-                && !layout.frames(edge).is_empty();
-            self.dock.set_reveal_area(edge.area(), shown);
+        for ((column, row), tabs) in layout.frames(Side::Centre) {
+            let frame = self.grid.column(column).row(row);
+            self.fill(&frame, &tabs);
+        }
+        for side in Side::EDGES {
+            let shown = layout.revealed.get(&side).copied().unwrap_or(false)
+                && !layout.frames(side).is_empty();
+            self.dock.set_reveal_area(side.area(), shown);
         }
         self.last.replace(layout.clone());
+    }
+
+    /// Adds these panels to a frame, in order.
+    fn fill(&self, frame: &panel::Frame, tabs: &[PanelId]) {
+        for id in tabs {
+            if let Some(widget) = self.panels.get(id) {
+                frame.add(widget);
+            }
+        }
     }
 
     /// Where the panels are now.
     pub fn layout(&self) -> Layout {
         let mut places = BTreeMap::new();
-        let mut frame_counts: BTreeMap<Edge, u32> = BTreeMap::new();
-        self.dock.foreach_frame(|frame| {
-            let Some(edge) = Edge::of_area(frame.position().area()) else {
-                return;
-            };
-            if frame.n_pages() == 0 {
-                return;
-            }
-            let count = frame_counts.entry(edge).or_insert(0);
-            let index = *count;
-            *count = count.saturating_add(1);
+        let mut counts: BTreeMap<Side, u32> = BTreeMap::new();
+        let mut record = |frame: &panel::Frame, side: Side, column: u32, index: u32| {
             for tab in 0..frame.n_pages() {
                 let id = frame
                     .page(tab)
                     .and_then(|page| PanelId::from_word(&page.id()));
                 if let Some(id) = id {
-                    places.insert(
-                        id,
-                        Place {
-                            edge,
-                            frame: index,
-                            tab,
-                        },
-                    );
+                    places.insert(id, Place::new(side, column, index, tab));
                 }
             }
+        };
+        // At an edge, frames count along it; the centre's say their own
+        // column and row.
+        self.dock.foreach_frame(|frame| {
+            let Some(side) = Side::of_area(frame.position().area()) else {
+                return;
+            };
+            if side == Side::Centre || frame.n_pages() == 0 {
+                return;
+            }
+            let count = counts.entry(side).or_insert(0);
+            let index = *count;
+            *count = count.saturating_add(1);
+            record(frame, side, 0, index);
         });
-        let revealed = Edge::ALL
+        self.grid.foreach_frame(|frame| {
+            if frame.n_pages() == 0 {
+                return;
+            }
+            let position = frame.position();
+            record(frame, Side::Centre, position.column(), position.row());
+        });
+        let revealed = Side::EDGES
             .into_iter()
-            .map(|edge| (edge, self.dock.reveals_area(edge.area())))
+            .map(|side| (side, self.dock.reveals_area(side.area())))
             .collect();
         Layout { places, revealed }
     }
@@ -500,33 +579,39 @@ impl Workbench {
                 .copied()
                 .or_else(|| Layout::default().places.get(&id).copied());
             if let Some(place) = place {
-                self.frame_at(place.edge, place.frame).add(widget);
+                let frame = self.frame_at(place);
+                self.fill(&frame, &[id]);
             }
         }
-        if let Some(edge) = widget.position().and_then(|p| Edge::of_area(p.area())) {
-            self.dock.set_reveal_area(edge.area(), true);
+        if let Some(side) = widget.position().and_then(|p| Side::of_area(p.area()))
+            && side != Side::Centre
+        {
+            self.dock.set_reveal_area(side.area(), true);
         }
         widget.raise();
     }
 
-    /// The `index`th frame along an edge, made (with any before it) if
-    /// there aren't that many.
-    fn frame_at(&self, edge: Edge, index: u32) -> panel::Frame {
-        let mut last = None;
+    /// The frame at a place, made (with any before it) if there aren't
+    /// that many.
+    fn frame_at(&self, place: Place) -> panel::Frame {
+        if place.side == Side::Centre {
+            return self.grid.column(place.column).row(place.frame);
+        }
+        let mut found = None;
         let mut seen = 0;
         self.dock.foreach_frame(|frame| {
-            if Edge::of_area(frame.position().area()) == Some(edge) {
-                if seen <= index {
-                    last = Some(frame.clone());
+            if Side::of_area(frame.position().area()) == Some(place.side) {
+                if seen <= place.frame {
+                    found = Some(frame.clone());
                 }
                 seen += 1;
             }
         });
-        match last {
-            Some(frame) if seen > index => frame,
+        match found {
+            Some(frame) if seen > place.frame => frame,
             _ => {
                 let frame = new_frame();
-                if let Some(paned) = self.paneds.get(&edge) {
+                if let Some(paned) = self.paneds.get(&place.side) {
                     paned.append(&frame);
                 }
                 frame
@@ -535,7 +620,7 @@ impl Workbench {
     }
 }
 
-/// An empty frame, its tabs along the top whichever edge it is at.
+/// An empty frame, its tabs along the top wherever it is.
 fn new_frame() -> panel::Frame {
     let frame = panel::Frame::new();
     frame.set_orientation(gtk::Orientation::Vertical);
@@ -564,30 +649,51 @@ mod tests {
     fn the_default_is_board_b() {
         let layout = Layout::default();
         assert_eq!(
-            layout.frames(Edge::Start),
+            layout.frames(Side::Start).into_values().collect::<Vec<_>>(),
             vec![vec![PanelId::Parts, PanelId::Files], vec![PanelId::Details]]
         );
         assert_eq!(
-            layout.frames(Edge::Bottom),
+            layout.frames(Side::Centre),
+            BTreeMap::from([
+                ((0, 0), vec![PanelId::View]),
+                ((0, 1), vec![PanelId::Controls]),
+            ])
+        );
+        assert_eq!(
+            layout
+                .frames(Side::Bottom)
+                .into_values()
+                .collect::<Vec<_>>(),
             vec![vec![PanelId::Code, PanelId::Problems]]
         );
-        assert!(layout.frames(Edge::End).is_empty());
-        assert_eq!(layout.revealed.get(&Edge::End), Some(&false));
+        assert!(layout.frames(Side::End).is_empty());
+        assert_eq!(layout.revealed.get(&Side::End), Some(&false));
     }
 
     #[test]
     fn a_layout_reads_back_as_written() {
         let mut layout = Layout::default();
-        layout.places.insert(
-            PanelId::Code,
-            Place {
-                edge: Edge::End,
-                frame: 0,
-                tab: 0,
-            },
-        );
-        layout.revealed.insert(Edge::End, true);
+        layout
+            .places
+            .insert(PanelId::Code, Place::new(Side::Centre, 1, 0, 0));
+        layout
+            .places
+            .insert(PanelId::Controls, Place::new(Side::End, 0, 0, 0));
+        layout.revealed.insert(Side::End, true);
         assert_eq!(Layout::from_text(&layout.to_text()), layout);
+    }
+
+    #[test]
+    fn a_line_without_a_column_means_column_0() {
+        let layout = Layout::from_text("code end 0 0\nview centre 2 1 0\n");
+        assert_eq!(
+            layout.places.get(&PanelId::Code),
+            Some(&Place::new(Side::End, 0, 0, 0))
+        );
+        assert_eq!(
+            layout.places.get(&PanelId::View),
+            Some(&Place::new(Side::Centre, 2, 1, 0))
+        );
     }
 
     #[test]
@@ -599,7 +705,42 @@ mod tests {
     #[test]
     fn lines_naming_unknown_panels_are_left_out() {
         let layout = Layout::from_text("parts start 0 0\nruler end 0 0\ncode end x 0\n");
-        assert_eq!(layout.places.len(), 1);
-        assert!(layout.places.contains_key(&PanelId::Parts));
+        assert_eq!(
+            layout.places.get(&PanelId::Parts),
+            Some(&Place::new(Side::Start, 0, 0, 0))
+        );
+        // The broken line is left out, so Code goes to its default place.
+        assert_eq!(
+            layout.places.get(&PanelId::Code),
+            Layout::default().places.get(&PanelId::Code)
+        );
+    }
+
+    #[test]
+    fn a_closed_panel_stays_closed() {
+        let mut layout = Layout::default();
+        layout.places.remove(&PanelId::Files);
+        let text = layout.to_text();
+        assert!(text.contains("closed files"));
+        assert_eq!(Layout::from_text(&text), layout);
+    }
+
+    #[test]
+    fn a_panel_an_older_file_doesnt_mention_goes_where_the_default_puts_it() {
+        let layout = Layout::from_text("parts start 0 0\ncode end 0 0\n");
+        assert_eq!(
+            layout.places.get(&PanelId::View),
+            Some(&Place::new(Side::Centre, 0, 0, 0))
+        );
+        assert_eq!(
+            layout.places.get(&PanelId::Code),
+            Some(&Place::new(Side::End, 0, 0, 0))
+        );
+    }
+
+    #[test]
+    fn the_centre_is_never_hidden() {
+        let layout = Layout::from_text("view centre 0 0 0\nshow centre false\n");
+        assert!(!layout.revealed.contains_key(&Side::Centre));
     }
 }

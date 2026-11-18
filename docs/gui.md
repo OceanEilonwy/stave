@@ -204,11 +204,11 @@ PDF doesn't exist yet, and the button says so honestly.
 
 ```
 ┌ title bar ── back · forward · open · title ── [Find a part, file, line or problem  Ctrl K] ── Design|Cut list · ‹ chip › · hammer · menu ┐
-├ Parts │ Files ─────┬──────────────────────────────────────────────────────────┬ (right edge: empty, hidden) ┤
+├ Parts │ Files ─────┬ 3D View ─────────────────────────────────────────────────┬ (right edge: empty, hidden) ┤
 │ CARCASS            │                                                          │                             │
 │  base     oak_19   │                        3D view                           │                             │
 │ ASSEMBLIES         │                     (problem pins)                       │                             │
-├ Details ───────────┤──────────────────────────────────────────────────────────┤                             │
+├ Details ───────────┼ View Controls ───────────────────────────────────────────┤                             │
 │ PART · IN door_l   │ scene ▾ · Pull apart · X-ray · door_l ──── 110° · Move: … · [fit][front][turn]          │
 │ stile[hinge]       ├ Code │ Problems ─────────────────────────────────────────┤                             │
 │ Stock  oak_19 …    │ doors.stave │ carcass.stave                               │                             │
@@ -218,18 +218,33 @@ PDF doesn't exist yet, and the button says so honestly.
 └──────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-The panels are docked round the 3D view with libpanel (`Workbench`):
-nothing but the problem pins and a short hint line sits over the model.
-Each panel is a `panel::Widget` in a `panel::Frame` (tabs along the top,
-`panel::FrameTabBar`); drag a tab to another edge or into another frame,
-close it with its ×, and show an edge again from the status bar's
-toggles. The default layout is board B (`Layout::default`): Parts and
-Files above Details on the left, Code and Problems at the bottom, the
-right edge empty and hidden. The layout is remembered per user in
-`~/.config/stave/layout` (saved on every drop and when the window
-closes; one line per panel, `code end 0 0`, and one per edge, `show end
-true`; a broken file means the default) and never in a `.stave` file.
-"Reset Layout" in the main menu puts board B back.
+Every part of the window is a panel, docked with libpanel (`Workbench`):
+the 3D View, its View Controls, Parts, Files, Details, Code and Problems.
+Nothing but the problem pins sits over the model. Each panel is a
+`panel::Widget` in a `panel::Frame` (tabs along the top,
+`panel::FrameTabBar`); drag a tab to an edge, into the centre (a
+`panel::Grid`, which splits into columns and rows, so Code can sit beside
+the 3D view) or into another frame; close it with its ×; show an edge
+again from the status bar's toggles. The default layout is board B
+(`Layout::default`): Parts and Files above Details on the left, the 3D
+View over its View Controls in the centre, Code and Problems at the
+bottom, the right edge empty and hidden. The layout is remembered per
+user in `~/.config/stave/layout` (saved on every drop and when the
+window closes; one line per panel, `code centre 1 0 0` for side, column,
+frame and tab, and one per edge, `show end true`; a broken file means
+the default) and never in a `.stave` file. "Reset Layout" in the main
+menu puts board B back.
+
+- **3D View** is the view and nothing else (the problem pins and the chip
+  for a problem off screen sit on it).
+- **View Controls** holds what used to float over or under the view: the
+  scene menu, Pull apart, X-ray, the "Open it" slider, the Move chips, the
+  camera buttons, focus mode's From above / In 3D switch, the shared-wood
+  key, a short line ("Focused on one joint · Esc to go back"), a posed
+  problem's swing card and a joint's step player. The buttons and sliders
+  sit in an `adw::WrapBox`: in a wide, short frame they make a row and wrap
+  onto more as it narrows; in a narrow side frame they stack; the panel
+  scrolls when even that doesn't fit. Focus mode brings it forward.
 
 - **Code panel** holds the open files as its own tabs, so a file always
   opens wherever the Code panel is docked (board B2: dragged to the right

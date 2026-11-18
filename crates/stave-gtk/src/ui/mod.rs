@@ -95,8 +95,11 @@ const FRONT_PITCH: f32 = 0.12;
 /// before rendering again at it.
 const PICTURES_DELAY: Duration = Duration::from_millis(150);
 
-/// The space kept clear round the floating panels, in logical pixels.
+/// The space kept clear round what sits on the 3D view, in logical pixels.
 const EDGE: i32 = 14;
+
+/// The most height the View Controls panel asks for before it scrolls.
+const CONTROLS_MOST: i32 = 320;
 
 /// The most problems pinned on the model at once.
 const PIN_LIMIT: usize = 12;
@@ -971,6 +974,7 @@ impl Window {
     fn show_card(self: &Rc<Self>) {
         if self.session.borrow().focus().is_some() {
             self.widgets.workbench.present(workbench::PanelId::Details);
+            self.widgets.workbench.present(workbench::PanelId::Controls);
         }
     }
 
@@ -2487,6 +2491,21 @@ impl Window {
                 }
             }),
         );
+        let show_panel = gio::SimpleAction::new("show-panel", Some(glib::VariantTy::STRING));
+        let this = self.clone();
+        show_panel.connect_activate(move |_, word| {
+            let id = word
+                .and_then(glib::Variant::str)
+                .and_then(workbench::PanelId::from_word);
+            match id {
+                Some(workbench::PanelId::Code) => {
+                    let _ = WidgetExt::activate_action(&this.widgets.window, "win.editor", None);
+                }
+                Some(id) => this.widgets.workbench.present(id),
+                None => {}
+            }
+        });
+        self.widgets.window.add_action(&show_panel);
         let this = self.clone();
         add(
             "reset-layout",
@@ -3295,10 +3314,16 @@ fn main_menu() -> gio::Menu {
     project.append(Some("Frame Everything"), Some("win.frame"));
     project.append(Some("Export View as glTF…"), Some("win.export-view"));
     menu.append_section(None, &project);
+    // Any panel can be closed; these bring it back where it was.
     let panels = gio::Menu::new();
-    panels.append(Some("Show the Code Panel"), Some("win.editor"));
+    for id in workbench::PanelId::ALL {
+        panels.append(
+            Some(id.title()),
+            Some(&format!("win.show-panel::{}", id.word())),
+        );
+    }
     panels.append(Some("Reset Layout"), Some("win.reset-layout"));
-    menu.append_section(None, &panels);
+    menu.append_section(Some("Panels"), &panels);
     let style = gio::Menu::new();
     style.append(Some("Follow System Style"), Some("win.style::system"));
     style.append(Some("Light"), Some("win.style::light"));
@@ -3314,38 +3339,35 @@ fn build_widgets(application: &adw::Application, options: &Options) -> Result<Wi
     );
     let header = Header::new(&folder_name, &main_menu());
 
-    // The 3D view with the controls that belong to the view itself: the
-    // camera buttons, the shared-wood key, focus mode's From above / In 3D
-    // switch, a joint's step player and a problem's motion card.
+    // The 3D view, and the controls that belong to it (they go in their
+    // own panel, below): the camera buttons, the shared-wood key, focus
+    // mode's From above / In 3D switch, a joint's step player and a
+    // problem's motion card.
     let viewport = Viewport::default();
     let motion = MotionBar::new();
     let view_toolbar = ViewToolbar::new();
-    // The camera buttons sit at the end of the strip under the view.
     let camera = CameraToolbar::new();
     camera.root.set_orientation(gtk::Orientation::Horizontal);
-    camera.root.set_valign(gtk::Align::Center);
-    camera.root.set_halign(gtk::Align::End);
-    camera.root.set_hexpand(true);
-    camera.root.set_margin_top(0);
-    camera.root.set_margin_end(0);
     let contact_key = view_tools::contact_key();
     let plan_switch = PlanSwitch::new();
     let step_card = StepCard::new();
     let problem_card = ProblemCard::new();
+    // Made to float over the view, they now sit in a panel's flow.
+    for widget in [
+        camera.root.upcast_ref::<gtk::Widget>(),
+        contact_key.upcast_ref(),
+        plan_switch.root.upcast_ref(),
+        step_card.root.upcast_ref(),
+        problem_card.root.upcast_ref(),
+    ] {
+        in_flow(widget);
+    }
     let figure = gtk::Overlay::builder()
         .child(&viewport)
         .vexpand(true)
         .overflow(gtk::Overflow::Hidden)
         .css_classes(["stave-viewport", "stave-figure"])
         .build();
-    for overlaid in [
-        contact_key.upcast_ref::<gtk::Widget>(),
-        plan_switch.root.upcast_ref(),
-        step_card.root.upcast_ref(),
-        problem_card.root.upcast_ref(),
-    ] {
-        figure.add_overlay(overlaid);
-    }
     // Hardware focus lays the view out as a page (Hinge.dc.html): a line
     // over it, three small views and the swing card under it.
     let caption = Caption::new();
@@ -3379,14 +3401,11 @@ fn build_widgets(application: &adw::Application, options: &Options) -> Result<Wi
     let file_list = panels::FilesList::new();
     let problems = panels::ProblemsPanel::new();
 
-    // Over the view only what belongs on the model: a short line at the
-    // top and the chip naming a problem off screen (the pins come later).
-    let hint = gtk::Label::new(None);
+    // Over the view only what belongs on the model: the chip naming a
+    // problem off screen (the pins come later).
+    let hint = gtk::Label::builder().xalign(0.0).wrap(true).build();
     let hint_box = gtk::Box::builder()
-        .css_classes(["stave-chip"])
-        .halign(gtk::Align::Center)
-        .valign(gtk::Align::Start)
-        .margin_top(EDGE)
+        .css_classes(["stave-controls-hint"])
         .visible(false)
         .build();
     hint_box.append(&hint);
@@ -3412,31 +3431,50 @@ fn build_widgets(application: &adw::Application, options: &Options) -> Result<Wi
         .vexpand(true)
         .overflow(gtk::Overflow::Hidden)
         .build();
-    design.add_overlay(&hint_box);
     design.add_overlay(&edge_pin);
-    // The view's own tools in a strip under it, never over it.
+    // The view's controls in a panel of their own: they wrap onto more
+    // rows (or stack, in a narrow panel) and scroll when even that doesn't
+    // fit.
     let dock = Dock::new(&header.scene, &view_toolbar, &motion);
     dock.root.append(&camera.root);
-    let centre = gtk::Box::builder()
+    dock.root.append(&plan_switch.root);
+    dock.root.append(&contact_key);
+    let controls = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
-        .hexpand(true)
-        .vexpand(true)
+        .spacing(8)
+        .css_classes(["stave-controls"])
         .build();
-    centre.append(&design);
-    // In a narrow window the strip scrolls sideways rather than holding
-    // the window wide.
-    centre.append(
-        &gtk::ScrolledWindow::builder()
-            .vscrollbar_policy(gtk::PolicyType::Never)
-            .hscrollbar_policy(gtk::PolicyType::External)
-            .propagate_natural_height(true)
-            .child(&dock.root)
-            .build(),
-    );
+    controls.append(&hint_box);
+    controls.append(&dock.root);
+    controls.append(&problem_card.root);
+    controls.append(&step_card.root);
+    let content = controls;
+    let controls = gtk::ScrolledWindow::builder()
+        .hscrollbar_policy(gtk::PolicyType::Never)
+        .vexpand(false)
+        .propagate_natural_height(true)
+        .child(&content)
+        .build();
+    // The panel asks for the height its controls need at its width (a
+    // swing card or step player included), up to CONTROLS_MOST; past that
+    // it scrolls. libpanel sizes frames by their minimum, so that is what
+    // follows the content.
+    controls.add_tick_callback(move |scrolled, _| {
+        let width = scrolled.width();
+        if width > 1 {
+            let (_, natural, _, _) = content.measure(gtk::Orientation::Vertical, width);
+            let wanted = natural.min(CONTROLS_MOST);
+            if scrolled.min_content_height() != wanted {
+                scrolled.set_min_content_height(wanted);
+            }
+        }
+        glib::ControlFlow::Continue
+    });
 
     let workbench = workbench::Workbench::new(
-        &centre,
         vec![
+            (workbench::PanelId::View, design.clone().upcast()),
+            (workbench::PanelId::Controls, controls.upcast()),
             (workbench::PanelId::Parts, tree.root.clone().upcast()),
             (workbench::PanelId::Files, file_list.root.clone().upcast()),
             (workbench::PanelId::Details, details.upcast()),
@@ -3548,6 +3586,17 @@ fn build_widgets(application: &adw::Application, options: &Options) -> Result<Wi
         problem_card,
         files,
     })
+}
+
+/// Takes a widget made to float over the 3D view (aligned to a corner,
+/// with margins) into a panel's flow.
+fn in_flow(widget: &gtk::Widget) {
+    widget.set_halign(gtk::Align::Fill);
+    widget.set_valign(gtk::Align::Center);
+    widget.set_margin_top(0);
+    widget.set_margin_bottom(0);
+    widget.set_margin_start(0);
+    widget.set_margin_end(0);
 }
 
 /// A breakpoint for windows at most `width` sp wide.

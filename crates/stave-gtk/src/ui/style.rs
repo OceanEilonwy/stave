@@ -303,8 +303,9 @@ button.stave-play:hover { background: mix(@accent_bg_color, @accent_fg_color, 0.
 .stave-dock button.stave-move.error { box-shadow: inset 0 0 0 1px alpha(@error_color, 0.6); }
 .stave-dock button.stave-move.warning { box-shadow: inset 0 0 0 1px alpha(@warning_color, 0.7); }
 .stave-dock button.stave-move.current { background: alpha(@accent_bg_color, 0.2); color: @accent_color; }
-.stave-dock { background: @headerbar_bg_color; color: @headerbar_fg_color; box-shadow: inset 0 1px @headerbar_shade_color; }
-.stave-dock .stave-camera { background: transparent; padding: 0; }
+.stave-controls { padding: 8px; color: @window_fg_color; }
+.stave-controls .stave-camera, .stave-controls .stave-plan-switch { background: transparent; padding: 0; box-shadow: none; }
+.stave-controls-hint { font-weight: 600; color: @accent_color; padding: 0 4px; }
 .stave-code-head { background: @headerbar_bg_color; box-shadow: inset 0 -1px @headerbar_shade_color; }
 button.stave-code-tab { background: transparent; color: alpha(currentColor, 0.8); }
 button.stave-code-tab:hover { background: alpha(currentColor, 0.07); }
