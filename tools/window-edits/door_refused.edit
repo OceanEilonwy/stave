@@ -1,0 +1,7 @@
+# The door fixture: a door chosen for the bay, hinged on the left side,
+# overlaying it almost to the wall, so it swings into the wall: refused,
+# with the checker's fix offered.
+select region bay
+choose Door
+bind face side_l.right
+set mount = overlay(left: 17.8mm, right: 17.8mm)

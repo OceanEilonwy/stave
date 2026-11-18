@@ -22,14 +22,20 @@ mod dock;
 mod edit_card;
 mod edit_demo;
 mod edit_menu;
+mod edit_script;
+mod edit_view;
+mod edit_writer;
 mod editor;
 mod files;
 mod finder;
 mod focus_panel;
 mod focus_stage;
+#[cfg(test)]
+mod gtk_test;
 mod header;
 mod icons;
 mod inspector;
+mod new_project;
 mod sideways;
 mod slider;
 mod style;
@@ -200,6 +206,10 @@ pub struct Options {
     pub camera: StartCamera,
     /// Show the editing menu or card from the contract's fixture.
     pub edit_fixture: Option<edit_demo::Showcase>,
+    /// Editing steps to run once the design is drawn (screenshots).
+    pub edit_script: Option<PathBuf>,
+    /// Open the new project dialog.
+    pub new_project: bool,
 }
 
 /// Where the 3D view's camera starts, from the command line.
@@ -363,6 +373,8 @@ struct State {
     marks: Marks,
     /// Where the card was put last (left and top margins).
     card_place: Option<(i32, i32)>,
+    /// Editing steps to run once the design is drawn (`--edit-script`).
+    edit_script: Option<PathBuf>,
 }
 
 /// The window's widgets.
@@ -414,6 +426,8 @@ struct Window {
     pins: RefCell<Vec<gtk::Widget>>,
     /// Kept alive for as long as the window: dropping it stops watching.
     watcher: RefCell<Option<Watcher>>,
+    /// Editing in the 3D view: the menu, the card and the ghost.
+    editing: edit_view::EditView,
 }
 
 impl Window {
@@ -471,15 +485,22 @@ impl Window {
                 xray: false,
                 marks: Marks::default(),
                 card_place: None,
+                edit_script: None,
             }),
             pins: RefCell::new(Vec::new()),
             watcher: RefCell::new(None),
+            editing: edit_view::EditView::new(),
         });
         if let Some(showcase) = options.edit_fixture {
             edit_demo::show(&window.widgets.design, showcase);
         }
         window.install_actions(options.theme);
         window.connect_events();
+        window.connect_editing();
+        window.state.borrow_mut().edit_script = options.edit_script;
+        if options.new_project {
+            window.ask_new_project();
+        }
         window.watch();
         // The keyboard starts in the 3D view, not in the first focusable
         // widget GTK finds, which can be a problem's selectable `stave
@@ -529,7 +550,7 @@ impl Window {
                 Event::CheckStatusChanged => self.check_status_changed(),
                 Event::BuildChanged => self.build_changed(),
                 Event::CheckStarted(ticket) => self.run_check(ticket),
-                Event::Edit(_) => {}
+                Event::Edit(event) => self.edit_event(event),
                 Event::Notice(notice) => {
                     self.widgets.toasts.add_toast(
                         adw::Toast::builder()
@@ -963,7 +984,8 @@ impl Window {
                 || (!editing
                     && (session.selection().is_some() || stave_app::empty::of(&session).is_some()))
         };
-        self.widgets.card.set_visible(shows);
+        self.widgets.card.set_visible(shows && !self.edit_open());
+        self.update_face_button();
         self.state.borrow_mut().card_place = None;
         // Placed again once laid out: with nothing to draw (a library) no
         // frame of the 3D view places it.
@@ -1429,6 +1451,8 @@ impl Window {
                     section,
                     looks: Some(&frame.looks),
                     overlay: None,
+                    lit: None,
+                    tints: None,
                     tint_cut_faces: focus.options.tint_cut_faces,
                     backdrop,
                     width,
@@ -2067,6 +2091,9 @@ impl Window {
     }
 
     fn pick(self: &Rc<Self>, x: f64, y: f64) {
+        if self.edit_click(x, y) {
+            return;
+        }
         let hit = {
             let session = self.session.borrow();
             let state = self.state.borrow();
@@ -2156,7 +2183,10 @@ impl Window {
         } else {
             self.looks(&selection)
         };
-        let rendered = {
+        let ghost = self.render_ghost(backdrop);
+        let rendered = if let Some(rendered) = ghost {
+            rendered
+        } else {
             let session = self.session.borrow();
             let mut state = self.state.borrow_mut();
             state.render_queued = false;
@@ -2200,6 +2230,25 @@ impl Window {
                     volumes: Vec::new(),
                 },
             });
+            // The space the pointer or an edit is on, lit, and what covers
+            // it see-through.
+            let marks = if focus.is_none() {
+                self.edit_marks(&session, graph, posed, &orbit)
+            } else {
+                edit_view::EditMarks::default()
+            };
+            let looks = if marks.covering.is_empty() {
+                looks
+            } else {
+                let mut looks =
+                    looks.unwrap_or_else(|| vec![Look::Normal; graph.node_ids().count()]);
+                for node in &marks.covering {
+                    if let Some(look) = looks.get_mut(node.index()) {
+                        *look = Look::XRay;
+                    }
+                }
+                Some(looks)
+            };
             renderer.render(&Frame {
                 scene: graph,
                 posed,
@@ -2215,6 +2264,8 @@ impl Window {
                     .or(looks.as_deref()),
                 overlay: focus.map(|f| &f.overlay),
                 tint_cut_faces: focus.is_none_or(|f| f.options.tint_cut_faces),
+                lit: Some(&marks.lit),
+                tints: None,
                 backdrop,
                 width,
                 height,
@@ -2227,13 +2278,20 @@ impl Window {
                 }
                 self.place_card();
                 self.show_pins();
+                self.place_ghost_verdict();
                 // Save the window once a frame of the view's real size is up.
                 let settled = {
                     let state = self.state.borrow();
                     state.size.0 > 1 && state.size == self.widgets.viewport.device_size()
                 };
                 if settled {
-                    self.capture_if_asked();
+                    // An edit script runs first; the frame it asks for is
+                    // the one saved.
+                    if self.run_edit_script() {
+                        self.request_render();
+                    } else {
+                        self.capture_if_asked();
+                    }
                 }
             }
             Err(error) => {
@@ -2353,7 +2411,13 @@ impl Window {
         let found: Vec<Pin> = {
             let session = self.session.borrow();
             let state = self.state.borrow();
-            if state.focus.is_some() || session.showing_older() || session.view() != View::Design {
+            // An edit's menu, card and ghost take the view.
+            let editing = session.edit().is_some() || session.change().is_some();
+            if state.focus.is_some()
+                || editing
+                || session.showing_older()
+                || session.view() != View::Design
+            {
                 return;
             }
             let Some((_, graph)) = session.drawable() else {
@@ -2567,6 +2631,8 @@ impl Window {
             window.add_action(&action);
         };
         let this = self.clone();
+        add("new-project", Box::new(move || this.ask_new_project()));
+        let this = self.clone();
         add("back", Box::new(move || this.dispatch(Command::Back)));
         let this = self.clone();
         add("forward", Box::new(move || this.dispatch(Command::Forward)));
@@ -2635,6 +2701,9 @@ impl Window {
         add(
             "escape",
             Box::new(move || {
+                if this.cancel_edit() {
+                    return;
+                }
                 let focused = this.session.borrow().focus().is_some();
                 if focused {
                     this.dispatch(Command::LeaveFocus);
@@ -2758,6 +2827,7 @@ impl Window {
 
     fn open_folder(self: &Rc<Self>, folder: PathBuf) {
         *self.session.borrow_mut() = Session::new(folder);
+        self.editing_folder_changed();
         {
             let mut state = self.state.borrow_mut();
             state.uploaded = None;
@@ -3384,6 +3454,7 @@ fn settle_for_screenshot() {
 fn main_menu() -> gio::Menu {
     let menu = gio::Menu::new();
     let project = gio::Menu::new();
+    project.append(Some("New Project…"), Some("win.new-project"));
     project.append(Some("Open Project…"), Some("win.open"));
     project.append(Some("Check Again"), Some("win.check"));
     project.append(Some("Frame Everything"), Some("win.frame"));

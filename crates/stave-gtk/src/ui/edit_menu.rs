@@ -26,6 +26,7 @@ use std::rc::Rc;
 use adw::prelude::*;
 use stave_app::edit::{Applicability, Candidate, Declaration, Heading, MenuGroup};
 use stave_lang::Diagnostic;
+use stave_lang::ast::Name;
 use stave_model::nonempty::NonEmpty;
 
 use super::edit_card::install_style;
@@ -57,6 +58,9 @@ pub struct MenuItem<'a> {
 enum EntryState<'a> {
     /// It applies: it can be chosen.
     Fits,
+    /// It can be chosen, and the card then asks for these (place params
+    /// to point at, settings to choose) before it is tried.
+    NeedsChoice(&'a NonEmpty<Name>),
     /// Still being checked.
     Checking,
     /// It doesn't apply here, with the checker's reasons.
@@ -71,9 +75,8 @@ impl<'a> EntryState<'a> {
             }
             // Something is still to choose: not a refusal. The entry is
             // listed as usual and the card asks for it once it is chosen.
-            (Checked::Done, Applicability::Applies | Applicability::NeedsChoice(_)) => {
-                EntryState::Fits
-            }
+            (Checked::Done, Applicability::Applies) => EntryState::Fits,
+            (Checked::Done, Applicability::NeedsChoice(names)) => EntryState::NeedsChoice(names),
             (Checked::Done, Applicability::Greyed(reasons)) => EntryState::Greyed(reasons),
         }
     }
@@ -81,7 +84,7 @@ impl<'a> EntryState<'a> {
     /// Where it sorts within its group: fits, checking, greyed.
     fn rank(self) -> u8 {
         match self {
-            EntryState::Fits => 0,
+            EntryState::Fits | EntryState::NeedsChoice(_) => 0,
             EntryState::Checking => 1,
             EntryState::Greyed(_) => 2,
         }
@@ -145,6 +148,16 @@ fn reason_text(reasons: &NonEmpty<Diagnostic>) -> String {
         .map(|diagnostic| diagnostic.message.as_str())
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// The line under an entry that needs a choice: "Then point at or
+/// choose: hinge side, mount".
+fn needs_choice_text(names: &NonEmpty<Name>) -> String {
+    let names: Vec<String> = names
+        .iter()
+        .map(|name| name.as_str().replace('_', " "))
+        .collect();
+    format!("Then point at or choose: {}", names.join(", "))
 }
 
 /// The menu for a selection.
@@ -281,6 +294,11 @@ impl EditMenu {
         let mut description = entry.hint.clone().unwrap_or_default();
         match state {
             EntryState::Fits => {}
+            EntryState::NeedsChoice(names) => {
+                let words = needs_choice_text(names);
+                content.append(&wrapped(&words, &["stave-edit-needs"]));
+                description = format!("{description} {words}");
+            }
             EntryState::Checking => {
                 let words = "Checking whether it fits here…";
                 content.append(&wrapped(words, &["stave-edit-checking"]));
@@ -300,7 +318,7 @@ impl EditMenu {
             gtk::accessible::Property::Label(entry.label.as_str()),
             gtk::accessible::Property::Description(description.trim()),
         ]);
-        let choosable = state == EntryState::Fits;
+        let choosable = matches!(state, EntryState::Fits | EntryState::NeedsChoice(_));
         if choosable {
             button.set_tooltip_text(Some("Try it here"));
         } else {

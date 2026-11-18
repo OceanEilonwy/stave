@@ -1,0 +1,12 @@
+# The project the editing shots start from: a new project with a case in
+# its envelope, made by `stave edit --script` exactly as a user would.
+new "Small chest" 700mm 1000mm 480mm
+import std:casework
+stock oak_19 white_oak solid 19mm max_width 200mm max_length 2700mm
+stock maple_12 hard_maple solid 12mm max_width 150mm max_length 2400mm
+stock ply_6 birch plywood 6mm max_length 2440mm
+create
+select region envelope
+choose casework.Case
+set panel_stock = oak_19
+add

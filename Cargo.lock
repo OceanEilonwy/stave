@@ -1898,6 +1898,7 @@ dependencies = [
  "stave-model",
  "stave-modules",
  "stave-scene",
+ "stave-schema",
  "wgpu",
 ]
 

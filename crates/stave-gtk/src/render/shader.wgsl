@@ -391,6 +391,18 @@ fn volume_edge_fragment() -> @location(0) vec4<f32> {
     return vec4<f32>(0.45, 0.0, 0.0, 0.95);
 }
 
+// ---- a space lit for the editor: the accent, on top of everything ----
+
+@fragment
+fn lit_fragment() -> @location(0) vec4<f32> {
+    return vec4<f32>(0.0284, 0.1590, 0.6724, 0.16);
+}
+
+@fragment
+fn lit_edge_fragment() -> @location(0) vec4<f32> {
+    return vec4<f32>(0.0137, 0.1144, 0.6038, 0.95);
+}
+
 // ---- the overlay: paths, outlines and labels, on screen ----
 
 struct OverlayOut {

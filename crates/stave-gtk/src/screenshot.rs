@@ -409,6 +409,8 @@ fn render_bounds(
         section: view.section,
         looks: view.looks,
         overlay: view.overlay,
+        lit: None,
+        tints: None,
         tint_cut_faces: view.tint_cut_faces,
         width,
         height,
