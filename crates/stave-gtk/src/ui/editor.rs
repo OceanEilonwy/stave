@@ -1311,14 +1311,32 @@ impl Editor {
         root.append(&show);
         let symbol: Rc<Cell<Option<SymbolId>>> = Rc::new(Cell::new(None));
         for (button, callbacks) in [(&uses, &self.on_uses), (&show, &self.on_show)] {
-            let symbol = symbol.clone();
-            let callbacks = callbacks.clone();
-            button.connect_clicked(move |_| {
-                let callback = callbacks.borrow().clone();
-                if let (Some(callback), Some(symbol)) = (callback, symbol.get()) {
-                    callback(symbol);
-                }
+            let call = {
+                let symbol = symbol.clone();
+                let callbacks = callbacks.clone();
+                Rc::new(move || {
+                    let callback = callbacks.borrow().clone();
+                    if let (Some(callback), Some(symbol)) = (callback, symbol.get()) {
+                        callback(symbol);
+                    }
+                })
+            };
+            // From the keyboard.
+            let keyboard = call.clone();
+            button.connect_clicked(move |_| keyboard());
+            // A button doesn't claim the press, so the text view under the
+            // lens would take it too and start selecting text. This claims
+            // it first (which also keeps the button's own click from
+            // firing) and calls on release.
+            let mouse = gtk::GestureClick::builder()
+                .button(gtk::gdk::BUTTON_PRIMARY)
+                .propagation_phase(gtk::PropagationPhase::Capture)
+                .build();
+            mouse.connect_pressed(|gesture, _, _, _| {
+                gesture.set_state(gtk::EventSequenceState::Claimed);
             });
+            mouse.connect_released(move |_, _, _, _| call());
+            button.add_controller(mouse);
         }
         self.view.add_overlay(&root, 0, 0);
         LensSlot {

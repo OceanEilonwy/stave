@@ -1,9 +1,9 @@
-//! The dock floating at the bottom of the 3D view (V2C_Home.dc.html): the
-//! scene menu, "Pull apart" (with its play button and slider while on),
-//! X-ray, the selection's motion slider, and one chip per moving assembly
-//! ("Move: door_l, door_r, drawer[top]") that selects it so its slider
-//! shows. Chips of assemblies with problems are ringed in the problem's
-//! colour.
+//! The strip under the 3D view: the scene menu, "Pull apart" (with its
+//! play button and slider while on), X-ray, the selection's motion slider,
+//! and one chip per moving assembly ("Move: door_l, door_r, drawer[top]")
+//! that selects it so its slider shows; the window adds the camera
+//! buttons at its end. Chips of assemblies with problems are ringed in the
+//! problem's colour.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -19,8 +19,8 @@ type MoveCallback = Rc<dyn Fn(AssemblyId)>;
 
 /// The dock's widgets.
 pub struct Dock {
-    /// The dock, to float over the 3D view.
-    pub root: gtk::Box,
+    /// The controls, wrapping onto as many rows as the panel needs.
+    pub root: adw::WrapBox,
     /// See through everything but the selection.
     pub xray: gtk::ToggleButton,
     moves: gtk::Box,
@@ -64,12 +64,10 @@ impl Dock {
             .valign(gtk::Align::Center)
             .build();
         let moves_separator = separator();
-        let root = gtk::Box::builder()
-            .orientation(gtk::Orientation::Horizontal)
+        let root = adw::WrapBox::builder()
+            .child_spacing(6)
+            .line_spacing(6)
             .css_classes(["stave-dock"])
-            .halign(gtk::Align::Center)
-            .valign(gtk::Align::End)
-            .margin_bottom(18)
             .build();
         root.append(scene);
         root.append(&toolbar.root);

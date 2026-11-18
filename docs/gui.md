@@ -9,6 +9,12 @@ libadwaita and the GNOME HIG settle what it leaves open. The first
 version's three panes (Main, Problems, FilesMode) are kept on the
 canvas's first page for reference.
 
+Since 2026-11-18 the window is **docked** rather than floating over the 3D
+view: the canvas "Stave docked layouts" (boards B and B2) and
+`docs/superpowers/specs/2026-11-18-docked-window-design.md`. Where this
+page still describes the V2 pages, the panels' contents are the same; only
+where they sit has changed (see "The window").
+
 ## Seeing the real window
 
 `tools/window-shot` writes a PNG of the real GTK window, with no screen:
@@ -100,12 +106,13 @@ forwards what people do.
 | `stave-app` | `problems` | The marks (`marks(checked)`: a `Mark` — error, warning or involved — per part or piece of hardware, per assembly and per file, for the dots), the problems grouped by part (`tree(checked, Filter)`), and a problem's `details` (eyebrow, plain title, the `stave check` text, `Fix`es, the `MotionCard`). |
 | `stave-app` | `finder` | The finder (`search(Sources, query)`): parts and assemblies, files and names (through `stave-ide`), lines of the project's own text and problems, grouped by `Kind`, each `Hit` with its `Goal` (select it, or open a place in the editor). |
 | `stave-app` | `focus`, `view` | Focus mode (its insert text with `steps`, `link` and `location`; `receives`), problems as rows, posing at a contact. |
-| `stave-gtk` | `ui/mod.rs` | The window: owns the `Session`, dispatches commands, redraws on events, runs checks on a worker thread, lays out what floats over the 3D view (the card beside the part, the problem pins) and keeps what only the 3D view needs (camera, renderer, the looks, focus mode's scrub, the "Open it" slider). |
-| `stave-gtk` | `ui/header.rs`, `tree.rs`, `inspector.rs`, `chrome.rs` | The title bar (with the problems chip and the finder's field); the floating model tree; the card's pages (a part, a problem's details, focus mode); the motion bar and the Cut list's placeholder. |
-| `stave-gtk` | `ui/dock.rs`, `finder.rs` | The dock at the bottom of the 3D view (scene menu, Pull apart, X-ray, the motion slider, the moving assemblies' chips); the finder dialog (Ctrl+K). |
+| `stave-gtk` | `ui/mod.rs` | The window: owns the `Session`, dispatches commands, redraws on events, runs checks on a worker thread, hands the panels to the workbench, lays the problem pins over the 3D view and keeps what only the 3D view needs (camera, renderer, the looks, focus mode's scrub, the "Open it" slider). |
+| `stave-gtk` | `ui/header.rs`, `tree.rs`, `inspector.rs`, `chrome.rs` | The title bar (with the problems chip and the finder's field); the Parts panel's tree; the Details panel's pages (a part, a problem's details, focus mode); the motion bar and the Cut list's placeholder. |
+| `stave-gtk` | `ui/workbench.rs`, `panels.rs` | The docked window (libpanel): the dock, its panels (Parts, Files, Details, Code, Problems), the status bar with a toggle per edge, and the remembered `Layout` (`~/.config/stave/layout`; `--layout FILE` reads another and writes nothing; screenshots use the default); the Problems and Files lists. |
+| `stave-gtk` | `ui/dock.rs`, `finder.rs` | The strip under the 3D view (scene menu, Pull apart, X-ray, the motion slider, the moving assemblies' chips, the camera buttons); the finder dialog (Ctrl+K). |
 | `stave-gtk` | `ui/view_tools.rs`, `slider.rs` | The Pull apart toolbar (shown in the dock), camera buttons, the shared-wood key and focus mode's From above / In 3D switch; the design's slider (track, ring handle, a hatched blocked range). |
 | `stave-gtk` | `ui/focus_stage.rs`, `focus_panel.rs` | Focus mode in the 3D view's area (the step player, the caption, three small views, the swing card) and a problem's motion card; focus mode's side panel. |
-| `stave-gtk` | `ui/files.rs`, `editor.rs`, `sideways.rs` | The rail of open files (a tab each, turned to read downward by `Sideways`, with its dot) and the editor's panel (the file's name, breadcrumbs, the uses panel, the footer); the editor (a GtkSourceView 5 with its gutter, tags, lenses, peek, hover card and search bar; the only file that knows it is a GtkSourceView). |
+| `stave-gtk` | `ui/files.rs`, `editor.rs` | The Code panel: the open files as tabs (each with its dot), a placeholder while none is open, breadcrumbs, the uses panel and the footer; the editor (a GtkSourceView 5 with its gutter, tags, lenses, peek, hover card and search bar; the only file that knows it is a GtkSourceView). |
 | `stave-gtk` | `ui/icons.rs`, `style.rs` | The design's icons drawn from SVG path data in the text colour; one stylesheet whose colours are all libadwaita's named colours (`@headerbar_bg_color`, `@sidebar_bg_color`, `@card_bg_color`, `@accent_bg_color`, `@success_color`, ...), so light and dark both come from it and follow the style manager the moment it changes; only the code block is dark in both. |
 
 ## The session contract
@@ -196,18 +203,65 @@ PDF doesn't exist yet, and the button says so honestly.
 ## The window
 
 ```
-┌ title bar ── back · forward · open · title ─── [Find a part, file, line or problem  Ctrl K] ─── Design|Cut list · ‹ chip › · hammer · menu ┐
-│ ┌ model ──────┐                                                      ┌ card ─────────┐            ┌ editor ──────────────┐ │
-│ │ CARCASS     │                    3D view                           │ PART · IN …   │          ‹ │ doors.stave       ›  │ │
-│ │ ASSEMBLIES ●│        ! pin      (the chosen part framed,            │ stock, size … │       doors│ breadcrumbs          │ │
-│ │  part       │                    the rest dimmed)                   │ joints        │      .stave│ text …               │ │
-│ │   JOINT …   │                                                      │ text  doors:9 │          + │                      │ │
-│ └─────────────┘   [scene ▾ · Pull apart · X-ray · door_l ───── 110° · Move: …]   [fit][front][turn]└──────────────────────┘ │
-└────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+┌ title bar ── back · forward · open · title ── [Find a part, file, line or problem  Ctrl K] ── Design|Cut list · ‹ chip › · hammer · menu ┐
+├ Parts │ Files ─────┬ 3D View ─────────────────────────────────────────────────┬ (right edge: empty, hidden) ┤
+│ CARCASS            │                                                          │                             │
+│  base     oak_19   │                        3D view                           │                             │
+│ ASSEMBLIES         │                     (problem pins)                       │                             │
+├ Details ───────────┼ View Controls ───────────────────────────────────────────┤                             │
+│ PART · IN door_l   │ scene ▾ · Pull apart · X-ray · door_l ──── 110° · Move: … · [fit][front][turn]          │
+│ stile[hinge]       ├ Code │ Problems ─────────────────────────────────────────┤                             │
+│ Stock  oak_19 …    │ doors.stave │ carcass.stave                               │                             │
+│                    │  9 assembly door_l : casework.FramePanelDoor {           │                             │
+├────────────────────┴──────────────────────────────────────────────────────────┴─────────────────────────────┤
+│ Linked to the text · door_l.stile[hinge], line 9                                       [left][bottom][right] │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-The 3D view fills the window; everything else floats over it
-(V2C_Home, V2C_Spatial).
+Every part of the window is a panel, docked with libpanel (`Workbench`):
+the 3D View, its View Controls, Parts, Files, Details, Code and Problems.
+Nothing but the problem pins sits over the model. Each panel is a
+`panel::Widget` in a `panel::Frame` (tabs along the top,
+`panel::FrameTabBar`); drag a tab to an edge, into the centre (a
+`panel::Grid`, which splits into columns and rows, so Code can sit beside
+the 3D view) or into another frame; close it with its ×; show an edge
+again from the status bar's toggles. The default layout is board B
+(`Layout::default`): Parts and Files above Details on the left, the 3D
+View over its View Controls in the centre, Code and Problems at the
+bottom, the right edge empty and hidden. The layout is remembered per
+user in `~/.config/stave/layout` (saved on every drop and when the
+window closes; one line per panel, `code centre 1 0 0` for side, column,
+frame and tab, and one per edge, `show end true`; a broken file means
+the default) and never in a `.stave` file. "Reset Layout" in the main
+menu puts board B back.
+
+- **3D View** is the view and nothing else (the problem pins and the chip
+  for a problem off screen sit on it).
+- **View Controls** holds what used to float over or under the view: the
+  scene menu, Pull apart, X-ray, the "Open it" slider, the Move chips, the
+  camera buttons, focus mode's From above / In 3D switch, the shared-wood
+  key, a short line ("Focused on one joint · Esc to go back"), a posed
+  problem's swing card and a joint's step player. The buttons and sliders
+  sit in an `adw::WrapBox`: in a wide, short frame they make a row and wrap
+  onto more as it narrows; in a narrow side frame they stack; the panel
+  scrolls when even that doesn't fit. Focus mode brings it forward.
+
+- **Code panel** holds the open files as its own tabs, so a file always
+  opens wherever the Code panel is docked (board B2: dragged to the right
+  edge, files open on the right). With no file open it shows "No file
+  open" and stays where it is. Ctrl+E ("Show the Code Panel") brings it
+  back where it last was if it was closed, and puts the keyboard in the
+  text.
+- **Problems panel** lists the latest check's problems with their file and
+  line; choosing one selects it (posed in the 3D view, explained in
+  Details).
+- **Files panel** lists the project's `.stave` files; choosing one opens
+  it in the Code panel.
+- **Details panel** is the old card: the selection's account, a
+  problem's details, focus mode's controls (focus mode brings it to the
+  front).
+- **Status bar**: "Linked to the text · door_l, line 9" for the
+  selection, and a toggle per edge.
 
 - **Title bar** (`Header`): back and forward are `win.back`/`win.forward`
   (Alt+←/→). The finder's field is a button that opens the finder
@@ -240,24 +294,22 @@ The 3D view fills the window; everything else floats over it
   row carries its `Mark` (`problems::marks`): a red dot for an error, an
   amber one for a warning, a red ring for a part a problem only involves;
   an assembly carries the worst inside it. Under the chosen part, the
-  joints it is in (`focus::targets_of`), each opening focus mode. Its
-  head folds it to one line (F9).
-- **Choosing frames it**: a part, a piece of hardware or an assembly
-  chosen in the 3D view, the tree, the finder or the dock is framed at
-  once (no flying), with room round it (`FRAME_ROOM`), in the middle of
-  the room the tree, the card and the rail leave; Escape lets it go and
-  frames everything again. A new check's result never moves the camera.
-- **The card** (`Inspector` in `.stave-card-panel`, beside the part):
+  joints it is in (`focus::targets_of`), each opening focus mode. F9
+  shows the Parts panel.
+- **Choosing in a list frames it**: a part, a piece of hardware or an
+  assembly chosen in Parts, the finder or a lens's "show in 3D" is framed
+  at once (no flying), with room round it (`FRAME_ROOM`). Clicking in the
+  3D view selects without moving the camera, and only outlines the
+  choice: the rest stays solid (fading is for X-ray and posed problems).
+  A new check's result never moves the camera. The mouse's Back and
+  Forward buttons go back and forward.
+- **Details** (`Inspector`, in the Details panel):
   eyebrow ("PART · IN door_l"), title, doc comment, rows (stock, finished
   size, grain, moves), joints and cuts (each row opens focus mode:
   `Command::Focus`), and "Defined in the text": the snippet of the
   declaration in the project's own files (a part of a library component
   is shown by its assembly's declaration) with a file:line link that
-  sends `Command::GoToSource`. It stands beside the part (`Orbit::project`
-  of its bounds' middle): to its right where there is room, otherwise to
-  its left, a little above it, always clear of the tree and the rail; a
-  problem, focus mode or a library puts it at the top right. It goes
-  while the editor is open (the text says it), except in focus mode.
+  sends `Command::GoToSource`.
   Every code block (this snippet, a problem's `stave check` text, a
   library's import line) is one style, `.stave-code`: #1e1e24 in both
   styles, and in the dark style #121216 with a thin light edge so it
@@ -479,19 +531,10 @@ step and changes nothing in the interface.
 
 ### The panel
 
-- **The rail** (at the 3D view's right edge, riding on the editor's edge
-  while it is open): the arrow opens or closes the editor (`win.editor`,
-  Ctrl+E), then a tab per open file, its name turned to read downward
-  (`Sideways`: GTK 4 labels can't turn), a dot for the file's worst
-  problem (`Marks::file`) and "•" while unsaved; choosing a tab shows the
-  file and opens the editor. "+" opens the finder (Ctrl+K), which finds
-  files, names and lines; there is no file tree. The tab of the file
-  showing is the accent.
-- **The editor's panel** slides in from the right (`gtk::Revealer`,
-  hidden while closed so it takes no room) beside the 3D view, which
-  narrows; once it has slid, the selection is framed again in what is
-  left. Its head names the file ("doors.stave • not saved") with a close
-  arrow.
+- **The tabs** across the top of the Code panel: a tab per open file, a
+  dot for the file's worst problem (`Marks::file`) and "•" while unsaved;
+  the tab of the file showing is the accent. Files open from the Files
+  panel, the finder (Ctrl+K) or by following a link.
 - **Breadcrumbs** follow the cursor. **Footer**: the shortcuts and the
   line.
 - **Editor**: a GtkSourceView 5 (`editor.rs` is the only file that knows;
@@ -575,5 +618,5 @@ card has "Show in text" for each way to fix it and no "Apply" or
 "Preview" (fixes that edit the text aren't built); the model tree shows
 what isn't involved in a posed problem as it is, dimming it in the view
 rather than hiding it; the finder opens as a dialog in the middle of the
-window; the open files' rail floats at the view's right edge rather than
-in a column of its own.
+window; the panels are docked (the canvas's "Stave docked layouts") rather
+than floating over the view.
