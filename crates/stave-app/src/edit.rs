@@ -222,10 +222,12 @@ pub enum MenuGroup {
     /// Declared in the project's own module.
     Project,
     /// From a module the project imports, by the name it is used through
-    /// (`casework`).
+    /// (`casework`). A standard module that is imported, such as
+    /// `std:casework`, is listed here too.
     Module(Ident),
-    /// From a standard module (`joinery`, `hardware`, `casework`), by its
-    /// name: a [`Name`], since `hardware` is a reserved word.
+    /// From a standard module of the prelude, in scope without an import
+    /// (`joinery`, `hardware`), by its name: a [`Name`], since `hardware`
+    /// is a reserved word.
     Standard(Name),
 }
 

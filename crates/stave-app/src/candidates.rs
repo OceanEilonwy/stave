@@ -43,8 +43,8 @@ use stave_schema::kinds::RoleType;
 
 use crate::Opened;
 use crate::edit::{
-    Applicability, Candidate, Declaration, MenuEntry, MenuGroup, PartFace, Picked, PlaceParam,
-    PlaceSlot, SettingParam, SettingValue,
+    Applicability, Candidate, Declaration, MenuEntry, MenuGroup, Picked, PlaceParam, PlaceSlot,
+    SettingParam, SettingValue,
 };
 
 pub use write::{Repeat, WriteError, WrittenPatch};
@@ -172,9 +172,13 @@ impl<'a> EditScope<'a> {
     }
 
     /// The modules whose declarations are in scope, each once with its
-    /// menu group: the project's own, then every module a file of the
-    /// project imports (by the name it is imported under, the first file's
-    /// name when several import it), then the prelude.
+    /// menu group: the project's own ([`MenuGroup::Project`]), then every
+    /// module a file of the project imports, a standard one such as
+    /// `std:casework` included ([`MenuGroup::Module`], by the name it is
+    /// imported under, the first file's name when several import it), then
+    /// the prelude's standard modules ([`MenuGroup::Standard`]), which are
+    /// in scope without an import. This is the grouping
+    /// [`crate::edit::clothing_cabinet_fixture`] shows.
     fn modules_in_scope(&self) -> Vec<(ModuleId, MenuGroup)> {
         let defs = &self.model.defs;
         let mut out = vec![(self.model.root, MenuGroup::Project)];
@@ -185,26 +189,15 @@ impl<'a> EditScope<'a> {
                 continue;
             };
             for (alias, module) in &scope.imports {
-                if seen(&out, *module) {
+                // A prelude module is in scope everywhere: it is listed
+                // under std below, even when a file also imports it.
+                if seen(&out, *module) || defs.prelude.contains(module) {
                     continue;
                 }
-                let standard = defs
-                    .modules
-                    .get(module.index())
-                    .is_some_and(|m| m.folder.is_none());
-                let group = if standard {
-                    Name::new(alias.as_str(), Span::default())
-                        .ok()
-                        .map(MenuGroup::Standard)
-                } else {
-                    Ident::new(alias.as_str(), Span::default())
-                        .ok()
-                        .map(MenuGroup::Module)
-                };
-                let Some(group) = group else {
+                let Ok(alias) = Ident::new(alias.as_str(), Span::default()) else {
                     continue;
                 };
-                out.push((*module, group));
+                out.push((*module, MenuGroup::Module(alias)));
             }
         }
         for module in &defs.prelude {
@@ -428,14 +421,16 @@ pub fn first_sentence(docs: &[String]) -> Option<String> {
     Some(joined)
 }
 
-/// Binds the selection to a component's place params: each typed value
-/// fills the first unbound param of its own type. A `Region` must be
-/// placed; of a face's `Anchor` and `Part` at least one must be (a
-/// component on a face may take the face, the part, or both); `Parts`
-/// fills a `Parts` param. `false` when the selection doesn't fit.
+/// Binds the selection to a component's place params (`docs/editing.md`,
+/// "Signature matching", step 2): every typed value of the selection fills
+/// the first unbound place param of its own type, and no value may be left
+/// over. A `Region` fills a `Region` param; a face gives two values, its
+/// `Anchor` and its `Part`, and both must find a param; `Parts` (two facing
+/// parts, or a group) fills a `Parts` param. `false` when the selection
+/// doesn't fit.
 fn bind_component(place: &mut [PlaceParam], picked: &Picked) -> bool {
     match picked {
-        Picked::Region(region) => place.iter_mut().any(|param| match &mut param.slot {
+        Picked::Region(region) => fill_first(place, |slot| match slot {
             PlaceSlot::Region(slot @ None) => {
                 *slot = Some(*region);
                 true
@@ -443,49 +438,51 @@ fn bind_component(place: &mut [PlaceParam], picked: &Picked) -> bool {
             _ => false,
         }),
         Picked::Face(face) => {
-            let anchor = place.iter_mut().any(|param| match &mut param.slot {
+            let anchor = fill_first(place, |slot| match slot {
                 PlaceSlot::Anchor(slot @ None) => {
                     *slot = Some(*face);
                     true
                 }
                 _ => false,
             });
-            let part = place.iter_mut().any(|param| match &mut param.slot {
+            let part = fill_first(place, |slot| match slot {
                 PlaceSlot::Part(slot @ None) => {
                     *slot = Some(face.part);
                     true
                 }
                 _ => false,
             });
-            anchor || part
+            anchor && part
         }
-        Picked::Between(pair) => {
-            NonEmpty::new(vec![pair.first(), pair.second()]).is_some_and(|parts| {
-                place.iter_mut().any(|param| match &mut param.slot {
-                    PlaceSlot::Parts(slot @ None) => {
-                        *slot = Some(parts.clone());
-                        true
-                    }
-                    _ => false,
-                })
-            })
-        }
-        Picked::Group(parts) => place.iter_mut().any(|param| match &mut param.slot {
-            PlaceSlot::Parts(slot @ None) => {
-                *slot = Some(parts.clone());
-                true
-            }
-            _ => false,
-        }),
+        Picked::Between(pair) => NonEmpty::new(vec![pair.first(), pair.second()])
+            .is_some_and(|parts| fill_parts(place, parts)),
+        Picked::Group(parts) => fill_parts(place, parts.clone()),
     }
+}
+
+/// Fills the first place param `fill` takes. `true` when one took it.
+fn fill_first(place: &mut [PlaceParam], mut fill: impl FnMut(&mut PlaceSlot) -> bool) -> bool {
+    place.iter_mut().any(|param| fill(&mut param.slot))
+}
+
+fn fill_parts(place: &mut [PlaceParam], parts: NonEmpty<stave_model::ids::PartId>) -> bool {
+    fill_first(place, |slot| match slot {
+        PlaceSlot::Parts(slot @ None) => {
+            *slot = Some(parts.clone());
+            true
+        }
+        _ => false,
+    })
 }
 
 /// Binds the selection to a kind's roles. A `Region` fills the first
 /// `Region` role. The parts of the selection (a face's part, the two facing
 /// parts, the group) go one to each `Part` or `Parts` role in order, the
 /// part pointed at first to the first role; parts left over join the last
-/// `Parts` role that took one. A face's `Anchor` fills no role. `false`
-/// when a value of the selection is left over.
+/// `Parts` role that took one. A face's `Anchor` is a typed value of the
+/// selection too, and a kind has no `Anchor` role to take it, so a kind is
+/// never a candidate on a face (step 2: every typed value must fill a place
+/// param). `false` when a value of the selection is left over.
 fn bind_kind(place: &mut [PlaceParam], picked: &Picked) -> bool {
     let parts = match picked {
         Picked::Region(region) => {
@@ -497,7 +494,7 @@ fn bind_kind(place: &mut [PlaceParam], picked: &Picked) -> bool {
                 _ => false,
             });
         }
-        Picked::Face(PartFace { part, .. }) => vec![*part],
+        Picked::Face(_) => return false,
         Picked::Between(pair) => vec![pair.first(), pair.second()],
         Picked::Group(parts) => parts.iter().copied().collect(),
     };

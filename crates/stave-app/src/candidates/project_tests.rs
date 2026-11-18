@@ -60,6 +60,7 @@ region inside = opening(
 /// Rests on a face. Holds books.
 component Ledge {
   param on    : Anchor
+  param piece : Part
   param wood  : Stock
   param depth = 200mm
   require deep_enough : depth >= 10mm "the ledge is too shallow"
@@ -71,6 +72,18 @@ component Filler {
   param wood  : Stock
 }
 
+/// Sits on a face, but names no part.
+component Pad {
+  param on    : Anchor
+  param wood  : Stock
+}
+
+/// Hangs from a part, but names no face.
+component Hook {
+  param from  : Part
+  param wood  : Stock
+}
+
 /// Ties parts together.
 component Tie {
   param ends  : Parts
@@ -79,10 +92,12 @@ component Tie {
 
 assembly ledge : Ledge {
   on:    base.top
+  piece: base
   wood:  oak_19
 }
 assembly ledge_2 : Ledge {
   on:    side_l.right
+  piece: side_l
   wood:  ply_6
 }
 "#;
@@ -146,7 +161,7 @@ fn name_expr(name: &str) -> Expr {
 }
 
 #[test]
-fn a_face_fills_an_anchor_param_and_copies_from_the_latest_assembly() {
+fn a_face_fills_an_anchor_and_a_part_param_and_copies_from_the_latest_assembly() {
     let opened = open(PROJECT);
     let scope = EditScope::new(&opened).unwrap();
     let face = PartFace {
@@ -157,9 +172,14 @@ fn a_face_fills_an_anchor_param_and_copies_from_the_latest_assembly() {
     let ledge = find(&menu, "Ledge").unwrap_or_else(|| panic!("{:?}", labels(&menu)));
     assert!(find(&menu, "Filler").is_none());
     assert!(find(&menu, "Tie").is_none());
+    // A face is two typed values, its Anchor and its Part, and each must
+    // fill a place param: a component that takes only one is not listed.
+    assert!(find(&menu, "Pad").is_none(), "{:?}", labels(&menu));
+    assert!(find(&menu, "Hook").is_none(), "{:?}", labels(&menu));
     assert_eq!(ledge.entry.group, MenuGroup::Project);
     assert_eq!(ledge.entry.hint.as_deref(), Some("Rests on a face."));
     assert_eq!(ledge.place[0].slot, PlaceSlot::Anchor(Some(face)));
+    assert_eq!(ledge.place[1].slot, PlaceSlot::Part(Some(face.part)));
     // The project's own components come first.
     assert_eq!(
         menu.first().map(|c| &c.entry.group),
@@ -174,17 +194,20 @@ fn a_face_fills_an_anchor_param_and_copies_from_the_latest_assembly() {
     assert_eq!(model.assemblies.get(from.index()).unwrap().name, "ledge_2");
     assert_eq!(ledge.settings[1].value, SettingValue::Default);
 
-    // A pull's one role takes the face's part.
-    let knob = find(&menu, "knob").unwrap_or_else(|| panic!("{:?}", labels(&menu)));
-    assert!(matches!(knob.declaration, Declaration::Kind(_)));
-    assert_eq!(knob.place[0].slot, PlaceSlot::Part(Some(face.part)));
+    // A kind has no Anchor role to take the face, so none is listed.
+    assert!(
+        menu.iter()
+            .all(|c| matches!(c.declaration, Declaration::Component(_))),
+        "{:?}",
+        labels(&menu)
+    );
 
     let written = scope.write_patch(ledge, None).unwrap();
     assert_eq!(written.name.as_str(), "ledge_3");
     assert_eq!(written.file, "box.stave");
     assert_eq!(
         written.text,
-        "stave 1\n\npatch \"Add a ledge\" {\n  add assembly ledge_3 : Ledge {\n    on:   base.top\n    wood: ply_6\n  } in \"box.stave\"\n}\n"
+        "stave 1\n\npatch \"Add a ledge\" {\n  add assembly ledge_3 : Ledge {\n    on:    base.top\n    piece: base\n    wood:  ply_6\n  } in \"box.stave\"\n}\n"
     );
     let (text, errors) = apply(&scope, &written);
     assert!(errors.is_empty(), "{errors:?}\n{text}");
@@ -306,6 +329,7 @@ import "./shop" as shop
 
 assembly first : shop.Rest {
   on:    base.top
+  piece: base
   wood:  oak_19
 }
 "#;
@@ -317,6 +341,7 @@ library "Shop" {
 /// A rest.
 component Rest {
   param on    : Anchor
+  param piece : Part
   param wood  : Stock
 }
 "#;

@@ -118,11 +118,11 @@ fn a_click_behind_the_left_door_lists_the_drawer_and_the_door() {
     let door = by_label(&menu, "FramePanelDoor");
     for candidate in [drawer, door] {
         assert!(matches!(candidate.declaration, Declaration::Component(_)));
+        // std:casework is imported, not in the prelude: it is grouped
+        // by the name it is imported under, as the contract fixture shows.
         assert_eq!(
             candidate.entry.group,
-            MenuGroup::Standard(
-                stave_lang::ast::Name::new("casework", Default::default()).unwrap()
-            )
+            MenuGroup::Module(stave_lang::ast::Ident::new("casework", Default::default()).unwrap())
         );
         assert_eq!(candidate.applicability, Applicability::NotChecked);
         assert_eq!(candidate.place[0].name.as_str(), "opening");
@@ -179,6 +179,51 @@ fn a_click_behind_the_left_door_lists_the_drawer_and_the_door() {
     let mut sorted = groups.clone();
     sorted.sort_by(|a, b| stave_app::candidates::compare_groups(a, b));
     assert_eq!(groups, sorted);
+}
+
+/// The contract fixture (`stave_app::edit::clothing_cabinet_fixture`) and
+/// the real menu agree on each entry (label, hint, group) and on the names
+/// of each candidate's place and setting params. The fixture's ids are
+/// illustrative, so they are not compared.
+#[test]
+fn the_menu_matches_the_contract_fixture() {
+    let fixture = stave_app::edit::clothing_cabinet_fixture().unwrap();
+    let opened = stave_app::open(&cabinet_folder()).unwrap();
+    let scope = EditScope::new(&opened).unwrap();
+    let door_bay_left = scope
+        .model()
+        .regions
+        .iter()
+        .find(|r| r.name == "door_bay[left]")
+        .unwrap()
+        .id;
+    let menu = scope.candidates(&Picked::Region(door_bay_left));
+    for expected in &fixture.candidates {
+        let found = by_label(&menu, expected.entry.label.as_str());
+        assert_eq!(found.entry, expected.entry);
+        let place = |c: &Candidate| -> Vec<String> {
+            c.place.iter().map(|p| p.name.as_str().to_owned()).collect()
+        };
+        let settings = |c: &Candidate| -> Vec<String> {
+            c.settings
+                .iter()
+                .map(|p| p.name.as_str().to_owned())
+                .collect()
+        };
+        assert_eq!(
+            place(found),
+            place(expected),
+            "{}",
+            expected.entry.label.as_str()
+        );
+        for name in settings(expected) {
+            assert!(
+                settings(found).contains(&name),
+                "{}: {name} is a setting",
+                expected.entry.label.as_str()
+            );
+        }
+    }
 }
 
 #[test]
