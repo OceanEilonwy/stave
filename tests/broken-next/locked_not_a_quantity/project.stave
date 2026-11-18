@@ -6,7 +6,7 @@ project "Locked stock" {
   units: mm
 }
 
-stock pine_19 { species: pine, form: solid, thickness: 19mm }
+stock pine_19 { species: pine, form: solid, thickness: 19mm, max_length: 2400mm }
 
 // Only a size or a number can be locked or solved.
 locked param top_stock : Stock = pine_19

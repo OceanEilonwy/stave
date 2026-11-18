@@ -83,18 +83,18 @@ fn libraries_that_changed_are_not_reused() {
     let modules = ModuleSet::load(&folder).unwrap();
     let (_, _, kept) = resolve_keeping(&modules);
     let kept = kept.unwrap();
-    // A file of the imported `casework` library changed.
-    let library = modules
+    // A file of the imported local `hardware` library changed. (`casework`
+    // is a standard module now, so it has no folder to change.)
+    let (library, library_folder) = modules
         .modules
         .iter()
-        .find(|module| module.name == "casework")
-        .expect("the example imports casework");
-    let stave_modules::ModuleSource::Local {
-        folder: library_folder,
-    } = &library.source
-    else {
-        panic!("casework is a local module");
-    };
+        .find_map(|module| match &module.source {
+            stave_modules::ModuleSource::Local { folder } if folder.ends_with("hardware") => {
+                Some((module, folder))
+            }
+            _ => None,
+        })
+        .expect("the example imports its own hardware folder");
     let file = library.files.first().unwrap();
     let name = Path::new(&file.path).file_name().unwrap();
     let text = modules.sources.get(file.file).unwrap().text().to_owned();

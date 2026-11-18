@@ -15,7 +15,7 @@ param shelves = 2 within [2, 3]
 
 region bay[shelves] = split(envelope, up, shares: [1, 2])
 
-stock pine_19 { species: pine, form: solid, thickness: 19mm }
+stock pine_19 { species: pine, form: solid, thickness: 19mm, max_length: 2400mm }
 
 part base : pine_19 {
   length: overall_width

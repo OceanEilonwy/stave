@@ -9,7 +9,7 @@ project "Solved without a range" {
 // The solver may only move a solved param inside its 'within' range.
 solved param overall_width = 600mm
 
-stock pine_19 { species: pine, form: solid, thickness: 19mm }
+stock pine_19 { species: pine, form: solid, thickness: 19mm, max_length: 2400mm }
 
 part base : pine_19 {
   length: overall_width

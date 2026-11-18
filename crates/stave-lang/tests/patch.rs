@@ -906,7 +906,10 @@ fn module_files(folder: &Path) -> Vec<(String, Parse<ast::File>)> {
 fn the_grammar_example_applies_to_the_clothing_cabinet() {
     let folder = workspace().join("examples/clothing_cabinet");
     let project = module_files(&folder);
-    let casework = module_files(&folder.join("casework"));
+    // Drawer and FramePanelDoor moved to std:casework. They are handed over
+    // here as a local module all the same: what this test pins is that a
+    // patch can reach into a module the caller supplies.
+    let casework = module_files(&workspace().join("std/casework"));
     let hardware = module_files(&folder.join("hardware"));
     let target = PatchTarget::new(as_files(&project))
         .with_local_module("casework", as_files(&casework))

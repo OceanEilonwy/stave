@@ -14,7 +14,7 @@ region envelope = box(across: overall_width, up: overall_height, deep: overall_d
 // Shares are relative sizes: 140, not 140mm.
 region bay[lower, upper] = split(envelope, up, shares: [140mm, 260mm])
 
-stock pine_19 { species: pine, form: solid, thickness: 19mm }
+stock pine_19 { species: pine, form: solid, thickness: 19mm, max_length: 2400mm }
 
 part base : pine_19 {
   length: overall_width
