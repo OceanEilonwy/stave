@@ -43,6 +43,12 @@
 //! that anyway, and its own mistake stays one error), and the base's
 //! diagnostics are taken with the checks run the same way, so the errors
 //! they find in the base are not counted against the edit.
+//!
+//! Most errors before the checks (a failing `require`, an unknown name)
+//! stop the solver writing a design at all, so there is nothing to check
+//! for fit. Such a candidate is refused even when it caused no error
+//! itself, with a diagnostic pointing at the error that stops the design
+//! being placed: strict commit never writes what wasn't checked.
 
 use std::collections::BTreeMap;
 use std::io;
