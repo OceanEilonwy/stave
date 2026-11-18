@@ -1758,6 +1758,7 @@ impl Window {
         let cards: Vec<Rect> = [
             self.editing.menu.root.upcast_ref::<gtk::Widget>(),
             self.editing.card.root.upcast_ref(),
+            self.widgets.card.upcast_ref(),
         ]
         .into_iter()
         .filter(|card| card.is_visible())
@@ -1873,9 +1874,12 @@ impl Window {
         put(&grips.panel.root, x, y);
     }
 
-    /// `true` while the grips of a selected assembly are drawn: they take
-    /// the place of its card, which would cover them (the tree still says
-    /// what is selected). A part's card stays, beside the grips.
+    /// `true` while the grips of a selected assembly are drawn and its
+    /// card has none of the item's changes to offer: they take the place
+    /// of the card, which would cover them (the tree still says what is
+    /// selected). While the item's changes can be offered (the text
+    /// reads), the card carries them, so it stays, beside the grips, as a
+    /// part's card does.
     pub(in crate::ui) fn grips_take_the_card(&self) -> bool {
         let state = self.editing.grips.state.borrow();
         matches!(state.shown_for, Some(GripSelection::Assembly(_)))
@@ -1884,6 +1888,7 @@ impl Window {
                 self.session.borrow().selection(),
                 Some(Selection::Assembly(_))
             )
+            && !self.gestures_allowed()
     }
 
     /// Where the part's card stands beside the selection: right of the

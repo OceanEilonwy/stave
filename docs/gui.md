@@ -556,9 +556,11 @@ the session holds.
   envelope shows the envelope's three sizes beside the menu "In this
   space"; a click in one piece of a split (`drawer_bay[bottom]`) shows
   the boundaries between its pieces. Selecting something else, or
-  letting the space's menu go, takes them away. While an assembly's
-  grips show, its card steps aside (the tree still says what is
-  selected); a part's card stays, to the right of the grips.
+  letting the space's menu go, takes them away. The selection's card
+  stays, to the right of the grips, since it carries the item's changes
+  (below), and the grips' labels keep off it; only while the text
+  doesn't read (when the card has no changes to offer) does an
+  assembly's card step aside for its grips.
 - **How a grip is drawn** (`grip_text::grip_look`), never by colour
   alone: each kind has its own handle, line and words.
   - A plain number that moves: a round handle on the face that moves,
