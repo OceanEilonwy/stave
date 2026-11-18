@@ -22,7 +22,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 
 use adw::prelude::*;
-use gtk::glib;
+use gtk::{gio, glib};
 use panel::prelude::*;
 
 /// One of the window's panels.
@@ -79,7 +79,7 @@ impl PanelId {
     pub fn title(self) -> &'static str {
         match self {
             PanelId::View => "3D View",
-            PanelId::Controls => "View Controls",
+            PanelId::Controls => "3D Tools",
             PanelId::Parts => "Parts",
             PanelId::Files => "Files",
             PanelId::Details => "Details",
@@ -129,7 +129,8 @@ impl Side {
     /// The edges, which can be hidden (the centre always shows).
     pub const EDGES: [Side; 4] = [Side::Start, Side::End, Side::Top, Side::Bottom];
 
-    fn word(self) -> &'static str {
+    /// The word the layout file and the actions use.
+    pub fn word(self) -> &'static str {
         match self {
             Side::Start => "start",
             Side::End => "end",
@@ -139,8 +140,20 @@ impl Side {
         }
     }
 
-    fn from_word(word: &str) -> Option<Side> {
+    /// The side a word names.
+    pub fn from_word(word: &str) -> Option<Side> {
         Side::ALL.into_iter().find(|side| side.word() == word)
+    }
+
+    /// The side as a menu says where to move a panel.
+    fn menu_label(self) -> &'static str {
+        match self {
+            Side::Start => "Move to the Left",
+            Side::End => "Move to the Right",
+            Side::Top => "Move to the Top",
+            Side::Bottom => "Move to the Bottom",
+            Side::Centre => "Move to the Middle",
+        }
     }
 
     fn area(self) -> panel::Area {
@@ -410,6 +423,15 @@ impl Workbench {
                     .build();
                 widget.set_id(id.word());
                 widget.set_child(Some(&content));
+                // The tab's menu moves the panel without dragging it.
+                let menu = gio::Menu::new();
+                for side in Side::ALL {
+                    menu.append(
+                        Some(side.menu_label()),
+                        Some(&format!("win.move-panel::{}:{}", id.word(), side.word())),
+                    );
+                }
+                widget.set_menu_model(Some(&menu));
                 (id, widget)
             })
             .collect();
@@ -591,6 +613,26 @@ impl Workbench {
         widget.raise();
     }
 
+    /// Moves a panel to a side: at an edge into its first frame (as a new
+    /// tab), in the middle into a new column beside what is there.
+    pub fn move_to(&self, id: PanelId, side: Side) {
+        let Some(widget) = self.panels.get(&id) else {
+            return;
+        };
+        detach(widget);
+        let column = match side {
+            Side::Centre => self.grid.n_columns(),
+            Side::Start | Side::End | Side::Top | Side::Bottom => 0,
+        };
+        let frame = self.frame_at(Place::new(side, column, 0, 0));
+        self.fill(&frame, &[id]);
+        if side != Side::Centre {
+            self.dock.set_reveal_area(side.area(), true);
+        }
+        widget.raise();
+        self.save();
+    }
+
     /// The frame at a place, made (with any before it) if there aren't
     /// that many.
     fn frame_at(&self, place: Place) -> panel::Frame {
@@ -624,8 +666,12 @@ impl Workbench {
 fn new_frame() -> panel::Frame {
     let frame = panel::Frame::new();
     frame.set_orientation(gtk::Orientation::Vertical);
-    // Tabs with their titles, not libpanel's icon-only switcher.
-    frame.set_header(Some(&panel::FrameTabBar::new()));
+    // Small tabs with their titles at the start, as in an IDE, not
+    // libpanel's icon-only switcher nor tabs stretched across the frame.
+    let tabs = panel::FrameTabBar::new();
+    tabs.set_expand_tabs(false);
+    tabs.add_css_class("stave-frame-tabs");
+    frame.set_header(Some(&tabs));
     frame
 }
 

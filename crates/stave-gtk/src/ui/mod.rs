@@ -98,7 +98,7 @@ const PICTURES_DELAY: Duration = Duration::from_millis(150);
 /// The space kept clear round what sits on the 3D view, in logical pixels.
 const EDGE: i32 = 14;
 
-/// The most height the View Controls panel asks for before it scrolls.
+/// The most height the 3D Tools panel asks for before it scrolls.
 const CONTROLS_MOST: i32 = 320;
 
 /// The most problems pinned on the model at once.
@@ -537,8 +537,10 @@ impl Window {
 
     /// Selects something and frames it: for the parts list, the finder,
     /// "show in 3D" and the command line. Clicking in the 3D view selects
-    /// without moving the camera (`pick`).
+    /// without moving the camera (`pick`). The 3D View comes to the front
+    /// (brought back if it was closed), so what was chosen can be seen.
     fn select_and_frame(self: &Rc<Self>, selection: Option<Selection>) {
+        self.widgets.workbench.present(workbench::PanelId::View);
         self.dispatch(Command::Select(selection));
         self.frame_selection();
     }
@@ -2506,6 +2508,24 @@ impl Window {
             }
         });
         self.widgets.window.add_action(&show_panel);
+        // "code:end": move the Code panel to the right edge.
+        let move_panel = gio::SimpleAction::new("move-panel", Some(glib::VariantTy::STRING));
+        let this = self.clone();
+        move_panel.connect_activate(move |_, target| {
+            let Some((id, side)) = target
+                .and_then(glib::Variant::str)
+                .and_then(|t| t.split_once(':'))
+            else {
+                return;
+            };
+            if let (Some(id), Some(side)) = (
+                workbench::PanelId::from_word(id),
+                workbench::Side::from_word(side),
+            ) {
+                this.widgets.workbench.move_to(id, side);
+            }
+        });
+        self.widgets.window.add_action(&move_panel);
         let this = self.clone();
         add(
             "reset-layout",
