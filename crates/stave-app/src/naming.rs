@@ -344,8 +344,10 @@ fn sides(axis: Axis) -> (&'static str, &'static str) {
 /// The two names of a mirrored pair across `axis`: the name plus each side
 /// (`door_left`, `door_right` across; `_bottom`, `_top` up; `_front`,
 /// `_back` deep). The first is the side nearer the start of the axis. A
-/// name that already ends in a side of any axis has it replaced, never
-/// doubled: `door_left` gives `door_left` and `door_right`. When either
+/// name that already ends in a side of the mirrored axis has it replaced,
+/// never doubled: `door_left` across gives `door_left` and `door_right`.
+/// A side of another axis is kept as part of the name: `leg_front`
+/// across gives `leg_front_left` and `leg_front_right`. When either
 /// is taken, both move to the next number together (`door_2_left`,
 /// `door_2_right`), so the pair still reads as a pair.
 ///
@@ -358,7 +360,7 @@ pub fn mirrored_pair(
     taken: &TakenNames,
 ) -> Result<(Ident, Ident), NamingError> {
     let (first, last) = sides(axis);
-    let names = numbered(&without_side(&base_of(base)?), taken, |stem| {
+    let names = numbered(&without_side(&base_of(base)?, axis), taken, |stem| {
         vec![format!("{stem}_{first}"), format!("{stem}_{last}")]
     })?;
     let mut names = names.into_iter();
@@ -368,10 +370,12 @@ pub fn mirrored_pair(
     }
 }
 
-/// A name with a trailing side word (`_left`, `_right`, `_bottom`,
-/// `_top`, `_front`, `_back`) taken off, when something is left.
-fn without_side(name: &str) -> String {
-    for side in ["left", "right", "bottom", "top", "front", "back"] {
+/// A name with a trailing side word of `axis` (`_left` or `_right`
+/// across, `_bottom` or `_top` up, `_front` or `_back` deep) taken off,
+/// when something is left. Side words of the other axes stay.
+fn without_side(name: &str, axis: Axis) -> String {
+    let (first, last) = sides(axis);
+    for side in [first, last] {
         if let Some(stem) = name.strip_suffix(side).and_then(|s| s.strip_suffix('_'))
             && !stem.is_empty()
         {
@@ -611,6 +615,27 @@ mod tests {
         );
         let (left, right) = mirrored_pair("left", Axis::Across, &none).unwrap();
         assert_eq!((left.as_str(), right.as_str()), ("left_left", "left_right"));
+        // A side of another axis is part of the name and stays.
+        let (left, right) = mirrored_pair("leg_front", Axis::Across, &none).unwrap();
+        assert_eq!(
+            (left.as_str(), right.as_str()),
+            ("leg_front_left", "leg_front_right")
+        );
+        let (left, right) = mirrored_pair("rail_back", Axis::Across, &none).unwrap();
+        assert_eq!(
+            (left.as_str(), right.as_str()),
+            ("rail_back_left", "rail_back_right")
+        );
+        let (front, back) = mirrored_pair("drawer_top", Axis::Deep, &none).unwrap();
+        assert_eq!(
+            (front.as_str(), back.as_str()),
+            ("drawer_top_front", "drawer_top_back")
+        );
+        let (bottom, top) = mirrored_pair("door_left", Axis::Up, &none).unwrap();
+        assert_eq!(
+            (bottom.as_str(), top.as_str()),
+            ("door_left_bottom", "door_left_top")
+        );
     }
 
     #[test]

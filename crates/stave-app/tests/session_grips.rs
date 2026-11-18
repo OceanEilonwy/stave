@@ -794,6 +794,10 @@ fn a_component_is_not_offered_inside_itself_unless_it_may_nest() {
     let inside = menu_labels(&cabinet, "case.inside");
     assert!(!inside.contains(&"Case".to_owned()), "{inside:?}");
     assert!(inside.contains(&"Divider".to_owned()), "{inside:?}");
+    // The library's Divider says it may nest: the space under a divider
+    // takes another divider, as its region's doc says.
+    let below = menu_labels(&cabinet, "divider.below");
+    assert!(below.contains(&"Divider".to_owned()), "{below:?}");
     let envelope = menu_labels(&cabinet, "envelope");
     assert!(envelope.contains(&"Case".to_owned()), "{envelope:?}");
 }

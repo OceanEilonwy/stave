@@ -183,12 +183,14 @@ never from a list in the app.
      checker says.
    - **A component is not put straight inside itself.** A component is
      not offered to fill a space that one of its own assemblies declares
-     (a `Case` in `case.inside`, a `Divider` in `divider.below`): that
-     would nest it in itself with nothing between. A space made from such
+     (a `Case` in `case.inside`): that would nest it in itself with
+     nothing between. A space made from such
      a region in the project (`split(case.inside, up)`) is the project's,
      and offers it as usual. A component that is meant to nest says so
      in its `///` doc comment with the words "may nest inside itself"
-     (any case): `/// A tray. It may nest inside itself.`
+     (any case): `/// A tray. It may nest inside itself.` The library's
+     `Divider` says so, since the space under a divider may take another
+     divider.
 3. **Applicability.** Each candidate is instantiated in a scratch copy
    with its defaults (and, for a setting with no default, the value it
    would get by step 6) and checked. Its own `require` lines are its
@@ -568,8 +570,10 @@ what was pointed at and its setting params as chosen, never a bare
   name plus `_bay`: `drawer_bay[bottom, top]`, `door_bay[left, right]`.
 - **Mirrored pairs.** The name plus its side: `door_left`, and
   `door_right = mirror(door_left, about: ...)`. A name that already ends
-  in a side has it replaced, never doubled: mirroring `door_left` keeps
-  it and adds `door_right`.
+  in a side of the mirrored axis has it replaced, never doubled:
+  mirroring `door_left` across keeps it and adds `door_right`. A side
+  of another axis is part of the name and stays: mirroring `leg_front`
+  across gives `leg_front_left` and `leg_front_right`.
 - **Held rules.** Named from the two things measured, joined by `_to_`,
   plus `_min` or `_max`: `slat_to_apron_front_min`. A word already in
   the name is not written again (`rail.rail` to `divider.panel` gives
