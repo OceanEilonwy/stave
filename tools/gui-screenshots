@@ -122,6 +122,20 @@ shot $window/finder_dark.png $cabinet --theme dark --finder door
 shot $window/library.png examples/japanese_joinery --theme light
 shot $window/library_dark.png examples/japanese_joinery --theme dark
 
+# The editing menu and card (docs/editing.md), drawn from the contract's
+# hand-built fixture (stave_app::edit) until the edit loop drives them: the
+# menu for a click in door_bay[left] (Drawer fits, FramePanelDoor still
+# being checked; then greyed with an illustrative reason, dark); the card
+# for Drawer refused with the checker's problem and its fix, then fitting
+# with Add enabled (dark); with a setting that needs a choice; and
+# FramePanelDoor waiting for its hinge side to be pointed at.
+shot $window/edit_menu.png $cabinet --theme light --edit-fixture menu
+shot $window/edit_menu_greyed_dark.png $cabinet --theme dark --edit-fixture greyed
+shot $window/edit_card_refused.png $cabinet --theme light --edit-fixture refused
+shot $window/edit_card_fits_dark.png $cabinet --theme dark --edit-fixture fits
+shot $window/edit_card_choose.png $cabinet --theme light --edit-fixture choose
+shot $window/edit_card_point.png $cabinet --theme light --edit-fixture point
+
 # ---- the editor (docs/screenshots/files) ----
 # `--view files` opens the editor beside the 3D view, sliding in from the
 # right with the file's tab on the rail (V2C_EditorOpen).
