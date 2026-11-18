@@ -242,8 +242,8 @@ fn a_newline_after_within_continues_the_line() {
 }
 
 #[test]
-fn locked_is_written_last() {
-    holds("param reveal = 1.5mm within 1mm..2mm locked\nrequire r : reveal == 1.5mm \"locked\"");
+fn locked_is_written_first() {
+    holds("locked param reveal = 1.5mm within 1mm..2mm\nrequire r : reveal == 1.5mm \"locked\"");
 }
 
 // ---------------------------------------------------------------------------

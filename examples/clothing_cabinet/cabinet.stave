@@ -17,12 +17,12 @@ project "Clothing cabinet" {
 
 // ---- parameters: the knobs ----
 // Every check must hold for every value inside these ranges.
-param cabinet_width  = 900mm within 600mm..1200mm
-param cabinet_height = 1700mm within 1400mm..2100mm    // bottom of the base to top of the top, without feet
-param cabinet_depth  = 560mm within 550mm..650mm
-param drawer_zone    = 500mm within 300mm..600mm       // height of the drawer section
-param slide_length   = 500mm within [350mm, 400mm, 450mm, 500mm]
-param reveal         = 1.5mm locked                    // gap between neighbouring fronts
+       param cabinet_width  = 900mm within 600mm..1200mm
+       param cabinet_height = 1700mm within 1400mm..2100mm    // bottom of the base to top of the top, without feet
+       param cabinet_depth  = 560mm within 550mm..650mm
+       param drawer_zone    = 500mm within 300mm..600mm       // height of the drawer section
+       param slide_length   = 500mm within [350mm, 400mm, 450mm, 500mm]
+locked param reveal         = 1.5mm                           // gap between neighbouring fronts
 
 let overhang = 20mm
 

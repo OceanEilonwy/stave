@@ -17,14 +17,14 @@ project "Nightstand" {
 }
 
 // ---- parameters ----
-param stand_width   = 450mm within 400mm..550mm
-param stand_height  = 600mm within 550mm..700mm     // floor to the top of the top
-param stand_depth   = 400mm within 380mm..450mm
-param drawer_height = 150mm within 120mm..200mm     // the drawer opening, top to divider
-param slide_length  = 350mm within [300mm, 350mm]
-param reveal        = 2mm locked                    // the gap round the inset drawer front
-let overhang  = 15mm                                // the top overhangs the front and both sides
-let toe_space = 60mm                                // floor to the underside of the bottom shelf
+       param stand_width   = 450mm within 400mm..550mm
+       param stand_height  = 600mm within 550mm..700mm     // floor to the top of the top
+       param stand_depth   = 400mm within 380mm..450mm
+       param drawer_height = 150mm within 120mm..200mm     // the drawer opening, top to divider
+       param slide_length  = 350mm within [300mm, 350mm]
+locked param reveal        = 2mm                           // the gap round the inset drawer front
+let overhang  = 15mm                                       // the top overhangs the front and both sides
+let toe_space = 60mm                                       // floor to the underside of the bottom shelf
 
 // ---- checks ----
 require drawer_room : bay[drawer].deep >= slide_length + cherry_19.thickness "the slide and the inset front must fit in the opening"

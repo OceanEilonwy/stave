@@ -1369,7 +1369,7 @@ impl<'a> Resolver<'a> {
                         ty,
                         default,
                         domain,
-                        locked: syntax.locked.is_some(),
+                        kind: syntax.kind(),
                     },
                 );
             }

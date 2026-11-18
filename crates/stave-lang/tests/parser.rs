@@ -683,8 +683,8 @@ fn every_item_form_parses() {
          component C {\n\
          \x20 /// Doc.\n\
          \x20 param a : Region\n\
-         \x20 param b : Count = 3 within [1, 2, 3] locked\n\
-         \x20 param c = 1mm within 1mm..2mm + 1mm\n\
+         \x20 locked param b : Count = 3 within [1, 2, 3]\n\
+         \x20 solved param c = 1mm within 1mm..2mm + 1mm\n\
          \x20 let d = -a.up * (2 + 3) / 4 - !true\n\
          \x20 region e[3] = split(a, up)\n\
          \x20 part g[2] : s { length: fit, place { ground } }\n\
@@ -710,10 +710,11 @@ fn every_item_form_parses() {
         panic!()
     };
     assert!(matches!(param.within, Some(Domain::OneOf { .. })));
-    assert!(param.locked.is_some());
+    assert_eq!(param.kind(), ParamKind::Locked);
     let DesignItem::Param(param) = &component.items[2].node else {
         panic!()
     };
+    assert_eq!(param.kind(), ParamKind::Solved);
     let Some(Domain::Range { hi, .. }) = &param.within else {
         panic!()
     };

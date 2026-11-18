@@ -385,11 +385,12 @@ impl Lowering {
     }
 }
 
-/// The keyword that starts an item node (after docs and `private`).
+/// The keyword that starts an item node (after docs, `private` and a
+/// param's kind).
 fn item_keyword(node: &SyntaxNode) -> Option<SyntaxToken> {
     node.children_with_tokens()
         .filter_map(|element| element.into_token())
-        .find(|token| token.kind().is_item_keyword() && token.kind() != SyntaxKind::KW_PRIVATE)
+        .find(|token| token.kind().is_item_keyword() && !token.kind().is_item_prefix())
 }
 
 fn design_item(node: &SyntaxNode) -> Option<DesignItem> {
@@ -478,7 +479,24 @@ fn param(node: &SyntaxNode) -> Option<Param> {
         name,
         spec,
         within,
-        locked: token(node, SyntaxKind::KW_LOCKED).map(|token| token_span(&token)),
+        mark: param_mark(node),
+    })
+}
+
+/// The `locked` or `solved` before `param`, if there is one.
+fn param_mark(node: &SyntaxNode) -> Option<Spanned<ParamMark>> {
+    let token = node
+        .children_with_tokens()
+        .filter_map(|element| element.into_token())
+        .find(|token| token.kind().is_param_kind())?;
+    let value = match token.kind() {
+        SyntaxKind::KW_LOCKED => ParamMark::Locked,
+        SyntaxKind::KW_SOLVED => ParamMark::Solved,
+        _ => return None,
+    };
+    Some(Spanned {
+        value,
+        span: token_span(&token),
     })
 }
 

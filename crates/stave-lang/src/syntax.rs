@@ -181,6 +181,8 @@ syntax_kinds! {
     KW_WITHIN,
     /// `locked`
     KW_LOCKED,
+    /// `solved`
+    KW_SOLVED,
     /// `fit`
     KW_FIT,
     /// `true`
@@ -215,7 +217,7 @@ syntax_kinds! {
     COMPONENT,
     /// `scene name "Title" { ... }`
     SCENE,
-    /// `param name : Type = default within domain locked`
+    /// `[locked | solved] param name : Type = default within domain`
     PARAM,
     /// `let name = expr`
     LET,
@@ -372,6 +374,8 @@ impl SyntaxKind {
                 | SyntaxKind::KW_PROJECT
                 | SyntaxKind::KW_LIBRARY
                 | SyntaxKind::KW_PRIVATE
+                | SyntaxKind::KW_LOCKED
+                | SyntaxKind::KW_SOLVED
                 | SyntaxKind::KW_KIND
                 | SyntaxKind::KW_RECIPE
                 | SyntaxKind::KW_STOCK
@@ -390,12 +394,30 @@ impl SyntaxKind {
         )
     }
 
+    /// `true` for the words that come before an item's own keyword:
+    /// `private`, and a param's kind, `locked` or `solved`.
+    pub fn is_item_prefix(self) -> bool {
+        matches!(
+            self,
+            SyntaxKind::KW_PRIVATE | SyntaxKind::KW_LOCKED | SyntaxKind::KW_SOLVED
+        )
+    }
+
+    /// `true` for a param's kind keyword, `locked` or `solved`, which comes
+    /// before `param`.
+    pub fn is_param_kind(self) -> bool {
+        matches!(self, SyntaxKind::KW_LOCKED | SyntaxKind::KW_SOLVED)
+    }
+
     /// `true` for the keywords that start an item allowed inside a
-    /// `component` body (the grammar's `design_item`).
+    /// `component` body (the grammar's `design_item`, with the param kinds
+    /// `locked` and `solved` that start a param).
     pub fn is_design_item_keyword(self) -> bool {
         matches!(
             self,
             SyntaxKind::KW_PARAM
+                | SyntaxKind::KW_LOCKED
+                | SyntaxKind::KW_SOLVED
                 | SyntaxKind::KW_LET
                 | SyntaxKind::KW_REGION
                 | SyntaxKind::KW_PART
@@ -479,6 +501,7 @@ impl SyntaxKind {
             "at" => SyntaxKind::KW_AT,
             "within" => SyntaxKind::KW_WITHIN,
             "locked" => SyntaxKind::KW_LOCKED,
+            "solved" => SyntaxKind::KW_SOLVED,
             "fit" => SyntaxKind::KW_FIT,
             "true" => SyntaxKind::KW_TRUE,
             "false" => SyntaxKind::KW_FALSE,

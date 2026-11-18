@@ -966,11 +966,12 @@ pub struct StepBlock {
 
 /// `param cabinet_width = 900mm within 600mm..1200mm`
 /// `param slide : SlideKind`
-/// `param reveal = 1.5mm locked`
+/// `locked param reveal = 1.5mm`
+/// `solved param overall_width = 900mm within 600mm..1200mm`
 ///
 /// The same form in modules, components and kinds. The domain lets the
-/// checker verify the design for every allowed value; `locked` stops smart
-/// edits from changing it.
+/// checker verify the design for every allowed value; the param's kind says
+/// what a smart edit may do with it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Param {
     /// The param's name.
@@ -979,8 +980,60 @@ pub struct Param {
     pub spec: ParamSpec,
     /// The allowed values.
     pub within: Option<Domain>,
-    /// `Some` with the keyword's span when the param is `locked`.
-    pub locked: Option<Span>,
+    /// The `locked` or `solved` written before `param`, with its span;
+    /// `None` for a plain param.
+    pub mark: Option<Spanned<ParamMark>>,
+}
+
+impl Param {
+    /// The param's kind: plain, locked or solved.
+    pub fn kind(&self) -> ParamKind {
+        self.mark
+            .as_ref()
+            .map_or(ParamKind::Plain, |mark| mark.value.kind())
+    }
+}
+
+/// The word written before `param` to give it a kind other than plain.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ParamMark {
+    /// `locked param`
+    Locked,
+    /// `solved param`
+    Solved,
+}
+
+impl ParamMark {
+    /// The keyword as written.
+    pub fn word(self) -> &'static str {
+        match self {
+            ParamMark::Locked => "locked",
+            ParamMark::Solved => "solved",
+        }
+    }
+
+    /// The kind this word gives a param.
+    pub fn kind(self) -> ParamKind {
+        match self {
+            ParamMark::Locked => ParamKind::Locked,
+            ParamMark::Solved => ParamKind::Solved,
+        }
+    }
+}
+
+/// What a smart edit may do with a param (grammar, "Param kinds"). Checking
+/// is the same for all three.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+pub enum ParamKind {
+    /// `param x = ...`: changed only when it is the single candidate, or when
+    /// the user picks it.
+    #[default]
+    Plain,
+    /// `locked param x = ...`: never changed; the chain of a smart edit stops
+    /// there.
+    Locked,
+    /// `solved param x = ... within ...`: the solver may solve for it.
+    Solved,
 }
 
 /// What a `param` declares: a type, a default, or both. A param with neither

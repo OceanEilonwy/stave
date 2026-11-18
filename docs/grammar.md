@@ -89,14 +89,12 @@ PUNCT         = "{" | "}" | "(" | ")" | "[" | "]" | "," | ":" | "." | ".." | "="
 ```
 stave project library import private kind recipe param let region stock part
 joint hardware assembly profile component scene require patch add set remove
-place pose at within locked fit true false
+place pose at within locked solved fit true false
 ```
 
-`solved` is a keyword too: with `locked` it starts a param of one of the
+`locked` and `solved` start a param of one of the
 [param kinds](#param-name--type--default-within-domain-with-locked-or-solved-before-it)
-(`solved param overall_width = ...`). Not built yet: until param kinds
-are, the parser still reads `solved` as a name, so it joins the list above
-with them.
+(`solved param overall_width = ...`).
 
 A keyword where a new name is expected is `error[reserved-word]`. A keyword
 **is** allowed wherever the grammar says `NAME`: after a `.` and before a `:`
@@ -197,13 +195,12 @@ local:
 > parsing continue normally.
 
 Item keywords are the words that start a declaration: `import`, `project`,
-`library`, `private`, `kind`, `recipe`, `stock`, `profile`, `component`,
-`scene`, `param`, `let`, `region`, `part`, `joint`, `hardware`, `assembly`,
-`require`, `patch`.
-`locked` and `solved` are item keywords as well: like `private`, they come
-before the keyword of a declaration (`locked param reveal = 1.5mm`), so a
-line that starts with one starts a declaration. (Not built yet: until
-param kinds are, the parser does not stop at them.)
+`library`, `private`, `locked`, `solved`, `kind`, `recipe`, `stock`,
+`profile`, `component`, `scene`, `param`, `let`, `region`, `part`, `joint`,
+`hardware`, `assembly`, `require`, `patch`.
+`locked` and `solved`, like `private`, come before the keyword of a
+declaration (`locked param reveal = 1.5mm`), so a line that starts with one
+starts a declaration.
 
 ```
 region front_opening = opening(
@@ -446,9 +443,8 @@ Notes for the parser:
   solved, not both"). The trailing `locked` of earlier drafts
   (`param reveal = 1.5mm locked`) is `error[syntax]`
   (`expected end of line, found 'locked'`) with the help
-  `write 'locked' first: locked param reveal = 1.5mm`. (Not built yet: the
-  parser still reads the trailing form, and three examples still use it,
-  until param kinds are built.)
+  `write 'locked' first: locked param reveal = 1.5mm` (the help repeats
+  the param as written, with `locked` moved to the front).
 - A `block(part_entry)` and a `block(place)` hold at most one `place`; a second
   one is `error[syntax]`. A joint has no body: `joint x : dado(...) { ... }` is
   `error[syntax]` with the help "a joint's settings go inside the parentheses".
@@ -748,8 +744,9 @@ is the same for all three.
 - The trailing `locked` of earlier drafts (`param reveal = 1.5mm locked`)
   is `error[syntax]`; see the notes under [Syntactic grammar](#syntactic-grammar).
 
-Not built yet: the parser reads only the trailing `locked` of draft 3, and
-none of these checks exists.
+Not built yet: the parser reads the three kinds and the model carries
+them, but the checks on `locked` and `solved` above (a default, a
+quantity, a `within`) are not made yet.
 
 ### `let name = expr`
 
@@ -3148,7 +3145,7 @@ produce a diagnostic with exactly that code and message (it may produce
 others). A design for a check that isn't built yet says so on its second
 line, `// pending: <reason>`; until the check lands it must check without any
 diagnostic, and the line comes off when it does. A design that needs
-language the parser doesn't read yet (a `solved param`, `box`, `shares:`)
+language the parser doesn't read yet
 can't check clean, so it waits in `tests/broken-next/`, in the same
 format with its `// pending:` line, and moves to `tests/broken/` with the
 change that builds its language. `docs/test-coverage.md` maps
@@ -3236,8 +3233,8 @@ UTF-16 offsets the language server protocol uses, are computed at the edge
 
 | Tier | Layers | When |
 |---|---|---|
-| Fast | 1 syntax, 2 types and names | on every change, within one keystroke |
-| Slow | 3 placement and sizes, 4 fit, 5 motion, 6 requires and ranges (z3), 7 buildability | in the background after typing pauses; cancelled and restarted by the next change |
+| Fast | 1 syntax, 2 types and names, 3 placement and sizes, and the overlaps of the parts' boxes at rest | on every change, within one keystroke; in the editor, on every move of the pointer |
+| Slow | 4 fit, 5 motion, 6 requires and ranges (z3), 7 buildability | in the background after typing pauses; cancelled and restarted by the next change |
 
 Results are computed incrementally (query-based, as in rust-analyzer's `salsa`):
 a change to one file re-runs only what depends on it, and determinism makes
@@ -3304,7 +3301,6 @@ ends a field, so lines are never joined or split) and normalises the rest:
   solved param overall_width = 900mm within 600mm..1200mm
   ```
 
-  (Not built yet, with param kinds.)
 - a comment at the end of a line keeps its column when there is room;
 - at most one blank line in a row, none at the start or end of a block or
   of the file.
@@ -3514,11 +3510,16 @@ What a `set` or `unset` path can address:
 | `cabinet_width` | the default of a `param`, or the value of a `let` |
 | `shelf.width`, `oak_19.thickness`, `all_open.explode` | a field of an item |
 | `shelf_dados.depth`, `shelf_dados.into` | a setting or role in a joint's or hardware's kind call |
-| `drawer.pull_kind`, `drawer[top].slide`, `apron_front.setback` | an argument of an assembly (a component param), added when it isn't written yet |
+| `drawer.pull_kind`, `apron_front.setback` | an argument of an assembly (a component param), added when it isn't written yet |
 | `drawer_bay.shares`, `envelope.across` | a named argument of the call that makes a region (`split`, `box`, `opening`, `cover`) |
 | `side_l.place.up`, `.place.across`, `.place.deep` | the placement term that fixes that axis (each axis has exactly one). A term that fixes two axes (`corners`) is replaced as a whole |
 | `side_l.place.orient` | the `orient` term |
 | `casework.Drawer.box_height` | the same, inside a component of a local module |
+
+The elements of an array share one declaration, so a path through one
+element (`drawer[top].slide`) is refused: the patch is not applied, and the
+reason says to set the value on the array (`drawer.slide`), which changes it
+for every element. `drawer[*].slide` means the same as `drawer.slide`.
 
 A patch may edit modules that are local folders. A module from a remote source
 is read-only (`error[not-supported]`). After a patch is applied, the whole

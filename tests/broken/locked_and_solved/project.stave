@@ -1,5 +1,4 @@
 // expect: error[syntax] expected 'param', found 'solved'
-// pending: the parser does not read 'locked param' yet
 stave 1
 
 project "Locked and solved" {

@@ -1,5 +1,5 @@
 // expect: error[missing-value] 'gap' has no value
-// pending: the parser does not read 'locked param' yet
+// pending: the parser reads 'locked param'; the check that a locked or solved param has a default is not built yet
 stave 1
 
 project "Locked without a default" {
