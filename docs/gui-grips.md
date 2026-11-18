@@ -41,11 +41,14 @@ the session holds.
   component's length between the two faces it is measured between (or,
   when another length of the assembly has the same value, the faces its
   placement term names); a part's length or width and the envelope's
-  sizes along the box's edge nearest the eye; a split's boundary at the
-  boundary. A grip with no direction in space (a count, an angle, a
-  length that is no gap) has no place on the model. Labels are moved
-  along their line so they cover no handle and no other label, and kept
-  inside the view.
+  sizes along the box's edge nearest the eye whose end no other handle
+  already holds (so the envelope's width, height and depth end on three
+  different corners and each handle can be grabbed); a split's boundary
+  at the boundary. A grip with no direction in space (a count, an angle,
+  a length that is no gap) has no place on the model. Labels are moved
+  along their line, to either side of it or on past the handle, so they
+  cover no handle, no other label and no floating card (the space's
+  menu, the edit's card), and kept inside the view.
 - **Stops.** Once listed, every movable grip's stops are searched on a
   worker thread (`Session::grip_stops_job`, cancelled when the grips
   change), each answer handed to `Session::grip_stops_found` as it
@@ -72,10 +75,17 @@ the session holds.
   with the arrow keys (Ctrl: round numbers) and Enter writes it.
 - **A typed value.** Clicking the number turns it into an entry. Enter
   tries the value through the same check (`TypeGripValue`) and writes it
-  when it fits. A value past a stop already found, or one the check
-  refuses, is not written: the entry stays open, marked, with why under
-  it ("Can't be 120mm: it stops at 180mm, because …"). Escape puts the
-  number back and drops what was tried.
+  when it fits. What is written is always the number typed, never
+  another: a value outside the grip's range (its stops once found;
+  before, its `within`, or how far a grip reaches, 1000mm either way),
+  or off the project's resolution, is refused before it is tried ("Can't
+  be 2900mm: this grip moves it between 780mm and 2780mm", "Can't be
+  912.3mm: it goes in steps of 0.5mm; the nearest is 912.5mm"), and a
+  try the session would write as another number is refused and dropped.
+  A value the check refuses is not written either. Each time the entry
+  stays open, marked, holding what was typed, with why under it ("Can't
+  be 120mm: it stops at 180mm, because …"). Escape puts the number back
+  and drops what was tried.
 - **A size that follows params.** Dragging its square handle changes
   what it follows. With one plain param the panel says which and to
   what before the drag ends ("Changes overall_width 500mm to 560mm")
@@ -124,7 +134,7 @@ or `examples/side_table_from_box`:
 | `grip_typed_refused.png` | `grip_typed_refused.edit` (`--select divider`) | 120mm typed: the entry stays open with why |
 | `grip_follows.png` | `grip_follows.edit` (`--select top`) | the table top's length dragged: "Changes overall_width 500mm to 560mm", everything that follows it in the ghost |
 | `grip_follows_pick.png` | `grip_follows_pick.edit` (`--select apron_front`) | the apron's length, which follows two plain params: the list to pick from |
-| `grip_envelope.png` | `grip_envelope.edit` | a click in the envelope: the menu and the three sizes along the box's edges |
+| `grip_envelope.png` | `grip_envelope.edit` | a click in the envelope: the menu and the three sizes along the box's edges, each handle on its own corner, each label clear of the menu |
 | `grip_solver.png` | `grip_solver.edit` | the height made solved within 1500mm..2000mm, waiting for Apply |
 
 ```

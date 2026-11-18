@@ -311,6 +311,60 @@ pub(super) fn amount_like(now: Amount, text: &str) -> Result<Amount, String> {
     })
 }
 
+/// A value typed for a movable grip checked before it is tried: the
+/// session would write the nearest step of the project's resolution, or
+/// the end of the grip's range, in place of a value off a step or past an
+/// end, so such a value is refused here, in words, and nothing different
+/// from what was typed is ever written. A size that follows params is
+/// checked by the session alone.
+pub(super) fn typed_check(listed: &ListedGrip, value: Amount) -> Result<(), String> {
+    let GripAction::Moves(movable) = &listed.grip.action else {
+        return Ok(());
+    };
+    let cant = |why: String| Err(format!("Can't be {}: {why}", amount_words(value)));
+    if let Some(((low, _), (high, _))) = grip_range(listed)
+        && let (_, Some(held)) = clamped(value, low, high)
+    {
+        return cant(held_words(listed, held).map_or_else(
+            || {
+                format!(
+                    "this grip moves it between {} and {}",
+                    amount_words(low),
+                    amount_words(high)
+                )
+            },
+            |why| format!("it {why}"),
+        ));
+    }
+    match &movable.steps {
+        // As the session snaps: to a whole number of steps.
+        SearchSteps::Step(step) => {
+            let nearest = value
+                .raw()
+                .checked_div(step.raw())
+                .map(|times| times.round())
+                .and_then(|times| step.raw().checked_mul(Rational::from_int(times)));
+            match nearest {
+                Some(nearest) if nearest == value.raw() => Ok(()),
+                Some(nearest) => cant(format!(
+                    "it goes in steps of {}; the nearest is {}",
+                    amount_words(*step),
+                    amount_words(value.with_raw(nearest))
+                )),
+                None => cant("it can't be worked out".to_owned()),
+            }
+        }
+        SearchSteps::List(values) => {
+            if values.iter().any(|listed| listed.raw() == value.raw()) {
+                Ok(())
+            } else {
+                let words: Vec<String> = values.iter().map(|v| amount_words(*v)).collect();
+                cant(format!("it can only be one of {}", words.join(", ")))
+            }
+        }
+    }
+}
+
 /// A param of the project a grip's switch can make solved, or plain
 /// again: its name and whether it is solved now. Only the project's own
 /// params can change kind (`param_kind_patch` refuses the rest), so a
@@ -691,6 +745,51 @@ mod tests {
             "stops at 7mm, because at 8mm 'mortise_wall' fails"
         );
         assert_eq!(clamped(mm(6), low, high), (mm(6), None));
+    }
+
+    #[test]
+    fn a_typed_value_the_session_would_change_is_refused_whatever_the_stops() {
+        // Before the stops are searched: the range is the within (or the
+        // reach), and a value past it is refused, not held at its end.
+        for stops in [
+            GripStops::NotSearched,
+            GripStops::NotSearchable,
+            GripStops::Failed("no".to_owned()),
+        ] {
+            let grip = movable(900, stops);
+            assert_eq!(
+                typed_check(&grip, mm(9000)).unwrap_err(),
+                "Can't be 9000mm: this grip moves it between 600mm and 1200mm"
+            );
+            assert_eq!(
+                typed_check(&grip, mm(100)).unwrap_err(),
+                "Can't be 100mm: this grip moves it between 600mm and 1200mm"
+            );
+            assert_eq!(typed_check(&grip, mm(950)), Ok(()));
+            assert_eq!(typed_check(&grip, mm(1200)), Ok(()));
+        }
+        // Found: the rule that stops it.
+        let grip = movable(
+            900,
+            GripStops::Found {
+                below: Box::new(Side {
+                    last_good: mm(600),
+                    end: SideEnd::Domain,
+                }),
+                above: Box::new(stopped_side(1000, 1001, "'fits_room' fails")),
+            },
+        );
+        assert_eq!(
+            typed_check(&grip, mm(1100)).unwrap_err(),
+            "Can't be 1100mm: it stops at 1000mm, because at 1001mm 'fits_room' fails"
+        );
+        // Off the resolution: refused with the nearest step, not rounded.
+        let grip = movable(900, GripStops::NotSearched);
+        assert_eq!(
+            typed_check(&grip, mm_amount(912.3).unwrap()).unwrap_err(),
+            "Can't be 912.3mm: it goes in steps of 0.5mm; the nearest is 912.5mm"
+        );
+        assert_eq!(typed_check(&grip, mm_amount(912.5).unwrap()), Ok(()));
     }
 
     #[test]

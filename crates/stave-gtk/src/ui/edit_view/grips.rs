@@ -46,7 +46,7 @@ use super::grip_panel::{GripPanel, PanelAction, install_style};
 use super::grip_text::{
     GripLook, Held, RangeEnd, SolverSwitch, amount_like, amount_words, clamped, grip_look,
     grip_range, grip_value, held_words, label_words, length_mm, mm_amount, panel_model, snapped,
-    solver_switches, suggested_range, typed_refusal,
+    solver_switches, suggested_range, typed_check, typed_refusal,
 };
 use crate::ui::{EDGE, Window};
 
@@ -224,12 +224,29 @@ fn high_face(axis: Axis) -> Face {
 /// Where a grip sits, from what its listing carries: the scene's
 /// `grip_place`, or, for a length the scene can't tell from another of
 /// the same value, the two faces its placement term names; a part's
-/// length or width across the part.
+/// length or width across the part. `handles` holds the handles placed
+/// before this one: a size drawn along a box's edge takes the nearest
+/// edge whose handle is not on one of them, so no two handles share a
+/// corner (the envelope's width and height would both end at the corner
+/// nearest the eye) and each can be grabbed.
 fn place_of(
     graph: &SceneGraph,
     listed: &ListedGrip,
     index: usize,
     eye: Option<Vec3>,
+    handles: &mut Vec<Vec3>,
+) -> Option<Placed> {
+    let placed = place_apart(graph, listed, index, eye, handles)?;
+    handles.push(placed.handle);
+    Some(placed)
+}
+
+fn place_apart(
+    graph: &SceneGraph,
+    listed: &ListedGrip,
+    index: usize,
+    eye: Option<Vec3>,
+    handles: &[Vec3],
 ) -> Option<Placed> {
     let value = length_mm(grip_value(listed))?;
     let look = grip_look(listed);
@@ -250,7 +267,7 @@ fn place_of(
             return None;
         };
         let bounds = graph.drawn_box(graph.node_of(Item::Part(*part))?)?;
-        let (start, handle, up) = edge_dimension(&bounds, axis, eye)?;
+        let (start, handle, up) = edge_dimension(&bounds, axis, eye, handles)?;
         return Some(placed(handle, start, up));
     };
     match place {
@@ -287,7 +304,7 @@ fn place_of(
         // handle on the face that moves.
         PlaceInput::Envelope { region, face } => {
             let bounds = graph.region(*region)?.bounds;
-            let (start, handle, up) = edge_dimension(&bounds, face.axis(), eye)?;
+            let (start, handle, up) = edge_dimension(&bounds, face.axis(), eye, handles)?;
             Some(placed(handle, start, up))
         }
         PlaceInput::Share { low, high, axis } => match graph.grip_place(GripOf::Share {
@@ -305,12 +322,15 @@ fn place_of(
     }
 }
 
-/// A box's size along `axis` as a dimension on the edge nearest the eye:
-/// its low end, its high end (the handle) and the way up the axis.
+/// A box's size along `axis` as a dimension on the edge nearest the eye
+/// whose high end is not one of `handles` (the nearest edge when every
+/// one is): its low end, its high end (the handle) and the way up the
+/// axis.
 fn edge_dimension(
     bounds: &stave_model::solved::WorldBox,
     axis: Axis,
     eye: Option<Vec3>,
+    handles: &[Vec3],
 ) -> Option<(Vec3, Vec3, Vec3)> {
     let [first, second] = axis.others();
     let (low, high) = (bounds.min().get(axis), bounds.max().get(axis));
@@ -333,9 +353,16 @@ fn edge_dimension(
             ((at(low, edge) + at(high, edge)) * 0.5 - eye).length()
         })
     };
+    edges.sort_by(|x, y| distance(*x).total_cmp(&distance(*y)));
+    let free = |edge: &(Length, Length)| {
+        let handle = at(high, *edge);
+        !handles.iter().any(|other| (*other - handle).length() < 1.0)
+    };
     let edge = edges
-        .into_iter()
-        .min_by(|x, y| distance(*x).total_cmp(&distance(*y)))?;
+        .iter()
+        .copied()
+        .find(free)
+        .or_else(|| edges.first().copied())?;
     let up = stave_geom::render::direction(high_face(axis).direction());
     Some((at(low, edge), at(high, edge), up))
 }
@@ -896,11 +923,12 @@ impl Window {
             let (Some(grips), Some((_, graph))) = (session.grips(), session.drawable()) else {
                 return;
             };
+            let mut handles = Vec::new();
             let places: Vec<Placed> = grips
                 .grips()
                 .iter()
                 .enumerate()
-                .filter_map(|(index, listed)| place_of(graph, listed, index, eye))
+                .filter_map(|(index, listed)| place_of(graph, listed, index, eye, &mut handles))
                 .collect();
             let listed = places
                 .iter()
@@ -1521,23 +1549,19 @@ impl Window {
         let Some(listed) = self.listed_grip(index) else {
             return;
         };
-        let typed = amount_like(grip_value(&listed), text.trim());
-        // A value past a stop the search found would be held at the stop:
-        // say so rather than write another value than the one typed.
-        let held = typed.as_ref().ok().and_then(|value| {
-            let ((low, _), (high, _)) = grip_range(&listed)?;
-            let (_, held) = clamped(*value, low, high);
-            held.zip(Some(*value))
-        });
-        let refusal = match (typed, held) {
-            (Err(words), _) => Some(words),
-            (Ok(_), Some((held, value)))
-                if matches!(listed.stops, stave_app::gripping::GripStops::Found { .. }) =>
-            {
-                held_words(&listed, held)
-                    .map(|why| format!("Can't be {}: it {why}", amount_words(value)))
+        // A value the session would write differently (past an end of the
+        // range, off the resolution) is refused before it is tried: what
+        // is written is always the number typed.
+        let typed = amount_like(grip_value(&listed), text.trim())
+            .and_then(|value| typed_check(&listed, value).map(|()| value));
+        let refusal = match typed {
+            Err(words) => {
+                // A value tried before and still shown in the panel goes,
+                // so the panel never shows another number than the entry.
+                self.drop_typed_change(index);
+                Some(words)
             }
-            (Ok(value), _) => {
+            Ok(value) => {
                 {
                     let mut state = self.editing.grips.state.borrow_mut();
                     state.open = Some(index);
@@ -1548,29 +1572,66 @@ impl Window {
                     grip: index,
                     value,
                 }));
-                let progress = self
-                    .session
-                    .borrow()
-                    .change()
-                    .map(|change| change.progress().clone());
-                match progress {
-                    Some(progress) => typed_refusal(&progress),
-                    None => Some("it can't be tried".to_owned()),
+                let (progress, written) = {
+                    let session = self.session.borrow();
+                    let change = session.change();
+                    (
+                        change.map(|change| change.progress().clone()),
+                        change.and_then(|change| typed_written(&listed, change, index)),
+                    )
+                };
+                match (progress, written) {
+                    // Whatever the verdict, the session would write
+                    // another number: refused, and its try dropped.
+                    (_, Some(written)) if written.raw() != value.raw() => {
+                        self.drop_typed_change(index);
+                        Some(format!(
+                            "Can't be {}: it would be written as {}",
+                            amount_words(value),
+                            amount_words(written)
+                        ))
+                    }
+                    (Some(progress), _) => typed_refusal(&progress),
+                    (None, _) => Some("it can't be tried".to_owned()),
                 }
             }
         };
-        let state = self.editing.grips.state.borrow();
+        self.show_typed_result(index, text, refusal);
+    }
+
+    /// A typed value's try that is still open on grip `index` is
+    /// cancelled; the entry stays open.
+    fn drop_typed_change(self: &Rc<Self>, index: usize) {
+        let open = self.session.borrow().change().and_then(drag_index) == Some(index);
+        if open {
+            self.dispatch(Command::Edit(EditCommand::Cancel));
+        }
+    }
+
+    /// Shows what became of a typed value: written (Add), or why not,
+    /// under the entry, which stays open holding the text typed.
+    fn show_typed_result(self: &Rc<Self>, index: usize, text: &str, refusal: Option<String>) {
+        let mut state = self.editing.grips.state.borrow_mut();
         let Some(marks) = state.marks.iter().find(|m| m.index == index) else {
             return;
         };
         match refusal {
             Some(words) => {
-                marks.error.set_label(&words);
-                marks.error.set_visible(true);
-                if let Some(entry) = &marks.entry {
+                // A cancel may have closed the entry: open it again.
+                if let (Some(stack), Some(entry)) = (&marks.stack, &marks.entry) {
+                    stack.set_visible_child_name("entry");
+                    if entry.text() != text {
+                        entry.set_text(text);
+                    }
                     entry.add_css_class("error");
                     entry.grab_focus();
                 }
+                marks.error.set_label(&words);
+                marks.error.set_visible(true);
+                state.typing = Some(index);
+                drop(state);
+                // The label grew: placed again, clear of the handles.
+                self.request_render();
             }
             None => {
                 marks.error.set_visible(false);
@@ -1689,20 +1750,37 @@ impl Window {
                 panel_at = Some(end);
             }
         }
-        // Each label beside its line, where it covers no handle and no
-        // label placed before it, inside the view and clear of the rail.
+        // Each label beside its line, where it covers no handle, no label
+        // placed before it and no card floating over the view (the menu
+        // of a space, the edit's card: a number under one could not be
+        // clicked), inside the view and clear of the rail.
         let handles: Vec<(f64, f64)> = drawing.iter().map(|drawn| drawn.end).collect();
+        let cards: Vec<Rect> = [
+            self.editing.menu.root.upcast_ref::<gtk::Widget>(),
+            self.editing.card.root.upcast_ref(),
+        ]
+        .into_iter()
+        .filter(|card| card.is_visible())
+        .filter_map(|card| card.compute_bounds(&self.widgets.design))
+        .map(|bounds| Rect {
+            x: f64::from(bounds.x()),
+            y: f64::from(bounds.y()),
+            width: f64::from(bounds.width()),
+            height: f64::from(bounds.height()),
+        })
+        .collect();
         let mut taken: Vec<Rect> = Vec::new();
         for (label, start, end, (width, height)) in labels {
             let right = (view_width - rail - width - edge).max(edge);
             let bottom = (view_height - height - edge).max(edge);
-            let spot = |along: f64| {
+            let spot = |(along, side): (f64, f64)| {
                 let (dx, dy) = (end.0 - start.0, end.1 - start.1);
                 let length = dx.hypot(dy).max(1.0);
                 let mut across = (-dy / length, dx / length);
                 if across.1 > 0.0 {
                     across = (-across.0, -across.1);
                 }
+                across = (across.0 * side, across.1 * side);
                 let at = (start.0 + dx * along, start.1 + dy * along);
                 Rect {
                     x: (at.0 + across.0 * LABEL_OFFSET - width / 2.0).clamp(edge, right),
@@ -1711,17 +1789,30 @@ impl Window {
                     height,
                 }
             };
+            let off_cards = |rect: &Rect| !cards.iter().any(|card| rect.overlaps(card));
             let clear = |rect: &Rect| {
-                !handles
-                    .iter()
-                    .any(|point| rect.near(*point, HANDLE / 2.0 + 4.0))
+                off_cards(rect)
+                    && !handles
+                        .iter()
+                        .any(|point| rect.near(*point, HANDLE / 2.0 + 4.0))
                     && !taken.iter().any(|other| rect.overlaps(other))
             };
-            let rect = [0.5, 0.3, 0.7, 0.2, 0.8]
+            // Above the line first, then below it; then on past the
+            // handle, where a line that runs behind a card still shows.
+            let length = (end.0 - start.0).hypot(end.1 - start.1).max(1.0);
+            let past = 1.0 + (HANDLE + width.max(height)) / length;
+            let spots: Vec<Rect> = [1.0, -1.0]
                 .into_iter()
+                .flat_map(|side| [0.5, 0.3, 0.7, 0.2, 0.8].map(|along| (along, side)))
+                .chain([(past, 0.0), (past, 1.0), (past, -1.0)])
                 .map(spot)
+                .collect();
+            let rect = spots
+                .iter()
                 .find(|rect| clear(rect))
-                .unwrap_or_else(|| spot(0.5));
+                .or_else(|| spots.iter().find(|rect| off_cards(rect)))
+                .copied()
+                .unwrap_or_else(|| spot((0.5, 1.0)));
             grips.layer.move_(label, rect.x, rect.y);
             taken.push(rect);
         }
@@ -1934,6 +2025,16 @@ fn drag_target(change: &Change, index: usize) -> Option<Amount> {
     }
 }
 
+/// The value a typed movable grip's change would write, when it is open
+/// on `index`; `None` for a size that follows params (its params are
+/// written, and the size they reach is shown in the panel).
+fn typed_written(listed: &ListedGrip, change: &Change, index: usize) -> Option<Amount> {
+    match listed.grip.action {
+        GripAction::Moves(_) => drag_target(change, index),
+        GripAction::Follows(_) => None,
+    }
+}
+
 /// `true` when a change fits.
 fn fits(progress: &Progress) -> bool {
     matches!(progress, Progress::Tried(Verdict::Fits(_)))
@@ -2018,6 +2119,37 @@ mod tests {
     }
 
     #[test]
+    fn the_envelopes_three_handles_sit_on_three_corners() {
+        let mm = |n| Length::from_mm(n);
+        let bounds = stave_model::solved::WorldBox::new(
+            Point::default(),
+            Point::default()
+                .with(Axis::Across, mm(900))
+                .with(Axis::Up, mm(1800))
+                .with(Axis::Deep, mm(600)),
+        );
+        // Front, right and above, as the camera usually stands.
+        let corner = stave_geom::render::point(
+            Point::default()
+                .with(Axis::Across, mm(900))
+                .with(Axis::Up, mm(1800))
+                .with(Axis::Deep, mm(0)),
+        );
+        let eye = corner + (corner - stave_geom::render::point(bounds.min())) * 2.0;
+        let mut handles: Vec<Vec3> = Vec::new();
+        for axis in [Axis::Across, Axis::Up, Axis::Deep] {
+            let (start, handle, _) = edge_dimension(&bounds, axis, Some(eye), &handles).unwrap();
+            assert!((handle - start).length() > 500.0);
+            handles.push(handle);
+        }
+        for (i, a) in handles.iter().enumerate() {
+            for b in &handles[i + 1..] {
+                assert!((*a - *b).length() > 500.0, "two handles share a corner");
+            }
+        }
+    }
+
+    #[test]
     fn labels_keep_off_each_other_and_the_handles() {
         let label = Rect {
             x: 10.0,
@@ -2088,6 +2220,57 @@ mod tests {
         assert!(picked.choices[0].picked);
         assert_eq!(picked.changes, ["Changes overall_width 500mm to 520mm"]);
         assert!(picked.can_apply);
+        let _ = std::fs::remove_dir_all(&folder);
+    }
+
+    #[test]
+    fn a_typed_value_past_the_range_is_refused_before_the_stops_are_found() {
+        let folder = table("typed");
+        let mut session = Session::new(folder.clone());
+        send(
+            &mut session,
+            EditCommand::ListGrips(GripSelection::Envelope),
+        );
+        let grips = session.grips().unwrap();
+        let index = grips
+            .grips()
+            .iter()
+            .position(|listed| listed.grip.label == "overall_width")
+            .unwrap();
+        let listed = grips.grips()[index].clone();
+        assert!(matches!(
+            listed.stops,
+            stave_app::gripping::GripStops::NotSearched
+        ));
+        // The window refuses it, naming the range, before trying it.
+        assert_eq!(
+            typed_check(&listed, mm_amount(9000.0).unwrap()).unwrap_err(),
+            "Can't be 9000mm: this grip moves it between 400mm and 600mm"
+        );
+        // Tried anyway, the session would write the end of the range: the
+        // window sees another number than the one typed, and refuses it.
+        send(
+            &mut session,
+            EditCommand::TypeGripValue {
+                grip: index,
+                value: mm_amount(9000.0).unwrap(),
+            },
+        );
+        let written = typed_written(&listed, session.change().unwrap(), index).unwrap();
+        assert_eq!(amount_words(written), "600mm");
+        // A value inside the range is written as typed.
+        send(&mut session, EditCommand::Cancel);
+        let typed = mm_amount(550.0).unwrap();
+        assert_eq!(typed_check(&listed, typed), Ok(()));
+        send(
+            &mut session,
+            EditCommand::TypeGripValue {
+                grip: index,
+                value: typed,
+            },
+        );
+        let written = typed_written(&listed, session.change().unwrap(), index).unwrap();
+        assert_eq!(written.raw(), typed.raw());
         let _ = std::fs::remove_dir_all(&folder);
     }
 
