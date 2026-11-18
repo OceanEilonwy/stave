@@ -1,4 +1,5 @@
 // expect: error[out-of-range] 'length' must be within [250mm, 300mm, 350mm, 400mm, 450mm, 500mm, 550mm, 600mm], found 320mm
+// fix: patch "Use 300mm" { set runner.length = 300mm }
 stave 1
 
 project "Out of range" {

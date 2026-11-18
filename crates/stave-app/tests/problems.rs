@@ -75,10 +75,10 @@ fn a_door_that_hits_lists_the_door_and_what_it_hits() {
         outline(&tree),
         [
             "wall [involved]",
-            "  Motion  project.stave[82]",
+            "  Motion  project.stave[83]",
             "door/",
             "  panel [1]",
-            "    Motion  project.stave[82]",
+            "    Motion  project.stave[83]",
         ]
     );
     let row = &tree.assemblies[0].entries[0].rows[0];
@@ -91,7 +91,7 @@ fn a_door_that_hits_lists_the_door_and_what_it_hits() {
         "door.panel hits wall when door is opened past 0.6deg"
     );
     assert!(row.places[0].location.path.ends_with("project.stave"));
-    assert_eq!(row.places[0].location.line.get(), 82);
+    assert_eq!(row.places[0].location.line.get(), 83);
 }
 
 #[test]
@@ -165,12 +165,12 @@ fn a_motion_problem_has_its_details_and_its_card() {
             .text
             .starts_with("error[motion]: door.panel hits wall when door is opened past 0.6deg\n")
     );
-    assert!(details.text.contains("82 | assembly door : Door {"));
-    assert!(details.text.contains("  --> project.stave:82:10\n"));
+    assert!(details.text.contains("83 | assembly door : Door {"));
+    assert!(details.text.contains("  --> project.stave:83:10\n"));
     assert!(
         details
             .text
-            .ends_with("= help: leave at least 1mm between door and wall")
+            .contains("= help: leave at least 1mm between door and wall\n")
     );
     assert_eq!(details.fixes.len(), 1);
     assert_eq!(

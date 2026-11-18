@@ -33,6 +33,20 @@ struct Expectation {
     pending: Option<String>,
 }
 
+/// Layer 1 codes a later layer reports too: a design that expects one of
+/// them and parses clean is for the later layer (`missing-value` for a
+/// `locked` param with no default is the resolver's).
+const ALSO_LATER: &[Code] = &[Code::MissingValue];
+
+/// `true` for a design whose layer 1 code a later layer reports.
+fn for_a_later_layer(expected: &Expectation, text: &str) -> bool {
+    let mut sources = SourceMap::new();
+    let Ok(file) = sources.add("project.stave", text) else {
+        return false;
+    };
+    ALSO_LATER.contains(&expected.code) && parse_file(file, text).diagnostics.is_empty()
+}
+
 /// Reads the `// expect:` line (and the optional `// pending:` line) of a
 /// broken design.
 fn expectation(path: &Path, text: &str) -> Expectation {
@@ -101,6 +115,9 @@ fn broken_designs_produce_their_expected_diagnostic() {
             }
         }
         let rendered = render_diagnostics(&sources, &diagnostics);
+        if for_a_later_layer(&expected, &text) {
+            continue;
+        }
         if expected.code.layer() <= implemented && expected.pending.is_none() {
             checked += 1;
             let [only] = diagnostics.as_slice() else {
@@ -141,7 +158,10 @@ fn broken_designs_produce_their_expected_diagnostic() {
 fn the_rest_of_a_broken_file_still_parses() {
     let mut sources = SourceMap::new();
     for (path, text, expected) in corpus() {
-        if expected.code.layer() != 1 || expected.pending.is_some() {
+        if expected.code.layer() != 1
+            || expected.pending.is_some()
+            || for_a_later_layer(&expected, &text)
+        {
             continue;
         }
         let file = sources.add(path.to_string_lossy(), text.as_str()).unwrap();

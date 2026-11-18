@@ -188,6 +188,7 @@ impl Solver<'_> {
         call: &KindCallDef,
         env: &Env<'_>,
         what: &str,
+        owner: DefId,
     ) -> Solved<Binding> {
         let kind_value = match self.eval(&call.kind, env)? {
             Value::Kind(kind) => kind,
@@ -296,12 +297,20 @@ impl Solver<'_> {
         if let Some(ctx) = self.module_ctx(DefId::Kind(kind)) {
             for (name, value) in &settings {
                 if let Some(param) = kind_def.params.iter().find(|p| p.decl.name == *name) {
-                    let span = call
-                        .named
-                        .iter()
-                        .find(|s| s.name == *name)
-                        .map_or(call.span, |s| s.value.span);
-                    self.check_domain(param, value, env.file, span, name, ctx)?;
+                    let written = call.named.iter().find(|s| s.name == *name);
+                    let span = written.map_or(call.span, |s| s.value.span);
+                    // A setting written in this call is set by a patch
+                    // on the declaration; one given by a kind value
+                    // elsewhere is not.
+                    let target = written
+                        .and_then(|_| self.model.defs.patch_path(owner, self.model.root))
+                        .map(|path| format!("{path}.{name}"));
+                    let written = crate::fixes::Written {
+                        file: env.file,
+                        span,
+                        path: target,
+                    };
+                    self.check_domain(param, value, written, name, ctx)?;
                 }
             }
         }
@@ -389,20 +398,22 @@ impl Solver<'_> {
             array,
         };
         let what = format!("joint '{}'", inst.name);
-        let result = self.bind_call(&def.call, &env, &what).and_then(|binding| {
-            let base = self.model.defs.kind(binding.kind).map(|k| k.base);
-            if base == Some(BaseKind::Joint) {
-                Ok(binding)
-            } else {
-                Err(self.error(
-                    Code::TypeMismatch,
-                    format!("'{}' needs a joint kind", inst.name),
-                    def.decl.file,
-                    def.call.kind.span,
-                    "use a kind declared with kind name : joint",
-                ))
-            }
-        });
+        let result = self
+            .bind_call(&def.call, &env, &what, DefId::Joint(inst.def))
+            .and_then(|binding| {
+                let base = self.model.defs.kind(binding.kind).map(|k| k.base);
+                if base == Some(BaseKind::Joint) {
+                    Ok(binding)
+                } else {
+                    Err(self.error(
+                        Code::TypeMismatch,
+                        format!("'{}' needs a joint kind", inst.name),
+                        def.decl.file,
+                        def.call.kind.span,
+                        "use a kind declared with kind name : joint",
+                    ))
+                }
+            });
         self.leave();
         if let Some(slot) = self.joints.get_mut(joint.index()) {
             *slot = match &result {

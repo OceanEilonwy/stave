@@ -1,4 +1,5 @@
 // expect: error[motion] door_l.panel hits door_r.panel when door_l is opened past 0.1deg
+// fix: patch "Use right: 8.5mm" { set door_l.mount = overlay(left: 16mm, right: 8.5mm, top: -2mm, bottom: 16mm) }
 stave 1
 
 // A pair of doors hinged on the same middle divider, their hinge edges

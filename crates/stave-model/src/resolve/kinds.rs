@@ -139,6 +139,7 @@ impl Resolver<'_> {
                 .early_kind_params
                 .remove(&(id, index))
                 .unwrap_or((Ty::Unknown, None));
+            self.check_param_kind(origin.file, param, &ty, default.is_some(), false);
             let domain = param
                 .within
                 .as_ref()

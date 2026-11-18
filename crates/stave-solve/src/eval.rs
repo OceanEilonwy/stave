@@ -5,7 +5,7 @@ use std::cell::RefCell;
 use stave_lang::ast::Span;
 use stave_lang::placement::{Axis, Face};
 use stave_lang::units::{ExactLength, Rational};
-use stave_lang::{Code, FileId};
+use stave_lang::{Code, Diagnostic, FileId, Label};
 use stave_model::defs::{
     ArrayDef, DefId, Index, Member, RExpr, RExprKind, StockField, Symbol, Text, TextPart, Word,
 };
@@ -18,6 +18,7 @@ use stave_model::value::{
 use stave_schema::functions::Builtin;
 use stave_schema::words::StockForm;
 
+use crate::fixes::Written;
 use crate::{Frame, Memo, Reported, Solved, Solver};
 
 /// The roles and settings of one application of a kind.
@@ -498,8 +499,14 @@ impl Solver<'_> {
                         self.check_domain(
                             def,
                             value,
-                            def.decl.file,
-                            default.span,
+                            Written {
+                                file: def.decl.file,
+                                span: default.span,
+                                path: self
+                                    .model
+                                    .defs
+                                    .patch_path(DefId::Param(inst.def), self.model.root),
+                            },
                             &inst.name,
                             domain_ctx,
                         )?;
@@ -547,7 +554,22 @@ impl Solver<'_> {
                                 instance: inst.instance,
                                 element: None,
                             };
-                            self.check_domain(def, value, file, arg.span, &inst.name, domain_ctx)?;
+                            let target = self
+                                .model
+                                .defs
+                                .patch_path(DefId::Assembly(assembly), self.model.root)
+                                .map(|path| format!("{path}.{}", def.decl.name));
+                            self.check_domain(
+                                def,
+                                value,
+                                Written {
+                                    file,
+                                    span: arg.span,
+                                    path: target,
+                                },
+                                &inst.name,
+                                domain_ctx,
+                            )?;
                         }
                         value
                     }
@@ -571,8 +593,7 @@ impl Solver<'_> {
         &mut self,
         def: &stave_model::defs::ParamDef,
         value: &Value,
-        file: FileId,
-        span: Span,
+        written: Written,
         name: &str,
         domain_ctx: Ctx,
     ) -> Solved<()> {
@@ -585,7 +606,9 @@ impl Solver<'_> {
             kind: None,
             array: None,
         };
-        let (inside, text) = match domain {
+        // Whether the value is inside, the domain as messages write it, and
+        // the allowed value nearest to it.
+        let (inside, text, nearest) = match domain {
             stave_model::defs::Domain::Range { low, high, .. } => {
                 let low = self.eval(low, &module_env)?;
                 let high = self.eval(high, &module_env)?;
@@ -593,30 +616,45 @@ impl Solver<'_> {
                     == Some(Value::Bool(true));
                 let below = value::binary(stave_lang::ast::BinaryOp::Le, value, &high).ok()
                     == Some(Value::Bool(true));
-                (above && below, format!("{low}..{high}"))
+                let text = format!("{low}..{high}");
+                (above && below, text, if above { high } else { low })
             }
             stave_model::defs::Domain::OneOf { values, .. } => {
                 let mut list = Vec::new();
-                let mut inside = false;
                 for v in values {
-                    let v = self.eval(v, &module_env)?;
-                    inside |= &v == value;
-                    list.push(v.to_string());
+                    list.push(self.eval(v, &module_env)?);
                 }
-                (inside, format!("[{}]", list.join(", ")))
+                let inside = list.contains(value);
+                let nearest = crate::fixes::nearest(value, &list).cloned();
+                let text = list.iter().map(Value::to_string).collect::<Vec<_>>();
+                let text = format!("[{}]", text.join(", "));
+                match nearest {
+                    Some(nearest) => (inside, text, nearest),
+                    None => (inside, text, value.clone()),
+                }
             }
         };
         if inside {
             return Ok(());
         }
         let short = name.rsplit('.').next().unwrap_or(name);
-        Err(self.error(
+        let mut diagnostic = Diagnostic::error(
             Code::OutOfRange,
             format!("'{short}' must be within {text}, found {value}"),
-            file,
-            span,
-            format!("give a value within {text}"),
-        ))
+            Label::new(written.file, written.span),
+        )
+        .with_help(format!("give a value within {text}"));
+        // The fix sets the value to the nearest allowed one, where a patch
+        // can reach the value (grammar, "Fixes").
+        if &nearest != value
+            && let Some(fix) = written
+                .path
+                .and_then(|path| crate::fixes::set_to(&path, &nearest))
+        {
+            diagnostic = diagnostic.with_fix(fix);
+        }
+        self.report(diagnostic);
+        Err(Reported)
     }
 
     pub(crate) fn let_value(&mut self, binding: stave_model::ids::LetId) -> Solved<Value> {

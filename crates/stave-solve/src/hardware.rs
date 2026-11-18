@@ -430,7 +430,12 @@ impl Solver<'_> {
         };
         let name = inst.name.clone();
         let span = def.call.span;
-        let binding = self.bind_call(&def.call, &env, &format!("hardware '{name}'"))?;
+        let binding = self.bind_call(
+            &def.call,
+            &env,
+            &format!("hardware '{name}'"),
+            DefId::Hardware(inst.def),
+        )?;
         let Some(kind) = self.model.defs.kind(binding.kind).cloned() else {
             return Err(Reported);
         };

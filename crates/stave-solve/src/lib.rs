@@ -33,6 +33,7 @@ mod boards;
 mod build;
 mod contact;
 mod eval;
+mod fixes;
 mod hardware;
 mod help;
 mod joints;

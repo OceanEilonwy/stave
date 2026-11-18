@@ -148,6 +148,13 @@ fn root_files(modules: &ModuleSet) -> impl Iterator<Item = FileId> + '_ {
         .flat_map(|module| module.files.iter().map(|file| file.file))
 }
 
+/// The text of every file of the project's module.
+pub(super) fn root_sources(modules: &ModuleSet) -> std::collections::BTreeMap<FileId, String> {
+    root_files(modules)
+        .map(|file| (file, text(modules, file).to_owned()))
+        .collect()
+}
+
 fn text(modules: &ModuleSet, file: FileId) -> &str {
     modules
         .sources

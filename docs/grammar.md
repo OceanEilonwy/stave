@@ -744,10 +744,6 @@ is the same for all three.
 - The trailing `locked` of earlier drafts (`param reveal = 1.5mm locked`)
   is `error[syntax]`; see the notes under [Syntactic grammar](#syntactic-grammar).
 
-Not built yet: the parser reads the three kinds and the model carries
-them, but the checks on `locked` and `solved` above (a default, a
-quantity, a `within`) are not made yet.
-
 ### `let name = expr`
 
 A named value. Not a knob: it has no range and can't be passed in.
@@ -3058,7 +3054,7 @@ shape of their messages are fixed, because tests and AI tools match on them.
 | Layer | Code | Message |
 |---|---|---|
 | 1 | `syntax` | `expected <what>, found <token>`; several expectations are joined with "or" |
-| 1 | `missing-value` | `'<name>' has no value` |
+| 1, 2 | `missing-value` | `'<name>' has no value` (layer 2 for a `locked` or `solved` param with no default) |
 | 1 | `reserved-word` | `'<word>' is a reserved word and can't be used as a name` |
 | 1 | `unknown-unit` | `unknown unit '<unit>' (expected one of mm, cm, m, in, ft, deg)` |
 | 1 | `unclosed-bracket` | `this "<bracket>" is never closed` |
@@ -3197,8 +3193,17 @@ error[require-range]: 'hanger_room' does not hold for every allowed value: room 
   its `// pending:` line); the corpus test then requires the diagnostic's
   first fix to be exactly that patch.
 
-Not built yet: a diagnostic can carry fixes, and the corpus test reads
-`// fix:` lines, but no check offers a fix yet.
+The checks that offer fixes so far:
+
+| Diagnostic | Fix |
+|---|---|
+| `out-of-range` for a param's `within` | sets the value to the nearest allowed one, where it is written: the param's default, the assembly's argument, or the setting in the joint's or hardware's kind call (`patch "Use 300mm" { set runner.length = 300mm }`) |
+| `motion`, a hinged front that turns into something as it starts to open | sets the overlay on the edge between them to what clears, as an exact length: in the assembly's `Mount` argument, or in the one `cover(..., overlay(...))` region of its component (`patch "Use left: 17mm" { set door.mount = overlay(left: 17mm, right: 17.8mm) }`); for two mirrored fronts that meet, `meeting:` |
+| `motion`, a hinged front that hits something | opens it no further than just short of where it hits, a tenth of a degree, when the param its hardware's kind turns to allows that value (`patch "Open no further than 106.8deg" { set Door.hinges.opening_angle = 106.8deg }`) |
+
+A fix edits only the project's own module: a value written in a library
+gets no fix. A `solved param` with no `within` gets none either: there is
+no right range to guess.
 
 ---
 
