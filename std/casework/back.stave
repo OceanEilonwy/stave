@@ -23,4 +23,16 @@ component Back {
   }
 
   joint housing : joinery(panel, into: sides, depth: depth)
+
+  /// The space in front of the back: between the sides, from the base up to
+  /// the top, and from the front of the base back to the panel. A divider,
+  /// shelves, drawers and doors.
+  region in_front = opening(
+    left:   panel.left,
+    right:  panel.right,
+    bottom: stands_on.top,
+    top:    under.bottom,
+    front:  stands_on.front,
+    back:   panel.front,
+  )
 }

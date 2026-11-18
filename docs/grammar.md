@@ -619,7 +619,7 @@ imports them and uses their items qualified, like any library.
 
 | Module | Folder | Provides |
 |---|---|---|
-| `std:casework` | `std/casework` | cabinet components (`Drawer`, `FramePanelDoor`), used as `casework.Drawer` after `import "std:casework"` |
+| `std:casework` | `std/casework` | cabinet components (`Case`, `Back`, `Divider`, `Shelf`, `HangingRail`, `Feet`, `Drawer`, `FramePanelDoor`), used as `casework.Drawer` after `import "std:casework"` |
 
 A standard module never reaches into a project: everything a component needs
 from one (the opening, the stock, the shop's own hardware) is a param.
