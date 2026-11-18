@@ -121,8 +121,8 @@ pub enum NewProjectError {
     Unparsable,
 }
 
-/// The text of a new project. It parses; it checks once `box` is a root
-/// the checker places.
+/// The text of a new project. It parses and checks: the envelope `box` is
+/// its root.
 ///
 /// # Errors
 ///
@@ -313,6 +313,23 @@ mod tests {
             text.contains("stock dowel_8 { species: beech, form: dowel, diameter: 8mm }"),
             "{text}"
         );
+    }
+
+    #[test]
+    fn a_new_project_checks_with_the_box_as_its_root() {
+        // Tools the prelude declares: the table's `saw` is only a name.
+        let mut project = table();
+        project.tools = vec![name("tenon_saw"), name("chisel")];
+        let text = new_project_text(&project).unwrap();
+        let folder = std::path::PathBuf::from("/test/table");
+        let files = stave_modules::MemoryFiles::new().with(folder.join("project.stave"), &text);
+        let opened = crate::open_with(&folder, &files).unwrap();
+        let errors: Vec<_> = opened
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.is_error())
+            .collect();
+        assert!(errors.is_empty(), "{text}\n{errors:?}");
     }
 
     #[test]
