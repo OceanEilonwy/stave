@@ -156,7 +156,7 @@ impl Resolver<'_> {
                 ty,
                 default,
                 domain,
-                locked: param.locked.is_some(),
+                kind: param.kind(),
             });
         }
         let mut requires = Vec::new();

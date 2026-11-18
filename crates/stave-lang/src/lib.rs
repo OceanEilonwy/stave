@@ -208,6 +208,7 @@ pub const KEYWORDS: &[&str] = &[
     "at",
     "within",
     "locked",
+    "solved",
     "fit",
     "true",
     "false",

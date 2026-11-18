@@ -1,5 +1,4 @@
 // expect: error[syntax] expected end of line, found 'locked'
-// pending: param kinds are not built: the parser still reads the trailing 'locked' of draft 3
 stave 1
 
 project "Locked written last" {

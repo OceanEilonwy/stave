@@ -31,7 +31,7 @@ and `broken/<folder>` for a design in `tests/broken/`.
 | Every byte is in some token (the lexer covers the input) | `lang/lexer::every_byte_is_covered`, `lang/corpus::the_tree_is_lossless` | covered |
 | The keyword list | `lang/lib::keywords_match_the_grammar`, `lang/syntax::keyword_kinds_match_the_keyword_list`, `lang/ast::an_ident_is_never_a_keyword` | covered |
 | A keyword where a new name is expected is `reserved-word` | `lang/parser::a_keyword_where_a_new_name_goes_is_reserved`, `broken/reserved_word` | covered |
-| `solved` is a keyword; `locked` and `solved` are item keywords, so the parser recovers at them | — | pending: param kinds are not built |
+| `solved` is a keyword; `locked` and `solved` are item keywords, so the parser recovers at them | `lang/lib::keywords_match_the_grammar`, `lang/syntax::item_keywords_match_the_grammar_list`, `lang/param_kinds::solved_is_a_keyword`, `lang/param_kinds::an_unclosed_bracket_is_closed_before_a_line_that_starts_with_locked_or_solved`, `lang/param_kinds::a_missing_brace_ends_a_part_at_a_locked_param`, `lang/param_kinds::a_broken_param_kind_costs_one_error_and_the_next_line_still_parses` | covered |
 | A keyword is a `NAME` after `.` and before `:` | `lang/parser::keywords_are_names_after_a_dot_and_before_a_colon`, `lang/ast::a_name_may_be_a_keyword` | covered |
 | Face and direction words, types and built-in names are not keywords | `app/features::a_part_may_be_called_like_a_face_word`, `app/spec_names::a_builtin_is_found_only_when_called` | covered |
 | Contextual words are special in one position only | `lang/lib::contextual_words_match_the_grammar`, `lang/parser::contextual_words_in_their_positions`, `lang/parser::contextual_words_are_ordinary_names_elsewhere` | covered |
@@ -172,13 +172,13 @@ and `broken/<folder>` for a design in `tests/broken/`.
 | A value worked out from itself is `type-mismatch` | `app/spec_values::a_value_worked_out_from_itself_is_a_type_mismatch` | covered |
 | `within` gives the allowed values, of the param's type | `app/spec_values::within_values_must_have_the_params_type`, `app/spec_values::a_module_params_default_must_lie_within_its_range` | covered |
 | An argument outside a component or kind param's `within` is `out-of-range` | `app/features::values_outside_within_are_out_of_range`, `app/spec_joints::a_setting_outside_the_kinds_within_is_out_of_range`, `broken/out_of_range` | covered |
-| The trailing `locked` of draft 3 parses and is kept, until param kinds replace it | `app/spec_values::locked_is_written_last`, `lang/parser::every_item_form_parses` | partial: smart edits, which `locked` stops, are a later step |
-| Param kinds are a prefix: `param`, `locked param`, `solved param`; `private` first | — | pending: param kinds are not built |
-| The trailing `locked` is `syntax`, with the help to write it first | `broken/locked_written_last` | pending: param kinds are not built |
-| `locked` or `solved` followed by anything but `param`, both on one param, or `private` after them is `syntax` | — | pending: param kinds are not built (tests/broken-next/locked_and_solved, private_after_locked) |
-| `locked` or `solved` on a param without a default is `missing-value` | — | pending: param kinds are not built (tests/broken-next/locked_without_default) |
-| `locked` or `solved` on a param that isn't a quantity is `type-mismatch` | — | pending: param kinds are not built (tests/broken-next/locked_not_a_quantity) |
-| A `solved param` without `within` is `missing-field` | — | pending: param kinds are not built (tests/broken-next/solved_without_within) |
+| A `locked` or `solved` param checks like a plain one, and the model carries its kind | `app/spec_values::locked_is_written_first`, `lang/parser::every_item_form_parses` | partial: smart edits, which read the kind, are a later step |
+| Param kinds are a prefix: `param`, `locked param`, `solved param`; `private` first | `lang/param_kinds::a_param_is_plain_locked_or_solved`, `lang/param_kinds::param_kinds_inside_components_and_kinds`, `lang/param_kinds::the_kind_keeps_the_span_of_its_word_and_the_item_starts_at_it` | covered |
+| The trailing `locked` is `syntax`, with the help to write it first | `broken/locked_written_last`, `lang/param_kinds::the_trailing_locked_is_a_syntax_error_with_the_help_to_write_it_first` | covered |
+| `locked` or `solved` followed by anything but `param`, both on one param, or `private` after them is `syntax` | `broken/locked_and_solved`, `broken/private_after_locked`, `lang/param_kinds::a_param_kind_is_followed_only_by_param`, `lang/param_kinds::a_param_with_one_word_too_many_is_broken_under_its_own_name` | covered |
+| `locked` or `solved` on a param without a default is `missing-value` | — | pending: the parser reads the kinds; the check is not built (tests/broken-next/locked_without_default) |
+| `locked` or `solved` on a param that isn't a quantity is `type-mismatch` | — | pending: the parser reads the kinds; the check is not built (tests/broken-next/locked_not_a_quantity) |
+| A `solved param` without `within` is `missing-field` | — | pending: the parser reads the kinds; the check is not built (tests/broken-next/solved_without_within) |
 | A module param's `within` is the range the design must work over | — | pending: checking over a range needs z3 (layer 6) |
 | A misspelt type name is `unknown-name` | `app/spec_values::a_misspelt_type_name_is_an_unknown_name` | covered |
 | `let`: a named value, used before or after it is written, not passed in | `app/spec_values::a_let_is_a_named_value_used_before_or_after_it_is_written`, `app/spec_values::a_let_can_not_be_passed_into_a_component` | covered |
@@ -522,7 +522,7 @@ pinned down the same way.
 | Spans are byte offsets inside the file; lines and columns are computed at the edge | `lang/diagnostics::lines_and_columns_count_characters`, `lang/ast::spans_are_ordered_and_join`, `lang/fuzz::mutated_sources_never_panic_hang_or_lose_text` | covered |
 | Parsing is fast enough for every keystroke | `lang/timing::the_cabinet_parses_in_well_under_a_millisecond_per_file` | covered |
 | `stave fmt` layout: indentation, spacing, alignment, comments, blank lines | `lang/format::indents_and_spaces`, `lang/format::aligns_fields_in_runs`, `lang/format::aligns_consecutive_one_line_declarations`, `lang/format::keeps_comments_and_their_columns`, `lang/format::continuation_lines` | covered |
-| `stave fmt` aligns the word `param` across prefixes in a run of params | — | pending: param kinds are not built |
+| `stave fmt` aligns the word `param` across prefixes in a run of params | `lang/param_kinds::the_word_param_lines_up_across_prefixes`, `lang/param_kinds::private_and_a_kind_together_make_the_longest_prefix`, `lang/param_kinds::param_alignment_is_kept_inside_a_component_and_a_run_ends_at_a_blank_line`, `lang/param_kinds::comments_after_aligned_params_stay_put` | covered |
 | Formatting is idempotent and keeps the tree; it refuses files with errors | `lang/corpus::formatting_is_idempotent_and_keeps_the_meaning`, `lang/fuzz::mutated_sources_never_panic_hang_or_lose_text`, `lang/format::refuses_files_with_errors`, `cli/cli::fmt_skips_files_with_errors` | covered |
 | Every file of the repository is formatted | `lang/corpus::every_corpus_file_is_already_formatted`, `cli/cli::the_whole_repository_is_formatted` | covered |
 | Fast and slow tiers, incremental queries, the language server and its features | — | pending: stave-lsp is a later step |
@@ -568,7 +568,7 @@ One row per code of the grammar's Diagnostics table and its warnings.
 
 | Code | Layer | Status | Broken design | Tests |
 |---|---|---|---|---|
-| `syntax` | 1 | covered | `broken/syntax_error`, `broken/locked_written_last` | `lang/parser::one_mistake_one_error`, `lang/spec_syntax::every_syntax_error_has_a_help_line` |
+| `syntax` | 1 | covered | `broken/syntax_error`, `broken/locked_written_last`, `broken/locked_and_solved`, `broken/private_after_locked` | `lang/parser::one_mistake_one_error`, `lang/spec_syntax::every_syntax_error_has_a_help_line` |
 | `missing-value` | 1 | covered | `broken/missing_value` | `lang/parser::a_missing_value_is_reported_on_its_own_line` |
 | `reserved-word` | 1 | covered | `broken/reserved_word` | `lang/parser::a_keyword_where_a_new_name_goes_is_reserved`, `modules/memory::keyword_folder_without_alias_is_reserved_word` |
 | `unknown-unit` | 1 | covered | `broken/unknown_unit` | `lang/lexer::quantity_forms`, `app/one_mistake::a_size_decided_by_a_joint_with_its_own_error_is_not_also_undecided` |

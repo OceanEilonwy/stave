@@ -373,8 +373,9 @@ pub struct ParamDef {
     pub default: Option<RExpr>,
     /// The allowed values.
     pub domain: Option<Domain>,
-    /// `true` when `locked`: smart edits must not change it.
-    pub locked: bool,
+    /// Its kind: plain, `locked` (smart edits must not change it) or
+    /// `solved` (the solver may solve for it).
+    pub kind: stave_lang::ast::ParamKind,
 }
 
 /// The values a param may take.

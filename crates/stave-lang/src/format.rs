@@ -29,7 +29,10 @@
 //!    with no blank, comment or doc line between them, pad their names
 //!    (array labels included) so the token after the name lines up: the `=`
 //!    of params and regions, the `:` of joints and kinds, the `{` of
-//!    stocks. Nothing further along the line is aligned.
+//!    stocks. Nothing further along the line is aligned. In a run of params
+//!    the word `param` lines up too, across the prefixes `private`,
+//!    `locked` and `solved`: a line is padded before its first word so its
+//!    `param` starts in the column of the longest prefix's.
 //! 4. **Comments**: a comment at the end of a line keeps its column when
 //!    the code before it leaves room, so aligned comments stay aligned;
 //!    otherwise it moves to one space after the code.
@@ -331,7 +334,7 @@ fn declaration(line: &Line) -> Option<(usize, u32, SyntaxKind)> {
         let parent = atom.token.parent();
         let is_item = |node: &SyntaxNode| *node == item;
         if parent.as_ref().is_some_and(is_item) {
-            return atom.kind == SyntaxKind::KW_PRIVATE || atom.kind.is_item_keyword();
+            return atom.kind.is_item_keyword();
         }
         if atom.parent == SyntaxKind::NAME
             && parent
@@ -395,10 +398,42 @@ fn atoms_width(atoms: &[Atom]) -> usize {
     total
 }
 
-/// For every line that starts an aligned run member: the width its key is
-/// padded to (the longest key in its run).
-fn alignment(lines: &[Line]) -> Vec<Option<(usize, usize)>> {
-    let mut result: Vec<Option<(usize, usize)>> = vec![None; lines.len()];
+/// How one line of an aligned run is laid out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Aligned {
+    /// Spaces before the line's first atom, after its indentation: a param
+    /// with a shorter prefix than the longest in its run is moved right so
+    /// that the words `param` line up.
+    lead: usize,
+    /// The number of leading atoms that form the key.
+    count: usize,
+    /// The width the key, lead included, is padded to: the longest in its run.
+    key_width: usize,
+}
+
+/// The width of a param line's prefix (`private`, `locked`, `solved`), with
+/// the space after it, if the line is a one-line param.
+fn param_prefix_width(line: &Line) -> Option<usize> {
+    let (_, _, kind) = declaration(line)?;
+    if kind != SyntaxKind::PARAM {
+        return None;
+    }
+    let prefix = line
+        .atoms
+        .iter()
+        .take_while(|atom| atom.kind.is_item_prefix())
+        .count();
+    let atoms = line.atoms.get(..prefix)?;
+    Some(if prefix == 0 {
+        0
+    } else {
+        atoms_width(atoms) + 1
+    })
+}
+
+/// For every line that starts an aligned run member: how it is padded.
+fn alignment(lines: &[Line]) -> Vec<Option<Aligned>> {
+    let mut result: Vec<Option<Aligned>> = vec![None; lines.len()];
     // Open runs by container: the line indexes in the run.
     let mut open: BTreeMap<u32, Vec<usize>> = BTreeMap::new();
     let mut runs: Vec<Vec<usize>> = Vec::new();
@@ -443,22 +478,39 @@ fn alignment(lines: &[Line]) -> Vec<Option<(usize, usize)>> {
         key(line).or_else(|| declaration(line).map(|(count, scope, _)| (count, scope)))
     };
     for run in runs {
-        let keys: Vec<(usize, usize)> = run
+        let longest_prefix = run
+            .iter()
+            .filter_map(|&index| param_prefix_width(lines.get(index)?))
+            .max()
+            .unwrap_or(0);
+        // (line index, atoms in the key, lead, key width with its lead)
+        let keys: Vec<(usize, usize, usize, usize)> = run
             .iter()
             .filter_map(|&index| {
                 let line = lines.get(index)?;
                 let (count, _) = run_key(line)?;
-                Some((index, atoms_width(line.atoms.get(..count)?)))
+                let lead = param_prefix_width(line)
+                    .map_or(0, |prefix| longest_prefix.saturating_sub(prefix));
+                Some((
+                    index,
+                    count,
+                    lead,
+                    lead + atoms_width(line.atoms.get(..count)?),
+                ))
             })
             .collect();
         let longest = keys
             .iter()
-            .map(|(_, key_width)| *key_width)
+            .map(|&(_, _, _, key_width)| key_width)
             .max()
             .unwrap_or(0);
-        for (index, _) in keys {
-            if let (Some(slot), Some(line)) = (result.get_mut(index), lines.get(index)) {
-                *slot = run_key(line).map(|(count, _)| (count, longest));
+        for (index, count, lead, _) in keys {
+            if let Some(slot) = result.get_mut(index) {
+                *slot = Some(Aligned {
+                    lead,
+                    count,
+                    key_width: longest,
+                });
             }
         }
     }
@@ -572,19 +624,20 @@ fn render(lines: &[Line]) -> Vec<(usize, String)> {
         };
 
         let original_indent = line.atoms.first().map_or(0, |atom| atom.column);
-        let mut rendered = " ".repeat(indent);
-        let mut column = indent;
         let alignment = aligned.get(index).copied().flatten();
+        let lead = alignment.map_or(0, |aligned| aligned.lead);
+        let mut rendered = " ".repeat(indent + lead);
+        let mut column = indent + lead;
         let mut statement_anchor: Option<usize> = None;
         let last_code_index = line.atoms.iter().rposition(|atom| !atom.is_comment());
 
         for (position, atom) in line.atoms.iter().enumerate() {
             if let Some(previous) = position.checked_sub(1).and_then(|p| line.atoms.get(p)) {
                 let target = match alignment {
-                    Some((count, key_width)) if position == count => indent + key_width + 1,
-                    // Keep the comment's column, moved with the line's
-                    // indentation.
-                    _ if atom.kind == SyntaxKind::LINE_COMMENT => (atom.column + indent)
+                    Some(aligned) if position == aligned.count => indent + aligned.key_width + 1,
+                    // Keep the comment's column, moved with the start of
+                    // the line.
+                    _ if atom.kind == SyntaxKind::LINE_COMMENT => (atom.column + indent + lead)
                         .saturating_sub(original_indent)
                         .max(column + 1),
                     _ if space_between(previous, atom) => column + 1,
@@ -701,9 +754,9 @@ mod tests {
     fn aligns_consecutive_one_line_declarations() {
         assert_eq!(
             format(
-                "stave 1\nparam cabinet_width = 900mm  within 600mm..1200mm\nparam reveal = 1.5mm locked\nparam opening : Region\nlet a = 1\nregion bay[drawers, doors] = split(o, up)\nregion door_bay[left, right] = split(bay[doors], across)\n\nstock oak_19 { species: white_oak }\n// breaks the run\nstock ply_6 { species: birch }\nstock maple_12 { species: hard_maple }\n/// doc\njoint a : dado(x)\njoint bbb : dado(y)\npart p : s {\n  length: 1mm\n}\npart quite_long : s { length: 1mm }\n"
+                "stave 1\nparam cabinet_width = 900mm  within 600mm..1200mm\nlocked param reveal = 1.5mm\nparam opening : Region\nlet a = 1\nregion bay[drawers, doors] = split(o, up)\nregion door_bay[left, right] = split(bay[doors], across)\n\nstock oak_19 { species: white_oak }\n// breaks the run\nstock ply_6 { species: birch }\nstock maple_12 { species: hard_maple }\n/// doc\njoint a : dado(x)\njoint bbb : dado(y)\npart p : s {\n  length: 1mm\n}\npart quite_long : s { length: 1mm }\n"
             ),
-            "stave 1\nparam cabinet_width = 900mm within 600mm..1200mm\nparam reveal        = 1.5mm locked\nparam opening       : Region\nlet a = 1\nregion bay[drawers, doors]   = split(o, up)\nregion door_bay[left, right] = split(bay[doors], across)\n\nstock oak_19 { species: white_oak }\n// breaks the run\nstock ply_6    { species: birch }\nstock maple_12 { species: hard_maple }\n/// doc\njoint a   : dado(x)\njoint bbb : dado(y)\npart p : s {\n  length: 1mm\n}\npart quite_long : s { length: 1mm }\n"
+            "stave 1\n       param cabinet_width = 900mm within 600mm..1200mm\nlocked param reveal        = 1.5mm\n       param opening       : Region\nlet a = 1\nregion bay[drawers, doors]   = split(o, up)\nregion door_bay[left, right] = split(bay[doors], across)\n\nstock oak_19 { species: white_oak }\n// breaks the run\nstock ply_6    { species: birch }\nstock maple_12 { species: hard_maple }\n/// doc\njoint a   : dado(x)\njoint bbb : dado(y)\npart p : s {\n  length: 1mm\n}\npart quite_long : s { length: 1mm }\n"
         );
     }
 

@@ -1,5 +1,4 @@
 // expect: error[syntax] expected 'param', found 'private'
-// pending: the parser does not read 'locked param' yet
 stave 1
 
 project "Private after locked" {

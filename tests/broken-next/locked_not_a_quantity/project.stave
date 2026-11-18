@@ -1,5 +1,5 @@
 // expect: error[type-mismatch] 'locked' needs a length, an angle, a ratio or a count, found a stock
-// pending: the parser does not read 'locked param' yet
+// pending: the parser reads 'locked param'; the check that a locked or solved param is a quantity is not built yet
 stave 1
 
 project "Locked stock" {
