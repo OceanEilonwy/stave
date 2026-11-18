@@ -103,6 +103,10 @@ pub struct TreeEntry {
     /// Each item's own label (`rail[top]`), in the order of `items`, for
     /// showing a group's members one by one.
     pub member_labels: Vec<String>,
+    /// Each item's own dim text, in the order of `items`: a joint's
+    /// members on one pair say that pair's copies (`dowel_pin × 4`) where
+    /// the group says the joint's (`dowel_pin × 8`).
+    pub member_details: Vec<Option<String>>,
     /// Its mark.
     pub swatch: Swatch,
     /// Every full name it stands for, for searching.
@@ -301,7 +305,11 @@ struct Single {
     item: Item,
     label: String,
     full: String,
+    /// Its own dim text.
     detail: Option<String>,
+    /// The dim text of a group it heads, when that is not its own (a
+    /// joint's copies over all its pairs).
+    group_detail: Option<String>,
     swatch: Swatch,
     same: Sameness,
     mirror_of: Option<PartId>,
@@ -331,16 +339,24 @@ fn group(singles: Vec<Single>) -> Vec<TreeEntry> {
             let mut items = NonEmpty::one(first.item);
             let mut names = vec![first.full.clone()];
             let mut labels = vec![first.label.clone()];
+            let mut details = vec![first.detail.clone()];
             for member in &rest {
                 items.push(member.item);
                 names.push(member.full.clone());
                 labels.push(member.label.clone());
+                details.push(member.detail.clone());
             }
             let label = group_label(&labels);
+            let detail = if rest.is_empty() {
+                first.detail
+            } else {
+                first.group_detail.or(first.detail)
+            };
             Some(TreeEntry {
                 label,
                 member_labels: labels,
-                detail: first.detail,
+                member_details: details,
+                detail,
                 items,
                 swatch: first.swatch,
                 names,
@@ -406,6 +422,7 @@ pub fn parts_tree(design: &SolvedDesign) -> PartsTree {
                     label,
                     full: part.name.clone(),
                     detail: Some(detail),
+                    group_detail: None,
                     swatch: part_swatch(part),
                     mirror_of,
                 }
@@ -425,6 +442,7 @@ pub fn parts_tree(design: &SolvedDesign) -> PartsTree {
                     label,
                     full: hardware.name.clone(),
                     detail: None,
+                    group_detail: None,
                     swatch: hardware_swatch(),
                     mirror_of: None,
                 }
@@ -451,7 +469,7 @@ pub fn parts_tree(design: &SolvedDesign) -> PartsTree {
                 } else {
                     base
                 };
-                let copies: u32 = design
+                let total: u32 = design
                     .pair_members()
                     .filter(|(other, found)| other.joint == member.joint && found.name == body.name)
                     .map(|(_, found)| found.copies())
@@ -470,7 +488,8 @@ pub fn parts_tree(design: &SolvedDesign) -> PartsTree {
                         .pair_member_name(member)
                         .unwrap_or_else(|| label.clone()),
                     label,
-                    detail: Some(format!("{what} × {copies}")),
+                    detail: Some(format!("{what} × {}", body.copies())),
+                    group_detail: Some(format!("{what} × {total}")),
                     swatch: member_swatch(body),
                     mirror_of: None,
                 })

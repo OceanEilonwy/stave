@@ -441,13 +441,25 @@ fn entry_rows(
     let split = entry.items.len() > 1
         && selected.is_some_and(|item| entry.items.iter().any(|i| *i == item));
     if split {
-        for (item, label) in entry.items.iter().zip(&entry.member_labels) {
-            rows.push(entry_row(entry, label, vec![*item], depth));
+        for ((item, label), detail) in entry
+            .items
+            .iter()
+            .zip(&entry.member_labels)
+            .zip(&entry.member_details)
+        {
+            rows.push(entry_row(
+                entry,
+                label,
+                detail.as_deref(),
+                vec![*item],
+                depth,
+            ));
         }
     } else {
         rows.push(entry_row(
             entry,
             &entry.label,
+            entry.detail.as_deref(),
             entry.items.iter().copied().collect(),
             depth,
         ));
@@ -457,6 +469,7 @@ fn entry_rows(
 fn entry_row(
     entry: &TreeEntry,
     label: &str,
+    detail: Option<&str>,
     items: Vec<stave_scene::Item>,
     depth: usize,
 ) -> (gtk::ListBoxRow, RowKind) {
@@ -482,7 +495,7 @@ fn entry_row(
             .ellipsize(gtk::pango::EllipsizeMode::End)
             .build(),
     );
-    if let Some(detail) = &entry.detail {
+    if let Some(detail) = detail {
         content.append(
             &gtk::Label::builder()
                 .label(detail)

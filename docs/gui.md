@@ -216,7 +216,8 @@ PDF doesn't exist yet, and the button says so honestly.
   until one of them is selected, when the group shows its members one by
   one. Each joint's members follow, one row for the joint grouped over
   its pairs with how many copies it places (`top_dowels's pin[2] ·
-  dowel_pin × 8`), in the assembly of the part that carries them;
+  dowel_pin × 8`; shown one by one, each pair's row counts its own,
+  `dowel_pin × 4`), in the assembly of the part that carries them;
   selecting one selects that pair's pins (the inspector's "JOINT MEMBER":
   which joint placed it, its pair, what it is, how many, and the joint's
   line in "Defined in the text"). The assembly holding the selection

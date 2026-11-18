@@ -230,6 +230,35 @@ fn the_parts_tree_counts_the_pins_each_joint_places() {
             "{rows:?}"
         );
     }
+    // Shown one by one (when one is selected), each pair's row counts its
+    // own copies: four pins each, eight in all.
+    let pins = tree
+        .carcass
+        .iter()
+        .find(|entry| entry.label == "top_dowels's pin[2]")
+        .unwrap();
+    assert_eq!(
+        pins.member_labels,
+        ["top_dowels's pin[0]", "top_dowels's pin[1]"]
+    );
+    assert_eq!(
+        pins.member_details,
+        [
+            Some("dowel_pin × 4".to_owned()),
+            Some("dowel_pin × 4".to_owned())
+        ]
+    );
+    // A part's rows keep the stock, grouped or one by one.
+    let sides = tree
+        .carcass
+        .iter()
+        .find(|entry| entry.label == "side_l, side_r")
+        .unwrap();
+    assert_eq!(sides.detail.as_deref(), Some("oak_19"));
+    assert_eq!(
+        sides.member_details,
+        [Some("oak_19".to_owned()), Some("oak_19".to_owned())]
+    );
     // A drawer's screws are listed in the drawer.
     let drawer = tree
         .assemblies
