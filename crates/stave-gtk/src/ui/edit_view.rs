@@ -78,6 +78,8 @@ pub(super) struct EditView {
     /// Whether the editor shows, for the writer (a commit opens the file
     /// in a tab when it does).
     editor_open: Rc<Cell<bool>>,
+    /// The grips of the selection, on the model.
+    grips: grips::GripView,
     state: RefCell<EditState>,
     // The changes of the design (lane W2b): their card, the item's tools,
     // hold, repeat handles, the editor's pending lines, the finder's verbs.
@@ -154,6 +156,7 @@ impl EditView {
             verdict,
             face_button,
             editor_open: Rc::new(Cell::new(false)),
+            grips: grips::GripView::new(),
             state: RefCell::new(EditState::default()),
             changes: changes::Changes::new(),
             tools: item_tools::ItemTools::new(),
@@ -449,6 +452,7 @@ impl Window {
             }
         });
         self.widgets.viewport.add_controller(motion);
+        self.connect_grips();
     }
 
     /// Add writes through the editor's buffers.
@@ -817,6 +821,7 @@ impl Window {
 
     /// Redraws what an edit event names.
     pub(super) fn edit_event(self: &Rc<Self>, event: EditEvent) {
+        self.grip_event(&event);
         match event {
             EditEvent::Started => {
                 let generation = {
@@ -879,7 +884,7 @@ impl Window {
                 self.show_card();
             }
             EditEvent::Rejected(why) => self.edit_toast(&why.text()),
-            // The window draws no grips yet.
+            // Drawn by `grip_event`.
             EditEvent::GripsChanged | EditEvent::GripStopsFound(_) => {}
         }
     }
@@ -999,15 +1004,13 @@ impl Window {
         let ghosts = {
             let session = self.session.borrow();
             let chosen = session.edit().and_then(Edit::chosen);
-            let change = session.change();
-            let verdict = chosen
-                .map(|chosen| chosen.progress())
-                .or_else(|| change.map(|change| change.progress()))
-                .and_then(ghost_verdict);
-            let candidate = chosen
-                .and_then(|chosen| chosen.ghost())
-                .or_else(|| change.and_then(|change| change.ghost()))
-                .and_then(|opened| opened.design.as_ref());
+            // A change of the design (a grip's drag) has a ghost too.
+            let (verdict, candidate) = match (chosen, session.change()) {
+                (Some(chosen), _) => (ghost_verdict(chosen.progress()), chosen.ghost()),
+                (None, Some(change)) => (ghost_verdict(change.progress()), change.ghost()),
+                (None, None) => (None, None),
+            };
+            let candidate = candidate.and_then(|opened| opened.design.as_ref());
             match (verdict, candidate, session.drawable()) {
                 (Some(verdict), Some(candidate), Some((base, graph))) => Some(Ghosts::new(
                     base,
@@ -1252,6 +1255,11 @@ mod changes;
 #[cfg(test)]
 mod changes_tests;
 mod editor_link;
+mod grip_layer;
+mod grip_panel;
+mod grip_script;
+mod grip_text;
+mod grips;
 mod hold;
 mod item_tools;
 mod pointing;

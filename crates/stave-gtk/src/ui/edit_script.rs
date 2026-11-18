@@ -156,7 +156,18 @@ impl Window {
             }
             "add" | "commit" => self.send_edit(EditCommand::Add),
             "cancel" => self.send_edit(EditCommand::Cancel),
-            _ => return self.change_step(word, rest),
+            // The grips and the changes of the design share two words:
+            // `pick` is a grip's while a follows grip's list waits, else a
+            // click on an item; `drag count|boundary` is a repeat's
+            // handle, any other `drag` a grip's.
+            "pick" if !self.grip_choice_waits() => return self.change_step(word, rest),
+            "drag" if matches!(rest.split_whitespace().next(), Some("count" | "boundary")) => {
+                return self.change_step(word, rest);
+            }
+            _ => match self.grip_step(word, rest) {
+                Some(result) => result?,
+                None => return self.change_step(word, rest),
+            },
         }
         Ok(())
     }

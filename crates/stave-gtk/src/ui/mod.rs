@@ -611,6 +611,7 @@ impl Window {
     }
 
     fn result_changed(self: &Rc<Self>) {
+        self.grips_result_changed();
         let (shown, latest, showing_older) = {
             let session = self.session.borrow();
             (
@@ -969,6 +970,7 @@ impl Window {
         }
         self.show_card();
         self.show_moves();
+        self.grips_follow_selection();
         self.request_render();
     }
 
@@ -985,7 +987,9 @@ impl Window {
                     && (session.selection().is_some()
                         || edit_view::empty_state(&session).is_some()))
         };
-        self.widgets.card.set_visible(shows && !self.edit_open());
+        self.widgets
+            .card
+            .set_visible(shows && !self.edit_open() && !self.grips_take_the_card());
         self.update_face_button();
         self.state.borrow_mut().card_place = None;
         // Placed again once laid out: with nothing to draw (a library) no
@@ -2280,6 +2284,7 @@ impl Window {
                 self.place_card();
                 self.show_pins();
                 self.place_ghost_verdict();
+                self.place_grips();
                 // Save the window once a frame of the view's real size is up.
                 let settled = {
                     let state = self.state.borrow();
@@ -2342,7 +2347,8 @@ impl Window {
         };
         let point = anchored
             .then(|| self.screen_point(&self.selected_nodes()))
-            .flatten();
+            .flatten()
+            .map(|point| self.beside_grips(point));
         let card_height = card.height().max(200);
         // The card keeps clear of the model tree at the top left.
         let tree = &self.widgets.tree.root;
