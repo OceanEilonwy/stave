@@ -1,5 +1,6 @@
-//! The render-ready scene of a solved design: one node per part and piece
-//! of hardware with its mesh, material and assembly path; the scene poses
+//! The render-ready scene of a solved design: one node per part, per
+//! member of a piece of hardware and per member of a joint pair (a dowel's
+//! pins) with its mesh, material and assembly path; the scene poses
 //! (motions applied); an orbit camera; ray picking; and a binary glTF
 //! export.
 //!

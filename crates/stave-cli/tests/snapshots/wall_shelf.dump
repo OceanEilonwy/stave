@@ -5,18 +5,18 @@ all lengths in mm; boxes are drawn boxes as across, up, deep ranges from the gro
 PARTS (5)
 part                         stock          cut L x W x T              across               up                   deep                 length/width/thickness
 shelf                        pine_19        600 x 150 x 19             0..600               0..19                0..150               right/back/up
-    cut drill 1 x diameter 4.5 depth through on thickness start: where shelf_screws's screw meets it, local 68..71 x 54.666667..57.666667 x 0..19
-    cut drill 1 x diameter 4.5 depth through on thickness start: where shelf_screws's screw meets it, local 68..71 x 102.333333..105.333333 x 0..19
-    cut drill 1 x diameter 4.5 depth through on thickness start: where shelf_screws's screw meets it, local 529..532 x 54.666667..57.666667 x 0..19
-    cut drill 1 x diameter 4.5 depth through on thickness start: where shelf_screws's screw meets it, local 529..532 x 102.333333..105.333333 x 0..19
+    cut drill diameter 4.5 depth through on thickness start: where shelf_screws's screw meets it, local 68..71 x 54.666667..57.666667 x 0..19
+    cut drill diameter 4.5 depth through on thickness start: where shelf_screws's screw meets it, local 68..71 x 102.333333..105.333333 x 0..19
+    cut drill diameter 4.5 depth through on thickness start: where shelf_screws's screw meets it, local 529..532 x 54.666667..57.666667 x 0..19
+    cut drill diameter 4.5 depth through on thickness start: where shelf_screws's screw meets it, local 529..532 x 102.333333..105.333333 x 0..19
 arm[left]                    pine_strip     140 x 40 x 19              60..79               -40..0               10..150              back/up/right
     cut notch depth 9.5 on thickness end: where upright[left] meets it, local 100..140 x 0..40 x 0..19
-    cut drill 1 x diameter 3 depth 21 on width end: where shelf_screws's screw meets it, local 44.666667..47.666667 x 19..40 x 8..11
-    cut drill 1 x diameter 3 depth 21 on width end: where shelf_screws's screw meets it, local 92.333333..95.333333 x 19..40 x 8..11
+    cut drill diameter 3 depth 21 on width end: where shelf_screws's screw meets it, local 44.666667..47.666667 x 19..40 x 8..11
+    cut drill diameter 3 depth 21 on width end: where shelf_screws's screw meets it, local 92.333333..95.333333 x 19..40 x 8..11
 arm[right]                   pine_strip     140 x 40 x 19              521..540             -40..0               10..150              back/up/right
     cut notch depth 9.5 on thickness end: where upright[right] meets it, local 100..140 x 0..40 x 0..19
-    cut drill 1 x diameter 3 depth 21 on width end: where shelf_screws's screw meets it, local 44.666667..47.666667 x 19..40 x 8..11
-    cut drill 1 x diameter 3 depth 21 on width end: where shelf_screws's screw meets it, local 92.333333..95.333333 x 19..40 x 8..11
+    cut drill diameter 3 depth 21 on width end: where shelf_screws's screw meets it, local 44.666667..47.666667 x 19..40 x 8..11
+    cut drill diameter 3 depth 21 on width end: where shelf_screws's screw meets it, local 92.333333..95.333333 x 19..40 x 8..11
 upright[left]                pine_strip     200 x 40 x 19              60..79               -200..0              110..150             up/back/right
     cut notch depth 9.5 on thickness start: where arm[left] meets it, local 160..200 x 0..40 x 0..19
 upright[right]               pine_strip     200 x 40 x 19              521..540             -200..0              110..150             up/back/right
@@ -31,11 +31,13 @@ corner[right]                half_lap
     piece: upright[right], into: arm[right] (cross)
 shelf_screws                 screw, no glue
     piece: shelf, into: arm[left] (butt across up)
-        screw cylinder up diameter 3, up -21..19, centre across 69.5 x deep 56.166667
-        screw cylinder up diameter 3, up -21..19, centre across 69.5 x deep 103.833333
+        screw: 2 x wood_screw (steel), moves with shelf
+            1 cylinder up diameter 3, up -21..19, centre across 69.5 x deep 56.166667
+            2 cylinder up diameter 3, up -21..19, centre across 69.5 x deep 103.833333
     piece: shelf, into: arm[right] (butt across up)
-        screw cylinder up diameter 3, up -21..19, centre across 530.5 x deep 56.166667
-        screw cylinder up diameter 3, up -21..19, centre across 530.5 x deep 103.833333
+        screw: 2 x wood_screw (steel), moves with shelf
+            1 cylinder up diameter 3, up -21..19, centre across 530.5 x deep 56.166667
+            2 cylinder up diameter 3, up -21..19, centre across 530.5 x deep 103.833333
 
 FASTENERS
 shelf_screws                 4 x wood_screw (4 x 40)

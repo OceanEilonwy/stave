@@ -75,7 +75,7 @@ use stave_lang::{Code, Diagnostic, FileId, Label, Severity};
 use stave_model::Model;
 use stave_model::solved::{
     AnchorItem, AssemblyId, BodyCarrier, BodyOwner, BodyRef, CutSource, FixedSpacing, HardwareId,
-    MemberIndex, PartId, PartOrigin, PoseValue, Rules, SolvedDesign, WorldBox,
+    MemberIndex, PairMember, PartId, PartOrigin, PoseValue, Rules, SolvedDesign, WorldBox,
 };
 
 use crate::names::{length_text, pose_text};
@@ -87,6 +87,9 @@ pub enum ContactItem {
     Part(PartId),
     /// A piece of hardware (either member).
     Hardware(HardwareId),
+    /// A joint pair's member (a dowel's pins); the pair's parts are
+    /// listed with it.
+    Member(PairMember),
 }
 
 /// Where a motion hits something.
@@ -123,17 +126,19 @@ impl Contact {
             Item::Part(part) => vec![ContactItem::Part(part)],
             Item::Member(member) => match member.owner {
                 BodyOwner::Hardware { hardware } => vec![ContactItem::Hardware(hardware)],
-                BodyOwner::Joint { joint, pair } => design
-                    .joints
-                    .get(joint.index())
-                    .and_then(|joint| joint.pairs.get(pair))
-                    .map(|pair| {
-                        pair.roles
-                            .iter()
-                            .map(|role| ContactItem::Part(role.part))
-                            .collect()
-                    })
-                    .unwrap_or_default(),
+                BodyOwner::Joint { joint, pair } => {
+                    let parts = design
+                        .joints
+                        .get(joint.index())
+                        .and_then(|joint| joint.pairs.get(pair))
+                        .map(|pair| pair.roles.iter().map(|role| ContactItem::Part(role.part)));
+                    member
+                        .pair_member()
+                        .map(ContactItem::Member)
+                        .into_iter()
+                        .chain(parts.into_iter().flatten())
+                        .collect()
+                }
             },
         };
         for item in items {

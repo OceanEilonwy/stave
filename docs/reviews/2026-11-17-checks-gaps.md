@@ -525,3 +525,118 @@ vocabulary, the standing rule). What changed in stage 2 for it:
   `stave dump` lists requires at the current values, so the wall rules
   (measured later, by the check) no longer appear in its REQUIRES list.
   Wood movement and strength remain a separate design.
+
+## Resolution: stage 4
+
+- **Drawn everywhere.** `stave-scene` has a third node item,
+  `Item::Member(PairMember)`: one node per member per joint pair (every
+  copy of a dowel's pins on that pair), named `<joint>'s <member>`
+  (`top_dowels's pin between side_l and top` when the joint has several
+  pairs, `SolvedDesign::pair_member_name`), drawn from
+  `stave_geom::body`. It is generic over any joint kind's members: the
+  graph walks `SolvedDesign::pair_members()` and reads nothing but the
+  body. It shows in the normal view, pulled apart, in sections and in
+  focus mode, and a scene's `show:`/`hide:` of a part takes the members
+  it carries with it. `stave_model::solved::PairMember { joint, pair,
+  body }` names one; `BodyRef::pair_member` and `PairMember::body_ref`
+  convert.
+- **What it looks like.** A fastener kind may write `species:` (a
+  species word, as a stock's; grammar, "`kind name : ... fastener`");
+  `std:hardware`'s `dowel_pin` says `species: beech`. The solver puts
+  the member's fastener on its body (`Body::item: Option<MemberItem {
+  kind, wood }>`, with `Body::copies()` and `copy_shapes()`), and the
+  scene draws a member whose fastener names a species in that wood
+  (rings about each copy's axis), and any other as steel: the screws of
+  `screw` are steel, as is a home-made kind's `member peg` that names no
+  fastener. Nothing is checked by `species`.
+- **The insert-step choice: members ride on their carrier.** The spec
+  already says a joint member moves with the pair's first part, and both
+  standard kinds push that part (`push(piece, along: ...)`). So in focus
+  mode, pulled apart, and in any later animation, a member moves with
+  the part that carries it (`Node::carried_by`, `SceneGraph::
+  carried_nodes`, `move_part` moves them): the pins sit in the piece's
+  holes and go into the other part's holes, drawn see-through, as the
+  piece comes home. The other choice, pins appearing between the parts,
+  would need a rule of its own for when they appear and where they wait,
+  per kind, and would show a step nobody wrote; riding on the carrier
+  needs no new word, matches glueing the pins into one part first, and
+  for a screw shows its tip finding the pilot hole. The trace that plays
+  the steps (`stave_geom::sequence::trace_carrying`) sweeps a part with
+  the bodies it carries, so a push without `by:` goes on until the pins
+  are out of their holes: before, `top_dowels` played 0mm, the side's
+  bare end being clear of the top at once. The assembly check still
+  calls `trace` (the part's own wood), so checking is unchanged; a pin
+  square to its push is therefore not yet caught by the assembly check
+  (a follow-up for `stave-check`). Focus on a pair with members is framed
+  on them (`SceneGraph::members_zone`), lists `Places: 4 × pin
+  (dowel_pin, beech), cylinder 8 mm across, 30 mm long`, and counts a
+  member's cuts per part (`Hole: 4 × 8 mm across, 15 mm deep, in
+  side_l`) instead of a row per hole.
+- **Selecting, inspecting, problems.** `Selection::Member(PairMember)`
+  (`Selection::of_item`, `item`, carried to a new result by joint name,
+  pair and member name); clicking a pin selects its pair's pins. The
+  inspector (`inspect::inspect_member`) reads `JOINT MEMBER`, the
+  member's doc comment from its kind, `Placed by: top_dowels (dowel)`,
+  `Pair`, `Fastener: dowel_pin, beech`, `Copies`, `Each`, `Goes in with`,
+  "See how it goes together" (focus on the pair), and "Defined in the
+  text" at the joint's line (`carcass.stave:102`). With a member
+  selected, or a selected problem about one, the parts of its pair are
+  drawn see-through in the normal view (`Session::looks`,
+  `view::see_into`), so pins inside the wood show. `stave_check::
+  ContactItem::Member` is added before the pair's parts, so an overlap
+  such as `shelf_pegs's peg and side overlap` lists the member as its own
+  row in the problems tree, tints it, and poses it.
+- **Counted.** The parts tree lists each joint's member once per joint,
+  grouped over its pairs, with the copies placed in all
+  (`top_dowels's pin[2] · dowel_pin × 8`, `front_screws's screw ·
+  wood_screw × 4` inside its drawer), in the assembly of the part that
+  carries it. The hardware list (`SolvedDesign::fasteners`) already
+  counted members since stage 2.
+- **`stave dump`** prints each member as a line of its own, then each
+  copy's shapes numbered: `pin: 4 x dowel_pin (beech), moves with
+  side_l` / `1 cylinder up diameter 8, ...`; `drill` cuts read `drill
+  diameter 8 depth 15` (no count). All seven dump snapshots changed.
+- **`drill(count:)` is retired.** Nothing in `std/`, `examples/` or
+  `tests/` used it (checked: only `spec_joints::operations_record_
+  their_measurements` and `a_count_argument_is_a_count`). Removed from
+  the language: `CutKind::Drill` has no `count`, `hole_centres` became
+  `hole_centre` (the middle of the footprint, or of the member's shape),
+  and the schema keeps a table of retired arguments
+  (`operations::RETIRED_ARGUMENTS`) so the resolver says what to write
+  instead of only "unknown":
+  `error[unknown-field]: 'drill' has no field 'count'`, help `a drill
+  makes one hole; for a row of holes, give the joint kind a member for
+  what goes in them, with count: and spaced:, and drill crossing(role,
+  member): one hole for every copy, lined up in both parts`. The two
+  spec tests became `operations_record_their_measurements` (one hole)
+  and `a_drill_has_no_count_and_points_to_joint_members`.
+- **Tests.** `app/show_members` (8: beech pins and steel screws; pulled
+  apart with the carrier; pins riding into their holes in focus, with
+  the panel's rows; the inspector and its source line; the parts tree's
+  counts; X-ray when selected; a selection surviving a recheck; the
+  pin-past-its-hole problem posed, tinted and X-rayed), the scene
+  cabinet test (a node per pair member, beech, carried by its side), the
+  glTF export count, the dump snapshots, and the special-cases audit's
+  S4 and SO18 entries updated. Screenshots: `docs/screenshots/window/
+  focus_dowels.png`, `focus_kick_dowels.png`, `selected_pins.png`,
+  `exploded_bookshelf.png`, `problem_pin.png` are new (and in
+  `tools/gui-screenshots`); the others that changed were regenerated
+  (the cabinet's parts tree gained the two dowel rows; several also
+  showed the top made of two boards, which main had changed since they
+  were taken).
+
+### Stages 3 and 4 merged
+
+- `stave-geom`'s wall measurement takes a drill as one hole, centred as
+  the solid makes it (`solid::hole_centre`, now `pub(crate)`); its copy of
+  the retired `drill(count:)` spreading is gone.
+- The drawer's two front screws make the parts tree's row read
+  `wood_screw × 2` (`app/show_members`).
+- The six cabinet window screenshots whose picture changed (the stiles'
+  sticking now runs out of their ends) were regenerated; the others
+  differed only in the status bar's timing and were left as they were.
+- The assembly check still traces each pair's parts without the members
+  they carry. Using `trace_carrying` there was tried: it doesn't catch a
+  pegged side pushed square to its pegs (the step still comes apart), so
+  it needs its own look at how a carried pin is swept against the hole it
+  sits in, and was left for a follow-up.

@@ -356,10 +356,7 @@ fn place_of(checked: &Checked, diagnostic: &Diagnostic) -> Option<Place> {
 }
 
 fn item_of(contact_item: ContactItem) -> Item {
-    match contact_item {
-        ContactItem::Part(id) => Item::Part(id),
-        ContactItem::Hardware(id) => Item::Hardware(id),
-    }
+    crate::view::contact_item(contact_item)
 }
 
 /// Whether an item is inside an assembly (at any depth).
@@ -367,6 +364,10 @@ fn inside(design: &SolvedDesign, item: Item, assembly: AssemblyId) -> bool {
     let mut current = match item {
         Item::Part(id) => design.part(id).and_then(|p| p.assembly),
         Item::Hardware(id) => design.hardware.get(id.index()).and_then(|h| h.assembly),
+        Item::Member(member) => design
+            .pair_member(member)
+            .and_then(|body| design.part(body.carried_by()?))
+            .and_then(|p| p.assembly),
     };
     let mut steps = 0;
     while let Some(id) = current {
@@ -788,6 +789,7 @@ fn specific_title(
                 let found = match item {
                     Item::Part(id) => design.part(id).map(|p| p.name.clone()),
                     Item::Hardware(id) => design.hardware.get(id.index()).map(|h| h.name.clone()),
+                    Item::Member(member) => design.pair_member_name(member),
                 };
                 if let Some(found) = found
                     && !hits.contains(&found)

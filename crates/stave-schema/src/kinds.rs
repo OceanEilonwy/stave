@@ -131,6 +131,11 @@ const FASTENER: BaseSpec = BaseSpec {
         entry("envelope", Type(TypeName::Envelope), Optional),
         entry("model", Type(TypeName::Model), Optional),
         entry("license", Type(TypeName::Text), Optional),
+        entry(
+            "species",
+            ValueType::Words(crate::words::WordSet::Species),
+            Optional,
+        ),
     ],
 };
 

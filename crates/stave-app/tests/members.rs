@@ -114,7 +114,6 @@ fn a_members_cuts_are_one_hole_per_pin_in_each_part() {
                 CutKind::Drill {
                     diameter: mm("8"),
                     depth: Depth::Length(mm("15")),
-                    count: 1,
                 }
             );
         }

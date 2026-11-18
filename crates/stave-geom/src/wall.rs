@@ -35,6 +35,8 @@
 //!   another cut): dovetails, outlines and slots turned at an angle, and
 //!   the cuts between the boards of a part made of boards.
 //!
+//! A drill is one hole, centred on its place, as the solid makes it.
+//!
 //! Work is in half nanometres (`i128`), so the radius of a hole whose
 //! diameter is an odd number of nanometres is still exact.
 
@@ -44,8 +46,8 @@ use stave_model::solved::{Cut, CutKind, Depth, End, LocalFace, Part, Shape, Size
 
 use crate::render;
 use crate::solid::{
-    Local, Solid, across, centred_low, depth_range, entering_axes, face_extent, place_centre,
-    slot_run,
+    Local, Solid, across, centred_low, depth_range, entering_axes, face_extent, hole_centre,
+    place_centre, slot_run,
 };
 
 /// Where the least wood round a cut is.
@@ -417,23 +419,17 @@ fn shape_of(part: &Part, cut: &Cut, design: &SolvedDesign, round: bool) -> CutSh
     };
     let ranged = |depth: Depth| depth_range(size, face, depth);
     match &cut.kind {
-        CutKind::Drill {
-            diameter,
-            depth,
-            count,
-        } => {
+        CutKind::Drill { diameter, depth } => {
             shape.closed = true;
             shape.through = *depth == Depth::Through;
             let (start, end) = ranged(*depth);
-            for centre in hole_centres(part, cut, *count) {
-                shape.volumes.push(Volume::Cylinder {
-                    axis: face.axis,
-                    centre: centre.map(half),
-                    radius: i128::from(diameter.nm()),
-                    start: half(start),
-                    end: half(end),
-                });
-            }
+            shape.volumes.push(Volume::Cylinder {
+                axis: face.axis,
+                centre: hole_centre(part, cut).map(half),
+                radius: i128::from(diameter.nm()),
+                start: half(start),
+                end: half(end),
+            });
             return shape;
         }
         CutKind::Spigot { length, .. } => {
@@ -592,34 +588,6 @@ fn tenon_axes(face_axis: PartAxis) -> (PartAxis, PartAxis) {
         PartAxis::Width => (PartAxis::Length, PartAxis::Thickness),
         PartAxis::Thickness => (PartAxis::Length, PartAxis::Width),
     }
-}
-
-/// The centres of a drill's holes on the two axes across its face: one
-/// in the middle of its place, or `count` spread along the longer side as
-/// the solid spreads them (until `drill(count:)` is retired).
-fn hole_centres(part: &Part, cut: &Cut, count: u32) -> Vec<[Length; 2]> {
-    let [first, second] = across(cut.face.axis);
-    let count = count.max(1);
-    let (a0, a1) = face_extent(part, &cut.place, first);
-    let (b0, b1) = face_extent(part, &cut.place, second);
-    let middle = |low: Length, high: Length| {
-        Length::from_nm(low.nm().saturating_add(high.nm()).div_euclid(2))
-    };
-    let long_is_first = a1.nm().saturating_sub(a0.nm()) >= b1.nm().saturating_sub(b0.nm());
-    let spread = |low: Length, high: Length, index: u32| {
-        let span = i128::from(high.nm()) - i128::from(low.nm());
-        let step = span * i128::from(index + 1) / i128::from(count + 1);
-        Length::from_nm(low.nm().saturating_add(i64::try_from(step).unwrap_or(0)))
-    };
-    (0..count)
-        .map(|index| {
-            if long_is_first {
-                [spread(a0, a1, index), middle(b0, b1)]
-            } else {
-                [middle(a0, a1), spread(b0, b1, index)]
-            }
-        })
-        .collect()
 }
 
 /// The face at the other end of an axis.

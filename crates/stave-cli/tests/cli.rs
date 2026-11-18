@@ -247,9 +247,12 @@ fn export_writes_a_valid_gltf_of_the_cabinet() {
     // each piece of hardware, named `<hardware> <member>`: five for each of
     // the four cup hinges (plate, arm, cup and two links), and two for each
     // of the four slides and the four handles (a bar or knob and its
-    // screws).
+    // screws); and one per joint pair's member, named `<joint>'s <member>`:
+    // the dowels of the base and the top into each side, and the screws of
+    // each drawer's front.
     let names: Vec<&str> = document.nodes().filter_map(|n| n.name()).collect();
-    assert_eq!(names.len(), 34 + 4 * 5 + 4 * 2 + 4 * 2);
+    assert_eq!(names.len(), 34 + 4 * 5 + 4 * 2 + 4 * 2 + 2 * 2 + 2);
+    assert!(names.contains(&"top_dowels's pin between side_l and top"));
     assert!(names.contains(&"door_l.hinges[lower] plate"));
     assert!(names.contains(&"door_l.hinges[lower] arm"));
     assert!(names.contains(&"door_l.hinges[lower] outer_link"));

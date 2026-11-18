@@ -63,7 +63,11 @@ const CATALOGUE_WORDS: [&str; 13] = [
 /// Words read out of `std/` that are the language's own vocabulary, not a
 /// kind's: the core may use them. Every entry says why; review reads this
 /// list (work pack "generalise kinds", stage 8).
-const ALLOWED_WORDS: [(&str, &str); 10] = [
+const ALLOWED_WORDS: [(&str, &str); 11] = [
+    (
+        "species",
+        "a stock's species word, a closed vocabulary of the language, and a fastener base's optional entry (what a placed fastener is made of)",
+    ),
     (
         "length",
         "a part's axis and a box's size in the language (`length:`), and a fastener base's required entry",

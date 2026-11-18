@@ -806,8 +806,14 @@ hardware list and the work plan read them:
 
 | Base | Required | Optional |
 |---|---|---|
-| `fastener` | `diameter`, `length`: `Length` | `envelope`, `model`, `license` |
+| `fastener` | `diameter`, `length`: `Length` | `envelope`, `model`, `license`, `species` |
 | `tool` | | `title`: `Text`; `powered`: `Bool` (default `false`) |
+
+A fastener's `species` is a species word, as a stock's is: what it is
+made of when it is wooden (`std:hardware`'s `dowel_pin` writes `species:
+beech`). A viewer draws a placed fastener (a [joint
+member](#joint-members)) in that wood, and one without `species` as
+steel. Nothing is checked by it.
 
 A fastener or tool kind has no `roles`, `mount`, `member`, `mechanism` or
 `cut`.
@@ -1512,6 +1518,22 @@ A joint member moves with the pair's first part. Members aren't placed
 between the boards of a part made of boards yet: such a kind is
 `warning[not-supported]` there (see [Boards](#boards)).
 
+**Drawing.** A viewer draws every copy of a joint's member where it is
+placed, in the normal view, pulled apart and in a section, as the
+fastener it is: in the wood its fastener kind's `species:` names (a
+`dowel_pin` is beech), and as steel when the kind names no species or
+the member names no fastener. It is a thing of its own in the view
+(clicking a pin selects the joint's pins on that pair, named `<joint>'s
+<member>`, and says which joint placed them and where that joint is
+written), and selecting it draws the pair's parts see-through, so pins
+inside the wood show. Pulled apart, and in focus mode as the pair's
+`insert:` steps play, it moves with the part that carries it (the
+pair's first part), so a dowel's pins ride on the piece and go into
+their holes in the other part as it comes home. The parts tree lists
+each joint's member once, grouped over its pairs, with how many copies
+the joint places in all (`dowel_pin × 8`), as the hardware list
+counts them.
+
 #### Faces to cut
 
 A cut is measured on one face of one role's part, from that face's own edges.
@@ -1630,7 +1652,7 @@ hardware kind's `member` and `mechanism`: `point(...)` anywhere else is
 | `tenon(length:, width:, thickness:)` | end, crossing | everything around a centred rectangular tenon, `length` long from the face. On `end`, `width` and `thickness` are across the part's width and thickness. On `crossing` it is a **tongue** along an edge, for parts that butt edge to edge (the face is across the part's width): `width` runs along the part's length, `thickness` across its thickness, centred on the footprint. On any other face of a crossing it is `error[type-mismatch]` |
 | `spigot(length:, diameter:)` | end | everything around a centred round tenon |
 | `round(diameter:, flats:, flats_angle:)` | crossing | turns the part round, to `diameter`, over the length where the other part passes (the footprint's extent along this part's length), leaving square sections either side. With `flats:` it keeps two flat faces that distance apart, their normal at `flats_angle` (default `0deg`) from the part's width axis toward its thickness axis |
-| `drill(diameter:, depth:, count:)` | crossing, end, side | `count` round holes (default 1), spread along the longer side of the footprint or end (equal steps between their centres and from the ends, which leaves less wood between holes than at the ends) and centred across it. *Being replaced:* holes for something placed are a [joint member](#joint-members)'s, which spaces copies by their size; `count:` stays until nothing in `std:` uses it |
+| `drill(diameter:, depth:)` | crossing, end, side | one round hole, centred on the footprint or end; on `crossing(role, member)`, centred on the member's shape. A row of holes is a [joint member](#joint-members) laid out `count:` times, with the drill cut once for every copy. `count:` was retired: `drill(..., count: 4)` is `error[unknown-field]` (`'drill' has no field 'count'`), with the help `a drill makes one hole; for a row of holes, give the joint kind a member for what goes in them, with count: and spaced:, and drill crossing(role, member): one hole for every copy, lined up in both parts` |
 | `dovetail_socket(neck:, depth:, angle:, slope:)` | end, crossing | a dovetail socket: `neck` wide at the face, `depth` deep, widening by its spread each side to its bottom, cut straight through the part (see "Angled cuts"). On `crossing` it is a **housing** for a sliding dovetail, running along the entering part's length |
 | `dovetail_tail(neck:, depth:, angle:, slope:)` | end, crossing | everything around a dovetail tail: over the last `depth` of the part, the wood either side of a tail `neck` wide at its shoulder and wider by its spread each side at the face, cut straight through the part. On `crossing` it is the **tongue** of a sliding dovetail, running along the part's own length |
 | `outline(marks: [...], depth:, from_depth:)` | side | the shape marked out with `mark(along:, across:)` points, in order round the shape, cut from `from_depth` (default `0mm`, the face itself) to `depth` below the face. With `from_depth` greater than zero the cut is hidden inside the part: a recess for a hidden stub tenon |
