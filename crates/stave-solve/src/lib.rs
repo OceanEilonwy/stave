@@ -39,6 +39,7 @@ mod help;
 mod joints;
 mod mechanism;
 mod members;
+mod mirror_cuts;
 mod models;
 mod pieces;
 mod place;

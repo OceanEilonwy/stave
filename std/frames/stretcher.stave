@@ -1,0 +1,35 @@
+stave 1
+
+/// A rail between two legs, low down, that braces them and can carry a shelf.
+/// It stands on edge at a set height above the legs' lower end and runs from
+/// the face of one leg to the other; its face is set back from the legs'
+/// outside faces. It is joined to the legs with mortise and tenon by
+/// default; the tenons are added to its cut length by the joint.
+component Stretcher {
+  param legs            : Parts                      // the two legs it runs between
+  param outside         : Anchor                     // the legs' outside face it lines up with: legs.leg[front_left].front
+  param start           : Anchor                     // the face of the first leg it runs from: legs.leg[front_left].right
+  param lower_end       : Anchor                     // the legs' lower end, where the height is measured from: legs.leg[front_left].bottom
+  param stretcher_stock : Stock
+  param run             : Direction                  // which way its length runs from start: right, left, front or back
+  param height          = 150mm                      // from the legs' lower end to the top of the stretcher
+  param width           = 50mm                       // how tall the stretcher is
+  param setback         = 5mm                        // from the legs' outside face to the stretcher's face
+  param joinery         : JointKind = mortise_tenon  // how it is joined to the legs
+  param tenon_length    = 25mm                       // how far the tenons reach into the legs
+
+  require above_the_floor : height >= width "the stretcher would reach below the legs; make it higher or narrower"
+
+  part rail : stretcher_stock {
+    length: fit                      // between the legs; the tenons are added by the joint
+    width:  width
+    place {
+      orient(length: run, width: up)
+      flush(lower_end, inset: height - width)
+      against(start)
+      flush(outside, inset: setback)
+    }
+  }
+
+  joint tenons : joinery(rail, into: legs, length: tenon_length)
+}

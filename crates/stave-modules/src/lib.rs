@@ -95,8 +95,8 @@ pub enum ModuleSource {
     },
     /// A standard module embedded in Stave.
     Std {
-        /// One of [`STD_MODULES`]: `"joinery"`, `"hardware"`, `"tools"` or
-        /// `"casework"`.
+        /// One of [`STD_MODULES`]: `"joinery"`, `"hardware"`, `"tools"`,
+        /// `"casework"` or `"frames"`.
         name: &'static str,
     },
 }

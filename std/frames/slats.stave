@@ -1,0 +1,39 @@
+stave 1
+
+/// A row of slats across two rails, with an even gap between them, such as a lower shelf.
+/// The slats rest on the rails and are screwed down to them. They fill the
+/// space between two faces exactly: the first slat against one, the last
+/// against the other, so a project says only how many and how far apart,
+/// and the slat width is worked out here.
+component Slats {
+  param rails        : Parts      // the two rails they rest on
+  param on           : Anchor     // the rails' upper face: stretcher_front.rail.top
+  param fill_from    : Anchor     // the face the first slat lies against: legs.leg[front_left].right
+  param fill_to      : Anchor     // the face the last slat lies against: legs.leg[front_right].left
+  param ends_from    : Anchor     // the face one end of each slat is flush with: stretcher_front.rail.front
+  param ends_to      : Anchor     // the face the other end is flush with: stretcher_back.rail.back
+  param slat_stock   : Stock
+  param count        = 5          // how many slats
+  param gap          = 15mm       // between neighbouring slats
+  param run          : Direction  // which way each slat's length runs from ends_from
+  param spread       : Direction  // which way the row runs from fill_from
+  param screw_length = 40mm
+
+  /// The width that makes count slats and the gaps between them fill the space.
+  let slat_width = (between(fill_from, fill_to) - (count - 1) * gap) / count
+
+  require slats_fit : slat_width > 0mm "the gaps alone fill the space; use fewer slats or a smaller gap"
+
+  part slat[count] : slat_stock {
+    length: between(ends_from, ends_to)
+    width:  slat_width
+    place {
+      orient(length: run, width: spread)
+      against(on)
+      spaced(gap(gap), from: fill_from, to: fill_to)
+      flush(ends_from)
+    }
+  }
+
+  joint screws : screw(slat[*], into: rails, length: screw_length)
+}

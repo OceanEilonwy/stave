@@ -1,0 +1,25 @@
+stave 1
+
+// std:frames — table and stand components: a top, legs under it, the
+// aprons, stretchers and cleats between the legs, and a slatted shelf.
+// Like std:casework it is not in the prelude: a project imports it,
+// import "std:frames", and then writes frames.Legs, frames.Apron and so on.
+//
+// A library can't place parts at the top level; its components do that
+// when a project instantiates them. Everything a component needs from the
+// project (the space, the parts it is placed against, the stock) comes in
+// as a param, so the library stands alone.
+//
+// Rails (Apron, Stretcher, Cleat, Slats) are told which way they run with a
+// Direction param, which has no default: like the faces they are placed
+// against, it says where the rail goes. They are placed against faces they
+// are handed (Anchor params): the outside face of the legs they line up
+// with, the leg face they start from. A mirrored assembly re-binds those faces to their mirror
+// images, so one rail and its mirror make a pair.
+//
+// Components: Top, Legs, Apron, Stretcher, Cleat, Slats
+
+library "Frames" {
+  about:   "Tops, legs, aprons, stretchers, cleats and slats for tables and stands"
+  license: "AGPL-3.0-or-later"
+}

@@ -1,0 +1,20 @@
+stave 1
+
+/// Four square legs standing under the corners of a part, such as a table top.
+/// Each leg hangs straight down from the underside of the part, its two
+/// outer faces a set distance in from the part's edges.
+component Legs {
+  param under     : Part    // the part they stand under: a top
+  param leg_stock : Stock   // square stock, as wide as the leg
+  param length    : Length  // from the underside of the part down to the floor
+  param inset     = 25mm    // from each edge of the part to the outside of a leg
+
+  part leg[front_left, front_right, back_left, back_right] : leg_stock {
+    length: length
+    place {
+      orient(length: up, width: right)
+      corners(under, inset: inset)
+      against(under.bottom)
+    }
+  }
+}

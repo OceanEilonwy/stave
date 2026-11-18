@@ -27,6 +27,7 @@ use crate::hardware::{
 use crate::joints::{GeomTable, JointWork, PartGeom, local_slot, round_length};
 use crate::mechanism::AssemblyMechanism;
 use crate::members::{LaidOut, WorldMemberCut};
+use crate::mirror_cuts::MirroredJoint;
 use crate::place::reflect;
 use crate::{Reported, Solved, Solver};
 
@@ -480,6 +481,24 @@ pub(crate) fn build(solver: &mut Solver<'_>) -> Option<SolvedDesign> {
         &mut placed,
         &work,
     );
+    // A mirrored joint that was made buys its source's fasteners again.
+    for inst in &solver.model.joints {
+        let Some(source) = inst.mirror_of else {
+            continue;
+        };
+        if !joints.get(inst.id.index()).is_some_and(Option::is_some) {
+            continue;
+        }
+        let copied: Vec<FastenerUse> = fasteners
+            .iter()
+            .filter(|f| f.joint == source)
+            .map(|f| FastenerUse {
+                joint: inst.id,
+                ..f.clone()
+            })
+            .collect();
+        fasteners.extend(copied);
+    }
 
     // 6b. Spliced parts: their pieces and the splices between them.
     let splits = solver.make_pieces(&mut crate::pieces::Tables {
@@ -1232,6 +1251,7 @@ impl Solver<'_> {
                             carrier,
                             shapes,
                         )
+                        .and_then(|body| body.laid_out(member.copies(), member.item.clone()))
                     });
                     match body {
                         Some(body) => members.push(body),
@@ -1304,6 +1324,21 @@ impl Solver<'_> {
                     list.push(made);
                 }
             }
+            // Its kind's cuts in parts outside the assembly too.
+            self.mirror_outside_cuts(
+                &MirroredJoint {
+                    joint,
+                    source,
+                    assembly,
+                    axis,
+                    plane,
+                    part_map: &part_map,
+                },
+                &inst.name,
+                geoms,
+                cuts,
+                memberships,
+            );
             if let Some(entry) = joints.get_mut(joint.index()) {
                 *entry = Some(copy);
             }
@@ -1445,7 +1480,7 @@ impl Solver<'_> {
         }
     }
     /// The part that occupies the reflected place of an outside part.
-    fn rebind_part(
+    pub(crate) fn rebind_part(
         &mut self,
         part: PartId,
         axis: Axis,
@@ -1506,7 +1541,10 @@ impl Solver<'_> {
         ))
     }
 
-    fn assembly_place(&self, assembly: AssemblyId) -> (stave_lang::FileId, stave_lang::ast::Span) {
+    pub(crate) fn assembly_place(
+        &self,
+        assembly: AssemblyId,
+    ) -> (stave_lang::FileId, stave_lang::ast::Span) {
         let mut current = Some(assembly);
         while let Some(id) = current {
             let Some(inst) = self.model.assemblies.get(id.index()) else {
