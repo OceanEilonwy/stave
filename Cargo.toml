@@ -2,6 +2,7 @@
 resolver = "3"
 members = [
   "crates/stave-lang",
+  "crates/stave-smt",
   "crates/stave-schema",
   "crates/stave-modules",
   "crates/stave-model",
