@@ -616,6 +616,14 @@ impl Edit {
             return Err(CommitError::DoesNotFit);
         }
         let files = file_edits(self.base.opened(), tried, patch);
+        // Every file is checked before any is written, so a file changed
+        // since the edit began stops the commit with nothing written.
+        for file in &files {
+            to.can_write(file).map_err(|source| CommitError::Write {
+                path: file.path.clone(),
+                source,
+            })?;
+        }
         for file in &files {
             to.write_edits(file).map_err(|source| CommitError::Write {
                 path: file.path.clone(),
@@ -883,11 +891,74 @@ pub trait WriteEdits {
     /// The file can't be written, or its text is no longer the text the
     /// edits were computed from.
     fn write_edits(&mut self, file: &FileEdit) -> io::Result<()>;
+
+    /// Checks, writing nothing, that [`WriteEdits::write_edits`] would
+    /// find the text the edits were computed from: a commit checks every
+    /// file before it writes any.
+    ///
+    /// # Errors
+    ///
+    /// The file's text is no longer the text the edits were computed
+    /// from, or it can't be read.
+    fn can_write(&mut self, file: &FileEdit) -> io::Result<()> {
+        let _ = file;
+        Ok(())
+    }
 }
 
+/// The file changed since the edit began.
+fn changed_since(file: &FileEdit) -> io::Error {
+    io::Error::other(format!(
+        "'{}' changed since the edit began; start the edit again",
+        file.path.display()
+    ))
+}
+
+/// Checks that the file on disk still holds the text the edits were
+/// computed from, or, for a file the patch creates, that it still
+/// doesn't exist.
+fn disk_unchanged(file: &FileEdit) -> io::Result<()> {
+    if file.created {
+        return match std::fs::symlink_metadata(&file.path) {
+            Ok(_) => Err(changed_since(file)),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error),
+        };
+    }
+    if std::fs::read_to_string(&file.path)? == file.before {
+        Ok(())
+    } else {
+        Err(changed_since(file))
+    }
+}
+
+/// Files on disk: a file is written only while it still holds the text
+/// the edits were computed from, so a change saved since the edit began
+/// is never overwritten.
 impl WriteEdits for DiskWriter {
     fn write_edits(&mut self, file: &FileEdit) -> io::Result<()> {
+        disk_unchanged(file)?;
+        if file.created {
+            // Refuse, rather than replace, a file that appeared meanwhile.
+            use std::io::Write as _;
+            let mut out = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&file.path)
+                .map_err(|error| {
+                    if error.kind() == io::ErrorKind::AlreadyExists {
+                        changed_since(file)
+                    } else {
+                        error
+                    }
+                })?;
+            return out.write_all(file.after.as_bytes());
+        }
         std::fs::write(&file.path, &file.after)
+    }
+
+    fn can_write(&mut self, file: &FileEdit) -> io::Result<()> {
+        disk_unchanged(file)
     }
 }
 
@@ -912,13 +983,20 @@ impl WriteEdits for stave_ide::Buffers {
         }
         let current = self.open(&document).map_err(io::Error::other)?.to_owned();
         if current != file.before {
-            return Err(io::Error::other(
-                "the file changed since the edit began; start the edit again",
-            ));
+            return Err(changed_since(file));
         }
         let text = stave_lang::apply_text_edits(&current, &file.edits)
             .ok_or_else(|| io::Error::other("the edits don't fit the file's text"))?;
         self.edit(&document, &text).map_err(io::Error::other)
+    }
+
+    fn can_write(&mut self, file: &FileEdit) -> io::Result<()> {
+        let document = stave_ide::Document::File(file.path.clone());
+        match self.text(&document) {
+            Some(text) if text != file.before => Err(changed_since(file)),
+            Some(_) => Ok(()),
+            None => disk_unchanged(file),
+        }
     }
 }
 
@@ -926,6 +1004,10 @@ impl WriteEdits for stave_ide::Buffers {
 impl<T: WriteEdits> WriteEdits for Rc<RefCell<T>> {
     fn write_edits(&mut self, file: &FileEdit) -> io::Result<()> {
         self.borrow_mut().write_edits(file)
+    }
+
+    fn can_write(&mut self, file: &FileEdit) -> io::Result<()> {
+        self.borrow_mut().can_write(file)
     }
 }
 

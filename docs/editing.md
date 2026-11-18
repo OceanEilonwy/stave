@@ -232,8 +232,14 @@ already used in the project, or is a word of the language, is refused.
 the patch gives them) through the open buffers when the window has the
 file open, so the editor shows the change unsaved and its undo can take
 it back; on the command line, to disk. The session then shows the
-committed design. **Cancel** leaves no trace: nothing was written, so
-every file is as it was, byte for byte.
+committed design. Add never overwrites a change made since the edit
+began: every file is checked before any is written, and when one no
+longer holds the text the edit started from (a change saved in the
+editor or elsewhere, or a file the patch would create that now exists)
+Add writes nothing and is rejected (`CantWrite`), the change is kept, and
+the edit stays open to be cancelled or started again. **Cancel** leaves
+no trace: nothing was written, so every file is as it was, byte for
+byte.
 
 ## The command line
 

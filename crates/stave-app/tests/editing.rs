@@ -361,6 +361,51 @@ fn cancel_leaves_every_file_byte_for_byte() {
 }
 
 #[test]
+fn add_never_overwrites_a_change_saved_since_the_edit_began() {
+    let folder = copy_of_the_cabinet("stale");
+    let base = opened_for(&folder);
+    let above = region(&base, "divider.above");
+    let (side_l, side_r) = (part(&base, "side_l"), part(&base, "side_r"));
+    let carcass = folder.join("carcass.stave");
+
+    let mut session = Session::new(folder.clone());
+    session.apply(Command::Edit(EditCommand::Start(Picked::Region(above))));
+    let (index, _) = entry(session.edit().unwrap().menu(), "Shelf");
+    session.apply(Command::Edit(EditCommand::Choose(index)));
+    session.apply(Command::Edit(EditCommand::Bind(Picked::Group(
+        NonEmpty::new(vec![side_l, side_r]).unwrap(),
+    ))));
+    assert!(matches!(
+        session.edit().unwrap().chosen().unwrap().progress(),
+        Progress::Tried(Verdict::Fits(_))
+    ));
+
+    // Someone saves a change to the file the patch edits.
+    let saved = format!(
+        "{}\n// a note saved in the editor\n",
+        std::fs::read_to_string(&carcass).unwrap()
+    );
+    std::fs::write(&carcass, &saved).unwrap();
+    let before = snapshot(&folder);
+
+    let events = session.apply(Command::Edit(EditCommand::Add));
+    assert!(
+        events.iter().any(|e| matches!(
+            e,
+            Event::Edit(EditEvent::Rejected(Rejection::CantWrite(message)))
+                if message.contains("changed since the edit began")
+        )),
+        "{events:?}"
+    );
+    assert!(!events.contains(&Event::Edit(EditEvent::Committed)));
+    // The saved change is kept and nothing else was written.
+    assert_eq!(std::fs::read_to_string(&carcass).unwrap(), saved);
+    assert_eq!(snapshot(&folder), before);
+    // The edit is still open, so it can be cancelled or started again.
+    assert!(session.edit().is_some());
+}
+
+#[test]
 fn add_writes_through_open_buffers() {
     let folder = copy_of_the_cabinet("buffers");
     let base = opened_for(&folder);
