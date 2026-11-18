@@ -436,6 +436,32 @@ impl FilesPage {
         state.buffers.overlay()
     }
 
+    /// What an edit started in the window reads: the open documents'
+    /// text, unsaved changes included, over the disk.
+    pub fn edit_files(&self) -> Overlay {
+        self.state.borrow().buffers.overlay()
+    }
+
+    /// The text buffer of a file of the project, when it has a tab; with
+    /// `open`, a tab is opened for it first (not shown).
+    pub fn buffer_for(self: &Rc<Self>, path: &Path, open: bool) -> Option<gtk::TextBuffer> {
+        let document = Document::File(path.to_path_buf());
+        let index = if open {
+            self.ensure_tab(&document)?
+        } else {
+            self.state
+                .borrow()
+                .tabs
+                .iter()
+                .position(|tab| tab.document == document)?
+        };
+        self.state
+            .borrow()
+            .tabs
+            .get(index)
+            .map(|tab| tab.buffer.clone())
+    }
+
     /// `true` if some document has changes that aren't saved.
     pub fn has_unsaved(&self) -> bool {
         self.state.borrow().buffers.dirty().next().is_some()

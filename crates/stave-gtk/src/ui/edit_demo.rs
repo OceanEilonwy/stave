@@ -186,6 +186,7 @@ pub fn show(design: &gtk::Overlay, showcase: Showcase) {
             let card = EditCard::new();
             card.show(
                 &CardModel {
+                    applied: &[],
                     heading,
                     candidate,
                     name: &name,

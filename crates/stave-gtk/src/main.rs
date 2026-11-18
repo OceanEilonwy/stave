@@ -197,6 +197,14 @@ struct Arguments {
     /// fixture over the design (menu, greyed, refused, fits, choose or point).
     #[arg(long, value_name = "STATE", value_parser = parse_edit_fixture)]
     edit_fixture: Option<ui::Showcase>,
+    /// For the window: once the design is drawn, run these editing steps
+    /// (hover, select, choose, bind, set, name, fix, add, cancel; see
+    /// docs/gui.md), as the pointer and the card would.
+    #[arg(long, value_name = "FILE")]
+    edit_script: Option<PathBuf>,
+    /// For the window: open the New Project dialog.
+    #[arg(long)]
+    new_project: bool,
 }
 
 fn parse_edit_fixture(text: &str) -> Result<ui::Showcase> {
@@ -332,6 +340,8 @@ fn main() -> ExitCode {
                 zoom: arguments.zoom,
             },
             edit_fixture: arguments.edit_fixture,
+            edit_script: arguments.edit_script,
+            new_project: arguments.new_project,
         }),
     };
     match result {

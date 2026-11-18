@@ -1,0 +1,1165 @@
+//! Editing in the 3D view, wired to the session (`docs/editing.md`,
+//! `docs/gui.md` "Editing in the 3D view"): the pointer lights the space
+//! under it, a click in a space or in the gap between two facing parts
+//! opens the menu for it, the part's card offers to add onto the face
+//! clicked, and the menu and the card send the session's commands. The
+//! session decides everything; this file only turns what people do into
+//! [`EditCommand`]s and draws what the session holds after each
+//! [`EditEvent`].
+//!
+//! ```text
+//! pointer ──pick_target──▶ Region ─▶ lit (and what covers it see-through)
+//! click   ──pick_target──▶ Region / facing pair ─▶ EditCommand::Start ─▶ menu
+//! menu entry ─▶ Choose ─▶ card ─▶ Set / Bind (next click) / Rename / ApplyFix
+//!                              └▶ Add ─▶ Committed: the new design, the item selected
+//!                              └▶ Cancel or Escape ─▶ nothing written
+//! chosen candidate tried ─▶ its ghost (Ghosts over the base), tinted by verdict
+//! ```
+//!
+//! What a widget reports is sent a moment later ([`Window::send_edit_later`]),
+//! never from inside the widget's own signal: the card is drawn again from
+//! the session on every event, and its name field reports when it is taken
+//! away.
+
+use std::cell::{Cell, RefCell};
+use std::rc::Rc;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
+
+use adw::prelude::*;
+use gtk::glib;
+use stave_app::edit::{
+    Applicability, Declaration, Names, PartFace, Picked, PlaceSlot, Problem, Refusal, Verdict,
+};
+use stave_app::editing::{
+    Edit, EditCommand, EditEvent, Progress, parse_name, parse_value, picked_from_facing,
+    picked_from_part_face,
+};
+use stave_app::session::{Command, Editor, Selection, Session};
+use stave_lang::ast::Expr;
+use stave_lang::{Code, Diagnostic, Severity};
+use stave_model::ids::AssemblyId;
+use stave_model::solved::RegionId;
+use stave_scene::{
+    Aabb, BuildOptions, Extent, Facing, GhostVerdict, Ghosts, Look, NodeId, Orbit, Posed, Ray,
+    SceneGraph, Subject, Target,
+};
+
+use super::edit_card::{CardAction, CardModel, EditCard, Words};
+use super::edit_menu::{Checked, EditMenu, MenuItem};
+use super::edit_writer::BufferWriter;
+use super::{EDGE, Window};
+use crate::render::{Backdrop, Frame, Image};
+
+/// How long one step of the menu's check runs before the window draws
+/// what it found so far; a step that finds nothing new gets twice as long.
+const MENU_STEP: Duration = Duration::from_millis(120);
+/// The longest a step of the menu's check may run.
+const MENU_STEP_LIMIT: Duration = Duration::from_secs(8);
+/// How long the card shows "Checking" before a command that tries the
+/// candidate again runs, so the spinner is drawn first.
+const CHECKING_DELAY: Duration = Duration::from_millis(40);
+/// How strongly a ghost takes its verdict's colour.
+const GHOST_TINT: f32 = 0.62;
+
+/// The editing widgets that float over the 3D view, and what only they
+/// need.
+pub(super) struct EditView {
+    /// The menu for a selection.
+    pub(super) menu: EditMenu,
+    /// The card for a chosen candidate.
+    pub(super) card: EditCard,
+    /// The verdict in words beside the ghost, so it never rests on colour
+    /// alone.
+    verdict: gtk::Label,
+    /// On the part's card: add onto the face that was clicked.
+    face_button: gtk::Button,
+    /// Whether the editor shows, for the writer (a commit opens the file
+    /// in a tab when it does).
+    editor_open: Rc<Cell<bool>>,
+    state: RefCell<EditState>,
+}
+
+/// What the editing view keeps between events.
+#[derive(Default)]
+struct EditState {
+    /// The space lit under the pointer.
+    hover: Option<RegionId>,
+    /// The face last clicked on the selected part.
+    face: Option<PartFace>,
+    /// Where the menu opens, in the 3D view's logical pixels.
+    point: Option<(f64, f64)>,
+    /// The chosen candidate's ghost, while it has one.
+    ghost: Option<GhostView>,
+    /// Counts edits, so a menu check meant for an earlier one stops.
+    generation: u64,
+    /// A command that tries the candidate again is waiting to run.
+    checking: bool,
+    /// The name of the item being added, to select once it is written.
+    select_after: Option<String>,
+    /// A space lit by name until an edit starts (a new project's
+    /// envelope).
+    first_space: Option<String>,
+}
+
+/// A candidate's ghost: its scene, posed at rest.
+struct GhostView {
+    ghosts: Ghosts,
+    posed: Posed,
+    /// The renderer holds this scene.
+    uploaded: bool,
+}
+
+impl EditView {
+    /// The widgets, hidden until an edit starts.
+    pub(super) fn new() -> EditView {
+        let menu = EditMenu::new();
+        menu.root.set_halign(gtk::Align::Start);
+        menu.root.set_valign(gtk::Align::Start);
+        menu.root.set_visible(false);
+        let card = EditCard::new();
+        card.root.set_halign(gtk::Align::End);
+        card.root.set_valign(gtk::Align::Start);
+        card.root.set_margin_top(EDGE);
+        card.root.set_visible(false);
+        let verdict = gtk::Label::builder()
+            .halign(gtk::Align::Start)
+            .valign(gtk::Align::Start)
+            .css_classes(["stave-ghost-verdict"])
+            .can_target(false)
+            .visible(false)
+            .build();
+        let face_button = gtk::Button::builder()
+            .css_classes(["stave-edit-face", "pill"])
+            .margin_start(16)
+            .margin_end(16)
+            .margin_bottom(16)
+            .visible(false)
+            .build();
+        EditView {
+            menu,
+            card,
+            verdict,
+            face_button,
+            editor_open: Rc::new(Cell::new(false)),
+            state: RefCell::new(EditState::default()),
+        }
+    }
+}
+
+/// The words for the ids and expressions a candidate holds, from the
+/// model of the design the edit is tried on.
+pub(super) struct SessionWords<'m> {
+    names: Option<Names<'m>>,
+}
+
+impl<'m> SessionWords<'m> {
+    /// Words from the edit's base model.
+    pub(super) fn of(edit: &'m Edit) -> SessionWords<'m> {
+        SessionWords {
+            names: edit.base().model.as_ref().map(Names::new),
+        }
+    }
+}
+
+impl Words for SessionWords<'_> {
+    fn expression(&self, expression: &Expr) -> String {
+        stave_app::edit::value_text(expression)
+    }
+
+    fn assembly(&self, assembly: AssemblyId) -> String {
+        self.names
+            .and_then(|names| names.assembly(assembly))
+            .unwrap_or("another assembly")
+            .to_owned()
+    }
+
+    fn place(&self, slot: &PlaceSlot) -> Option<String> {
+        self.names?.slot(slot)
+    }
+}
+
+/// The menu's entries as the session has them: each entry's
+/// applicability is final once worked out; one not checked yet shows as
+/// being checked.
+pub(super) fn menu_items(edit: &Edit) -> Vec<MenuItem<'_>> {
+    edit.menu()
+        .iter()
+        .map(|candidate| MenuItem {
+            candidate,
+            checked: Checked::Done,
+        })
+        .collect()
+}
+
+/// How many entries of the menu are not checked yet.
+pub(super) fn unchecked(edit: &Edit) -> usize {
+    edit.menu()
+        .iter()
+        .filter(|candidate| candidate.applicability == Applicability::NotChecked)
+        .count()
+}
+
+/// The index in the session's menu of the entry for a declaration.
+pub(super) fn entry_index(edit: &Edit, declaration: Declaration) -> Option<usize> {
+    edit.menu()
+        .iter()
+        .position(|candidate| candidate.declaration == declaration)
+}
+
+/// The verdict the card shows: none while something is still to choose,
+/// Checking while a command is waiting to try it again, else the try's.
+pub(super) fn card_verdict(progress: &Progress, checking: bool) -> Option<Verdict> {
+    if checking {
+        return Some(Verdict::Checking);
+    }
+    match progress {
+        Progress::NeedsChoice(_) => None,
+        Progress::Tried(verdict) => Some(verdict.clone()),
+        Progress::Unwritable(reason) => {
+            let diagnostic = Diagnostic {
+                severity: Severity::Error,
+                code: Code::NotSupported,
+                message: reason.clone(),
+                labels: Vec::new(),
+                notes: Vec::new(),
+                help: None,
+                fixes: Vec::new(),
+            };
+            let problem = Problem::new(diagnostic, Vec::new()).ok()?;
+            Refusal::new(vec![problem]).ok().map(Verdict::Refused)
+        }
+    }
+}
+
+/// The command a card action asks for, or what is wrong with what was
+/// typed, in words.
+pub(super) fn command_for(action: CardAction) -> Result<EditCommand, String> {
+    match action {
+        CardAction::Rename(text) => parse_name(&text)
+            .map(EditCommand::Rename)
+            .map_err(|error| format!("'{text}' can't be a name: {}", error.0)),
+        CardAction::Choose { param, text } => parse_value(&text)
+            .map(|value| EditCommand::Set { name: param, value })
+            .map_err(|error| format!("'{text}' isn't a value Stave can read: {}", error.0)),
+        CardAction::Fix { problem, fix } => Ok(EditCommand::ApplyFix { problem, fix }),
+        CardAction::Add => Ok(EditCommand::Add),
+        CardAction::Cancel => Ok(EditCommand::Cancel),
+    }
+}
+
+/// `true` for a command that tries the candidate again (the card shows
+/// Checking until it has).
+fn tries_again(command: &EditCommand) -> bool {
+    matches!(
+        command,
+        EditCommand::Choose(_)
+            | EditCommand::Bind(_)
+            | EditCommand::Set { .. }
+            | EditCommand::Rename(_)
+            | EditCommand::Repeat(_)
+            | EditCommand::ApplyFix { .. }
+    )
+}
+
+/// Draws the edit in progress: the menu while nothing is chosen, the
+/// card once something is, neither without an edit. Returns whether an
+/// edit is in progress.
+pub(super) fn draw_edit(
+    menu: &EditMenu,
+    card: &EditCard,
+    session: &Session,
+    checking: bool,
+) -> bool {
+    let Some(edit) = session.edit() else {
+        menu.root.set_visible(false);
+        card.root.set_visible(false);
+        return false;
+    };
+    let heading = edit.picked().heading();
+    match edit.chosen() {
+        None => {
+            menu.show(heading, &menu_items(edit));
+            menu.root.set_visible(true);
+            card.root.set_visible(false);
+        }
+        Some(chosen) => {
+            let candidate = chosen.candidate();
+            let verdict = card_verdict(chosen.progress(), checking);
+            let name = chosen
+                .item_name()
+                .or(candidate.generated_name.as_ref())
+                .map(|name| name.as_str().to_owned())
+                .unwrap_or_default();
+            let applied: Vec<String> = chosen
+                .fixes()
+                .iter()
+                .map(|fix| fix.label().to_owned())
+                .collect();
+            card.show(
+                &CardModel {
+                    applied: &applied,
+                    heading,
+                    candidate,
+                    name: &name,
+                    verdict: verdict.as_ref(),
+                },
+                &SessionWords::of(edit),
+            );
+            menu.root.set_visible(false);
+            card.root.set_visible(true);
+        }
+    }
+    true
+}
+
+/// The colour a ghost is tinted with, from its verdict.
+fn ghost_tint(verdict: GhostVerdict) -> [f32; 4] {
+    let [r, g, b] = verdict.tint();
+    [r, g, b, GHOST_TINT]
+}
+
+/// The verdict beside a ghost, in words.
+fn verdict_words(verdict: GhostVerdict) -> &'static str {
+    match verdict {
+        GhostVerdict::Checking => "Checking…",
+        GhostVerdict::Fits => "✓ It fits",
+        GhostVerdict::Refused => "✕ It doesn't fit",
+    }
+}
+
+/// The CSS class of a verdict's words.
+fn verdict_class(verdict: GhostVerdict) -> &'static str {
+    match verdict {
+        GhostVerdict::Checking => "checking",
+        GhostVerdict::Fits => "fits",
+        GhostVerdict::Refused => "refused",
+    }
+}
+
+/// The ghost's verdict for where a chosen candidate stands; `None` when
+/// it has not been tried.
+fn ghost_verdict(progress: &Progress) -> Option<GhostVerdict> {
+    match progress {
+        Progress::Tried(Verdict::Checking) => Some(GhostVerdict::Checking),
+        Progress::Tried(Verdict::Fits(_)) => Some(GhostVerdict::Fits),
+        Progress::Tried(Verdict::Refused(_)) => Some(GhostVerdict::Refused),
+        Progress::NeedsChoice(_) | Progress::Unwritable(_) => None,
+    }
+}
+
+/// The nodes of `graph` that cover a region from the camera, found by its
+/// name (a ghost's scene numbers its regions afresh).
+fn covering_region(graph: &SceneGraph, posed: &Posed, orbit: &Orbit, name: &str) -> Vec<NodeId> {
+    graph
+        .regions()
+        .iter()
+        .find(|region| region.name == name)
+        .map(|region| graph.covering(posed, orbit, Subject::Region(region.id)))
+        .unwrap_or_default()
+}
+
+/// What the editor adds to a frame of the design: the spaces lit and the
+/// nodes drawn see-through because they cover the space worked on.
+#[derive(Debug, Default)]
+pub(super) struct EditMarks {
+    /// The spaces lit, posed.
+    pub(super) lit: Vec<Aabb>,
+    /// The nodes in front of the space worked on.
+    pub(super) covering: Vec<NodeId>,
+}
+
+impl Window {
+    /// Puts the editing widgets over the 3D view and connects them.
+    pub(super) fn connect_editing(self: &Rc<Self>) {
+        let editing = &self.editing;
+        let design = &self.widgets.design;
+        design.add_overlay(&editing.menu.root);
+        design.add_overlay(&editing.card.root);
+        design.add_overlay(&editing.verdict);
+        self.widgets.card.append(&editing.face_button);
+        self.install_edit_writer();
+
+        let window = Rc::downgrade(self);
+        editing.menu.connect_chosen(move |declaration| {
+            let Some(window) = window.upgrade() else {
+                return;
+            };
+            window.choose_later(declaration);
+        });
+        let window = Rc::downgrade(self);
+        editing.card.connect_action(move |action| {
+            if let Some(window) = window.upgrade() {
+                window.card_action(action);
+            }
+        });
+        let window = Rc::downgrade(self);
+        editing.face_button.connect_clicked(move |_| {
+            if let Some(window) = window.upgrade() {
+                window.edit_face();
+            }
+        });
+
+        // The pointer lights the space under it.
+        let motion = gtk::EventControllerMotion::new();
+        let window = Rc::downgrade(self);
+        motion.connect_motion(move |_, x, y| {
+            if let Some(window) = window.upgrade() {
+                window.edit_hover(Some((x, y)));
+            }
+        });
+        let window = Rc::downgrade(self);
+        motion.connect_leave(move |_| {
+            if let Some(window) = window.upgrade() {
+                window.edit_hover(None);
+            }
+        });
+        self.widgets.viewport.add_controller(motion);
+    }
+
+    /// Add writes through the editor's buffers.
+    fn install_edit_writer(&self) {
+        self.session
+            .borrow_mut()
+            .set_edit_writer(Box::new(BufferWriter::new(
+                &self.widgets.files,
+                self.editing.editor_open.clone(),
+            )));
+    }
+
+    /// Another folder is open: a fresh session, nothing being edited.
+    pub(super) fn editing_folder_changed(self: &Rc<Self>) {
+        self.install_edit_writer();
+        {
+            let mut state = self.editing.state.borrow_mut();
+            let first_space = state.first_space.take();
+            *state = EditState {
+                generation: state.generation.wrapping_add(1),
+                ..EditState::default()
+            };
+            state.first_space = first_space;
+        }
+        self.editing.verdict.set_visible(false);
+        self.refresh_edit();
+    }
+
+    /// Lights a space by name until an edit starts: a new project's
+    /// envelope, the first space to click.
+    pub(super) fn light_first_space(&self, name: &str) {
+        self.editing.state.borrow_mut().first_space = Some(name.to_owned());
+    }
+
+    /// `true` while an edit (or a change) is in progress.
+    pub(super) fn edit_open(&self) -> bool {
+        let session = self.session.borrow();
+        session.edit().is_some() || session.change().is_some()
+    }
+
+    /// Escape: drops the edit in progress. `true` when there was one.
+    pub(super) fn cancel_edit(self: &Rc<Self>) -> bool {
+        if !self.edit_open() {
+            return false;
+        }
+        self.dispatch(Command::Edit(EditCommand::Cancel));
+        true
+    }
+
+    // ---- what the pointer is on ----
+
+    /// The ray through a point of the 3D view.
+    fn ray_at(&self, x: f64, y: f64) -> Option<Ray> {
+        let state = self.state.borrow();
+        let viewport = &self.widgets.viewport;
+        state.orbit.map(|orbit| {
+            orbit.ray(
+                crate::convert::f32_of(x),
+                crate::convert::f32_of(y),
+                crate::convert::f32_of_int(viewport.width()),
+                crate::convert::f32_of_int(viewport.height()),
+            )
+        })
+    }
+
+    /// What a point of the 3D view is on: a part's face or a space, and
+    /// the two parts facing across the gap there.
+    fn pointed_at(&self, x: f64, y: f64) -> (Option<Target>, Option<Facing>) {
+        let Some(ray) = self.ray_at(x, y) else {
+            return (None, None);
+        };
+        let session = self.session.borrow();
+        let state = self.state.borrow();
+        let (Some((_, graph)), Some(posed)) = (session.drawable(), state.posed.as_ref()) else {
+            return (None, None);
+        };
+        let target = graph.pick_target(posed, ray);
+        let facing = match target {
+            None => graph.facing(posed, ray),
+            Some(_) => None,
+        };
+        (target, facing)
+    }
+
+    /// What the chosen candidate still waits to have pointed at; the next
+    /// click binds it when anything is.
+    pub(super) fn wanted(&self) -> pointing::Wanted {
+        pointing::Wanted::of(self.session.borrow().edit())
+    }
+
+    /// What a click at a point of the 3D view binds, for what the card
+    /// asks to be pointed at.
+    pub(super) fn binding_picked(
+        &self,
+        x: f64,
+        y: f64,
+        wanted: pointing::Wanted,
+    ) -> Option<Picked> {
+        let ray = self.ray_at(x, y)?;
+        let session = self.session.borrow();
+        let state = self.state.borrow();
+        let (_, graph) = session.drawable()?;
+        pointing::binding_pick(graph, state.posed.as_ref()?, ray, wanted)
+    }
+
+    /// The pointer moved over the 3D view (or left it: `None`): lights the
+    /// space under it while nothing is chosen, or while the card asks for
+    /// a place to point at.
+    fn edit_hover(self: &Rc<Self>, point: Option<(f64, f64)>) {
+        let hover = match point {
+            Some((x, y))
+                if self.state.borrow().focus.is_none()
+                    && (self.session.borrow().edit().is_none() || self.wanted().region) =>
+            {
+                match self.pointed_at(x, y).0 {
+                    Some(Target::Region(hit)) => Some(hit.region),
+                    Some(Target::Node(_)) | None => None,
+                }
+            }
+            Some(_) | None => None,
+        };
+        let changed = {
+            let mut state = self.editing.state.borrow_mut();
+            let changed = state.hover != hover;
+            state.hover = hover;
+            changed
+        };
+        if changed {
+            self.request_render();
+        }
+    }
+
+    /// A click in the 3D view, for editing first: a space or a gap opens
+    /// the menu for it, and while the card asks for a place the click
+    /// binds it. A click on a part is left to the selection (its face is
+    /// kept for the card's "Add onto" button), dropping any edit. `true`
+    /// when the click was used here.
+    pub(super) fn edit_click(self: &Rc<Self>, x: f64, y: f64) -> bool {
+        if self.state.borrow().focus.is_some() {
+            return false;
+        }
+        let wanted = self.wanted();
+        if wanted.any() {
+            // A part's face is wanted even where the click goes through a
+            // space to reach it.
+            if let Some(picked) = self.binding_picked(x, y, wanted) {
+                self.send_edit_later(EditCommand::Bind(picked));
+            }
+            return true;
+        }
+        let (target, facing) = self.pointed_at(x, y);
+        let picked = match target {
+            Some(Target::Region(hit)) => Some(Picked::Region(hit.region)),
+            Some(Target::Node(hit)) => hit.part_face().map(picked_from_part_face),
+            None => facing.as_ref().and_then(picked_from_facing),
+        };
+        match (target, picked) {
+            (Some(Target::Region(_)), Some(picked)) | (None, Some(picked)) => {
+                self.start_edit(picked, (x, y));
+                true
+            }
+            (Some(Target::Node(_)), picked) => {
+                self.editing.state.borrow_mut().face = match picked {
+                    Some(Picked::Face(face)) => Some(face),
+                    Some(Picked::Region(_) | Picked::Between(_) | Picked::Group(_)) | None => None,
+                };
+                self.cancel_edit();
+                false
+            }
+            (Some(Target::Region(_)) | None, None) => {
+                self.cancel_edit();
+                false
+            }
+        }
+    }
+
+    /// Starts an edit from a selection: the menu opens near `point`.
+    pub(super) fn start_edit(self: &Rc<Self>, picked: Picked, point: (f64, f64)) {
+        let keeps_selection = matches!(picked, Picked::Face(_));
+        {
+            let mut session = self.session.borrow_mut();
+            session.set_edit_files(Arc::new(self.widgets.files.edit_files()));
+        }
+        self.editing.state.borrow_mut().point = Some(point);
+        if !keeps_selection && self.session.borrow().selection().is_some() {
+            self.dispatch(Command::Select(None));
+        }
+        self.dispatch(Command::Edit(EditCommand::Start(picked)));
+    }
+
+    /// The part's card's button: the menu for the face clicked on it.
+    fn edit_face(self: &Rc<Self>) {
+        let Some(face) = self.editing.state.borrow().face else {
+            return;
+        };
+        let point = self
+            .screen_point(&self.selected_nodes())
+            .map_or((200.0, 200.0), |(x, y)| (f64::from(x), f64::from(y)));
+        self.start_edit(Picked::Face(face), point);
+    }
+
+    /// Shows the part's "Add onto" button when the selected part is the
+    /// one whose face was clicked and nothing is being edited.
+    pub(super) fn update_face_button(&self) {
+        let face = self.editing.state.borrow().face;
+        let selected = match self.session.borrow().selection() {
+            Some(Selection::Part(part)) => Some(*part),
+            _ => None,
+        };
+        let shown = match (face, selected) {
+            (Some(face), Some(part)) if face.part == part && !self.edit_open() => Some(face),
+            _ => None,
+        };
+        let button = &self.editing.face_button;
+        if let Some(face) = shown {
+            button.set_label(&format!(
+                "Add something onto its {} face…",
+                face.face.word()
+            ));
+            button.set_tooltip_text(Some("List what can go on the face you clicked"));
+        }
+        button.set_visible(shown.is_some());
+        // A new project's box is the first space to click.
+        let waiting = self.editing.state.borrow().first_space.is_some()
+            || self
+                .session
+                .borrow()
+                .drawable()
+                .is_some_and(|(_, graph)| pointing::only_spaces(graph));
+        if waiting && !self.edit_open() && self.session.borrow().selection().is_none() {
+            self.show_hint("Click inside the box to add the first piece");
+        }
+    }
+
+    // ---- commands ----
+
+    /// What the card reports, as the session's command.
+    fn card_action(self: &Rc<Self>, action: CardAction) {
+        match command_for(action) {
+            Ok(command) => self.send_edit_later(command),
+            Err(words) => self.edit_toast(&words),
+        }
+    }
+
+    fn edit_toast(&self, words: &str) {
+        self.widgets
+            .toasts
+            .add_toast(adw::Toast::builder().title(words).timeout(4).build());
+    }
+
+    /// Sends an edit command once the widget that asked has finished its
+    /// own signal; a command that tries the candidate again first shows
+    /// Checking (the card's spinner and the ghost's grey).
+    pub(super) fn send_edit_later(self: &Rc<Self>, command: EditCommand) {
+        if tries_again(&command) {
+            self.show_checking();
+        }
+        let window = self.clone();
+        glib::timeout_add_local_once(CHECKING_DELAY, move || {
+            window.send_edit(command);
+        });
+    }
+
+    /// Chooses a menu entry once the menu's own signal is done. The entry
+    /// is looked up by its declaration when the command is sent, not when
+    /// it was clicked: a step of the menu's check may sort the menu in
+    /// between (greyed entries go last in their group), moving indexes.
+    pub(super) fn choose_later(self: &Rc<Self>, declaration: Declaration) {
+        self.show_checking();
+        let window = self.clone();
+        glib::timeout_add_local_once(CHECKING_DELAY, move || {
+            window.choose_now(declaration);
+        });
+    }
+
+    /// Chooses the menu entry for a declaration now, wherever the menu
+    /// holds it; an entry that is gone chooses nothing.
+    pub(super) fn choose_now(self: &Rc<Self>, declaration: Declaration) {
+        let index = self
+            .session
+            .borrow()
+            .edit()
+            .and_then(|edit| entry_index(edit, declaration));
+        match index {
+            Some(index) => self.send_edit(EditCommand::Choose(index)),
+            None => {
+                self.editing.state.borrow_mut().checking = false;
+                self.refresh_edit();
+            }
+        }
+    }
+
+    /// The card's spinner and the ghost's grey, before a command that
+    /// tries the candidate again.
+    fn show_checking(self: &Rc<Self>) {
+        {
+            let mut state = self.editing.state.borrow_mut();
+            state.checking = true;
+            if let Some(ghost) = state.ghost.as_mut() {
+                ghost.ghosts.set_verdict(GhostVerdict::Checking);
+            }
+        }
+        self.refresh_edit();
+    }
+
+    /// Sends an edit command now.
+    pub(super) fn send_edit(self: &Rc<Self>, command: EditCommand) {
+        if command == EditCommand::Add {
+            let name = self
+                .session
+                .borrow()
+                .edit()
+                .and_then(Edit::chosen)
+                .and_then(|chosen| chosen.item_name().map(|name| name.as_str().to_owned()));
+            let mut state = self.editing.state.borrow_mut();
+            state.select_after = name;
+            self.editing
+                .editor_open
+                .set(self.session.borrow().editor() == Editor::Open);
+        }
+        // The events draw the card from the try that follows, so it no
+        // longer shows Checking.
+        let was_checking = std::mem::take(&mut self.editing.state.borrow_mut().checking);
+        self.dispatch(Command::Edit(command));
+        if was_checking {
+            // A command that was rejected tried nothing: the ghost takes
+            // back the verdict it had.
+            let verdict = self
+                .session
+                .borrow()
+                .edit()
+                .and_then(Edit::chosen)
+                .and_then(|chosen| ghost_verdict(chosen.progress()));
+            if let (Some(verdict), Some(ghost)) =
+                (verdict, self.editing.state.borrow_mut().ghost.as_mut())
+            {
+                ghost.ghosts.set_verdict(verdict);
+            }
+            self.refresh_edit();
+        }
+    }
+
+    /// Redraws what an edit event names.
+    pub(super) fn edit_event(self: &Rc<Self>, event: EditEvent) {
+        match event {
+            EditEvent::Started => {
+                let generation = {
+                    let mut state = self.editing.state.borrow_mut();
+                    state.generation = state.generation.wrapping_add(1);
+                    state.checking = false;
+                    state.hover = None;
+                    state.first_space = None;
+                    state.generation
+                };
+                self.show_hint("");
+                self.clear_ghost();
+                self.refresh_edit();
+                self.check_menu_soon(generation, MENU_STEP);
+            }
+            EditEvent::MenuChanged => self.refresh_edit(),
+            EditEvent::Chosen
+            | EditEvent::PlaceBound
+            | EditEvent::SettingChanged
+            | EditEvent::Renamed
+            | EditEvent::FixApplied
+            | EditEvent::RepeatChanged
+            | EditEvent::ChangeStarted
+            | EditEvent::DependantsIncluded
+            | EditEvent::VerdictChanged => {
+                self.update_ghost();
+                self.refresh_edit();
+            }
+            EditEvent::Committed => {
+                let name = {
+                    let mut state = self.editing.state.borrow_mut();
+                    state.generation = state.generation.wrapping_add(1);
+                    state.select_after.take()
+                };
+                self.clear_ghost();
+                self.refresh_edit();
+                let selection = {
+                    let session = self.session.borrow();
+                    name.zip(session.drawable())
+                        .and_then(|(name, (design, _))| {
+                            stave_app::link::selection_named(design, &name)
+                        })
+                };
+                if selection.is_some() {
+                    self.dispatch(Command::Select(selection));
+                }
+                self.show_card();
+            }
+            EditEvent::Cancelled => {
+                {
+                    let mut state = self.editing.state.borrow_mut();
+                    state.generation = state.generation.wrapping_add(1);
+                    state.checking = false;
+                }
+                self.clear_ghost();
+                self.refresh_edit();
+                self.show_card();
+            }
+            EditEvent::Rejected(why) => self.edit_toast(&why.text()),
+        }
+    }
+
+    /// Draws the menu or the card from the session, places them, and
+    /// hides the part's card while an edit is open.
+    pub(super) fn refresh_edit(self: &Rc<Self>) {
+        let checking = self.editing.state.borrow().checking;
+        let open = {
+            let session = self.session.borrow();
+            draw_edit(&self.editing.menu, &self.editing.card, &session, checking)
+        };
+        if open {
+            self.widgets.card.set_visible(false);
+            self.place_edit_widgets();
+        } else {
+            self.editing.verdict.set_visible(false);
+        }
+        self.update_face_button();
+        self.request_render();
+    }
+
+    /// The menu near where it was asked for, inside the view; the card at
+    /// the top right, clear of the rail of open files.
+    fn place_edit_widgets(&self) {
+        let (width, height) = (
+            f64::from(self.widgets.design.width()),
+            f64::from(self.widgets.design.height()),
+        );
+        let (x, y) = self
+            .editing
+            .state
+            .borrow()
+            .point
+            .unwrap_or((width / 3.0, 80.0));
+        let menu = &self.editing.menu.root;
+        let menu_width = 340.0;
+        let left = (x + 24.0).min(width - menu_width - f64::from(EDGE));
+        // Clear of the dock at the bottom: as high as it must be to show
+        // whole.
+        let (_, natural, _, _) = menu.measure(gtk::Orientation::Vertical, 340);
+        let top = (y - 60.0).min(height - f64::from(natural) - 96.0);
+        menu.set_margin_start(crate::convert::int_of(left.max(f64::from(EDGE))));
+        menu.set_margin_top(crate::convert::int_of(top.max(f64::from(EDGE))));
+        let rail = self.widgets.files.rail.width();
+        self.editing
+            .card
+            .root
+            .set_margin_end(EDGE.saturating_add(rail).saturating_add(EDGE));
+    }
+
+    /// Works the menu's applicability out a step at a time, drawing what
+    /// each step finds, until every entry is checked, something is chosen
+    /// or the edit ends.
+    fn check_menu_soon(self: &Rc<Self>, generation: u64, budget: Duration) {
+        let window = Rc::downgrade(self);
+        glib::timeout_add_local_once(Duration::from_millis(16), move || {
+            if let Some(window) = window.upgrade() {
+                window.check_menu_step(generation, budget);
+            }
+        });
+    }
+
+    fn check_menu_step(self: &Rc<Self>, generation: u64, budget: Duration) {
+        if self.editing.state.borrow().generation != generation {
+            return;
+        }
+        let before = {
+            let session = self.session.borrow();
+            match session.edit() {
+                Some(edit) if edit.chosen().is_none() => unchecked(edit),
+                Some(_) | None => 0,
+            }
+        };
+        if before == 0 {
+            return;
+        }
+        // The step stops when the flag is raised, keeping what it found.
+        let stop = Arc::new(AtomicBool::new(false));
+        {
+            let stop = stop.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(budget);
+                stop.store(true, Ordering::Relaxed);
+            });
+        }
+        let events = self.session.borrow_mut().check_edit_menu(&stop);
+        let after = self.session.borrow().edit().map_or(0, unchecked);
+        if events.is_empty() && after < before {
+            self.refresh_edit();
+        }
+        self.handle(events);
+        if after > 0 {
+            let next = if after < before {
+                MENU_STEP
+            } else {
+                budget.saturating_mul(2).min(MENU_STEP_LIMIT)
+            };
+            self.check_menu_soon(generation, next);
+        }
+    }
+
+    // ---- the ghost ----
+
+    /// Builds the chosen candidate's ghost from its last try: what it adds
+    /// or changes, over the design as it is.
+    fn update_ghost(self: &Rc<Self>) {
+        let ghosts = {
+            let session = self.session.borrow();
+            let chosen = session.edit().and_then(Edit::chosen);
+            let verdict = chosen.and_then(|chosen| ghost_verdict(chosen.progress()));
+            let candidate = chosen
+                .and_then(|chosen| chosen.ghost())
+                .and_then(|opened| opened.design.as_ref());
+            match (verdict, candidate, session.drawable()) {
+                (Some(verdict), Some(candidate), Some((base, graph))) => Some(Ghosts::new(
+                    base,
+                    graph,
+                    candidate,
+                    BuildOptions {
+                        extent: Extent::Cut,
+                    },
+                    verdict,
+                )),
+                _ => None,
+            }
+        };
+        match ghosts {
+            Some(ghosts) => {
+                let posed = ghosts.graph().rest();
+                self.editing.state.borrow_mut().ghost = Some(GhostView {
+                    ghosts,
+                    posed,
+                    uploaded: false,
+                });
+                self.request_render();
+            }
+            None => self.clear_ghost(),
+        }
+    }
+
+    /// Takes the ghost away; the next frame puts the design's own scene
+    /// back in the renderer.
+    fn clear_ghost(self: &Rc<Self>) {
+        if self.editing.state.borrow_mut().ghost.take().is_some() {
+            self.editing.verdict.set_visible(false);
+            self.request_render();
+        }
+    }
+
+    /// The region an edit is for, by name, when it began in a space.
+    fn edit_region(&self, session: &Session, graph: &SceneGraph) -> Option<String> {
+        match session.edit()?.picked() {
+            Picked::Region(region) => graph.region(*region).map(|region| region.name.clone()),
+            Picked::Face(_) | Picked::Between(_) | Picked::Group(_) => None,
+        }
+    }
+
+    /// The spaces to light and the nodes to see through in a frame of the
+    /// design: the space under the pointer, or the one the edit is for,
+    /// and what covers it from the camera.
+    pub(super) fn edit_marks(
+        &self,
+        session: &Session,
+        graph: &SceneGraph,
+        posed: &Posed,
+        orbit: &Orbit,
+    ) -> EditMarks {
+        let state = self.editing.state.borrow();
+        let first = || {
+            let name = state.first_space.as_deref()?;
+            graph
+                .regions()
+                .iter()
+                .find(|region| region.name == name)
+                .map(|region| region.id)
+        };
+        let region = state
+            .hover
+            .or_else(|| match session.edit()?.picked() {
+                Picked::Region(region) => Some(*region),
+                Picked::Face(_) | Picked::Between(_) | Picked::Group(_) => None,
+            })
+            .or_else(|| session.edit().is_none().then(first).flatten());
+        let Some(region) = region else {
+            // A design of spaces with no parts yet (a new project's
+            // envelope): its spaces show, waiting for the first click.
+            return EditMarks {
+                lit: pointing::spaces_waiting(graph, posed, session.edit().is_some()),
+                covering: Vec::new(),
+            };
+        };
+        EditMarks {
+            lit: graph.region_volume(posed, region).into_iter().collect(),
+            covering: graph.covering(posed, orbit, Subject::Region(region)),
+        }
+    }
+
+    /// Draws a frame with the chosen candidate's ghost, when it has one:
+    /// the candidate's scene, its ghosts tinted by the verdict, and what
+    /// covers the space it goes in see-through. `None` draws the design
+    /// as usual (and puts its scene back in the renderer first if a ghost
+    /// had it).
+    pub(super) fn render_ghost(&self, backdrop: Backdrop) -> Option<anyhow::Result<Image>> {
+        let session = self.session.borrow();
+        let mut edit_state = self.editing.state.borrow_mut();
+        let mut state = self.state.borrow_mut();
+        let shows_ghost = edit_state.ghost.is_some() && state.focus.is_none();
+        if !shows_ghost {
+            if state.uploaded.is_none()
+                && let Some(shown) = session.shown()
+                && let Some((_, graph)) = shown.drawable()
+                && let Ok(renderer) = &mut state.renderer
+            {
+                renderer.upload(graph);
+                state.uploaded = Some(shown.clone());
+            }
+            return None;
+        }
+        let ghost = edit_state.ghost.as_mut()?;
+        let orbit = state.orbit?;
+        let (width, height) = state.size;
+        let region = session
+            .drawable()
+            .and_then(|(_, graph)| self.edit_region(&session, graph));
+        let super::State {
+            renderer,
+            uploaded,
+            render_queued,
+            ..
+        } = &mut *state;
+        let Ok(renderer) = renderer else {
+            return None;
+        };
+        *render_queued = false;
+        // The ghost's scene replaces the design's in the renderer until the
+        // ghost goes (a new result put the design's back: upload again).
+        if uploaded.is_some() || !ghost.uploaded {
+            renderer.upload(ghost.ghosts.graph());
+            *uploaded = None;
+            ghost.uploaded = true;
+        }
+        let graph = ghost.ghosts.graph();
+        let count = graph.node_ids().count();
+        let mut looks = vec![Look::Normal; count];
+        let mut tints = vec![[0.0; 4]; count];
+        if let Some(name) = &region {
+            for node in covering_region(graph, &ghost.posed, &orbit, name) {
+                if let Some(look) = looks.get_mut(node.index()) {
+                    *look = Look::XRay;
+                }
+            }
+        }
+        let tint = ghost_tint(ghost.ghosts.verdict());
+        for item in ghost.ghosts.ghosts() {
+            if let Some(look) = looks.get_mut(item.node.index()) {
+                *look = Look::XRay;
+            }
+            if let Some(slot) = tints.get_mut(item.node.index()) {
+                *slot = tint;
+            }
+        }
+        Some(renderer.render(&Frame {
+            scene: graph,
+            posed: &ghost.posed,
+            orbit,
+            selection: &[],
+            highlight: None,
+            section: None,
+            looks: Some(&looks),
+            overlay: None,
+            tint_cut_faces: true,
+            lit: None,
+            tints: Some(&tints),
+            backdrop,
+            width,
+            height,
+        }))
+    }
+
+    /// Puts the verdict's words beside the ghost, after a frame is drawn.
+    pub(super) fn place_ghost_verdict(&self) {
+        let label = &self.editing.verdict;
+        let place = {
+            let edit_state = self.editing.state.borrow();
+            let state = self.state.borrow();
+            edit_state.ghost.as_ref().and_then(|ghost| {
+                let nodes: Vec<NodeId> =
+                    ghost.ghosts.ghosts().iter().map(|item| item.node).collect();
+                let bounds = ghost.ghosts.graph().bounds_of(&ghost.posed, &nodes)?;
+                let point = self.project(&state, bounds.centre())?;
+                Some((point, ghost.ghosts.verdict()))
+            })
+        };
+        let Some(((x, y), verdict)) = place.filter(|_| self.state.borrow().focus.is_none()) else {
+            label.set_visible(false);
+            return;
+        };
+        for class in ["checking", "fits", "refused"] {
+            label.remove_css_class(class);
+        }
+        label.add_css_class(verdict_class(verdict));
+        label.set_label(verdict_words(verdict));
+        label.set_margin_start(crate::convert::int_of_f32((x - 50.0).max(0.0).round()));
+        label.set_margin_top(crate::convert::int_of_f32((y - 14.0).max(0.0).round()));
+        label.set_visible(true);
+    }
+
+    // ---- driving it without a pointer (screenshots) ----
+
+    /// Lights a space as if the pointer rested in it.
+    pub(super) fn hover_region(self: &Rc<Self>, region: RegionId) {
+        self.editing.state.borrow_mut().hover = Some(region);
+        self.request_render();
+    }
+
+    /// Selects a part as a click on one of its faces does.
+    pub(super) fn click_face(self: &Rc<Self>, face: PartFace) {
+        self.editing.state.borrow_mut().face = Some(face);
+        self.cancel_edit();
+        self.dispatch(Command::Select(Some(Selection::Part(face.part))));
+    }
+
+    /// Works out every entry of the menu now, as the steps would.
+    pub(super) fn check_menu_now(self: &Rc<Self>) {
+        let never = AtomicBool::new(false);
+        let events = self.session.borrow_mut().check_edit_menu(&never);
+        self.handle(events);
+        self.refresh_edit();
+    }
+
+    /// Where a node set shows, as a point to open a menu at.
+    pub(super) fn point_of(&self, volume: Option<Aabb>) -> (f64, f64) {
+        let state = self.state.borrow();
+        volume
+            .and_then(|volume| self.project(&state, volume.centre()))
+            .map_or((300.0, 300.0), |(x, y)| (f64::from(x), f64::from(y)))
+    }
+}
+
+mod pointing;
+#[cfg(test)]
+mod tests;
+
+pub(super) use pointing::{drawn_bounds, empty_state};

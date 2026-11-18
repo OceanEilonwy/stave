@@ -1,0 +1,7 @@
+# A new project as the New Project dialog writes it (the same writer): a
+# name, three sizes, the wood and the standard casework library, and no
+# parts yet, so the envelope is the first space to click.
+new "Hall table" 900mm 760mm 400mm
+import std:casework
+stock oak_19 white_oak solid 19mm max_width 200mm max_length 2700mm
+create

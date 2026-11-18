@@ -14,7 +14,7 @@ set -eu
 
 cd "$(dirname "$0")/.."
 
-cargo build --quiet -p stave-gtk
+cargo build --quiet -p stave-gtk -p stave-cli
 
 window=docs/screenshots/window
 files=docs/screenshots/files
@@ -135,6 +135,51 @@ shot $window/edit_card_refused.png $cabinet --theme light --edit-fixture refused
 shot $window/edit_card_fits_dark.png $cabinet --theme dark --edit-fixture fits
 shot $window/edit_card_choose.png $cabinet --theme light --edit-fixture choose
 shot $window/edit_card_point.png $cabinet --theme light --edit-fixture point
+
+# Editing on the real session (docs/editing.md, docs/gui.md "Editing in the
+# 3D view"), each state reached by an edit script (tools/window-edits/) that
+# does what the pointer and the card would. The projects are copies in a
+# temporary folder, since Add writes: a small chest made by `stave edit
+# --script` (a new project with a case in its envelope), and the door
+# fixture (crates/stave-gtk/fixtures/door_hits_wall).
+edits=tools/window-edits
+# A fixed folder, so the window's subtitle is the same on every run.
+scratch=${TMPDIR:-/tmp}/stave-window-edits
+rm -rf "$scratch"
+mkdir -p "$scratch"
+trap 'rm -rf "$scratch"' EXIT
+stave=${CARGO_TARGET_DIR:-target}/debug/stave
+"$stave" edit "$scratch/chest" --script $edits/small_chest.script >/dev/null
+door() {
+    rm -rf "$scratch/door"
+    cp -r crates/stave-gtk/fixtures/door_hits_wall "$scratch/door"
+    echo "$scratch/door"
+}
+# The pointer in the case's space: lit, with the case's front see-through.
+shot $window/edit_space_lit.png "$scratch/chest" --theme light --edit-script $edits/space_lit.edit
+# A click there: the menu headed "In this space", what needs a choice said.
+shot $window/edit_space_menu.png "$scratch/chest" --theme light --edit-script $edits/space_menu.edit
+# A click on a part: its card offers to add onto the face clicked.
+shot $window/edit_face_button.png "$scratch/chest" --theme light --edit-script $edits/face_button.edit
+# The door's hinge side is pointed at on the model (`point`: the inside face
+# of side_l, clicked through the bay, as the pointer's click is picked).
+# The door refused (it swings into the wall) with the fix offered, its ghost
+# red and labelled; the fix applied, fitting, its ghost green (light and
+# dark); and the design after Add with the door selected, then with the
+# editor open, where the change shows unsaved.
+shot $window/edit_door_refused.png "$(door)" --theme light --edit-script $edits/door_refused.edit
+shot $window/edit_door_fits.png "$(door)" --theme light --edit-script $edits/door_fits.edit
+shot $window/edit_door_fits_dark.png "$(door)" --theme dark --edit-script $edits/door_fits.edit
+shot $window/edit_door_added.png "$(door)" --theme light --edit-script $edits/door_added.edit
+shot $window/edit_door_added_editor.png "$(door)" --theme light --view files --edit-script $edits/door_added.edit
+# The New Project dialog (main menu, New Project…).
+shot $window/new_project.png "$scratch/chest" --theme light --new-project
+# A project just made by it (the same writer, through `stave edit
+# --script`): no parts yet, the envelope drawn as the first space to click,
+# then the menu a click in it opens.
+"$stave" edit "$scratch/hall_table" --script $edits/new_project.script >/dev/null
+shot $window/new_project_opened.png "$scratch/hall_table" --theme light
+shot $window/new_project_menu.png "$scratch/hall_table" --theme light --edit-script $edits/envelope_menu.edit
 
 # ---- the editor (docs/screenshots/files) ----
 # `--view files` opens the editor beside the 3D view, sliding in from the

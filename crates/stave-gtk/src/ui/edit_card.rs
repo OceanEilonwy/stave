@@ -93,6 +93,9 @@ pub struct CardModel<'a> {
     /// The verdict; `None` while the candidate isn't complete, so isn't
     /// tried.
     pub verdict: Option<&'a Verdict>,
+    /// The labels of the fixes added to what is tried, in order ("Use
+    /// left: 17mm"): they change the text after the settings shown.
+    pub applied: &'a [String],
 }
 
 /// `true` when Add may be pressed: the verdict is Fits and nothing is
@@ -149,6 +152,38 @@ pub fn source_words(value: &SettingValue, words: &dyn Words) -> String {
     }
 }
 
+/// What an empty entry for a setting at its default says: the value the
+/// default stands for once the candidate was tried (`220mm`), else the
+/// default as written.
+fn default_placeholder(setting: &SettingParam) -> String {
+    match (&setting.default_value, &setting.default_text) {
+        (Some(value), _) => format!("{value} (the default)"),
+        (None, Some(text)) => format!("{text} (the default)"),
+        (None, None) => "Use the default".to_owned(),
+    }
+}
+
+/// Where a setting's value comes from, with the default spelled out: "the
+/// default, opening.up - bottom_gap - top_gap = 220mm", and the range a
+/// `within` allows.
+fn setting_source(setting: &SettingParam, words: &dyn Words) -> String {
+    let source = match (
+        &setting.value,
+        &setting.default_text,
+        &setting.default_value,
+    ) {
+        (SettingValue::Default, Some(text), Some(value)) if text != value => {
+            format!("the default, {text} = {value}")
+        }
+        (SettingValue::Default, Some(text), _) => format!("the default, {text}"),
+        _ => source_words(&setting.value, words),
+    };
+    match &setting.range {
+        Some(range) => format!("{source} · {} to {}", range.low, range.high),
+        None => source,
+    }
+}
+
 /// The value written for a setting, if there is one to show.
 fn value_text(value: &SettingValue, words: &dyn Words) -> Option<String> {
     match value {
@@ -190,6 +225,8 @@ pub struct EditCard {
     entries: RefCell<Vec<(Ident, gtk::Entry)>>,
     /// Each fix's button, with its problem and fix index (for tests).
     fixes: RefCell<Vec<((usize, usize), gtk::Button)>>,
+    /// Each setting's list of options, by param (for tests).
+    options: RefCell<Vec<(Ident, gtk::Popover)>>,
     on_action: Rc<RefCell<Option<ActionCallback>>>,
 }
 
@@ -301,6 +338,7 @@ impl EditCard {
             add_enabled,
             entries: RefCell::new(Vec::new()),
             fixes: RefCell::new(Vec::new()),
+            options: RefCell::new(Vec::new()),
             on_action,
         }
     }
@@ -350,11 +388,15 @@ impl EditCard {
         self.body.append(&name_card);
 
         self.body.append(&self.place_section(candidate, words));
+        if !model.applied.is_empty() {
+            self.body.append(&applied_section(model.applied));
+        }
         let mut fixes = Vec::new();
         self.body
             .append(&self.verdict_section(model.verdict, candidate, &mut fixes));
         self.fixes.replace(fixes);
         let mut entries = Vec::new();
+        self.options.borrow_mut().clear();
         if !candidate.settings.is_empty() {
             self.body
                 .append(&self.settings_section(&candidate.settings, words, &mut entries));
@@ -387,7 +429,7 @@ impl EditCard {
                 .css_classes(["stave-card-row"])
                 .build();
             row.append(&key_label(param.name.as_str()));
-            match words.place(&param.slot) {
+            match param.text.clone().or_else(|| words.place(&param.slot)) {
                 Some(value) => {
                     row.append(&value_label(&value));
                 }
@@ -399,7 +441,12 @@ impl EditCard {
                         .css_classes(["stave-edit-prompt"])
                         .build();
                     prompt.append(&gtk::Image::from_icon_name("find-location-symbolic"));
-                    let words = place_prompt(param);
+                    // The param's own sentence, from its doc comment.
+                    let words = if param.prompt.trim().is_empty() {
+                        place_prompt(param)
+                    } else {
+                        param.prompt.clone()
+                    };
                     let label = text(&words, &[]);
                     label.set_xalign(1.0);
                     label.set_justify(gtk::Justification::Right);
@@ -487,7 +534,8 @@ impl EditCard {
             .text(value.as_deref().unwrap_or(""))
             .placeholder_text(match setting.value {
                 SettingValue::Unset => "Needs a choice".to_owned(),
-                SettingValue::Default | SettingValue::Copied { .. } | SettingValue::Chosen(_) => {
+                SettingValue::Default => default_placeholder(setting),
+                SettingValue::Copied { .. } | SettingValue::Chosen(_) => {
                     "Use the default".to_owned()
                 }
             })
@@ -517,8 +565,11 @@ impl EditCard {
             });
         }
         line.append(&entry);
+        if !setting.options.is_empty() {
+            line.append(&self.options_button(setting));
+        }
         row.append(&line);
-        let source = source_words(&setting.value, words);
+        let source = setting_source(setting, words);
         let caption = text(
             &if unset {
                 format!(
@@ -536,6 +587,61 @@ impl EditCard {
         entry.update_property(&[gtk::accessible::Property::Description(&source)]);
         row.append(&caption);
         (row, entry)
+    }
+
+    /// A button listing what a setting can be set to (the stocks, mounts
+    /// or kinds in scope, a `within` list); choosing one sets it.
+    fn options_button(&self, setting: &SettingParam) -> gtk::MenuButton {
+        let list = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .spacing(2)
+            .css_classes(["stave-edit-options"])
+            .build();
+        let popover = gtk::Popover::builder().child(&list).build();
+        for option in &setting.options {
+            let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
+            content.append(&text(&option.text, &["stave-edit-option"]));
+            if let Some(hint) = &option.hint {
+                content.append(&text(hint, &["stave-edit-hint"]));
+            }
+            let button = gtk::Button::builder()
+                .child(&content)
+                .css_classes(["flat"])
+                .build();
+            button.update_property(&[gtk::accessible::Property::Label(&option.text)]);
+            let on_action = self.on_action.clone();
+            let param = setting.name.clone();
+            let chosen = option.text.clone();
+            let popover = popover.downgrade();
+            button.connect_clicked(move |_| {
+                if let Some(popover) = popover.upgrade() {
+                    popover.popdown();
+                }
+                let callback = on_action.borrow().clone();
+                if let Some(callback) = callback {
+                    callback(CardAction::Choose {
+                        param: param.clone(),
+                        text: chosen.clone(),
+                    });
+                }
+            });
+            list.append(&button);
+        }
+        let button = gtk::MenuButton::builder()
+            .icon_name("pan-down-symbolic")
+            .popover(&popover)
+            .valign(gtk::Align::Center)
+            .css_classes(["flat"])
+            .tooltip_text(format!("Choose {}", spaced(setting.name.as_str())))
+            .build();
+        button.update_property(&[gtk::accessible::Property::Label(&format!(
+            "Choose {}",
+            spaced(setting.name.as_str())
+        ))]);
+        self.options
+            .borrow_mut()
+            .push((setting.name.clone(), popover));
+        button
     }
 
     /// The verdict: checking, fits (with its warnings), or refused with
@@ -674,11 +780,39 @@ impl EditCard {
         self.entries.borrow().clone()
     }
 
+    /// Each setting's list of options (for tests).
+    #[cfg(test)]
+    pub fn option_lists(&self) -> Vec<(Ident, gtk::Popover)> {
+        self.options.borrow().clone()
+    }
+
     /// Each fix's button with its problem and fix index (for tests).
     #[cfg(test)]
     pub fn fix_buttons(&self) -> Vec<((usize, usize), gtk::Button)> {
         self.fixes.borrow().clone()
     }
+}
+
+/// The fixes added to what is tried, each by its label.
+fn applied_section(labels: &[String]) -> gtk::Box {
+    let section = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    section.append(&text("FIXES ADDED", &["stave-section"]));
+    let rows = card();
+    for label in labels {
+        let row = gtk::Box::builder()
+            .spacing(10)
+            .css_classes(["stave-card-row"])
+            .build();
+        row.append(&gtk::Image::from_icon_name("object-select-symbolic"));
+        row.append(&text(label, &[]));
+        rows.append(&row);
+    }
+    section.append(&rows);
+    section.append(&text(
+        "Each is written after the settings below, so it wins over them.",
+        &["stave-footnote"],
+    ));
+    section
 }
 
 /// Moves the keyboard into the card, unless it is there already, so
@@ -787,6 +921,7 @@ const STYLE: &str = r#"
 .stave-edit-hint { font-size: 12px; opacity: 0.75; }
 .stave-edit-checking { font-size: 12px; color: @accent_color; }
 .stave-edit-reason { font-size: 12px; color: @error_color; }
+.stave-edit-needs { font-size: 12px; color: @warning_color; }
 button.stave-edit-unavailable .stave-edit-entry-label,
 button.stave-edit-unavailable .stave-edit-hint { opacity: 0.5; }
 .stave-edit-name { font-weight: 600; }
@@ -808,6 +943,14 @@ button.stave-edit-unavailable .stave-edit-hint { opacity: 0.5; }
 .stave-edit-problem-head.warning { color: @warning_color; }
 .stave-edit-help, .stave-edit-note { font-family: monospace; font-size: 12px; }
 .stave-edit-buttons { padding: 10px 16px 14px 16px; }
+.stave-edit-option { font-family: monospace; font-size: 13px; }
+.stave-ghost-verdict { padding: 4px 12px; border-radius: 999px; font-weight: 700; font-size: 13px;
+  background: @window_bg_color; color: @window_fg_color; box-shadow: 0 1px 3px alpha(black, 0.25); }
+.stave-ghost-verdict.fits { color: @success_color; }
+.stave-ghost-verdict.refused { color: @error_color; }
+.stave-ghost-verdict.checking { color: alpha(currentColor, 0.75); }
+button.stave-edit-face { margin-top: 4px; }
+.stave-edit-options { padding: 4px; }
 "#;
 
 /// Puts the menu's and the card's stylesheet on the display, once.
@@ -900,10 +1043,10 @@ mod tests {
     /// `tools/window-shot` starts); without one it says so and stops.
     #[test]
     fn the_menu_and_the_card_report_what_the_user_does() {
-        if gtk::init().is_err() {
-            eprintln!("skipped: GTK can't start here (no display)");
-            return;
-        }
+        crate::ui::gtk_test::on_gtk_thread(menu_and_card_report);
+    }
+
+    fn menu_and_card_report() {
         let fixture = clothing_cabinet_fixture().unwrap();
         let [drawer, door] = fixture.candidates.as_slice() else {
             panic!("two candidates");
@@ -1001,6 +1144,7 @@ mod tests {
         let show = |candidate, verdict| {
             card.show(
                 &CardModel {
+                    applied: &[],
                     heading: fixture.picked.heading(),
                     candidate,
                     name: "drawer_2",
