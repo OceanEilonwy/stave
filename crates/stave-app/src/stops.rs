@@ -367,6 +367,9 @@ impl Search<'_, '_, '_> {
             return Err(StopsError::Cancelled);
         }
         self.checks = self.checks.saturating_add(1);
+        // Trial values are the written number plus whole steps (a
+        // hundredth for a ratio, one for a count), so they always have
+        // plain-number text unless they overflow.
         let text = amount_text(value).ok_or(StopsError::Overflow)?;
         let patch = GeneratedPatch::new(
             &format!("Try {} = {text}", self.path),
@@ -663,10 +666,13 @@ pub(crate) fn snap(value: Amount, step: Amount) -> Option<Amount> {
     Some(value.with_raw(step.raw().checked_mul(Rational::from_int(times))?))
 }
 
-/// An amount as `.stave` text: `180mm`, `-0.75mm`, `12.5deg`, `3`. A
-/// length or angle that is not a whole number of nanometres or
-/// micro-degrees is written as an exact fraction (`1/3mm`). `None` when a
-/// number does not fit.
+/// An amount as a plain number in `.stave` text: `180mm`, `-0.75mm`,
+/// `12.5deg`, `3`, `0.37`. A length or angle that is not a whole number of
+/// nanometres or micro-degrees is written as an exact fractional quantity
+/// (`1/3mm`). A count or ratio is written as an integer or a decimal: the
+/// grammar has no unitless fraction literal, so a value with no finite
+/// decimal (a third) has no plain-number text and gives `None`, as does a
+/// number that does not fit.
 pub fn amount_text(value: Amount) -> Option<String> {
     match value {
         Amount::Length(length) => match length.to_length() {
@@ -685,12 +691,43 @@ pub fn amount_text(value: Amount) -> Option<String> {
                 "deg",
             ),
         },
-        Amount::Count(n) | Amount::Ratio(n) => Some(if n.is_integer() {
-            n.to_string()
-        } else {
-            format!("{} / {}", n.numerator(), n.denominator())
-        }),
+        Amount::Count(n) | Amount::Ratio(n) => decimal_text(n),
     }
+}
+
+/// The fewest decimal places that write `n` exactly, or `None` when its
+/// denominator has a prime factor other than 2 and 5 (no finite decimal).
+pub(crate) fn decimal_places(n: Rational) -> Option<u32> {
+    let mut rest = n.denominator();
+    let (mut twos, mut fives) = (0u32, 0u32);
+    while rest % 2 == 0 {
+        rest /= 2;
+        twos += 1;
+    }
+    while rest % 5 == 0 {
+        rest /= 5;
+        fives += 1;
+    }
+    (rest == 1).then_some(twos.max(fives))
+}
+
+/// `n` as an INT or DECIMAL literal (with a leading `-` for a negative
+/// value): `3`, `0.37`, `-1.5`. `None` when its denominator has a prime
+/// factor other than 2 and 5 (no finite decimal), or the digits don't fit
+/// a literal.
+fn decimal_text(n: Rational) -> Option<String> {
+    if n.is_integer() {
+        return Some(n.to_string());
+    }
+    let places = decimal_places(n)?;
+    let scale = 10i128.checked_pow(places)?;
+    let digits = n.numerator().checked_mul(scale)? / n.denominator();
+    let magnitude = u64::try_from(digits.unsigned_abs()).ok()?;
+    let places = usize::try_from(places).ok()?;
+    let text = format!("{magnitude:0>width$}", width = places + 1);
+    let (whole, fraction) = text.split_at(text.len() - places);
+    let sign = if digits < 0 { "-" } else { "" };
+    Some(format!("{sign}{whole}.{fraction}"))
 }
 
 fn fraction_text(raw: Rational, per_unit: i128, unit: &str) -> Option<String> {
@@ -811,6 +848,18 @@ mod tests {
         assert_eq!(amount_text(mm(180)).as_deref(), Some("180mm"));
         let third = Amount::Length(ExactLength::new(Rational::new(1_000_000, 3).unwrap()));
         assert_eq!(amount_text(third).as_deref(), Some("1/3mm"));
+        let ratio = |n, d| Amount::Ratio(Rational::new(n, d).unwrap());
+        assert_eq!(amount_text(ratio(37, 100)).as_deref(), Some("0.37"));
+        assert_eq!(amount_text(ratio(1, 2)).as_deref(), Some("0.5"));
+        assert_eq!(amount_text(ratio(1, 40)).as_deref(), Some("0.025"));
+        assert_eq!(amount_text(ratio(-3, 2)).as_deref(), Some("-1.5"));
+        assert_eq!(amount_text(ratio(7, 1)).as_deref(), Some("7"));
+        assert_eq!(
+            amount_text(Amount::Count(Rational::from_int(3))).as_deref(),
+            Some("3")
+        );
+        // No finite decimal: no plain number, and never a division.
+        assert_eq!(amount_text(ratio(1, 3)), None);
         let step = mm(1).with_raw(Rational::from_int(500_000));
         assert_eq!(
             snap(mm(1).with_raw(Rational::from_int(400_200_000)), step),

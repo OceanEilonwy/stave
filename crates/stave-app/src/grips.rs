@@ -1128,6 +1128,20 @@ pub enum MoveError {
     /// The numbers are too large.
     #[error("the numbers are too large")]
     Overflow,
+    /// The value the drag needs has no plain-number text: a count or ratio
+    /// with no finite decimal (a third), which `.stave` can only write as
+    /// a division. A drag writes plain numbers, so it is refused.
+    #[error(
+        "'{path}' would have to be {numerator}/{denominator}, which has no exact decimal, so a drag can't write it"
+    )]
+    NotPlain {
+        /// The path of the param.
+        path: String,
+        /// The value needed, above the line.
+        numerator: i128,
+        /// The value needed, below the line.
+        denominator: i128,
+    },
 }
 
 fn stopped_message(follows: &[FollowedValue]) -> String {
@@ -1242,7 +1256,16 @@ fn invert_one(
 }
 
 fn set_patch(path: &str, before: Amount, after: Amount) -> Result<GripPatch, MoveError> {
-    let text = amount_text(after).ok_or(MoveError::Overflow)?;
+    let text = amount_text(after).ok_or_else(|| match after {
+        Amount::Count(n) | Amount::Ratio(n) if crate::stops::decimal_places(n).is_none() => {
+            MoveError::NotPlain {
+                path: path.to_owned(),
+                numerator: n.numerator(),
+                denominator: n.denominator(),
+            }
+        }
+        _ => MoveError::Overflow,
+    })?;
     let patch = GeneratedPatch::new(
         &format!("Set {path} to {text}"),
         &[format!("set {path} = {text}")],
@@ -1699,5 +1722,103 @@ mod tests {
             contract.target,
             GripTarget::Shares { lower: 0, .. }
         ));
+    }
+
+    /// The cabinet with a slat whose length is a ratio of the space above
+    /// the shelf, written as `share: <share>`.
+    fn with_slat(share: &str) -> MemoryFiles {
+        let mut files = cabinet();
+        files.insert(
+            PathBuf::from(FOLDER).join("slat.stave"),
+            "stave 1\n\n\
+             component Slat {\n\
+             \x20 param space : Region\n\
+             \x20 param slat_stock : Stock\n\
+             \x20 param share = 0.5\n\n\
+             \x20 part board : slat_stock {\n\
+             \x20   length: space.across * share\n\
+             \x20   width:  60mm\n\
+             \x20   place {\n\
+             \x20     against(space.bottom)\n\
+             \x20     flush(space.left)\n\
+             \x20     flush(space.front)\n\
+             \x20   }\n\
+             \x20 }\n\
+             }\n"
+            .to_owned(),
+        );
+        let cabinet = PathBuf::from(FOLDER).join("cabinet.stave");
+        let mut text = std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../examples/clothing_cabinet_from_box/cabinet.stave"),
+        )
+        .unwrap();
+        text.push_str(&format!(
+            "\nassembly slat : Slat {{\n  space: shelf.above\n  slat_stock: oak_19\n  share: {share}\n}}\n"
+        ));
+        files.insert(cabinet, text);
+        files
+    }
+
+    /// A ratio param is dragged as a plain DECIMAL, so after the patch it
+    /// is still a plain number and still a movable grip. A ratio with no
+    /// finite decimal is refused rather than written as a division.
+    #[test]
+    fn a_ratio_grip_writes_a_decimal_and_stays_movable() {
+        let ratio = |n, d| Amount::Ratio(Rational::new(n, d).unwrap());
+        let files = with_slat("0.5");
+        let base = EditBase::new(Path::new(FOLDER), &files).unwrap();
+        let cancel = AtomicBool::new(false);
+        let grips = grips(
+            &base,
+            GripSelection::Assembly(assembly(&base, "slat")),
+            options(&cancel, false),
+        )
+        .unwrap();
+        let share = grip(&grips, "slat.share");
+        let range = movable(share);
+        assert_eq!(range.value, ratio(1, 2));
+        let opened = base.opened();
+        let scope = EditScope::new(opened).unwrap();
+        let design = opened.design.as_ref().unwrap();
+        // 0.372 snaps to the hundredth.
+        let GripMove::Set(patch) = move_grip(&scope, design, share, ratio(372, 1000)).unwrap()
+        else {
+            panic!("a movable grip writes one patch");
+        };
+        assert!(
+            patch.patch.text.contains("set slat.share = 0.37"),
+            "{}",
+            patch.patch.text
+        );
+        assert!(!patch.patch.text.contains('/'), "{}", patch.patch.text);
+        assert_eq!(patch.after, ratio(37, 100));
+        let tried = tried(&base, &patch);
+        assert!(tried.opened().and_then(|o| o.design.as_ref()).is_some());
+
+        // The value as it is written after the commit: still movable.
+        let files = with_slat("0.37");
+        let base = EditBase::new(Path::new(FOLDER), &files).unwrap();
+        let after = super::grips(
+            &base,
+            GripSelection::Assembly(assembly(&base, "slat")),
+            options(&cancel, false),
+        )
+        .unwrap();
+        assert_eq!(movable(grip(&after, "slat.share")).value, ratio(37, 100));
+
+        // A third has no plain-number text.
+        let refused = set_patch("slat.share", ratio(1, 2), ratio(1, 3));
+        assert!(
+            matches!(
+                &refused,
+                Err(MoveError::NotPlain {
+                    numerator: 1,
+                    denominator: 3,
+                    ..
+                })
+            ),
+            "{refused:?}"
+        );
     }
 }
