@@ -3380,7 +3380,11 @@ choices the solved design made (the side a part stands on, which way a
 `fit` is linear when exactly one part it is joined into can end it on
 each side it is measured to; when several can, the nearest decides it and
 it is not. `between` and `extent` measure whichever end is nearer or
-farther, so they are not linear either. The trace and rule 2's inversion
+farther, so they are not linear either. Linearity is decided for each
+param on its own: `width * factor + extra` is not linear as a whole, but
+with the others held it is `a × p + b` in each of the three, so each is
+offered; only a param multiplied by itself, divided by, or deciding a `fit`
+or a measure is not. The trace and rule 2's inversion
 are built (`stave_solve::trace`, `stave_model::trace::invert`); the
 editor does not use them yet.
 

@@ -17,8 +17,11 @@
 //! a `locked param`, a stock's field and a kind's own size. Something with
 //! no linear form (a product of two values that both change, a division by
 //! one, `between` and `extent`, a `fit` that more than one part could end)
-//! makes the answer [`Form::NotLinear`], still naming every value it
-//! depends on.
+//! makes the answer [`Form::NotLinear`]. Linearity is then decided for each
+//! value on its own, as rule 2 of "Smart edits" asks: with every other
+//! value held, `width * factor + extra` is still linear in each of the
+//! three, and only a value multiplied by itself, divided by, or deciding a
+//! `fit` or a measure is named as not linear.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
@@ -108,18 +111,26 @@ pub fn trace_all(model: &Model, quantities: &[Quantity]) -> Vec<Result<Trace, Tr
 // Linear forms
 // ---------------------------------------------------------------------------
 
-/// A value as a linear form over the values it is worked out from, in raw
-/// units (see [`Amount::raw`]).
+/// A value as a form over the values it is worked out from, in raw units
+/// (see [`Amount::raw`]).
+///
+/// When `reasons` is empty the form is exact: the value is `constant + Σ
+/// coefficient × value` whatever the values are. Otherwise it is not linear
+/// as a whole, and the form says, for each value, what it is with every
+/// other value held at its current value (grammar, "Smart edits", rule 2):
+/// a value in `terms` is still `a × p + b`, with its coefficient `a` worked
+/// out at the other values' current values; a value in `bent` is not (it is
+/// multiplied by itself, divided by, or decides a `fit` or a measure).
+/// `constant` then means nothing and is zero.
 #[derive(Debug, Clone, PartialEq)]
-enum Affine {
-    Linear {
-        constant: Rational,
-        terms: BTreeMap<Source, Rational>,
-    },
-    NotLinear {
-        reasons: BTreeSet<Reason>,
-        keys: BTreeSet<Source>,
-    },
+struct Affine {
+    constant: Rational,
+    terms: BTreeMap<Source, Rational>,
+    bent: BTreeSet<Source>,
+    reasons: BTreeSet<Reason>,
+    /// Part of the value is something the trace does not follow, which may
+    /// depend on any value: no coefficient beside it can be trusted.
+    opaque: bool,
 }
 
 /// The trace could not work a value out; the solver has said why.
@@ -134,9 +145,12 @@ fn ratio(numerator: i128, denominator: i128) -> Step<Rational> {
 
 impl Affine {
     fn constant(value: Rational) -> Affine {
-        Affine::Linear {
+        Affine {
             constant: value,
             terms: BTreeMap::new(),
+            bent: BTreeSet::new(),
+            reasons: BTreeSet::new(),
+            opaque: false,
         }
     }
 
@@ -149,132 +163,205 @@ impl Affine {
     }
 
     fn source(source: Source) -> Affine {
-        Affine::Linear {
-            constant: Rational::ZERO,
+        Affine {
             terms: BTreeMap::from([(source, Rational::ONE)]),
+            ..Affine::zero()
         }
     }
 
+    /// Something the trace does not follow.
     fn other(what: &str) -> Affine {
-        Affine::NotLinear {
+        Affine {
             reasons: BTreeSet::from([Reason::Other(what.to_owned())]),
-            keys: BTreeSet::new(),
+            opaque: true,
+            ..Affine::zero()
         }
     }
 
+    /// `true` when the form is exactly linear as a whole.
+    fn is_exact(&self) -> bool {
+        self.reasons.is_empty()
+    }
+
+    /// Every value it depends on.
     fn keys(&self) -> BTreeSet<Source> {
-        match self {
-            Affine::Linear { terms, .. } => terms.keys().cloned().collect(),
-            Affine::NotLinear { keys, .. } => keys.clone(),
-        }
-    }
-
-    fn reasons(&self) -> BTreeSet<Reason> {
-        match self {
-            Affine::Linear { .. } => BTreeSet::new(),
-            Affine::NotLinear { reasons, .. } => reasons.clone(),
-        }
+        let mut keys: BTreeSet<Source> = self.terms.keys().cloned().collect();
+        keys.extend(self.bent.iter().cloned());
+        keys
     }
 
     /// The value, when it depends on nothing.
     fn as_constant(&self) -> Option<Rational> {
-        match self {
-            Affine::Linear { constant, terms } if terms.is_empty() => Some(*constant),
-            Affine::Linear { .. } | Affine::NotLinear { .. } => None,
-        }
+        (self.is_exact() && self.terms.is_empty() && !self.opaque).then_some(self.constant)
     }
 
-    /// Not linear for `reason`, depending on everything `parts` depend on.
+    /// Keeps the invariants: a value that is bent anywhere is bent, an
+    /// opaque form trusts no coefficient, and a form that is not exact has
+    /// no constant.
+    fn settled(mut self) -> Affine {
+        if self.opaque {
+            let terms = std::mem::take(&mut self.terms);
+            self.bent.extend(terms.into_keys());
+        }
+        let bent = &self.bent;
+        self.terms.retain(|source, _| !bent.contains(source));
+        if !self.is_exact() {
+            self.constant = Rational::ZERO;
+        }
+        self
+    }
+
+    /// Not linear for `reason` in every value `parts` depend on: something
+    /// with no linear form in any of them (a `fit` several parts could end,
+    /// a measure, a share over the sum of shares).
     fn not_linear(reason: Reason, parts: &[&Affine]) -> Affine {
-        let mut reasons = BTreeSet::from([reason]);
-        let mut keys = BTreeSet::new();
+        let mut form = Affine::zero();
+        form.reasons.insert(reason);
         for part in parts {
-            reasons.extend(part.reasons());
-            keys.extend(part.keys());
+            form.reasons.extend(part.reasons.iter().cloned());
+            form.bent.extend(part.keys());
+            form.opaque |= part.opaque;
         }
-        Affine::NotLinear { reasons, keys }
+        form
     }
 
-    /// Not linear for the reasons of the parts that are not.
+    /// Not linear, for the reasons of the parts that are not, in every
+    /// value the parts depend on.
     fn joined(parts: &[&Affine]) -> Affine {
-        let mut reasons = BTreeSet::new();
-        let mut keys = BTreeSet::new();
+        let mut form = Affine::zero();
         for part in parts {
-            reasons.extend(part.reasons());
-            keys.extend(part.keys());
+            form.reasons.extend(part.reasons.iter().cloned());
+            form.bent.extend(part.keys());
+            form.opaque |= part.opaque;
         }
-        Affine::NotLinear { reasons, keys }
+        if form.is_exact() && !form.bent.is_empty() {
+            form.reasons
+                .insert(Reason::Other("a value with no linear form".to_owned()));
+        }
+        form
     }
 
     fn plus(&self, other: &Affine) -> Step<Affine> {
-        match (self, other) {
-            (
-                Affine::Linear {
-                    constant: a,
-                    terms: ta,
-                },
-                Affine::Linear {
-                    constant: b,
-                    terms: tb,
-                },
-            ) => {
-                let mut terms = ta.clone();
-                for (source, coefficient) in tb {
-                    let sum = match terms.get(source) {
-                        Some(existing) => existing.checked_add(*coefficient).ok_or(Halt)?,
-                        None => *coefficient,
-                    };
-                    if sum == Rational::ZERO {
-                        terms.remove(source);
-                    } else {
-                        terms.insert(source.clone(), sum);
-                    }
-                }
-                Ok(Affine::Linear {
-                    constant: a.checked_add(*b).ok_or(Halt)?,
-                    terms,
-                })
+        let mut terms = self.terms.clone();
+        for (source, coefficient) in &other.terms {
+            let sum = match terms.get(source) {
+                Some(existing) => existing.checked_add(*coefficient).ok_or(Halt)?,
+                None => *coefficient,
+            };
+            if sum == Rational::ZERO {
+                terms.remove(source);
+            } else {
+                terms.insert(source.clone(), sum);
             }
-            _ => Ok(Affine::joined(&[self, other])),
         }
+        let mut reasons = self.reasons.clone();
+        reasons.extend(other.reasons.iter().cloned());
+        let constant = if reasons.is_empty() {
+            self.constant.checked_add(other.constant).ok_or(Halt)?
+        } else {
+            Rational::ZERO
+        };
+        let mut bent = self.bent.clone();
+        bent.extend(other.bent.iter().cloned());
+        Ok(Affine {
+            constant,
+            terms,
+            bent,
+            reasons,
+            opaque: self.opaque || other.opaque,
+        }
+        .settled())
     }
 
     fn scaled(&self, factor: Rational) -> Step<Affine> {
-        match self {
-            Affine::Linear { constant, terms } => {
-                let mut scaled = BTreeMap::new();
-                if factor != Rational::ZERO {
-                    for (source, coefficient) in terms {
-                        scaled.insert(source.clone(), coefficient.checked_mul(factor).ok_or(Halt)?);
-                    }
-                }
-                Ok(Affine::Linear {
-                    constant: constant.checked_mul(factor).ok_or(Halt)?,
-                    terms: scaled,
-                })
-            }
-            Affine::NotLinear { .. } => Ok(self.clone()),
+        // Nothing times zero is nothing, whatever it depends on.
+        if factor == Rational::ZERO {
+            return Ok(Affine::zero());
         }
+        let mut terms = BTreeMap::new();
+        for (source, coefficient) in &self.terms {
+            terms.insert(source.clone(), coefficient.checked_mul(factor).ok_or(Halt)?);
+        }
+        Ok(Affine {
+            constant: self.constant.checked_mul(factor).ok_or(Halt)?,
+            terms,
+            ..self.clone()
+        })
     }
 
     fn minus(&self, other: &Affine) -> Step<Affine> {
         self.plus(&other.scaled(Rational::from(-1_i64))?)
     }
 
-    fn times(&self, other: &Affine) -> Step<Affine> {
-        match (self.as_constant(), other.as_constant()) {
-            (Some(factor), _) => other.scaled(factor),
-            (_, Some(factor)) => self.scaled(factor),
-            (None, None) => Ok(Affine::not_linear(Reason::Product, &[self, other])),
+    /// The product. `values` are the current values of the two factors;
+    /// with one factor held, the other's values keep their form scaled by
+    /// it. A value in both factors is multiplied by itself and is bent.
+    fn times(&self, other: &Affine, values: (Option<Rational>, Option<Rational>)) -> Step<Affine> {
+        if let Some(factor) = self.as_constant() {
+            return other.scaled(factor);
         }
+        if let Some(factor) = other.as_constant() {
+            return self.scaled(factor);
+        }
+        let mut form = Affine::zero();
+        form.reasons.insert(Reason::Product);
+        for (part, held) in [(self, values.1), (other, values.0)] {
+            form.reasons.extend(part.reasons.iter().cloned());
+            form.bent.extend(part.bent.iter().cloned());
+            form.opaque |= part.opaque;
+            for (source, coefficient) in &part.terms {
+                match held {
+                    Some(held) => {
+                        let scaled = coefficient.checked_mul(held).ok_or(Halt)?;
+                        if scaled != Rational::ZERO {
+                            form.terms.insert(source.clone(), scaled);
+                        }
+                    }
+                    None => {
+                        form.bent.insert(source.clone());
+                    }
+                }
+            }
+        }
+        form.bent
+            .extend(self.keys().intersection(&other.keys()).cloned());
+        Ok(form.settled())
     }
 
-    fn over(&self, other: &Affine) -> Step<Affine> {
-        match other.as_constant() {
-            Some(divisor) if divisor == Rational::ZERO => Err(Halt),
-            Some(divisor) => self.scaled(Rational::ONE.checked_div(divisor).ok_or(Halt)?),
-            None => Ok(Affine::not_linear(Reason::Division, &[self, other])),
+    /// The quotient. `divisor` is the current value of `other`; a value
+    /// the divisor depends on is bent, and the dividend's values keep their
+    /// form divided by it.
+    fn over(&self, other: &Affine, divisor: Option<Rational>) -> Step<Affine> {
+        if let Some(constant) = other.as_constant() {
+            if constant == Rational::ZERO {
+                return Err(Halt);
+            }
+            return self.scaled(Rational::ONE.checked_div(constant).ok_or(Halt)?);
         }
+        let mut form = Affine::zero();
+        form.reasons.insert(Reason::Division);
+        form.reasons.extend(self.reasons.iter().cloned());
+        form.reasons.extend(other.reasons.iter().cloned());
+        form.bent.extend(self.bent.iter().cloned());
+        form.bent.extend(other.keys());
+        form.opaque = self.opaque || other.opaque;
+        let inverse = divisor
+            .filter(|d| *d != Rational::ZERO)
+            .and_then(|d| Rational::ONE.checked_div(d));
+        for (source, coefficient) in &self.terms {
+            match inverse {
+                Some(inverse) => {
+                    form.terms.insert(
+                        source.clone(),
+                        coefficient.checked_mul(inverse).ok_or(Halt)?,
+                    );
+                }
+                None => {
+                    form.bent.insert(source.clone());
+                }
+            }
+        }
+        Ok(form.settled())
     }
 
     fn half(&self) -> Step<Affine> {
@@ -420,40 +507,41 @@ impl<'s, 'm> Tracer<'s, 'm> {
 
     fn run(mut self) -> Result<Trace, TraceError> {
         let (value, form) = self.quantity()?;
-        let form = match form {
-            Affine::Linear { constant, terms } => {
-                let mut list = Vec::new();
-                for (source, coefficient) in terms {
-                    let dependence = self
-                        .dependences
-                        .get(&source)
-                        .cloned()
-                        .ok_or(TraceError::NotWorkedOut)?;
-                    list.push(Term {
-                        dependence,
-                        coefficient,
-                    });
-                }
-                let linear = Linear {
-                    constant: value.with_raw(constant),
-                    terms: list,
-                };
-                let traced = linear.evaluate().ok_or(TraceError::NotWorkedOut)?;
-                if traced != value {
-                    return Err(TraceError::Disagrees {
-                        traced,
-                        solved: value,
-                    });
-                }
-                Form::Linear(linear)
+        let mut terms = Vec::new();
+        for (source, coefficient) in &form.terms {
+            let dependence = self
+                .dependences
+                .get(source)
+                .cloned()
+                .ok_or(TraceError::NotWorkedOut)?;
+            terms.push(Term {
+                dependence,
+                coefficient: *coefficient,
+            });
+        }
+        let form = if form.is_exact() {
+            let linear = Linear {
+                constant: value.with_raw(form.constant),
+                terms,
+            };
+            let traced = linear.evaluate().ok_or(TraceError::NotWorkedOut)?;
+            if traced != value {
+                return Err(TraceError::Disagrees {
+                    traced,
+                    solved: value,
+                });
             }
-            Affine::NotLinear { reasons, keys } => Form::NotLinear(NotLinear {
-                reasons: reasons.into_iter().collect(),
-                dependences: keys
+            Form::Linear(linear)
+        } else {
+            Form::NotLinear(NotLinear {
+                reasons: form.reasons.into_iter().collect(),
+                held: terms,
+                dependences: form
+                    .bent
                     .iter()
                     .filter_map(|k| self.dependences.get(k).cloned())
                     .collect(),
-            }),
+            })
         };
         Ok(Trace {
             quantity: self.quantity,
@@ -567,6 +655,13 @@ impl<'s, 'm> Tracer<'s, 'm> {
 
     fn value(&mut self, expr: &RExpr, env: &Env<'_>) -> Step<Value> {
         self.solver.eval(expr, env).map_err(|_| Halt)
+    }
+
+    /// The current value of an expression as a raw number, when it is a
+    /// quantity the solver can work out.
+    fn raw_value(&mut self, expr: &RExpr, env: &Env<'_>) -> Option<Rational> {
+        let value = self.solver.eval(expr, env).ok()?;
+        Amount::from_value(&value).map(Amount::raw)
     }
 
     fn levels(&self, instance: InstanceId) -> u32 {
@@ -856,12 +951,20 @@ impl<'s, 'm> Tracer<'s, 'm> {
                 operand,
             } => self.affine(operand, env)?.scaled(Rational::from(-1_i64)),
             RExprKind::Binary { op, lhs, rhs } => {
-                let (lhs, rhs) = (self.affine(lhs, env)?, self.affine(rhs, env)?);
+                let (left, right) = (self.affine(lhs, env)?, self.affine(rhs, env)?);
+                // A product or a quotient of two values that both change
+                // needs their current values, to hold one while the other
+                // changes.
+                let varies = left.as_constant().is_none() && right.as_constant().is_none();
                 match op {
-                    BinaryOp::Add => lhs.plus(&rhs),
-                    BinaryOp::Sub => lhs.minus(&rhs),
-                    BinaryOp::Mul => lhs.times(&rhs),
-                    BinaryOp::Div => lhs.over(&rhs),
+                    BinaryOp::Add => left.plus(&right),
+                    BinaryOp::Sub => left.minus(&right),
+                    BinaryOp::Mul if varies => {
+                        left.times(&right, (self.raw_value(lhs, env), self.raw_value(rhs, env)))
+                    }
+                    BinaryOp::Mul => left.times(&right, (None, None)),
+                    BinaryOp::Div if varies => left.over(&right, self.raw_value(rhs, env)),
+                    BinaryOp::Div => left.over(&right, None),
                     BinaryOp::Or
                     | BinaryOp::And
                     | BinaryOp::Eq

@@ -436,6 +436,7 @@ project "Trace test" {
 
 param width  = 600mm within 400mm..800mm
 param factor = 1.5 within 1..2
+param extra  = 100mm within 0mm..400mm
 let   margin = 10mm
 
 stock pine_19 { species: white_oak, form: solid, thickness: 19mm, max_width: 300mm, max_length: 2400mm }
@@ -453,6 +454,26 @@ part shelf : pine_19 {
   width:  200mm - margin
   place {
     against(top.bottom, gap: 100mm)
+    flush(top.left)
+    flush(top.front)
+  }
+}
+
+part bench : pine_19 {
+  length: width * factor + extra
+  width:  200mm
+  place {
+    against(shelf.bottom, gap: 100mm)
+    flush(top.left)
+    flush(top.front)
+  }
+}
+
+part brace : pine_19 {
+  length: width / factor * factor
+  width:  100mm
+  place {
+    against(bench.bottom, gap: 100mm)
     flush(top.left)
     flush(top.front)
   }
@@ -477,14 +498,26 @@ fn a_product_of_two_params_is_not_linear() {
         panic!("linear: {:?}", traced.form);
     };
     assert_eq!(not.reasons, vec![Reason::Product]);
-    let named: Vec<&Source> = not.dependences.iter().map(|d| &d.source).collect();
-    assert_eq!(named, vec![&Source::Param(width), &Source::Param(factor)]);
+    // With the other held, the size is still linear in each of the two
+    // (grammar, "Smart edits", rule 2): `width`'s coefficient is the
+    // factor, `factor`'s is the width in nanometres.
+    let held: Vec<(&Source, Rational)> = not
+        .held
+        .iter()
+        .map(|t| (&t.dependence.source, t.coefficient))
+        .collect();
     assert_eq!(
-        invert(&traced, width, mm(1000)),
-        Err(InvertError::NotLinear)
+        held,
+        vec![
+            (&Source::Param(width), Rational::new(3, 2).unwrap()),
+            (&Source::Param(factor), whole(600_000_000)),
+        ]
     );
+    assert!(not.dependences.is_empty());
+    // 1000mm / 1.5 = 666 2/3 mm.
+    assert_eq!(invert(&traced, width, mm(1000)), Ok(mm_fraction(2000, 3)));
 
-    // A division by a param is not linear either.
+    // A division by a param is not linear in it; the dividend still is.
     let shelf = trace(
         &model,
         Quantity::PartSize {
@@ -497,6 +530,38 @@ fn a_product_of_two_params_is_not_linear() {
         panic!("linear: {:?}", shelf.form);
     };
     assert_eq!(not.reasons, vec![Reason::Division]);
+    let named: Vec<&Source> = not.dependences.iter().map(|d| &d.source).collect();
+    assert_eq!(named, vec![&Source::Param(factor)]);
+    assert_eq!(not.held.len(), 1);
+    assert_eq!(not.held[0].dependence.source, Source::Param(width));
+    assert_eq!(not.held[0].coefficient, Rational::new(2, 3).unwrap());
+    assert_eq!(invert(&shelf, factor, mm(300)), Err(InvertError::NotLinear));
+    assert_eq!(invert(&shelf, width, mm(500)), Ok(mm(750)));
+
+    // A param multiplied by itself is not linear in it: `width / factor *
+    // factor` has `factor` on both sides of the product, while `width`
+    // keeps its coefficient of exactly one.
+    let brace = trace(
+        &model,
+        Quantity::PartSize {
+            part: part(&model, "brace"),
+            axis: PartAxis::Length,
+        },
+    )
+    .unwrap();
+    assert_eq!(brace.value, mm(600));
+    let Form::NotLinear(not) = &brace.form else {
+        panic!("linear: {:?}", brace.form);
+    };
+    assert_eq!(not.reasons, vec![Reason::Product, Reason::Division]);
+    let named: Vec<&Source> = not.dependences.iter().map(|d| &d.source).collect();
+    assert_eq!(named, vec![&Source::Param(factor)]);
+    let held: Vec<(&Source, Rational)> = not
+        .held
+        .iter()
+        .map(|t| (&t.dependence.source, t.coefficient))
+        .collect();
+    assert_eq!(held, vec![(&Source::Param(width), Rational::ONE)]);
 
     // A let is followed to its number and is never a candidate.
     let narrow = trace(
@@ -514,6 +579,84 @@ fn a_product_of_two_params_is_not_linear() {
         narrow.followed.as_slice(),
         [Followed::Let { levels: 0, .. }]
     ));
+}
+
+/// The length of `bench` in the PRODUCT design after `name` is set to
+/// `value`, solved again from the changed text.
+fn bench_length_with(name: &str, value: &str) -> Amount {
+    let changed = set_param(PRODUCT, name, value);
+    assert_ne!(changed, PRODUCT);
+    let model = design(&format!("product-{name}"), &changed);
+    trace(
+        &model,
+        Quantity::PartSize {
+            part: part(&model, "bench"),
+            axis: PartAxis::Length,
+        },
+    )
+    .unwrap()
+    .value
+}
+
+#[test]
+fn a_param_added_to_a_product_is_still_linear_in_itself() {
+    // `width * factor + extra`: the product makes the size not linear as
+    // a whole, but `extra` enters with a coefficient of exactly one, and
+    // each factor is linear with the other held.
+    let model = design("bench", PRODUCT);
+    let width = param(&model, "width");
+    let factor = param(&model, "factor");
+    let extra = param(&model, "extra");
+    let traced = trace(
+        &model,
+        Quantity::PartSize {
+            part: part(&model, "bench"),
+            axis: PartAxis::Length,
+        },
+    )
+    .unwrap();
+    assert_eq!(traced.value, mm(1000));
+    let Form::NotLinear(not) = &traced.form else {
+        panic!("linear: {:?}", traced.form);
+    };
+    assert_eq!(not.reasons, vec![Reason::Product]);
+    assert!(not.dependences.is_empty());
+    let held: Vec<(&Source, Rational)> = not
+        .held
+        .iter()
+        .map(|t| (&t.dependence.source, t.coefficient))
+        .collect();
+    assert_eq!(
+        held,
+        vec![
+            (&Source::Param(width), Rational::new(3, 2).unwrap()),
+            (&Source::Param(factor), whole(600_000_000)),
+            (&Source::Param(extra), Rational::ONE),
+        ]
+    );
+    assert!(
+        not.held
+            .iter()
+            .all(|t| t.dependence.freedom == Freedom::Plain)
+    );
+
+    // Each answer, written into the source and solved again, gives the
+    // target exactly.
+    assert_eq!(invert(&traced, extra, mm(1200)), Ok(mm(300)));
+    assert_eq!(bench_length_with("extra", "300mm"), mm(1200));
+    assert_eq!(invert(&traced, width, mm(1150)), Ok(mm(700)));
+    assert_eq!(bench_length_with("width", "700mm"), mm(1150));
+    assert_eq!(
+        invert(&traced, factor, mm(1300)),
+        Ok(Amount::Ratio(Rational::from(2_i64)))
+    );
+    assert_eq!(bench_length_with("factor", "2"), mm(1300));
+
+    // The domain still applies to a param held this way.
+    assert_eq!(
+        invert(&traced, extra, mm(1500)),
+        Err(InvertError::OutsideRange { value: mm(600) })
+    );
 }
 
 #[test]

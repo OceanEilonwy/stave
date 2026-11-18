@@ -336,12 +336,22 @@ pub enum Reason {
     Other(String),
 }
 
-/// A size that depends on its values in a way that is not linear.
+/// A size that is not linear as a whole. Linearity is then decided for
+/// each value on its own (grammar, "Smart edits", rule 2): with every other
+/// value held at its current value, the size may still be `a × p + b` in a
+/// value `p` (`held`), or not (`dependences`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NotLinear {
-    /// Why, in a fixed order.
+    /// Why it is not linear as a whole, in a fixed order.
     pub reasons: Vec<Reason>,
-    /// The values it depends on, in a fixed order.
+    /// The values the size is linear in with every other value held, in a
+    /// fixed order, each with its coefficient worked out at the other
+    /// values' current values (in `width * factor`, `width`'s coefficient
+    /// is `factor`'s value). Each holds only while every other value does.
+    pub held: Vec<Term>,
+    /// The values the size is not linear in even with every other value
+    /// held (a value times itself, a division by it, a `fit` or a measure
+    /// it decides), in a fixed order.
     pub dependences: Vec<Dependence>,
 }
 
@@ -394,8 +404,9 @@ pub struct Trace {
 /// Why single-param inversion has no answer.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum InvertError {
-    /// The size is not linear in its values.
-    #[error("the size is not worked out linearly from its values")]
+    /// The size is not linear in the param, even with every other value
+    /// held.
+    #[error("the size is not worked out linearly from this param")]
     NotLinear,
     /// The size does not change with the param.
     #[error("the size does not change with this param")]
@@ -432,17 +443,27 @@ pub enum InvertError {
 
 /// Single-param inversion (grammar, "Smart edits", rule 2): the value of
 /// `param` that makes the traced size exactly `target`, with every other
-/// value held at its current value. The answer is exact; writing it to a
-/// file may need rounding (`ExactLength::to_length`).
+/// value held at its current value. With them held the size is `a × p +
+/// b`, so the answer is `p + (target − size) / a` at the current `p` and
+/// size. It is found for a param the size is linear in on its own even
+/// when the size is not linear as a whole ([`NotLinear::held`]). The
+/// answer is exact; writing it to a file may need rounding
+/// (`ExactLength::to_length`).
 pub fn invert(trace: &Trace, param: ParamId, target: Amount) -> Result<Amount, InvertError> {
-    let Form::Linear(linear) = &trace.form else {
-        return Err(InvertError::NotLinear);
-    };
-    if !target.same_dimension(linear.constant) {
+    if !target.same_dimension(trace.value) {
         return Err(InvertError::Mismatch);
     }
     let source = Source::Param(param);
-    let Some(chosen) = linear.term(&source) else {
+    let chosen = match &trace.form {
+        Form::Linear(linear) => linear.term(&source),
+        Form::NotLinear(not) => {
+            if not.dependences.iter().any(|d| d.source == source) {
+                return Err(InvertError::NotLinear);
+            }
+            not.held.iter().find(|t| t.dependence.source == source)
+        }
+    };
+    let Some(chosen) = chosen else {
         return Err(InvertError::ZeroCoefficient);
     };
     if chosen.coefficient == Rational::ZERO {
@@ -451,22 +472,16 @@ pub fn invert(trace: &Trace, param: ParamId, target: Amount) -> Result<Amount, I
     if chosen.dependence.freedom == Freedom::Locked {
         return Err(InvertError::Locked);
     }
-    let mut rest = target
+    let change = target
         .raw()
-        .checked_sub(linear.constant.raw())
+        .checked_sub(trace.value.raw())
+        .and_then(|d| d.checked_div(chosen.coefficient))
         .ok_or(InvertError::Overflow)?;
-    for term in &linear.terms {
-        if term.dependence.source == source {
-            continue;
-        }
-        let part = term
-            .coefficient
-            .checked_mul(term.dependence.value.raw())
-            .ok_or(InvertError::Overflow)?;
-        rest = rest.checked_sub(part).ok_or(InvertError::Overflow)?;
-    }
-    let raw = rest
-        .checked_div(chosen.coefficient)
+    let raw = chosen
+        .dependence
+        .value
+        .raw()
+        .checked_add(change)
         .ok_or(InvertError::Overflow)?;
     let value = chosen.dependence.value.with_raw(raw);
     if matches!(value, Amount::Count(_)) && !raw.is_integer() {
@@ -567,6 +582,7 @@ mod tests {
         let trace = Trace {
             form: Form::NotLinear(NotLinear {
                 reasons: vec![Reason::Product],
+                held: Vec::new(),
                 dependences: vec![param(0, mm(900), None)],
             }),
             ..bay(None)
@@ -574,6 +590,57 @@ mod tests {
         assert_eq!(
             invert(&trace, ParamId::from_usize(0), mm(400)),
             Err(InvertError::NotLinear)
+        );
+    }
+
+    /// `size = width * factor + extra` at width 600mm, factor 3/2 and
+    /// extra 100mm: not linear as a whole, but linear in each value with
+    /// the others held.
+    #[test]
+    fn a_param_linear_on_its_own_inverts_in_a_size_that_is_not() {
+        let factor = Amount::Ratio(Rational::new(3, 2).unwrap_or(Rational::ONE));
+        let trace = Trace {
+            quantity: Quantity::Param(ParamId::from_usize(3)),
+            value: mm(1000),
+            form: Form::NotLinear(NotLinear {
+                reasons: vec![Reason::Product],
+                held: vec![
+                    Term {
+                        dependence: param(0, mm(600), None),
+                        coefficient: Rational::new(3, 2).unwrap_or(Rational::ONE),
+                    },
+                    Term {
+                        dependence: param(1, factor, None),
+                        coefficient: Rational::from(600_000_000_i64),
+                    },
+                    Term {
+                        dependence: param(2, mm(100), None),
+                        coefficient: Rational::ONE,
+                    },
+                ],
+                dependences: vec![param(4, mm(5), None)],
+            }),
+            followed: Vec::new(),
+        };
+        assert_eq!(
+            invert(&trace, ParamId::from_usize(2), mm(1100)),
+            Ok(mm(200))
+        );
+        assert_eq!(
+            invert(&trace, ParamId::from_usize(0), mm(1150)),
+            Ok(mm(700))
+        );
+        assert_eq!(
+            invert(&trace, ParamId::from_usize(1), mm(1200)),
+            Ok(Amount::Ratio(Rational::new(11, 6).unwrap_or(Rational::ONE)))
+        );
+        assert_eq!(
+            invert(&trace, ParamId::from_usize(4), mm(1100)),
+            Err(InvertError::NotLinear)
+        );
+        assert_eq!(
+            invert(&trace, ParamId::from_usize(5), mm(1100)),
+            Err(InvertError::ZeroCoefficient)
         );
     }
 
