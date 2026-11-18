@@ -1,8 +1,9 @@
 //! Picking the space between parts: the region a ray looks into, and the
 //! two parts that face each other across the gap it passes through.
 //!
-//! Both work on what the scene shows. A region stays where the design
-//! puts it (motions don't move it); a facing pair is found among the
+//! Both work on what the scene shows. A region is where the pose puts it
+//! (one a component exposes moves with its assembly; a declared region
+//! stays where the design puts it); a facing pair is found among the
 //! shown parts that are where the design puts them (a part a scene
 //! swings open or pulls apart no longer faces anything), and its clear
 //! distance is exact, measured between drawn boxes.
@@ -126,7 +127,7 @@ impl SceneGraph {
     /// size on some axis) are never picked.
     pub fn pick_region(&self, posed: &Posed, ray: Ray) -> Option<RegionHit> {
         let stop = self.pick(posed, ray).map(|hit| hit.distance);
-        self.region_before(ray, stop)
+        self.region_before(posed, ray, stop)
     }
 
     /// What a ray points at: the node it hits, unless it first passes
@@ -136,13 +137,13 @@ impl SceneGraph {
     /// (a rail across a bay) is what the pointer is on.
     pub fn pick_target(&self, posed: &Posed, ray: Ray) -> Option<Target> {
         let hit = self.pick(posed, ray);
-        let region = self.region_before(ray, hit.map(|hit| hit.distance));
+        let region = self.region_before(posed, ray, hit.map(|hit| hit.distance));
         match (hit, region) {
             (Some(hit), Some(region)) => {
                 let point = ray.origin + ray.direction * hit.distance;
                 let inside = self
-                    .region(region.region)
-                    .is_some_and(|node| well_inside(node.volume, point));
+                    .region_volume(posed, region.region)
+                    .is_some_and(|volume| well_inside(volume, point));
                 Some(if inside {
                     Target::Node(hit)
                 } else {
@@ -156,18 +157,19 @@ impl SceneGraph {
     }
 
     /// The region a ray looks into before `stop` (where it hits a node).
-    fn region_before(&self, ray: Ray, stop: Option<f32>) -> Option<RegionHit> {
+    fn region_before(&self, posed: &Posed, ray: Ray, stop: Option<f32>) -> Option<RegionHit> {
         let candidates: Vec<(RegionId, f32, f32, f32)> = self
             .regions()
             .iter()
             .filter(|region| region.volume.size().min_element() > TOLERANCE)
             .filter_map(|region| {
-                let (near, far) = span(region.volume, ray.origin, ray.direction)?;
+                let bounds = region.volume.transformed(posed.region(region.id));
+                let (near, far) = span(bounds, ray.origin, ray.direction)?;
                 if stop.is_some_and(|stop| near + TOLERANCE >= stop) {
                     return None;
                 }
                 let end = stop.map_or(far, |stop| far.min(stop));
-                Some((region.id, near, end, volume(region.volume)))
+                Some((region.id, near, end, volume(bounds)))
             })
             .collect();
         let last = candidates

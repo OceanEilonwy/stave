@@ -14,6 +14,11 @@
 //! a scene with `explode: true` is posed fully exploded. A [`Highlight`]
 //! is what a viewer tints and draws in red for a problem.
 //!
+//! For the editor: [`Ghosts`] of a candidate edit over the base scene,
+//! with its verdict; the nodes [`SceneGraph::covering`] what the user is
+//! working on from the camera, to draw see-through; and where a grip
+//! sits ([`SceneGraph::grip_place`]).
+//!
 //! Not done yet: a scene's `section` is carried ([`SceneEntry::section`])
 //! but not applied.
 
@@ -21,21 +26,27 @@
 #![warn(missing_docs)]
 
 pub mod camera;
+mod cover;
 pub mod export;
 pub mod focus;
+mod ghost;
 mod graph;
+mod grip;
 mod pick;
 mod space;
 
 pub use camera::{Orbit, Projection, Ray};
+pub use cover::Subject;
 pub use focus::{
     Anchor, GapMark, Label, LineKind, Look, MotionPlay, Note, Overlay, OverlayLine, Plan, Play,
     PlayFrame, StepPlay,
 };
+pub use ghost::{Ghost, GhostChange, GhostVerdict, Ghosts};
 pub use graph::{
     BuildOptions, Highlight, Item, Material, MemberFollower, MotionRange, Node, NodeId, Posed,
     RegionNode, SceneEntry, SceneGraph, Section, Wood,
 };
+pub use grip::{FaceOf, GripFace, GripHandle, GripOf, GripPlace};
 pub use pick::{Hit, PartFace};
 pub use space::{Facing, RegionHit, Target};
 pub use stave_geom::{Aabb, Extent, Geometry};
