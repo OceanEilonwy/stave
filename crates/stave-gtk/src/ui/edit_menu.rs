@@ -32,9 +32,9 @@ use super::edit_card::install_style;
 
 type ChosenCallback = Rc<dyn Fn(Declaration)>;
 
-/// Whether a candidate's applicability check has finished. The contract's
-/// [`Applicability`] has only the two answers; until the check is done the
-/// caller says so here, and the entry shows that it is being checked.
+/// Whether a candidate's applicability check has finished. Until the check
+/// is done the caller says so here, and the entry shows that it is being
+/// checked, as it does for [`Applicability::NotChecked`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Checked {
     /// The candidate's `applicability` is the checker's answer.
@@ -66,8 +66,14 @@ enum EntryState<'a> {
 impl<'a> EntryState<'a> {
     fn of(item: &MenuItem<'a>) -> Self {
         match (item.checked, &item.candidate.applicability) {
-            (Checked::Pending, _) => EntryState::Checking,
-            (Checked::Done, Applicability::Applies) => EntryState::Fits,
+            (Checked::Pending, _) | (Checked::Done, Applicability::NotChecked) => {
+                EntryState::Checking
+            }
+            // Something is still to choose: not a refusal. The entry is
+            // listed as usual and the card asks for it once it is chosen.
+            (Checked::Done, Applicability::Applies | Applicability::NeedsChoice(_)) => {
+                EntryState::Fits
+            }
             (Checked::Done, Applicability::Greyed(reasons)) => EntryState::Greyed(reasons),
         }
     }
@@ -339,7 +345,7 @@ fn wrapped(text: &str, classes: &[&str]) -> gtk::Label {
 pub(super) mod tests {
     use super::*;
     use stave_app::edit::clothing_cabinet_fixture;
-    use stave_lang::ast::{Ident, Span};
+    use stave_lang::ast::{Ident, Name, Span};
     use stave_lang::{Code, Label, SourceMap};
     use stave_model::ids::ComponentId;
 
@@ -367,7 +373,12 @@ pub(super) mod tests {
         let drawer = &fixture.candidates[0];
         let name = |text: &str| Ident::new(text, Span::default()).unwrap();
         let candidates = [
-            renamed(drawer, "Shelf", MenuGroup::Standard(name("casework")), 10),
+            renamed(
+                drawer,
+                "Shelf",
+                MenuGroup::Standard(Name::new("joinery", Span::default()).unwrap()),
+                10,
+            ),
             renamed(drawer, "Plinth", MenuGroup::Project, 11),
             renamed(drawer, "Drawer", MenuGroup::Module(name("casework")), 12),
             greyed(
@@ -401,7 +412,7 @@ pub(super) mod tests {
             [
                 ("In this project".to_owned(), vec!["Plinth"]),
                 ("casework".to_owned(), vec!["Drawer", "Bracket", "Apron"]),
-                ("Standard · casework".to_owned(), vec!["Shelf"]),
+                ("Standard · joinery".to_owned(), vec!["Shelf"]),
             ]
         );
     }
