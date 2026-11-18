@@ -1,9 +1,9 @@
-//! The smaller pieces of the window: the motion bar ("Open it", shown in
-//! the dock) and the Cut list's placeholder page.
+//! The smaller pieces of the window: the motion bar ("Open it", floating
+//! at the bottom right of the 3D view) and the Cut list's placeholder page.
 
 use adw::prelude::*;
 
-/// The floating bar at the bottom of the 3D view: a name, words at each
+/// The floating bar at the bottom right of the 3D view: a name, words at each
 /// end and a slider ("door_l  closed ——— 110°").
 pub struct MotionBar {
     /// The bar, to overlay on the view.

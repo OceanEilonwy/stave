@@ -94,14 +94,15 @@ button.stave-lens-link { min-height: 0; min-width: 0; padding: 0 2px; font-weigh
 .stave-empty-description { font-size: 14px; }
 .stave-stage.page .stave-figure { border-radius: 14px; }
 .stave-toolbar { padding: 4px; border-radius: 12px; border-spacing: 4px; }
-.stave-toolbar button.stave-tool { min-height: 32px; padding: 0 12px; border-radius: 8px; font-size: 13px; font-weight: 600; }
-.stave-toolbar button.stave-tool box { border-spacing: 6px; }
-.stave-toolbar .stave-tool-separator { min-width: 1px; margin: 6px 0; }
-.stave-toolbar button.stave-tool-play { min-width: 32px; min-height: 32px; padding: 0; }
 .stave-tool-slider { padding: 4px 10px 2px 2px; }
 .stave-tool-end { font-size: 11px; }
 .stave-camera { padding: 4px; border-radius: 10px; }
 .stave-camera button { min-width: 32px; min-height: 32px; padding: 0; border-radius: 7px; }
+.stave-camera.joined { border-bottom-left-radius: 0; }
+.stave-camera-separator { min-height: 1px; margin: 2px 4px; }
+.stave-pull-popout { padding: 4px 6px 4px 4px; border-radius: 10px 0 0 10px; border-spacing: 4px; }
+.stave-moves { padding: 4px 6px 4px 10px; border-radius: 12px; }
+.stave-moves .stave-dock-label { min-height: 30px; padding: 0 2px 0 0; }
 .stave-contact-key { padding: 6px 12px; border-radius: 14px; font-size: 12px; font-weight: 600; }
 .stave-plan-switch { padding: 3px; border-radius: 10px; }
 .stave-plan-switch button { min-width: 34px; min-height: 30px; padding: 0; border-radius: 7px; }
@@ -216,6 +217,8 @@ stavetabstrip .stave-tab-end button { min-height: 24px; min-width: 24px; padding
 .stave-title .subtitle, .dim { color: alpha(currentColor, 0.7); }
 menubutton.stave-scene > button { background: alpha(currentColor, 0.08); }
 menubutton.stave-scene > button:hover { background: alpha(currentColor, 0.12); }
+.stave-scene-float menubutton.stave-scene > button { background: transparent; }
+.stave-scene-float menubutton.stave-scene > button:hover { background: alpha(currentColor, 0.07); }
 .stave-problems-chip.clean button.stave-pill { background: alpha(@success_color, 0.15); color: @success_color; }
 .stave-problems-chip.warnings button.stave-pill { background: alpha(@warning_color, 0.18); color: @warning_color; }
 .stave-problems-chip.errors button.stave-pill { background: alpha(@error_color, 0.14); color: @error_color; }
@@ -278,11 +281,14 @@ button.stave-lens-link:hover { background: alpha(@accent_color, 0.1); }
 .stave-empty-icon, .stave-empty-description { opacity: 0.75; }
 .stave-toolbar, .stave-plan-switch { background: alpha(@view_bg_color, 0.92); color: @view_fg_color; box-shadow: 0 1px 6px alpha(black, 0.1); }
 .stave-camera { background: alpha(@view_bg_color, 0.88); color: @view_fg_color; }
+.stave-camera button:hover { background: alpha(currentColor, 0.07); }
+.stave-camera button:checked { background: alpha(@accent_bg_color, 0.2); color: @accent_color; }
+.stave-camera button.stave-tool-play { color: @accent_color; }
+.stave-camera-separator { background: alpha(currentColor, 0.15); }
+.stave-moves { background: alpha(@view_bg_color, 0.92); color: @view_fg_color; box-shadow: 0 1px 6px alpha(black, 0.1); }
 .stave-toolbar button.stave-tool, .stave-plan-switch button { background: transparent; color: inherit; }
 .stave-toolbar button.stave-tool:hover, .stave-plan-switch button:hover { background: alpha(currentColor, 0.07); }
 .stave-toolbar button.stave-tool:checked, .stave-plan-switch button:checked { background: alpha(@accent_bg_color, 0.2); color: @accent_color; }
-.stave-toolbar .stave-tool-separator { background: alpha(currentColor, 0.15); }
-.stave-toolbar button.stave-tool-play { color: @accent_color; }
 .stave-slider { color: @accent_bg_color; }
 .stave-tool-end, .stave-card-dim { color: alpha(currentColor, 0.7); }
 .stave-contact-key { background: alpha(@view_bg_color, 0.9); color: @error_color; }
@@ -327,9 +333,6 @@ button.stave-play:hover { background: mix(@accent_bg_color, @accent_fg_color, 0.
 .stave-dock button.stave-move.error { box-shadow: inset 0 0 0 1px alpha(@error_color, 0.6); }
 .stave-dock button.stave-move.warning { box-shadow: inset 0 0 0 1px alpha(@warning_color, 0.7); }
 .stave-dock button.stave-move.current { background: alpha(@accent_bg_color, 0.2); color: @accent_color; }
-.stave-controls { padding: 6px 8px; color: @headerbar_fg_color; background: @headerbar_bg_color; box-shadow: inset 0 1px @headerbar_shade_color; }
-.stave-controls .stave-camera, .stave-controls .stave-plan-switch { background: transparent; padding: 0; box-shadow: none; }
-.stave-controls-hint { font-weight: 600; color: @accent_color; padding: 0 4px; }
 .stave-code-head { background: @headerbar_bg_color; box-shadow: inset 0 -1px @headerbar_shade_color; }
 button.stave-code-tab { background: transparent; color: alpha(currentColor, 0.8); }
 button.stave-code-tab:hover { background: alpha(currentColor, 0.07); }

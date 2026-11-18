@@ -48,7 +48,7 @@ design too; `files` opens the editor), `--editor` (the editor open),
 `--select NAME` (a part, piece of hardware or assembly), `--focus NAME` (a
 joint or a piece of hardware) with `--plan` (from above), `--in-3d` and
 `--step AMOUNT` (0 to 1), `--diagnostic N` (select the Nth problem),
-`--finder TEXT` (the finder open with TEXT typed), `--xray` (the dock's
+`--finder TEXT` (the finder open with TEXT typed), `--xray` (the view's
 X-ray on), `--scene NAME`, `--explode AMOUNT`, `--size WxH`,
 and for the camera `--turn DEGREES` and `--pitch DEGREES` (as for
 `--screenshot`), `--frame-selection` (framed on the selection, as F does)
@@ -109,8 +109,8 @@ forwards what people do.
 | `stave-gtk` | `ui/mod.rs` | The window: owns the `Session`, dispatches commands, redraws on events, runs checks on a worker thread, hands the panels to the workbench, lays the problem pins over the 3D view and keeps what only the 3D view needs (camera, renderer, the looks, focus mode's scrub, the "Open it" slider). |
 | `stave-gtk` | `ui/header.rs`, `tree.rs`, `inspector.rs`, `chrome.rs` | The title bar (with the problems chip and the finder's field); the Parts panel's tree; the Details panel's pages (a part, focus mode); the motion bar and the Cut list's placeholder. |
 | `stave-gtk` | `ui/workbench.rs`, `panels.rs` | The docked window (libpanel): the dock, its panels (Parts, Files, Details, Code, Problems), the status bar with a toggle per edge, and the remembered `Layout` (`~/.config/stave/layout`; `--layout FILE` reads another and writes nothing; screenshots use the default); the Problems and Files lists. |
-| `stave-gtk` | `ui/dock.rs`, `finder.rs` | The strip under the 3D view (scene menu, Pull apart, X-ray, the motion slider, the moving assemblies' chips, the camera buttons); the finder dialog (Ctrl+K). |
-| `stave-gtk` | `ui/view_tools.rs`, `slider.rs` | The Pull apart toolbar (shown in the dock), camera buttons, the shared-wood key and focus mode's From above / In 3D switch; the design's slider (track, ring handle, a hatched blocked range). |
+| `stave-gtk` | `ui/dock.rs`, `finder.rs` | The scene menu's floating box and the moving assemblies' chips on the 3D view; the finder dialog (Ctrl+K). |
+| `stave-gtk` | `ui/view_tools.rs`, `view_layout.rs`, `slider.rs` | The camera column (fit, front, turn, X-ray, Pull apart and Pull apart's pop-out slider), the shared-wood key and focus mode's From above / In 3D switch; where each floating control goes on the 3D view so none covers another (`view_layout::place`, tested without GTK); the design's slider (track, ring handle, a hatched blocked range). |
 | `stave-gtk` | `ui/focus_stage.rs`, `focus_panel.rs` | Focus mode in the 3D view's area (the step player, the caption, three small views, the swing card) and a problem's motion card; focus mode's side panel. |
 | `stave-gtk` | `ui/files.rs`, `editor.rs` | The Code panel: the open files as tabs (each with its dot), a placeholder while none is open, breadcrumbs, the uses panel and the footer; the editor (a GtkSourceView 5 with its gutter, tags, lenses, peek, hover card and search bar; the only file that knows it is a GtkSourceView). |
 | `stave-gtk` | `ui/icons.rs`, `style.rs` | The design's icons drawn from SVG path data in the text colour; one stylesheet whose colours are all libadwaita's named colours (`@headerbar_bg_color`, `@sidebar_bg_color`, `@card_bg_color`, `@accent_bg_color`, `@success_color`, ...), so light and dark both come from it and follow the style manager the moment it changes; only the code block is dark in both. |
@@ -206,11 +206,13 @@ PDF doesn't exist yet, and the button says so honestly.
 ┌ title bar ── back · forward · open · title ── [Find a part, file, line or problem  Ctrl K] ── Design|Cut list · ‹ chip › · hammer · menu ┐
 ├ Parts │ Files ─────┬ 3D View ─────────────────────────────────────────────────┬ (right edge: empty, hidden) ┤
 │ CARCASS            │                                                          │                             │
-│  base     oak_19   │                        3D view                           │                             │
-│ ASSEMBLIES         │                     (problem pins)                       │                             │
-├ Details ───────────┤ (tool strip, no header)                                  │                             │
-│ PART · IN door_l   │ scene ▾ · Pull apart · X-ray · door_l ──── 110° · Move: … · [fit][front][turn]          │
-│ stile[hinge]       ├ Code │ Problems ─────────────────────────────────────────┤                             │
+│  base     oak_19   │ [As built ▾]       (a short line)           [fit]        │                             │
+│ ASSEMBLIES         │                                             [front]      │                             │
+├ Details ───────────┤                        3D view              [turn]       │                             │
+│ PART · IN door_l   │                     (problem pins)          [X-ray]      │                             │
+│ stile[hinge]       │                          [▶ together ──o── apart][Pull]  │                             │
+│                    │ [Move: door_l drawer[top] …]    [door_l closed ──o── 110°]│                             │
+│                    ├ Code │ Problems ─────────────────────────────────────────┤                             │
 │ Stock  oak_19 …    │ doors.stave │ carcass.stave                               │                             │
 │                    │  9 assembly door_l : casework.FramePanelDoor {           │                             │
 ├────────────────────┴──────────────────────────────────────────────────────────┴─────────────────────────────┤
@@ -236,16 +238,26 @@ frame and tab, and one per edge, `show end true`; a broken file means
 the default) and never in a `.stave` file. "Reset Layout" in the main
 menu puts board B back.
 
-- **3D View** is the view, with the camera buttons (frame, front, reset)
-  as small buttons on its top right corner, the problem pins and the chip
-  for a problem off screen on it, and its tools in a strip along its foot
-  (part of the panel, no header of their own, so they go where the view
-  goes): the scene menu, Pull apart, X-ray, the "Open it" slider, the Move
-  chips, focus mode's From above / In 3D switch, the shared-wood key, a
-  short line ("Focused on one joint · Esc to go back"), a posed problem's
-  swing card and a joint's step player. The buttons and sliders sit in an
-  `adw::WrapBox`, wrapping onto more rows (or stacking) as the panel
-  narrows.
+- **3D View** is the view with its controls floating on it (part of the
+  panel, so they go wherever the view is docked): the scene menu at the
+  top left; a column of icon buttons at the top right (fit, front view,
+  turn to the back, then X-ray and Pull apart, which stay pressed while
+  on), Pull apart's play button and "together … apart" slider popping out
+  to the left of its button while it is on; a short line ("Focused on one
+  joint · Esc to go back") and the shared-wood key along the top; the
+  moving assemblies' chips at the bottom left and the selection's "Open
+  it" slider at the bottom right; a joint's step player, a posed
+  problem's swing card and the chip for a problem off screen above the
+  foot, in the middle; focus mode's From above / In 3D switch at the top
+  right; and the problem pins. There is no strip under the view.
+  `view_layout::place` puts each control where it goes for the view's
+  size and what is showing (through the overlay's `get-child-position`),
+  so none covers another: the chips go above the slider when they can't
+  sit beside it, a bottom control keeps clear of the camera column, the
+  pop-out goes under the column when there's no room beside it, and the
+  line drops below the scene menu when it can't sit beside it. A control
+  that is hidden takes no room and can't catch the pointer meant for the
+  view.
 - **Headers** are a slim strip of flush tabs (`TabStrip`, our own
   `panel::FrameHeader`): a tab as wide as its title, the shown one with an
   accent line and its ×, and the shown panel's menu (▾: "Move to the
@@ -258,8 +270,12 @@ menu puts board B back.
   piece of hardware anywhere opens the file that places it, at that line
   (the panel comes forward unless it shares a frame with the 3D View; the
   keyboard stays where it is) (board B2: dragged to the right
-  edge, files open on the right). With no file open it shows "No file
-  open" and stays where it is. Ctrl+E ("Show the Code Panel") brings it
+  edge, files open on the right). The text scrolls that line into view
+  only once the text has its size (`Editor::go_to` waits for it on the
+  frame clock): a file opened into a panel that was showing "No file
+  open", or behind another tab, has none until the next frame, and a
+  scroll worked out before then lands anywhere. With no file open it
+  shows "No file open" and stays where it is. Ctrl+E ("Show the Code Panel") brings it
   back where it last was if it was closed, and puts the keyboard in the
   text.
 - **Problems panel** is where a problem is read: every problem of the
@@ -391,26 +407,29 @@ free of its warning.
   and draws over the part's own edges; where the selection is hidden
   behind other parts the outline is faint. Focus mode selects nothing in
   the view; a problem's parts keep their red tint and red shared wood.
-- **The dock** (`Dock`, bottom middle): the scene menu, then the view
-  toolbar, X-ray, the selection's motion bar ("door_l closed ——— 110°",
-  the "Open it" slider), and while no slider shows a chip per moving
-  assembly ("Move: door_l · drawer[top] …", ringed in its mark's colour)
-  that selects it. Hidden in focus mode and while a problem is posed (its
-  motion card takes the place).
-- **View toolbar** (in the dock, `ViewToolbar`): "Pull apart" is a toggle;
-  on, it sets `Command::SetExplode(1)` and grows a play button and the
-  "together … apart" slider (`Slider`, 12 px handle, thin ring); the
-  slider sends `SetExplode`; play runs the amount from 0 to 1 in 3 s on
-  the frame clock. `Event::ExplodeChanged` reposes (staged: assemblies
+- **The floating controls** (`Dock`): the scene menu in its own box at
+  the top left; the selection's motion bar ("door_l closed ——— 110°", the
+  "Open it" slider) at the bottom right; and while no slider shows, a
+  chip per moving assembly ("Move: door_l · drawer[top] …", ringed in its
+  mark's colour) at the bottom left, which selects it. The scene menu,
+  the chips, X-ray and Pull apart step aside in focus mode and while a
+  problem is posed (its motion card takes the place).
+- **X-ray and Pull apart** (`ViewToolbar`, at the foot of the camera
+  column): X-ray is an icon toggle; so is "Pull apart": on, it sets
+  `Command::SetExplode(1)` and pops out a play button and the "together …
+  apart" slider (`Slider`, 12 px handle, thin ring) to the left of its
+  button, joined to the column; the slider sends `SetExplode`; play runs
+  the amount from 0 to 1 in 3 s on the frame clock. `Event::ExplodeChanged` reposes (staged: assemblies
   first, then parts) and redraws the toolbar; the toggle stays on at 0
   until it is switched off. A line at the top of the view says "Pulled
   apart · 60%" while nothing is selected.
 - **Pulled apart, the card stays as it is**: a selected part shows its
   usual account. The mockups' "How it comes apart" panel (Exploded.dc.html,
   V2C_PullApart) was removed: its step list added little to the picture.
-- **Camera buttons** (bottom right, `CameraToolbar`): fit is `win.frame`
-  (the selection, or everything); front looks from the front, a little
-  above, framing everything; turn swings the view half way round.
+- **Camera buttons** (top right, `CameraToolbar`, one column with X-ray
+  and Pull apart under a line): fit is `win.frame` (the selection, or
+  everything); front looks from the front, a little above, framing
+  everything; turn swings the view half way round.
 
 ## Problems
 
@@ -422,7 +441,7 @@ free of its warning.
   error · …"), which selects it. A posed problem shows only its own pin;
   focus mode and an older design show none.
 - **The dots**: the tree's rows and the rail's tabs carry their marks
-  (`problems::marks`); the dock's chips are ringed for a moving assembly
+  (`problems::marks`); the Move chips are ringed for a moving assembly
   with a problem.
 - **Stepping**: the chip's pill and arrows, F8 and Shift+F8 select the
   next or previous problem (`Command::NextProblem`), wrapping round.
@@ -444,7 +463,7 @@ free of its warning.
 Focus mode keeps its state in the window (`FocusState`: progress,
 options, from above, playing) and lays the 3D view's area out by kind
 (`layout_for_focus`); its panel is the card's `focus` page, at the top
-right (V2C_Joint, V2C_Hinge), and the dock steps aside.
+right (V2C_Joint, V2C_Hinge), and the scene menu, the Move chips, X-ray and Pull apart step aside.
 
 - **A joint** (JointFocus.dc.html, V2C_Joint): the step player floats at the bottom
   of the view (`StepCard`): play (pauses while playing), "**Step 1 of 1** ·
@@ -501,7 +520,7 @@ view beside it follows it. Pictures in `docs/screenshots/files/`
                          │    framed                   │o│  9 assembly door_l : …              │
                          │                            │o│ 10   opening: door_bay[left]        │
                          │                            │r│ [uses panel]                        │
-                         │ [dock]                      │+│ Ctrl+click follows a name …  Line 9 │
+                         │ [Move chips]  [slider]     │+│ Ctrl+click follows a name …  Line 9 │
                          └────────────────────────────┘ └─────────────────────────────────────┘
 ```
 
