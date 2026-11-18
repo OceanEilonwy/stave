@@ -1832,6 +1832,7 @@ dependencies = [
  "stave-modules",
  "stave-scene",
  "stave-schema",
+ "stave-smt",
  "stave-solve",
  "thiserror",
 ]

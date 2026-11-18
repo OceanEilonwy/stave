@@ -15,6 +15,7 @@ stave-geom = { path = "../stave-geom" }
 stave-ide = { path = "../stave-ide" }
 stave-scene = { path = "../stave-scene" }
 stave-schema = { path = "../stave-schema" }
+stave-smt = { path = "../stave-smt" }
 thiserror = "2"
 notify = "8"
 

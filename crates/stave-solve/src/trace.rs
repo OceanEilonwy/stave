@@ -33,7 +33,9 @@ use stave_model::defs::{
     AssemblyKind, DefId, Domain, Member, PartKind, RExpr, RExprKind, Setting, Size, StockField,
     Symbol, Word,
 };
-use stave_model::ids::{AssemblyId, InstanceId, LetId, ParamId, PartId, RegionId, StockId};
+use stave_model::ids::{
+    AssemblyId, InstanceId, LetId, ParamId, PartId, RegionId, RequireId, StockId,
+};
 use stave_model::instance::{Ctx, InstanceKind, ItemSlot, ParamSource};
 use stave_model::trace::{
     Amount, Dependence, Followed, Form, Freedom, Linear, NotLinear, ParamDomain, Quantity, Reason,
@@ -68,6 +70,10 @@ pub enum TraceError {
     /// The region is not a piece of a split written with `shares:`.
     #[error("the region is not a piece of a split with shares")]
     NoShares,
+    /// A require's condition is not comparisons joined by `&&`
+    /// ([`trace_requires`]).
+    #[error("the require is not comparisons joined by '&&'")]
+    NotAComparison,
     /// The trace and the solver disagree; a bug in the trace.
     #[error("the trace gives {traced:?}, but the solver gives {solved:?}")]
     Disagrees {
@@ -105,6 +111,138 @@ pub fn trace_all(model: &Model, quantities: &[Quantity]) -> Vec<Result<Trace, Tr
         .iter()
         .map(|quantity| Tracer::new(&mut solver, *quantity).and_then(|t| t.run()))
         .collect()
+}
+
+/// How the two sides of one comparison in a `require` compare.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Comparison {
+    /// `==`
+    Equal,
+    /// `<`
+    Less,
+    /// `<=`
+    LessOrEqual,
+    /// `>`
+    Greater,
+    /// `>=`
+    GreaterOrEqual,
+}
+
+impl Comparison {
+    fn of(op: BinaryOp) -> Option<Comparison> {
+        match op {
+            BinaryOp::Eq => Some(Comparison::Equal),
+            BinaryOp::Lt => Some(Comparison::Less),
+            BinaryOp::Le => Some(Comparison::LessOrEqual),
+            BinaryOp::Gt => Some(Comparison::Greater),
+            BinaryOp::Ge => Some(Comparison::GreaterOrEqual),
+            BinaryOp::Or
+            | BinaryOp::And
+            | BinaryOp::Ne
+            | BinaryOp::Add
+            | BinaryOp::Sub
+            | BinaryOp::Mul
+            | BinaryOp::Div
+            | BinaryOp::In => None,
+        }
+    }
+}
+
+/// One comparison of a require's condition, traced as `left − right`
+/// compared with zero: `left >= right` is `left − right >= 0`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TracedComparison {
+    /// How the sides compare.
+    pub comparison: Comparison,
+    /// `left − right` at the current values, exact.
+    pub value: Amount,
+    /// How `left − right` depends on the values it is worked out from.
+    /// The [`Dependence::levels`] in it count from the require.
+    pub form: Form,
+}
+
+/// Traces the condition of every `require` the project's design has (the
+/// project's own and those inside its assemblies' components; a mirrored
+/// assembly's copies are left out, as the solver leaves them out), solving
+/// the design once. A condition made of comparisons joined by `&&` gives
+/// one [`TracedComparison`] per comparison, in the order written;
+/// anything else (`||`, `!=`, `!`) is [`TraceError::NotAComparison`]. The
+/// results are in the order of the model's requires. The requires of
+/// kinds (a joint's, a board's) are not here: they are checked where the
+/// kind is used.
+pub fn trace_requires(
+    model: &Model,
+) -> Vec<(RequireId, Result<Vec<TracedComparison>, TraceError>)> {
+    let Some(project) = model.defs.project(model.root) else {
+        return Vec::new();
+    };
+    let mut solver = Solver::new(model, project.file, project.span);
+    let _ = solver.run();
+    model
+        .requires
+        .iter()
+        .filter(|inst| inst.mirror_of.is_none())
+        .map(|inst| (inst.id, trace_require(&mut solver, inst.id)))
+        .collect()
+}
+
+fn trace_require(
+    solver: &mut Solver<'_>,
+    require: RequireId,
+) -> Result<Vec<TracedComparison>, TraceError> {
+    let model = solver.model;
+    let inst = model
+        .requires
+        .get(require.index())
+        .ok_or(TraceError::UnknownItem)?;
+    let def = model
+        .defs
+        .require(inst.def)
+        .ok_or(TraceError::UnknownItem)?;
+    let env = Env {
+        ctx: inst.ctx,
+        file: def.decl.file,
+        kind: None,
+        array: None,
+    };
+    let mut comparisons = Vec::new();
+    let mut pending = vec![&def.condition];
+    while let Some(expr) = pending.pop() {
+        let RExprKind::Binary { op, lhs, rhs } = &expr.kind else {
+            return Err(TraceError::NotAComparison);
+        };
+        if *op == BinaryOp::And {
+            pending.push(rhs);
+            pending.push(lhs);
+            continue;
+        }
+        let comparison = Comparison::of(*op).ok_or(TraceError::NotAComparison)?;
+        let mut tracer = Tracer::at(solver, inst.ctx.instance);
+        let halt = |Halt| TraceError::NotWorkedOut;
+        let left = tracer.value(lhs, &env).map_err(halt)?;
+        let right = tracer.value(rhs, &env).map_err(halt)?;
+        let (Some(left), Some(right)) = (Amount::from_value(&left), Amount::from_value(&right))
+        else {
+            return Err(TraceError::NotAQuantity);
+        };
+        if !left.same_dimension(right) {
+            return Err(TraceError::NotAQuantity);
+        }
+        let raw = left
+            .raw()
+            .checked_sub(right.raw())
+            .ok_or(TraceError::NotWorkedOut)?;
+        let value = left.with_raw(raw);
+        let left_form = tracer.affine(lhs, &env).map_err(halt)?;
+        let right_form = tracer.affine(rhs, &env).map_err(halt)?;
+        let form = left_form.minus(&right_form).map_err(halt)?.settled();
+        comparisons.push(TracedComparison {
+            comparison,
+            value,
+            form: tracer.form_of(value, form)?,
+        });
+    }
+    Ok(comparisons)
 }
 
 // ---------------------------------------------------------------------------
@@ -463,7 +601,9 @@ const PEEL_LIMIT: usize = 64;
 
 struct Tracer<'s, 'm> {
     solver: &'s mut Solver<'m>,
-    quantity: Quantity,
+    /// What is traced; `None` for the sides of a require
+    /// ([`trace_requires`]), which are traced as expressions.
+    quantity: Option<Quantity>,
     /// Component levels the quantity is inside.
     depth: u32,
     dependences: BTreeMap<Source, Dependence>,
@@ -489,10 +629,18 @@ impl<'s, 'm> Tracer<'s, 'm> {
             Quantity::Param(param) => model.params.get(param.index()).map(|p| p.instance),
         }
         .ok_or(TraceError::UnknownItem)?;
-        let depth = instance_depth(model, instance);
-        Ok(Tracer {
+        let mut tracer = Tracer::at(solver, instance);
+        tracer.quantity = Some(quantity);
+        Ok(tracer)
+    }
+
+    /// A tracer for expressions evaluated in `instance`, tracing no
+    /// quantity of its own.
+    fn at(solver: &'s mut Solver<'m>, instance: InstanceId) -> Self {
+        let depth = instance_depth(solver.model, instance);
+        Tracer {
             solver,
-            quantity,
+            quantity: None,
             depth,
             dependences: BTreeMap::new(),
             followed: Vec::new(),
@@ -502,11 +650,24 @@ impl<'s, 'm> Tracer<'s, 'm> {
             mins: HashMap::new(),
             regions: HashMap::new(),
             busy: HashSet::new(),
-        })
+        }
     }
 
     fn run(mut self) -> Result<Trace, TraceError> {
+        let quantity = self.quantity.ok_or(TraceError::UnknownItem)?;
         let (value, form) = self.quantity()?;
+        let form = self.form_of(value, form)?;
+        Ok(Trace {
+            quantity,
+            value,
+            form,
+            followed: self.followed,
+        })
+    }
+
+    /// The public form of a value worked out as `form`, checked against
+    /// its value `value` as the solver gives it.
+    fn form_of(&self, value: Amount, form: Affine) -> Result<Form, TraceError> {
         let mut terms = Vec::new();
         for (source, coefficient) in &form.terms {
             let dependence = self
@@ -543,19 +704,14 @@ impl<'s, 'm> Tracer<'s, 'm> {
                     .collect(),
             })
         };
-        Ok(Trace {
-            quantity: self.quantity,
-            value,
-            form,
-            followed: self.followed,
-        })
+        Ok(form)
     }
 
     /// The quantity's value as the solver gives it, and its form.
     fn quantity(&mut self) -> Result<(Amount, Affine), TraceError> {
         let halt = |Halt| TraceError::NotWorkedOut;
         let amount = |value: &Value| Amount::from_value(value).ok_or(TraceError::NotAQuantity);
-        match self.quantity {
+        match self.quantity.ok_or(TraceError::UnknownItem)? {
             Quantity::PartSize { part, axis } => {
                 let value = self
                     .solver

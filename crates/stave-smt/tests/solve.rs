@@ -1,10 +1,11 @@
 //! Behaviour of `Problem::solve`: the answer it picks, its conflicts, and
 //! that it picks the same answer every time.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use stave_smt::{
-    Conflict, Constraint, Domain, Outcome, Problem, Rational, Relation, SmtError, Solution, Unknown,
+    Conflict, Constraint, Domain, Outcome, Problem, Rational, Reach, Relation, SmtError, Solution,
+    Unknown,
 };
 
 fn whole(value: i128) -> Rational {
@@ -336,6 +337,122 @@ fn a_zero_time_limit_times_out() {
     problem.add_unknown(unknown("a", 0, range(0, 10), 0, 0));
     problem.set_time_limit(Duration::ZERO);
     assert_eq!(problem.solve(), Ok(Outcome::TimedOut));
+}
+
+/// A problem with no answer that only a search through every choice can
+/// prove has none: 60 unknowns, each either 0 or an even number, whose sum
+/// must be odd. z3's real arithmetic doesn't reason about evenness, so it
+/// has to try combinations, of which there are 2^60.
+fn odd_sum_of_evens() -> Problem {
+    let mut problem = Problem::new();
+    let mut state: i128 = 12_345;
+    let mut total = 0;
+    let mut terms = Vec::new();
+    for order in 0..60_u32 {
+        state = (state * 1_103_515_245 + 12_345) % 2_147_483_648;
+        let even = 2 * (1_000_000 + state % 1_000_000);
+        total += even;
+        let name = format!("u{order}");
+        let domain = match Domain::values([whole(0), whole(even)]) {
+            Ok(domain) => domain,
+            Err(error) => panic!("{error}"),
+        };
+        problem.add_unknown(Unknown {
+            name: name.clone(),
+            current: whole(0),
+            domain,
+            rank: 0,
+            order,
+        });
+        terms.push((name, whole(1)));
+    }
+    problem.add_constraint(Constraint::new(
+        "odd",
+        terms,
+        Relation::Equal,
+        whole(total / 2 + 1 - (total / 2) % 2),
+    ));
+    problem
+}
+
+#[test]
+fn a_hard_problem_runs_out_of_its_time_limit() {
+    let mut problem = odd_sum_of_evens();
+    problem.set_time_limit(Duration::from_millis(200));
+    let start = Instant::now();
+    assert_eq!(problem.solve(), Ok(Outcome::TimedOut));
+    // z3 stops close to the limit; the margin allows for a loaded machine.
+    let took = start.elapsed();
+    assert!(took < Duration::from_secs(5), "took {took:?}");
+}
+
+#[test]
+fn the_reach_of_a_sum_keeps_every_domain_and_constraint() {
+    let mut problem = Problem::new();
+    problem.add_unknown(unknown("a", 5, range(0, 10), 0, 0));
+    problem.add_unknown(unknown("b", 5, range(0, 20), 0, 1));
+    assert_eq!(
+        problem.reach([("a", whole(1)), ("b", whole(1))]),
+        Ok(Reach::Between {
+            lowest: whole(0),
+            highest: whole(30),
+        })
+    );
+    // `cap` (a + 2b <= 30) holds a + b to 15 + a / 2, so at most 20 at
+    // a = 10, b = 10; the least is still 0.
+    problem.add_constraint(constraint(
+        "cap",
+        &[("a", 1), ("b", 2)],
+        Relation::LessOrEqual,
+        30,
+    ));
+    problem.add_constraint(constraint(
+        "floor",
+        &[("b", 1), ("a", -1)],
+        Relation::GreaterOrEqual,
+        -3,
+    ));
+    assert_eq!(
+        problem.reach([("a", whole(1)), ("b", whole(1))]),
+        Ok(Reach::Between {
+            lowest: whole(0),
+            highest: whole(20),
+        })
+    );
+    // 2a - b: `floor` (b - a >= -3) makes it at most a + 3, so 13 at
+    // a = 10, b = 7; `cap` lets b be at most 15 at a = 0, so at least -15.
+    assert_eq!(
+        problem.reach([("a", whole(2)), ("b", whole(-1))]),
+        Ok(Reach::Between {
+            lowest: whole(-15),
+            highest: whole(13),
+        })
+    );
+    assert_eq!(
+        problem.reach([("a", fraction(1, 2))]),
+        Ok(Reach::Between {
+            lowest: whole(0),
+            highest: whole(5),
+        })
+    );
+    assert!(matches!(
+        problem.reach([("c", whole(1))]),
+        Err(SmtError::UndeclaredUnknown { .. })
+    ));
+}
+
+#[test]
+fn the_reach_of_a_problem_with_no_answer_names_the_conflict() {
+    let mut problem = Problem::new();
+    problem.add_unknown(unknown("a", 5, range(0, 10), 0, 0));
+    problem.add_constraint(constraint("too big", &[("a", 1)], Relation::Greater, 10));
+    assert_eq!(
+        problem.reach([("a", whole(1))]),
+        Ok(Reach::Unsatisfiable(vec![
+            Conflict::Domain("a".into()),
+            Conflict::Constraint("too big".into()),
+        ]))
+    );
 }
 
 /// `items` in an order fixed by `seed` (a Fisher-Yates shuffle driven by a

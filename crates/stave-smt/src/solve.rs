@@ -7,7 +7,7 @@ use std::time::Instant;
 use z3::ast::{Bool, Real};
 use z3::{Model, Optimize, Params, SatResult, Solver};
 
-use crate::{Conflict, Domain, Outcome, Problem, Rational, Relation, SmtError, Solution};
+use crate::{Conflict, Domain, Outcome, Problem, Rational, Reach, Relation, SmtError, Solution};
 
 /// Why a solve stopped early: out of time, or an error.
 enum Halt {
@@ -56,6 +56,87 @@ pub(crate) fn solve(problem: &Problem) -> Result<Outcome, SmtError> {
         Ok(outcome) => Ok(outcome),
         Err(Halt::TimedOut) => Ok(Outcome::TimedOut),
         Err(Halt::Failed(error)) => Err(error),
+    }
+}
+
+pub(crate) fn reach(problem: &Problem, terms: &[(String, Rational)]) -> Result<Reach, SmtError> {
+    let deadline = Instant::now().checked_add(problem.time_limit);
+    let checked = check(problem)?;
+    let mut indexed = Vec::with_capacity(terms.len());
+    for (name, coefficient) in terms {
+        let index = checked
+            .unknowns
+            .iter()
+            .position(|unknown| &unknown.name == name)
+            .ok_or_else(|| SmtError::UndeclaredUnknown {
+                constraint: "the sum whose reach is asked for".into(),
+                unknown: name.clone(),
+            })?;
+        indexed.push((index, *coefficient));
+    }
+    match run_reach(&checked, &indexed, deadline) {
+        Ok(reach) => Ok(reach),
+        Err(Halt::TimedOut) => Ok(Reach::TimedOut),
+        Err(Halt::Failed(error)) => Err(error),
+    }
+}
+
+fn run_reach(
+    checked: &Checked,
+    terms: &[(usize, Rational)],
+    deadline: Option<Instant>,
+) -> Result<Reach, Halt> {
+    let encoding = encode(checked)?;
+    if let Some(conflicts) = find_conflict(checked, &encoding, deadline)? {
+        return Ok(Reach::Unsatisfiable(conflicts));
+    }
+    let products = terms
+        .iter()
+        .map(|(index, coefficient)| {
+            let value = encoding
+                .values
+                .get(*index)
+                .ok_or(SmtError::Solver("an unknown lost its variables".into()))?;
+            Ok(Real::mul(&[numeral(*coefficient)?, value.clone()]))
+        })
+        .collect::<Result<Vec<Real>, SmtError>>()?;
+    let total = sum(&products)?;
+    let mut ends = Vec::with_capacity(2);
+    for lowest in [true, false] {
+        let optimize = Optimize::new();
+        for formula in encoding.domains.iter().chain(&encoding.constraints) {
+            optimize.assert(formula);
+        }
+        if lowest {
+            optimize.minimize(&total);
+        } else {
+            optimize.maximize(&total);
+        }
+        optimize.set_params(&time_left(deadline)?);
+        let model = match optimize.check(&[]) {
+            SatResult::Sat => optimize
+                .get_model()
+                .ok_or(Halt::Failed(SmtError::Solver("z3 gave no answer".into())))?,
+            SatResult::Unsat => {
+                return Err(Halt::Failed(SmtError::Solver(
+                    "a problem that was satisfiable stopped being so while it was optimised".into(),
+                )));
+            }
+            SatResult::Unknown => return Err(unknown_result(optimize.get_reason_unknown())),
+        };
+        let evaluated = model
+            .eval(&total, true)
+            .ok_or(SmtError::Solver("z3 gave no value for the sum".into()))?;
+        ends.push(parse_numeral(&evaluated.to_string())?);
+    }
+    match ends.as_slice() {
+        [lowest, highest] => Ok(Reach::Between {
+            lowest: *lowest,
+            highest: *highest,
+        }),
+        _ => Err(Halt::Failed(SmtError::Solver(
+            "the reach lost one of its ends".into(),
+        ))),
     }
 }
 
