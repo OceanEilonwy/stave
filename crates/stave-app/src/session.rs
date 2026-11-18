@@ -1345,8 +1345,15 @@ impl Session {
             }
             Outcome::CantOpen { message, .. } => Verdict::CantOpen(message),
         };
+        let cant_open_first = matches!(verdict, Verdict::CantOpen(_)) && self.latest().is_none();
         self.status = CheckStatus::Done(verdict);
         events.push(Event::CheckStatusChanged);
+        // With no design in yet, what the view shows changes from
+        // "Checking…" to why the folder can't be opened (an empty folder
+        // included): said as a changed result so the window redraws it.
+        if cant_open_first {
+            events.push(Event::ResultChanged);
+        }
         if self.queued == Queued::Again {
             self.queued = Queued::Nothing;
             self.request_check(&mut events);

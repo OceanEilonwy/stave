@@ -1,0 +1,7 @@
+# The side table, built from an empty project by the steps a person takes
+# with the mouse: the envelope, then each piece picked from the menu.
+new "Side table" 500mm 600mm 500mm
+import std:frames
+stock oak_19 white_oak solid 19mm max_width 200mm max_length 2700mm
+stock oak_45_sq white_oak solid 45mm width 45mm max_length 2700mm
+create

@@ -929,10 +929,12 @@ fn attempt(
 }
 
 /// Binds a further pick to the first place param still to point at that
-/// it can fill: a region to a `Region` param; a face to an `Anchor`
-/// param, else its part to a `Part` param, else to a `Parts` param; two
-/// facing parts or a group to a `Parts` param, else one to each `Part`
-/// param in order. `false`, with nothing changed, when it fills none.
+/// it can fill, in declaration order (the order the card asks for them):
+/// a region to a `Region` param; a face to an `Anchor` param, or its part
+/// to a `Part` param, whichever comes first, else its part to a `Parts`
+/// param; two facing parts or a group to a `Parts` param, else one to
+/// each `Part` param in order. `false`, with nothing changed, when it
+/// fills none.
 pub fn bind_further(place: &mut [crate::edit::PlaceParam], picked: &Picked) -> bool {
     let first = |place: &mut [crate::edit::PlaceParam],
                  fill: &mut dyn FnMut(&mut PlaceSlot) -> bool| {
@@ -952,8 +954,6 @@ pub fn bind_further(place: &mut [crate::edit::PlaceParam], picked: &Picked) -> b
                     *slot = Some(*face);
                     true
                 }
-                _ => false,
-            }) || first(place, &mut |slot| match slot {
                 PlaceSlot::Part(slot @ None) => {
                     *slot = Some(face.part);
                     true
@@ -1376,6 +1376,45 @@ pub fn is_component(candidate: &Candidate) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_face_fills_the_first_place_the_card_asks_for() {
+        use crate::edit::{PartFace, PlaceParam};
+        use stave_lang::placement::Face;
+        use stave_model::ids::PartId;
+        // An apron's places after a click between two legs: under (the
+        // top, a Part), then outside and start (faces of a leg).
+        let param = |name: &str, slot: PlaceSlot| PlaceParam {
+            name: Name::new(name, Span::default()).unwrap(),
+            slot,
+            prompt: String::new(),
+            text: None,
+        };
+        let mut place = vec![
+            param("under", PlaceSlot::Part(None)),
+            param("outside", PlaceSlot::Anchor(None)),
+            param("start", PlaceSlot::Anchor(None)),
+        ];
+        let top = PartFace {
+            part: PartId::from_usize(0),
+            face: Face::Top,
+        };
+        let leg = PartFace {
+            part: PartId::from_usize(1),
+            face: Face::Front,
+        };
+        assert!(bind_further(&mut place, &Picked::Face(top)));
+        assert!(bind_further(&mut place, &Picked::Face(leg)));
+        let slots: Vec<&PlaceSlot> = place.iter().map(|param| &param.slot).collect();
+        assert_eq!(
+            slots,
+            [
+                &PlaceSlot::Part(Some(top.part)),
+                &PlaceSlot::Anchor(Some(leg)),
+                &PlaceSlot::Anchor(None),
+            ]
+        );
+    }
 
     #[test]
     fn a_rename_changes_whole_words_only() {

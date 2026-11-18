@@ -494,11 +494,18 @@ impl Window {
         tools.repeat.show(count, tools.repeat.axis(), count < 2);
         tools.repeat.root.set_visible(fills);
         tools.mirror.set_active(false);
-        tools.mirror_row.set_visible(mirror.is_some());
+        // With no mirror image in the design, one piece filling a whole
+        // space is made a mirrored pair across it (`MirrorSplit`).
+        let splits = mirror.is_none() && fills && count < 2;
+        tools.mirror_row.set_visible(mirror.is_some() || splits);
         if let Some(image) = &mirror {
             tools
                 .mirror_words
                 .set_label(&format!("And the other side · adds {image}"));
+        } else if splits {
+            tools
+                .mirror_words
+                .set_label("And the other side · splits its space across into a mirrored pair");
         }
         tools.hold.set_sensitive(unmeasurable.is_none());
         tools.hold.set_tooltip_text(Some(match unmeasurable {
@@ -565,12 +572,26 @@ impl Window {
         }
     }
 
-    /// Adds the mirror image of the selected item.
+    /// Adds the mirror image of the selected item; with none in the
+    /// design, one piece filling a whole space is made a mirrored pair,
+    /// the space split across.
     pub(in crate::ui) fn mirror_selected(self: &Rc<Self>) {
         let Some(item) = self.change_target() else {
             return;
         };
+        let has_image = self.session.borrow().mirror_offer(&item).is_some();
+        let one_piece = {
+            let session = self.session.borrow();
+            session
+                .drawable()
+                .is_some_and(|(design, _)| piece_count(design, &item) < 2)
+        };
+        let splits = !has_image && one_piece && self.item_fills_a_space(&item);
         match parse_name(&item) {
+            Ok(item) if splits => self.start_change(EditCommand::MirrorSplit {
+                item,
+                axis: Axis::Across,
+            }),
             Ok(item) => self.start_change(EditCommand::Mirror(item)),
             Err(error) => self.edit_toast(&error.0),
         }

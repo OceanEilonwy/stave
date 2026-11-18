@@ -1,0 +1,10 @@
+# A click in the space under the divider: Drawer, its settings typed,
+# and the card's count stepper set to 2 stacked up.
+select region divider.below
+choose casework.Drawer
+set mount = overlay(left: 18mm, right: 18mm, top: 8mm, bottom: 8mm, meeting: -0.75mm)
+set front_stock = oak_19
+set box_stock = maple_12
+set bottom_stock = ply_6
+set slide = side_mount_slide(length: 500mm)
+repeat 2 up

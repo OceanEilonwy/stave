@@ -1,0 +1,5 @@
+# The front apron selected: its grips; the setback's number clicked,
+# 3mm typed and Enter pressed.
+grips assembly apron_front
+stops
+type 2 3mm

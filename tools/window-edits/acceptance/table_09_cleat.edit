@@ -1,0 +1,9 @@
+# The front apron's board selected, "Add something onto its back face":
+# Cleat; the top and the apron's left end pointed at, its settings.
+select face apron_front.apron.back
+choose frames.Cleat
+point face top.board.top
+bind face apron_front.apron.left
+set cleat_stock = oak_19
+set run = right
+set inward = back

@@ -95,6 +95,8 @@ line and the rest are skipped:
 | `rename <name>` | the selected item's name retyped among its changes in Details |
 | `finder <text>` | Ctrl+K with the text typed (the finder stays open) |
 | `do <text>` | Ctrl+K, the text, Enter: the first verb the finder lists is run |
+| `turn <degrees> [<pitch>]` | the view orbited between two clicks: turned about the upright by that many degrees, and tipped to that height above the horizontal (negative looks from below), so a face out of sight can be pointed at |
+| `save` | Ctrl+S: every open file with unsaved changes saved (an Add or a change made while its file is open in the editor stays unsaved there, as typing would, until saved) |
 
 ```
 tools/window-shot refused.png crates/stave-gtk/fixtures/door_hits_wall --edit-script tools/window-edits/door_refused.edit
@@ -817,7 +819,13 @@ was. Once written, the window selects the item by its new name.
   switch, shown when `Session::mirror_offer` has an offer (worked out
   once per item and result, since it reads the project): on, it sends
   `Mirror`, and the change's card shows the same switch, on, which
-  cancels when turned off; **Hold a distance…** and **Remove…**.
+  cancels when turned off. With no offer, a single piece that fills a
+  whole space (a door filling the space above a divider) shows the
+  switch as **And the other side · splits its space across into a
+  mirrored pair**: on, it sends `MirrorSplit { axis: across }` (the
+  space split in two, `door_left` and `door_right = mirror(...)`; see
+  [editing](editing.md#repeat-and-mirror)); a mirrored pair split up or
+  deep has no gesture yet. **Hold a distance…** and **Remove…**.
 - **Repeat** (`edit_view/repeat_handles.rs`): the card of a candidate
   that fills a space (a component with its `Region` bound) has the same
   stepper above its buttons, sending `Repeat` (one piece is no repeat).
@@ -981,6 +989,26 @@ finder's "repeat 3", and "add shelf" opening Shelf's card),
 open: two places pending, the bays' line and the drawers' line, and the
 envelope's line lined up again) and `edit_text_broken.png` (a brace
 typed: editing in 3D off, and why).
+
+### The acceptance run
+
+`tools/window-edits/acceptance/run` builds the clothing cabinet and the
+side table from empty projects in the real window, one `tools/window-shot`
+run a stage, each stage twice (its card, then with Add and `save`), and
+records `docs/screenshots/window/accept_cabinet_*.png` and
+`accept_table_*.png` (`accept_new_project_dialog.png` is the New Project
+dialog). It ends by comparing what the window wrote with the pinned
+`tests/edit-scripts/clothing_cabinet.stave` and `side_table.stave`. Each
+stage's steps are in `tools/window-edits/acceptance/`. The project
+itself is made by `stave edit --script` with the dialog's writer: the
+dialog's fields have no script step, and it takes one wood (the cabinet
+needs six, the table two). Where a face is out of sight the view is
+turned first (`turn`, or `--turn`/`--pitch` for a whole stage), as a
+person would orbit it; one face, the front apron's left end (the cleat's
+`start`), is inside the leg's mortise and cannot be clicked from any
+side, so that one is filled with `bind`, which stands for the click
+without making it. See [STATUS](STATUS.md#graphical-editing) for what
+the run found.
 
 ### The widgets
 

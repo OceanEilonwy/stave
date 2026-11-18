@@ -1,0 +1,6 @@
+# The top's board selected, "Add something onto its bottom face": Legs,
+# their stock, and their length typed as an expression.
+select face top.board.bottom
+choose frames.Legs
+set leg_stock = oak_45_sq
+set length = overall_height - top.board.thickness

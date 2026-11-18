@@ -16,6 +16,9 @@
 //! name <name>                          the name retyped on the card
 //! fix <problem> <fix>                  a fix's button, both counted from 1
 //! add | cancel                         the card's buttons
+//! save                                 Ctrl+S: every open file with unsaved changes saved
+//! turn <degrees> [<pitch degrees>]     the view orbited: turned about the upright, and
+//!                                      tipped to that height above the horizontal
 //! ```
 //!
 //! `#` starts a comment. A step that can't be done is said on standard
@@ -156,6 +159,39 @@ impl Window {
             }
             "add" | "commit" => self.send_edit(EditCommand::Add),
             "cancel" => self.send_edit(EditCommand::Cancel),
+            // An Add with the file open in the editor leaves the change
+            // unsaved in its buffer, as typing would; Ctrl+S writes it.
+            "save" => {
+                if !self.widgets.files.save_all() {
+                    return Err("the open files couldn't be saved".to_owned());
+                }
+            }
+            "turn" => {
+                // The orbit drag between two clicks, so a face out of
+                // sight can be brought round and pointed at.
+                let degrees: Vec<f32> = rest
+                    .split_whitespace()
+                    .map(|word| word.parse::<f32>().map_err(|error| error.to_string()))
+                    .collect::<Result<_, _>>()?;
+                let (turn, pitch) = match degrees.as_slice() {
+                    [turn] => (*turn, None),
+                    [turn, pitch] if (-89.0..=89.0).contains(pitch) => (*turn, Some(*pitch)),
+                    _ => {
+                        return Err(
+                            "write it as turn <degrees> [<pitch degrees, -89 to 89>]".to_owned()
+                        );
+                    }
+                };
+                {
+                    let mut state = self.state.borrow_mut();
+                    let orbit = state.orbit.as_mut().ok_or("nothing is drawn yet")?;
+                    orbit.yaw = (orbit.yaw + turn.to_radians()).rem_euclid(std::f32::consts::TAU);
+                    if let Some(pitch) = pitch {
+                        orbit.pitch = pitch.to_radians();
+                    }
+                }
+                self.request_render();
+            }
             // The grips and the changes of the design share two words:
             // `pick` is a grip's while a follows grip's list waits, else a
             // click on an item; `drag count|boundary` is a repeat's

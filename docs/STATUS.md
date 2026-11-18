@@ -297,8 +297,93 @@ the system or the main menu, the 3D backdrop with them.
   `docs/screenshots/window/`.
 
 What the window shows is worked out in `stave-app` (the session, the
-tree, the inspector, focus mode, problems) and tested headless; clicking
-through the window itself is not automated.
+tree, the inspector, focus mode, problems, editing) and tested headless;
+the window's editing is driven by `--edit-script` steps (`gui.md`).
+
+## Graphical editing
+
+A design can be built and changed in the 3D view ([editing.md](editing.md)
+is the specification, [gui.md](gui.md) "Editing in the 3D view" the
+window). Every gesture makes an ordinary patch in the `.stave` grammar,
+tries it on a scratch copy, shows a ghost with a verdict and writes the
+text only when it checks (an error the edit would cause refuses it, with
+the checker's fixes on the card).
+
+- **Language**: `locked param` / `solved param` as a prefix; a project's
+  root may be `region envelope = box(across:, up:, deep:)`; `split(...,
+  shares: [...])`; component params of type `Part`, `Parts`, `Anchor`;
+  patches `add`, `set`, `unset`, `remove`, `replace`, `rename`; fixes as
+  patches on diagnostics.
+- **Libraries**: `std:casework` (Case, Back, Divider, Shelf, HangingRail,
+  Feet, Drawer, FramePanelDoor) and `std:frames` (Top, Legs, Apron,
+  Stretcher, Cleat, Slats), imported, not in the prelude.
+- **Window**: New Project dialog (name, sizes, one wood, libraries,
+  tools); a click in a space, in the gap between two parts, or "Add
+  something onto its … face" in Details opens a menu drawn from the
+  components and kinds in scope, each tried (greyed with the reason when
+  it doesn't fit); the card asks for what is still to point at and the
+  settings, with a ghost and "It fits" / "It doesn't fit"; Add, Cancel,
+  fixes; a selected item's changes (rename, how many, "And the other
+  side", hold a distance, remove with what depends on it); count and
+  boundary handles; grips on the model (drag, type, stops, sizes that
+  follow, "Let the solver move this"); the finder's verbs.
+- **Command line**: `stave edit <folder> --patch <file> [--commit]` and
+  `stave edit <folder> --script <file>` (a whole build as steps).
+
+**Accepted in the window**: the clothing cabinet and the side table were
+built from empty projects by the window's scripted input (the same
+commands the pointer, the card and the keys send to the real window); the
+text each run wrote is byte-identical to the pinned
+`tests/edit-scripts/clothing_cabinet.stave` and `side_table.stave`. A
+picture before and after each Add is in
+`docs/screenshots/window/accept_*.png`.
+
+### How to try it
+
+```
+cargo build -p stave-cli -p stave-gtk
+mkdir -p ~/stave-try
+target/debug/stave-gtk ~/stave-try --new-project      # an empty folder, the New Project dialog open
+target/debug/stave view examples/side_table_from_box  # a finished piece: click a part, its card has its changes
+
+# The two pieces by script, from nothing (the session, no window):
+target/debug/stave edit /tmp/cabinet --script tests/edit-scripts/clothing_cabinet.txt
+target/debug/stave edit /tmp/table   --script tests/edit-scripts/side_table.txt
+
+# The same two in the real window, a picture a stage (about six minutes):
+tools/window-edits/acceptance/run
+```
+
+In the window: Create writes the project and lights the box; click
+inside it, choose Case (or Top), pick the wood on the card, Add. Then
+click in the spaces and gaps the parts leave. The dialog takes one wood:
+type the other stock lines into the text (Ctrl+E opens the editor), as
+`tests/edit-scripts/clothing_cabinet.stave` has them. After a change made
+from a selected item (mirror, a grip, hold) press Ctrl+S: with its file
+open in the editor the change stays unsaved there.
+
+### What is not right yet
+
+- The New Project dialog takes one wood; the cabinet needs six stocks,
+  the table two. Its fields have no script step, so the acceptance made
+  the projects with `stave edit --script` (the same writer).
+- The front apron's end (the cleat's `start`) is inside the leg and
+  cannot be clicked from any side.
+- Changes made from a selected item go into the open editor buffer
+  unsaved; menu Adds with no file open are written at once.
+- A mirror is offered again for every item that has one (`door_left`
+  offers `door_2_right`, `apron_front` offers `apron_2_back`).
+- "And the other side · splits its space across into a mirrored pair"
+  shows on every single piece that fills a space (the Top, the Case, the
+  Divider, the Shelf), not only where a pair makes sense (a door).
+- Grip labels overlap each other and are drawn over the cards; the typed
+  grip's panel covers the change card's title; the Details panel's
+  "CHANGE …" heading overlaps the row above it.
+- Library place params prompt "Point at the under." (they have `//`
+  comments, not `///`); the card shows raw param names.
+- A mirrored pair split up or deep has no gesture.
+- The full list, with what was decided and left out, is in
+  `docs/workpacks/2026-11-18-graphical-editing.md`.
 
 ## Not done yet
 
@@ -350,6 +435,7 @@ through the window itself is not automated.
   of its parts turns about the up axis.
 - **Modules**: remote sources (`github:`, `https:`) and the lockfile.
 - **Editors and AI**: the language server (`stave-lsp`, on `stave-ide`),
-  completion, signature help, rename, quick fixes, inlay hints, smart
-  edits and patches. The navigation layer rebuilds its
+  completion, signature help, quick fixes in the text editor and inlay
+  hints. (Patches, rename and smart edits exist for the 3D editor and
+  `stave edit`; see "Graphical editing".) The navigation layer rebuilds its
   index on each pause in typing rather than per file (a few milliseconds).

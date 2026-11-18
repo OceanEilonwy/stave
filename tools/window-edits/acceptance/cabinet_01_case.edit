@@ -1,0 +1,6 @@
+# A click inside the empty envelope: the menu "In this space"; Case
+# chosen, its wood and its raise typed on the card.
+select region envelope
+choose casework.Case
+set panel_stock = oak_19
+set raise = 80mm

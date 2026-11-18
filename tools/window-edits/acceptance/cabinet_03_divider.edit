@@ -1,0 +1,7 @@
+# A click in the space in front of the back: Divider, the two sides
+# pointed at (a click in the gap between them), its height typed.
+select region back.in_front
+choose casework.Divider
+bind between case.side[left] case.side[right]
+set panel_stock = oak_19
+set height = 500mm

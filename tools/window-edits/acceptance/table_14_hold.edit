@@ -1,0 +1,6 @@
+# Hold a distance: from the first slat, then a click on the front
+# apron; at least 200mm, the reason typed, tried.
+pick slats.slat[0]
+hold slats.slat[0] to apron_front.apron
+hold min 200mm "leave room above the shelf for a stack of books"
+hold try

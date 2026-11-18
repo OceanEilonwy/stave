@@ -231,7 +231,13 @@ never from a list in the app.
    ordered by group, and within a group by name.
 6. **Filling the rest.** A place param still unbound is asked for by
    pointing: the card names it ("Point at the side the hinges go on") and
-   the next click fills it. Setting params with no default are asked for in
+   the next click fills it. The card lists them in declaration order,
+   and a click fills the first one still open that it can: a face fills
+   an `Anchor` with the face or a `Part` with its part, whichever comes
+   first (so an apron's `under: Part` takes the top before its `outside:
+   Anchor` takes a leg's face), else a `Parts` with its part; a click
+   between two parts fills a `Parts`, else one `Part` each
+   (`editing::bind_further`). Setting params with no default are asked for in
    the card: on first use the user chooses; later the value is copied from
    the project's most recent assembly of that component, read from the
    text (the last in file order of the files as the folder lists them).
@@ -808,10 +814,24 @@ Do not add these; each is a later decision:
 
 ## Libraries this is meant for
 
-Written later, as ordinary libraries: `std:casework` (`Case`, `Back`,
-`Divider`, `Shelf`, `HangingRail`, `Feet`, `Drawer`, `FramePanelDoor`) and
-`std:frames` (`Top`, `Legs`, `Apron`, `Stretcher`, `Cleat`, `Slats`). Each
-exposes its place params, a default for each setting where sensible, each
-size a user would drag as a param, and the regions a later pick fills
-(`case.inside`, `divider.above`, `divider.below`). Nothing in the editor
-names them.
+Ordinary libraries, outside the prelude (`import "std:casework"`):
+`std:casework` (`Case`, `Back`, `Divider`, `Shelf`, `HangingRail`,
+`Feet`, `Drawer`, `FramePanelDoor`) and `std:frames` (`Top`, `Legs`,
+`Apron`, `Stretcher`, `Cleat`, `Slats`). Each exposes its place params, a
+default for each setting where sensible, each size a user would drag as
+a param, and the regions a later pick fills (`case.inside`,
+`divider.above`, `divider.below`). Nothing in the editor names them.
+Their place params carry `//` comments, not `///` doc comments, so the
+card's prompt for them is the fallback "Point at the under." rather than
+a sentence.
+
+## Both pieces from nothing, in the window
+
+The acceptance of this feature: the clothing cabinet and the side table
+built from an empty project in the real window, every step a gesture
+(`tools/window-edits/acceptance/run`, see [gui.md](gui.md#the-acceptance-run)).
+Both projects the window writes are the same text, byte for byte, as
+`tests/edit-scripts/clothing_cabinet.stave` and `side_table.stave`, which
+`stave edit --script` writes from the session. What the window could not
+do by gesture, and what it does badly, is listed in
+[STATUS](STATUS.md#graphical-editing).
