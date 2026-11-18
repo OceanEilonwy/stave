@@ -22,7 +22,10 @@
 //! └──────────────────────────────────────────┘
 //! ```
 //!
-//! Keys: Enter adds when Add is enabled; Escape cancels.
+//! Keys: Enter adds when Add is enabled; Escape cancels. The keys
+//! reach the card while the keyboard is in it, so the card takes the
+//! keyboard when it appears and each time it is shown again (unless the
+//! keyboard is already inside it, say in a setting being typed).
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -236,6 +239,9 @@ impl EditCard {
             .width_request(340)
             .accessible_role(gtk::AccessibleRole::Group)
             .overflow(gtk::Overflow::Hidden)
+            // It holds the keyboard itself, so Enter and Escape work
+            // before anything in it is clicked.
+            .focusable(true)
             .build();
         root.append(&scrolled);
         root.append(&buttons);
@@ -284,6 +290,7 @@ impl EditCard {
             keys.connect_key_pressed(move |_, key, _, _| key_action(key, enabled.get(), &send));
         }
         root.add_controller(keys);
+        root.connect_map(take_focus);
 
         EditCard {
             root,
@@ -361,6 +368,7 @@ impl EditCard {
             add_blocked_reason(candidate, model.verdict)
                 .unwrap_or("Write it into the design (Enter)"),
         ));
+        take_focus(&self.root);
     }
 
     /// The place params: each bound one with what holds it, each unbound
@@ -633,17 +641,14 @@ impl EditCard {
         block
     }
 
-    /// Handles a key as the card does: Enter adds when enabled, Escape
-    /// cancels.
+    /// The card's own key controller (for tests).
     #[cfg(test)]
-    pub fn press(&self, key: gdk::Key) -> glib::Propagation {
-        let on_action = self.on_action.clone();
-        key_action(key, self.add_enabled.get(), &move |action| {
-            let callback = on_action.borrow().clone();
-            if let Some(callback) = callback {
-                callback(action);
-            }
-        })
+    pub fn key_controller(&self) -> gtk::EventControllerKey {
+        let controllers = self.root.observe_controllers();
+        (0..controllers.n_items())
+            .filter_map(|index| controllers.item(index))
+            .find_map(|item| item.downcast::<gtk::EventControllerKey>().ok())
+            .expect("the card listens for keys")
     }
 
     /// The Add and Cancel buttons (for tests).
@@ -673,6 +678,23 @@ impl EditCard {
     #[cfg(test)]
     pub fn fix_buttons(&self) -> Vec<((usize, usize), gtk::Button)> {
         self.fixes.borrow().clone()
+    }
+}
+
+/// Moves the keyboard into the card, unless it is there already, so
+/// Enter and Escape reach it. Does nothing until the card is on screen.
+fn take_focus(root: &gtk::Box) {
+    if !root.is_mapped() {
+        return;
+    }
+    let Some(window) = root.root() else {
+        return;
+    };
+    let inside = window
+        .focus()
+        .is_some_and(|focus| focus == *root.upcast_ref::<gtk::Widget>() || focus.is_ancestor(root));
+    if !inside {
+        root.grab_focus();
     }
 }
 
@@ -924,14 +946,58 @@ mod tests {
         }
         assert_eq!(*chosen.borrow(), [drawer.declaration, drawer.declaration]);
 
-        // The card, refused: Add is disabled, Enter does nothing, the fix
-        // and Escape are reported.
+        // The card, on screen in a window that, like Stave's, takes
+        // Escape for itself when nothing inside does.
         let card = EditCard::new();
         let actions: Rc<RefCell<Vec<CardAction>>> = Rc::default();
         {
             let actions = actions.clone();
             card.connect_action(move |action| actions.borrow_mut().push(action));
         }
+        let window = gtk::Window::builder()
+            .default_width(420)
+            .default_height(720)
+            .build();
+        let window_escapes = Rc::new(Cell::new(0));
+        {
+            let keys = gtk::EventControllerKey::new();
+            let window_escapes = window_escapes.clone();
+            keys.connect_key_pressed(move |_, key, _, _| {
+                if key == gdk::Key::Escape {
+                    window_escapes.set(window_escapes.get() + 1);
+                    glib::Propagation::Stop
+                } else {
+                    glib::Propagation::Proceed
+                }
+            });
+            window.add_controller(keys);
+        }
+        let other = gtk::Button::with_label("Elsewhere");
+        let layout = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        layout.append(&other);
+        layout.append(&card.root);
+        window.set_child(Some(&layout));
+        // The keyboard starts elsewhere, as it starts in the 3D view.
+        gtk::prelude::GtkWindowExt::set_focus(&window, Some(&other));
+        window.present();
+        let context = glib::MainContext::default();
+        let started = std::time::Instant::now();
+        while !card.root.is_mapped() && started.elapsed() < std::time::Duration::from_secs(10) {
+            context.iteration(false);
+        }
+        assert!(card.root.is_mapped(), "the window never came up");
+        // Appearing, the card takes the keyboard.
+        assert_eq!(
+            gtk::prelude::GtkWindowExt::focus(&window).as_ref(),
+            Some(card.root.upcast_ref::<gtk::Widget>())
+        );
+        assert_eq!(
+            card.key_controller().widget().as_ref(),
+            Some(card.root.upcast_ref::<gtk::Widget>())
+        );
+
+        // Refused: Add is disabled, Enter does nothing, the fix and
+        // Escape are reported, and Escape never reaches the window.
         let show = |candidate, verdict| {
             card.show(
                 &CardModel {
@@ -946,7 +1012,10 @@ mod tests {
         show(drawer, Some(&fixture.verdict));
         let (add, cancel) = card.buttons();
         assert!(!add.is_sensitive());
-        assert_eq!(card.press(gtk::gdk::Key::Return), glib::Propagation::Stop);
+        assert_eq!(
+            press(&window, gdk::Key::Return),
+            Some(card.root.clone().upcast())
+        );
         let fixes = card.fix_buttons();
         assert_eq!(fixes.len(), 1);
         assert_eq!(
@@ -954,7 +1023,11 @@ mod tests {
             Some("Remove door_l and door_r")
         );
         fixes[0].1.emit_clicked();
-        card.press(gtk::gdk::Key::Escape);
+        assert_eq!(
+            press(&window, gdk::Key::Escape),
+            Some(card.root.clone().upcast())
+        );
+        assert_eq!(window_escapes.get(), 0);
         cancel.emit_clicked();
         assert_eq!(
             actions.borrow_mut().drain(..).collect::<Vec<_>>(),
@@ -994,7 +1067,16 @@ mod tests {
         let fits = Verdict::Fits(Fits::new(Vec::new()).unwrap());
         show(drawer, Some(&fits));
         assert!(add.is_sensitive());
-        card.press(gtk::gdk::Key::KP_Enter);
+        gtk::prelude::GtkWindowExt::set_focus(&window, Some(&other));
+        show(drawer, Some(&fits));
+        assert_eq!(
+            gtk::prelude::GtkWindowExt::focus(&window).as_ref(),
+            Some(card.root.upcast_ref::<gtk::Widget>())
+        );
+        assert_eq!(
+            press(&window, gdk::Key::KP_Enter),
+            Some(card.root.clone().upcast())
+        );
         add.emit_clicked();
         assert_eq!(
             actions.borrow_mut().drain(..).collect::<Vec<_>>(),
@@ -1012,5 +1094,66 @@ mod tests {
         show(door, None);
         assert!(!add.is_sensitive());
         assert!(card.fix_buttons().is_empty());
+        // Without the card's controller, Escape would fall to the window.
+        card.root.remove_controller(&card.key_controller());
+        assert_eq!(
+            press(&window, gdk::Key::Escape),
+            Some(window.clone().upcast())
+        );
+        assert_eq!(window_escapes.get(), 1);
+        window.destroy();
+    }
+
+    /// Delivers a key press as GTK does: from the window down to the
+    /// focused widget through each key controller set to capture, then
+    /// back up through each set to bubble (or target), until one stops
+    /// it. Returns the widget whose controller stopped it. (GTK has no
+    /// public way to make a key event, so this walks its order.)
+    fn press(window: &gtk::Window, key: gdk::Key) -> Option<gtk::Widget> {
+        let mut path = Vec::new();
+        let mut at = gtk::prelude::GtkWindowExt::focus(window);
+        while let Some(widget) = at {
+            at = widget.parent();
+            path.push(widget);
+        }
+        let keys_of = |widget: &gtk::Widget| {
+            let controllers = widget.observe_controllers();
+            (0..controllers.n_items())
+                .filter_map(|index| controllers.item(index))
+                .filter_map(|item| item.downcast::<gtk::EventControllerKey>().ok())
+                .collect::<Vec<_>>()
+        };
+        let stops = |controller: &gtk::EventControllerKey| {
+            controller.emit_by_name::<bool>(
+                "key-pressed",
+                &[
+                    &glib::translate::IntoGlib::into_glib(key),
+                    &0u32,
+                    &gdk::ModifierType::empty(),
+                ],
+            )
+        };
+        for widget in path.iter().rev() {
+            for controller in keys_of(widget) {
+                if controller.propagation_phase() == gtk::PropagationPhase::Capture
+                    && stops(&controller)
+                {
+                    return Some(widget.clone());
+                }
+            }
+        }
+        for widget in &path {
+            for controller in keys_of(widget) {
+                let phase = controller.propagation_phase();
+                if matches!(
+                    phase,
+                    gtk::PropagationPhase::Bubble | gtk::PropagationPhase::Target
+                ) && stops(&controller)
+                {
+                    return Some(widget.clone());
+                }
+            }
+        }
+        None
     }
 }

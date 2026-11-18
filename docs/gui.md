@@ -448,7 +448,10 @@ contract values and report what the user does; they decide nothing.
   `connect_action(Fn(CardAction))` reports `Rename(text)`,
   `Choose { param, text }` (Enter in a setting's entry, the text as
   typed), `Fix { problem, fix }` (indexes in the refusal), `Add` and
-  `Cancel`. Enter adds when Add is enabled; Escape cancels.
+  `Cancel`. Enter adds when Add is enabled; Escape cancels. The card
+  is focusable and takes the keyboard when it appears and on each
+  `show` (unless the keyboard is already inside it), so these keys
+  reach it before the window's own Escape.
 
 To see them, `--edit-fixture menu|greyed|refused|fits|choose|point`
 puts one over the design from `clothing_cabinet_fixture()` (the menu
