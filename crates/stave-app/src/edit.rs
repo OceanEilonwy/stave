@@ -19,7 +19,7 @@
 //! [`Diagnostic`]s. Ids are the resolved model's ([`stave_model::ids`]).
 
 use stave_lang::ast::{
-    AssemblyDef, DesignItem, Expr, Ident, ItemKind, PatchOpKind, Span, StringPart, TypeName,
+    AssemblyDef, DesignItem, Expr, Ident, ItemKind, Name, PatchOpKind, Span, StringPart, TypeName,
 };
 use stave_lang::placement::{Axis, Face};
 use stave_lang::units::{Angle, Length, Rational};
@@ -224,16 +224,18 @@ pub enum MenuGroup {
     /// From a module the project imports, by the name it is used through
     /// (`casework`).
     Module(Ident),
-    /// From a standard module (`joinery`, `hardware`, `casework`).
-    Standard(Ident),
+    /// From a standard module (`joinery`, `hardware`, `casework`), by its
+    /// name: a [`Name`], since `hardware` is a reserved word.
+    Standard(Name),
 }
 
 /// A place param and what fills it. The variant is the param's type, so a
 /// binding always has the type its param needs.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PlaceParam {
-    /// The param's (or role's) name: `opening`, `hinge_side`.
-    pub name: Ident,
+    /// The param's (or role's) name: `opening`, `hinge_side`. A role's
+    /// name may be any word (a slide's `in`), so this is a [`Name`].
+    pub name: Name,
     /// Its type, and its value once pointed at.
     pub slot: PlaceSlot,
 }
@@ -298,6 +300,9 @@ pub enum SettingValue {
 /// Whether a candidate applies to the selection.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Applicability {
+    /// Not checked yet: signature matching lists it, and the scratch-copy
+    /// check hasn't run.
+    NotChecked,
     /// Its `require` lines hold with its defaults.
     Applies,
     /// Listed greyed, with the checker's messages saying why.
@@ -666,6 +671,7 @@ pub fn clothing_cabinet_fixture() -> Option<Fixture> {
         (patches.next()?, patches.next()?, patches.next()?);
 
     let name = |text: &str| Ident::new(text, Span::default()).ok();
+    let word = |text: &str| Name::new(text, Span::default()).ok();
     let set_value = |patch: &Patch, index: usize| match &patch.ops.get(index)?.kind {
         PatchOpKind::Set { value, .. } => Some(value.clone()),
         _ => None,
@@ -712,7 +718,7 @@ pub fn clothing_cabinet_fixture() -> Option<Fixture> {
             group: MenuGroup::Module(casework.clone()),
         },
         place: vec![PlaceParam {
-            name: name("opening")?,
+            name: word("opening")?,
             slot: PlaceSlot::Region(Some(door_bay_left)),
         }],
         settings: vec![
@@ -760,11 +766,11 @@ pub fn clothing_cabinet_fixture() -> Option<Fixture> {
         },
         place: vec![
             PlaceParam {
-                name: name("opening")?,
+                name: word("opening")?,
                 slot: PlaceSlot::Region(Some(door_bay_left)),
             },
             PlaceParam {
-                name: name("hinge_side")?,
+                name: word("hinge_side")?,
                 slot: PlaceSlot::Part(None),
             },
         ],

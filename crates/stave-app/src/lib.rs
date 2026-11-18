@@ -24,6 +24,7 @@
 
 use std::path::Path;
 
+pub mod candidates;
 pub mod check;
 pub mod edit;
 pub mod empty;
@@ -32,6 +33,7 @@ pub mod finder;
 pub mod focus;
 pub mod inspect;
 pub mod link;
+pub mod naming;
 pub mod problems;
 pub mod session;
 pub mod view;
