@@ -56,21 +56,35 @@
 //! rates along the drag, fixed by the constraints that are tight at the
 //! answer (the target and any require on its edge), so for any target in
 //! the piece the values are worked out by exact rational arithmetic
-//! without the solver. A piece ends where a moving param reaches a bound
+//! without the solver. A piece starts at the target it was found at
+//! (that end included) and reaches only away from where the drag started
+//! (the size as it is now); it ends where a moving param reaches a bound
 //! of its domain or its starting value, or where a require that was not
-//! tight reaches its edge; a target beyond every piece solves again and
-//! adds a piece. [`Drag::reach`] is the range of targets that can be
-//! reached at all, with every domain and linear require kept. The first
-//! piece from where the drag started is exactly the solver's answer at
-//! every target in it (moving away from the start, a cheaper set of params
-//! never becomes possible, and every cost grows in proportion). A later
-//! piece is the solver's answer where it was found and follows the same
-//! tight constraints; it is the solver's answer along its length unless a
-//! different set of the same number of params becomes cheaper part way
-//! along, which needs two or more params moving together, each with
-//! constraints that bend its cost. A param restricted to a `within` list
-//! has no rate: a piece in which one moves holds only its own target. The
-//! same drag gives the same values every time.
+//! tight reaches its edge. A target outside every piece, including one
+//! between the start and the target a piece was found at, solves again
+//! and adds a piece. [`Drag::reach`] is the range of targets that can be
+//! reached at all, with every domain and linear require kept.
+//!
+//! Why a piece only reaches away from the start: towards the start, a
+//! cheaper set of params that a require blocked at the found target can
+//! be allowed again. Away from it, that can't happen. The targets a set
+//! of params can reach (the others held) form an interval holding the
+//! start, so a set that can't reach the found target can't reach
+//! anything further out, and the number of params that change never
+//! drops. And the least fraction a set needs grows at least in
+//! proportion to the distance from the start (it is convex in the target
+//! and zero at the start). So when a piece's values are in proportion
+//! too (each param that moves is on a line through its starting value at
+//! the start, and every other param is at its starting value), the piece is the solver's answer at every target in it, up to
+//! a tie between different values that are exactly as good. A piece
+//! whose values are not in proportion (a param held at a bound it moved
+//! to, or a require tight off the start) is the solver's answer where it
+//! was found and follows the same tight constraints; it stays the
+//! solver's answer unless a different set of the same number of params
+//! becomes cheaper part way along, which the tests check against solving
+//! but which is not proven. A param restricted to a `within` list has no
+//! rate: a piece in which one moves holds only its own target. The same
+//! drag gives the same values every time.
 
 use std::collections::BTreeMap;
 use std::sync::atomic::AtomicBool;
@@ -1134,12 +1148,25 @@ impl Setup {
             ends.keep_under(Rational::ZERO, rate, *slack)
                 .ok_or_else(overflow)?;
         }
+        // A piece reaches only away from where the drag started, beyond
+        // the target it was found at. Between the start and that target a
+        // cheaper set of params, blocked at the target, can be allowed
+        // again, so the piece says nothing there: a target in between is
+        // solved.
+        let start = self.current.raw();
+        let (below, above) = if target > start {
+            (Some((Rational::ZERO, false)), ends.above)
+        } else if target < start {
+            (ends.below, Some((Rational::ZERO, false)))
+        } else {
+            (Some((Rational::ZERO, false)), Some((Rational::ZERO, false)))
+        };
         Ok(Piece {
             at: target,
             values,
             rates,
-            below: ends.below,
-            above: ends.above,
+            below,
+            above,
         })
     }
 }
@@ -1732,6 +1759,68 @@ mod tests {
                 ("drawer_height".to_owned(), mm(480)),
             ]
         );
+    }
+
+    #[test]
+    fn a_first_target_past_a_require_s_edge_doesn_t_reach_back() {
+        // drawer_height may not go under 490mm. At 1163mm it would have to
+        // be 480mm, so overall_height takes the 20mm. Back at 1148mm the
+        // drawers can give 5mm again, which is 5/600 of their range
+        // against 5/200 of overall_height's: the drag must solve there,
+        // not carry on with overall_height from the piece found at 1163mm.
+        let project = two_params("drag-back", "1700mm..1900mm", "200mm..800mm");
+        let text = fs::read_to_string(project.folder.join("cabinet.stave")).unwrap();
+        let text = replace(
+            text,
+            "region envelope =",
+            "require drawer_floor : drawer_height >= 490mm \"the socks need room\"\n\nregion envelope =",
+        );
+        fs::write(project.folder.join("cabinet.stave"), text).unwrap();
+        let base = EditBase::new(&project.folder, &DiskFiles).unwrap();
+        assert_eq!(base.opened().error_count(), 0);
+        let above = region(&base, "divider.above", Axis::Up);
+        let Ready::Setup(setup) = Setup::prepare(&base, above).unwrap() else {
+            panic!("two solved params");
+        };
+        let DragStart::Ready(mut drag) = Drag::start(&base, above, mm(1163)).unwrap() else {
+            panic!("two solved params");
+        };
+        let ids: Vec<ParamId> = drag.params().map(|(id, _)| id).collect();
+        let expect = |height: i64, drawer: i64| {
+            ids.iter()
+                .copied()
+                .zip([mm(height), mm(drawer)])
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(drag.solves(), 1);
+        // Further out, the piece holds: arithmetic, no solve.
+        let DragStep::Values(out) = drag.values_at(mm(1173)).unwrap() else {
+            panic!("1173mm should be reached");
+        };
+        assert!(!out.solved);
+        assert_eq!(out.values, expect(1810, 500));
+        assert_eq!(out.values, solved_values(&setup, mm(1173)));
+        // Back towards the start, it solves.
+        let DragStep::Values(back) = drag.values_at(mm(1148)).unwrap() else {
+            panic!("1148mm should be reached");
+        };
+        assert!(back.solved);
+        assert_eq!(back.values, expect(1780, 495));
+        assert_eq!(drag.solves(), 2);
+        // Every millimetre between the start and the first target, and a
+        // little beyond, is the solver's answer.
+        for target in (1133..=1183).chain((1133..=1183).rev()) {
+            assert_eq!(
+                drag_values(&mut drag, mm(target)),
+                solved_values(&setup, mm(target)),
+                "at {target}mm"
+            );
+        }
+        // And solve_size writes what the drag showed.
+        let SizeSolve::Fits(edit) = solve(&base, above, mm(1148)) else {
+            panic!("should fit");
+        };
+        assert_eq!(changes(&edit), vec![("drawer_height".to_owned(), mm(495))]);
     }
 
     #[test]
