@@ -25,7 +25,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
-use stave_lang::ast::{BinaryOp, Span, UnaryOp};
+use stave_lang::ast::{BinaryOp, ParamKind, Span, UnaryOp};
 use stave_lang::placement::{Axis, Face, PartAxis};
 use stave_lang::units::{ExactLength, Rational};
 use stave_model::Model;
@@ -2043,14 +2043,12 @@ impl<'s, 'm> Tracer<'s, 'm> {
 }
 
 /// What allows or stops a smart edit changing a param, from its
-/// declaration. The syntax tree on this branch carries only a `locked`
-/// flag; once param kinds are merged this reads `def.kind` (`Plain`,
-/// `Locked`, `Solved`), and nothing else here changes.
+/// declaration's kind (`param`, `locked param`, `solved param`).
 fn freedom_of(def: &stave_model::defs::ParamDef) -> Freedom {
-    if def.locked {
-        Freedom::Locked
-    } else {
-        Freedom::Plain
+    match def.kind {
+        ParamKind::Plain => Freedom::Plain,
+        ParamKind::Locked => Freedom::Locked,
+        ParamKind::Solved => Freedom::Solved,
     }
 }
 

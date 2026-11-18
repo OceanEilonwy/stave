@@ -193,9 +193,8 @@ pub enum Freedom {
     Plain,
     /// A `locked param`: never changed; the chain stops there.
     Locked,
-    /// A `solved param`: the solver may pick it. Not read yet: the syntax
-    /// tree on this branch carries only `locked`, so no trace says this
-    /// until param kinds are built.
+    /// A `solved param`: the solver may pick it. Until z3 over solved
+    /// params is built it is edited as a plain one.
     Solved,
     /// A stock's field: stops the chain.
     StockField,
