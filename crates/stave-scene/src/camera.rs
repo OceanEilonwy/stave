@@ -218,6 +218,20 @@ impl Orbit {
         self.projection(aspect) * self.view()
     }
 
+    /// Where a point shows in a `width` × `height` view, in pixels from
+    /// the top left: the inverse of [`Orbit::ray`]. `None` behind the
+    /// camera. The pixel may be outside the view (an off-screen point),
+    /// so a viewer can point at it from the view's edge.
+    pub fn project(&self, point: Vec3, width: f32, height: f32) -> Option<(f32, f32)> {
+        let (width, height) = (width.max(1.0), height.max(1.0));
+        let clip = self.view_projection(width / height) * point.extend(1.0);
+        if clip.w <= f32::EPSILON {
+            return None;
+        }
+        let ndc = clip.xyz() / clip.w;
+        Some(((ndc.x + 1.0) * 0.5 * width, (1.0 - ndc.y) * 0.5 * height))
+    }
+
     /// The ray through a pixel of a `width` × `height` view (pixels from
     /// the top left).
     pub fn ray(&self, x: f32, y: f32, width: f32, height: f32) -> Ray {
@@ -322,5 +336,25 @@ mod tests {
         assert!(right.x > left.x);
         let high = clip.project_point3(Vec3::new(0.0, 1500.0, 0.0));
         assert!((high.x - left.x).abs() < 1e-5 && (high.y - left.y).abs() < 1e-5);
+    }
+
+    #[test]
+    fn projecting_undoes_the_ray() {
+        let bounds = cabinet_bounds();
+        let orbit = Orbit::framing(bounds, 1.6);
+        let (width, height) = (1600.0, 1000.0);
+        let centre = orbit
+            .project(orbit.target, width, height)
+            .expect("in front");
+        assert!((centre.0 - 800.0).abs() < 0.5 && (centre.1 - 500.0).abs() < 0.5);
+        let ray = orbit.ray(300.0, 200.0, width, height);
+        let point = ray.origin + ray.direction * 1000.0;
+        let (x, y) = orbit.project(point, width, height).expect("in front");
+        assert!(
+            (x - 300.0).abs() < 0.5 && (y - 200.0).abs() < 0.5,
+            "{x}, {y}"
+        );
+        let behind = orbit.target + orbit.backward() * (orbit.distance * 2.0);
+        assert_eq!(orbit.project(behind, width, height), None);
     }
 }

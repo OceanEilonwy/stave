@@ -56,45 +56,50 @@ struct Arguments {
     /// The window's style: system, light or dark.
     #[arg(long, value_name = "STYLE", default_value = "system", value_parser = parse_theme)]
     theme: ui::Theme,
-    /// The view the window starts in: parts, cut-list or files.
-    #[arg(long, value_name = "VIEW", default_value = "parts", value_parser = parse_view)]
-    view: stave_app::session::View,
-    /// Open the window with the problems list showing.
+    /// The view the window starts in: design or cut-list (`parts` and
+    /// `files` name the design too; `files` opens the editor beside it).
+    #[arg(long, value_name = "VIEW", default_value = "design", value_parser = parse_view)]
+    view: (stave_app::session::View, bool),
+    /// Open the editor beside the 3D view.
     #[arg(long)]
-    problems: bool,
-    /// Open this file in the Files view, at a line: `doors.stave:9`
-    /// (relative to the folder, or `std/joinery/dado.stave`).
+    editor: bool,
+    /// Turn X-ray on in the dock: everything but the selection
+    /// see-through.
+    #[arg(long)]
+    xray: bool,
+    /// Open the finder (Ctrl+K) with this typed.
+    #[arg(long, value_name = "TEXT")]
+    finder: Option<String>,
+    /// Open this file in the editor, at a line: `doors.stave:9` (relative
+    /// to the folder, or `std/joinery/dado.stave`).
     #[arg(long, value_name = "FILE[:LINE]")]
     file: Option<String>,
-    /// In the Files view, put the cursor on the first occurrence of this
+    /// In the editor, put the cursor on the first occurrence of this
     /// word on the line `--file` names.
     #[arg(long, value_name = "WORD")]
     cursor: Option<String>,
-    /// In the Files view, peek at the definition under the cursor.
+    /// In the editor, peek at the definition under the cursor.
     #[arg(long)]
     peek: bool,
-    /// In the Files view, show the card for the word under the cursor.
+    /// In the editor, show the card for the word under the cursor.
     #[arg(long)]
     hover: bool,
-    /// In the Files view, list the uses of the name under the cursor.
+    /// In the editor, list the uses of the name under the cursor.
     #[arg(long)]
     uses: bool,
-    /// In the Files view, type this text at the cursor, as if typed.
+    /// In the editor, type this text at the cursor, as if typed.
     #[arg(long = "type", value_name = "TEXT")]
     typing: Option<String>,
-    /// In the Files view, follow the name under the cursor (F12).
+    /// In the editor, follow the name under the cursor (F12).
     #[arg(long)]
     follow: bool,
-    /// In the Files view, undo once (after --type, if given).
+    /// In the editor, undo once (after --type, if given).
     #[arg(long)]
     undo: bool,
-    /// In the Files view, find this text in the file from the cursor
+    /// In the editor, find this text in the file from the cursor
     /// (Ctrl+F), with every match highlighted.
     #[arg(long, value_name = "TEXT")]
     search: Option<String>,
-    /// In the Files view, show the text alone (no 3D view beside it).
-    #[arg(long)]
-    text_only: bool,
     /// With --window-screenshot: check again and capture the window while
     /// that check runs (the status pill's spinner).
     #[arg(long)]
@@ -203,9 +208,12 @@ fn parse_theme(text: &str) -> Result<ui::Theme> {
         .ok_or_else(|| anyhow::anyhow!("the style is system, light or dark"))
 }
 
-fn parse_view(text: &str) -> Result<stave_app::session::View> {
-    stave_app::session::View::from_word(text.trim())
-        .ok_or_else(|| anyhow::anyhow!("the view is parts, cut-list or files"))
+/// The view a word names, and whether it opens the editor (`files`).
+fn parse_view(text: &str) -> Result<(stave_app::session::View, bool)> {
+    let word = text.trim();
+    stave_app::session::View::from_word(word)
+        .map(|view| (view, word == "files"))
+        .ok_or_else(|| anyhow::anyhow!("the view is design or cut-list"))
 }
 
 fn parse_open(text: &str) -> Result<(String, f32)> {
@@ -287,8 +295,10 @@ fn main() -> ExitCode {
             step: arguments.step,
             problem: arguments.diagnostic,
             explode: arguments.explode,
-            view: arguments.view,
-            problems: arguments.problems,
+            view: arguments.view.0,
+            editor: arguments.editor || arguments.view.1 || arguments.file.is_some(),
+            finder: arguments.finder,
+            xray: arguments.xray,
             theme: arguments.theme,
             window_screenshot: arguments.window_screenshot,
             size: arguments.size.unwrap_or((1440, 900)),
@@ -305,7 +315,6 @@ fn main() -> ExitCode {
                 undo: arguments.undo,
                 search: arguments.search,
             },
-            text_only: arguments.text_only,
             camera: ui::StartCamera {
                 turn: arguments.turn,
                 pitch: arguments.pitch,

@@ -107,11 +107,14 @@ exact message it must produce on its first line.
 ## The viewer
 
 `stave view <folder>` opens the libadwaita window of the design canvas
-(Main.dc.html; [gui.md](gui.md) describes how it is built): a title bar
-with back and forward (Alt+←/→), the project title, the Parts / Cut list /
-Files switcher, the scene menu, a status pill and the build button; the
-Parts view with the parts tree, the 3D view and the inspector; and a status
-bar. Every part is drawn with its cuts made (tenons, mortises, dados,
+(the V2-C "Spatial" screens with option A's rail of open files;
+[gui.md](gui.md) describes how it is built): a title bar with back and
+forward (Alt+←/→), the project title, the finder's field (Ctrl+K), the
+Design / Cut list switcher, the problems chip and the build button; and
+the design: the 3D view filling the window, the model tree floating over
+it, the chosen part's card beside it, problems pinned where they happen,
+the dock at the bottom, and the rail of open files at the right edge with
+the editor sliding in beside the view. Every part is drawn with its cuts made (tenons, mortises, dados,
 rabbets, grooves, holes, hinge recesses, the chidori's diagonal slots and
 flats), in species colours, with orbit, zoom and pan. Light and dark follow
 the system or the main menu, the 3D backdrop with them.
@@ -121,21 +124,33 @@ the system or the main menu, the 3D backdrop with them.
   replaces the old one whole, and the selection and back/forward history
   follow their items by name. The pill says "No problems" (green), "N
   problems" (red; amber for warnings only) and spins while a check runs,
-  keeping its last colour and words; clicking it opens the problems list.
+  keeping its last colour and words; its tooltip says what the check
+  found, and clicking it (or F8, Shift+F8, its arrows) steps through the
+  problems.
   A design that stops solving keeps its last good version on show under a
   banner.
-- **Parts tree and inspector**: the carcass, then each assembly with its
-  motion ("turns 110°", "slides out 500 mm", "mirror of door_l"), its parts
-  and hardware, with stock swatches and search. Selecting in the tree or
-  the 3D view selects in both. The inspector gives the kind and assembly
-  ("PART · IN door_l"), the doc comment, stock, finished size, grain and
-  how it moves, its joints and hardware cuts (each opens focus mode), and
-  the declaration as written, highlighted, with a file:line link that
-  opens it in the Files view.
-- **Files view** (FilesMode.dc.html; `docs/gui.md`, "The Files view"):
-  the project's files by folder and the read-only standard library with
-  "Go to file or name", tabs, breadcrumbs and an editor that edits the
-  real files (a GtkSourceView 5): `.stave` colours from the navigation
+- **Model tree and card**: the floating tree lists the carcass, then
+  each assembly with its motion ("turns 110°", "slides out 500 mm",
+  "mirror of door_l"), its parts and hardware, with stock swatches and a
+  dot on every row with a problem (red, amber, or a red ring for a part a
+  problem only involves); under the chosen part, the joints it is in, each
+  opening focus mode. Choosing in the tree, the 3D view or the finder
+  frames it at once (no flying), dims the rest of the design and opens its
+  card beside it: the kind and assembly ("PART · IN door_l"), the doc
+  comment, stock, finished size, grain and how it moves, its joints and
+  hardware cuts (each opens focus mode), and the declaration as written,
+  highlighted, with a file:line link that opens the editor there.
+- **Finder** (Ctrl+K): one field over the design's parts and assemblies,
+  the project's files and names, its lines and its problems, grouped,
+  with a filter per kind; the arrows show a part in 3D, Enter goes there,
+  Ctrl+Enter opens its text.
+- **Dock**: the scene menu, Pull apart, X-ray (everything but the choice
+  see-through), the chosen door's or drawer's slider, and a chip per
+  moving assembly.
+- **Editor** (`docs/gui.md`, "The editor"): Ctrl+E, the rail's arrow or
+  any link slides it in from the right; each open file is a tab on the
+  rail with a dot for its worst problem. It edits the real files (a
+  GtkSourceView 5): `.stave` colours from the navigation
   layer's semantic tokens, line numbers, the cursor's line with its blue
   bar, bracket matching, two-space auto-indent, smart Home/End, undo,
   Ctrl+F search in the text, wavy underlines with a card for each problem,
@@ -146,29 +161,26 @@ the system or the main menu, the 3D backdrop with them.
   uses · show in 3D" above declarations, a card with the doc comment on
   hover, Ctrl+S to save (atomically), Ctrl+Shift+I to lay the file out on
   demand. Typing re-checks the design from the open buffers; unsaved
-  files are marked and closing asks. Text | Both puts the 3D view beside
-  the text: the cursor on a part, assembly or piece of hardware selects
-  it there, and selecting in 3D or the tree moves the editor to the line
-  that places it ("Linked to the text · door_l, line 9"). See
-  `docs/screenshots/files/`; `tools/gui-screenshots` regenerates every
-  window and Files view screenshot.
+  files are marked and closing asks. The 3D view stays beside the text:
+  the cursor on a part, assembly or piece of hardware selects and frames
+  it there, and choosing in 3D, the tree or the finder moves the editor to
+  the line that places it. See `docs/screenshots/files/`;
+  `tools/gui-screenshots` regenerates every window and editor screenshot.
 - **Navigation layer** (`stave-ide`, no GTK): definition, uses, hover,
   breadcrumbs, semantic tokens, lenses, search and the fast diagnostics
   at a byte offset, plus open buffers and saving; the future language
   server's core.
 - **Build button**: checks, then says "The build plan (PDF) isn't built
   yet"; disabled while the design has errors.
-- **Problems**: the pill (or Ctrl+E, from any view) opens the Problems
-  sidebar: All / Errors / Warnings filters with their counts and the parts
-  tree showing only the parts with problems, each kind of problem one
-  compact row with its icon (`Motion`, `Overlap (2)`, `No contact`...) and
-  where it is written (`project.stave[82]`); the parts a problem only
-  involves (the wall a door hits) carry the same row, marked "involved";
-  problems not about a part (a misspelt name) come after the tree.
-  Choosing a row poses the design where it happens (its scene, and a door
-  or drawer stopped just past where it hits), tints the parts red and
-  draws the shared wood as translucent red boxes, with a "Shared wood at
-  first contact" key. The inspector gives the problem's details: "ERROR ·
+- **Problems**: each problem with a place in the design is pinned on the
+  model where it happens (its shared wood, or the parts it is about); one
+  whose place is off screen is named on a chip at the view's edge. The
+  tree's rows and the rail's tabs carry their dots. Choosing a pin (or
+  F8, or the finder) poses the design where it happens (its scene, and a
+  door or drawer stopped just past where it hits), tints the parts red,
+  dims what it doesn't involve and draws the shared wood as translucent
+  red boxes, with a "Shared wood at first contact" key. The card gives the
+  problem's details: "ERROR ·
   MOTION", a plain title ("door hits wall as it opens"), the text exactly
   as `stave check .` prints it (highlighted), the ways to fix it from its
   help line, each with "Show in text", and that fixes are never applied
@@ -182,20 +194,20 @@ the system or the main menu, the 3D backdrop with them.
   from both ends (a rung, an apron) goes with the parts it is held
   between, so the stool's rungs drop with its legs and the legs pull off
   their ends. The 3D
-  view's toolbar has "Pull apart": on, it grows a play button and a
-  "together … apart" slider; the inspector keeps its usual state. The
+  view's dock has "Pull apart": on, it grows a play button and a
+  "together … apart" slider. The
   main menu's "Export View as glTF…" saves the view as posed. The camera
   buttons fit the view, look at the front and turn to the back. A library folder, or a design that doesn't solve, says so in
-  the view instead of leaving it blank, and so do the sidebar and the
-  inspector: a library's sidebar lists the kinds, recipes and components
-  it defines (each opens its text) and its inspector explains what a
-  library folder is and the line that imports it.
+  the view instead of leaving it blank, and so do the tree and the card:
+  a library's tree lists the kinds, recipes and components it defines
+  (each opens its text) and its card explains what a library folder is
+  and the line that imports it.
 - **Cup hinges** are drawn as their mechanism: the steel cup with its
   rim and boss pins in the door, the plate, arm and arm pins on the side,
   and the two links, which turn about their arm pins as the door opens.
   Selecting any part or piece of hardware of a door or drawer (a hinge
-  included) offers an "Open it" slider at the bottom of the 3D view that
-  opens it, the hinges' mechanism moving with it.
+  included) offers an "Open it" slider in the dock that opens it, the
+  hinges' mechanism moving with it.
 - **Sections**: a scene's `section:` cuts the view at a plane; the wood
   it cuts is drawn flat (evenly lit).
 - **Every cut drawn**: holes in round and turned parts are bored too (the
@@ -280,7 +292,8 @@ the system or the main menu, the 3D backdrop with them.
   FOLDER [options]` runs the viewer on a private GTK Broadway server and
   the window draws itself into the PNG (`--theme`, `--size`, `--select`,
   `--focus` with `--plan`, `--in-3d` and `--step`, `--diagnostic`,
-  `--problems`, `--explode`, `--view`, `--checking`). See
+  `--explode`, `--view`, `--editor`, `--finder`, `--xray`, `--checking`).
+  See
   `docs/screenshots/window/`.
 
 What the window shows is worked out in `stave-app` (the session, the

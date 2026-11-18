@@ -1,7 +1,9 @@
-//! The title bar: the sidebar toggle, back and forward, the project's
-//! title, the Parts / Cut list / Files switcher, the scene menu, the status
-//! pill and the build button. It only shows what the session says; the
-//! window wires its buttons to session commands.
+//! The title bar (V2C_Home.dc.html): back and forward, the project's
+//! title, the finder's field (Ctrl+K), the Design / Cut list switcher, the
+//! problems chip (the status pill between previous and next, stepping
+//! through the problems) and the build button. It also makes the scene
+//! menu, which the window puts in the dock. It only shows what the
+//! session says; the window wires its buttons to session commands.
 
 use adw::prelude::*;
 use stave_app::session::{Activity, Build, Pill, Tone, View};
@@ -12,8 +14,6 @@ use super::icons::{self, PathIcon};
 pub struct Header {
     /// The bar itself.
     pub bar: adw::HeaderBar,
-    /// Shows or hides the left sidebar.
-    pub sidebar: gtk::ToggleButton,
     /// Back (Alt+←).
     pub back: gtk::Button,
     /// Forward (Alt+→).
@@ -24,16 +24,24 @@ pub struct Header {
     pub title_box: gtk::Box,
     title: gtk::Label,
     subtitle: gtk::Label,
-    /// Parts / Cut list / Files.
+    /// Opens the finder (Ctrl+K).
+    pub find: gtk::Button,
+    /// Design / Cut list.
     pub switcher: adw::ToggleGroup,
     switcher_labels: Vec<gtk::Label>,
-    /// The scene menu.
+    /// The scene menu (shown in the dock).
     pub scene: gtk::MenuButton,
     scene_label: gtk::Label,
     /// The scenes, in the scene menu's popover.
     pub scenes: gtk::ListBox,
-    /// The status pill: opens the problems list.
+    /// The problems chip round the pill and its arrows.
+    pub chip: gtk::Box,
+    /// The status pill: selects the next problem (F8).
     pub pill: gtk::Button,
+    /// Selects the previous problem (Shift+F8).
+    pub previous: gtk::Button,
+    /// Selects the next problem (F8).
+    pub next: gtk::Button,
     pill_icon: PathIcon,
     pill_spinner: adw::Spinner,
     pill_stack: gtk::Stack,
@@ -58,13 +66,6 @@ impl Header {
     /// A title bar for a project in `folder` (shown as the subtitle until
     /// the design is loaded).
     pub fn new(folder_label: &str, menu: &gtk::gio::Menu) -> Header {
-        let sidebar = gtk::ToggleButton::builder()
-            .child(&PathIcon::new(icons::SIDEBAR, 16))
-            .tooltip_text("Show the parts (F9)")
-            .css_classes(["flat", "stave-icon-button", "stave-sidebar-toggle"])
-            .valign(gtk::Align::Center)
-            .active(true)
-            .build();
         let back = icon_button(icons::BACK, "Back (Alt+←)");
         let forward = icon_button(icons::FORWARD, "Forward (Alt+→)");
         back.set_sensitive(false);
@@ -90,6 +91,39 @@ impl Header {
         title_box.append(&title);
         title_box.append(&subtitle);
 
+        // The finder's field: a button that looks like a search entry.
+        let find_content = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing(8)
+            .build();
+        find_content.append(&gtk::Image::from_icon_name("system-search-symbolic"));
+        let find_words = gtk::Label::builder()
+            .label("Find a part, file, line or problem")
+            .xalign(0.0)
+            .hexpand(true)
+            .ellipsize(gtk::pango::EllipsizeMode::End)
+            .css_classes(["dim-label"])
+            .build();
+        find_content.append(&find_words);
+        find_content.append(
+            &gtk::Label::builder()
+                .label("Ctrl K")
+                .css_classes(["stave-key", "dim-label"])
+                .build(),
+        );
+        let find = gtk::Button::builder()
+            .child(&find_content)
+            .tooltip_text("Find a part, file, line or problem (Ctrl+K)")
+            .action_name("win.find")
+            .css_classes(["stave-find"])
+            .valign(gtk::Align::Center)
+            .hexpand(true)
+            .width_request(260)
+            .build();
+        find.update_property(&[gtk::accessible::Property::Label(
+            "Find a part, file, line or problem",
+        )]);
+
         let switcher = adw::ToggleGroup::builder()
             .css_classes(["stave-switcher"])
             .homogeneous(true)
@@ -98,9 +132,8 @@ impl Header {
         let mut switcher_labels = Vec::new();
         for view in View::ALL {
             let shape = match view {
-                View::Parts => icons::PARTS,
+                View::Design => icons::PARTS,
                 View::CutList => icons::CUT_LIST,
-                View::Files => icons::FILES,
             };
             let content = gtk::Box::builder()
                 .halign(gtk::Align::Center)
@@ -117,7 +150,7 @@ impl Header {
                 .build();
             switcher.add(toggle);
         }
-        switcher.set_active_name(Some(View::Parts.word()));
+        switcher.set_active_name(Some(View::Design.word()));
 
         let scene_label = gtk::Label::new(Some("Rest"));
         let scene_content = gtk::Box::new(gtk::Orientation::Horizontal, 6);
@@ -160,10 +193,35 @@ impl Header {
         pill_content.append(&pill_label);
         let pill = gtk::Button::builder()
             .child(&pill_content)
-            .css_classes(["stave-pill", "unknown"])
-            .tooltip_text("Show the problems")
+            .css_classes(["stave-pill"])
+            .tooltip_text("Not checked yet")
+            .action_name("win.next-problem")
             .valign(gtk::Align::Center)
             .build();
+        let previous = gtk::Button::builder()
+            .icon_name("go-previous-symbolic")
+            .tooltip_text("Previous problem (Shift+F8)")
+            .action_name("win.previous-problem")
+            .css_classes(["stave-problem-step"])
+            .valign(gtk::Align::Center)
+            .visible(false)
+            .build();
+        let next = gtk::Button::builder()
+            .icon_name("go-next-symbolic")
+            .tooltip_text("Next problem (F8)")
+            .action_name("win.next-problem")
+            .css_classes(["stave-problem-step"])
+            .valign(gtk::Align::Center)
+            .visible(false)
+            .build();
+        let chip = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .css_classes(["stave-problems-chip", "unknown"])
+            .valign(gtk::Align::Center)
+            .build();
+        chip.append(&previous);
+        chip.append(&pill);
+        chip.append(&next);
 
         let hammer = PathIcon::new(icons::HAMMER, 18);
         let building = gtk::Overlay::new();
@@ -201,35 +259,43 @@ impl Header {
             .primary(true)
             .build();
 
+        let find_box = gtk::Box::builder()
+            .halign(gtk::Align::Center)
+            .hexpand(true)
+            .build();
+        find_box.append(&find);
+        find.set_width_request(420);
         let bar = adw::HeaderBar::builder()
-            .title_widget(&switcher)
+            .title_widget(&find_box)
             .css_classes(["stave-header"])
             .build();
-        bar.pack_start(&sidebar);
         bar.pack_start(&back);
         bar.pack_start(&forward);
         bar.pack_start(&open);
         bar.pack_start(&title_box);
         bar.pack_end(&menu);
         bar.pack_end(&build);
-        bar.pack_end(&pill);
-        bar.pack_end(&scene);
+        bar.pack_end(&chip);
+        bar.pack_end(&switcher);
 
         Header {
             bar,
-            sidebar,
             back,
             forward,
             open,
             title_box,
             title,
             subtitle,
+            find,
             switcher,
             switcher_labels,
             scene,
             scene_label,
             scenes,
+            chip,
             pill,
+            previous,
+            next,
             pill_icon,
             pill_spinner,
             pill_stack,
@@ -258,6 +324,11 @@ impl Header {
         }
     }
 
+    /// The finder's field, hidden when the window is narrow.
+    pub fn find_box(&self) -> &gtk::Button {
+        &self.find
+    }
+
     /// The switcher's words, hidden when the window is narrow.
     pub fn switcher_labels(&self) -> &[gtk::Label] {
         &self.switcher_labels
@@ -266,11 +337,6 @@ impl Header {
     /// The project's folder under its title, hidden when narrow.
     pub fn subtitle(&self) -> &gtk::Label {
         &self.subtitle
-    }
-
-    /// The scene menu's words.
-    pub fn scene_label(&self) -> &gtk::Label {
-        &self.scene_label
     }
 
     /// The scenes to choose from (titles) and the one showing.
@@ -296,10 +362,12 @@ impl Header {
         self.scene.set_sensitive(!titles.is_empty());
     }
 
-    /// The status pill. `open`: the problems list is showing.
-    pub fn show_pill(&self, pill: &Pill, open: bool) {
+    /// The problems chip: the pill's colour and words, the arrows when
+    /// there are problems to step through, and the status line (what the
+    /// last check found) in its tooltip.
+    pub fn show_pill(&self, pill: &Pill, problems: usize, line: &str) {
         for class in ["clean", "warnings", "errors", "unknown"] {
-            self.pill.remove_css_class(class);
+            self.chip.remove_css_class(class);
         }
         let (class, shape) = match pill.tone {
             Tone::Clean => ("clean", icons::CHECK),
@@ -307,22 +375,20 @@ impl Header {
             Tone::Errors => ("errors", icons::ALERT),
             Tone::Unknown => ("unknown", icons::PENDING),
         };
-        self.pill.add_css_class(class);
-        if open {
-            self.pill.add_css_class("open");
-        } else {
-            self.pill.remove_css_class("open");
-        }
+        self.chip.add_css_class(class);
+        self.previous.set_visible(problems > 1);
+        self.next.set_visible(problems > 1);
+        self.pill.set_sensitive(problems > 0);
         self.pill_icon.set_shape(shape);
         self.pill_label.set_label(&pill.label);
         let checking = pill.activity == Activity::Checking;
         self.pill_stack
             .set_visible_child_name(if checking { "spinner" } else { "icon" });
         self.pill_spinner.set_visible(checking);
-        let tooltip = if checking {
-            format!("{}, checking again. Show the problems", pill.label)
+        let tooltip = if problems > 0 {
+            format!("{line}. Show the next problem (F8)")
         } else {
-            format!("{}. Show the problems", pill.label)
+            line.to_owned()
         };
         self.pill.set_tooltip_text(Some(&tooltip));
         self.pill
