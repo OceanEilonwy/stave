@@ -22,7 +22,7 @@ use stave_lang::placement::Direction;
 use stave_lang::units::{Angle, Length};
 use stave_lang::{Code, Severity};
 use stave_model::mechanism::DriveValue;
-use stave_model::solved::{AssemblyId, PoseValue, WorldBox};
+use stave_model::solved::{AssemblyId, PoseValue, SolvedDesign, WorldBox};
 
 use crate::names::length_text;
 use crate::{Checker, Contact, ContactMotion, Item};
@@ -577,4 +577,25 @@ impl Checker<'_> {
             Some(help),
         );
     }
+}
+
+/// Each assembly's mechanism run through its range, by assembly (`None`
+/// for one nothing moves, or whose mechanism can't move), and the
+/// mechanisms that can't.
+pub(crate) fn mechanism_paths(design: &SolvedDesign) -> crate::Mechanisms {
+    let mut paths = Vec::with_capacity(design.assemblies.len());
+    let mut broken = Vec::new();
+    for assembly in &design.assemblies {
+        paths.push(match &assembly.mechanism {
+            Some(mechanism) => match Path::new(mechanism) {
+                Ok(path) => Some(path),
+                Err(error) => {
+                    broken.push((assembly.id, error));
+                    None
+                }
+            },
+            None => None,
+        });
+    }
+    crate::Mechanisms { paths, broken }
 }

@@ -1,7 +1,9 @@
-//! The two check tiers over the corpus: the slow tier run to completion
-//! gives exactly the single check's diagnostics, in the same order, and
-//! the fast tier's box overlaps cover every overlap at rest between two
-//! parts that aren't joined to each other.
+//! The two check tiers over the corpus: the fast tier's diagnostics
+//! finished by the slow tier run to completion give exactly the single
+//! check's diagnostics, in the same order; the fast tier's are the single
+//! check's layers 1 to 3, in order; and its box overlaps
+//! cover every overlap at rest between two parts that aren't joined to
+//! each other.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
@@ -54,20 +56,37 @@ fn solved(folder: &Path) -> Option<(Model, SolvedDesign)> {
 #[test]
 fn fast_then_slow_gives_exactly_the_single_check() {
     let mut checked = 0;
+    let mut layered = 0;
     for folder in corpus() {
         let Some((model, design)) = solved(&folder) else {
             continue;
         };
         let what = folder.display().to_string();
-        let _ = check_fast(&design);
-        let slow = check_slow(&model, &design, &AtomicBool::new(false))
+        let fast = check_fast(&model, &design);
+        let slow = check_slow(&model, &design, &fast, &AtomicBool::new(false))
             .unwrap_or_else(|_| panic!("{what}: never cancelled"));
-        assert_eq!(slow, check_with_contacts(&model, &design), "{what}");
+        let single = check_with_contacts(&model, &design);
+        assert_eq!(slow, single, "{what}");
+        // The fast tier's diagnostics are the single check's layers 1 to
+        // 3, in its order: what an editor shows while the pointer moves
+        // is what it shows once the slow tier is done. (A wall rule the
+        // walls check can't measure is that layer-4 check's own warning.)
+        let early: Vec<_> = single
+            .iter()
+            .filter(|(d, _)| d.code.layer() <= 3 && !d.message.starts_with("measuring wall("))
+            .cloned()
+            .collect();
+        assert_eq!(fast.diagnostics, early, "{what}");
+        layered += usize::from(!early.is_empty());
         let diagnostics: Vec<_> = slow.into_iter().map(|(d, _)| d).collect();
         assert_eq!(diagnostics, check(&model, &design), "{what}");
         checked += 1;
     }
     assert!(checked > 30, "most of the corpus reaches the checks");
+    assert!(
+        layered >= 2,
+        "the checks make layer 1 to 3 diagnostics: {layered}"
+    );
 }
 
 #[test]
@@ -75,7 +94,12 @@ fn a_cancelled_slow_tier_stops() {
     let folder = workspace().join("examples/clothing_cabinet");
     let (model, design) = solved(&folder).unwrap();
     assert_eq!(
-        check_slow(&model, &design, &AtomicBool::new(true)),
+        check_slow(
+            &model,
+            &design,
+            &check_fast(&model, &design),
+            &AtomicBool::new(true)
+        ),
         Err(Cancelled)
     );
 }
@@ -87,10 +111,15 @@ fn the_examples_have_no_box_overlaps() {
             continue;
         }
         // A library has nothing to place.
-        let Some((_, design)) = solved(&folder) else {
+        let Some((model, design)) = solved(&folder) else {
             continue;
         };
-        assert_eq!(check_fast(&design), Vec::new(), "{}", folder.display());
+        assert_eq!(
+            check_fast(&model, &design).overlaps,
+            Vec::new(),
+            "{}",
+            folder.display()
+        );
     }
 }
 
@@ -134,7 +163,7 @@ fn every_overlap_at_rest_of_unrelated_items_is_a_box_overlap() {
             continue;
         };
         let what = folder.display().to_string();
-        let fast = check_fast(&design);
+        let fast = check_fast(&model, &design).overlaps;
         for (diagnostic, contact) in check_with_contacts(&model, &design) {
             let Some(contact) = contact else { continue };
             let at_rest = contact.scene.is_none() && contact.motion.is_none();
@@ -170,8 +199,8 @@ fn box_overlaps_name_the_items_of_the_broken_examples() {
         ("tests/broken/dowels_cross_dowels", 1),
     ];
     for (folder, count) in cases {
-        let (_, design) = solved(&workspace().join(folder)).unwrap();
-        let fast = check_fast(&design);
+        let (model, design) = solved(&workspace().join(folder)).unwrap();
+        let fast = check_fast(&model, &design).overlaps;
         assert_eq!(fast.len(), count, "{folder}: {fast:?}");
         for overlap in fast {
             assert!(overlap.a < overlap.b && !overlap.regions.is_empty());

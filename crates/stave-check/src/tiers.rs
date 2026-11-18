@@ -1,19 +1,30 @@
 //! The checks in two tiers, for an editor that checks a candidate while
 //! the pointer moves (grammar, "Fast and slow diagnostics").
 //!
-//! - **Fast** ([`check_fast`]): layers 1 to 3 (syntax, names and types,
-//!   placement and sizes) are done by the stages before this crate; the
-//!   fast tier adds box-level overlap: each part's board box and each
-//!   member's box at rest, against every other, keeping the pairs whose
-//!   boxes share more than the contact tolerance and that nothing explains
-//!   (they are not joined to each other, and neither cuts room in the
-//!   other). It needs no cut solids, no mechanism and no sweep, so it takes
-//!   microseconds. Its findings are not diagnostics: a box is bigger than
-//!   the wood in it, so a box overlap means "these may overlap"; every
-//!   overlap at rest between two such items is among them.
-//! - **Slow** ([`check_slow`]): everything this crate checks (fit, scene
-//!   poses, motion through its travel, held, models), exactly as
-//!   [`crate::check_with_contacts`]: the same diagnostics, in the same
+//! - **Fast** ([`check_fast`]): layers 1 to 3. The stages before this
+//!   crate report syntax, names and types and most of placement and
+//!   sizes; the fast tier gives the ones this crate reports itself
+//!   ([`Fast::diagnostics`]): a cut whose shape is a mistake
+//!   (`error[type-mismatch]`), a cut the geometry can't make yet
+//!   (`warning[not-supported]`) and a mechanism with no order of steps
+//!   (`error[mechanism]`). They need the parts' cut solids, cheap to make,
+//!   and each mechanism run through its range, but no overlap, wall or
+//!   sweep. (A wall rule the walls check can't measure is also
+//!   `warning[not-supported]`, but it is that layer-4 check's own finding
+//!   and comes with it, in the slow tier.) The fast tier adds box-level
+//!   overlap ([`Fast::overlaps`]): each part's board box and each member's
+//!   box at rest, against every other, keeping the pairs whose boxes share
+//!   more than the contact tolerance and that nothing explains (they are
+//!   not joined to each other, and neither cuts room in the other). A box
+//!   overlap is not a diagnostic: a box is bigger than the wood in it, so
+//!   it means "these may overlap"; every overlap at rest between two such
+//!   items is among them.
+//! - **Slow** ([`check_slow`]): everything else this crate checks (fit,
+//!   scene poses, motion through its travel, held, models). It finishes
+//!   the fast tier's list: it reuses the fast tier's mechanisms, and takes
+//!   each of the fast tier's diagnostics at the place the single check
+//!   makes it instead of its own, so its result is exactly
+//!   [`crate::check_with_contacts`]'s: the same diagnostics, in the same
 //!   order. It can be cancelled: the flag is read between checks and
 //!   between the motions of the sweep check, the costly one.
 
@@ -47,10 +58,38 @@ pub struct BoxOverlap {
 #[error("the check was cancelled before it finished")]
 pub struct Cancelled;
 
-/// The fast tier: every pair of items whose boxes overlap at rest and that
-/// nothing explains, sorted by item. Cheap enough to run on every pointer
-/// move.
-pub fn check_fast(design: &SolvedDesign) -> Vec<BoxOverlap> {
+/// What the fast tier finds.
+#[derive(Debug, Clone, Default)]
+pub struct Fast {
+    /// The diagnostics of layers 1 to 3 this crate makes, in the order
+    /// the single check gives them, merged as it merges them.
+    pub diagnostics: Vec<(Diagnostic, Option<Contact>)>,
+    /// Every pair of items whose boxes overlap at rest and that nothing
+    /// explains, sorted by item.
+    pub overlaps: Vec<BoxOverlap>,
+    /// Those diagnostics as made, before merging: what the slow tier
+    /// takes.
+    pub(crate) made: Vec<(Diagnostic, Option<Contact>)>,
+    /// The mechanisms run through their range, for the slow tier's motion
+    /// checks.
+    pub(crate) mechanisms: Option<crate::Mechanisms>,
+}
+
+/// The fast tier: the diagnostics of layers 1 to 3 this crate makes, and
+/// the box overlaps at rest. Cheap enough to run on every pointer move.
+pub fn check_fast(model: &Model, design: &SolvedDesign) -> Fast {
+    let (made, mechanisms) = crate::fast_steps(model, design);
+    Fast {
+        diagnostics: crate::merge(made.clone()),
+        overlaps: box_overlaps(design),
+        made,
+        mechanisms: Some(mechanisms),
+    }
+}
+
+/// Every pair of items whose boxes overlap at rest and that nothing
+/// explains, sorted by item.
+fn box_overlaps(design: &SolvedDesign) -> Vec<BoxOverlap> {
     let mut boxes: Vec<(Thing, WorldBox)> = design
         .parts
         .iter()
@@ -108,16 +147,19 @@ pub fn check_fast(design: &SolvedDesign) -> Vec<BoxOverlap> {
     found
 }
 
-/// The slow tier: every check of [`crate::check_with_contacts`], with the
-/// same result, unless `cancel` is set before it finishes. Set `cancel`
-/// from another thread (or from a callback) to stop it at the next point
-/// it is read.
+/// The slow tier: every check of [`crate::check_with_contacts`] but the
+/// fast tier's, finishing `fast` (what [`check_fast`] found for the same
+/// model and design) into the single check's result: the same
+/// diagnostics in the same order, unless `cancel` is set before it
+/// finishes. Set `cancel` from another thread (or from a callback) to
+/// stop it at the next point it is read.
 pub fn check_slow(
     model: &Model,
     design: &SolvedDesign,
+    fast: &Fast,
     cancel: &AtomicBool,
 ) -> Result<Vec<(Diagnostic, Option<Contact>)>, Cancelled> {
-    crate::run(model, design, cancel)
+    crate::run(model, design, Some(fast), cancel)
 }
 
 /// Something that may ask the checks to stop.
@@ -342,6 +384,49 @@ mod tests {
         }
     }
 
+    fn solved(folder: &str) -> (Model, SolvedDesign) {
+        let folder = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join(folder);
+        let modules = stave_modules::ModuleSet::load(&folder).unwrap();
+        let (defs, _) = stave_model::resolve(&modules);
+        let (model, _) = stave_model::instance::instantiate(defs, modules.root);
+        let (design, _) = stave_solve::solve(&model);
+        (model, design.unwrap())
+    }
+
+    /// The slow tier doesn't make the fast tier's diagnostics again: it
+    /// takes each one from the fast tier, where the single check makes it.
+    #[test]
+    fn the_slow_tier_takes_the_fast_tiers_diagnostics() {
+        for folder in [
+            "tests/broken/outline_crosses_itself",
+            "tests/broken/mechanism_cannot_be_solved",
+        ] {
+            let (model, design) = solved(folder);
+            let single = crate::check_with_contacts(&model, &design);
+            let mut fast = check_fast(&model, &design);
+            assert!(!fast.made.is_empty(), "{folder}: a layer 1 to 3 diagnostic");
+            for (diagnostic, _) in &mut fast.made {
+                diagnostic.message.push_str(" (fast)");
+            }
+            let slow = check_slow(&model, &design, &fast, &AtomicBool::new(false)).unwrap();
+            assert_eq!(slow.len(), single.len(), "{folder}");
+            for ((got, _), (want, _)) in slow.iter().zip(&single) {
+                if want.code.layer() <= 3 && !want.message.starts_with("measuring wall(") {
+                    assert_eq!(got.message, format!("{} (fast)", want.message), "{folder}");
+                } else {
+                    assert_eq!(got, want, "{folder}");
+                }
+            }
+            // Without the fast tier's mechanisms it runs them itself.
+            fast.mechanisms = None;
+            fast.made.clear();
+            let slow = check_slow(&model, &design, &fast, &AtomicBool::new(false)).unwrap();
+            assert_eq!(slow, single, "{folder}");
+        }
+    }
+
     #[test]
     fn stopping_at_any_point_gives_nothing_and_not_stopping_gives_the_single_check() {
         let folder = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/nightstand");
@@ -357,7 +442,7 @@ mod tests {
                 reads: Cell::new(0),
                 limit,
             };
-            match crate::run(&model, &design, &stop) {
+            match crate::run(&model, &design, None, &stop) {
                 Err(()) => limit += 1,
                 Ok(found) => {
                     assert_eq!(found, single);
