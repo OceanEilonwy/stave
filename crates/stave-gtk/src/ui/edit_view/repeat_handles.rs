@@ -289,12 +289,6 @@ impl Window {
             .unwrap_or_default()
     }
 
-    /// `true` when the item of the project by this name fills a space of
-    /// the design: its component's space param is bound to one.
-    pub(in crate::ui) fn item_fills_a_space(&self, item: &str) -> bool {
-        !self.spaces_of(item).is_empty()
-    }
-
     /// The panels floating over the 3D view, in its pixels, that a handle
     /// or a label must not cover: the view's own controls (the scene menu,
     /// the camera column and Pull apart's slider, the moving assemblies'

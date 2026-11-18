@@ -166,8 +166,12 @@ Fixed on the way:
    `editing::tests::a_face_fills_the_first_place_the_card_asks_for`).
 3. A door filling a space had no gesture to become a mirrored pair: "And
    the other side" was hidden for it and, when sent, refused. Now it
-   sends `MirrorSplit` across (no automated test: it is window code; the
-   acceptance run is its proof).
+   sends `MirrorSplit` across. (After the final review, which gesture to
+   offer moved out of the window into `stave_app::item_offer`, offered
+   only for a handed piece and never for an item that already has its
+   image; tested in `stave-app/tests/session_changes.rs`,
+   `only_a_handed_piece_filling_a_space_is_offered_a_mirrored_pair` and
+   `an_item_with_a_mirror_image_is_not_offered_another`.)
 
 Added to the window's script steps: `save` (Ctrl+S) and `turn <degrees>
 [<pitch>]` (orbit).
@@ -181,17 +185,30 @@ Seen in the acceptance run; none blocks building either piece.
   that buffer unsaved (the tab shows "•") and is written only on Ctrl+S,
   while an Add from the menu with no file open writes to disk at once.
   Documented, but it surprises.
-- **A mirror is offered again** on every item that already has one:
-  `door_left` offers "And the other side · adds door_2_right"
-  (`offer mirror door_left` in `stave edit` names `door_2_left` and
-  `door_2_right`), and so do `apron_front` (`apron_2_back`), `apron_left`
-  (`apron_2_right`), `cleat_front` and `stretcher_front`.
-- **The mirrored-pair switch is offered too widely** (a side effect of
-  fix 3): any single piece that fills a whole space and has no mirror
-  image shows "And the other side · splits its space across into a
-  mirrored pair", so the Top, the Case, the Divider and the Shelf offer
-  it, where a mirrored pair makes no sense. Turned on there, it would
-  split the space and pair them; nothing stops it but the check.
+- **No undo of a commit** (found by the final review). A menu Add with
+  no file open in the editor goes straight to disk (`DiskWriter`) and
+  the window has no Ctrl+Z for it; Remove, or the text, are the only
+  ways back. `docs/editing.md` said "each commit is one step of undo";
+  it now says there is none yet. Not built: an undo of commits needs a
+  stack of what each commit wrote, written back through the one
+  writer, and a key that doesn't fight the Code panel's own undo.
+- **z3 against the brief** (found by the final review). The brief's
+  "out of the first build" list named z3; `docs/editing.md` copied the
+  list without it. It now lists z3 and says the build has it anyway.
+  Left for the owner to keep or drop.
+- **The acceptance overstated** (found by the final review): "every
+  step a gesture" was not so. The 6 `select region`, 6 `select between`
+  and 4 `select face` steps and the 3 `bind between` steps resolve
+  names and send commands; only the 21 `point face` steps use the
+  scene's real pick. Clicking a space or a gap between two parts in the
+  real window was not exercised. The docs now say so.
+- **A drawer about 330mm wide with a 160mm pull** is refused
+  (`pilot_wall`): the front screws, now 20mm from each end of the box
+  front (`front_screw_inset`), meet the pull's screws there. Before the
+  final review they were spread evenly and met a 160mm pull's screws in
+  cabinets about 575mm to 635mm wide, 600mm among them. The help names
+  the pull's screw hole but not the setting to change
+  (`front_screw_inset: 30mm`, or a 128mm pull, makes it fit).
 - **Grip labels pile up**: after Add, the selected assembly's grip
   labels overlap each other ("80mm · locked: follows numbers only" eight
   times on the feet; "follows" labels wrapped into tall narrow boxes) and

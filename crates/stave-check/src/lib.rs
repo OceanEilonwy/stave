@@ -875,6 +875,7 @@ impl<'a> Checker<'a> {
                         length_text(value),
                         length_text(overrun.past)
                     )],
+                    merged: Vec::new(),
                     help: Some(help),
                     fixes: Vec::new(),
                 },
@@ -1200,7 +1201,8 @@ impl<'a> Checker<'a> {
 }
 
 /// One diagnostic per mistake: diagnostics with the same code at the same
-/// place are merged into the first, the others becoming notes.
+/// place are merged into the first, the others becoming a note and, in
+/// full, [`Diagnostic::merged`].
 fn merge(diagnostics: Vec<(Diagnostic, Option<Contact>)>) -> Vec<(Diagnostic, Option<Contact>)> {
     let mut merged: Vec<(Diagnostic, Option<Contact>)> = Vec::new();
     let mut extra: BTreeMap<usize, Vec<String>> = BTreeMap::new();
@@ -1239,6 +1241,7 @@ fn merge(diagnostics: Vec<(Diagnostic, Option<Contact>)>) -> Vec<(Diagnostic, Op
     }
     for (index, messages) in extra {
         if let Some((diagnostic, _)) = merged.get_mut(index) {
+            diagnostic.merged.extend(messages.iter().cloned());
             let shown: Vec<String> = messages.iter().take(3).cloned().collect();
             let more = messages.len().saturating_sub(shown.len());
             let mut note = format!("the same line also causes: {}", shown.join("; "));

@@ -21,6 +21,8 @@ use adw::prelude::*;
 use stave_app::change::ChangeRequest;
 use stave_app::editing::{EditCommand, parse_name};
 use stave_app::hold::Measured;
+use stave_app::item_offer::{ItemOffer, MirrorGesture};
+pub(in crate::ui) use stave_app::item_offer::{piece_count, selected_item};
 use stave_app::naming::RepeatCount;
 use stave_app::session::Selection;
 use stave_lang::placement::Axis;
@@ -38,76 +40,6 @@ pub(in crate::ui) const AXES: [(Axis, &str); 3] = [
 
 /// The most pieces the stepper and the drag handle go to.
 pub(in crate::ui) const MOST: usize = 12;
-
-/// The name of the item of the project a name in the design belongs to:
-/// the outermost assembly or the part itself, without its index
-/// (`drawer[top].front` → `drawer`, `case.side[left]` → `case`,
-/// `foot[2]` → `foot`).
-pub(in crate::ui) fn item_base(name: &str) -> &str {
-    let end = name.find(['.', '[', ' ', '\'']).unwrap_or(name.len());
-    name.get(..end).unwrap_or(name)
-}
-
-/// The item of the project a selection belongs to, by name: what is
-/// renamed, repeated, mirrored or removed when the selection is.
-pub(in crate::ui) fn selected_item(design: &SolvedDesign, selection: &Selection) -> Option<String> {
-    let outermost = |mut id| {
-        while let Some(parent) = design
-            .assemblies
-            .iter()
-            .find(|assembly| assembly.id == id)
-            .and_then(|assembly| assembly.parent)
-        {
-            id = parent;
-        }
-        design.assemblies.iter().find(|assembly| assembly.id == id)
-    };
-    let name = match selection {
-        Selection::Assembly(id) => outermost(*id)?.name.clone(),
-        Selection::Part(part) => match design
-            .assemblies
-            .iter()
-            .find(|assembly| assembly.parent.is_none() && assembly.parts.contains(part))
-        {
-            Some(assembly) => assembly.name.clone(),
-            None => design.part(*part)?.name.clone(),
-        },
-        Selection::Hardware(hardware) => match design
-            .assemblies
-            .iter()
-            .find(|assembly| assembly.parent.is_none() && assembly.hardware.contains(hardware))
-        {
-            Some(assembly) => assembly.name.clone(),
-            None => design
-                .hardware
-                .iter()
-                .find(|item| item.id == *hardware)?
-                .name
-                .clone(),
-        },
-        Selection::Joint { .. }
-        | Selection::Member(_)
-        | Selection::Location(_)
-        | Selection::Problem(_) => return None,
-    };
-    Some(item_base(&name).to_owned())
-}
-
-/// How many pieces an item of the project is: the elements of its array,
-/// or one.
-pub(in crate::ui) fn piece_count(design: &SolvedDesign, item: &str) -> usize {
-    let mut names: Vec<&str> = design
-        .assemblies
-        .iter()
-        .filter(|assembly| assembly.parent.is_none())
-        .map(|assembly| assembly.name.as_str())
-        .chain(design.parts.iter().map(|part| part.name.as_str()))
-        .filter(|name| item_base(name) == item && !name[item.len()..].contains('.'))
-        .collect();
-    names.sort_unstable();
-    names.dedup();
-    names.len().max(1)
-}
 
 /// The thing a hold measures from, for a selection: a part by its whole
 /// name; `None` for an assembly (a distance is measured between parts or
@@ -276,9 +208,10 @@ pub(in crate::ui) struct ItemTools {
 struct Shown {
     item: String,
     /// The design it was worked out from, by address: a new result works
-    /// the mirror offer out again.
+    /// the offer out again.
     design: usize,
-    mirror: Option<String>,
+    /// What the session offers for it.
+    offer: Option<ItemOffer>,
 }
 
 impl ItemTools {
@@ -449,14 +382,12 @@ impl Window {
             session.drawable().and_then(|(design, _)| {
                 let selection = session.selection()?;
                 let item = selected_item(design, selection)?;
-                let count = piece_count(design, &item);
                 let measurable = measured_of(design, selection);
                 let address = std::ptr::from_ref(design).addr();
-                let fills = count > 1 || self.item_fills_a_space(&item);
-                Some((item, count, measurable.err(), address, fills))
+                Some((item, measurable.err(), address))
             })
         };
-        let Some((item, count, unmeasurable, address, fills)) =
+        let Some((item, unmeasurable, address)) =
             found.filter(|_| !self.edit_open() && self.gestures_allowed())
         else {
             tools.root.set_visible(false);
@@ -470,42 +401,41 @@ impl Window {
         if stale {
             // The offer reads the project, so it is worked out once per
             // item and result.
-            let mirror = self
-                .session
-                .borrow()
-                .mirror_offer(&item)
-                .map(|offer| offer.image.as_str().to_owned());
+            let offer = self.session.borrow().item_offer(&item);
             tools.shown.replace(Some(Shown {
                 item: item.clone(),
                 design: address,
-                mirror,
+                offer,
             }));
         }
-        let mirror = tools
+        let Some(offer) = tools
             .shown
             .borrow()
             .as_ref()
-            .and_then(|shown| shown.mirror.clone());
+            .and_then(|shown| shown.offer.clone())
+        else {
+            tools.root.set_visible(false);
+            return;
+        };
+        let count = offer.pieces;
         tools.filling.set(true);
         tools
             .title
             .set_label(&format!("CHANGE {item}").to_uppercase());
         tools.name.set_text(&item);
         tools.repeat.show(count, tools.repeat.axis(), count < 2);
-        tools.repeat.root.set_visible(fills);
+        tools.repeat.root.set_visible(offer.repeatable);
         tools.mirror.set_active(false);
-        // With no mirror image in the design, one piece filling a whole
-        // space is made a mirrored pair across it (`MirrorSplit`).
-        let splits = mirror.is_none() && fills && count < 2;
-        tools.mirror_row.set_visible(mirror.is_some() || splits);
-        if let Some(image) = &mirror {
-            tools
+        tools.mirror_row.set_visible(offer.mirror.is_some());
+        match &offer.mirror {
+            Some(MirrorGesture::Image(image)) => tools.mirror_words.set_label(&format!(
+                "And the other side · adds {}",
+                image.image.as_str()
+            )),
+            Some(MirrorGesture::Split(_)) => tools
                 .mirror_words
-                .set_label(&format!("And the other side · adds {image}"));
-        } else if splits {
-            tools
-                .mirror_words
-                .set_label("And the other side · splits its space across into a mirrored pair");
+                .set_label("And the other side · splits its space across into a mirrored pair"),
+            None => {}
         }
         tools.hold.set_sensitive(unmeasurable.is_none());
         tools.hold.set_tooltip_text(Some(match unmeasurable {
@@ -572,27 +502,24 @@ impl Window {
         }
     }
 
-    /// Adds the mirror image of the selected item; with none in the
-    /// design, one piece filling a whole space is made a mirrored pair,
-    /// the space split across.
+    /// Does what the session offers for the selected item's other side
+    /// ([`stave_app::item_offer::MirrorGesture`]): adds its mirror image,
+    /// or makes a handed piece filling a space a mirrored pair.
     pub(in crate::ui) fn mirror_selected(self: &Rc<Self>) {
         let Some(item) = self.change_target() else {
             return;
         };
-        let has_image = self.session.borrow().mirror_offer(&item).is_some();
-        let one_piece = {
-            let session = self.session.borrow();
-            session
-                .drawable()
-                .is_some_and(|(design, _)| piece_count(design, &item) < 2)
+        let Some(gesture) = self
+            .session
+            .borrow()
+            .item_offer(&item)
+            .and_then(|offer| offer.mirror)
+        else {
+            self.edit_toast(&format!("{item} has no other side to add"));
+            return;
         };
-        let splits = !has_image && one_piece && self.item_fills_a_space(&item);
         match parse_name(&item) {
-            Ok(item) if splits => self.start_change(EditCommand::MirrorSplit {
-                item,
-                axis: Axis::Across,
-            }),
-            Ok(item) => self.start_change(EditCommand::Mirror(item)),
+            Ok(item) => self.start_change(gesture.command(item)),
             Err(error) => self.edit_toast(&error.0),
         }
     }
@@ -669,15 +596,6 @@ impl Window {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn an_item_is_named_by_its_outermost_name_without_an_index() {
-        assert_eq!(item_base("drawer[top].front"), "drawer");
-        assert_eq!(item_base("case.side[left]"), "case");
-        assert_eq!(item_base("foot[2]"), "foot");
-        assert_eq!(item_base("door_l"), "door_l");
-        assert_eq!(item_base("top_dowels's pin between a and b"), "top_dowels");
-    }
 
     #[test]
     fn one_piece_is_no_repeat() {

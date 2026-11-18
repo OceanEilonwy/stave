@@ -246,6 +246,7 @@ pub(super) fn card_verdict(progress: &Progress, checking: bool) -> Option<Verdic
                 message: reason.clone(),
                 labels: Vec::new(),
                 notes: Vec::new(),
+                merged: Vec::new(),
                 help: None,
                 fixes: Vec::new(),
             };

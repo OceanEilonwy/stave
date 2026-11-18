@@ -664,6 +664,15 @@ impl Session {
         crate::change::mirror_offer(&self.folder, self.ports.files.as_ref(), &opened, item)
     }
 
+    /// What the card of the item of the project by this name offers: how
+    /// many pieces it is, whether the repeat controls apply, and what "And
+    /// the other side" does ([`crate::item_offer::item_offer`]), read from
+    /// the project as the edit files give it. `None` when it has no design.
+    pub fn item_offer(&self, item: &str) -> Option<crate::item_offer::ItemOffer> {
+        let opened = crate::open_with(&self.folder, self.ports.files.as_ref()).ok()?;
+        crate::item_offer::item_offer(&self.folder, self.ports.files.as_ref(), &opened, item)
+    }
+
     /// The grips listed by the last [`EditCommand::ListGrips`], with their
     /// stops as far as found; `None` before a listing and after a commit.
     pub fn grips(&self) -> Option<&GripList> {

@@ -336,7 +336,11 @@ commands the pointer, the card and the keys send to the real window); the
 text each run wrote is byte-identical to the pinned
 `tests/edit-scripts/clothing_cabinet.stave` and `side_table.stave`. A
 picture before and after each Add is in
-`docs/screenshots/window/accept_*.png`.
+`docs/screenshots/window/accept_*.png`. The faces were clicked through
+the scene's real pick; the steps that open a menu in a space or between
+two parts, and that fill a place between two parts, find it by name
+instead, so those two clicks were not exercised in the window (see
+below).
 
 ### How to try it
 
@@ -371,11 +375,32 @@ open in the editor the change stays unsaved there.
   cannot be clicked from any side.
 - Changes made from a selected item go into the open editor buffer
   unsaved; menu Adds with no file open are written at once.
-- A mirror is offered again for every item that has one (`door_left`
-  offers `door_2_right`, `apron_front` offers `apron_2_back`).
-- "And the other side · splits its space across into a mirrored pair"
-  shows on every single piece that fills a space (the Top, the Case, the
-  Divider, the Shelf), not only where a pair makes sense (a door).
+- **No undo of a commit.** A menu Add with no file open in the editor
+  is written straight to disk and nothing in the window takes it back:
+  there is no Ctrl+Z for it. The ways back are Remove, or editing the
+  text. (A change written into an open file's buffer can be undone in
+  the Code panel with the editor's own undo.)
+- **z3 is in the build against the brief.** The brief's "out of the
+  first build" list named z3; the waves were told to build it anyway, so
+  `crates/stave-smt` (z3 from source, about five minutes the first time)
+  exists and `stave-app` depends on it for "Let the solver move this".
+  The owner has to choose: keep it, or drop `stave-smt`, `solve_edit.rs`
+  and the solver switch.
+- **Two clicks not exercised in the window.** The acceptance run's
+  steps that open a menu in a space (`select region`) or between two
+  parts (`select between`), and that fill a place between two parts
+  (`bind between`), find it by name and send the command; only the 21
+  `point face` steps went through the scene's real pick. Clicking a
+  space or a gap in the real window was not tested by the run.
+- **A drawer about 330mm wide with a 160mm pull.** The standard Drawer
+  keeps its front screws 20mm from each end of the box front, clear of a
+  centred pull in cabinets of any common width; but with the default
+  160mm bar pull, a cabinet about 325mm to 335mm wide overall with a
+  drawer up to about 250mm tall puts the front screws where the pull's
+  screws go, and the drawer is refused (`pilot_wall`, "the screw comes
+  too close to … another cut"). Its help names the pull's screw hole
+  but not the setting to change: `front_screw_inset: 30mm` on the
+  drawer, or `pull_kind: bar_pull(centres: 128mm)`, makes it fit.
 - Grip labels overlap each other and are drawn over the cards; the typed
   grip's panel covers the change card's title; the Details panel's
   "CHANGE …" heading overlaps the row above it.

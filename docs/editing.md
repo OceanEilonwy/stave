@@ -49,8 +49,14 @@ comes from the param kinds (see [Smart edits](grammar.md#smart-edits)).
    every comment and line break, and the text is checked again as after
    any save. Otherwise nothing is written.
 
-Escape, or moving to another place, drops the candidate. Each commit is
-one step of undo, and undo is an edit of the text like any other.
+Escape, or moving to another place, drops the candidate. **There is no
+undo of a commit yet.** A commit into a file open in the Code panel goes
+into its buffer as one step of that editor's own undo (Ctrl+Z with the
+text focused). A commit with no file open in the editor, the default for
+a menu Add, is written straight to disk, and the window can't take it
+back: the only ways back are Remove, or editing the text. Undo of a
+commit, as one step and an edit of the text like any other, is still to
+be built (see [STATUS](STATUS.md#graphical-editing)).
 
 **A design that doesn't place can't be edited by pointing.** When the
 project's own design has an error that stops the solver writing a design
@@ -288,8 +294,20 @@ returned `Event::Edit(EditEvent)`s name, as for every other command.
 
 `Session::mirror_offer(item)` says, without trying anything, whether an
 assembly has a mirror image and what adding it would name (a
-`MirrorOffer { source, renamed, image, about }`): the card offers
-**Mirror** when it is `Some`.
+`MirrorOffer { source, renamed, image, about }`); `None` too when the
+item already has its image (`door_right = mirror(door_left, ...)`) or is
+one. `Session::item_offer(item)` (`stave_app::item_offer`) is everything
+a selected item's card offers: how many pieces it is, whether the repeat
+controls apply (it is pieces of a repeat or fills a space), and what
+**And the other side** does, a `MirrorGesture`: `Image(MirrorOffer)`
+(sends `Mirror`) or `Split(axis)` (sends `MirrorSplit`), or nothing.
+`MirrorGesture::command(item)` is the command to send. The window shows
+these answers and decides none of them. `stave_app::item_offer` also
+says which item a selection changes (`selected_item`: its outermost
+assembly or the part, without its index) and how many pieces an item is
+(`piece_count`); `stave_app::grip_values` says where a drag snaps, how
+far it may go, what an arrow key steps by and whether a typed value
+would be written as typed.
 
 | Event | Says |
 |---|---|
@@ -641,9 +659,16 @@ the plane written as the mid-plane of a part it names (else of a region)
 that the plane halves. A plane the component itself lies astride (the
 apron's mid-plane across) is not offered: its image would be itself.
 
-**A mirrored pair from one.** A component that fills a whole space (a
-door filling the space above a divider) is made a pair by splitting the
-space in two (`mirror door across`): the space becomes `<component>_bay`
+**A mirrored pair from one.** A component that fills a whole space and
+is handed (a door filling the space above a divider, hinged to the left
+side) is made a pair by splitting the space in two (`mirror door
+across`). Handed means one of its place params that takes a single part
+or face (`hinge_side : Part`) is bound to one off the middle of the
+space along the split; a top, a case, a shelf or a divider, whose places
+are the space itself or both sides at once, is the same either way round
+and is not offered the pair (`stave edit` still makes it when asked, and
+the check decides). An item that already has its mirror image is offered
+neither. The split: the space becomes `<component>_bay`
 as a repeat of two would make it, the original is renamed with the first
 side and fills the first piece, and its mirror image fills the other,
 about the space's mid-plane:
@@ -810,7 +835,19 @@ Do not add these; each is a later decision:
 - a `fill` size;
 - turned or tapered legs;
 - automatic linking of repeated numbers;
-- applicability guards beyond `require`.
+- applicability guards beyond `require`;
+- z3.
+
+**Against that list, the build has z3.** The owner's brief named z3
+here ("No crate depends on z3 today"). The waves that built this
+feature were each told to build it anyway, so `crates/stave-smt` (z3
+built from source, about five minutes the first time) exists, and
+`stave-app` depends on it for solving `solved param`s
+(`solve_edit.rs`, the window's "Let the solver move this"). It is a
+decision for the owner, not taken here: keep it, or drop `stave-smt`,
+`solve_edit.rs` and the solver switch (grips then move plain numbers
+and single params only, as the brief's first build said). Until then
+it stays, and [STATUS](STATUS.md#graphical-editing) lists it.
 
 ## Libraries this is meant for
 
@@ -828,8 +865,13 @@ a sentence.
 ## Both pieces from nothing, in the window
 
 The acceptance of this feature: the clothing cabinet and the side table
-built from an empty project in the real window, every step a gesture
-(`tools/window-edits/acceptance/run`, see [gui.md](gui.md#the-acceptance-run)).
+built from an empty project in the real window, driven by its scripted
+input (`tools/window-edits/acceptance/run`, see
+[gui.md](gui.md#the-acceptance-run)). Not every step was a gesture: the
+faces were clicked through the scene's real pick, but the steps that
+open a menu in a space or between two parts, and those that fill a place
+between two parts, find it by name and send the command the click would
+send, so those two clicks were not exercised in the window.
 Both projects the window writes are the same text, byte for byte, as
 `tests/edit-scripts/clothing_cabinet.stave` and `side_table.stave`, which
 `stave edit --script` writes from the session. What the window could not

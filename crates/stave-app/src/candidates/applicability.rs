@@ -153,6 +153,7 @@ fn unchecked(message: &str) -> Diagnostic {
         message: message.to_owned(),
         labels: Vec::new(),
         notes: Vec::new(),
+        merged: Vec::new(),
         help: None,
         fixes: Vec::new(),
     }

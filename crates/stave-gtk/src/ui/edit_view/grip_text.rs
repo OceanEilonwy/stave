@@ -1,16 +1,19 @@
 //! The words and numbers the grips show (`docs/gui.md`, "Grips"): what a
-//! grip's label says, how a value typed or dragged becomes an amount of
-//! the grip's kind, where a drag snaps, and what the panel beside a drag
-//! says. Nothing here decides what a grip may do: that is the session's
-//! (`stave_app::gripping`); these only put its answers into words and
-//! turn the pointer's position into a value to send.
+//! grip's label says, how a value typed becomes an amount of the grip's
+//! kind, and what the panel beside a drag says. Nothing here decides what
+//! a grip may do: that is the session's (`stave_app::gripping`), and
+//! where a drag snaps, how far it goes and whether a typed value is
+//! written as typed are `stave_app::grip_values`; these only put the
+//! answers into words and turn the pointer's position into a value.
 
 use stave_app::change::{Change, ChangeDetail, ChangeRequest};
 use stave_app::edit::Verdict;
 use stave_app::editing::Progress;
+pub(super) use stave_app::grip_values::{Held, grip_value};
+use stave_app::grip_values::{TypedProblem, grip_bounds};
 use stave_app::gripping::{GripDetail, GripStops, ListedGrip};
 use stave_app::grips::{FollowKind, GripAction, GripSize, MovableGrip};
-use stave_app::stops::{SearchSteps, Side, SideEnd, amount_text};
+use stave_app::stops::{Side, SideEnd, amount_text};
 use stave_lang::ast::{ExprKind, Ident};
 use stave_lang::units::{Length, Rational};
 use stave_model::ids::ParamId;
@@ -66,14 +69,6 @@ fn stuck(movable: &MovableGrip, stops: &GripStops) -> bool {
 /// An amount as `.stave` writes it.
 pub(super) fn amount_words(amount: Amount) -> String {
     amount_text(amount).unwrap_or_else(|| "?".to_owned())
-}
-
-/// The value a grip has now.
-pub(super) fn grip_value(listed: &ListedGrip) -> Amount {
-    match &listed.grip.action {
-        GripAction::Moves(movable) => movable.value,
-        GripAction::Follows(follows) => follows.value,
-    }
 }
 
 /// What a grip's label says: its value; for a size that follows params,
@@ -172,18 +167,12 @@ pub(super) fn range_end(side: &Side) -> RangeEnd {
 /// once its stops are found; before, its `within` (or how far it may be
 /// searched), both ends open.
 pub(super) fn grip_range(listed: &ListedGrip) -> Option<((Amount, RangeEnd), (Amount, RangeEnd))> {
-    let GripAction::Moves(movable) = &listed.grip.action else {
-        return None;
-    };
+    let (low, high) = grip_bounds(listed)?;
     Some(match &listed.stops {
-        GripStops::Found { below, above } => (
-            (below.last_good, range_end(below)),
-            (above.last_good, range_end(above)),
-        ),
-        GripStops::NotSearched | GripStops::NotSearchable | GripStops::Failed(_) => (
-            (movable.low, RangeEnd::Open),
-            (movable.high, RangeEnd::Open),
-        ),
+        GripStops::Found { below, above } => ((low, range_end(below)), (high, range_end(above))),
+        GripStops::NotSearched | GripStops::NotSearchable | GripStops::Failed(_) => {
+            ((low, RangeEnd::Open), (high, RangeEnd::Open))
+        }
     })
 }
 
@@ -198,76 +187,6 @@ pub(super) fn length_mm(amount: Amount) -> Option<f64> {
 /// Millimetres from the pointer as a length amount (to the nanometre).
 pub(super) fn mm_amount(mm: f64) -> Option<Amount> {
     stave_geom::render::length_from_nm(mm * 1e6).map(|length| Amount::Length(length.to_exact()))
-}
-
-/// The round numbers a drag snaps to while the modifier is held: 10mm,
-/// 5°, whole numbers, twentieths.
-fn round_step(like: Amount) -> Rational {
-    match like {
-        Amount::Length(_) => Rational::from_int(10_000_000),
-        Amount::Angle(_) => Rational::from_int(5_000_000),
-        Amount::Count(_) => Rational::ONE,
-        Amount::Ratio(_) => Rational::new(1, 20).unwrap_or(Rational::ONE),
-    }
-}
-
-/// Where a value the pointer reached snaps: to the grip's steps (the
-/// project's resolution counted from the value now, or the nearest value
-/// of a `within` list), or to round numbers when `round`.
-pub(super) fn snapped(
-    now: Amount,
-    wanted: Amount,
-    steps: Option<&SearchSteps>,
-    round: bool,
-) -> Amount {
-    let multiple = |from: Rational, step: Rational| -> Option<Rational> {
-        let count = wanted.raw().checked_sub(from)?.checked_div(step)?.round();
-        from.checked_add(step.checked_mul(Rational::from_int(count))?)
-    };
-    if round {
-        let step = round_step(now);
-        return multiple(Rational::ZERO, step).map_or(wanted, |raw| wanted.with_raw(raw));
-    }
-    match steps {
-        Some(SearchSteps::Step(step)) => {
-            multiple(now.raw(), step.raw()).map_or(wanted, |raw| wanted.with_raw(raw))
-        }
-        Some(SearchSteps::List(values)) => values
-            .iter()
-            .copied()
-            .min_by_key(|value| {
-                value.raw().checked_sub(wanted.raw()).map(|gap| {
-                    if gap.is_negative() {
-                        gap.checked_neg().unwrap_or(gap)
-                    } else {
-                        gap
-                    }
-                })
-            })
-            .unwrap_or(wanted),
-        None => wanted,
-    }
-}
-
-/// `value` kept between `low` and `high`; the side it was held at, when it
-/// was.
-pub(super) fn clamped(value: Amount, low: Amount, high: Amount) -> (Amount, Option<Held>) {
-    if value.raw() < low.raw() {
-        (low, Some(Held::Below))
-    } else if value.raw() > high.raw() {
-        (high, Some(Held::Above))
-    } else {
-        (value, None)
-    }
-}
-
-/// Which end of its range a drag was held at.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum Held {
-    /// The low end.
-    Below,
-    /// The high end.
-    Above,
 }
 
 /// What the handle says when a drag is held at an end of its range: the
@@ -311,21 +230,13 @@ pub(super) fn amount_like(now: Amount, text: &str) -> Result<Amount, String> {
     })
 }
 
-/// A value typed for a movable grip checked before it is tried: the
-/// session would write the nearest step of the project's resolution, or
-/// the end of the grip's range, in place of a value off a step or past an
-/// end, so such a value is refused here, in words, and nothing different
-/// from what was typed is ever written. A size that follows params is
-/// checked by the session alone.
+/// A value typed for a movable grip checked before it is tried
+/// ([`stave_app::grip_values::typed_check`]): what the session would
+/// write differently, in words.
 pub(super) fn typed_check(listed: &ListedGrip, value: Amount) -> Result<(), String> {
-    let GripAction::Moves(movable) = &listed.grip.action else {
-        return Ok(());
-    };
-    let cant = |why: String| Err(format!("Can't be {}: {why}", amount_words(value)));
-    if let Some(((low, _), (high, _))) = grip_range(listed)
-        && let (_, Some(held)) = clamped(value, low, high)
-    {
-        return cant(held_words(listed, held).map_or_else(
+    let why = match stave_app::grip_values::typed_check(listed, value) {
+        Ok(()) => return Ok(()),
+        Err(TypedProblem::OutOfRange { held, low, high }) => held_words(listed, held).map_or_else(
             || {
                 format!(
                     "this grip moves it between {} and {}",
@@ -334,35 +245,19 @@ pub(super) fn typed_check(listed: &ListedGrip, value: Amount) -> Result<(), Stri
                 )
             },
             |why| format!("it {why}"),
-        ));
-    }
-    match &movable.steps {
-        // As the session snaps: to a whole number of steps.
-        SearchSteps::Step(step) => {
-            let nearest = value
-                .raw()
-                .checked_div(step.raw())
-                .map(|times| times.round())
-                .and_then(|times| step.raw().checked_mul(Rational::from_int(times)));
-            match nearest {
-                Some(nearest) if nearest == value.raw() => Ok(()),
-                Some(nearest) => cant(format!(
-                    "it goes in steps of {}; the nearest is {}",
-                    amount_words(*step),
-                    amount_words(value.with_raw(nearest))
-                )),
-                None => cant("it can't be worked out".to_owned()),
-            }
+        ),
+        Err(TypedProblem::OffStep { step, nearest }) => format!(
+            "it goes in steps of {}; the nearest is {}",
+            amount_words(step),
+            amount_words(nearest)
+        ),
+        Err(TypedProblem::NotListed(values)) => {
+            let words: Vec<String> = values.iter().map(|v| amount_words(*v)).collect();
+            format!("it can only be one of {}", words.join(", "))
         }
-        SearchSteps::List(values) => {
-            if values.iter().any(|listed| listed.raw() == value.raw()) {
-                Ok(())
-            } else {
-                let words: Vec<String> = values.iter().map(|v| amount_words(*v)).collect();
-                cant(format!("it can only be one of {}", words.join(", ")))
-            }
-        }
-    }
+        Err(TypedProblem::Unworkable) => "it can't be worked out".to_owned(),
+    };
+    Err(format!("Can't be {}: {why}", amount_words(value)))
 }
 
 /// A param of the project a grip's switch can make solved, or plain
@@ -655,7 +550,9 @@ pub(super) fn typed_refusal(progress: &Progress) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use stave_app::grip_values::{clamped, snapped};
     use stave_app::grips::{FollowedValue, FollowsGrip, SelectionGrip};
+    use stave_app::stops::SearchSteps;
     use stave_lang::{Code, Diagnostic, Severity};
     use stave_model::trace::Source;
 
@@ -697,6 +594,7 @@ mod tests {
                     message: message.to_owned(),
                     labels: Vec::new(),
                     notes: Vec::new(),
+                    merged: Vec::new(),
                     help: None,
                     fixes: Vec::new(),
                 },

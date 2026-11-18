@@ -382,6 +382,13 @@ pub struct Diagnostic {
     pub labels: Vec<Label>,
     /// Extra facts, printed as `= note: ...`.
     pub notes: Vec<String>,
+    /// The messages of the other problems with the same code at the same
+    /// place that the checker merged into this one, in full and in their
+    /// order (its note names the first three). Empty for a diagnostic
+    /// that stands for one problem. An editor comparing diagnostics
+    /// across a change compares these too: a new problem on a line that
+    /// already had one is only here.
+    pub merged: Vec<String>,
     /// A concrete suggestion, printed as `= help: ...`.
     pub help: Option<String>,
     /// Patches that make the problem go away, printed as `= fix: ...`
@@ -399,6 +406,7 @@ impl Diagnostic {
             message: message.into(),
             labels: vec![primary],
             notes: Vec::new(),
+            merged: Vec::new(),
             help: None,
             fixes: Vec::new(),
         }

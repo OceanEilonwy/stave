@@ -71,12 +71,12 @@ line and the rest are skipped:
 | Step | What it stands for |
 |---|---|
 | `hover <region>` | the pointer resting in a space: it is lit |
-| `select region <name>` | a click in a space: its menu, every entry checked |
-| `select face <part>.<face>` | the "Add something onto its … face" button in Details for the part |
-| `select between <part> <part>` | a click in the gap between two facing parts |
+| `select region <name>` | stands for a click in a space: the space is found by name and the edit started from it, its menu checked, without going through the scene's pick |
+| `select face <part>.<face>` | stands for the "Add something onto its … face" button in Details for the part: the face is found by name, the button is not pressed |
+| `select between <part> <part>` | stands for a click in the gap between two facing parts: the pair is found by name, without the scene's pick |
 | `click face <part>.<face>` | a click on a part's face: the part selected, Details offering that face |
 | `choose <entry>` | a menu entry, by its label or `group.label` |
-| `bind region\|face\|between ...` | the next click, filling the place the card asks for |
+| `bind region\|face\|between ...` | stands for the next click, filling the place the card asks for: found by name, without the scene's pick |
 | `point face <part>.<face>` | the next click made on the model at the middle of that face and picked as the pointer's is (so a wall of a space is reached through the space); it fails if the click would pick something else |
 | `set <name> = <value>` | a setting typed on the card (or chosen from its list) |
 | `name <name>` | the name retyped on the card |
@@ -620,7 +620,9 @@ the session's.
   or the editor is open (which opens the file's tab and shows it): the
   text shows the change unsaved and one undo takes the whole change
   back (`edit_writer::BufferWriter`, one user action). Otherwise it
-  writes to disk. The session then shows the committed design and the
+  writes to disk, and nothing in the window takes that back: there is
+  no undo of a commit yet (Remove, or the text, are the ways back). The
+  session then shows the committed design and the
   window selects the new item by its name
   (`link::selection_named`), without moving the camera (as a click
   on the model selects). **Cancel** and **Escape** send
@@ -637,8 +639,10 @@ Grips and the changes of the design below are in the window too.
 (`EditCommand::ListGrips`, `Session::grips`) and moved with the
 session's drag commands (`BeginDrag`, `DragTo`, `PickParam`,
 `TypeGripValue`, `MakeSolved`, `MakePlain`, `Add`, `Cancel`). The window
-decides nothing: what a grip moves, where it snaps, what stops it, the
-verdict and the text written are the session's. It turns the pointer's
+decides nothing: what a grip moves, what stops it, the verdict and the
+text written are the session's, and where a drag snaps, how far it goes
+and whether a typed value is written as typed are
+`stave_app::grip_values`. It turns the pointer's
 travel along the handle on screen into a value to send, and draws what
 the session holds.
 
@@ -815,17 +819,22 @@ was. Once written, the window selects the item by its new name.
   `RenameItem`); **How many**, a stepper with which way the pieces split
   (stacked up, side by side, front to back; the way shows only for a
   first repeat), which sends `RepeatItem`, shown when the item fills a
-  space of the design; **And the other side · adds apron_back**, a
-  switch, shown when `Session::mirror_offer` has an offer (worked out
-  once per item and result, since it reads the project): on, it sends
-  `Mirror`, and the change's card shows the same switch, on, which
-  cancels when turned off. With no offer, a single piece that fills a
-  whole space (a door filling the space above a divider) shows the
-  switch as **And the other side · splits its space across into a
-  mirrored pair**: on, it sends `MirrorSplit { axis: across }` (the
-  space split in two, `door_left` and `door_right = mirror(...)`; see
-  [editing](editing.md#repeat-and-mirror)); a mirrored pair split up or
-  deep has no gesture yet. **Hold a distance…** and **Remove…**.
+  space of the design; **And the other side**, a switch. All three come
+  from `Session::item_offer` (worked out once per item and result,
+  since it reads the project; the window decides none of it): the
+  pieces and whether the stepper shows, and the `MirrorGesture`. With
+  `Image`, the switch reads **And the other side · adds apron_back**
+  and on, it sends `Mirror`; the change's card shows the same switch,
+  on, which cancels when turned off. With `Split`, a handed single
+  piece that fills a whole space (a door filling the space above a
+  divider, hinged on the left side), it reads **And the other side ·
+  splits its space across into a mirrored pair** and on, it sends
+  `MirrorSplit { axis: across }` (the space split in two, `door_left`
+  and `door_right = mirror(...)`; see
+  [editing](editing.md#repeat-and-mirror)). With neither (a top, a
+  case, a shelf, a divider, or an item that already has its mirror
+  image) the switch is hidden. A mirrored pair split up or deep has no
+  gesture yet. **Hold a distance…** and **Remove…**.
 - **Repeat** (`edit_view/repeat_handles.rs`): the card of a candidate
   that fills a space (a component with its `Region` bound) has the same
   stepper above its buttons, sending `Repeat` (one piece is no repeat).
@@ -1009,6 +1018,17 @@ person would orbit it; one face, the front apron's left end (the cleat's
 side, so that one is filled with `bind`, which stands for the click
 without making it. See [STATUS](STATUS.md#graphical-editing) for what
 the run found.
+
+What the run exercised, and what it did not: only `point face` (21
+steps) goes through the scene's real pick, as a click would. The 16
+steps that open a menu (6 `select region`, 6 `select between`, 4
+`select face`) and the 3 `bind between` steps find their space, pair or
+face by name and send the command the click would send; `select face`
+does not press the Details button. So the run proves the session, the
+menu, the card, the writer and picking faces, but **a click in a space
+and a click in the gap between two parts were not exercised through the
+real window's pick**; those picks are tested below the window
+(`crates/stave-scene/tests/picking.rs`), not in it.
 
 ### The widgets
 

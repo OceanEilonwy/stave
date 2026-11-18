@@ -298,20 +298,26 @@ impl<'f> EditBase<'f> {
     }
 
     /// The diagnostics in `diagnostics` that the base doesn't have,
-    /// split into errors and warnings, in their order.
+    /// split into errors and warnings, in their order. A diagnostic the
+    /// checker merged from several problems is the base's only when every
+    /// one of them is: a new clash on a line that already had one is
+    /// folded into the old diagnostic, and is still caused by the edit.
     fn caused<'d>(&self, sources: &SourceMap, diagnostics: &'d [Diagnostic]) -> Caused<'d> {
         let mut left = self.known.clone();
         let mut caused = Caused::default();
         for diagnostic in diagnostics {
-            let key = Key::of(sources, diagnostic);
-            match left.get_mut(&key) {
-                Some(remaining) if *remaining > 0 => *remaining -= 1,
-                _ => {
-                    if diagnostic.is_error() {
-                        caused.errors.push(diagnostic);
-                    } else {
-                        caused.warnings.push(diagnostic);
-                    }
+            let mut new = false;
+            for key in Key::all(sources, diagnostic) {
+                match left.get_mut(&key) {
+                    Some(remaining) if *remaining > 0 => *remaining -= 1,
+                    _ => new = true,
+                }
+            }
+            if new {
+                if diagnostic.is_error() {
+                    caused.errors.push(diagnostic);
+                } else {
+                    caused.warnings.push(diagnostic);
                 }
             }
         }
@@ -964,8 +970,10 @@ fn place(prepared: &Prepared, folder: &Path, files: &dyn FileSource) -> Result<S
 // Comparing diagnostics
 // ---------------------------------------------------------------------------
 
-/// What makes two diagnostics the same problem across an edit: what they
-/// say, and the file and the words of the text they point at.
+/// What makes two problems the same across an edit: what they say, and
+/// the file and the words of the text they point at. A diagnostic stands
+/// for one problem, or for several when the checker merged them
+/// ([`Diagnostic::merged`]): [`Key::all`] gives one key for each.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct Key {
     error: bool,
@@ -975,7 +983,9 @@ struct Key {
 }
 
 impl Key {
-    fn of(sources: &SourceMap, diagnostic: &Diagnostic) -> Self {
+    /// A key for each problem `diagnostic` stands for: its own message
+    /// first, then each merged into it.
+    fn all(sources: &SourceMap, diagnostic: &Diagnostic) -> Vec<Self> {
         let place = diagnostic.primary().and_then(|label| {
             let file = sources.get(label.file)?;
             let start = usize::try_from(label.span.start()).ok()?;
@@ -987,20 +997,25 @@ impl Key {
             let words: Vec<&str> = text.split_whitespace().collect();
             Some((file.path().to_owned(), words.join(" ")))
         });
-        Self {
-            error: diagnostic.is_error(),
-            code: diagnostic.code,
-            message: diagnostic.message.clone(),
-            place,
-        }
+        std::iter::once(&diagnostic.message)
+            .chain(&diagnostic.merged)
+            .map(|message| Self {
+                error: diagnostic.is_error(),
+                code: diagnostic.code,
+                message: message.clone(),
+                place: place.clone(),
+            })
+            .collect()
     }
 }
 
-/// Each diagnostic's key, counted.
+/// Each problem's key, counted.
 fn count(sources: &SourceMap, diagnostics: &[Diagnostic]) -> BTreeMap<Key, usize> {
     let mut counted = BTreeMap::new();
     for diagnostic in diagnostics {
-        *counted.entry(Key::of(sources, diagnostic)).or_insert(0) += 1;
+        for key in Key::all(sources, diagnostic) {
+            *counted.entry(key).or_insert(0) += 1;
+        }
     }
     counted
 }
@@ -1231,6 +1246,101 @@ patch "Add a shelf through the divider" {
         let mut written = files.clone();
         assert!(commit(&tried, &mut written).is_err());
         assert_eq!(written, files);
+    }
+
+    /// A cupboard whose left door already reaches 1mm into the case's
+    /// top (its overlay's `top: 1mm`): one error at the case's line, the
+    /// door's other clashes merged into it.
+    const CUPBOARD: &str = r#"stave 1
+
+import "std:casework"
+
+project "Hall cupboard" {
+  units: mm
+}
+
+param overall_width  = 600mm
+param overall_height = 900mm
+param overall_depth  = 400mm
+
+region envelope                        = box(across: overall_width, up: overall_height, deep: overall_depth)
+region drawer_bay[bottom, middle, top] = split(divider.below, up)
+region door_bay[left, right]           = split(divider.above, across)
+
+stock oak_19   { species: white_oak, form: solid, thickness: 19mm, max_width: 200mm, max_length: 2700mm }
+stock maple_12 { species: hard_maple, form: solid, thickness: 12mm, max_width: 150mm, max_length: 2400mm }
+stock ply_6    { species: birch, form: plywood, thickness: 6mm, max_length: 2440mm }
+
+assembly case : casework.Case {
+  space:       envelope
+  panel_stock: oak_19
+}
+
+assembly back : casework.Back {
+  sides:       [case.side[left], case.side[right]]
+  stands_on:   case.base
+  under:       case.top
+  panel_stock: ply_6
+}
+
+assembly divider : casework.Divider {
+  space:       back.in_front
+  sides:       [case.side[left], case.side[right]]
+  panel_stock: oak_19
+  height:      300mm
+}
+
+assembly drawer[bottom, middle, top] : casework.Drawer {
+  opening:      drawer_bay[same]
+  mount:        overlay(left: 18mm, right: 18mm, top: 8mm, bottom: 8mm, meeting: -0.75mm)
+  front_stock:  oak_19
+  box_stock:    maple_12
+  bottom_stock: ply_6
+  slide:        side_mount_slide(length: 300mm)
+  pull_kind:    bar_pull(centres: 128mm)
+}
+
+assembly door_left : casework.FramePanelDoor {
+  opening:     door_bay[left]
+  hinge_side:  case.side[left]
+  mount:       overlay(left: 18mm, right: 18mm, top: 1mm, bottom: 8mm, meeting: -0.75mm)
+  frame:       oak_19
+  panel_stock: ply_6
+}
+
+
+"#;
+
+    #[test]
+    fn a_new_clash_merged_into_an_old_error_still_refuses() {
+        // The mirrored right door reaches into the top as the left one
+        // does. The checker reports its clashes at the case's line, the
+        // same code at the same place as the left door's, so they are
+        // merged into the error the design had: the edit still causes
+        // them, and is refused.
+        let folder = Path::new("scratch/hall_cupboard");
+        let mut files = MemoryFiles::new();
+        files.insert(folder.join("hall_cupboard.stave"), CUPBOARD.to_owned());
+        let base = EditBase::new(folder, &files).unwrap();
+        assert_eq!(
+            base.opened().error_count(),
+            1,
+            "{}",
+            render_diagnostics(&base.opened().sources, &base.opened().diagnostics)
+        );
+        let tried = try_patch(
+            &base,
+            r#"stave 1
+
+patch "Add the right door" {
+  add assembly door_right = mirror(door_left, about: mid(divider.above, across)) in "hall_cupboard.stave"
+}
+"#,
+        );
+        let shown = render_diagnostics(tried.sources(), &tried.shown());
+        let codes = refused_codes(&tried).expect("refused");
+        assert_eq!(codes, [Code::Overlap], "{shown}");
+        assert!(shown.contains("door_right"), "{shown}");
     }
 
     #[test]

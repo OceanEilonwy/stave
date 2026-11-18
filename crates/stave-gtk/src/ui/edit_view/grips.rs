@@ -44,9 +44,9 @@ use stave_scene::{FaceOf, GripFace, GripOf, GripPlace, Item, SceneGraph};
 use super::grip_layer::GripLayer;
 use super::grip_panel::{GripPanel, PanelAction, install_style};
 use super::grip_text::{
-    GripLook, Held, RangeEnd, SolverSwitch, amount_like, amount_words, clamped, grip_look,
-    grip_range, grip_value, held_words, label_words, length_mm, mm_amount, panel_model, snapped,
-    solver_switches, suggested_range, typed_check, typed_refusal,
+    GripLook, Held, RangeEnd, SolverSwitch, amount_like, amount_words, grip_look, grip_range,
+    grip_value, held_words, label_words, length_mm, mm_amount, panel_model, solver_switches,
+    suggested_range, typed_check, typed_refusal,
 };
 use crate::ui::{EDGE, Window};
 
@@ -1379,25 +1379,10 @@ impl Window {
         let Some(now) = self.grip_target(index) else {
             return;
         };
-        let step = match (&listed.grip.action, round) {
-            (GripAction::Moves(movable), false) => match &movable.steps {
-                stave_app::stops::SearchSteps::Step(step) => step.raw(),
-                stave_app::stops::SearchSteps::List(_) => {
-                    stave_lang::units::Rational::from_int(1_000_000)
-                }
-            },
-            (GripAction::Moves(_) | GripAction::Follows(_), true) => {
-                stave_lang::units::Rational::from_int(10_000_000)
-            }
-            (GripAction::Follows(_), false) => stave_lang::units::Rational::from_int(500_000),
-        };
-        let Some(raw) = step
-            .checked_mul(stave_lang::units::Rational::from_int(i128::from(steps)))
-            .and_then(|by| now.raw().checked_add(by))
-        else {
+        let Some(wanted) = stave_app::grip_values::stepped(&listed, now, steps, round) else {
             return;
         };
-        self.grip_wanted(index, now.with_raw(raw), round);
+        self.grip_wanted(index, wanted, round);
         self.flush_drag();
     }
 
@@ -1408,17 +1393,7 @@ impl Window {
         let Some(listed) = self.listed_grip(index) else {
             return;
         };
-        let now = grip_value(&listed);
-        let (target, held) = match &listed.grip.action {
-            GripAction::Moves(movable) => {
-                let snapped = snapped(now, wanted, Some(&movable.steps), round);
-                match grip_range(&listed) {
-                    Some(((low, _), (high, _))) => clamped(snapped, low, high),
-                    None => (snapped, None),
-                }
-            }
-            GripAction::Follows(_) => (snapped(now, wanted, None, round), None),
-        };
+        let (target, held) = stave_app::grip_values::drag_target(&listed, wanted, round);
         let send = {
             let mut state = self.editing.grips.state.borrow_mut();
             state.held = held;

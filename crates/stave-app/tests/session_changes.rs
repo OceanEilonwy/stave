@@ -16,6 +16,7 @@ use stave_app::editing::{
     parse_length, parse_name, parse_value,
 };
 use stave_app::hold::{HoldRequest, Measured};
+use stave_app::item_offer::MirrorGesture;
 use stave_app::naming::{Bound, RepeatCount};
 use stave_app::scratch::{DiskWriter, EditBase};
 use stave_app::session::{Command, Event, Session};
@@ -668,4 +669,88 @@ fn the_writer_refuses_a_file_changed_on_disk_since_it_was_read() {
         "{now}"
     );
     let _ = Arc::new(DiskFiles);
+}
+
+// ---------------------------------------------------------------------------
+// What "And the other side" offers, decided by the session
+// ---------------------------------------------------------------------------
+
+#[test]
+fn an_item_with_a_mirror_image_is_not_offered_another() {
+    // The doors and the side table's aprons, cleats and stretchers are
+    // pairs already: none offers a second image (`door_2_right`), and
+    // the image itself offers nothing.
+    let cabinet = copy_of("clothing_cabinet_from_box", "offer_pairs_cabinet");
+    let session = Session::new(cabinet);
+    for item in ["frame_panel_door_left", "frame_panel_door_right"] {
+        assert!(session.mirror_offer(item).is_none(), "{item}");
+        let offer = session.item_offer(item).expect("the cabinet places");
+        assert_eq!(offer.mirror, None, "{item}");
+    }
+    let table = copy_of("side_table_from_box", "offer_pairs_table");
+    let session = Session::new(table);
+    for item in [
+        "apron_front",
+        "apron_left",
+        "cleat_front",
+        "stretcher_front",
+    ] {
+        assert!(session.mirror_offer(item).is_none(), "{item}");
+        let offer = session.item_offer(item).expect("the table places");
+        assert_eq!(offer.mirror, None, "{item}");
+    }
+}
+
+#[test]
+fn only_a_handed_piece_filling_a_space_is_offered_a_mirrored_pair() {
+    // The case, the divider, the shelf and the top fill a space but are
+    // the same either way round: no mirrored pair. The drawers are two
+    // pieces of a repeat.
+    let cabinet = copy_of("clothing_cabinet_from_box", "offer_split_cabinet");
+    let session = Session::new(cabinet.clone());
+    for item in ["case", "divider", "shelf"] {
+        let offer = session.item_offer(item).expect("the cabinet places");
+        assert_eq!((offer.pieces, offer.repeatable), (1, true), "{item}");
+        assert_eq!(offer.mirror, None, "{item}");
+    }
+    let drawer = session.item_offer("drawer").unwrap();
+    assert_eq!(
+        (drawer.pieces, drawer.repeatable, drawer.mirror),
+        (2, true, None)
+    );
+    let table = copy_of("side_table_from_box", "offer_split_table");
+    let top = Session::new(table).item_offer("top").unwrap();
+    assert_eq!(top.mirror, None);
+
+    // One door filling the space above the divider, hinged on the left
+    // side: it is offered the pair, and the pair fits.
+    let file = cabinet.join("cabinet.stave");
+    let text = std::fs::read_to_string(&file)
+        .unwrap()
+        .replace(
+            "region frame_panel_door_bay[left, right] = split(divider.above, across)\n",
+            "",
+        )
+        .replace(
+            "assembly frame_panel_door_left : casework.FramePanelDoor {\n  opening:     frame_panel_door_bay[left]",
+            "assembly door : casework.FramePanelDoor {\n  opening:     divider.above",
+        )
+        .replace(
+            "assembly frame_panel_door_right = mirror(frame_panel_door_left, about: mid(envelope, across))\n",
+            "",
+        );
+    std::fs::write(&file, text).unwrap();
+    assert_eq!(errors(&cabinet), "");
+    let mut session = Session::new(cabinet.clone());
+    let offer = session.item_offer("door").expect("the cabinet places");
+    assert_eq!(offer.mirror, Some(MirrorGesture::Split(Axis::Across)));
+    let command = offer.mirror.unwrap().command(name("door"));
+    send(&mut session, command);
+    fits(&session);
+    add(&mut session, &cabinet);
+    let text = std::fs::read_to_string(&file).unwrap();
+    assert!(
+        text.contains("assembly door_right = mirror(door_left"),
+        "{text}"
+    );
 }

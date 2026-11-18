@@ -760,6 +760,9 @@ pub fn mirror_assembly(
     let AssemblyDef::Instance { body, .. } = &item.def else {
         return Err(not("it is already a mirror image"));
     };
+    if let Some(image) = mirror_image_of(scope, assembly) {
+        return Err(not(&format!("it already has a mirror image, {image}")));
+    }
     let (axis, about, first_side) = body
         .fields
         .iter()
@@ -853,6 +856,9 @@ pub fn mirror_split_assembly(
     let AssemblyDef::Instance { component, body } = &item.def else {
         return Err(not("it is already a mirror image"));
     };
+    if let Some(image) = mirror_image_of(scope, assembly) {
+        return Err(not(&format!("it already has a mirror image, {image}")));
+    }
     let param = region_param(scope, assembly)
         .ok_or_else(|| not("its component has no space (Region) param to fill"))?;
     let field = body
@@ -920,6 +926,106 @@ pub fn mirror_split_assembly(
         rename,
         patch,
     })
+}
+
+/// The name of the item of the project that is the mirror image of
+/// `name` (`door_right = mirror(door_left, ...)`), if there is one.
+pub(crate) fn mirror_image_of(scope: &EditScope<'_>, name: &str) -> Option<String> {
+    scope.files().iter().find_map(|file| {
+        file.parse.ast.as_ref()?.items.iter().find_map(|item| {
+            let source = match &item.kind {
+                ItemKind::Design(DesignItem::Assembly(assembly)) => match &assembly.def {
+                    AssemblyDef::Mirror(mirror) => &mirror.source,
+                    AssemblyDef::Instance { .. } => return None,
+                },
+                ItemKind::Design(DesignItem::Part(part)) => match &part.def {
+                    PartDef::Mirror(mirror) => &mirror.source,
+                    PartDef::FromStock { .. } => return None,
+                },
+                _ => return None,
+            };
+            let path = source.as_path()?;
+            if path.root.as_str() != name || !path.segments.is_empty() {
+                return None;
+            }
+            item.kind.name().map(|image| image.as_str().to_owned())
+        })
+    })
+}
+
+/// Whether an assembly that fills a space is handed along `axis`: one of
+/// its place params that takes a single part or face (a door's
+/// `hinge_side`) is bound to one off the middle of that space. Only then
+/// does a mirrored pair across the space differ from a plain repeat: a
+/// door hinged on the left side gets a partner hinged on the right. A
+/// top, a case, a shelf or a divider, whose places are the space itself
+/// or both sides at once, is the same either way round.
+pub(crate) fn handed(
+    scope: &EditScope<'_>,
+    design: &SolvedDesign,
+    assembly: &str,
+    axis: Axis,
+) -> bool {
+    let model = scope.model();
+    let Some(space) = crate::spaces::filled_spaces(model, assembly)
+        .first()
+        .and_then(|region| design.regions.iter().find(|found| found.id == *region))
+    else {
+        return false;
+    };
+    let Some((middle, _)) = doubled_centre(&space.bounds, axis) else {
+        return false;
+    };
+    let Some(found) = find(scope, assembly) else {
+        return false;
+    };
+    let ItemKind::Design(DesignItem::Assembly(item)) = &found.item.kind else {
+        return false;
+    };
+    let AssemblyDef::Instance { body, .. } = &item.def else {
+        return false;
+    };
+    let single = single_place_params(scope, assembly);
+    body.fields
+        .iter()
+        .filter(|field| single.iter().any(|name| name == field.key.as_str()))
+        .flat_map(|field| named_parts(&found, design, &field.value))
+        .any(|part| doubled_centre(&drawn_box(part), axis).is_some_and(|(c, _)| c != middle))
+}
+
+/// The names of an assembly's component params that take a single part
+/// or face (`Part`, `Anchor`).
+fn single_place_params(scope: &EditScope<'_>, assembly: &str) -> Vec<String> {
+    let model = scope.model();
+    let defs = &model.defs;
+    let Some(module) = defs.modules.get(model.root.index()) else {
+        return Vec::new();
+    };
+    let component = module.items.iter().find_map(|item| match item {
+        DefId::Assembly(id) => {
+            let def = defs.assembly(*id)?;
+            if def.decl.name != assembly {
+                return None;
+            }
+            match &def.kind {
+                AssemblyKind::Instance { component, .. } => Some(*component),
+                AssemblyKind::Mirror(_) | AssemblyKind::Invalid => None,
+            }
+        }
+        _ => None,
+    });
+    component
+        .and_then(|component| defs.component(component))
+        .map(|component| {
+            component
+                .params
+                .iter()
+                .filter_map(|param| defs.param(*param))
+                .filter(|param| matches!(param.ty, Ty::Part | Ty::Anchor))
+                .map(|param| param.decl.name.clone())
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// A place param bound to a part (or a face of one) that has a mirror
