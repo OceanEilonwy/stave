@@ -11,15 +11,21 @@ kind mortise_tenon : joint {
   param length = 30mm
   /// Extra depth in the mortise so the shoulders close before the tenon bottoms out.
   param relief = 2mm
+  /// Wood left round the mortise: to every face of the other part (its far
+  /// side too) and to its other cuts, such as another mortise from the next
+  /// face of a leg. Less and the mortise's cheek splits when the tenon is
+  /// driven home.
+  param wall = 6mm
 
   // tenon_thin: a third of the piece is usual and half the most; a thicker
   // tenon leaves cheeks too thin to hold its shoulders square.
   // mortise_fits: the tenon, and so its mortise, must lie on the patch
   // where the parts touch, or the mortise runs out past the other part.
-  require has_width     : piece.width > 2 * shoulder "the shoulders leave no tenon"
-  require mortise_stops : length + relief <= extent(into, length, of: piece) - 3mm "the mortise would come through the other side"
-  require tenon_thin    : thickness <= piece.thickness / 2 "a tenon thicker than half the rail leaves its cheeks too thin"
-  require mortise_fits  : piece.width - 2 * shoulder <= contact(piece, into).length "the mortise would run out past the edge of the other part"
+  // mortise_wall: wood all round the mortise, measured once it is cut.
+  require has_width    : piece.width > 2 * shoulder "the shoulders leave no tenon"
+  require tenon_thin   : thickness <= piece.thickness / 2 "a tenon thicker than half the rail leaves its cheeks too thin"
+  require mortise_fits : piece.width - 2 * shoulder <= contact(piece, into).length "the mortise would run out past the edge of the other part"
+  require mortise_wall : wall(mortise) >= wall "the mortise comes too close to a face of the part or another cut"
 
   insert:    [push(piece, along: length)]
   cut_first: into                            // cut the mortise first, then fit the tenon to it

@@ -9,9 +9,6 @@ kind screw : joint {
   param length = 30mm
   /// Screws per connection.
   param count = 2
-  /// How much of the other part lies in the screw's path: its thickness
-  /// for a screw into a face, its width for a screw into an edge.
-  param bite = extent(into, thickness, of: piece)
   /// Wood left each side of a screw, across the patch where the parts
   /// touch. 6mm is about one and a half times a common 4mm screw: less and
   /// the screw splits the edge it is driven into.
@@ -25,11 +22,13 @@ kind screw : joint {
   param pilot = diameter * 3 / 4
 
   // The screws are centred across the patch where the parts touch and
-  // spread evenly along it.
-  require stays_inside : length <= piece.thickness + bite - 3mm "the screw would come out the other side"
-  require bites        : length >= piece.thickness + 8mm "the screw is too short to hold"
-  require seat_wide    : contact(piece, into).width >= diameter + 2 * wall "the parts overlap too little for screws this thick"
-  require seat_long    : contact(piece, into).length >= count * (diameter + gap) + gap "too many screws for this joint"
+  // spread evenly along it. pilot_wall: the pilot hole keeps 3mm of wood
+  // to every face of the other part (its far side too) and to its other
+  // cuts, so the screw doesn't come out or run into another hole.
+  require pilot_wall : wall(pilot_hole) >= 3mm "the screw comes too close to a face of the part or another cut"
+  require bites      : length >= piece.thickness + 8mm "the screw is too short to hold"
+  require seat_wide  : contact(piece, into).width >= diameter + 2 * wall "the parts overlap too little for screws this thick"
+  require seat_long  : contact(piece, into).length >= count * (diameter + gap) + gap "too many screws for this joint"
 
   insert: [push(piece, along: thickness)]
 

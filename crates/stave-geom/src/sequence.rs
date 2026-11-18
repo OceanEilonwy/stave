@@ -31,7 +31,7 @@ use glam::{DMat4, DVec3};
 use stave_lang::placement::{Axis, Direction, PartAxis};
 use stave_lang::units::{Angle, Length};
 use stave_model::solved::{
-    JointPair, Part, PartId, Point, SolvedDesign, StepAmount, StepKind, WorldBox,
+    Body, JointPair, Part, PartId, Point, SolvedDesign, StepAmount, StepKind, WorldBox,
 };
 
 use crate::collide::{
@@ -173,9 +173,34 @@ pub fn disassemble(members: &[Member<'_>], steps: &[Step]) -> Result<(), Blocked
 /// moves its part, in step order (the first step first). A viewer plays
 /// them forwards to show the joint going together.
 pub fn trace(members: &[Member<'_>], steps: &[Step]) -> Result<Vec<Traced>, Blocked> {
+    trace_carrying(members, &[], steps)
+}
+
+/// [`trace`], with what each member carries moving with it: `carried[i]`
+/// are the bodies member `i` carries (a joint's pins, on the part they go
+/// in with), and a member with no entry carries nothing. A push along an
+/// axis then sweeps the carried shapes like the part's own wood (a pin
+/// held by its hole along the push goes on through it), and a push
+/// without `by:` goes until the part and what it carries are clear, so a
+/// dowelled part comes off until its pins are out of their holes. A
+/// sampled step (a turn, a push on a diagonal) samples the part's own
+/// wood only.
+pub fn trace_carrying(
+    members: &[Member<'_>],
+    carried: &[Vec<&Body>],
+    steps: &[Step],
+) -> Result<Vec<Traced>, Blocked> {
     let worlds: Vec<WorldSolid> = members
         .iter()
-        .map(|m| WorldSolid::of_part(m.part, m.solid))
+        .enumerate()
+        .map(|(index, m)| {
+            let own = WorldSolid::of_part(m.part, m.solid);
+            carried
+                .get(index)
+                .into_iter()
+                .flatten()
+                .fold(own, |solid, body| solid.joined(&WorldSolid::of_body(body)))
+        })
         .collect();
     let shapes: Vec<Shape<'_>> = members
         .iter()

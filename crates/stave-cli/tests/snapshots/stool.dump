@@ -5,34 +5,34 @@ all lengths in mm; boxes are drawn boxes as across, up, deep ranges from the gro
 PARTS (9)
 part                         stock          cut L x W x T              across               up                   deep                 length/width/thickness
 seat                         ash_30         320 x 320 x 30             0..320               0..30                0..320               right/back/up
-    cut drill 1 x diameter 22 depth 20 on thickness start: where leg[front_left] meets it, local 30..70 x 30..70 x 0..20
-    cut drill 1 x diameter 22 depth 20 on thickness start: where leg[front_right] meets it, local 250..290 x 30..70 x 0..20
-    cut drill 1 x diameter 22 depth 20 on thickness start: where leg[back_left] meets it, local 30..70 x 250..290 x 0..20
-    cut drill 1 x diameter 22 depth 20 on thickness start: where leg[back_right] meets it, local 250..290 x 250..290 x 0..20
+    cut drill diameter 22 depth 20 on thickness start: where leg[front_left] meets it, local 30..70 x 30..70 x 0..20
+    cut drill diameter 22 depth 20 on thickness start: where leg[front_right] meets it, local 250..290 x 30..70 x 0..20
+    cut drill diameter 22 depth 20 on thickness start: where leg[back_left] meets it, local 30..70 x 250..290 x 0..20
+    cut drill diameter 22 depth 20 on thickness start: where leg[back_right] meets it, local 250..290 x 250..290 x 0..20
 leg[front_left]              ash_45_sq      440 x 40 x 40              30..70               -420..0              30..70               down/right/back
     drawn 420 x 40 x 40, starting 20 x 0 x 0 into the cut size
     turned to leg_shape: 0:34 190:40 300:40 420:30
     cut spigot length 20 diameter 22 on length start: end toward seat
-    cut drill 1 x diameter 22 depth 15 on width end: where rung[front] meets it, local 279..301 x 25..40 x 9..31
-    cut drill 1 x diameter 22 depth 15 on thickness end: where side_rung[left] meets it, local 244..266 x 9..31 x 25..40
+    cut drill diameter 22 depth 15 on width end: where rung[front] meets it, local 279..301 x 25..40 x 9..31
+    cut drill diameter 22 depth 15 on thickness end: where side_rung[left] meets it, local 244..266 x 9..31 x 25..40
 leg[front_right]             ash_45_sq      440 x 40 x 40              250..290             -420..0              30..70               down/right/back
     drawn 420 x 40 x 40, starting 20 x 0 x 0 into the cut size
     turned to leg_shape: 0:34 190:40 300:40 420:30
     cut spigot length 20 diameter 22 on length start: end toward seat
-    cut drill 1 x diameter 22 depth 15 on width start: where rung[front] meets it, local 279..301 x 0..15 x 9..31
-    cut drill 1 x diameter 22 depth 15 on thickness end: where side_rung[right] meets it, local 244..266 x 9..31 x 25..40
+    cut drill diameter 22 depth 15 on width start: where rung[front] meets it, local 279..301 x 0..15 x 9..31
+    cut drill diameter 22 depth 15 on thickness end: where side_rung[right] meets it, local 244..266 x 9..31 x 25..40
 leg[back_left]               ash_45_sq      440 x 40 x 40              30..70               -420..0              250..290             down/right/back
     drawn 420 x 40 x 40, starting 20 x 0 x 0 into the cut size
     turned to leg_shape: 0:34 190:40 300:40 420:30
     cut spigot length 20 diameter 22 on length start: end toward seat
-    cut drill 1 x diameter 22 depth 15 on width end: where rung[back] meets it, local 279..301 x 25..40 x 9..31
-    cut drill 1 x diameter 22 depth 15 on thickness start: where side_rung[left] meets it, local 244..266 x 9..31 x 0..15
+    cut drill diameter 22 depth 15 on width end: where rung[back] meets it, local 279..301 x 25..40 x 9..31
+    cut drill diameter 22 depth 15 on thickness start: where side_rung[left] meets it, local 244..266 x 9..31 x 0..15
 leg[back_right]              ash_45_sq      440 x 40 x 40              250..290             -420..0              250..290             down/right/back
     drawn 420 x 40 x 40, starting 20 x 0 x 0 into the cut size
     turned to leg_shape: 0:34 190:40 300:40 420:30
     cut spigot length 20 diameter 22 on length start: end toward seat
-    cut drill 1 x diameter 22 depth 15 on width start: where rung[back] meets it, local 279..301 x 0..15 x 9..31
-    cut drill 1 x diameter 22 depth 15 on thickness start: where side_rung[right] meets it, local 244..266 x 9..31 x 0..15
+    cut drill diameter 22 depth 15 on width start: where rung[back] meets it, local 279..301 x 0..15 x 9..31
+    cut drill diameter 22 depth 15 on thickness start: where side_rung[right] meets it, local 244..266 x 9..31 x 0..15
 rung[front]                  ash_dowel_22   210 x 22 x 22              70..250              -281..-259           39..61               right/back/up
     drawn 180 x 22 x 22, starting 15 x 0 x 0 into the cut size
 rung[back]                   ash_dowel_22   210 x 22 x 22              70..250              -281..-259           259..281             right/back/up
@@ -76,16 +76,11 @@ REGIONS (0)
 
 ASSEMBLIES (0)
 
-REQUIRES (18)
-rungs_miss                                   holds
+REQUIRES (13)
 legs_fit                                     holds
-leg_tenons.hole_stops                        holds
 leg_tenons.tenon_fits                        holds
-leg_tenons.hole_stops                        holds
 leg_tenons.tenon_fits                        holds
-leg_tenons.hole_stops                        holds
 leg_tenons.tenon_fits                        holds
-leg_tenons.hole_stops                        holds
 leg_tenons.tenon_fits                        holds
 rung_sockets.not_too_deep                    holds
 rung_sockets.not_too_deep                    holds

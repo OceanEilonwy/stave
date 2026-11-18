@@ -120,9 +120,14 @@ and is tested headless (`crates/stave-app/tests/session.rs`).
   and Forward bring it back).
 - `selection() -> Option<&Selection>`, where `Selection` is one of
   `Part(PartId)`, `Hardware(HardwareId)`, `Joint { joint, pair }`,
-  `Assembly(AssemblyId)`, `Location(SourceLocation)` (a file path as the
-  source map names it, and a `LineNumber` from 1) or
+  `Member(PairMember)` (the member a joint lays out on one pair: a
+  dowel's pins), `Assembly(AssemblyId)`, `Location(SourceLocation)` (a
+  file path as the source map names it, and a `LineNumber` from 1) or
   `Problem(ProblemIndex)` (an index into `problems()`).
+- `looks() -> Option<Vec<Look>>`: how the 3D view draws each node outside
+  focus mode: when a joint's member is selected, or the selected problem
+  is about one, the parts of its pair are see-through so the pins inside
+  them show (`view::see_into`); otherwise `None`, every node as usual.
 - `focus() -> Option<focus::Target>`: focus mode on a joint pair or a piece
   of hardware (always with the matching selection).
 - `place() -> &Place`: view, selection, focus and editor together; one entry of
@@ -224,7 +229,14 @@ The 3D view fills the window; everything else floats over it
   door_l"). Rows that are the same part (one stock and size under one
   name, mirror pairs) share a row (`rail[bottom, top]`, `foot[4]`,
   `side_l, side_r`) until one of them is selected, when the group shows
-  its members one by one. The assembly holding the selection opens. Every
+  its members one by one. Each joint's members follow, one row for the
+  joint grouped over its pairs with how many copies it places
+  (`top_dowels's pin[2] · dowel_pin × 8`; shown one by one, each pair's
+  row counts its own, `dowel_pin × 4`), in the assembly of the part that
+  carries them; selecting one selects that pair's pins (the card's "JOINT
+  MEMBER": which joint placed it, its pair, what it is, how many, and the
+  joint's line in "Defined in the text"), drawn with the parts it sits in
+  see-through. The assembly holding the selection opens. Every
   row carries its `Mark` (`problems::marks`): a red dot for an error, an
   amber one for a warning, a red ring for a part a problem only involves;
   an assembly carries the worst inside it. Under the chosen part, the

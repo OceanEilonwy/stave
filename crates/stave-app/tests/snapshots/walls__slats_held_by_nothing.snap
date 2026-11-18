@@ -1,0 +1,11 @@
+---
+source: crates/stave-app/tests/walls.rs
+expression: "rendered(\"tests/broken/slats_held_by_nothing\")"
+---
+warning[loose-part]: slat[0] is loose: no joint or hardware joins it to top or to anything joined to top
+   --> tests/broken/slats_held_by_nothing/project.stave:125:6
+    |
+125 | part slat[5] : oak_19 {
+    |      ^^^^
+    = note: the same line also causes: slat[1] is loose: no joint or hardware joins it to top or to anything joined to top; slat[2] is loose: no joint or hardware joins it to top or to anything joined to top; slat[3] is loose: no joint or hardware joins it to top or to anything joined to top; and 1 more
+    = help: join slat[0] to stretcher_front, which it touches, with a joint or hardware, or write loose: true in the part if it is meant to lift out

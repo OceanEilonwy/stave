@@ -282,7 +282,7 @@ pub struct Profile {
 impl Profile {
     /// The diameter at a local length coordinate, on straight lines
     /// between stations.
-    fn diameter_at(&self, at: Length) -> Length {
+    pub(crate) fn diameter_at(&self, at: Length) -> Length {
         let mut previous: Option<ProfileStation> = None;
         for station in &self.stations {
             if station.at >= at {
@@ -668,22 +668,16 @@ impl Solid {
         let operation = cut.kind.operation();
         let round_part = self.profile.is_some();
         match &cut.kind {
-            CutKind::Drill {
-                diameter,
-                depth,
-                count,
-            } => {
+            CutKind::Drill { diameter, depth } => {
                 let range = depth_range(size, cut.face, *depth);
-                for centre in hole_centres(part, cut, *count) {
-                    self.holes.push(Rod {
-                        axis: cut.face.axis,
-                        centre,
-                        diameter: *diameter,
-                        start: range.0,
-                        end: range.1,
-                        flats: None,
-                    });
-                }
+                self.holes.push(Rod {
+                    axis: cut.face.axis,
+                    centre: hole_centre(part, cut),
+                    diameter: *diameter,
+                    start: range.0,
+                    end: range.1,
+                    flats: None,
+                });
                 return Ok(());
             }
             CutKind::Spigot { length, diameter } => {
@@ -1006,17 +1000,17 @@ pub fn cut_at(part: &Part, index: usize) -> Option<&Cut> {
 }
 
 /// Half a length, rounded down to the nanometre.
-fn half(length: Length) -> Length {
+pub(crate) fn half(length: Length) -> Length {
     Length::from_nm(length.nm().div_euclid(2))
 }
 
 /// The low edge of something `extent` wide centred at `centre`.
-fn centred_low(centre: Length, extent: Length) -> Length {
+pub(crate) fn centred_low(centre: Length, extent: Length) -> Length {
     Length::from_nm(centre.nm().saturating_sub(extent.nm().div_euclid(2)))
 }
 
 /// The range along a face's axis that a depth below the face covers.
-fn depth_range(size: Size3, face: LocalFace, depth: Depth) -> (Length, Length) {
+pub(crate) fn depth_range(size: Size3, face: LocalFace, depth: Depth) -> (Length, Length) {
     let full = size.get(face.axis);
     let depth = match depth {
         Depth::Through => full,
@@ -1040,7 +1034,7 @@ fn local_get(point: &stave_model::solved::LocalPoint, axis: PartAxis) -> Length 
 /// whole shape (so a member's holes in two parts share their centres even
 /// where the shape runs past the edge of one), the footprint's, or the
 /// whole part's.
-fn face_extent(part: &Part, place: &CutPlace, axis: PartAxis) -> (Length, Length) {
+pub(crate) fn face_extent(part: &Part, place: &CutPlace, axis: PartAxis) -> (Length, Length) {
     let extent = match place {
         CutPlace::Member { shape, .. } => Some(shape),
         CutPlace::Crossing { footprint, .. } => Some(footprint),
@@ -1053,7 +1047,7 @@ fn face_extent(part: &Part, place: &CutPlace, axis: PartAxis) -> (Length, Length
 }
 
 /// The centre of a cut's place on its face (the face axis is left at 0).
-fn place_centre(part: &Part, place: &CutPlace, face_axis: PartAxis) -> Local {
+pub(crate) fn place_centre(part: &Part, place: &CutPlace, face_axis: PartAxis) -> Local {
     let mut centre = Local::default();
     for axis in across(face_axis) {
         let (low, high) = face_extent(part, place, axis);
@@ -1075,7 +1069,7 @@ fn entering_part<'d>(place: &CutPlace, design: &'d SolvedDesign) -> Option<&'d P
 
 /// The local axes of this part that the entering part's width and
 /// thickness lie along, both on the face; for a pocket.
-fn entering_axes(
+pub(crate) fn entering_axes(
     part: &Part,
     place: &CutPlace,
     design: &SolvedDesign,
@@ -1104,7 +1098,7 @@ fn entering_axes(
 /// The local axis a slot runs along and whether it runs toward the
 /// positive end of it (for `from_centre`). `turns` is the slot's angle in
 /// quarter turns.
-fn slot_run(
+pub(crate) fn slot_run(
     part: &Part,
     place: &CutPlace,
     design: &SolvedDesign,
@@ -1466,28 +1460,16 @@ fn outline_range(
     }
 }
 
-/// Where the holes of a `drill` go, on the two axes across the face's.
-fn hole_centres(part: &Part, cut: &Cut, count: u32) -> Vec<[Length; 2]> {
-    let [first, second] = across(cut.face.axis);
-    let count = count.max(1);
-    let (a0, a1) = face_extent(part, &cut.place, first);
-    let (b0, b1) = face_extent(part, &cut.place, second);
-    let long_is_first = (a1.nm() - a0.nm()) >= (b1.nm() - b0.nm());
-    let middle = |low: Length, high: Length| Length::from_nm((low.nm() + high.nm()).div_euclid(2));
-    let spread = |low: Length, high: Length, index: u32| {
-        let span = i128::from(high.nm() - low.nm());
-        let step = span * i128::from(index + 1) / i128::from(count + 1);
-        Length::from_nm(low.nm().saturating_add(i64::try_from(step).unwrap_or(0)))
+/// Where a `drill`'s hole goes, on the two axes across the face's: the
+/// middle of its footprint, or of the member's shape it is drilled for.
+pub(crate) fn hole_centre(part: &Part, cut: &Cut) -> [Length; 2] {
+    let middle = |(low, high): (Length, Length)| {
+        Length::from_nm(
+            i64::try_from((i128::from(low.nm()) + i128::from(high.nm())).div_euclid(2))
+                .unwrap_or(low.nm()),
+        )
     };
-    (0..count)
-        .map(|index| {
-            if long_is_first {
-                [spread(a0, a1, index), middle(b0, b1)]
-            } else {
-                [middle(a0, a1), spread(b0, b1, index)]
-            }
-        })
-        .collect()
+    across(cut.face.axis).map(|axis| middle(face_extent(part, &cut.place, axis)))
 }
 
 #[cfg(test)]

@@ -576,7 +576,7 @@ kind inset_cup_hinge : hinge {
 }
 component Flap {
   param hinge_side : Part
-  part leaf : pine_12 {
+  part leaf : pine_19 {
     length: 200mm
     width:  100mm
     place {
@@ -1299,7 +1299,9 @@ joint screws : screw(base, into: cleat, length: 50mm)",
     );
     assert_eq!(
         diagnostics(&flat),
-        ["require: 'stays_inside' fails: the screw would come out the other side"]
+        [
+            "require: 'pilot_wall' fails: the screw comes too close to a face of the part or another cut"
+        ]
     );
 }
 

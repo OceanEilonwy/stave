@@ -502,9 +502,21 @@ fn entry_rows(
     let split = entry.items.len() > 1
         && selected.is_some_and(|item| entry.items.iter().any(|i| *i == item));
     if split {
-        for (item, label) in entry.items.iter().zip(&entry.member_labels) {
+        for ((item, label), detail) in entry
+            .items
+            .iter()
+            .zip(&entry.member_labels)
+            .zip(&entry.member_details)
+        {
             let mark = shown.marks.item(*item);
-            rows.push(entry_row(entry, label, vec![*item], depth, mark));
+            rows.push(entry_row(
+                entry,
+                label,
+                detail.as_deref(),
+                vec![*item],
+                depth,
+                mark,
+            ));
             if selected == Some(*item) {
                 joint_rows(shown.joints, depth, rows);
             }
@@ -513,6 +525,7 @@ fn entry_rows(
         rows.push(entry_row(
             entry,
             &entry.label,
+            entry.detail.as_deref(),
             entry.items.iter().copied().collect(),
             depth,
             shown.marks.entry(entry),
@@ -568,6 +581,7 @@ fn joint_rows(
 fn entry_row(
     entry: &TreeEntry,
     label: &str,
+    detail: Option<&str>,
     items: Vec<stave_scene::Item>,
     depth: usize,
     mark: Option<stave_app::problems::Mark>,
@@ -594,7 +608,7 @@ fn entry_row(
             .ellipsize(gtk::pango::EllipsizeMode::End)
             .build(),
     );
-    if let Some(detail) = &entry.detail {
+    if let Some(detail) = detail {
         content.append(
             &gtk::Label::builder()
                 .label(detail)

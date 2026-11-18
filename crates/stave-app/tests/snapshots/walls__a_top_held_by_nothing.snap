@@ -1,0 +1,10 @@
+---
+source: crates/stave-app/tests/walls.rs
+expression: "rendered(\"tests/broken/top_held_by_nothing\")"
+---
+warning[loose-part]: leg[front_left], leg[front_right], leg[back_left], leg[back_right] and 13 more are joined only to each other: no joint or hardware joins them to top or to anything joined to top
+  --> tests/broken/top_held_by_nothing/project.stave:55:6
+   |
+55 | part leg[front_left, front_right, back_left, back_right] : oak_45_sq {
+   |      ^^^
+   = help: join cleat_front to top, which it touches, with a joint or hardware, or write loose: true in the part if it is meant to lift out

@@ -567,7 +567,14 @@ impl Solver<'_> {
             };
             // Requires, at the current values, for this pair.
             let mut results = Vec::new();
-            for require in &kind.requires {
+            let source = stave_model::solved::CutSource::Joint {
+                joint,
+                pair: pairs.len(),
+            };
+            for (index, require) in kind.requires.iter().enumerate() {
+                if self.defer_wall_rule(source, binding.kind, index, require, &kind_env)? {
+                    continue;
+                }
                 let holds = self.eval_bool(&require.condition, &kind_env)?;
                 let message = self.format_text(&require.message, &kind_env)?;
                 if !holds {
@@ -1060,23 +1067,6 @@ impl Solver<'_> {
             CutOperation::Drill => CutKind::Drill {
                 diameter: length(self, "diameter")?,
                 depth: depth(self, "depth")?,
-                count: match get("count") {
-                    Some((value, span)) => match value.number() {
-                        Some(n) if n.is_integer() && !n.is_negative() => {
-                            u32::try_from(n.numerator()).map_err(|_| Reported)?
-                        }
-                        _ => {
-                            return Err(self.error(
-                                Code::TypeMismatch,
-                                "'count' needs a whole number",
-                                env.file,
-                                span,
-                                "write a count such as 4",
-                            ));
-                        }
-                    },
-                    None => 1,
-                },
             },
             CutOperation::DovetailSocket => CutKind::DovetailSocket {
                 neck: length(self, "neck")?,

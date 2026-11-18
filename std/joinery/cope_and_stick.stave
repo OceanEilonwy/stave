@@ -17,8 +17,11 @@ kind cope_and_stick : joint {
   cut cope: end(piece, facing: into) {
     tenon(length: depth, width: piece.width, thickness: tongue)
   }
+  // The sticking is the groove run along the whole stile, out of both
+  // ends, as a router or moulding plane cuts it: the stub tenon sits in it,
+  // and so does the panel.
   cut sticking: crossing(into, piece) {
-    pocket(width: piece.width, thickness: tongue, depth: depth)
+    slot(width: tongue, depth: depth)
   }
 
   note: "Cut the rails to length before cutting the stub tenons; check the frame for square when clamping"

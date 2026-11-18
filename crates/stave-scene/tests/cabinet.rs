@@ -8,7 +8,7 @@ use stave_lang::placement::Direction;
 use stave_lang::units::Length;
 use stave_model::mechanism::{FramePoint, MechanismEntry, MemberIndex};
 use stave_model::solved::{BodyCarrier, Hardware, Point, SolvedDesign};
-use stave_scene::{BuildOptions, Orbit, Ray, SceneGraph};
+use stave_scene::{BuildOptions, Material, Orbit, Ray, SceneGraph};
 
 fn solve(folder: &str) -> SolvedDesign {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -53,16 +53,42 @@ fn every_part_and_hardware_has_a_node() {
     );
     let links = carried(&|_, carrier| matches!(carrier, BodyCarrier::Link(_)));
     assert_eq!(links, 8, "two links on each of the four cup hinges");
-    // One node for each part and one for each member of each piece of
-    // hardware, named `<hardware> <member>`.
+    // One node for each part, one for each member of each piece of
+    // hardware, named `<hardware> <member>`, and one for each joint pair's
+    // member, named `<joint>'s <member>` (with the pair's parts when the
+    // joint has several pairs).
     let members: usize = design.hardware.iter().map(|h| h.members.len()).sum();
-    assert_eq!(graph.nodes.len(), design.parts.len() + members);
+    let pair_members = design.pair_members().count();
+    assert_eq!(
+        pair_members, 6,
+        "the base's and the top's dowels, each side, and each drawer's front screws"
+    );
+    assert_eq!(
+        graph.nodes.len(),
+        design.parts.len() + members + pair_members
+    );
     for hardware in &design.hardware {
         for member in &hardware.members {
             let name = format!("{} {}", hardware.name, member.name);
             assert!(graph.nodes.iter().any(|node| node.name == name), "{name}");
         }
     }
+    let pins = graph
+        .nodes
+        .iter()
+        .find(|node| node.name == "top_dowels's pin between side_l and top")
+        .expect("the top's dowels into side_l");
+    assert!(matches!(pins.item, stave_scene::Item::Member(_)));
+    // A dowel pin is beech, as its fastener kind says.
+    match pins.material {
+        Material::Wood(wood) => {
+            assert_eq!(wood.species, stave_schema::species::Species::Beech);
+        }
+        Material::Metal => panic!("a dowel pin is drawn in wood"),
+    }
+    // Four pins on each pair, carried by the side they go into the top with.
+    let side_l = design.part_named("side_l").unwrap().id;
+    assert_eq!(pins.carried_by(), Some(side_l));
     assert_eq!(graph.scenes.first().map(|s| s.name.as_str()), Some("rest"));
     let stile = graph
         .nodes

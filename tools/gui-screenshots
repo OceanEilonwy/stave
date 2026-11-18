@@ -77,6 +77,18 @@ shot $window/exploded_stool.png examples/stool --theme light --explode 1
 # Focus mode on a joint: the stool's rung socket, part way through its
 # insert step (JointFocus).
 shot $window/focus.png examples/stool --theme light --focus rung_sockets --step 0.6
+# Focus mode on dowel joints: the pins ride on the piece and go into their
+# holes in the part drawn see-through, framed on the pins; the cabinet's
+# side into its top, and the bookshelf's kick into a side.
+shot $window/focus_dowels.png $cabinet --theme light --focus top_dowels --step 0.4
+shot $window/focus_kick_dowels.png examples/bookshelf --theme light --focus kick_dowels --step 0.5
+# A joint's pins selected in the normal view: the parts they sit in are
+# drawn see-through so they show, and the inspector says which joint
+# placed them and where it is written.
+shot $window/selected_pins.png $cabinet --theme light --select "top_dowels's pin between side_l and top" --frame-selection --turn 20
+# The bookshelf pulled apart: the sides come off the kick's ends, its pins
+# staying in the kick.
+shot $window/exploded_bookshelf.png examples/bookshelf --theme light --explode 1
 # Focus mode on a cup hinge, in 3D and from above, light and dark, and in
 # a narrow window (Hinge).
 shot $window/hinge_3d.png $cabinet --theme light --focus "$hinge" --step 0.41
@@ -90,6 +102,10 @@ shot $window/hinge_narrow.png $cabinet --theme light --focus "$hinge" --step 0.4
 # dark.
 shot $window/problem.png tests/broken/door_hits_side --theme light --diagnostic 0
 shot $window/problem_dark.png tests/broken/door_hits_side --theme dark --diagnostic 0
+# A problem about a joint's member: the peg that runs past the bottom of
+# its hole, posed with the shared wood in red and the parts it sits in
+# see-through.
+shot $window/problem_pin.png tests/broken/pin_past_its_hole --theme light --diagnostic 0
 # Several problems of several kinds, one chosen: the chip's arrows step
 # through them (F8); and the same in a narrow window.
 shot $window/problems_several.png crates/stave-app/tests/projects/several_problems --theme light --diagnostic 2

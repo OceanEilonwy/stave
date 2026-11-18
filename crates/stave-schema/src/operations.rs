@@ -148,6 +148,33 @@ impl OperationSpec {
     }
 }
 
+/// An argument a cut operation no longer takes, with what to write
+/// instead: the resolver says so rather than only that the argument is
+/// unknown.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct RetiredArgument {
+    /// The operation.
+    pub operation: CutOperation,
+    /// The argument's name.
+    pub name: &'static str,
+    /// The help line: what to write instead.
+    pub help: &'static str,
+}
+
+/// Every retired argument.
+pub const RETIRED_ARGUMENTS: &[RetiredArgument] = &[RetiredArgument {
+    operation: CutOperation::Drill,
+    name: "count",
+    help: "a drill makes one hole; for a row of holes, give the joint kind a member for what goes in them, with count: and spaced:, and drill crossing(role, member): one hole for every copy, lined up in both parts",
+}];
+
+/// The retired argument of an operation with this name, if it is one.
+pub fn retired_argument(operation: CutOperation, name: &str) -> Option<&'static RetiredArgument> {
+    RETIRED_ARGUMENTS
+        .iter()
+        .find(|retired| retired.operation == operation && retired.name == name)
+}
+
 /// `mark(along:, across:)` inside `outline(marks: [...])`.
 pub const MARK: &str = "mark";
 
@@ -178,7 +205,6 @@ use Selector::{Crossing, End, Side};
 const LENGTH: ValueType = ValueType::Type(TypeName::Length);
 const ANGLE: ValueType = ValueType::Type(TypeName::Angle);
 const RATIO: ValueType = ValueType::Type(TypeName::Ratio);
-const COUNT: ValueType = ValueType::Type(TypeName::Count);
 const BOOL: ValueType = ValueType::Type(TypeName::Bool);
 const DEPTH: ValueType = ValueType::Depth;
 const MARKS: ValueType = ValueType::ListOf(&ValueType::Type(TypeName::Anchor));
@@ -267,7 +293,6 @@ pub fn cut_operation(cut: CutOperation) -> &'static OperationSpec {
         arguments: &[
             argument("diameter", LENGTH, D::Required),
             argument("depth", DEPTH, D::Required),
-            argument("count", COUNT, D::Count(1)),
         ],
         selectors: &[Crossing, End, Side],
         features: &["centre"],

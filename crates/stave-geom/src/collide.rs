@@ -384,6 +384,16 @@ impl WorldSolid {
             .reduce(|a, b| union(&a, &b))
     }
 
+    /// This solid with another's wood added to it (a part with the pins it
+    /// carries): the other's boxes, rods and prisms join this one's, and
+    /// this one's holes and angled cuts stay as they are.
+    pub fn joined(mut self, other: &WorldSolid) -> WorldSolid {
+        self.boxes.extend(other.boxes.iter().copied());
+        self.rods.extend(other.rods.iter().copied());
+        self.prisms.extend(other.prisms.iter().cloned());
+        self
+    }
+
     /// The same solid moved by an exact offset.
     pub fn translated(&self, by: Point) -> WorldSolid {
         WorldSolid {

@@ -173,6 +173,7 @@ impl SceneGraph {
             let kind = match node.item {
                 Item::Part(_) => "part",
                 Item::Hardware(_) => "hardware",
+                Item::Member(_) => "member",
             };
             nodes.push(json!({
                 "name": node.name,

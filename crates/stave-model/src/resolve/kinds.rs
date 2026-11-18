@@ -8,7 +8,9 @@ use stave_lang::placement::PartAxis;
 use stave_lang::{Code, Diagnostic, Label};
 use stave_schema::fields::{self, Requirement};
 use stave_schema::kinds::{JOINT_DEFAULT_ROLES, RESERVED_JOINT_SETTINGS, RoleType, base};
-use stave_schema::operations::{ArgumentDefault, MARK, Selector, cut_operation, operation};
+use stave_schema::operations::{
+    ArgumentDefault, MARK, Selector, cut_operation, operation, retired_argument,
+};
 use stave_schema::placement::{AssemblyStepKind, EXTEND, MadePartTerm};
 use stave_schema::recipes::{CuttingStep, MarkingStep, NeedKind};
 use stave_schema::words::WordSet;
@@ -170,6 +172,16 @@ impl Resolver<'_> {
         let mut hardware_uses = JointKindDef::default();
         let mut joint_cuts: Vec<&ast::Cut> = Vec::new();
         self.check_cut_names(&cx, &syntax.body.entries);
+        let cut_names: Vec<String> = syntax
+            .body
+            .entries
+            .iter()
+            .filter_map(|entry| match entry {
+                ast::KindEntry::Cut(cut) => cut.name.as_ref().map(|n| n.as_str().to_owned()),
+                _ => None,
+            })
+            .collect();
+        self.kind_cut_names.insert(id, cut_names);
         for entry in &syntax.body.entries {
             match entry {
                 ast::KindEntry::Param(_) => {}
@@ -202,11 +214,14 @@ impl Resolver<'_> {
                     }
                 }
                 ast::KindEntry::Require(require) => {
+                    self.in_kind_require = true;
                     let condition = self.value(
                         &cx,
                         &require.node.condition,
                         &Expect::ty(Ty::Bool).named(require.node.name.as_str()),
                     );
+                    self.in_kind_require = false;
+                    self.check_wall_comparison(&cx, &condition);
                     let message = self.text(&cx, &require.node.message);
                     requires.push(RequireDef {
                         decl: crate::defs::Decl {
@@ -1180,7 +1195,26 @@ impl Resolver<'_> {
                 continue;
             }
             let names: Vec<&str> = spec.arguments.iter().map(|a| a.name).collect();
-            let parsed = self.split_args(cx, head, &call.args, &names, 0);
+            // An argument the operation no longer takes says what to write
+            // instead.
+            let mut kept = Vec::with_capacity(call.args.len());
+            for arg in &call.args {
+                match arg
+                    .name
+                    .as_ref()
+                    .and_then(|name| retired_argument(op, name.as_str()).zip(Some(name)))
+                {
+                    Some((retired, name)) => self.error_help(
+                        Code::UnknownField,
+                        format!("'{head}' has no field '{}'", retired.name),
+                        cx.file,
+                        name.span(),
+                        retired.help,
+                    ),
+                    None => kept.push(arg.clone()),
+                }
+            }
+            let parsed = self.split_args(cx, head, &kept, &names, 0);
             let mut args = Vec::new();
             let mut marks = Vec::new();
             for argument in spec.arguments {

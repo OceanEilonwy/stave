@@ -311,6 +311,10 @@ pub enum RExprKind {
     },
     /// `[a, b]`; lists inside lists are flattened when evaluated.
     List(Vec<RExpr>),
+    /// `wall(cut)`: the least wood round one of the enclosing kind's named
+    /// cuts. Only one whole side of a comparison that is a kind's
+    /// `require` condition; measured once the cuts are made.
+    Wall(CutName),
     /// Something that could not be resolved; already reported.
     Error,
 }
@@ -467,6 +471,9 @@ pub struct PartBodyDef {
     pub note: Option<Text>,
     /// `boards:`: how its boards are joined (grammar, "Boards").
     pub boards: Option<RExpr>,
+    /// `loose:`: `true` for a part meant to lift out, which nothing needs
+    /// to hold (grammar, "Held").
+    pub loose: Option<RExpr>,
     /// The `place { }` terms in order.
     pub place: Vec<PlaceTerm>,
     /// The `place { }` block, when written.

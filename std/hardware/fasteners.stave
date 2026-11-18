@@ -4,6 +4,7 @@ stave 1
 kind dowel_pin : fastener {
   param diameter = 8mm
   param length   = 30mm
+  species:  beech
   envelope: cylinder(diameter: diameter, length: length)
 }
 

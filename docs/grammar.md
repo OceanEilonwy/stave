@@ -706,6 +706,7 @@ A named value. Not a knob: it has no range and can't be passed in.
 | `face_edge` | face word | no | no | the reference edge |
 | `note` | `Text` | no | no | printed on the part's work card |
 | `boards` | `Boards` | no (default: the project's) | no | how its boards are joined, when it is made of boards; see [Boards](#boards) |
+| `loose` | `Bool` | no (default `false`) | no | `true` for a part meant to lift out (a loose shelf, a tray), which nothing needs to hold; see [Held](#held) |
 | `place { }` | | yes | | see [Placement](#placement) |
 
 Also readable on every part: `diameter` (round parts only), `stock`, and the
@@ -805,8 +806,14 @@ hardware list and the work plan read them:
 
 | Base | Required | Optional |
 |---|---|---|
-| `fastener` | `diameter`, `length`: `Length` | `envelope`, `model`, `license` |
+| `fastener` | `diameter`, `length`: `Length` | `envelope`, `model`, `license`, `species` |
 | `tool` | | `title`: `Text`; `powered`: `Bool` (default `false`) |
+
+A fastener's `species` is a species word, as a stock's is: what it is
+made of when it is wooden (`std:hardware`'s `dowel_pin` writes `species:
+beech`). A viewer draws a placed fastener (a [joint
+member](#joint-members)) in that wood, and one without `species` as
+steel. Nothing is checked by it.
 
 A fastener or tool kind has no `roles`, `mount`, `member`, `mechanism` or
 `cut`.
@@ -1511,6 +1518,22 @@ A joint member moves with the pair's first part. Members aren't placed
 between the boards of a part made of boards yet: such a kind is
 `warning[not-supported]` there (see [Boards](#boards)).
 
+**Drawing.** A viewer draws every copy of a joint's member where it is
+placed, in the normal view, pulled apart and in a section, as the
+fastener it is: in the wood its fastener kind's `species:` names (a
+`dowel_pin` is beech), and as steel when the kind names no species or
+the member names no fastener. It is a thing of its own in the view
+(clicking a pin selects the joint's pins on that pair, named `<joint>'s
+<member>`, and says which joint placed them and where that joint is
+written), and selecting it draws the pair's parts see-through, so pins
+inside the wood show. Pulled apart, and in focus mode as the pair's
+`insert:` steps play, it moves with the part that carries it (the
+pair's first part), so a dowel's pins ride on the piece and go into
+their holes in the other part as it comes home. The parts tree lists
+each joint's member once, grouped over its pairs, with how many copies
+the joint places in all (`dowel_pin × 8`), as the hardware list
+counts them.
+
 #### Faces to cut
 
 A cut is measured on one face of one role's part, from that face's own edges.
@@ -1629,7 +1652,7 @@ hardware kind's `member` and `mechanism`: `point(...)` anywhere else is
 | `tenon(length:, width:, thickness:)` | end, crossing | everything around a centred rectangular tenon, `length` long from the face. On `end`, `width` and `thickness` are across the part's width and thickness. On `crossing` it is a **tongue** along an edge, for parts that butt edge to edge (the face is across the part's width): `width` runs along the part's length, `thickness` across its thickness, centred on the footprint. On any other face of a crossing it is `error[type-mismatch]` |
 | `spigot(length:, diameter:)` | end | everything around a centred round tenon |
 | `round(diameter:, flats:, flats_angle:)` | crossing | turns the part round, to `diameter`, over the length where the other part passes (the footprint's extent along this part's length), leaving square sections either side. With `flats:` it keeps two flat faces that distance apart, their normal at `flats_angle` (default `0deg`) from the part's width axis toward its thickness axis |
-| `drill(diameter:, depth:, count:)` | crossing, end, side | `count` round holes (default 1), spread along the longer side of the footprint or end (equal steps between their centres and from the ends, which leaves less wood between holes than at the ends) and centred across it. *Being replaced:* holes for something placed are a [joint member](#joint-members)'s, which spaces copies by their size; `count:` stays until nothing in `std:` uses it |
+| `drill(diameter:, depth:)` | crossing, end, side | one round hole, centred on the footprint or end; on `crossing(role, member)`, centred on the member's shape. A row of holes is a [joint member](#joint-members) laid out `count:` times, with the drill cut once for every copy. `count:` was retired: `drill(..., count: 4)` is `error[unknown-field]` (`'drill' has no field 'count'`), with the help `a drill makes one hole; for a row of holes, give the joint kind a member for what goes in them, with count: and spaced:, and drill crossing(role, member): one hole for every copy, lined up in both parts` |
 | `dovetail_socket(neck:, depth:, angle:, slope:)` | end, crossing | a dovetail socket: `neck` wide at the face, `depth` deep, widening by its spread each side to its bottom, cut straight through the part (see "Angled cuts"). On `crossing` it is a **housing** for a sliding dovetail, running along the entering part's length |
 | `dovetail_tail(neck:, depth:, angle:, slope:)` | end, crossing | everything around a dovetail tail: over the last `depth` of the part, the wood either side of a tail `neck` wide at its shoulder and wider by its spread each side at the face, cut straight through the part. On `crossing` it is the **tongue** of a sliding dovetail, running along the part's own length |
 | `outline(marks: [...], depth:, from_depth:)` | side | the shape marked out with `mark(along:, across:)` points, in order round the shape, cut from `from_depth` (default `0mm`, the face itself) to `depth` below the face. With `from_depth` greater than zero the cut is hidden inside the part: a recess for a hidden stub tenon |
@@ -2391,6 +2414,7 @@ These are looked up when a bare name is called (see [Names](#names), rule 3).
 | `model(source, align:, sha256:)` | `Model` | a `.glb` model; optional `align: node("name")` and `sha256: "<hex>"` (see [Hardware](#hardware)) |
 | `ends(inset:)`, `pitch(d)`, `gap(d)` | `Spacing` | used by `spaced`, with the bare words `evenly` and `ends` |
 | `contact(a, b)` | `Patch` | the patch where two parts touch, read as `.length` (its longer side) and `.width` (its shorter side); see below |
+| `wall(cut)` | `Length` | the least wood between one of the kind's named cuts and any face or other cut of the same part, read only in a kind's `require`; see [Walls](#walls) |
 
 **`contact(a, b)`** is where two parts touch: a flat patch, measured on
 the parts' drawn boxes, before joints lengthen them (a tenon reaching into
@@ -2589,6 +2613,159 @@ errors in the same item.
 7. **Buildability**: an order of operations exists. See
    [Order of operations](#order-of-operations).
 
+### Walls
+
+`wall(cut)` is the least wood between one of the kind's own cuts and
+everything else of the part it is cut in: the part's faces, and every other
+cut of that part, whichever joint or hardware makes it. It is how a kind
+says how much wood a cut must leave round it, in the kind's own words:
+
+```
+kind socket : joint {
+  ...
+  cut socket: crossing(into, piece) { drill(diameter: piece.diameter, depth: depth) }
+
+  /// Wood left round the hole: to every face of the board and to its other
+  /// cuts, such as a dado or another socket.
+  param wall = 6mm
+  require socket_wall : wall(socket) >= wall "the socket comes too close to a face of the board or another cut"
+}
+```
+
+- **What it names.** The argument is the name of one of the kind's cuts
+  (see [Named cuts](#named-cuts)), written alone: `wall(socket)`. A name
+  that isn't one of the kind's cuts is `error[unknown-name]` (`unknown
+  name 'sokcet'`), with the kind's cut names in the help. `wall(...)` is
+  read only in a joint or hardware kind's `require` (anywhere else it is
+  `error[syntax]`: `wall(...) is read only in a joint or hardware kind's
+  require`), and the rule is one comparison with `wall(cut)` alone on one
+  side (`wall(hole) >= 3mm`, `3mm <= wall(hole)`); anything else is
+  `error[syntax]`: `wall(...) is compared on its own in a rule`.
+- **What it measures.** For each pair of a joint (or each piece of
+  hardware), every copy of the cut on every part it is made on: the least
+  of them. A cut always opens onto the face it is cut from, and a `through`
+  cut onto the opposite one too: those are never walls. A closed cut
+  (`drill`, `pocket`) is measured to every other face, so one that breaks
+  out of a face has a wall of `0mm`; any other cut opens wherever it
+  reaches a face (a groove runs out of the ends of its board), so only the
+  faces it stays clear of count. Another cut counts unless one of the two
+  lies wholly inside the other (a stub tenon's mortise in the panel groove
+  it sits in takes no wood of its own). Copies of the same cut count, so a
+  dowel's holes are walls to each other.
+- **Round parts.** On round stock and turned parts the faces across the
+  length are the lathe profile, at its narrowest along the hole: a hole
+  into the side of a leg is measured from its bottom to the round surface
+  (its mouth breaks the surface by design), a hole into the end from its
+  side.
+- **Exact where the shapes allow it.** Between boxes, from a shape to a
+  flat face, and between parallel holes in line, the wall is a difference
+  of exact lengths. On a slant (a hole past the corner of a pocket) it is a
+  square root, and between two holes square to each other (two rungs into
+  a leg from adjacent faces) it is found by projecting from one hole to the
+  other until the distance stops shrinking; both are rounded down to the
+  nanometre.
+- **When it is measured.** Once every cut of the design is made, after
+  the kind's other rules: a rule that reads `wall()` is checked in layer 4,
+  with the fit checks, and reported like any failed rule of its kind, at
+  the joint's or hardware's call, with what it measured and where:
+
+```
+error[require]: 'socket_wall' fails: the socket comes too close to a face of the board or another cut
+  --> carcass.stave:103:22
+   = note: for rod and side_l in rod_sockets
+   = note: the rule measures 0mm and needs at least 6mm
+   = note: the same for rod and side_r in rod_sockets
+   = help: the socket in side_l leaves 0mm of wood at the dado that shelf_dados cuts in side_l; move the parts so the socket has more wood round it, or change the joint's settings
+```
+
+  The help says `runs 2mm past <place>` when the cut goes past the face or
+  into the other cut. A rule that fails where something already overlaps
+  (a pin running into another joint's tenon) is left to the overlap, which
+  names what collides.
+- **Not measured yet.** Dovetails, outlines and slots turned at an angle,
+  as the cut measured or as another cut, and the cuts between the boards
+  of a part made of boards: a rule about such a cut is left out, with
+  `warning[not-supported]` (`measuring wall(tail) is not supported yet`).
+  The range layer doesn't measure walls yet: they are checked at the
+  current values.
+
+### Cuts stay in their part
+
+Three backstops hold for every kind, whatever its rules, because no kind
+should be able to get them wrong. Each is reported at the joint's or
+hardware's call, in layer 4:
+
+- **Cuts only remove wood** (`error[cut-size]`). A `tenon` wider or
+  thicker than the part across its end (for a tongue, along its edge), or
+  a `spigot` wider than the part's end (its diameter at that end, for a
+  round or turned part): `rail_stubs: its stub on rail is 25mm thick, but
+  rail is only 19mm thick`, with the help `a stub is the wood left when the
+  wood round it is cut away, so it can't be thicker than the part; make it
+  less than 19mm thick`.
+- **Stopped cuts leave wood behind** (`error[cut-size]`). A depth given as
+  a length (`notch`, `slot`, `pocket`, `drill`, `outline`) must be less
+  than the part there (for a hole into the side of a round part, to the
+  far side of the round); only `through` goes through: `bottom_slots: its
+  slot in front is 12mm deep, but front is only 12mm thick there`, with
+  the help `a cut with a depth stops inside the part and leaves wood behind
+  it; make the slot less than 12mm deep, or write depth: through if it
+  should go right through`.
+- **Closed cuts keep a wall** (`error[wall]`). Every `drill` and `pocket`
+  leaves wood (a wall of more than `0mm`, see [Walls](#walls)) between it
+  and every face it isn't aimed at, and every closed cut of another joint
+  pair or piece of hardware: `side_pegs: its peg hole in base breaks out
+  of the left end of base` (help: `the peg hole runs 5.5mm past the left
+  end of base; move the parts so the peg hole sits inside base with wood
+  all round it, or make the peg hole smaller`), or `post_a_bore: its bore
+  in base runs into the bore of post_b_bore` (help: `the bore runs 2mm
+  into the bore in base; move one of the joints so there is wood between
+  the two cuts, or make one of them smaller`). A pin or screw that runs
+  into another joint's empty hole is caught here, or by its kind's
+  `wall()` rule: its own hole runs into the other. How near a hole may come
+  to a groove or dado is a kind's judgement, not a backstop: write it with
+  `wall()`.
+
+One mistake, one error. A kind's own rule says it first: when one fails
+the design isn't checked further, so std's `tenon_thin` speaks for a tenon
+too thick and `groove`'s `not_too_deep` for a groove too deep, in the
+joint's words, before any backstop. A pair or piece of hardware whose
+`wall()` rule failed gets no backstop for the same cuts; a cut too big or
+too deep gets no wall error, and its part is left out of the overlap
+check, which would only report the same mistake as parts that no longer
+fit. Two closed cuts that run into each other are one error, for the
+first. Nothing here is reported for a part or member that already
+overlaps something.
+
+### Held
+
+Every part must be held: joined to the part placed with `ground`, through
+joints and hardware, or be meant to lift out. The parts a joint pair binds
+(and the parts it makes) hold each other, as do a part made of boards and
+the parts its board joints make; a piece of hardware holds the part it is
+mounted on, the parts its roles name, the parts that carry its members and
+the parts its members touch. A part that nothing joins to the ground part
+this way is `warning[loose-part]` (layer 4), once for each group of parts
+joined only to each other, at the group's first part. It is a question
+about the whole project, asked only once the design has no errors: a part
+with an error may be the one that would join the rest.
+
+```
+warning[loose-part]: slat[0] is loose: no joint or hardware joins it to top or to anything joined to top
+  --> table.stave:120:6
+   = help: join slat[0] to stretcher_front, which it touches, with a joint or hardware, or write loose: true in the part if it is meant to lift out
+```
+
+A group of several parts is named as `a, b, c, d and 11 more are joined
+only to each other: ...`. The help names the held part the group touches
+most, or, when it touches none, says to place it against one.
+
+**Meant to lift out.** A part that is meant to rest in place or lift out
+(a loose shelf, a tray, a removable lid, the samples on a bench) says so
+with `loose: true`, a field of `part` (see [Declarations and their fields](#declarations-and-their-fields)).
+A group with a loose part is not warned: the whole group lifts out
+together, so one part of a tray is enough. `loose:` is a `Bool`, so a
+component can take it as a param.
+
 ### Diagnostics
 
 A diagnostic is printed compiler-style: `error[code]: message`, then
@@ -2626,6 +2803,8 @@ shape of their messages are fixed, because tests and AI tools match on them.
 | 4 | `no-contact` | `<joint or hardware>: <part> meets none of the parts it should join`, or for `contact(a, b)` `<a> and <b> don't touch` |
 | 4 | `overlap` | `<a> and <b> overlap` |
 | 4 | `adjust` | `<hardware>: the <member> would sit <offset> off its place on the <member>; it adjusts <d>`, or for an axis no `adjust` covers `<hardware>: the <member> would sit <offset> off its place <across>; it doesn't adjust that way` |
+| 4 | `wall` | `<joint>: its <hole> in <part> breaks out of the <left end> of <part>`, or `<joint>: its <bore> in <part> runs into the <bore> of <other>` (`meets` when they only touch); see [Cuts stay in their part](#cuts-stay-in-their-part) |
+| 4 | `cut-size` | `<joint>: its <tenon> on <part> is <25mm> <thick>, but <part> is only <19mm> <thick>`, `... is <80mm> across, but <part> is only <70mm> across at that end`, or `<joint>: its <groove> in <part> is <12mm> deep, but <part> is only <12mm> <thick> there` |
 | 5 | `motion` | `<a> hits <b> when <assembly> is <open>`; `<assembly>'s hardware doesn't move alike`; `<hardware>: <members> lock at <value>`; `<hardware>: <members> may come within 0.1mm of locking near <value>` |
 | 6 | `require` | `'<name>' fails: <message>` |
 | 6 | `require-range` | `'<name>' does not hold for every allowed value: <message>` |
@@ -2633,7 +2812,7 @@ shape of their messages are fixed, because tests and AI tools match on them.
 | 7 | `order` | `<part>: there is no valid order for its cuts`, or for a joint's insert steps `<joint>: <step> is blocked by <part>` |
 
 Warnings and notes: `shadows-prelude`, `no-recipe`, `not-supported`,
-`model-mismatch`, `unnamed-cut`.
+`model-mismatch`, `unnamed-cut`, `loose-part`.
 
 A model mismatch (layer 4) is reported at the kind's
 `model(...)` and says one of `<kind>'s model puts '<node>' at <point>, but

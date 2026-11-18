@@ -686,27 +686,10 @@ impl Window {
         let found = {
             let session = self.session.borrow();
             session.drawable().map(|(design, graph)| {
-                let select = wanted.selection.as_ref().and_then(|name| {
-                    design
-                        .parts
-                        .iter()
-                        .find(|p| &p.name == name)
-                        .map(|p| Selection::Part(p.id))
-                        .or_else(|| {
-                            design
-                                .hardware
-                                .iter()
-                                .find(|h| &h.name == name)
-                                .map(|h| Selection::Hardware(h.id))
-                        })
-                        .or_else(|| {
-                            design
-                                .assemblies
-                                .iter()
-                                .find(|a| &a.name == name)
-                                .map(|a| Selection::Assembly(a.id))
-                        })
-                });
+                let select = wanted
+                    .selection
+                    .as_ref()
+                    .and_then(|name| link::selection_named(design, name));
                 let focus = wanted
                     .focus
                     .as_ref()
@@ -2182,6 +2165,13 @@ impl Window {
                 return;
             };
             let focus = focus.as_ref();
+            // Outside focus mode, a selected joint member shows through
+            // the parts it sits in.
+            let outside = if focus.is_none() {
+                session.looks()
+            } else {
+                None
+            };
             let plan = focus
                 .filter(|f| f.plan)
                 .and_then(|f| f.focus.plan().copied());
@@ -2209,7 +2199,10 @@ impl Window {
                 section: plan
                     .map(|p| p.section)
                     .or_else(|| session.scene_entry().and_then(|entry| entry.section)),
-                looks: focus.map(|f| f.looks.as_slice()).or(looks.as_deref()),
+                looks: focus
+                    .map(|f| f.looks.as_slice())
+                    .or(outside.as_deref())
+                    .or(looks.as_deref()),
                 overlay: focus.map(|f| &f.overlay),
                 tint_cut_faces: focus.is_none_or(|f| f.options.tint_cut_faces),
                 backdrop,

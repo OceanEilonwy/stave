@@ -433,6 +433,10 @@ pub struct SolvedDesign {
     /// Elements spaced with `pitch` or `gap` that run past their `to`
     /// anchor (the fit check reports them as `overlap`).
     pub overruns: Vec<Overrun>,
+    /// The kinds' rules that read `wall(cut)`, for every pair or piece of
+    /// hardware: measured by the fit check once every cut is made
+    /// (grammar, "Walls").
+    pub wall_rules: Vec<WallRule>,
 }
 
 impl SolvedDesign {
@@ -459,6 +463,72 @@ impl SolvedDesign {
     /// The lowest point of any part: where the floor is.
     pub fn floor(&self) -> Option<Length> {
         self.parts.iter().map(|p| p.cut_box().min().up).min()
+    }
+
+    /// A joint pair's member, laid out on its contact patch.
+    pub fn pair_member(&self, member: PairMember) -> Option<&Body> {
+        self.joints
+            .get(member.joint.index())?
+            .pairs
+            .get(member.pair)?
+            .members
+            .iter()
+            .find(|body| body.id.body == member.body)
+    }
+
+    /// A joint pair's member in words: `top_dowels's pin`, with the pair's
+    /// parts when the joint has more than one pair (`top_dowels's pin
+    /// between side_l and top`).
+    pub fn pair_member_name(&self, member: PairMember) -> Option<String> {
+        let joint = self.joints.get(member.joint.index())?;
+        let body = self.pair_member(member)?;
+        let between = match joint.pairs.as_slice() {
+            [_, _, ..] => {
+                let parts: Vec<&str> = joint
+                    .pairs
+                    .get(member.pair)?
+                    .roles
+                    .iter()
+                    .filter_map(|role| self.part(role.part).map(|p| p.name.as_str()))
+                    .collect();
+                match parts.split_last() {
+                    Some((last, [first, rest @ ..])) => {
+                        let mut list = (*first).to_owned();
+                        for part in rest {
+                            list.push_str(", ");
+                            list.push_str(part);
+                        }
+                        format!(" between {list} and {last}")
+                    }
+                    Some((only, [])) => format!(" in {only}"),
+                    None => String::new(),
+                }
+            }
+            [] | [_] => String::new(),
+        };
+        Some(format!("{}'s {}{between}", joint.name, body.name))
+    }
+
+    /// Every joint pair's members, in joint, pair and member order.
+    pub fn pair_members(&self) -> impl Iterator<Item = (PairMember, &Body)> {
+        self.joints.iter().flat_map(|joint| {
+            joint
+                .pairs
+                .iter()
+                .enumerate()
+                .flat_map(move |(pair, found)| {
+                    found.members.iter().map(move |body| {
+                        (
+                            PairMember {
+                                joint: joint.id,
+                                pair,
+                                body: body.id.body,
+                            },
+                            body,
+                        )
+                    })
+                })
+        })
     }
 }
 
@@ -628,6 +698,9 @@ pub struct Part {
     /// The boards it is made of, when it is wider than its stock's
     /// `max_width` (grammar, "Boards"). Derived, never written.
     pub boards: Option<Boards>,
+    /// `loose: true`: meant to lift out, so nothing needs to hold it
+    /// (grammar, "Held").
+    pub loose: bool,
 }
 
 /// The number of a board within its part: 1 is the board at the
@@ -837,14 +910,12 @@ pub enum CutKind {
         /// The flats' angle.
         flats_angle: Angle,
     },
-    /// Round holes.
+    /// One round hole, centred on the footprint (or on a member's shape).
     Drill {
         /// Hole diameter.
         diameter: Length,
         /// Hole depth.
         depth: Depth,
-        /// How many, spaced along the longer side.
-        count: u32,
     },
     /// A dovetail socket.
     DovetailSocket {
@@ -1093,6 +1164,76 @@ pub struct RequireResult {
     pub holds: bool,
     /// Its message, with values filled in.
     pub message: String,
+}
+
+/// How a rule compares `wall(cut)` with what it needs, with the wall on
+/// the left (`3mm <= wall(hole)` is `wall(hole) >= 3mm`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WallCompare {
+    /// `>=`
+    AtLeast,
+    /// `>`
+    MoreThan,
+    /// `<=`
+    AtMost,
+    /// `<`
+    LessThan,
+    /// `==`
+    Exactly,
+    /// `!=`
+    Not,
+}
+
+impl WallCompare {
+    /// `true` when a wall of `wall` keeps the rule against `needs`.
+    pub fn holds(self, wall: Length, needs: Length) -> bool {
+        match self {
+            WallCompare::AtLeast => wall >= needs,
+            WallCompare::MoreThan => wall > needs,
+            WallCompare::AtMost => wall <= needs,
+            WallCompare::LessThan => wall < needs,
+            WallCompare::Exactly => wall == needs,
+            WallCompare::Not => wall != needs,
+        }
+    }
+
+    /// How a message says what the rule needs: `at least`, `exactly`.
+    pub fn phrase(self) -> &'static str {
+        match self {
+            WallCompare::AtLeast => "at least",
+            WallCompare::MoreThan => "more than",
+            WallCompare::AtMost => "at most",
+            WallCompare::LessThan => "less than",
+            WallCompare::Exactly => "exactly",
+            WallCompare::Not => "anything but",
+        }
+    }
+}
+
+/// A kind's `require` that reads `wall(cut)`, for one pair of a joint or
+/// one piece of hardware: everything but the wall is worked out when the
+/// kind's rules run; the wall is measured once every cut is made
+/// (grammar, "Walls").
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct WallRule {
+    /// The pair or piece of hardware whose cut it measures.
+    pub source: CutSource,
+    /// The kind the rule belongs to.
+    #[serde(skip)]
+    pub kind: KindId,
+    /// The rule, in the kind's list of requires.
+    pub require: usize,
+    /// The rule's name.
+    pub name: String,
+    /// Its message, with values filled in.
+    pub message: String,
+    /// The cut it measures.
+    pub cut: CutName,
+    /// How the wall must compare with `needs`.
+    pub compare: WallCompare,
+    /// The other side of the comparison, rounded once.
+    pub needs: Length,
 }
 
 /// A fastener a joint uses.
@@ -1380,6 +1521,33 @@ impl BodyOwner {
     }
 }
 
+/// A member a joint lays out on one pair's contact patch (a dowel's pins,
+/// the screws of a screwed joint): which joint, which pair, and which of
+/// its kind's members. Every copy of the member on that pair is one
+/// [`Body`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
+pub struct PairMember {
+    /// The joint.
+    pub joint: JointId,
+    /// The pair (index into [`Joint::pairs`]).
+    pub pair: usize,
+    /// The member, among its kind's members with a body.
+    pub body: BodyId,
+}
+
+impl PairMember {
+    /// The body reference it is.
+    pub fn body_ref(self) -> BodyRef {
+        BodyRef {
+            owner: BodyOwner::Joint {
+                joint: self.joint,
+                pair: self.pair,
+            },
+            body: self.body,
+        }
+    }
+}
+
 /// A member of one piece of hardware or one joint pair: whose, and which
 /// of its kind's members.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
@@ -1395,6 +1563,30 @@ impl BodyRef {
     pub fn hardware(self) -> Option<HardwareId> {
         self.owner.hardware()
     }
+
+    /// The joint pair's member, for a joint's member.
+    pub fn pair_member(self) -> Option<PairMember> {
+        match self.owner {
+            BodyOwner::Joint { joint, pair } => Some(PairMember {
+                joint,
+                pair,
+                body: self.body,
+            }),
+            BodyOwner::Hardware { .. } => None,
+        }
+    }
+}
+
+/// What a joint's member is, when its kind names it (`member pin :
+/// dowel_pin(...)`): the fastener the hardware list counts.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct MemberItem {
+    /// The fastener kind's name: `dowel_pin`.
+    pub kind: String,
+    /// The fastener kind's `species:`, when it is made of wood (a dowel
+    /// pin); `None` when it doesn't say, which a viewer draws as steel.
+    #[serde(serialize_with = "serialize_optional_species")]
+    pub wood: Option<Species>,
 }
 
 /// What moves a member.
@@ -1477,12 +1669,18 @@ pub struct Body {
     pub name: String,
     /// What moves it.
     pub carrier: BodyCarrier,
+    /// What it is, for a joint's member whose kind names a fastener.
+    pub item: Option<MemberItem>,
     /// Its shapes, in its kind's order; never empty.
     shapes: Vec<MemberShape>,
+    /// How many copies its shapes are (a joint's member laid out `count:`
+    /// times); at least 1, and the shapes divide evenly among them.
+    copies: u32,
 }
 
 impl Body {
-    /// A member with its shapes; `None` when it has none.
+    /// A member with its shapes, one copy and no item; `None` when it has
+    /// no shapes.
     pub fn new(
         id: BodyRef,
         name: String,
@@ -1493,8 +1691,45 @@ impl Body {
             id,
             name,
             carrier,
+            item: None,
             shapes,
+            copies: 1,
         })
+    }
+
+    /// The same member laid out `copies` times, its shapes in copy order
+    /// (each copy's shapes together); `None` when the shapes don't divide
+    /// evenly among that many copies or there are none.
+    pub fn laid_out(self, copies: u32, item: Option<MemberItem>) -> Option<Body> {
+        let count = usize::try_from(copies).ok().filter(|count| *count > 0)?;
+        self.shapes.len().is_multiple_of(count).then_some(Body {
+            copies,
+            item,
+            ..self
+        })
+    }
+
+    /// The part it moves with, when a part carries it.
+    pub fn carried_by(&self) -> Option<PartId> {
+        match self.carrier {
+            BodyCarrier::Part(part) => Some(part),
+            BodyCarrier::Region(_) | BodyCarrier::Link(_) => None,
+        }
+    }
+
+    /// How many copies of the member it is: 1 for hardware.
+    pub fn copies(&self) -> u32 {
+        self.copies
+    }
+
+    /// Each copy's shapes, in order.
+    pub fn copy_shapes(&self) -> impl Iterator<Item = &[MemberShape]> {
+        let per_copy = usize::try_from(self.copies)
+            .ok()
+            .filter(|count| *count > 0)
+            .map_or(self.shapes.len(), |count| self.shapes.len() / count)
+            .max(1);
+        self.shapes.chunks(per_copy)
     }
 
     /// Its shapes, in its kind's order (at least one).
@@ -1837,6 +2072,16 @@ fn serialize_species<S: serde::Serializer>(
     serializer: S,
 ) -> Result<S::Ok, S::Error> {
     serializer.serialize_str(value.word())
+}
+
+fn serialize_optional_species<S: serde::Serializer>(
+    value: &Option<Species>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    match value {
+        Some(species) => serializer.serialize_some(species.word()),
+        None => serializer.serialize_none(),
+    }
 }
 
 fn serialize_axis<S: serde::Serializer>(value: &Axis, serializer: S) -> Result<S::Ok, S::Error> {

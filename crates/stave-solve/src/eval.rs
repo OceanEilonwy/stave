@@ -187,6 +187,14 @@ impl Solver<'_> {
                 self.member(&base_value, member, env, span)
             }
             RExprKind::Index { base, index } => self.index(base, index, env, span),
+            // A rule that reads a wall is measured by the fit check once
+            // every cut is made (`walls`); nothing else may read one.
+            RExprKind::Wall(_) => Err(self.eval_error(
+                env,
+                span,
+                "wall(...) can't be worked out here".to_owned(),
+                "wall(...) is read only as one side of a kind's require",
+            )),
             RExprKind::Builtin { function, args } => self.builtin(*function, args, env, span),
             RExprKind::KindValue { kind, settings } => {
                 let base = self.eval(kind, env)?;
@@ -1351,6 +1359,9 @@ impl Solver<'_> {
                     origin: RegionOrigin::Plain,
                 }]))
             }
+            // Read only as one side of a kind's rule, measured by the
+            // fit check: the resolver makes it `RExprKind::Wall`.
+            Builtin::Wall => Err(Reported),
             Builtin::Contact => {
                 let (Some(a), Some(b)) = (Self::arg(args, "a"), Self::arg(args, "b")) else {
                     return Err(Reported);

@@ -71,6 +71,7 @@ fn part(orientation: Orientation, origin: Point, cut: Size3, shape: Shape) -> Pa
         joints: Vec::new(),
         note: None,
         boards: None,
+        loose: false,
     }
 }
 
@@ -385,6 +386,7 @@ fn design_of(part: &Part) -> SolvedDesign {
         scenes: Vec::new(),
         requires: Vec::new(),
         overruns: Vec::new(),
+        wall_rules: Vec::new(),
     }
 }
 
@@ -544,7 +546,6 @@ fn a_hole_opens_in_its_face() {
         CutKind::Drill {
             diameter: mm(10),
             depth: Depth::Length(mm(8)),
-            count: 1,
         },
     )];
     let solid = solid::Solid::of(&board, &design_of(&board));

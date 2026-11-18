@@ -1,0 +1,46 @@
+// expect: error[require] 'socket_wall' fails: the socket comes too close to a face of the board or another cut
+stave 1
+
+// The clothing cabinet's rod placed flush with the front of the sides: the
+// 28mm socket in each side is open at the side's front edge, with no wood
+// in front of it (docs/reviews/2026-11-17-checks-gaps.md, gap 4).
+
+project "A socket at the edge" {
+  units: mm
+}
+
+stock oak_19       { species: white_oak, form: solid, thickness: 19mm }
+stock oak_dowel_28 { species: white_oak, form: dowel, diameter: 28mm }
+
+part base : oak_19 {
+  length: 900mm
+  width:  560mm
+  place {
+    ground
+  }
+}
+
+part side_l : oak_19 {
+  length: 1600mm
+  width:  560mm
+  place {
+    orient(length: up, width: back)
+    against(base.top)
+    flush(base.left)
+    flush(base.back)
+  }
+}
+
+part side_r = mirror(side_l, about: mid(base, across))
+
+part rod : oak_dowel_28 {
+  length: fit
+  place {
+    against(base.top, gap: 1300mm)
+    center(base, across)
+    flush(side_l.front)
+  }
+}
+
+joint base_dowels : dowel([side_l, side_r], into: base, count: 4)
+joint rod_sockets : socket(rod, into: [side_l, side_r], depth: 9mm)

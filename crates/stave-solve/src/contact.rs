@@ -88,6 +88,7 @@ fn patch_size_read(expr: &RExpr) -> Option<(&RExpr, &RExpr, PatchSize)> {
         | RExprKind::Word(_)
         | RExprKind::Symbol(_)
         | RExprKind::SelfElement(_)
+        | RExprKind::Wall(_)
         | RExprKind::Error => None,
     }
 }
@@ -128,6 +129,7 @@ fn params_read(expr: &RExpr, out: &mut Vec<usize>) {
         | RExprKind::Fit
         | RExprKind::Word(_)
         | RExprKind::SelfElement(_)
+        | RExprKind::Wall(_)
         | RExprKind::Error => {}
     }
 }
@@ -297,6 +299,7 @@ impl Solver<'_> {
             | RExprKind::KindValue { .. }
             | RExprKind::Unary { .. }
             | RExprKind::List(_)
+            | RExprKind::Wall(_)
             | RExprKind::Error => None,
         }
     }

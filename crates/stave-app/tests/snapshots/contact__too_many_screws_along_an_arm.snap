@@ -7,10 +7,10 @@ error[require]: 'seat_long' fails: too many screws for this joint
    |
 31 | joint shelf_screws : screw(shelf, into: arm[*], length: 40mm, count: 60, glue: false)
    |                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  ::: std/joinery/screw.stave:32:3
+  ::: std/joinery/screw.stave:31:3
    |
-32 |   require seat_long    : contact(piece, into).length >= count * (diameter + gap) + gap "too many screws for this joint"
-   |   --------------------------------------------------------------------------------------------------------------------- the kind's rule
+31 |   require seat_long  : contact(piece, into).length >= count * (diameter + gap) + gap "too many screws for this joint"
+   |   ------------------------------------------------------------------------------------------------------------------- the kind's rule
    = note: for shelf and arm[left] in shelf_screws
    = note: the rule measures 140mm and needs at least 1155mm
    = note: the same for shelf and arm[right] in shelf_screws

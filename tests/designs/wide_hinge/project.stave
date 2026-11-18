@@ -65,6 +65,9 @@ component Door {
   }
 }
 
+// The sides stand on the base on dowels.
+joint side_dowels : dowel([side_l, side_r], into: base, depth: 12mm)
+
 assembly door : Door {
   opening:    bay
   hinge_side: side_l

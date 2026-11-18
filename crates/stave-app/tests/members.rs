@@ -114,7 +114,6 @@ fn a_members_cuts_are_one_hole_per_pin_in_each_part() {
                 CutKind::Drill {
                     diameter: mm("8"),
                     depth: Depth::Length(mm("15")),
-                    count: 1,
                 }
             );
         }
@@ -165,10 +164,12 @@ fn peg_kind(layout: &str) -> String {
     )
 }
 
-/// The centres of the pegs along the patch's length (deep).
+/// The centres of the pegs along the patch's length (deep). A peg flush
+/// with the end of the patch has a hole that breaks out of the board
+/// (`error[wall]`), which is not what these tests are about.
 fn peg_centres(layout: &str) -> Vec<stave_lang::units::Length> {
     let opened = open(&peg_kind(layout));
-    let design = design(&opened);
+    let design = common::solved(&opened);
     design.joints[0].pairs[0].members[0]
         .shapes()
         .iter()

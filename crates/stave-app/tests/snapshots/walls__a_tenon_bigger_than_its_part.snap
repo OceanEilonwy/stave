@@ -1,0 +1,10 @@
+---
+source: crates/stave-app/tests/walls.rs
+expression: "rendered(\"tests/broken/tenon_bigger_than_part\")"
+---
+error[cut-size]: rail_stubs: its stub on rail is 25mm thick, but rail is only 19mm thick
+  --> tests/broken/tenon_bigger_than_part/project.stave:58:20
+   |
+58 | joint rail_stubs : stub_tenon(rail, into: [leg_l, leg_r])
+   |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = help: a stub is the wood left when the wood round it is cut away, so it can't be thicker than the part; make it less than 19mm thick

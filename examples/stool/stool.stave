@@ -22,8 +22,7 @@ let low_rung     = 150mm                           // floor to the centre of the
 let high_rung    = 185mm                           // floor to the centre of the side rungs
 
 // ---- checks ----
-require rungs_miss : high_rung - low_rung >= ash_dowel_22.diameter + 10mm "the rung holes in a leg must not run into each other"
-require legs_fit   : seat_size >= 2 * (leg_inset + leg_diameter) + 100mm "the legs crowd each other on a small seat"
+require legs_fit : seat_size >= 2 * (leg_inset + leg_diameter) + 100mm "the legs crowd each other on a small seat"
 
 // ---- stock ----
 stock ash_30       { species: ash, form: solid, thickness: 30mm, max_width: 200mm }

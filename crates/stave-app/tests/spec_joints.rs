@@ -782,7 +782,7 @@ fn operations_record_their_measurements() {
         "kind k : joint {
   cut housing: crossing(into, piece) {
     slot(width: 5mm, depth: 6mm, angle: 10deg, from_centre: true)
-    drill(diameter: 5mm, depth: 8mm, count: 2)
+    drill(diameter: 5mm, depth: 8mm)
   }
   cut recess: side(piece, normal: thickness, from: into, opposite: true, flip: true) {
     pocket(width: 10mm, thickness: 5mm, depth: 5mm)
@@ -802,11 +802,11 @@ joint j : k(shelf, into: side)",
             ..
         }
     )));
-    assert!(
-        side_cuts
-            .iter()
-            .any(|k| matches!(k, CutKind::Drill { count: 2, .. }))
-    );
+    assert!(side_cuts.iter().any(|k| **k
+        == CutKind::Drill {
+            diameter: mm("5"),
+            depth: Depth::Length(mm("8")),
+        }));
     let shelf = part(design, "shelf");
     assert!(
         shelf
@@ -872,14 +872,17 @@ fn a_dovetail_takes_an_angle_or_a_slope() {
     );
 }
 
+/// A drill makes one hole: `count:` spread several before joint members
+/// placed them, and now says what to write instead.
 #[test]
-fn a_count_argument_is_a_count() {
-    only_error(
-        &open(
-            "kind k : joint {\n  cut hole: crossing(into, piece) {\n    drill(diameter: 5mm, depth: 5mm, count: 2mm)\n  }\n}",
-        ),
-        "unit-mismatch",
-        "'count' needs a count, found a length",
+fn a_drill_has_no_count_and_points_to_joint_members() {
+    let opened = open(
+        "kind k : joint {\n  cut hole: crossing(into, piece) {\n    drill(diameter: 5mm, depth: 5mm, count: 2)\n  }\n}",
+    );
+    only_error(&opened, "unknown-field", "'drill' has no field 'count'");
+    assert_eq!(
+        common::help(&opened),
+        "a drill makes one hole; for a row of holes, give the joint kind a member for what goes in them, with count: and spaced:, and drill crossing(role, member): one hole for every copy, lined up in both parts"
     );
 }
 
@@ -1090,7 +1093,6 @@ fn a_pull_bores_one_hole_or_two_holes_centres_apart() {
                 CutKind::Drill {
                     diameter,
                     depth: Depth::Through,
-                    count: 1,
                 },
             ) if *diameter == mm("4") => Some((
                 design.hardware[hardware.index()].name.clone(),
@@ -1123,7 +1125,6 @@ fn a_cup_hinge_bores_its_cup_in_the_mount_face() {
         == CutKind::Drill {
             diameter: mm("35"),
             depth: Depth::Length(mm("13")),
-            count: 1
         }));
     // The plate stays on the side: it never reaches into it.
     let plate = common::member_bounds(common::hardware(design, "h"), "plate");

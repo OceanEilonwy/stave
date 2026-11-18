@@ -8,23 +8,23 @@ side_l                       cherry_19      581 x 400 x 19             0..19    
     cut notch depth 8 on thickness end: where bottom meets it, local 60..79 x 0..394 x 11..19
     cut notch depth 8 on thickness end: where divider meets it, local 412..431 x 0..394 x 11..19
     cut notch depth 9 on thickness end: where back meets it, local 60..581 x 394..400 x 10..19
-    cut drill 1 x diameter 8 depth 15 on length end: where top_dowels's pin meets it, local 566..581 x 94..102 x 5.5..13.5
-    cut drill 1 x diameter 8 depth 15 on length end: where top_dowels's pin meets it, local 566..581 x 196..204 x 5.5..13.5
-    cut drill 1 x diameter 8 depth 15 on length end: where top_dowels's pin meets it, local 566..581 x 298..306 x 5.5..13.5
+    cut drill diameter 8 depth 15 on length end: where top_dowels's pin meets it, local 566..581 x 94..102 x 5.5..13.5
+    cut drill diameter 8 depth 15 on length end: where top_dowels's pin meets it, local 566..581 x 196..204 x 5.5..13.5
+    cut drill diameter 8 depth 15 on length end: where top_dowels's pin meets it, local 566..581 x 298..306 x 5.5..13.5
 side_r                       cherry_19      581 x 400 x 19             431..450             0..581               0..400               up/back/right
     cut notch depth 8 on thickness start: where bottom meets it, local 60..79 x 0..394 x 0..8
     cut notch depth 8 on thickness start: where divider meets it, local 412..431 x 0..394 x 0..8
     cut notch depth 9 on thickness start: where back meets it, local 60..581 x 394..400 x 0..9
-    cut drill 1 x diameter 8 depth 15 on length end: where top_dowels's pin meets it, local 566..581 x 94..102 x 5.5..13.5
-    cut drill 1 x diameter 8 depth 15 on length end: where top_dowels's pin meets it, local 566..581 x 196..204 x 5.5..13.5
-    cut drill 1 x diameter 8 depth 15 on length end: where top_dowels's pin meets it, local 566..581 x 298..306 x 5.5..13.5
+    cut drill diameter 8 depth 15 on length end: where top_dowels's pin meets it, local 566..581 x 94..102 x 5.5..13.5
+    cut drill diameter 8 depth 15 on length end: where top_dowels's pin meets it, local 566..581 x 196..204 x 5.5..13.5
+    cut drill diameter 8 depth 15 on length end: where top_dowels's pin meets it, local 566..581 x 298..306 x 5.5..13.5
 top                          cherry_19      480 x 415 x 19             -15..465             581..600             -15..400             right/back/up
-    cut drill 1 x diameter 8 depth 15 on thickness start: where top_dowels's pin meets it, local 20.5..28.5 x 109..117 x 0..15
-    cut drill 1 x diameter 8 depth 15 on thickness start: where top_dowels's pin meets it, local 20.5..28.5 x 211..219 x 0..15
-    cut drill 1 x diameter 8 depth 15 on thickness start: where top_dowels's pin meets it, local 20.5..28.5 x 313..321 x 0..15
-    cut drill 1 x diameter 8 depth 15 on thickness start: where top_dowels's pin meets it, local 451.5..459.5 x 109..117 x 0..15
-    cut drill 1 x diameter 8 depth 15 on thickness start: where top_dowels's pin meets it, local 451.5..459.5 x 211..219 x 0..15
-    cut drill 1 x diameter 8 depth 15 on thickness start: where top_dowels's pin meets it, local 451.5..459.5 x 313..321 x 0..15
+    cut drill diameter 8 depth 15 on thickness start: where top_dowels's pin meets it, local 20.5..28.5 x 109..117 x 0..15
+    cut drill diameter 8 depth 15 on thickness start: where top_dowels's pin meets it, local 20.5..28.5 x 211..219 x 0..15
+    cut drill diameter 8 depth 15 on thickness start: where top_dowels's pin meets it, local 20.5..28.5 x 313..321 x 0..15
+    cut drill diameter 8 depth 15 on thickness start: where top_dowels's pin meets it, local 451.5..459.5 x 109..117 x 0..15
+    cut drill diameter 8 depth 15 on thickness start: where top_dowels's pin meets it, local 451.5..459.5 x 211..219 x 0..15
+    cut drill diameter 8 depth 15 on thickness start: where top_dowels's pin meets it, local 451.5..459.5 x 313..321 x 0..15
 bottom                       cherry_19      428 x 394 x 19             19..431              60..79               0..394               right/back/up
     drawn 412 x 394 x 19, starting 8 x 0 x 0 into the cut size
 divider                      cherry_19      428 x 394 x 19             19..431              412..431             0..394               right/back/up
@@ -32,11 +32,9 @@ divider                      cherry_19      428 x 394 x 19             19..431  
 back                         ply_6          521 x 430 x 6              19..431              60..581              394..400             up/right/back
     drawn 521 x 412 x 6, starting 0 x 9 x 0 into the cut size
 drawer.front                 cherry_19      408 x 146 x 19             21..429              433..579             0..19                right/up/back
-    cut drill 1 x diameter 3 depth 13 on thickness end: where drawer.front_screws's screw meets it, local 92.82..95.82 x 73..76 x 6..19
-    cut drill 1 x diameter 3 depth 13 on thickness end: where drawer.front_screws's screw meets it, local 165.94..168.94 x 73..76 x 6..19
-    cut drill 1 x diameter 3 depth 13 on thickness end: where drawer.front_screws's screw meets it, local 239.06..242.06 x 73..76 x 6..19
-    cut drill 1 x diameter 3 depth 13 on thickness end: where drawer.front_screws's screw meets it, local 312.18..315.18 x 73..76 x 6..19
-    cut drill 1 x diameter 4 depth through on thickness start: where drawer.pull's screw meets it, local 202..206 x 71..75 x 0..19
+    cut drill diameter 3 depth 13 on thickness end: where drawer.front_screws's screw meets it, local 141.566667..144.566667 x 73..76 x 6..19
+    cut drill diameter 3 depth 13 on thickness end: where drawer.front_screws's screw meets it, local 263.433333..266.433333 x 73..76 x 6..19
+    cut drill diameter 4 depth through on thickness start: where drawer.pull's screw meets it, local 202..206 x 71..75 x 0..19
 drawer.side[left]            maple_12       350 x 123 x 12             31.7..43.7           446..569             19..369              back/up/right
     cut notch depth 6 on thickness end: where drawer.sub_front meets it, local 0..12 x 0..123 x 6..12
     cut notch depth 6 on thickness end: where drawer.back meets it, local 338..350 x 0..123 x 6..12
@@ -48,10 +46,8 @@ drawer.side[right]           maple_12       350 x 123 x 12             406.3..41
 drawer.sub_front             maple_12       374.6 x 123 x 12           43.7..406.3          446..569             19..31               right/up/back
     drawn 362.6 x 123 x 12, starting 6 x 0 x 0 into the cut size
     cut notch depth 6 on thickness end: where drawer.bottom meets it, local 0..374.6 x 10..16 x 6..12
-    cut drill 1 x diameter 4.5 depth through on thickness start: where drawer.front_screws's screw meets it, local 76.12..79.12 x 60..63 x 0..12
-    cut drill 1 x diameter 4.5 depth through on thickness start: where drawer.front_screws's screw meets it, local 149.24..152.24 x 60..63 x 0..12
-    cut drill 1 x diameter 4.5 depth through on thickness start: where drawer.front_screws's screw meets it, local 222.36..225.36 x 60..63 x 0..12
-    cut drill 1 x diameter 4.5 depth through on thickness start: where drawer.front_screws's screw meets it, local 295.48..298.48 x 60..63 x 0..12
+    cut drill diameter 4.5 depth through on thickness start: where drawer.front_screws's screw meets it, local 124.866667..127.866667 x 60..63 x 0..12
+    cut drill diameter 4.5 depth through on thickness start: where drawer.front_screws's screw meets it, local 246.733333..249.733333 x 60..63 x 0..12
 drawer.back                  maple_12       374.6 x 123 x 12           43.7..406.3          446..569             357..369             right/up/back
     drawn 362.6 x 123 x 12, starting 6 x 0 x 0 into the cut size
     cut notch depth 6 on thickness start: where drawer.bottom meets it, local 0..374.6 x 10..16 x 0..6
@@ -89,13 +85,15 @@ back_rabbets                 rabbet
         adds 9 to the width end of back
 top_dowels                   dowel
     piece: side_l, into: top (butt across up)
-        pin cylinder up diameter 8, up 566..596, centre across 9.5 x deep 98
-        pin cylinder up diameter 8, up 566..596, centre across 9.5 x deep 200
-        pin cylinder up diameter 8, up 566..596, centre across 9.5 x deep 302
+        pin: 3 x dowel_pin (beech), moves with side_l
+            1 cylinder up diameter 8, up 566..596, centre across 9.5 x deep 98
+            2 cylinder up diameter 8, up 566..596, centre across 9.5 x deep 200
+            3 cylinder up diameter 8, up 566..596, centre across 9.5 x deep 302
     piece: side_r, into: top (butt across up)
-        pin cylinder up diameter 8, up 566..596, centre across 440.5 x deep 98
-        pin cylinder up diameter 8, up 566..596, centre across 440.5 x deep 200
-        pin cylinder up diameter 8, up 566..596, centre across 440.5 x deep 302
+        pin: 3 x dowel_pin (beech), moves with side_r
+            1 cylinder up diameter 8, up 566..596, centre across 440.5 x deep 98
+            2 cylinder up diameter 8, up 566..596, centre across 440.5 x deep 200
+            3 cylinder up diameter 8, up 566..596, centre across 440.5 x deep 302
 drawer.box_dados             dado
     piece: drawer.sub_front, into: drawer.side[left] (butt across across)
         adds 6 to the length start of drawer.sub_front
@@ -116,14 +114,13 @@ drawer.bottom_groove         groove
         adds 6 to the width end of drawer.bottom
 drawer.front_screws          screw, no glue
     piece: drawer.sub_front, into: drawer.front (butt across deep)
-        screw cylinder deep diameter 3, deep 6..31, centre up 507.5 x across 115.32
-        screw cylinder deep diameter 3, deep 6..31, centre up 507.5 x across 188.44
-        screw cylinder deep diameter 3, deep 6..31, centre up 507.5 x across 261.56
-        screw cylinder deep diameter 3, deep 6..31, centre up 507.5 x across 334.68
+        screw: 2 x wood_screw (steel), moves with drawer.sub_front
+            1 cylinder deep diameter 3, deep 6..31, centre up 507.5 x across 164.066667
+            2 cylinder deep diameter 3, deep 6..31, centre up 507.5 x across 285.933333
 
 FASTENERS
 top_dowels                   6 x dowel_pin (8 x 30)
-drawer.front_screws          4 x wood_screw (4 x 25)
+drawer.front_screws          2 x wood_screw (4 x 25)
 
 REGIONS (4)
 inside                       19..431              79..581              0..394              
@@ -134,7 +131,7 @@ drawer.face                  21..429              433..579             0..19
 ASSEMBLIES (1)
 drawer                       Drawer (6 parts): travels 350 toward the front
 
-REQUIRES (34)
+REQUIRES (31)
 drawer_room                                  holds
 shelf_room                                   holds
 drawer.slide_fits                            holds
@@ -146,11 +143,9 @@ shelf_dados.not_too_deep                     holds
 back_rabbets.not_too_deep                    holds
 back_rabbets.not_too_deep                    holds
 top_dowels.pin_fits_piece                    holds
-top_dowels.hole_stops                        holds
 top_dowels.seat_wide                         holds
 top_dowels.seat_long                         holds
 top_dowels.pin_fits_piece                    holds
-top_dowels.hole_stops                        holds
 top_dowels.seat_wide                         holds
 top_dowels.seat_long                         holds
 drawer.box_dados.not_too_deep                holds
@@ -165,7 +160,6 @@ drawer.bottom_groove.panel_is_held           holds
 drawer.bottom_groove.not_too_deep            holds
 drawer.bottom_groove.panel_is_held           holds
 drawer.bottom_groove.not_too_deep            holds
-drawer.front_screws.stays_inside             holds
 drawer.front_screws.bites                    holds
 drawer.front_screws.seat_wide                holds
 drawer.front_screws.seat_long                holds

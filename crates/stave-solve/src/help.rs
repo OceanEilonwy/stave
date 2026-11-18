@@ -109,6 +109,7 @@ fn compares_for_equality(condition: &RExpr) -> bool {
         | RExprKind::KindValue { .. }
         | RExprKind::Unary { .. }
         | RExprKind::List(_)
+        | RExprKind::Wall(_)
         | RExprKind::Error => false,
     }
 }

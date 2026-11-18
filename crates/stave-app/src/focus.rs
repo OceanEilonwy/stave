@@ -24,15 +24,15 @@ use stave_geom::clearance::{box_centre, closest_for};
 use stave_geom::mechanism::MechanismPath;
 
 use stave_geom::collide::{CONTACT_TOLERANCE, WorldSolid, overlaps, touches};
-use stave_geom::sequence::{Member, pair_members, pair_steps, trace};
+use stave_geom::sequence::{Member, pair_members, pair_steps, trace, trace_carrying};
 use stave_geom::solid::Solid;
 use stave_lang::Code;
 use stave_lang::units::Length;
 use stave_model::defs::KindDef;
 use stave_model::mechanism::{Holding, Mechanism, MechanismEntry, MemberIndex, MotionShape};
 use stave_model::solved::{
-    AssemblyId, Body, BodyCarrier, CutKind, CutSource, Depth, Hardware, HardwareBase, HardwareId,
-    JointId, Part, PartId, RoleValue, SolvedDesign, StepAmount, StepKind, WorldBox,
+    AssemblyId, Body, BodyCarrier, CutKind, CutPlace, CutSource, Depth, Hardware, HardwareBase,
+    HardwareId, JointId, Part, PartId, RoleValue, SolvedDesign, StepAmount, StepKind, WorldBox,
 };
 use stave_scene::focus::{
     Anchor, GapMark, MotionPlay, Plan, Play, StepPlay, amount_text, around, edge_point, hinge_view,
@@ -139,6 +139,14 @@ pub fn targets_of(design: &SolvedDesign, item: Item) -> Vec<(Target, String)> {
             .collect(),
         Item::Hardware(hardware) => {
             let target = Target::Hardware(hardware);
+            vec![(target, title(design, target))]
+        }
+        // A joint's member goes together with its pair.
+        Item::Member(member) => {
+            let target = Target::Joint {
+                joint: member.joint,
+                pair: member.pair,
+            };
             vec![(target, title(design, target))]
         }
     }
@@ -384,20 +392,8 @@ pub(crate) fn cut_row(joint_kind: &str, kind: &CutKind) -> Row {
         Depth::Through => "all the way through".to_owned(),
     };
     let (label, value) = match kind {
-        CutKind::Drill {
-            diameter,
-            depth,
-            count,
-        } => {
-            let holes = if *count > 1 {
-                format!("{count} holes, ")
-            } else {
-                String::new()
-            };
-            (
-                "Hole",
-                format!("{holes}{} across, {}", mm(*diameter), deep(depth)),
-            )
+        CutKind::Drill { diameter, depth } => {
+            ("Hole", format!("{} across, {}", mm(*diameter), deep(depth)))
         }
         CutKind::Pocket {
             width,
@@ -457,6 +453,19 @@ fn part_nodes(graph: &SceneGraph, parts: &[PartId]) -> Vec<NodeId> {
         .collect()
 }
 
+/// Every node of a joint pair's members (a dowel's pins).
+fn pair_member_nodes(graph: &SceneGraph, joint: JointId, pair: usize) -> Vec<NodeId> {
+    graph
+        .node_ids()
+        .filter(|id| {
+            graph.node(*id).is_some_and(|node| match node.item {
+                Item::Member(member) => member.joint == joint && member.pair == pair,
+                Item::Part(_) | Item::Hardware(_) => false,
+            })
+        })
+        .collect()
+}
+
 /// Opens focus on a target. `None` when the target isn't in the design.
 pub fn open(
     opened: &Opened,
@@ -501,7 +510,21 @@ fn joint_focus(
                 .zip(&solids)
                 .map(|(part, solid)| Member { part, solid })
                 .collect();
-            match trace(&sequence, &steps) {
+            // The pair's members (its pins) move with the part that
+            // carries them, so the part comes off until they are out of
+            // their holes. A pair whose members would block a step (none
+            // of the standard kinds) plays its parts' own steps.
+            let carried: Vec<Vec<&Body>> = members
+                .iter()
+                .map(|part| {
+                    pair.members
+                        .iter()
+                        .filter(|body| body.carried_by() == Some(*part))
+                        .collect()
+                })
+                .collect();
+            match trace_carrying(&sequence, &carried, &steps).or_else(|_| trace(&sequence, &steps))
+            {
                 Ok(traced) => Play::Steps(StepPlay {
                     members: members.clone(),
                     traced,
@@ -557,6 +580,26 @@ fn joint_focus(
                 .join(", "),
         });
     }
+    // The members it places (a dowel's pins): how many, what, how big.
+    for body in &pair.members {
+        let what = body
+            .item
+            .as_ref()
+            .map(|item| format!(" ({})", crate::view::item_text(item)))
+            .unwrap_or_default();
+        rows.push(Row {
+            label: "Places",
+            value: format!(
+                "{} × {}{what}, {}",
+                body.copies(),
+                body.name.replace('_', " "),
+                crate::view::copy_text(body)
+            ),
+        });
+    }
+    // The cuts, the same cut in one part counted once (a hole for each
+    // pin is "4 × Hole").
+    let mut cuts: Vec<(Row, usize)> = Vec::new();
     for part in &parts {
         for cut in &part.cuts {
             if cut.source
@@ -566,13 +609,27 @@ fn joint_focus(
                 })
             {
                 let mut row = cut_row(&joint.kind, &cut.kind);
-                if parts.len() > 2 || matches!(cut.kind, CutKind::Notch { .. }) {
+                let per_member = matches!(cut.place, CutPlace::Member { .. });
+                if parts.len() > 2 || per_member || matches!(cut.kind, CutKind::Notch { .. }) {
                     row.value = format!("{}, in {}", row.value, part.name);
                 }
-                rows.push(row);
+                match cuts.iter_mut().find(|(seen, _)| *seen == row) {
+                    Some((_, count)) => *count = count.saturating_add(1),
+                    None => cuts.push((row, 1)),
+                }
             }
         }
     }
+    rows.extend(cuts.into_iter().map(|(row, count)| {
+        if count > 1 {
+            Row {
+                value: format!("{count} × {}", row.value),
+                ..row
+            }
+        } else {
+            row
+        }
+    }));
     rows.push(Row {
         label: "Fit",
         value: fit_text(&parts, &solids),
@@ -581,7 +638,12 @@ fn joint_focus(
     // A part that turns about the up axis (the chidori's lock) is best
     // seen from above, cut through the node: its flats lining up with the
     // slots it turns into.
-    let zone = graph.joint_zone(&moving, &receiving);
+    // A joint with members (a dowel's pins) is framed on them: they are
+    // what shows how it goes together.
+    let pins = pair_member_nodes(graph, joint_id, pair_index);
+    let zone = graph
+        .members_zone(&pins)
+        .or_else(|| graph.joint_zone(&moving, &receiving));
     let turning = pair.insert.iter().find(|step| {
         step.kind == StepKind::Rotate
             && design.part(step.part).is_some_and(|part| {
@@ -629,7 +691,12 @@ fn joint_focus(
             },
         ],
         closest: None,
-        focus_nodes: part_nodes(graph, &members),
+        // The pair's members (its pins) are drawn as they are and move
+        // with the part that carries them.
+        focus_nodes: part_nodes(graph, &members)
+            .into_iter()
+            .chain(pins)
+            .collect(),
         xray_nodes: part_nodes(graph, &receiving),
         zone,
         view: None,

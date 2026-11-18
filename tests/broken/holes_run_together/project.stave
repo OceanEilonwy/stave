@@ -1,0 +1,53 @@
+// expect: error[wall] post_a_bore: its bore in base runs into the bore of post_b_bore
+stave 1
+
+// Two joints of a kind with no rule about the wood round its hole, each
+// boring an empty 20mm hole into the base under an 18mm post: the posts
+// stand side by side, so the two holes run into each other inside the
+// base. Neither hole has a pin
+// or tenon in it, so nothing overlaps; the engine's backstop catches it.
+
+project "Holes that run together" {
+  units: mm
+}
+
+/// An empty hole, and nothing else: no rules.
+kind bored : joint {
+  insert: [push(piece, along: length)]
+  cut bore: crossing(into, piece) { drill(diameter: 20mm, depth: 12mm) }
+}
+
+stock oak_19 { species: white_oak, form: solid, thickness: 19mm }
+
+part base : oak_19 {
+  length: 600mm
+  width:  300mm
+  place {
+    ground
+  }
+}
+
+part post_a : oak_19 {
+  length: 100mm
+  width:  18mm
+  place {
+    orient(length: up, width: right)
+    against(base.top)
+    flush(base.left, inset: 100mm)
+    flush(base.front, inset: 100mm)
+  }
+}
+
+part post_b : oak_19 {
+  length: 100mm
+  width:  18mm
+  place {
+    orient(length: up, width: right)
+    against(base.top)
+    against(post_a.right)
+    flush(post_a.front)
+  }
+}
+
+joint post_a_bore : bored(post_a, into: base)
+joint post_b_bore : bored(post_b, into: base)

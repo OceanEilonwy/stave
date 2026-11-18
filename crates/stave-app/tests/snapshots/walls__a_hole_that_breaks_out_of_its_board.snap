@@ -1,0 +1,10 @@
+---
+source: crates/stave-app/tests/walls.rs
+expression: "rendered(\"tests/broken/hole_breaks_out\")"
+---
+error[wall]: side_pegs: its peg hole in base breaks out of the left end of base
+  --> tests/broken/hole_breaks_out/project.stave:40:19
+   |
+40 | joint side_pegs : big_peg(side, into: base)
+   |                   ^^^^^^^^^^^^^^^^^^^^^^^^^
+   = help: the peg hole runs 5.5mm past the left end of base; move the parts so the peg hole sits inside base with wood all round it, or make the peg hole smaller

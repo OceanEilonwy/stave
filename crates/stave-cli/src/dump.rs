@@ -114,15 +114,9 @@ fn cut_kind(kind: &CutKind) -> String {
             ),
             None => format!("round diameter {}", mm(*diameter)),
         },
-        CutKind::Drill {
-            diameter,
-            depth: d,
-            count,
-        } => format!(
-            "drill {count} x diameter {} depth {}",
-            mm(*diameter),
-            depth(*d)
-        ),
+        CutKind::Drill { diameter, depth: d } => {
+            format!("drill diameter {} depth {}", mm(*diameter), depth(*d))
+        }
         CutKind::DovetailSocket {
             neck,
             depth: d,
@@ -548,9 +542,36 @@ pub fn table(design: &SolvedDesign, model: Option<&Model>) -> String {
             for made in &pair.made_parts {
                 let _ = writeln!(out, "        makes {}", name(*made));
             }
+            // Each member: what it is, how many and what carries it, then
+            // every copy's shapes, numbered from 1.
             for member in &pair.members {
-                for shape in member.shapes() {
-                    let _ = writeln!(out, "        {} {}", member.name, member_shape(shape));
+                let what = member
+                    .item
+                    .as_ref()
+                    .map(|item| {
+                        let made_of = item.wood.map_or("steel", |species| species.word());
+                        format!(" x {} ({made_of})", item.kind)
+                    })
+                    .unwrap_or_default();
+                let carrier = member
+                    .carried_by()
+                    .map(|part| format!(", moves with {}", name(part)))
+                    .unwrap_or_default();
+                let _ = writeln!(
+                    out,
+                    "        {}: {}{what}{carrier}",
+                    member.name,
+                    member.copies()
+                );
+                for (copy, shapes) in member.copy_shapes().enumerate() {
+                    for shape in shapes {
+                        let _ = writeln!(
+                            out,
+                            "            {} {}",
+                            copy.saturating_add(1),
+                            member_shape(shape)
+                        );
+                    }
                 }
             }
         }

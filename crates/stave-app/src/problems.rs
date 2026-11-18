@@ -33,7 +33,8 @@ pub enum Category {
     Motion,
     /// Wood passes through wood (`overlap`).
     Overlap,
-    /// A joint's parts don't meet (`no-contact`).
+    /// A joint's parts don't meet (`no-contact`), or a part nothing joins
+    /// to the rest (`loose-part`).
     NoContact,
     /// A piece of hardware can't be set within its adjustment to fit
     /// where it is placed (`adjust`).
@@ -54,8 +55,9 @@ pub enum Category {
     Name,
     /// A value is the wrong kind, unit or size (`type-mismatch`, ...).
     Value,
-    /// A cut no recipe can make with the project's tools (`no-recipe`), or
-    /// a kind's cut with no name (`unnamed-cut`).
+    /// A cut no recipe can make with the project's tools (`no-recipe`), a
+    /// kind's cut with no name (`unnamed-cut`), a cut that leaves no wood
+    /// round it (`wall`), or one bigger than its part (`cut-size`).
     Cut,
     /// A hardware model doesn't match its envelope (`model-mismatch`).
     Hardware,
@@ -69,7 +71,7 @@ impl Category {
         match code {
             Code::Motion => Category::Motion,
             Code::Overlap => Category::Overlap,
-            Code::NoContact => Category::NoContact,
+            Code::NoContact | Code::LoosePart => Category::NoContact,
             Code::Adjust => Category::Adjust,
             Code::Mechanism => Category::Mechanism,
             Code::Order => Category::Order,
@@ -98,7 +100,7 @@ impl Category {
             | Code::UnknownField
             | Code::MissingField
             | Code::OutOfRange => Category::Value,
-            Code::NoRecipe | Code::UnnamedCut => Category::Cut,
+            Code::NoRecipe | Code::UnnamedCut | Code::Wall | Code::CutSize => Category::Cut,
             Code::ModelMismatch => Category::Hardware,
             Code::NotSupported => Category::NotSupported,
         }
@@ -354,10 +356,7 @@ fn place_of(checked: &Checked, diagnostic: &Diagnostic) -> Option<Place> {
 }
 
 fn item_of(contact_item: ContactItem) -> Item {
-    match contact_item {
-        ContactItem::Part(id) => Item::Part(id),
-        ContactItem::Hardware(id) => Item::Hardware(id),
-    }
+    crate::view::contact_item(contact_item)
 }
 
 /// Whether an item is inside an assembly (at any depth).
@@ -365,6 +364,10 @@ fn inside(design: &SolvedDesign, item: Item, assembly: AssemblyId) -> bool {
     let mut current = match item {
         Item::Part(id) => design.part(id).and_then(|p| p.assembly),
         Item::Hardware(id) => design.hardware.get(id.index()).and_then(|h| h.assembly),
+        Item::Member(member) => design
+            .pair_member(member)
+            .and_then(|body| design.part(body.carried_by()?))
+            .and_then(|p| p.assembly),
     };
     let mut steps = 0;
     while let Some(id) = current {
@@ -897,6 +900,7 @@ fn specific_title(
                 let found = match item {
                     Item::Part(id) => design.part(id).map(|p| p.name.clone()),
                     Item::Hardware(id) => design.hardware.get(id.index()).map(|h| h.name.clone()),
+                    Item::Member(member) => design.pair_member_name(member),
                 };
                 if let Some(found) = found
                     && !hits.contains(&found)

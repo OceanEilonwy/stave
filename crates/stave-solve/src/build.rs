@@ -571,6 +571,7 @@ pub(crate) fn build(solver: &mut Solver<'_>) -> Option<SolvedDesign> {
             overruns.dedup();
             overruns
         },
+        wall_rules: std::mem::take(&mut solver.wall_rules),
     })
 }
 
@@ -644,13 +645,19 @@ fn member_cut(geom: &PartGeom, cut: MemberCut<'_>) -> Solved<Cut> {
 
 /// A joint's member for one pair in the solved design: one shape for
 /// each shape of each copy, carried by the pair's first part.
-fn joint_body(owner: BodyOwner, member: &LaidOut, carrier: PartId) -> Solved<solved::Body> {
+fn joint_body(
+    owner: BodyOwner,
+    member: &LaidOut,
+    carrier: PartId,
+    item: Option<solved::MemberItem>,
+) -> Solved<solved::Body> {
     let mut shapes = Vec::new();
     for copy in &member.copies {
         for shape in &copy.shapes {
             shapes.push(member_shape(&world_shape(shape, &copy.frame)?)?);
         }
     }
+    let copies = u32::try_from(member.copies.len()).map_err(|_| Reported)?;
     solved::Body::new(
         solved::BodyRef {
             owner,
@@ -660,6 +667,7 @@ fn joint_body(owner: BodyOwner, member: &LaidOut, carrier: PartId) -> Solved<sol
         solved::BodyCarrier::Part(carrier),
         shapes,
     )
+    .and_then(|body| body.laid_out(copies, item))
     .ok_or(Reported)
 }
 
@@ -838,11 +846,17 @@ impl Solver<'_> {
             }
             let carrier = pair.parts.first().copied().ok_or(Reported)?;
             // A member laid out no times (`count: 0`) is no body.
-            let members = laid_out
-                .iter()
-                .filter(|member| !member.copies.is_empty())
-                .map(|member| joint_body(owner, member, carrier))
-                .collect::<Solved<Vec<_>>>()?;
+            let mut members = Vec::new();
+            for member in laid_out.iter().filter(|member| !member.copies.is_empty()) {
+                let item = match (&member.item, kind.bodies.get(member.body.index())) {
+                    (Some(item), Some(body)) => {
+                        let span = body.item.as_ref().map_or(body.span, |written| written.span);
+                        Some(self.member_item(item, kind.decl.file, span)?)
+                    }
+                    (Some(_) | None, None) | (None, Some(_)) => None,
+                };
+                members.push(joint_body(owner, member, carrier, item)?);
+            }
             let insert = self.pair_steps(kind_id, pair, &env)?;
             let mut cut_order = Vec::new();
             if !joint_def.cut_first.is_empty() {
@@ -975,6 +989,30 @@ impl Solver<'_> {
             unmatched: work.unmatched.clone(),
             note,
         })
+    }
+
+    /// What a joint's member is (`member pin : dowel_pin(...)`): the
+    /// fastener kind's name and, when it says, the wood it is made of.
+    fn member_item(
+        &mut self,
+        item: &stave_model::value::KindValue,
+        file: stave_lang::FileId,
+        span: stave_lang::ast::Span,
+    ) -> Solved<solved::MemberItem> {
+        let Some(def) = self.model.defs.kind(item.kind) else {
+            return Err(Reported);
+        };
+        let kind = def.decl.name.clone();
+        let says_wood = def.param("species").is_some() || def.field("species").is_some();
+        let wood = if says_wood {
+            match self.kind_entry(item, "species", file, span)? {
+                Value::Word(stave_model::defs::Word::Species(species)) => Some(species),
+                _ => None,
+            }
+        } else {
+            None
+        };
+        Ok(solved::MemberItem { kind, wood })
     }
 
     /// A kind's name, qualified with its module unless it is from the
@@ -1521,7 +1559,7 @@ impl Solver<'_> {
             let Some(geom) = geoms.get(id).cloned() else {
                 return Err(Reported);
             };
-            let (name, assembly, origin, stock, shape, grain, note) =
+            let (name, assembly, origin, stock, shape, grain, note, loose) =
                 if let Some(inst) = self.model.parts.get(index).cloned() {
                     let mirror = self.mirror_source(id)?;
                     let origin = match (inst.mirror_of, mirror) {
@@ -1583,6 +1621,13 @@ impl Solver<'_> {
                         }
                         None => None,
                     };
+                    let loose = match body.as_ref().and_then(|b| b.loose.clone()) {
+                        Some(expr) => {
+                            let env = self.part_env(source_body).ok_or(Reported)?;
+                            self.eval_bool(&expr, &env)?
+                        }
+                        None => false,
+                    };
                     (
                         inst.name.clone(),
                         inst.assembly,
@@ -1591,6 +1636,7 @@ impl Solver<'_> {
                         shape,
                         grain,
                         note,
+                        loose,
                     )
                 } else {
                     let info = made.get(index - self.model.parts.len()).ok_or(Reported)?;
@@ -1602,6 +1648,7 @@ impl Solver<'_> {
                         Shape::Board,
                         Grain::Length,
                         info.note.clone(),
+                        false,
                     )
                 };
             let stock = self.write_stock(stock)?;
@@ -1653,6 +1700,7 @@ impl Solver<'_> {
                 joints: part_joints,
                 note,
                 boards: boards.get_mut(index).and_then(Option::take),
+                loose,
             });
         }
         Ok(parts)

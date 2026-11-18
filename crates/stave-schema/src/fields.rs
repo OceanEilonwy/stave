@@ -143,6 +143,7 @@ pub const PART: &[FieldSpec] = &[
     field("face_edge", Words(WordSet::Face), Optional, false),
     field("note", Type(TypeName::Text), Optional, false),
     field("boards", Type(TypeName::Boards), Optional, false),
+    field("loose", Type(TypeName::Bool), Optional, false),
 ];
 
 /// Members readable on every part besides its readable fields.

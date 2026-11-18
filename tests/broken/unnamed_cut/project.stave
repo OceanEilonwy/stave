@@ -54,4 +54,5 @@ kind housing : joint {
   }
 }
 
+joint base_dowels    : dowel([side_l, side_r], into: base)
 joint shelf_housings : housing(shelf, into: [side_l, side_r])

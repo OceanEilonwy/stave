@@ -1,0 +1,10 @@
+---
+source: crates/stave-app/tests/walls.rs
+expression: "rendered(\"tests/broken/holes_run_together\")"
+---
+error[wall]: post_a_bore: its bore in base runs into the bore of post_b_bore
+  --> tests/broken/holes_run_together/project.stave:52:21
+   |
+52 | joint post_a_bore : bored(post_a, into: base)
+   |                     ^^^^^^^^^^^^^^^^^^^^^^^^^
+   = help: the bore runs 2mm into the bore in base; move one of the joints so there is wood between the two cuts, or make one of them smaller

@@ -76,7 +76,7 @@ component Drawer {
 
   joint box_dados     : dado([sub_front, back], into: side[*], depth: 6mm)
   joint bottom_groove : groove(bottom, into: [side[*], sub_front, back], depth: 6mm)
-  joint front_screws  : screw(sub_front, into: front, count: 4, length: 25mm, glue: false)
+  joint front_screws  : screw(sub_front, into: front, count: 2, length: 25mm, glue: false)
 
   hardware slides[left, right] : slide(side[same], in: opening)
 

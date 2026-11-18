@@ -46,6 +46,10 @@ pub enum Builtin {
     Gap,
     /// `contact(a, b)`: the patch where two parts touch, a [`TypeName::Patch`].
     Contact,
+    /// `wall(cut)`: the least wood left between one of a kind's named cuts
+    /// and any face or other cut of the same part, a length; read only in
+    /// a joint or hardware kind's `require`.
+    Wall,
 }
 
 /// A parameter of a built-in function.
@@ -87,7 +91,7 @@ const ITEM: ValueType = ValueType::Items;
 
 impl Builtin {
     /// Every built-in, in the order the grammar lists them.
-    pub const ALL: [Builtin; 17] = [
+    pub const ALL: [Builtin; 18] = [
         Builtin::Between,
         Builtin::Extent,
         Builtin::Mid,
@@ -105,6 +109,7 @@ impl Builtin {
         Builtin::Pitch,
         Builtin::Gap,
         Builtin::Contact,
+        Builtin::Wall,
     ];
 
     /// The function's name.
@@ -127,6 +132,7 @@ impl Builtin {
             Builtin::Pitch => "pitch",
             Builtin::Gap => "gap",
             Builtin::Contact => "contact",
+            Builtin::Wall => "wall",
         }
     }
 
@@ -139,7 +145,7 @@ impl Builtin {
     /// array `region` declaration can hold.
     pub fn returns(self) -> TypeName {
         match self {
-            Builtin::Between | Builtin::Extent => TypeName::Length,
+            Builtin::Between | Builtin::Extent | Builtin::Wall => TypeName::Length,
             Builtin::Mid => TypeName::Anchor,
             Builtin::Opening | Builtin::Split | Builtin::Cover => TypeName::Region,
             Builtin::Overlay | Builtin::Inset => TypeName::Mount,
@@ -255,6 +261,11 @@ impl Builtin {
             }
             Builtin::Contact => {
                 const LIST: &[Parameter] = &[positional("a", ITEM), positional("b", ITEM)];
+                LIST
+            }
+            // The name of one of the kind's cuts: checked by the resolver.
+            Builtin::Wall => {
+                const LIST: &[Parameter] = &[positional("cut", ITEM)];
                 LIST
             }
         }

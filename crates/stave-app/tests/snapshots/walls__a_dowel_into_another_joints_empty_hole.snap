@@ -1,0 +1,16 @@
+---
+source: crates/stave-app/tests/walls.rs
+expression: "rendered(\"tests/broken/dowel_into_empty_hole\")"
+---
+error[require]: 'hole_wall' fails: the dowel hole comes too close to a face of the board or another cut
+  --> tests/broken/dowel_into_empty_hole/project.stave:53:21
+   |
+53 | joint side_dowels : dowel(side, into: base, count: 1)
+   |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  ::: std/joinery/dowel.stave:24:3
+   |
+24 |   require hole_wall      : wall(hole) >= wall "the dowel hole comes too close to a face of the board or another cut"
+   |   ------------------------------------------------------------------------------------------------------------------ the kind's rule
+   = note: for side and base in side_dowels
+   = note: the rule measures 0mm and needs at least 4mm
+   = help: the hole in base runs 8mm past the bore that foot_bore cuts in base; move the parts so the hole has wood all round it, or change the joint's settings

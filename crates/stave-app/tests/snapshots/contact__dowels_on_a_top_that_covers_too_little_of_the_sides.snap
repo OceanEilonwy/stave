@@ -7,9 +7,9 @@ error[require]: 'seat_wide' fails: the parts overlap too little for these dowels
    |
 48 | joint top_dowels : dowel([side_l, side_r], into: top, count: 4)
    |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  ::: std/joinery/dowel.stave:23:3
+  ::: std/joinery/dowel.stave:25:3
    |
-23 |   require seat_wide      : contact(piece, into).width >= diameter + 2 * wall "the parts overlap too little for these dowels"
+25 |   require seat_wide      : contact(piece, into).width >= diameter + 2 * wall "the parts overlap too little for these dowels"
    |   -------------------------------------------------------------------------------------------------------------------------- the kind's rule
    = note: for side_l and top in top_dowels
    = note: the rule measures 5.5mm and needs at least 16mm

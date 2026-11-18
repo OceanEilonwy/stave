@@ -10,20 +10,23 @@ use stave_lang::placement::PartAxis;
 use stave_model::mechanism::MotionShape;
 use stave_model::mechanism::{DriveValue, MemberIndex};
 use stave_model::solved::{
-    AssemblyId, BodyCarrier, BodyRef, HardwareId, Part, PartId, PoseValue, SceneId, SceneItem,
-    SolvedDesign, StepKind,
+    AssemblyId, Body, BodyCarrier, BodyRef, HardwareId, PairMember, Part, PartId, PoseValue,
+    SceneId, SceneItem, SolvedDesign, StepKind,
 };
 use stave_schema::species::{Species, Srgb};
 use stave_schema::words::StockForm;
 
-/// What a node draws: a part or a piece of hardware. This is what picking
-/// returns.
+/// What a node draws: a part, a piece of hardware, or the member a joint
+/// lays out on one pair (a dowel's pins). This is what picking returns.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Item {
     /// A part.
     Part(PartId),
-    /// A piece of hardware (drawn as its envelope).
+    /// A piece of hardware (drawn as its members' shapes).
     Hardware(HardwareId),
+    /// A joint pair's member: every copy on that pair, drawn as their
+    /// shapes and moving with the part that carries them.
+    Member(PairMember),
 }
 
 /// The index of a node in [`SceneGraph::nodes`].
@@ -91,8 +94,24 @@ pub struct Node {
     /// A member its assembly's mechanism places (a link): it follows its
     /// own assembly's mechanism, on top of what its other assemblies do.
     pub follows: Option<MemberFollower>,
-    /// For a hardware member: which member, and what moves it.
+    /// For a member of a piece of hardware or of a joint pair: which
+    /// member, and what moves it.
     pub member: Option<(BodyRef, BodyCarrier)>,
+}
+
+impl Node {
+    /// The part it moves with: itself for a part, the part that carries
+    /// it for a member carried by a part (a joint's pins, a hinge's cup).
+    pub fn carried_by(&self) -> Option<PartId> {
+        match (self.item, self.member) {
+            (Item::Part(part), _) => Some(part),
+            (Item::Hardware(_) | Item::Member(_), Some((_, BodyCarrier::Part(part)))) => Some(part),
+            (
+                Item::Hardware(_) | Item::Member(_),
+                Some((_, BodyCarrier::Region(_) | BodyCarrier::Link(_))) | None,
+            ) => None,
+        }
+    }
 }
 
 /// How a member its assembly's mechanism places moves: as that member of
@@ -297,8 +316,9 @@ pub struct BuildOptions {
 pub struct SceneGraph {
     /// The project's title.
     pub title: String,
-    /// Parts first (in part order), then hardware: each piece's members,
-    /// in its kind's order.
+    /// Parts first (in part order), then hardware (each piece's members,
+    /// in its kind's order), then joint pairs' members (in joint, pair and
+    /// member order).
     pub nodes: Vec<Node>,
     /// The scenes; the first is the built-in `rest`.
     pub scenes: Vec<SceneEntry>,
@@ -360,6 +380,21 @@ fn linear(colour: Srgb) -> [f32; 3] {
             ((c + 0.055) / 1.055).powf(2.4)
         }
     })
+}
+
+/// The look of a joint's member: the wood its fastener kind is made of
+/// (a dowel pin), drawn with rings about each copy's axis; otherwise
+/// steel (a screw), as hardware is.
+fn member_material(body: &Body) -> Material {
+    match body.item.as_ref().and_then(|item| item.wood) {
+        Some(species) => Material::Wood(Wood {
+            species,
+            colour: linear(species.colour()),
+            pith: [0.0, 0.0],
+            figure: 0.6,
+        }),
+        None => Material::Metal,
+    }
 }
 
 /// A small deterministic hash of a part id, in `0..1`, so neighbouring
@@ -492,6 +527,28 @@ impl SceneGraph {
                     member: Some((member.id, member.carrier)),
                 });
             }
+        }
+        // Every joint pair's members (a dowel's pins), named
+        // `<joint>'s <member>`, moving with the part that carries them.
+        for (member, body) in design.pair_members() {
+            let assembly = match body.carrier {
+                BodyCarrier::Part(part) => design.part(part).and_then(|p| p.assembly),
+                BodyCarrier::Region(region) => {
+                    design.regions.get(region.index()).and_then(|r| r.assembly)
+                }
+                BodyCarrier::Link(_) => None,
+            };
+            nodes.push(Node {
+                item: Item::Member(member),
+                name: design
+                    .pair_member_name(member)
+                    .unwrap_or_else(|| body.name.clone()),
+                geometry: stave_geom::body(body),
+                material: member_material(body),
+                assemblies: assemblies_of(assembly),
+                follows: None,
+                member: Some((body.id, body.carrier)),
+            });
         }
         let motions: Vec<Option<AssemblyMove>> = paths
             .iter()
@@ -642,8 +699,13 @@ impl SceneGraph {
                 .find(|(id, _)| *id == assembly)
                 .map(|(_, amount)| *amount)
         };
+        // A joint's member goes with the part that carries it.
         let matches = |node: &Node, item: &SceneItem| match *item {
-            SceneItem::Part(id) => node.item == Item::Part(id),
+            SceneItem::Part(id) => match node.item {
+                Item::Part(part) => part == id,
+                Item::Member(_) => node.carried_by() == Some(id),
+                Item::Hardware(_) => false,
+            },
             SceneItem::Hardware(id) => node.item == Item::Hardware(id),
             SceneItem::Assembly(id) => node.assemblies.contains(&id),
         };
@@ -1105,6 +1167,8 @@ impl Exploded {
         };
         match node.item {
             Item::Part(id) => of_part(id),
+            // A joint's member goes with the part that carries it.
+            Item::Member(_) => node.carried_by().map_or((Vec3::ZERO, Vec3::ZERO), of_part),
             Item::Hardware(id) => {
                 let Some(hardware) = design.hardware.get(id.index()) else {
                     return (Vec3::ZERO, Vec3::ZERO);

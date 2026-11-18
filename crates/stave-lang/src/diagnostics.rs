@@ -286,6 +286,11 @@ codes! {
     Overlap = "overlap", layer 4;
     /// `<hardware>: the <member> would sit <offset> off its place on the <member>; it adjusts <d>`
     Adjust = "adjust", layer 4;
+    /// `<joint>: its <hole> in <part> breaks out of <part>'s <front edge>`,
+    /// or `... runs into <other>'s <dado>`
+    Wall = "wall", layer 4;
+    /// `<joint>: its <tenon> on <part> is <30mm> thick, but <part> is only <19mm> thick`
+    CutSize = "cut-size", layer 4;
     /// `<a> hits <b> when <assembly> is <open>`
     Motion = "motion", layer 5;
     /// `'<name>' fails: <message>`
@@ -302,6 +307,8 @@ codes! {
     NoRecipe = "no-recipe", layer 7;
     /// Warning: a hardware model does not match its envelope.
     ModelMismatch = "model-mismatch", layer 4;
+    /// Warning: a part that no joint or hardware joins to the ground part.
+    LoosePart = "loose-part", layer 4;
 }
 
 impl Code {

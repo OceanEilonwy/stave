@@ -30,13 +30,27 @@ part base : pine_19 {
 }
 ";
 
-/// Runs the pipeline on in-memory files under `/project`.
-pub fn open_files(files: &[(&str, &str)]) -> Opened {
+/// Runs the pipeline on in-memory files under `/project`, with every
+/// diagnostic.
+pub fn open_files_with_every_warning(files: &[(&str, &str)]) -> Opened {
     let mut memory = MemoryFiles::new();
     for (path, text) in files {
         memory.insert(Path::new("/project").join(path), *text);
     }
     stave_app::open_with(Path::new("/project"), &memory).expect("the project loads")
+}
+
+/// Runs the pipeline on in-memory files under `/project`. The projects
+/// here are fragments that place a few parts to test one rule, mostly
+/// without joining them, so `warning[loose-part]` is left out; the held
+/// check has its own tests (`held.rs`, `tests/broken`), which use
+/// [`open_files_with_every_warning`].
+pub fn open_files(files: &[(&str, &str)]) -> Opened {
+    let mut opened = open_files_with_every_warning(files);
+    opened
+        .diagnostics
+        .retain(|d| d.code != stave_lang::Code::LoosePart);
+    opened
 }
 
 /// Runs the pipeline on one file: [`HEADER`] followed by `body`.
@@ -66,13 +80,17 @@ pub fn design(opened: &Opened) -> &SolvedDesign {
 
 /// The solved design of a test about placement or joints (layers 2 and
 /// 3), whose made-up parts may well pass through each other or not touch:
-/// errors of the fit checks (`overlap`, `no-contact`, `motion`) are
-/// allowed, any other error panics.
+/// errors of the fit checks (`overlap`, `no-contact`, `motion`, `wall`,
+/// `cut-size`) are allowed, any other error panics.
 pub fn solved(opened: &Opened) -> &SolvedDesign {
     let fit = |d: &stave_lang::Diagnostic| {
         matches!(
             d.code,
-            stave_lang::Code::Overlap | stave_lang::Code::NoContact | stave_lang::Code::Motion
+            stave_lang::Code::Overlap
+                | stave_lang::Code::NoContact
+                | stave_lang::Code::Motion
+                | stave_lang::Code::Wall
+                | stave_lang::Code::CutSize
         )
     };
     match &opened.design {
