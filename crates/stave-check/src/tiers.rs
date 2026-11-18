@@ -253,12 +253,13 @@ impl Explained {
             board_parts: design
                 .parts
                 .iter()
-                .filter_map(|part| match part.origin {
-                    PartOrigin::Boards { part: boards, .. } => Some((part.id, boards)),
-                    PartOrigin::Declared
-                    | PartOrigin::Mirror { .. }
-                    | PartOrigin::MirroredAssembly { .. }
-                    | PartOrigin::Made { .. } => None,
+                // Only a board joint's parts sit in another part without
+                // being in a joint pair with it.
+                .filter_map(|part| {
+                    let PartOrigin::Boards { part: boards, .. } = part.origin else {
+                        return None;
+                    };
+                    Some((part.id, boards))
                 })
                 .collect(),
         }
