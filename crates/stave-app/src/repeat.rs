@@ -646,7 +646,11 @@ pub fn move_shares(
     if let Some(slot) = shares.get_mut(upper) {
         *slot = new_upper;
     }
-    let list: Vec<String> = shares.iter().map(|share| share_text(*share)).collect();
+    let list: Vec<String> = whole_shares(&shares)
+        .ok_or(RepeatError::Overflow)?
+        .iter()
+        .map(i128::to_string)
+        .collect();
     // The whole declaration is replaced: the patcher doesn't reach into a
     // region's call by `set <region>.shares` yet.
     let declaration = match spec {
@@ -666,25 +670,35 @@ pub fn move_shares(
     Ok(GeneratedPatch::new(&summary, &ops)?)
 }
 
-/// A share as text: a whole number, a short decimal when it is one, or
-/// `p / q`.
-fn share_text(share: Rational) -> String {
-    let (numerator, denominator) = (share.numerator(), share.denominator());
-    if denominator == 1 {
-        return numerator.to_string();
-    }
-    // A decimal of up to four places, when the share is one exactly.
-    for (scale, places) in [(10i128, 1usize), (100, 2), (1000, 3), (10_000, 4)] {
-        if let Some(scaled) = numerator.checked_mul(scale)
-            && scaled % denominator == 0
-        {
-            let digits = scaled / denominator;
-            let whole = digits / scale;
-            let fraction = digits % scale;
-            return format!("{whole}.{fraction:0places$}");
+/// Shares as whole numbers in the same proportions: as they are when each
+/// is already whole, or else scaled by the least common multiple of their
+/// denominators and reduced by what they have in common. `100 / 181` and
+/// `262 / 181` become `50` and `131`, which a beginner can read and which
+/// a later grip reads back as plain numbers.
+fn whole_shares(shares: &[Rational]) -> Option<Vec<i128>> {
+    fn gcd(mut a: i128, mut b: i128) -> i128 {
+        while b != 0 {
+            (a, b) = (b, a % b);
         }
+        a.abs()
     }
-    format!("{numerator} / {denominator}")
+    if shares.iter().all(|share| share.denominator() == 1) {
+        return Some(shares.iter().map(|share| share.numerator()).collect());
+    }
+    let mut lcm: i128 = 1;
+    for share in shares {
+        let d = share.denominator();
+        lcm = (lcm / gcd(lcm, d)).checked_mul(d)?;
+    }
+    let scaled: Vec<i128> = shares
+        .iter()
+        .map(|share| share.numerator().checked_mul(lcm / share.denominator()))
+        .collect::<Option<_>>()?;
+    let common = scaled.iter().fold(0, |acc, n| gcd(acc, *n));
+    if common == 0 {
+        return None;
+    }
+    Some(scaled.iter().map(|n| n / common).collect())
 }
 
 // ---------------------------------------------------------------------------
@@ -1394,10 +1408,11 @@ mod tests {
             boundary: Length::from_mm(100),
         };
         let patch = move_shares(&scope, design, grip).unwrap();
-        // The inside is 400 - 2 * 19 = 362mm wide: 2 * 100 / 362.
+        // The inside is 400 - 2 * 19 = 362mm wide: shares of 2 * 100 / 362
+        // and 2 * 262 / 362, written as the whole numbers 50 and 131.
         assert!(
             patch.text.contains(
-                "replace region box_bay[left, right] = split(inside, across, shares: [100 / 181, 262 / 181])"
+                "replace region box_bay[left, right] = split(inside, across, shares: [50, 131])"
             ),
             "{}",
             patch.text
@@ -1434,6 +1449,40 @@ mod tests {
             ),
             Err(RepeatError::NoSuchPieces { .. })
         ));
+
+        // The grip moves again after the first drag, and again after that.
+        let mut files = files;
+        commit(&mut files, &tried);
+        for (boundary, shares, left_mm) in [
+            (Length::from_nm(140_400_000), "[70, 111]", 140),
+            (Length::from_mm(181), "[1, 1]", 181),
+        ] {
+            let base = clean_base(&folder, &files);
+            let scope = EditScope::new(base.opened()).unwrap();
+            let design = base.opened().design.as_ref().unwrap();
+            let grip = SharesMove {
+                region: "box_bay",
+                lower: 0,
+                boundary,
+            };
+            let patch = move_shares(&scope, design, grip).unwrap();
+            assert!(
+                patch.text.contains(&format!(
+                    "replace region box_bay[left, right] = split(inside, across, shares: {shares})"
+                )),
+                "{}",
+                patch.text
+            );
+            let tried = fits(&folder, &files, &patch);
+            let moved = tried.opened().and_then(|o| o.design.as_ref()).unwrap();
+            let left = moved
+                .regions
+                .iter()
+                .find(|r| r.name == "box_bay[left]")
+                .unwrap();
+            assert_eq!(left.bounds.size(Axis::Across), Length::from_mm(left_mm));
+            commit(&mut files, &tried);
+        }
     }
 
     /// The assemblies cabinet with one door, not yet mirrored: the door is
@@ -1570,12 +1619,12 @@ mod tests {
     }
 
     #[test]
-    fn shares_are_written_exactly() {
+    fn shares_are_written_as_whole_numbers() {
         let r = |n, d| Rational::new(n, d).unwrap();
-        assert_eq!(share_text(r(3, 1)), "3");
-        assert_eq!(share_text(r(1, 2)), "0.5");
-        assert_eq!(share_text(r(24, 25)), "0.96");
-        assert_eq!(share_text(r(5, 4)), "1.25");
-        assert_eq!(share_text(r(1, 3)), "1 / 3");
+        let whole = |shares: &[Rational]| whole_shares(shares).unwrap();
+        assert_eq!(whole(&[r(120, 1), r(180, 1), r(100, 1)]), [120, 180, 100]);
+        assert_eq!(whole(&[r(100, 181), r(262, 181)]), [50, 131]);
+        assert_eq!(whole(&[r(1, 2), r(3, 2), r(1, 1)]), [1, 3, 2]);
+        assert_eq!(whole(&[r(1, 3), r(1, 2)]), [2, 3]);
     }
 }

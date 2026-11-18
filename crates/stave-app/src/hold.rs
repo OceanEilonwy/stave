@@ -9,7 +9,20 @@
 //! The two things are parts, regions or faces of either. The distance is
 //! `between(a, b)`, or, when the two things are opposite faces of one part
 //! or region, its own size along that axis: `inside.deep` for a region,
-//! `extent(base, up)` for a part. The rule is named from the two things
+//! `extent(base, up)` for a part. `between` measures two parts, two
+//! parallel faces, or a face to the same side of a region, so the other
+//! pairs are written in one of those forms from where the solved design
+//! has them:
+//!
+//! - a part and a region, or two regions, apart along one axis: the two
+//!   faces that look at each other, `between(top.bottom, inside.top)`;
+//! - a part inside a region (or a region inside or across another): the
+//!   part's face nearest the same side of the region, leaving out sides it
+//!   is flush with, `between(tray.board.left, inside)`;
+//! - a face and a part: the part's face along the same axis nearest the
+//!   picked face, `between(inside.top, tray.board.top)`.
+//!
+//! The rule is named from the two things
 //! measured plus `_min` or `_max` ([`crate::naming::held_rule_name`]), and
 //! the reason the user types is its message. Like any edit the patch is
 //! tried before it is written, so a rule the design already breaks is
@@ -17,9 +30,10 @@
 //! that would break it.
 
 use stave_lang::ast::{DesignItem, Ident, ItemKind};
-use stave_lang::placement::Face;
+use stave_lang::placement::{Axis, Face};
 use stave_lang::units::Length;
 use stave_model::defs::{AssemblyKind, DefId};
+use stave_model::solved::{SolvedDesign, WorldBox};
 
 use crate::candidates::EditScope;
 use crate::candidates::print::quoted;
@@ -95,6 +109,17 @@ pub enum HoldError {
     /// A thing's first name is not an item of the project.
     #[error("there is no item named '{0}' in this project")]
     UnknownItem(String),
+    /// A thing is not a part or a region of the solved design (an
+    /// assembly, say), so there is nothing to measure it by.
+    #[error("'{0}' is not a part or a region; pick a part, a region or one of their faces")]
+    NotMeasurable(String),
+    /// Two faces that are not parallel have no distance between them.
+    #[error("'{0}' and '{1}' are not parallel; pick two faces across the same axis")]
+    NotParallel(String, String),
+    /// The two things are apart along more than one axis, so no single
+    /// distance is the one between them.
+    #[error("'{0}' and '{1}' are apart along more than one axis; pick two faces instead")]
+    NotOneAxis(String, String),
     /// A generated name couldn't be made.
     #[error(transparent)]
     Naming(#[from] NamingError),
@@ -105,12 +130,20 @@ pub enum HoldError {
 
 /// The patch that adds the held rule (see the module's notes). It is added
 /// without `in`, so it goes to the file of the first item it names.
+/// `design` is the project's solved design, which says which faces a part
+/// and a region are measured between.
 ///
 /// # Errors
 ///
 /// An empty reason, the same thing twice, a thing that is not in the
-/// project, or a name that can't be made; see [`HoldError`].
-pub fn hold_patch(scope: &EditScope<'_>, request: &HoldRequest) -> Result<HeldPatch, HoldError> {
+/// project or not a part or region, two faces that are not parallel, two
+/// things apart along more than one axis, or a name that can't be made;
+/// see [`HoldError`].
+pub fn hold_patch(
+    scope: &EditScope<'_>,
+    design: &SolvedDesign,
+    request: &HoldRequest,
+) -> Result<HeldPatch, HoldError> {
     let reason = request.reason.trim();
     if reason.is_empty() {
         return Err(HoldError::NoReason);
@@ -136,7 +169,7 @@ pub fn hold_patch(scope: &EditScope<'_>, request: &HoldRequest) -> Result<HeldPa
                 format!("extent({a}, {axis})")
             }
         }
-        _ => format!("between({first}, {second})"),
+        _ => measured_between(design, &request.first, &request.second)?,
     };
     let condition = format!("{measure} {} {}", request.bound.operator(), request.value);
     let taken = TakenNames::of_project(scope.model());
@@ -157,6 +190,137 @@ pub fn hold_patch(scope: &EditScope<'_>, request: &HoldRequest) -> Result<HeldPa
         condition,
         patch,
     })
+}
+
+/// What a picked thing is in the solved design.
+#[derive(Clone, Copy)]
+enum Solid {
+    Part(WorldBox),
+    Region(WorldBox),
+}
+
+impl Solid {
+    fn bounds(self) -> WorldBox {
+        match self {
+            Solid::Part(bounds) | Solid::Region(bounds) => bounds,
+        }
+    }
+}
+
+fn solid(design: &SolvedDesign, path: &str) -> Result<Solid, HoldError> {
+    if let Some(part) = design.part_named(path) {
+        return Ok(Solid::Part(part.drawn_box()));
+    }
+    design
+        .regions
+        .iter()
+        .find(|region| region.name == path)
+        .map(|region| Solid::Region(region.bounds))
+        .ok_or_else(|| HoldError::NotMeasurable(path.to_owned()))
+}
+
+/// The distance between two things that are not opposite faces of one,
+/// in a form `between` accepts (see the module's notes).
+fn measured_between(
+    design: &SolvedDesign,
+    first: &Measured,
+    second: &Measured,
+) -> Result<String, HoldError> {
+    let (a, b) = (first.path(), second.path());
+    match (first, second) {
+        (Measured::Face { face: fa, .. }, Measured::Face { face: fb, .. }) => {
+            if fa.axis() == fb.axis() {
+                Ok(format!("between({a}, {b})"))
+            } else {
+                Err(HoldError::NotParallel(a, b))
+            }
+        }
+        (Measured::Face { item, face }, Measured::Item(other)) => {
+            match solid(design, other)? {
+                // A face to a region's same side.
+                Solid::Region(_) => Ok(format!("between({a}, {b})")),
+                Solid::Part(part) => {
+                    let plane = solid(design, item)?.bounds().face(*face);
+                    let near = nearest_face(part, face.axis(), plane);
+                    Ok(format!("between({a}, {other}.{})", near.word()))
+                }
+            }
+        }
+        (Measured::Item(other), Measured::Face { item, face }) => match solid(design, other)? {
+            Solid::Region(_) => Ok(format!("between({a}, {b})")),
+            Solid::Part(part) => {
+                let plane = solid(design, item)?.bounds().face(*face);
+                let near = nearest_face(part, face.axis(), plane);
+                Ok(format!("between({other}.{}, {b})", near.word()))
+            }
+        },
+        (Measured::Item(_), Measured::Item(_)) => {
+            let (sa, sb) = (solid(design, &a)?, solid(design, &b)?);
+            if let (Solid::Part(_), Solid::Part(_)) = (sa, sb) {
+                return Ok(format!("between({a}, {b})"));
+            }
+            let (ba, bb) = (sa.bounds(), sb.bounds());
+            let apart: Vec<(Axis, bool)> = Axis::ALL
+                .into_iter()
+                .filter_map(|axis| {
+                    let low = Face::ALL
+                        .into_iter()
+                        .find(|f| f.axis() == axis && !f.is_positive())?;
+                    let high = low.opposite();
+                    if ba.face(high) <= bb.face(low) {
+                        Some((axis, true))
+                    } else if bb.face(high) <= ba.face(low) {
+                        Some((axis, false))
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            match apart.as_slice() {
+                // Apart along one axis: the two faces that look at each
+                // other.
+                [(axis, a_below)] => {
+                    let high = Face::ALL
+                        .into_iter()
+                        .find(|f| f.axis() == *axis && f.is_positive())
+                        .unwrap_or(Face::Top);
+                    let (fa, fb) = if *a_below {
+                        (high, high.opposite())
+                    } else {
+                        (high.opposite(), high)
+                    };
+                    Ok(format!("between({a}.{}, {b}.{})", fa.word(), fb.word()))
+                }
+                // One inside or across the other: a face of one to the
+                // same side of the other, which must be a region.
+                [] => {
+                    let gap = |face: Face| ba.face(face).nm().abs_diff(bb.face(face).nm());
+                    let face = Face::ALL
+                        .into_iter()
+                        .filter(|face| gap(*face) > 0)
+                        .min_by_key(|face| gap(*face))
+                        .unwrap_or(Face::Top);
+                    let word = face.word();
+                    Ok(match sb {
+                        Solid::Region(_) => format!("between({a}.{word}, {b})"),
+                        Solid::Part(_) => format!("between({a}, {b}.{word})"),
+                    })
+                }
+                _ => Err(HoldError::NotOneAxis(a, b)),
+            }
+        }
+    }
+}
+
+/// Of a box's two faces across `axis`, the one nearest the plane at
+/// `plane`.
+fn nearest_face(bounds: WorldBox, axis: Axis, plane: Length) -> Face {
+    let distance = |face: Face| bounds.face(face).nm().abs_diff(plane.nm());
+    Face::ALL
+        .into_iter()
+        .filter(|face| face.axis() == axis)
+        .min_by_key(|face| distance(*face))
+        .unwrap_or(Face::Top)
 }
 
 /// The first name of a path: `drawer` in `drawer[top].front`.
@@ -253,8 +417,10 @@ mod tests {
 
         let base = clean_base(&folder, &files);
         let scope = EditScope::new(base.opened()).unwrap();
+        let design = base.opened().design.as_ref().unwrap();
         let held = hold_patch(
             &scope,
+            design,
             &HoldRequest {
                 first: face("inside", Face::Front),
                 second: face("inside", Face::Back),
@@ -289,8 +455,10 @@ mod tests {
         let (folder, files) = small_project(&[]);
         let base = clean_base(&folder, &files);
         let scope = EditScope::new(base.opened()).unwrap();
+        let design = base.opened().design.as_ref().unwrap();
         let held = hold_patch(
             &scope,
+            design,
             &HoldRequest {
                 first: face("inside", Face::Front),
                 second: face("inside", Face::Back),
@@ -308,8 +476,10 @@ mod tests {
         let (folder, files) = small_project(&[]);
         let base = clean_base(&folder, &files);
         let scope = EditScope::new(base.opened()).unwrap();
+        let design = base.opened().design.as_ref().unwrap();
         let between = hold_patch(
             &scope,
+            design,
             &HoldRequest {
                 first: Measured::Item("side_l".to_owned()),
                 second: Measured::Item("side_r".to_owned()),
@@ -325,6 +495,7 @@ mod tests {
 
         let size = hold_patch(
             &scope,
+            design,
             &HoldRequest {
                 first: face("base", Face::Top),
                 second: face("base", Face::Bottom),
@@ -340,6 +511,7 @@ mod tests {
         assert!(matches!(
             hold_patch(
                 &scope,
+                design,
                 &HoldRequest {
                     first: face("base", Face::Top),
                     second: face("base", Face::Top),
@@ -353,6 +525,7 @@ mod tests {
         assert!(matches!(
             hold_patch(
                 &scope,
+                design,
                 &HoldRequest {
                     first: face("base", Face::Top),
                     second: face("base", Face::Bottom),
@@ -366,6 +539,7 @@ mod tests {
         assert!(matches!(
             hold_patch(
                 &scope,
+                design,
                 &HoldRequest {
                     first: Measured::Item("nothing".to_owned()),
                     second: Measured::Item("base".to_owned()),
@@ -379,14 +553,142 @@ mod tests {
     }
 
     #[test]
+    fn a_part_and_a_region_and_a_face_and_a_part() {
+        let (folder, files) = small_project(&[]);
+        let base = clean_base(&folder, &files);
+        let scope = EditScope::new(base.opened()).unwrap();
+        let design = base.opened().design.as_ref().unwrap();
+        // The tray's board lies on the bottom of the inside, 5mm in from
+        // its other sides: measured from its nearest face that isn't flush.
+        let request = |first: Measured, second: Measured, bound, mm| HoldRequest {
+            first,
+            second,
+            bound,
+            value: Length::from_mm(mm),
+            reason: "room to lift it out".to_owned(),
+        };
+        let inside = hold_patch(
+            &scope,
+            design,
+            &request(
+                Measured::Item("tray.board".to_owned()),
+                Measured::Item("inside".to_owned()),
+                Bound::Min,
+                5,
+            ),
+        )
+        .unwrap();
+        assert_eq!(inside.condition, "between(tray.board.left, inside) >= 5mm");
+        assert_eq!(inside.name.as_str(), "tray_board_to_inside_min");
+        fits(&folder, &files, &inside.patch);
+        // The same pair the other way round.
+        let reversed = hold_patch(
+            &scope,
+            design,
+            &request(
+                Measured::Item("inside".to_owned()),
+                Measured::Item("tray.board".to_owned()),
+                Bound::Min,
+                5,
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            reversed.condition,
+            "between(inside, tray.board.left) >= 5mm"
+        );
+        fits(&folder, &files, &reversed.patch);
+
+        // A part outside a region, apart along one axis: the top stands
+        // on the inside's top side, so the faces that look at each other.
+        let above = hold_patch(
+            &scope,
+            design,
+            &request(
+                Measured::Item("top".to_owned()),
+                Measured::Item("inside".to_owned()),
+                Bound::Max,
+                0,
+            ),
+        )
+        .unwrap();
+        assert_eq!(above.condition, "between(top.bottom, inside.top) <= 0mm");
+        fits(&folder, &files, &above.patch);
+
+        // A face and a part: the part's nearest face across the same axis.
+        let headroom = hold_patch(
+            &scope,
+            design,
+            &request(
+                face("inside", Face::Top),
+                Measured::Item("tray.board".to_owned()),
+                Bound::Min,
+                400,
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            headroom.condition,
+            "between(inside.top, tray.board.top) >= 400mm"
+        );
+        fits(&folder, &files, &headroom.patch);
+        let from_part = hold_patch(
+            &scope,
+            design,
+            &request(
+                Measured::Item("side_l".to_owned()),
+                face("tray.board", Face::Left),
+                Bound::Min,
+                5,
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            from_part.condition,
+            "between(side_l.right, tray.board.left) >= 5mm"
+        );
+        fits(&folder, &files, &from_part.patch);
+
+        // What has no distance is refused before it is written.
+        assert!(matches!(
+            hold_patch(
+                &scope,
+                design,
+                &request(
+                    face("base", Face::Top),
+                    face("top", Face::Left),
+                    Bound::Min,
+                    1
+                )
+            ),
+            Err(HoldError::NotParallel(..))
+        ));
+        assert!(matches!(
+            hold_patch(
+                &scope,
+                design,
+                &request(
+                    Measured::Item("tray".to_owned()),
+                    Measured::Item("inside".to_owned()),
+                    Bound::Min,
+                    1
+                )
+            ),
+            Err(HoldError::NotMeasurable(_))
+        ));
+    }
+
+    #[test]
     fn a_held_drawer_space_in_the_cabinet() {
         let files = assemblies();
         let base = clean_base(ASSEMBLIES, &files);
         let scope = EditScope::new(base.opened()).unwrap();
+        let design = base.opened().design.as_ref().unwrap();
         // The space under the divider is a region of the divider's
         // component: its own height.
         let held = hold_patch(
             &scope,
+            design,
             &HoldRequest {
                 first: face("divider.below", Face::Bottom),
                 second: face("divider.below", Face::Top),
