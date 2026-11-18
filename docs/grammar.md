@@ -1210,7 +1210,10 @@ Mirroring is defined on **results**, not on text:
   Every role of a piece of hardware is re-bound this way, whatever its
   name. The cuts such a joint makes in an outside part (the mortise a
   rail's tenon goes into, in a leg the assembly was handed) are made in
-  the counterpart, reflected into its frame. A counterpart turned so that
+  the counterpart, reflected into its frame. Its fasteners are its
+  source's again: each member keeps what it is and how many copies it
+  is, and the fastener list counts them once more for the mirror image
+  (two cleats of three screws are six to buy). A counterpart turned so that
   its length, width or thickness lies along another axis than the
   reflected part's, or a cut drawn at an angle or as an outline whose
   face the reflection turns over, can't be reflected yet:

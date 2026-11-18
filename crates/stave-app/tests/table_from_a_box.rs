@@ -4,7 +4,8 @@
 //! back and right aprons, the back cleat and the back stretcher are mirror
 //! images. It must make the same table as the hand-written one: the same
 //! parts, compared by stock and cut size with names ignored, and the same
-//! joints by kind and count.
+//! joints by kind and count, with the same fasteners to buy and the same
+//! joint members (what each is and how many copies).
 //!
 //! This reads `examples/side_table`, which another lane may own; it only
 //! reads it.
@@ -70,6 +71,34 @@ fn joints(design: &SolvedDesign) -> BTreeMap<String, usize> {
         *joints.entry(joint.kind.clone()).or_insert(0) += joint.pairs.len();
     }
     joints
+}
+
+/// The fasteners to buy, totalled by kind and size over every joint.
+fn fasteners(design: &SolvedDesign) -> BTreeMap<(String, Length, Length), u32> {
+    let mut totals = BTreeMap::new();
+    for fastener in &design.fasteners {
+        *totals
+            .entry((fastener.kind.clone(), fastener.diameter, fastener.length))
+            .or_insert(0) += fastener.count;
+    }
+    totals
+}
+
+/// The joints' members, names left out: by joint kind, member name and
+/// what the member is, how many copies there are in all.
+fn members(design: &SolvedDesign) -> BTreeMap<(String, String, Option<String>), u32> {
+    let mut members = BTreeMap::new();
+    for joint in &design.joints {
+        for pair in &joint.pairs {
+            for member in &pair.members {
+                let item = member.item.as_ref().map(|item| item.kind.clone());
+                *members
+                    .entry((joint.kind.clone(), member.name.clone(), item))
+                    .or_insert(0) += member.copies();
+            }
+        }
+    }
+    members
 }
 
 #[test]
@@ -138,4 +167,21 @@ fn the_mirrored_rails_cut_their_mortises_in_the_back_legs() {
     for leg in ["front_left", "front_right", "back_left", "back_right"] {
         assert_eq!(cuts(&format!("legs.leg[{leg}]")), 3, "legs.leg[{leg}]");
     }
+}
+
+/// The mirrored cleat's screws are bought too, and its joint's member says
+/// what it is and how many: a mirrored assembly's joint keeps its source's
+/// fasteners.
+#[test]
+fn the_table_from_a_box_buys_the_same_fasteners_as_the_hand_written_one() {
+    let written = clean("side_table");
+    let assembled = clean("side_table_from_box");
+    let written_fasteners = fasteners(solved(&written));
+    assert_eq!(
+        written_fasteners.values().sum::<u32>(),
+        26,
+        "six top screws and twenty slat screws"
+    );
+    assert_eq!(written_fasteners, fasteners(solved(&assembled)));
+    assert_eq!(members(solved(&written)), members(solved(&assembled)));
 }

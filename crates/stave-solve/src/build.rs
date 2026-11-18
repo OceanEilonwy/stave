@@ -481,6 +481,24 @@ pub(crate) fn build(solver: &mut Solver<'_>) -> Option<SolvedDesign> {
         &mut placed,
         &work,
     );
+    // A mirrored joint that was made buys its source's fasteners again.
+    for inst in &solver.model.joints {
+        let Some(source) = inst.mirror_of else {
+            continue;
+        };
+        if !joints.get(inst.id.index()).is_some_and(Option::is_some) {
+            continue;
+        }
+        let copied: Vec<FastenerUse> = fasteners
+            .iter()
+            .filter(|f| f.joint == source)
+            .map(|f| FastenerUse {
+                joint: inst.id,
+                ..f.clone()
+            })
+            .collect();
+        fasteners.extend(copied);
+    }
 
     // 6b. Spliced parts: their pieces and the splices between them.
     let splits = solver.make_pieces(&mut crate::pieces::Tables {
@@ -1233,6 +1251,7 @@ impl Solver<'_> {
                             carrier,
                             shapes,
                         )
+                        .and_then(|body| body.laid_out(member.copies(), member.item.clone()))
                     });
                     match body {
                         Some(body) => members.push(body),
