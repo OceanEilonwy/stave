@@ -11,7 +11,7 @@ use stave_model::mechanism::MotionShape;
 use stave_model::mechanism::{DriveValue, MemberIndex};
 use stave_model::solved::{
     AssemblyId, Body, BodyCarrier, BodyRef, HardwareId, PairMember, Part, PartId, PoseValue,
-    SceneId, SceneItem, SolvedDesign, StepKind,
+    RegionId, SceneId, SceneItem, SolvedDesign, StepKind, WorldBox,
 };
 use stave_schema::species::{Species, Srgb};
 use stave_schema::words::StockForm;
@@ -330,6 +330,30 @@ pub struct SceneGraph {
     /// Per node: how far it then moves out within its assembly, the second
     /// stage.
     explode_part: Vec<Vec3>,
+    /// Per node: a part's drawn box at rest (the box its six faces are
+    /// the faces of); `None` for hardware and joint members.
+    drawn: Vec<Option<WorldBox>>,
+    /// Every region of the design, in [`RegionId`] order.
+    regions: Vec<RegionNode>,
+}
+
+/// A region of the design (a declared region, or one a component
+/// exposes) as a volume: what a ray picks when it passes through empty
+/// space inside it, and what a view lights when it is picked. Regions
+/// stay where the design puts them: motions and exploded views don't
+/// move them.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RegionNode {
+    /// The region.
+    pub id: RegionId,
+    /// Its name as written: `door_bay[left]`, `door_l.door`.
+    pub name: String,
+    /// The assembly it belongs to.
+    pub assembly: Option<AssemblyId>,
+    /// Its box, exact.
+    pub bounds: WorldBox,
+    /// Its box in the render frame.
+    pub volume: Aabb,
 }
 
 /// What a viewer shows for a problem: nodes to tint and the shared
@@ -580,6 +604,24 @@ impl SceneGraph {
             .iter()
             .map(|node| exploded.of_node(design, node))
             .unzip();
+        let drawn = nodes
+            .iter()
+            .map(|node| match node.item {
+                Item::Part(id) => design.part(id).map(Part::drawn_box),
+                Item::Hardware(_) | Item::Member(_) => None,
+            })
+            .collect();
+        let regions = design
+            .regions
+            .iter()
+            .map(|region| RegionNode {
+                id: region.id,
+                name: region.name.clone(),
+                assembly: region.assembly,
+                bounds: region.bounds,
+                volume: render::world_box(region.bounds),
+            })
+            .collect();
         SceneGraph {
             title: design.project.title.clone(),
             nodes,
@@ -587,6 +629,8 @@ impl SceneGraph {
             motions,
             explode_assembly,
             explode_part,
+            drawn,
+            regions,
         }
     }
 
@@ -659,6 +703,32 @@ impl SceneGraph {
             .iter()
             .position(|node| node.item == item)
             .map(NodeId)
+    }
+
+    /// A part node's drawn box at rest; `None` for any other node.
+    pub fn drawn_box(&self, id: NodeId) -> Option<WorldBox> {
+        self.drawn.get(id.0).copied().flatten()
+    }
+
+    /// Every region of the design, in [`RegionId`] order.
+    pub fn regions(&self) -> &[RegionNode] {
+        &self.regions
+    }
+
+    /// A region.
+    pub fn region(&self, id: RegionId) -> Option<&RegionNode> {
+        self.regions
+            .get(id.index())
+            .filter(|region| region.id == id)
+            .or_else(|| self.regions.iter().find(|region| region.id == id))
+    }
+
+    /// What a view draws to light a region: its volume, with no nodes.
+    pub fn region_highlight(&self, id: RegionId) -> Option<Highlight> {
+        Some(Highlight {
+            nodes: Vec::new(),
+            volumes: vec![self.region(id)?.volume],
+        })
     }
 
     /// A scene by name.
