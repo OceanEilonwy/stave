@@ -53,6 +53,7 @@ pub mod nonempty;
 mod resolve;
 pub mod solved;
 pub mod suggest;
+pub mod trace;
 pub mod types;
 pub mod value;
 
