@@ -3374,6 +3374,16 @@ editor commits it only if it checks. The result is an ordinary patch
 or `inset:`), and **snap** replaces a term with `flush` or `against` on the
 face the part was dropped on.
 
+What counts as linear. With every other value held, the trace takes the
+choices the solved design made (the side a part stands on, which way a
+`spaced` row runs, which piece of a split a region is) as they are. A
+`fit` is linear when exactly one part it is joined into can end it on
+each side it is measured to; when several can, the nearest decides it and
+it is not. `between` and `extent` measure whichever end is nearer or
+farther, so they are not linear either. The trace and rule 2's inversion
+are built (`stave_solve::trace`, `stave_model::trace::invert`); the
+editor does not use them yet.
+
 Not built yet. The first build moves plain numbers (rule 1) and single
 params (rule 2) only; z3 over solved params (rule 3) is a later stage, and
 until it is built a `solved param` is edited as a plain one.

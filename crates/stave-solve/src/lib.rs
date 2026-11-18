@@ -42,6 +42,7 @@ mod models;
 mod pieces;
 mod place;
 mod rules;
+pub mod trace;
 mod walls;
 
 use std::collections::HashMap;
