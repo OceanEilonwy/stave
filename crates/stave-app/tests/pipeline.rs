@@ -63,8 +63,10 @@ fn every_example_and_standard_module_checks_clean() {
         [
             "bookshelf",
             "box",
+            "chest_of_drawers",
             "clothing_cabinet",
             "clothing_cabinet_assemblies",
+            "clothing_cabinet_from_box",
             "joint_samples",
             "nightstand",
             "side_table",

@@ -10,9 +10,9 @@ stave 1
 // (the opening, the stock, the shop's own hardware) comes in as a param, so
 // the library stands alone.
 //
-// Components: Back, Divider, Shelf, HangingRail, Feet, Drawer, FramePanelDoor
+// Components: Case, Back, Divider, Shelf, HangingRail, Feet, Drawer, FramePanelDoor
 
 library "Casework" {
-  about:   "Backs, dividers, shelves, rails, feet, drawers and doors for cabinets"
+  about:   "Cases, backs, dividers, shelves, rails, feet, drawers and doors for cabinets"
   license: "AGPL-3.0-or-later"
 }
