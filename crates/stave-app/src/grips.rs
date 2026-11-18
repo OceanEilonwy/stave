@@ -26,8 +26,11 @@
 //!   ([`stave_model::trace::invert`]) on its one plain param, with the
 //!   value before and after; the plain params to pick from when there are
 //!   several ([`move_grip_by`] then makes the patch for the one picked); and
-//!   a refusal naming what stops it when there are none. A solved param is
-//!   treated as a plain one: solving for several at once is a later stage.
+//!   a refusal naming what stops it when there are none. Here a solved
+//!   param is treated as a plain one; the session's drag
+//!   ([`crate::gripping`]) lets the solver choose among solved params
+//!   first ([`crate::solve_edit::Drag`]) and comes here when none is
+//!   involved.
 //!
 //! The contract's [`Grip`] can't say everything a grip here carries (a
 //! part's size has no [`GripTarget`]; a component param's path is not an

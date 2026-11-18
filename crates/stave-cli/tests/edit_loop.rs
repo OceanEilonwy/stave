@@ -75,15 +75,16 @@ fn the_menu_for_the_space_above_the_divider_lists_the_shelf_and_why_a_drawer_can
     assert_eq!(output.status.code(), Some(0), "{}", stdout(&output));
     let printed = stdout(&output);
     assert!(
-        printed.starts_with("In this space: divider.above\n6 menu entries\n"),
+        printed.starts_with("In this space: divider.above\n5 menu entries\n"),
         "{printed}"
     );
     assert!(
-        printed.contains("\n  4. casework.Shelf             needs a choice: sides\n"),
+        printed.contains("\n  3. casework.Shelf             needs a choice: sides\n"),
         "{printed}"
     );
-    // A drawer would run into the shelf and the doors: refused, with the
-    // checker's messages.
+    // A divider is not offered inside a divider's own space. A drawer
+    // would run into the shelf and the doors: refused, with the checker's
+    // messages, after the entries that fit.
     assert!(
         printed.contains(
             "\n  5. casework.Drawer            refused\n       error[overlap]: shelf and drawer_2.side[left] overlap\n"
@@ -136,14 +137,14 @@ fn choosing_the_shelf_and_committing_gives_a_design_that_checks_clean() {
     assert_eq!(
         stdout(&output),
         "In this space: divider.above
-6 menu entries
+5 menu entries
 casework.Shelf as shelf_2 (In this space)
   space        divider.above
   sides        [side_l, side_r]
   panel_stock  oak_19 (copied from shelf)
   headroom     400mm
-  joinery      default
-  depth        default
+  joinery      dado (default)
+  depth        9mm (default)
 verdict: fits
 patch:
   stave 1
@@ -232,7 +233,7 @@ cancel
         stdout(&output),
         "> select region divider.above
 In this space: divider.above
-6 menu entries
+5 menu entries
 > choose casework.Shelf
 needs a choice: sides
 > bind parts side_l side_r

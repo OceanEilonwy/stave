@@ -784,6 +784,8 @@ impl Window {
             | EditEvent::RepeatChanged
             | EditEvent::ChangeStarted
             | EditEvent::DependantsIncluded
+            | EditEvent::DragMoved
+            | EditEvent::ParamPicked
             | EditEvent::VerdictChanged => {
                 self.update_ghost();
                 self.refresh_edit();
@@ -819,6 +821,8 @@ impl Window {
                 self.show_card();
             }
             EditEvent::Rejected(why) => self.edit_toast(&why.text()),
+            // The window draws no grips yet.
+            EditEvent::GripsChanged | EditEvent::GripStopsFound(_) => {}
         }
     }
 

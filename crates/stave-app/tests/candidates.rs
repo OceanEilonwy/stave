@@ -335,7 +335,8 @@ fn the_door_waits_for_its_hinge_side() {
     let side_l = model.parts.iter().find(|p| p.name == "side_l").unwrap().id;
     door.place[1].slot = PlaceSlot::Part(Some(side_l));
     let written = scope.write_patch(&door, None).unwrap();
-    assert_eq!(written.name.as_str(), "frame_panel_door");
+    // A component named with several words gives its last: `door`.
+    assert_eq!(written.name.as_str(), "door");
     assert!(
         written.text.contains("hinge_side:  side_l"),
         "{}",

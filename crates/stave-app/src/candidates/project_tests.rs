@@ -262,6 +262,17 @@ fn facing_parts_fill_parts_params_and_a_joint_s_roles() {
         tie.place[0].slot,
         PlaceSlot::Parts(NonEmpty::new(vec![side_l, side_r]))
     );
+    // The two sides face each other across the box, so they never meet:
+    // no joint could join them, and none is listed.
+    assert!(find(&menu, "dado").is_none(), "{:?}", labels(&menu));
+    assert!(
+        menu.iter()
+            .all(|c| c.applicability == Applicability::NotChecked)
+    );
+
+    // A group: the joint's last `Parts` role takes the parts left over.
+    let group = Picked::Group(NonEmpty::new(vec![side_l, side_r, base]).unwrap());
+    let menu = scope.candidates(&group);
     let dado = find(&menu, "dado").unwrap();
     assert_eq!(
         dado.place[0].slot,
@@ -269,33 +280,19 @@ fn facing_parts_fill_parts_params_and_a_joint_s_roles() {
     );
     assert_eq!(
         dado.place[1].slot,
-        PlaceSlot::Parts(NonEmpty::new(vec![side_r]))
+        PlaceSlot::Parts(NonEmpty::new(vec![side_r, base]))
     );
-    assert!(
-        menu.iter()
-            .all(|c| c.applicability == Applicability::NotChecked)
-    );
-
     let written = scope.write_patch(dado, None).unwrap();
     assert_eq!(written.name.as_str(), "dado_2");
     assert!(
         written
             .text
-            .contains("  add joint dado_2 : dado(side_l, into: side_r) in \"box.stave\"\n"),
+            .contains("  add joint dado_2 : dado(side_l, into: [side_r, base]) in \"box.stave\"\n"),
         "{}",
         written.text
     );
     let (text, errors) = apply(&scope, &written);
     assert!(errors.is_empty(), "{errors:?}\n{text}");
-
-    // A group: the joint's last `Parts` role takes the parts left over.
-    let group = Picked::Group(NonEmpty::new(vec![side_l, side_r, base]).unwrap());
-    let menu = scope.candidates(&group);
-    let dado = find(&menu, "dado").unwrap();
-    assert_eq!(
-        dado.place[1].slot,
-        PlaceSlot::Parts(NonEmpty::new(vec![side_r, base]))
-    );
     let tie = find(&menu, "Tie").unwrap();
     assert_eq!(
         tie.place[0].slot,

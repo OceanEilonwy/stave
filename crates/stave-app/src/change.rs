@@ -28,6 +28,7 @@ use std::collections::BTreeMap;
 use std::io;
 use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
@@ -47,11 +48,14 @@ use crate::editing::{
     Commit, CommitError, EditEvent, FileEdit, Progress, Rejection, StartError, WriteEdits,
     write_all,
 };
+use crate::gripping::{DragOutcome, GripDetail, GripDrag};
 use crate::hold::{HoldRequest, hold_patch};
 use crate::naming::RepeatCount;
+use crate::param_kind::{NewParamKind, param_kind_patch};
 use crate::remove::{Dependants, Removal, patch_for, removal};
 use crate::repeat::{
-    RepeatRequest, SharesMove, mirror_assembly, mirror_split_assembly, move_shares, repeat_assembly,
+    RepeatRequest, SharesMove, SpacedRequest, mirror_assembly, mirror_split_assembly, move_shares,
+    repeat_assembly, repeat_part,
 };
 use crate::scratch::{EditBase, Tried, TryError};
 
@@ -109,6 +113,34 @@ pub enum ChangeRequest {
         /// The value as `.stave` text: `8mm`.
         value: String,
     },
+    /// Repeat a part spaced evenly along a span, or change how many there
+    /// are ([`crate::repeat::repeat_part`]).
+    RepeatPart {
+        /// The part: `slat`.
+        part: Ident,
+        /// How many it becomes.
+        count: RepeatCount,
+        /// The axis they are spaced along.
+        axis: Axis,
+        /// The anchor the span starts at, as written: `apron_left.right`.
+        from: String,
+        /// The anchor it ends at: `apron_right.left`.
+        to: String,
+    },
+    /// Make a param of the project solved (with a range) or plain
+    /// ([`crate::param_kind::param_kind_patch`]).
+    ParamKind {
+        /// The param.
+        param: Ident,
+        /// The kind it becomes.
+        kind: NewParamKind,
+    },
+    /// A drag on a grip of the listed grips: its patch is written by the
+    /// drag as the grip moves ([`crate::gripping`]).
+    Grip {
+        /// The grip's index in the listing.
+        index: usize,
+    },
     /// Hold a measured distance with a minimum or a maximum
     /// ([`crate::hold::hold_patch`]).
     Hold(HoldRequest),
@@ -163,13 +195,16 @@ pub enum ChangeDetail {
         /// The new name.
         to: Ident,
     },
+    /// A drag on a grip, or a value typed for one: where it was moved,
+    /// what changes, what to pick from, what stops it.
+    Grip(Box<GripDetail>),
 }
 
 /// A change in progress: what was asked, its patch and its verdict.
 pub struct Change {
     folder: PathBuf,
     files: Arc<dyn FileSource + Send + Sync>,
-    base: EditBase<'static>,
+    base: Rc<EditBase<'static>>,
     request: ChangeRequest,
     summary: String,
     detail: ChangeDetail,
@@ -187,6 +222,8 @@ pub struct Change {
     /// The scratch base with the rename in place, kept for the ghost of
     /// a rename alone.
     renamed_base: Option<EditBase<'static>>,
+    /// For a drag on a grip: the drag.
+    grip: Option<Box<GripDrag>>,
 }
 
 impl std::fmt::Debug for Change {
@@ -244,11 +281,23 @@ impl Change {
         if base.opened().design.is_none() {
             return Err(StartError::NotSolved.into());
         }
-        let mut change = Change {
+        let mut change = Change::empty(folder, files, Rc::new(base), request.clone());
+        change.write(&request, Dependants::Refuse)?;
+        change.retry();
+        Ok(change)
+    }
+
+    fn empty(
+        folder: &Path,
+        files: Arc<dyn FileSource + Send + Sync>,
+        base: Rc<EditBase<'static>>,
+        request: ChangeRequest,
+    ) -> Change {
+        Change {
             folder: folder.to_path_buf(),
             files,
             base,
-            request: request.clone(),
+            request,
             summary: String::new(),
             detail: ChangeDetail::Repeat,
             renamed: Vec::new(),
@@ -258,10 +307,95 @@ impl Change {
             progress: Progress::Unwritable(String::new()),
             tried: None,
             renamed_base: None,
+            grip: None,
+        }
+    }
+
+    /// A drag on the grip at `index` of a listing, on the listing's base:
+    /// nothing is tried until the grip is moved ([`Change::grip_move`]).
+    pub(crate) fn for_grip(
+        folder: &Path,
+        files: Arc<dyn FileSource + Send + Sync>,
+        base: Rc<EditBase<'static>>,
+        index: usize,
+        grip: crate::grips::SelectionGrip,
+    ) -> Change {
+        let summary = format!("Drag {}", grip.label);
+        let drag = GripDrag::new(index, grip);
+        let mut change = Change::empty(folder, files, base, ChangeRequest::Grip { index });
+        change.summary = summary;
+        change.detail = ChangeDetail::Grip(Box::new(drag.detail().clone()));
+        change.progress = Progress::Unwritable("move the grip, or type a value for it".to_owned());
+        change.grip = Some(Box::new(drag));
+        change
+    }
+
+    /// `true` for a drag on a grip.
+    pub fn is_drag(&self) -> bool {
+        self.grip.is_some()
+    }
+
+    /// Moves the grip of a drag to `target`: writes its patch again and
+    /// tries it. Not a drag: rejected.
+    pub(crate) fn grip_move(&mut self, target: stave_model::trace::Amount) -> Vec<EditEvent> {
+        let Some(drag) = self.grip.as_mut() else {
+            return vec![EditEvent::Rejected(Rejection::NotDragging)];
         };
-        change.write(&request, Dependants::Refuse)?;
-        change.retry();
-        Ok(change)
+        let outcome = drag.move_to(&self.base, target);
+        let detail = drag.detail().clone();
+        let before = self.progress.clone();
+        self.take_outcome(outcome, detail);
+        let mut events = vec![EditEvent::DragMoved];
+        if self.progress != before {
+            events.push(EditEvent::VerdictChanged);
+        }
+        events
+    }
+
+    /// Picks the param a drag's follows grip changes, from its choices,
+    /// and tries the drag again at its last value.
+    pub(crate) fn grip_pick(&mut self, param: stave_model::ids::ParamId) -> Vec<EditEvent> {
+        let Some(drag) = self.grip.as_mut() else {
+            return vec![EditEvent::Rejected(Rejection::NotDragging)];
+        };
+        if !drag.pick(param) {
+            return vec![EditEvent::Rejected(Rejection::NotAChoice)];
+        }
+        let mut events = vec![EditEvent::ParamPicked];
+        if let Some(target) = drag.target() {
+            let outcome = drag.move_to(&self.base, target);
+            let detail = drag.detail().clone();
+            let before = self.progress.clone();
+            self.take_outcome(outcome, detail);
+            if self.progress != before {
+                events.push(EditEvent::VerdictChanged);
+            }
+        }
+        events
+    }
+
+    fn take_outcome(&mut self, outcome: DragOutcome, detail: GripDetail) {
+        self.detail = ChangeDetail::Grip(Box::new(detail));
+        self.fixes.clear();
+        match outcome {
+            DragOutcome::Patch { summary, text } => {
+                self.summary = summary;
+                self.patch = Some(text);
+                self.retry();
+            }
+            DragOutcome::Stands(progress) => {
+                if let ChangeDetail::Grip(detail) = &self.detail {
+                    self.summary = match detail.target.and_then(crate::stops::amount_text) {
+                        Some(value) => format!("Drag {} to {value}", detail.label),
+                        None => format!("Drag {}", detail.label),
+                    };
+                }
+                self.patch = None;
+                self.tried = None;
+                self.tried_patch = None;
+                self.progress = progress;
+            }
+        }
     }
 
     /// The project folder.
@@ -484,6 +618,38 @@ impl Change {
                     about: plan.about,
                 };
             }
+            ChangeRequest::RepeatPart {
+                part,
+                count,
+                axis,
+                from,
+                to,
+            } => {
+                let patch = repeat_part(
+                    &scope,
+                    SpacedRequest {
+                        part: part.as_str(),
+                        count: *count,
+                        axis: *axis,
+                        from,
+                        to,
+                    },
+                )
+                .map_err(|error| unwritable(&error))?;
+                self.summary = patch.summary;
+                self.patch = Some(patch.text);
+                self.detail = ChangeDetail::Repeat;
+            }
+            ChangeRequest::ParamKind { param, kind } => {
+                let patch = param_kind_patch(&scope, param.as_str(), kind)
+                    .map_err(|error| unwritable(&error))?;
+                self.summary = patch.summary;
+                self.patch = Some(patch.text);
+                self.detail = ChangeDetail::Repeat;
+            }
+            ChangeRequest::Grip { .. } => {
+                // A drag's patch is written as the grip moves.
+            }
             ChangeRequest::SetParam { item, param, value } => {
                 let summary = format!("Set {}.{} to {value}", item.as_str(), param.as_str());
                 let op = format!("set {}.{} = {value}", item.as_str(), param.as_str());
@@ -606,7 +772,7 @@ impl Change {
             }
             return;
         };
-        let base = renamed_base.as_ref().unwrap_or(&self.base);
+        let base = renamed_base.as_ref().unwrap_or(self.base.as_ref());
         let parse = match SourceMap::new().add(CHANGE_PATCH_NAME, text.as_str()) {
             Ok(file) => parse_patch_file(file, &text),
             Err(error) => {

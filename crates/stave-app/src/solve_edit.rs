@@ -296,6 +296,26 @@ pub fn solve_size(
     })
 }
 
+/// The patch that writes `changes`: one `set` each, in their order.
+///
+/// # Errors
+///
+/// [`SolveEditError::Overflow`] when a value has no text, or the patch
+/// doesn't parse (a bug).
+pub fn changes_patch(changes: &[ParamChange]) -> Result<GeneratedPatch, SolveEditError> {
+    let mut ops = Vec::with_capacity(changes.len());
+    let mut said = Vec::with_capacity(changes.len());
+    for change in changes {
+        let text = value_text(change.to).ok_or(SolveEditError::Overflow)?;
+        ops.push(format!("set {} = {text}", change.path));
+        said.push(format!("{} to {text}", change.path));
+    }
+    Ok(GeneratedPatch::new(
+        &format!("Set {}", said.join(", ")),
+        &ops,
+    )?)
+}
+
 // ---------------------------------------------------------------------------
 // The drag
 // ---------------------------------------------------------------------------
@@ -439,6 +459,30 @@ impl Drag {
             .unknowns
             .iter()
             .map(|unknown| (unknown.param, unknown.path.as_str()))
+    }
+
+    /// The changes a drag that stops at `values` writes: every param that
+    /// moved, its value snapped to the project's resolution as
+    /// [`solve_size`] snaps it (without solving again), and the size the
+    /// snapped values give, which can miss the target by less than a step.
+    ///
+    /// # Errors
+    ///
+    /// [`SolveEditError::Overflow`] when the numbers are too large.
+    pub fn changes_at(
+        &self,
+        values: &DragValues,
+    ) -> Result<(Vec<ParamChange>, Amount), SolveEditError> {
+        let raw: Vec<Rational> = values.values.iter().map(|(_, value)| value.raw()).collect();
+        let snapped = self.setup.snap_all(&raw)?;
+        let size = self
+            .setup
+            .size_of(&snapped)
+            .ok_or(SolveEditError::Overflow)?;
+        Ok((
+            self.setup.changes(&snapped),
+            self.setup.current.with_raw(size),
+        ))
     }
 
     /// How many times the solver has run for targets (the reach is not

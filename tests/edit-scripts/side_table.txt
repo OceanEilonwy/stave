@@ -48,7 +48,8 @@ offer mirror apron
 mirror apron
 add
 
-set apron_front.setback = 3mm
+grips assembly apron_front                 # the setback, as a grip: typed
+grip 2 = 3mm
 add
 set apron_left.setback = 3mm
 add
@@ -94,6 +95,7 @@ set gap = 15mm
 show
 add
 
+measure slats.slat[0] apron_front.apron
 hold slats.slat[0] apron_front.apron min 200mm "leave room above the shelf for a stack of books"
 show
 add

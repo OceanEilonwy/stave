@@ -11,9 +11,9 @@ param overall_width  = 940mm
 param overall_height = 1780mm
 param overall_depth  = 580mm
 
-region envelope                          = box(across: overall_width, up: overall_height, deep: overall_depth)
-region drawer_bay[bottom, top]           = split(divider.below, up)
-region frame_panel_door_bay[left, right] = split(divider.above, across)
+region envelope                = box(across: overall_width, up: overall_height, deep: overall_depth)
+region drawer_bay[bottom, top] = split(divider.below, up)
+region door_bay[left, right]   = split(divider.above, across)
 
 stock oak_19       { species: white_oak, form: solid, thickness: 19mm, max_width: 200mm, max_length: 2700mm }
 stock oak_6        { species: white_oak, form: solid, thickness: 6mm, max_width: 200mm, max_length: 2700mm }
@@ -51,15 +51,15 @@ assembly drawer[bottom, top] : casework.Drawer {
   slide:        side_mount_slide(length: 500mm)
 }
 
-assembly frame_panel_door_left : casework.FramePanelDoor {
-  opening:     frame_panel_door_bay[left]
+assembly door_left : casework.FramePanelDoor {
+  opening:     door_bay[left]
   hinge_side:  case.side[left]
   mount:       overlay(left: 18mm, right: 18mm, top: -1.5mm, bottom: 8mm, meeting: -0.75mm)
   frame:       oak_19
   panel_stock: oak_6
 }
 
-assembly frame_panel_door_right = mirror(frame_panel_door_left, about: mid(divider.above, across))
+assembly door_right = mirror(door_left, about: mid(divider.above, across))
 
 assembly shelf : casework.Shelf {
   space:       divider.above
@@ -68,7 +68,7 @@ assembly shelf : casework.Shelf {
   headroom:    160mm
 }
 
-assembly hanging_rail : casework.HangingRail {
+assembly rail : casework.HangingRail {
   under:      shelf.board
   sides:      [case.side[left], case.side[right]]
   rail_stock: oak_dowel_28
@@ -79,4 +79,4 @@ assembly feet : casework.Feet {
   foot_stock: oak_75_sq
 }
 
-require hanging_rail_rail_to_divider_panel_min : between(hanging_rail.rail, divider.panel) >= 800mm "room for a coat on a hanger"
+require rail_to_divider_panel_min : between(rail.rail, divider.panel) >= 800mm "room for a coat on a hanger"

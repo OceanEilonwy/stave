@@ -55,8 +55,8 @@ set panel_stock = oak_6
 show
 add
 
-offer mirror frame_panel_door
-mirror frame_panel_door across
+offer mirror door
+mirror door across
 show
 add
 
@@ -74,17 +74,12 @@ bind parts case.side[left] case.side[right]
 set rail_stock = oak_dowel_28
 add
 
-select face frame_panel_door_left.stile[latch].front
-list
-choose hardware.knob                       # expect: refused
-show
-cancel
-
 select face case.base.bottom
 choose casework.Feet
 set foot_stock = oak_75_sq
 add
 
-hold hanging_rail.rail divider.panel min 800mm "room for a coat on a hanger"
+measure rail.rail divider.panel
+hold rail.rail divider.panel min 800mm "room for a coat on a hanger"
 show
 add

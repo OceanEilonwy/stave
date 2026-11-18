@@ -75,13 +75,12 @@ pub fn applicability(
         Ok(tried) => Ok(match tried.verdict() {
             Verdict::Fits(_) => Applicability::Applies,
             Verdict::Refused(refusal) => Applicability::Greyed(
-                NonEmpty::new(
+                NonEmpty::new(once_each(
                     refusal
                         .problems()
                         .iter()
-                        .map(|problem| problem.diagnostic().clone())
-                        .collect(),
-                )
+                        .map(|problem| problem.diagnostic().clone()),
+                ))
                 .unwrap_or_else(|| NonEmpty::one(unchecked("the check found nothing to say"))),
             ),
             // A finished try is never still checking; not applying is the
@@ -119,6 +118,24 @@ pub fn check_menu(
         candidate.applicability = applicability(base, scope, candidate, cancel)?;
     }
     Ok(())
+}
+
+/// The diagnostics in order, each said once: a later one with the same
+/// severity, code and message as an earlier one (the same error for each
+/// element of an array, say) is left out.
+fn once_each(diagnostics: impl Iterator<Item = Diagnostic>) -> Vec<Diagnostic> {
+    let mut out: Vec<Diagnostic> = Vec::new();
+    for diagnostic in diagnostics {
+        let seen = out.iter().any(|earlier| {
+            earlier.severity == diagnostic.severity
+                && earlier.code == diagnostic.code
+                && earlier.message == diagnostic.message
+        });
+        if !seen {
+            out.push(diagnostic);
+        }
+    }
+    out
 }
 
 /// A candidate whose patch can't be written, as a diagnostic for its
