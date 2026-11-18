@@ -12,9 +12,9 @@
 //! place params bound or still to point at, and its setting params with
 //! where each value comes from: the param's default, a copy of what the
 //! project's most recent assembly of that component wrote, or nothing yet.
-//! Whether a candidate applies (building it in a scratch copy and checking
-//! it) is not worked out here: every candidate comes back
-//! [`Applicability::NotChecked`].
+//! Whether a candidate applies is not worked out by the listing: every
+//! candidate comes back [`Applicability::NotChecked`], and
+//! [`applicability`] builds each in a scratch copy and checks it.
 //!
 //! [`EditScope::write_patch`] writes the patch for a chosen candidate: an
 //! ordinary patch of the `.stave` grammar that adds the assembly (or the
@@ -23,6 +23,7 @@
 //! [`new_project::new_project_text`] writes a new project started from a
 //! box.
 
+pub mod applicability;
 pub mod new_project;
 pub mod print;
 #[cfg(test)]
@@ -265,6 +266,15 @@ impl<'a> EditScope<'a> {
 
     fn kind_candidate(&self, id: KindId, picked: &Picked, group: &MenuGroup) -> Option<Candidate> {
         let kind = self.model.defs.kind(id)?;
+        // A fastener or a tool is used by a joint or a tool list, never
+        // placed by itself, so it is not a menu entry.
+        match kind.base {
+            ast::BaseKind::Joint
+            | ast::BaseKind::Slide
+            | ast::BaseKind::Hinge
+            | ast::BaseKind::Pull => {}
+            ast::BaseKind::Fastener | ast::BaseKind::Tool => return None,
+        }
         let mut place = Vec::new();
         for role in &kind.roles {
             let name = Name::new(role.name.as_str(), Span::default()).ok()?;
@@ -423,11 +433,13 @@ pub fn first_sentence(docs: &[String]) -> Option<String> {
 
 /// Binds the selection to a component's place params (`docs/editing.md`,
 /// "Signature matching", step 2): every typed value of the selection fills
-/// the first unbound place param of its own type, and no value may be left
-/// over. A `Region` fills a `Region` param; a face gives two values, its
-/// `Anchor` and its `Part`, and both must find a param; `Parts` (two facing
-/// parts, or a group) fills a `Parts` param. `false` when the selection
-/// doesn't fit.
+/// the first unbound place param of its own type. A `Region` fills a
+/// `Region` param; `Parts` (two facing parts, or a group) fills a `Parts`
+/// param, and must find one. A face gives two values, its `Anchor` and its
+/// `Part`, and the component is a candidate when either finds a param
+/// (the face rule): a component that sits on a face without naming its
+/// part, or hangs from a part without naming a face, is offered on a
+/// face too. `false` when the selection doesn't fit.
 fn bind_component(place: &mut [PlaceParam], picked: &Picked) -> bool {
     match picked {
         Picked::Region(region) => fill_first(place, |slot| match slot {
@@ -452,7 +464,7 @@ fn bind_component(place: &mut [PlaceParam], picked: &Picked) -> bool {
                 }
                 _ => false,
             });
-            anchor && part
+            anchor || part
         }
         Picked::Between(pair) => NonEmpty::new(vec![pair.first(), pair.second()])
             .is_some_and(|parts| fill_parts(place, parts)),
@@ -479,10 +491,11 @@ fn fill_parts(place: &mut [PlaceParam], parts: NonEmpty<stave_model::ids::PartId
 /// `Region` role. The parts of the selection (a face's part, the two facing
 /// parts, the group) go one to each `Part` or `Parts` role in order, the
 /// part pointed at first to the first role; parts left over join the last
-/// `Parts` role that took one. A face's `Anchor` is a typed value of the
-/// selection too, and a kind has no `Anchor` role to take it, so a kind is
-/// never a candidate on a face (step 2: every typed value must fill a place
-/// param). `false` when a value of the selection is left over.
+/// `Parts` role that took one. A kind has no `Anchor` role, so of a face's
+/// two typed values only its `Part` is used (the face rule): a kind whose
+/// first part role is a `Part` (a knob's `piece`) is offered on a face.
+/// `false` when a value of the selection is left over, or nothing was
+/// bound.
 fn bind_kind(place: &mut [PlaceParam], picked: &Picked) -> bool {
     let parts = match picked {
         Picked::Region(region) => {
@@ -494,10 +507,16 @@ fn bind_kind(place: &mut [PlaceParam], picked: &Picked) -> bool {
                 _ => false,
             });
         }
-        Picked::Face(_) => return false,
+        Picked::Face(face) => vec![face.part],
         Picked::Between(pair) => vec![pair.first(), pair.second()],
         Picked::Group(parts) => parts.iter().copied().collect(),
     };
+    if !place
+        .iter()
+        .any(|param| matches!(param.slot, PlaceSlot::Part(None) | PlaceSlot::Parts(None)))
+    {
+        return false;
+    }
     let mut parts = parts.into_iter();
     let mut last_parts_role = None;
     for (index, param) in place.iter_mut().enumerate() {
@@ -566,7 +585,7 @@ fn group_key(group: &MenuGroup) -> (u8, &str) {
 fn greyed(candidate: &Candidate) -> bool {
     match candidate.applicability {
         Applicability::Greyed(_) => true,
-        Applicability::NotChecked | Applicability::Applies => false,
+        Applicability::NotChecked | Applicability::Applies | Applicability::NeedsChoice(_) => false,
     }
 }
 

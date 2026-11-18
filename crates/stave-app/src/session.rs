@@ -16,14 +16,19 @@
 use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
 use stave_model::solved::{AssemblyId, HardwareId, JointId, PairMember, PartId, SolvedDesign};
+use stave_modules::{DiskFiles, FileSource};
 use stave_scene::{Item, SceneEntry, SceneGraph};
 
 use crate::check::{Checked, Outcome, Summary};
+use crate::editing::{Edit, EditCommand, EditEvent, Rejection, WriteEdits};
 use crate::empty::Reason;
 use crate::focus::Target;
+use crate::scratch::DiskWriter;
 use crate::view::Problem;
 
 /// The most places the back and forward lists keep.
@@ -482,6 +487,9 @@ pub enum Command {
     Check,
     /// Build the plan (Ctrl+B): checks first.
     Build,
+    /// Drive the edit in progress (`docs/editing.md`): start one from a
+    /// selection, choose and fill in a candidate, add it or cancel it.
+    Edit(EditCommand),
 }
 
 /// What changed, for the views to redraw.
@@ -514,6 +522,8 @@ pub enum Event {
     CheckStarted(CheckTicket),
     /// Show this message.
     Notice(Notice),
+    /// [`Session::edit`] changed in this way.
+    Edit(EditEvent),
 }
 
 /// Which way [`Command::NextProblem`] and [`Command::PreviousProblem`]
@@ -529,6 +539,29 @@ enum Step {
 enum Queued {
     Nothing,
     Again,
+}
+
+/// Where the edit in progress reads the project and writes its commits.
+struct EditPorts {
+    /// What an edit is started from: the disk, or the editor's buffers.
+    files: Arc<dyn FileSource + Send + Sync>,
+    /// Where Add writes.
+    writer: Box<dyn WriteEdits>,
+}
+
+impl std::fmt::Debug for EditPorts {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EditPorts").finish_non_exhaustive()
+    }
+}
+
+impl Default for EditPorts {
+    fn default() -> Self {
+        EditPorts {
+            files: Arc::new(DiskFiles),
+            writer: Box::new(DiskWriter),
+        }
+    }
 }
 
 /// One open project.
@@ -549,6 +582,10 @@ pub struct Session {
     latest: Option<Rc<Checked>>,
     /// The last result that solved: what the 3D view shows.
     shown: Option<Rc<Checked>>,
+    /// The edit in progress.
+    edit: Option<Edit>,
+    /// Where it reads and writes.
+    ports: EditPorts,
 }
 
 impl Session {
@@ -568,7 +605,40 @@ impl Session {
             queued: Queued::Nothing,
             latest: None,
             shown: None,
+            edit: None,
+            ports: EditPorts::default(),
         }
+    }
+
+    /// Where an edit started from now on reads the project: the disk by
+    /// default; a window passes its buffers' overlay
+    /// ([`stave_ide::Buffers::overlay`]) so unsaved text is what is edited.
+    pub fn set_edit_files(&mut self, files: Arc<dyn FileSource + Send + Sync>) {
+        self.ports.files = files;
+    }
+
+    /// Where Add writes: the disk by default; a window passes its open
+    /// buffers, so the editor and its undo see the change.
+    pub fn set_edit_writer(&mut self, writer: Box<dyn WriteEdits>) {
+        self.ports.writer = writer;
+    }
+
+    /// The edit in progress, if any.
+    pub fn edit(&self) -> Option<&Edit> {
+        self.edit.as_ref()
+    }
+
+    /// Works out whether each entry of the edit's menu applies, as
+    /// [`EditCommand::CheckMenu`] does, but stops when `cancel` is set
+    /// (the entries reached keep their answer).
+    pub fn check_edit_menu(&mut self, cancel: &AtomicBool) -> Vec<Event> {
+        let mut events = Vec::new();
+        if let Some(edit) = self.edit.as_mut()
+            && let Ok(true) = edit.check_menu(cancel)
+        {
+            events.push(Event::Edit(EditEvent::MenuChanged));
+        }
+        finish(events)
     }
 
     // ---- reading ----
@@ -892,8 +962,75 @@ impl Session {
                     self.request_check(&mut events);
                 }
             }
+            Command::Edit(command) => self.edit_command(command, &mut events),
         }
         finish(events)
+    }
+
+    /// Does an edit command: starting, adding and cancelling here, the
+    /// rest in the edit itself.
+    fn edit_command(&mut self, command: EditCommand, events: &mut Vec<Event>) {
+        match command {
+            EditCommand::Start(picked) => {
+                if self.edit.take().is_some() {
+                    events.push(Event::Edit(EditEvent::Cancelled));
+                }
+                match Edit::start(&self.folder, self.ports.files.clone(), picked) {
+                    Ok(edit) => {
+                        self.edit = Some(edit);
+                        events.push(Event::Edit(EditEvent::Started));
+                    }
+                    Err(error) => events.push(Event::Edit(EditEvent::Rejected(
+                        Rejection::CantStart(error.to_string()),
+                    ))),
+                }
+            }
+            EditCommand::Cancel => {
+                if self.edit.take().is_some() {
+                    events.push(Event::Edit(EditEvent::Cancelled));
+                } else {
+                    events.push(Event::Edit(EditEvent::Rejected(Rejection::NoEdit)));
+                }
+            }
+            EditCommand::Add => {
+                let Some(edit) = self.edit.as_mut() else {
+                    events.push(Event::Edit(EditEvent::Rejected(Rejection::NoEdit)));
+                    return;
+                };
+                let started = std::time::Instant::now();
+                match edit.commit(self.ports.writer.as_mut()) {
+                    Ok(commit) => {
+                        self.edit = None;
+                        events.push(Event::Edit(EditEvent::Committed));
+                        let checked = crate::check::checked(&self.folder, commit.opened, started);
+                        let verdict = Verdict::Checked(checked.summary);
+                        self.adopt(Rc::new(checked), events);
+                        if self.running.is_none() {
+                            self.status = CheckStatus::Done(verdict);
+                            events.push(Event::CheckStatusChanged);
+                        }
+                    }
+                    Err(crate::editing::CommitError::NothingChosen) => {
+                        events.push(Event::Edit(EditEvent::Rejected(Rejection::NothingChosen)));
+                    }
+                    Err(crate::editing::CommitError::DoesNotFit) => {
+                        events.push(Event::Edit(EditEvent::Rejected(Rejection::DoesNotFit)));
+                    }
+                    Err(error @ crate::editing::CommitError::Write { .. }) => events.push(
+                        Event::Edit(EditEvent::Rejected(Rejection::CantWrite(error.to_string()))),
+                    ),
+                }
+            }
+            command @ (EditCommand::CheckMenu
+            | EditCommand::Choose(_)
+            | EditCommand::Bind(_)
+            | EditCommand::Set { .. }
+            | EditCommand::Rename(_)
+            | EditCommand::ApplyFix { .. }) => match self.edit.as_mut() {
+                Some(edit) => events.extend(edit.apply(command).into_iter().map(Event::Edit)),
+                None => events.push(Event::Edit(EditEvent::Rejected(Rejection::NoEdit))),
+            },
+        }
     }
 
     /// Hands back a check's outcome. A stale run's outcome (an older ticket

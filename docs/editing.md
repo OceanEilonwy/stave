@@ -10,7 +10,11 @@ grammar is the authority.
 
 The contract types are in `crates/stave-app/src/edit.rs` (`stave_app::edit`):
 the typed selection, a candidate, a verdict, a fix and a grip, with a
-hand-built fixture for the clothing cabinet. They carry no behaviour yet.
+hand-built fixture for the clothing cabinet. The behaviour is built on
+them: signature matching and applicability in `stave_app::candidates`,
+the scratch check in `stave_app::scratch`, and the edit in progress, which
+joins them, in `stave_app::editing` (see [The edit in
+progress](#the-edit-in-progress)).
 
 ## The idea
 
@@ -44,6 +48,12 @@ comes from the param kinds (see [Smart edits](grammar.md#smart-edits)).
 
 Escape, or moving to another place, drops the candidate. Each commit is
 one step of undo, and undo is an edit of the text like any other.
+
+**A design that doesn't place can't be edited by pointing.** When the
+project's own design has an error that stops the solver writing a design
+(a failing `require`, an unknown name), there is nothing to check a
+candidate against, so the edit doesn't start; the editor says so plainly
+("fix the errors `stave check` shows first") rather than guessing.
 
 ## Verdicts and strict commit
 
@@ -98,9 +108,32 @@ A selection becomes typed values, the same types as component params:
 | a click between two facing parts | `Parts`: the two | Between these parts |
 | a group selection (several parts) | `Parts`: every part of the group | With these parts |
 
-A click in a space picks the smallest region that holds the point.
-"Between two facing parts" is a point in the gap between two parallel
-faces of two parts that face each other, with nothing between them.
+What is under the pointer is decided by the scene, on what it shows:
+
+- **A part in front of a region wins.** A click goes to a space only
+  when the ray passes through empty space inside the region before it
+  reaches any part (by more than a hundredth of a millimetre); a part in
+  front of the region, or in its front face, is what is clicked. A part
+  that stands inside the region (a rail across a bay) is clicked too; a
+  part that is the region's wall, or lies beyond it, is not: the space
+  is.
+- **The innermost region is chosen.** Of the regions the ray looks into
+  through empty space, the one it is still inside where that run ends,
+  and of those the smallest (ties go to the one the design lists first). A region
+  with no room inside (no size on some axis) is never picked. A region
+  stays where the design puts it: a scene's motions don't move it.
+- **Facing pairs consider only shown parts at rest.** "Between two facing
+  parts" is a point in the gap between two parallel faces of two parts
+  that face each other, with nothing between them: along each axis, the
+  nearest part on either side whose box spans the point on the other two
+  axes, and of the axes that have a part on both sides, the one with the
+  narrowest gap (ties in the order up, across, deep). Only parts the scene
+  shows, and shows where the design puts them, count: a door a scene
+  swings open, or a part pulled apart, no longer faces anything. The pair
+  is given low side first (left, bottom, front).
+
+A click on a hardware's body or a joint's member gives no selection to
+edit from: they are not places to put something.
 
 ## Signature matching
 
@@ -112,18 +145,34 @@ never from a list in the app.
    `Parts`) are filled by pointing. **Setting params** (`Stock`, `Mount`,
    the kind types, lengths and other quantities) are filled in the card.
 2. **Candidates.** A `component` or `kind` in scope is a candidate when
-   the selection can fill its place params: every typed value of the
-   selection fills a place param of its own type that no other value
-   fills (the first such param in declaration order), and at least one
-   place param is filled. For a kind, its roles play that part: a role of
-   type `Part` takes one part of the selection, a role of type `Parts`
-   takes one or more, and the part pointed at first goes to the first
-   role.
+   the selection can fill its place params. Each typed value of the
+   selection fills the first place param of its own type in declaration
+   order that no other value fills. A `Region` must find a `Region`
+   param, and `Parts` (two facing parts, a group) a `Parts` param.
+   **A face gives both an `Anchor` and its `Part`, and a declaration is a
+   candidate when its place params can be filled from either**: a
+   component with an `Anchor` param, a `Part` param or both is offered on
+   a face, each param that has a value of its type taking it. For a kind,
+   its roles play that part: a role of type `Part` takes one part of the
+   selection, a role of type `Parts` takes one or more, and the part
+   pointed at first goes to the first role. A kind has no `Anchor` role,
+   so on a face its first part role takes the face's part: a knob (a
+   `pull` kind whose first role is `piece: Part`) is offered when a door
+   stile's face is clicked. A `fastener` or `tool` kind is used by a joint
+   or a tool list and never placed by itself, so it is never a candidate.
+   Place params the selection doesn't fill are asked for by pointing
+   (step 5).
 3. **Applicability.** Each candidate is instantiated in a scratch copy
    with its defaults (and, for a setting with no default, the value it
    would get by step 5) and checked. Its own `require` lines are its
    applicability rules. A candidate that fails is still listed, greyed,
-   with the checker's message, so the user learns why it doesn't fit.
+   with the checker's message, so the user learns why it doesn't fit. A
+   candidate that still has a place param to point at, or a setting with
+   no default and nothing to copy, is not tried: it **needs a choice**,
+   which is not a refusal, and the entry is listed as usual. Trying never
+   changes the design the menu was made for, and the menu can be checked
+   a little at a time: a check that is stopped part way keeps the answers
+   it reached, and the rest wait.
 4. **The menu entry** is drawn from the declaration:
 
    | Part of the entry | From |
@@ -143,6 +192,90 @@ never from a list in the app.
 
 A pick writes an assembly (see below); a kind writes a `joint` or a
 `hardware` with the kind call.
+
+## The edit in progress
+
+The edit in progress is session state (`stave_app::editing::Edit`, held
+by `stave_app::session::Session`). The window drives it with
+`Command::Edit(EditCommand)` and redraws what the returned
+`Event::Edit(EditEvent)`s name, as for every other command.
+
+| Command | Does |
+|---|---|
+| `Start(Picked)` | starts an edit from a selection (dropping one in progress) and lists its menu |
+| `CheckMenu` | works out each entry's applicability (`Session::check_edit_menu` does the same and can be stopped) |
+| `Choose(index)` | chooses a menu entry |
+| `Bind(Picked)` | binds the next place param still to point at with a further pick |
+| `Set { name, value }` | sets a setting to a value typed in the card |
+| `Rename(name)` | names the new item, in place of the generated name |
+| `ApplyFix { problem, fix }` | adds one of the refusal's fixes to the candidate |
+| `Add` | writes the candidate into the text, only when it fits |
+| `Cancel` | drops the edit, writing nothing |
+
+| Event | Says |
+|---|---|
+| `Started` | an edit began; the menu is listed |
+| `MenuChanged` | entries' applicability, or their order, changed |
+| `Chosen`, `PlaceBound`, `SettingChanged`, `Renamed`, `FixApplied` | the candidate changed in that way |
+| `VerdictChanged` | the candidate's verdict, or what is still to choose, changed |
+| `Committed` | the candidate was written; the committed design is the session's result (with `ResultChanged`) |
+| `Cancelled` | the edit was dropped |
+| `Rejected(why)` | the command couldn't be done (a name already used, a pick that fills nothing the card asks for, Add on a candidate that doesn't fit, a design that doesn't place); nothing changed |
+
+Each change to the candidate writes its patch again (the candidate's
+`add`, then each fix applied) and re-runs the scratch check, so the
+verdict is always that of the candidate as it now is. A name typed for
+the new item before it is added is part of the patch; one that is
+already used in the project, or is a word of the language, is refused.
+
+**Add** writes the patch as text edits per file (the smallest edits, as
+the patch gives them) through the open buffers when the window has the
+file open, so the editor shows the change unsaved and its undo can take
+it back; on the command line, to disk. The session then shows the
+committed design. **Cancel** leaves no trace: nothing was written, so
+every file is as it was, byte for byte.
+
+## The command line
+
+`stave edit` runs the whole loop with no window. Its output is the
+editor's test harness, so it is stable: entries in menu order, paths as
+given on the command line, diagnostics as `stave check` prints them.
+
+```
+stave edit cabinet --patch shelf.stave [--commit]        # try a patch file
+stave edit cabinet --region divider.above                # the menu
+stave edit cabinet --face 'door_l.stile[hinge].front'    # the menu for a face
+stave edit cabinet --between side_l side_r               # the menu for a gap
+stave edit cabinet --region divider.above --choose Shelf \
+    --bind 'parts side_l side_r' --set headroom=400mm --name hat_shelf --commit
+stave edit cabinet --script steps.txt
+```
+
+The menu lists each entry as `casework.Shelf` (the bare label for the
+project's own declarations) with `applies`, `needs a choice: <names>`
+or `refused` and the checker's errors under it. `--choose` takes the
+label or the label with its group, and prints the card: what fills each
+param, the verdict, the checker's words and the patch.
+
+A script holds one step a line (`#` starts a comment); each is echoed
+(`> list`) before what it prints:
+
+```
+select region divider.above      # or: face <part>.<face>, between <a> <b>, parts <a> <b> ...
+list
+choose casework.Shelf
+bind parts side_l side_r         # a selection, as for select
+set headroom = 400mm
+name hat_shelf
+fix 1 1                          # a refusal's fix: problem, fix, from 1
+show
+commit                           # or: cancel
+```
+
+The run stops at the first step that fails (a name not in the design, a
+command the edit rejects, a commit of a candidate that doesn't fit) and
+exits with 1; a script line that is not a step exits with 2 before
+anything runs.
 
 ## Generated text
 

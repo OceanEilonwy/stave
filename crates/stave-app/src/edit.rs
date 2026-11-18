@@ -309,6 +309,11 @@ pub enum Applicability {
     Applies,
     /// Listed greyed, with the checker's messages saying why.
     Greyed(NonEmpty<Diagnostic>),
+    /// Not tried yet because something is still to choose: a place param
+    /// to point at, or a setting with no default and nothing to copy. These
+    /// are their names, place params first. Not a refusal: the entry is
+    /// listed as usual, and the card asks for them once it is chosen.
+    NeedsChoice(NonEmpty<Name>),
 }
 
 // ---------------------------------------------------------------------------

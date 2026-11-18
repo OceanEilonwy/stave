@@ -53,6 +53,7 @@
 use std::collections::BTreeMap;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 use stave_check::{BoxOverlap, Cancelled, Contact, Fast};
@@ -78,7 +79,7 @@ pub struct EditBase<'f> {
     /// The project folder, as given.
     folder: PathBuf,
     /// Where the project's files are read from.
-    files: &'f dyn FileSource,
+    files: Source<'f>,
     /// Files whose text differs from `files`' after [`EditBase::advance`],
     /// by the path the loader reads them at.
     overrides: BTreeMap<PathBuf, String>,
@@ -103,6 +104,26 @@ impl<'f> EditBase<'f> {
         Ok(Self::from_prepared(folder, files, opened, prepared))
     }
 
+    /// [`EditBase::new`] reading through a source the base shares rather
+    /// than borrows, so it can be kept in a long-lived value (an editor
+    /// session) without a borrow tying it down.
+    ///
+    /// # Errors
+    ///
+    /// When the folder itself can't be loaded ([`crate::prepare`]).
+    pub fn shared(
+        folder: &Path,
+        files: Arc<dyn FileSource + Send + Sync>,
+    ) -> Result<EditBase<'static>, LoadError> {
+        let (opened, prepared) = crate::prepare(folder, files.as_ref())?;
+        Ok(EditBase::from_source(
+            folder,
+            Source::Shared(files),
+            opened,
+            prepared,
+        ))
+    }
+
     /// A base from a project already prepared with [`crate::prepare`]
     /// from the same `folder` and `files`; `opened` and `prepared` are
     /// what that call returned.
@@ -112,6 +133,10 @@ impl<'f> EditBase<'f> {
         opened: Opened,
         prepared: Prepared,
     ) -> Self {
+        Self::from_source(folder, Source::Borrowed(files), opened, prepared)
+    }
+
+    fn from_source(folder: &Path, files: Source<'f>, opened: Opened, prepared: Prepared) -> Self {
         let target = Target::of(&prepared.modules, folder);
         let known = count(&opened.sources, &base_diagnostics(&opened));
         Self {
@@ -179,7 +204,7 @@ impl<'f> EditBase<'f> {
             });
         }
         let overlay = Overlay {
-            files: self.files,
+            files: self.files.get(),
             overrides: &overrides,
         };
         let stages = place(&self.prepared, &self.folder, &overlay)?;
@@ -547,6 +572,13 @@ impl Tried {
         self.scratch.as_ref().map(|scratch| &scratch.opened)
     }
 
+    /// The scratch copy as checked, taken out of the result: after a
+    /// commit, the design an editor shows. `None` when the patch couldn't
+    /// be applied.
+    pub fn into_opened(self) -> Option<Opened> {
+        self.scratch.map(|scratch| scratch.opened)
+    }
+
     /// Every file the verdict's diagnostics point into: the scratch copy's
     /// and the patch file, for [`stave_lang::render_diagnostics`].
     pub fn sources(&self) -> &SourceMap {
@@ -840,6 +872,23 @@ impl Target {
             target = target.with_local_module(name.clone(), files(module));
         }
         target
+    }
+}
+
+/// Where an [`EditBase`] reads the project's files.
+enum Source<'f> {
+    /// A source the caller keeps.
+    Borrowed(&'f dyn FileSource),
+    /// A source the base shares ([`EditBase::shared`]).
+    Shared(Arc<dyn FileSource + Send + Sync>),
+}
+
+impl Source<'_> {
+    fn get(&self) -> &dyn FileSource {
+        match self {
+            Source::Borrowed(files) => *files,
+            Source::Shared(files) => files.as_ref(),
+        }
     }
 }
 
