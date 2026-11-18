@@ -26,7 +26,9 @@
 //! # changes of the design
 //! repeat drawer 3                  # an assembly's count
 //! shares drawer_bay 1 180mm        # the boundary above piece 1
+//! set drawer.top_gap = 20mm        # a param of an assembly, as a grip
 //! mirror door                      # offer mirror door: only say if it has one
+//! mirror door across               # a door filling a space: a mirrored pair
 //! hold slat[0] apron_front min 12mm "room for a finger"
 //! remove divider                   # then: include dependants
 //! rename shelf hat_shelf
@@ -131,6 +133,10 @@ pub enum Step {
     Bind(Selection),
     /// Set a setting: its name and the value as typed.
     Set(String, String),
+    /// Change: set a param of an assembly of the project, as a grip does
+    /// (`set apron_front.setback = 8mm`): the assembly, the param and the
+    /// value as typed.
+    SetParam(Ident, Ident, String),
     /// Name the new item.
     Name(String),
     /// Make the chosen entry so many pieces split along an axis; `repeat
@@ -146,6 +152,10 @@ pub enum Step {
     OfferMirror(Ident),
     /// Add the mirror image of an assembly.
     Mirror(Ident),
+    /// Make an assembly that fills a whole space a mirrored pair: split
+    /// the space in two along the axis, the assembly in the first piece
+    /// and its mirror image in the other.
+    MirrorSplit(Ident, Axis),
     /// Hold a measured distance: the two things as written (a part, a
     /// region, or a face of one), the bound, the value and the reason.
     Hold(HoldLine),
@@ -281,6 +291,7 @@ fn parse_step(line: &str) -> Result<Step> {
         )),
         ["offer", "mirror", item] => Ok(Step::OfferMirror(parse_name(item)?)),
         ["mirror", item] => Ok(Step::Mirror(parse_name(item)?)),
+        ["mirror", item, way] => Ok(Step::MirrorSplit(parse_name(item)?, axis(way)?)),
         ["hold", ..] => hold_step(line),
         ["remove", item] => Ok(Step::Remove(parse_name(item)?)),
         ["include", "dependants"] => Ok(Step::IncludeDependants),
@@ -448,7 +459,15 @@ pub fn setting(text: &str) -> Result<Step> {
     let Some((name, value)) = text.split_once('=') else {
         bail!("a setting is written '<name> = <value>', such as 'headroom = 400mm', not '{text}'");
     };
-    Ok(Step::Set(name.trim().to_owned(), value.trim().to_owned()))
+    let (name, value) = (name.trim(), value.trim());
+    if let Some((item, param)) = name.split_once('.') {
+        return Ok(Step::SetParam(
+            parse_name(item)?,
+            parse_name(param)?,
+            value.to_owned(),
+        ));
+    }
+    Ok(Step::Set(name.to_owned(), value.to_owned()))
 }
 
 fn count(word: &str) -> Result<usize> {
@@ -635,6 +654,14 @@ impl Runner<'_> {
                 let events = self.send(command);
                 self.outcome(&events, verbose, out)
             }
+            Step::SetParam(item, param, value) => self.change(
+                EditCommand::SetParam {
+                    item: item.clone(),
+                    param: param.clone(),
+                    value: parse_value(value)?,
+                },
+                out,
+            ),
             Step::Name(name) => {
                 self.edit()?;
                 let events = self.send(EditCommand::Rename(parse_name(name)?));
@@ -676,6 +703,13 @@ impl Runner<'_> {
                 Ok(true)
             }
             Step::Mirror(item) => self.change(EditCommand::Mirror(item.clone()), out),
+            Step::MirrorSplit(item, axis) => self.change(
+                EditCommand::MirrorSplit {
+                    item: item.clone(),
+                    axis: *axis,
+                },
+                out,
+            ),
             Step::Hold(line) => {
                 let opened = stave_app::open(self.folder)?;
                 let request = HoldRequest {

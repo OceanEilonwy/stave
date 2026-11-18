@@ -50,7 +50,9 @@ use crate::editing::{
 use crate::hold::{HoldRequest, hold_patch};
 use crate::naming::RepeatCount;
 use crate::remove::{Dependants, Removal, patch_for, removal};
-use crate::repeat::{RepeatRequest, SharesMove, mirror_assembly, move_shares, repeat_assembly};
+use crate::repeat::{
+    RepeatRequest, SharesMove, mirror_assembly, mirror_split_assembly, move_shares, repeat_assembly,
+};
 use crate::scratch::{EditBase, Tried, TryError};
 
 /// The name a change's patch file is shown under in its diagnostics.
@@ -86,6 +88,26 @@ pub enum ChangeRequest {
     Mirror {
         /// The assembly: `door`.
         item: Ident,
+    },
+    /// Make an assembly that fills a whole space a mirrored pair: split
+    /// the space in two along `axis`, the assembly in the first piece and
+    /// its mirror image in the other
+    /// ([`crate::repeat::mirror_split_assembly`]).
+    MirrorSplit {
+        /// The assembly: `door`.
+        item: Ident,
+        /// The axis the space is split along.
+        axis: Axis,
+    },
+    /// Set a param of an assembly of the project to a value: what a grip
+    /// writes when it is let go (`set apron_front.setback = 8mm`).
+    SetParam {
+        /// The assembly: `apron_front`.
+        item: Ident,
+        /// Its component's param: `setback`.
+        param: Ident,
+        /// The value as `.stave` text: `8mm`.
+        value: String,
     },
     /// Hold a measured distance with a minimum or a maximum
     /// ([`crate::hold::hold_patch`]).
@@ -448,6 +470,28 @@ impl Change {
                     image: plan.image,
                     about: plan.about,
                 };
+            }
+            ChangeRequest::MirrorSplit { item, axis } => {
+                let analysis = self.analysis()?;
+                let plan = mirror_split_assembly(&scope, &analysis, item.as_str(), *axis)
+                    .map_err(|error| unwritable(&error))?;
+                self.renamed = rename_files(&plan.rename);
+                self.summary = plan.patch.summary;
+                self.patch = Some(plan.patch.text);
+                self.detail = ChangeDetail::Mirror {
+                    renamed: plan.renamed,
+                    image: plan.image,
+                    about: plan.about,
+                };
+            }
+            ChangeRequest::SetParam { item, param, value } => {
+                let summary = format!("Set {}.{} to {value}", item.as_str(), param.as_str());
+                let op = format!("set {}.{} = {value}", item.as_str(), param.as_str());
+                let patch = crate::repeat::GeneratedPatch::new(&summary, &[op])
+                    .map_err(|error| unwritable(&error))?;
+                self.summary = patch.summary;
+                self.patch = Some(patch.text);
+                self.detail = ChangeDetail::Repeat;
             }
             ChangeRequest::Hold(hold) => {
                 let held = hold_patch(&scope, design, hold).map_err(|error| unwritable(&error))?;

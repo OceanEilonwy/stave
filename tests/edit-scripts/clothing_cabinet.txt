@@ -1,0 +1,90 @@
+# The clothing cabinet, built from an empty project by the steps a person
+# takes with the mouse: the envelope, then each piece picked from the menu.
+new "Clothing cabinet" 940mm 1780mm 580mm
+import std:casework
+stock oak_19 white_oak solid 19mm max_width 200mm max_length 2700mm
+stock oak_6 white_oak solid 6mm max_width 200mm max_length 2700mm
+stock maple_12 hard_maple solid 12mm max_width 150mm max_length 2400mm
+stock ply_6 birch plywood 6mm max_length 2440mm
+stock oak_dowel_28 white_oak dowel 28mm
+stock oak_75_sq white_oak solid 75mm width 75mm max_length 2700mm
+tools pencil marking_knife square tape marking_gauge awl calipers tenon_saw chisel mallet router_plane clamps screwdriver router straight_bit drill depth_stop lathe roughing_gouge spindle_gouge parting_tool
+create
+
+select region envelope
+list
+choose casework.Case
+set panel_stock = oak_19
+set raise = 80mm
+add
+
+select parts case.side[left] case.side[right]
+list
+choose casework.Back
+show
+bind parts case.base
+bind parts case.top
+set panel_stock = ply_6
+add
+
+select region back.in_front
+choose casework.Divider
+bind parts case.side[left] case.side[right]
+set panel_stock = oak_19
+set height = 500mm
+add
+
+select region divider.below
+choose casework.Drawer
+set mount = overlay(left: 18mm, right: 18mm, top: 8mm, bottom: 8mm, meeting: -0.75mm)
+set front_stock = oak_19
+set box_stock = maple_12
+set bottom_stock = ply_6
+set slide = side_mount_slide(length: 500mm)
+repeat 2 up
+show
+add
+
+select region divider.above
+list
+choose casework.FramePanelDoor
+bind parts case.side[left]
+set mount = overlay(left: 18mm, right: 18mm, top: -1.5mm, bottom: 8mm, meeting: -0.75mm)
+set frame = oak_19
+set panel_stock = oak_6
+show
+add
+
+offer mirror frame_panel_door
+mirror frame_panel_door across
+show
+add
+
+select region divider.above
+choose casework.Shelf
+bind parts case.side[left] case.side[right]
+set panel_stock = oak_19
+set headroom = 160mm
+add
+
+select face shelf.board.bottom
+list
+choose casework.HangingRail
+bind parts case.side[left] case.side[right]
+set rail_stock = oak_dowel_28
+add
+
+select face frame_panel_door_left.stile[latch].front
+list
+choose hardware.knob                       # expect: refused
+show
+cancel
+
+select face case.base.bottom
+choose casework.Feet
+set foot_stock = oak_75_sq
+add
+
+hold hanging_rail.rail divider.panel min 800mm "room for a coat on a hanger"
+show
+add

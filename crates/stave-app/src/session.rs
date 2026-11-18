@@ -1062,6 +1062,17 @@ impl Session {
                 events,
             ),
             EditCommand::Mirror(item) => self.start_change(ChangeRequest::Mirror { item }, events),
+            EditCommand::MirrorSplit { item, axis } => {
+                self.start_change(ChangeRequest::MirrorSplit { item, axis }, events);
+            }
+            EditCommand::SetParam { item, param, value } => self.start_change(
+                ChangeRequest::SetParam {
+                    item,
+                    param,
+                    value: crate::candidates::print::expr_text(&value),
+                },
+                events,
+            ),
             EditCommand::Hold(request) => self.start_change(ChangeRequest::Hold(request), events),
             EditCommand::Remove(item) => self.start_change(ChangeRequest::Remove { item }, events),
             EditCommand::RenameItem { item, to } => {

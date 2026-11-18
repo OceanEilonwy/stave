@@ -35,7 +35,7 @@ use stave_lang::placement::{Axis, Face};
 use stave_lang::units::{Length, Rational, number_to_rational};
 use stave_lang::{Diagnostic, Parse, SourceMap};
 use stave_model::defs::{AssemblyKind, DefId};
-use stave_model::solved::SolvedDesign;
+use stave_model::solved::{Part, SolvedDesign, WorldBox};
 use stave_model::types::Ty;
 
 use crate::candidates::print::quoted;
@@ -731,8 +731,13 @@ pub struct MirrorPlan {
 /// about `M`), or fills a piece of a split whose matching piece lies at
 /// the same place from the other end (`door_bay[left]` of an even split
 /// across, about the split region's mid-plane). Parts are looked for in
-/// every place param before regions are. The original is renamed with
-/// its side and the image takes the other (`door_left`, `door_right`).
+/// every place param before regions are. Failing both, it is placed
+/// against parts that each have a counterpart of the same size reflected
+/// about one plane, such as an apron between the two front legs of a
+/// `Legs` (whose back legs are the front ones reflected), about the
+/// mid-plane of a part it names that the plane halves (`mid(top.board,
+/// deep)`); see [`reflected_mirror`]. The original is renamed with its
+/// side and the image takes the other (`door_left`, `door_right`).
 ///
 /// # Errors
 ///
@@ -768,6 +773,10 @@ pub fn mirror_assembly(
                 .iter()
                 .find_map(|field| split_mirror(scope, &field.value))
         })
+        .or_else(|| {
+            let values: Vec<&Expr> = body.fields.iter().map(|field| &field.value).collect();
+            reflected_mirror(&found, design, assembly, &values)
+        })
         .ok_or_else(|| RepeatError::NoMirror(assembly.to_owned()))?;
 
     let taken = TakenNames::of_project(scope.model());
@@ -788,6 +797,112 @@ pub fn mirror_assembly(
         quoted(&found.file.name)
     )];
     let summary = format!("Add the mirror image of {assembly}");
+    let patch = GeneratedPatch::new(&summary, &ops)?;
+    Ok(MirrorPlan {
+        source: assembly.to_owned(),
+        renamed,
+        image,
+        axis,
+        about,
+        rename,
+        patch,
+    })
+}
+
+/// A mirrored pair made from an assembly that fills a whole space: the
+/// space is split in two along `axis` into `<component>_bay` (as a repeat
+/// of two splits it), the assembly is renamed with the first side and
+/// fills the first piece, and its mirror image, about the space's
+/// mid-plane, fills the other. This is "repeat across as a mirrored
+/// pair": a door hinged on the left side becomes `door_left`, and
+/// `door_right` hangs on the right, where a plain repeat would hang both
+/// on the left.
+///
+/// ```text
+/// region door_bay[left, right] = split(divider.above, across)
+/// assembly door_left : FramePanelDoor { opening: door_bay[left] ... }
+/// assembly door_right = mirror(door_left, about: mid(divider.above, across))
+/// ```
+///
+/// # Errors
+///
+/// An unknown item, one that isn't a single assembly of a component, one
+/// whose component has no space (`Region`) param, one that already fills
+/// one of two matching pieces of a split (mirror it without an axis), or
+/// a rename that is refused; see [`RepeatError`].
+pub fn mirror_split_assembly(
+    scope: &EditScope<'_>,
+    analysis: &Analysis,
+    assembly: &str,
+    axis: Axis,
+) -> Result<MirrorPlan, RepeatError> {
+    let not = |reason: &str| RepeatError::NotRepeatable {
+        name: assembly.to_owned(),
+        reason: reason.to_owned(),
+    };
+    let found =
+        find(scope, assembly).ok_or_else(|| RepeatError::UnknownItem(assembly.to_owned()))?;
+    let ItemKind::Design(DesignItem::Assembly(item)) = &found.item.kind else {
+        return Err(not("only an assembly is mirrored this way"));
+    };
+    if item.array.is_some() {
+        return Err(not("it is an array; mirror a single assembly"));
+    }
+    let AssemblyDef::Instance { component, body } = &item.def else {
+        return Err(not("it is already a mirror image"));
+    };
+    let param = region_param(scope, assembly)
+        .ok_or_else(|| not("its component has no space (Region) param to fill"))?;
+    let field = body
+        .field(&param)
+        .ok_or_else(|| not("its space param is not written"))?;
+    if split_mirror(scope, &field.value).is_some() {
+        return Err(not(
+            "it already fills one of two matching spaces; mirror it without saying which way",
+        ));
+    }
+    let source = found.slice(field.value.span).ok_or(RepeatError::Overflow)?;
+
+    let mut taken = TakenNames::of_project(scope.model());
+    let component_name = component
+        .rest
+        .last()
+        .map_or(component.root.as_str(), ast::Name::as_str);
+    let bay = bay_name(component_name, &taken)?;
+    taken.insert(bay.as_str());
+    let (renamed, image) = mirrored_pair(assembly, axis, &taken)?;
+    let pieces = RepeatCount::new(2).ok_or(RepeatError::Overflow)?;
+    let array = repeat_array(axis, pieces);
+    let first = array
+        .indexes()
+        .into_iter()
+        .next()
+        .ok_or(RepeatError::Overflow)?;
+    let symbol = analysis
+        .project_symbol(assembly)
+        .ok_or_else(|| RepeatError::UnknownItem(assembly.to_owned()))?;
+    let rename = analysis.rename(symbol.id, renamed.as_str())?;
+    let about = format!("mid({source}, {})", axis.word());
+    let ops = vec![
+        format!(
+            "add region {}{} = split({source}, {})",
+            bay.as_str(),
+            array.declaration(),
+            axis.word()
+        ),
+        format!(
+            "set {}.{param} = {}[{first}]",
+            renamed.as_str(),
+            bay.as_str()
+        ),
+        format!(
+            "add assembly {} = mirror({}, about: {about}) in {}",
+            image.as_str(),
+            renamed.as_str(),
+            quoted(&found.file.name)
+        ),
+    ];
+    let summary = format!("Make {assembly} a mirrored pair");
     let patch = GeneratedPatch::new(&summary, &ops)?;
     Ok(MirrorPlan {
         source: assembly.to_owned(),
@@ -902,6 +1017,148 @@ fn split_mirror(scope: &EditScope<'_>, value: &Expr) -> Option<(Axis, String, bo
         format!("mid({source}, {})", split.axis.word()),
         position < partner,
     ))
+}
+
+/// The parts an assembly's fields name, as the design names them: a part
+/// (`top.board`, `legs.leg[front_left]`), the part of a face
+/// (`legs.leg[front_left].front`), or each of a list.
+fn named_parts<'d>(found: &Found<'_>, design: &'d SolvedDesign, value: &Expr) -> Vec<&'d Part> {
+    if let ExprKind::List(items) = &value.kind {
+        return items
+            .iter()
+            .flat_map(|item| named_parts(found, design, item))
+            .collect();
+    }
+    let Some(text) = found.slice(value.span) else {
+        return Vec::new();
+    };
+    let text = text.trim();
+    let part = design.part_named(text).or_else(|| {
+        let (part, word) = text.rsplit_once('.')?;
+        Face::from_word(word)?;
+        design.part_named(part)
+    });
+    part.into_iter().collect()
+}
+
+/// Where a part's drawn box lies in the world (the box placement uses,
+/// inside its cut box).
+fn drawn_box(part: &Part) -> WorldBox {
+    part.pose.world_box_at(part.drawn_offset, part.drawn)
+}
+
+/// Twice the centre of a box on an axis, in nanometres (exact: no
+/// halving), and its size on that axis.
+fn doubled_centre(bounds: &WorldBox, axis: Axis) -> Option<(i64, i64)> {
+    let (low, high) = (bounds.min().get(axis).nm(), bounds.max().get(axis).nm());
+    Some((low.checked_add(high)?, high.checked_sub(low)?))
+}
+
+/// Whether `other` is `part` reflected about the plane across `axis` at a
+/// quarter of `plane` (both in doubled-centre nanometres, so a plane is
+/// the sum of the two doubled centres): the same size on every axis, the
+/// same centre on the other two, and the two centres summing to `plane`.
+fn reflects(part: &WorldBox, other: &WorldBox, axis: Axis, plane: i64) -> bool {
+    Axis::ALL.iter().all(
+        |&each| match (doubled_centre(part, each), doubled_centre(other, each)) {
+            (Some((a, size_a)), Some((b, size_b))) if size_a == size_b => {
+                if each == axis {
+                    a.checked_add(b) == Some(plane)
+                } else {
+                    a == b
+                }
+            }
+            _ => false,
+        },
+    )
+}
+
+/// The mirror image of an assembly placed against parts that each have a
+/// counterpart reflected about one plane: every part its fields name has
+/// a part of the same size at the same place from the other side of the
+/// plane, and the assembly's own parts don't already lie astride it (an
+/// apron between the front legs is mirrored front to back, not left to
+/// right). The plane is written as the mid-plane of a part or region that
+/// it halves, the assembly's named parts first (`mid(top.board, deep)`).
+/// Axes are tried across, up, deep, so the answer is the same every run.
+fn reflected_mirror(
+    found: &Found<'_>,
+    design: &SolvedDesign,
+    assembly: &str,
+    values: &[&Expr],
+) -> Option<(Axis, String, bool)> {
+    let named: Vec<&Part> = values
+        .iter()
+        .flat_map(|value| named_parts(found, design, value))
+        .collect();
+    let first = named.first()?;
+    let prefix = format!("{assembly}.");
+    let own: Vec<WorldBox> = design
+        .parts
+        .iter()
+        .filter(|part| part.name.starts_with(&prefix))
+        .map(drawn_box)
+        .collect();
+    let world = drawn_box;
+    for axis in [Axis::Across, Axis::Up, Axis::Deep] {
+        // The assembly's own extent along the axis, doubled-centre.
+        let low = own.iter().map(|b| b.min().get(axis).nm()).min()?;
+        let high = own.iter().map(|b| b.max().get(axis).nm()).max()?;
+        let centre = low.checked_add(high)?;
+        let first_box = world(first);
+        let (first_centre, _) = doubled_centre(&first_box, axis)?;
+        for other in &design.parts {
+            if other.id == first.id {
+                continue;
+            }
+            let (other_centre, _) = doubled_centre(&world(other), axis)?;
+            let Some(plane) = first_centre.checked_add(other_centre) else {
+                continue;
+            };
+            if !reflects(&first_box, &world(other), axis, plane) {
+                continue;
+            }
+            // The assembly lies astride the plane: its image is itself.
+            if centre.checked_mul(2) == Some(plane) {
+                continue;
+            }
+            let all = named.iter().all(|part| {
+                let bounds = world(part);
+                design
+                    .parts
+                    .iter()
+                    .any(|candidate| reflects(&bounds, &world(candidate), axis, plane))
+            });
+            if !all {
+                continue;
+            }
+            let halves = |bounds: &WorldBox| {
+                doubled_centre(bounds, axis)
+                    .and_then(|(c, _)| c.checked_mul(2))
+                    .is_some_and(|c| c == plane)
+            };
+            let Some(base) = named
+                .iter()
+                .find(|part| halves(&world(part)))
+                .map(|part| part.name.clone())
+                .or_else(|| {
+                    design
+                        .regions
+                        .iter()
+                        .find(|region| !region.name.starts_with(&prefix) && halves(&region.bounds))
+                        .map(|region| region.name.clone())
+                })
+            else {
+                continue;
+            };
+            return Some((
+                axis,
+                format!("mid({base}, {})", axis.word()),
+                centre.checked_mul(2)? < plane,
+            ));
+        }
+    }
+    None
 }
 
 /// The axis of a mid-plane as written: `mid(base, across)`.
@@ -1582,6 +1839,122 @@ mod tests {
             mirror_assembly(&scope, &analysis, design, "tray"),
             Err(RepeatError::NoMirror(_))
         ));
+    }
+
+    /// Applies a mirror's rename to a copy of `files`.
+    fn renamed_by(files: &MemoryFiles, plan: &MirrorPlan) -> MemoryFiles {
+        let mut renamed = files.clone();
+        for edit in &plan.rename {
+            let Document::File(path) = &edit.document else {
+                panic!("a standard file was renamed in");
+            };
+            renamed.insert(path.clone(), edit.text.clone());
+        }
+        renamed
+    }
+
+    #[test]
+    fn an_assembly_filling_a_whole_space_becomes_a_mirrored_pair() {
+        let (folder, files) = small_project(&[]);
+        let base = clean_base(&folder, &files);
+        let scope = EditScope::new(base.opened()).unwrap();
+        let analysis = Analysis::load(Path::new(&folder), &files).unwrap();
+        let plan = mirror_split_assembly(&scope, &analysis, "tray", Axis::Across).unwrap();
+        assert_eq!(
+            (plan.renamed.as_str(), plan.image.as_str()),
+            ("tray_left", "tray_right")
+        );
+        assert_eq!(plan.about, "mid(inside, across)");
+        for line in [
+            "add region tray_bay[left, right] = split(inside, across)",
+            "set tray_left.opening = tray_bay[left]",
+            "add assembly tray_right = mirror(tray_left, about: mid(inside, across)) in \"case.stave\"",
+        ] {
+            assert!(plan.patch.text.contains(line), "{}", plan.patch.text);
+        }
+        let renamed = renamed_by(&files, &plan);
+        let tried = fits(&folder, &renamed, &plan.patch);
+        let design = tried.opened().and_then(|o| o.design.as_ref()).unwrap();
+        let left = design.part_named("tray_left.board").unwrap();
+        let right = design.part_named("tray_right.board").unwrap();
+        assert_eq!(left.cut, right.cut);
+
+        // Up, the pieces are bottom and top.
+        let plan = mirror_split_assembly(&scope, &analysis, "tray", Axis::Up).unwrap();
+        assert_eq!(
+            (plan.renamed.as_str(), plan.image.as_str()),
+            ("tray_bottom", "tray_top")
+        );
+
+        // A tray already in one of two matching pieces is mirrored without
+        // an axis, and a mirror image is not mirrored again.
+        let mut files = small_project(&["region tray_bay[left, right] = split(inside, across)"]).1;
+        let case = text(&files, &folder, "case.stave")
+            .replace("opening:     inside", "opening:     tray_bay[left]");
+        files.insert(Path::new(&folder).join("case.stave"), case);
+        let base = clean_base(&folder, &files);
+        let scope = EditScope::new(base.opened()).unwrap();
+        let analysis = Analysis::load(Path::new(&folder), &files).unwrap();
+        assert!(matches!(
+            mirror_split_assembly(&scope, &analysis, "tray", Axis::Across),
+            Err(RepeatError::NotRepeatable { .. })
+        ));
+        assert!(matches!(
+            mirror_split_assembly(&scope, &analysis, "inside", Axis::Across),
+            Err(RepeatError::NotRepeatable { .. })
+        ));
+    }
+
+    /// `examples/side_table_from_box` with its back apron (and the back
+    /// cleat, which needs it) left out and the front one called `apron`,
+    /// in memory.
+    fn one_apron_table() -> (String, MemoryFiles) {
+        let folder = "d4/side_table".to_owned();
+        let example = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../examples/side_table_from_box/table.stave");
+        let table = std::fs::read_to_string(example)
+            .unwrap()
+            .replace(
+                "assembly apron_back = mirror(apron_front, about: mid(top.board, deep))\n",
+                "",
+            )
+            .replace(
+                "assembly cleat_back = mirror(cleat_front, about: mid(top.board, deep))\n",
+                "",
+            )
+            .replace("apron_front", "apron");
+        let mut files = MemoryFiles::new();
+        files.insert(Path::new(&folder).join("table.stave"), table);
+        (folder, files)
+    }
+
+    #[test]
+    fn an_apron_between_two_legs_mirrors_onto_the_other_two() {
+        let (folder, files) = one_apron_table();
+        let base = clean_base(&folder, &files);
+        let scope = EditScope::new(base.opened()).unwrap();
+        let analysis = Analysis::load(Path::new(&folder), &files).unwrap();
+        let design = base.opened().design.as_ref().unwrap();
+        // The legs are elements of an array, not mirror images, so only
+        // their places say the back legs reflect the front ones; the
+        // apron lies astride the plane across, so not that one.
+        // The top names no part, so it has nothing to be mirrored against.
+        assert!(matches!(
+            mirror_assembly(&scope, &analysis, design, "top"),
+            Err(RepeatError::NoMirror(_))
+        ));
+        let plan = mirror_assembly(&scope, &analysis, design, "apron").unwrap();
+        assert_eq!(plan.about, "mid(top.board, deep)");
+        assert_eq!(
+            (plan.renamed.as_str(), plan.image.as_str()),
+            ("apron_front", "apron_back")
+        );
+        let renamed = renamed_by(&files, &plan);
+        let tried = fits(&folder, &renamed, &plan.patch);
+        let design = tried.opened().and_then(|o| o.design.as_ref()).unwrap();
+        let front = design.part_named("apron_front.apron").unwrap();
+        let back = design.part_named("apron_back.apron").unwrap();
+        assert_eq!(front.cut, back.cut);
     }
 
     #[test]

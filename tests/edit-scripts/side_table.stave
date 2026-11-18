@@ -1,0 +1,90 @@
+stave 1
+
+import "std:frames"
+
+project "Side table" {
+  units: mm
+}
+
+param overall_width  = 500mm
+param overall_height = 600mm
+param overall_depth  = 500mm
+
+region envelope = box(across: overall_width, up: overall_height, deep: overall_depth)
+
+stock oak_19    { species: white_oak, form: solid, thickness: 19mm, max_width: 200mm, max_length: 2700mm }
+stock oak_45_sq { species: white_oak, form: solid, thickness: 45mm, width: 45mm, max_length: 2700mm }
+
+assembly top : frames.Top {
+  space:     envelope
+  top_stock: oak_19
+}
+
+assembly legs : frames.Legs {
+  under:     top.board
+  leg_stock: oak_45_sq
+  length:    overall_height - top.board.thickness
+}
+
+assembly apron_front : frames.Apron {
+  legs:        [legs.leg[front_left], legs.leg[front_right]]
+  under:       top.board
+  outside:     legs.leg[front_left].front
+  start:       legs.leg[front_left].right
+  apron_stock: oak_19
+  run:         right
+  setback:     3mm
+}
+
+assembly apron_back = mirror(apron_front, about: mid(top.board, deep))
+
+assembly apron_left : frames.Apron {
+  legs:        [legs.leg[front_left], legs.leg[back_left]]
+  under:       top.board
+  outside:     legs.leg[front_left].left
+  start:       legs.leg[front_left].back
+  apron_stock: oak_19
+  run:         back
+  setback:     3mm
+}
+
+assembly apron_right = mirror(apron_left, about: mid(top.board, across))
+
+assembly cleat_front : frames.Cleat {
+  apron:       apron_front.apron
+  inside:      apron_front.apron.back
+  under:       top.board
+  start:       apron_front.apron.left
+  cleat_stock: oak_19
+  run:         right
+  inward:      back
+}
+
+assembly cleat_back = mirror(cleat_front, about: mid(top.board, deep))
+
+assembly stretcher_front : frames.Stretcher {
+  legs:            [legs.leg[front_left], legs.leg[front_right]]
+  outside:         legs.leg[front_left].front
+  start:           legs.leg[front_left].right
+  lower_end:       legs.leg[front_left].bottom
+  stretcher_stock: oak_19
+  run:             right
+}
+
+assembly stretcher_back = mirror(stretcher_front, about: mid(envelope, deep))
+
+assembly slats : frames.Slats {
+  rails:      [stretcher_front.rail, stretcher_back.rail]
+  on:         stretcher_front.rail.top
+  fill_from:  legs.leg[front_left].right
+  fill_to:    legs.leg[front_right].left
+  ends_from:  stretcher_front.rail.front
+  ends_to:    stretcher_back.rail.back
+  slat_stock: oak_19
+  count:      5
+  gap:        15mm
+  run:        back
+  spread:     right
+}
+
+require slats_slat_to_apron_front_apron_min : between(slats.slat[0], apron_front.apron) >= 200mm "leave room above the shelf for a stack of books"

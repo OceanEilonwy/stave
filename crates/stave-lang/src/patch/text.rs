@@ -213,8 +213,10 @@ pub(super) fn tokens(text: &str) -> Vec<(crate::SyntaxKind, &str)> {
 }
 
 /// Lays out, as the formatter would, every line that overlaps one of the
-/// `touched` ranges, and leaves every other line byte for byte as it is.
-/// A file that doesn't parse is returned unchanged.
+/// `touched` ranges, and the other lines of an aligned run such a line is
+/// in (a longer name added to a run of regions moves every `=` of the
+/// run), and leaves every other line byte for byte as it is. A file that
+/// doesn't parse is returned unchanged.
 pub(super) fn relayout(text: &str, touched: &[Range<usize>]) -> String {
     if touched.is_empty() {
         return text.to_owned();
@@ -233,9 +235,17 @@ pub(super) fn relayout(text: &str, touched: &[Range<usize>]) -> String {
             }
         })
     };
-    let edits: Vec<Edit> = laid_out_lines(&root, text)
-        .into_iter()
+    let lines = laid_out_lines(&root, text);
+    let runs: std::collections::BTreeSet<usize> = lines
+        .iter()
         .filter(|line| overlaps(line.start, line.end))
+        .filter_map(|line| line.run)
+        .collect();
+    let edits: Vec<Edit> = lines
+        .into_iter()
+        .filter(|line| {
+            overlaps(line.start, line.end) || line.run.is_some_and(|run| runs.contains(&run))
+        })
         .filter(|line| text.get(line.start..line.end) != Some(line.text.as_str()))
         .map(|line| Edit::replace(line.start..line.end, line.text))
         .collect();

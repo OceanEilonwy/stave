@@ -965,7 +965,7 @@ fn place(prepared: &Prepared, folder: &Path, files: &dyn FileSource) -> Result<S
 // ---------------------------------------------------------------------------
 
 /// What makes two diagnostics the same problem across an edit: what they
-/// say, and the file and text they point at.
+/// say, and the file and the words of the text they point at.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct Key {
     error: bool,
@@ -980,8 +980,12 @@ impl Key {
             let file = sources.get(label.file)?;
             let start = usize::try_from(label.span.start()).ok()?;
             let end = usize::try_from(label.span.end()).ok()?;
+            // Its words, not its spacing: a patch that adds a line to an
+            // aligned run pads the lines already there, and an error on
+            // one of them is still the same error.
             let text = file.text().get(start..end).unwrap_or_default();
-            Some((file.path().to_owned(), text.to_owned()))
+            let words: Vec<&str> = text.split_whitespace().collect();
+            Some((file.path().to_owned(), words.join(" ")))
         });
         Self {
             error: diagnostic.is_error(),

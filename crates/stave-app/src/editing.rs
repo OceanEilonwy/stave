@@ -170,6 +170,26 @@ pub enum EditCommand {
     /// with its side). [`crate::session::Session::mirror_offer`] says
     /// whether it has one, without trying it.
     Mirror(Ident),
+    /// Start a change: make an assembly that fills a whole space a
+    /// mirrored pair, splitting the space in two along `axis`
+    /// ([`crate::repeat::mirror_split_assembly`]): "repeat across as a
+    /// mirrored pair".
+    MirrorSplit {
+        /// The assembly.
+        item: Ident,
+        /// The axis the space is split along.
+        axis: Axis,
+    },
+    /// Start a change: set a param of an assembly of the project, as a
+    /// grip does when it is let go (`set apron_front.setback = 8mm`).
+    SetParam {
+        /// The assembly.
+        item: Ident,
+        /// Its component's param.
+        param: Ident,
+        /// The value.
+        value: Expr,
+    },
     /// Start a change: hold a measured distance as a `require`.
     Hold(HoldRequest),
     /// Start a change: remove an item. While something depends on it the
@@ -682,6 +702,8 @@ impl Edit {
             | EditCommand::RepeatItem { .. }
             | EditCommand::MoveShares { .. }
             | EditCommand::Mirror(_)
+            | EditCommand::MirrorSplit { .. }
+            | EditCommand::SetParam { .. }
             | EditCommand::Hold(_)
             | EditCommand::Remove(_)
             | EditCommand::IncludeDependants
