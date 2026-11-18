@@ -14,8 +14,8 @@ use stave_lang::units::Length;
 use stave_model::solved::SolvedDesign;
 use stave_modules::{DiskFiles, FileSource};
 use stave_scene::{
-    BuildOptions, FaceOf, GhostChange, GhostVerdict, Ghosts, GripOf, GripPlace, Item, Look, Orbit,
-    Projection, SceneGraph, Subject,
+    BuildOptions, FaceOf, GhostChange, GhostVerdict, Ghosts, GripOf, GripPlace, Item, Look, Nudged,
+    Orbit, Projection, SceneGraph, Subject,
 };
 
 const EXAMPLE: &str = "clothing_cabinet_assemblies";
@@ -356,7 +356,9 @@ fn a_grip_on_the_dividers_height_sits_between_the_base_and_the_divider() {
         .grip_place(GripOf::Length {
             assembly: divider,
             axis: Axis::Up,
-            value: Length::from_mm(500),
+            param: "height",
+            lengths: &[("height", Length::from_mm(500))],
+            nudged: None,
         })
         .expect("the divider's height has a place");
     let GripPlace::Length {
@@ -392,8 +394,122 @@ fn a_grip_on_the_dividers_height_sits_between_the_base_and_the_divider() {
         graph.grip_place(GripOf::Length {
             assembly: divider,
             axis: Axis::Up,
-            value: Length::from_mm(123),
+            param: "height",
+            lengths: &[("height", Length::from_mm(123))],
+            nudged: None,
         }),
+        None
+    );
+    // Nor a param the assembly isn't given.
+    assert_eq!(
+        graph.grip_place(GripOf::Length {
+            assembly: divider,
+            axis: Axis::Up,
+            param: "depth",
+            lengths: &[("height", Length::from_mm(500))],
+            nudged: None,
+        }),
+        None
+    );
+}
+
+/// The cabinet with both drawers' given gap changed.
+fn with_drawer_gap(param: &str, value: &str) -> SolvedDesign {
+    let line = format!("  pull_kind:    hw.bar_pull_160\n  {param}: {value}\n");
+    let set = |text: &str| {
+        let changed = text.replace("  pull_kind:    hw.bar_pull_160\n", &line);
+        assert_ne!(changed, text, "the drawers are where the test expects");
+        changed
+    };
+    solve_with(&[("drawers.stave", &set)])
+}
+
+#[test]
+fn two_gaps_of_one_value_are_told_apart_by_which_moves() {
+    let (design, graph) = base();
+    let drawer = design
+        .assemblies
+        .iter()
+        .find(|assembly| assembly.name == "drawer[top]")
+        .unwrap()
+        .id;
+    let gap = Length::from_mm(15);
+    let lengths = [("bottom_gap", gap), ("top_gap", gap)];
+    let grip = |param, nudged| GripOf::Length {
+        assembly: drawer,
+        axis: Axis::Up,
+        param,
+        lengths: &lengths,
+        nudged,
+    };
+    // Both 15mm: a pair 15mm apart could be either's, so neither has a
+    // place until a nudged scene says which faces each one moves.
+    assert_eq!(graph.grip_place(grip("top_gap", None)), None);
+    assert_eq!(graph.grip_place(grip("bottom_gap", None)), None);
+
+    let in_drawer = |of: FaceOf| match of {
+        FaceOf::Part(id) => design
+            .part(id)
+            .is_some_and(|part| part.name.starts_with("drawer[top].")),
+        FaceOf::Region(_) => false,
+    };
+
+    let top_nudged =
+        SceneGraph::build(&with_drawer_gap("top_gap", "20mm"), BuildOptions::default());
+    let place = graph
+        .grip_place(grip(
+            "top_gap",
+            Some(Nudged {
+                graph: &top_nudged,
+                value: Length::from_mm(20),
+            }),
+        ))
+        .expect("the top gap has a place");
+    let GripPlace::Length {
+        from, to, handle, ..
+    } = place
+    else {
+        panic!("a length grip: {place:?}");
+    };
+    assert!(in_drawer(to.of), "the box's top moves: {to:?}");
+    assert_eq!(to.face, Face::Top);
+    assert_eq!(from.face, Face::Bottom, "measured up to what is above");
+    assert_eq!(from.at.checked_sub(to.at), Some(gap));
+    assert_eq!(handle.direction, -Vec3::Y, "dragging down widens it");
+
+    let bottom_nudged = SceneGraph::build(
+        &with_drawer_gap("bottom_gap", "20mm"),
+        BuildOptions::default(),
+    );
+    let place = graph
+        .grip_place(grip(
+            "bottom_gap",
+            Some(Nudged {
+                graph: &bottom_nudged,
+                value: Length::from_mm(20),
+            }),
+        ))
+        .expect("the bottom gap has a place");
+    let GripPlace::Length {
+        from, to, handle, ..
+    } = place
+    else {
+        panic!("a length grip: {place:?}");
+    };
+    assert!(in_drawer(to.of), "the box's bottom moves: {to:?}");
+    assert_eq!(to.face, Face::Bottom);
+    assert_eq!(to.at.checked_sub(from.at), Some(gap));
+    assert_eq!(handle.direction, Vec3::Y, "dragging up widens it");
+
+    // A nudged scene that moves nothing 20mm apart names no faces.
+    assert_eq!(
+        graph.grip_place(grip(
+            "top_gap",
+            Some(Nudged {
+                graph: &graph,
+                value: Length::from_mm(20),
+            }),
+        )),
         None
     );
 }

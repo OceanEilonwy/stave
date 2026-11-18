@@ -46,7 +46,7 @@ pub use graph::{
     BuildOptions, Highlight, Item, Material, MemberFollower, MotionRange, Node, NodeId, Posed,
     RegionNode, SceneEntry, SceneGraph, Section, Wood,
 };
-pub use grip::{FaceOf, GripFace, GripHandle, GripOf, GripPlace};
+pub use grip::{FaceOf, GripFace, GripHandle, GripOf, GripPlace, Nudged};
 pub use pick::{Hit, PartFace};
 pub use space::{Facing, RegionHit, Target};
 pub use stave_geom::{Aabb, Extent, Geometry};

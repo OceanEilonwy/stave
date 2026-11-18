@@ -18,17 +18,35 @@ use crate::graph::{Item, SceneGraph};
 
 /// The description of a grip: which quantity it moves, on which item,
 /// along which axis.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum GripOf {
-    /// A param given in an assembly that is a length along an axis, with
-    /// its value now (`divider.height`, up, 500mm).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum GripOf<'a> {
+    /// A param given in an assembly that is a length along an axis
+    /// (`drawer[top].top_gap`, up).
+    ///
+    /// A scene holds no params, only where things ended up, so the faces
+    /// a length is measured between are found by its value: two faces
+    /// that far apart. When another length param of the assembly has the
+    /// same value (a drawer's `bottom_gap` and `top_gap`, both 15mm), a
+    /// pair that far apart could be either one's, so the scene of the
+    /// design with this param set to another value (`nudged`) is needed
+    /// to tell them apart: the pair measured by this param is the one
+    /// whose gap there is the nudged value. Without it, the grip has no
+    /// place rather than a guessed one.
     Length {
         /// The assembly.
         assembly: AssemblyId,
         /// The world axis the length runs along.
         axis: Axis,
-        /// Its value in the design as solved.
-        value: Length,
+        /// The param's name in the assembly: `top_gap`.
+        param: &'a str,
+        /// The assembly's params that are lengths, with their values in
+        /// the design as solved; `param` among them. Every length param
+        /// of the assembly, whatever its axis: a value shared with any of
+        /// them makes a pair of faces ambiguous.
+        lengths: &'a [(&'a str, Length)],
+        /// The scene of the design with `param` set to another value, to
+        /// pick out the faces it measures between.
+        nudged: Option<Nudged<'a>>,
     },
     /// A size of the envelope: the box region and the face its handle is
     /// on (`overall_width` on the box's right face).
@@ -48,6 +66,18 @@ pub enum GripOf {
         /// The split's axis.
         axis: Axis,
     },
+}
+
+/// The scene of a design with one length param set to another value
+/// (the solved design of `set drawer[top].top_gap = 20mm`, say), to find
+/// which faces that param measures between. Parts and regions are matched
+/// to this scene's by their names.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Nudged<'a> {
+    /// The scene of the nudged design.
+    pub graph: &'a SceneGraph,
+    /// The param's value in it.
+    pub value: Length,
 }
 
 /// What a face belongs to.
@@ -188,7 +218,8 @@ struct Match {
 impl SceneGraph {
     /// Where a grip sits, at rest; `None` when the description names
     /// nothing in this scene, or (for a length) no two faces lie that far
-    /// apart.
+    /// apart, or the length's value is shared with another length param
+    /// of the assembly and no nudged scene tells the two apart.
     ///
     /// - A length in an assembly is measured between a face of one of the
     ///   assembly's parts and a face outside the assembly that faces it
@@ -196,18 +227,22 @@ impl SceneGraph {
     ///   (the base's top and the divider's underside for the divider's
     ///   height). A part's face is preferred to a region's in the same
     ///   plane, then the pair that overlaps most. When no gap is that
-    ///   wide, a part of the assembly that is `value` long along the axis
-    ///   is measured from its low face to its high face.
+    ///   wide, the one part of the assembly that is that long along the
+    ///   axis is measured from its low face to its high face (none when
+    ///   two parts are). With a nudged scene, only the pairs (or parts)
+    ///   that are the nudged value apart there count.
     /// - An envelope size has its handle in the middle of the box's face.
     /// - A share's handle is in the middle of the boundary between the two
     ///   neighbours, which must touch along the axis.
-    pub fn grip_place(&self, grip: GripOf) -> Option<GripPlace> {
+    pub fn grip_place(&self, grip: GripOf<'_>) -> Option<GripPlace> {
         match grip {
             GripOf::Length {
                 assembly,
                 axis,
-                value,
-            } => self.length_place(assembly, axis, value),
+                param,
+                lengths,
+                nudged,
+            } => self.length_place(assembly, axis, param, lengths, nudged),
             GripOf::Envelope { region, face } => {
                 let bounds = self.region(region)?.bounds;
                 let axis = face.axis();
@@ -248,7 +283,25 @@ impl SceneGraph {
     }
 
     /// The faces a length in an assembly is measured between.
-    fn length_place(&self, assembly: AssemblyId, axis: Axis, value: Length) -> Option<GripPlace> {
+    fn length_place(
+        &self,
+        assembly: AssemblyId,
+        axis: Axis,
+        param: &str,
+        lengths: &[(&str, Length)],
+        nudged: Option<Nudged<'_>>,
+    ) -> Option<GripPlace> {
+        let value = lengths
+            .iter()
+            .find(|(name, _)| *name == param)
+            .map(|(_, value)| *value)?;
+        let shared = lengths
+            .iter()
+            .any(|(name, other)| *name != param && *other == value);
+        if shared && nudged.is_none() {
+            // A pair that far apart could be the other param's.
+            return None;
+        }
         let (low_face, high_face) = faces_along(axis);
         let mut inside: Vec<(PartId, WorldBox)> = Vec::new();
         let mut references: Vec<Reference> = Vec::new();
@@ -283,6 +336,30 @@ impl SceneGraph {
                     bounds: region.bounds,
                 }),
         );
+        // How far apart two faces are, positive when `to` lies on the far
+        // side of `from` from the way `to` looks.
+        let gap = |from_at: Length, to_face: Face, to_at: Length| {
+            if to_face == low_face {
+                to_at.checked_sub(from_at)
+            } else {
+                from_at.checked_sub(to_at)
+            }
+        };
+        // Whether a pair is the nudged value apart in the nudged scene;
+        // always, with no nudged scene.
+        let measured_by_param = |from: &GripFace, to: &GripFace| match nudged {
+            None => true,
+            Some(nudged) => {
+                let from_at = self.face_in(nudged.graph, from);
+                let to_at = self.face_in(nudged.graph, to);
+                match (from_at, to_at) {
+                    (Some(from_at), Some(to_at)) => {
+                        gap(from_at, to.face, to_at) == Some(nudged.value)
+                    }
+                    _ => false,
+                }
+            }
+        };
         let mut best: Option<Match> = None;
         for (part, bounds) in &inside {
             for reference in &references {
@@ -308,12 +385,7 @@ impl SceneGraph {
                     (down_face, down_at, high_face, bounds.max().get(axis)),
                 ];
                 for (from_face, from_at, to_face, to_at) in candidates {
-                    let gap = if to_face == low_face {
-                        to_at.checked_sub(from_at)
-                    } else {
-                        from_at.checked_sub(to_at)
-                    };
-                    if gap != Some(value) {
+                    if gap(from_at, to_face, to_at) != Some(value) {
                         continue;
                     }
                     let rank = (
@@ -328,45 +400,55 @@ impl SceneGraph {
                     if best.as_ref().is_some_and(|best| best.rank <= rank) {
                         continue;
                     }
+                    let from = GripFace {
+                        of: reference.of,
+                        face: from_face,
+                        at: from_at,
+                    };
+                    let to = GripFace {
+                        of: FaceOf::Part(*part),
+                        face: to_face,
+                        at: to_at,
+                    };
+                    if !measured_by_param(&from, &to) {
+                        continue;
+                    }
                     best = Some(Match {
-                        from: GripFace {
-                            of: reference.of,
-                            face: from_face,
-                            at: from_at,
-                        },
-                        to: GripFace {
-                            of: FaceOf::Part(*part),
-                            face: to_face,
-                            at: to_at,
-                        },
+                        from,
+                        to,
                         ranges,
                         rank,
                     });
                 }
             }
         }
-        // No gap that wide: a part of the assembly that long.
+        // No gap that wide: the one part of the assembly that long.
         let best = best.or_else(|| {
-            inside
-                .iter()
-                .find(|(_, bounds)| bounds.size(axis) == value)
-                .and_then(|(part, bounds)| {
-                    let ranges = overlap(bounds, bounds, axis)?;
-                    Some(Match {
-                        from: GripFace {
-                            of: FaceOf::Part(*part),
-                            face: low_face,
-                            at: bounds.min().get(axis),
-                        },
-                        to: GripFace {
-                            of: FaceOf::Part(*part),
-                            face: high_face,
-                            at: bounds.max().get(axis),
-                        },
-                        ranges,
-                        rank: (0, std::cmp::Reverse(0), FaceOf::Part(*part), *part),
-                    })
+            let mut long = inside.iter().filter_map(|(part, bounds)| {
+                if bounds.size(axis) != value {
+                    return None;
+                }
+                let ranges = overlap(bounds, bounds, axis)?;
+                let from = GripFace {
+                    of: FaceOf::Part(*part),
+                    face: low_face,
+                    at: bounds.min().get(axis),
+                };
+                let to = GripFace {
+                    of: FaceOf::Part(*part),
+                    face: high_face,
+                    at: bounds.max().get(axis),
+                };
+                measured_by_param(&from, &to).then_some(Match {
+                    from,
+                    to,
+                    ranges,
+                    rank: (0, std::cmp::Reverse(0), FaceOf::Part(*part), *part),
                 })
+            });
+            let only = long.next()?;
+            // Two parts that long: either could be the one it sizes.
+            long.next().is_none().then_some(only)
         })?;
         Some(GripPlace::Length {
             start: point_at(axis, best.from.at, &best.ranges),
@@ -377,6 +459,28 @@ impl SceneGraph {
             from: best.from,
             to: best.to,
         })
+    }
+
+    /// Where a face of this scene's part or region lies in another scene
+    /// of the same project, matched by name; `None` when that scene has
+    /// nothing of that name.
+    fn face_in(&self, other: &SceneGraph, face: &GripFace) -> Option<Length> {
+        match face.of {
+            FaceOf::Part(part) => {
+                let name = &self.node(self.node_of(Item::Part(part))?)?.name;
+                let id = other.node_ids().find(|id| {
+                    other.node(*id).is_some_and(|node| {
+                        matches!(node.item, Item::Part(_)) && node.name == *name
+                    })
+                })?;
+                Some(other.drawn_box(id)?.face(face.face))
+            }
+            FaceOf::Region(region) => {
+                let name = &self.region(region)?.name;
+                let there = other.regions().iter().find(|r| r.name == *name)?;
+                Some(there.bounds.face(face.face))
+            }
+        }
     }
 }
 
