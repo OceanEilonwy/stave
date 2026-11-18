@@ -263,10 +263,10 @@ pub(crate) struct Index {
     pub(crate) root: ModuleId,
     pub(crate) prelude: Vec<ModuleId>,
     pub(crate) symbols: Vec<Symbol>,
-    module_scope: BTreeMap<(ModuleId, String), SymbolId>,
-    inner_scope: BTreeMap<(SymbolId, String), SymbolId>,
+    pub(crate) module_scope: BTreeMap<(ModuleId, String), SymbolId>,
+    pub(crate) inner_scope: BTreeMap<(SymbolId, String), SymbolId>,
     /// Each file's import names.
-    imports: BTreeMap<(FileId, String), SymbolId>,
+    pub(crate) imports: BTreeMap<(FileId, String), SymbolId>,
     /// The symbol an item node declares, by file and node start.
     item_at: BTreeMap<(FileId, u32), SymbolId>,
     /// The component each assembly is an instance of.
