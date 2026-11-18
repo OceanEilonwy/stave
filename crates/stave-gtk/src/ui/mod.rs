@@ -30,6 +30,7 @@ mod inspector;
 mod panels;
 mod slider;
 mod style;
+mod tab_strip;
 mod tree;
 mod view_tools;
 mod viewport;
@@ -97,9 +98,6 @@ const PICTURES_DELAY: Duration = Duration::from_millis(150);
 
 /// The space kept clear round what sits on the 3D view, in logical pixels.
 const EDGE: i32 = 14;
-
-/// The most height the 3D Tools panel asks for before it scrolls.
-const CONTROLS_MOST: i32 = 320;
 
 /// The most problems pinned on the model at once.
 const PIN_LIMIT: usize = 12;
@@ -841,13 +839,19 @@ impl Window {
                 .and_then(|(shown, selection)| link::placed_at(shown, selection));
             (session.editor() == Editor::Open, selection, placed)
         };
-        if !open {
-            return;
-        }
         let files = &self.widgets.files;
         match (&selection, placed) {
-            (Some(Selection::Location(location)), _) => files.show_location(location),
-            (Some(_), Some(placed)) if !self.state.borrow().linking => files.reveal(&placed),
+            (Some(Selection::Location(location)), _) if open => files.show_location(location),
+            // A part, assembly or piece of hardware chosen anywhere opens
+            // the file that places it, at that line, in the Code panel
+            // (forward unless it would cover the 3D view; the keyboard
+            // stays where it is).
+            (Some(_), Some(placed)) if !self.state.borrow().linking => {
+                files.reveal(&placed);
+                self.widgets
+                    .workbench
+                    .bring_forward_beside_view(workbench::PanelId::Code);
+            }
             _ => {}
         }
     }
@@ -976,7 +980,6 @@ impl Window {
     fn show_card(self: &Rc<Self>) {
         if self.session.borrow().focus().is_some() {
             self.widgets.workbench.present(workbench::PanelId::Details);
-            self.widgets.workbench.present(workbench::PanelId::Controls);
         }
     }
 
@@ -3359,23 +3362,25 @@ fn build_widgets(application: &adw::Application, options: &Options) -> Result<Wi
     );
     let header = Header::new(&folder_name, &main_menu());
 
-    // The 3D view, and the controls that belong to it (they go in their
-    // own panel, below): the camera buttons, the shared-wood key, focus
-    // mode's From above / In 3D switch, a joint's step player and a
-    // problem's motion card.
+    // The 3D view and what belongs to it: the camera buttons as small
+    // buttons on the view's corner; the shared-wood key, focus mode's From
+    // above / In 3D switch, a joint's step player and a problem's motion
+    // card in the tool strip along its foot (below).
     let viewport = Viewport::default();
     let motion = MotionBar::new();
     let view_toolbar = ViewToolbar::new();
     let camera = CameraToolbar::new();
-    camera.root.set_orientation(gtk::Orientation::Horizontal);
+    camera.root.set_halign(gtk::Align::End);
+    camera.root.set_valign(gtk::Align::Start);
+    camera.root.set_margin_top(EDGE);
+    camera.root.set_margin_end(EDGE);
     let contact_key = view_tools::contact_key();
     let plan_switch = PlanSwitch::new();
     let step_card = StepCard::new();
     let problem_card = ProblemCard::new();
-    // Made to float over the view, they now sit in a panel's flow.
+    // Made to float over the view, they now sit in the strip's flow.
     for widget in [
-        camera.root.upcast_ref::<gtk::Widget>(),
-        contact_key.upcast_ref(),
+        contact_key.upcast_ref::<gtk::Widget>(),
         plan_switch.root.upcast_ref(),
         step_card.root.upcast_ref(),
         problem_card.root.upcast_ref(),
@@ -3388,6 +3393,7 @@ fn build_widgets(application: &adw::Application, options: &Options) -> Result<Wi
         .overflow(gtk::Overflow::Hidden)
         .css_classes(["stave-viewport", "stave-figure"])
         .build();
+    figure.add_overlay(&camera.root);
     // Hardware focus lays the view out as a page (Hinge.dc.html): a line
     // over it, three small views and the swing card under it.
     let caption = Caption::new();
@@ -3452,49 +3458,30 @@ fn build_widgets(application: &adw::Application, options: &Options) -> Result<Wi
         .overflow(gtk::Overflow::Hidden)
         .build();
     design.add_overlay(&edge_pin);
-    // The view's controls in a panel of their own: they wrap onto more
-    // rows (or stack, in a narrow panel) and scroll when even that doesn't
-    // fit.
+    // The view's tools in a strip along its foot, part of the 3D View
+    // panel (no header of their own; they go where the view goes): they
+    // wrap onto more rows, or stack, as the panel narrows.
     let dock = Dock::new(&header.scene, &view_toolbar, &motion);
-    dock.root.append(&camera.root);
     dock.root.append(&plan_switch.root);
     dock.root.append(&contact_key);
-    let controls = gtk::Box::builder()
+    let tools = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
         .spacing(8)
         .css_classes(["stave-controls"])
         .build();
-    controls.append(&hint_box);
-    controls.append(&dock.root);
-    controls.append(&problem_card.root);
-    controls.append(&step_card.root);
-    let content = controls;
-    let controls = gtk::ScrolledWindow::builder()
-        .hscrollbar_policy(gtk::PolicyType::Never)
-        .vexpand(false)
-        .propagate_natural_height(true)
-        .child(&content)
+    tools.append(&hint_box);
+    tools.append(&dock.root);
+    tools.append(&problem_card.root);
+    tools.append(&step_card.root);
+    let view_panel = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
         .build();
-    // The panel asks for the height its controls need at its width (a
-    // swing card or step player included), up to CONTROLS_MOST; past that
-    // it scrolls. libpanel sizes frames by their minimum, so that is what
-    // follows the content.
-    controls.add_tick_callback(move |scrolled, _| {
-        let width = scrolled.width();
-        if width > 1 {
-            let (_, natural, _, _) = content.measure(gtk::Orientation::Vertical, width);
-            let wanted = natural.min(CONTROLS_MOST);
-            if scrolled.min_content_height() != wanted {
-                scrolled.set_min_content_height(wanted);
-            }
-        }
-        glib::ControlFlow::Continue
-    });
+    view_panel.append(&design);
+    view_panel.append(&tools);
 
     let workbench = workbench::Workbench::new(
         vec![
-            (workbench::PanelId::View, design.clone().upcast()),
-            (workbench::PanelId::Controls, controls.upcast()),
+            (workbench::PanelId::View, view_panel.upcast()),
             (workbench::PanelId::Parts, tree.root.clone().upcast()),
             (workbench::PanelId::Files, file_list.root.clone().upcast()),
             (workbench::PanelId::Details, details.upcast()),

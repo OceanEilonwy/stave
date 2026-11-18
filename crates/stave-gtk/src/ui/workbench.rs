@@ -28,11 +28,10 @@ use panel::prelude::*;
 /// One of the window's panels.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum PanelId {
-    /// The 3D view.
+    /// The 3D view, with its tools in a strip along its foot (scene, Pull
+    /// apart, X-ray, the sliders, a posed problem's swing, focus mode's
+    /// steps) and the camera buttons on the view.
     View,
-    /// The 3D view's controls: scene, Pull apart, X-ray, the sliders, the
-    /// camera buttons, a posed problem's swing and focus mode's steps.
-    Controls,
     /// The parts tree.
     Parts,
     /// The project's files.
@@ -47,9 +46,8 @@ pub enum PanelId {
 
 impl PanelId {
     /// Every panel, in the order the menu lists them.
-    pub const ALL: [PanelId; 7] = [
+    pub const ALL: [PanelId; 6] = [
         PanelId::View,
-        PanelId::Controls,
         PanelId::Parts,
         PanelId::Files,
         PanelId::Details,
@@ -61,7 +59,6 @@ impl PanelId {
     pub fn word(self) -> &'static str {
         match self {
             PanelId::View => "view",
-            PanelId::Controls => "controls",
             PanelId::Parts => "parts",
             PanelId::Files => "files",
             PanelId::Details => "details",
@@ -79,7 +76,6 @@ impl PanelId {
     pub fn title(self) -> &'static str {
         match self {
             PanelId::View => "3D View",
-            PanelId::Controls => "3D Tools",
             PanelId::Parts => "Parts",
             PanelId::Files => "Files",
             PanelId::Details => "Details",
@@ -92,7 +88,6 @@ impl PanelId {
     fn icon_name(self) -> &'static str {
         match self {
             PanelId::View => "view-reveal-symbolic",
-            PanelId::Controls => "preferences-system-symbolic",
             PanelId::Parts => "view-list-symbolic",
             PanelId::Files => "folder-symbolic",
             PanelId::Details => "dialog-information-symbolic",
@@ -215,14 +210,12 @@ pub struct Layout {
 }
 
 impl Default for Layout {
-    /// Board B: Parts and Files above Details on the left, the 3D view
-    /// over its controls in the centre, Code and Problems at the bottom,
-    /// nothing on the right.
+    /// Board B: Parts and Files above Details on the left, the 3D view in
+    /// the centre, Code and Problems at the bottom, nothing on the right.
     fn default() -> Layout {
         Layout {
             places: BTreeMap::from([
                 (PanelId::View, Place::new(Side::Centre, 0, 0, 0)),
-                (PanelId::Controls, Place::new(Side::Centre, 0, 1, 0)),
                 (PanelId::Parts, Place::new(Side::Start, 0, 0, 0)),
                 (PanelId::Files, Place::new(Side::Start, 0, 0, 1)),
                 (PanelId::Details, Place::new(Side::Start, 0, 1, 0)),
@@ -443,6 +436,27 @@ impl Workbench {
             .build();
         let statusbar = panel::Statusbar::new();
         statusbar.add_prefix(0, &status);
+        // Brings back any panel that was closed, and resets the layout.
+        let panels_menu = gio::Menu::new();
+        let shows = gio::Menu::new();
+        for id in PanelId::ALL {
+            shows.append(
+                Some(id.title()),
+                Some(&format!("win.show-panel::{}", id.word())),
+            );
+        }
+        panels_menu.append_section(Some("Show a panel"), &shows);
+        let reset = gio::Menu::new();
+        reset.append(Some("Reset Layout"), Some("win.reset-layout"));
+        panels_menu.append_section(None, &reset);
+        let panels_button = gtk::MenuButton::builder()
+            .label("Panels")
+            .menu_model(&panels_menu)
+            .direction(gtk::ArrowType::Up)
+            .tooltip_text("Show a closed panel, or put them all back")
+            .css_classes(["flat", "stave-panels-button"])
+            .build();
+        statusbar.add_suffix(-1, &panels_button);
         for (priority, area) in [panel::Area::Start, panel::Area::Bottom, panel::Area::End]
             .into_iter()
             .enumerate()
@@ -613,6 +627,27 @@ impl Workbench {
         widget.raise();
     }
 
+    /// Brings a panel to the front of its frame, unless that frame also
+    /// holds the 3D View (it would hide the model); a closed panel opens
+    /// where it last was. Its edge isn't shown if people hid it.
+    pub fn bring_forward_beside_view(&self, id: PanelId) {
+        let Some(widget) = self.panels.get(&id) else {
+            return;
+        };
+        let Some(frame) = frame_of(widget) else {
+            self.present(id);
+            return;
+        };
+        let holds_view = self
+            .panels
+            .get(&PanelId::View)
+            .and_then(frame_of)
+            .is_some_and(|view_frame| view_frame == frame);
+        if !holds_view {
+            widget.raise();
+        }
+    }
+
     /// Moves a panel to a side: at an edge into its first frame (as a new
     /// tab), in the middle into a new column beside what is there.
     pub fn move_to(&self, id: PanelId, side: Side) {
@@ -666,24 +701,27 @@ impl Workbench {
 fn new_frame() -> panel::Frame {
     let frame = panel::Frame::new();
     frame.set_orientation(gtk::Orientation::Vertical);
-    // Small tabs with their titles at the start, as in an IDE, not
-    // libpanel's icon-only switcher nor tabs stretched across the frame.
-    let tabs = panel::FrameTabBar::new();
-    tabs.set_expand_tabs(false);
-    tabs.add_css_class("stave-frame-tabs");
-    frame.set_header(Some(&tabs));
+    // A slim strip of flush tabs, as in an IDE.
+    frame.set_header(Some(&super::tab_strip::TabStrip::new()));
     frame
+}
+
+/// The frame holding a panel, if it is open.
+fn frame_of(widget: &panel::Widget) -> Option<panel::Frame> {
+    let mut ancestor = widget.parent();
+    while let Some(current) = ancestor {
+        if let Ok(frame) = current.clone().downcast::<panel::Frame>() {
+            return Some(frame);
+        }
+        ancestor = current.parent();
+    }
+    None
 }
 
 /// Takes a panel out of whatever frame holds it.
 fn detach(widget: &panel::Widget) {
-    let mut ancestor = widget.parent();
-    while let Some(current) = ancestor {
-        if let Some(frame) = current.downcast_ref::<panel::Frame>() {
-            frame.remove(widget);
-            return;
-        }
-        ancestor = current.parent();
+    if let Some(frame) = frame_of(widget) {
+        frame.remove(widget);
     }
 }
 
@@ -700,10 +738,7 @@ mod tests {
         );
         assert_eq!(
             layout.frames(Side::Centre),
-            BTreeMap::from([
-                ((0, 0), vec![PanelId::View]),
-                ((0, 1), vec![PanelId::Controls]),
-            ])
+            BTreeMap::from([((0, 0), vec![PanelId::View])])
         );
         assert_eq!(
             layout
@@ -724,7 +759,7 @@ mod tests {
             .insert(PanelId::Code, Place::new(Side::Centre, 1, 0, 0));
         layout
             .places
-            .insert(PanelId::Controls, Place::new(Side::End, 0, 0, 0));
+            .insert(PanelId::Problems, Place::new(Side::End, 0, 0, 0));
         layout.revealed.insert(Side::End, true);
         assert_eq!(Layout::from_text(&layout.to_text()), layout);
     }

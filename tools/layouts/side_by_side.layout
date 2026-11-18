@@ -1,11 +1,10 @@
-# Code split beside the 3D view; the view controls in the right edge, stacked.
+# Code split beside the 3D view; Problems in the right edge.
 view centre 0 0 0
 code centre 1 0 0
-controls end 0 0 0
+problems end 0 0 0
 parts start 0 0 0
 files start 0 0 1
 details start 0 1 0
-problems bottom 0 0 0
 show start true
 show end true
 show bottom false
