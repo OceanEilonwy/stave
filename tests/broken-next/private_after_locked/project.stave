@@ -1,0 +1,20 @@
+// expect: error[syntax] expected 'param', found 'private'
+// pending: the parser does not read 'locked param' yet
+stave 1
+
+project "Private after locked" {
+  units: mm
+}
+
+// 'private' comes first: private locked param reveal = 1.5mm
+locked private param reveal = 1.5mm
+
+stock pine_19 { species: pine, form: solid, thickness: 19mm }
+
+part base : pine_19 {
+  length: 600mm
+  width:  300mm
+  place {
+    ground
+  }
+}

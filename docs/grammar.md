@@ -10,6 +10,18 @@ and never stored.
 Draft 3 applies `docs/reviews/2026-11-16-language-review-2.md`. What changed
 from draft 2 is listed in that file's "Resolution" section.
 
+Graphical editing ([`docs/editing.md`](editing.md), decided 2026-11-18)
+adds to draft 3: param kinds written as a prefix (`locked param`,
+`solved param`; see [`param`](#param-name--type--default-within-domain-with-locked-or-solved-before-it)),
+a root region made from sizes (`box(across:, up:, deep:)`; see
+[Placement rules](#placement-rules-checked)), relative sizes for `split`
+(`shares:`; see [Regions](#regions)), `Part`, `Parts` and `Anchor`
+component params (see [`assembly`](#assembly-name--component--)), smart
+edits over the param kinds (see [Smart edits](#smart-edits)) and fixes
+carried as patches (see [Fixes](#fixes)). These are specified here ahead
+of the code: where a rule is not built yet, the text says so, and
+`docs/test-coverage.md` lists it as pending.
+
 Design rules:
 
 1. **Every length carries a unit.** `19mm`, `3/4in`, `1-1/2in`. A bare number is
@@ -79,6 +91,12 @@ stave project library import private kind recipe param let region stock part
 joint hardware assembly profile component scene require patch add set remove
 place pose at within locked fit true false
 ```
+
+`solved` is a keyword too: with `locked` it starts a param of one of the
+[param kinds](#param-name--type--default-within-domain-with-locked-or-solved-before-it)
+(`solved param overall_width = ...`). Not built yet: until param kinds
+are, the parser still reads `solved` as a name, so it joins the list above
+with them.
 
 A keyword where a new name is expected is `error[reserved-word]`. A keyword
 **is** allowed wherever the grammar says `NAME`: after a `.` and before a `:`
@@ -182,6 +200,10 @@ Item keywords are the words that start a declaration: `import`, `project`,
 `library`, `private`, `kind`, `recipe`, `stock`, `profile`, `component`,
 `scene`, `param`, `let`, `region`, `part`, `joint`, `hardware`, `assembly`,
 `require`, `patch`.
+`locked` and `solved` are item keywords as well: like `private`, they come
+before the keyword of a declaration (`locked param reveal = 1.5mm`), so a
+line that starts with one starts a declaration. (Not built yet: until
+param kinds are, the parser does not stop at them.)
 
 ```
 region front_opening = opening(
@@ -276,7 +298,7 @@ header        = "stave" , INT ;                          (* the format version: 
 import        = "import" , STRING , [ "as" , IDENT ] ;  (* applies to this file only *)
 
 (* ---------- Items ---------- *)
-item          = { DOC } , [ "private" ] , item_kind ;
+item          = { DOC } , [ "private" ] , item_kind ;   (* private first: private solved param ... *)
 item_kind     = project | library | kind | recipe | stock | profile | component
               | scene | design_item ;
 design_item   = param | let | region | part | joint | hardware | assembly | require ;
@@ -319,8 +341,9 @@ recipe_entry  = "mark" , block(call)                     (* marking-out steps *)
               | "cut" , block(call)                      (* cutting steps *)
               | field ;                                  (* tools: [...], rank: 10, needs: [...], check: "..." *)
 
-param         = "param" , IDENT , [ ":" , IDENT ] , [ "=" , expr ] ,
-                [ "within" , domain ] , [ "locked" ] ;   (* a type, a default, or both *)
+param         = [ "locked" | "solved" ] , "param" , IDENT , [ ":" , IDENT ] ,
+                [ "=" , expr ] , [ "within" , domain ] ; (* a type, a default, or both;
+                   the prefix is the param's kind: locked param reveal = 1.5mm *)
 domain        = add_expr , ".." , add_expr               (* continuous: 600mm..1200mm, both ends included *)
               | list ;                                   (* one of: [350mm, 400mm, 450mm] *)
 let           = "let" , IDENT , "=" , expr ;
@@ -415,6 +438,17 @@ Notes for the parser:
   `]`.
 - Positional arguments come before named ones; a positional argument after a
   named one is `error[syntax]`.
+- `locked` and `solved` are followed only by `param`. Anything else after
+  them is `error[syntax]` (`expected 'param', found 'let'`), and so is
+  `private` after them (`locked private param` is written
+  `private locked param`) or both of them on one param
+  (`expected 'param', found 'solved'`, with the help "a param is locked or
+  solved, not both"). The trailing `locked` of earlier drafts
+  (`param reveal = 1.5mm locked`) is `error[syntax]`
+  (`expected end of line, found 'locked'`) with the help
+  `write 'locked' first: locked param reveal = 1.5mm`. (Not built yet: the
+  parser still reads the trailing form, and three examples still use it,
+  until param kinds are built.)
 - A `block(part_entry)` and a `block(place)` hold at most one `place`; a second
   one is `error[syntax]`. A joint has no body: `joint x : dado(...) { ... }` is
   `error[syntax]` with the help "a joint's settings go inside the parentheses".
@@ -656,10 +690,16 @@ member (`oak_19.thickness`). Types are listed under [Types](#types-units-and-ari
 | `license` | `Text` | no | credited in the build manual |
 | `boards` | `Boards` | no | in a library in the prelude: how a part's boards are joined when neither the part nor its project says; see [Boards](#boards) |
 
-### `param name [: Type] [= default] [within domain] [locked]`
+### `param name [: Type] [= default] [within domain]`, with `locked` or `solved` before it
 
 The same form everywhere: in a project or library module, in a `component` and
 in a `kind`.
+
+```
+locked param reveal        = 1.5mm
+       param overall_depth = 560mm within 550mm..650mm
+solved param overall_width = 900mm within 600mm..1200mm
+```
 
 - At least one of the type and the default is required. With only a default,
   the type is the default's type. With both, they must agree.
@@ -675,7 +715,35 @@ in a `kind`.
   design must work over (see [Checks](#checks-and-require)). For a component
   or kind param it limits what a user may pass: an argument outside it is
   `error[out-of-range]`.
-- `locked` stops smart edits from changing the value.
+
+**Param kinds.** A param is one of three kinds, written as a prefix. They
+say only what a [smart edit](#smart-edits) may do with the value; checking
+is the same for all three.
+
+| Kind | Written | A smart edit |
+|---|---|---|
+| plain | `param x = ...` | changes it only when it is the single param the edited size depends on, or when the user picks it from the list of candidates. The new value is worked out with exact arithmetic, without z3 |
+| locked | `locked param x = ...` | never changes it: the chain of a smart edit stops there |
+| solved | `solved param x = ... within ...` | may solve for it with z3, alone or with other solved params, keeping every `require` and `within`. Its default is where the solve starts |
+
+- `private` comes first when both are written: `private solved param x`.
+- `locked` and `solved` need a param that has a default and whose type is a
+  quantity: `Length`, `Angle`, `Ratio` or `Count`. On a param without a
+  default it is `error[missing-value]`
+  (`'opening' has no value`, with the note "a locked param needs a
+  default" and the help to give one or remove `locked`). On a param of
+  another type (`locked param frame : Stock = oak_19`) it is
+  `error[type-mismatch]` (`'locked' needs a length, an angle, a ratio or a
+  count, found a stock`). A param without a default is reported first, so
+  `locked param opening : Region` is one error, `missing-value`.
+- A `solved param` needs a `within` domain, the values the solver may
+  choose from: without one it is `error[missing-field]`
+  (`solved param 'overall_width' is missing 'within'`).
+- The trailing `locked` of earlier drafts (`param reveal = 1.5mm locked`)
+  is `error[syntax]`; see the notes under [Syntactic grammar](#syntactic-grammar).
+
+Not built yet: the parser reads only the trailing `locked` of draft 3, and
+none of these checks exists.
 
 ### `let name = expr`
 
@@ -722,6 +790,26 @@ No fields. Readable: the six faces, and the sizes `across`, `up` and `deep`.
 The fields are the component's params, by name. A param without a default must
 be given. Readable through the assembly: every item of the component
 (`door_l.stile[hinge]`, `drawer[top].front`) and its params.
+
+**Place params.** A component may take `Region`, `Part`, `Parts` and
+`Anchor` params: the things it is placed in, on or between. They are
+given in the assembly body like any other param, as an expression of
+their type:
+
+| Type | Given as | Example |
+|---|---|---|
+| `Region` | a region, or an element of a region array | `opening: drawer_bay[same]` |
+| `Part` | one part (an element of an array, or a part of another assembly) | `hinge_side: side_l` |
+| `Parts` | one part or a list of parts (`x[*]` flattens into it) | `rails: [apron_front, apron_back]` |
+| `Anchor` | a face or a mid-plane of a part or region | `on: top.bottom`, `about: mid(base, across)` |
+
+Inside the component they are used where their type is expected: a
+`Region` or `Part` param's faces in `place { }` (`against(hinge_side.right)`),
+a `Parts` param as a joint's role (`into: rails`), an `Anchor` param as a
+placement term's anchor (`against(on)`, which takes a face, so a mid-plane
+there is `error[type-mismatch]` as anywhere). Place params are not
+quantities, so they can't be `locked` or `solved`. The editor fills these
+params by pointing (see [`docs/editing.md`](editing.md)).
 
 ### `profile name { }`
 
@@ -884,7 +972,7 @@ Joint kinds use these, because a joint doesn't know how its parts are placed.
 
 | Term | Fixes | Meaning |
 |---|---|---|
-| `ground` | all three axes | the root that every other part is placed from. It may be turned with `orient`, like any part. The floor is wherever the lowest part ends up |
+| `ground` | all three axes | the root that every other part is placed from, when the project has no root box (see rule 1 below). It may be turned with `orient`, like any part. The floor is wherever the lowest part ends up |
 | `against(face)` | 1 axis | this part's **opposite** face touches the face: `against(base.top)` stands the part on the base |
 | `against(face, gap: d)` | 1 axis | as above, then moved `d` away from the face, on the face's outward side |
 | `flush(face)` | 1 axis | this part's **same-named** face lies in the face's plane: `flush(base.left)` lines up the two left faces |
@@ -921,8 +1009,36 @@ term the part lies flat: `orient(length: right, width: back)`.
 
 ### Placement rules (checked)
 
-1. Exactly one part of a project is placed with `ground` (`error[ground]`).
-   Parts inside components are never `ground`.
+1. **Exactly one root.** A project has exactly one root, which every other
+   part and region is placed from: either one part placed with `ground`, or
+   one region made with `box(across:, up:, deep:)` (see [Regions](#regions)).
+   Anything else is `error[ground]`, reported as follows:
+
+   | Case | Message | Reported at |
+   |---|---|---|
+   | no part placed with `ground` and no region made with `box` | `nothing is the root: no part is placed with 'ground' and no region is made with 'box'` | the project item |
+   | two parts placed with `ground` | `'<a>' and '<b>' are both placed with 'ground'` | the second `ground` |
+   | two regions made with `box` | `'<a>' and '<b>' are both made with 'box'` | the second `box` |
+   | a part placed with `ground` and a region made with `box` | `'<part>' is placed with 'ground', but '<region>' is made with 'box'; only one can be the root` | the `ground` |
+   | a part placed with `ground` inside a component | `'<a>' is placed with 'ground' inside a component` | the `ground` |
+   | a region made with `box` inside a component | `'<a>' is made with 'box' inside a component` | the `box` |
+   | `box(across:, up:, deep:)` anywhere but as the whole value of a single (not array) region | `box(across:, up:, deep:) can only be the whole value of a region` | the call |
+
+   The help says what to do instead: for two roots, place the second
+   against the first (in `base`, `ground` becomes `flush(envelope.bottom)`,
+   `flush(envelope.left)` and `flush(envelope.front)`); for none, add a
+   root box with the overall sizes or place the lowest part with `ground`;
+   inside a component, use a param the assembly is handed (a `Region` or a
+   `Part`). Parts and regions inside components are never the root.
+
+   When the root is a box, **the floor is the box's bottom face**, whether or
+   not a part stands on it; parts and regions place against the box's faces
+   and mid-planes like any region's. When the root is a part, the floor is
+   wherever the lowest part ends up.
+
+   Not built yet: `box(across:, up:, deep:)` does not exist, so only the
+   `ground` cases are checked, and the first is still worded
+   `no part is placed with 'ground'`.
 2. Every anchor belongs to something placed earlier in dependency order. A
    cycle is `error[placement-cycle]`, listing it.
 3. Each axis is fixed by exactly one term. A missing axis is
@@ -1080,7 +1196,11 @@ Mirroring is defined on **results**, not on text:
   occupies the reflected place: `side_r`. If nothing occupies that place
   exactly, it is `error[mirror]`, naming the item that has no counterpart.
   Every role of a piece of hardware is re-bound this way, whatever its
-  name.
+  name. A `Parts` param is re-bound part by part, in the same order; an
+  `Anchor` param is re-bound to the face of the counterpart that lies in
+  the reflected plane (`side_l.right` becomes `side_r.left`), or to the
+  reflected mid-plane; a `Region` param to the region that occupies the
+  reflected box.
 - Arguments are not rewritten: there is no textual swap of `left` and `right`.
 - The cut list marks a mirrored part as the mirror image of its source, and
   the work plan marks the pair out together.
@@ -1216,17 +1336,59 @@ region front_opening = opening(left: side_l.right, right: side_r.left,
 region bay[drawers, doors]     = split(front_opening, up, at: divider)
 region drawer_bay[bottom, top] = split(bay[drawers], up)
 region door = cover(opening, mount, thickness: frame.thickness)
+region envelope = box(across: overall_width, up: overall_height, deep: overall_depth)
+region drawer_bay[a, b, c] = split(bay, up, shares: [140, 180, 220])
 ```
 
 | Function | Result |
 |---|---|
+| `box(across:, up:, deep:)` | a box of space made from three lengths, with no parts needed: the project's root (see [Placement rules](#placement-rules-checked), rule 1). All three are required |
 | `opening(left:, right:, bottom:, top:, front:, back:)` | the box bounded by six anchors, one per side. All six are required |
 | `split(region, axis, at: part)` | two regions, on either side of the part along `axis`, each ending at the part's face |
 | `split(region, axis)` | as many equal regions as the declaration has elements (so the region being declared must be an array), with nothing between them |
+| `split(region, axis, shares: [n, ...])` | as `split(region, axis)`, but the pieces are sized in proportion to the shares, in label order |
 | `cover(region, mount, thickness: d)` | the space a door or drawer front fills: the region's front face, grown or shrunk at each edge as the mount says, `d` deep |
 
 `split` labels its pieces in the direction of its axis: for `up` the first
 label is the lowest piece, for `across` the leftmost, for `deep` the front one.
+
+**`box`** makes the root region from sizes alone: the overall width, height
+and depth of the piece, before any part exists. Each size is a `Length`
+greater than `0mm`, usually a param (`overall_width`); a size of `0mm` or
+less is `error[out-of-range]` (`'up' must be more than 0mm, found 0mm`).
+The box is where everything else is measured from, so it is placed by
+nothing and is never in a component; rule 1 of
+[Placement rules](#placement-rules-checked) gives every error. Parts and
+components place against its faces (`flush(envelope.bottom)` stands a
+part on the floor inside it) and its mid-planes, and regions are made from it
+(`split(envelope, up, ...)`, `opening(...)` with its faces) like any
+region. Which `box` a call is follows from its argument names:
+`across:`, `up:` and `deep:` make a region; the hardware envelope and a
+member's shape are listed under [Built-in functions](#built-in-functions).
+Not built yet.
+
+**`shares:`** gives relative sizes: `shares: [140, 180, 220]` splits the
+region's size along the axis in the ratio 140 : 180 : 220, so here the
+middle piece is 180 / 540 of it. A share is a unitless value (a `Count` or
+a `Ratio`, usually a plain number) greater than zero. The rules, each with
+its error:
+
+- there are as many shares as the declared array has elements:
+  `error[type-mismatch]` (`'shares' needs 3 numbers, one for each piece of drawer_bay, found 2`);
+- every share is more than zero: `error[out-of-range]`
+  (`'shares' must each be more than 0, found 0`);
+- a share has no unit: `error[unit-mismatch]`
+  (`'shares' needs a number, found a length`, with the help "shares are
+  relative sizes: write 140, not 140mm");
+- `shares:` and `at:` are not written together: `error[type-mismatch]`
+  (`split takes 'at:' or 'shares:', not both`);
+- the array's count is fixed: a counted array whose count is a param with a
+  `within` list can't take `shares:` (`error[type-mismatch]`,
+  `'shares' needs a fixed number of pieces, found a count that can change`).
+
+`split(region, axis)` without `shares:` is equal division, as before. The
+editor's grip between two neighbouring pieces edits their two shares (see
+[`docs/editing.md`](editing.md)). Not built yet.
 
 **Mounts** say how a front relates to its opening:
 
@@ -2405,11 +2567,11 @@ These are looked up when a bare name is called (see [Names](#names), rule 3).
 | `between(a, b)` | `Length` | the clear distance between two parts, or between two parallel anchors, or from a face to the same side of a region (`between(side.left, opening)` is from the side's left face to the opening's left side). Two parts must be apart along exactly one axis |
 | `extent(items, axis)` | `Length` | overall drawn size of a list of parts along a world axis. With `of: part`, `axis` is one of that part's own axes (`length`, `width`, `thickness`), meaning the world axis it runs along once placed. In a joint kind this measures the other part along this one's direction: `extent(into, thickness, of: piece)` is how much of `into` a screw driven through `piece`'s thickness can bite into (its thickness for a face, its width for an edge). With `of: contact(a, b)`, `axis` is one of the patch's own axes: `length` and `width` along it, `thickness` square to it, so `extent(into, thickness, of: contact(piece, into))` is how much of `into` lies behind the place where `piece` meets it |
 | `mid(item, axis)` | `Anchor` | the mid-plane of a part or region |
-| `opening(...)`, `split(...)`, `cover(...)` | `Region` | see [Regions](#regions) |
+| `opening(...)`, `split(...)`, `cover(...)` | `Region` | see [Regions](#regions); `split` takes `at:` or `shares:` |
 | `overlay(...)`, `inset(reveal:)` | `Mount` | see [Regions](#regions) |
 | `turned(profile)` | `Shape` | turned on a lathe to a profile |
 | `joined(by:)` | `Boards` | how the boards of a part are joined: `by:` is a joint kind value or a list of them; see [Boards](#boards) |
-| `box(length:, width:, thickness:)` | `Envelope` | a hardware envelope |
+| `box(length:, width:, thickness:)` | `Envelope` | a hardware envelope. Written `box(across:, up:, deep:)`, with those three argument names, it is instead the `Region` that is the project's root; see [Regions](#regions) |
 | `cylinder(diameter:, length:)` | `Envelope` | a hardware envelope; its axis stands off the mount face |
 | `model(source, align:, sha256:)` | `Model` | a `.glb` model; optional `align: node("name")` and `sha256: "<hex>"` (see [Hardware](#hardware)) |
 | `ends(inset:)`, `pitch(d)`, `gap(d)` | `Spacing` | used by `spaced`, with the bare words `evenly` and `ends` |
@@ -2749,6 +2911,13 @@ joined only to each other, at the group's first part. It is a question
 about the whole project, asked only once the design has no errors: a part
 with an error may be the one that would join the rest.
 
+When the root is a box (see [Placement rules](#placement-rules-checked)),
+there is no ground part: a group is held when one of its parts stands on
+the floor, its bottom face on the box's bottom face. A group that doesn't
+is `warning[loose-part]` with the message
+`<part> is loose: no joint or hardware joins it to a part that stands on the floor`.
+(Not built yet, with `box`.)
+
 ```
 warning[loose-part]: slat[0] is loose: no joint or hardware joins it to top or to anything joined to top
   --> table.stave:120:6
@@ -2784,16 +2953,16 @@ shape of their messages are fixed, because tests and AI tools match on them.
 | 2 | `duplicate-name` | `'<name>' is declared twice` |
 | 2 | `ambiguous-name` | `'<name>' could be <this> or <that> here` |
 | 2 | `unit-mismatch` | `can't <add> <a length> and <an angle>`, or `'<field>' needs <a length>, found <a count>` |
-| 2, 4 | `type-mismatch` | `'<field>' needs <a part>, found <a region>`, or for a cut's shape `<joint>: the outline crosses itself between mark <n> and mark <n + 1>` |
+| 2, 4 | `type-mismatch` | `'<field>' needs <a part>, found <a region>` (for a param kind `'<locked>' needs a length, an angle, a ratio or a count, found <a stock>`; for shares `'shares' needs <3> numbers, one for each piece of <drawer_bay>, found <2>` or `'shares' needs a fixed number of pieces, found a count that can change`), `split takes 'at:' or 'shares:', not both`, or for a cut's shape `<joint>: the outline crosses itself between mark <n> and mark <n + 1>` |
 | 2 | `unknown-field` | `<a part> has no field '<name>'` |
-| 2 | `missing-field` | `<what> is missing '<name>'` |
-| 2 | `out-of-range` | `'<param>' must be within <domain>, found <value>` |
+| 2 | `missing-field` | `<what> is missing '<name>'` (`solved param 'overall_width' is missing 'within'`) |
+| 2 | `out-of-range` | `'<param>' must be within <domain>, found <value>`, or for a size that must be positive `'<up>' must be more than <0mm>, found <value>` (`'shares' must each be more than 0, found <value>`) |
 | 2 | `not-in-library` | `a library can't contain a <part> at the top level` |
 | 2 | `import-cycle` | `modules import each other: <a> -> <b> -> <a>` |
 | 2 | `unknown-module` | `can't find module '<source>'` |
 | 2, 4 | `not-supported` | `<what> is not supported yet` (an error for remote imports and for a format version other than 1, a warning for a cut on a round or turned part other than a hole or a round tenon) |
 | 2 | `unnamed-cut` | `this cut has no name, so messages will call it "a <slot>"` (a warning, once for each unnamed `cut` in a kind; see [Named cuts](#named-cuts)) |
-| 3 | `ground` | `no part is placed with 'ground'`, `'<a>' and '<b>' are both placed with 'ground'`, or `'<a>' is placed with 'ground' inside a component` |
+| 3 | `ground` | `nothing is the root: no part is placed with 'ground' and no region is made with 'box'`, `'<a>' and '<b>' are both placed with 'ground'`, `'<a>' and '<b>' are both made with 'box'`, `'<part>' is placed with 'ground', but '<region>' is made with 'box'; only one can be the root`, `'<a>' is placed with 'ground' inside a component`, `'<a>' is made with 'box' inside a component`, or `box(across:, up:, deep:) can only be the whole value of a region`; see [Placement rules](#placement-rules-checked) |
 | 3 | `axis-not-set` | `<item>: position along '<axis>' is not set` |
 | 3 | `axis-set-twice` | `<item>: position along '<axis>' is set twice` |
 | 3 | `placement-cycle` | `<a> and <b> are placed against each other` |
@@ -2853,9 +3022,66 @@ whose first line is `// expect: error[<code>] <message>` (or
 produce a diagnostic with exactly that code and message (it may produce
 others). A design for a check that isn't built yet says so on its second
 line, `// pending: <reason>`; until the check lands it must check without any
-diagnostic, and the line comes off when it does. `docs/test-coverage.md` maps
+diagnostic, and the line comes off when it does. A design that needs
+language the parser doesn't read yet (a `solved param`, `box`, `shares:`)
+can't check clean, so it waits in `tests/broken-next/`, in the same
+format with its `// pending:` line, and moves to `tests/broken/` with the
+change that builds its language. `docs/test-coverage.md` maps
 every rule of this document and every code above to the tests that pin it
 down.
+
+### Fixes
+
+A diagnostic's help may carry **fixes**: [patches](#patches) that make the
+problem go away, which a tool can apply as they are. "Use 18mm" is a patch
+that sets the door's overlay; "tighten the range" is a patch that replaces
+the param. Each fix is printed on its own line after the help, as
+`= fix: ` and then one patch written on one line (the operations separated
+by commas, as any block allows):
+
+```
+error[require]: 'thirds' fails: the slot is a third of the post's thickness
+  --> project.stave:44:14
+   = note: for rail and post in corner
+   = note: the rule measures 18mm and needs 24mm
+   = help: use slot: 8mm, from the kind's list
+   = fix: patch "Use slot: 8mm" { set corner.slot = 8mm }
+
+error[require-range]: 'hanger_room' does not hold for every allowed value: room for coat hangers
+  --> cabinet.stave:27:1
+   = it fails when cabinet_depth = 450mm
+   = help: tighten the range: param cabinet_depth = 560mm within 546mm..650mm
+   = fix: patch "Tighten the range" { replace param cabinet_depth = 560mm within 546mm..650mm }
+```
+
+- The text after `= fix: ` is exactly a `patch` of the [patch grammar](#syntactic-grammar),
+  so a test or a tool parses it with the patch parser and matches on it as
+  it matches on codes and messages. Its string is the label a tool shows
+  on the fix's button: a short instruction with a capital letter and no
+  full stop ("Use 18mm", "Remove 'locked'").
+- Fixes come in the order the help names them, the one the help
+  recommends first. Every alternative the help offers as a value (each
+  value of a kind's list that makes a rule hold) is its own fix.
+- A fix is offered only when the checker has seen that it removes this
+  diagnostic: the list search of [Checks and `require`](#checks-and-require)
+  tries each value, a range is tightened to the values that held. It is
+  not promised to make the whole design check: applying one is checked
+  again like any patch, and the editor refuses it, as any edit, if it
+  leaves an error (see [`docs/editing.md`](editing.md)).
+- **A diagnostic that can't offer a patch still explains itself in
+  words.** The help line is always there; fixes are added to it, never in
+  place of it. A help that asks for a judgement ("move or resize top so
+  it covers the whole end") has no fix.
+- Fixes are patches, so they edit what parsed: from layer 2 on. A syntax
+  error's help stays a text edit, offered as a quick fix (see
+  [Tooling and editors](#tooling-and-editors)).
+- A design in the broken corpus may pin its first fix with a line
+  `// fix: patch "..." { ... }` right after its `// expect:` line (or after
+  its `// pending:` line); the corpus test then requires the diagnostic's
+  first fix to be exactly that patch.
+
+Not built yet: diagnostics carry their help as words only, and the corpus
+test doesn't read `// fix:` lines.
 
 ---
 
@@ -2904,7 +3130,7 @@ diagnostic with a "fetch" code action.
 | Feature | From |
 |---|---|
 | Diagnostics | the fast and slow tiers above, with codes from the [Diagnostics](#diagnostics) table |
-| Quick fixes | each diagnostic's `help:` line, as an edit when it is mechanical ("add `as hw`", "write `name[*]`", "add `)`") |
+| Quick fixes | each diagnostic's [fixes](#fixes), as workspace edits made by applying their patches; for a syntax error, its `help:` line as a text edit when it is mechanical ("add `as hw`", "write `name[*]`", "add `)`") |
 | Completion | the position decides the vocabulary: placement terms at the start of a line in `place { }`; cut operations after `cut`; base kinds after `kind name :`; the declaration's field table in a field position; the expected type's words in an argument (`up`, `evenly`, `plywood`); a module's public items after `module.`; labels inside `[ ]` |
 | Signature help | the roles and params of the kind or component being called, with defaults |
 | Hover | doc comments, types, and values worked out in the project's units |
@@ -2939,7 +3165,21 @@ ends a field, so lines are never joined or split) and normalises the rest:
   up one space after the longest: the `=` or `:` of params, the `:` of
   joints, kinds and requires, the `{` of stocks, the `=` of regions. A name
   includes its array labels (`bay[drawers, doors]`). Nothing after that
-  token is aligned (not `within`, not `locked`), except trailing comments;
+  token is aligned (not `within`), except trailing comments;
+- in such a run of params, a param's keyword is `param` whatever comes
+  before it, and the word `param` is aligned across prefixes (`locked`,
+  `solved`, `private` and `private locked` or `private solved`): each line
+  is padded with spaces before its prefix, or before `param` when it has
+  none, so that every `param` starts in the column of the longest prefix's,
+  and names and `=` signs still line up:
+
+  ```
+  locked param reveal        = 1.5mm
+         param overall_depth = 560mm within 550mm..650mm
+  solved param overall_width = 900mm within 600mm..1200mm
+  ```
+
+  (Not built yet, with param kinds.)
 - a comment at the end of a line keeps its column when there is room;
 - at most one blank line in a row, none at the start or end of a block or
   of the file.
@@ -2948,28 +3188,70 @@ ends a field, so lines are never joined or split) and normalises the rest:
 
 ## Smart edits
 
-The mouse tools in the app edit the design through relationships. A **resize**
-drag on a part asks: which unlocked values, if changed, give this new size?
+The mouse tools in the app edit the design through relationships, and
+every edit they make is an ordinary [patch](#patches). How the editor
+presents them is [`docs/editing.md`](editing.md); this section is what a
+drag may change.
 
-- Every size is an expression that leads back to params. Dragging the top
-  drawer 50mm wider traces its box width through `opening.across` to
-  `cabinet_width`.
-- z3 finds the change. Among the unlocked params the size depends on, it picks
-  the smallest change to the param closest to the dragged part, keeps every
-  `require` and `within` range, and offers the other answers as alternatives.
-- **Locked values stop the chain**: params marked `locked`, stock thickness, and
-  hardware sizes from the catalog (such as slide clearance).
+A **resize** drag on a part, a region or a grip asks: which values, if
+changed, give this new size? Every size is an expression that leads back
+to params and numbers: dragging the top drawer 50mm wider traces its box
+width through `opening.across` to `cabinet_width`. The trace follows
+`let`s, defaults, region functions and the params an assembly passes to its
+component, and collects the **candidates**: the params the size depends
+on. It stops at
 
-  ```
-  param reveal = 1.5mm locked
-  ```
+- a `locked param`: the chain stops there, and it is never a candidate;
+- a stock's fields (its thickness) and a kind's sizes (a slide's
+  clearance, a hinge's cup): what you buy is not changed by a drag;
+- a `let`: it is followed to its value, but a number written in it is not a
+  knob and is never a candidate.
 
-- **A plain number is edited in place.** If the size is written as a number
-  (`width: 400mm`), the drag changes that number and nothing else follows.
-- The result is an ordinary patch (`set cabinet_width = 950mm`).
+What happens next depends on how the size is written and on the kinds of
+its candidates (see [Param kinds](#param-name--type--default-within-domain-with-locked-or-solved-before-it)):
 
-**Move** drags edit the measured offset of one placement term, and **snap**
-replaces a term with `flush` or `against` on the face the part was dropped on.
+1. **A plain number is edited in place.** If the size is written as a
+   number (`width: 400mm`, a share in `shares: [140, 180, 220]`), the drag
+   changes that number and nothing else follows.
+2. **Plain params are the user's to pick.** A plain param is changed only
+   when it is the single candidate, or when the user picks it from the
+   list of candidates. Its new value is worked out with exact arithmetic,
+   without z3: with every other value fixed, the size is `a × p + b` in the
+   param `p`, with `a` and `b` exact fractions found by evaluating the size;
+   the drag sets `p = (size − b) / a`. When the size is not of that form
+   in `p` (`p` times `p`, a division by `p`, a `fit` that `p` decides) or
+   `a` is zero, `p` is not offered.
+3. **Solved params are picked automatically**, by z3. Its only unknowns are
+   the solved params the size depends on; every other value is fixed. The
+   target is an equality (the size equals the dragged size), and every
+   `require` and every `within` is a constraint. Among the answers it
+   minimises, in this order:
+   1. how many params change;
+   2. how far they move, each measured as a fraction of its own `within`
+      domain (from its lowest to its highest value), summed;
+   3. how far they are from the thing dragged: a param of the component
+      the dragged part is in counts 0, of the component around that 1, and
+      so on out to the project's params, summed over the params that
+      change; so a component's own solved param goes before the project's;
+   4. the order the params are written in (by file, then position), so
+      that no two answers tie.
+
+   The ordering is total, so the answer is the same on every run. When the
+   size depends on plain params as well, they are listed beside the solved
+   answer for the user to pick instead. When there is no answer, the drag
+   is refused and says which `require` or `within` stopped it.
+
+Each answer is applied to a scratch copy and checked like any patch; the
+editor commits it only if it checks. The result is an ordinary patch
+(`set cabinet_width = 950mm`, `set drawer_bay.shares = [140, 200, 200]`).
+
+**Move** drags edit the measured offset of one placement term (its `gap:`
+or `inset:`), and **snap** replaces a term with `flush` or `against` on the
+face the part was dropped on.
+
+Not built yet. The first build moves plain numbers (rule 1) and single
+params (rule 2) only; z3 over solved params (rule 3) is a later stage, and
+until it is built a `solved param` is edited as a plain one.
 
 ---
 
@@ -3076,6 +3358,29 @@ patch "Add a shoe shelf" {
 | `remove import "..." in "file.stave"` | removes an import |
 | `rename <tag> <path> to <name>` | renames an item and every reference to it |
 
+What the mouse writes (see [`docs/editing.md`](editing.md)) is made of
+these same operations:
+
+```
+patch "Add a drawer" {
+  add region drawer_bay[bottom, top] = split(bay, up, shares: [1, 1])
+  add assembly drawer[bottom, top] : casework.Drawer {
+    opening: drawer_bay[same]
+    slide:   side_mount_slide(length: 450mm)
+  }
+}
+patch "Hold this" {
+  add require slat_to_apron_front_min : between(slat[0], apron_front) >= 12mm "room for a finger"
+}
+patch "Name this size" {
+  add param shelf_gap = 300mm
+  set shelf.place.up = against(divider.top, gap: shelf_gap)
+}
+patch "Move the apron back" {
+  set apron_front.setback = 5mm
+}
+```
+
 What a `set` or `unset` path can address:
 
 | Path | Addresses |
@@ -3083,7 +3388,8 @@ What a `set` or `unset` path can address:
 | `cabinet_width` | the default of a `param`, or the value of a `let` |
 | `shelf.width`, `oak_19.thickness`, `all_open.explode` | a field of an item |
 | `shelf_dados.depth`, `shelf_dados.into` | a setting or role in a joint's or hardware's kind call |
-| `drawer.pull_kind`, `drawer[top].slide` | an argument of an assembly |
+| `drawer.pull_kind`, `drawer[top].slide`, `apron_front.setback` | an argument of an assembly (a component param), added when it isn't written yet |
+| `drawer_bay.shares`, `envelope.across` | a named argument of the call that makes a region (`split`, `box`, `opening`, `cover`) |
 | `side_l.place.up`, `.place.across`, `.place.deep` | the placement term that fixes that axis (each axis has exactly one). A term that fixes two axes (`corners`) is replaced as a whole |
 | `side_l.place.orient` | the `orient` term |
 | `casework.Drawer.box_height` | the same, inside a component of a local module |

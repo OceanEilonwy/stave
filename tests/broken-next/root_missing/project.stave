@@ -1,0 +1,30 @@
+// expect: error[ground] nothing is the root: no part is placed with 'ground' and no region is made with 'box'
+// pending: the root box is not built: the message still says only that no part is placed with 'ground'
+stave 1
+
+project "No root" {
+  units: mm
+}
+
+stock pine_19 { species: pine, form: solid, thickness: 19mm }
+
+// Each part is placed against the other, and nothing is the root.
+part a : pine_19 {
+  length: 100mm
+  width:  100mm
+  place {
+    against(b.top)
+    flush(b.left)
+    flush(b.front)
+  }
+}
+
+part b : pine_19 {
+  length: 100mm
+  width:  100mm
+  place {
+    against(a.top)
+    flush(a.left)
+    flush(a.front)
+  }
+}

@@ -1,0 +1,21 @@
+// expect: error[syntax] expected end of line, found 'locked'
+// pending: param kinds are not built: the parser still reads the trailing 'locked' of draft 3
+stave 1
+
+project "Locked written last" {
+  units: mm
+}
+
+// Draft 3 wrote 'locked' after the value. It now comes first:
+// locked param reveal = 1.5mm
+param reveal = 1.5mm locked
+
+stock pine_19 { species: pine, form: solid, thickness: 19mm }
+
+part base : pine_19 {
+  length: 600mm
+  width:  300mm
+  place {
+    ground
+  }
+}

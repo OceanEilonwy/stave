@@ -1,0 +1,38 @@
+// expect: error[unit-mismatch] 'shares' needs a number, found a length
+// pending: the parser does not read 'shares:' yet
+stave 1
+
+project "Shares in millimetres" {
+  units: mm
+}
+
+param overall_width  = 600mm
+param overall_height = 400mm
+param overall_depth  = 300mm
+
+region envelope = box(across: overall_width, up: overall_height, deep: overall_depth)
+// Shares are relative sizes: 140, not 140mm.
+region bay[lower, upper] = split(envelope, up, shares: [140mm, 260mm])
+
+stock pine_19 { species: pine, form: solid, thickness: 19mm }
+
+part base : pine_19 {
+  length: overall_width
+  width:  overall_depth
+  place {
+    flush(envelope.bottom)
+    flush(envelope.left)
+    flush(envelope.front)
+  }
+}
+
+part shelf : pine_19 {
+  length: overall_width
+  width:  overall_depth
+  loose:  true
+  place {
+    flush(bay[lower].top)
+    flush(envelope.left)
+    flush(envelope.front)
+  }
+}

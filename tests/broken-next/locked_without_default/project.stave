@@ -1,0 +1,35 @@
+// expect: error[missing-value] 'gap' has no value
+// pending: the parser does not read 'locked param' yet
+stave 1
+
+project "Locked without a default" {
+  units: mm
+}
+
+stock pine_19 { species: pine, form: solid, thickness: 19mm }
+
+part base : pine_19 {
+  length: 600mm
+  width:  300mm
+  place {
+    ground
+  }
+}
+
+component Block {
+  // A locked param keeps the value it has, so it needs one.
+  locked param gap : Length
+  part block : pine_19 {
+    length: 100mm
+    width:  100mm
+    place {
+      against(base.top, gap: gap)
+      flush(base.left)
+      flush(base.front)
+    }
+  }
+}
+
+assembly block : Block {
+  gap: 10mm
+}
