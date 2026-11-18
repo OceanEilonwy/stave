@@ -75,7 +75,20 @@ line and the rest are skipped:
 | `set <name> = <value>` | a setting typed on the card (or chosen from its list) |
 | `name <name>` | the name retyped on the card |
 | `fix <problem> <fix>` | a fix's button, both counted from 1 |
-| `add`, `cancel` | the card's buttons |
+| `add`, `cancel` | the card's buttons (a change's card too) |
+| `pick <name>` | a click on a part, piece of hardware or assembly: selected, its card showing its changes |
+| `repeat <count> [up\|across\|deep]` | the count stepper: on the chosen candidate's card, else on the selected item's |
+| `drag count <count>` | the count handle in the 3D view, dragged until it says × count |
+| `drag boundary <n> <length>` | the n-th boundary handle (from 1), dragged until the piece before it is that long |
+| `mirror` | "And the other side" switched on |
+| `hold <a> to <b>` | "Hold a distance…" from `a`, then a click on `b` (each a part or a space by name) |
+| `hold min\|max [<length>] "<reason>"` | the hold card's fields (without a length, the distance as it is now) |
+| `hold try` | the hold card's "Try it" |
+| `remove` | Delete on the selection |
+| `include dependants` | the removal's dialog: remove them too |
+| `rename <name>` | the selected item's name retyped on its card |
+| `finder <text>` | Ctrl+K with the text typed (the finder stays open) |
+| `do <text>` | Ctrl+K, the text, Enter: the first verb the finder lists is run |
 
 ```
 tools/window-shot refused.png crates/stave-gtk/fixtures/door_hits_wall --edit-script tools/window-edits/door_refused.edit
@@ -129,6 +142,7 @@ forwards what people do.
 | `stave-app` | `problems` | The marks (`marks(checked)`: a `Mark` — error, warning or involved — per part or piece of hardware, per assembly and per file, for the dots), the problems grouped by part (`tree(checked, Filter)`), and a problem's `details` (eyebrow, plain title, the `stave check` text, `Fix`es, the `MotionCard`). |
 | `stave-app` | `finder` | The finder (`search(Sources, query)`): parts and assemblies, files and names (through `stave-ide`), lines of the project's own text and problems, grouped by `Kind`, each `Hit` with its `Goal` (select it, or open a place in the editor). |
 | `stave-app` | `focus`, `view` | Focus mode (its insert text with `steps`, `link` and `location`; `receives`), problems as rows, posing at a contact. |
+| `stave-app` | `spaces` | Which space an assembly fills, read from the model (`filled_spaces`: the region its component's first `Region` param is bound to), and the boundaries of a split with where a dragged one settles (`split_boundaries`, `SplitBoundary::settle`), for the window's How many, count handle and boundary handles. |
 | `stave-gtk` | `ui/mod.rs` | The window: owns the `Session`, dispatches commands, redraws on events, runs checks on a worker thread, lays out what floats over the 3D view (the card beside the part, the problem pins) and keeps what only the 3D view needs (camera, renderer, the looks, focus mode's scrub, the "Open it" slider). |
 | `stave-gtk` | `ui/header.rs`, `tree.rs`, `inspector.rs`, `chrome.rs` | The title bar (with the problems chip and the finder's field); the floating model tree; the card's pages (a part, a problem's details, focus mode); the motion bar and the Cut list's placeholder. |
 | `stave-gtk` | `ui/dock.rs`, `finder.rs` | The dock at the bottom of the 3D view (scene menu, Pull apart, X-ray, the motion slider, the moving assemblies' chips); the finder dialog (Ctrl+K). |
@@ -137,6 +151,7 @@ forwards what people do.
 | `stave-gtk` | `ui/files.rs`, `editor.rs`, `sideways.rs` | The rail of open files (a tab each, turned to read downward by `Sideways`, with its dot) and the editor's panel (the file's name, breadcrumbs, the uses panel, the footer); the editor (a GtkSourceView 5 with its gutter, tags, lenses, peek, hover card and search bar; the only file that knows it is a GtkSourceView). |
 | `stave-gtk` | `ui/edit_menu.rs`, `edit_card.rs`, `edit_demo.rs` | The editing menu for a selection and the card for a chosen candidate (below), drawn from `stave_app::edit`'s contract values; `edit_demo` shows them from the contract's fixture (`--edit-fixture`). |
 | `stave-gtk` | `ui/edit_view.rs`, `edit_writer.rs`, `edit_script.rs` | Editing on the real session: what the pointer lights and a click starts, the menu and the card drawn from `Session::edit` after each `EditEvent` and what is done on them sent as `EditCommand`s, the ghost; Add's writer through the editor's buffers; `--edit-script`. |
+| `stave-gtk` | `ui/edit_view/` | Beside `edit_view.rs`: `changes.rs` (a change's card and the removal's dialog), `item_tools.rs` (a selected item's changes on its card), `repeat_handles.rs` (the count stepper on a candidate's card, the count handle and the boundary handles), `hold.rs` (Hold this), `verbs.rs` (the finder's verbs), `editor_link.rs` (pending lines in the editor; editing off while the text doesn't read), `change_steps.rs` (their edit-script steps), `pointing.rs` (what a click binds). |
 | `stave-gtk` | `ui/new_project.rs` | The New Project dialog, writing with `stave_app::change::new_project_file`. |
 | `stave-gtk` | `ui/icons.rs`, `style.rs` | The design's icons drawn from SVG path data in the text colour; one stylesheet whose colours are all libadwaita's named colours (`@headerbar_bg_color`, `@sidebar_bg_color`, `@card_bg_color`, `@accent_bg_color`, `@success_color`, ...), so light and dark both come from it and follow the style manager the moment it changes; only the code block is dark in both. |
 
@@ -301,7 +316,8 @@ The 3D view fills the window; everything else floats over it
   in a space or in the gap between two facing parts opens the editing
   menu for it instead (see [Editing in the 3D view](#editing-in-the-3d-view)).
   F frames, Escape drops an edit in progress, else leaves focus or
-  clears the selection. The backdrop follows the style
+  clears the selection; Delete removes the selected item, naming first
+  what would go with it (see [Changing what is there](#changing-what-is-there)). The backdrop follows the style
   (#e8e5df light, #242428 dark, chosen when each frame is drawn and
   redrawn when the style changes). With something chosen the rest is
   drawn `Look::Dim` (still wood, half faded); with X-ray on, `Look::XRay`.
@@ -487,7 +503,8 @@ the session's.
   Add and Cancel all send the session's commands (`Rename`, `Set`,
   `ApplyFix`, `Add`, `Cancel`); what is typed is read with
   `editing::parse_value` and `parse_name`, and what can't be read is
-  said in a toast. A place param still unbound shows the contract's
+  said in a toast. A value too long for its entry is also said in full
+  under it. A place param still unbound shows the contract's
   prompt (`PlaceParam::prompt`, "Point at the side the hinges are screwed
   to."), and the next click on the model binds it (`Bind`), picked for
   what the param holds (`edit_view/pointing.rs`): a space wins over its
@@ -519,12 +536,138 @@ the session's.
 - Rejections (`EditEvent::Rejected`) are said in a toast, in the
   session's words.
 
-Not in the window yet (later tasks; the session can do them): grips,
-repeating by dragging, mirroring, holding a distance, removing, and
-renaming an item after it is added. The menu's `Repeat` and the
-changes (`RepeatItem`, `MoveShares`, `Mirror`, `Hold`, `Remove`,
-`RenameItem`) have no gesture yet; a change started some other way is
-drawn by the same card code only as far as its verdict goes.
+Grips are another lane's (the session's `ListGrips` and drags); the
+changes of the design below are in the window.
+
+### Changing what is there
+
+The changes of the design that don't come from the menu
+(`docs/editing.md`, "Changes of the design") each have a gesture, a
+control on a card, and a verb of the finder; all three call the same
+method of the window (`repeat_selected`, `mirror_selected`,
+`hold_from_selected`, `remove_selected`, `rename_selected`), which sends
+the session's command. Each change is tried at once and shown on **the
+change's card** (`edit_view/changes.rs`, in the card's place at the top
+right): what it does ("Make 3 of drawer"), what it found (the mirror's
+names, the rule a hold writes and its reason, what a removal takes, the
+files a rename rewrites), the verdict with the checker's problems and a
+button per fix, and Cancel and its commit button (Add, Hold, Remove,
+Rename). Its ghost is drawn as an edit's is, from `Change::ghost`; a
+removal is drawn on the design as it is, what would go see-through and
+red, since the candidate has nothing there to draw. Nothing is written
+before the commit button; Cancel (or Escape) leaves every file as it
+was. Once written, the window selects the item by its new name.
+
+- **A selected item's card** (`edit_view/item_tools.rs`): with a part, a
+  piece of hardware or an assembly selected, the card ends with "CHANGE
+  drawer": the item of the project it belongs to (its outermost assembly,
+  or the part itself, without its index: `drawer[top].front` changes
+  `drawer`) with its **name**, a `gtk::EditableLabel` (retyped, it sends
+  `RenameItem`); **How many**, a stepper with which way the pieces split
+  (stacked up, side by side, front to back; the way shows only for a
+  first repeat), which sends `RepeatItem`, shown when the item fills a
+  space of the design; **And the other side · adds apron_back**, a
+  switch, shown when `Session::mirror_offer` has an offer (worked out
+  once per item and result, since it reads the project): on, it sends
+  `Mirror`, and the change's card shows the same switch, on, which
+  cancels when turned off; **Hold a distance…** and **Remove…**.
+- **Repeat** (`edit_view/repeat_handles.rs`): the card of a candidate
+  that fills a space (a component with its `Region` bound) has the same
+  stepper above its buttons, sending `Repeat` (one piece is no repeat).
+  In the 3D view, a **count handle** (an accent pill "× 1") sits on the
+  space at the top (or right, or back) of its first piece, at the
+  space's left front edge; dragged toward
+  the start of the space it makes more pieces, each as long as the
+  handle marks, and back, fewer (at most 12); its label follows the
+  pointer and the repeat is tried when it is let go, so the ghost shows
+  every copy. A selected item that fills a space has the handle too
+  while it is one piece. Which space an item fills is read from the
+  model, not from the picture: the region its component's first `Region`
+  param is bound to (`stave_app::spaces::filled_spaces`, following `bay`,
+  `drawer_bay[same]`, `case.inside`); the same says whether How many shows
+  on its card. Whether a repeat fits is the session's to say.
+- **Shares**: with an item selected whose space is one piece of a split
+  (`drawer_bay[bottom]`), a **boundary handle** (an outlined pill with the
+  lower piece's size, "240.5 mm") sits in the middle of each boundary
+  between neighbours, on the front. The boundaries come from the session
+  (`stave_app::spaces::split_boundaries`, built on the grips' own
+  `grips::split_grips`): the region array, which pieces in label order,
+  their sizes and the axis. Dragged, the handle settles where
+  `SplitBoundary::settle` says: an even division of the two pieces, the
+  whole split's even size, or a round size (a whole 10 mm) when near one,
+  else a step of the project's `resolution:`; let go, it sends
+  `MoveShares`.
+- **Keeping clear of the panels**: a handle, the ghost's verdict pill and
+  a problem's pin are each moved, by the least distance, off any panel
+  floating over the 3D view that they would cover (the parts list, a
+  card, the menu, the dock, the line at the top, the editor's rail);
+  a verdict pill with no room left is hidden (the card says the verdict),
+  and a pin with no room is listed in the off-screen chip. A dragged
+  handle still measures from the point it stands for.
+- **Hold this** (`edit_view/hold.rs`): "Hold a distance…" on a part's
+  card (or "Hold a distance from this space…" at the foot of a space's
+  menu) asks, in the line at the top of the view, for the second thing;
+  the next click on a part or a space is it. **The hold card** then says
+  "divider.panel to case.top · It is 462mm now" (`Session::measure`, or
+  why it can't be measured), and asks At least or At most, the distance
+  (starting at the distance now) and why (the rule's message); "Try it"
+  sends `Hold`, and the change's card shows the rule. An assembly is not
+  measured: its card says to pick one of its parts.
+- **Remove**: Delete (or "Remove…") on a selected item sends `Remove`.
+  When other things use it, **a dialog** in the middle of the view, over
+  a dimmed backdrop, names each ("These use divider, and can't stay
+  without it: • drawer_bay • drawer") and offers Cancel or "Remove
+  divider and all 2" (`IncludeDependants`); the change's card lists them
+  too. Either way nothing goes until Remove on the card, after the red
+  ghost shows what goes. (The dialog is part of the window rather than
+  an `AdwDialog`, which the window's screenshot didn't draw when it was
+  opened by an edit script.)
+- **Rename**: the name on the item's card, retyped (`RenameItem`).
+
+### The finder's verbs
+
+The finder (Ctrl+K) lists, before what it finds, under "DO · Enter does
+it", what a verb typed in it would do (`edit_view/verbs.rs`, through
+`Finder::connect_actions` and `connect_action`); Enter runs the first.
+"add shelf" (or "add hanging rail", "add casework.drawer") with a space's
+menu open lists each entry whose label holds the words, and runs the
+same `Choose` a click on it sends; with a part selected and no menu, it
+starts the edit for the face last clicked on it (else for the part) and
+chooses the first entry that matches, or says nothing called that goes
+there. "remove" (or "delete"), "rename <name>" (bare: the name field on
+the card), "repeat 3 across" (or "make 3"), "mirror" (or "other side")
+and "hold" do what the card's controls do. With nothing selected, it
+says to select something first.
+
+### The text while editing in 3D
+
+While an edit or a change is in progress and the editor is open
+(`edit_view/editor_link.rs`), the lines its patch would write show at
+the top of the editor's panel as **pending**, from the last try
+(`Tried::changed` against the text the editor holds): "PENDING · Add
+writes this to small_chest.stave, line 39", each inserted line marked
+"+", each removed one "−" struck through, and a line whose word or value
+changed shown in place, old struck through and new after it
+(`panel_stock: oak_19 → maple_12`); a line whose only change is its
+spaces (the formatter lining up a run of declarations again) shows "≈"
+and says so. The lines are compared by a line diff
+(`stave_lang::changed_line_runs`, the one patches use), so a change in
+several places shows each place under its own "line 13", "line 31", and
+the head says "This change changes small_chest.stave in 2 places, from
+line 13"; the lines between the places are neither shown nor marked.
+The editor goes to the first place, and in the text itself only the old
+lines each place replaces are struck through. A rename alone, tried
+without a patch, shows each line of the files it rewrites with the name
+changed as a word. They go when the edit is cancelled or added.
+
+**While the text doesn't read** (an error of layer 1, a syntax error, in
+one of the project's files, as the editor's analysis has it), editing in
+the 3D view is off: a click in a space or a gap, the item's changes,
+Delete and the finder's verbs start nothing, and a line low in the view,
+just above the dock and wrapped, says why ("Editing in 3D is off while
+small_chest.stave doesn't read: expected end of line, found 'space'. Fix
+the text first."); it stands there, not at the top, so it covers neither
+the parts list nor a card.
 
 ### A new project
 
@@ -544,9 +687,10 @@ missing is said under the fields.
 A project with spaces but no parts yet (however it was opened) is drawn,
 not shown as "No parts yet": the camera frames its spaces (a scene with
 no nodes has no bounds of its own), every space is lit until an edit
-starts, the same line asks for the first click, and a click in the box
-opens the menu "In this space" (`new_project_opened.png`,
-`new_project_menu.png`).
+starts, the same line asks for the first click, the model tree says "No
+parts yet. Click inside the box to add the first piece." rather than
+"Nothing to show yet", and a click in the box opens the menu "In this
+space" (`new_project_opened.png`, `new_project_menu.png`).
 
 ### Pictures
 
@@ -566,6 +710,26 @@ envelope drawn and lit, waiting for the first click) and
 scripts point at the hinge side with `point`, as the pointer would. The
 door is `crates/stave-gtk/fixtures/door_hits_wall`; the small chest is
 made by `stave edit --script tools/window-edits/small_chest.script`.
+
+The changes, on the small chest with a divider and two drawers
+(`chest_drawers.script`) and the side table as far as its front apron
+(`table_apron.script`): `edit_item_card.png` (a drawer's card with its
+changes, the boundary handle between the drawer bays),
+`edit_repeat_card.png` (a drawer chosen for a space, the count handle
+dragged to × 3, every copy in the ghost), `edit_repeat_item.png` (the
+drawers made three from their card), `edit_shares_dark.png` (the
+boundary moved to 180mm), `edit_mirror_offer.png` and `edit_mirror.png`
+(the apron's "And the other side", then on), `edit_hold_card.png` and
+`edit_hold.png` (the hold card, then the rule tried),
+`edit_remove_dialog.png` and `edit_remove.png` (the dialog naming what
+goes, then what goes in red), `edit_rename_editor.png` (a rename pending
+in the text), `edit_finder_verbs.png` and `edit_finder_add.png` (the
+finder's "repeat 3", and "add shelf" opening Shelf's card),
+`edit_pending_editor.png` (a shelf's lines pending in the editor),
+`edit_pending_two_places.png` (the drawers made three with the editor
+open: two places pending, the bays' line and the drawers' line, and the
+envelope's line lined up again) and `edit_text_broken.png` (a brace
+typed: editing in 3D off, and why).
 
 ### The widgets
 
@@ -635,11 +799,10 @@ colours) are a stylesheet in `edit_card.rs`, installed once per display.
 
 ## Slots for the next lanes
 
-- **Grips, repeat, mirror, hold, remove**: the session's changes
-  (`EditCommand::RepeatItem` and the rest) are drawn by the edit view's
-  card code and ghost once started; each needs its gesture (a grip in
-  the 3D view, a button on the card) in `ui/edit_view.rs` or a file of
-  its own.
+- **Grips**: the session's grips and drags (`ListGrips`, `BeginDrag`,
+  `DragTo`) need their gesture in the 3D view; a drag started some
+  other way is drawn by the change's card (`edit_view/changes.rs`) as
+  far as its summary, what changes and its verdict go.
 
 - **The editor**: built; see "The editor" below. "Show in text" in a
   problem's details and the joint kind's link in focus mode send

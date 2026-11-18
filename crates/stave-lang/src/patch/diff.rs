@@ -61,6 +61,17 @@ pub(super) fn text_edits(old: &str, new: &str) -> Vec<TextEdit> {
     edits
 }
 
+/// The runs of lines that differ between two texts, in order, as (old
+/// lines, new lines) counted from 0 and without their line endings: what an
+/// editor shows as pending before a patch is written. Each run is a place
+/// the texts differ; lines the two share between places are in no run.
+/// Empty when the texts have the same lines.
+pub fn changed_line_runs(old: &str, new: &str) -> Vec<(Range<usize>, Range<usize>)> {
+    let old_lines: Vec<&str> = old.lines().collect();
+    let new_lines: Vec<&str> = new.lines().collect();
+    changed_runs(&old_lines, &new_lines)
+}
+
 /// The byte offset where each line starts, and the end of the text last.
 fn starts(lines: &[&str]) -> Vec<usize> {
     let mut starts = Vec::with_capacity(lines.len() + 1);
@@ -292,5 +303,13 @@ mod tests {
             },
         ];
         assert_eq!(apply_text_edits("abc", &edits), None);
+    }
+
+    #[test]
+    fn changed_line_runs_are_each_place_apart() {
+        let old = "a\nb\nc\nd\ne\n";
+        let new = "A\nb\nc\nD\nnew\ne\n";
+        assert_eq!(changed_line_runs(old, new), [(0..1, 0..1), (3..4, 3..5)]);
+        assert!(changed_line_runs(old, old).is_empty());
     }
 }

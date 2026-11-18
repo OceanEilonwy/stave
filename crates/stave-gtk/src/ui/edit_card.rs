@@ -576,6 +576,16 @@ impl EditCard {
                     "{}: needs a choice before it can be tried",
                     setting.ty.word()
                 )
+            } else if value
+                .as_ref()
+                .is_some_and(|value| value.chars().count() > 16)
+            {
+                // A long value doesn't fit its entry: it is said in full.
+                format!(
+                    "{} · {source}: {}",
+                    setting.ty.word(),
+                    value.as_deref().unwrap_or_default()
+                )
             } else {
                 format!("{} · {source}", setting.ty.word())
             },

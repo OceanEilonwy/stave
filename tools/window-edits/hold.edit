@@ -1,0 +1,8 @@
+# Hold a distance: from the divider's panel, the second thing clicked is
+# the case's top; the card offers the distance as it is now, a minimum,
+# and the reason typed.
+pick divider.panel
+hold divider.panel to case.top
+hold min "room for the drawers"
+# Try it: the rule is tried as a change, and fits.
+hold try
