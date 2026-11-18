@@ -32,6 +32,7 @@ mod slider;
 mod style;
 mod tab_strip;
 mod tree;
+mod view_layout;
 mod view_tools;
 mod viewport;
 mod workbench;
@@ -95,9 +96,6 @@ const FRONT_PITCH: f32 = 0.12;
 /// How long hardware focus's small views wait for their size to settle
 /// before rendering again at it.
 const PICTURES_DELAY: Duration = Duration::from_millis(150);
-
-/// The space kept clear round what sits on the 3D view, in logical pixels.
-const EDGE: i32 = 14;
 
 /// The most problems pinned on the model at once.
 const PIN_LIMIT: usize = 12;
@@ -401,6 +399,16 @@ struct Widgets {
     pictures: Pictures,
     problem_card: ProblemCard,
     files: Rc<FilesPage>,
+}
+
+impl Widgets {
+    /// Offers the view's everyday controls (the scene menu, X-ray, Pull
+    /// apart and the moving assemblies' chips), or takes them away while
+    /// a problem is posed or a joint is in focus.
+    fn offer_view_tools(&self, offered: bool) {
+        self.dock.offer(offered);
+        self.view_toolbar.offer(offered);
+    }
 }
 
 struct Window {
@@ -750,7 +758,7 @@ impl Window {
             self.dispatch(Command::ShowView(wanted.view));
         }
         if wanted.xray {
-            self.widgets.dock.xray.set_active(true);
+            self.widgets.view_toolbar.xray.set_active(true);
         }
         if wanted.editor && wanted.file.is_none() {
             self.dispatch(Command::ShowEditor(Editor::Open));
@@ -1165,7 +1173,7 @@ impl Window {
             .root
             .set_visible(focus.is_some_and(|f| f.focus.plan().is_some()));
         widgets.camera.root.set_visible(focus.is_none());
-        widgets.dock.root.set_visible(focus.is_none());
+        widgets.offer_view_tools(focus.is_none());
         drop(state);
         self.show_caption();
     }
@@ -1729,7 +1737,7 @@ impl Window {
         let shared = problem.is_some_and(|(_, _, shared)| shared);
         let focused = self.state.borrow().focus.is_some();
         widgets.contact_key.set_visible(shared && !focused);
-        widgets.dock.root.set_visible(!posed && !focused);
+        widgets.offer_view_tools(!posed && !focused);
         if !posed && !focused {
             self.show_hint("");
         }
@@ -1782,7 +1790,7 @@ impl Window {
             None => {
                 self.widgets.problem_card.show(None, 0.0);
                 self.widgets.contact_key.set_visible(shared);
-                self.widgets.dock.root.set_visible(false);
+                self.widgets.offer_view_tools(false);
                 if shared {
                     self.show_hint("Posed at contact");
                 }
@@ -2771,7 +2779,7 @@ impl Window {
             }
         });
         let window = self.clone();
-        widgets.dock.xray.connect_toggled(move |button| {
+        widgets.view_toolbar.xray.connect_toggled(move |button| {
             window.state.borrow_mut().xray = button.is_active();
             window.request_render();
         });
@@ -3362,38 +3370,82 @@ fn build_widgets(application: &adw::Application, options: &Options) -> Result<Wi
     );
     let header = Header::new(&folder_name, &main_menu());
 
-    // The 3D view and what belongs to it: the camera buttons as small
-    // buttons on the view's corner; the shared-wood key, focus mode's From
-    // above / In 3D switch, a joint's step player and a problem's motion
-    // card in the tool strip along its foot (below).
+    // The 3D view, its controls floating on it (`view_layout` keeps them
+    // apart): the scene menu at the top left; the camera buttons, X-ray
+    // and Pull apart down the top right, Pull apart's slider popping out
+    // to the left of its button; a short line and the shared-wood key
+    // along the top; the moving assemblies' chips at the bottom left and
+    // the selection's motion slider at the bottom right; a joint's step
+    // player, a problem's motion card and the off-screen chip above the
+    // foot, in the middle; focus mode's From above / In 3D switch at the
+    // top right.
     let viewport = Viewport::default();
     let motion = MotionBar::new();
     let view_toolbar = ViewToolbar::new();
-    let camera = CameraToolbar::new();
-    camera.root.set_halign(gtk::Align::End);
-    camera.root.set_valign(gtk::Align::Start);
-    camera.root.set_margin_top(EDGE);
-    camera.root.set_margin_end(EDGE);
+    let camera = CameraToolbar::new(&view_toolbar);
     let contact_key = view_tools::contact_key();
     let plan_switch = PlanSwitch::new();
     let step_card = StepCard::new();
     let problem_card = ProblemCard::new();
-    // Made to float over the view, they now sit in the strip's flow.
-    for widget in [
-        contact_key.upcast_ref::<gtk::Widget>(),
-        plan_switch.root.upcast_ref(),
-        step_card.root.upcast_ref(),
-        problem_card.root.upcast_ref(),
-    ] {
-        in_flow(widget);
-    }
+    let dock = Dock::new(&header.scene, &motion);
+    let hint = gtk::Label::builder()
+        .xalign(0.0)
+        .wrap(true)
+        .max_width_chars(48)
+        .build();
+    let hint_box = gtk::Box::builder()
+        .css_classes(["stave-chip"])
+        .visible(false)
+        .build();
+    hint_box.append(&hint);
+    let edge_label = gtk::Label::new(None);
+    edge_label.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    edge_label.set_max_width_chars(60);
+    let edge_content = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    edge_content.append(&gtk::Image::from_icon_name("go-down-symbolic"));
+    edge_content.append(&edge_label);
+    let edge_pin = gtk::Button::builder()
+        .child(&edge_content)
+        .css_classes(["stave-edge-pin"])
+        .action_name("win.show-problem")
+        .tooltip_text("Show the problem off screen")
+        .visible(false)
+        .build();
     let figure = gtk::Overlay::builder()
         .child(&viewport)
         .vexpand(true)
         .overflow(gtk::Overflow::Hidden)
         .css_classes(["stave-viewport", "stave-figure"])
         .build();
-    figure.add_overlay(&camera.root);
+    let floating: Vec<(view_layout::Floating, gtk::Widget)> = vec![
+        (view_layout::Floating::Camera, camera.root.clone().upcast()),
+        (
+            view_layout::Floating::PullSlider,
+            view_toolbar.popout.clone().upcast(),
+        ),
+        (
+            view_layout::Floating::PlanSwitch,
+            plan_switch.root.clone().upcast(),
+        ),
+        (view_layout::Floating::Scene, dock.scene.clone().upcast()),
+        (view_layout::Floating::Hint, hint_box.clone().upcast()),
+        (
+            view_layout::Floating::ContactKey,
+            contact_key.clone().upcast(),
+        ),
+        (view_layout::Floating::Moves, dock.moves.clone().upcast()),
+        (view_layout::Floating::Motion, motion.root.clone().upcast()),
+        (
+            view_layout::Floating::StepCard,
+            step_card.root.clone().upcast(),
+        ),
+        (
+            view_layout::Floating::ProblemCard,
+            problem_card.root.clone().upcast(),
+        ),
+        (view_layout::Floating::EdgePin, edge_pin.clone().upcast()),
+    ];
+    float_on(&figure, floating);
     // Hardware focus lays the view out as a page (Hinge.dc.html): a line
     // over it, three small views and the swing card under it.
     let caption = Caption::new();
@@ -3427,57 +3479,15 @@ fn build_widgets(application: &adw::Application, options: &Options) -> Result<Wi
     let file_list = panels::FilesList::new();
     let problems = panels::ProblemsPanel::new();
 
-    // Over the view only what belongs on the model: the chip naming a
-    // problem off screen (the pins come later).
-    let hint = gtk::Label::builder().xalign(0.0).wrap(true).build();
-    let hint_box = gtk::Box::builder()
-        .css_classes(["stave-controls-hint"])
-        .visible(false)
-        .build();
-    hint_box.append(&hint);
-    let edge_label = gtk::Label::new(None);
-    edge_label.set_ellipsize(gtk::pango::EllipsizeMode::End);
-    edge_label.set_max_width_chars(60);
-    let edge_content = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-    edge_content.append(&gtk::Image::from_icon_name("go-down-symbolic"));
-    edge_content.append(&edge_label);
-    let edge_pin = gtk::Button::builder()
-        .child(&edge_content)
-        .css_classes(["stave-edge-pin"])
-        .halign(gtk::Align::Center)
-        .valign(gtk::Align::End)
-        .margin_bottom(EDGE)
-        .action_name("win.show-problem")
-        .tooltip_text("Show the problem off screen")
-        .visible(false)
-        .build();
+    // The 3D View panel: the view, with the problems pinned on the model
+    // (they come later) over it.
     let design = gtk::Overlay::builder()
         .child(&view_stack)
         .hexpand(true)
         .vexpand(true)
         .overflow(gtk::Overflow::Hidden)
         .build();
-    design.add_overlay(&edge_pin);
-    // The view's tools in a strip along its foot, part of the 3D View
-    // panel (no header of their own; they go where the view goes): they
-    // wrap onto more rows, or stack, as the panel narrows.
-    let dock = Dock::new(&header.scene, &view_toolbar, &motion);
-    dock.root.append(&plan_switch.root);
-    dock.root.append(&contact_key);
-    let tools = gtk::Box::builder()
-        .orientation(gtk::Orientation::Vertical)
-        .spacing(8)
-        .css_classes(["stave-controls"])
-        .build();
-    tools.append(&hint_box);
-    tools.append(&dock.root);
-    tools.append(&problem_card.root);
-    tools.append(&step_card.root);
-    let view_panel = gtk::Box::builder()
-        .orientation(gtk::Orientation::Vertical)
-        .build();
-    view_panel.append(&design);
-    view_panel.append(&tools);
+    let view_panel = design.clone();
 
     let workbench = workbench::Workbench::new(
         vec![
@@ -3535,10 +3545,10 @@ fn build_widgets(application: &adw::Application, options: &Options) -> Result<Wi
 
     // Narrower windows drop words first, then the finder's field (Ctrl+K
     // still opens it), the title, the open button and forward.
-    for (width, tiny) in [(1100.0, false), (860.0, false), (600.0, true)] {
+    for (width, tiny) in [(1200.0, false), (1100.0, false), (600.0, true)] {
         let narrow = breakpoint(width);
         narrow.add_setter(header.subtitle(), "visible", Some(&false.to_value()));
-        if width < 1000.0 {
+        if width < 1150.0 {
             for label in header.switcher_labels() {
                 narrow.add_setter(label, "visible", Some(&false.to_value()));
             }
@@ -3595,15 +3605,61 @@ fn build_widgets(application: &adw::Application, options: &Options) -> Result<Wi
     })
 }
 
-/// Takes a widget made to float over the 3D view (aligned to a corner,
-/// with margins) into a panel's flow.
-fn in_flow(widget: &gtk::Widget) {
-    widget.set_halign(gtk::Align::Fill);
-    widget.set_valign(gtk::Align::Center);
-    widget.set_margin_top(0);
-    widget.set_margin_bottom(0);
-    widget.set_margin_start(0);
-    widget.set_margin_end(0);
+/// Floats the controls on the 3D view, each where `view_layout` puts it
+/// for the view's size and what is showing, so none covers another.
+fn float_on(figure: &gtk::Overlay, floating: Vec<(view_layout::Floating, gtk::Widget)>) {
+    for (_, widget) in &floating {
+        // The layout gives each its exact place: no margins of its own.
+        widget.set_halign(gtk::Align::Fill);
+        widget.set_valign(gtk::Align::Fill);
+        widget.set_margin_top(0);
+        widget.set_margin_bottom(0);
+        widget.set_margin_start(0);
+        widget.set_margin_end(0);
+        figure.add_overlay(widget);
+    }
+    let measured = Measured(floating);
+    figure.connect_get_child_position(move |figure, widget| {
+        let item = measured.item_of(widget)?;
+        let placement = view_layout::place(figure.width(), figure.height(), &measured);
+        // A control left out (hidden, or no room) takes no room either,
+        // so it can't catch the pointer meant for the view.
+        let rect = placement.get(item).unwrap_or(view_layout::Rect {
+            x: 0,
+            y: 0,
+            width: 0,
+            height: 0,
+        });
+        Some(gdk::Rectangle::new(rect.x, rect.y, rect.width, rect.height))
+    });
+}
+
+/// The floating controls, measured by GTK.
+struct Measured(Vec<(view_layout::Floating, gtk::Widget)>);
+
+impl Measured {
+    fn widget(&self, item: view_layout::Floating) -> Option<&gtk::Widget> {
+        self.0.iter().find(|(i, _)| *i == item).map(|(_, w)| w)
+    }
+
+    fn item_of(&self, widget: &gtk::Widget) -> Option<view_layout::Floating> {
+        self.0.iter().find(|(_, w)| w == widget).map(|(i, _)| *i)
+    }
+}
+
+impl view_layout::Measure for Measured {
+    fn widths(&self, item: view_layout::Floating) -> Option<(i32, i32)> {
+        let widget = self.widget(item).filter(|w| w.is_visible())?;
+        let (smallest, natural, _, _) = widget.measure(gtk::Orientation::Horizontal, -1);
+        (natural > 0).then_some((smallest, natural))
+    }
+
+    fn height(&self, item: view_layout::Floating, width: i32) -> i32 {
+        self.widget(item).map_or(0, |widget| {
+            let (_, natural, _, _) = widget.measure(gtk::Orientation::Vertical, width);
+            natural
+        })
+    }
 }
 
 /// A breakpoint for windows at most `width` sp wide.

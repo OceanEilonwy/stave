@@ -1,9 +1,11 @@
 //! The 3D view's floating controls (Main.dc.html, Exploded.dc.html): the
-//! view toolbar at the top left ("Pull apart", which grows a play button
-//! and a "together … apart" slider while it is on), the camera buttons at
-//! the top right (fit, front view, turn to the back), the "Shared wood at
-//! first contact" key shown while a problem is posed, and focus mode's
-//! "From above" / "In 3D" switch.
+//! column of buttons at the top right (fit, front view, turn to the back,
+//! then X-ray and Pull apart, whose play button and "together … apart"
+//! slider pop out to its left while it is on), the "Shared wood at first
+//! contact" key shown while a problem is posed, and focus mode's "From
+//! above" / "In 3D" switch. `view_layout` says where each one goes.
+
+use std::cell::Cell;
 
 use adw::prelude::*;
 
@@ -21,36 +23,55 @@ fn icon_button(shape: icons::Shape, label: &str, classes: &[&str]) -> gtk::Butto
     button
 }
 
-/// The view toolbar at the top left: "Pull apart", and while it is on a
-/// play button and the "together … apart" slider.
+/// An icon button that stays pressed while its tool is on.
+fn icon_toggle(shape: icons::Shape, label: &str, tooltip: &str) -> gtk::ToggleButton {
+    let button = gtk::ToggleButton::builder()
+        .child(&PathIcon::new(shape, 16))
+        .tooltip_text(tooltip)
+        .css_classes(["stave-camera-button", "flat"])
+        .build();
+    button.update_property(&[gtk::accessible::Property::Label(label)]);
+    button
+}
+
+/// The view's own tools, in the camera column: X-ray and Pull apart, and
+/// while Pull apart is on its play button and "together … apart" slider,
+/// popping out to the left of its button.
 pub struct ViewToolbar {
-    /// The toolbar, to overlay on the view.
-    pub root: gtk::Box,
+    /// See through everything but the selection.
+    pub xray: gtk::ToggleButton,
     /// Pull apart, on or off.
     pub pull: gtk::ToggleButton,
+    /// The play button and the slider, floating beside Pull apart while
+    /// it is on.
+    pub popout: gtk::Box,
     /// Plays the pulling apart from together to apart.
     pub play: gtk::Button,
     play_icon: PathIcon,
     /// How far apart, 0 to 1.
     pub slider: Slider,
-    extra: gtk::Box,
+    /// X-ray and Pull apart with the line above them, for the camera
+    /// column.
+    section: gtk::Box,
+    /// Pull apart is on.
+    on: Cell<bool>,
+    /// The tools are offered (not while a problem is posed).
+    offered: Cell<bool>,
 }
 
 impl ViewToolbar {
-    /// The toolbar, off.
+    /// The tools, off.
     pub fn new() -> ViewToolbar {
-        let content = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-        content.append(&PathIcon::new(icons::PULL_APART, 16));
-        content.append(&gtk::Label::new(Some("Pull apart")));
-        let pull = gtk::ToggleButton::builder()
-            .child(&content)
-            .tooltip_text("Pull the parts apart along their joints")
-            .css_classes(["stave-tool"])
-            .build();
-        let separator = gtk::Separator::builder()
-            .orientation(gtk::Orientation::Vertical)
-            .css_classes(["stave-tool-separator"])
-            .build();
+        let xray = icon_toggle(
+            icons::XRAY,
+            "X-ray",
+            "X-ray: see through everything but the selection",
+        );
+        let pull = icon_toggle(
+            icons::PULL_APART,
+            "Pull apart",
+            "Pull apart: move the parts away from each other along their joints",
+        );
         let play_icon = PathIcon::new(icons::PLAY, 13);
         let play = gtk::Button::builder()
             .child(&play_icon)
@@ -79,42 +100,52 @@ impl ViewToolbar {
         let column = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
             .spacing(2)
-            .width_request(240)
+            .hexpand(true)
+            .width_request(200)
             .css_classes(["stave-tool-slider"])
             .build();
         column.append(&slider.root);
         column.append(&ends);
-        let extra = gtk::Box::new(gtk::Orientation::Horizontal, 4);
-        extra.append(&separator);
-        extra.append(&play);
-        extra.append(&column);
-        extra.set_visible(false);
-        let root = gtk::Box::builder()
+        let popout = gtk::Box::builder()
             .orientation(gtk::Orientation::Horizontal)
             .spacing(4)
-            .halign(gtk::Align::Start)
-            .valign(gtk::Align::Start)
-            .margin_top(12)
-            .margin_start(12)
-            .css_classes(["stave-toolbar"])
-            .name("view-toolbar")
+            .css_classes(["stave-camera", "stave-pull-popout"])
+            .name("pull-apart-slider")
+            .visible(false)
             .build();
-        root.append(&pull);
-        root.append(&extra);
+        popout.update_property(&[gtk::accessible::Property::Label("Pull apart")]);
+        popout.append(&play);
+        popout.append(&column);
+        let section = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .spacing(4)
+            .build();
+        section.append(
+            &gtk::Separator::builder()
+                .orientation(gtk::Orientation::Horizontal)
+                .css_classes(["stave-camera-separator"])
+                .build(),
+        );
+        section.append(&xray);
+        section.append(&pull);
         ViewToolbar {
-            root,
+            xray,
             pull,
+            popout,
             play,
             play_icon,
             slider,
-            extra,
+            section,
+            on: Cell::new(false),
+            offered: Cell::new(true),
         }
     }
 
-    /// Shows the toolbar on (with its slider at `amount`) or off.
+    /// Shows Pull apart on (with its slider at `amount`) or off.
     pub fn show(&self, on: bool, amount: f32, playing: bool) {
+        self.on.set(on);
         self.pull.set_active(on);
-        self.extra.set_visible(on);
+        self.popout.set_visible(on && self.offered.get());
         self.slider.set_value(f64::from(amount));
         self.slider
             .set_value_text(&format!("{}%, parts apart", percent(amount)));
@@ -126,6 +157,14 @@ impl ViewToolbar {
             "Play: pull apart from together"
         }));
     }
+
+    /// Offers the tools, or takes them away while a problem is posed or
+    /// a joint is in focus.
+    pub fn offer(&self, offered: bool) {
+        self.offered.set(offered);
+        self.section.set_visible(offered);
+        self.popout.set_visible(offered && self.on.get());
+    }
 }
 
 /// An explode amount as a whole percentage.
@@ -135,9 +174,10 @@ pub fn percent(amount: f32) -> i32 {
     crate::convert::int_of_f32(percent)
 }
 
-/// The camera buttons at the top right.
+/// The column of buttons at the top right of the view: fit, front view
+/// and turn to the back, then X-ray and Pull apart.
 pub struct CameraToolbar {
-    /// The toolbar, to overlay on the view.
+    /// The column, to float on the view.
     pub root: gtk::Box,
     /// Frames everything (or the selection).
     pub fit: gtk::Button,
@@ -148,8 +188,8 @@ pub struct CameraToolbar {
 }
 
 impl CameraToolbar {
-    /// The buttons.
-    pub fn new() -> CameraToolbar {
+    /// The buttons, with the view's own tools at the foot.
+    pub fn new(tools: &ViewToolbar) -> CameraToolbar {
         let fit = icon_button(
             icons::FIT,
             "Fit to view (F)",
@@ -164,16 +204,25 @@ impl CameraToolbar {
         let root = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
             .spacing(4)
-            .halign(gtk::Align::End)
-            .valign(gtk::Align::Start)
-            .margin_top(14)
-            .margin_end(14)
             .css_classes(["stave-camera"])
             .name("camera-toolbar")
             .build();
         root.append(&fit);
         root.append(&front);
         root.append(&turn);
+        root.append(&tools.section);
+        // While Pull apart's slider pops out beside its button, the
+        // column's corner meets it square.
+        let column = root.downgrade();
+        tools.popout.connect_visible_notify(move |popout| {
+            if let Some(column) = column.upgrade() {
+                if popout.is_visible() {
+                    column.add_css_class("joined");
+                } else {
+                    column.remove_css_class("joined");
+                }
+            }
+        });
         CameraToolbar {
             root,
             fit,
