@@ -3,9 +3,10 @@ source: crates/stave-app/tests/fit.rs
 expression: "rendered(\"tests/broken/knob_hits_door\")"
 ---
 error[motion]: door_r.panel hits door_l.handle's knob when door_r is opened past 106.8deg
-   --> tests/broken/knob_hits_door/project.stave:106:15
+   --> tests/broken/knob_hits_door/project.stave:107:15
     |
-106 |   mount:      overlay(left: 8mm, right: 16mm, bottom: 16mm)
+107 |   mount:      overlay(left: 8mm, right: 16mm, bottom: 16mm)
     |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
     = note: the hinges open to 110deg
     = help: open door_r no further than 106.8deg (give its hardware's kind a smaller range), or move door_l.handle's knob out of its way
+    = fix: patch "Open no further than 106.8deg" { set Door.hinges.opening_angle = 106.8deg }

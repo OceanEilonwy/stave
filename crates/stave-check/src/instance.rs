@@ -13,10 +13,10 @@ use std::collections::BTreeMap;
 
 use stave_geom::collide::Overlap;
 use stave_lang::ast::Span;
-use stave_lang::placement::Direction;
+use stave_lang::placement::{Axis, Direction};
 use stave_lang::{Code, Diagnostic, FileId, Label, Severity};
 use stave_model::defs::AssemblyKind;
-use stave_model::solved::{AssemblyId, WorldBox};
+use stave_model::solved::{AssemblyId, PartOrigin, WorldBox};
 use stave_model::types::Ty;
 
 use crate::names::{length_text, list};
@@ -84,6 +84,44 @@ impl Checker<'_> {
             }
         }
         assembly
+    }
+
+    /// A world direction at a mirrored assembly, as it is at the
+    /// assembly it is the image of ([`Self::mirror_root`]): each mirror
+    /// between them reverses the direction across its plane. The plane is
+    /// read from the frames of the parts, an image's frame being its
+    /// source's reflected through it. The direction itself for an
+    /// assembly that is no one's image.
+    pub(crate) fn at_mirror_root(
+        &self,
+        mut assembly: AssemblyId,
+        direction: Direction,
+    ) -> Direction {
+        let mut direction = direction;
+        for _ in 0..self.design.assemblies.len() {
+            let Some(found) = self.design.assemblies.get(assembly.index()) else {
+                break;
+            };
+            let Some(source) = found.mirror_of else {
+                break;
+            };
+            let axis = found.parts.iter().find_map(|id| {
+                let part = self.design.part(*id)?;
+                let PartOrigin::MirroredAssembly { source } = part.origin else {
+                    return None;
+                };
+                let image = part.pose.orientation;
+                let source = self.design.part(source)?.pose.orientation;
+                Axis::ALL
+                    .into_iter()
+                    .find(|axis| source.mirrored(*axis) == image)
+            });
+            if axis == Some(direction.axis()) {
+                direction = direction.opposite();
+            }
+            assembly = source;
+        }
+        direction
     }
 
     /// Where an instance is placed: its `Mount` argument, or its name.

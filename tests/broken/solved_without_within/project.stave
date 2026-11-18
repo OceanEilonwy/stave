@@ -1,5 +1,4 @@
 // expect: error[missing-field] solved param 'overall_width' is missing 'within'
-// pending: the parser reads 'solved param'; the check that it has a 'within' is not built yet
 stave 1
 
 project "Solved without a range" {

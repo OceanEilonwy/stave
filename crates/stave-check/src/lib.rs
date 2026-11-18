@@ -70,6 +70,7 @@
 #![warn(missing_docs)]
 
 mod explain;
+mod fixes;
 mod held;
 mod instance;
 mod models;

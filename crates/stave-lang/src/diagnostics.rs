@@ -276,7 +276,10 @@ codes! {
     NotSupported = "not-supported", layer 2;
     /// Warning: `this cut has no name, so messages will call it "a <slot>"`
     UnnamedCut = "unnamed-cut", layer 2;
-    /// `no part is placed with 'ground'`
+    /// `nothing is the root: no part is placed with 'ground' and no region
+    /// is made with 'box'`, or two roots (`'<a>' and '<b>' are both placed
+    /// with 'ground'`), a root inside a component, or `box(...)` that isn't
+    /// the whole value of a region
     Ground = "ground", layer 3;
     /// `<item>: position along '<axis>' is not set`
     AxisNotSet = "axis-not-set", layer 3;

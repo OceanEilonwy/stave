@@ -392,6 +392,68 @@ impl<'a> Resolver<'a> {
         self.report(Diagnostic::error(code, message, Label::new(file, span)).with_help(help));
     }
 
+    /// The checks on a param's kind (grammar, "Param kinds"): `locked` and
+    /// `solved` need a default and a quantity type, and `solved` needs a
+    /// `within`. One error at most, the missing default first. `reported`
+    /// is `true` when a missing default is reported elsewhere (a module
+    /// param must have one), so it isn't reported twice.
+    pub(crate) fn check_param_kind(
+        &mut self,
+        file: FileId,
+        param: &ast::Param,
+        ty: &Ty,
+        has_default: bool,
+        reported: bool,
+    ) {
+        let Some(mark) = &param.mark else {
+            return;
+        };
+        let word = mark.value.word();
+        let name = param.name.as_str();
+        if !has_default {
+            if !reported {
+                self.report(
+                    Diagnostic::error(
+                        Code::MissingValue,
+                        format!("'{name}' has no value"),
+                        Label::new(file, param.name.span()),
+                    )
+                    .with_note(format!("a {word} param needs a default"))
+                    .with_help(format!(
+                        "give it a default ({word} param {name} = ...), or remove '{word}'"
+                    )),
+                );
+            }
+            return;
+        }
+        if !ty.is_quantity() {
+            if *ty != Ty::Unknown {
+                self.error_help(
+                    Code::TypeMismatch,
+                    format!(
+                        "'{word}' needs a length, an angle, a ratio or a count, found {}",
+                        ty.description()
+                    ),
+                    file,
+                    mark.span,
+                    format!("only a size or a number can be {word}; remove '{word}'"),
+                );
+            }
+            return;
+        }
+        if mark.value == ast::ParamMark::Solved && param.within.is_none() {
+            self.error_help(
+                Code::MissingField,
+                format!("solved param '{name}' is missing 'within'"),
+                file,
+                param.name.span(),
+                format!(
+                    "give it the values the solver may choose from (solved param {name} = ... within <lowest>..<highest>), or remove 'solved'"
+                ),
+            );
+        }
+    }
+
     fn finish(mut self) -> (Defs, Vec<Diagnostic>) {
         fn take<T>(arena: Vec<Option<T>>) -> Vec<T> {
             arena.into_iter().flatten().collect()
@@ -417,6 +479,7 @@ impl<'a> Resolver<'a> {
             recipes: take(out.recipes),
             components: take(out.components),
             scenes: take(out.scenes),
+            sources: reuse::root_sources(self.modules),
         };
         let mut diagnostics = self.diagnostics;
         diagnostics.sort_by_key(|d| {
@@ -1347,7 +1410,9 @@ impl<'a> Resolver<'a> {
                         (ty, default)
                     }
                 };
-                if default.is_none() && matches!(origin.scope, Scope::Module(_)) {
+                let module_param = matches!(origin.scope, Scope::Module(_));
+                self.check_param_kind(origin.file, syntax, &ty, default.is_some(), module_param);
+                if default.is_none() && module_param {
                     self.error_help(
                         Code::MissingField,
                         format!("param '{}' is missing a default", syntax.name.as_str()),
