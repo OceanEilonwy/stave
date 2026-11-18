@@ -27,6 +27,7 @@ use crate::hardware::{
 use crate::joints::{GeomTable, JointWork, PartGeom, local_slot, round_length};
 use crate::mechanism::AssemblyMechanism;
 use crate::members::{LaidOut, WorldMemberCut};
+use crate::mirror_cuts::MirroredJoint;
 use crate::place::reflect;
 use crate::{Reported, Solved, Solver};
 
@@ -1304,6 +1305,21 @@ impl Solver<'_> {
                     list.push(made);
                 }
             }
+            // Its kind's cuts in parts outside the assembly too.
+            self.mirror_outside_cuts(
+                &MirroredJoint {
+                    joint,
+                    source,
+                    assembly,
+                    axis,
+                    plane,
+                    part_map: &part_map,
+                },
+                &inst.name,
+                geoms,
+                cuts,
+                memberships,
+            );
             if let Some(entry) = joints.get_mut(joint.index()) {
                 *entry = Some(copy);
             }
@@ -1445,7 +1461,7 @@ impl Solver<'_> {
         }
     }
     /// The part that occupies the reflected place of an outside part.
-    fn rebind_part(
+    pub(crate) fn rebind_part(
         &mut self,
         part: PartId,
         axis: Axis,
@@ -1506,7 +1522,10 @@ impl Solver<'_> {
         ))
     }
 
-    fn assembly_place(&self, assembly: AssemblyId) -> (stave_lang::FileId, stave_lang::ast::Span) {
+    pub(crate) fn assembly_place(
+        &self,
+        assembly: AssemblyId,
+    ) -> (stave_lang::FileId, stave_lang::ast::Span) {
         let mut current = Some(assembly);
         while let Some(id) = current {
             let Some(inst) = self.model.assemblies.get(id.index()) else {

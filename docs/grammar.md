@@ -1207,11 +1207,17 @@ Mirroring is defined on **results**, not on text:
   occupies the reflected place: `side_r`. If nothing occupies that place
   exactly, it is `error[mirror]`, naming the item that has no counterpart.
   Every role of a piece of hardware is re-bound this way, whatever its
-  name. A `Parts` param is re-bound part by part, in the same order; an
-  `Anchor` param is re-bound to the face of the counterpart that lies in
-  the reflected plane (`side_l.right` becomes `side_r.left`), or to the
-  reflected mid-plane; a `Region` param to the region that occupies the
-  reflected box.
+  name. The cuts such a joint makes in an outside part (the mortise a
+  rail's tenon goes into, in a leg the assembly was handed) are made in
+  the counterpart, reflected into its frame. A counterpart turned so that
+  its length, width or thickness lies along another axis than the
+  reflected part's, or a cut drawn at an angle or as an outline whose
+  face the reflection turns over, can't be reflected yet:
+  `error[mirror]`, naming the joint and both parts. A `Parts` param is
+  re-bound part by part, in the same order; an `Anchor` param is re-bound
+  to the face of the counterpart that lies in the reflected plane
+  (`side_l.right` becomes `side_r.left`), or to the reflected mid-plane; a
+  `Region` param to the region that occupies the reflected box.
 - Arguments are not rewritten: there is no textual swap of `left` and `right`.
 - The cut list marks a mirrored part as the mirror image of its source, and
   the work plan marks the pair out together.
