@@ -743,6 +743,14 @@ fn unapplied(error: &PatchError, file: FileId) -> Vec<Diagnostic> {
             Code::DuplicateName,
             "remove the import that is there first, in the same patch".to_owned(),
         ),
+        PatchErrorKind::WrongTerm { .. } => (
+            Code::TypeMismatch,
+            "set the path for the axis the term fixes, or write a term for this axis".to_owned(),
+        ),
+        PatchErrorKind::TermClash { other, .. } => (
+            Code::AxisSetTwice,
+            format!("unset '{other}' earlier in the patch, so each axis has one term"),
+        ),
         PatchErrorKind::NotSupported(_) => (
             Code::NotSupported,
             "write the change with 'remove' and 'add' for now".to_owned(),
