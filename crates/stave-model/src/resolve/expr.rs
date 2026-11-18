@@ -40,6 +40,10 @@ impl Expect {
     pub fn ty(ty: Ty) -> Self {
         let words = match &ty {
             Ty::Word(set) => vec![*set],
+            // A spacing is a call (`ends(inset: 5mm)`) or a bare word
+            // (`evenly`), wherever one is expected: a member's `spaced:`,
+            // and a param or argument of type `Spacing`.
+            Ty::Spacing => vec![WordSet::Spacing],
             _ => Vec::new(),
         };
         Expect {

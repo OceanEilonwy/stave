@@ -17,14 +17,18 @@ kind screw : joint {
   /// ends of the patch: about four times a common 4mm screw. Screws driven
   /// closer than this split the wood along the grain between them.
   param gap = 15mm
+  /// How the screws are spread along the patch where the parts touch:
+  /// evenly, or `ends(inset: 20mm)` to keep them near its ends and clear
+  /// of something in the middle (a pull's screws through a drawer front).
+  param spacing : Spacing = evenly
   /// The pilot hole: about three quarters of the shank, the size of the
   /// screw's core, so the thread cuts its own way into the wood around it.
   param pilot = diameter * 3 / 4
 
   // The screws are centred across the patch where the parts touch and
-  // spread evenly along it. pilot_wall: the pilot hole keeps 3mm of wood
-  // to every face of the other part (its far side too) and to its other
-  // cuts, so the screw doesn't come out or run into another hole.
+  // spread along it as `spacing` says. pilot_wall: the pilot hole keeps
+  // 3mm of wood to every face of the other part (its far side too) and to
+  // its other cuts, so the screw doesn't come out or run into another hole.
   require pilot_wall : wall(pilot_hole) >= 3mm "the screw comes too close to a face of the part or another cut"
   require bites      : length >= piece.thickness + 8mm "the screw is too short to hold"
   require seat_wide  : contact(piece, into).width >= diameter + 2 * wall "the parts overlap too little for screws this thick"
@@ -38,7 +42,7 @@ kind screw : joint {
   member screw : wood_screw(diameter: diameter, length: length) {
     on:     contact(piece, into)
     count:  count
-    spaced: evenly
+    spaced: spacing
     shape:  cylinder(diameter: pilot, depth: -piece.thickness..length - piece.thickness)
   }
   cut clearance_hole: crossing(piece, screw) { drill(diameter: diameter + 0.5mm, depth: through) }

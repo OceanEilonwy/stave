@@ -1315,9 +1315,13 @@ fn the_grammar_example_without_its_rename_line_applies_to_the_clothing_cabinet()
     };
     assert_eq!(drawer.module, ModuleKey::Local("casework".to_owned()));
     assert_eq!(drawer.name, "drawer.stave");
-    assert!(drawer.text.contains("  param top_gap      = 12mm"));
     assert!(
-        drawer.text.contains("  param handle_gap   = 2mm\n"),
+        drawer.text.contains("  param top_gap           = 12mm"),
+        "{}",
+        drawer.text
+    );
+    assert!(
+        drawer.text.contains("  param handle_gap        = 2mm\n"),
         "{}",
         drawer.text
     );
