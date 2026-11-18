@@ -90,7 +90,7 @@ fn parse_root(file: FileId, text: &str) -> Result<SyntaxNode, FormatError> {
 
 /// The meaning-carrying content of a tree: its tokens and comments, with
 /// runs of newlines counted once.
-fn signature(root: &SyntaxNode) -> Vec<(SyntaxKind, String)> {
+pub(crate) fn signature(root: &SyntaxNode) -> Vec<(SyntaxKind, String)> {
     let mut out: Vec<(SyntaxKind, String)> = Vec::new();
     for token in root
         .descendants_with_tokens()
@@ -475,13 +475,10 @@ struct Frame {
 
 fn layout(root: &SyntaxNode, text: &str) -> String {
     let lines = lines(root, text);
-    let aligned = alignment(&lines);
     let mut out = String::with_capacity(text.len());
-    let mut depth: usize = 0;
-    let mut frames: Vec<Frame> = Vec::new();
-    let mut anchor: usize = 0;
     let mut pending_blank = false;
     let mut previous_opens_block = true; // the start of the file
+    let mut rendered = render(&lines).into_iter().peekable();
 
     for (index, line) in lines.iter().enumerate() {
         if line.is_blank() {
@@ -493,6 +490,68 @@ fn layout(root: &SyntaxNode, text: &str) -> String {
             out.push('\n');
         }
         pending_blank = false;
+        if let Some((_, text)) = rendered.next_if(|(rendered, _)| *rendered == index) {
+            out.push_str(&text);
+        }
+        out.push('\n');
+        previous_opens_block = line
+            .last_code()
+            .is_some_and(|atom| atom.kind == SyntaxKind::L_BRACE);
+    }
+    out
+}
+
+/// One non-blank line of the input and its canonical layout.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct LaidOutLine {
+    /// Byte offset of the start of the line in the input (its indentation
+    /// included).
+    pub start: usize,
+    /// Byte offset just past the line's last token or comment.
+    pub end: usize,
+    /// The line laid out canonically, indentation included, without a
+    /// newline.
+    pub text: String,
+}
+
+/// Every non-blank line of a file that parses, with the layout the
+/// formatter gives it. The patcher uses it to lay out the lines it writes
+/// exactly as `stave fmt` would, leaving every other line alone.
+pub(crate) fn laid_out_lines(root: &SyntaxNode, text: &str) -> Vec<LaidOutLine> {
+    let lines = lines(root, text);
+    render(&lines)
+        .into_iter()
+        .filter_map(|(index, rendered)| {
+            let line = lines.get(index)?;
+            let first = usize::from(line.atoms.first()?.token.text_range().start());
+            let end = usize::try_from(line.atoms.last()?.end).ok()?;
+            let start = text
+                .get(..first)?
+                .rfind('\n')
+                .map_or(0, |newline| newline + 1);
+            Some(LaidOutLine {
+                start,
+                end,
+                text: rendered,
+            })
+        })
+        .collect()
+}
+
+/// Lays out every non-blank line: its index and its text, indentation
+/// included, without trailing spaces or the newline.
+fn render(lines: &[Line]) -> Vec<(usize, String)> {
+    let aligned = alignment(lines);
+    let mut out = Vec::with_capacity(lines.len());
+    let mut depth: usize = 0;
+    let mut frames: Vec<Frame> = Vec::new();
+    let mut anchor: usize = 0;
+
+    for (index, line) in lines.iter().enumerate() {
+        if line.is_blank() {
+            continue;
+        }
+        let closes_block = line.first_kind() == Some(SyntaxKind::R_BRACE);
 
         let indent = if line.continuation {
             match frames.last() {
@@ -573,11 +632,7 @@ fn layout(root: &SyntaxNode, text: &str) -> String {
         if !line.continuation && !line.is_comment_only() {
             anchor = statement_anchor.unwrap_or(indent + 4);
         }
-        out.push_str(rendered.trim_end());
-        out.push('\n');
-        previous_opens_block = line
-            .last_code()
-            .is_some_and(|atom| atom.kind == SyntaxKind::L_BRACE);
+        out.push((index, rendered.trim_end().to_owned()));
     }
     out
 }
