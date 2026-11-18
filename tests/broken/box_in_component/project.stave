@@ -1,5 +1,4 @@
 // expect: error[ground] 'space' is made with 'box' inside a component
-// pending: the parser does not read box(across:, up:, deep:) yet
 stave 1
 
 project "A box in a component" {

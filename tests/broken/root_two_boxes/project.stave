@@ -1,8 +1,7 @@
-// expect: error[ground] 'base' is placed with 'ground', but 'envelope' is made with 'box'; only one can be the root
-// pending: the parser does not read box(across:, up:, deep:) yet
+// expect: error[ground] 'envelope' and 'second' are both made with 'box'
 stave 1
 
-project "Ground and a box" {
+project "Two boxes" {
   units: mm
 }
 
@@ -11,14 +10,16 @@ param overall_height = 400mm
 param overall_depth  = 300mm
 
 region envelope = box(across: overall_width, up: overall_height, deep: overall_depth)
+region second   = box(across: 300mm, up: 300mm, deep: 300mm)
 
 stock pine_19 { species: pine, form: solid, thickness: 19mm, max_length: 2400mm }
 
-// The box is the root, so base should stand on its bottom face instead.
 part base : pine_19 {
   length: overall_width
   width:  overall_depth
   place {
-    ground
+    flush(envelope.bottom)
+    flush(envelope.left)
+    flush(envelope.front)
   }
 }

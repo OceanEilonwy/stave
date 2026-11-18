@@ -7,12 +7,13 @@ use stave_lang::ast::{self, ExprKind, Span};
 use stave_lang::{Code, Diagnostic, Label};
 use stave_modules::{Module, ModuleHeader};
 use stave_schema::fields::{self, FieldSpec, Requirement};
+use stave_schema::functions::Builtin;
 use stave_schema::kinds::RoleType;
 use stave_schema::placement::PlacementTerm;
 use stave_schema::words::{Grain, OutputUnit, StockForm, WordSet};
 
 use super::expr::Expect;
-use super::{Cx, Origin, Resolver, Syntax};
+use super::{Body, Cx, Origin, Resolver, Syntax};
 use crate::defs::{
     ArrayDef, AssemblyDef, AssemblyKind, DefId, Domain, HardwareDef, JointDef, KindCallDef,
     LibraryDef, MirrorDef, PartBodyDef, PartDef, PartKind, PlaceTerm, PlaceTermKind, PoseDef,
@@ -500,11 +501,31 @@ impl<'a> Resolver<'a> {
         origin: Origin<'_>,
     ) -> RegionDef {
         let array = self.lower_array(cx, syntax.array.as_ref());
-        let value = self.value(
-            cx,
-            &syntax.value,
-            &Expect::any().named(syntax.name.as_str()),
-        );
+        let value = match self.whole_region_box(cx, &syntax.value) {
+            Some(args) if array.is_none() => {
+                let value = self.region_box(cx, args, syntax.value.span);
+                if let Body::Component(_) = cx.body {
+                    // A component is handed the space it fills; the root
+                    // belongs to the project.
+                    self.error_help(
+                        Code::Ground,
+                        format!(
+                            "'{}' is made with 'box' inside a component",
+                            syntax.name.as_str()
+                        ),
+                        cx.file,
+                        syntax.value.span,
+                        "give the component a Region param for the space it fills, and hand it that space in the assembly; only the project has a root box",
+                    );
+                }
+                value
+            }
+            _ => self.value(
+                cx,
+                &syntax.value,
+                &Expect::any().named(syntax.name.as_str()),
+            ),
+        };
         match (&value.ty, array.is_some()) {
             (Ty::Region | Ty::Unknown, false) | (Ty::Regions | Ty::Unknown, true) => {}
             (Ty::Regions, false) => self.error_help(
@@ -536,6 +557,24 @@ impl<'a> Resolver<'a> {
             array,
             value,
         }
+    }
+
+    /// The arguments of `box(across:, up:, deep:)` when it is the whole of
+    /// `value` and `box` is the built-in, not an item of that name.
+    fn whole_region_box<'e>(&self, cx: &Cx, value: &'e ast::Expr) -> Option<&'e [ast::Arg]> {
+        let ast::ExprKind::Call { callee, args } = &value.kind else {
+            return None;
+        };
+        let ast::ExprKind::Name(head) = &callee.kind else {
+            return None;
+        };
+        let builtin = Builtin::from_word(head.as_str())?;
+        (self.lookup(cx, head.as_str()).is_none()
+            && builtin.for_arguments(
+                args.iter()
+                    .filter_map(|a| a.name.as_ref().map(|n| n.as_str())),
+            ) == Builtin::RegionBox)
+            .then_some(args.as_slice())
     }
 
     pub(super) fn lower_stock(

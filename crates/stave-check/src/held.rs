@@ -7,7 +7,8 @@
 //! roles name, the parts that carry its members and the parts its members
 //! touch (a slide's runner fixed to a cabinet side through the opening it
 //! is placed in). Parts that hold each other form groups; the group with
-//! the ground part is held. Every other group is `warning[loose-part]`,
+//! the ground part is held; when the root is a box, every group with a
+//! part standing on the floor (the box's bottom face) is. Every other group is `warning[loose-part]`,
 //! once, at its first part, unless one of its parts says `loose: true` (a
 //! loose shelf, a tray: the whole group lifts out together). It is asked
 //! only of a design with no errors.
@@ -92,6 +93,16 @@ fn shared(a: &WorldBox, b: &WorldBox) -> Option<i128> {
     (overlapping >= 2).then_some(product)
 }
 
+/// What a held group is joined to.
+#[derive(Debug, Clone, Copy)]
+enum Holder {
+    /// The part placed with `ground`.
+    Ground(PartId),
+    /// The floor, the root box's bottom face: a group with a part whose
+    /// bottom face lies on it stands on it.
+    Floor(stave_lang::units::Length),
+}
+
 impl Checker<'_> {
     /// The part placed with `ground`.
     fn ground_part(&self) -> Option<PartId> {
@@ -111,10 +122,14 @@ impl Checker<'_> {
     }
 
     pub(crate) fn held(&mut self) {
-        let Some(ground) = self.ground_part() else {
-            return;
-        };
         let design = self.design;
+        // What holds the design up: the ground part, or, when the root is
+        // a box, the floor (its bottom face).
+        let anchor = match (self.ground_part(), design.root_box()) {
+            (Some(ground), _) => Holder::Ground(ground),
+            (None, Some(root)) => Holder::Floor(root.bounds.min().up),
+            (None, None) => return,
+        };
         let count = design.parts.len();
         let mut parent: Vec<usize> = (0..count).collect();
         for joint in &design.joints {
@@ -157,11 +172,20 @@ impl Checker<'_> {
         }
         let roots: Vec<usize> = (0..count).map(|index| root(&mut parent, index)).collect();
         let group_of = |part: PartId| roots.get(part.index()).copied();
-        let held = group_of(ground);
+        let held: Vec<Option<usize>> = match anchor {
+            Holder::Ground(ground) => vec![group_of(ground)],
+            Holder::Floor(floor) => design
+                .parts
+                .iter()
+                .filter(|part| part.drawn_box().min().up == floor)
+                .map(|part| group_of(part.id))
+                .collect(),
+        };
+        let is_held = |part: PartId| held.contains(&group_of(part));
         let mut groups: Vec<(Option<usize>, Vec<PartId>)> = Vec::new();
         for part in &design.parts {
             let group = group_of(part.id);
-            if group == held {
+            if held.contains(&group) {
                 continue;
             }
             match groups.iter_mut().find(|(root, _)| *root == group) {
@@ -180,13 +204,17 @@ impl Checker<'_> {
             let Some(first) = parts.first().copied() else {
                 continue;
             };
-            let ground_name = self.part_name(ground);
+            let to = match anchor {
+                Holder::Ground(ground) => {
+                    let ground_name = self.part_name(ground);
+                    format!("{ground_name} or to anything joined to {ground_name}")
+                }
+                Holder::Floor(_) => "a part that stands on the floor".to_owned(),
+            };
             let message = match names.as_slice() {
-                [only] => format!(
-                    "{only} is loose: no joint or hardware joins it to {ground_name} or to anything joined to {ground_name}"
-                ),
+                [only] => format!("{only} is loose: no joint or hardware joins it to {to}"),
                 _ => format!(
-                    "{} are joined only to each other: no joint or hardware joins them to {ground_name} or to anything joined to {ground_name}",
+                    "{} are joined only to each other: no joint or hardware joins them to {to}",
                     few(&names)
                 ),
             };
@@ -198,7 +226,7 @@ impl Checker<'_> {
                 let Some(own) = design.part(*part).map(|p| p.drawn_box()) else {
                     continue;
                 };
-                for other in design.parts.iter().filter(|o| group_of(o.id) == held) {
+                for other in design.parts.iter().filter(|o| is_held(o.id)) {
                     if let Some(area) = shared(&own, &other.drawn_box())
                         && touching.is_none_or(|(best, _, _)| area > best)
                     {

@@ -20,7 +20,8 @@ pub enum Builtin {
     Mid,
     /// `opening(left:, right:, bottom:, top:, front:, back:)`: a region.
     Opening,
-    /// `split(region, axis)` or `split(region, axis, at: part)`: regions.
+    /// `split(region, axis)`, `split(region, axis, at: part)` or
+    /// `split(region, axis, shares: [n, ...])`: regions.
     Split,
     /// `cover(region, mount, thickness: d)`: a region.
     Cover,
@@ -37,6 +38,11 @@ pub enum Builtin {
     Spliced,
     /// `box(length:, width:, thickness:)`: an envelope.
     Box,
+    /// `box(across:, up:, deep:)`: a region made from three lengths, the
+    /// project's root. It shares the name `box` with [`Builtin::Box`]; the
+    /// two are told apart by their argument names (see
+    /// [`Builtin::for_arguments`]), so it is not in [`Builtin::ALL`].
+    RegionBox,
     /// `cylinder(diameter:, length:)`: an envelope.
     Cylinder,
     /// `model(source, align:)`: a model.
@@ -130,7 +136,7 @@ impl Builtin {
             Builtin::Turned => "turned",
             Builtin::Joined => "joined",
             Builtin::Spliced => "spliced",
-            Builtin::Box => "box",
+            Builtin::Box | Builtin::RegionBox => "box",
             Builtin::Cylinder => "cylinder",
             Builtin::Model => "model",
             Builtin::Ends => "ends",
@@ -141,9 +147,29 @@ impl Builtin {
         }
     }
 
-    /// The built-in for a name, if it is one.
+    /// The built-in for a name, if it is one. For `box` this is the
+    /// hardware envelope; [`Builtin::for_arguments`] picks the region.
     pub fn from_word(word: &str) -> Option<Builtin> {
         Builtin::ALL.into_iter().find(|b| b.word() == word)
+    }
+
+    /// The argument names of `box(across:, up:, deep:)`, the region.
+    pub const REGION_BOX_ARGUMENTS: [&'static str; 3] = ["across", "up", "deep"];
+
+    /// The built-in a call means once its argument names are known: `box`
+    /// with any of `across:`, `up:` or `deep:` is the region
+    /// [`Builtin::RegionBox`]; every other built-in is itself.
+    pub fn for_arguments<'a>(self, mut names: impl Iterator<Item = &'a str>) -> Builtin {
+        match self {
+            Builtin::Box | Builtin::RegionBox => {
+                if names.any(|name| Builtin::REGION_BOX_ARGUMENTS.contains(&name)) {
+                    Builtin::RegionBox
+                } else {
+                    Builtin::Box
+                }
+            }
+            other => other,
+        }
     }
 
     /// What it returns. `split` returns a list of regions, which only an
@@ -152,7 +178,9 @@ impl Builtin {
         match self {
             Builtin::Between | Builtin::Extent | Builtin::Wall => TypeName::Length,
             Builtin::Mid => TypeName::Anchor,
-            Builtin::Opening | Builtin::Split | Builtin::Cover => TypeName::Region,
+            Builtin::Opening | Builtin::Split | Builtin::Cover | Builtin::RegionBox => {
+                TypeName::Region
+            }
             Builtin::Overlay | Builtin::Inset => TypeName::Mount,
             Builtin::Turned => TypeName::Shape,
             Builtin::Joined => TypeName::Boards,
@@ -200,6 +228,8 @@ impl Builtin {
                     positional("region", Type(TypeName::Region)),
                     positional("axis", AXIS),
                     named("at", Type(TypeName::Part), false),
+                    // A Count or a Ratio each: checked by the resolver.
+                    named("shares", ValueType::ListOf(&ITEM), false),
                 ];
                 LIST
             }
@@ -247,6 +277,14 @@ impl Builtin {
                     named("length", LENGTH, true),
                     named("width", LENGTH, true),
                     named("thickness", LENGTH, true),
+                ];
+                LIST
+            }
+            Builtin::RegionBox => {
+                const LIST: &[Parameter] = &[
+                    named("across", LENGTH, true),
+                    named("up", LENGTH, true),
+                    named("deep", LENGTH, true),
                 ];
                 LIST
             }

@@ -1842,11 +1842,19 @@ impl Solver<'_> {
             let Some(inst) = self.model.regions.get(index) else {
                 return Err(Reported);
             };
+            let root = inst.assembly.is_none()
+                && inst.mirror_of.is_none()
+                && self
+                    .model
+                    .defs
+                    .region(inst.def)
+                    .is_some_and(|def| crate::place::is_region_box(&def.value));
             out.push(Region {
                 id,
                 name: inst.name.clone(),
                 assembly: inst.assembly,
                 bounds: world_box(&value.bounds)?,
+                root,
             });
         }
         Ok(out)

@@ -1,0 +1,65 @@
+stave 1
+
+// A small open shelf built inside a root box. The box gives the overall
+// sizes before any part exists; the bottom stands on its bottom face (the
+// floor), the sides stand on the bottom against its left and right faces,
+// and the shelf sits on top of the lower of two bays split 2 : 1.
+
+project "Box root shelf" {
+  goal:  "A pine shelf unit whose parts are placed against the faces of its overall box"
+  units: mm
+}
+
+param overall_width  = 600mm within 400mm..900mm
+param overall_height = 450mm within 300mm..600mm
+param overall_depth  = 250mm
+
+region envelope = box(across: overall_width, up: overall_height, deep: overall_depth)
+
+stock pine_19 { species: pine, form: solid, thickness: 19mm, max_width: 300mm, max_length: 2400mm }
+
+/// The bottom stands on the floor, the box's bottom face.
+part bottom : pine_19 {
+  length: overall_width
+  width:  overall_depth
+  place {
+    flush(envelope.bottom)
+    flush(envelope.left)
+    flush(envelope.front)
+  }
+}
+
+/// The sides stand on the bottom and reach the top of the box.
+part side_l : pine_19 {
+  length: overall_height - pine_19.thickness
+  width:  overall_depth
+  place {
+    orient(length: up, width: back)
+    against(bottom.top)
+    flush(envelope.left)
+    flush(envelope.front)
+  }
+}
+
+part side_r = mirror(side_l, about: mid(envelope, across))
+
+/// The space between the sides, above the bottom, split so the lower bay
+/// is twice as tall as the upper one.
+region inside = opening(left: side_l.right, right: side_r.left,
+                        bottom: bottom.top, top: envelope.top,
+                        front:  envelope.front, back: envelope.back)
+region bay[lower, upper] = split(inside, up, shares: [2, 1])
+
+/// The shelf sits on top of the lower bay, between the sides.
+part shelf : pine_19 {
+  length: inside.across
+  width:  overall_depth
+  place {
+    against(bay[lower].top)
+    center(from: side_l.right, to: side_r.left)
+    flush(envelope.front)
+  }
+}
+
+joint sides_to_bottom : screw(bottom, into: [side_l, side_r], length: 40mm)
+joint shelf_to_sides  : screw([side_l, side_r], into: shelf, length: 40mm)

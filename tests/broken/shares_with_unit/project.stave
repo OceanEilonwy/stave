@@ -1,8 +1,7 @@
-// expect: error[out-of-range] 'shares' must each be more than 0, found 0
-// pending: the parser does not read 'shares:' yet
+// expect: error[unit-mismatch] 'shares' needs a number, found a length
 stave 1
 
-project "A share of nothing" {
+project "Shares in millimetres" {
   units: mm
 }
 
@@ -10,8 +9,9 @@ param overall_width  = 600mm
 param overall_height = 400mm
 param overall_depth  = 300mm
 
-region envelope          = box(across: overall_width, up: overall_height, deep: overall_depth)
-region bay[lower, upper] = split(envelope, up, shares: [0, 1])
+region envelope = box(across: overall_width, up: overall_height, deep: overall_depth)
+// Shares are relative sizes: 140, not 140mm.
+region bay[lower, upper] = split(envelope, up, shares: [140mm, 260mm])
 
 stock pine_19 { species: pine, form: solid, thickness: 19mm, max_length: 2400mm }
 

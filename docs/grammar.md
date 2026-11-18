@@ -1053,9 +1053,6 @@ term the part lies flat: `orient(length: right, width: back)`.
    and mid-planes like any region's. When the root is a part, the floor is
    wherever the lowest part ends up.
 
-   Not built yet: `box(across:, up:, deep:)` does not exist, so only the
-   `ground` cases are checked, and the first is still worded
-   `no part is placed with 'ground'`.
 2. Every anchor belongs to something placed earlier in dependency order. A
    cycle is `error[placement-cycle]`, listing it.
 3. Each axis is fixed by exactly one term. A missing axis is
@@ -1479,7 +1476,6 @@ part on the floor inside it) and its mid-planes, and regions are made from it
 region. Which `box` a call is follows from its argument names:
 `across:`, `up:` and `deep:` make a region; the hardware envelope and a
 member's shape are listed under [Built-in functions](#built-in-functions).
-Not built yet.
 
 **`shares:`** gives relative sizes: `shares: [140, 180, 220]` splits the
 region's size along the axis in the ratio 140 : 180 : 220, so here the
@@ -1502,7 +1498,7 @@ its error:
 
 `split(region, axis)` without `shares:` is equal division, as before. The
 editor's grip between two neighbouring pieces edits their two shares (see
-[`docs/editing.md`](editing.md)). Not built yet.
+[`docs/editing.md`](editing.md)).
 
 **Mounts** say how a front relates to its opening:
 
@@ -3038,7 +3034,6 @@ there is no ground part: a group is held when one of its parts stands on
 the floor, its bottom face on the box's bottom face. A group that doesn't
 is `warning[loose-part]` with the message
 `<part> is loose: no joint or hardware joins it to a part that stands on the floor`.
-(Not built yet, with `box`.)
 
 ```
 warning[loose-part]: slat[0] is loose: no joint or hardware joins it to top or to anything joined to top

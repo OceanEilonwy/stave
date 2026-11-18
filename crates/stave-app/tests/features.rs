@@ -841,7 +841,11 @@ fn exactly_one_part_is_ground() {
         "project.stave",
         "stave 1\n\nproject \"T\" {\n  units: mm\n}\n\nstock s { species: pine, form: solid, thickness: 19mm }\n\npart a : s {\n  length: 1mm\n  width: 1mm\n  place {\n    against(b.top)\n    flush(b.left)\n    flush(b.front)\n  }\n}\npart b : s {\n  length: 1mm\n  width: 1mm\n  place {\n    against(a.top)\n    flush(a.left)\n    flush(a.front)\n  }\n}\n",
     )]);
-    only_error(&none, "ground", "no part is placed with 'ground'");
+    only_error(
+        &none,
+        "ground",
+        "nothing is the root: no part is placed with 'ground' and no region is made with 'box'",
+    );
 }
 
 #[test]

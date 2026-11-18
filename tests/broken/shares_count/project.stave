@@ -1,8 +1,7 @@
-// expect: error[type-mismatch] split takes 'at:' or 'shares:', not both
-// pending: the parser does not read 'shares:' yet
+// expect: error[type-mismatch] 'shares' needs 3 numbers, one for each piece of bay, found 2
 stave 1
 
-project "Shares and a part" {
+project "Too few shares" {
   units: mm
 }
 
@@ -10,8 +9,8 @@ param overall_width  = 600mm
 param overall_height = 400mm
 param overall_depth  = 300mm
 
-region envelope          = box(across: overall_width, up: overall_height, deep: overall_depth)
-region bay[lower, upper] = split(envelope, up, at: base, shares: [1, 1])
+region envelope                  = box(across: overall_width, up: overall_height, deep: overall_depth)
+region bay[lower, middle, upper] = split(envelope, up, shares: [1, 2])
 
 stock pine_19 { species: pine, form: solid, thickness: 19mm, max_length: 2400mm }
 
