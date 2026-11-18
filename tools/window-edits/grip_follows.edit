@@ -1,0 +1,6 @@
+# The table top's length follows one param, overall_width: dragging its
+# square handle says, before the drag ends, which param changes and to
+# what, and the ghost shows everything that follows it move (the top, the
+# aprons across, the slats).
+grips assembly top
+drag 1 560mm

@@ -1,0 +1,5 @@
+# The front apron's length follows two plain params, overall_width and
+# the legs' inset: the drag lists both, each with the value it would
+# take, to pick from before anything is tried.
+grips assembly apron_front
+drag 4 380mm

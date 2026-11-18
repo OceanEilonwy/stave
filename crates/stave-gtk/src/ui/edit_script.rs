@@ -156,7 +156,10 @@ impl Window {
             }
             "add" | "commit" => self.send_edit(EditCommand::Add),
             "cancel" => self.send_edit(EditCommand::Cancel),
-            _ => return Err(format!("'{word}' isn't a step of an edit script")),
+            _ => match self.grip_step(word, rest) {
+                Some(result) => result?,
+                None => return Err(format!("'{word}' isn't a step of an edit script")),
+            },
         }
         Ok(())
     }
