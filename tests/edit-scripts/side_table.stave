@@ -87,4 +87,4 @@ assembly slats : frames.Slats {
   spread:     right
 }
 
-require slats_slat_to_apron_front_apron_min : between(slats.slat[0], apron_front.apron) >= 200mm "leave room above the shelf for a stack of books"
+require slats_slat_to_apron_front_min : between(slats.slat[0], apron_front.apron) >= 200mm "leave room above the shelf for a stack of books"

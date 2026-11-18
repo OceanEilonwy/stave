@@ -3,6 +3,7 @@ stave 1
 /// A fixed panel across a space that splits it into a space below and a space above.
 /// It reaches from the front of the space to its back and fits between the
 /// sides, housed in a dado in each; the dado depth is added by the joint.
+/// It may nest inside itself: the space under a divider may take another.
 component Divider {
   param space       : Region         // the space it divides, from side to side
   param sides       : Parts          // the cabinet sides it is housed in

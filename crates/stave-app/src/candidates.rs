@@ -39,6 +39,7 @@ use stave_model::Model;
 use stave_model::defs::{AssemblyKind, DefId, Defs, ParamDef, Scope};
 use stave_model::ids::{AssemblyId, ComponentId, KindId};
 use stave_model::nonempty::NonEmpty;
+use stave_model::solved::SolvedDesign;
 use stave_model::types::Ty;
 use stave_modules::ModuleId;
 use stave_schema::kinds::RoleType;
@@ -77,6 +78,9 @@ pub struct ProjectFile {
 pub struct EditScope<'a> {
     model: &'a Model,
     files: Vec<ProjectFile>,
+    /// The solved design, when the scope was made from an opened project
+    /// that solved: where the parts are, for the rules that need it.
+    design: Option<&'a SolvedDesign>,
 }
 
 impl<'a> EditScope<'a> {
@@ -87,7 +91,9 @@ impl<'a> EditScope<'a> {
     /// [`ScopeError::NoModel`] when the project has no resolved model.
     pub fn new(opened: &'a Opened) -> Result<Self, ScopeError> {
         let model = opened.model.as_ref().ok_or(ScopeError::NoModel)?;
-        Ok(Self::from_parts(model, &opened.sources))
+        let mut scope = Self::from_parts(model, &opened.sources);
+        scope.design = opened.design.as_ref();
+        Ok(scope)
     }
 
     /// The editor's view of a model and the sources it was read from.
@@ -110,7 +116,17 @@ impl<'a> EditScope<'a> {
                 })
             })
             .collect();
-        Self { model, files }
+        Self {
+            model,
+            files,
+            design: None,
+        }
+    }
+
+    /// The solved design, when the scope was made from a project that
+    /// solved.
+    pub fn design(&self) -> Option<&'a SolvedDesign> {
+        self.design
     }
 
     /// The resolved model.
@@ -258,6 +274,9 @@ impl<'a> EditScope<'a> {
         if !bind_component(&mut place, picked) {
             return None;
         }
+        if self.would_nest_in_itself(id, picked) && !may_nest(&component.decl.docs) {
+            return None;
+        }
         Some(Candidate {
             declaration: Declaration::Component(id),
             entry: menu_entry(&component.decl.name, &component.decl.docs, group)?,
@@ -265,6 +284,7 @@ impl<'a> EditScope<'a> {
             settings,
             applicability: Applicability::NotChecked,
             generated_name: None,
+            mounted_on: None,
         })
     }
 
@@ -297,7 +317,20 @@ impl<'a> EditScope<'a> {
         if !bind_kind(&mut place, picked) {
             return None;
         }
+        // A joint joins parts that meet: offered on parts that don't, it
+        // could never apply, so it is not listed.
+        if kind.base == ast::BaseKind::Joint && !self.joined_parts_meet(&place) {
+            return None;
+        }
         let settings = kind.params.iter().filter_map(kind_setting).collect();
+        // Hardware offered on a face is mounted on that face.
+        let mounted_on = match (picked, kind.base) {
+            (
+                Picked::Face(face),
+                ast::BaseKind::Slide | ast::BaseKind::Hinge | ast::BaseKind::Pull,
+            ) => Some(*face),
+            _ => None,
+        };
         Some(Candidate {
             declaration: Declaration::Kind(id),
             entry: menu_entry(&kind.decl.name, &kind.decl.docs, group)?,
@@ -305,6 +338,66 @@ impl<'a> EditScope<'a> {
             settings,
             applicability: Applicability::NotChecked,
             generated_name: None,
+            mounted_on,
+        })
+    }
+
+    /// Whether filling the picked space with `component` would put it
+    /// straight inside an instance of itself: the space is a region one
+    /// of its own assemblies declares (a case's `inside`), with nothing
+    /// between.
+    fn would_nest_in_itself(&self, component: ComponentId, picked: &Picked) -> bool {
+        let Picked::Region(region) = picked else {
+            return false;
+        };
+        let model = self.model;
+        model
+            .regions
+            .get(region.index())
+            .and_then(|region| model.instance(region.ctx.instance))
+            .is_some_and(|instance| {
+                matches!(
+                    instance.kind,
+                    stave_model::instance::InstanceKind::Component { component: owner, .. }
+                        if owner == component
+                )
+            })
+    }
+
+    /// Whether the parts a joint's roles were bound to can meet: the part
+    /// of its first role touches or overlaps at least one part of the
+    /// others. `true` while a role is still to point at, or without a
+    /// solved design to tell.
+    fn joined_parts_meet(&self, place: &[PlaceParam]) -> bool {
+        let Some(design) = self.design else {
+            return true;
+        };
+        let mut roles = place.iter().map(|param| match &param.slot {
+            PlaceSlot::Part(Some(part)) => Some(vec![*part]),
+            PlaceSlot::Parts(Some(parts)) => Some(parts.iter().copied().collect()),
+            PlaceSlot::Part(None)
+            | PlaceSlot::Parts(None)
+            | PlaceSlot::Region(_)
+            | PlaceSlot::Anchor(_) => None,
+        });
+        let Some(Some(first)) = roles.next() else {
+            return true;
+        };
+        let mut others = Vec::new();
+        for role in roles {
+            match role {
+                Some(parts) => others.extend(parts),
+                None => return true,
+            }
+        }
+        let bounds = |part: stave_model::ids::PartId| design.part(part).map(|p| p.drawn_box());
+        first.iter().any(|a| {
+            others.iter().any(|b| match (bounds(*a), bounds(*b)) {
+                (Some(a), Some(b)) => stave_lang::placement::Axis::ALL.into_iter().all(|axis| {
+                    a.min().get(axis) <= b.max().get(axis) && b.min().get(axis) <= a.max().get(axis)
+                }),
+                _ => true,
+            })
         })
     }
 
@@ -407,6 +500,18 @@ fn kind_setting(param: &ParamDef) -> Option<SettingParam> {
             SettingValue::Unset
         },
     ))
+}
+
+/// Whether a component's `///` doc comment says it may be put inside a
+/// space one of its own assemblies exposes: a sentence that says it "may
+/// nest inside itself" (in any case).
+pub fn may_nest(docs: &[String]) -> bool {
+    docs.iter()
+        .map(|line| line.trim())
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_ascii_lowercase()
+        .contains("may nest inside itself")
 }
 
 fn menu_entry(name: &str, docs: &[String], group: &MenuGroup) -> Option<MenuEntry> {
@@ -570,18 +675,29 @@ fn bind_kind(place: &mut [PlaceParam], picked: &Picked) -> bool {
     }
 }
 
-/// Sorts a menu: by group (the project's own first, then imported modules
-/// by name, then the standard modules by name), within a group the entries
-/// that apply (or aren't checked yet) before the greyed ones, each in name
-/// order.
+/// Sorts a menu: the entries that apply, need a choice or aren't checked
+/// yet first, then the refused (greyed) ones, so the refused ones can be
+/// folded away together ([`refused_from`]); each part by group (the
+/// project's own first, then imported modules by name, then the standard
+/// modules by name), within a group in name order.
 pub fn sort_menu(candidates: &mut [Candidate]) {
     candidates.sort_by(|a, b| {
-        group_key(&a.entry.group)
-            .cmp(&group_key(&b.entry.group))
-            .then_with(|| greyed(a).cmp(&greyed(b)))
+        greyed(a)
+            .cmp(&greyed(b))
+            .then_with(|| group_key(&a.entry.group).cmp(&group_key(&b.entry.group)))
             .then_with(|| a.entry.label.as_str().cmp(b.entry.label.as_str()))
             .then_with(|| declaration_key(a).cmp(&declaration_key(b)))
     });
+}
+
+/// Where the refused entries of a sorted menu begin: the index of the
+/// first greyed entry, or the menu's length when none is greyed. The
+/// window folds `menu[refused_from(menu)..]` under one heading.
+pub fn refused_from(candidates: &[Candidate]) -> usize {
+    candidates
+        .iter()
+        .position(greyed)
+        .unwrap_or(candidates.len())
 }
 
 fn group_key(group: &MenuGroup) -> (u8, &str) {

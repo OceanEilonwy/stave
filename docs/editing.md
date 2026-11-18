@@ -14,9 +14,10 @@ the card shows (see [The card](#the-card)) and a hand-built fixture for
 the clothing cabinet. The behaviour is built on them: signature matching
 and applicability in `stave_app::candidates`, the scratch check in
 `stave_app::scratch`, the edit in progress, which joins them, in
-`stave_app::editing`, and the changes of the design that don't come from
+`stave_app::editing`, the changes of the design that don't come from
 the menu in `stave_app::change` (see [The edit in
-progress](#the-edit-in-progress)).
+progress](#the-edit-in-progress)), and grips and the solver in
+`stave_app::gripping` (see [Grips in the session](#grips-in-the-session)).
 
 ## The idea
 
@@ -165,19 +166,56 @@ never from a list in the app.
    stile's face is clicked. A `fastener` or `tool` kind is used by a joint
    or a tool list and never placed by itself, so it is never a candidate.
    Place params the selection doesn't fill are asked for by pointing
-   (step 5).
+   (step 6).
+
+   Two rules leave out entries that could never apply, so the menu
+   doesn't list them at all:
+
+   - **A joint joins parts that meet.** Every joint kind's parts must
+     touch (the checker's `no-contact` rule holds for the whole class),
+     so a joint is not listed when the parts the selection gives its
+     roles can't meet: the part of its first role touches or overlaps
+     none of the parts of the others, as the design has them now. Two
+     parts facing each other across a gap ("Between these parts") never
+     meet, so no joint is offered between them. A joint with a role still
+     to point at is listed as usual. Hardware is not left out this way:
+     whether its members reach a part depends on the kind, so the
+     checker says.
+   - **A component is not put straight inside itself.** A component is
+     not offered to fill a space that one of its own assemblies declares
+     (a `Case` in `case.inside`): that would nest it in itself with
+     nothing between. A space made from such
+     a region in the project (`split(case.inside, up)`) is the project's,
+     and offers it as usual. A component that is meant to nest says so
+     in its `///` doc comment with the words "may nest inside itself"
+     (any case): `/// A tray. It may nest inside itself.` The library's
+     `Divider` says so, since the space under a divider may take another
+     divider.
 3. **Applicability.** Each candidate is instantiated in a scratch copy
    with its defaults (and, for a setting with no default, the value it
-   would get by step 5) and checked. Its own `require` lines are its
+   would get by step 6) and checked. Its own `require` lines are its
    applicability rules. A candidate that fails is still listed, greyed,
-   with the checker's message, so the user learns why it doesn't fit. A
-   candidate that still has a place param to point at, or a setting with
-   no default and nothing to copy, is not tried: it **needs a choice**,
+   with the checker's message, so the user learns why it doesn't fit (an
+   error said again with the same code and message, once for each
+   element of an array, is shown once). A candidate that still has a
+   place param to point at, or a setting with no default and nothing to
+   copy, is not tried: it **needs a choice**,
    which is not a refusal, and the entry is listed as usual. Trying never
    changes the design the menu was made for, and the menu can be checked
    a little at a time: a check that is stopped part way keeps the answers
    it reached, and the rest wait.
-4. **The menu entry** is drawn from the declaration:
+4. **Hardware on a face is placed.** A kind of hardware (a slide, hinge
+   or pull) chosen on a face is mounted on that face: its call writes
+   `face: <the face>` when the kind's own `mount { }` puts it on another,
+   and a `place { }` that fixes every axis the kind leaves `open`, each
+   centred on the piece (`center(stile, across)`, `center(stile, up)`),
+   so a knob on a door stile fits as soon as it is chosen. The axes are
+   found as the solver finds them: `along` is the piece's length (its
+   width when the mount face is an end), `across` the mount face's other
+   axis. Hardware chosen on parts rather than a face is centred on its
+   piece the same way, on its kind's own mount face. The user can move
+   it after (a `set knob_2.place.up = ...`).
+5. **The menu entry** is drawn from the declaration:
 
    | Part of the entry | From |
    |---|---|
@@ -186,8 +224,12 @@ never from a list in the app.
    | group | its module: the project's own first, then imported modules by name, then `std` |
    | heading | the type of the selection (the table above) |
 
-   Within a group, entries are in name order, greyed ones after the rest.
-5. **Filling the rest.** A place param still unbound is asked for by
+   The entries that apply, need a choice or aren't checked yet come
+   first, then every refused (greyed) entry, so the window can fold the
+   refused ones under one heading (`Edit::refused_from` is where they
+   begin, `candidates::refused_from` for any menu). Each part is
+   ordered by group, and within a group by name.
+6. **Filling the rest.** A place param still unbound is asked for by
    pointing: the card names it ("Point at the side the hinges go on") and
    the next click fills it. Setting params with no default are asked for in
    the card: on first use the user chooses; later the value is copied from
@@ -222,13 +264,21 @@ returned `Event::Edit(EditEvent)`s name, as for every other command.
 | `Mirror(item)` | starts a change: adds the mirror image of an assembly, renaming it with its side |
 | `MirrorSplit { item, axis }` | starts a change: makes an assembly that fills a whole space a mirrored pair, splitting the space in two along `axis` (see [Repeat and mirror](#repeat-and-mirror)) |
 | `SetParam { item, param, value }` | starts a change: sets a param of an assembly of the project, as a grip does when it is let go (`set apron_front.setback = 3mm`) |
+| `RepeatPart { part, count, axis, from, to }` | starts a change: repeats a part spaced evenly along a span from one anchor to another (`from: "rail_l.right"`), or changes how many there are ([`repeat::repeat_part`](#repeat-and-mirror)) |
 | `Hold(HoldRequest)` | starts a change: holds a measured distance as a `require` (see [Hold this](#hold-this)) |
 | `Remove(item)` | starts a change: removes an item; while something depends on it the change *needs a choice*, naming what does |
 | `IncludeDependants` | a removal waiting on its dependants removes them too |
 | `RenameItem { item, to }` | starts a change: renames an item of the project everywhere it is used |
+| `ListGrips(GripSelection)` | lists the grips of an assembly, the envelope or a split's boundaries, without their stops (see [Grips in the session](#grips-in-the-session)) |
+| `BeginDrag(index)` | starts a change: a drag on the listed grip at `index` |
+| `DragTo(Amount)` | moves the grip being dragged to a value: its patch is written again and tried |
+| `PickParam(ParamId)` | picks which plain param a dragged size changes, from the drag's choices |
+| `TypeGripValue { grip, value }` | a drag on a listed grip begun and moved to a typed value in one |
+| `MakeSolved { param, low, high }` | starts a change: makes a param of the project a `solved param` within `low..high` |
+| `MakePlain(param)` | starts a change: makes a solved param of the project plain again, keeping its range |
 | `ApplyFix { problem, fix }` | adds one of the refusal's fixes to the candidate or the change (both counted from 0) |
-| `Add` | writes the candidate or the change into the text, only when it fits |
-| `Cancel` | drops the edit or the change, writing nothing |
+| `Add` | writes the candidate or the change into the text, only when it fits; ends a drag by writing it |
+| `Cancel` | drops the edit or the change, writing nothing; ends a drag by dropping it |
 
 `Session::mirror_offer(item)` says, without trying anything, whether an
 assembly has a mirror image and what adding it would name (a
@@ -243,9 +293,12 @@ assembly has a mirror image and what adding it would name (a
 | `ChangeStarted` | a change began and has been tried; `VerdictChanged` follows |
 | `DependantsIncluded` | a removal now takes what depends on the item too |
 | `VerdictChanged` | the candidate's or the change's verdict, or what is still to choose, changed |
+| `GripsChanged` | `Session::grips` changed: listed, or dropped after a commit (the design they were listed from is gone) |
+| `GripStopsFound(index)` | the stops of the listed grip at `index` were found |
+| `DragMoved`, `ParamPicked` | the grip being dragged moved, or a param was picked for it; `VerdictChanged` follows when the verdict did |
 | `Committed` | the candidate or change was written; the committed design is the session's result (with `ResultChanged`); `Session::last_commit` lists the files written |
 | `Cancelled` | the edit or change was dropped |
-| `Rejected(why)` | the command couldn't be done (a name already used, a pick that fills nothing the card asks for, Add on something that doesn't fit, a design that doesn't place, a change that can't be written for this design, `IncludeDependants` with no removal waiting: `NothingToInclude`); nothing changed |
+| `Rejected(why)` | the command couldn't be done (a name already used, a pick that fills nothing the card asks for, Add on something that doesn't fit, a design that doesn't place, a change that can't be written for this design, `IncludeDependants` with no removal waiting: `NothingToInclude`; a grip command with no grips listed: `NoGrips`; a grip index the listing doesn't have: `NoSuchGrip`; a drag command with no drag: `NotDragging`; a pick that is not one of the choices: `NotAChoice`); nothing changed |
 
 Each change to the candidate writes its patch again (the candidate's
 `add`, then each fix applied) and re-runs the scratch check, so the
@@ -286,7 +339,7 @@ final text.
 `Change::summary` says what it does ("Make 3 of drawer"),
 `Change::detail` what it found (`ChangeDetail::Mirror { renamed, image,
 about }`, `Hold { name, condition }`, `Remove { removal, dependants }`,
-`Rename { from, to }`, or `Repeat`), `Change::progress` where it stands
+`Rename { from, to }`, `Grip(GripDetail)` for a drag, or `Repeat`), `Change::progress` where it stands
 (the same `Progress` as an edit's chosen candidate), `Change::patch` the
 patch tried, `Change::renamed_files` the files a rename rewrites, and
 `Change::ghost` the design it would make.
@@ -338,9 +391,13 @@ stave edit cabinet --script steps.txt
 
 The menu lists each entry as `casework.Shelf` (the bare label for the
 project's own declarations) with `applies`, `needs a choice: <names>`
-or `refused` and the checker's errors under it. `--choose` takes the
+or `refused` and the checker's errors under it, the refused entries
+last. `--choose` takes the
 label or the label with its group, and prints the card: what fills each
-param, the verdict, the checker's words and the patch. `--patch
+param (a setting left at its default shows the value it works out to:
+`depth  9mm (default)`, `box_height  220mm (default: opening.up -
+bottom_gap - top_gap)`), the verdict, the checker's words and the
+patch. `--patch
 --commit` writes each patch that fits through the editor's one writer.
 
 ### Scripts
@@ -366,15 +423,24 @@ before what it prints.
 | `name <name>` | names the new item |
 | `repeat <count> <axis>` | makes the chosen entry `count` pieces split along `across`, `up` or `deep`; `repeat 1` makes it one again |
 | `repeat <assembly> <count> [<axis>]` | change: repeats an assembly, or changes its count |
+| `spaced <part> <count> <axis> from <anchor> to <anchor>` | change: repeats a part spaced evenly along a span (`spaced slat 5 across from apron_left.right to apron_right.left`), or changes how many there are |
 | `shares <region> <piece> <length>` | change: moves the boundary above piece `<piece>` (from 1) so that piece is `<length>` long |
 | `offer mirror <assembly>` | says whether it has a mirror image and what adding it would name |
 | `mirror <assembly>` | change: adds its mirror image |
 | `mirror <assembly> <axis>` | change: makes an assembly that fills a whole space a mirrored pair, the space split in two along `across`, `up` or `deep` |
 | `set <assembly>.<param> = <value>` | change: sets a param of an assembly of the project, as a grip does (a `set` whose name has a dot) |
-| `hold <a> <b> min\|max <length> "<reason>"` | change: holds the distance between two things, each a part or region by its whole name (`drawer[top].front`), else a face of one (`case.top.bottom`) |
+| `measure <a> <b>` | says the distance between two things as the design has it now |
+| `hold <a> <b> min\|max [<length>] "<reason>"` | change: holds the distance between two things, each a part or region by its whole name (`drawer[top].front`), else a face of one (`case.top.bottom`); without a length, the distance as it is now |
 | `remove <item>` | change: removes an item, or says what uses it |
 | `include dependants` | the removal takes what uses the item too |
 | `rename <item> <new name>` | change: renames an item everywhere |
+| `grips envelope`, `grips assembly <name>`, `grips split <piece>` | lists the grips of the envelope, of an assembly, or of the boundaries of a split (`grips split drawer_bay[bottom]`), numbered from 1 |
+| `stops [<grip>]` | searches the stops of one listed grip, or of all that move |
+| `drag <grip> <value>` | change: drags a listed grip to a value (`drag 1 420mm`); a `drag` of the same grip goes on from where it is |
+| `grip <grip> = <value>` | change: types a value for a listed grip |
+| `pick <param>` | picks which param a dragged size changes, by its name as listed (`case.overhang`) or its own (`overhang`) |
+| `solved <param> within <low>..<high>` | change: makes a param of the project a solved param |
+| `plain <param>` | change: makes a solved param plain again |
 | `fix <problem> <fix>` | applies a refusal's fix, both counted from 1 as `show` numbers them |
 | `show` | the card: of the chosen entry, or of the change |
 | `commit` or `add` | writes the candidate or the change |
@@ -414,6 +480,14 @@ repeat drawer 3          # changes of the design
 add
 shares drawer_bay 1 180mm
 add
+
+grips envelope           # a grip, dragged or typed
+stops 1
+drag 1 720mm
+add
+measure divider.panel case.top
+hold divider.panel case.top min "room for the drawers"   # the distance as it is now
+add
 ```
 
 What each step prints:
@@ -431,6 +505,22 @@ What each step prints:
 - A change step: `<summary>: <where it stands>` (`Make 3 of drawer:
   fits`); a removal waiting on what uses the item: `Remove back: used by
   drawer_bay, drawer; 'include dependants' removes them too`.
+- `grips`: one grip a line, `  1. divider.height  500mm  moves
+  180mm..1329.5mm (up)` or `  4. apron_front.apron.length  360mm
+  follows overall_width, legs.inset, oak_45_sq.width (a size of the
+  stock) (across)`; `stops`: each searched grip with `down to <value>`
+  and `up to <value>`, and what breaks it one step further (`179.5mm
+  breaks it: error[require]: ...`), the end of its range, or as far as
+  the search looks.
+- `drag`, `grip`, `pick`: the change line (`Set divider.height to 420mm:
+  fits`; `Drag apron_front.apron.length to 380mm: pick which size
+  changes: overall_width, inset`; `Drag legs.leg[front_left].length to
+  400mm: refused: can't reach 400mm: the rule 'knee_room' stops it
+  (...)`), then, indented, `changes <path> <from> -> <to>` when the
+  solver chose or a param was picked, and `could change <param>: <from>
+  -> <to>` for each choice still to pick from.
+- `measure`: `<a> to <b>: <distance>`; `hold` without a length says
+  `the distance is <distance> now` first.
 - `show`: the card. For a change: its summary, what it found (indented),
   `verdict: ...`, each error as `stave check` prints it and `fix <p> <f>:
   <label>` for each fix, then `patch:` and the patch.
@@ -463,20 +553,32 @@ what was pointed at and its setting params as chosen, never a bare
 - **Sizes.** A drag writes a plain number. "Name this size" turns a number
   into a `param` with a name the user types (`add param shelf_gap = 300mm`
   and a `set` that uses it). The tool never invents a param name.
-- **Assemblies.** The component's name in lower case, words joined by `_`
-  (`Drawer` gives `drawer`, `FramePanelDoor` gives `frame_panel_door`),
-  then `_2`, `_3` for the next ones. A joint or a piece of hardware is
-  named the same way from its kind's name (`dado`, `dado_2`).
+- **Assemblies.** The component's name in lower case when it is one
+  word (`Drawer` gives `drawer`). **A name of two or more words gives
+  its last word**, the thing it is (`FramePanelDoor` gives `door`,
+  `HangingRail` gives `rail`), so a mirrored pair reads `door_left`, not
+  `frame_panel_door_left`; a last word that is a number or a single
+  letter keeps the word before it (`PanelA` gives `panel_a`,
+  `WidePanel_2` gives `panel_2`). Then `_2`, `_3` for the next ones. A
+  joint or a piece of hardware is named from its kind's whole name
+  (`dado_2`, `side_mount_slide_2`).
 - **Repeats.** A repeat of 2 or 3 is a labelled array, its labels from the
   direction of the split: up `[bottom, top]` or `[bottom, middle, top]`;
   across `[left, right]` or `[left, middle, right]`; deep `[front, back]`
   (and `[front, middle, back]`). A repeat of 4 or more is a counted array.
-- **Bays.** The region a repeated component fills is the component's name
-  plus `_bay`: `drawer_bay[bottom, top]`.
+- **Bays.** The region a repeated component fills is the assembly's base
+  name plus `_bay`: `drawer_bay[bottom, top]`, `door_bay[left, right]`.
 - **Mirrored pairs.** The name plus its side: `door_left`, and
-  `door_right = mirror(door_left, about: ...)`.
-- **Held rules.** Named from the two things measured, plus `_min` or
-  `_max`: `slat_to_apron_front_min`. The reason the user types is its
+  `door_right = mirror(door_left, about: ...)`. A name that already ends
+  in a side of the mirrored axis has it replaced, never doubled:
+  mirroring `door_left` across keeps it and adds `door_right`. A side
+  of another axis is part of the name and stays: mirroring `leg_front`
+  across gives `leg_front_left` and `leg_front_right`.
+- **Held rules.** Named from the two things measured, joined by `_to_`,
+  plus `_min` or `_max`: `slat_to_apron_front_min`. A word already in
+  the name is not written again (`rail.rail` to `divider.panel` gives
+  `rail_to_divider_panel_min`; `drawer.front` to `drawer.back` gives
+  `drawer_front_to_back_min`). The reason the user types is its
   message.
 - **Files.** One file per project until the user splits it. Once split,
   an added item goes to the file of the first item it refers to, as a
@@ -506,11 +608,19 @@ assembly drawer[bottom, top] : Drawer {
 
 A grip between two neighbouring pieces edits their two shares, keeping
 their sum, so only those two pieces change size. The boundary is snapped
-to whole millimetres, and the shares are written as whole numbers in the
-same proportions (`100 / 181` and `262 / 181` become `50` and `131`), so
-a later grip reads them back as plain numbers. When the pieces' sizes
-are not whole millimetres themselves (a split of an odd size), those
-whole numbers can be large; they are exact.
+to the project's `resolution:`, and the shares written are small whole
+numbers: every piece's size counted in steps of the resolution, divided
+by what the counts have in common (pieces of 150mm, 225mm and 125mm at
+0.5mm are 300, 450 and 250 steps: `shares: [6, 9, 5]`). A later grip
+reads them back as plain numbers. A piece whose size is not a whole
+number of steps (a split of an odd size) is counted to the nearest
+step, which moves it by less than a step.
+
+**Spaced.** A part placed along a span is repeated with `spaced`
+(`EditCommand::RepeatPart`, `repeat::repeat_part`): the part becomes an
+array, labelled from the axis for two or three, and its placement term
+on that axis becomes `spaced(evenly, from: <anchor>, to: <anchor>)`. On
+a part that is already an array it changes the count.
 
 **Mirror.** When the selection has a mirror image in the design (a
 component placed against one of two parts that are mirror images, or in
@@ -533,9 +643,9 @@ side and fills the first piece, and its mirror image fills the other,
 about the space's mid-plane:
 
 ```
-region frame_panel_door_bay[left, right] = split(divider.above, across)
-assembly frame_panel_door_left : casework.FramePanelDoor { opening: frame_panel_door_bay[left] ... }
-assembly frame_panel_door_right = mirror(frame_panel_door_left, about: mid(divider.above, across))
+region door_bay[left, right] = split(divider.above, across)
+assembly door_left : casework.FramePanelDoor { opening: door_bay[left] ... }
+assembly door_right = mirror(door_left, about: mid(divider.above, across))
 ```
 
 A plain repeat across would hang both doors on the side the first was
@@ -551,7 +661,10 @@ require slat_to_apron_front_min : between(slat[0], apron_front) >= 12mm "room fo
 ```
 
 The value pinned is the distance as it is now, and the user may type
-another; the message is the reason the user types. Like any edit it is
+another; the message is the reason the user types. The card offers the
+distance as it is now (`Session::measure(first, second)`, worked out
+from the solved design by `hold::measured_distance` in the same forms
+the rule writes). Like any edit it is
 tried first: a rule that already fails is refused.
 
 The request (`hold::HoldRequest`) is the two things measured (each a
@@ -587,17 +700,101 @@ item last), and the whole is tried as one patch.
 
 A grip is a handle on a size in the 3D view.
 
-- **Grips in the first build move plain numbers only**: the envelope's
-  params, component params (`set drawer[top].top_gap = 20mm`) and shares.
-  A grip shows its value, the range it may move in (the param's `within`,
-  or for a share, up to the sum of the two it shares with) and its stops:
-  the values of a `within` list, or a step of the project's `resolution:`.
+- **A grip moves a plain number**: the envelope's params, component
+  params (`set drawer.top_gap = 20mm`) and shares. A grip shows its
+  value, the range it may move in (the param's `within`, or for a share,
+  up to the sum of the two it shares with) and its stops: the values of
+  a `within` list, or a step of the project's `resolution:`.
 - **A size that is an expression** shows what it follows ("follows
-  `cabinet_width`") and has no grip of its own. Single-param inversion
-  ([Smart edits](grammar.md#smart-edits), rule 2) comes with the grips:
-  dragging such a size offers its plain params.
-- z3 over solved params is a later stage. No crate depends on z3 for
-  editing today.
+  `overall_width`, `case.overhang`"), each with its kind (plain, solved,
+  locked, a size of the stock, a size of the hardware or joint), and is
+  dragged through what it follows ([Smart edits](grammar.md#smart-edits)):
+  - **solved params**: when the size depends on `solved param`s, the
+    solver chooses which change and by how much (rule 3), keeping every
+    `require` and `within`;
+  - **one plain param**: the drag inverts it exactly (rule 2);
+  - **several plain params**: the card lists them, each with the value it
+    would take, and waits for the user to pick one;
+  - **none**: the card says what stops it ("nothing this size follows
+    can change: maple_12.thickness (a size of the stock)").
+
+The pure functions are `grips::grips` (the grips of a selection: an
+assembly's params then its parts' lengths and widths, the envelope's
+three sizes, or a split's boundaries), `stops::find_stops` (how far a
+plain number can go each way before the design stops checking),
+`grips::move_grip` and `move_grip_by` (the patch for a drag), and
+`solve_edit::Drag` (the solver's drag).
+
+### Grips in the session
+
+The session lists grips and drives a drag with the same commands and
+events as every other edit (see the tables in [The edit in
+progress](#the-edit-in-progress)); `stave_app::gripping` joins the pure
+functions.
+
+- **Listing.** `ListGrips(selection)` lists the grips at once, without
+  their stops (`GripSelection::Assembly(id)`, `Envelope` or
+  `Split(piece)`); `Session::grips` gives the `GripList`. Each
+  `ListedGrip` holds the grip (`SelectionGrip`: its size, its label
+  `divider.height`, the world axis it drags along, `GripAction::Moves`
+  with value, range, steps and kind, or `GripAction::Follows` with what
+  it follows) and its stops (`GripStops::NotSearched`, `NotSearchable`
+  for a follows grip or a boundary, `Found { below, above }`, or
+  `Failed`). A length grip of an assembly carries what the scene's
+  `grip_place` needs and can't know itself (`SelectionGrip::place`,
+  `PlaceInput::Length`): every length param of the assembly with its
+  value, and the two faces the length is measured between; the
+  envelope's grips carry the box and the face that moves
+  (`PlaceInput::Envelope`), a boundary its two pieces and the axis
+  (`PlaceInput::Share`). `GripList::contract(index)` gives the
+  contract's `Grip` where one can be made.
+- **Stops, without waiting.** The stop search is tens of checks a grip,
+  so it is never run by a command. `Session::grip_stops_job()` gives a
+  `StopsJob` (it can be sent to another thread: it prepares the project
+  itself); `StopsJob::run(cancel, found)` searches each movable grip in
+  turn and hands each answer (`FoundStops`) to `found` as soon as it is
+  known; the window hands each to `Session::grip_stops_found`, which
+  narrows the grip's range to its two last good values and says
+  `GripStopsFound(index)`. Setting the cancel flag stops the job between
+  checks; the grips reached keep their answer. An answer for an older
+  listing is dropped (`GripList::ticket`). `Session::find_grip_stops`
+  runs the job in place, for a script.
+- **A drag** is a change of the design: `BeginDrag(index)` starts it
+  (dropping what was in progress, keeping the grips listed),
+  `DragTo(value)` moves it, and each move writes the patch again and
+  tries it as an edit in progress is tried: the verdict and the ghost
+  (`Change::ghost`) are of the value as it now is. `Add` ends the drag
+  by writing it through the one writer; `Cancel` drops it.
+  `TypeGripValue { grip, value }` begins and moves in one, for a value
+  typed in the card. `Change::detail` is `ChangeDetail::Grip(GripDetail)`:
+  where it was moved (`target`), what changes and to what (`changes`,
+  each a `ParamChange { param, path, from, to }`), the plain params to
+  pick from (`choices`, each with the change it would make or why it
+  can't) and the one picked (`picked`, by `PickParam(param)`), what stops
+  it (`stopped`), what blocks the solver (`blockers`), whether the
+  solver chose (`solved`), and the size the written values reach when
+  snapping to the resolution made them miss (`reached`).
+  `Change::progress` is *needs a choice* (the plain params by name)
+  while a pick is waited for, and *can't be written* with the reason
+  when nothing can change or the solver can't reach the value. A commit
+  makes the listed grips stale, so the session drops them
+  (`GripsChanged`).
+- **The solver in a drag.** When the size depends on solved params, the
+  first move starts the solver's `Drag`: it solves once, then gives the
+  params' values by exact arithmetic along the drag and solves again only
+  at a bound (a `within` end, a require's edge, a param back at its
+  start). Each move reports the params that will change and to what
+  (`GripDetail::changes`, on the resolution) before the drag ends. A
+  value no answer reaches is refused naming what blocks it: "can't reach
+  400mm: the rule 'knee_room' stops it (leave room under the aprons for
+  your knees)" (`GripDetail::blockers`, `Blocker::Require { name,
+  message }`).
+- **Solved and plain.** `MakeSolved { param, low, high }` turns a plain
+  param of the project into `solved param ... within low..high` (a solved
+  param needs its range, which the user types); `MakePlain(param)` takes
+  `solved` off again and keeps the range, which still limits it. A
+  `locked param` is refused (no edit changes it), as is a param that
+  isn't the project's own (`param_kind::param_kind_patch`).
 
 ## What is not in the first build
 
@@ -607,8 +804,7 @@ Do not add these; each is a later decision:
 - a `fill` size;
 - turned or tapered legs;
 - automatic linking of repeated numbers;
-- applicability guards beyond `require`;
-- z3 (solved params are edited as plain ones until it comes).
+- applicability guards beyond `require`.
 
 ## Libraries this is meant for
 

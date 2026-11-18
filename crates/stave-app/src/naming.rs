@@ -85,6 +85,12 @@ impl TakenNames {
         self.names.insert(name.into());
     }
 
+    /// Frees a name, as for the item a change renames (its own name is
+    /// not in the way of its new one).
+    pub fn remove(&mut self, name: &str) {
+        self.names.remove(name);
+    }
+
     /// `true` if the name is taken.
     pub fn contains(&self, name: &str) -> bool {
         self.names.contains(name)
@@ -189,14 +195,43 @@ fn numbered(
     Err(NamingError::Exhausted(base.to_owned()))
 }
 
-/// The name of a new assembly of a component: the component's name in
-/// [`snake_case`], numbered when taken (`drawer`, `drawer_2`).
+/// The name of a new assembly of a component: the component's
+/// [`short_name`], numbered when taken (`drawer`, `drawer_2`;
+/// `FramePanelDoor` gives `door`).
 ///
 /// # Errors
 ///
 /// [`NamingError::NoName`] when the component's name has no letters.
 pub fn assembly_name(component: &str, taken: &TakenNames) -> Result<Ident, NamingError> {
-    first_free(&base_of(component)?, taken)
+    first_free(&short_name(component)?, taken)
+}
+
+/// The base name a component gives its assemblies (and the regions a
+/// repeat of one fills): its name in [`snake_case`] when that is one
+/// word (`Drawer` gives `drawer`), otherwise its last word, the thing it
+/// is (`FramePanelDoor` gives `door`, `HangingRail` gives `rail`). A last
+/// word that is a number or a single letter is kept with the word before
+/// it (`WidePanel_2` gives `panel_2`, `PanelA` gives `panel_a`).
+///
+/// # Errors
+///
+/// [`NamingError::NoName`] when the component's name has no letters.
+pub fn short_name(component: &str) -> Result<String, NamingError> {
+    let full = base_of(component)?;
+    let words: Vec<&str> = full.split('_').collect();
+    let Some((last, before)) = words.split_last() else {
+        return Ok(full);
+    };
+    let weak = last.len() < 2 || last.chars().all(|c| c.is_ascii_digit());
+    let short = match (before.last(), weak) {
+        (Some(previous), true) => format!("{previous}_{last}"),
+        _ => (*last).to_owned(),
+    };
+    if stave_lang::ast::is_word(&short) && short.starts_with(|c: char| c.is_ascii_lowercase()) {
+        Ok(short)
+    } else {
+        Ok(full)
+    }
 }
 
 /// The name of a new joint or piece of hardware: its kind's name, numbered
@@ -216,14 +251,15 @@ pub fn kind_item_name(kind: &str, taken: &TakenNames) -> Result<Ident, NamingErr
     first_free(&base, &taken)
 }
 
-/// The region a repeated component fills: the component's name plus
-/// `_bay`, numbered when taken (`drawer_bay`, `drawer_bay_2`).
+/// The region a repeated component fills: the component's [`short_name`]
+/// plus `_bay`, numbered when taken (`drawer_bay`, `drawer_bay_2`,
+/// `door_bay`).
 ///
 /// # Errors
 ///
 /// [`NamingError::NoName`] when the component's name has no letters.
 pub fn bay_name(component: &str, taken: &TakenNames) -> Result<Ident, NamingError> {
-    first_free(&format!("{}_bay", base_of(component)?), taken)
+    first_free(&format!("{}_bay", short_name(component)?), taken)
 }
 
 fn base_of(name: &str) -> Result<String, NamingError> {
@@ -307,8 +343,12 @@ fn sides(axis: Axis) -> (&'static str, &'static str) {
 
 /// The two names of a mirrored pair across `axis`: the name plus each side
 /// (`door_left`, `door_right` across; `_bottom`, `_top` up; `_front`,
-/// `_back` deep). The first is the side nearer the start of the axis. When
-/// either is taken, both move to the next number together (`door_2_left`,
+/// `_back` deep). The first is the side nearer the start of the axis. A
+/// name that already ends in a side of the mirrored axis has it replaced,
+/// never doubled: `door_left` across gives `door_left` and `door_right`.
+/// A side of another axis is kept as part of the name: `leg_front`
+/// across gives `leg_front_left` and `leg_front_right`. When either
+/// is taken, both move to the next number together (`door_2_left`,
 /// `door_2_right`), so the pair still reads as a pair.
 ///
 /// # Errors
@@ -320,7 +360,7 @@ pub fn mirrored_pair(
     taken: &TakenNames,
 ) -> Result<(Ident, Ident), NamingError> {
     let (first, last) = sides(axis);
-    let names = numbered(&base_of(base)?, taken, |stem| {
+    let names = numbered(&without_side(&base_of(base)?, axis), taken, |stem| {
         vec![format!("{stem}_{first}"), format!("{stem}_{last}")]
     })?;
     let mut names = names.into_iter();
@@ -328,6 +368,21 @@ pub fn mirrored_pair(
         (Some(a), Some(b)) => Ok((a, b)),
         _ => Err(NamingError::NoName(base.to_owned())),
     }
+}
+
+/// A name with a trailing side word of `axis` (`_left` or `_right`
+/// across, `_bottom` or `_top` up, `_front` or `_back` deep) taken off,
+/// when something is left. Side words of the other axes stay.
+fn without_side(name: &str, axis: Axis) -> String {
+    let (first, last) = sides(axis);
+    for side in [first, last] {
+        if let Some(stem) = name.strip_suffix(side).and_then(|s| s.strip_suffix('_'))
+            && !stem.is_empty()
+        {
+            return stem.to_owned();
+        }
+    }
+    name.to_owned()
 }
 
 /// Which way a held rule pins a distance.
@@ -361,7 +416,9 @@ impl Bound {
 /// plus `_min` or `_max` (`between(slat[0], apron_front) >= ...` gives
 /// `slat_to_apron_front_min`). Each thing is named by its path with indexes
 /// left out and members joined by `_` (`drawer[top].front` gives
-/// `drawer_front`).
+/// `drawer_front`), and a word already in the name is not written again
+/// (`rail.rail` to `divider.panel` gives `rail_to_divider_panel_min`, and
+/// `drawer.front` to `drawer.back` gives `drawer_front_to_back_min`).
 ///
 /// # Errors
 ///
@@ -374,7 +431,30 @@ pub fn held_rule_name(
 ) -> Result<Ident, NamingError> {
     let a = path_words(first)?;
     let b = path_words(second)?;
-    first_free(&format!("{a}_to_{b}_{}", bound.suffix()), taken)
+    let mut seen: Vec<String> = Vec::new();
+    let mut sides: [Vec<String>; 2] = [Vec::new(), Vec::new()];
+    for (side, words) in sides.iter_mut().zip([&a, &b]) {
+        for word in words.split('_') {
+            if !seen.iter().any(|w| w == word) {
+                seen.push(word.to_owned());
+                side.push(word.to_owned());
+            }
+        }
+    }
+    let [left, mut right] = sides;
+    if right.is_empty() {
+        // The second is wholly in the first's words: keep its last word.
+        right.push(b.rsplit('_').next().unwrap_or(&b).to_owned());
+    }
+    first_free(
+        &format!(
+            "{}_to_{}_{}",
+            left.join("_"),
+            right.join("_"),
+            bound.suffix()
+        ),
+        taken,
+    )
 }
 
 /// A path as words: indexes dropped, members joined by `_`.
@@ -415,10 +495,19 @@ mod tests {
     fn assemblies_take_the_next_number() {
         let none = TakenNames::new();
         assert_eq!(assembly_name("Drawer", &none).unwrap().as_str(), "drawer");
+        // A name of two or more words is shortened to its last word.
         assert_eq!(
             assembly_name("FramePanelDoor", &none).unwrap().as_str(),
-            "frame_panel_door"
+            "door"
         );
+        assert_eq!(
+            assembly_name("HangingRail", &none).unwrap().as_str(),
+            "rail"
+        );
+        assert_eq!(short_name("Shelf2Wide").unwrap(), "wide");
+        assert_eq!(short_name("PanelA").unwrap(), "panel_a");
+        assert_eq!(short_name("Panel2").unwrap(), "panel2");
+        assert_eq!(short_name("WidePanel_2").unwrap(), "panel_2");
         let some = taken(&["drawer", "drawer_2"]);
         assert_eq!(assembly_name("Drawer", &some).unwrap().as_str(), "drawer_3");
         // A joint never takes its kind's own name, which it would hide.
@@ -489,6 +578,10 @@ mod tests {
         let none = TakenNames::new();
         assert_eq!(bay_name("Drawer", &none).unwrap().as_str(), "drawer_bay");
         assert_eq!(
+            bay_name("FramePanelDoor", &none).unwrap().as_str(),
+            "door_bay"
+        );
+        assert_eq!(
             bay_name("Drawer", &taken(&["drawer_bay"]))
                 .unwrap()
                 .as_str(),
@@ -511,6 +604,37 @@ mod tests {
         assert_eq!(
             (left.as_str(), right.as_str()),
             ("door_2_left", "door_2_right")
+        );
+        // A name that has a side already has it replaced, not doubled.
+        let (left, right) = mirrored_pair("door_left", Axis::Across, &none).unwrap();
+        assert_eq!((left.as_str(), right.as_str()), ("door_left", "door_right"));
+        let (front, back) = mirrored_pair("apron_front", Axis::Deep, &none).unwrap();
+        assert_eq!(
+            (front.as_str(), back.as_str()),
+            ("apron_front", "apron_back")
+        );
+        let (left, right) = mirrored_pair("left", Axis::Across, &none).unwrap();
+        assert_eq!((left.as_str(), right.as_str()), ("left_left", "left_right"));
+        // A side of another axis is part of the name and stays.
+        let (left, right) = mirrored_pair("leg_front", Axis::Across, &none).unwrap();
+        assert_eq!(
+            (left.as_str(), right.as_str()),
+            ("leg_front_left", "leg_front_right")
+        );
+        let (left, right) = mirrored_pair("rail_back", Axis::Across, &none).unwrap();
+        assert_eq!(
+            (left.as_str(), right.as_str()),
+            ("rail_back_left", "rail_back_right")
+        );
+        let (front, back) = mirrored_pair("drawer_top", Axis::Deep, &none).unwrap();
+        assert_eq!(
+            (front.as_str(), back.as_str()),
+            ("drawer_top_front", "drawer_top_back")
+        );
+        let (bottom, top) = mirrored_pair("door_left", Axis::Up, &none).unwrap();
+        assert_eq!(
+            (bottom.as_str(), top.as_str()),
+            ("door_left_bottom", "door_left_top")
         );
     }
 
@@ -539,6 +663,25 @@ mod tests {
             .unwrap()
             .as_str(),
             "slat_to_apron_front_min_2"
+        );
+        // A word is never written twice.
+        assert_eq!(
+            held_rule_name("hanging_rail.rail", "divider.panel", Bound::Min, &none)
+                .unwrap()
+                .as_str(),
+            "hanging_rail_to_divider_panel_min"
+        );
+        assert_eq!(
+            held_rule_name("drawer.front", "drawer.back", Bound::Max, &none)
+                .unwrap()
+                .as_str(),
+            "drawer_front_to_back_max"
+        );
+        assert_eq!(
+            held_rule_name("rail", "rail.end", Bound::Min, &none)
+                .unwrap()
+                .as_str(),
+            "rail_to_end_min"
         );
         assert_eq!(Bound::Min.operator(), ">=");
         assert_eq!(Bound::Max.operator(), "<=");

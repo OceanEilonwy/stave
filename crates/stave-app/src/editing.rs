@@ -52,7 +52,9 @@ use stave_lang::ast::{self, Expr, Ident, Name, Span};
 use stave_lang::placement::Axis;
 use stave_lang::units::Length;
 use stave_lang::{Fix as LangFix, Parse, SourceMap, TextEdit, apply_patch, parse_patch_file};
+use stave_model::ids::ParamId;
 use stave_model::nonempty::NonEmpty;
+use stave_model::trace::Amount;
 use stave_modules::{FileSource, LoadError, MemoryFiles};
 
 use crate::Opened;
@@ -62,6 +64,7 @@ use crate::edit::{
     Applicability, Candidate, Declaration, FacingPair, PartFace, Picked, PlaceSlot, SettingValue,
     Verdict,
 };
+use crate::grips::GripSelection;
 use crate::hold::HoldRequest;
 use crate::naming::RepeatCount;
 use crate::naming::TakenNames;
@@ -206,6 +209,58 @@ pub enum EditCommand {
         /// Its new name.
         to: Ident,
     },
+    /// Start a change: repeat a part spaced evenly along a span, from one
+    /// anchor to another, or change how many there are
+    /// ([`crate::repeat::repeat_part`]).
+    RepeatPart {
+        /// The part: `slat`.
+        part: Ident,
+        /// How many it becomes.
+        count: RepeatCount,
+        /// The axis they are spaced along (it names the labels of two or
+        /// three).
+        axis: Axis,
+        /// The anchor the span starts at, as written: `apron_left.right`.
+        from: String,
+        /// The anchor it ends at: `apron_right.left`.
+        to: String,
+    },
+    /// List the grips of a selection: an assembly, the envelope, or the
+    /// boundaries of a split ([`crate::session::Session::grips`]). Their
+    /// stops are not searched yet: run
+    /// [`crate::session::Session::grip_stops_job`] off the main thread.
+    ListGrips(GripSelection),
+    /// Start a drag on the grip at this index of the listed grips (a
+    /// change; what was in progress is dropped, the grips stay listed).
+    BeginDrag(usize),
+    /// Move the grip being dragged to a value: its patch is written again
+    /// and tried, as an edit in progress is. `Add` ends the drag by
+    /// writing it, `Cancel` by dropping it.
+    DragTo(Amount),
+    /// Pick which plain param a follows grip changes, from the drag's
+    /// choices ([`crate::gripping::GripDetail::choices`]).
+    PickParam(ParamId),
+    /// Type a value for the grip at this index: a drag begun and moved
+    /// there in one, ready for `Add`.
+    TypeGripValue {
+        /// The grip's index in the listed grips.
+        grip: usize,
+        /// The value.
+        value: Amount,
+    },
+    /// Start a change: make a param of the project a `solved param` the
+    /// solver may change within `low..high`.
+    MakeSolved {
+        /// The param.
+        param: Ident,
+        /// The lowest value it may take.
+        low: Expr,
+        /// The highest.
+        high: Expr,
+    },
+    /// Start a change: make a solved param of the project plain again,
+    /// keeping its range.
+    MakePlain(Ident),
     /// Write the candidate, or the change, into the text (only when it
     /// fits).
     Add,
@@ -242,6 +297,17 @@ pub enum EditEvent {
     /// The chosen candidate's [`Progress`] changed: its verdict, or what is
     /// still to choose.
     VerdictChanged,
+    /// [`crate::session::Session::grips`] changed: listed, or dropped
+    /// (after a commit, the design they were listed from is gone).
+    GripsChanged,
+    /// The stops of the grip at this index were found.
+    GripStopsFound(usize),
+    /// The grip being dragged moved: the change's detail
+    /// ([`crate::change::ChangeDetail::Grip`]) says to what, and what
+    /// changes.
+    DragMoved,
+    /// A param was picked for a follows grip.
+    ParamPicked,
     /// The candidate was written into the text; the edit is over and the
     /// committed design is the result.
     Committed,
@@ -279,6 +345,14 @@ pub enum Rejection {
     /// [`EditCommand::IncludeDependants`] without a removal waiting on
     /// its dependants.
     NothingToInclude,
+    /// A grip command with no grips listed.
+    NoGrips,
+    /// No listed grip has this index.
+    NoSuchGrip(usize),
+    /// A drag command with no drag in progress.
+    NotDragging,
+    /// The param picked is not one the grip could change.
+    NotAChoice,
 }
 
 impl Rejection {
@@ -300,6 +374,12 @@ impl Rejection {
             Rejection::CantStart(message) | Rejection::CantWrite(message) => message.clone(),
             Rejection::NothingToInclude => {
                 "there is no removal waiting on what depends on it".to_owned()
+            }
+            Rejection::NoGrips => "list the grips of something first".to_owned(),
+            Rejection::NoSuchGrip(index) => format!("there is no grip {}", index + 1),
+            Rejection::NotDragging => "no grip is being dragged".to_owned(),
+            Rejection::NotAChoice => {
+                "that is not one of the sizes this grip could change".to_owned()
             }
         }
     }
@@ -516,6 +596,14 @@ impl Edit {
         &self.menu
     }
 
+    /// Where the refused entries of the menu begin, for the window to
+    /// fold them: `menu()[refused_from()..]` are greyed, the entries before
+    /// apply, need a choice or are not checked yet
+    /// ([`crate::candidates::refused_from`]).
+    pub fn refused_from(&self) -> usize {
+        crate::candidates::refused_from(&self.menu)
+    }
+
     /// The chosen candidate, once one is chosen.
     pub fn chosen(&self) -> Option<&Chosen> {
         self.chosen.as_ref()
@@ -707,7 +795,15 @@ impl Edit {
             | EditCommand::Hold(_)
             | EditCommand::Remove(_)
             | EditCommand::IncludeDependants
-            | EditCommand::RenameItem { .. } => {
+            | EditCommand::RenameItem { .. }
+            | EditCommand::RepeatPart { .. }
+            | EditCommand::ListGrips(_)
+            | EditCommand::BeginDrag(_)
+            | EditCommand::DragTo(_)
+            | EditCommand::PickParam(_)
+            | EditCommand::TypeGripValue { .. }
+            | EditCommand::MakeSolved { .. }
+            | EditCommand::MakePlain(_) => {
                 events.push(EditEvent::Rejected(Rejection::NoEdit));
             }
         }

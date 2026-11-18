@@ -192,6 +192,88 @@ pub fn hold_patch(
     })
 }
 
+/// The distance between two things as the design has it now: what a held
+/// rule's `between` (or size) measures, worked out from where the solved
+/// design puts them. The card offers it as the value to hold, before the
+/// user types another.
+///
+/// # Errors
+///
+/// The same thing twice, a thing that is not a part or region of the
+/// design, two faces that are not parallel, or two things apart along
+/// more than one axis; see [`HoldError`].
+pub fn measured_distance(
+    design: &SolvedDesign,
+    first: &Measured,
+    second: &Measured,
+) -> Result<Length, HoldError> {
+    let (a, b) = (first.path(), second.path());
+    if a == b {
+        return Err(HoldError::SameThing(a));
+    }
+    let apart = |x: Length, y: Length| {
+        i64::try_from(x.nm().abs_diff(y.nm()))
+            .map(Length::from_nm)
+            .map_err(|_| HoldError::NotOneAxis(a.clone(), b.clone()))
+    };
+    match (first, second) {
+        (Measured::Face { item: ia, face: fa }, Measured::Face { item: ib, face: fb }) => {
+            if fa.axis() != fb.axis() {
+                return Err(HoldError::NotParallel(a, b));
+            }
+            apart(
+                solid(design, ia)?.bounds().face(*fa),
+                solid(design, ib)?.bounds().face(*fb),
+            )
+        }
+        (Measured::Face { item, face }, Measured::Item(other))
+        | (Measured::Item(other), Measured::Face { item, face }) => {
+            let plane = solid(design, item)?.bounds().face(*face);
+            match solid(design, other)? {
+                Solid::Region(region) => apart(plane, region.face(*face)),
+                Solid::Part(part) => {
+                    apart(plane, part.face(nearest_face(part, face.axis(), plane)))
+                }
+            }
+        }
+        (Measured::Item(_), Measured::Item(_)) => {
+            let (sa, sb) = (solid(design, &a)?, solid(design, &b)?);
+            let (ba, bb) = (sa.bounds(), sb.bounds());
+            let gaps: Vec<(Length, Length)> = Axis::ALL
+                .into_iter()
+                .filter_map(|axis| {
+                    let low = Face::ALL
+                        .into_iter()
+                        .find(|f| f.axis() == axis && !f.is_positive())?;
+                    let high = low.opposite();
+                    if ba.face(high) <= bb.face(low) {
+                        Some((ba.face(high), bb.face(low)))
+                    } else if bb.face(high) <= ba.face(low) {
+                        Some((bb.face(high), ba.face(low)))
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            let both_parts = matches!((sa, sb), (Solid::Part(_), Solid::Part(_)));
+            match gaps.as_slice() {
+                [(from, to)] => apart(*from, *to),
+                [] if !both_parts => {
+                    // One inside or across the other: the nearest side.
+                    let gap = |face: Face| ba.face(face).nm().abs_diff(bb.face(face).nm());
+                    let face = Face::ALL
+                        .into_iter()
+                        .filter(|face| gap(*face) > 0)
+                        .min_by_key(|face| gap(*face))
+                        .unwrap_or(Face::Top);
+                    apart(ba.face(face), bb.face(face))
+                }
+                _ => Err(HoldError::NotOneAxis(a, b)),
+            }
+        }
+    }
+}
+
 /// What a picked thing is in the solved design.
 #[derive(Clone, Copy)]
 enum Solid {
@@ -430,10 +512,10 @@ mod tests {
             },
         )
         .unwrap();
-        assert_eq!(held.name.as_str(), "inside_front_to_inside_back_min");
+        assert_eq!(held.name.as_str(), "inside_front_to_back_min");
         assert_eq!(held.condition, "inside.deep >= 280mm");
         assert!(held.patch.text.contains(
-            "add require inside_front_to_inside_back_min : inside.deep >= 280mm \"room for files\""
+            "add require inside_front_to_back_min : inside.deep >= 280mm \"room for files\""
         ));
         let tried = fits(&folder, &files, &held.patch);
         drop(scope);
@@ -489,7 +571,7 @@ mod tests {
             },
         )
         .unwrap();
-        assert_eq!(between.name.as_str(), "side_l_to_side_r_max");
+        assert_eq!(between.name.as_str(), "side_l_to_r_max");
         assert_eq!(between.condition, "between(side_l, side_r) <= 370mm");
         fits(&folder, &files, &between.patch);
 
@@ -699,10 +781,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(held.condition, "divider.below.up >= 300mm");
-        assert_eq!(
-            held.name.as_str(),
-            "divider_below_bottom_to_divider_below_top_min"
-        );
+        assert_eq!(held.name.as_str(), "divider_below_bottom_to_top_min");
         let tried = fits(ASSEMBLIES, &files, &held.patch);
         assert!(
             tried

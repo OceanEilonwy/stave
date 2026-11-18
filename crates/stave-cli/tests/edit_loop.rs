@@ -82,11 +82,12 @@ fn the_menu_for_the_space_above_the_divider_lists_the_shelf_and_why_a_drawer_can
         printed.contains("\n  4. casework.Shelf             needs a choice: sides\n"),
         "{printed}"
     );
-    // A drawer would run into the shelf and the doors: refused, with the
-    // checker's messages.
+    // A divider may nest, so it is offered over another divider. A drawer
+    // would run into the shelf and the doors: refused, with the checker's
+    // messages, after the entries that fit.
     assert!(
         printed.contains(
-            "\n  5. casework.Drawer            refused\n       error[overlap]: shelf and drawer_2.side[left] overlap\n"
+            "\n  6. casework.Drawer            refused\n       error[overlap]: shelf and drawer_2.side[left] overlap\n"
         ),
         "{printed}"
     );
@@ -142,8 +143,8 @@ casework.Shelf as shelf_2 (In this space)
   sides        [side_l, side_r]
   panel_stock  oak_19 (copied from shelf)
   headroom     400mm
-  joinery      default
-  depth        default
+  joinery      dado (default)
+  depth        9mm (default)
 verdict: fits
 patch:
   stave 1

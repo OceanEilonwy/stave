@@ -30,8 +30,19 @@
 //! mirror door                      # offer mirror door: only say if it has one
 //! mirror door across               # a door filling a space: a mirrored pair
 //! hold slat[0] apron_front min 12mm "room for a finger"
+//! hold slat[0] apron_front min "room for a finger"   # as it is now
+//! measure slat[0] apron_front      # the distance now
+//! spaced slat 5 across from apron_left.right to apron_right.left
 //! remove divider                   # then: include dependants
 //! rename shelf hat_shelf
+//! # grips and the solver
+//! grips assembly divider           # or: grips envelope, grips split drawer_bay[bottom]
+//! stops 1                          # how far grip 1 can go each way
+//! drag 1 420mm                     # tried at once; drag again to go on
+//! grip 1 = 450mm                   # a value typed for grip 1
+//! pick overall_width               # which param a dragged size changes
+//! solved overall_width within 600mm..1200mm
+//! plain overall_width
 //! ```
 //!
 //! Each step of a script is echoed (`> list`) before what it prints, so
@@ -58,15 +69,19 @@ use stave_app::editing::{
     Edit, EditCommand, EditEvent, Progress, entry_matches, parse_length, parse_name, parse_value,
     write_all,
 };
+use stave_app::gripping::{GripChoice, GripDetail, GripList, GripStops};
+use stave_app::grips::{FollowKind, GripAction, GripSelection};
 use stave_app::hold::{HoldRequest, Measured};
 use stave_app::naming::{Bound, RepeatCount};
 use stave_app::remove::Dependants;
 use stave_app::scratch::DiskWriter;
 use stave_app::session::{Command, Event, Session};
+use stave_app::stops::{Side, SideEnd, amount_text};
 use stave_lang::ast::Ident;
 use stave_lang::placement::{Axis, Face};
 use stave_lang::render_diagnostics;
 use stave_model::nonempty::NonEmpty;
+use stave_model::trace::{Amount, Freedom};
 use stave_schema::species::Species;
 
 /// What a step points at, by name.
@@ -80,6 +95,17 @@ pub enum Selection {
     Between(String, String),
     /// `parts side_l side_r`: a group of parts.
     Parts(Vec<String>),
+}
+
+/// What a `grips` step lists the grips of.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GripsOf {
+    /// `grips envelope`: the project's three overall sizes.
+    Envelope,
+    /// `grips assembly divider`: an assembly's params and parts' sizes.
+    Assembly(String),
+    /// `grips split drawer_bay[bottom]`: the boundaries of a split.
+    Split(String),
 }
 
 /// One stock line of a new project: `stock oak_19 white_oak solid 19mm
@@ -96,8 +122,8 @@ pub struct HoldLine {
     pub second: String,
     /// A minimum or a maximum.
     pub bound: Bound,
-    /// The value pinned.
-    pub value: stave_lang::units::Length,
+    /// The value pinned; `None` for the distance as it is now.
+    pub value: Option<stave_lang::units::Length>,
     /// Why.
     pub reason: String,
 }
@@ -157,8 +183,41 @@ pub enum Step {
     /// and its mirror image in the other.
     MirrorSplit(Ident, Axis),
     /// Hold a measured distance: the two things as written (a part, a
-    /// region, or a face of one), the bound, the value and the reason.
+    /// region, or a face of one), the bound, the value (the distance as
+    /// it is now when left out) and the reason.
     Hold(HoldLine),
+    /// Say the distance between two things as the design has it now.
+    Measure(String, String),
+    /// Repeat a part spaced evenly along a span: the part, how many, the
+    /// axis, and the anchors the span runs from and to.
+    Spaced {
+        /// The part.
+        part: Ident,
+        /// How many.
+        count: RepeatCount,
+        /// The axis they are spaced along.
+        axis: Axis,
+        /// The anchor the span starts at.
+        from: String,
+        /// The anchor it ends at.
+        to: String,
+    },
+    /// List the grips of something.
+    Grips(GripsOf),
+    /// Search the stops of the listed grips: of one (counted from 1), or
+    /// of all.
+    Stops(Option<usize>),
+    /// Drag a listed grip (counted from 1) to a value as typed; a drag on
+    /// the same grip goes on from where it is.
+    Drag(usize, String),
+    /// Type a value for a listed grip (counted from 1).
+    TypeGrip(usize, String),
+    /// Pick the param a dragged size changes, by its name.
+    Pick(String),
+    /// Make a param of the project solved, with its range as typed.
+    Solved(Ident, String, String),
+    /// Make a solved param of the project plain again.
+    Plain(Ident),
     /// Remove an item.
     Remove(Ident),
     /// Remove what depends on it too.
@@ -251,7 +310,7 @@ fn without_comment(line: &str) -> &str {
     line
 }
 
-const STEPS: &str = "new, import, stock, tools, create, select, list, choose, bind, set, name, repeat, shares, offer mirror, mirror, hold, remove, include dependants, rename, fix, show, commit, add or cancel";
+const STEPS: &str = "new, import, stock, tools, create, select, list, choose, bind, set, name, repeat, spaced, shares, offer mirror, mirror, measure, hold, remove, include dependants, rename, grips, stops, drag, grip, pick, solved, plain, fix, show, commit, add or cancel";
 
 fn parse_step(line: &str) -> Result<Step> {
     let words: Vec<&str> = line.split_whitespace().collect();
@@ -293,6 +352,33 @@ fn parse_step(line: &str) -> Result<Step> {
         ["mirror", item] => Ok(Step::Mirror(parse_name(item)?)),
         ["mirror", item, way] => Ok(Step::MirrorSplit(parse_name(item)?, axis(way)?)),
         ["hold", ..] => hold_step(line),
+        ["measure", first, second] => Ok(Step::Measure((*first).to_owned(), (*second).to_owned())),
+        ["spaced", part, count, way, "from", from, "to", to] => Ok(Step::Spaced {
+            part: parse_name(part)?,
+            count: repeat_count(count)?,
+            axis: axis(way)?,
+            from: (*from).to_owned(),
+            to: (*to).to_owned(),
+        }),
+        ["grips", "envelope"] => Ok(Step::Grips(GripsOf::Envelope)),
+        ["grips", "assembly", name] => Ok(Step::Grips(GripsOf::Assembly((*name).to_owned()))),
+        ["grips", "split", piece] => Ok(Step::Grips(GripsOf::Split((*piece).to_owned()))),
+        ["stops"] => Ok(Step::Stops(None)),
+        ["stops", grip] => Ok(Step::Stops(Some(count(grip)?))),
+        ["drag", grip, value] => Ok(Step::Drag(count(grip)?, (*value).to_owned())),
+        ["grip", grip, "=", value @ ..] if !value.is_empty() => {
+            Ok(Step::TypeGrip(count(grip)?, value.join(" ")))
+        }
+        ["pick", name] => Ok(Step::Pick((*name).to_owned())),
+        ["solved", param, "within", range] => match range.split_once("..") {
+            Some((low, high)) if !low.is_empty() && !high.is_empty() => Ok(Step::Solved(
+                parse_name(param)?,
+                low.to_owned(),
+                high.to_owned(),
+            )),
+            _ => bail!("a solved param needs a range: 'solved {param} within 600mm..1200mm'"),
+        },
+        ["plain", param] => Ok(Step::Plain(parse_name(param)?)),
         ["remove", item] => Ok(Step::Remove(parse_name(item)?)),
         ["include", "dependants"] => Ok(Step::IncludeDependants),
         ["rename", item, to] => Ok(Step::Rename(parse_name(item)?, parse_name(to)?)),
@@ -378,7 +464,7 @@ fn stock_line(words: &[&str]) -> Result<StockLine> {
 
 /// `hold <a> <b> min|max <length> "<reason>"`.
 fn hold_step(line: &str) -> Result<Step> {
-    let usage = "a held distance is written 'hold <a> <b> min|max <length> \"<reason>\"', each of a and b a part, a region or one of their faces";
+    let usage = "a held distance is written 'hold <a> <b> min|max [<length>] \"<reason>\"', each of a and b a part, a region or one of their faces; without a length it holds the distance as it is now";
     let rest = line.trim_start_matches("hold").trim();
     let Some((head, reason)) = rest.split_once('"') else {
         bail!("{usage}");
@@ -387,8 +473,10 @@ fn hold_step(line: &str) -> Result<Step> {
         bail!("{usage}");
     };
     let words: Vec<&str> = head.split_whitespace().collect();
-    let [first, second, bound, value] = words.as_slice() else {
-        bail!("{usage}");
+    let (first, second, bound, value) = match words.as_slice() {
+        [first, second, bound] => (first, second, bound, None),
+        [first, second, bound, value] => (first, second, bound, Some(value)),
+        _ => bail!("{usage}"),
     };
     let bound = match *bound {
         "min" => Bound::Min,
@@ -399,7 +487,7 @@ fn hold_step(line: &str) -> Result<Step> {
         first: (*first).to_owned(),
         second: (*second).to_owned(),
         bound,
-        value: parse_length(value)?,
+        value: value.map(|value| parse_length(value)).transpose()?,
         reason: reason.to_owned(),
     }))
 }
@@ -712,15 +800,135 @@ impl Runner<'_> {
             ),
             Step::Hold(line) => {
                 let opened = stave_app::open(self.folder)?;
+                let (first, second) = (
+                    measured(&opened, &line.first),
+                    measured(&opened, &line.second),
+                );
+                let value = match line.value {
+                    Some(value) => value,
+                    None => {
+                        let now = self
+                            .session
+                            .measure(&first, &second)
+                            .map_err(anyhow::Error::msg)?;
+                        writeln!(out, "the distance is {now} now")?;
+                        now
+                    }
+                };
                 let request = HoldRequest {
-                    first: measured(&opened, &line.first),
-                    second: measured(&opened, &line.second),
+                    first,
+                    second,
                     bound: line.bound,
-                    value: line.value,
+                    value,
                     reason: line.reason.clone(),
                 };
                 self.change(EditCommand::Hold(request), out)
             }
+            Step::Measure(first, second) => {
+                let opened = stave_app::open(self.folder)?;
+                let distance = self
+                    .session
+                    .measure(&measured(&opened, first), &measured(&opened, second))
+                    .map_err(anyhow::Error::msg)?;
+                writeln!(out, "{first} to {second}: {distance}")?;
+                Ok(true)
+            }
+            Step::Spaced {
+                part,
+                count,
+                axis,
+                from,
+                to,
+            } => self.change(
+                EditCommand::RepeatPart {
+                    part: part.clone(),
+                    count: *count,
+                    axis: *axis,
+                    from: from.clone(),
+                    to: to.clone(),
+                },
+                out,
+            ),
+            Step::Grips(of) => {
+                let opened = stave_app::open(self.folder)?;
+                let selection = grip_selection(&opened, of)?;
+                let events = self.send(EditCommand::ListGrips(selection));
+                if let Some(failed) = rejected(&events) {
+                    writeln!(out, "rejected: {failed}")?;
+                    return Ok(false);
+                }
+                if let Some(grips) = self.session.grips() {
+                    grips_list(grips, out)?;
+                }
+                Ok(true)
+            }
+            Step::Stops(grip) => {
+                let never = std::sync::atomic::AtomicBool::new(false);
+                let events = self
+                    .session
+                    .find_grip_stops(grip.map(|n| n.saturating_sub(1)), &never);
+                let events: Vec<EditEvent> = events
+                    .into_iter()
+                    .filter_map(|event| match event {
+                        Event::Edit(event) => Some(event),
+                        _ => None,
+                    })
+                    .collect();
+                if let Some(failed) = rejected(&events) {
+                    writeln!(out, "rejected: {failed}")?;
+                    return Ok(false);
+                }
+                if let Some(grips) = self.session.grips() {
+                    stops_list(grips, *grip, out)?;
+                }
+                Ok(true)
+            }
+            Step::Drag(grip, value) => {
+                let index = grip.saturating_sub(1);
+                let value = self.grip_value(index, value)?;
+                let dragging = self.session.change().is_some_and(|change| {
+                    matches!(change.detail(), ChangeDetail::Grip(detail) if detail.index == index)
+                });
+                if !dragging {
+                    let events = self.send(EditCommand::BeginDrag(index));
+                    if let Some(failed) = rejected(&events) {
+                        writeln!(out, "rejected: {failed}")?;
+                        return Ok(false);
+                    }
+                }
+                self.drag_step(EditCommand::DragTo(value), out)
+            }
+            Step::TypeGrip(grip, value) => {
+                let index = grip.saturating_sub(1);
+                let value = self.grip_value(index, value)?;
+                self.drag_step(EditCommand::TypeGripValue { grip: index, value }, out)
+            }
+            Step::Pick(name) => {
+                let choice = self
+                    .session
+                    .change()
+                    .and_then(|change| match change.detail() {
+                        ChangeDetail::Grip(detail) => detail
+                            .choices
+                            .iter()
+                            .find(|choice| choice_named(choice, name))
+                            .map(|choice| choice.param),
+                        _ => None,
+                    });
+                let Some(param) = choice else {
+                    bail!("'{name}' is not one of the sizes the dragged grip could change");
+                };
+                self.drag_step(EditCommand::PickParam(param), out)
+            }
+            Step::Solved(param, low, high) => self.change(
+                EditCommand::MakeSolved {
+                    param: param.clone(),
+                    low: parse_value(low)?,
+                    high: parse_value(high)?,
+                },
+                out,
+            ),
+            Step::Plain(param) => self.change(EditCommand::MakePlain(param.clone()), out),
             Step::Remove(item) => self.change(EditCommand::Remove(item.clone()), out),
             Step::IncludeDependants => {
                 let events = self.send(EditCommand::IncludeDependants);
@@ -808,6 +1016,38 @@ impl Runner<'_> {
         Ok(true)
     }
 
+    /// Sends a drag command and says where the drag stands, with what it
+    /// changes, what to pick from and what stops it.
+    fn drag_step(&mut self, command: EditCommand, out: &mut String) -> Result<bool> {
+        let events = self.send(command);
+        if let Some(failed) = rejected(&events) {
+            writeln!(out, "rejected: {failed}")?;
+            return Ok(false);
+        }
+        if let Some(change) = self.session.change() {
+            writeln!(out, "{}: {}", change.summary(), change_line(change))?;
+            if let ChangeDetail::Grip(detail) = change.detail() {
+                grip_detail(detail, out)?;
+            }
+        }
+        Ok(true)
+    }
+
+    /// A value typed for the listed grip at `index`, of the grip's kind.
+    fn grip_value(&self, index: usize, text: &str) -> Result<Amount> {
+        let Some(grips) = self.session.grips() else {
+            bail!("list the grips of something first: 'grips assembly <name>'");
+        };
+        let Some(listed) = grips.grips().get(index) else {
+            bail!("there is no grip {}", index.saturating_add(1));
+        };
+        let now = match &listed.grip.action {
+            GripAction::Moves(movable) => movable.value,
+            GripAction::Follows(follows) => follows.value,
+        };
+        amount_like(now, text)
+    }
+
     fn edit(&self) -> Result<&Edit> {
         match self.session.edit() {
             Some(edit) => Ok(edit),
@@ -853,6 +1093,10 @@ fn change_line(change: &Change) -> String {
             "used by {}; 'include dependants' removes them too",
             names_text(names)
         ),
+        (ChangeDetail::Grip(_), Progress::NeedsChoice(names)) => {
+            format!("pick which size changes: {}", names_text(names))
+        }
+        (ChangeDetail::Grip(_), Progress::Unwritable(reason)) => format!("refused: {reason}"),
         (_, progress) => progress_line(progress),
     }
 }
@@ -898,6 +1142,13 @@ fn change_card(change: &Change, out: &mut String) -> Result<()> {
         ChangeDetail::Rename { from, to } => {
             writeln!(out, "  renames {from} to {} where it is used", to.as_str())?;
         }
+        ChangeDetail::Grip(detail) => {
+            writeln!(out, "  grip {}: {}", detail.index + 1, detail.label)?;
+            if let Some(target) = detail.target {
+                writeln!(out, "  moved to {}", amount(target))?;
+            }
+            grip_detail(detail, out)?;
+        }
     }
     for path in change.renamed_files() {
         writeln!(out, "  renames in {}", path.display())?;
@@ -931,6 +1182,194 @@ fn change_card(change: &Change, out: &mut String) -> Result<()> {
                 writeln!(out)?;
             } else {
                 writeln!(out, "  {line}")?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// What a drag found, indented: what changes (when the solver chose it,
+/// or after a pick), what to pick from, what stops it.
+fn grip_detail(detail: &GripDetail, out: &mut String) -> Result<()> {
+    if (detail.solved || detail.picked.is_some()) && !detail.changes.is_empty() {
+        let changes: Vec<String> = detail
+            .changes
+            .iter()
+            .map(|change| {
+                format!(
+                    "{} {} -> {}",
+                    change.path,
+                    amount(change.from),
+                    amount(change.to)
+                )
+            })
+            .collect();
+        writeln!(out, "  changes {}", changes.join(", "))?;
+    }
+    if let Some(reached) = detail.reached {
+        writeln!(out, "  reaches {} on the resolution", amount(reached))?;
+    }
+    if detail.picked.is_none() {
+        for choice in &detail.choices {
+            match &choice.change {
+                Ok(change) => writeln!(
+                    out,
+                    "  could change {}: {} -> {}",
+                    choice.name,
+                    amount(change.from),
+                    amount(change.to)
+                )?,
+                Err(why) => writeln!(out, "  could not change {}: {why}", choice.name)?,
+            }
+        }
+    }
+    Ok(())
+}
+
+/// An amount as `.stave` writes it.
+fn amount(value: Amount) -> String {
+    amount_text(value).unwrap_or_else(|| "?".to_owned())
+}
+
+/// The value a grip of the kind of `now` is moved to, as typed: a length
+/// (`400mm`), an angle (`95deg`) or a plain number (`0.37`, `3`).
+fn amount_like(now: Amount, text: &str) -> Result<Amount> {
+    let expr = parse_value(text)?;
+    let wrong = || anyhow::anyhow!("'{text}' is not the same kind of value as {}", amount(now));
+    Ok(match (now, &expr.kind) {
+        (Amount::Length(_), stave_lang::ast::ExprKind::Quantity(quantity)) => {
+            Amount::Length(stave_lang::units::quantity_to_length(*quantity).map_err(|_| wrong())?)
+        }
+        (Amount::Angle(_), stave_lang::ast::ExprKind::Quantity(quantity)) => {
+            Amount::Angle(stave_lang::units::quantity_to_angle(*quantity).map_err(|_| wrong())?)
+        }
+        (Amount::Count(_), stave_lang::ast::ExprKind::Number(number)) => {
+            Amount::Count(stave_lang::units::number_to_rational(*number).map_err(|_| wrong())?)
+        }
+        (Amount::Ratio(_), stave_lang::ast::ExprKind::Number(number)) => {
+            Amount::Ratio(stave_lang::units::number_to_rational(*number).map_err(|_| wrong())?)
+        }
+        _ => return Err(wrong()),
+    })
+}
+
+/// Whether a choice is the one named: by its name as listed
+/// (`case.overhang`), or the param's own name (`overhang`).
+fn choice_named(choice: &GripChoice, name: &str) -> bool {
+    choice.name == name
+        || choice
+            .name
+            .rsplit('.')
+            .next()
+            .and_then(|tail| tail.split('[').next())
+            == Some(name)
+}
+
+/// The grips of a selection by name.
+fn grip_selection(opened: &Opened, of: &GripsOf) -> Result<GripSelection> {
+    let Some(model) = opened.model.as_ref() else {
+        bail!("the project's names and types don't resolve; see stave check");
+    };
+    Ok(match of {
+        GripsOf::Envelope => GripSelection::Envelope,
+        GripsOf::Assembly(name) => match model.assemblies.iter().find(|a| a.name == *name) {
+            Some(assembly) => GripSelection::Assembly(assembly.id),
+            None => bail!("the design has no assembly called '{name}'"),
+        },
+        GripsOf::Split(name) => match model.regions.iter().find(|r| r.name == *name) {
+            Some(region) => GripSelection::Split(region.id),
+            None => bail!("the design has no region called '{name}'"),
+        },
+    })
+}
+
+/// The listed grips, one a line, numbered from 1: the size, its value,
+/// and what it moves through or what it follows.
+fn grips_list(grips: &GripList, out: &mut String) -> Result<()> {
+    if grips.grips().is_empty() {
+        writeln!(out, "no grips")?;
+    }
+    let width = grips
+        .grips()
+        .iter()
+        .map(|listed| listed.grip.label.len())
+        .max()
+        .unwrap_or(0);
+    for (index, listed) in grips.grips().iter().enumerate() {
+        let grip = &listed.grip;
+        let pad = " ".repeat(width - grip.label.len());
+        let axis = grip
+            .axis
+            .map_or(String::new(), |axis| format!(" ({})", axis.word()));
+        let what = match &grip.action {
+            GripAction::Moves(movable) => {
+                let range = format!("{}..{}", amount(movable.low), amount(movable.high));
+                let kind = match movable.freedom {
+                    Freedom::Solved => ", solved",
+                    Freedom::Plain | Freedom::Locked | Freedom::StockField | Freedom::KindSize => {
+                        ""
+                    }
+                };
+                format!("{}  moves {range}{kind}", amount(movable.value))
+            }
+            GripAction::Follows(follows) => {
+                let names: Vec<String> = follows
+                    .follows
+                    .iter()
+                    .map(|f| match f.kind {
+                        FollowKind::Plain => f.name.clone(),
+                        kind => format!("{} ({})", f.name, kind.words()),
+                    })
+                    .collect();
+                if names.is_empty() {
+                    format!("{}  is fixed", amount(follows.value))
+                } else {
+                    format!("{}  follows {}", amount(follows.value), names.join(", "))
+                }
+            }
+        };
+        writeln!(out, "{:>3}. {}{pad}  {what}{axis}", index + 1, grip.label)?;
+    }
+    Ok(())
+}
+
+/// The stops found: for each searched grip (or the one asked for), its
+/// range and what ends it each way.
+fn stops_list(grips: &GripList, only: Option<usize>, out: &mut String) -> Result<()> {
+    for (index, listed) in grips.grips().iter().enumerate() {
+        if only.is_some_and(|n| n.saturating_sub(1) != index) {
+            continue;
+        }
+        let side = |side: &Side| match &side.end {
+            SideEnd::Stopped { at, diagnostic } => format!(
+                "{} ({} breaks it: {}[{}]: {})",
+                amount(side.last_good),
+                amount(*at),
+                diagnostic.severity,
+                diagnostic.code,
+                diagnostic.message
+            ),
+            SideEnd::Domain => format!("{} (the end of its range)", amount(side.last_good)),
+            SideEnd::Limit => format!("{} (as far as the search looks)", amount(side.last_good)),
+        };
+        match &listed.stops {
+            GripStops::Found { below, above } => {
+                writeln!(out, "{:>3}. {}", index + 1, listed.grip.label)?;
+                writeln!(out, "       down to {}", side(below))?;
+                writeln!(out, "       up to {}", side(above))?;
+            }
+            GripStops::Failed(why) => {
+                writeln!(out, "{:>3}. {}: {why}", index + 1, listed.grip.label)?;
+            }
+            GripStops::NotSearched | GripStops::NotSearchable => {
+                if only.is_some() {
+                    writeln!(
+                        out,
+                        "{:>3}. {}: no stops to search",
+                        index + 1,
+                        listed.grip.label
+                    )?;
+                }
             }
         }
     }
@@ -1033,7 +1472,7 @@ fn card(edit: &Edit, out: &mut String) -> Result<()> {
         })
         .chain(candidate.settings.iter().map(|setting| {
             let value = match &setting.value {
-                SettingValue::Default => "default".to_owned(),
+                SettingValue::Default => default_text(setting),
                 SettingValue::Copied { from, value } => {
                     let from = edit
                         .base()
@@ -1084,6 +1523,20 @@ fn card(edit: &Edit, out: &mut String) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// A setting left at its default, as the card shows it: the value it
+/// works out to, with the default as written when that says more (`220mm
+/// (default: opening.up - bottom_gap - top_gap)`, `dowel(count: 4)
+/// (default)`).
+fn default_text(setting: &stave_app::edit::SettingParam) -> String {
+    match (&setting.default_value, &setting.default_text) {
+        (Some(value), Some(written)) if value != written => {
+            format!("{value} (default: {written})")
+        }
+        (Some(value), _) | (None, Some(value)) => format!("{value} (default)"),
+        (None, None) => "the default".to_owned(),
+    }
 }
 
 /// A place param's value as written, or that it is still to point at.

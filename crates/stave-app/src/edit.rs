@@ -177,6 +177,10 @@ pub struct Candidate {
     /// component's or kind's name in lower case, numbered when taken
     /// (`drawer_2`). `None` only when no name could be made.
     pub generated_name: Option<Ident>,
+    /// For a piece of hardware offered on a face (a knob on a stile): the
+    /// face it is mounted on, which its patch writes as the call's `face:`
+    /// when the kind mounts it elsewhere. `None` otherwise.
+    pub mounted_on: Option<PartFace>,
 }
 
 impl Candidate {
@@ -970,6 +974,7 @@ pub fn clothing_cabinet_fixture() -> Option<Fixture> {
         ],
         applicability: Applicability::Applies,
         generated_name: name("drawer_2"),
+        mounted_on: None,
     };
 
     let door = Candidate {
@@ -1018,7 +1023,8 @@ pub fn clothing_cabinet_fixture() -> Option<Fixture> {
             setting("knob_kind", TypeName::PullKind, SettingValue::Default)?,
         ],
         applicability: Applicability::Applies,
-        generated_name: name("frame_panel_door"),
+        generated_name: name("door"),
+        mounted_on: None,
     };
 
     let at = FIXTURE_TEXT.find("drawer_2")?;

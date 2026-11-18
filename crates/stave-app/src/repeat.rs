@@ -182,14 +182,14 @@ pub enum RepeatError {
 // ---------------------------------------------------------------------------
 
 /// A top-level item of the project, with the text of its file.
-struct Found<'s> {
-    file: &'s ProjectFile,
-    text: String,
-    item: &'s ast::Item,
+pub(crate) struct Found<'s> {
+    pub(crate) file: &'s ProjectFile,
+    pub(crate) text: String,
+    pub(crate) item: &'s ast::Item,
 }
 
 impl Found<'_> {
-    fn slice(&self, span: ast::Span) -> Option<&str> {
+    pub(crate) fn slice(&self, span: ast::Span) -> Option<&str> {
         slice(&self.text, span)
     }
 }
@@ -201,7 +201,7 @@ pub(crate) fn slice(text: &str, span: ast::Span) -> Option<&str> {
 }
 
 /// The project's top-level item named `name`.
-fn find<'s>(scope: &'s EditScope<'_>, name: &str) -> Option<Found<'s>> {
+pub(crate) fn find<'s>(scope: &'s EditScope<'_>, name: &str) -> Option<Found<'s>> {
     scope.files().iter().find_map(|file| {
         let item = file
             .parse
@@ -552,18 +552,20 @@ pub struct SharesMove<'a> {
     /// other is the next one.
     pub lower: usize,
     /// Where the boundary between them goes: the new size of the first
-    /// piece along the split's axis, from its start. Snapped to whole
-    /// millimetres.
+    /// piece along the split's axis, from its start. Snapped to the
+    /// project's resolution.
     pub boundary: Length,
 }
 
 /// The patch that moves the boundary between two neighbouring pieces of
 /// a split: the region's declaration again with only those two shares
 /// changed and their sum kept, so the pieces around them keep their
-/// sizes. A split without `shares:` counts as all ones. The boundary is
-/// snapped to whole millimetres; the two pieces' sizes come from the
-/// solved design. A share that is not a whole number is written as a
-/// division of two whole numbers, which is exact.
+/// sizes. The boundary is snapped to the project's `resolution:`; every
+/// piece's size (from the solved design, the two moved ones as moved) is
+/// counted in steps of the resolution, and the counts, divided by what
+/// they have in common, are the shares: small whole numbers (`[6, 9,
+/// 5]` for pieces of 150mm, 225mm and 125mm at 0.5mm). A piece whose
+/// size is not a whole number of steps is rounded to the nearest step.
 ///
 /// # Errors
 ///
@@ -593,12 +595,12 @@ pub fn move_shares(
         .filter(|split| !split.at)
         .ok_or_else(|| not("it is not an even split or a split with shares"))?;
     let indexes = array_indexes(spec).ok_or_else(|| not("its count is not a fixed number"))?;
-    let mut shares = match split.shares {
-        None => vec![Rational::from_int(1); indexes.len()],
-        Some(expr) => {
-            share_values(expr).ok_or_else(|| RepeatError::SharesNotNumbers(name.to_owned()))?
-        }
-    };
+    // The shares must be plain numbers for a grip to read them back.
+    if let Some(expr) = split.shares
+        && share_values(expr).is_none()
+    {
+        return Err(RepeatError::SharesNotNumbers(name.to_owned()));
+    }
     let upper = grip.lower.checked_add(1).ok_or(RepeatError::Overflow)?;
     let no_pieces = || RepeatError::NoSuchPieces {
         region: name.to_owned(),
@@ -618,35 +620,44 @@ pub fn move_shares(
             .map(|region| region.bounds.size(split.axis))
             .ok_or(RepeatError::NotSolved(piece))
     };
-    let pair = size(lower_label)?
-        .checked_add(size(upper_label)?)
-        .ok_or(RepeatError::Overflow)?;
-    let millimetre = Length::from_mm(1).nm();
-    let snapped = grip
-        .boundary
-        .nm()
-        .checked_add(millimetre / 2)
-        .and_then(|nm| nm.checked_div(millimetre))
-        .and_then(|mm| mm.checked_mul(millimetre))
+    let mut sizes = indexes
+        .iter()
+        .map(|label| size(label))
+        .collect::<Result<Vec<Length>, RepeatError>>()?;
+    let (Some(a), Some(b)) = (sizes.get(grip.lower), sizes.get(upper)) else {
+        return Err(no_pieces());
+    };
+    let pair = a.checked_add(*b).ok_or(RepeatError::Overflow)?;
+    // Sizes are counted in steps of the project's resolution.
+    let unit = design.project.resolution.nm().max(1);
+    let units = |nm: i64| -> Option<i128> {
+        let nm = i128::from(nm);
+        let unit = i128::from(unit);
+        nm.checked_add(unit / 2)?.checked_div(unit)
+    };
+    let snapped = units(grip.boundary.nm())
+        .and_then(|n| n.checked_mul(i128::from(unit)))
+        .and_then(|nm| i64::try_from(nm).ok())
         .ok_or(RepeatError::Overflow)?;
     if snapped <= 0 || snapped >= pair.nm() {
         return Err(RepeatError::BoundaryOutside { pair });
     }
-    let (Some(a), Some(b)) = (shares.get(grip.lower), shares.get(upper)) else {
-        return Err(no_pieces());
-    };
-    let sum = a.checked_add(*b).ok_or(RepeatError::Overflow)?;
-    let fraction =
-        Rational::new(i128::from(snapped), i128::from(pair.nm())).ok_or(RepeatError::Overflow)?;
-    let new_lower = sum.checked_mul(fraction).ok_or(RepeatError::Overflow)?;
-    let new_upper = sum.checked_sub(new_lower).ok_or(RepeatError::Overflow)?;
-    if let Some(slot) = shares.get_mut(grip.lower) {
-        *slot = new_lower;
+    let new_upper = pair
+        .nm()
+        .checked_sub(snapped)
+        .ok_or(RepeatError::Overflow)?;
+    if let Some(slot) = sizes.get_mut(grip.lower) {
+        *slot = Length::from_nm(snapped);
     }
-    if let Some(slot) = shares.get_mut(upper) {
-        *slot = new_upper;
+    if let Some(slot) = sizes.get_mut(upper) {
+        *slot = Length::from_nm(new_upper);
     }
-    let list: Vec<String> = whole_shares(&shares)
+    let counted = sizes
+        .iter()
+        .map(|size| units(size.nm()).filter(|n| *n > 0))
+        .collect::<Option<Vec<i128>>>()
+        .ok_or(RepeatError::BoundaryOutside { pair })?;
+    let list: Vec<String> = reduced(&counted)
         .ok_or(RepeatError::Overflow)?
         .iter()
         .map(i128::to_string)
@@ -670,35 +681,20 @@ pub fn move_shares(
     Ok(GeneratedPatch::new(&summary, &ops)?)
 }
 
-/// Shares as whole numbers in the same proportions: as they are when each
-/// is already whole, or else scaled by the least common multiple of their
-/// denominators and reduced by what they have in common. `100 / 181` and
-/// `262 / 181` become `50` and `131`, which a beginner can read and which
-/// a later grip reads back as plain numbers.
-fn whole_shares(shares: &[Rational]) -> Option<Vec<i128>> {
+/// Whole numbers divided by what they all have in common: `[300, 450,
+/// 250]` gives `[6, 9, 5]`. `None` when they are all zero.
+fn reduced(numbers: &[i128]) -> Option<Vec<i128>> {
     fn gcd(mut a: i128, mut b: i128) -> i128 {
         while b != 0 {
             (a, b) = (b, a % b);
         }
         a.abs()
     }
-    if shares.iter().all(|share| share.denominator() == 1) {
-        return Some(shares.iter().map(|share| share.numerator()).collect());
-    }
-    let mut lcm: i128 = 1;
-    for share in shares {
-        let d = share.denominator();
-        lcm = (lcm / gcd(lcm, d)).checked_mul(d)?;
-    }
-    let scaled: Vec<i128> = shares
-        .iter()
-        .map(|share| share.numerator().checked_mul(lcm / share.denominator()))
-        .collect::<Option<_>>()?;
-    let common = scaled.iter().fold(0, |acc, n| gcd(acc, *n));
+    let common = numbers.iter().fold(0, |acc, n| gcd(acc, *n));
     if common == 0 {
         return None;
     }
-    Some(scaled.iter().map(|n| n / common).collect())
+    Some(numbers.iter().map(|n| n / common).collect())
 }
 
 // ---------------------------------------------------------------------------
@@ -779,7 +775,9 @@ pub fn mirror_assembly(
         })
         .ok_or_else(|| RepeatError::NoMirror(assembly.to_owned()))?;
 
-    let taken = TakenNames::of_project(scope.model());
+    let mut taken = TakenNames::of_project(scope.model());
+    // Its own name doesn't stand in the way: `door_left` stays `door_left`.
+    taken.remove(assembly);
     let (first, last) = mirrored_pair(assembly, axis, &taken)?;
     let (renamed, image) = if first_side {
         (first, last)
@@ -789,7 +787,11 @@ pub fn mirror_assembly(
     let symbol = analysis
         .project_symbol(assembly)
         .ok_or_else(|| RepeatError::UnknownItem(assembly.to_owned()))?;
-    let rename = analysis.rename(symbol.id, renamed.as_str())?;
+    let rename = if renamed.as_str() == assembly {
+        Vec::new()
+    } else {
+        analysis.rename(symbol.id, renamed.as_str())?
+    };
     let ops = vec![format!(
         "add assembly {} = mirror({}, about: {about}) in {}",
         image.as_str(),
@@ -870,6 +872,7 @@ pub fn mirror_split_assembly(
         .map_or(component.root.as_str(), ast::Name::as_str);
     let bay = bay_name(component_name, &taken)?;
     taken.insert(bay.as_str());
+    taken.remove(assembly);
     let (renamed, image) = mirrored_pair(assembly, axis, &taken)?;
     let pieces = RepeatCount::new(2).ok_or(RepeatError::Overflow)?;
     let array = repeat_array(axis, pieces);
@@ -881,7 +884,11 @@ pub fn mirror_split_assembly(
     let symbol = analysis
         .project_symbol(assembly)
         .ok_or_else(|| RepeatError::UnknownItem(assembly.to_owned()))?;
-    let rename = analysis.rename(symbol.id, renamed.as_str())?;
+    let rename = if renamed.as_str() == assembly {
+        Vec::new()
+    } else {
+        analysis.rename(symbol.id, renamed.as_str())?
+    };
     let about = format!("mid({source}, {})", axis.word());
     let ops = vec![
         format!(
@@ -1627,7 +1634,9 @@ mod tests {
                 .size(Axis::Up)
         };
         assert_eq!(piece("a"), Length::from_mm(125));
-        // Drag the boundary between a and b up to 150.2mm: it snaps to 150mm.
+        // Drag the boundary between a and b up to 150.2mm: it snaps to
+        // 150mm, a step of the 0.5mm resolution. The pieces are then 150mm,
+        // 225mm and 125mm: 300, 450 and 250 steps, or 6, 9 and 5.
         let grip = SharesMove {
             region: "shelf_bay",
             lower: 0,
@@ -1636,7 +1645,7 @@ mod tests {
         let patch = move_shares(&scope, design, grip).unwrap();
         assert!(
             patch.text.contains(
-                "replace region shelf_bay[a, b, c] = split(inside, up, shares: [120, 180, 100])"
+                "replace region shelf_bay[a, b, c] = split(inside, up, shares: [6, 9, 5])"
             ),
             "{}",
             patch.text
@@ -1668,8 +1677,8 @@ mod tests {
             boundary: Length::from_mm(100),
         };
         let patch = move_shares(&scope, design, grip).unwrap();
-        // The inside is 400 - 2 * 19 = 362mm wide: shares of 2 * 100 / 362
-        // and 2 * 262 / 362, written as the whole numbers 50 and 131.
+        // The inside is 400 - 2 * 19 = 362mm wide: pieces of 100mm and
+        // 262mm, 200 and 524 steps of 0.5mm, written as 50 and 131.
         assert!(
             patch.text.contains(
                 "replace region box_bay[left, right] = split(inside, across, shares: [50, 131])"
@@ -1714,8 +1723,8 @@ mod tests {
         let mut files = files;
         commit(&mut files, &tried);
         for (boundary, shares, left_mm) in [
-            (Length::from_nm(140_400_000), "[70, 111]", 140),
-            (Length::from_mm(181), "[1, 1]", 181),
+            (Length::from_nm(140_400_000), "[281, 443]", None),
+            (Length::from_mm(181), "[1, 1]", Some(181)),
         ] {
             let base = clean_base(&folder, &files);
             let scope = EditScope::new(base.opened()).unwrap();
@@ -1740,7 +1749,9 @@ mod tests {
                 .iter()
                 .find(|r| r.name == "box_bay[left]")
                 .unwrap();
-            assert_eq!(left.bounds.size(Axis::Across), Length::from_mm(left_mm));
+            // 140.4mm snaps to 140.5mm.
+            let expected = left_mm.map_or(Length::from_nm(140_500_000), Length::from_mm);
+            assert_eq!(left.bounds.size(Axis::Across), expected);
             commit(&mut files, &tried);
         }
     }
@@ -1798,6 +1809,35 @@ mod tests {
                 .parts
                 .iter()
                 .any(|p| p.name.starts_with("frame_panel_door_right."))
+        );
+    }
+
+    /// An assembly already named with its side keeps that name, and its
+    /// image takes the other side: never `door_left_left`.
+    #[test]
+    fn mirroring_an_item_named_with_a_side_does_not_double_it() {
+        let mut files = one_door_cabinet();
+        for name in ["doors.stave", "cabinet.stave"] {
+            let renamed = text(&files, ASSEMBLIES, name).replace("frame_panel_door", "door_left");
+            files.insert(Path::new(ASSEMBLIES).join(name), renamed);
+        }
+        let base = clean_base(ASSEMBLIES, &files);
+        let scope = EditScope::new(base.opened()).unwrap();
+        let analysis = Analysis::load(Path::new(ASSEMBLIES), &files).unwrap();
+        let design = base.opened().design.as_ref().unwrap();
+        let plan = mirror_assembly(&scope, &analysis, design, "door_left").unwrap();
+        assert_eq!(
+            (plan.renamed.as_str(), plan.image.as_str()),
+            ("door_left", "door_right")
+        );
+        assert!(plan.rename.is_empty(), "nothing to rename");
+        let tried = fits(ASSEMBLIES, &files, &plan.patch);
+        let design = tried.opened().and_then(|o| o.design.as_ref()).unwrap();
+        assert!(
+            design
+                .parts
+                .iter()
+                .any(|p| p.name.starts_with("door_right."))
         );
     }
 
@@ -1995,12 +2035,10 @@ mod tests {
     }
 
     #[test]
-    fn shares_are_written_as_whole_numbers() {
-        let r = |n, d| Rational::new(n, d).unwrap();
-        let whole = |shares: &[Rational]| whole_shares(shares).unwrap();
-        assert_eq!(whole(&[r(120, 1), r(180, 1), r(100, 1)]), [120, 180, 100]);
-        assert_eq!(whole(&[r(100, 181), r(262, 181)]), [50, 131]);
-        assert_eq!(whole(&[r(1, 2), r(3, 2), r(1, 1)]), [1, 3, 2]);
-        assert_eq!(whole(&[r(1, 3), r(1, 2)]), [2, 3]);
+    fn shares_are_reduced_by_what_they_have_in_common() {
+        assert_eq!(reduced(&[300, 450, 250]).unwrap(), [6, 9, 5]);
+        assert_eq!(reduced(&[200, 524]).unwrap(), [50, 131]);
+        assert_eq!(reduced(&[281, 443]).unwrap(), [281, 443]);
+        assert_eq!(reduced(&[0, 0]), None);
     }
 }

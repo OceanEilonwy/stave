@@ -58,6 +58,15 @@ pub struct WrittenPatch {
     pub bay: Option<Ident>,
 }
 
+/// Where a piece of hardware sits, as its patch writes it.
+struct HardwareMount {
+    /// The call's `face:`, when the hardware goes on another face than
+    /// the kind's own.
+    face_argument: Option<stave_lang::placement::Face>,
+    /// The `place { }` terms for the axes the kind leaves open.
+    place: Option<Vec<String>>,
+}
+
 /// Why a patch can't be written for a candidate.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum WriteError {
@@ -283,12 +292,30 @@ impl EditScope<'_> {
                         format!("{}: {text}", field.key)
                     });
                 }
-                format!(
+                let mut placed = None;
+                if keyword == "hardware"
+                    && let Declaration::Kind(id) = candidate.declaration
+                {
+                    let mount = self.hardware_mount(id, candidate);
+                    if let Some(face) = mount.face_argument {
+                        args.push(format!("face: {}", face.word()));
+                    }
+                    placed = mount.place;
+                }
+                let mut text = format!(
                     "{keyword} {} : {qualifier}{}({})",
                     name.as_str(),
                     decl.name,
                     args.join(", ")
-                )
+                );
+                if let Some(terms) = placed {
+                    text.push_str(" {\n  place {\n");
+                    for term in terms {
+                        text.push_str(&format!("    {term}\n"));
+                    }
+                    text.push_str("  }\n}");
+                }
+                text
             }
         };
 
@@ -441,6 +468,96 @@ impl EditScope<'_> {
             }
         }
         Ok((fields, repeated))
+    }
+
+    /// Where a piece of hardware of kind `id` sits on its piece (its first
+    /// role): the `face:` its call writes, when it is offered on a face
+    /// the kind doesn't mount it on, and the `place { }` terms that fix
+    /// every axis the kind's `mount { }` leaves open, each centred on the
+    /// piece (`center(stile, up)`). The open axes are found as the solver
+    /// finds them: `along` is the piece's length (its width when the mount
+    /// face is an end), `across` the other axis of the mount face. Without
+    /// a solved design they are known only when both are open.
+    fn hardware_mount(&self, id: stave_model::ids::KindId, candidate: &Candidate) -> HardwareMount {
+        use stave_lang::placement::PartAxis;
+        use stave_model::defs::{AxisRule, FaceRule};
+        let mut out = HardwareMount {
+            face_argument: None,
+            place: None,
+        };
+        let Some(hardware) = self
+            .model
+            .defs
+            .kind(id)
+            .and_then(|kind| kind.hardware.as_ref())
+        else {
+            return out;
+        };
+        let piece = candidate.place.first().and_then(|param| match &param.slot {
+            PlaceSlot::Part(Some(part)) => Some(*part),
+            _ => None,
+        });
+        let Some(piece) = piece else {
+            return out;
+        };
+        let clicked = candidate
+            .mounted_on
+            .filter(|face| face.part == piece)
+            .map(|face| face.face);
+        if let Some(face) = clicked
+            && hardware.mount.face != FaceRule::Word(face)
+        {
+            out.face_argument = Some(face);
+        }
+        let solved = self.design.and_then(|design| design.part(piece));
+        let face_axis = match (clicked, hardware.mount.face) {
+            (Some(face), _) | (None, FaceRule::Word(face)) => Some(face.axis()),
+            (None, FaceRule::Nearer { .. }) => {
+                solved.map(|part| part.pose.orientation.direction(PartAxis::Thickness).axis())
+            }
+        };
+        let Some(face_axis) = face_axis else {
+            return out;
+        };
+        let open_across = hardware.mount.across == AxisRule::Open;
+        let open_along = hardware.mount.along == AxisRule::Open;
+        let axes: Vec<Axis> = match solved {
+            Some(part) => {
+                let orientation = part.pose.orientation;
+                let length = orientation.direction(PartAxis::Length).axis();
+                let along = if length == face_axis {
+                    orientation.direction(PartAxis::Width).axis()
+                } else {
+                    length
+                };
+                let across = along.third(face_axis);
+                let mut axes = Vec::new();
+                if open_across && let Some(across) = across {
+                    axes.push(across);
+                }
+                if open_along {
+                    axes.push(along);
+                }
+                axes
+            }
+            None if open_across && open_along => face_axis.others().to_vec(),
+            None => Vec::new(),
+        };
+        if axes.is_empty() {
+            return out;
+        }
+        let Some(name) = self.model.parts.get(piece.index()).map(|p| p.name.clone()) else {
+            return out;
+        };
+        let mut axes = axes;
+        let order = [Axis::Across, Axis::Up, Axis::Deep];
+        axes.sort_by_key(|axis| order.iter().position(|a| a == axis));
+        out.place = Some(
+            axes.into_iter()
+                .map(|axis| format!("center({name}, {})", axis.word()))
+                .collect(),
+        );
+        out
     }
 
     /// A place param's value as text: the region or part by its name, a
