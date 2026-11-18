@@ -380,12 +380,11 @@ open in the editor the change stays unsaved there.
   there is no Ctrl+Z for it. The ways back are Remove, or editing the
   text. (A change written into an open file's buffer can be undone in
   the Code panel with the editor's own undo.)
-- **z3 is in the build against the brief.** The brief's "out of the
-  first build" list named z3; the waves were told to build it anyway, so
-  `crates/stave-smt` (z3 from source, about five minutes the first time)
-  exists and `stave-app` depends on it for "Let the solver move this".
-  The owner has to choose: keep it, or drop `stave-smt`, `solve_edit.rs`
-  and the solver switch.
+- **The first build is slow because of z3.** `crates/stave-smt` builds
+  z3 from source, about five minutes the first time. z3 is part of the
+  feature by the owner's decision (19 November 2026): `stave-app` uses
+  it to solve for `solved param`s, and the window's "Let the solver move
+  this" depends on it. This is a cost, not a defect.
 - **Two clicks not exercised in the window.** The acceptance run's
   steps that open a menu in a space (`select region`) or between two
   parts (`select between`), and that fill a place between two parts

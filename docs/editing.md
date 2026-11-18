@@ -835,19 +835,15 @@ Do not add these; each is a later decision:
 - a `fill` size;
 - turned or tapered legs;
 - automatic linking of repeated numbers;
-- applicability guards beyond `require`;
-- z3.
+- applicability guards beyond `require`.
 
-**Against that list, the build has z3.** The owner's brief named z3
-here ("No crate depends on z3 today"). The waves that built this
-feature were each told to build it anyway, so `crates/stave-smt` (z3
-built from source, about five minutes the first time) exists, and
-`stave-app` depends on it for solving `solved param`s
-(`solve_edit.rs`, the window's "Let the solver move this"). It is a
-decision for the owner, not taken here: keep it, or drop `stave-smt`,
-`solve_edit.rs` and the solver switch (grips then move plain numbers
-and single params only, as the brief's first build said). Until then
-it stays, and [STATUS](STATUS.md#graphical-editing) lists it.
+**z3 is in the build.** An early brief listed z3 as out of the first
+build; the owner decided on 19 November 2026 that it is required.
+`crates/stave-smt` (z3 built from source, about five minutes the first
+time) is the only crate that depends on it, and `stave-app` uses it to
+solve for `solved param`s (`solve_edit.rs`, the window's "Let the
+solver move this"). Plain params are still moved by exact single-param
+inversion, with no solver.
 
 ## Libraries this is meant for
 

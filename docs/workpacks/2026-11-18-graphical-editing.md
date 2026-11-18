@@ -113,9 +113,10 @@ Each is a later decision, not an oversight:
 - automatic linking of repeated numbers;
 - applicability guards beyond a component's own `require` lines.
 
-The brief also left z3 out of the first build; the orchestrated waves
-built it anyway (`stave-smt` in wave 2, the solver in the session and the
-window in waves 3 and 4), as each wave's task said.
+An early brief also left z3 out of the first build, while the work
+plan's last wave included the solver. The waves built it (`stave-smt` in
+wave 2, the solver in the session and the window in waves 3 and 4), and
+the owner confirmed on 19 November 2026 that z3 is required.
 
 ## Acceptance
 
@@ -194,8 +195,8 @@ Seen in the acceptance run; none blocks building either piece.
   writer, and a key that doesn't fight the Code panel's own undo.
 - **z3 against the brief** (found by the final review). The brief's
   "out of the first build" list named z3; `docs/editing.md` copied the
-  list without it. It now lists z3 and says the build has it anyway.
-  Left for the owner to keep or drop.
+  list without it. Settled: the owner decided on 19 November 2026 that
+  z3 is required, and the docs now say so.
 - **The acceptance overstated** (found by the final review): "every
   step a gesture" was not so. The 6 `select region`, 6 `select between`
   and 4 `select face` steps and the 3 `bind between` steps resolve
