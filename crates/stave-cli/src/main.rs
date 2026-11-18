@@ -9,24 +9,36 @@
 //! stave view examples/clothing_cabinet      # the 3D viewer (stave-gtk)
 //! stave export examples/clothing_cabinet --gltf cabinet.glb
 //! stave export examples/clothing_cabinet --gltf apart.glb --scene drawer_bench
+//! stave edit examples/clothing_cabinet --patch shelf.stave   # try a patch
+//! stave edit examples/clothing_cabinet --patch shelf.stave --commit
 //! ```
 //!
 //! `check` runs the whole pipeline (through `stave-app`) on a module
 //! folder: a folder that holds `.stave` files directly. Given a folder
 //! without any, it checks every module folder below it, in sorted order so
 //! output is the same on every run. `fmt` searches a directory recursively
-//! for `.stave` files. Exit codes: 0 when everything is fine, 1
-//! when `check` finds errors or `fmt --check` finds a file to reformat (`fmt`
+//! for `.stave` files. `edit` tries each patch of a patch file on a
+//! scratch copy of the project, in order, and stops at the first one that
+//! is refused (see [`edit`] for its output). Exit codes: 0 when
+//! everything is fine, 1 when `check` finds errors, `edit` refuses a
+//! patch or `fmt --check` finds a file to reformat (`fmt`
 //! skips files with syntax errors, which are `check`'s business), 2 when
 //! the command itself fails (a missing path, an unreadable file).
 
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::sync::atomic::AtomicBool;
 
 use anyhow::{Context as _, Result, bail};
 use clap::{Parser, Subcommand};
-use stave_lang::{FormatError, Severity, SourceMap, format_file, render_diagnostics};
+use stave_app::edit::Verdict;
+use stave_app::scratch::{DiskWriter, EditBase, one_patch_each};
+use stave_lang::ast;
+use stave_lang::{
+    FormatError, Parse, Severity, SourceMap, format_file, parse_patch_file, render_diagnostics,
+};
+use stave_modules::DiskFiles;
 
 mod dump;
 
@@ -85,6 +97,19 @@ enum Command {
         #[arg(long, value_name = "AMOUNT")]
         explode: Option<f32>,
     },
+    /// Try the patches of a patch file on a project, in order: each is
+    /// applied to a scratch copy, which is checked. Prints whether each
+    /// fits or is refused, and why; stops at the first refusal.
+    Edit {
+        /// The project folder.
+        path: PathBuf,
+        /// The patch file: one or more `patch "..." { ... }` blocks.
+        #[arg(long, value_name = "FILE")]
+        patch: PathBuf,
+        /// Write the files each patch that fits changes.
+        #[arg(long)]
+        commit: bool,
+    },
     /// Lay out .stave files canonically, in place. Files with syntax errors
     /// are skipped.
     Fmt {
@@ -102,6 +127,11 @@ fn main() -> ExitCode {
         Command::Check { path } => check(&path),
         Command::Dump { path, json } => dump(&path, json),
         Command::Fmt { path, check } => fmt(&path, check),
+        Command::Edit {
+            path,
+            patch,
+            commit,
+        } => edit(&path, &patch, commit),
         Command::View { path, scene } => view(&path, scene.as_deref()),
         Command::Export {
             path,
@@ -317,6 +347,111 @@ fn export(path: &Path, output: &Path, scene: Option<&str>, explode: Option<f32>)
         graph.nodes.len()
     )?;
     Ok(true)
+}
+
+/// Tries each patch of the patch file at `patch_path` on the project in
+/// `folder`, in order, each on top of the ones before it, and stops at the
+/// first refusal. With `commit`, writes the files of each patch that fits
+/// before trying the next. Prints to standard output, for each patch tried:
+///
+/// ```text
+/// patch "Add a shelf": fits
+///   changes cabinet/carcass.stave        (wrote, with --commit; creates/created for a new file)
+/// <each warning the patch causes, as `stave check` prints it>
+/// patch "Through the divider": refused
+/// <each error the patch causes, as `stave check` prints it>
+/// checked 2 of 3 patches: 1 fits, 1 refused
+/// ```
+///
+/// A patch is named by its string; a patch file with syntax errors is
+/// tried whole and named by its path. `Ok(false)` on a refusal.
+fn edit(folder: &Path, patch_path: &Path, commit: bool) -> Result<bool> {
+    let text = read(patch_path)?;
+    let name = patch_path.display().to_string();
+    let mut sources = SourceMap::new();
+    let file = sources.add(name.as_str(), text.as_str())?;
+    let patches = one_patch_each(file, &parse_patch_file(file, &text));
+    let mut base = EditBase::new(folder, &DiskFiles)
+        .with_context(|| format!("can't open '{}'", folder.display()))?;
+    let cancel = AtomicBool::new(false);
+    let mut stdout = std::io::stdout().lock();
+    let (mut fit, mut refused) = (0_usize, 0_usize);
+    let mut written = std::collections::BTreeSet::new();
+    for patch in &patches {
+        let tried = base
+            .try_patch(&name, patch, &cancel)
+            .with_context(|| format!("can't open '{}'", folder.display()))?;
+        let title = title(patch, &name);
+        match tried.verdict() {
+            Verdict::Fits(_) => {
+                writeln!(stdout, "{title}: fits")?;
+                fit += 1;
+                if commit {
+                    tried.commit(&mut DiskWriter)?;
+                    written.extend(tried.changed().iter().map(|file| file.path.clone()));
+                }
+                if tried.changed().is_empty() {
+                    writeln!(stdout, "  changes nothing")?;
+                }
+                for file in tried.changed() {
+                    let verb = match (commit, file.created) {
+                        (false, false) => "changes",
+                        (false, true) => "creates",
+                        (true, false) => "wrote",
+                        (true, true) => "created",
+                    };
+                    writeln!(stdout, "  {verb} {}", file.path.display())?;
+                }
+            }
+            Verdict::Refused(_) | Verdict::Checking => {
+                writeln!(stdout, "{title}: refused")?;
+                refused += 1;
+            }
+        }
+        write!(
+            stdout,
+            "{}",
+            render_diagnostics(tried.sources(), &tried.shown())
+        )?;
+        if refused > 0 {
+            break;
+        }
+        base.advance(tried)?;
+    }
+    let mut summary = format!(
+        "checked {} of {} {}: {fit} {}, {refused} refused",
+        fit + refused,
+        patches.len(),
+        plural(patches.len(), "patch", "patches"),
+        plural(fit, "fits", "fit"),
+    );
+    if commit {
+        summary.push_str(&format!(
+            ", wrote {} {}",
+            written.len(),
+            plural(written.len(), "file", "files")
+        ));
+    }
+    writeln!(stdout, "{summary}")?;
+    Ok(refused == 0)
+}
+
+/// How `stave edit` names a patch: `patch "Add a shelf"`, or the patch
+/// file's path when it isn't one readable patch.
+fn title(patch: &Parse<ast::PatchFile>, file: &str) -> String {
+    let only = match patch.ast.as_ref().map(|ast| ast.patches.as_slice()) {
+        Some([only]) if !patch.has_errors() => only,
+        _ => return file.to_owned(),
+    };
+    // The string as written, quotes included.
+    let text = patch.syntax().to_string();
+    let span = only.summary.span;
+    let written = usize::try_from(span.start())
+        .ok()
+        .zip(usize::try_from(span.end()).ok())
+        .and_then(|(start, end)| text.get(start..end))
+        .unwrap_or("\"\"");
+    format!("patch {written}")
 }
 
 /// Formats every file, or with `check_only` reports the ones that would

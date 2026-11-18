@@ -16,6 +16,7 @@ serde_json = "1"
 stave-app = { path = "../stave-app" }
 stave-lang = { path = "../stave-lang" }
 stave-model = { path = "../stave-model" }
+stave-modules = { path = "../stave-modules" }
 
 [dev-dependencies]
 gltf = "1"

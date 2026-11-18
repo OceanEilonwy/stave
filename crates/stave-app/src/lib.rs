@@ -35,6 +35,7 @@ pub mod inspect;
 pub mod link;
 pub mod naming;
 pub mod problems;
+pub mod scratch;
 pub mod session;
 pub mod view;
 
