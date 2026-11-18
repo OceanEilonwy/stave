@@ -208,7 +208,7 @@ PDF doesn't exist yet, and the button says so honestly.
 │ CARCASS            │                                                          │                             │
 │  base     oak_19   │                        3D view                           │                             │
 │ ASSEMBLIES         │                     (problem pins)                       │                             │
-├ Details ───────────┼ View Controls ───────────────────────────────────────────┤                             │
+├ Details ───────────┼ 3D Tools ────────────────────────────────────────────────┤                             │
 │ PART · IN door_l   │ scene ▾ · Pull apart · X-ray · door_l ──── 110° · Move: … · [fit][front][turn]          │
 │ stile[hinge]       ├ Code │ Problems ─────────────────────────────────────────┤                             │
 │ Stock  oak_19 …    │ doors.stave │ carcass.stave                               │                             │
@@ -219,15 +219,16 @@ PDF doesn't exist yet, and the button says so honestly.
 ```
 
 Every part of the window is a panel, docked with libpanel (`Workbench`):
-the 3D View, its View Controls, Parts, Files, Details, Code and Problems.
+the 3D View, its 3D Tools, Parts, Files, Details, Code and Problems.
 Nothing but the problem pins sits over the model. Each panel is a
 `panel::Widget` in a `panel::Frame` (tabs along the top,
 `panel::FrameTabBar`); drag a tab to an edge, into the centre (a
 `panel::Grid`, which splits into columns and rows, so Code can sit beside
-the 3D view) or into another frame; close it with its ×; show an edge
+the 3D view) or into another frame, or pick "Move to the Right" (left,
+bottom, top, middle) from its tab's menu; close it with its ×; show an edge
 again from the status bar's toggles. The default layout is board B
 (`Layout::default`): Parts and Files above Details on the left, the 3D
-View over its View Controls in the centre, Code and Problems at the
+View over its 3D Tools in the centre, Code and Problems at the
 bottom, the right edge empty and hidden. The layout is remembered per
 user in `~/.config/stave/layout` (saved on every drop and when the
 window closes; one line per panel, `code centre 1 0 0` for side, column,
@@ -237,7 +238,7 @@ menu puts board B back.
 
 - **3D View** is the view and nothing else (the problem pins and the chip
   for a problem off screen sit on it).
-- **View Controls** holds what used to float over or under the view: the
+- **3D Tools** holds what used to float over or under the view: the
   scene menu, Pull apart, X-ray, the "Open it" slider, the Move chips, the
   camera buttons, focus mode's From above / In 3D switch, the shared-wood
   key, a short line ("Focused on one joint · Esc to go back"), a posed
@@ -298,7 +299,8 @@ menu puts board B back.
   shows the Parts panel.
 - **Choosing in a list frames it**: a part, a piece of hardware or an
   assembly chosen in Parts, the finder or a lens's "show in 3D" is framed
-  at once (no flying), with room round it (`FRAME_ROOM`). Clicking in the
+  at once (no flying), with room round it (`FRAME_ROOM`), and the 3D View
+  comes to the front (brought back if closed). Clicking in the
   3D view selects without moving the camera, and only outlines the
   choice: the rest stays solid (fading is for X-ray and posed problems).
   A new check's result never moves the camera. The mouse's Back and

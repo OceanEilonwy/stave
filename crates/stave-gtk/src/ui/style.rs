@@ -193,6 +193,14 @@ headerbar.stave-header:backdrop > windowhandle { filter: none; }
 window.stave-window { background-color: @window_bg_color; }
 /* The panels' tabs read in both styles, focused or not. */
 panelframetabbar tabbar tab, panelframetabbar tabbar tab label { color: @window_fg_color; opacity: 1; filter: none; }
+/* Slim headers, as in an IDE: a thin strip of small tabs, so the panels
+   keep their room. */
+panelframetabbar tabbar .box { min-height: 0; padding: 2px 4px; }
+panelframetabbar tabbar tab { min-height: 24px; padding: 0 4px; font-size: 12px; font-weight: 600; }
+panelframetabbar tabbar tab button, panelframetabbar button { min-height: 20px; min-width: 20px; padding: 0; }
+panelframetabbar tabbar tab image { -gtk-icon-size: 12px; }
+panelframetabbar, panelframetabbar > box, panelframetabbar tabbar, panelframetabbar tabbar tabbox { min-height: 0; padding-top: 0; padding-bottom: 0; margin-top: 0; margin-bottom: 0; }
+panelframetabbar tabbar tabbox > tabboxchild, panelframetabbar tabbar tab { margin-top: 0; margin-bottom: 0; }
 .stave-header button.stave-icon-button:disabled { color: alpha(currentColor, 0.45); }
 .stave-header button.stave-sidebar-toggle:checked { background: alpha(currentColor, 0.1); }
 .stave-title .subtitle, .dim { color: alpha(currentColor, 0.7); }
