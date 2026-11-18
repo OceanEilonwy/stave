@@ -1,6 +1,6 @@
 stave 1
 
-import "./casework"
+import "std:casework"
 import "./hardware" as hw          // 'hardware' is a reserved word, so the module needs another name
 
 // Two frame-and-panel doors on cup hinges. door_r is the mirror image of

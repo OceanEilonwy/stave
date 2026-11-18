@@ -23,8 +23,15 @@ fn cabinet() -> (PathBuf, Analysis) {
 /// The position of the `nth` (from 0) occurrence of `needle` on 1-based
 /// `line` of `file`, plus `into` bytes.
 fn at(analysis: &Analysis, folder: &Path, file: &str, line: usize, needle: &str) -> FilePosition {
+    // `std/casework/drawer.stave` is a standard file; anything else is in
+    // the project's folder.
+    let document = if file.starts_with("std/") {
+        Document::from_source_path(file)
+    } else {
+        Document::File(folder.join(file))
+    };
     let id = analysis
-        .file(&Document::File(folder.join(file)))
+        .file(&document)
         .unwrap_or_else(|| panic!("{file} isn't loaded"));
     let start = analysis.line_start(id, line).unwrap();
     let text = analysis.text(id).unwrap();
@@ -46,12 +53,12 @@ fn a_component_from_another_module() {
     let definition = analysis.definition(position).unwrap();
     assert_eq!(
         definition.label(&folder),
-        "casework/frame_panel_door.stave:4"
+        "std/casework/frame_panel_door.stave:4"
     );
     // The module name before it goes to the module's library item.
     let position = at(&analysis, &folder, "doors.stave", 9, "casework");
     let definition = analysis.definition(position).unwrap();
-    assert_eq!(definition.label(&folder), "casework/library.stave:7");
+    assert_eq!(definition.label(&folder), "std/casework/library.stave:15");
 }
 
 #[test]
@@ -128,7 +135,7 @@ fn breadcrumbs_follow_the_cursor() {
         .breadcrumbs(at(
             &analysis,
             &folder,
-            "casework/frame_panel_door.stave",
+            "std/casework/frame_panel_door.stave",
             27,
             "door",
         ))
@@ -138,7 +145,7 @@ fn breadcrumbs_follow_the_cursor() {
     assert_eq!(
         crumbs,
         [
-            "casework/frame_panel_door.stave",
+            "std/casework/frame_panel_door.stave",
             "component FramePanelDoor",
             "part stile",
             "place"
@@ -166,7 +173,7 @@ fn names_resolve_by_namespace() {
     // A field of an assembly is its component's param.
     assert_eq!(
         go("doors.stave", 10, "opening").as_deref(),
-        Some("casework/frame_panel_door.stave:5")
+        Some("std/casework/frame_panel_door.stave:5")
     );
     // A module's item through an `as` name.
     assert_eq!(
@@ -190,13 +197,13 @@ fn names_resolve_by_namespace() {
     assert_eq!(depth.document.uri(), "stave-std:///joinery/dado.stave");
     // A component's own names, from inside it.
     assert_eq!(
-        go("casework/frame_panel_door.stave", 23, "stile_width").as_deref(),
-        Some("casework/frame_panel_door.stave:10")
+        go("std/casework/frame_panel_door.stave", 23, "stile_width").as_deref(),
+        Some("std/casework/frame_panel_door.stave:10")
     );
     // Enum words, built-ins and placement terms are no items.
     assert_eq!(go("doors.stave", 18, "across"), None);
     assert_eq!(go("doors.stave", 12, "overlay"), None);
-    assert_eq!(go("casework/frame_panel_door.stave", 27, "flush"), None);
+    assert_eq!(go("std/casework/frame_panel_door.stave", 27, "flush"), None);
 }
 
 #[test]
@@ -219,7 +226,7 @@ fn colours_follow_the_namespaces() {
     assert_eq!(class_of("casework."), Some(TokenClass::Module));
     assert_eq!(class_of("18mm"), Some(TokenClass::Number));
     assert_eq!(class_of("overlay"), Some(TokenClass::Function));
-    assert_eq!(class_of("\"./casework\""), Some(TokenClass::Text));
+    assert_eq!(class_of("\"std:casework\""), Some(TokenClass::Text));
     assert_eq!(class_of("// Two"), Some(TokenClass::Comment));
     assert_eq!(class_of("side_l"), Some(TokenClass::Item(SymbolKind::Part)));
     assert_eq!(class_of("across"), Some(TokenClass::EnumWord));

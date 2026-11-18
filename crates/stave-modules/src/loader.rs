@@ -12,7 +12,7 @@ use stave_lang::{
 };
 
 use crate::source::{FileSource, is_stave_path, normalize};
-use crate::std_library::{STD_MODULES, module_files, std_module};
+use crate::std_library::{PRELUDE_MODULES, STD_MODULES, module_files, std_module};
 use crate::{
     FileImport, LoadError, Module, ModuleFile, ModuleHeader, ModuleId, ModuleSet, ModuleSource,
 };
@@ -57,8 +57,8 @@ pub(crate) fn load(
     loader.by_folder.insert(canonical, root);
     loader.visit(root)?;
 
-    let mut prelude = Vec::with_capacity(STD_MODULES.len());
-    for module in STD_MODULES {
+    let mut prelude = Vec::with_capacity(PRELUDE_MODULES.len());
+    for module in PRELUDE_MODULES {
         prelude.push(loader.std_module(module)?);
     }
     Ok(loader.finish(root, prelude))

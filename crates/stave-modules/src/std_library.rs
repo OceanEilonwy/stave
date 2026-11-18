@@ -3,8 +3,14 @@
 
 include!(concat!(env!("OUT_DIR"), "/std_files.rs"));
 
-/// The standard modules, in prelude order. `std:<name>` imports one of them.
-pub const STD_MODULES: [&str; 3] = ["joinery", "hardware", "tools"];
+/// The standard modules: the [`PRELUDE_MODULES`] in prelude order, then the
+/// ones a project imports to use. `std:<name>` imports one of them.
+pub const STD_MODULES: [&str; 4] = ["joinery", "hardware", "tools", "casework"];
+
+/// The standard modules whose public items every file sees without an
+/// import, in prelude order: the first entries of [`STD_MODULES`]. The
+/// others (`std:casework`) are loaded only when a file imports them.
+pub const PRELUDE_MODULES: [&str; 3] = ["joinery", "hardware", "tools"];
 
 /// Every embedded standard-library file as (module, file name, text):
 /// modules in [`STD_MODULES`] order, files sorted by name.

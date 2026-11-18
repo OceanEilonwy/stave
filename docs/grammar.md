@@ -538,10 +538,6 @@ clothing_cabinet/          // project module (see examples/clothing_cabinet)
   doors.stave
   drawers.stave
   stave.lock               //   only when there are remote imports
-  casework/                // library module, used as casework.*
-    library.stave          //   library "Casework"
-    frame_panel_door.stave
-    drawer.stave
   hardware/                // library module; 'hardware' is a keyword, so: import "./hardware" as hw
     library.stave          //   library "Shop hardware"
     handles.stave
@@ -550,7 +546,7 @@ clothing_cabinet/          // project module (see examples/clothing_cabinet)
 ### Imports
 
 ```
-import "./casework"
+import "std:casework"
 import "./hardware" as hw
 import "github:some-maker/stave-catalog/slides@v2.1.0" as slides
 
@@ -587,6 +583,16 @@ library, may not declare the same name twice between them, and change only
 with the format version in the `stave` header. They can also be imported
 explicitly (`import "std:joinery"`, `import "std:hardware" as stdhw`) to reach
 an item that a local name hides.
+
+Other standard modules ship with Stave but are not in the prelude: a file
+imports them and uses their items qualified, like any library.
+
+| Module | Folder | Provides |
+|---|---|---|
+| `std:casework` | `std/casework` | cabinet components (`Drawer`, `FramePanelDoor`), used as `casework.Drawer` after `import "std:casework"` |
+
+A standard module never reaches into a project: everything a component needs
+from one (the opening, the stock, the shop's own hardware) is a param.
 
 ### Sources
 

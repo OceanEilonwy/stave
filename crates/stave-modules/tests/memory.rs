@@ -4,7 +4,8 @@ use std::path::{Path, PathBuf};
 
 use stave_lang::{Code, Diagnostic, render_diagnostics};
 use stave_modules::{
-    LoadError, MemoryFiles, ModuleHeader, ModuleId, ModuleSet, ModuleSource, STD_MODULES, std_files,
+    LoadError, MemoryFiles, ModuleHeader, ModuleId, ModuleSet, ModuleSource, PRELUDE_MODULES,
+    STD_MODULES, std_files,
 };
 
 const PROJECT: &str = "stave 1\n\nproject \"Shop\" {\n  units: mm\n}\n";
@@ -76,7 +77,11 @@ fn root_project_with_two_files() {
     // Root files get the first file ids, in file-name order.
     assert_eq!(root.files[0].file.index(), 0);
     assert_eq!(root.files[1].file.index(), 1);
-    assert_eq!(set.sources.files().count(), 2 + std_files().count());
+    // Only the prelude's standard modules load without an import.
+    let prelude_files = std_files()
+        .filter(|(module, _, _)| PRELUDE_MODULES.contains(module))
+        .count();
+    assert_eq!(set.sources.files().count(), 2 + prelude_files);
 }
 
 #[test]
@@ -110,7 +115,7 @@ fn std_is_always_loaded_in_prelude_order() {
         names,
         [("joinery", true), ("hardware", true), ("tools", true)]
     );
-    for (id, expected) in set.prelude.iter().zip(STD_MODULES) {
+    for (id, expected) in set.prelude.iter().zip(PRELUDE_MODULES) {
         let module = set.module(*id).unwrap();
         assert_eq!(module.source, ModuleSource::Std { name: expected });
         assert!(
@@ -432,6 +437,37 @@ fn std_hardware_without_alias_is_reserved_word() {
         diagnostic.message,
         "'hardware' is a reserved word and can't be used as a name"
     );
+}
+
+#[test]
+fn std_casework_loads_only_when_imported() {
+    let without = load(&MemoryFiles::new().with("shop/cabinet.stave", PROJECT));
+    assert!(
+        without
+            .modules
+            .iter()
+            .all(|module| module.source != ModuleSource::Std { name: "casework" })
+    );
+
+    let files = MemoryFiles::new().with(
+        "shop/cabinet.stave",
+        project_with_imports("import \"std:casework\""),
+    );
+    let set = load(&files);
+    assert!(set.diagnostics.is_empty(), "{}", render(&set));
+    let root = set.module(set.root).unwrap();
+    let import = &root.files[0].imports[0];
+    assert_eq!(import.name, "casework");
+    let casework = set.module(import.module).unwrap();
+    assert_eq!(casework.source, ModuleSource::Std { name: "casework" });
+    assert!(matches!(
+        casework.header,
+        Some(ModuleHeader::Library { .. })
+    ));
+    // It is importable, not part of the prelude.
+    assert!(!set.prelude.contains(&casework.id));
+    assert_eq!(set.prelude.len(), PRELUDE_MODULES.len());
+    assert!(STD_MODULES.contains(&"casework"));
 }
 
 #[test]
