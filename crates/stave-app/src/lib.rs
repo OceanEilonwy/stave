@@ -33,6 +33,7 @@ pub mod empty;
 pub mod export_view;
 pub mod finder;
 pub mod focus;
+pub mod grips;
 pub mod hold;
 pub mod inspect;
 pub mod link;
@@ -42,6 +43,7 @@ pub mod remove;
 pub mod repeat;
 pub mod scratch;
 pub mod session;
+pub mod stops;
 pub mod view;
 
 use stave_lang::{Diagnostic, SourceMap};
