@@ -64,6 +64,7 @@ fn every_example_and_standard_module_checks_clean() {
             "bookshelf",
             "box",
             "clothing_cabinet",
+            "clothing_cabinet_assemblies",
             "joint_samples",
             "nightstand",
             "side_table",

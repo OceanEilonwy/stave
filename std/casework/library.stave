@@ -1,18 +1,18 @@
 stave 1
 
-// std:casework — cabinet components: whole drawers and doors that a project
-// places in an opening. Unlike std:joinery, std:hardware and std:tools it is
+// std:casework — cabinet components: carcass pieces, drawers and doors that
+// a project places. Unlike std:joinery, std:hardware and std:tools it is
 // not in the prelude: a project imports it, import "std:casework", and then
-// writes casework.Drawer or casework.FramePanelDoor.
+// writes casework.Drawer, casework.Shelf and so on.
 //
 // A library can't place parts at the top level; its components do that when
 // a project instantiates them. Everything a component needs from the project
 // (the opening, the stock, the shop's own hardware) comes in as a param, so
 // the library stands alone.
 //
-// Components: Drawer, FramePanelDoor
+// Components: Back, Divider, Shelf, HangingRail, Feet, Drawer, FramePanelDoor
 
 library "Casework" {
-  about:   "Drawers and doors for cabinets"
+  about:   "Backs, dividers, shelves, rails, feet, drawers and doors for cabinets"
   license: "AGPL-3.0-or-later"
 }

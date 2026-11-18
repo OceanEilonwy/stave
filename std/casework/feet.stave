@@ -1,0 +1,34 @@
+stave 1
+
+/// Four turned feet under the corners of a base, each held by a round tenon.
+/// The feet hang down from the base, their outer faces a set distance in
+/// from its edges; the tenon is added by the joint.
+component Feet {
+  param under          : Part        // the base they stand under
+  param foot_stock     : Stock       // a square blank as wide as the foot
+  param foot_profile   : Profile = bun_foot
+  param inset          = 60mm        // from each edge of the base to the outside of a foot
+  param tenon_diameter = 19mm
+  param tenon_length   = 16mm        // how far the tenon reaches into the base
+
+  part foot[front_left, front_right, back_left, back_right] : foot_stock {
+    length: fit                      // from the profile; the tenon is added by the joint
+    shape:  turned(foot_profile)
+    place {
+      orient(length: down)           // station 0 of the profile is at the top, against the base
+      corners(under, inset: inset)
+      against(under.bottom)
+    }
+  }
+
+  joint tenons : round_tenon(foot[*], into: under, diameter: tenon_diameter, length: tenon_length)
+}
+
+/// A bun foot: a straight collar under the base, then a curve in to a narrower toe.
+profile bun_foot {
+  measure: diameter
+  smooth:  true
+  at 0mm:  70mm
+  at 34mm: 70mm
+  at 80mm: 40mm
+}

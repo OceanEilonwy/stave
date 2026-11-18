@@ -1,0 +1,26 @@
+stave 1
+
+/// A back panel that closes the rear of a cabinet, housed in a rabbet in each side.
+/// It stands on the base, reaches up to the underside of the top, and fits
+/// between the sides; the rabbet depth is added by the joint.
+component Back {
+  param sides       : Parts          // the cabinet sides it is housed in
+  param stands_on   : Part           // the base it stands on, flush with its back
+  param under       : Part           // the top it reaches up to
+  param panel_stock : Stock
+  param joinery     : JointKind = rabbet
+  param depth       = 9mm            // how far the rabbets are cut into the sides
+
+  part panel : panel_stock {
+    length: between(stands_on, under)
+    width:  fit                      // between the sides; the rabbet depth is added by the joint
+    place {
+      orient(length: up, width: right)
+      against(stands_on.top)
+      center(stands_on, across)
+      flush(stands_on.back)
+    }
+  }
+
+  joint housing : joinery(panel, into: sides, depth: depth)
+}

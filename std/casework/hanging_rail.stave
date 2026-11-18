@@ -1,0 +1,24 @@
+stave 1
+
+/// A round clothes rail hung under a shelf, its ends in sockets in the cabinet sides.
+/// It runs from side to side under the shelf, centred front to back on it;
+/// the socket depth is added by the joint.
+component HangingRail {
+  param under      : Part            // the shelf it hangs under
+  param sides      : Parts           // the cabinet sides its ends sit in
+  param rail_stock : Stock           // round stock: a dowel
+  param drop       = 50mm            // from the underside of the shelf to the top of the rail
+  param joinery    : JointKind = socket
+  param depth      = 9mm             // how deep the sockets are
+
+  part rail : rail_stock {
+    length: fit                      // between the sides; the socket depth is added by the joint
+    place {
+      against(under.bottom, gap: drop)
+      center(under, across)
+      center(under, deep)
+    }
+  }
+
+  joint ends : joinery(rail, into: sides, depth: depth)
+}
