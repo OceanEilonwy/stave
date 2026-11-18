@@ -1,8 +1,9 @@
 //! The render-ready scene of a solved design: one node per part, per
 //! member of a piece of hardware and per member of a joint pair (a dowel's
-//! pins) with its mesh, material and assembly path; the scene poses
-//! (motions applied); an orbit camera; ray picking; and a binary glTF
-//! export.
+//! pins) with its mesh, material and assembly path; the design's regions
+//! as volumes; the scene poses (motions applied); an orbit camera; ray
+//! picking (a part and the face hit, the region a ray looks into, the two
+//! parts facing each other across a gap); and a binary glTF export.
 //!
 //! Everything is in the render frame of [`stave_geom`] (millimetres, `+y`
 //! up, `+z` toward the viewer). Exact values are converted once, while the
@@ -24,6 +25,7 @@ pub mod export;
 pub mod focus;
 mod graph;
 mod pick;
+mod space;
 
 pub use camera::{Orbit, Projection, Ray};
 pub use focus::{
@@ -32,7 +34,8 @@ pub use focus::{
 };
 pub use graph::{
     BuildOptions, Highlight, Item, Material, MemberFollower, MotionRange, Node, NodeId, Posed,
-    SceneEntry, SceneGraph, Section, Wood,
+    RegionNode, SceneEntry, SceneGraph, Section, Wood,
 };
-pub use pick::Hit;
+pub use pick::{Hit, PartFace};
+pub use space::{Facing, RegionHit, Target};
 pub use stave_geom::{Aabb, Extent, Geometry};

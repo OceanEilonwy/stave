@@ -11,7 +11,7 @@
 use glam::Vec3;
 use stave_lang::placement::{Axis, Direction};
 use stave_lang::units::{Angle, Length};
-use stave_model::solved::{Point, Size3};
+use stave_model::solved::{Point, Size3, WorldBox};
 
 /// A length in millimetres.
 pub fn mm(length: Length) -> f32 {
@@ -121,6 +121,28 @@ pub fn point(point: Point) -> Vec3 {
     Vec3::new(mm(point.across), mm(point.up), -mm(point.deep))
 }
 
+/// A point in the render frame back to a world point, each coordinate
+/// rounded to the nearest nanometre: the way a picked point (a float)
+/// becomes something exact relationships can be measured against. `None`
+/// when a coordinate isn't finite.
+pub fn point_from_render(point: Vec3) -> Option<Point> {
+    let length = |mm: f32| length_from_nm(f64::from(mm) * 1e6);
+    Some(Point {
+        across: length(point.x)?,
+        up: length(point.y)?,
+        deep: length(-point.z)?,
+    })
+}
+
+/// A world box in the render frame.
+pub fn world_box(bounds: WorldBox) -> crate::Aabb {
+    let (a, b) = (point(bounds.min()), point(bounds.max()));
+    crate::Aabb {
+        min: a.min(b),
+        max: a.max(b),
+    }
+}
+
 /// A world transform (world nanometres to world nanometres, as the
 /// collision tests and [`crate::linkage`] use) as a render-frame transform
 /// (millimetres, `z` toward the front).
@@ -210,5 +232,10 @@ mod tests {
         };
         assert_eq!(point(p), Vec3::new(1.0, 2.0, -3.0));
         assert_eq!(direction(Direction::Back), axis(Axis::Deep));
+        assert_eq!(point_from_render(point(p)), Some(p));
+        assert_eq!(point_from_render(Vec3::new(f32::NAN, 0.0, 0.0)), None);
+        let bounds = world_box(WorldBox::new(Point::default(), p));
+        assert_eq!(bounds.min, Vec3::new(0.0, 0.0, -3.0));
+        assert_eq!(bounds.max, Vec3::new(1.0, 2.0, 0.0));
     }
 }
