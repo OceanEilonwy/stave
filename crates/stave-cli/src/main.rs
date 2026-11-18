@@ -15,6 +15,7 @@
 //! stave edit examples/clothing_cabinet_assemblies --region divider.above \
 //!     --choose Shelf --bind "parts side_l side_r" --set headroom=400mm --commit
 //! stave edit examples/clothing_cabinet_assemblies --script steps.txt
+//! stave edit new_chest --script build.txt   # a script can start a new project
 //! ```
 //!
 //! `check` runs the whole pipeline (through `stave-app`) on a module
@@ -37,6 +38,7 @@ use std::sync::atomic::AtomicBool;
 use anyhow::{Context as _, Result, bail};
 use clap::{Parser, Subcommand};
 use stave_app::edit::Verdict;
+use stave_app::editing::commit_tried;
 use stave_app::scratch::{DiskWriter, EditBase, one_patch_each};
 use stave_lang::ast;
 use stave_lang::{
@@ -119,7 +121,10 @@ enum Command {
         /// The patch file: one or more `patch "..." { ... }` blocks.
         #[arg(long, value_name = "FILE")]
         patch: Option<PathBuf>,
-        /// A script of edit steps, one a line (see the command's docs).
+        /// A script of edit steps, one a line: new/import/stock/tools/create
+        /// to start a project, select/choose/bind/set/name/repeat to add,
+        /// repeat/shares/mirror/hold/remove/rename to change, fix, show,
+        /// add, cancel (see docs/editing.md, "Scripts").
         #[arg(long, value_name = "FILE")]
         script: Option<PathBuf>,
         /// Select a space by its region's name: `divider.above`.
@@ -449,8 +454,10 @@ fn edit(folder: &Path, patch_path: &Path, commit: bool) -> Result<bool> {
                 writeln!(stdout, "{title}: fits")?;
                 fit += 1;
                 if commit {
-                    tried.commit(&mut DiskWriter)?;
-                    written.extend(tried.changed().iter().map(|file| file.path.clone()));
+                    // The editor's one writer: it refuses a file that
+                    // changed on disk since the project was read.
+                    let files = commit_tried(base.opened(), &tried, patch, &mut DiskWriter)?;
+                    written.extend(files.into_iter().map(|file| file.path));
                 }
                 if tried.changed().is_empty() {
                     writeln!(stdout, "  changes nothing")?;

@@ -3,7 +3,7 @@
 //! a project, and commit it to the text only when it fits.
 //!
 //! ```text
-//! EditBase ──start(patch)──▶ Scratch ──finish(cancel)──▶ Tried ──commit(writer)──▶ files written
+//! EditBase ──start(patch)──▶ Scratch ──finish(cancel)──▶ Tried ──editing::commit_tried──▶ files written
 //!   │  (apply to a scratch     │ fast tier:            │ slow tier:               only on Fits
 //!   │   copy, re-solve)        │ Refused or Checking   │ Fits or Refused
 //!   └─ unchanged: many candidates are tried from one base
@@ -21,8 +21,9 @@
 //! - [`Scratch::finish`] runs the slow tier ([`stave_check::check_slow`]),
 //!   which the caller can cancel with a flag, and gives a [`Tried`] with
 //!   the final [`Verdict`]: *fits* or *refused*.
-//! - [`Tried::commit`] writes the changed files through [`WriteFiles`],
-//!   and only for a verdict that fits.
+//! - A try that fits is written by the editor's one writer,
+//!   [`crate::editing::commit_tried`] (or the edit in progress's commit),
+//!   which never overwrites a file changed since it was read.
 //!
 //! **Strict commit.** A candidate is refused when it causes an error. An
 //! error the design already had is not caused by the edit and doesn't
@@ -64,7 +65,7 @@ use stave_lang::{
 };
 use stave_model::Model;
 use stave_model::solved::SolvedDesign;
-use stave_modules::{FileSource, LoadError, MemoryFiles, ModuleSet, ModuleSource};
+use stave_modules::{FileSource, LoadError, ModuleSet, ModuleSource};
 
 use crate::edit::{Fits, Fix, Problem, Refusal, Verdict};
 use crate::{Opened, Prepared};
@@ -181,7 +182,7 @@ impl<'f> EditBase<'f> {
                 return Ok(Scratch {
                     base: self,
                     state: State::Done(Tried {
-                        verdict: verdict(errors.iter().collect(), Vec::new()),
+                        verdict: verdict(&sources, errors.iter().collect(), Vec::new()),
                         changed: Vec::new(),
                         sources,
                         scratch: None,
@@ -329,8 +330,8 @@ impl<'f> EditBase<'f> {
         let caused = self.caused(&stages.modules.sources, &diagnostics);
         let unplaced = unplaced(&stages, &diagnostics, &caused);
         let verdict = match &unplaced {
-            Some(unplaced) => verdict(vec![unplaced], Vec::new()),
-            None => verdict(caused.errors, caused.warnings),
+            Some(unplaced) => verdict(&pending.sources, vec![unplaced], Vec::new()),
+            None => verdict(&pending.sources, caused.errors, caused.warnings),
         };
         let opened = Opened {
             sources: stages.modules.sources.clone(),
@@ -354,12 +355,19 @@ impl<'f> EditBase<'f> {
 }
 
 /// The verdict for the errors and warnings an edit causes: refused with
-/// the errors and their fixes when there is one, else fits with the
+/// the errors, their fixes and their text as `stave check` prints it
+/// (rendered from `sources`) when there is one, else fits with the
 /// warnings.
-fn verdict(errors: Vec<&Diagnostic>, warnings: Vec<&Diagnostic>) -> Verdict {
+fn verdict(sources: &SourceMap, errors: Vec<&Diagnostic>, warnings: Vec<&Diagnostic>) -> Verdict {
     let problems = errors
         .into_iter()
-        .filter_map(|diagnostic| Problem::new(diagnostic.clone(), fixes(diagnostic)).ok())
+        .filter_map(|diagnostic| {
+            Problem::new(diagnostic.clone(), fixes(diagnostic))
+                .ok()
+                .map(|problem| {
+                    problem.with_rendered(stave_lang::render_diagnostic(sources, diagnostic))
+                })
+        })
         .collect();
     match Refusal::new(problems) {
         Ok(refusal) => Verdict::Refused(refusal),
@@ -403,10 +411,14 @@ fn unplaced(
     Some(unplaced)
 }
 
-/// The fixes a diagnostic holds. The checker's diagnostics carry none
-/// yet (grammar, "Fixes"); this is the one place that will read them.
-fn fixes(_diagnostic: &Diagnostic) -> Vec<Fix> {
-    Vec::new()
+/// The fixes a diagnostic holds (grammar, "Fixes"), as contract fixes,
+/// in the order the help recommends them.
+fn fixes(diagnostic: &Diagnostic) -> Vec<Fix> {
+    diagnostic
+        .fixes
+        .iter()
+        .filter_map(Fix::from_diagnostic_fix)
+        .collect()
 }
 
 /// What the edit caused.
@@ -598,72 +610,25 @@ impl Tried {
                 .collect(),
         }
     }
-
-    /// Writes the changed files through `to`, in path order, when the
-    /// verdict fits. Nothing is written otherwise.
-    ///
-    /// # Errors
-    ///
-    /// [`CommitError::Refused`] when the verdict doesn't fit (nothing is
-    /// written), [`CommitError::Write`] when a file can't be written (the
-    /// files before it are written).
-    pub fn commit(&self, to: &mut dyn WriteFiles) -> Result<&[ChangedFile], CommitError> {
-        if !self.fits() {
-            return Err(CommitError::Refused);
-        }
-        for file in &self.changed {
-            to.write_file(&file.path, &file.text)
-                .map_err(|source| CommitError::Write {
-                    path: file.path.clone(),
-                    source,
-                })?;
-        }
-        Ok(&self.changed)
-    }
 }
 
 // ---------------------------------------------------------------------------
 // Writing
 // ---------------------------------------------------------------------------
 
-/// Where a commit writes files.
-pub trait WriteFiles {
-    /// Writes `text` as the whole of the file at `path`, creating it if
-    /// it doesn't exist.
-    fn write_file(&mut self, path: &Path, text: &str) -> io::Result<()>;
-}
-
-/// Writes files on disk.
+/// Files on disk: the editor's writer for the command line. It writes a
+/// file only while it still holds the text the edits were computed from
+/// (see [`crate::editing::WriteEdits`]), so a change saved since the
+/// project was read is never overwritten.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct DiskWriter;
 
-impl WriteFiles for DiskWriter {
-    fn write_file(&mut self, path: &Path, text: &str) -> io::Result<()> {
-        std::fs::write(path, text)
-    }
-}
-
-impl WriteFiles for MemoryFiles {
-    fn write_file(&mut self, path: &Path, text: &str) -> io::Result<()> {
-        self.insert(path, text);
-        Ok(())
-    }
-}
-
-/// Why a commit wrote nothing, or not everything.
+/// Why [`EditBase::advance`] didn't move the base.
 #[derive(Debug, thiserror::Error)]
 pub enum CommitError {
     /// The candidate doesn't fit.
     #[error("the edit was refused, so nothing was written")]
     Refused,
-    /// A file can't be written.
-    #[error("can't write '{}': {source}", path.display())]
-    Write {
-        /// The file.
-        path: PathBuf,
-        /// What went wrong.
-        source: io::Error,
-    },
 }
 
 // ---------------------------------------------------------------------------
@@ -1078,6 +1043,18 @@ mod tests {
         parse
     }
 
+    /// Writes a fitting try's files into `files`; `Err` for a refusal,
+    /// with nothing written.
+    fn commit(tried: &Tried, files: &mut MemoryFiles) -> Result<(), ()> {
+        if !tried.fits() {
+            return Err(());
+        }
+        for file in tried.changed() {
+            files.insert(&file.path, file.text.clone());
+        }
+        Ok(())
+    }
+
     fn try_patch(base: &EditBase<'_>, text: &str) -> Tried {
         base.try_patch("change.stave", &patch(text), &AtomicBool::new(false))
             .unwrap()
@@ -1147,7 +1124,7 @@ patch "Add a shelf through the divider" {
         assert_eq!(changed, [Path::new(FOLDER).join("carcass.stave")]);
 
         let mut written = files.clone();
-        tried.commit(&mut written).unwrap();
+        commit(&tried, &mut written).unwrap();
         assert_ne!(written, files);
         let reopened = crate::open_with(Path::new(FOLDER), &written).unwrap();
         assert_eq!(
@@ -1176,10 +1153,7 @@ patch "Add a shelf through the divider" {
         assert!(shown.contains("divider"), "{shown}");
 
         let mut written = files.clone();
-        assert!(matches!(
-            tried.commit(&mut written),
-            Err(CommitError::Refused)
-        ));
+        assert!(commit(&tried, &mut written).is_err());
         assert_eq!(written, files);
     }
 
@@ -1234,7 +1208,7 @@ patch "Add a shelf through the divider" {
             base.opened().error_count()
         );
         let mut written = files.clone();
-        tried.commit(&mut written).unwrap();
+        commit(&tried, &mut written).unwrap();
         assert_ne!(written, files);
     }
 
@@ -1251,10 +1225,7 @@ patch "Add a shelf through the divider" {
         assert!(codes.contains(&Code::Overlap), "{shown}");
         assert!(shown.contains("shelf_4"), "{shown}");
         let mut written = files.clone();
-        assert!(matches!(
-            tried.commit(&mut written),
-            Err(CommitError::Refused)
-        ));
+        assert!(commit(&tried, &mut written).is_err());
         assert_eq!(written, files);
     }
 
@@ -1282,7 +1253,7 @@ patch "Add a shelf through the divider" {
                 "{shown}"
             );
             let mut written = files.clone();
-            assert!(tried.commit(&mut written).is_err());
+            assert!(commit(&tried, &mut written).is_err());
             assert_eq!(written, files);
         }
         // A new error is the edit's own, and refuses as itself.
@@ -1317,7 +1288,7 @@ patch "Add a shelf through the divider" {
             "{shown}"
         );
         let mut written = files.clone();
-        assert!(tried.commit(&mut written).is_err());
+        assert!(commit(&tried, &mut written).is_err());
         assert_eq!(written, files);
     }
 

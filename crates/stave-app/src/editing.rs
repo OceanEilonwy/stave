@@ -49,17 +49,21 @@ use std::sync::atomic::AtomicBool;
 
 use stave_check::Cancelled;
 use stave_lang::ast::{self, Expr, Ident, Name, Span};
-use stave_lang::{Fix as LangFix, SourceMap, TextEdit, apply_patch, parse_patch_file};
+use stave_lang::placement::Axis;
+use stave_lang::units::Length;
+use stave_lang::{Fix as LangFix, Parse, SourceMap, TextEdit, apply_patch, parse_patch_file};
 use stave_model::nonempty::NonEmpty;
 use stave_modules::{FileSource, LoadError, MemoryFiles};
 
 use crate::Opened;
 use crate::candidates::applicability::{self, PATCH_NAME, still_to_choose};
-use crate::candidates::{EditScope, ScopeError, sort_menu};
+use crate::candidates::{EditScope, Repeat, ScopeError, sort_menu};
 use crate::edit::{
     Applicability, Candidate, Declaration, FacingPair, PartFace, Picked, PlaceSlot, SettingValue,
     Verdict,
 };
+use crate::hold::HoldRequest;
+use crate::naming::RepeatCount;
 use crate::naming::TakenNames;
 use crate::scratch::{DiskWriter, EditBase, Tried, TryError};
 
@@ -135,9 +139,57 @@ pub enum EditCommand {
         /// The fix.
         fix: usize,
     },
-    /// Write the candidate into the text (only when it fits).
+    /// Make the chosen candidate an array of pieces filling its region,
+    /// split along an axis (`Some`), or a single one again (`None`). The
+    /// array is named by the naming rules (`drawer[bottom, top]` filling
+    /// `drawer_bay[bottom, top]`).
+    Repeat(Option<Repeat>),
+    /// Start a change: repeat an assembly of the project that fills a
+    /// region `count` times, or change the count of one already repeated
+    /// (`axis` is needed for a first repeat and ignored after).
+    RepeatItem {
+        /// The assembly.
+        item: Ident,
+        /// How many pieces.
+        count: RepeatCount,
+        /// The axis to split its region along.
+        axis: Option<Axis>,
+    },
+    /// Start a change: move the boundary between pieces `lower` and
+    /// `lower + 1` (from 0, in label order) of a split region, so the
+    /// lower piece is `boundary` long along the split; their sum is kept.
+    MoveShares {
+        /// The region array: `drawer_bay`.
+        region: Ident,
+        /// The first of the two pieces.
+        lower: usize,
+        /// The new size of that piece.
+        boundary: Length,
+    },
+    /// Start a change: add the mirror image of an assembly (renaming it
+    /// with its side). [`crate::session::Session::mirror_offer`] says
+    /// whether it has one, without trying it.
+    Mirror(Ident),
+    /// Start a change: hold a measured distance as a `require`.
+    Hold(HoldRequest),
+    /// Start a change: remove an item. While something depends on it the
+    /// change needs a choice, naming what does; then
+    /// [`EditCommand::IncludeDependants`] removes those too.
+    Remove(Ident),
+    /// Remove the dependants too (a removal waiting on them).
+    IncludeDependants,
+    /// Start a change: rename an item of the project everywhere it is
+    /// used.
+    RenameItem {
+        /// The item.
+        item: Ident,
+        /// Its new name.
+        to: Ident,
+    },
+    /// Write the candidate, or the change, into the text (only when it
+    /// fits).
     Add,
-    /// Drop the edit, writing nothing.
+    /// Drop the edit or the change, writing nothing.
     Cancel,
 }
 
@@ -160,6 +212,13 @@ pub enum EditEvent {
     Renamed,
     /// A fix was added to the candidate.
     FixApplied,
+    /// The chosen candidate's repeat changed.
+    RepeatChanged,
+    /// A change of the design began ([`crate::session::Session::change`]):
+    /// it has been tried, and [`EditEvent::VerdictChanged`] follows.
+    ChangeStarted,
+    /// A removal now takes the items that depend on it too.
+    DependantsIncluded,
     /// The chosen candidate's [`Progress`] changed: its verdict, or what is
     /// still to choose.
     VerdictChanged,
@@ -197,6 +256,9 @@ pub enum Rejection {
     CantStart(String),
     /// The text couldn't be written, in words.
     CantWrite(String),
+    /// [`EditCommand::IncludeDependants`] without a removal waiting on
+    /// its dependants.
+    NothingToInclude,
 }
 
 impl Rejection {
@@ -216,6 +278,9 @@ impl Rejection {
             Rejection::NoSuchFix => "there is no such fix".to_owned(),
             Rejection::DoesNotFit => "the edit doesn't fit, so nothing was written".to_owned(),
             Rejection::CantStart(message) | Rejection::CantWrite(message) => message.clone(),
+            Rejection::NothingToInclude => {
+                "there is no removal waiting on what depends on it".to_owned()
+            }
         }
     }
 }
@@ -267,6 +332,8 @@ pub struct Chosen {
     name: Option<Ident>,
     /// The fixes added, in order.
     fixes: Vec<LangFix>,
+    /// The repeat asked for, if any.
+    repeat: Option<Repeat>,
     /// The patch as last written: the candidate's, then each fix.
     patch: Option<String>,
     /// The name the new item takes in that patch.
@@ -302,6 +369,11 @@ impl Chosen {
     /// The fixes added so far.
     pub fn fixes(&self) -> &[LangFix] {
         &self.fixes
+    }
+
+    /// The repeat asked for: how many pieces, split along which axis.
+    pub fn repeat(&self) -> Option<Repeat> {
+        self.repeat
     }
 
     /// The scratch copy as last checked, for the ghost; `None` when the
@@ -398,7 +470,8 @@ impl Edit {
         if base.opened().design.is_none() {
             return Err(StartError::NotSolved);
         }
-        let menu = EditScope::new(base.opened())?.candidates(&picked);
+        let menu =
+            EditScope::new(base.opened())?.described_candidates(&base.opened().sources, &picked);
         Ok(Edit {
             folder: folder.to_path_buf(),
             base,
@@ -492,6 +565,7 @@ impl Edit {
                         candidate: candidate.clone(),
                         name: None,
                         fixes: Vec::new(),
+                        repeat: None,
                         patch: None,
                         item_name: None,
                         progress: Progress::Unwritable(String::new()),
@@ -591,7 +665,27 @@ impl Edit {
                     None => events.push(EditEvent::Rejected(Rejection::NoSuchFix)),
                 }
             }
-            EditCommand::Start(_) | EditCommand::Add | EditCommand::Cancel => {
+            EditCommand::Repeat(repeat) => {
+                let Some(chosen) = self.chosen.as_mut() else {
+                    events.push(EditEvent::Rejected(Rejection::NothingChosen));
+                    return events;
+                };
+                if chosen.repeat != repeat {
+                    chosen.repeat = repeat;
+                    events.push(EditEvent::RepeatChanged);
+                    self.retry(&mut events);
+                }
+            }
+            EditCommand::Start(_)
+            | EditCommand::Add
+            | EditCommand::Cancel
+            | EditCommand::RepeatItem { .. }
+            | EditCommand::MoveShares { .. }
+            | EditCommand::Mirror(_)
+            | EditCommand::Hold(_)
+            | EditCommand::Remove(_)
+            | EditCommand::IncludeDependants
+            | EditCommand::RenameItem { .. } => {
                 events.push(EditEvent::Rejected(Rejection::NoEdit));
             }
         }
@@ -615,21 +709,12 @@ impl Edit {
         if !tried.fits() {
             return Err(CommitError::DoesNotFit);
         }
-        let files = file_edits(self.base.opened(), tried, patch);
-        // Every file is checked before any is written, so a file changed
-        // since the edit began stops the commit with nothing written.
-        for file in &files {
-            to.can_write(file).map_err(|source| CommitError::Write {
-                path: file.path.clone(),
-                source,
-            })?;
-        }
-        for file in &files {
-            to.write_edits(file).map_err(|source| CommitError::Write {
-                path: file.path.clone(),
-                source,
-            })?;
-        }
+        let parse = SourceMap::new()
+            .add(PATCH_NAME, patch.as_str())
+            .map(|file| parse_patch_file(file, patch))
+            .ok();
+        let files = file_edits(self.base.opened(), tried, parse.as_ref());
+        write_all(&files, to)?;
         let opened = chosen
             .tried
             .take()
@@ -647,11 +732,19 @@ impl Edit {
         };
         let before = chosen.progress.clone();
         chosen.tried = None;
+        if let Ok(scope) = EditScope::new(self.base.opened()) {
+            scope.describe(&self.base.opened().sources, &mut chosen.candidate);
+        }
         let (progress, patch, item_name, tried) = attempt(&self.base, chosen);
         chosen.progress = progress;
         chosen.patch = patch;
         chosen.item_name = item_name;
         chosen.tried = tried;
+        crate::candidates::describe::fill_default_values(
+            &mut chosen.candidate,
+            chosen.item_name.as_ref(),
+            chosen.tried.as_ref().and_then(Tried::opened),
+        );
         if chosen.progress != before {
             events.push(EditEvent::VerdictChanged);
         }
@@ -671,10 +764,11 @@ fn attempt(
         Ok(scope) => scope,
         Err(error) => return (Progress::Unwritable(error.to_string()), None, None, None),
     };
-    let written = match scope.write_patch_named(&chosen.candidate, None, chosen.name.as_ref()) {
-        Ok(written) => written,
-        Err(error) => return (Progress::Unwritable(error.to_string()), None, None, None),
-    };
+    let written =
+        match scope.write_patch_named(&chosen.candidate, chosen.repeat, chosen.name.as_ref()) {
+            Ok(written) => written,
+            Err(error) => return (Progress::Unwritable(error.to_string()), None, None, None),
+        };
     let mut text = written.text.clone();
     for fix in &chosen.fixes {
         text.push('\n');
@@ -827,14 +921,67 @@ fn rename_word(text: &str, old: &str, new: &str) -> String {
     out
 }
 
+/// Writes a try that fits, tried from `base` with `patch`, through `to`:
+/// the one writer of the editor, which the command line's `--patch
+/// --commit` uses too. Every file is checked before any is written, so a
+/// file changed since `base` was read stops the commit with nothing
+/// written. Gives back what was written.
+///
+/// # Errors
+///
+/// [`CommitError::DoesNotFit`] when the try doesn't fit (nothing is
+/// written); [`CommitError::Write`] when a file changed since it was read
+/// or can't be written.
+pub fn commit_tried(
+    base: &Opened,
+    tried: &Tried,
+    patch: &Parse<ast::PatchFile>,
+    to: &mut dyn WriteEdits,
+) -> Result<Vec<FileEdit>, CommitError> {
+    if !tried.fits() {
+        return Err(CommitError::DoesNotFit);
+    }
+    let files = file_edits(base, tried, Some(patch));
+    write_all(&files, to)?;
+    Ok(files)
+}
+
+/// Writes files' edits through `to`, checking every file before writing
+/// any: a file whose text is no longer what the edits were computed from
+/// stops the whole write with nothing written.
+///
+/// # Errors
+///
+/// [`CommitError::Write`] for the first file that changed since it was
+/// read, or that can't be written (files before it were written).
+pub fn write_all(files: &[FileEdit], to: &mut dyn WriteEdits) -> Result<(), CommitError> {
+    for file in files {
+        to.can_write(file).map_err(|source| CommitError::Write {
+            path: file.path.clone(),
+            source,
+        })?;
+    }
+    for file in files {
+        to.write_edits(file).map_err(|source| CommitError::Write {
+            path: file.path.clone(),
+            source,
+        })?;
+    }
+    Ok(())
+}
+
 /// The text edits a fitting try makes, per file, in path order: computed
 /// against the base's own files, so they apply to the text the edit began
 /// from.
-fn file_edits(base: &Opened, tried: &Tried, patch: &str) -> Vec<FileEdit> {
-    let patched = EditScope::new(base).ok().and_then(|scope| {
-        let file = SourceMap::new().add(PATCH_NAME, patch).ok()?;
-        apply_patch(&scope.patch_target(), &parse_patch_file(file, patch)).ok()
-    });
+fn file_edits(
+    base: &Opened,
+    tried: &Tried,
+    patch: Option<&Parse<ast::PatchFile>>,
+) -> Vec<FileEdit> {
+    let patched = EditScope::new(base)
+        .ok()
+        .zip(patch)
+        .and_then(|(scope, patch)| apply_patch(&scope.patch_target(), patch).ok());
     let mut out: Vec<FileEdit> = tried
         .changed()
         .iter()
@@ -1054,6 +1201,23 @@ pub fn parse_value(text: &str) -> Result<Expr, NotAValue> {
     }
 }
 
+/// A length as typed (`400mm`, `3/4in`), exactly.
+///
+/// # Errors
+///
+/// [`NotAValue`] when the text is not one length literal.
+pub fn parse_length(text: &str) -> Result<Length, NotAValue> {
+    let not = || NotAValue(text.to_owned());
+    let expr = parse_value(text)?;
+    let ast::ExprKind::Quantity(quantity) = expr.kind else {
+        return Err(not());
+    };
+    stave_lang::units::quantity_to_length(quantity)
+        .ok()
+        .and_then(|exact| exact.to_length())
+        .ok_or_else(not)
+}
+
 /// A name as typed (`hat_shelf`).
 ///
 /// # Errors
@@ -1114,5 +1278,7 @@ mod tests {
         assert!(parse_value("oak_19").is_ok());
         assert!(parse_value("").is_err());
         assert!(parse_value("400mm }").is_err());
+        assert_eq!(parse_length("400mm"), Ok(Length::from_mm(400)));
+        assert!(parse_length("oak_19").is_err());
     }
 }

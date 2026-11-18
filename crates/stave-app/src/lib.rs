@@ -25,6 +25,7 @@
 use std::path::Path;
 
 pub mod candidates;
+pub mod change;
 pub mod check;
 pub mod edit;
 pub mod editing;

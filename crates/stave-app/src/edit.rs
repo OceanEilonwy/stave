@@ -173,6 +173,10 @@ pub struct Candidate {
     /// Whether it applies here: its own `require` lines, checked in a
     /// scratch copy with its defaults.
     pub applicability: Applicability,
+    /// The name the new item takes unless the user types another: the
+    /// component's or kind's name in lower case, numbered when taken
+    /// (`drawer_2`). `None` only when no name could be made.
+    pub generated_name: Option<Ident>,
 }
 
 impl Candidate {
@@ -240,6 +244,14 @@ pub struct PlaceParam {
     pub name: Name,
     /// Its type, and its value once pointed at.
     pub slot: PlaceSlot,
+    /// The sentence the card asks for it with while it is unbound: the
+    /// first sentence of the param's own `///` doc comment when it has
+    /// one, otherwise "Point at the <name in words>." (`Point at the hinge
+    /// side.`).
+    pub prompt: String,
+    /// What fills it, as `.stave` text (`door_bay[left]`,
+    /// `side_l.right`, `[side_l, side_r]`); `None` while unbound.
+    pub text: Option<String>,
 }
 
 /// A place param's type and, once bound, its value.
@@ -277,6 +289,156 @@ pub struct SettingParam {
     pub ty: TypeName,
     /// Its value, or that it has none yet.
     pub value: SettingValue,
+    /// The text of the value it has now, as `.stave` text: what was
+    /// chosen or copied, or, for [`SettingValue::Default`], the default as
+    /// the declaration writes it. `None` while [`SettingValue::Unset`].
+    pub text: Option<String>,
+    /// The param's default as the declaration writes it (`15mm`,
+    /// `opening.up - bottom_gap - top_gap`, `dado`); `None` when the param
+    /// has no default. For the value it works out to, see
+    /// [`SettingParam::default_value`].
+    pub default_text: Option<String>,
+    /// The value the default stands for in this candidate, as `.stave`
+    /// text, while the setting is [`SettingValue::Default`]: the
+    /// default worked out in the scratch copy the chosen candidate was
+    /// tried in (`opening.up - bottom_gap - top_gap` gives `132mm`), or,
+    /// for a default that names a value (`ply_18`, `butt_hinge(length:
+    /// 40mm)`), that text. `None` until the candidate is chosen and tried
+    /// far enough to be solved, while the setting holds a chosen or
+    /// copied value, and when the default's value can't be worked out.
+    pub default_value: Option<String>,
+    /// For [`SettingValue::Copied`], the name of the assembly it was
+    /// copied from (`drawer[top]`).
+    pub copied_from: Option<String>,
+    /// What it can be set to, by its type, each as `.stave` text: the
+    /// stocks in scope for a `Stock`; the mounts (those the project's
+    /// assemblies write, then `overlay()` and `inset(reveal: 2mm)`) for a
+    /// `Mount`; the kinds of that class in scope for a kind type; the
+    /// values of a `within [..]` list for a quantity. Empty when the type
+    /// has no list (a quantity with a range or no domain: see
+    /// [`SettingParam::range`]).
+    pub options: Vec<SettingOption>,
+    /// For a quantity whose param has `within low..high`, the two ends as
+    /// written.
+    pub range: Option<ValueRange>,
+}
+
+impl SettingParam {
+    /// A setting with this name, type and value, and none of the card's
+    /// texts yet ([`crate::candidates::EditScope::describe`] fills them).
+    pub fn new(name: Ident, ty: TypeName, value: SettingValue) -> Self {
+        Self {
+            name,
+            ty,
+            value,
+            text: None,
+            default_text: None,
+            default_value: None,
+            copied_from: None,
+            options: Vec::new(),
+            range: None,
+        }
+    }
+}
+
+/// One thing a setting can be set to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SettingOption {
+    /// The value as `.stave` text, ready for a `set`: `oak_19`,
+    /// `casework.oak_19`, `side_mount_slide`, `overlay()`, `18mm`.
+    pub text: String,
+    /// The first sentence of its declaration's `///` doc comment, when it
+    /// has one.
+    pub hint: Option<String>,
+}
+
+/// The two ends of a `within low..high` domain, as written.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ValueRange {
+    /// The smallest value allowed.
+    pub low: String,
+    /// The largest value allowed.
+    pub high: String,
+}
+
+/// An expression as `.stave` text, exactly: the text parses back to the
+/// same expression (`overlay(left: 18mm, meeting: -reveal / 2)`).
+pub fn value_text(expr: &Expr) -> String {
+    crate::candidates::print::expr_text(expr)
+}
+
+/// Names for the ids the contract holds, read from the model they belong
+/// to: the regions, parts and assemblies of [`PlaceSlot`]s,
+/// [`SettingValue::Copied`] and [`GripTarget`]s.
+#[derive(Debug, Clone, Copy)]
+pub struct Names<'m> {
+    model: &'m stave_model::Model,
+}
+
+impl<'m> Names<'m> {
+    /// Names from this model.
+    pub fn new(model: &'m stave_model::Model) -> Self {
+        Self { model }
+    }
+
+    /// A region's full name: `door_bay[left]`, `case.inside`.
+    pub fn region(&self, id: RegionId) -> Option<&'m str> {
+        self.model
+            .regions
+            .get(id.index())
+            .map(|region| region.name.as_str())
+    }
+
+    /// A part's full name: `case.side[left]`.
+    pub fn part(&self, id: PartId) -> Option<&'m str> {
+        self.model
+            .parts
+            .get(id.index())
+            .map(|part| part.name.as_str())
+    }
+
+    /// An assembly's full name: `drawer[top]`.
+    pub fn assembly(&self, id: AssemblyId) -> Option<&'m str> {
+        self.model
+            .assemblies
+            .get(id.index())
+            .map(|assembly| assembly.name.as_str())
+    }
+
+    /// A face of a part as written: `side_l.right`.
+    pub fn face(&self, face: PartFace) -> Option<String> {
+        Some(format!("{}.{}", self.part(face.part)?, face.face.word()))
+    }
+
+    /// What fills a place param, as written; `None` while unbound or for
+    /// an id the model doesn't have.
+    pub fn slot(&self, slot: &PlaceSlot) -> Option<String> {
+        match slot {
+            PlaceSlot::Region(region) => region.and_then(|id| self.region(id)).map(str::to_owned),
+            PlaceSlot::Anchor(face) => face.and_then(|face| self.face(face)),
+            PlaceSlot::Part(part) => part.and_then(|id| self.part(id)).map(str::to_owned),
+            PlaceSlot::Parts(parts) => {
+                let parts = parts.as_ref()?;
+                let names = parts
+                    .iter()
+                    .map(|id| self.part(*id))
+                    .collect::<Option<Vec<_>>>()?;
+                Some(format!("[{}]", names.join(", ")))
+            }
+        }
+    }
+
+    /// The `set` path a grip writes to, as text: `overall_width`,
+    /// `apron_front.setback`, `drawer_bay.shares`.
+    pub fn grip_target(&self, target: &GripTarget) -> Option<String> {
+        match target {
+            GripTarget::Param(name) => Some(name.as_str().to_owned()),
+            GripTarget::AssemblyArgument { assembly, param } => {
+                Some(format!("{}.{}", self.assembly(*assembly)?, param.as_str()))
+            }
+            GripTarget::Shares { region, .. } => Some(format!("{}.shares", region.as_str())),
+        }
+    }
 }
 
 /// Where a setting's value comes from.
@@ -383,16 +545,36 @@ impl Refusal {
 pub struct Problem {
     diagnostic: Diagnostic,
     fixes: Vec<Fix>,
+    rendered: Option<String>,
 }
 
 impl Problem {
     /// The problem, or [`ContractError::NotAnError`] for a warning.
     pub fn new(diagnostic: Diagnostic, fixes: Vec<Fix>) -> Result<Self, ContractError> {
         if diagnostic.is_error() {
-            Ok(Self { diagnostic, fixes })
+            Ok(Self {
+                diagnostic,
+                fixes,
+                rendered: None,
+            })
         } else {
             Err(ContractError::NotAnError)
         }
+    }
+
+    /// The problem with its text as `stave check` prints it.
+    #[must_use]
+    pub fn with_rendered(mut self, rendered: String) -> Self {
+        self.rendered = Some(rendered);
+        self
+    }
+
+    /// The error as `stave check` prints it: the message, the place, the
+    /// source excerpt with its marks, the notes, the help and the fixes
+    /// (no trailing blank line). `None` when the problem was made without
+    /// its sources (a hand-built value).
+    pub fn rendered(&self) -> Option<&str> {
+        self.rendered.as_deref()
     }
 
     /// The error as `stave check` words it; its help line is always there.
@@ -429,6 +611,19 @@ impl Fix {
     /// The patch.
     pub fn patch(&self) -> &Patch {
         &self.patch
+    }
+
+    /// The fix a diagnostic holds ([`stave_lang::Fix`]) as a contract
+    /// fix; `None` only if its text stops parsing.
+    pub fn from_diagnostic_fix(fix: &stave_lang::Fix) -> Option<Self> {
+        let text = fix.patch_file();
+        let file = SourceMap::new().add("fix.stave", text.as_str()).ok()?;
+        let parsed = stave_lang::parse_patch_file(file, &text);
+        if parsed.has_errors() {
+            return None;
+        }
+        let patch = parsed.ast?.patches.into_iter().next()?;
+        Self::new(patch).ok()
     }
 
     /// The label on the fix's button: the patch's string ("Use 18mm").
@@ -701,10 +896,22 @@ pub fn clothing_cabinet_fixture() -> Option<Fixture> {
     let door_l = AssemblyId::from_index(2)?;
     let casework = name("casework")?;
     let setting = |param: &str, ty: TypeName, value: SettingValue| -> Option<SettingParam> {
+        let text = match &value {
+            SettingValue::Copied { value, .. } | SettingValue::Chosen(value) => {
+                Some(value_text(value))
+            }
+            SettingValue::Default | SettingValue::Unset => None,
+        };
         Some(SettingParam {
             name: name(param)?,
             ty,
             value,
+            text,
+            default_text: None,
+            default_value: None,
+            copied_from: None,
+            options: Vec::new(),
+            range: None,
         })
     };
     let copied = |from: AssemblyId, value: Option<Expr>| -> Option<SettingValue> {
@@ -727,6 +934,8 @@ pub fn clothing_cabinet_fixture() -> Option<Fixture> {
         place: vec![PlaceParam {
             name: word("opening")?,
             slot: PlaceSlot::Region(Some(door_bay_left)),
+            prompt: "Point at the opening.".to_owned(),
+            text: Some("door_bay[left]".to_owned()),
         }],
         settings: vec![
             setting(
@@ -760,6 +969,7 @@ pub fn clothing_cabinet_fixture() -> Option<Fixture> {
             setting("box_height", TypeName::Length, SettingValue::Default)?,
         ],
         applicability: Applicability::Applies,
+        generated_name: name("drawer_2"),
     };
 
     let door = Candidate {
@@ -775,10 +985,14 @@ pub fn clothing_cabinet_fixture() -> Option<Fixture> {
             PlaceParam {
                 name: word("opening")?,
                 slot: PlaceSlot::Region(Some(door_bay_left)),
+                prompt: "Point at the opening.".to_owned(),
+                text: Some("door_bay[left]".to_owned()),
             },
             PlaceParam {
                 name: word("hinge_side")?,
                 slot: PlaceSlot::Part(None),
+                prompt: "Point at the hinge side.".to_owned(),
+                text: None,
             },
         ],
         settings: vec![
@@ -804,6 +1018,7 @@ pub fn clothing_cabinet_fixture() -> Option<Fixture> {
             setting("knob_kind", TypeName::PullKind, SettingValue::Default)?,
         ],
         applicability: Applicability::Applies,
+        generated_name: name("frame_panel_door"),
     };
 
     let at = FIXTURE_TEXT.find("drawer_2")?;
