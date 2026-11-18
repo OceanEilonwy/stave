@@ -636,7 +636,7 @@ impl Window {
         };
         self.state.borrow_mut().marks = tree_marks.clone();
         widgets.tree.show_marks(tree_marks);
-        let empty = stave_app::empty::of(&self.session.borrow());
+        let empty = edit_view::empty_state(&self.session.borrow());
         if let Some(empty) = empty {
             // The sidebar and the inspector say why too (for a library,
             // what it defines and how to use it), not "Nothing selected".
@@ -982,7 +982,8 @@ impl Window {
             let editing = session.editor() == Editor::Open;
             session.focus().is_some()
                 || (!editing
-                    && (session.selection().is_some() || stave_app::empty::of(&session).is_some()))
+                    && (session.selection().is_some()
+                        || edit_view::empty_state(&session).is_some()))
         };
         self.widgets.card.set_visible(shows && !self.edit_open());
         self.update_face_button();
@@ -1478,7 +1479,7 @@ impl Window {
     /// A camera that shows everything shown.
     fn frame_all(state: &State, shown: &Checked) -> Option<Orbit> {
         let (_, graph) = shown.drawable()?;
-        let bounds = graph.bounds(state.posed.as_ref()?)?;
+        let bounds = edit_view::drawn_bounds(graph, state.posed.as_ref()?)?;
         let aspect = Self::aspect(state);
         Some(match state.orbit {
             Some(orbit) => orbit.framed(bounds, aspect),
@@ -1653,7 +1654,7 @@ impl Window {
                 let posed = posed?;
                 match node.filter(|_| camera.frame_selection) {
                     Some(id) => graph.bounds_of(posed, &[id]),
-                    None => graph.bounds(posed),
+                    None => edit_view::drawn_bounds(graph, posed),
                 }
             });
             let framed = bounds.map_or(turned, |bounds| turned.framed(bounds, aspect));
@@ -1879,7 +1880,7 @@ impl Window {
             let aspect = Self::aspect(&state);
             let bounds = session
                 .drawable()
-                .and_then(|(_, graph)| graph.bounds(state.posed.as_ref()?));
+                .and_then(|(_, graph)| edit_view::drawn_bounds(graph, state.posed.as_ref()?));
             state.orbit = state.orbit.map(|orbit| {
                 let turned = Orbit {
                     yaw: yaw.rem_euclid(std::f32::consts::TAU),

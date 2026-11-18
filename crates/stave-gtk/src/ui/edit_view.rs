@@ -386,14 +386,7 @@ impl Window {
             let Some(window) = window.upgrade() else {
                 return;
             };
-            let index = window
-                .session
-                .borrow()
-                .edit()
-                .and_then(|edit| entry_index(edit, declaration));
-            if let Some(index) = index {
-                window.send_edit_later(EditCommand::Choose(index));
-            }
+            window.choose_later(declaration);
         });
         let window = Rc::downgrade(self);
         editing.card.connect_action(move |action| {
@@ -507,14 +500,25 @@ impl Window {
         (target, facing)
     }
 
-    /// `true` while the chosen candidate waits for a place to be pointed
-    /// at, so the next click binds it.
-    fn binding(&self) -> bool {
-        self.session
-            .borrow()
-            .edit()
-            .and_then(Edit::chosen)
-            .is_some_and(|chosen| chosen.candidate().unbound_place().next().is_some())
+    /// What the chosen candidate still waits to have pointed at; the next
+    /// click binds it when anything is.
+    pub(super) fn wanted(&self) -> pointing::Wanted {
+        pointing::Wanted::of(self.session.borrow().edit())
+    }
+
+    /// What a click at a point of the 3D view binds, for what the card
+    /// asks to be pointed at.
+    pub(super) fn binding_picked(
+        &self,
+        x: f64,
+        y: f64,
+        wanted: pointing::Wanted,
+    ) -> Option<Picked> {
+        let ray = self.ray_at(x, y)?;
+        let session = self.session.borrow();
+        let state = self.state.borrow();
+        let (_, graph) = session.drawable()?;
+        pointing::binding_pick(graph, state.posed.as_ref()?, ray, wanted)
     }
 
     /// The pointer moved over the 3D view (or left it: `None`): lights the
@@ -524,7 +528,7 @@ impl Window {
         let hover = match point {
             Some((x, y))
                 if self.state.borrow().focus.is_none()
-                    && (self.session.borrow().edit().is_none() || self.binding()) =>
+                    && (self.session.borrow().edit().is_none() || self.wanted().region) =>
             {
                 match self.pointed_at(x, y).0 {
                     Some(Target::Region(hit)) => Some(hit.region),
@@ -553,18 +557,21 @@ impl Window {
         if self.state.borrow().focus.is_some() {
             return false;
         }
+        let wanted = self.wanted();
+        if wanted.any() {
+            // A part's face is wanted even where the click goes through a
+            // space to reach it.
+            if let Some(picked) = self.binding_picked(x, y, wanted) {
+                self.send_edit_later(EditCommand::Bind(picked));
+            }
+            return true;
+        }
         let (target, facing) = self.pointed_at(x, y);
         let picked = match target {
             Some(Target::Region(hit)) => Some(Picked::Region(hit.region)),
             Some(Target::Node(hit)) => hit.part_face().map(picked_from_part_face),
             None => facing.as_ref().and_then(picked_from_facing),
         };
-        if self.binding() {
-            if let Some(picked) = picked {
-                self.send_edit_later(EditCommand::Bind(picked));
-            }
-            return true;
-        }
         match (target, picked) {
             (Some(Target::Region(_)), Some(picked)) | (None, Some(picked)) => {
                 self.start_edit(picked, (x, y));
@@ -632,7 +639,12 @@ impl Window {
         }
         button.set_visible(shown.is_some());
         // A new project's box is the first space to click.
-        let waiting = self.editing.state.borrow().first_space.is_some();
+        let waiting = self.editing.state.borrow().first_space.is_some()
+            || self
+                .session
+                .borrow()
+                .drawable()
+                .is_some_and(|(_, graph)| pointing::only_spaces(graph));
         if waiting && !self.edit_open() && self.session.borrow().selection().is_none() {
             self.show_hint("Click inside the box to add the first piece");
         }
@@ -659,19 +671,54 @@ impl Window {
     /// Checking (the card's spinner and the ghost's grey).
     pub(super) fn send_edit_later(self: &Rc<Self>, command: EditCommand) {
         if tries_again(&command) {
-            {
-                let mut state = self.editing.state.borrow_mut();
-                state.checking = true;
-                if let Some(ghost) = state.ghost.as_mut() {
-                    ghost.ghosts.set_verdict(GhostVerdict::Checking);
-                }
-            }
-            self.refresh_edit();
+            self.show_checking();
         }
         let window = self.clone();
         glib::timeout_add_local_once(CHECKING_DELAY, move || {
             window.send_edit(command);
         });
+    }
+
+    /// Chooses a menu entry once the menu's own signal is done. The entry
+    /// is looked up by its declaration when the command is sent, not when
+    /// it was clicked: a step of the menu's check may sort the menu in
+    /// between (greyed entries go last in their group), moving indexes.
+    pub(super) fn choose_later(self: &Rc<Self>, declaration: Declaration) {
+        self.show_checking();
+        let window = self.clone();
+        glib::timeout_add_local_once(CHECKING_DELAY, move || {
+            window.choose_now(declaration);
+        });
+    }
+
+    /// Chooses the menu entry for a declaration now, wherever the menu
+    /// holds it; an entry that is gone chooses nothing.
+    pub(super) fn choose_now(self: &Rc<Self>, declaration: Declaration) {
+        let index = self
+            .session
+            .borrow()
+            .edit()
+            .and_then(|edit| entry_index(edit, declaration));
+        match index {
+            Some(index) => self.send_edit(EditCommand::Choose(index)),
+            None => {
+                self.editing.state.borrow_mut().checking = false;
+                self.refresh_edit();
+            }
+        }
+    }
+
+    /// The card's spinner and the ghost's grey, before a command that
+    /// tries the candidate again.
+    fn show_checking(self: &Rc<Self>) {
+        {
+            let mut state = self.editing.state.borrow_mut();
+            state.checking = true;
+            if let Some(ghost) = state.ghost.as_mut() {
+                ghost.ghosts.set_verdict(GhostVerdict::Checking);
+            }
+        }
+        self.refresh_edit();
     }
 
     /// Sends an edit command now.
@@ -956,7 +1003,12 @@ impl Window {
             })
             .or_else(|| session.edit().is_none().then(first).flatten());
         let Some(region) = region else {
-            return EditMarks::default();
+            // A design of spaces with no parts yet (a new project's
+            // envelope): its spaces show, waiting for the first click.
+            return EditMarks {
+                lit: pointing::spaces_waiting(graph, posed, session.edit().is_some()),
+                covering: Vec::new(),
+            };
         };
         EditMarks {
             lit: graph.region_volume(posed, region).into_iter().collect(),
@@ -1106,5 +1158,8 @@ impl Window {
     }
 }
 
+mod pointing;
 #[cfg(test)]
 mod tests;
+
+pub(super) use pointing::{drawn_bounds, empty_state};

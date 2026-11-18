@@ -3,7 +3,9 @@
 # with the checker's fix offered.
 select region bay
 choose Door
-bind face side_l.right
+# The hinge side pointed at on the model: the inside face of side_l,
+# clicked through the bay.
+point face side_l.right
 set mount = overlay(left: 17.8mm, right: 17.8mm)
 # The fix applied: it fits, its ghost green.
 fix 1 1

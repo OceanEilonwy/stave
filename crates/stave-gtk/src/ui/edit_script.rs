@@ -10,6 +10,8 @@
 //! click face <part>.<face>             a click on a part: selected, its card offering that face
 //! choose <entry>                       a menu entry, by label or group.label
 //! bind region|face|between ...         the next click, for the card's place
+//! point face <part>.<face>             the next click, made on the model at that face's
+//!                                      middle and picked as the pointer's click is
 //! set <name> = <value>                 a setting typed on the card
 //! name <name>                          the name retyped on the card
 //! fix <problem> <fix>                  a fix's button, both counted from 1
@@ -103,6 +105,30 @@ impl Window {
                 let picked = self.picked_named(rest)?;
                 self.send_edit(EditCommand::Bind(picked));
             }
+            "point" => {
+                // A click on the model where the face shows, picked as
+                // the pointer's own click is while the card asks for a
+                // place (through a space to the wall behind it).
+                let Picked::Face(face) = self.picked_named(rest)? else {
+                    return Err("write it as point face <part>.<face>".to_owned());
+                };
+                let wanted = self.wanted();
+                if !wanted.any() {
+                    return Err("nothing on the card waits to be pointed at".to_owned());
+                }
+                let (x, y) = self
+                    .face_point(face)
+                    .ok_or_else(|| format!("'{rest}' isn't in view"))?;
+                let picked = self
+                    .binding_picked(x, y, wanted)
+                    .ok_or_else(|| format!("a click on '{rest}' picks nothing"))?;
+                if picked != Picked::Face(face) {
+                    return Err(format!(
+                        "a click on '{rest}' picks something else: {picked:?}"
+                    ));
+                }
+                self.send_edit(EditCommand::Bind(picked));
+            }
             "set" => {
                 let (name, value) = rest
                     .split_once('=')
@@ -184,6 +210,29 @@ impl Window {
                 "'{text}' isn't a selection: write region <name>, face <part>.<face> or between <part> <part>"
             )),
         }
+    }
+
+    /// Where the middle of a part's face shows in the 3D view, a hair
+    /// inside the part so a click there lands on that face.
+    fn face_point(&self, face: PartFace) -> Option<(f64, f64)> {
+        let session = self.session.borrow();
+        let state = self.state.borrow();
+        let (_, graph) = session.drawable()?;
+        let nodes = graph.nodes_of(Item::Part(face.part));
+        let bounds = graph.bounds_of(state.posed.as_ref()?, &nodes)?;
+        let centre = bounds.centre();
+        let half = (bounds.max - bounds.min) * 0.5;
+        let outward = match face.face {
+            Face::Top => glam::Vec3::Y,
+            Face::Bottom => glam::Vec3::NEG_Y,
+            Face::Left => glam::Vec3::NEG_X,
+            Face::Right => glam::Vec3::X,
+            Face::Front => glam::Vec3::Z,
+            Face::Back => glam::Vec3::NEG_Z,
+        };
+        let point = centre + outward * (half.dot(outward.abs()) - 0.5);
+        let (x, y) = self.project(&state, point)?;
+        Some((f64::from(x), f64::from(y)))
     }
 
     /// Where a selection is in the scene, to open its menu beside.

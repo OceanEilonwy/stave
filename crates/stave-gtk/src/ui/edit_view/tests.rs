@@ -368,3 +368,221 @@ fn menu_and_card_on_the_session() {
     assert_eq!(project.imports, ["std:casework", "std:frames"]);
     assert!(project.tools.is_empty(), "none ticked: every tool");
 }
+
+/// A session with the folder checked, as the window has once the first
+/// result is in.
+fn checked_session(folder: &Path) -> Session {
+    let mut session = Session::new(folder.to_owned());
+    let ticket = session
+        .apply(Command::Check)
+        .into_iter()
+        .find_map(|event| match event {
+            Event::CheckStarted(ticket) => Some(ticket),
+            _ => None,
+        })
+        .expect("a check starts");
+    session.finish_check(ticket, stave_app::check::run(folder));
+    session
+}
+
+/// A project as the New Project dialog writes it, in a folder of its own.
+fn new_project(name: &str, imports: &[&str]) -> PathBuf {
+    let answers = Answers {
+        title: "Hall table".to_owned(),
+        size: [900.0, 760.0, 400.0],
+        stock_name: "oak_19".to_owned(),
+        species: Species::WhiteOak,
+        form: BoardForm::Solid,
+        thickness: 19.0,
+        max_length: 2400.0,
+        imports: imports.iter().map(|import| (*import).to_owned()).collect(),
+        tools: Vec::new(),
+    };
+    let folder =
+        std::env::temp_dir().join(format!("stave-gtk-opened-{}-{name}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&folder);
+    create_project(&folder, &answers.project().unwrap()).unwrap();
+    folder.canonicalize().unwrap()
+}
+
+#[test]
+fn a_new_project_opens_showing_its_envelope_to_click_in() {
+    let folder = new_project("envelope", &["std:casework"]);
+    let mut session = checked_session(&folder);
+    // No parts yet, but the envelope is a space: the view draws it rather
+    // than saying "No parts yet".
+    assert!(matches!(
+        stave_app::empty::of(&session).map(|empty| empty.reason),
+        Some(stave_app::empty::Reason::NoParts)
+    ));
+    assert!(empty_state(&session).is_none());
+    let (_, graph) = session.drawable().unwrap();
+    assert!(pointing::only_spaces(graph));
+    let posed = graph.rest();
+    let envelope = graph
+        .regions()
+        .iter()
+        .find(|region| region.name == stave_app::naming::ENVELOPE_REGION)
+        .unwrap()
+        .id;
+    // Shown lit while nothing is edited, so there is a box to click in.
+    assert_eq!(
+        pointing::spaces_waiting(graph, &posed, false),
+        vec![graph.region_volume(&posed, envelope).unwrap()]
+    );
+    assert!(pointing::spaces_waiting(graph, &posed, true).is_empty());
+    // The camera frames it (a scene with no nodes has no bounds of its
+    // own), and a click in the middle of the view lands in it.
+    assert!(graph.bounds(&posed).is_none());
+    let bounds = drawn_bounds(graph, &posed).expect("the envelope is framed");
+    let orbit = Orbit::framing(bounds, 1.6);
+    let ray = orbit.ray(800.0, 500.0, 1600.0, 1000.0);
+    let Some(Target::Region(hit)) = graph.pick_target(&posed, ray) else {
+        panic!("a click in the middle lands in the envelope");
+    };
+    assert_eq!(hit.region, envelope);
+    // That click opens the menu for the space.
+    let events = send(&mut session, EditCommand::Start(Picked::Region(envelope)));
+    assert!(events.contains(&EditEvent::Started), "{events:?}");
+    assert!(!session.edit().unwrap().menu().is_empty());
+}
+
+/// A ray from in front and to the right of the cabinet to the middle of
+/// the inside face of its left side: it passes through the bay first.
+fn ray_to_inside_of(graph: &SceneGraph, posed: &Posed, part: stave_model::solved::PartId) -> Ray {
+    let nodes = graph.nodes_of(stave_scene::Item::Part(part));
+    let side = graph.bounds_of(posed, &nodes).unwrap();
+    let target = glam::Vec3::new(side.max.x, side.centre().y, side.centre().z);
+    let origin = target + glam::Vec3::new(1500.0, 0.0, 2000.0);
+    Ray {
+        origin,
+        direction: (target - origin).normalize(),
+    }
+}
+
+#[test]
+fn a_click_that_binds_a_part_reaches_it_through_the_space() {
+    let folder = door_project("bind");
+    let (bay, side_l) = bay_and_side(&folder);
+    let mut session = checked_session(&folder);
+    send(&mut session, EditCommand::Start(Picked::Region(bay)));
+    let index = session
+        .edit()
+        .unwrap()
+        .menu()
+        .iter()
+        .position(|candidate| candidate.entry.label.as_str() == "Door")
+        .unwrap();
+    assert!(send(&mut session, EditCommand::Choose(index)).contains(&EditEvent::Chosen));
+    // The card asks for the hinge side, a part: not a space.
+    let wanted = pointing::Wanted::of(session.edit());
+    assert!(wanted.face && !wanted.region && !wanted.parts, "{wanted:?}");
+    let picked = {
+        let (_, graph) = session.drawable().unwrap();
+        let posed = graph.rest();
+        let ray = ray_to_inside_of(graph, &posed, side_l);
+        // Outside binding, the bay wins over its own wall...
+        assert!(matches!(
+            graph.pick_target(&posed, ray),
+            Some(Target::Region(hit)) if hit.region == bay
+        ));
+        // ...so a space asked for still gets the bay.
+        assert_eq!(
+            pointing::binding_pick(
+                graph,
+                &posed,
+                ray,
+                pointing::Wanted {
+                    region: true,
+                    ..pointing::Wanted::default()
+                }
+            ),
+            Some(Picked::Region(bay))
+        );
+        // While a part is wanted, the click is on the side's inside face.
+        pointing::binding_pick(graph, &posed, ray, wanted)
+    };
+    assert_eq!(
+        picked,
+        Some(Picked::Face(PartFace {
+            part: side_l,
+            face: Face::Right,
+        }))
+    );
+    let events = send(&mut session, EditCommand::Bind(picked.unwrap()));
+    assert!(events.contains(&EditEvent::PlaceBound), "{events:?}");
+    assert!(!pointing::Wanted::of(session.edit()).any());
+}
+
+#[test]
+fn a_menu_entry_is_found_by_its_declaration_when_it_is_chosen() {
+    // Two components of the project's own for a space: "Bench" is listed
+    // first but greys (its own rule refuses the envelope), "Crate" fits.
+    let folder = new_project("menu", &[]);
+    let file = folder.join("hall_table.stave");
+    let mut text = std::fs::read_to_string(&file).unwrap();
+    let component = |name: &str, rule: &str| {
+        format!(
+            "\n/// A block of oak.\ncomponent {name} {{\n  param space : Region\n{rule}  part block : oak_19 {{\n    length: 100mm\n    width:  50mm\n    place {{\n      flush(space.bottom)\n      flush(space.left)\n      flush(space.front)\n    }}\n  }}\n}}\n"
+        )
+    };
+    text.push_str(&component(
+        "Bench",
+        "  require tall_enough : space.up > 5000mm \"the space is too low\"\n",
+    ));
+    text.push_str(&component("Crate", ""));
+    std::fs::write(&file, text).unwrap();
+    let mut session = checked_session(&folder);
+    let (_, graph) = session.drawable().unwrap();
+    let envelope = graph
+        .regions()
+        .iter()
+        .find(|region| region.name == stave_app::naming::ENVELOPE_REGION)
+        .unwrap()
+        .id;
+    send(&mut session, EditCommand::Start(Picked::Region(envelope)));
+    // Where each entry was when the menu was first drawn (when it could
+    // be clicked)...
+    let before: Vec<Declaration> = session
+        .edit()
+        .unwrap()
+        .menu()
+        .iter()
+        .map(|candidate| candidate.declaration)
+        .collect();
+    // ...and after a step of the check sorted greyed entries last.
+    session.check_edit_menu(&AtomicBool::new(false));
+    let edit = session.edit().unwrap();
+    let states: Vec<_> = edit
+        .menu()
+        .iter()
+        .map(|candidate| (candidate.entry.label.as_str(), &candidate.applicability))
+        .collect();
+    let moved = before
+        .iter()
+        .enumerate()
+        .find(|(index, declaration)| entry_index(edit, **declaration) != Some(*index))
+        .map(|(index, declaration)| (index, *declaration));
+    let (stale, declaration) =
+        moved.unwrap_or_else(|| panic!("checking moves an entry: {states:#?}"));
+    // The index the click saw now names another entry; looked up when the
+    // command is sent, the clicked entry is the one chosen.
+    assert_ne!(
+        edit.menu()
+            .get(stale)
+            .map(|candidate| candidate.declaration),
+        Some(declaration)
+    );
+    let index = entry_index(edit, declaration).unwrap();
+    send(&mut session, EditCommand::Choose(index));
+    assert_eq!(
+        session
+            .edit()
+            .unwrap()
+            .chosen()
+            .unwrap()
+            .candidate()
+            .declaration,
+        declaration
+    );
+}

@@ -161,6 +161,8 @@ shot $window/edit_space_lit.png "$scratch/chest" --theme light --edit-script $ed
 shot $window/edit_space_menu.png "$scratch/chest" --theme light --edit-script $edits/space_menu.edit
 # A click on a part: its card offers to add onto the face clicked.
 shot $window/edit_face_button.png "$scratch/chest" --theme light --edit-script $edits/face_button.edit
+# The door's hinge side is pointed at on the model (`point`: the inside face
+# of side_l, clicked through the bay, as the pointer's click is picked).
 # The door refused (it swings into the wall) with the fix offered, its ghost
 # red and labelled; the fix applied, fitting, its ghost green (light and
 # dark); and the design after Add with the door selected, then with the
@@ -172,6 +174,12 @@ shot $window/edit_door_added.png "$(door)" --theme light --edit-script $edits/do
 shot $window/edit_door_added_editor.png "$(door)" --theme light --view files --edit-script $edits/door_added.edit
 # The New Project dialog (main menu, New Project…).
 shot $window/new_project.png "$scratch/chest" --theme light --new-project
+# A project just made by it (the same writer, through `stave edit
+# --script`): no parts yet, the envelope drawn as the first space to click,
+# then the menu a click in it opens.
+"$stave" edit "$scratch/hall_table" --script $edits/new_project.script >/dev/null
+shot $window/new_project_opened.png "$scratch/hall_table" --theme light
+shot $window/new_project_menu.png "$scratch/hall_table" --theme light --edit-script $edits/envelope_menu.edit
 
 # ---- the editor (docs/screenshots/files) ----
 # `--view files` opens the editor beside the 3D view, sliding in from the

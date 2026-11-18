@@ -71,6 +71,7 @@ line and the rest are skipped:
 | `click face <part>.<face>` | a click on a part's face: the part selected, its card offering that face |
 | `choose <entry>` | a menu entry, by its label or `group.label` |
 | `bind region\|face\|between ...` | the next click, filling the place the card asks for |
+| `point face <part>.<face>` | the next click made on the model at the middle of that face and picked as the pointer's is (so a wall of a space is reached through the space); it fails if the click would pick something else |
 | `set <name> = <value>` | a setting typed on the card (or chosen from its list) |
 | `name <name>` | the name retyped on the card |
 | `fix <problem> <fix>` | a fix's button, both counted from 1 |
@@ -475,7 +476,10 @@ the session's.
   each step, entries not checked yet with a spinner ("Checking whether
   it fits here…"), entries that fit, entries that need a choice ("Then
   point at or choose: hinge side, mount", still choosable), and greyed
-  ones with the checker's reason. Choosing one sends `Choose(index)`.
+  ones with the checker's reason. Choosing one sends `Choose(index)`,
+  the index looked up by the entry's declaration when the command is
+  sent, not when it was clicked: a step of the check can sort the menu in
+  between (greyed entries go last in their group).
 - **The card** replaces the menu at the top right. Its name, its
   settings (typed, or picked from the button listing
   `SettingParam::options`; one at its default shows what the default
@@ -485,8 +489,13 @@ the session's.
   `editing::parse_value` and `parse_name`, and what can't be read is
   said in a toast. A place param still unbound shows the contract's
   prompt (`PlaceParam::prompt`, "Point at the side the hinges are screwed
-  to."), and the next click on the model binds it (`Bind`), whatever it
-  is on. The fixes added are listed ("FIXES ADDED · Use left: 17mm").
+  to."), and the next click on the model binds it (`Bind`), picked for
+  what the param holds (`edit_view/pointing.rs`): a space wins over its
+  walls only when a `Region` is wanted; for an `Anchor` or a `Part` the
+  click is on the part the ray meets, even through a space (the hinge
+  side is a wall of the bay: its inside face is clicked through the
+  bay); for `Parts` alone, the two parts facing across the gap. While a
+  part is wanted the pointer lights no space. The fixes added are listed ("FIXES ADDED · Use left: 17mm").
   A command that tries the candidate again first shows Checking (the
   spinner, the ghost grey) for a moment so it is drawn, then runs. What
   a widget reports is always sent after its own signal has finished.
@@ -532,6 +541,13 @@ means every tool), and a folder. Create writes the project with
 inside the box to add the first piece" at the top of the view. What is
 missing is said under the fields.
 
+A project with spaces but no parts yet (however it was opened) is drawn,
+not shown as "No parts yet": the camera frames its spaces (a scene with
+no nodes has no bounds of its own), every space is lit until an edit
+starts, the same line asks for the first click, and a click in the box
+opens the menu "In this space" (`new_project_opened.png`,
+`new_project_menu.png`).
+
 ### Pictures
 
 `tools/gui-screenshots` records, with the edit scripts in
@@ -543,7 +559,11 @@ wall, refused, its fix offered, the ghost red),
 `edit_door_fits.png` and `edit_door_fits_dark.png` (the fix applied,
 fitting, the ghost green), `edit_door_added.png` (the design after Add,
 the door selected), `edit_door_added_editor.png` (the same with the
-editor open: the change unsaved in the text) and `new_project.png`. The
+editor open: the change unsaved in the text), `new_project.png` (the
+dialog), `new_project_opened.png` (a project it made, opened: the
+envelope drawn and lit, waiting for the first click) and
+`new_project_menu.png` (the menu a click in the envelope opens). The door
+scripts point at the hinge side with `point`, as the pointer would. The
 door is `crates/stave-gtk/fixtures/door_hits_wall`; the small chest is
 made by `stave edit --script tools/window-edits/small_chest.script`.
 
