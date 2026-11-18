@@ -17,7 +17,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-use stave_lang::{Code, Diagnostic, Severity, render_diagnostic};
+use stave_lang::{Code, Diagnostic, Severity, place_label, render_diagnostic};
 use stave_model::solved::{AssemblyId, SolvedDesign};
 use stave_scene::Item;
 
@@ -835,6 +835,135 @@ pub fn details(checked: &Checked, index: ProblemIndex) -> Option<Details> {
         location,
         motion,
     })
+}
+
+/// Whether a place in a [`Report`] is where the problem is, or a place
+/// that explains it (the kind's rule a requirement comes from).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Role {
+    /// Where the problem is: `-->` in `stave check`'s text, underlined
+    /// with `^`.
+    Primary,
+    /// A place that explains it: `:::`, underlined with `-`.
+    Secondary,
+}
+
+/// One place a [`Report`] points at, with its line of source and the part
+/// of it the problem is about, as `stave check` prints them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReportPlace {
+    /// Where the problem is, or a place that explains it.
+    pub role: Role,
+    /// `carcass.stave:102:22`: the project's own files relative to its
+    /// folder, the standard library's as `std/...`.
+    pub shown: String,
+    /// The place, for opening in the editor.
+    pub location: SourceLocation,
+    /// The line's text before the underlined part (tabs as spaces).
+    pub before: String,
+    /// The underlined part of the line.
+    pub marked: String,
+    /// The rest of the line.
+    pub after: String,
+    /// What `stave check` writes after the underline (`the kind's rule`);
+    /// may be empty.
+    pub message: String,
+}
+
+/// A problem in full, as `stave check` prints it, as data for a viewer:
+/// the heading, every place with its line of source, the notes and the
+/// help line.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Report {
+    /// How serious it is.
+    pub severity: Severity,
+    /// Its code: `require`.
+    pub code: Code,
+    /// The message.
+    pub message: String,
+    /// Where it is (first) and the places that explain it.
+    pub places: Vec<ReportPlace>,
+    /// The extra facts (`= note:`).
+    pub notes: Vec<String>,
+    /// What to do about it (`= help:`).
+    pub help: Option<String>,
+}
+
+impl Report {
+    /// The heading's start: `error[require]`.
+    pub fn heading(&self) -> String {
+        format!("{}[{}]", self.severity, self.code)
+    }
+}
+
+/// One of a result's problems in full.
+pub fn report(checked: &Checked, index: ProblemIndex) -> Option<Report> {
+    checked
+        .opened
+        .diagnostics
+        .get(index.0)
+        .map(|diagnostic| report_of(checked, diagnostic))
+}
+
+/// Every one of a result's problems in full, in `stave check` order.
+pub fn reports(checked: &Checked) -> Vec<Report> {
+    checked
+        .opened
+        .diagnostics
+        .iter()
+        .map(|diagnostic| report_of(checked, diagnostic))
+        .collect()
+}
+
+fn report_of(checked: &Checked, diagnostic: &Diagnostic) -> Report {
+    let places = diagnostic
+        .labels
+        .iter()
+        .enumerate()
+        .filter_map(|(index, label)| {
+            let placement = place_label(&checked.opened.sources, label)?;
+            let line = LineNumber::from_usize(placement.start.line)?;
+            let path = Path::new(placement.file.path());
+            let shown = path.strip_prefix(&checked.folder).unwrap_or(path);
+            let text = placement.line_text().replace('\t', " ");
+            let skip = placement.start.column.saturating_sub(1);
+            let before: String = text.chars().take(skip).collect();
+            let marked: String = text.chars().skip(skip).take(placement.width).collect();
+            let after: String = text
+                .chars()
+                .skip(skip.saturating_add(placement.width))
+                .collect();
+            Some(ReportPlace {
+                role: if index == 0 {
+                    Role::Primary
+                } else {
+                    Role::Secondary
+                },
+                shown: format!(
+                    "{}:{}:{}",
+                    shown.display(),
+                    placement.start.line,
+                    placement.start.column
+                ),
+                location: SourceLocation {
+                    path: placement.file.path().to_owned(),
+                    line,
+                },
+                before,
+                marked,
+                after,
+                message: label.message.clone(),
+            })
+        })
+        .collect();
+    Report {
+        severity: diagnostic.severity,
+        code: diagnostic.code,
+        message: diagnostic.message.clone(),
+        places,
+        notes: diagnostic.notes.clone(),
+        help: diagnostic.help.clone(),
+    }
 }
 
 /// Text with a capital first letter, unless it starts with a name as

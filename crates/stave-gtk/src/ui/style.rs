@@ -131,6 +131,13 @@ button.stave-close { min-width: 28px; min-height: 28px; padding: 0; }
 .stave-eyebrow.stave-eyebrow-bold, .stave-eyebrow.stave-problem-eyebrow { font-weight: 700; letter-spacing: 0.02em; }
 .stave-problem-title { font-size: 19px; }
 .stave-code.stave-diagnostic { padding: 14px; font-size: 11.5px; }
+.stave-problem-row { padding: 4px 0; }
+.stave-problem-heading { font-weight: 600; }
+.stave-problem-code { font-family: "JetBrains Mono", "Adwaita Mono", monospace; font-size: 11.5px; font-weight: 700; }
+.stave-problem-place { font-family: "JetBrains Mono", "Adwaita Mono", monospace; font-size: 11.5px; padding: 0 2px; min-height: 20px; }
+.stave-code.stave-problem-snippet { padding: 6px 10px; border-radius: 8px; font-size: 11.5px; }
+.stave-problem-note, .stave-problem-help { font-size: 12.5px; }
+.stave-problems-stale { padding: 8px 12px 2px 12px; }
 .stave-number { min-width: 22px; min-height: 22px; border-radius: 11px; font-size: 12px; font-weight: 700; }
 .stave-card > .stave-card-row.stave-toggle-row { padding: 10px 14px; }
 .stave-card > .stave-card-row.compact { padding: 8px 14px; }
@@ -209,10 +216,10 @@ stavetabstrip .stave-tab-end button { min-height: 24px; min-width: 24px; padding
 .stave-title .subtitle, .dim { color: alpha(currentColor, 0.7); }
 menubutton.stave-scene > button { background: alpha(currentColor, 0.08); }
 menubutton.stave-scene > button:hover { background: alpha(currentColor, 0.12); }
-button.stave-pill.clean { background: alpha(@success_color, 0.15); color: @success_color; }
-button.stave-pill.warnings { background: alpha(@warning_color, 0.18); color: @warning_color; }
-button.stave-pill.errors { background: alpha(@error_color, 0.14); color: @error_color; }
-button.stave-pill.unknown { background: alpha(currentColor, 0.08); color: alpha(currentColor, 0.7); }
+.stave-problems-chip.clean button.stave-pill { background: alpha(@success_color, 0.15); color: @success_color; }
+.stave-problems-chip.warnings button.stave-pill { background: alpha(@warning_color, 0.18); color: @warning_color; }
+.stave-problems-chip.errors button.stave-pill { background: alpha(@error_color, 0.14); color: @error_color; }
+.stave-problems-chip.unknown button.stave-pill { background: alpha(currentColor, 0.08); color: alpha(currentColor, 0.7); }
 button.stave-build { background: @accent_bg_color; color: @accent_fg_color; }
 button.stave-build:hover { background: mix(@accent_bg_color, @accent_fg_color, 0.1); }
 button.stave-build:disabled { background: alpha(currentColor, 0.08); color: alpha(@headerbar_fg_color, 0.45); }
@@ -292,6 +299,12 @@ button.stave-play:hover { background: mix(@accent_bg_color, @accent_fg_color, 0.
 .stave-problem-icon.error { color: @error_color; }
 .stave-problem-icon.warning { color: @warning_color; }
 .stave-problem-icon.note { color: alpha(currentColor, 0.7); }
+.stave-problem-code.error { color: @error_color; }
+.stave-problem-code.warning { color: @warning_color; }
+.stave-problem-note { color: alpha(currentColor, 0.75); }
+.stave-problem-help { color: @success_color; }
+.stave-panel-list, .stave-problems-stale { color: @window_fg_color; }
+.stave-panel-list > row:selected { background: alpha(@accent_bg_color, 0.14); color: @window_fg_color; }
 .stave-problem-places { color: @accent_color; }
 .stave-eyebrow.stave-problem-eyebrow.error { color: @error_color; }
 .stave-eyebrow.stave-problem-eyebrow.warning { color: @warning_color; }
@@ -472,6 +485,24 @@ mod tests {
                 let ratio = contrast(colour, background);
                 assert!(ratio >= 4.5, "{colour} on {background}: {ratio:.2}:1");
             }
+        }
+    }
+
+    /// The header puts its tone class (`errors`, `warnings`...) on the
+    /// chip round the pill, so the pill's colours must be keyed on the
+    /// chip: keyed on the pill itself they never apply and an error shows
+    /// grey.
+    #[test]
+    fn the_problems_pill_takes_its_colour_from_the_chip() {
+        for tone in ["clean", "warnings", "errors", "unknown"] {
+            assert!(
+                COLOURS.contains(&format!(".stave-problems-chip.{tone} button.stave-pill {{")),
+                "{tone}"
+            );
+            assert!(
+                !COLOURS.contains(&format!("button.stave-pill.{tone}")),
+                "{tone}"
+            );
         }
     }
 }

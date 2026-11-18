@@ -366,7 +366,6 @@ struct Widgets {
     window: adw::ApplicationWindow,
     header: Header,
     toasts: adw::ToastOverlay,
-    banner: adw::Banner,
     views: gtk::Stack,
     /// The 3D view with everything that floats over it.
     design: gtk::Overlay,
@@ -606,7 +605,11 @@ impl Window {
                 Some(Selection::Problem(index)) => Some(index.0),
                 _ => None,
             };
-            widgets.problems.show(session.problems(), selected);
+            let reports = latest
+                .as_deref()
+                .map(stave_app::problems::reports)
+                .unwrap_or_default();
+            widgets.problems.show(&reports, selected, showing_older);
         }
         // The dots: by file always; by part only when the latest result is
         // the one shown (its ids are the tree's).
@@ -639,14 +642,8 @@ impl Window {
         let Some(shown) = shown else {
             return;
         };
-        if showing_older {
-            widgets
-                .banner
-                .set_title("The design has errors. Showing the last version that worked.");
-            widgets.banner.set_revealed(true);
-        } else {
-            widgets.banner.set_revealed(false);
-        }
+        // An older design on show is said by the red problems chip and a
+        // line over the Problems panel's list, not a banner.
         let Some((design, graph)) = shown.drawable() else {
             return;
         };
@@ -953,10 +950,9 @@ impl Window {
         } else {
             String::new()
         });
-        match &problem {
-            Some((_, details)) => widgets.inspector.show_problem(details),
-            None => widgets.inspector.show(inspection.as_ref()),
-        }
+        // A problem is read in the Problems panel; Details keeps to the
+        // design.
+        widgets.inspector.show(inspection.as_ref());
         // Pose a problem where it happens, or offer to open the selection.
         match problem.and_then(|(problem, details)| Some((problem.contact?, details.motion))) {
             Some((contact, card)) => self.pose_problem(contact, card),
@@ -2708,6 +2704,12 @@ impl Window {
             }
         });
         let window = Rc::downgrade(self);
+        widgets.problems.connect_source(move |location| {
+            if let Some(window) = window.upgrade() {
+                window.dispatch(Command::GoToSource(location));
+            }
+        });
+        let window = Rc::downgrade(self);
         widgets.file_list.connect_open(move |path| {
             let (Some(window), Some(line)) = (window.upgrade(), LineNumber::new(1)) else {
                 return;
@@ -3503,9 +3505,7 @@ fn build_widgets(application: &adw::Application, options: &Options) -> Result<Wi
     views.add_named(&chrome::cut_list_page(), Some(View::CutList.word()));
     views.set_visible_child_name(View::Design.word());
 
-    let banner = adw::Banner::new("");
     let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    content.append(&banner);
     content.append(&views);
     let toasts = adw::ToastOverlay::new();
     toasts.set_child(Some(&content));
@@ -3563,7 +3563,6 @@ fn build_widgets(application: &adw::Application, options: &Options) -> Result<Wi
         window,
         header,
         toasts,
-        banner,
         views,
         design,
         tree,
