@@ -1,9 +1,8 @@
-//! The text (V2C_EditorOpen.dc.html, option A): a rail of the open files
-//! at the window's right edge, one tab each with a dot for its worst
-//! problem, and the editor that slides in from the right beside the 3D
-//! view: the file's name, breadcrumbs, the editor, the uses panel and a
-//! footer. Files are opened with the finder (Ctrl+K) or by following a
-//! link; the 3D view stays the window's own.
+//! The Code panel: the open files as tabs across the top, one each with a
+//! dot for its worst problem, then breadcrumbs, the editor, the uses panel
+//! and a footer; "No file open" while none is. The panel is docked
+//! wherever people put it, so files open there. Files are opened from the
+//! Files panel, with the finder (Ctrl+K) or by following a link.
 //!
 //! Everything it knows about the text comes from `stave-ide`: the open
 //! buffers ([`Buffers`]), and an [`Analysis`] built again on a worker
@@ -119,8 +118,10 @@ struct State {
     tabs: Vec<Tab>,
     active: Option<usize>,
     problems: Vec<Problem>,
-    /// The texts the running check reads.
-    check_texts: Vec<(Document, String)>,
+    /// The text the last check read for each document it has a problem
+    /// in: its problems are underlined only while the document still
+    /// reads so (their spans are offsets into that text).
+    checked_texts: std::collections::BTreeMap<Document, String>,
     /// Changes made by the page itself: don't report them.
     quiet: bool,
     /// The exact place to put the cursor when the next place shown is
@@ -145,17 +146,15 @@ struct State {
     relink: bool,
 }
 
-/// The open files' rail and the editor beside the 3D view.
+/// The Code panel: the open files as tabs, and the editor.
 pub struct FilesPage {
-    /// The editor's panel, which the window slides in from the right.
+    /// The panel's content.
     pub root: gtk::Box,
-    /// The rail of open files at the window's right edge.
-    pub rail: gtk::Box,
-    /// The rail's button that opens or closes the editor.
-    pub toggle: gtk::Button,
-    toggle_icon: gtk::Image,
     tab_list: gtk::Box,
-    title: gtk::Label,
+    /// What shows while no file is open.
+    placeholder: gtk::Widget,
+    /// The open file's text and what goes with it.
+    body: gtk::Box,
     crumbs: gtk::Box,
     editor: Editor,
     uses: gtk::Revealer,
@@ -187,60 +186,18 @@ fn escape(text: &str) -> String {
 impl FilesPage {
     /// An empty rail and editor.
     pub fn new() -> Rc<FilesPage> {
-        // The rail: open or close the editor, the open files, "+".
-        let toggle_icon = gtk::Image::from_icon_name("go-previous-symbolic");
-        let toggle = gtk::Button::builder()
-            .child(&toggle_icon)
-            .tooltip_text("Open the text (Ctrl+E)")
-            .action_name("win.editor")
-            .css_classes(["flat", "stave-rail-button"])
-            .build();
+        // The open files, one tab each, across the top.
         let tab_list = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
-            .spacing(4)
-            .css_classes(["stave-rail-tabs"])
-            .build();
-        let add = gtk::Button::builder()
-            .icon_name("list-add-symbolic")
-            .tooltip_text("Open another file (Ctrl+K)")
-            .action_name("win.find")
-            .css_classes(["flat", "stave-rail-button"])
-            .build();
-        let rail = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
-            .spacing(4)
-            .css_classes(["stave-rail"])
-            .build();
-        rail.append(&toggle);
-        rail.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
-        rail.append(
-            &gtk::ScrolledWindow::builder()
-                .hscrollbar_policy(gtk::PolicyType::Never)
-                .propagate_natural_height(true)
-                .vexpand(true)
-                .child(&tab_list)
-                .build(),
-        );
-        rail.append(&add);
-
-        // The panel's head: the file's name and the close button.
-        let title = label("", &["stave-editor-title"]);
-        title.set_hexpand(true);
-        title.set_max_width_chars(10);
-        title.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
-        let close = gtk::Button::builder()
-            .icon_name("go-next-symbolic")
-            .tooltip_text("Close the text (Ctrl+E)")
-            .action_name("win.editor")
-            .css_classes(["flat", "circular"])
-            .build();
-        let head = gtk::Box::builder()
             .orientation(gtk::Orientation::Horizontal)
-            .spacing(8)
-            .css_classes(["stave-editor-head"])
+            .spacing(2)
+            .css_classes(["stave-code-tabs"])
             .build();
-        head.append(&title);
-        head.append(&close);
+        let head = gtk::ScrolledWindow::builder()
+            .vscrollbar_policy(gtk::PolicyType::Never)
+            .hscrollbar_policy(gtk::PolicyType::External)
+            .child(&tab_list)
+            .css_classes(["stave-code-head"])
+            .build();
 
         let crumbs = gtk::Box::builder()
             .orientation(gtk::Orientation::Horizontal)
@@ -304,24 +261,39 @@ impl FilesPage {
         footer.append(&hint);
         footer.append(&line);
 
+        let body = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .vexpand(true)
+            .visible(false)
+            .build();
+        body.append(&crumbs);
+        body.append(&editor.root);
+        body.append(&uses);
+        body.append(&footer);
+        // With no file open the panel stays where it is and says how to
+        // open one.
+        let placeholder = adw::StatusPage::builder()
+            .icon_name("text-x-generic-symbolic")
+            .title("No file open")
+            .description("Open a file from Files, or find one with Ctrl+K. Files open in this panel, wherever you dock it.")
+            .vexpand(true)
+            .css_classes(["compact", "stave-code-placeholder"])
+            .build()
+            .upcast::<gtk::Widget>();
+
         let column = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
             .css_classes(["stave-editor-column"])
-            .width_request(320)
             .build();
         column.append(&head);
-        column.append(&crumbs);
-        column.append(&editor.root);
-        column.append(&uses);
-        column.append(&footer);
+        column.append(&placeholder);
+        column.append(&body);
 
         let page = Rc::new(FilesPage {
             root: column,
-            rail,
-            toggle,
-            toggle_icon,
             tab_list,
-            title,
+            placeholder,
+            body,
             crumbs,
             editor,
             uses,
@@ -376,25 +348,6 @@ impl FilesPage {
 
     // ---- what the window asks ----
 
-    /// Shows the rail's button and the editor as open or closed.
-    pub fn show_open(&self, open: bool) {
-        self.toggle_icon.set_icon_name(Some(if open {
-            "go-next-symbolic"
-        } else {
-            "go-previous-symbolic"
-        }));
-        self.toggle.set_tooltip_text(Some(if open {
-            "Close the text (Ctrl+E)"
-        } else {
-            "Open the text (Ctrl+E)"
-        }));
-        if open {
-            self.rail.add_css_class("open");
-        } else {
-            self.rail.remove_css_class("open");
-        }
-    }
-
     /// Puts the keyboard in the text.
     pub fn focus_text(&self) {
         self.editor.view.grab_focus();
@@ -418,22 +371,16 @@ impl FilesPage {
         }
         self.editor.show_buffer(&self.editor.new_buffer(""), false);
         self.uses.set_reveal_child(false);
-        self.title.set_label("");
+        self.show_body(false);
         self.show_crumbs(&[]);
         self.analyse_now();
     }
 
     /// The unsaved texts, for a check that reads what the editor shows.
-    /// Remembers them, so the check's underlines go on the right text.
+    /// (Which text the check read comes back with its result, so its
+    /// underlines go on the right text.)
     pub fn overlay_for_check(&self) -> Overlay {
-        let mut state = self.state.borrow_mut();
-        let texts: Vec<(Document, String)> = state
-            .buffers
-            .documents()
-            .filter_map(|d| Some((d.clone(), state.buffers.text(d)?.to_owned())))
-            .collect();
-        state.check_texts = texts;
-        state.buffers.overlay()
+        self.state.borrow().buffers.overlay()
     }
 
     /// What an edit started in the window reads: the open documents'
@@ -572,32 +519,29 @@ impl FilesPage {
         {
             let mut state = self.state.borrow_mut();
             state.problems.clear();
+            state.checked_texts.clear();
             if let Some(checked) = checked {
+                // Every place a problem points at: where it is, and the
+                // places that explain it (the kind's rule in a standard
+                // file), each underlined when its file is open.
                 for diagnostic in &checked.opened.diagnostics {
-                    let Some(label) = diagnostic.primary() else {
-                        continue;
-                    };
-                    let Some(source) = checked.opened.sources.get(label.file) else {
-                        continue;
-                    };
-                    let document = Document::from_source_path(source.path());
-                    // Only problems in text that still reads as checked.
-                    let checked_text = state
-                        .check_texts
-                        .iter()
-                        .find(|(d, _)| *d == document)
-                        .map(|(_, t)| t.as_str());
-                    let current = state.buffers.text(&document);
-                    if current.is_some() && checked_text.is_some() && current != checked_text {
-                        continue;
+                    for label in &diagnostic.labels {
+                        let Some(source) = checked.opened.sources.get(label.file) else {
+                            continue;
+                        };
+                        let document = Document::from_source_path(source.path());
+                        state
+                            .checked_texts
+                            .entry(document.clone())
+                            .or_insert_with(|| source.text().to_owned());
+                        state.problems.push(Problem {
+                            document,
+                            span: label.span,
+                            severity: diagnostic.severity,
+                            message: diagnostic.message.clone(),
+                            help: diagnostic.help.clone(),
+                        });
                     }
-                    state.problems.push(Problem {
-                        document,
-                        span: label.span,
-                        severity: diagnostic.severity,
-                        message: diagnostic.message.clone(),
-                        help: diagnostic.help.clone(),
-                    });
                 }
             }
         }
@@ -840,21 +784,21 @@ impl FilesPage {
         };
         let buffer = self.editor.new_buffer(&text);
         let name = document.file_name();
-        let tab_label = label(&name, &["stave-rail-name"]);
+        let tab_label = label(&name, &["stave-code-tab-name"]);
         let dot = gtk::Box::builder()
             .css_classes(["stave-mark"])
-            .halign(gtk::Align::Center)
+            .valign(gtk::Align::Center)
             .visible(false)
             .build();
-        let column = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
-            .spacing(8)
+        let row = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing(6)
             .build();
-        column.append(&dot);
-        column.append(&super::sideways::Sideways::new(&tab_label));
+        row.append(&dot);
+        row.append(&tab_label);
         let button = gtk::Button::builder()
-            .child(&column)
-            .css_classes(["stave-rail-tab"])
+            .child(&row)
+            .css_classes(["flat", "stave-code-tab"])
             .tooltip_text(document.display(&self.state.borrow().folder))
             .build();
         let page = Rc::downgrade(self);
@@ -894,6 +838,12 @@ impl FilesPage {
         Some(state.tabs.len().saturating_sub(1))
     }
 
+    /// Shows the open file's text, or the placeholder when none is open.
+    fn show_body(&self, open: bool) {
+        self.body.set_visible(open);
+        self.placeholder.set_visible(!open);
+    }
+
     fn activate(self: &Rc<Self>, index: usize) {
         let found = {
             let mut state = self.state.borrow_mut();
@@ -908,6 +858,7 @@ impl FilesPage {
             }
         };
         if let Some((buffer, read_only)) = found {
+            self.show_body(true);
             self.hide_hover();
             self.state.borrow_mut().quiet = true;
             self.editor.show_buffer(&buffer, !read_only);
@@ -1067,38 +1018,53 @@ impl FilesPage {
                 })
                 .collect();
             self.editor.paint(&buffer, &lines, &runs);
-            let mut problems: Vec<(Run, Severity)> = analysis
-                .diagnostics(*file)
-                .filter_map(|d| {
-                    let span = d.primary()?.span;
-                    Some((
-                        Run {
-                            start: span.start(),
-                            end: span.end(),
-                        },
-                        d.severity,
-                    ))
-                })
-                .collect();
-            problems.extend(self.check_problems(&document).into_iter().map(|p| {
-                (
-                    Run {
-                        start: p.span.start(),
-                        end: p.span.end(),
-                    },
-                    p.severity,
-                )
-            }));
-            self.editor.underline(&buffer, &lines, &problems);
             self.show_lenses(analysis, *file);
         }
+        // The check's problems are underlined whether or not the names
+        // are worked out yet: they need only the text the check read.
+        let mut problems: Vec<(Run, Severity)> = fresh
+            .iter()
+            .flat_map(|(analysis, file)| {
+                analysis
+                    .diagnostics(*file)
+                    .filter_map(|d| {
+                        let span = d.primary()?.span;
+                        Some((
+                            Run {
+                                start: span.start(),
+                                end: span.end(),
+                            },
+                            d.severity,
+                        ))
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        problems.extend(self.check_problems(&document).into_iter().map(|p| {
+            (
+                Run {
+                    start: p.span.start(),
+                    end: p.span.end(),
+                },
+                p.severity,
+            )
+        }));
+        self.editor.underline(&buffer, &lines, &problems);
         let relink = fresh.is_some() && std::mem::take(&mut self.state.borrow_mut().relink);
         self.cursor_moved_now(relink);
     }
 
+    /// The last check's problems in a document, while it still reads as
+    /// the check read it (after an edit their spans would point at the
+    /// wrong text; the next check brings them back).
     fn check_problems(&self, document: &Document) -> Vec<Problem> {
-        self.state
-            .borrow()
+        let state = self.state.borrow();
+        let current = state.buffers.text(document);
+        let checked = state.checked_texts.get(document).map(String::as_str);
+        if current.is_none() || current != checked {
+            return Vec::new();
+        }
+        state
             .problems
             .iter()
             .filter(|p| p.document == *document)
@@ -1235,11 +1201,6 @@ impl FilesPage {
             });
             if Some(index) == state.active {
                 tab.button.add_css_class("active");
-                self.title.set_label(&if dirty {
-                    format!("{name} • not saved")
-                } else {
-                    name
-                });
             } else {
                 tab.button.remove_css_class("active");
             }

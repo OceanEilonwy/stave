@@ -36,12 +36,15 @@ mod header;
 mod icons;
 mod inspector;
 mod new_project;
-mod sideways;
+mod panels;
 mod slider;
 mod style;
+mod tab_strip;
 mod tree;
+mod view_layout;
 mod view_tools;
 mod viewport;
+mod workbench;
 
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
@@ -85,6 +88,12 @@ use viewport::Viewport;
 /// is a click, not a drag.
 const CLICK_SLOP: f64 = 4.0;
 
+/// A mouse's Back button (the thumb button nearer the wrist), as GDK
+/// numbers it.
+const MOUSE_BACK: u32 = 8;
+/// A mouse's Forward button.
+const MOUSE_FORWARD: u32 = 9;
+
 /// How fast focus mode plays: the whole way in 2.5 seconds.
 const PLAY_PER_SECOND: f64 = 0.4;
 
@@ -98,24 +107,16 @@ const FRONT_PITCH: f32 = 0.12;
 /// before rendering again at it.
 const PICTURES_DELAY: Duration = Duration::from_millis(150);
 
-/// The editor's width, in logical pixels.
-const EDITOR_WIDTH: i32 = 600;
-
-/// The selection's card's width, in logical pixels.
-const CARD_WIDTH: i32 = 380;
-
-/// How far the card stands off the part it is about, in logical pixels.
-const CARD_GAP: f32 = 48.0;
-
-/// The space kept clear round the floating panels, in logical pixels.
-const EDGE: i32 = 14;
-
 /// The most problems pinned on the model at once.
 const PIN_LIMIT: usize = 12;
 
 /// How much room a chosen part is framed with: the camera stands this many
 /// times farther back than the tightest fit, so what is round it shows.
 const FRAME_ROOM: f32 = 1.6;
+
+/// The space kept clear round what the editing puts on the 3D view (its
+/// menu, cards, handles and labels), in logical pixels.
+const EDGE: i32 = 14;
 
 /// The light or dark style.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -186,6 +187,8 @@ pub struct Options {
     pub finder: Option<String>,
     /// Start with X-ray on.
     pub xray: bool,
+    /// Lay the panels out from this file instead of the user's own.
+    pub layout: Option<PathBuf>,
     /// Light, dark or the system's.
     pub theme: Theme,
     /// Save the window to this PNG once drawn, then close.
@@ -252,8 +255,11 @@ pub fn run(options: Options) -> Result<()> {
         .build();
     let options = Rc::new(RefCell::new(Some(Options { folder, ..options })));
     application.connect_activate(move |application| {
-        if let Some(options) = options.borrow_mut().take() {
-            Window::open(application, options);
+        if let Some(options) = options.borrow_mut().take()
+            && let Err(error) = Window::open(application, options)
+        {
+            eprintln!("error: {error:#}");
+            application.quit();
         }
     });
     let status = application.run_with_args::<&str>(&[]);
@@ -371,8 +377,6 @@ struct State {
     xray: bool,
     /// The latest check's marks, when its ids are the shown design's.
     marks: Marks,
-    /// Where the card was put last (left and top margins).
-    card_place: Option<(i32, i32)>,
     /// Editing steps to run once the design is drawn (`--edit-script`).
     edit_script: Option<PathBuf>,
 }
@@ -382,17 +386,22 @@ struct Widgets {
     window: adw::ApplicationWindow,
     header: Header,
     toasts: adw::ToastOverlay,
-    banner: adw::Banner,
     views: gtk::Stack,
     /// The 3D view with everything that floats over it.
     design: gtk::Overlay,
     tree: TreeSidebar,
     inspector: Inspector,
-    /// The selection's card, floating beside the part.
-    card: gtk::Box,
+    /// The Details panel's content: the selection's account (the
+    /// inspector), then its editing controls (the "Add onto" button and
+    /// the item's changes).
+    details: gtk::Box,
     dock: Rc<Dock>,
-    /// The editor's panel, sliding in from the right.
-    editor_panel: gtk::Revealer,
+    /// The dock and its panels round the 3D view.
+    workbench: Rc<workbench::Workbench>,
+    /// The Problems panel.
+    problems: Rc<panels::ProblemsPanel>,
+    /// The Files panel.
+    file_list: Rc<panels::FilesList>,
     /// A short line at the top of the view: focus mode, posed problems.
     hint: gtk::Label,
     hint_box: gtk::Box,
@@ -417,6 +426,16 @@ struct Widgets {
     files: Rc<FilesPage>,
 }
 
+impl Widgets {
+    /// Offers the view's everyday controls (the scene menu, X-ray, Pull
+    /// apart and the moving assemblies' chips), or takes them away while
+    /// a problem is posed or a joint is in focus.
+    fn offer_view_tools(&self, offered: bool) {
+        self.dock.offer(offered);
+        self.view_toolbar.offer(offered);
+    }
+}
+
 struct Window {
     widgets: Widgets,
     session: RefCell<Session>,
@@ -431,7 +450,7 @@ struct Window {
 }
 
 impl Window {
-    fn open(application: &adw::Application, options: Options) {
+    fn open(application: &adw::Application, options: Options) -> Result<()> {
         if options.window_screenshot.is_some() {
             settle_for_screenshot();
         }
@@ -439,7 +458,7 @@ impl Window {
         if let Some(display) = gdk::Display::default() {
             style::install(&display);
         }
-        let widgets = build_widgets(application, &options);
+        let widgets = build_widgets(application, &options)?;
         let renderer = Renderer::new().map_err(|error| format!("{error:#}"));
         let window = Rc::new(Window {
             widgets,
@@ -484,7 +503,6 @@ impl Window {
                 linking: false,
                 xray: false,
                 marks: Marks::default(),
-                card_place: None,
                 edit_script: None,
             }),
             pins: RefCell::new(Vec::new()),
@@ -512,6 +530,7 @@ impl Window {
         window.widgets.window.present();
         window.show_folder();
         window.dispatch(Command::Check);
+        Ok(())
     }
 
     // ---- the session ----
@@ -526,9 +545,6 @@ impl Window {
     /// other views see it.
     fn handle(self: &Rc<Self>, events: Vec<Event>) {
         let result = events.contains(&Event::ResultChanged);
-        // Choosing something frames it at once; a new result keeps the
-        // camera where people left it.
-        let reframe = !result && events.contains(&Event::SelectionChanged);
         if result {
             self.result_changed();
         }
@@ -561,9 +577,16 @@ impl Window {
                 }
             }
         }
-        if reframe {
-            self.frame_selection();
-        }
+    }
+
+    /// Selects something and frames it: for the parts list, the finder,
+    /// "show in 3D" and the command line. Clicking in the 3D view selects
+    /// without moving the camera (`pick`). The 3D View comes to the front
+    /// (brought back if it was closed), so what was chosen can be seen.
+    fn select_and_frame(self: &Rc<Self>, selection: Option<Selection>) {
+        self.widgets.workbench.present(workbench::PanelId::View);
+        self.dispatch(Command::Select(selection));
+        self.frame_selection();
     }
 
     /// Runs a check on a worker thread and hands its outcome back.
@@ -595,6 +618,7 @@ impl Window {
         let folder = self.session.borrow().folder().to_path_buf();
         self.show_title();
         self.widgets.files.set_folder(&folder);
+        self.widgets.file_list.set_folder(&folder);
     }
 
     /// The project's or library's own title (the folder's name until one
@@ -623,6 +647,18 @@ impl Window {
         self.show_title();
         let widgets = &self.widgets;
         widgets.files.show_result(latest.as_deref());
+        {
+            let session = self.session.borrow();
+            let selected = match session.selection() {
+                Some(Selection::Problem(index)) => Some(index.0),
+                _ => None,
+            };
+            let reports = latest
+                .as_deref()
+                .map(stave_app::problems::reports)
+                .unwrap_or_default();
+            widgets.problems.show(&reports, selected, showing_older);
+        }
         // The dots: by file always; by part only when the latest result is
         // the one shown (its ids are the tree's).
         let marks = latest
@@ -654,14 +690,8 @@ impl Window {
         let Some(shown) = shown else {
             return;
         };
-        if showing_older {
-            widgets
-                .banner
-                .set_title("The design has errors. Showing the last version that worked.");
-            widgets.banner.set_revealed(true);
-        } else {
-            widgets.banner.set_revealed(false);
-        }
+        // An older design on show is said by the red problems chip and a
+        // line over the Problems panel's list, not a banner.
         let Some((design, graph)) = shown.drawable() else {
             return;
         };
@@ -749,7 +779,7 @@ impl Window {
             self.dispatch(Command::SetExplode(Explode::clamped(explode)));
         }
         if let Some(selection) = select {
-            self.dispatch(Command::Select(Some(selection)));
+            self.select_and_frame(Some(selection));
         }
         if let Some(target) = target {
             self.state.borrow_mut().focus_start = Some((plan, wanted.step));
@@ -765,7 +795,7 @@ impl Window {
             self.dispatch(Command::ShowView(wanted.view));
         }
         if wanted.xray {
-            self.widgets.dock.xray.set_active(true);
+            self.widgets.view_toolbar.xray.set_active(true);
         }
         if wanted.editor && wanted.file.is_none() {
             self.dispatch(Command::ShowEditor(Editor::Open));
@@ -822,17 +852,13 @@ impl Window {
         }
     }
 
-    /// The editor opened or closed: slides it in or out, and shows where
-    /// the selection is written.
+    /// The editor opened or closed. Opening shows the Code panel wherever
+    /// it is docked, with the selection's line; closing gives the keyboard
+    /// back to the 3D view (the panel stays where it is).
     fn editor_changed(self: &Rc<Self>) {
         let open = self.session.borrow().editor() == Editor::Open;
-        // Hidden while closed, so it takes no room; it slides out first.
         if open {
-            self.widgets.editor_panel.set_visible(true);
-        }
-        self.widgets.editor_panel.set_reveal_child(open);
-        self.widgets.files.show_open(open);
-        if open {
+            self.widgets.workbench.present(workbench::PanelId::Code);
             self.sync_files();
             self.widgets.files.focus_text();
         } else {
@@ -841,9 +867,6 @@ impl Window {
                 Some(self.widgets.viewport.upcast_ref::<gtk::Widget>()),
             );
         }
-        // The view's width changes as the panel slides: the card and the
-        // pins follow on the next frames.
-        self.show_card();
         self.request_render();
     }
 
@@ -861,13 +884,19 @@ impl Window {
                 .and_then(|(shown, selection)| link::placed_at(shown, selection));
             (session.editor() == Editor::Open, selection, placed)
         };
-        if !open {
-            return;
-        }
         let files = &self.widgets.files;
         match (&selection, placed) {
-            (Some(Selection::Location(location)), _) => files.show_location(location),
-            (Some(_), Some(placed)) if !self.state.borrow().linking => files.reveal(&placed),
+            (Some(Selection::Location(location)), _) if open => files.show_location(location),
+            // A part, assembly or piece of hardware chosen anywhere opens
+            // the file that places it, at that line, in the Code panel
+            // (forward unless it would cover the 3D view; the keyboard
+            // stays where it is).
+            (Some(_), Some(placed)) if !self.state.borrow().linking => {
+                files.reveal(&placed);
+                self.widgets
+                    .workbench
+                    .bring_forward_beside_view(workbench::PanelId::Code);
+            }
             _ => {}
         }
     }
@@ -939,7 +968,25 @@ impl Window {
             )
         };
         let widgets = &self.widgets;
+        let linked = {
+            let session = self.session.borrow();
+            session
+                .drawable()
+                .zip(selection.as_ref())
+                .and_then(|((design, _), selection)| {
+                    let placed = link::placed_at(session.shown()?, selection)?;
+                    link::chip(design, selection, &placed)
+                })
+        };
+        widgets
+            .workbench
+            .status
+            .set_label(linked.as_deref().unwrap_or(""));
         widgets.tree.show_selection(selection.as_ref(), joints);
+        widgets.problems.show_selected(match &selection {
+            Some(Selection::Problem(index)) => Some(index.0),
+            _ => None,
+        });
         self.sync_files();
         if focused {
             self.show_card();
@@ -951,10 +998,9 @@ impl Window {
         } else {
             String::new()
         });
-        match &problem {
-            Some((_, details)) => widgets.inspector.show_problem(details),
-            None => widgets.inspector.show(inspection.as_ref()),
-        }
+        // A problem is read in the Problems panel; Details keeps to the
+        // design.
+        widgets.inspector.show(inspection.as_ref());
         // Pose a problem where it happens, or offer to open the selection.
         match problem.and_then(|(problem, details)| Some((problem.contact?, details.motion))) {
             Some((contact, card)) => self.pose_problem(contact, card),
@@ -974,33 +1020,13 @@ impl Window {
         self.request_render();
     }
 
-    /// The card shows while there is something to say: a selection, focus
-    /// mode, or why there is nothing to select. With the editor open the
-    /// text says it (V2C_EditorOpen.dc.html), so only focus mode keeps its
-    /// card. Its place follows the part (`place_card`).
+    /// The Details panel always shows the selection's account; focus mode
+    /// brings it forward, since its controls are there.
     fn show_card(self: &Rc<Self>) {
-        let shows = {
-            let session = self.session.borrow();
-            let editing = session.editor() == Editor::Open;
-            session.focus().is_some()
-                || (!editing
-                    && (session.selection().is_some()
-                        || edit_view::empty_state(&session).is_some()))
-        };
-        self.widgets
-            .card
-            .set_visible(shows && !self.edit_open() && !self.grips_take_the_card());
+        if self.session.borrow().focus().is_some() {
+            self.widgets.workbench.present(workbench::PanelId::Details);
+        }
         self.update_face_button();
-        self.state.borrow_mut().card_place = None;
-        // Placed again once laid out: with nothing to draw (a library) no
-        // frame of the 3D view places it.
-        let window = Rc::downgrade(self);
-        self.widgets.card.add_tick_callback(move |_, _| {
-            if let Some(window) = window.upgrade() {
-                window.place_card();
-            }
-            glib::ControlFlow::Break
-        });
     }
 
     /// A short line at the top of the 3D view ("Focused on one joint · Esc
@@ -1185,16 +1211,7 @@ impl Window {
             .root
             .set_visible(focus.is_some_and(|f| f.focus.plan().is_some()));
         widgets.camera.root.set_visible(focus.is_none());
-        widgets.dock.root.set_visible(focus.is_none());
-        widgets.tree.root.set_visible(!page);
-        // A hardware page keeps clear of the card and the rail beside it.
-        widgets.stage.set_margin_end(if page {
-            CARD_WIDTH
-                .saturating_add(EDGE.saturating_mul(2))
-                .saturating_add(widgets.files.rail.width())
-        } else {
-            0
-        });
+        widgets.offer_view_tools(focus.is_none());
         drop(state);
         self.show_caption();
     }
@@ -1548,7 +1565,6 @@ impl Window {
     /// everything.
     fn frame(self: &Rc<Self>) {
         let nodes = self.selected_nodes();
-        let shift = self.free_centre_shift();
         {
             let session = self.session.borrow();
             let Some(shown) = session.shown() else {
@@ -1561,49 +1577,15 @@ impl Window {
                     let (_, graph) = shown.drawable()?;
                     let bounds = graph.bounds_of(state.posed.as_ref()?, &nodes)?;
                     let framed = state.orbit?.framed(bounds, aspect);
-                    let roomy = Orbit {
+                    Some(Orbit {
                         distance: framed.distance * FRAME_ROOM,
                         ..framed
-                    };
-                    // In the middle of the room the model tree leaves.
-                    let height = crate::convert::f32_of_int(self.widgets.viewport.height());
-                    Some(roomy.panned(shift, 0.0, height))
+                    })
                 })
                 .flatten();
             state.orbit = selected.or_else(|| Self::frame_all(&state, shown));
-            state.card_place = None;
         }
         self.request_render();
-    }
-
-    /// How far right of the view's middle the middle of the free room is,
-    /// in logical pixels: between the model tree on the left and the card
-    /// and the rail on the right. What is framed goes there, not under
-    /// them.
-    fn free_centre_shift(&self) -> f32 {
-        let width = self.widgets.viewport.width();
-        if width <= 1 {
-            return 0.0;
-        }
-        let tree = &self.widgets.tree.root;
-        let left = if tree.is_visible() {
-            tree.width().saturating_add(EDGE.saturating_mul(2))
-        } else {
-            0
-        };
-        let card = if self.widgets.card.is_visible() {
-            CARD_WIDTH.saturating_add(EDGE.saturating_mul(2))
-        } else {
-            0
-        };
-        let right = width
-            .saturating_sub(card)
-            .saturating_sub(self.widgets.files.rail.width());
-        if right.saturating_sub(left) < width / 3 {
-            return 0.0;
-        }
-        let middle = crate::convert::f32_of_int(left.saturating_add(right)) / 2.0;
-        middle - crate::convert::f32_of_int(width) / 2.0
     }
 
     /// Choosing something frames it at once: a part, a piece of hardware
@@ -1795,7 +1777,7 @@ impl Window {
         let shared = problem.is_some_and(|(_, _, shared)| shared);
         let focused = self.state.borrow().focus.is_some();
         widgets.contact_key.set_visible(shared && !focused);
-        widgets.dock.root.set_visible(!posed && !focused);
+        widgets.offer_view_tools(!posed && !focused);
         if !posed && !focused {
             self.show_hint("");
         }
@@ -1848,7 +1830,7 @@ impl Window {
             None => {
                 self.widgets.problem_card.show(None, 0.0);
                 self.widgets.contact_key.set_visible(shared);
-                self.widgets.dock.root.set_visible(false);
+                self.widgets.offer_view_tools(false);
                 if shared {
                     self.show_hint("Posed at contact");
                 }
@@ -2154,10 +2136,11 @@ impl Window {
         });
     }
 
-    /// How each node looks outside focus mode: with something chosen, the
-    /// rest fades (see-through with X-ray on); a posed problem fades what
-    /// it doesn't involve; X-ray alone makes everything see-through.
-    /// `None` draws every node as usual.
+    /// How each node looks outside focus mode. Choosing something only
+    /// outlines it: the rest stays solid, so clicking around never switches
+    /// the view between solid and see-through. With X-ray on everything
+    /// but the selection is see-through; a posed problem fades what it
+    /// doesn't involve. `None` draws every node as usual.
     fn looks(&self, selection: &[NodeId]) -> Option<Vec<Look>> {
         let session = self.session.borrow();
         let state = self.state.borrow();
@@ -2165,11 +2148,9 @@ impl Window {
         let count = graph.node_ids().count();
         let kept: &[NodeId] = match state.problem.as_ref() {
             Some(problem) => &problem.highlight.nodes,
-            None => selection,
+            None if state.xray => selection,
+            None => return None,
         };
-        if kept.is_empty() && !state.xray {
-            return None;
-        }
         let rest = if state.xray { Look::XRay } else { Look::Dim };
         let mut looks = vec![rest; count];
         for node in kept {
@@ -2281,7 +2262,6 @@ impl Window {
                 if let Some(texture) = texture(image) {
                     self.widgets.viewport.show_frame(texture);
                 }
-                self.place_card();
                 self.show_pins();
                 self.place_ghost_verdict();
                 self.place_grips();
@@ -2318,6 +2298,18 @@ impl Window {
         self.project(&state, bounds.centre())
     }
 
+    /// How much of the 3D view's right side the camera column takes (with
+    /// the space beside it), in logical pixels: what the editing's cards
+    /// and labels keep clear of at the right.
+    fn right_column(&self) -> i32 {
+        let camera = &self.widgets.camera.root;
+        if camera.is_visible() {
+            camera.width().saturating_add(EDGE)
+        } else {
+            0
+        }
+    }
+
     /// Where a point of the scene shows in the 3D view, in logical pixels.
     fn project(&self, state: &State, point: glam::Vec3) -> Option<(f32, f32)> {
         let viewport = &self.widgets.viewport;
@@ -2326,79 +2318,6 @@ impl Window {
             crate::convert::f32_of_int(viewport.width()),
             crate::convert::f32_of_int(viewport.height()),
         )
-    }
-
-    /// Puts the card beside the selected part: to its right when the part
-    /// is in the left half of the view, to its left otherwise, a little
-    /// above it, always inside the view. Without a part to stand by (a
-    /// problem, focus mode, a library), the card sits at the top right.
-    fn place_card(&self) {
-        let card = &self.widgets.card;
-        if !card.is_visible() {
-            return;
-        }
-        let (width, height) = (self.widgets.design.width(), self.widgets.design.height());
-        if width <= 1 {
-            return;
-        }
-        let anchored = {
-            let session = self.session.borrow();
-            session.focus().is_none() && !matches!(session.selection(), Some(Selection::Problem(_)))
-        };
-        let point = anchored
-            .then(|| self.screen_point(&self.selected_nodes()))
-            .flatten()
-            .map(|point| self.beside_grips(point));
-        let card_height = card.height().max(200);
-        // The card keeps clear of the model tree at the top left.
-        let tree = &self.widgets.tree.root;
-        let left_most = if tree.is_visible() {
-            tree.width().saturating_add(EDGE.saturating_mul(2))
-        } else {
-            EDGE
-        };
-        // ...and of the rail of open files at the right.
-        let rail = self.widgets.files.rail.width();
-        // Never past the right edge: in a narrow window the card lies over
-        // the tree rather than off the window.
-        let right_most = width
-            .saturating_sub(CARD_WIDTH)
-            .saturating_sub(EDGE)
-            .saturating_sub(rail)
-            .max(EDGE);
-        let left_most = left_most.min(right_most);
-        let lowest = height
-            .saturating_sub(card_height)
-            .saturating_sub(90)
-            .max(EDGE);
-        let place = match point {
-            Some((x, y)) => {
-                let card_width = crate::convert::f32_of_int(CARD_WIDTH);
-                let after = x + CARD_GAP;
-                let before = x - CARD_GAP - card_width;
-                // Beside the part on the side with room for the card;
-                // the right when both have.
-                let fits_after = after + card_width
-                    <= crate::convert::f32_of_int(right_most.saturating_add(CARD_WIDTH));
-                let fits_before = before >= crate::convert::f32_of_int(left_most);
-                let left = match (fits_after, fits_before) {
-                    (true, _) => after,
-                    (false, true) => before,
-                    (false, false) => crate::convert::f32_of_int(right_most),
-                };
-                (
-                    crate::convert::int_of_f32(left.round()).clamp(left_most, right_most),
-                    crate::convert::int_of_f32((y - 160.0).round()).clamp(EDGE, lowest),
-                )
-            }
-            None => (right_most, EDGE),
-        };
-        let mut state = self.state.borrow_mut();
-        if state.card_place != Some(place) {
-            state.card_place = Some(place);
-            card.set_margin_start(place.0);
-            card.set_margin_top(place.1);
-        }
     }
 
     /// Takes every pin off the model.
@@ -2687,17 +2606,60 @@ impl Window {
         let this = self.clone();
         add(
             "editor",
+            // Shows the Code panel wherever it is docked, with the keyboard
+            // in the text.
             Box::new(move || {
-                let open = this.session.borrow().editor() == Editor::Open;
-                this.dispatch(Command::ShowEditor(if open {
-                    Editor::Closed
+                if this.session.borrow().editor() == Editor::Open {
+                    this.widgets.workbench.present(workbench::PanelId::Code);
+                    this.widgets.files.focus_text();
                 } else {
-                    Editor::Open
-                }));
+                    this.dispatch(Command::ShowEditor(Editor::Open));
+                }
             }),
         );
+        let show_panel = gio::SimpleAction::new("show-panel", Some(glib::VariantTy::STRING));
         let this = self.clone();
-        add("model", Box::new(move || this.widgets.tree.toggle()));
+        show_panel.connect_activate(move |_, word| {
+            let id = word
+                .and_then(glib::Variant::str)
+                .and_then(workbench::PanelId::from_word);
+            match id {
+                Some(workbench::PanelId::Code) => {
+                    let _ = WidgetExt::activate_action(&this.widgets.window, "win.editor", None);
+                }
+                Some(id) => this.widgets.workbench.present(id),
+                None => {}
+            }
+        });
+        self.widgets.window.add_action(&show_panel);
+        // "code:end": move the Code panel to the right edge.
+        let move_panel = gio::SimpleAction::new("move-panel", Some(glib::VariantTy::STRING));
+        let this = self.clone();
+        move_panel.connect_activate(move |_, target| {
+            let Some((id, side)) = target
+                .and_then(glib::Variant::str)
+                .and_then(|t| t.split_once(':'))
+            else {
+                return;
+            };
+            if let (Some(id), Some(side)) = (
+                workbench::PanelId::from_word(id),
+                workbench::Side::from_word(side),
+            ) {
+                this.widgets.workbench.move_to(id, side);
+            }
+        });
+        self.widgets.window.add_action(&move_panel);
+        let this = self.clone();
+        add(
+            "reset-layout",
+            Box::new(move || this.widgets.workbench.reset()),
+        );
+        let this = self.clone();
+        add(
+            "model",
+            Box::new(move || this.widgets.workbench.present(workbench::PanelId::Parts)),
+        );
         let this = self.clone();
         add("save", Box::new(move || this.widgets.files.save()));
         let this = self.clone();
@@ -2862,6 +2824,30 @@ impl Window {
 
     fn connect_events(self: &Rc<Self>) {
         let widgets = &self.widgets;
+        let window = Rc::downgrade(self);
+        widgets.problems.connect_choose(move |index| {
+            if let Some(window) = window.upgrade() {
+                window.dispatch(Command::Select(Some(Selection::Problem(ProblemIndex(
+                    index,
+                )))));
+            }
+        });
+        let window = Rc::downgrade(self);
+        widgets.problems.connect_source(move |location| {
+            if let Some(window) = window.upgrade() {
+                window.dispatch(Command::GoToSource(location));
+            }
+        });
+        let window = Rc::downgrade(self);
+        widgets.file_list.connect_open(move |path| {
+            let (Some(window), Some(line)) = (window.upgrade(), LineNumber::new(1)) else {
+                return;
+            };
+            window.dispatch(Command::GoToSource(SourceLocation {
+                path: path.display().to_string(),
+                line,
+            }));
+        });
         let header = &widgets.header;
         header.back.set_action_name(Some("win.back"));
         header.forward.set_action_name(Some("win.forward"));
@@ -2894,7 +2880,7 @@ impl Window {
         let window = Rc::downgrade(self);
         widgets.tree.connect_select(move |selection| {
             if let Some(window) = window.upgrade() {
-                window.dispatch(Command::Select(Some(selection)));
+                window.select_and_frame(Some(selection));
             }
         });
         let window = Rc::downgrade(self);
@@ -2915,18 +2901,8 @@ impl Window {
                 window.dispatch(Command::Select(Some(Selection::Assembly(assembly))));
             }
         });
-        // Once the editor has slid in or out, the view's width has
-        // changed: the selection is framed again in what is left.
-        let window = Rc::downgrade(self);
-        widgets
-            .editor_panel
-            .connect_child_revealed_notify(move |_| {
-                if let Some(window) = window.upgrade() {
-                    window.frame_selection();
-                }
-            });
         let window = self.clone();
-        widgets.dock.xray.connect_toggled(move |button| {
+        widgets.view_toolbar.xray.connect_toggled(move |button| {
             window.state.borrow_mut().xray = button.is_active();
             window.request_render();
         });
@@ -3104,7 +3080,7 @@ impl Window {
                 })
             };
             match selection {
-                Some(selection) => window.dispatch(Command::Select(Some(selection))),
+                Some(selection) => window.select_and_frame(Some(selection)),
                 None => window.widgets.toasts.add_toast(
                     adw::Toast::builder()
                         .title("It isn't in the design the 3D view shows")
@@ -3134,6 +3110,7 @@ impl Window {
             let Some(window) = window.upgrade() else {
                 return glib::Propagation::Proceed;
             };
+            window.widgets.workbench.save();
             if !window.widgets.files.has_unsaved() {
                 return glib::Propagation::Proceed;
             }
@@ -3188,7 +3165,7 @@ impl Window {
                 }
                 (Goal::Select(_) | Goal::Open(_), Choice::Preview) => {}
                 (Goal::Select(selection), Choice::Go) => {
-                    window.dispatch(Command::Select(Some(selection)));
+                    window.select_and_frame(Some(selection));
                 }
                 (Goal::Select(selection), Choice::OpenText) => {
                     let placed = {
@@ -3197,7 +3174,7 @@ impl Window {
                             .shown()
                             .and_then(|shown| link::placed_at(shown, &selection))
                     };
-                    window.dispatch(Command::Select(Some(selection)));
+                    window.select_and_frame(Some(selection));
                     if let Some(placed) = placed {
                         window.dispatch(Command::GoToSource(placed));
                     }
@@ -3322,6 +3299,24 @@ impl Window {
             }
         });
         self.widgets.window.add_controller(keys);
+
+        // A mouse's Back and Forward buttons (8 and 9) anywhere in the
+        // window, before the widget under the pointer sees them.
+        let history = gtk::GestureClick::builder()
+            .button(0)
+            .propagation_phase(gtk::PropagationPhase::Capture)
+            .build();
+        let window = self.clone();
+        history.connect_pressed(move |gesture, _, _, _| {
+            let action = match gesture.current_button() {
+                MOUSE_BACK => "win.back",
+                MOUSE_FORWARD => "win.forward",
+                _ => return,
+            };
+            gesture.set_state(gtk::EventSequenceState::Claimed);
+            let _ = WidgetExt::activate_action(&window.widgets.window, action, None);
+        });
+        self.widgets.window.add_controller(history);
     }
 
     /// The part of a drag not applied yet.
@@ -3478,6 +3473,16 @@ fn main_menu() -> gio::Menu {
     project.append(Some("Frame Everything"), Some("win.frame"));
     project.append(Some("Export View as glTF…"), Some("win.export-view"));
     menu.append_section(None, &project);
+    // Any panel can be closed; these bring it back where it was.
+    let panels = gio::Menu::new();
+    for id in workbench::PanelId::ALL {
+        panels.append(
+            Some(id.title()),
+            Some(&format!("win.show-panel::{}", id.word())),
+        );
+    }
+    panels.append(Some("Reset Layout"), Some("win.reset-layout"));
+    menu.append_section(Some("Panels"), &panels);
     let style = gio::Menu::new();
     style.append(Some("Follow System Style"), Some("win.style::system"));
     style.append(Some("Light"), Some("win.style::light"));
@@ -3486,42 +3491,89 @@ fn main_menu() -> gio::Menu {
     menu
 }
 
-fn build_widgets(application: &adw::Application, options: &Options) -> Widgets {
+fn build_widgets(application: &adw::Application, options: &Options) -> Result<Widgets> {
     let folder_name = options.folder.file_name().map_or_else(
         || options.folder.display().to_string(),
         |name| name.to_string_lossy().into_owned(),
     );
     let header = Header::new(&folder_name, &main_menu());
 
-    // The 3D view with the controls that belong to the view itself: the
-    // camera buttons, the shared-wood key, focus mode's From above / In 3D
-    // switch, a joint's step player and a problem's motion card.
+    // The 3D view, its controls floating on it (`view_layout` keeps them
+    // apart): the scene menu at the top left; the camera buttons, X-ray
+    // and Pull apart down the top right, Pull apart's slider popping out
+    // to the left of its button; a short line and the shared-wood key
+    // along the top; the moving assemblies' chips at the bottom left and
+    // the selection's motion slider at the bottom right; a joint's step
+    // player, a problem's motion card and the off-screen chip above the
+    // foot, in the middle; focus mode's From above / In 3D switch at the
+    // top right.
     let viewport = Viewport::default();
     let motion = MotionBar::new();
     let view_toolbar = ViewToolbar::new();
-    let camera = CameraToolbar::new();
-    camera.root.set_valign(gtk::Align::End);
-    camera.root.set_margin_top(0);
-    camera.root.set_margin_bottom(18);
+    let camera = CameraToolbar::new(&view_toolbar);
     let contact_key = view_tools::contact_key();
     let plan_switch = PlanSwitch::new();
     let step_card = StepCard::new();
     let problem_card = ProblemCard::new();
+    let dock = Dock::new(&header.scene, &motion);
+    let hint = gtk::Label::builder()
+        .xalign(0.0)
+        .wrap(true)
+        .max_width_chars(48)
+        .build();
+    let hint_box = gtk::Box::builder()
+        .css_classes(["stave-chip"])
+        .visible(false)
+        .build();
+    hint_box.append(&hint);
+    let edge_label = gtk::Label::new(None);
+    edge_label.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    edge_label.set_max_width_chars(60);
+    let edge_content = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    edge_content.append(&gtk::Image::from_icon_name("go-down-symbolic"));
+    edge_content.append(&edge_label);
+    let edge_pin = gtk::Button::builder()
+        .child(&edge_content)
+        .css_classes(["stave-edge-pin"])
+        .action_name("win.show-problem")
+        .tooltip_text("Show the problem off screen")
+        .visible(false)
+        .build();
     let figure = gtk::Overlay::builder()
         .child(&viewport)
         .vexpand(true)
         .overflow(gtk::Overflow::Hidden)
         .css_classes(["stave-viewport", "stave-figure"])
         .build();
-    for overlaid in [
-        camera.root.upcast_ref::<gtk::Widget>(),
-        contact_key.upcast_ref(),
-        plan_switch.root.upcast_ref(),
-        step_card.root.upcast_ref(),
-        problem_card.root.upcast_ref(),
-    ] {
-        figure.add_overlay(overlaid);
-    }
+    let floating: Vec<(view_layout::Floating, gtk::Widget)> = vec![
+        (view_layout::Floating::Camera, camera.root.clone().upcast()),
+        (
+            view_layout::Floating::PullSlider,
+            view_toolbar.popout.clone().upcast(),
+        ),
+        (
+            view_layout::Floating::PlanSwitch,
+            plan_switch.root.clone().upcast(),
+        ),
+        (view_layout::Floating::Scene, dock.scene.clone().upcast()),
+        (view_layout::Floating::Hint, hint_box.clone().upcast()),
+        (
+            view_layout::Floating::ContactKey,
+            contact_key.clone().upcast(),
+        ),
+        (view_layout::Floating::Moves, dock.moves.clone().upcast()),
+        (view_layout::Floating::Motion, motion.root.clone().upcast()),
+        (
+            view_layout::Floating::StepCard,
+            step_card.root.clone().upcast(),
+        ),
+        (
+            view_layout::Floating::ProblemCard,
+            problem_card.root.clone().upcast(),
+        ),
+        (view_layout::Floating::EdgePin, edge_pin.clone().upcast()),
+    ];
+    float_on(&figure, floating);
     // Hardware focus lays the view out as a page (Hinge.dc.html): a line
     // over it, three small views and the swing card under it.
     let caption = Caption::new();
@@ -3541,101 +3593,57 @@ fn build_widgets(application: &adw::Application, options: &Options) -> Widgets {
     view_stack.add_named(&empty.root, Some("status"));
     view_stack.set_visible_child_name("status");
 
-    // What floats over the view: the model tree at the top left, the
-    // selection's card beside the part, the dock at the bottom, a short
-    // line at the top, and the chip naming a problem off screen.
+    // The panels round the view: the parts tree, the files, the
+    // selection's account, the open files and the problems.
     let tree = TreeSidebar::new();
-    tree.root.set_margin_start(EDGE);
-    tree.root.set_margin_top(EDGE);
     let inspector = Inspector::new();
-    let card = gtk::Box::builder()
-        .orientation(gtk::Orientation::Vertical)
-        .css_classes(["stave-card-panel"])
-        .width_request(CARD_WIDTH)
-        .halign(gtk::Align::Start)
-        .valign(gtk::Align::Start)
-        .margin_top(EDGE)
-        .visible(false)
-        .overflow(gtk::Overflow::Hidden)
+    let details_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    details_box.append(&inspector.root);
+    let details = gtk::ScrolledWindow::builder()
+        .hscrollbar_policy(gtk::PolicyType::Never)
+        .vexpand(true)
+        .child(&details_box)
+        .css_classes(["stave-details"])
         .build();
-    card.append(&inspector.root);
-    let dock = Dock::new(&header.scene, &view_toolbar, &motion);
-    let hint = gtk::Label::new(None);
-    let hint_box = gtk::Box::builder()
-        .css_classes(["stave-chip"])
-        .halign(gtk::Align::Center)
-        .valign(gtk::Align::Start)
-        .margin_top(EDGE)
-        .visible(false)
-        .build();
-    hint_box.append(&hint);
-    let edge_label = gtk::Label::new(None);
-    edge_label.set_ellipsize(gtk::pango::EllipsizeMode::End);
-    edge_label.set_max_width_chars(60);
-    let edge_content = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-    edge_content.append(&gtk::Image::from_icon_name("go-down-symbolic"));
-    edge_content.append(&edge_label);
-    let edge_pin = gtk::Button::builder()
-        .child(&edge_content)
-        .css_classes(["stave-edge-pin"])
-        .halign(gtk::Align::Center)
-        .valign(gtk::Align::End)
-        .margin_bottom(76)
-        .action_name("win.show-problem")
-        .tooltip_text("Show the problem off screen")
-        .visible(false)
-        .build();
+    let files = FilesPage::new();
+    let file_list = panels::FilesList::new();
+    let problems = panels::ProblemsPanel::new();
+
+    // The 3D View panel: the view, with the problems pinned on the model
+    // (they come later) over it.
     let design = gtk::Overlay::builder()
         .child(&view_stack)
         .hexpand(true)
+        .vexpand(true)
         .overflow(gtk::Overflow::Hidden)
         .build();
-    for overlaid in [
-        tree.root.upcast_ref::<gtk::Widget>(),
-        card.upcast_ref(),
-        dock.root.upcast_ref(),
-        hint_box.upcast_ref(),
-        edge_pin.upcast_ref(),
-    ] {
-        design.add_overlay(overlaid);
-    }
+    let view_panel = design.clone();
 
-    // At the right edge: the editor sliding in, and the rail of open
-    // files beside it.
-    let files = FilesPage::new();
-    files.root.add_css_class("stave-editor-panel");
-    files.root.set_width_request(EDITOR_WIDTH);
-    let editor_panel = gtk::Revealer::builder()
-        .transition_type(gtk::RevealerTransitionType::SlideLeft)
-        .child(&files.root)
-        .reveal_child(false)
-        .visible(false)
-        .build();
-    editor_panel.connect_child_revealed_notify(|revealer| {
-        if !revealer.is_child_revealed() && !revealer.reveals_child() {
-            revealer.set_visible(false);
-        }
-    });
-    // The rail floats at the view's right edge, so it rides on the
-    // editor's edge while the editor is open.
-    files.rail.set_halign(gtk::Align::End);
-    files.rail.set_valign(gtk::Align::Center);
-    design.add_overlay(&files.rail);
-    let design_row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-    design_row.append(&design);
-    design_row.append(&editor_panel);
+    let workbench = workbench::Workbench::new(
+        vec![
+            (workbench::PanelId::View, view_panel.upcast()),
+            (workbench::PanelId::Parts, tree.root.clone().upcast()),
+            (workbench::PanelId::Files, file_list.root.clone().upcast()),
+            (workbench::PanelId::Details, details.upcast()),
+            (workbench::PanelId::Code, files.root.clone().upcast()),
+            (workbench::PanelId::Problems, problems.root.clone().upcast()),
+        ],
+        match &options.layout {
+            Some(path) => workbench::Remember::From(path.clone()),
+            None if options.window_screenshot.is_some() => workbench::Remember::Nothing,
+            None => workbench::Remember::Yours,
+        },
+    )?;
 
     let views = gtk::Stack::builder()
         .transition_type(gtk::StackTransitionType::Crossfade)
         .vexpand(true)
         .build();
-    views.add_named(&design_row, Some(View::Design.word()));
+    views.add_named(&workbench.root, Some(View::Design.word()));
     views.add_named(&chrome::cut_list_page(), Some(View::CutList.word()));
     views.set_visible_child_name(View::Design.word());
 
-    let banner = adw::Banner::new("");
     let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    content.append(&banner);
     content.append(&views);
     let toasts = adw::ToastOverlay::new();
     toasts.set_child(Some(&content));
@@ -3665,11 +3673,10 @@ fn build_widgets(application: &adw::Application, options: &Options) -> Widgets {
 
     // Narrower windows drop words first, then the finder's field (Ctrl+K
     // still opens it), the title, the open button and forward.
-    for (width, tiny) in [(1100.0, false), (860.0, false), (600.0, true)] {
+    for (width, tiny) in [(1200.0, false), (1100.0, false), (600.0, true)] {
         let narrow = breakpoint(width);
         narrow.add_setter(header.subtitle(), "visible", Some(&false.to_value()));
-        narrow.add_setter(&files.root, "width-request", Some(&360.to_value()));
-        if width < 1000.0 {
+        if width < 1150.0 {
             for label in header.switcher_labels() {
                 narrow.add_setter(label, "visible", Some(&false.to_value()));
             }
@@ -3690,18 +3697,19 @@ fn build_widgets(application: &adw::Application, options: &Options) -> Widgets {
 
     let finder = Finder::new();
 
-    Widgets {
+    Ok(Widgets {
         window,
         header,
         toasts,
-        banner,
         views,
         design,
         tree,
         inspector,
-        card,
+        details: details_box,
         dock,
-        editor_panel,
+        workbench,
+        problems,
+        file_list,
         hint,
         hint_box,
         edge_pin,
@@ -3722,6 +3730,63 @@ fn build_widgets(application: &adw::Application, options: &Options) -> Widgets {
         pictures,
         problem_card,
         files,
+    })
+}
+
+/// Floats the controls on the 3D view, each where `view_layout` puts it
+/// for the view's size and what is showing, so none covers another.
+fn float_on(figure: &gtk::Overlay, floating: Vec<(view_layout::Floating, gtk::Widget)>) {
+    for (_, widget) in &floating {
+        // The layout gives each its exact place: no margins of its own.
+        widget.set_halign(gtk::Align::Fill);
+        widget.set_valign(gtk::Align::Fill);
+        widget.set_margin_top(0);
+        widget.set_margin_bottom(0);
+        widget.set_margin_start(0);
+        widget.set_margin_end(0);
+        figure.add_overlay(widget);
+    }
+    let measured = Measured(floating);
+    figure.connect_get_child_position(move |figure, widget| {
+        let item = measured.item_of(widget)?;
+        let placement = view_layout::place(figure.width(), figure.height(), &measured);
+        // A control left out (hidden, or no room) takes no room either,
+        // so it can't catch the pointer meant for the view.
+        let rect = placement.get(item).unwrap_or(view_layout::Rect {
+            x: 0,
+            y: 0,
+            width: 0,
+            height: 0,
+        });
+        Some(gdk::Rectangle::new(rect.x, rect.y, rect.width, rect.height))
+    });
+}
+
+/// The floating controls, measured by GTK.
+struct Measured(Vec<(view_layout::Floating, gtk::Widget)>);
+
+impl Measured {
+    fn widget(&self, item: view_layout::Floating) -> Option<&gtk::Widget> {
+        self.0.iter().find(|(i, _)| *i == item).map(|(_, w)| w)
+    }
+
+    fn item_of(&self, widget: &gtk::Widget) -> Option<view_layout::Floating> {
+        self.0.iter().find(|(_, w)| w == widget).map(|(i, _)| *i)
+    }
+}
+
+impl view_layout::Measure for Measured {
+    fn widths(&self, item: view_layout::Floating) -> Option<(i32, i32)> {
+        let widget = self.widget(item).filter(|w| w.is_visible())?;
+        let (smallest, natural, _, _) = widget.measure(gtk::Orientation::Horizontal, -1);
+        (natural > 0).then_some((smallest, natural))
+    }
+
+    fn height(&self, item: view_layout::Floating, width: i32) -> i32 {
+        self.widget(item).map_or(0, |widget| {
+            let (_, natural, _, _) = widget.measure(gtk::Orientation::Vertical, width);
+            natural
+        })
     }
 }
 

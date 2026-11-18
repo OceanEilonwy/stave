@@ -218,7 +218,8 @@ impl Finder {
             finder.choose_row(row, Choice::Preview);
         });
         // Up and down in the field move through the list; Ctrl+Enter
-        // opens the text; Tab moves to the next filter.
+        // opens the text; Tab moves to the next filter; Esc closes the
+        // finder (the search field would only clear its text).
         let keys = gtk::EventControllerKey::new();
         keys.set_propagation_phase(gtk::PropagationPhase::Capture);
         let finder = Rc::downgrade(self);
@@ -234,6 +235,9 @@ impl Finder {
                     finder.choose_selected(Choice::OpenText);
                 }
                 gtk::gdk::Key::Tab => finder.next_filter(),
+                gtk::gdk::Key::Escape => {
+                    finder.dialog.close();
+                }
                 _ => return gtk::glib::Propagation::Proceed,
             }
             gtk::glib::Propagation::Stop

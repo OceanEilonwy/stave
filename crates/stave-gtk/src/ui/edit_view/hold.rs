@@ -400,10 +400,9 @@ impl Window {
     pub(in crate::ui) fn ask_hold(self: &Rc<Self>, first: Measured, second: Measured) {
         let now = self.session.borrow().measure(&first, &second);
         self.show_hint("");
-        self.widgets.card.set_visible(false);
         let card = &self.editing.hold.card;
         card.show(&first, &second, &now);
-        let rail = self.widgets.files.rail.width();
+        let rail = self.right_column();
         card.root.set_margin_end(
             super::super::EDGE
                 .saturating_add(rail)

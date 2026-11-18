@@ -296,17 +296,26 @@ impl Window {
     }
 
     /// The panels floating over the 3D view, in its pixels, that a handle
-    /// or a label must not cover: the parts list, the cards, the menu, the
-    /// line at the top, the dock and the editor's rail.
+    /// or a label must not cover: the view's own controls (the scene menu,
+    /// the camera column and Pull apart's slider, the moving assemblies'
+    /// chips, the motion slider, the line and the key at the top, the
+    /// cards and the chip at the foot) and the editing's menu and cards.
     pub(in crate::ui) fn floating_panels(&self) -> Vec<Rect> {
         let design = &self.widgets.design;
         let editing = &self.editing;
+        let widgets = &self.widgets;
         [
-            self.widgets.tree.root.upcast_ref::<gtk::Widget>(),
-            self.widgets.card.upcast_ref(),
-            self.widgets.dock.root.upcast_ref(),
-            self.widgets.hint_box.upcast_ref(),
-            self.widgets.files.rail.upcast_ref(),
+            widgets.dock.scene.upcast_ref::<gtk::Widget>(),
+            widgets.dock.moves.upcast_ref(),
+            widgets.camera.root.upcast_ref(),
+            widgets.view_toolbar.popout.upcast_ref(),
+            widgets.motion.root.upcast_ref(),
+            widgets.hint_box.upcast_ref(),
+            widgets.contact_key.upcast_ref(),
+            widgets.plan_switch.root.upcast_ref(),
+            widgets.step_card.root.upcast_ref(),
+            widgets.problem_card.root.upcast_ref(),
+            widgets.edge_pin.upcast_ref(),
             editing.menu.root.upcast_ref(),
             editing.card.root.upcast_ref(),
             editing.changes.card.root.upcast_ref(),

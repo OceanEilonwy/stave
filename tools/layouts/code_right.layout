@@ -1,0 +1,9 @@
+# The Code panel dragged to the right edge (canvas board B2).
+parts start 0 0
+files start 0 1
+details start 1 0
+code end 0 0
+problems bottom 0 0
+show start true
+show end true
+show bottom true

@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use stave_app::check::{self, Checked, Outcome};
-use stave_app::problems::{self, Category, Filter, ProblemEntry, ProblemsTree};
+use stave_app::problems::{self, Category, Filter, ProblemEntry, ProblemsTree, Role};
 use stave_app::session::{ProblemIndex, Selection};
 use stave_lang::Severity;
 
@@ -210,4 +210,49 @@ fn the_list_is_the_same_every_time() {
     let b = problems::tree(&several(), Filter::All);
     assert_eq!(a, b);
     assert!(started.elapsed().as_secs() < 120);
+}
+
+#[test]
+fn a_report_holds_everything_stave_check_prints() {
+    let checked = broken("dowels_overlap_too_little");
+    let report = problems::report(&checked, ProblemIndex(0)).expect("a report");
+    assert_eq!(report.heading(), "error[require]");
+    assert_eq!(
+        report.message,
+        "'seat_wide' fails: the parts overlap too little for these dowels"
+    );
+    let [primary, rule] = report.places.as_slice() else {
+        panic!("two places: {:?}", report.places);
+    };
+    assert_eq!(primary.role, Role::Primary);
+    assert_eq!(primary.shown, "project.stave:48:20");
+    assert_eq!(primary.location.line.get(), 48);
+    assert!(primary.location.path.ends_with("project.stave"));
+    assert_eq!(primary.before, "joint top_dowels : ");
+    assert_eq!(
+        primary.marked,
+        "dowel([side_l, side_r], into: top, count: 4)"
+    );
+    assert_eq!(primary.after, "");
+    assert_eq!(rule.role, Role::Secondary);
+    assert_eq!(rule.shown, "std/joinery/dowel.stave:25:3");
+    assert_eq!(rule.location.path, "std/joinery/dowel.stave");
+    assert_eq!(rule.message, "the kind's rule");
+    assert!(rule.marked.starts_with("require seat_wide"));
+    assert_eq!(
+        report.notes,
+        [
+            "for side_l and top in top_dowels",
+            "the rule measures 5.5mm and needs at least 16mm",
+            "the same for side_r and top in top_dowels",
+        ]
+    );
+    assert_eq!(
+        report.help.as_deref(),
+        Some(
+            "top covers only 5.5mm of side_l's 19mm end; move or resize top so it covers the whole end"
+        )
+    );
+    // One report per problem, in `stave check` order.
+    assert_eq!(problems::reports(&checked), vec![report]);
 }

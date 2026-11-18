@@ -109,6 +109,15 @@ pub const PULL_APART: Shape = stroke(
         "M12.5 6L14.5 8L12.5 10",
     ],
 );
+/// X-ray: a box drawn as if see-through, every edge showing.
+pub const XRAY: Shape = stroke(
+    1.5,
+    &[
+        "M2.5 5.5h8v8h-8z",
+        "M5.5 2.5h8v8h-8z",
+        "M2.5 5.5l3-3M10.5 5.5l3-3M10.5 13.5l3-3M2.5 13.5l3-3",
+    ],
+);
 /// Play: a triangle.
 pub const PLAY: Shape = Shape {
     view_box: 16.0,

@@ -637,16 +637,30 @@ pub fn render_diagnostic(sources: &SourceMap, diagnostic: &Diagnostic) -> String
     out
 }
 
-/// Where a label lands once lines are known.
-struct Placed<'a> {
-    label: &'a Label,
-    file: &'a SourceFile,
-    start: LineColumn,
-    /// Number of characters to underline on the start line, at least one.
-    width: usize,
+/// Where a label lands once lines are known: its file, the line and
+/// column it starts at, and how many characters [`render_diagnostic`]
+/// underlines on that line. Viewers use it to show a diagnostic the way
+/// the renderer prints it, without parsing the text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Placement<'a> {
+    /// The file the label is in.
+    pub file: &'a SourceFile,
+    /// Where the label starts.
+    pub start: LineColumn,
+    /// The number of characters underlined on the start line, at least one
+    /// (to the end of the line for a span that runs onto later lines).
+    pub width: usize,
 }
 
-fn place<'a>(sources: &'a SourceMap, label: &'a Label) -> Option<Placed<'a>> {
+impl Placement<'_> {
+    /// The start line's text, without its line ending.
+    pub fn line_text(&self) -> &str {
+        self.file.line_text(self.start.line)
+    }
+}
+
+/// Places a label in its file, or `None` when the file isn't in the map.
+pub fn place_label<'a>(sources: &'a SourceMap, label: &Label) -> Option<Placement<'a>> {
     let file = sources.get(label.file)?;
     let start = file.line_column(label.span.start());
     let end = file.line_column(label.span.end());
@@ -656,11 +670,29 @@ fn place<'a>(sources: &'a SourceMap, label: &'a Label) -> Option<Placed<'a>> {
     } else {
         line_chars.saturating_add(1)
     };
-    Some(Placed {
-        label,
+    Some(Placement {
         file,
         start,
         width: last_column.saturating_sub(start.column).max(1),
+    })
+}
+
+/// Where a label lands, with the label.
+struct Placed<'a> {
+    label: &'a Label,
+    file: &'a SourceFile,
+    start: LineColumn,
+    /// Number of characters to underline on the start line, at least one.
+    width: usize,
+}
+
+fn place<'a>(sources: &'a SourceMap, label: &'a Label) -> Option<Placed<'a>> {
+    let placement = place_label(sources, label)?;
+    Some(Placed {
+        label,
+        file: placement.file,
+        start: placement.start,
+        width: placement.width,
     })
 }
 

@@ -70,6 +70,10 @@ struct Arguments {
     /// Open the finder (Ctrl+K) with this typed.
     #[arg(long, value_name = "TEXT")]
     finder: Option<String>,
+    /// Lay the panels out as this layout file says (the form Stave keeps
+    /// in ~/.config/stave/layout), without reading or writing that file.
+    #[arg(long, value_name = "FILE")]
+    layout: Option<std::path::PathBuf>,
     /// Open this file in the editor, at a line: `doors.stave:9` (relative
     /// to the folder, or `std/joinery/dado.stave`).
     #[arg(long, value_name = "FILE[:LINE]")]
@@ -317,6 +321,7 @@ fn main() -> ExitCode {
             editor: arguments.editor || arguments.view.1 || arguments.file.is_some(),
             finder: arguments.finder,
             xray: arguments.xray,
+            layout: arguments.layout,
             theme: arguments.theme,
             window_screenshot: arguments.window_screenshot,
             size: arguments.size.unwrap_or((1440, 900)),

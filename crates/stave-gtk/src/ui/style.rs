@@ -94,14 +94,15 @@ button.stave-lens-link { min-height: 0; min-width: 0; padding: 0 2px; font-weigh
 .stave-empty-description { font-size: 14px; }
 .stave-stage.page .stave-figure { border-radius: 14px; }
 .stave-toolbar { padding: 4px; border-radius: 12px; border-spacing: 4px; }
-.stave-toolbar button.stave-tool { min-height: 32px; padding: 0 12px; border-radius: 8px; font-size: 13px; font-weight: 600; }
-.stave-toolbar button.stave-tool box { border-spacing: 6px; }
-.stave-toolbar .stave-tool-separator { min-width: 1px; margin: 6px 0; }
-.stave-toolbar button.stave-tool-play { min-width: 32px; min-height: 32px; padding: 0; }
 .stave-tool-slider { padding: 4px 10px 2px 2px; }
 .stave-tool-end { font-size: 11px; }
 .stave-camera { padding: 4px; border-radius: 10px; }
 .stave-camera button { min-width: 32px; min-height: 32px; padding: 0; border-radius: 7px; }
+.stave-camera.joined { border-bottom-left-radius: 0; }
+.stave-camera-separator { min-height: 1px; margin: 2px 4px; }
+.stave-pull-popout { padding: 4px 6px 4px 4px; border-radius: 10px 0 0 10px; border-spacing: 4px; }
+.stave-moves { padding: 4px 6px 4px 10px; border-radius: 12px; }
+.stave-moves .stave-dock-label { min-height: 30px; padding: 0 2px 0 0; }
 .stave-contact-key { padding: 6px 12px; border-radius: 14px; font-size: 12px; font-weight: 600; }
 .stave-plan-switch { padding: 3px; border-radius: 10px; }
 .stave-plan-switch button { min-width: 34px; min-height: 30px; padding: 0; border-radius: 7px; }
@@ -131,6 +132,13 @@ button.stave-close { min-width: 28px; min-height: 28px; padding: 0; }
 .stave-eyebrow.stave-eyebrow-bold, .stave-eyebrow.stave-problem-eyebrow { font-weight: 700; letter-spacing: 0.02em; }
 .stave-problem-title { font-size: 19px; }
 .stave-code.stave-diagnostic { padding: 14px; font-size: 11.5px; }
+.stave-problem-row { padding: 4px 0; }
+.stave-problem-heading { font-weight: 600; }
+.stave-problem-code { font-family: "JetBrains Mono", "Adwaita Mono", monospace; font-size: 11.5px; font-weight: 700; }
+.stave-problem-place { font-family: "JetBrains Mono", "Adwaita Mono", monospace; font-size: 11.5px; padding: 0 2px; min-height: 20px; }
+.stave-code.stave-problem-snippet { padding: 6px 10px; border-radius: 8px; font-size: 11.5px; }
+.stave-problem-note, .stave-problem-help { font-size: 12.5px; }
+.stave-problems-stale { padding: 8px 12px 2px 12px; }
 .stave-number { min-width: 22px; min-height: 22px; border-radius: 11px; font-size: 12px; font-weight: 700; }
 .stave-card > .stave-card-row.stave-toggle-row { padding: 10px 14px; }
 .stave-card > .stave-card-row.compact { padding: 8px 14px; }
@@ -147,17 +155,19 @@ expander.stave-more title > arrow { min-width: 12px; min-height: 12px; }
 .stave-mark.warning { border-radius: 2px; }
 .stave-card-panel { border-radius: 16px; }
 .stave-card-panel .stave-inspector { padding: 14px 16px; }
-.stave-dock { padding: 6px; border-radius: 14px; border-spacing: 6px; font-size: 13px; }
+.stave-dock { padding: 4px 8px; border-spacing: 6px; font-size: 13px; }
 .stave-dock button.stave-tool { min-height: 34px; padding: 0 12px; border-radius: 9px; font-weight: 600; }
 .stave-dock .stave-dock-separator { min-width: 1px; margin: 6px 2px; }
 .stave-dock .stave-dock-label { font-size: 12px; padding: 0 4px; }
 .stave-dock button.stave-move { min-height: 30px; padding: 0 10px; border-radius: 15px; font-size: 12px; font-weight: 600; }
-.stave-rail { padding: 4px; border-radius: 12px 0 0 12px; border-spacing: 4px; min-width: 36px; }
-.stave-rail button.stave-rail-button { min-width: 36px; min-height: 36px; padding: 0; border-radius: 8px; }
-.stave-rail button.stave-rail-tab { min-width: 36px; padding: 12px 0; border-radius: 8px; font-size: 12.5px; font-weight: 500; }
-.stave-rail button.stave-rail-tab.active { font-weight: 700; }
-.stave-rail-name { font-family: "JetBrains Mono", "Adwaita Mono", monospace; }
-.stave-editor-panel { min-width: 420px; }
+.stave-code-tabs { padding: 4px 6px; border-spacing: 2px; }
+button.stave-code-tab { min-height: 28px; padding: 0 10px; border-radius: 7px; font-size: 12.5px; font-weight: 500; }
+button.stave-code-tab.active { font-weight: 700; }
+.stave-code-tab-name { font-family: "JetBrains Mono", "Adwaita Mono", monospace; }
+.stave-panel-list row { padding: 6px 10px; }
+.stave-panel-empty { padding: 16px; }
+.stave-status-text { font-size: 12px; padding: 0 8px; }
+.stave-model .stave-tree { background: transparent; }
 .stave-editor-head { min-height: 44px; padding: 0 8px 0 16px; }
 .stave-editor-title { font-family: "JetBrains Mono", "Adwaita Mono", monospace; font-size: 13px; font-weight: 600; }
 button.stave-problem-step { min-width: 28px; min-height: 28px; padding: 0; border-radius: 14px; }
@@ -186,15 +196,35 @@ button.stave-problem-step { min-width: 28px; min-height: 28px; padding: 0; borde
 /// with an edge, on the dark style's dark panels).
 const COLOURS: &str = r#"
 .stave-header { background: @headerbar_bg_color; color: @headerbar_fg_color; box-shadow: inset 0 -1px @headerbar_shade_color; }
+/* Solid whether or not the window has focus: libadwaita fades an
+   unfocused window's header bar, which let the desktop show through. */
+headerbar.stave-header:backdrop { background-color: @headerbar_bg_color; transition: none; }
+headerbar.stave-header:backdrop > windowhandle { filter: none; }
+window.stave-window { background-color: @window_bg_color; }
+/* The panels' headers (TabStrip): a slim strip of flush tabs, as in an
+   IDE; the shown tab carries an accent line, the others are dimmer. */
+stavetabstrip { min-height: 28px; background: @headerbar_bg_color; color: @headerbar_fg_color; box-shadow: inset 0 -1px @headerbar_shade_color; }
+stavetabstrip .stave-tab { border-radius: 0; color: alpha(currentColor, 0.65); }
+stavetabstrip .stave-tab:hover { background: alpha(currentColor, 0.05); color: currentColor; }
+stavetabstrip .stave-tab.shown { color: currentColor; background: alpha(currentColor, 0.06); box-shadow: inset 0 -2px @accent_bg_color; }
+stavetabstrip button.stave-tab-show { min-height: 28px; padding: 0 4px 0 10px; border-radius: 0; background: transparent; color: inherit; font-size: 12px; font-weight: 600; }
+stavetabstrip button.stave-tab-show image { -gtk-icon-size: 14px; }
+stavetabstrip button.stave-tab-close { min-height: 18px; min-width: 18px; margin: 0 6px 0 0; padding: 0; border-radius: 4px; opacity: 0; }
+stavetabstrip .stave-tab.shown button.stave-tab-close, stavetabstrip .stave-tab:hover button.stave-tab-close { opacity: 0.7; }
+stavetabstrip button.stave-tab-close:hover { opacity: 1; background: alpha(currentColor, 0.1); }
+stavetabstrip button.stave-tab-close image { -gtk-icon-size: 12px; }
+stavetabstrip .stave-tab-end button { min-height: 24px; min-width: 24px; padding: 0; margin: 2px 4px; border-radius: 5px; }
 .stave-header button.stave-icon-button:disabled { color: alpha(currentColor, 0.45); }
 .stave-header button.stave-sidebar-toggle:checked { background: alpha(currentColor, 0.1); }
 .stave-title .subtitle, .dim { color: alpha(currentColor, 0.7); }
 menubutton.stave-scene > button { background: alpha(currentColor, 0.08); }
 menubutton.stave-scene > button:hover { background: alpha(currentColor, 0.12); }
-button.stave-pill.clean { background: alpha(@success_color, 0.15); color: @success_color; }
-button.stave-pill.warnings { background: alpha(@warning_color, 0.18); color: @warning_color; }
-button.stave-pill.errors { background: alpha(@error_color, 0.14); color: @error_color; }
-button.stave-pill.unknown { background: alpha(currentColor, 0.08); color: alpha(currentColor, 0.7); }
+.stave-scene-float menubutton.stave-scene > button { background: transparent; }
+.stave-scene-float menubutton.stave-scene > button:hover { background: alpha(currentColor, 0.07); }
+.stave-problems-chip.clean button.stave-pill { background: alpha(@success_color, 0.15); color: @success_color; }
+.stave-problems-chip.warnings button.stave-pill { background: alpha(@warning_color, 0.18); color: @warning_color; }
+.stave-problems-chip.errors button.stave-pill { background: alpha(@error_color, 0.14); color: @error_color; }
+.stave-problems-chip.unknown button.stave-pill { background: alpha(currentColor, 0.08); color: alpha(currentColor, 0.7); }
 button.stave-build { background: @accent_bg_color; color: @accent_fg_color; }
 button.stave-build:hover { background: mix(@accent_bg_color, @accent_fg_color, 0.1); }
 button.stave-build:disabled { background: alpha(currentColor, 0.08); color: alpha(@headerbar_fg_color, 0.45); }
@@ -253,11 +283,14 @@ button.stave-lens-link:hover { background: alpha(@accent_color, 0.1); }
 .stave-empty-icon, .stave-empty-description { opacity: 0.75; }
 .stave-toolbar, .stave-plan-switch { background: alpha(@view_bg_color, 0.92); color: @view_fg_color; box-shadow: 0 1px 6px alpha(black, 0.1); }
 .stave-camera { background: alpha(@view_bg_color, 0.88); color: @view_fg_color; }
+.stave-camera button:hover { background: alpha(currentColor, 0.07); }
+.stave-camera button:checked { background: alpha(@accent_bg_color, 0.2); color: @accent_color; }
+.stave-camera button.stave-tool-play { color: @accent_color; }
+.stave-camera-separator { background: alpha(currentColor, 0.15); }
+.stave-moves { background: alpha(@view_bg_color, 0.92); color: @view_fg_color; box-shadow: 0 1px 6px alpha(black, 0.1); }
 .stave-toolbar button.stave-tool, .stave-plan-switch button { background: transparent; color: inherit; }
 .stave-toolbar button.stave-tool:hover, .stave-plan-switch button:hover { background: alpha(currentColor, 0.07); }
 .stave-toolbar button.stave-tool:checked, .stave-plan-switch button:checked { background: alpha(@accent_bg_color, 0.2); color: @accent_color; }
-.stave-toolbar .stave-tool-separator { background: alpha(currentColor, 0.15); }
-.stave-toolbar button.stave-tool-play { color: @accent_color; }
 .stave-slider { color: @accent_bg_color; }
 .stave-tool-end, .stave-card-dim { color: alpha(currentColor, 0.7); }
 .stave-contact-key { background: alpha(@view_bg_color, 0.9); color: @error_color; }
@@ -274,6 +307,12 @@ button.stave-play:hover { background: mix(@accent_bg_color, @accent_fg_color, 0.
 .stave-problem-icon.error { color: @error_color; }
 .stave-problem-icon.warning { color: @warning_color; }
 .stave-problem-icon.note { color: alpha(currentColor, 0.7); }
+.stave-problem-code.error { color: @error_color; }
+.stave-problem-code.warning { color: @warning_color; }
+.stave-problem-note { color: alpha(currentColor, 0.75); }
+.stave-problem-help { color: @success_color; }
+.stave-panel-list, .stave-problems-stale { color: @window_fg_color; }
+.stave-panel-list > row:selected { background: alpha(@accent_bg_color, 0.14); color: @window_fg_color; }
 .stave-problem-places { color: @accent_color; }
 .stave-eyebrow.stave-problem-eyebrow.error { color: @error_color; }
 .stave-eyebrow.stave-problem-eyebrow.warning { color: @warning_color; }
@@ -281,7 +320,7 @@ button.stave-play:hover { background: mix(@accent_bg_color, @accent_fg_color, 0.
 .stave-card .stave-value.good { color: @success_color; }
 .stave-card .stave-value.bad { color: @error_color; }
 
-.stave-panel, .stave-dock, .stave-rail, .stave-edge-pin, .stave-pin-label { background: alpha(@view_bg_color, 0.95); color: @view_fg_color; box-shadow: 0 2px 12px alpha(black, 0.12); }
+.stave-panel, .stave-edge-pin, .stave-pin-label { background: alpha(@view_bg_color, 0.95); color: @view_fg_color; box-shadow: 0 2px 12px alpha(black, 0.12); }
 .stave-card-panel { background: @view_bg_color; color: @view_fg_color; box-shadow: 0 0 0 1px alpha(black, 0.08), 0 10px 32px alpha(black, 0.18); }
 .stave-joint-word { background: alpha(currentColor, 0.1); }
 .stave-mark.error { background: @error_color; }
@@ -296,11 +335,11 @@ button.stave-play:hover { background: mix(@accent_bg_color, @accent_fg_color, 0.
 .stave-dock button.stave-move.error { box-shadow: inset 0 0 0 1px alpha(@error_color, 0.6); }
 .stave-dock button.stave-move.warning { box-shadow: inset 0 0 0 1px alpha(@warning_color, 0.7); }
 .stave-dock button.stave-move.current { background: alpha(@accent_bg_color, 0.2); color: @accent_color; }
-.stave-rail { box-shadow: -2px 0 12px alpha(black, 0.14); }
-.stave-rail button.stave-rail-tab { background: transparent; color: alpha(currentColor, 0.8); }
-.stave-rail button.stave-rail-tab:hover { background: alpha(currentColor, 0.07); }
-.stave-rail button.stave-rail-tab.active { background: alpha(@accent_bg_color, 0.2); color: @accent_color; }
-.stave-editor-panel { background: @view_bg_color; box-shadow: -8px 0 28px alpha(black, 0.16); }
+.stave-code-head { background: @headerbar_bg_color; box-shadow: inset 0 -1px @headerbar_shade_color; }
+button.stave-code-tab { background: transparent; color: alpha(currentColor, 0.8); }
+button.stave-code-tab:hover { background: alpha(currentColor, 0.07); }
+button.stave-code-tab.active { background: alpha(@accent_bg_color, 0.2); color: @accent_color; }
+.stave-editor-column, .stave-details { background: @view_bg_color; color: @view_fg_color; }
 .stave-editor-head { background: @headerbar_bg_color; border-bottom: 1px solid alpha(currentColor, 0.1); }
 .stave-pin { background: @error_bg_color; color: @error_fg_color; box-shadow: 0 0 0 4px alpha(@error_bg_color, 0.22); }
 .stave-pin.warning { background: @warning_bg_color; color: @warning_fg_color; box-shadow: 0 0 0 4px alpha(@warning_bg_color, 0.25); }
@@ -451,6 +490,24 @@ mod tests {
                 let ratio = contrast(colour, background);
                 assert!(ratio >= 4.5, "{colour} on {background}: {ratio:.2}:1");
             }
+        }
+    }
+
+    /// The header puts its tone class (`errors`, `warnings`...) on the
+    /// chip round the pill, so the pill's colours must be keyed on the
+    /// chip: keyed on the pill itself they never apply and an error shows
+    /// grey.
+    #[test]
+    fn the_problems_pill_takes_its_colour_from_the_chip() {
+        for tone in ["clean", "warnings", "errors", "unknown"] {
+            assert!(
+                COLOURS.contains(&format!(".stave-problems-chip.{tone} button.stave-pill {{")),
+                "{tone}"
+            );
+            assert!(
+                !COLOURS.contains(&format!("button.stave-pill.{tone}")),
+                "{tone}"
+            );
         }
     }
 }

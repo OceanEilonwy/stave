@@ -739,7 +739,7 @@ impl Window {
         };
         card.show(&words);
         card.root.set_visible(true);
-        let rail = self.widgets.files.rail.width();
+        let rail = self.right_column();
         card.root.set_margin_end(
             super::super::EDGE
                 .saturating_add(rail)

@@ -13,7 +13,7 @@
 //! hold try                             its "Try it"
 //! remove                               Delete on the selection
 //! include dependants                   the removal's dialog: remove them too
-//! rename <name>                        the item's name retyped on its card
+//! rename <name>                        the item's name retyped in Details
 //! finder <text>                        Ctrl+K with the text typed (the finder stays open)
 //! do <text>                            Ctrl+K, the text, Enter: the first verb listed is run
 //! ```

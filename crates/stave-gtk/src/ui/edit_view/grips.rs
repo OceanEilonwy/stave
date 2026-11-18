@@ -567,12 +567,8 @@ impl Window {
         let widgets = &self.widgets;
         let editing = &self.editing;
         for floating in [
-            widgets.tree.root.upcast_ref::<gtk::Widget>(),
-            widgets.card.upcast_ref(),
-            widgets.dock.root.upcast_ref(),
-            widgets.hint_box.upcast_ref(),
+            widgets.hint_box.upcast_ref::<gtk::Widget>(),
             widgets.edge_pin.upcast_ref(),
-            widgets.files.rail.upcast_ref(),
             editing.menu.root.upcast_ref(),
             editing.card.root.upcast_ref(),
             editing.verdict.upcast_ref(),
@@ -1678,7 +1674,7 @@ impl Window {
             f64::from(self.widgets.design.height()),
         );
         let edge = f64::from(EDGE);
-        let rail = f64::from(self.widgets.files.rail.width());
+        let rail = f64::from(self.right_column());
         for (place, marks) in state.places.iter().zip(&state.marks) {
             let listed = session
                 .grips()
@@ -1758,7 +1754,6 @@ impl Window {
         let cards: Vec<Rect> = [
             self.editing.menu.root.upcast_ref::<gtk::Widget>(),
             self.editing.card.root.upcast_ref(),
-            self.widgets.card.upcast_ref(),
         ]
         .into_iter()
         .filter(|card| card.is_visible())
@@ -1857,7 +1852,7 @@ impl Window {
             f64::from(self.widgets.design.height()),
         );
         let edge = f64::from(EDGE);
-        let rail = f64::from(self.widgets.files.rail.width());
+        let rail = f64::from(self.right_column());
         // Beside the handle, level with it, inside the view and clear of
         // the dock at the bottom.
         let (x, y) = at.map_or((view_width - width - rail - 2.0 * edge, edge), |(x, y)| {
@@ -1872,43 +1867,6 @@ impl Window {
         let x = x.min(right_most).max(edge);
         let y = y.min(view_height - height - 96.0).max(edge);
         put(&grips.panel.root, x, y);
-    }
-
-    /// `true` while the grips of a selected assembly are drawn and its
-    /// card has none of the item's changes to offer: they take the place
-    /// of the card, which would cover them (the tree still says what is
-    /// selected). While the item's changes can be offered (the text
-    /// reads), the card carries them, so it stays, beside the grips, as a
-    /// part's card does.
-    pub(in crate::ui) fn grips_take_the_card(&self) -> bool {
-        let state = self.editing.grips.state.borrow();
-        matches!(state.shown_for, Some(GripSelection::Assembly(_)))
-            && !state.marks.is_empty()
-            && matches!(
-                self.session.borrow().selection(),
-                Some(Selection::Assembly(_))
-            )
-            && !self.gestures_allowed()
-    }
-
-    /// Where the part's card stands beside the selection: right of the
-    /// grips drawn on it, so the card never covers a handle or a number.
-    pub(in crate::ui) fn beside_grips(&self, (x, y): (f32, f32)) -> (f32, f32) {
-        let grips = &self.editing.grips;
-        if !grips.area.is_visible() {
-            return (x, y);
-        }
-        let mut right = f64::from(x);
-        for marks in &grips.state.borrow().marks {
-            for widget in [&marks.handle, marks.label.upcast_ref()] {
-                if widget.is_visible()
-                    && let Some(bounds) = widget.compute_bounds(&self.widgets.design)
-                {
-                    right = right.max(f64::from(bounds.x() + bounds.width()));
-                }
-            }
-        }
-        (crate::convert::f32_of(right), y)
     }
 
     // ---- driving it without a pointer (screenshots) ----

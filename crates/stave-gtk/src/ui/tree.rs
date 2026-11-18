@@ -47,14 +47,11 @@ enum RowKind {
     Source(SourceLocation),
 }
 
-/// The model tree's floating panel.
+/// The Parts panel's tree.
 pub struct TreeSidebar {
-    /// The panel, to float over the 3D view.
+    /// The panel's content.
     pub root: gtk::Box,
-    /// Folds the panel down to its heading, or opens it again.
-    pub collapse: gtk::Button,
     list: gtk::ListBox,
-    body: gtk::Box,
     state: Rc<RefCell<TreeState>>,
 }
 
@@ -68,8 +65,11 @@ struct TreeState {
     selection: Option<Selection>,
     /// The latest check's marks, for the dots.
     marks: Marks,
-    /// The joints the selected part is in, shown under its row.
-    joints: Vec<(Target, String)>,
+    /// The part whose joints are listed under its row, and those joints.
+    listing: Listing,
+    /// The joint row being activated, while its callback runs: the
+    /// selection it makes keeps the joints listed where it was clicked.
+    clicked: Option<Target>,
     /// Why there are no parts, when there are none.
     empty: Option<EmptyState>,
     /// What an empty tree says instead of "Nothing to show yet" (a new
@@ -101,52 +101,17 @@ impl TreeSidebar {
         list.update_property(&[gtk::accessible::Property::Label("Model")]);
         let scrolled = gtk::ScrolledWindow::builder()
             .hscrollbar_policy(gtk::PolicyType::Never)
-            .propagate_natural_height(true)
-            .max_content_height(520)
+            .vexpand(true)
             .child(&list)
             .build();
-        let heading = gtk::Label::builder()
-            .label("MODEL")
-            .xalign(0.0)
-            .hexpand(true)
-            .css_classes(["dim-label"])
-            .build();
-        let collapse = gtk::Button::builder()
-            .icon_name("go-up-symbolic")
-            .tooltip_text("Fold the model tree (F9)")
-            .css_classes(["flat", "circular", "stave-close"])
-            .build();
-        let head = gtk::Box::builder()
-            .orientation(gtk::Orientation::Horizontal)
-            .css_classes(["stave-model-head"])
-            .build();
-        head.append(&heading);
-        head.append(&collapse);
-        let note = gtk::Label::builder()
-            .label("Click a row and the camera frames it. Find files with Ctrl+K.")
-            .xalign(0.0)
-            .wrap(true)
-            .css_classes(["dim-label", "stave-model-note"])
-            .build();
-        let body = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
-            .build();
-        body.append(&scrolled);
-        body.append(&note);
         let root = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
-            .css_classes(["stave-panel", "stave-model"])
-            .width_request(240)
-            .halign(gtk::Align::Start)
-            .valign(gtk::Align::Start)
+            .css_classes(["stave-model"])
             .build();
-        root.append(&head);
-        root.append(&body);
+        root.append(&scrolled);
         let sidebar = TreeSidebar {
             root,
-            collapse,
             list,
-            body,
             state: Rc::new(RefCell::new(TreeState::default())),
         };
         sidebar.connect();
@@ -154,21 +119,6 @@ impl TreeSidebar {
     }
 
     fn connect(&self) {
-        let body = self.body.clone();
-        self.collapse.connect_clicked(move |button| {
-            let open = !body.is_visible();
-            body.set_visible(open);
-            button.set_icon_name(if open {
-                "go-up-symbolic"
-            } else {
-                "go-down-symbolic"
-            });
-            button.set_tooltip_text(Some(if open {
-                "Fold the model tree (F9)"
-            } else {
-                "Open the model tree (F9)"
-            }));
-        });
         let state = self.state.clone();
         let list = self.list.clone();
         self.list.connect_row_activated(move |_, row| {
@@ -196,7 +146,12 @@ impl TreeSidebar {
                             .iter()
                             .find_map(|node| find(node, id))
                             .is_some_and(|node| {
-                                is_open(node, &state.toggled, state.selection.as_ref())
+                                is_open(
+                                    node,
+                                    &state.toggled,
+                                    state.selection.as_ref(),
+                                    state.listing.under,
+                                )
                             });
                         state.toggled.insert(id, !open);
                     }
@@ -209,7 +164,9 @@ impl TreeSidebar {
                 Some(RowKind::Joint(target)) => {
                     let callback = state.borrow().on_focus.clone();
                     if let Some(callback) = callback {
+                        state.borrow_mut().clicked = Some(target);
                         callback(target);
+                        state.borrow_mut().clicked = None;
                     }
                 }
                 Some(RowKind::Source(location)) => {
@@ -306,20 +263,76 @@ impl TreeSidebar {
     }
 
     /// Highlights the selection's row and lists the joints the selected
-    /// part is in under it.
+    /// part is in under it. Choosing one of those joints keeps them listed
+    /// under the same part, and then the rows are left as they are, so
+    /// nothing shuts and the list does not move.
     pub fn show_selection(&self, selection: Option<&Selection>, joints: Vec<(Target, String)>) {
-        {
+        let same_rows = {
             let mut state = self.state.borrow_mut();
+            let listing = state.listing.next(selection, joints, state.clicked);
+            let was_open = open_assemblies(
+                &state.tree.assemblies,
+                &state.toggled,
+                state.selection.as_ref(),
+                state.listing.under,
+            );
+            let now_open = open_assemblies(
+                &state.tree.assemblies,
+                &state.toggled,
+                selection,
+                listing.under,
+            );
+            let same_rows = listing == state.listing && was_open == now_open;
             state.selection = selection.cloned();
-            state.joints = joints;
+            state.listing = listing;
+            same_rows
+        };
+        if same_rows {
+            sync_selection(&self.list, &self.state);
+        } else {
+            // The assembly holding it opens.
+            fill(&self.list, &self.state);
         }
-        // The assembly holding it opens.
-        fill(&self.list, &self.state);
     }
+}
 
-    /// Folds the panel down to its heading, or opens it again (F9).
-    pub fn toggle(&self) {
-        self.collapse.emit_clicked();
+/// The part whose joints the tree lists under its row, and those joints.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct Listing {
+    /// The part (or piece of hardware, or member) they are under.
+    under: Option<stave_scene::Item>,
+    /// The joints, with their titles.
+    joints: Vec<(Target, String)>,
+}
+
+impl Listing {
+    /// The listing once `selection` is chosen, whose own joints are
+    /// `joints`. Choosing one of the listed joints keeps the listing: the
+    /// joint stays under the part it was chosen under rather than moving
+    /// to (or vanishing with) the selection. A joint pair is not a part, so
+    /// choosing one keeps it wherever it was chosen from; a piece of
+    /// hardware is, so it keeps the listing only when its row under the
+    /// part was the one `clicked`.
+    fn next(
+        &self,
+        selection: Option<&Selection>,
+        joints: Vec<(Target, String)>,
+        clicked: Option<Target>,
+    ) -> Listing {
+        let chosen_here = selection.is_some_and(|selection| {
+            self.joints.iter().any(|(target, _)| {
+                Selection::of_target(*target) == *selection
+                    && (selection.item().is_none() || clicked == Some(*target))
+            })
+        });
+        if chosen_here {
+            self.clone()
+        } else {
+            Listing {
+                under: selection.and_then(Selection::item),
+                joints,
+            }
+        }
     }
 }
 
@@ -334,7 +347,7 @@ fn fill(list: &gtk::ListBox, state: &Rc<RefCell<TreeState>>) {
     let shown = Shown {
         selection: state_ref.selection.as_ref(),
         marks: &state_ref.marks,
-        joints: &state_ref.joints,
+        listing: &state_ref.listing,
     };
     let mut rows = Vec::new();
     if !tree.carcass.is_empty() {
@@ -389,25 +402,50 @@ fn sync_selection(list: &gtk::ListBox, state: &Rc<RefCell<TreeState>>) {
     let mut state = state.borrow_mut();
     let was = state.syncing;
     state.syncing = true;
-    let selected = state.selection.as_ref().and_then(|selection| {
-        state.rows.iter().find_map(|(row, kind)| match kind {
-            RowKind::Entry { items, .. }
-                if selection.item().is_some_and(|item| items.contains(&item)) =>
-            {
-                Some(row.clone())
-            }
-            RowKind::Assembly(id) if *selection == Selection::Assembly(*id) => Some(row.clone()),
-            RowKind::Source(location) if *selection == Selection::Location(location.clone()) => {
-                Some(row.clone())
-            }
-            RowKind::Joint(target) if *selection == Selection::of_target(*target) => {
-                Some(row.clone())
-            }
-            RowKind::Entry { .. }
-            | RowKind::Assembly(_)
-            | RowKind::Joint(_)
-            | RowKind::Source(_)
-            | RowKind::Heading => None,
+    // A joint chosen under a part is highlighted there, even when what it
+    // selects (a piece of hardware) has a row of its own too.
+    let under_part = state.listing.under != state.selection.as_ref().and_then(Selection::item);
+    let joint_row = state
+        .selection
+        .as_ref()
+        .filter(|_| under_part)
+        .and_then(|selection| {
+            state.rows.iter().find_map(|(row, kind)| match kind {
+                RowKind::Joint(target) if *selection == Selection::of_target(*target) => {
+                    Some(row.clone())
+                }
+                RowKind::Joint(_)
+                | RowKind::Entry { .. }
+                | RowKind::Assembly(_)
+                | RowKind::Source(_)
+                | RowKind::Heading => None,
+            })
+        });
+    let selected = joint_row.or_else(|| {
+        state.selection.as_ref().and_then(|selection| {
+            state.rows.iter().find_map(|(row, kind)| match kind {
+                RowKind::Entry { items, .. }
+                    if selection.item().is_some_and(|item| items.contains(&item)) =>
+                {
+                    Some(row.clone())
+                }
+                RowKind::Assembly(id) if *selection == Selection::Assembly(*id) => {
+                    Some(row.clone())
+                }
+                RowKind::Source(location)
+                    if *selection == Selection::Location(location.clone()) =>
+                {
+                    Some(row.clone())
+                }
+                RowKind::Joint(target) if *selection == Selection::of_target(*target) => {
+                    Some(row.clone())
+                }
+                RowKind::Entry { .. }
+                | RowKind::Assembly(_)
+                | RowKind::Joint(_)
+                | RowKind::Source(_)
+                | RowKind::Heading => None,
+            })
         })
     });
     match selected {
@@ -421,7 +459,7 @@ fn sync_selection(list: &gtk::ListBox, state: &Rc<RefCell<TreeState>>) {
 struct Shown<'a> {
     selection: Option<&'a Selection>,
     marks: &'a Marks,
-    joints: &'a [(Target, String)],
+    listing: &'a Listing,
 }
 
 /// The rows that say why there are no parts: a line, then for a library
@@ -524,7 +562,9 @@ fn entry_rows(
     shown: &Shown<'_>,
     rows: &mut Vec<(gtk::ListBoxRow, RowKind)>,
 ) {
-    let selected = shown.selection.and_then(Selection::item);
+    // The part the joints are listed under: the selection, or the part a
+    // chosen joint was listed under.
+    let selected = shown.listing.under;
     let split = entry.items.len() > 1
         && selected.is_some_and(|item| entry.items.iter().any(|i| *i == item));
     if split {
@@ -544,7 +584,7 @@ fn entry_rows(
                 mark,
             ));
             if selected == Some(*item) {
-                joint_rows(shown.joints, depth, rows);
+                joint_rows(&shown.listing.joints, depth, rows);
             }
         }
     } else {
@@ -557,7 +597,7 @@ fn entry_rows(
             shown.marks.entry(entry),
         ));
         if selected.is_some_and(|item| entry.items.iter().any(|i| *i == item)) {
-            joint_rows(shown.joints, depth, rows);
+            joint_rows(&shown.listing.joints, depth, rows);
         }
     }
 }
@@ -662,7 +702,7 @@ fn assembly_rows(
     shown: &Shown<'_>,
     rows: &mut Vec<(gtk::ListBoxRow, RowKind)>,
 ) {
-    let open = is_open(node, toggled, shown.selection);
+    let open = is_open(node, toggled, shown.selection, shown.listing.under);
     let content = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
         .css_classes(["stave-assembly"])
@@ -720,16 +760,35 @@ fn find(node: &AssemblyNode, id: AssemblyId) -> Option<&AssemblyNode> {
 }
 
 /// Whether an assembly's rows show: as the user left it, or open when it
-/// holds the selection.
+/// holds the selection or the part whose joints are listed (`under`).
 fn is_open(
     node: &AssemblyNode,
     toggled: &BTreeMap<AssemblyId, bool>,
     selection: Option<&Selection>,
+    under: Option<stave_scene::Item>,
 ) -> bool {
-    toggled
-        .get(&node.id)
-        .copied()
-        .unwrap_or_else(|| selection.is_some_and(|s| holds(node, s)))
+    toggled.get(&node.id).copied().unwrap_or_else(|| {
+        selection.is_some_and(|s| holds(node, s))
+            || under.is_some_and(|item| holds(node, &Selection::of_item(item)))
+    })
+}
+
+/// The assemblies whose rows show, in tree order.
+fn open_assemblies(
+    nodes: &[AssemblyNode],
+    toggled: &BTreeMap<AssemblyId, bool>,
+    selection: Option<&Selection>,
+    under: Option<stave_scene::Item>,
+) -> Vec<AssemblyId> {
+    let mut open = Vec::new();
+    let mut stack: Vec<&AssemblyNode> = nodes.iter().rev().collect();
+    while let Some(node) = stack.pop() {
+        if is_open(node, toggled, selection, under) {
+            open.push(node.id);
+            stack.extend(node.children.iter().rev());
+        }
+    }
+    open
 }
 
 /// Whether the selection is inside an assembly.
@@ -741,4 +800,89 @@ fn holds(node: &AssemblyNode, selection: &Selection) -> bool {
                 .is_some_and(|item| entry.items.iter().any(|i| *i == item))
         })
         || node.children.iter().any(|child| holds(child, selection))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use stave_model::solved::{HardwareId, JointId, PartId};
+    use stave_scene::Item;
+
+    fn base() -> Item {
+        Item::Part(PartId::from_usize(0))
+    }
+
+    fn dowel(pair: usize) -> Target {
+        Target::Joint {
+            joint: JointId::from_usize(3),
+            pair,
+        }
+    }
+
+    fn hinge() -> Target {
+        Target::Hardware(HardwareId::from_usize(1))
+    }
+
+    /// `base` selected, with its joints listed under it.
+    fn base_listing() -> Listing {
+        Listing::default().next(
+            Some(&Selection::of_item(base())),
+            vec![
+                (dowel(0), "side_l into base (dowel)".to_owned()),
+                (dowel(1), "side_r into base (dowel)".to_owned()),
+                (hinge(), "hinge on base".to_owned()),
+            ],
+            None,
+        )
+    }
+
+    #[test]
+    fn selecting_a_part_lists_its_joints_under_it() {
+        let listing = base_listing();
+        assert_eq!(listing.under, Some(base()));
+        assert_eq!(listing.joints.len(), 3);
+    }
+
+    #[test]
+    fn choosing_a_listed_joint_keeps_it_under_the_part() {
+        let listing = base_listing();
+        // A joint pair is not a part: the window lists no joints for it.
+        let next = listing.next(
+            Some(&Selection::of_target(dowel(1))),
+            Vec::new(),
+            Some(dowel(1)),
+        );
+        assert_eq!(next, listing);
+        // Chosen from elsewhere (the Details panel) it stays put too.
+        let next = listing.next(Some(&Selection::of_target(dowel(0))), Vec::new(), None);
+        assert_eq!(next, listing);
+    }
+
+    #[test]
+    fn hardware_clicked_under_the_part_stays_there() {
+        let listing = base_listing();
+        let hinge_joints = vec![(dowel(0), "elsewhere".to_owned())];
+        let next = listing.next(
+            Some(&Selection::of_target(hinge())),
+            hinge_joints.clone(),
+            Some(hinge()),
+        );
+        assert_eq!(next, listing);
+        // Picked in the 3D view instead, it is its own selection.
+        let next = listing.next(Some(&Selection::of_target(hinge())), hinge_joints, None);
+        assert_eq!(next.under, Some(Item::Hardware(HardwareId::from_usize(1))));
+    }
+
+    #[test]
+    fn choosing_something_else_moves_the_listing() {
+        let listing = base_listing();
+        let other = Item::Part(PartId::from_usize(5));
+        let next = listing.next(Some(&Selection::of_item(other)), Vec::new(), None);
+        assert_eq!(next.under, Some(other));
+        assert!(next.joints.is_empty());
+        assert_eq!(listing.next(None, Vec::new(), None), Listing::default());
+        // A joint that is not listed does not keep it either.
+        let next = listing.next(Some(&Selection::of_target(dowel(7))), Vec::new(), None);
+        assert_eq!(next, Listing::default());
+    }
 }

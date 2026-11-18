@@ -408,7 +408,7 @@ impl Window {
         design.add_overlay(&editing.menu.root);
         design.add_overlay(&editing.card.root);
         design.add_overlay(&editing.verdict);
-        self.widgets.card.append(&editing.face_button);
+        self.widgets.details.append(&editing.face_button);
         self.install_edit_writer();
         self.connect_changes();
         self.connect_item_tools();
@@ -907,7 +907,6 @@ impl Window {
                 edit.chosen().is_none() && matches!(edit.picked(), Picked::Region(_))
             }));
         if open {
-            self.widgets.card.set_visible(false);
             self.place_edit_widgets();
         } else {
             self.editing.verdict.set_visible(false);
@@ -917,7 +916,7 @@ impl Window {
     }
 
     /// The menu near where it was asked for, inside the view; the card at
-    /// the top right, clear of the rail of open files.
+    /// the top right, clear of the camera column.
     fn place_edit_widgets(&self) {
         let (width, height) = (
             f64::from(self.widgets.design.width()),
@@ -938,7 +937,7 @@ impl Window {
         let top = (y - 60.0).min(height - f64::from(natural) - 96.0);
         menu.set_margin_start(crate::convert::int_of(left.max(f64::from(EDGE))));
         menu.set_margin_top(crate::convert::int_of(top.max(f64::from(EDGE))));
-        let rail = self.widgets.files.rail.width();
+        let rail = self.right_column();
         self.editing
             .card
             .root

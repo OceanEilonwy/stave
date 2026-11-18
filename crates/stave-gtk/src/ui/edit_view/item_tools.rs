@@ -386,10 +386,11 @@ impl ItemTools {
 }
 
 impl Window {
-    /// Puts the item's changes on the part's card and connects them.
+    /// Puts the item's changes in the Details panel, under the
+    /// selection's account, and connects them.
     pub(in crate::ui) fn connect_item_tools(self: &Rc<Self>) {
         let tools = &self.editing.tools;
-        self.widgets.card.append(&tools.root);
+        self.widgets.details.append(&tools.root);
         let window = Rc::downgrade(self);
         let filling = tools.filling.clone();
         tools.name.connect_editing_notify(move |label| {
@@ -459,7 +460,6 @@ impl Window {
             found.filter(|_| !self.edit_open() && self.gestures_allowed())
         else {
             tools.root.set_visible(false);
-            self.make_room_for_tools(false);
             return;
         };
         let stale = tools
@@ -507,27 +507,6 @@ impl Window {
         }));
         tools.filling.set(false);
         tools.root.set_visible(true);
-        self.make_room_for_tools(true);
-    }
-
-    /// The card's pages scroll sooner while the item's changes show
-    /// under them, so the whole card stays clear of the dock.
-    fn make_room_for_tools(&self, tools: bool) {
-        fn pages(widget: &gtk::Widget, height: i32) {
-            let mut child = widget.first_child();
-            while let Some(each) = child {
-                match each.downcast_ref::<gtk::ScrolledWindow>() {
-                    Some(scrolled) => scrolled.set_max_content_height(height),
-                    None => pages(&each, height),
-                }
-                child = each.next_sibling();
-            }
-        }
-        // The inspector's pages are 640 high at most (`inspector.rs`).
-        let height = if tools { 480 } else { 640 };
-        if let Some(inspector) = self.widgets.card.first_child() {
-            pages(&inspector, height);
-        }
     }
 
     /// Puts the keyboard in the item's name, ready to retype it.

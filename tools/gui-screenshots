@@ -41,12 +41,24 @@ shot() {
 
 # ---- the window (docs/screenshots/window) ----
 
-# The design with nothing chosen: the 3D view filling the window, the model
-# tree floating at its top left, the dock at the bottom, the rail of open
-# files at the right edge (V2C_Home); and a project with problems, each
-# pinned where it happens and dotted in the tree.
+# The design with nothing chosen, in the docked window's default layout
+# (canvas board B): Parts and Files above Details on the left, the 3D view
+# with its controls floating on it (scene menu top left, camera column
+# with X-ray and Pull apart top right, Move chips bottom left), Code and
+# Problems along the bottom; and a
+# project with problems, each pinned where it happens and dotted in Parts.
 shot $window/home.png $cabinet --theme light
 shot $window/home_problems.png crates/stave-app/tests/projects/several_problems --theme light
+# The Code panel dragged to the right edge (board B2): files open there.
+shot $window/code_right.png $cabinet --theme dark --editor --select 'door_l.stile[hinge]' --layout tools/layouts/code_right.layout
+# Code split beside the 3D view in the centre, Problems on the right; the
+# view's floating controls keep apart in the narrower view.
+shot $window/side_by_side.png $cabinet --theme dark --editor --select door_l --layout tools/layouts/side_by_side.layout
+# A moving assembly chosen and pulled apart in a 900 x 700 window: its
+# "Open it" slider floats at the bottom right, Pull apart's slider beside
+# its button, the file that places it open at that line; light and dark.
+shot $window/floating_narrow.png $cabinet --theme light --select door_l --explode 0.4 --size 900x700
+shot $window/floating_narrow_dark.png $cabinet --theme dark --select door_l --explode 0.4 --size 900x700
 # A hinge stile chosen, light and dark: the camera frames it between the
 # tree and its card, the rest of the design dims, the tree lists the
 # joints it is in, and the card beside it says what it is (V2C_Spatial).
@@ -68,7 +80,8 @@ shot $window/checking.png tests/broken/door_hits_side --theme light --checking
 # The build button pressed: its check running.
 shot $window/building.png examples/stool --theme light --select 'leg[front_left]' --building
 # Pulled apart, light and dark: drawers and doors out first, then every
-# part out of its joints; the dock grows its play button and slider.
+# part out of its joints; Pull apart's play button and slider pop out to
+# the left of its button in the camera column.
 shot $window/exploded.png $cabinet --theme light --explode 1
 shot $window/exploded_dark.png $cabinet --theme dark --explode 1
 # The stool pulled apart: the legs drop off the seat and out at their
@@ -110,7 +123,7 @@ shot $window/problem_pin.png tests/broken/pin_past_its_hole --theme light --diag
 # through them (F8); and the same in a narrow window.
 shot $window/problems_several.png crates/stave-app/tests/projects/several_problems --theme light --diagnostic 2
 shot $window/problems_narrow.png crates/stave-app/tests/projects/several_problems --theme light --diagnostic 0 --size 760x900
-# X-ray from the dock: everything but the chosen part see-through.
+# X-ray from the camera column: everything but the chosen part see-through.
 shot $window/xray.png $cabinet --theme light --select 'door_l.panel' --xray
 # The finder (Ctrl+K) with "hinge" typed: parts, names and lines, grouped,
 # with a filter per kind (V2C_Finder), light and dark.
@@ -229,6 +242,30 @@ shot $window/edit_pending_two_places.png "$(chest)" --theme light --view files -
 # A brace typed into the text: it doesn't read, so editing in 3D is off,
 # and a line low in the view, above the dock, says why.
 shot $window/edit_text_broken.png "$(chest)" --theme light --view files --file small_chest.stave:26 --cursor space --type '}'
+
+# Grips (docs/gui.md, "Grips"), each on a fresh copy of a project written
+# the way the editor writes one, since a drag that fits may write.
+from_box() {
+    rm -rf "$scratch/from_box"
+    cp -r "examples/$1" "$scratch/from_box"
+    echo "$scratch/from_box"
+}
+# The divider's grips (its height with a round handle and its value, the
+# panel's sizes saying what they follow), the height dragged to 700mm and
+# held (ghost, verdict, range with its red stop, the panel), dragged past
+# its stop, and a value typed that doesn't fit.
+shot $window/grip_divider.png "$(from_box clothing_cabinet_from_box)" --theme light --select divider --edit-script $edits/grip_divider.edit
+shot $window/grip_drag.png "$(from_box clothing_cabinet_from_box)" --theme light --select divider --edit-script $edits/grip_drag.edit
+shot $window/grip_stop.png "$(from_box clothing_cabinet_from_box)" --theme light --select divider --edit-script $edits/grip_stop.edit
+shot $window/grip_typed_refused.png "$(from_box clothing_cabinet_from_box)" --theme light --select divider --edit-script $edits/grip_typed_refused.edit
+# The table top's length, which follows one param, dragged; the front
+# apron's, which follows two, listing both to pick from.
+shot $window/grip_follows.png "$(from_box side_table_from_box)" --theme light --select top --edit-script $edits/grip_follows.edit
+shot $window/grip_follows_pick.png "$(from_box side_table_from_box)" --theme light --select apron_front --edit-script $edits/grip_follows_pick.edit
+# A click in the envelope: the menu and its three sizes as grips; the
+# height made solved within a range, waiting for Apply.
+shot $window/grip_envelope.png "$(from_box clothing_cabinet_from_box)" --theme light --edit-script $edits/grip_envelope.edit
+shot $window/grip_solver.png "$(from_box clothing_cabinet_from_box)" --theme light --edit-script $edits/grip_solver.edit
 
 # ---- the editor (docs/screenshots/files) ----
 # `--view files` opens the editor beside the 3D view, sliding in from the
