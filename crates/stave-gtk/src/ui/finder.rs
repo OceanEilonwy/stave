@@ -14,6 +14,19 @@ use stave_lang::Severity;
 
 type SearchCallback = Rc<dyn Fn(&str) -> Vec<Hit>>;
 type HitCallback = Rc<dyn Fn(Hit, Choice)>;
+type ActionsCallback = Rc<dyn Fn(&str) -> Vec<Action>>;
+type ActionCallback = Rc<dyn Fn(usize)>;
+
+/// Something the finder can do rather than go to: a verb typed in the
+/// field ("add shelf", "remove", "rename door_left"), listed first under
+/// "Do".
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Action {
+    /// What it does: "Add Shelf".
+    pub label: String,
+    /// Where or to what, dim after it: "in this space".
+    pub detail: String,
+}
 
 /// What choosing a hit asks for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -34,6 +47,11 @@ struct State {
     filter: Option<Kind>,
     on_search: Option<SearchCallback>,
     on_hit: Option<HitCallback>,
+    /// The verbs the query names, and their rows.
+    actions: Vec<Action>,
+    action_rows: Vec<(gtk::ListBoxRow, usize)>,
+    on_actions: Option<ActionsCallback>,
+    on_action: Option<ActionCallback>,
 }
 
 /// The finder dialog.
@@ -137,6 +155,17 @@ impl Finder {
         self.state.borrow_mut().on_hit = Some(Rc::new(callback));
     }
 
+    /// Calls `callback` with the query to list the verbs it names.
+    pub fn connect_actions(&self, callback: impl Fn(&str) -> Vec<Action> + 'static) {
+        self.state.borrow_mut().on_actions = Some(Rc::new(callback));
+    }
+
+    /// Calls `callback` with the index of the verb chosen (Enter or a
+    /// click), once the finder has closed.
+    pub fn connect_action(&self, callback: impl Fn(usize) + 'static) {
+        self.state.borrow_mut().on_action = Some(Rc::new(callback));
+    }
+
     /// Opens the finder over `parent`, with `query` typed (empty to start
     /// afresh).
     pub fn present(self: &Rc<Self>, parent: &impl IsA<gtk::Widget>, query: &str) {
@@ -217,7 +246,12 @@ impl Finder {
         let query = self.entry.text().to_string();
         let callback = self.state.borrow().on_search.clone();
         let hits = callback.map(|search| search(&query)).unwrap_or_default();
-        self.state.borrow_mut().hits = hits;
+        let actions = self.state.borrow().on_actions.clone();
+        let actions = actions.map(|list| list(&query)).unwrap_or_default();
+        let mut state = self.state.borrow_mut();
+        state.hits = hits;
+        state.actions = actions;
+        drop(state);
         self.show_counts();
         self.fill();
     }
@@ -249,8 +283,17 @@ impl Finder {
         }
         let query = self.entry.text().to_string();
         let mut rows = Vec::new();
+        let mut action_rows = Vec::new();
         {
             let state = self.state.borrow();
+            if !state.actions.is_empty() && state.filter.is_none() {
+                rows.push((action_heading(), None));
+                for (index, action) in state.actions.iter().enumerate() {
+                    let row = action_row(action);
+                    action_rows.push((row.clone(), index));
+                    rows.push((row, None));
+                }
+            }
             let mut last: Option<Kind> = None;
             for (index, hit) in state.hits.iter().enumerate() {
                 if state.filter.is_some_and(|kind| kind != hit.kind) {
@@ -264,7 +307,7 @@ impl Finder {
             }
             if rows.is_empty() {
                 let words = if query.trim().is_empty() {
-                    "Type a name: a part, a file, a word in the text or a problem"
+                    "Type a name: a part, a file, a word in the text or a problem; or a verb: add, remove, rename, repeat, mirror, hold"
                 } else {
                     "Nothing matches that"
                 };
@@ -288,11 +331,15 @@ impl Finder {
         for (row, _) in &rows {
             self.list.append(row);
         }
-        let first = rows
-            .iter()
-            .find(|(_, hit)| hit.is_some())
-            .map(|(row, _)| row.clone());
-        self.state.borrow_mut().rows = rows;
+        let first = action_rows.first().map(|(row, _)| row.clone()).or_else(|| {
+            rows.iter()
+                .find(|(_, hit)| hit.is_some())
+                .map(|(row, _)| row.clone())
+        });
+        let mut state = self.state.borrow_mut();
+        state.rows = rows;
+        state.action_rows = action_rows;
+        drop(state);
         match first {
             Some(row) => self.list.select_row(Some(&row)),
             None => self.list.unselect_all(),
@@ -306,7 +353,9 @@ impl Finder {
         let hits: Vec<&gtk::ListBoxRow> = state
             .rows
             .iter()
-            .filter(|(_, hit)| hit.is_some())
+            .filter(|(row, hit)| {
+                hit.is_some() || state.action_rows.iter().any(|(action, _)| action == row)
+            })
             .map(|(row, _)| row)
             .collect();
         let current = self
@@ -352,6 +401,24 @@ impl Finder {
     }
 
     fn choose_row(&self, row: &gtk::ListBoxRow, choice: Choice) {
+        let action = {
+            let state = self.state.borrow();
+            state
+                .action_rows
+                .iter()
+                .find(|(r, _)| r == row)
+                .map(|(_, index)| (*index, state.on_action.clone()))
+        };
+        if let Some((index, callback)) = action {
+            if choice == Choice::Preview {
+                return;
+            }
+            self.dialog.close();
+            if let Some(callback) = callback {
+                callback(index);
+            }
+            return;
+        }
         let (hit, callback) = {
             let state = self.state.borrow();
             let hit = state
@@ -392,6 +459,50 @@ fn heading(kind: Kind) -> gtk::ListBoxRow {
         .activatable(false)
         .selectable(false)
         .build()
+}
+
+fn action_heading() -> gtk::ListBoxRow {
+    let label = gtk::Label::builder()
+        .label("DO · Enter does it")
+        .xalign(0.0)
+        .css_classes(["stave-finder-heading"])
+        .build();
+    gtk::ListBoxRow::builder()
+        .child(&label)
+        .activatable(false)
+        .selectable(false)
+        .build()
+}
+
+fn action_row(action: &Action) -> gtk::ListBoxRow {
+    let content = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(8)
+        .css_classes(["stave-finder-hit"])
+        .build();
+    content.append(&gtk::Image::from_icon_name("go-next-symbolic"));
+    content.append(
+        &gtk::Label::builder()
+            .label(&action.label)
+            .xalign(0.0)
+            .hexpand(true)
+            .ellipsize(gtk::pango::EllipsizeMode::End)
+            .css_classes(["heading"])
+            .build(),
+    );
+    content.append(
+        &gtk::Label::builder()
+            .label(&action.detail)
+            .ellipsize(gtk::pango::EllipsizeMode::Start)
+            .css_classes(["stave-detail"])
+            .build(),
+    );
+    let row = gtk::ListBoxRow::builder().child(&content).build();
+    row.update_property(&[gtk::accessible::Property::Label(&format!(
+        "{} {}",
+        action.label, action.detail
+    ))]);
+    row
 }
 
 fn hit_row(hit: &Hit) -> gtk::ListBoxRow {

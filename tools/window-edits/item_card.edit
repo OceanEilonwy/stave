@@ -1,0 +1,4 @@
+# A drawer chosen in the 3D view: its card offers its changes (its name,
+# how many, holding a distance, removing it), and a handle on the boundary
+# between the two drawer bays.
+pick drawer[bottom]

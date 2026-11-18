@@ -1,0 +1,4 @@
+# The drawers made three with the stepper on their card: the change is
+# tried, its ghost green.
+pick drawer[bottom]
+repeat 3

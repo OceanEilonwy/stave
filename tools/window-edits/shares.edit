@@ -1,0 +1,4 @@
+# The boundary between the two drawer bays dragged to 180mm: only those
+# two pieces change size.
+pick drawer[bottom]
+drag boundary 1 180mm

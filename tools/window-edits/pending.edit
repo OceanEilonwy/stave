@@ -1,0 +1,7 @@
+# A shelf chosen for the space above the divider, its sides pointed at
+# and its stock chosen; with the editor open, the lines Add would write
+# show there as pending.
+select region divider.above
+choose casework.Shelf
+bind between case.side[left] case.side[right]
+set panel_stock = oak_19

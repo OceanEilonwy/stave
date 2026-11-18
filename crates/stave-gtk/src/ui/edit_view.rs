@@ -79,6 +79,17 @@ pub(super) struct EditView {
     /// in a tab when it does).
     editor_open: Rc<Cell<bool>>,
     state: RefCell<EditState>,
+    // The changes of the design (lane W2b): their card, the item's tools,
+    // hold, repeat handles, the editor's pending lines, the finder's verbs.
+    changes: changes::Changes,
+    tools: item_tools::ItemTools,
+    hold: hold::Hold,
+    repeats: repeat_handles::Repeats,
+    pending: editor_link::PendingPanel,
+    pending_marked: RefCell<Option<std::path::PathBuf>>,
+    verbs: RefCell<Vec<verbs::Run>>,
+    /// Scripts send each command at once, in order.
+    immediate: Cell<bool>,
 }
 
 /// What the editing view keeps between events.
@@ -144,6 +155,14 @@ impl EditView {
             face_button,
             editor_open: Rc::new(Cell::new(false)),
             state: RefCell::new(EditState::default()),
+            changes: changes::Changes::new(),
+            tools: item_tools::ItemTools::new(),
+            hold: hold::Hold::new(),
+            repeats: repeat_handles::Repeats::new(),
+            pending: editor_link::PendingPanel::new(),
+            pending_marked: RefCell::new(None),
+            verbs: RefCell::new(Vec::new()),
+            immediate: Cell::new(false),
         }
     }
 }
@@ -260,6 +279,14 @@ fn tries_again(command: &EditCommand) -> bool {
             | EditCommand::Rename(_)
             | EditCommand::Repeat(_)
             | EditCommand::ApplyFix { .. }
+            | EditCommand::RepeatItem { .. }
+            | EditCommand::MoveShares { .. }
+            | EditCommand::Mirror(_)
+            | EditCommand::MirrorSplit { .. }
+            | EditCommand::Hold(_)
+            | EditCommand::Remove(_)
+            | EditCommand::IncludeDependants
+            | EditCommand::RenameItem { .. }
     )
 }
 
@@ -380,6 +407,12 @@ impl Window {
         design.add_overlay(&editing.verdict);
         self.widgets.card.append(&editing.face_button);
         self.install_edit_writer();
+        self.connect_changes();
+        self.connect_item_tools();
+        self.connect_hold();
+        self.connect_repeats();
+        self.connect_editor_link();
+        self.connect_verbs();
 
         let window = Rc::downgrade(self);
         editing.menu.connect_chosen(move |declaration| {
@@ -458,6 +491,9 @@ impl Window {
 
     /// Escape: drops the edit in progress. `true` when there was one.
     pub(super) fn cancel_edit(self: &Rc<Self>) -> bool {
+        if self.cancel_hold() {
+            return true;
+        }
         if !self.edit_open() {
             return false;
         }
@@ -557,6 +593,9 @@ impl Window {
         if self.state.borrow().focus.is_some() {
             return false;
         }
+        if self.hold_click(x, y) {
+            return true;
+        }
         let wanted = self.wanted();
         if wanted.any() {
             // A part's face is wanted even where the click goes through a
@@ -573,6 +612,10 @@ impl Window {
             None => facing.as_ref().and_then(picked_from_facing),
         };
         match (target, picked) {
+            (Some(Target::Region(_)), Some(_)) | (None, Some(_)) if !self.gestures_allowed() => {
+                self.edit_toast(&self.parse_block_line().unwrap_or_default());
+                true
+            }
             (Some(Target::Region(_)), Some(picked)) | (None, Some(picked)) => {
                 self.start_edit(picked, (x, y));
                 true
@@ -648,6 +691,13 @@ impl Window {
         if waiting && !self.edit_open() && self.session.borrow().selection().is_none() {
             self.show_hint("Click inside the box to add the first piece");
         }
+        self.update_item_tools();
+        self.widgets.tree.set_placeholder(
+            waiting.then_some("No parts yet. Click inside the box to add the first piece."),
+        );
+        if let Some(line) = self.parse_block_line() {
+            self.show_hint(&line);
+        }
     }
 
     // ---- commands ----
@@ -670,6 +720,10 @@ impl Window {
     /// own signal; a command that tries the candidate again first shows
     /// Checking (the card's spinner and the ghost's grey).
     pub(super) fn send_edit_later(self: &Rc<Self>, command: EditCommand) {
+        if self.editing.immediate.get() {
+            self.send_edit(command);
+            return;
+        }
         if tries_again(&command) {
             self.show_checking();
         }
@@ -684,6 +738,10 @@ impl Window {
     /// it was clicked: a step of the menu's check may sort the menu in
     /// between (greyed entries go last in their group), moving indexes.
     pub(super) fn choose_later(self: &Rc<Self>, declaration: Declaration) {
+        if self.editing.immediate.get() {
+            self.choose_now(declaration);
+            return;
+        }
         self.show_checking();
         let window = self.clone();
         glib::timeout_add_local_once(CHECKING_DELAY, move || {
@@ -730,6 +788,7 @@ impl Window {
                 .edit()
                 .and_then(Edit::chosen)
                 .and_then(|chosen| chosen.item_name().map(|name| name.as_str().to_owned()));
+            let name = name.or_else(|| self.change_selects_after());
             let mut state = self.editing.state.borrow_mut();
             state.select_after = name;
             self.editing
@@ -816,6 +875,7 @@ impl Window {
                     state.generation = state.generation.wrapping_add(1);
                     state.checking = false;
                 }
+                self.close_change_dialog();
                 self.clear_ghost();
                 self.refresh_edit();
                 self.show_card();
@@ -834,6 +894,15 @@ impl Window {
             let session = self.session.borrow();
             draw_edit(&self.editing.menu, &self.editing.card, &session, checking)
         };
+        let open = self.draw_change(checking) || open;
+        self.update_repeat_row();
+        self.update_pending();
+        self.editing
+            .hold
+            .from_space
+            .set_visible(self.session.borrow().edit().is_some_and(|edit| {
+                edit.chosen().is_none() && matches!(edit.picked(), Picked::Region(_))
+            }));
         if open {
             self.widgets.card.set_visible(false);
             self.place_edit_widgets();
@@ -932,9 +1001,14 @@ impl Window {
         let ghosts = {
             let session = self.session.borrow();
             let chosen = session.edit().and_then(Edit::chosen);
-            let verdict = chosen.and_then(|chosen| ghost_verdict(chosen.progress()));
+            let change = session.change();
+            let verdict = chosen
+                .map(|chosen| chosen.progress())
+                .or_else(|| change.map(|change| change.progress()))
+                .and_then(ghost_verdict);
             let candidate = chosen
                 .and_then(|chosen| chosen.ghost())
+                .or_else(|| change.and_then(|change| change.ghost()))
                 .and_then(|opened| opened.design.as_ref());
             match (verdict, candidate, session.drawable()) {
                 (Some(verdict), Some(candidate), Some((base, graph))) => Some(Ghosts::new(
@@ -1026,6 +1100,9 @@ impl Window {
     /// as usual (and puts its scene back in the renderer first if a ghost
     /// had it).
     pub(super) fn render_ghost(&self, backdrop: Backdrop) -> Option<anyhow::Result<Image>> {
+        if let Some(image) = self.render_removal(backdrop) {
+            return Some(image);
+        }
         let session = self.session.borrow();
         let mut edit_state = self.editing.state.borrow_mut();
         let mut state = self.state.borrow_mut();
@@ -1103,7 +1180,8 @@ impl Window {
     }
 
     /// Puts the verdict's words beside the ghost, after a frame is drawn.
-    pub(super) fn place_ghost_verdict(&self) {
+    pub(super) fn place_ghost_verdict(self: &Rc<Self>) {
+        self.place_repeat_handles();
         let label = &self.editing.verdict;
         let place = {
             let edit_state = self.editing.state.borrow();
@@ -1162,8 +1240,17 @@ impl Window {
     }
 }
 
+mod change_steps;
+mod changes;
+#[cfg(test)]
+mod changes_tests;
+mod editor_link;
+mod hold;
+mod item_tools;
 mod pointing;
+mod repeat_handles;
 #[cfg(test)]
 mod tests;
+mod verbs;
 
 pub(super) use pointing::{drawn_bounds, empty_state};

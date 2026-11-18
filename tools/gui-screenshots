@@ -181,6 +181,51 @@ shot $window/new_project.png "$scratch/chest" --theme light --new-project
 shot $window/new_project_opened.png "$scratch/hall_table" --theme light
 shot $window/new_project_menu.png "$scratch/hall_table" --theme light --edit-script $edits/envelope_menu.edit
 
+# Changing what is there (docs/gui.md, "Changing what is there"): the small
+# chest with a divider and two drawers, and the side table as far as its
+# front apron, each made by `stave edit --script`; every shot works on a
+# fresh copy.
+"$stave" edit "$scratch/chest_drawers" --script $edits/chest_drawers.script >/dev/null
+"$stave" edit "$scratch/table" --script $edits/table_apron.script >/dev/null
+chest() {
+    rm -rf "$scratch/chest_copy"
+    cp -r "$scratch/chest_drawers" "$scratch/chest_copy"
+    echo "$scratch/chest_copy"
+}
+# A drawer chosen: its card's changes (name, how many, hold, remove) and
+# the handle on the boundary between the two drawer bays.
+shot $window/edit_item_card.png "$(chest)" --theme light --edit-script $edits/item_card.edit
+# A drawer chosen for a space, the count handle dragged to 3: every copy
+# in the ghost, the stepper on the card saying 3.
+shot $window/edit_repeat_card.png "$(chest)" --theme light --edit-script $edits/repeat_card.edit
+# The drawers made three from their card, and the boundary between the
+# bays dragged to 180mm (dark).
+shot $window/edit_repeat_item.png "$(chest)" --theme light --edit-script $edits/repeat_item.edit
+shot $window/edit_shares_dark.png "$(chest)" --theme dark --edit-script $edits/shares.edit
+# The front apron chosen: "And the other side" offered; then switched on.
+shot $window/edit_mirror_offer.png "$scratch/table" --theme light --edit-script $edits/mirror_offer.edit
+shot $window/edit_mirror.png "$scratch/table" --theme light --edit-script $edits/mirror.edit
+# Hold a distance: the card with the distance as it is now, then tried.
+shot $window/edit_hold_card.png "$(chest)" --theme light --edit-script $edits/hold_card.edit
+shot $window/edit_hold.png "$(chest)" --theme light --edit-script $edits/hold.edit
+# Delete on the divider: the dialog naming what goes with it; then, with
+# them included, what goes drawn red.
+shot $window/edit_remove_dialog.png "$(chest)" --theme light --edit-script $edits/remove_dialog.edit
+shot $window/edit_remove.png "$(chest)" --theme light --edit-script $edits/remove.edit
+# The drawers renamed on their card, with the editor open: the line the
+# rename changes pending in the text, old and new.
+shot $window/edit_rename_editor.png "$(chest)" --theme light --view files --edit-script $edits/rename.edit
+# The finder's verbs: "repeat 3" with a drawer chosen, and "add shelf"
+# with a space clicked, which opens the same card as the menu's Shelf.
+shot $window/edit_finder_verbs.png "$(chest)" --theme light --select 'drawer[bottom]' --finder 'repeat 3'
+shot $window/edit_finder_add.png "$(chest)" --theme light --edit-script $edits/finder_add.edit
+# A shelf ready to add with the editor open: the lines Add would write,
+# pending above the text.
+shot $window/edit_pending_editor.png "$(chest)" --theme light --view files --edit-script $edits/pending.edit
+# A brace typed into the text: it doesn't read, so editing in 3D is off,
+# and the line at the top of the view says why.
+shot $window/edit_text_broken.png "$(chest)" --theme light --view files --file small_chest.stave:26 --cursor space --type '}'
+
 # ---- the editor (docs/screenshots/files) ----
 # `--view files` opens the editor beside the 3D view, sliding in from the
 # right with the file's tab on the rail (V2C_EditorOpen).

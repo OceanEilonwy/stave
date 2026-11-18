@@ -1,0 +1,4 @@
+# Delete on the divider: what uses it is named in a dialog before
+# anything goes.
+pick divider.panel
+remove

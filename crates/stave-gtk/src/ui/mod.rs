@@ -3301,6 +3301,10 @@ impl Window {
                     window.frame();
                     glib::Propagation::Stop
                 }
+                // Delete removes the selection, saying first what goes.
+                gdk::Key::Delete | gdk::Key::KP_Delete if window.remove_selected() => {
+                    glib::Propagation::Stop
+                }
                 _ => glib::Propagation::Proceed,
             }
         });

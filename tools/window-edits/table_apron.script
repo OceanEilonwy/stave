@@ -1,0 +1,24 @@
+# The side table as far as its front apron: the top, the legs and one
+# apron, whose mirror image (the back apron) the window offers.
+new "Side table" 500mm 600mm 500mm
+import std:frames
+stock oak_19 white_oak solid 19mm max_width 200mm max_length 2700mm
+stock oak_45_sq white_oak solid 45mm width 45mm max_length 2700mm
+create
+select region envelope
+choose frames.Top
+set top_stock = oak_19
+add
+select face top.board.bottom
+choose frames.Legs
+set leg_stock = oak_45_sq
+set length = overall_height - top.board.thickness
+add
+select between legs.leg[front_left] legs.leg[front_right]
+choose frames.Apron
+bind parts top.board
+bind face legs.leg[front_left].front
+bind face legs.leg[front_left].right
+set apron_stock = oak_19
+set run = right
+add

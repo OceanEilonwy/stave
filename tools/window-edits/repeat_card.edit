@@ -1,0 +1,11 @@
+# A drawer chosen for the space above the divider, its settings typed;
+# then the count handle dragged until it says x 3: the ghost shows every
+# copy, and the card's stepper says 3.
+select region divider.above
+choose casework.Drawer
+set mount = overlay(left: 18mm, right: 18mm, top: -1.5mm, bottom: 8mm, meeting: -0.75mm)
+set front_stock = oak_19
+set box_stock = maple_12
+set bottom_stock = ply_6
+set slide = side_mount_slide(length: 400mm)
+drag count 3
