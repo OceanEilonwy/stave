@@ -172,10 +172,12 @@ fn a_face_fills_an_anchor_and_a_part_param_and_copies_from_the_latest_assembly()
     let ledge = find(&menu, "Ledge").unwrap_or_else(|| panic!("{:?}", labels(&menu)));
     assert!(find(&menu, "Filler").is_none());
     assert!(find(&menu, "Tie").is_none());
-    // A face is two typed values, its Anchor and its Part, and each must
-    // fill a place param: a component that takes only one is not listed.
-    assert!(find(&menu, "Pad").is_none(), "{:?}", labels(&menu));
-    assert!(find(&menu, "Hook").is_none(), "{:?}", labels(&menu));
+    // A face is two typed values, its Anchor and its Part, and a
+    // component is listed when either fills a place param (the face rule).
+    let pad = find(&menu, "Pad").unwrap_or_else(|| panic!("{:?}", labels(&menu)));
+    assert_eq!(pad.place[0].slot, PlaceSlot::Anchor(Some(face)));
+    let hook = find(&menu, "Hook").unwrap_or_else(|| panic!("{:?}", labels(&menu)));
+    assert_eq!(hook.place[0].slot, PlaceSlot::Part(Some(face.part)));
     assert_eq!(ledge.entry.group, MenuGroup::Project);
     assert_eq!(ledge.entry.hint.as_deref(), Some("Rests on a face."));
     assert_eq!(ledge.place[0].slot, PlaceSlot::Anchor(Some(face)));
@@ -194,13 +196,11 @@ fn a_face_fills_an_anchor_and_a_part_param_and_copies_from_the_latest_assembly()
     assert_eq!(model.assemblies.get(from.index()).unwrap().name, "ledge_2");
     assert_eq!(ledge.settings[1].value, SettingValue::Default);
 
-    // A kind has no Anchor role to take the face, so none is listed.
-    assert!(
-        menu.iter()
-            .all(|c| matches!(c.declaration, Declaration::Component(_))),
-        "{:?}",
-        labels(&menu)
-    );
+    // A kind has no Anchor role, but its first part role takes the face's
+    // part: the prelude's pulls are offered on a face.
+    let knob = find(&menu, "knob").unwrap_or_else(|| panic!("{:?}", labels(&menu)));
+    assert!(matches!(knob.declaration, Declaration::Kind(_)));
+    assert_eq!(knob.place[0].slot, PlaceSlot::Part(Some(face.part)));
 
     let written = scope.write_patch(ledge, None).unwrap();
     assert_eq!(written.name.as_str(), "ledge_3");

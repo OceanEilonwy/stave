@@ -88,6 +88,12 @@ pub enum WriteError {
         /// The module name.
         alias: String,
     },
+    /// The name typed for the new item is already used in the project, or
+    /// is a word of the language.
+    #[error(
+        "'{0}' is already used in this project or is a word of the language; choose another name"
+    )]
+    NameTaken(String),
     /// The project has no file to add to.
     #[error("the project has no file to add to")]
     NoFile,
@@ -136,6 +142,24 @@ impl EditScope<'_> {
         candidate: &Candidate,
         repeat: Option<Repeat>,
     ) -> Result<WrittenPatch, WriteError> {
+        self.write_patch_named(candidate, repeat, None)
+    }
+
+    /// [`EditScope::write_patch`], with the new item named `name` (a name
+    /// the user typed on the card) instead of the generated one. `None`
+    /// generates it.
+    ///
+    /// # Errors
+    ///
+    /// As for [`EditScope::write_patch`], and [`WriteError::NameTaken`]
+    /// when `name` is already used in the project or is a word of the
+    /// language.
+    pub fn write_patch_named(
+        &self,
+        candidate: &Candidate,
+        repeat: Option<Repeat>,
+        name: Option<&Ident>,
+    ) -> Result<WrittenPatch, WriteError> {
         let missing: Vec<String> = candidate
             .unbound_place()
             .map(|param| param.name.as_str().to_owned())
@@ -175,9 +199,13 @@ impl EditScope<'_> {
         };
 
         let mut taken = TakenNames::of_project(self.model);
-        let name = match candidate.declaration {
-            Declaration::Component(_) => assembly_name(&decl.name, &taken)?,
-            Declaration::Kind(_) => kind_item_name(&decl.name, &taken)?,
+        let name = match (name, candidate.declaration) {
+            (Some(name), _) if taken.is_unavailable(name.as_str()) => {
+                return Err(WriteError::NameTaken(name.as_str().to_owned()));
+            }
+            (Some(name), _) => name.clone(),
+            (None, Declaration::Component(_)) => assembly_name(&decl.name, &taken)?,
+            (None, Declaration::Kind(_)) => kind_item_name(&decl.name, &taken)?,
         };
         taken.insert(name.as_str());
         let bay = repeat.map(|_| bay_name(&decl.name, &taken)).transpose()?;

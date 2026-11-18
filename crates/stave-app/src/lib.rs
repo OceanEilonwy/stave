@@ -27,6 +27,7 @@ use std::path::Path;
 pub mod candidates;
 pub mod check;
 pub mod edit;
+pub mod editing;
 pub mod empty;
 pub mod export_view;
 pub mod finder;

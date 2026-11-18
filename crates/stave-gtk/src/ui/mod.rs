@@ -520,6 +520,7 @@ impl Window {
                 Event::CheckStatusChanged => self.check_status_changed(),
                 Event::BuildChanged => self.build_changed(),
                 Event::CheckStarted(ticket) => self.run_check(ticket),
+                Event::Edit(_) => {}
                 Event::Notice(notice) => {
                     self.widgets.toasts.add_toast(
                         adw::Toast::builder()
