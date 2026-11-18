@@ -82,18 +82,21 @@ fn one_unknown_meets_one_equality() {
 
 #[test]
 fn changing_fewer_unknowns_wins() {
-    // a + b = 1000 can be met by moving only `b` (to 600) or by moving both
-    // a little; moving one wins, though it moves further.
+    // a + b = 1000 needs 200 more. With `b` capped at 500, moving `a` alone
+    // (to 600) costs 200/1000 = 0.2 of a domain; moving both (a = 500,
+    // b = 500) costs 100/1000 + 100/10000 = 0.11, a smaller fraction. Moving
+    // one unknown still wins, so this answer comes from key 1 and no later
+    // key.
     let mut problem = Problem::new();
     problem.add_unknown(unknown("a", 400, range(0, 1000), 0, 0));
-    problem.add_unknown(unknown("b", 400, range(0, 1000), 0, 1));
+    problem.add_unknown(unknown("b", 400, range(0, 10000), 0, 1));
     problem.add_constraint(constraint(
         "sum",
         &[("a", 1), ("b", 1)],
         Relation::Equal,
         1000,
     ));
-    // `b` alone may not move: it is capped at 500, so only `a` can take it all.
+    // `b` alone cannot take the 200: it is capped at 500.
     problem.add_constraint(constraint(
         "b small",
         &[("b", 1)],
@@ -347,54 +350,67 @@ fn shuffled<T: Clone>(items: &[T], seed: usize) -> Vec<T> {
     items
 }
 
-/// A problem with ties at every key, built with unknowns, constraints and
-/// terms in the order `permutation` gives.
+/// A problem whose answer only the late keys settle, built with unknowns,
+/// constraints and terms in the order `permutation` gives. It is three
+/// independent parts, each of which needs exactly one unknown to move, so
+/// keys 1 and 2 tie between the candidates in each part:
+///
+/// - `q0` and `q1` are alike but for rank, and `q0` is declared first: key 3
+///   (rank) must pick `q1`.
+/// - `r0` to `r3` are alike in everything but declaration order: key 4 must
+///   pick `r0`, the earliest declared.
+/// - `s` must leave 30, which is not in its list; 20 and 40 are equally far
+///   from it: key 5 must pick 20.
+///
+/// A tiebreak that followed whichever model z3 returned would not give one
+/// answer across the permutations.
 fn tied_problem(permutation: usize) -> Problem {
     let unknowns = [
-        unknown("p0", 100, range(0, 1000), 1, 0),
-        unknown("p1", 100, range(0, 1000), 1, 1),
-        unknown("p2", 100, range(0, 1000), 1, 2),
-        unknown("p3", 250, range(0, 1000), 0, 3),
+        unknown("q0", 100, range(0, 1000), 2, 0),
+        unknown("q1", 100, range(0, 1000), 1, 1),
+        unknown("r0", 100, range(0, 1000), 3, 2),
+        unknown("r1", 100, range(0, 1000), 3, 3),
+        unknown("r2", 100, range(0, 1000), 3, 4),
+        unknown("r3", 100, range(0, 1000), 3, 5),
         unknown(
-            "p4",
+            "s",
             30,
-            match Domain::values([whole(10), whole(20), whole(40), whole(50)]) {
+            match Domain::values([whole(50), whole(10), whole(40), whole(20)]) {
                 Ok(domain) => domain,
                 Err(error) => panic!("{error}"),
             },
             0,
-            4,
+            6,
         ),
-        unknown("p5", 7, range(0, 1000), 2, 5),
     ];
     let constraints = [
         Constraint::new(
-            "target",
-            [
-                ("p0", whole(1)),
-                ("p1", whole(1)),
-                ("p2", whole(1)),
-                ("p5", whole(0)),
-            ],
+            "q sum",
+            [("q0", whole(1)), ("q1", whole(1))],
             Relation::Equal,
-            whole(700),
-        ),
-        Constraint::new(
-            "half",
-            [
-                ("p3", fraction(1, 2)),
-                ("p0", fraction(1, 3)),
-                ("p3", fraction(1, 2)),
-            ],
-            Relation::GreaterOrEqual,
             whole(300),
         ),
-        Constraint::new("list moves", [("p4", whole(1))], Relation::Less, whole(30)),
         Constraint::new(
-            "cap",
-            [("p1", whole(2)), ("p2", whole(-1))],
-            Relation::LessOrEqual,
-            whole(400),
+            "r sum",
+            [
+                ("r0", fraction(1, 2)),
+                ("r1", fraction(1, 2)),
+                ("r2", fraction(1, 2)),
+                ("r3", fraction(1, 2)),
+                ("r0", fraction(1, 2)),
+                ("r1", fraction(1, 2)),
+                ("r2", fraction(1, 2)),
+                ("r3", fraction(1, 2)),
+            ],
+            Relation::Equal,
+            whole(500),
+        ),
+        Constraint::new("s cap", [("s", whole(1))], Relation::Less, whole(50)),
+        Constraint::new(
+            "r floor",
+            [("r3", whole(3)), ("r1", whole(-1))],
+            Relation::GreaterOrEqual,
+            whole(0),
         ),
     ];
     let mut problem = Problem::new();
@@ -422,24 +438,51 @@ fn the_same_problem_gives_the_same_answer_every_time() {
             "permutation {permutation}"
         );
     }
-    // The answer itself, worked by hand. `list moves` forces p4 off 30 to
-    // the nearer of 20 and 40 below 30: 20. `target` needs 400 more from
-    // p0, p1 or p2; one alone can do it, so exactly one more unknown moves.
-    // p1 alone breaks `cap` (2 × 500 − 100 > 400); p0 and p2 tie on
-    // fraction (0.4 each) and rank (1 each), so declaration order picks p0.
-    // `half` then still holds with p3 where it is (250 + 500/3 >= 300).
+    // The answer itself, worked by hand. Each part needs one unknown moved
+    // (`q sum` 100 more, `r sum` 100 more, `s` off 30), so three move. In
+    // each part the candidates move the same fraction: 100/1000 for each of
+    // q0, q1 and r0 to r3, and 10/40 for `s` to 20 or to 40. Key 3 then
+    // picks q1 (rank 1) over q0 (rank 2), though q0 is declared first.
+    // r0 to r3 tie on rank too, so key 4 gives the 100 to r0, the earliest
+    // declared (`r floor` holds: 3 × 100 >= 100). `s` ties on rank, so key 5
+    // takes the lower value, 20.
     let answer = values(&first);
     assert_eq!(
         answer,
         [
-            ("p0".to_owned(), whole(500)),
-            ("p1".to_owned(), whole(100)),
-            ("p2".to_owned(), whole(100)),
-            ("p3".to_owned(), whole(250)),
-            ("p4".to_owned(), whole(20)),
-            ("p5".to_owned(), whole(7)),
+            ("q0".to_owned(), whole(100)),
+            ("q1".to_owned(), whole(200)),
+            ("r0".to_owned(), whole(200)),
+            ("r1".to_owned(), whole(100)),
+            ("r2".to_owned(), whole(100)),
+            ("r3".to_owned(), whole(100)),
+            ("s".to_owned(), whole(20)),
         ]
     );
+}
+
+#[test]
+fn declaration_order_decides_a_tie_whatever_the_names() {
+    // The same four `r` unknowns with their orders reversed: now r3 is the
+    // earliest declared, so it takes the change. This shows the answer
+    // follows the declared order, not the names or the order of addition.
+    let mut problem = Problem::new();
+    for (index, name) in ["r0", "r1", "r2", "r3"].iter().enumerate() {
+        let order = match u32::try_from(3 - index) {
+            Ok(order) => order,
+            Err(error) => panic!("{error}"),
+        };
+        problem.add_unknown(unknown(name, 100, range(0, 1000), 3, order));
+    }
+    problem.add_constraint(constraint(
+        "r sum",
+        &[("r0", 1), ("r1", 1), ("r2", 1), ("r3", 1)],
+        Relation::Equal,
+        500,
+    ));
+    let solution = solved(&problem);
+    assert_eq!(solution.changed().collect::<Vec<_>>(), ["r3"]);
+    assert_eq!(solution.value("r3"), Some(whole(200)));
 }
 
 #[test]
@@ -449,11 +492,11 @@ fn the_same_conflict_every_time() {
         let mut problem = tied_problem(permutation);
         problem.add_constraint(constraint(
             "too much",
-            &[("p0", 1)],
+            &[("q0", 1)],
             Relation::GreaterOrEqual,
             2000,
         ));
-        problem.add_constraint(constraint("too little", &[("p3", 1)], Relation::Less, 0));
+        problem.add_constraint(constraint("too little", &[("r3", 1)], Relation::Less, 0));
         let Ok(Outcome::Unsatisfiable(conflicts)) = problem.solve() else {
             panic!("expected a conflict");
         };
