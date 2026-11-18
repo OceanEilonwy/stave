@@ -1,0 +1,107 @@
+Long bench
+units: mm, resolution: 0.5mm
+all lengths in mm; boxes are drawn boxes as across, up, deep ranges from the ground part's left-bottom-front corner
+
+PARTS (8)
+part                         stock          cut L x W x T              across               up                   deep                 length/width/thickness
+seat.piece[1]                oak_30         1250 x 300 x 30            0..1100              0..30                0..300               right/back/up
+    drawn 1100 x 300 x 30, starting 0 x 0 x 0 into the cut size
+    cut drill diameter 8 depth 15 on thickness start: where leg_dowels's pin meets it, local 109.666667..117.666667 x 58.5..66.5 x 0..15
+    cut drill diameter 8 depth 15 on thickness start: where leg_dowels's pin meets it, local 127.333333..135.333333 x 58.5..66.5 x 0..15
+    cut drill diameter 8 depth 15 on thickness start: where leg_dowels's pin meets it, local 109.666667..117.666667 x 233.5..241.5 x 0..15
+    cut drill diameter 8 depth 15 on thickness start: where leg_dowels's pin meets it, local 127.333333..135.333333 x 233.5..241.5 x 0..15
+    cut notch depth 15 on thickness end: where seat.piece[2] meets it, local 950..1250 x 0..300 x 0..30
+leg_front_left               oak_45_sq      420 x 45 x 45              100..145             -420..0              40..85               down/right/back
+    cut drill diameter 8 depth 15 on length start: where leg_dowels's pin meets it, local 0..15 x 9.666667..17.666667 x 18.5..26.5
+    cut drill diameter 8 depth 15 on length start: where leg_dowels's pin meets it, local 0..15 x 27.333333..35.333333 x 18.5..26.5
+leg_back_left                oak_45_sq      420 x 45 x 45              100..145             -420..0              215..260             down/right/back
+    cut drill diameter 8 depth 15 on length start: where leg_dowels's pin meets it, local 0..15 x 9.666667..17.666667 x 18.5..26.5
+    cut drill diameter 8 depth 15 on length start: where leg_dowels's pin meets it, local 0..15 x 27.333333..35.333333 x 18.5..26.5
+leg_front_middle             oak_45_sq      420 x 45 x 45              1577.5..1622.5       -420..0              40..85               down/right/back
+    cut drill diameter 8 depth 15 on length start: where leg_dowels's pin meets it, local 0..15 x 9.666667..17.666667 x 18.5..26.5
+    cut drill diameter 8 depth 15 on length start: where leg_dowels's pin meets it, local 0..15 x 27.333333..35.333333 x 18.5..26.5
+leg_back_middle              oak_45_sq      420 x 45 x 45              1577.5..1622.5       -420..0              215..260             down/right/back
+    cut drill diameter 8 depth 15 on length start: where leg_dowels's pin meets it, local 0..15 x 9.666667..17.666667 x 18.5..26.5
+    cut drill diameter 8 depth 15 on length start: where leg_dowels's pin meets it, local 0..15 x 27.333333..35.333333 x 18.5..26.5
+leg_front_right              oak_45_sq      420 x 45 x 45              3055..3100           -420..0              40..85               down/right/back
+    cut drill diameter 8 depth 15 on length start: where leg_dowels's pin meets it, local 0..15 x 9.666667..17.666667 x 18.5..26.5
+    cut drill diameter 8 depth 15 on length start: where leg_dowels's pin meets it, local 0..15 x 27.333333..35.333333 x 18.5..26.5
+leg_back_right               oak_45_sq      420 x 45 x 45              3055..3100           -420..0              215..260             down/right/back
+    cut drill diameter 8 depth 15 on length start: where leg_dowels's pin meets it, local 0..15 x 9.666667..17.666667 x 18.5..26.5
+    cut drill diameter 8 depth 15 on length start: where leg_dowels's pin meets it, local 0..15 x 27.333333..35.333333 x 18.5..26.5
+seat.piece[2]                oak_30         2250 x 300 x 30            1100..3200           0..30                0..300               right/back/up
+    drawn 2100 x 300 x 30, starting 150 x 0 x 0 into the cut size
+    cut drill diameter 8 depth 15 on thickness start: where leg_dowels's pin meets it, local 637.166667..645.166667 x 58.5..66.5 x 0..15
+    cut drill diameter 8 depth 15 on thickness start: where leg_dowels's pin meets it, local 654.833333..662.833333 x 58.5..66.5 x 0..15
+    cut drill diameter 8 depth 15 on thickness start: where leg_dowels's pin meets it, local 637.166667..645.166667 x 233.5..241.5 x 0..15
+    cut drill diameter 8 depth 15 on thickness start: where leg_dowels's pin meets it, local 654.833333..662.833333 x 233.5..241.5 x 0..15
+    cut drill diameter 8 depth 15 on thickness start: where leg_dowels's pin meets it, local 2114.666667..2122.666667 x 58.5..66.5 x 0..15
+    cut drill diameter 8 depth 15 on thickness start: where leg_dowels's pin meets it, local 2132.333333..2140.333333 x 58.5..66.5 x 0..15
+    cut drill diameter 8 depth 15 on thickness start: where leg_dowels's pin meets it, local 2114.666667..2122.666667 x 233.5..241.5 x 0..15
+    cut drill diameter 8 depth 15 on thickness start: where leg_dowels's pin meets it, local 2132.333333..2140.333333 x 233.5..241.5 x 0..15
+    cut notch depth 15 on thickness start: where seat.piece[1] meets it, local 0..300 x 0..300 x 0..30
+
+HARDWARE (0)
+
+JOINTS (2)
+leg_dowels                   dowel
+    piece: leg_front_left, into: seat.piece[1] (butt across up)
+        pin: 2 x dowel_pin (beech), moves with leg_front_left
+            1 cylinder up diameter 8, up -15..15, centre across 113.666667 x deep 62.5
+            2 cylinder up diameter 8, up -15..15, centre across 131.333333 x deep 62.5
+    piece: leg_back_left, into: seat.piece[1] (butt across up)
+        pin: 2 x dowel_pin (beech), moves with leg_back_left
+            1 cylinder up diameter 8, up -15..15, centre across 113.666667 x deep 237.5
+            2 cylinder up diameter 8, up -15..15, centre across 131.333333 x deep 237.5
+    piece: leg_front_middle, into: seat.piece[2] (butt across up)
+        pin: 2 x dowel_pin (beech), moves with leg_front_middle
+            1 cylinder up diameter 8, up -15..15, centre across 1591.166667 x deep 62.5
+            2 cylinder up diameter 8, up -15..15, centre across 1608.833333 x deep 62.5
+    piece: leg_back_middle, into: seat.piece[2] (butt across up)
+        pin: 2 x dowel_pin (beech), moves with leg_back_middle
+            1 cylinder up diameter 8, up -15..15, centre across 1591.166667 x deep 237.5
+            2 cylinder up diameter 8, up -15..15, centre across 1608.833333 x deep 237.5
+    piece: leg_front_right, into: seat.piece[2] (butt across up)
+        pin: 2 x dowel_pin (beech), moves with leg_front_right
+            1 cylinder up diameter 8, up -15..15, centre across 3068.666667 x deep 62.5
+            2 cylinder up diameter 8, up -15..15, centre across 3086.333333 x deep 62.5
+    piece: leg_back_right, into: seat.piece[2] (butt across up)
+        pin: 2 x dowel_pin (beech), moves with leg_back_right
+            1 cylinder up diameter 8, up -15..15, centre across 3068.666667 x deep 237.5
+            2 cylinder up diameter 8, up -15..15, centre across 3086.333333 x deep 237.5
+seat.splice[1]               lap_splice
+    piece: seat.piece[1], into: seat.piece[2] (butt across across)
+        adds 150 to the length end of seat.piece[1]
+        adds 150 to the length start of seat.piece[2]
+
+FASTENERS
+leg_dowels                   12 x dowel_pin (8 x 30)
+
+REGIONS (0)
+
+ASSEMBLIES (0)
+
+REQUIRES (20)
+leg_dowels.pin_fits_piece                    holds
+leg_dowels.seat_wide                         holds
+leg_dowels.seat_long                         holds
+leg_dowels.pin_fits_piece                    holds
+leg_dowels.seat_wide                         holds
+leg_dowels.seat_long                         holds
+leg_dowels.pin_fits_piece                    holds
+leg_dowels.seat_wide                         holds
+leg_dowels.seat_long                         holds
+leg_dowels.pin_fits_piece                    holds
+leg_dowels.seat_wide                         holds
+leg_dowels.seat_long                         holds
+leg_dowels.pin_fits_piece                    holds
+leg_dowels.seat_wide                         holds
+leg_dowels.seat_long                         holds
+leg_dowels.pin_fits_piece                    holds
+leg_dowels.seat_wide                         holds
+leg_dowels.seat_long                         holds
+seat.splice[1].same_section                  holds
+seat.splice[1].room                          holds
+
+SCENES (1)
+rest                         As built

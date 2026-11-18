@@ -1,0 +1,10 @@
+---
+source: crates/stave-app/tests/splices.rs
+expression: "rendered(\"tests/broken/splice_from_a_side\")"
+---
+error[type-mismatch]: 'from' needs an end of rail, but front is one of its sides
+  --> tests/broken/splice_from_a_side/project.stave:24:12
+   |
+24 |   lengths: spliced(by: lap_splice, at: 1500mm, from: front)
+   |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = help: rail's length runs across, so its ends are left and right: write from: left

@@ -1,0 +1,46 @@
+// expect: error[require] 'lap_clear' fails: another cut comes too close to the lap
+stave 1
+
+// A tall side spliced 1500mm up with a lap splice, and a shelf housed in a
+// dado 1325mm up: clear of the splice, but only 6mm below the lap. The lap
+// splice's own wall() rule keeps half the board's thickness between its lap
+// and any other cut.
+
+project "Dado beside a lap" {
+  units: mm
+}
+
+stock pine_19 { species: pine, form: solid, thickness: 19mm, max_length: 2400mm }
+
+part side_l : pine_19 {
+  length:  3000mm
+  width:   280mm
+  lengths: spliced(by: lap_splice(lap: 300mm), at: 1500mm, from: bottom)
+  place {
+    ground
+    orient(length: up, width: back)
+  }
+}
+
+part side_r : pine_19 {
+  length: 2000mm
+  width:  280mm
+  place {
+    orient(length: up, width: back)
+    against(side_l.right, gap: 600mm)
+    flush(side_l.bottom)
+    flush(side_l.front)
+  }
+}
+
+part shelf : pine_19 {
+  length: fit
+  width:  280mm
+  place {
+    flush(side_l.bottom, inset: 1325mm)
+    center(from: side_l.right, to: side_r.left)
+    flush(side_l.front)
+  }
+}
+
+joint shelf_dados : dado(shelf, into: [side_l, side_r])

@@ -26,8 +26,8 @@ require book_room  : between(bottom, shelf[0]) >= 180mm "each opening should tak
 require shelf_span : case_width - 2 * pine_19.thickness <= 860mm "pine shelves longer than this sag under books"
 
 // ---- stock ----
-stock pine_19 { species: pine, form: solid, thickness: 19mm, max_width: 300mm }
-stock ply_6   { species: birch, form: plywood, thickness: 6mm }
+stock pine_19 { species: pine, form: solid, thickness: 19mm, max_width: 300mm, max_length: 2400mm }
+stock ply_6   { species: birch, form: plywood, thickness: 6mm, max_length: 2440mm }
 
 // ---- the case ----
 

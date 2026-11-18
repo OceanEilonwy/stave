@@ -12,9 +12,9 @@ use stave_model::instance::Ctx;
 use stave_model::mechanism::MemberIndex;
 use stave_model::solved::{
     self, Assembly, BodyOwner, Cut, CutPlace, CutSource, FastenerUse, Hardware, HardwareBase,
-    Joint, JointPair, LocalBox, LocalPoint, PartOrigin, Point, PoseValue, ProjectInfo, Region,
-    RequireResult, RoleBinding, Scene, SceneItem, ScenePose, Shape, Size3, SolvedDesign, Station,
-    Stock, Tool,
+    Joint, JointOrigin, JointPair, LocalBox, LocalPoint, PartOrigin, Point, PoseValue, ProjectInfo,
+    Region, RequireResult, RoleBinding, Scene, SceneItem, ScenePose, Shape, Size3, SolvedDesign,
+    Station, Stock, Tool,
 };
 use stave_model::value::{ExactBox, Value};
 use stave_schema::words::{Grain, MotionWord, StockForm};
@@ -417,6 +417,8 @@ pub(crate) fn build(solver: &mut Solver<'_>) -> Option<SolvedDesign> {
         }
     }
 
+    solver.warn_missing_max_length();
+
     // 4. Joints, pass B: made parts, cuts, steps.
     let mut cuts: Vec<Vec<Cut>> = vec![Vec::new(); part_count];
     let mut memberships: Vec<Vec<JointId>> = vec![Vec::new(); part_count];
@@ -479,8 +481,17 @@ pub(crate) fn build(solver: &mut Solver<'_>) -> Option<SolvedDesign> {
         &work,
     );
 
-    // 6b. Parts wider than their stock: boards and the joints between them.
-    let boards = solver.make_boards(&mut geoms, &mut cuts, &mut memberships, &mut made);
+    // 6b. Spliced parts: their pieces and the splices between them.
+    let splits = solver.make_pieces(&mut crate::pieces::Tables {
+        geoms: &mut geoms,
+        cuts: &mut cuts,
+        memberships: &mut memberships,
+        made: &mut made,
+        joints: &mut joints,
+    });
+
+    // 6c. Parts wider than their stock: boards and the joints between them.
+    let boards = solver.make_boards(&mut geoms, &mut cuts, &mut memberships, &mut made, &splits);
 
     // 7. Every assembly's mechanism, from the hardware that moves it.
     let mechanisms = solver.assembly_mechanisms(&placed);
@@ -555,7 +566,7 @@ pub(crate) fn build(solver: &mut Solver<'_>) -> Option<SolvedDesign> {
     if solver.diagnostics.iter().filter(|d| d.is_error()).count() > errors_before {
         return None;
     }
-    Some(SolvedDesign {
+    let mut design = SolvedDesign {
         project,
         parts,
         hardware,
@@ -572,7 +583,9 @@ pub(crate) fn build(solver: &mut Solver<'_>) -> Option<SolvedDesign> {
             overruns
         },
         wall_rules: std::mem::take(&mut solver.wall_rules),
-    })
+    };
+    solver.rebind_pieces(&mut design, &splits);
+    Some(design)
 }
 
 /// A cut a piece of hardware makes: its member's shape where it meets the
@@ -988,6 +1001,7 @@ impl Solver<'_> {
             pairs,
             unmatched: work.unmatched.clone(),
             note,
+            origin: JointOrigin::Declared,
         })
     }
 
@@ -1640,15 +1654,28 @@ impl Solver<'_> {
                     )
                 } else {
                     let info = made.get(index - self.model.parts.len()).ok_or(Reported)?;
+                    // A piece of a spliced part is cut as its part is.
+                    let (grain, note, loose) = match info.origin {
+                        PartOrigin::Piece { part, .. } => parts
+                            .get(part.index())
+                            .map_or((Grain::Length, None, false), |first: &solved::Part| {
+                                (first.grain, first.note.clone(), first.loose)
+                            }),
+                        PartOrigin::Declared
+                        | PartOrigin::Mirror { .. }
+                        | PartOrigin::MirroredAssembly { .. }
+                        | PartOrigin::Made { .. }
+                        | PartOrigin::Boards { .. } => (Grain::Length, info.note.clone(), false),
+                    };
                     (
                         info.name.clone(),
                         info.assembly,
                         info.origin,
                         info.stock,
                         Shape::Board,
-                        Grain::Length,
-                        info.note.clone(),
-                        false,
+                        grain,
+                        note,
+                        loose,
                     )
                 };
             let stock = self.write_stock(stock)?;
@@ -1701,6 +1728,7 @@ impl Solver<'_> {
                 note,
                 boards: boards.get_mut(index).and_then(Option::take),
                 loose,
+                pieces: None,
             });
         }
         Ok(parts)

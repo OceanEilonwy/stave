@@ -1,0 +1,33 @@
+// expect: error[type-mismatch] rail.piece[1]: its cut length works out as 2645mm, which is more than its stock's max_length of 2400mm
+stave 1
+
+// A four-metre rail spliced once, but 2600mm from its left end: the first
+// piece, with the half lap it reaches past the splice, is still longer
+// than a 2400mm board.
+
+project "A piece still too long" {
+  units: mm
+}
+
+stock pine_19 { species: pine, form: solid, thickness: 19mm, max_length: 2400mm }
+
+part base : pine_19 {
+  length: 600mm
+  width:  300mm
+  place {
+    ground
+  }
+}
+
+part rail : pine_19 {
+  length:  4000mm
+  width:   90mm
+  lengths: spliced(by: lap_splice, at: 2600mm, from: left)
+  place {
+    against(base.top)
+    flush(base.left)
+    flush(base.front)
+  }
+}
+
+joint rail_glue : glued_face(rail, into: base)

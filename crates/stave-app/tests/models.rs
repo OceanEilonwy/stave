@@ -44,7 +44,7 @@ project \"Model check\" {{
   units: mm
 }}
 
-stock side_19 {{ species: birch, form: plywood, thickness: 19mm }}
+stock side_19 {{ species: birch, form: plywood, thickness: 19mm, max_length: 2440mm }}
 
 part base : side_19 {{
   length: 600mm

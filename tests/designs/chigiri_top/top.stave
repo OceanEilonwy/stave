@@ -8,7 +8,7 @@ project "Chigiri top" {
   units: mm
 }
 
-stock oak_19 { species: white_oak, form: solid, thickness: 19mm, max_width: 150mm }
+stock oak_19 { species: white_oak, form: solid, thickness: 19mm, max_width: 150mm, max_length: 2700mm }
 
 /// The top: 420mm across the grain, so it is made of three boards of 140mm,
 /// with a key across each of the two seams.

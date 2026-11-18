@@ -9,7 +9,7 @@ project "Chidori without flats" {
   units: mm
 }
 
-stock hinoki_30 { species: hinoki, form: solid, thickness: 30mm, width: 30mm }
+stock hinoki_30 { species: hinoki, form: solid, thickness: 30mm, width: 30mm, max_length: 4000mm }
 
 part lock : hinoki_30 {
   length: 300mm

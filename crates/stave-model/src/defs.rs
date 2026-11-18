@@ -471,6 +471,9 @@ pub struct PartBodyDef {
     pub note: Option<Text>,
     /// `boards:`: how its boards are joined (grammar, "Boards").
     pub boards: Option<RExpr>,
+    /// `lengths:`: where it is spliced end to end, when it is longer than
+    /// its stock (grammar, "Splices").
+    pub lengths: Option<RExpr>,
     /// `loose:`: `true` for a part meant to lift out, which nothing needs
     /// to hold (grammar, "Held").
     pub loose: Option<RExpr>,

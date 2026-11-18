@@ -1389,6 +1389,7 @@ impl Resolver<'_> {
                 | Builtin::Inset
                 | Builtin::Turned
                 | Builtin::Joined
+                | Builtin::Spliced
                 | Builtin::Box
                 | Builtin::Cylinder
                 | Builtin::Model

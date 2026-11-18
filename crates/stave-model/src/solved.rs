@@ -609,6 +609,15 @@ pub enum PartOrigin {
         /// The pair (index into [`Joint::pairs`]).
         pair: usize,
     },
+    /// A piece of a spliced part after its first (grammar, "Splices"):
+    /// the first piece keeps the part's own id and origin, and its
+    /// [`Part::pieces`] lists them all.
+    Piece {
+        /// The part's first piece, which keeps the part's id.
+        part: PartId,
+        /// Its number, from the end the part's `lengths:` measures from.
+        index: PieceIndex,
+    },
     /// A part a board joint makes (a spline): once per seam of a part made
     /// of boards, or once for a kind with one `Parts` role.
     Boards {
@@ -701,6 +710,43 @@ pub struct Part {
     /// `loose: true`: meant to lift out, so nothing needs to hold it
     /// (grammar, "Held").
     pub loose: bool,
+    /// On the first piece of a part spliced end to end (grammar,
+    /// "Splices"): every piece and splice. Derived, never written.
+    pub pieces: Option<Pieces>,
+}
+
+/// The number of a piece of a spliced part: 1 is the piece at the end its
+/// `lengths:` measures from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[serde(transparent)]
+pub struct PieceIndex(std::num::NonZeroU32);
+
+impl PieceIndex {
+    /// The piece numbered `number`; `None` for 0.
+    pub fn new(number: u32) -> Option<PieceIndex> {
+        std::num::NonZeroU32::new(number).map(PieceIndex)
+    }
+
+    /// Its number, from 1.
+    pub fn get(self) -> u32 {
+        self.0.get()
+    }
+}
+
+/// The pieces a part longer than its stock is made of, joined end to end
+/// (grammar, "Splices"). Each piece is a part of its own in the solved
+/// design and each splice a joint, so everything that works on parts and
+/// joints works on them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Pieces {
+    /// The part's name as written, before it was split (`rail`).
+    pub name: String,
+    /// The pieces, numbered from 1 at the end `from:` names; the first is
+    /// the part that carries this list.
+    pub parts: NonEmpty<PartId>,
+    /// The splices, from the first piece: splice `n` joins piece `n` to
+    /// piece `n + 1`.
+    pub splices: Vec<JointId>,
 }
 
 /// The number of a board within its part: 1 is the board at the
@@ -1301,10 +1347,26 @@ pub struct Joint {
     pub unmatched: Vec<PartId>,
     /// `note:`, with values filled in.
     pub note: Option<String>,
+    /// Where it comes from: a `joint` declaration, or a part's `lengths:`.
+    pub origin: JointOrigin,
 }
 
-// ---------------------------------------------------------------------------
-// Hardware, assemblies, regions, scenes
+/// Where a joint comes from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case", tag = "kind")]
+pub enum JointOrigin {
+    /// Declared with `joint name : kind(...)`.
+    Declared,
+    /// A splice of a part's `lengths:` (grammar, "Splices"), joining two of
+    /// its pieces.
+    Splice {
+        /// The part's first piece, which keeps the part's id.
+        part: PartId,
+        /// Which splice, from 1 at the end `from:` names.
+        index: PieceIndex,
+    },
+}
+
 // ---------------------------------------------------------------------------
 
 /// What kind of mounted hardware.

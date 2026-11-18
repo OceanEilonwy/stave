@@ -1,0 +1,10 @@
+---
+source: crates/stave-app/tests/splices.rs
+expression: "rendered(\"tests/broken/stock_without_max_length\")"
+---
+warning[missing-field]: pine_19 doesn't say how long its boards are, so Stave can't check part lengths
+  --> tests/broken/stock_without_max_length/project.stave:11:7
+   |
+11 | stock pine_19 { species: pine, form: solid, thickness: 19mm }
+   |       ^^^^^^^
+   = help: add the longest board you can buy to pine_19, for example max_length: 2400mm

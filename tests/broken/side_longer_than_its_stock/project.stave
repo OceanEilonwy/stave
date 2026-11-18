@@ -1,0 +1,23 @@
+// expect: error[type-mismatch] side_l: its cut length works out as 9000mm, which is more than its stock's max_length of 2400mm
+stave 1
+
+// The review's nine-metre bookshelf, cut down to one side: it is far longer
+// than the pine boards you can buy, and nothing says where to splice it.
+// The help suggests a lengths: that gives pieces short enough.
+
+project "Nine-metre bookshelf" {
+  units: mm
+}
+
+param case_height = 9000mm
+
+stock pine_19 { species: pine, form: solid, thickness: 19mm, max_width: 300mm, max_length: 2400mm }
+
+part side_l : pine_19 {
+  length: case_height
+  width:  280mm
+  place {
+    ground
+    orient(length: up, width: back)
+  }
+}

@@ -1,0 +1,32 @@
+// expect: error[type-mismatch] 'from' needs an end of rail, but front is one of its sides
+stave 1
+
+// A rail running left to right, spliced with its distance measured from
+// its front face: a splice is measured from one of the rail's two ends.
+
+project "Splice measured from a side" {
+  units: mm
+}
+
+stock pine_19 { species: pine, form: solid, thickness: 19mm, max_length: 2400mm }
+
+part base : pine_19 {
+  length: 600mm
+  width:  300mm
+  place {
+    ground
+  }
+}
+
+part rail : pine_19 {
+  length:  3000mm
+  width:   90mm
+  lengths: spliced(by: lap_splice, at: 1500mm, from: front)
+  place {
+    against(base.top)
+    flush(base.left)
+    flush(base.front)
+  }
+}
+
+joint rail_glue : glued_face(rail, into: base)

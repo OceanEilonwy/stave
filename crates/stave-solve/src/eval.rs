@@ -1440,6 +1440,86 @@ impl Solver<'_> {
                     )),
                 }
             }
+            Builtin::Spliced => {
+                let (Some(by), Some(at), Some(from)) = (
+                    Self::arg(args, "by"),
+                    Self::arg(args, "at"),
+                    Self::arg(args, "from"),
+                ) else {
+                    return Err(Reported);
+                };
+                let by = match self.eval(by, env)? {
+                    Value::Kind(kind) => kind,
+                    other => {
+                        return Err(self.error(
+                            Code::TypeMismatch,
+                            format!("'by' needs a joint kind, found {}", other.description()),
+                            env.file,
+                            by.span,
+                            "name the joint kind each splice is made with: spliced(by: kind_name, ...)",
+                        ));
+                    }
+                };
+                let positions = match self.eval(at, env)? {
+                    Value::Length(length) => vec![length],
+                    Value::List(items) => {
+                        let mut lengths = Vec::new();
+                        for item in items {
+                            match item {
+                                Value::Length(length) => lengths.push(length),
+                                other => {
+                                    return Err(self.error(
+                                        Code::TypeMismatch,
+                                        format!(
+                                            "'at' needs lengths, found {}",
+                                            other.description()
+                                        ),
+                                        env.file,
+                                        at.span,
+                                        "list where each splice is: at: [1200mm, 2400mm]",
+                                    ));
+                                }
+                            }
+                        }
+                        lengths
+                    }
+                    other => {
+                        return Err(self.error(
+                            Code::TypeMismatch,
+                            format!("'at' needs a length, found {}", other.description()),
+                            env.file,
+                            at.span,
+                            "say how far from the end the splice is: at: 1200mm",
+                        ));
+                    }
+                };
+                let Some(positions) = stave_model::nonempty::NonEmpty::new(positions) else {
+                    return Err(self.error(
+                        Code::TypeMismatch,
+                        "'at' needs at least one length",
+                        env.file,
+                        at.span,
+                        "say how far from the end the splice is: at: 1200mm",
+                    ));
+                };
+                let from = match self.eval(from, env)? {
+                    Value::Word(Word::Face(face)) => face,
+                    other => {
+                        return Err(self.error(
+                            Code::TypeMismatch,
+                            format!("'from' needs a face, found {}", other.description()),
+                            env.file,
+                            from.span,
+                            "name the end the splices are measured from: from: left",
+                        ));
+                    }
+                };
+                Ok(Value::Splices(stave_model::value::Splicing {
+                    by,
+                    at: positions,
+                    from,
+                }))
+            }
             Builtin::Box => Ok(Value::Envelope(Envelope::Box {
                 length: length(self, "length")?.ok_or(Reported)?,
                 width: length(self, "width")?.ok_or(Reported)?,

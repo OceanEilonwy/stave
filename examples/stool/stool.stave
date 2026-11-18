@@ -25,8 +25,8 @@ let high_rung    = 185mm                           // floor to the centre of the
 require legs_fit : seat_size >= 2 * (leg_inset + leg_diameter) + 100mm "the legs crowd each other on a small seat"
 
 // ---- stock ----
-stock ash_30       { species: ash, form: solid, thickness: 30mm, max_width: 200mm }
-stock ash_45_sq    { species: ash, form: solid, thickness: 45mm, width: 45mm }
+stock ash_30       { species: ash, form: solid, thickness: 30mm, max_width: 200mm, max_length: 2400mm }
+stock ash_45_sq    { species: ash, form: solid, thickness: 45mm, width: 45mm, max_length: 2400mm }
 stock ash_dowel_22 { species: ash, form: dowel, diameter: 22mm }
 
 // ---- the seat ----

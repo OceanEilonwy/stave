@@ -1,0 +1,39 @@
+Spliced beam
+units: mm, resolution: 0.5mm
+all lengths in mm; boxes are drawn boxes as across, up, deep ranges from the ground part's left-bottom-front corner
+
+PARTS (3)
+part                         stock          cut L x W x T              across               up                   deep                 length/width/thickness
+beam.piece[1]                hinoki_105     3170.625 x 105 x 105       0..3000              0..105               0..105               right/back/up
+    drawn 3000 x 105 x 105, starting 0 x 0 x 0 into the cut size
+    cut outline of 7 marks depth through from 0 on thickness end: side from beam.piece[2]
+    cut outline of 4 marks depth 35 from 0 on thickness end: side from beam.piece[2]
+    cut outline of 4 marks depth 70 from 35 on thickness end: side from beam.piece[2]
+    cut outline of 4 marks depth 35 from 0 on thickness start: side from beam.piece[2]
+beam.splice[1].pin           hinoki_105     125 x 21 x 26.25           2986.875..3013.125   -10..115             42..63               up/back/right
+beam.piece[2]                hinoki_105     3170.625 x 105 x 105       3000..6000           0..105               0..105               right/back/up
+    drawn 3000 x 105 x 105, starting 170.625 x 0 x 0 into the cut size
+    cut outline of 7 marks depth through from 0 on thickness end: side from beam.piece[1]
+    cut outline of 4 marks depth 35 from 0 on thickness end: side from beam.piece[1]
+    cut outline of 4 marks depth 70 from 35 on thickness end: side from beam.piece[1]
+    cut outline of 4 marks depth 35 from 0 on thickness start: side from beam.piece[1]
+
+HARDWARE (0)
+
+JOINTS (1)
+beam.splice[1]               kanawa_tsugi
+    piece: beam.piece[1], into: beam.piece[2] (butt across across)
+        adds 170.625 to the length end of beam.piece[1]
+        adds 170.625 to the length start of beam.piece[2]
+        makes beam.splice[1].pin
+
+REGIONS (0)
+
+ASSEMBLIES (0)
+
+REQUIRES (2)
+beam.splice[1].same_section                  holds
+beam.splice[1].room                          holds
+
+SCENES (1)
+rest                         As built

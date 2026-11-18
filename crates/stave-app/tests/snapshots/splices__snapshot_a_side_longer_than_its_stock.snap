@@ -1,0 +1,10 @@
+---
+source: crates/stave-app/tests/splices.rs
+expression: "rendered(\"tests/broken/side_longer_than_its_stock\")"
+---
+error[type-mismatch]: side_l: its cut length works out as 9000mm, which is more than its stock's max_length of 2400mm
+  --> tests/broken/side_longer_than_its_stock/project.stave:17:11
+   |
+17 |   length: case_height
+   |           ^^^^^^^^^^^
+   = help: stock 'pine_19' comes no longer than 2400mm: splice it end to end with lengths: spliced(by: <an end joint>, at: [2250mm, 4500mm, 6750mm], from: bottom), choosing the end joint and leaving each piece room for what its splices add, or buy longer stock

@@ -147,7 +147,12 @@ fn dump_of_the_clothing_cabinet_matches_its_snapshot() {
 /// `stave dump examples/<example>` is the same as
 /// `snapshots/<example>.dump`, which was checked by hand when it was added.
 fn dump_matches_its_snapshot(example: &str) {
-    let output = stave(&["dump", &format!("examples/{example}")]);
+    folder_dump_matches_its_snapshot(&format!("examples/{example}"), example);
+}
+
+/// `stave dump <folder>` is the same as `snapshots/<name>.dump`.
+fn folder_dump_matches_its_snapshot(folder: &str, example: &str) {
+    let output = stave(&["dump", folder]);
     assert!(
         output.status.success(),
         "{}",
@@ -167,6 +172,14 @@ fn dump_matches_its_snapshot(example: &str) {
         "the dump changed; diff it against {}",
         snapshot.display()
     );
+}
+
+/// A spliced part (grammar, "Splices"): its pieces as parts, each with
+/// its own cuts, and each splice as a joint.
+#[test]
+fn dump_of_the_spliced_designs_matches_their_snapshots() {
+    folder_dump_matches_its_snapshot("tests/designs/spliced_bench", "spliced_bench");
+    folder_dump_matches_its_snapshot("tests/designs/spliced_beam", "spliced_beam");
 }
 
 #[test]

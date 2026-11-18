@@ -27,8 +27,8 @@ require hinge_room : lid.hinge_kind.leaf_width <= back.thickness "a hinge leaf m
 require useful     : box_height - bottom_up - ply_6.thickness >= 60mm "the box should be at least 60mm deep inside"
 
 // ---- stock ----
-stock walnut_12 { species: walnut, form: solid, thickness: 12mm, max_width: 200mm }
-stock ply_6     { species: birch, form: plywood, thickness: 6mm }
+stock walnut_12 { species: walnut, form: solid, thickness: 12mm, max_width: 200mm, max_length: 2400mm }
+stock ply_6     { species: birch, form: plywood, thickness: 6mm, max_length: 2440mm }
 
 // ---- the body ----
 

@@ -8,8 +8,8 @@ project "Door too thin for a cup hinge" {
   units: mm
 }
 
-stock ply_18   { species: birch, form: plywood, thickness: 18mm }
-stock maple_12 { species: hard_maple, form: solid, thickness: 12mm, max_width: 150mm }
+stock ply_18   { species: birch, form: plywood, thickness: 18mm, max_length: 2440mm }
+stock maple_12 { species: hard_maple, form: solid, thickness: 12mm, max_width: 150mm, max_length: 2400mm }
 
 part base : ply_18 {
   length: 600mm

@@ -32,6 +32,9 @@ pub enum Builtin {
     Turned,
     /// `joined(by:)`: how the boards of a part are joined.
     Joined,
+    /// `spliced(by:, at:, from:)`: where a part is spliced end to end, and
+    /// by what joint.
+    Spliced,
     /// `box(length:, width:, thickness:)`: an envelope.
     Box,
     /// `cylinder(diameter:, length:)`: an envelope.
@@ -91,7 +94,7 @@ const ITEM: ValueType = ValueType::Items;
 
 impl Builtin {
     /// Every built-in, in the order the grammar lists them.
-    pub const ALL: [Builtin; 18] = [
+    pub const ALL: [Builtin; 19] = [
         Builtin::Between,
         Builtin::Extent,
         Builtin::Mid,
@@ -102,6 +105,7 @@ impl Builtin {
         Builtin::Inset,
         Builtin::Turned,
         Builtin::Joined,
+        Builtin::Spliced,
         Builtin::Box,
         Builtin::Cylinder,
         Builtin::Model,
@@ -125,6 +129,7 @@ impl Builtin {
             Builtin::Inset => "inset",
             Builtin::Turned => "turned",
             Builtin::Joined => "joined",
+            Builtin::Spliced => "spliced",
             Builtin::Box => "box",
             Builtin::Cylinder => "cylinder",
             Builtin::Model => "model",
@@ -151,6 +156,7 @@ impl Builtin {
             Builtin::Overlay | Builtin::Inset => TypeName::Mount,
             Builtin::Turned => TypeName::Shape,
             Builtin::Joined => TypeName::Boards,
+            Builtin::Spliced => TypeName::Splices,
             Builtin::Box | Builtin::Cylinder => TypeName::Envelope,
             Builtin::Model => TypeName::Model,
             Builtin::Ends | Builtin::Pitch | Builtin::Gap => TypeName::Spacing,
@@ -226,6 +232,14 @@ impl Builtin {
             Builtin::Joined => {
                 const JOINT_KIND: ValueType = Type(TypeName::JointKind);
                 const LIST: &[Parameter] = &[named("by", ValueType::ListOf(&JOINT_KIND), true)];
+                LIST
+            }
+            Builtin::Spliced => {
+                const LIST: &[Parameter] = &[
+                    named("by", Type(TypeName::JointKind), true),
+                    named("at", ValueType::ListOf(&LENGTH), true),
+                    named("from", Words(WordSet::Face), true),
+                ];
                 LIST
             }
             Builtin::Box => {

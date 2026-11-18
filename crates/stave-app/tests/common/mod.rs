@@ -42,15 +42,25 @@ pub fn open_files_with_every_warning(files: &[(&str, &str)]) -> Opened {
 
 /// Runs the pipeline on in-memory files under `/project`. The projects
 /// here are fragments that place a few parts to test one rule, mostly
-/// without joining them, so `warning[loose-part]` is left out; the held
-/// check has its own tests (`held.rs`, `tests/broken`), which use
-/// [`open_files_with_every_warning`].
+/// without joining them and with stocks that don't say how long their
+/// boards are, so `warning[loose-part]` and the `warning[missing-field]`
+/// for a stock with no `max_length` are left out; the held check and the
+/// stock warning have their own tests (`walls.rs`, `splices.rs`,
+/// `tests/broken`), which use [`open_files_with_every_warning`].
 pub fn open_files(files: &[(&str, &str)]) -> Opened {
     let mut opened = open_files_with_every_warning(files);
     opened
         .diagnostics
-        .retain(|d| d.code != stave_lang::Code::LoosePart);
+        .retain(|d| d.code != stave_lang::Code::LoosePart && !is_no_max_length_warning(d));
     opened
+}
+
+/// `true` for the warning that a stock doesn't say how long its boards
+/// (or sheets) are.
+pub fn is_no_max_length_warning(d: &Diagnostic) -> bool {
+    d.code == stave_lang::Code::MissingField
+        && !d.is_error()
+        && d.message.contains("doesn't say how long its")
 }
 
 /// Runs the pipeline on one file: [`HEADER`] followed by `body`.

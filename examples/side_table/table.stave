@@ -31,8 +31,8 @@ require shelf_clear  : between(slat[0], apron_front) >= 200mm "leave room above 
 require slats_strong : slat_width >= 40mm "narrow slats bend; make the top bigger or the gaps smaller"
 
 // ---- stock ----
-stock oak_19    { species: white_oak, form: solid, thickness: 19mm, max_width: 200mm }
-stock oak_45_sq { species: white_oak, form: solid, thickness: 45mm, width: 45mm }
+stock oak_19    { species: white_oak, form: solid, thickness: 19mm, max_width: 200mm, max_length: 2700mm }
+stock oak_45_sq { species: white_oak, form: solid, thickness: 45mm, width: 45mm, max_length: 2700mm }
 
 // ---- the top and legs ----
 

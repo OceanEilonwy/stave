@@ -1925,6 +1925,9 @@ pub enum TypeName {
     Shape,
     /// `joined(by: ...)`: how the boards of a part are joined.
     Boards,
+    /// `spliced(by: ..., at: ..., from: ...)`: where a part too long for
+    /// its stock is spliced end to end, and by what joint.
+    Splices,
     /// `box(...)` or `cylinder(...)`.
     Envelope,
     /// `model(...)`.
@@ -1953,7 +1956,7 @@ pub enum TypeName {
 
 impl TypeName {
     /// Every type, in the order the grammar's type table lists them.
-    pub const ALL: [TypeName; 29] = [
+    pub const ALL: [TypeName; 30] = [
         TypeName::Length,
         TypeName::Angle,
         TypeName::Ratio,
@@ -1971,6 +1974,7 @@ impl TypeName {
         TypeName::Mount,
         TypeName::Shape,
         TypeName::Boards,
+        TypeName::Splices,
         TypeName::Envelope,
         TypeName::Model,
         TypeName::Spacing,
@@ -2005,6 +2009,7 @@ impl TypeName {
             TypeName::Mount => "Mount",
             TypeName::Shape => "Shape",
             TypeName::Boards => "Boards",
+            TypeName::Splices => "Splices",
             TypeName::Envelope => "Envelope",
             TypeName::Model => "Model",
             TypeName::Spacing => "Spacing",

@@ -10,7 +10,7 @@ project "Several problems" {
   units: mm
 }
 
-stock ply_18 { species: birch, form: plywood, thickness: 18mm }
+stock ply_18 { species: birch, form: plywood, thickness: 18mm, max_length: 2440mm }
 
 part base : ply_18 {
   length: 600mm
@@ -94,7 +94,7 @@ part shelf : ply_18 {
   }
 }
 
-stock pine_45 { species: pine, form: solid, thickness: 45mm }
+stock pine_45 { species: pine, form: solid, thickness: 45mm, max_length: 2400mm }
 
 /// A block meant to stand on the shelf, placed flush with its top instead.
 part block : pine_45 {

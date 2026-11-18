@@ -397,11 +397,36 @@ impl<'a> Checker<'a> {
     // Where things are written
     // -----------------------------------------------------------------------
 
-    /// The kind call of a joint.
+    /// The kind call of a joint, or for a splice the `lengths:` of the part
+    /// it splices.
     fn joint_place(&self, joint: stave_model::solved::JointId) -> Option<(FileId, Span)> {
+        if let Some(stave_model::solved::JointOrigin::Splice { part, .. }) =
+            self.design.joints.get(joint.index()).map(|j| j.origin)
+        {
+            return self.lengths_place(part);
+        }
         let inst = self.model.joints.get(joint.index())?;
         let def = self.model.defs.joint(inst.def)?;
         Some((def.decl.file, def.call.span))
+    }
+
+    /// Where a spliced part's `lengths:` is written: its own, or its
+    /// mirror source's.
+    fn lengths_place(&self, part: PartId) -> Option<(FileId, Span)> {
+        let mut current = part;
+        while let Some(PartOrigin::Mirror { source } | PartOrigin::MirroredAssembly { source }) =
+            self.design.part(current).map(|p| p.origin)
+        {
+            current = source;
+        }
+        let inst = self.model.parts.get(current.index())?;
+        let def = self.model.defs.part(inst.def)?;
+        match &def.kind {
+            stave_model::defs::PartKind::FromStock(body) => {
+                Some((def.decl.file, body.lengths.as_ref()?.span))
+            }
+            stave_model::defs::PartKind::Mirror(_) => None,
+        }
     }
 
     /// The kind call of a piece of hardware.
@@ -413,8 +438,10 @@ impl<'a> Checker<'a> {
 
     /// A part's name where it is declared (a made part: its joint).
     fn part_place(&self, part: PartId) -> Option<(FileId, Span)> {
-        if let Some(PartOrigin::Made { joint, .. }) = self.design.part(part).map(|p| p.origin) {
-            return self.joint_place(joint);
+        match self.design.part(part).map(|p| p.origin) {
+            Some(PartOrigin::Made { joint, .. }) => return self.joint_place(joint),
+            Some(PartOrigin::Piece { part: first, .. }) => return self.part_place(first),
+            _ => {}
         }
         let inst = self.model.parts.get(part.index())?;
         let def = self.model.defs.part(inst.def)?;

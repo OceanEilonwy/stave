@@ -1,0 +1,37 @@
+stave 1
+
+/// A lap splice (an end lap): two boards joined end to end, each cut away
+/// to half its thickness over the lap, so they overlap with their faces
+/// flush. Glued, and screwed or pegged through if it must carry load, it
+/// is the simplest way to make a part longer than the boards you can buy:
+/// name it in the part's `lengths:` (see "Splices" in the grammar).
+kind lap_splice : joint {
+  roles {
+    piece: Part
+    into:  Part
+  }
+  /// How far the two boards overlap: as far as the board is wide.
+  param lap = piece.width
+  /// The least wood to leave between a lap and any other cut in its board.
+  param wall = piece.thickness / 2
+
+  require same_section : piece.width == into.width && piece.thickness == into.thickness "both boards need the same width and thickness"
+  require room         : lap <= piece.length / 3 && lap <= into.length / 3 "the lap is too long for these boards"
+  require lap_clear    : wall(lap) >= wall "another cut comes too close to the lap"
+  require mating_clear : wall(mating_lap) >= wall "another cut comes too close to the lap"
+
+  // The boards are drawn meeting end to end; each reaches half the lap past
+  // that point, so they overlap by the whole lap.
+  adds:      [extend(piece, by: lap / 2), extend(into, by: lap / 2)]
+  insert:    [push(piece, along: thickness)]
+  cut_first: [into, piece]
+
+  cut lap: crossing(piece, into, normal: thickness) {
+    notch(depth: piece.thickness / 2)
+  }
+  cut mating_lap: crossing(into, piece, normal: thickness, opposite: true) {
+    notch(depth: into.thickness / 2)
+  }
+
+  note: "Saw both shoulders square and pare the cheeks flat; glue and clamp the lap with a straight batten along the faces so the part stays straight"
+}

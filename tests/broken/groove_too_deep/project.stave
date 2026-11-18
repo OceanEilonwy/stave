@@ -8,8 +8,8 @@ project "Groove too deep" {
   units: mm
 }
 
-stock walnut_12 { species: walnut, form: solid, thickness: 12mm, max_width: 200mm }
-stock ply_6     { species: birch, form: plywood, thickness: 6mm }
+stock walnut_12 { species: walnut, form: solid, thickness: 12mm, max_width: 200mm, max_length: 2400mm }
+stock ply_6     { species: birch, form: plywood, thickness: 6mm, max_length: 2440mm }
 
 part end_l : walnut_12 {
   length: 200mm

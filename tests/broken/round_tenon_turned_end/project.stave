@@ -10,8 +10,8 @@ project "Round tenon on a slim turned end" {
   units: mm
 }
 
-stock ash_30    { species: ash, form: solid, thickness: 30mm, max_width: 200mm }
-stock ash_45_sq { species: ash, form: solid, thickness: 45mm, width: 45mm }
+stock ash_30    { species: ash, form: solid, thickness: 30mm, max_width: 200mm, max_length: 2400mm }
+stock ash_45_sq { species: ash, form: solid, thickness: 45mm, width: 45mm, max_length: 2400mm }
 
 part seat : ash_30 {
   length: 320mm

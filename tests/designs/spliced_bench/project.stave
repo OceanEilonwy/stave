@@ -1,0 +1,90 @@
+stave 1
+
+// A long garden bench whose seat is longer than the oak boards you can buy:
+// the seat says where to splice it (grammar, "Splices"), so Stave makes it
+// from two pieces joined end to end with a lap splice, cuts both laps, and
+// checks that each piece fits a 2700mm board. The splice is placed clear
+// of the middle legs' dowels; move it onto them and the check says so.
+
+project "Long bench" {
+  units: mm
+}
+
+stock oak_30    { species: white_oak, form: solid, thickness: 30mm, max_width: 300mm, max_length: 2700mm }
+stock oak_45_sq { species: white_oak, form: solid, thickness: 45mm, width: 45mm, max_length: 2700mm }
+
+/// The seat: 3.2m long, from two boards spliced 1100mm from its left end.
+part seat : oak_30 {
+  length:  3200mm
+  width:   300mm
+  lengths: spliced(by: lap_splice, at: 1100mm, from: left)
+  place {
+    ground
+  }
+}
+
+/// Six legs: a pair at each end and a pair in the middle.
+part leg_front_left : oak_45_sq {
+  length: 420mm
+  place {
+    orient(length: down, width: right)
+    against(seat.bottom)
+    flush(seat.left, inset: 100mm)
+    flush(seat.front, inset: 40mm)
+  }
+}
+
+part leg_back_left : oak_45_sq {
+  length: 420mm
+  place {
+    orient(length: down, width: right)
+    against(seat.bottom)
+    flush(seat.left, inset: 100mm)
+    flush(seat.back, inset: 40mm)
+  }
+}
+
+part leg_front_middle : oak_45_sq {
+  length: 420mm
+  place {
+    orient(length: down, width: right)
+    against(seat.bottom)
+    center(seat, across)
+    flush(seat.front, inset: 40mm)
+  }
+}
+
+part leg_back_middle : oak_45_sq {
+  length: 420mm
+  place {
+    orient(length: down, width: right)
+    against(seat.bottom)
+    center(seat, across)
+    flush(seat.back, inset: 40mm)
+  }
+}
+
+part leg_front_right : oak_45_sq {
+  length: 420mm
+  place {
+    orient(length: down, width: right)
+    against(seat.bottom)
+    flush(seat.right, inset: 100mm)
+    flush(seat.front, inset: 40mm)
+  }
+}
+
+part leg_back_right : oak_45_sq {
+  length: 420mm
+  place {
+    orient(length: down, width: right)
+    against(seat.bottom)
+    flush(seat.right, inset: 100mm)
+    flush(seat.back, inset: 40mm)
+  }
+}
+
+// The legs are doweled up into the seat. Each leg names the seat, and each
+// pair of dowels lands on whichever piece of the seat is above it.
+joint leg_dowels : dowel([leg_front_left, leg_back_left, leg_front_middle, leg_back_middle,
+                          leg_front_right, leg_back_right], into: seat)

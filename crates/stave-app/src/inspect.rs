@@ -410,6 +410,7 @@ pub fn parts_tree(design: &SolvedDesign) -> PartsTree {
                     PartOrigin::Declared
                     | PartOrigin::MirroredAssembly { .. }
                     | PartOrigin::Made { .. }
+                    | PartOrigin::Piece { .. }
                     | PartOrigin::Boards { .. } => None,
                 };
                 Single {
@@ -870,12 +871,23 @@ fn hardware_decl(model: &Model, id: stave_model::solved::HardwareId) -> Option<&
 fn inspect_part(checked: &Checked, design: &SolvedDesign, id: PartId) -> Option<Inspection> {
     let part = design.part(id)?;
     let kind = match part.origin {
+        _ if part.pieces.is_some() => "PIECE OF A SPLICED PART",
+        PartOrigin::Piece { .. } => "PIECE OF A SPLICED PART",
         PartOrigin::Declared => "PART",
         PartOrigin::Mirror { .. } | PartOrigin::MirroredAssembly { .. } => "MIRROR IMAGE",
         PartOrigin::Made { .. } | PartOrigin::Boards { .. } => "MADE PART",
     };
     let model = checked.opened.model.as_ref();
-    let description = model.and_then(|m| part_decl(m, id)).and_then(docs);
+    // A piece of a spliced part is declared as its part.
+    let declared = match part.origin {
+        PartOrigin::Piece { part: first, .. } => first,
+        PartOrigin::Declared
+        | PartOrigin::Mirror { .. }
+        | PartOrigin::MirroredAssembly { .. }
+        | PartOrigin::Made { .. }
+        | PartOrigin::Boards { .. } => id,
+    };
+    let description = model.and_then(|m| part_decl(m, declared)).and_then(docs);
     let thickness = match part.shape {
         Shape::Round { diameter } => format!("{} across", mm(diameter)),
         Shape::Board | Shape::Turned { .. } => part
@@ -1020,7 +1032,7 @@ fn inspect_part(checked: &Checked, design: &SolvedDesign, id: PartId) -> Option<
             target: cut.hardware.first().map(|h| Target::Hardware(*h)),
         });
     }
-    let source = source_of(checked, |m| part_decl(m, id), part.assembly);
+    let source = source_of(checked, |m| part_decl(m, declared), part.assembly);
     Some(Inspection {
         eyebrow: eyebrow(design, kind, part.assembly),
         title: relative(design, &part.name, part.assembly).to_owned(),
@@ -1147,6 +1159,18 @@ fn inspect_assembly(
     })
 }
 
+/// The declaration of a joint, or of the part a splice joins the pieces
+/// of (its `lengths:` makes the splice).
+fn joint_or_splice_decl<'m>(
+    model: &'m Model,
+    joint: &stave_model::solved::Joint,
+) -> Option<&'m Decl> {
+    match joint.origin {
+        stave_model::solved::JointOrigin::Splice { part, .. } => part_decl(model, part),
+        stave_model::solved::JointOrigin::Declared => joint_decl(model, joint.id),
+    }
+}
+
 /// The declaration of a joint.
 fn joint_decl(model: &Model, id: stave_model::solved::JointId) -> Option<&Decl> {
     let instance = model.joints.get(id.index()).filter(|j| j.id == id)?;
@@ -1208,7 +1232,7 @@ fn inspect_member(
     let assembly = carrier.and_then(|part| part.assembly);
     let moves_with = moving(design, assembly);
     rows.extend(moves_row(design, moves_with));
-    let source = source_of(checked, |m| joint_decl(m, member.joint), joint.assembly);
+    let source = source_of(checked, |m| joint_or_splice_decl(m, joint), joint.assembly);
     Some(Inspection {
         eyebrow: eyebrow(design, "JOINT MEMBER", assembly),
         title: format!(
@@ -1252,7 +1276,11 @@ fn inspect_joint(
             value: focus::title(design, target),
         },
     ];
-    let source = source_of(checked, |model| joint_decl(model, id), joint.assembly);
+    let source = source_of(
+        checked,
+        |model| joint_or_splice_decl(model, joint),
+        joint.assembly,
+    );
     Some(Inspection {
         eyebrow: eyebrow(design, "JOINT", joint.assembly),
         title: relative(design, &joint.name, joint.assembly).to_owned(),

@@ -5,7 +5,7 @@ project "Butt hinge that meets nothing" {
   units: mm
 }
 
-stock pine_19 { species: pine, form: solid, thickness: 19mm }
+stock pine_19 { species: pine, form: solid, thickness: 19mm, max_length: 2400mm }
 
 part base : pine_19 {
   length: 600mm
@@ -17,7 +17,7 @@ part base : pine_19 {
 
 // The hinge is mounted on the lid's top face, which touches nothing: a
 // butt hinge's mount face must lie against a face of its 'on' part.
-stock pine_12 { species: pine, form: solid, thickness: 12mm }
+stock pine_12 { species: pine, form: solid, thickness: 12mm, max_length: 2400mm }
 
 part back : pine_12 {
   length: 600mm
