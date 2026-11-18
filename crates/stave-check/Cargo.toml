@@ -9,3 +9,8 @@ license.workspace = true
 stave-lang = { path = "../stave-lang" }
 stave-model = { path = "../stave-model" }
 stave-geom = { path = "../stave-geom" }
+thiserror = "2"
+
+[dev-dependencies]
+stave-modules = { path = "../stave-modules" }
+stave-solve = { path = "../stave-solve" }

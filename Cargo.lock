@@ -1812,6 +1812,9 @@ dependencies = [
  "stave-geom",
  "stave-lang",
  "stave-model",
+ "stave-modules",
+ "stave-solve",
+ "thiserror",
 ]
 
 [[package]]

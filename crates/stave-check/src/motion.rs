@@ -138,9 +138,14 @@ impl Checker<'_> {
         Some((kind.decl.file, kind.mechanism.as_ref()?.span))
     }
 
-    pub(crate) fn sweeps(&mut self) {
+    /// Stops early, leaving the result partial, once `stopped` says so; it
+    /// is read before each motion and each scene of it.
+    pub(crate) fn sweeps(&mut self, stopped: &dyn Fn() -> bool) {
         let mut found = Vec::new();
         for assembly in &self.design.assemblies {
+            if stopped() {
+                return;
+            }
             let Some(path) = self.path(assembly.id) else {
                 continue;
             };
@@ -174,6 +179,9 @@ impl Checker<'_> {
                 continue;
             }
             for scene_index in 0..self.design.scenes.len() {
+                if stopped() {
+                    return;
+                }
                 let (moves, placements) = self.scene_moves(scene_index);
                 if scene_index > 0 && moves.iter().all(crate::Moves::is_empty) {
                     continue;

@@ -49,6 +49,15 @@
 //! scene checks. When one line causes several problems (a component used
 //! twice, a joint applied to four pairs), they are reported once, at that
 //! line, with the others as notes.
+//!
+//! **Two tiers.** An editor that checks a candidate on every pointer move
+//! runs [`check_fast`] (box-level overlap at rest; about 21 µs on
+//! `examples/clothing_cabinet`, release build) and, once the pointer
+//! rests, [`check_slow`] (every check above; about 24 ms there), which a
+//! flag cancels between checks and between motions. Run to completion,
+//! [`check_slow`] gives exactly what [`check_with_contacts`] gives, in the
+//! same order (`tests/tiers.rs`). See the `tiers` module for what the fast
+//! tier's box overlaps mean.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
@@ -60,7 +69,10 @@ mod models;
 mod motion;
 mod names;
 mod sequence;
+mod tiers;
 mod walls;
+
+pub use tiers::{BoxOverlap, Cancelled, check_fast, check_slow};
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -173,30 +185,56 @@ pub fn check_with_contacts(
     model: &Model,
     design: &SolvedDesign,
 ) -> Vec<(Diagnostic, Option<Contact>)> {
+    match run(model, design, &tiers::Never) {
+        Ok(found) => found,
+        Err(never) => match never {},
+    }
+}
+
+/// Every check in order, reading `stop` between checks and inside the
+/// sweep check: the single check never stops, the slow tier
+/// ([`check_slow`]) stops when cancelled.
+fn run<'m, S: tiers::Stop + ?Sized>(
+    model: &'m Model,
+    design: &'m SolvedDesign,
+    stop: &S,
+) -> Result<Vec<(Diagnostic, Option<Contact>)>, S::Stopped> {
+    stop.check()?;
     let mut checker = Checker::new(model, design);
-    checker.misfits();
-    checker.misshapen();
-    checker.not_supported();
-    checker.cut_sizes();
-    checker.mechanisms();
-    checker.contact();
-    checker.overruns();
-    checker.rest();
-    checker.walls();
-    checker.scenes();
-    checker.sweeps();
+    let steps: [fn(&mut Checker<'m>); 10] = [
+        Checker::misfits,
+        Checker::misshapen,
+        Checker::not_supported,
+        Checker::cut_sizes,
+        Checker::mechanisms,
+        Checker::contact,
+        Checker::overruns,
+        Checker::rest,
+        Checker::walls,
+        Checker::scenes,
+    ];
+    for step in steps {
+        stop.check()?;
+        step(&mut checker);
+    }
+    stop.check()?;
+    checker.sweeps(&|| stop.stopped());
+    // The sweeps may have stopped part way: then this is the end.
+    stop.check()?;
     checker.sequences();
     // Held is a question about the whole project, asked once nothing
     // else is wrong: a part with an error may be the one that would join
     // the rest.
     if !checker.diagnostics.iter().any(|(d, _)| d.is_error()) {
+        stop.check()?;
         checker.held();
     }
+    stop.check()?;
     // Models are read from disk; one that can't be read is not checked.
     for diagnostic in models::models(design, &|path| std::fs::read(path)) {
         checker.diagnostics.push((diagnostic, None));
     }
-    checker.finish()
+    Ok(checker.finish())
 }
 
 /// Something that takes up room: a part, or a member of a piece of
