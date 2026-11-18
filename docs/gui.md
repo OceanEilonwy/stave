@@ -103,11 +103,11 @@ forwards what people do.
 | `stave-app` | `check` | One check as a value that crosses threads (`check::run`, `check::run_with` for open buffers, `Checked`, `Outcome`), and the folder watcher with its debounce (`Watcher`, `RECHECK_DELAY` = 250 ms). |
 | `stave-app` | `link` | The text and the 3D view share one selection: `selection_for` (the part, assembly or hardware a name means), `placed_at` (the line that places a selection), `chip` ("Linked to the text · door_l, line 9"). |
 | `stave-app` | `inspect` | The parts tree (`parts_tree`, `PartsTree::filtered`) and the inspector's account of a selection (`inspect`), with the declaration it is written in, highlighted (`snippet`, `highlight`). |
-| `stave-app` | `problems` | The marks (`marks(checked)`: a `Mark` — error, warning or involved — per part or piece of hardware, per assembly and per file, for the dots), the problems grouped by part (`tree(checked, Filter)`), and a problem's `details` (eyebrow, plain title, the `stave check` text, `Fix`es, the `MotionCard`). |
+| `stave-app` | `problems` | The marks (`marks(checked)`: a `Mark` — error, warning or involved — per part or piece of hardware, per assembly and per file, for the dots), the problems grouped by part (`tree(checked, Filter)`), every problem in full as data (`reports(checked)`, `report(checked, index)`: a `Report` with severity, code, message, its `ReportPlace`s — `Role::Primary` or `Secondary`, `file:line:column`, the place to open, the line split before / underlined / after, the label's words — its notes and help, from the same diagnostic and the same `stave_lang::place_label` the `stave check` renderer uses, never by parsing its text), and a problem's `details` (eyebrow, plain title, the `stave check` text, `Fix`es, the `MotionCard`). |
 | `stave-app` | `finder` | The finder (`search(Sources, query)`): parts and assemblies, files and names (through `stave-ide`), lines of the project's own text and problems, grouped by `Kind`, each `Hit` with its `Goal` (select it, or open a place in the editor). |
 | `stave-app` | `focus`, `view` | Focus mode (its insert text with `steps`, `link` and `location`; `receives`), problems as rows, posing at a contact. |
 | `stave-gtk` | `ui/mod.rs` | The window: owns the `Session`, dispatches commands, redraws on events, runs checks on a worker thread, hands the panels to the workbench, lays the problem pins over the 3D view and keeps what only the 3D view needs (camera, renderer, the looks, focus mode's scrub, the "Open it" slider). |
-| `stave-gtk` | `ui/header.rs`, `tree.rs`, `inspector.rs`, `chrome.rs` | The title bar (with the problems chip and the finder's field); the Parts panel's tree; the Details panel's pages (a part, a problem's details, focus mode); the motion bar and the Cut list's placeholder. |
+| `stave-gtk` | `ui/header.rs`, `tree.rs`, `inspector.rs`, `chrome.rs` | The title bar (with the problems chip and the finder's field); the Parts panel's tree; the Details panel's pages (a part, focus mode); the motion bar and the Cut list's placeholder. |
 | `stave-gtk` | `ui/workbench.rs`, `panels.rs` | The docked window (libpanel): the dock, its panels (Parts, Files, Details, Code, Problems), the status bar with a toggle per edge, and the remembered `Layout` (`~/.config/stave/layout`; `--layout FILE` reads another and writes nothing; screenshots use the default); the Problems and Files lists. |
 | `stave-gtk` | `ui/dock.rs`, `finder.rs` | The scene menu's floating box and the moving assemblies' chips on the 3D view; the finder dialog (Ctrl+K). |
 | `stave-gtk` | `ui/view_tools.rs`, `view_layout.rs`, `slider.rs` | The camera column (fit, front, turn, X-ray, Pull apart and Pull apart's pop-out slider), the shared-wood key and focus mode's From above / In 3D switch; where each floating control goes on the 3D view so none covers another (`view_layout::place`, tested without GTK); the design's slider (track, ring handle, a hatched blocked range). |
@@ -278,14 +278,24 @@ menu puts board B back.
   shows "No file open" and stays where it is. Ctrl+E ("Show the Code Panel") brings it
   back where it last was if it was closed, and puts the keyboard in the
   text.
-- **Problems panel** lists the latest check's problems with their file and
-  line; choosing one selects it (posed in the 3D view, explained in
-  Details).
+- **Problems panel** is where a problem is read: every problem of the
+  latest check in full, as `stave check` prints it
+  (`problems::reports`): `error[require]` in the severity's colour, the
+  message, then each place — its `file:line:column` as a link that opens
+  it in the Code panel (`Command::GoToSource`), with the label's words
+  ("the kind's rule") — over its line of source in a small dark code
+  block, coloured like the editor, without its indent, the part it is
+  about tinted and underlined (wavy for where it is, straight for a place
+  that explains it), then each `note:` and the `help:` line (green).
+  Choosing a row selects the problem (posed in the 3D view). While the 3D
+  view shows an older design (`showing_older()`), a line over the list
+  says so: "The 3D view shows the last version without errors until
+  these are fixed." There is no banner over the window.
 - **Files panel** lists the project's `.stave` files; choosing one opens
   it in the Code panel.
-- **Details panel** is the old card: the selection's account, a
-  problem's details, focus mode's controls (focus mode brings it to the
-  front).
+- **Details panel** is the old card: the selection's account and focus
+  mode's controls (focus mode brings it to the front). A selected
+  problem isn't explained here; the Problems panel shows it.
 - **Status bar**: "Linked to the text · door_l, line 9" for the
   selection, and a toggle per edge.
 
@@ -296,7 +306,10 @@ menu puts board B back.
   between previous and next arrows (`win.next-problem`, F8;
   `win.previous-problem`, Shift+F8; the arrows show when there is more
   than one problem); its tooltip is the status line ("Checked 5 files · 1
-  error · 0 warnings · 26 ms"). The hammer is `win.build` (Ctrl+B),
+  error · 0 warnings · 26 ms"). The pill is red while the latest check
+  has an error, amber for warnings only, green for none (`Pill::tone`;
+  the class goes on the chip round the pill, `.stave-problems-chip.errors
+  button.stave-pill`, a test keeps the CSS keyed so). The hammer is `win.build` (Ctrl+B),
   disabled while building or whenever there is nothing to build
   (`buildable()`), its tooltip saying why (`build_tooltip()`). The title
   is `Session::title()`. The main menu opens a project folder (Ctrl+O),
@@ -432,14 +445,9 @@ free of its warning.
   with a problem.
 - **Stepping**: the chip's pill and arrows, F8 and Shift+F8 select the
   next or previous problem (`Command::NextProblem`), wrapping round.
-- **The details** (`Inspector::show_problem(&Details)`, in the card at the
-  top right): the eyebrow in the severity's colour, the plain title and
-  what happened, the text exactly as `stave check .` prints it in the dark
-  code block (coloured by line: code, arrows, the source line
-  highlighted, carets, `help:`), "Ways to fix it" (the help line split at
-  "or"), each with "Show in text" (`Command::GoToSource` to the problem's
-  line), and the note that fixes are never applied without you. Nothing
-  here edits the text for you: there are no quick fixes yet.
+- **Reading a problem**: in the Problems panel (see "Problems panel"
+  above), in full. Nothing there edits the text for you: there are no
+  quick fixes yet. Details doesn't repeat it.
 - **Posed at contact** (V2C_Problem): a problem with a contact is posed
   and tinted with its shared wood (unchanged), framed, with what it
   doesn't involve drawn `Look::Dim` and the "Shared wood at first
@@ -582,7 +590,10 @@ step and changes nothing in the interface.
   wavy underlines from the fast tier and the last check (drawn by the
   text view itself, 1.6 px thick, in libadwaita's error and warning
   colours for the style, with a bar of the same colour in the gutter
-  beside each line that has one), a lens above each part, assembly, piece of hardware,
+  beside each line that has one; every place a check's problem points
+  at is underlined, so a standard file open in a tab shows the kind's
+  rule a requirement comes from; the check's underlines need only the
+  text the check read, not the names worked out), a lens above each part, assembly, piece of hardware,
   component and kind ("2 uses" lists them; "show in 3D" selects it and
   frames it).
 - **Keys**: F12 or Ctrl+click follows a name; Alt+F12 peeks at its
@@ -615,8 +626,9 @@ step and changes nothing in the interface.
 - **Editing**: the editor edits the real files. Every change updates the
   document's buffer; 150 ms later the names are worked out again, and
   700 ms later the design is checked from the buffers (`check::run_with`
-  with the page's overlay; the underlines go on only if the text is still
-  the text checked). Saving writes the file; the watcher's check then
+  with the page's overlay; the underlines go on only while the text is
+  still the text checked, compared with the text the result itself
+  carries, so a file changed on disk and reloaded is underlined too). Saving writes the file; the watcher's check then
   reads the same text. Tabs keep their text (and undo) when switching
   files or views; closing the window or opening another folder with
   unsaved changes asks: Save, Don't Save or Cancel. A file changed on disk

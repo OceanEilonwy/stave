@@ -118,8 +118,10 @@ struct State {
     tabs: Vec<Tab>,
     active: Option<usize>,
     problems: Vec<Problem>,
-    /// The texts the running check reads.
-    check_texts: Vec<(Document, String)>,
+    /// The text the last check read for each document it has a problem
+    /// in: its problems are underlined only while the document still
+    /// reads so (their spans are offsets into that text).
+    checked_texts: std::collections::BTreeMap<Document, String>,
     /// Changes made by the page itself: don't report them.
     quiet: bool,
     /// The exact place to put the cursor when the next place shown is
@@ -375,16 +377,10 @@ impl FilesPage {
     }
 
     /// The unsaved texts, for a check that reads what the editor shows.
-    /// Remembers them, so the check's underlines go on the right text.
+    /// (Which text the check read comes back with its result, so its
+    /// underlines go on the right text.)
     pub fn overlay_for_check(&self) -> Overlay {
-        let mut state = self.state.borrow_mut();
-        let texts: Vec<(Document, String)> = state
-            .buffers
-            .documents()
-            .filter_map(|d| Some((d.clone(), state.buffers.text(d)?.to_owned())))
-            .collect();
-        state.check_texts = texts;
-        state.buffers.overlay()
+        self.state.borrow().buffers.overlay()
     }
 
     /// `true` if some document has changes that aren't saved.
@@ -497,32 +493,29 @@ impl FilesPage {
         {
             let mut state = self.state.borrow_mut();
             state.problems.clear();
+            state.checked_texts.clear();
             if let Some(checked) = checked {
+                // Every place a problem points at: where it is, and the
+                // places that explain it (the kind's rule in a standard
+                // file), each underlined when its file is open.
                 for diagnostic in &checked.opened.diagnostics {
-                    let Some(label) = diagnostic.primary() else {
-                        continue;
-                    };
-                    let Some(source) = checked.opened.sources.get(label.file) else {
-                        continue;
-                    };
-                    let document = Document::from_source_path(source.path());
-                    // Only problems in text that still reads as checked.
-                    let checked_text = state
-                        .check_texts
-                        .iter()
-                        .find(|(d, _)| *d == document)
-                        .map(|(_, t)| t.as_str());
-                    let current = state.buffers.text(&document);
-                    if current.is_some() && checked_text.is_some() && current != checked_text {
-                        continue;
+                    for label in &diagnostic.labels {
+                        let Some(source) = checked.opened.sources.get(label.file) else {
+                            continue;
+                        };
+                        let document = Document::from_source_path(source.path());
+                        state
+                            .checked_texts
+                            .entry(document.clone())
+                            .or_insert_with(|| source.text().to_owned());
+                        state.problems.push(Problem {
+                            document,
+                            span: label.span,
+                            severity: diagnostic.severity,
+                            message: diagnostic.message.clone(),
+                            help: diagnostic.help.clone(),
+                        });
                     }
-                    state.problems.push(Problem {
-                        document,
-                        span: label.span,
-                        severity: diagnostic.severity,
-                        message: diagnostic.message.clone(),
-                        help: diagnostic.help.clone(),
-                    });
                 }
             }
         }
@@ -999,38 +992,53 @@ impl FilesPage {
                 })
                 .collect();
             self.editor.paint(&buffer, &lines, &runs);
-            let mut problems: Vec<(Run, Severity)> = analysis
-                .diagnostics(*file)
-                .filter_map(|d| {
-                    let span = d.primary()?.span;
-                    Some((
-                        Run {
-                            start: span.start(),
-                            end: span.end(),
-                        },
-                        d.severity,
-                    ))
-                })
-                .collect();
-            problems.extend(self.check_problems(&document).into_iter().map(|p| {
-                (
-                    Run {
-                        start: p.span.start(),
-                        end: p.span.end(),
-                    },
-                    p.severity,
-                )
-            }));
-            self.editor.underline(&buffer, &lines, &problems);
             self.show_lenses(analysis, *file);
         }
+        // The check's problems are underlined whether or not the names
+        // are worked out yet: they need only the text the check read.
+        let mut problems: Vec<(Run, Severity)> = fresh
+            .iter()
+            .flat_map(|(analysis, file)| {
+                analysis
+                    .diagnostics(*file)
+                    .filter_map(|d| {
+                        let span = d.primary()?.span;
+                        Some((
+                            Run {
+                                start: span.start(),
+                                end: span.end(),
+                            },
+                            d.severity,
+                        ))
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        problems.extend(self.check_problems(&document).into_iter().map(|p| {
+            (
+                Run {
+                    start: p.span.start(),
+                    end: p.span.end(),
+                },
+                p.severity,
+            )
+        }));
+        self.editor.underline(&buffer, &lines, &problems);
         let relink = fresh.is_some() && std::mem::take(&mut self.state.borrow_mut().relink);
         self.cursor_moved_now(relink);
     }
 
+    /// The last check's problems in a document, while it still reads as
+    /// the check read it (after an edit their spans would point at the
+    /// wrong text; the next check brings them back).
     fn check_problems(&self, document: &Document) -> Vec<Problem> {
-        self.state
-            .borrow()
+        let state = self.state.borrow();
+        let current = state.buffers.text(document);
+        let checked = state.checked_texts.get(document).map(String::as_str);
+        if current.is_none() || current != checked {
+            return Vec::new();
+        }
+        state
             .problems
             .iter()
             .filter(|p| p.document == *document)
