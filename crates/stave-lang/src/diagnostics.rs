@@ -14,10 +14,20 @@
 //!    |                     ^^^^^
 //!    = help: write ':' between the name and the condition
 //! ```
+//!
+//! A diagnostic's help may carry [`Fix`]es: patches a tool can apply as
+//! they are, each printed on its own line after the help (grammar,
+//! "Fixes"):
+//!
+//! ```text
+//!    = help: use slot: 8mm, from the kind's list
+//!    = fix: patch "Use slot: 8mm" { set corner.slot = 8mm }
+//! ```
 
 use std::fmt::{self, Write as _};
 
-use crate::ast::Span;
+use crate::ast::{self, Span};
+use crate::{FORMAT_VERSION, Parse, parse_patch_file};
 
 /// Identifies a file in a [`SourceMap`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -371,6 +381,10 @@ pub struct Diagnostic {
     pub notes: Vec<String>,
     /// A concrete suggestion, printed as `= help: ...`.
     pub help: Option<String>,
+    /// Patches that make the problem go away, printed as `= fix: ...`
+    /// after the help, the one the help recommends first. Empty when the
+    /// help asks for a judgement.
+    pub fixes: Vec<Fix>,
 }
 
 impl Diagnostic {
@@ -383,6 +397,7 @@ impl Diagnostic {
             labels: vec![primary],
             notes: Vec::new(),
             help: None,
+            fixes: Vec::new(),
         }
     }
 
@@ -398,6 +413,13 @@ impl Diagnostic {
     #[must_use]
     pub fn with_help(mut self, help: impl Into<String>) -> Self {
         self.help = Some(help.into());
+        self
+    }
+
+    /// Adds a fix after the ones already there.
+    #[must_use]
+    pub fn with_fix(mut self, fix: Fix) -> Self {
+        self.fixes.push(fix);
         self
     }
 
@@ -424,6 +446,174 @@ impl Diagnostic {
     pub fn is_error(&self) -> bool {
         self.severity == Severity::Error
     }
+}
+
+/// A fix: a labelled patch that makes a diagnostic go away, which a tool
+/// can apply as it is (grammar, "Fixes"). It is written on one line,
+/// `patch "Use 18mm" { set door.overlay = 18mm }`, and always parses with
+/// the patch parser: [`Fix::new`] and [`Fix::parse`] refuse anything else.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Fix {
+    label: String,
+    operations: String,
+}
+
+/// Why a [`Fix`] can't be made.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum FixError {
+    /// The label is empty.
+    #[error("a fix needs a label, such as \"Use 18mm\"")]
+    EmptyLabel,
+    /// The label doesn't start with a capital letter.
+    #[error("a fix's label starts with a capital letter, found \"{0}\"")]
+    LowercaseLabel(String),
+    /// The label ends with a full stop.
+    #[error("a fix's label has no full stop at the end, found \"{0}\"")]
+    FullStop(String),
+    /// The label holds a character a plain string can't.
+    #[error(
+        "a fix's label can't hold a quote, a backslash, a brace or a line break, found \"{0}\""
+    )]
+    LabelCharacter(String),
+    /// The patch is written on more than one line.
+    #[error("a fix is written on one line")]
+    MultiLine,
+    /// The patch has no operations.
+    #[error("a fix needs at least one operation")]
+    NoOperations,
+    /// The text is not exactly one patch.
+    #[error("a fix is exactly one patch: patch \"<label>\" {{ <operations> }}")]
+    NotOnePatch,
+    /// The patch doesn't parse.
+    #[error("the fix's patch has {} syntax error(s)", .0.len())]
+    Syntax(Vec<Diagnostic>),
+}
+
+impl Fix {
+    /// A fix with a label (the text on its button: a short instruction
+    /// with a capital letter and no full stop, "Use 18mm") and its
+    /// operations, written on one line and separated by commas
+    /// (`set door.overlay = 18mm, unset door.gap`).
+    ///
+    /// # Errors
+    ///
+    /// A label the grammar doesn't allow, or operations that are not one
+    /// line of the patch grammar.
+    pub fn new(label: impl Into<String>, operations: &str) -> Result<Self, FixError> {
+        let label = label.into();
+        check_label(&label)?;
+        if operations.contains(['\n', '\r']) {
+            return Err(FixError::MultiLine);
+        }
+        let text = patch_file_text(&format!("patch \"{label}\" {{ {operations} }}"));
+        let parse = parse_patch_file(FileId::DETACHED, &text);
+        let (_, operations) = one_patch(&parse, &text)?;
+        Ok(Self { label, operations })
+    }
+
+    /// Reads a fix as it is printed after `= fix: `, or written on a
+    /// broken design's `// fix:` line: `patch "Use 18mm" { ... }`.
+    ///
+    /// # Errors
+    ///
+    /// Text that is not exactly one patch on one line, with a label the
+    /// grammar allows and at least one operation.
+    pub fn parse(text: &str) -> Result<Self, FixError> {
+        let text = text.trim();
+        if text.contains(['\n', '\r']) {
+            return Err(FixError::MultiLine);
+        }
+        let file = patch_file_text(text);
+        let parse = parse_patch_file(FileId::DETACHED, &file);
+        let (label, operations) = one_patch(&parse, &file)?;
+        Self::new(label, &operations)
+    }
+
+    /// The label on the fix's button.
+    pub fn label(&self) -> &str {
+        &self.label
+    }
+
+    /// The operations, on one line, separated by commas.
+    pub fn operations(&self) -> &str {
+        &self.operations
+    }
+
+    /// The fix as a patch file, `stave 1` header included, ready for
+    /// [`crate::parse_patch_file`] and [`crate::apply_patch`].
+    pub fn patch_file(&self) -> String {
+        patch_file_text(&self.to_string())
+    }
+}
+
+impl fmt::Display for Fix {
+    /// The patch on one line: `patch "<label>" { <operations> }`.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "patch \"{}\" {{ {} }}", self.label, self.operations)
+    }
+}
+
+fn patch_file_text(patch: &str) -> String {
+    format!("stave {FORMAT_VERSION}\n\n{patch}\n")
+}
+
+fn check_label(label: &str) -> Result<(), FixError> {
+    let Some(first) = label.chars().next() else {
+        return Err(FixError::EmptyLabel);
+    };
+    if label.contains(['"', '\\', '{', '}', '\n', '\r']) {
+        return Err(FixError::LabelCharacter(label.to_owned()));
+    }
+    if !first.is_uppercase() {
+        return Err(FixError::LowercaseLabel(label.to_owned()));
+    }
+    if label.ends_with('.') {
+        return Err(FixError::FullStop(label.to_owned()));
+    }
+    Ok(())
+}
+
+/// The label and the operations (each as written, joined by ", ") of a
+/// patch file that holds exactly one patch.
+fn one_patch(parse: &Parse<ast::PatchFile>, text: &str) -> Result<(String, String), FixError> {
+    if parse.has_errors() {
+        return Err(FixError::Syntax(
+            parse
+                .diagnostics
+                .iter()
+                .filter(|diagnostic| diagnostic.is_error())
+                .cloned()
+                .collect(),
+        ));
+    }
+    let [patch] = parse
+        .ast
+        .as_ref()
+        .map(|file| file.patches.as_slice())
+        .unwrap_or_default()
+    else {
+        return Err(FixError::NotOnePatch);
+    };
+    if patch.ops.is_empty() {
+        return Err(FixError::NoOperations);
+    }
+    let slice = |span: Span| {
+        text.get(to_usize(span.start())..to_usize(span.end()))
+            .unwrap_or("")
+    };
+    let mut label = String::new();
+    for part in &patch.summary.parts {
+        match part {
+            ast::StringPart::Text { text, .. } => label.push_str(text),
+            ast::StringPart::Interp { .. } => {
+                return Err(FixError::LabelCharacter(
+                    slice(patch.summary.span).to_owned(),
+                ));
+            }
+        }
+    }
+    let operations: Vec<&str> = patch.ops.iter().map(|op| slice(op.span)).collect();
+    Ok((label, operations.join(", ")))
 }
 
 /// Renders diagnostics compiler-style, one after another, each followed by a
@@ -518,6 +708,9 @@ fn render_diagnostic_into(out: &mut String, sources: &SourceMap, diagnostic: &Di
     if let Some(help) = &diagnostic.help {
         let _ = writeln!(out, "{pad} = help: {help}");
     }
+    for fix in &diagnostic.fixes {
+        let _ = writeln!(out, "{pad} = fix: {fix}");
+    }
 }
 
 fn to_usize(offset: u32) -> usize {
@@ -605,6 +798,89 @@ mod tests {
              \x20  |            ^^^^\n\
              \x20  = note: units are written right after the number\n\
              \x20  = help: write 3in\n"
+        );
+    }
+
+    #[test]
+    fn renders_each_fix_on_its_own_line_after_the_help() {
+        let mut sources = SourceMap::new();
+        let id = sources.add("a.stave", "let slot = 6mm\n").unwrap();
+        let diagnostic = Diagnostic::error(
+            Code::Require,
+            "'thirds' fails: the slot is a third of the post's thickness",
+            Label::new(id, Span::new(4, 8)),
+        )
+        .with_help("use slot: 8mm or slot: 9mm, from the kind's list")
+        .with_fix(Fix::new("Use slot: 8mm", "set slot = 8mm").unwrap())
+        .with_fix(Fix::new("Use slot: 9mm", "set slot = 9mm,   unset other").unwrap());
+        assert_eq!(
+            render_diagnostic(&sources, &diagnostic),
+            "error[require]: 'thirds' fails: the slot is a third of the post's thickness\n\
+             \x20 --> a.stave:1:5\n\
+             \x20  |\n\
+             \x201 | let slot = 6mm\n\
+             \x20  |     ^^^^\n\
+             \x20  = help: use slot: 8mm or slot: 9mm, from the kind's list\n\
+             \x20  = fix: patch \"Use slot: 8mm\" { set slot = 8mm }\n\
+             \x20  = fix: patch \"Use slot: 9mm\" { set slot = 9mm, unset other }\n"
+        );
+    }
+
+    #[test]
+    fn the_grammars_fix_lines_parse_and_print_back_the_same() {
+        let mut seen = 0;
+        for line in GRAMMAR.lines() {
+            let Some(fix) = line.trim_start().strip_prefix("= fix: ") else {
+                continue;
+            };
+            let parsed = Fix::parse(fix).unwrap_or_else(|error| panic!("{fix}: {error}"));
+            assert_eq!(parsed.to_string(), fix);
+            assert_eq!(Fix::parse(&parsed.to_string()), Ok(parsed.clone()));
+            let file = parsed.patch_file();
+            assert!(!crate::parse_patch_file(FileId::DETACHED, &file).has_errors());
+            seen += 1;
+        }
+        assert!(seen >= 2, "the grammar's Fixes section lost its examples");
+    }
+
+    #[test]
+    fn a_fix_is_one_labelled_patch_on_one_line() {
+        let fix = Fix::new("Remove 'locked'", "set reveal = 1.5mm").unwrap();
+        assert_eq!(fix.label(), "Remove 'locked'");
+        assert_eq!(fix.operations(), "set reveal = 1.5mm");
+        assert_eq!(
+            fix.patch_file(),
+            "stave 1\n\npatch \"Remove 'locked'\" { set reveal = 1.5mm }\n"
+        );
+        assert_eq!(Fix::new("", "set a = 1mm"), Err(FixError::EmptyLabel));
+        assert!(matches!(
+            Fix::new("use 18mm", "set a = 1mm"),
+            Err(FixError::LowercaseLabel(_))
+        ));
+        assert!(matches!(
+            Fix::new("Use 18mm.", "set a = 1mm"),
+            Err(FixError::FullStop(_))
+        ));
+        assert!(matches!(
+            Fix::new("Use {a}", "set a = 1mm"),
+            Err(FixError::LabelCharacter(_))
+        ));
+        assert_eq!(
+            Fix::new("Use 18mm", "set a = 1mm\nset b = 2mm"),
+            Err(FixError::MultiLine)
+        );
+        assert_eq!(Fix::new("Use 18mm", ""), Err(FixError::NoOperations));
+        assert!(matches!(
+            Fix::new("Use 18mm", "set = 1mm"),
+            Err(FixError::Syntax(_))
+        ));
+        assert!(matches!(
+            Fix::new("Use 18mm", "set a = 1mm } patch \"B\" { set b = 2mm"),
+            Err(FixError::NotOnePatch | FixError::Syntax(_))
+        ));
+        assert_eq!(
+            Fix::parse("patch \"A\" { set a = 1mm }\npatch \"B\" { set b = 1mm }"),
+            Err(FixError::MultiLine)
         );
     }
 }

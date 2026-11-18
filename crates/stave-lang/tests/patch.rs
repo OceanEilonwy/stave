@@ -4,9 +4,11 @@
 
 use std::path::{Path, PathBuf};
 
+use stave_lang::placement::Axis;
 use stave_lang::{
-    ModuleFile, ModuleKey, Parse, PatchErrorKind, PatchTarget, PatchedFile, SourceMap, apply_patch,
-    ast, format_file, parse_file, parse_patch_file,
+    ModuleFile, ModuleKey, Parse, PatchErrorKind, PatchTarget, PatchedFile, Scope, SourceMap,
+    TermAddress, TermFixes, TextEdit, apply_patch, apply_text_edits, ast, format_file, parse_file,
+    parse_patch_file,
 };
 
 fn workspace() -> PathBuf {
@@ -52,6 +54,9 @@ fn apply(source: &str, ops: &str) -> Result<String, PatchErrorKind> {
         parse: &module,
     }]);
     let changed = apply_patch(&target, &patch).map_err(|error| error.kind)?;
+    for file in &changed {
+        assert_edits_rebuild(source, file);
+    }
     Ok(match changed.as_slice() {
         [] => source.to_owned(),
         [only] => {
@@ -60,6 +65,39 @@ fn apply(source: &str, ops: &str) -> Result<String, PatchErrorKind> {
         }
         more => panic!("expected one file, got {more:?}"),
     })
+}
+
+/// Applies a changed file's edits to its old text by hand, back to front,
+/// and checks they give exactly its new text; and that the edits are in
+/// the promised order and as small as the line they change allows.
+fn assert_edits_rebuild(old: &str, file: &PatchedFile) {
+    let old = if file.created { "" } else { old };
+    let mut text = old.to_owned();
+    let mut limit = old.len();
+    for TextEdit { range, text: new } in &file.edits {
+        assert!(
+            range.start <= range.end && range.end <= limit,
+            "{}: edits out of order: {:?}",
+            file.name,
+            file.edits
+        );
+        assert!(
+            !(range.is_empty() && new.is_empty()),
+            "{}: an empty edit",
+            file.name
+        );
+        text.replace_range(range.clone(), new);
+        limit = range.start;
+    }
+    assert_eq!(
+        text, file.text,
+        "{}: the edits don't rebuild the text",
+        file.name
+    );
+    assert_eq!(
+        apply_text_edits(old, &file.edits).as_deref(),
+        Some(file.text.as_str())
+    );
 }
 
 fn applied(source: &str, ops: &str) -> String {
@@ -237,9 +275,9 @@ fn set_a_placement_term_by_axis() {
 
 #[test]
 fn set_a_term_that_fixes_every_axis_replaces_it_whole() {
-    let text = applied(CABINET, "set base.place.across = against(side_l.top)");
+    let text = applied(CABINET, "set base.place.across = center(side_l, across)");
     assert!(
-        text.contains("  place {\n    against(side_l.top)\n  }\n"),
+        text.contains("  place {\n    center(side_l, across)\n  }\n"),
         "{text}"
     );
 }
@@ -258,6 +296,95 @@ fn set_a_placement_axis_that_has_no_term_adds_one() {
         text,
         "stave 1\n\npart a : s {\n  length: 1mm\n\n  place {\n    flush(b.back)\n  }\n}\n"
     );
+}
+
+#[test]
+fn set_a_placement_term_that_fixes_another_axis_is_refused() {
+    assert_eq!(
+        apply(CABINET, "set side_l.place.deep = against(base.top)").unwrap_err(),
+        PatchErrorKind::WrongTerm {
+            path: "side_l.place.deep".to_owned(),
+            term: "against(base.top)".to_owned(),
+            addressed: TermAddress::Axis(Axis::Deep),
+            fixes: TermFixes::Axes(&[Axis::Up]),
+        }
+    );
+    assert_eq!(
+        apply(CABINET, "set side_l.place.orient = flush(base.left)")
+            .unwrap_err()
+            .to_string(),
+        "'flush(base.left)' fixes across, not the orientation, so it can't be set as \
+         'side_l.place.orient'"
+    );
+    assert!(matches!(
+        apply(
+            CABINET,
+            "set side_l.place.up = orient(length: up, width: back)"
+        )
+        .unwrap_err(),
+        PatchErrorKind::WrongTerm {
+            addressed: TermAddress::Axis(Axis::Up),
+            fixes: TermFixes::Orientation,
+            ..
+        }
+    ));
+    // With no term for the axis yet, a term for another axis used to be
+    // added, setting that axis twice.
+    let source = "stave 1\n\npart a : s {\n  length: 1mm\n  place {\n    against(b.top)\n  }\n}\n";
+    assert!(matches!(
+        apply(source, "set a.place.deep = flush(b.left)").unwrap_err(),
+        PatchErrorKind::WrongTerm {
+            fixes: TermFixes::Axes(&[Axis::Across]),
+            ..
+        }
+    ));
+}
+
+#[test]
+fn set_a_placement_term_that_also_fixes_a_set_axis_is_refused() {
+    assert_eq!(
+        apply(CABINET, "set side_l.place.across = corners(base)").unwrap_err(),
+        PatchErrorKind::TermClash {
+            term: "corners(base)".to_owned(),
+            axis: Axis::Deep,
+            other: "flush(base.back)".to_owned(),
+        }
+    );
+    assert!(matches!(
+        apply(CABINET, "set side_l.place.up = ground").unwrap_err(),
+        PatchErrorKind::TermClash {
+            axis: Axis::Across,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn set_a_placement_term_whose_axis_cant_be_read_is_let_through() {
+    // An `Anchor` param's face can't be read from the text; the design is
+    // checked again as a whole after the patch.
+    let text = applied(CABINET, "set side_l.place.deep = flush(hinge_face)");
+    assert!(text.contains("    flush(hinge_face)\n"), "{text}");
+    assert!(!text.contains("flush(base.back)"));
+}
+
+#[test]
+fn set_a_placement_term_on_a_one_line_part_lays_the_part_out() {
+    let source = "stave 1\n\npart a : s { length: 1mm, width: 20mm }   // a\n";
+    let text = applied(source, "set a.place.up = against(b.top)");
+    assert_eq!(
+        text,
+        "stave 1\n\npart a : s {\n  length: 1mm\n  width:  20mm\n\n  place {\n    against(b.top)\n  }\n}   // a\n"
+    );
+    assert_eq!(format(&text), text);
+
+    let source = "stave 1\n\ncomponent C {\n  part a : s { length: 1mm }\n}\n";
+    let text = applied(source, "set C.a.place.deep = flush(b.back)");
+    assert_eq!(
+        text,
+        "stave 1\n\ncomponent C {\n  part a : s {\n    length: 1mm\n\n    place {\n      flush(b.back)\n    }\n  }\n}\n"
+    );
+    assert_eq!(format(&text), text);
 }
 
 #[test]
@@ -345,7 +472,7 @@ fn set_errors_name_what_is_missing() {
         apply(CABINET, "set shelf.width = 1mm").unwrap_err(),
         PatchErrorKind::UnknownItem {
             name: "shelf".to_owned(),
-            scope: "the project".to_owned()
+            scope: Scope::Module(ModuleKey::Project)
         }
     );
     assert_eq!(
@@ -519,7 +646,7 @@ fn add_refuses_a_name_that_is_taken() {
         apply(CABINET, "add let depth = 1mm").unwrap_err(),
         PatchErrorKind::AlreadyExists {
             name: "depth".to_owned(),
-            scope: "the project".to_owned()
+            scope: Scope::Module(ModuleKey::Project)
         }
     );
 }
@@ -564,6 +691,9 @@ fn add_picks_the_file_of_the_first_item_it_refers_to() {
         "stave 1\n\nproject \"P\" {\n  units: mm\n}\n\nparam width = 1mm\n\nlet half = width / 2\nlet x    = 1mm\n\nstock ash { species: ash }\n"
     );
     assert_eq!(changed[1].text, "stave 1\n\nlet y = 2mm\n");
+    assert_edits_rebuild(&parsed[0].1.syntax().to_string(), &changed[0]);
+    assert_edits_rebuild("", &changed[1]);
+    assert_eq!(changed[1].edits.len(), 1, "a new file is one insertion");
 }
 
 #[test]
@@ -597,15 +727,108 @@ fn add_and_remove_imports() {
     ));
 }
 
+// ---------------------------------------------------------------------------
+// replace and rename
+// ---------------------------------------------------------------------------
+
 #[test]
-fn replace_and_rename_are_not_applied_yet() {
+fn rename_is_not_applied() {
+    // Renaming needs every reference to the item, which takes name
+    // resolution; this crate has none.
     assert_eq!(
         apply(CABINET, "rename part base to bottom").unwrap_err(),
         PatchErrorKind::NotSupported("rename")
     );
+}
+
+#[test]
+fn replace_a_one_line_item_keeps_its_neighbours_and_comments() {
+    let text = applied(CABINET, "replace let overhang = 3mm");
     assert_eq!(
-        apply(CABINET, "replace let overhang = 3mm").unwrap_err(),
-        PatchErrorKind::NotSupported("replace")
+        text,
+        CABINET.replace("let overhang = 20mm", "let overhang = 3mm")
+    );
+    let text = applied(
+        CABINET,
+        "replace param cabinet_width = 950mm within 600mm..1000mm",
+    );
+    assert!(
+        text.contains(
+            "param cabinet_width = 950mm within 600mm..1000mm   // the outside width\n\
+             param depth         = 560mm\n"
+        ),
+        "{text}"
+    );
+}
+
+#[test]
+fn replace_a_block_keeps_the_doc_comment_unless_it_writes_one() {
+    let text = applied(
+        CABINET,
+        "replace part base : oak_19 {\n  length: 800mm\n  place { ground }\n}",
+    );
+    assert!(
+        text.contains(
+            "/// The bottom of the box.\npart base : oak_19 {\n  length: 800mm\n  place { ground }\n}\n\npart side_l"
+        ),
+        "{text}"
+    );
+    let text = applied(
+        CABINET,
+        "replace stock oak_19 {\n  species: white_oak, form: solid, thickness: 18mm\n}",
+    );
+    assert!(
+        text.contains(
+            "stock oak_19 {\n  species: white_oak, form: solid, thickness: 18mm\n}\n\n/// The bottom"
+        ),
+        "{text}"
+    );
+    let text = applied(
+        CABINET,
+        "replace /// The floor of the box.\npart base : oak_19 { length: 800mm }",
+    );
+    assert!(
+        text.contains(
+            "/// The floor of the box.\npart base : oak_19 { length: 800mm }\n\npart side_l"
+        ),
+        "{text}"
+    );
+    assert!(!text.contains("The bottom of the box"));
+}
+
+#[test]
+fn replace_is_laid_out_for_its_place() {
+    let text = applied(
+        CABINET,
+        "replace scene all_open \"Open\" {\n      explode:   10mm\n      }",
+    );
+    assert!(
+        text.ends_with("scene all_open \"Open\" {\n  explode: 10mm\n}\n"),
+        "{text}"
+    );
+}
+
+#[test]
+fn replace_with_the_same_item_changes_nothing() {
+    assert_eq!(applied(CABINET, "replace let  overhang=20mm"), CABINET);
+}
+
+#[test]
+fn replace_refuses_what_is_not_there_or_of_another_kind() {
+    assert_eq!(
+        apply(CABINET, "replace let nothing = 3mm").unwrap_err(),
+        PatchErrorKind::UnknownItem {
+            name: "nothing".to_owned(),
+            scope: Scope::Module(ModuleKey::Project)
+        }
+    );
+    assert_eq!(
+        apply(CABINET, "replace let base = 3mm").unwrap_err(),
+        PatchErrorKind::WrongTag {
+            path: "base".to_owned(),
+            expected: "let",
+            found: "part"
+        }
     );
 }
 
@@ -837,6 +1060,7 @@ fn patched_corpus_files_parse_and_format_stably() {
         let [patched] = changed.as_slice() else {
             panic!("{name}: expected one changed file");
         };
+        assert_edits_rebuild(&text, patched);
         assert!(
             !parse(&patched.text).has_errors(),
             "{name}: the patched file doesn't parse:\n{}",
@@ -860,6 +1084,112 @@ fn patched_corpus_files_parse_and_format_stably() {
             );
         }
     }
+}
+
+/// The tag a patch writes for a top-level item node.
+fn tag_word(kind: stave_lang::SyntaxKind) -> Option<&'static str> {
+    use stave_lang::SyntaxKind as K;
+    Some(match kind {
+        K::PARAM => "param",
+        K::LET => "let",
+        K::REGION => "region",
+        K::STOCK => "stock",
+        K::PART => "part",
+        K::JOINT => "joint",
+        K::HARDWARE => "hardware",
+        K::ASSEMBLY => "assembly",
+        K::PROFILE => "profile",
+        K::COMPONENT => "component",
+        K::SCENE => "scene",
+        K::REQUIRE => "require",
+        K::KIND => "kind",
+        K::RECIPE => "recipe",
+        _ => return None,
+    })
+}
+
+/// One patch for each operation the file can take: every operation the
+/// patcher applies, each on its own.
+fn one_patch_per_operation(text: &str) -> Vec<String> {
+    use stave_lang::SyntaxKind as K;
+    let module = parse(text);
+    let root = module.syntax();
+    let name_of = |node: &stave_lang::SyntaxNode| {
+        node.children()
+            .find(|child| child.kind() == K::NAME)
+            .map(|name| name.text().to_string())
+    };
+    let mut patches = vec![
+        "add let patch_marker = 1mm".to_owned(),
+        "add import \"./patch_marker\"".to_owned(),
+        "add let patch_marker = 1mm\nreplace let patch_marker = 2mm".to_owned(),
+    ];
+    if let Some(import) = root.children().find(|child| child.kind() == K::IMPORT) {
+        let source = import
+            .children()
+            .find(|child| child.kind() == K::STRING)
+            .unwrap()
+            .text()
+            .to_string();
+        patches.push(format!("remove import {source}"));
+    }
+    if let Some(op) = same_value_ops(text).first() {
+        let (path, _) = op.split_once(" = ").unwrap();
+        patches.push(format!("{path} = 1mm + 2mm"));
+    }
+    let items: Vec<_> = root
+        .children()
+        .filter(|child| tag_word(child.kind()).is_some())
+        .collect();
+    if let Some(param) = items.iter().find(|item| item.kind() == K::PARAM) {
+        patches.push(format!("replace param {} = 7mm", name_of(param).unwrap()));
+    }
+    let field = items.iter().find_map(|item| {
+        let block = item.children().find(|child| child.kind() == K::BLOCK)?;
+        let field = block.children().find(|child| child.kind() == K::FIELD)?;
+        Some(format!("{}.{}", name_of(item)?, name_of(&field)?))
+    });
+    if let Some(field) = field {
+        patches.push(format!("unset {field}"));
+    }
+    if let Some(last) = items.last() {
+        patches.push(format!(
+            "remove {} {}",
+            tag_word(last.kind()).unwrap(),
+            name_of(last).unwrap()
+        ));
+    }
+    patches
+}
+
+#[test]
+fn edits_rebuild_the_new_text_for_every_operation_and_every_corpus_file() {
+    let mut applied_patches = 0;
+    for (name, text) in corpus() {
+        let module = parse(&text);
+        let target = PatchTarget::new(vec![ModuleFile {
+            name: "file.stave",
+            parse: &module,
+        }]);
+        for ops in one_patch_per_operation(&text) {
+            let patch = parse_patch(&patch_text(&ops));
+            let changed = apply_patch(&target, &patch)
+                .unwrap_or_else(|error| panic!("{name}: {ops}: {error}"));
+            for file in &changed {
+                assert_edits_rebuild(&text, file);
+                assert!(
+                    file.edits.len() <= 4,
+                    "{name}: {ops}: {} edits for one operation",
+                    file.edits.len()
+                );
+            }
+            applied_patches += 1;
+        }
+    }
+    assert!(
+        applied_patches > 200,
+        "only {applied_patches} patches applied"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -902,8 +1232,11 @@ fn module_files(folder: &Path) -> Vec<(String, Parse<ast::File>)> {
         .collect()
 }
 
+/// The grammar's example less its `rename` line: renaming needs name
+/// resolution, which this crate doesn't have, so the patcher refuses it
+/// (see `rename_is_not_applied`). Everything else in the example applies.
 #[test]
-fn the_grammar_example_applies_to_the_clothing_cabinet() {
+fn the_grammar_example_without_its_rename_line_applies_to_the_clothing_cabinet() {
     let folder = workspace().join("examples/clothing_cabinet");
     let project = module_files(&folder);
     // Drawer and FramePanelDoor moved to std:casework. They are handed over
@@ -916,7 +1249,7 @@ fn the_grammar_example_applies_to_the_clothing_cabinet() {
         .with_local_module("hw", as_files(&hardware));
 
     let example = grammar_example();
-    // Renaming is a later task; everything else in the example applies.
+    // With the rename line, the whole patch is refused at that line.
     assert_eq!(
         apply_patch(&target, &parse_patch(&example))
             .unwrap_err()
@@ -930,6 +1263,8 @@ fn the_grammar_example_applies_to_the_clothing_cabinet() {
     assert_eq!(names, ["carcass.stave", "drawers.stave"]);
     for file in &changed {
         assert_eq!(file.module, ModuleKey::Project);
+        let old = std::fs::read_to_string(folder.join(&file.name)).unwrap();
+        assert_edits_rebuild(&old, file);
         let parsed = parse(&file.text);
         assert!(
             !parsed.has_errors(),
@@ -971,4 +1306,27 @@ fn the_grammar_example_applies_to_the_clothing_cabinet() {
     );
     assert!(!drawer.text.contains("part sub_front"));
     assert!(!parse(&drawer.text).has_errors());
+}
+
+// ---------------------------------------------------------------------------
+// Fixes
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_fix_is_a_patch_that_applies_as_it_is() {
+    let fix = stave_lang::Fix::new("Use 8mm deep dados", "set dados.depth = 8mm").unwrap();
+    let module = parse(CABINET);
+    let target = PatchTarget::new(vec![ModuleFile {
+        name: "main.stave",
+        parse: &module,
+    }]);
+    let changed = apply_patch(&target, &parse_patch(&fix.patch_file())).unwrap();
+    let [file] = changed.as_slice() else {
+        panic!("{changed:?}");
+    };
+    assert_edits_rebuild(CABINET, file);
+    assert!(
+        file.text
+            .contains("joint dados : dado(base, into: [side_l, side_r], depth: 8mm)\n")
+    );
 }

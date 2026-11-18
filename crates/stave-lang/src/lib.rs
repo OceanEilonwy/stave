@@ -62,11 +62,13 @@ pub mod units;
 pub use diagnostics::{
     Code, Diagnostic, FileId, Label, Severity, SourceMap, render_diagnostic, render_diagnostics,
 };
+pub use diagnostics::{Fix, FixError};
 pub use format::{FormatError, format_file};
 pub use lower::BrokenItem;
 pub use patch::{
     ModuleFile, ModuleKey, PatchError, PatchErrorKind, PatchTarget, PatchedFile, apply_patch,
 };
+pub use patch::{Scope, TermAddress, TermFixes, TextEdit, apply_text_edits};
 pub use syntax::{GreenNode, SyntaxKind, SyntaxNode, SyntaxToken};
 
 /// The result of parsing one file.
