@@ -47,14 +47,11 @@ enum RowKind {
     Source(SourceLocation),
 }
 
-/// The model tree's floating panel.
+/// The Parts panel's tree.
 pub struct TreeSidebar {
-    /// The panel, to float over the 3D view.
+    /// The panel's content.
     pub root: gtk::Box,
-    /// Folds the panel down to its heading, or opens it again.
-    pub collapse: gtk::Button,
     list: gtk::ListBox,
-    body: gtk::Box,
     state: Rc<RefCell<TreeState>>,
 }
 
@@ -98,52 +95,17 @@ impl TreeSidebar {
         list.update_property(&[gtk::accessible::Property::Label("Model")]);
         let scrolled = gtk::ScrolledWindow::builder()
             .hscrollbar_policy(gtk::PolicyType::Never)
-            .propagate_natural_height(true)
-            .max_content_height(520)
+            .vexpand(true)
             .child(&list)
             .build();
-        let heading = gtk::Label::builder()
-            .label("MODEL")
-            .xalign(0.0)
-            .hexpand(true)
-            .css_classes(["dim-label"])
-            .build();
-        let collapse = gtk::Button::builder()
-            .icon_name("go-up-symbolic")
-            .tooltip_text("Fold the model tree (F9)")
-            .css_classes(["flat", "circular", "stave-close"])
-            .build();
-        let head = gtk::Box::builder()
-            .orientation(gtk::Orientation::Horizontal)
-            .css_classes(["stave-model-head"])
-            .build();
-        head.append(&heading);
-        head.append(&collapse);
-        let note = gtk::Label::builder()
-            .label("Click a row and the camera frames it. Find files with Ctrl+K.")
-            .xalign(0.0)
-            .wrap(true)
-            .css_classes(["dim-label", "stave-model-note"])
-            .build();
-        let body = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
-            .build();
-        body.append(&scrolled);
-        body.append(&note);
         let root = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
-            .css_classes(["stave-panel", "stave-model"])
-            .width_request(240)
-            .halign(gtk::Align::Start)
-            .valign(gtk::Align::Start)
+            .css_classes(["stave-model"])
             .build();
-        root.append(&head);
-        root.append(&body);
+        root.append(&scrolled);
         let sidebar = TreeSidebar {
             root,
-            collapse,
             list,
-            body,
             state: Rc::new(RefCell::new(TreeState::default())),
         };
         sidebar.connect();
@@ -151,21 +113,6 @@ impl TreeSidebar {
     }
 
     fn connect(&self) {
-        let body = self.body.clone();
-        self.collapse.connect_clicked(move |button| {
-            let open = !body.is_visible();
-            body.set_visible(open);
-            button.set_icon_name(if open {
-                "go-up-symbolic"
-            } else {
-                "go-down-symbolic"
-            });
-            button.set_tooltip_text(Some(if open {
-                "Fold the model tree (F9)"
-            } else {
-                "Open the model tree (F9)"
-            }));
-        });
         let state = self.state.clone();
         let list = self.list.clone();
         self.list.connect_row_activated(move |_, row| {
@@ -298,11 +245,6 @@ impl TreeSidebar {
         }
         // The assembly holding it opens.
         fill(&self.list, &self.state);
-    }
-
-    /// Folds the panel down to its heading, or opens it again (F9).
-    pub fn toggle(&self) {
-        self.collapse.emit_clicked();
     }
 }
 

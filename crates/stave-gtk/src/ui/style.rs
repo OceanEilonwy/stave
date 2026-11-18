@@ -145,17 +145,19 @@ expander.stave-more title > arrow { min-width: 12px; min-height: 12px; }
 .stave-mark.warning { border-radius: 2px; }
 .stave-card-panel { border-radius: 16px; }
 .stave-card-panel .stave-inspector { padding: 14px 16px; }
-.stave-dock { padding: 6px; border-radius: 14px; border-spacing: 6px; font-size: 13px; }
+.stave-dock { padding: 4px 8px; border-spacing: 6px; font-size: 13px; }
 .stave-dock button.stave-tool { min-height: 34px; padding: 0 12px; border-radius: 9px; font-weight: 600; }
 .stave-dock .stave-dock-separator { min-width: 1px; margin: 6px 2px; }
 .stave-dock .stave-dock-label { font-size: 12px; padding: 0 4px; }
 .stave-dock button.stave-move { min-height: 30px; padding: 0 10px; border-radius: 15px; font-size: 12px; font-weight: 600; }
-.stave-rail { padding: 4px; border-radius: 12px 0 0 12px; border-spacing: 4px; min-width: 36px; }
-.stave-rail button.stave-rail-button { min-width: 36px; min-height: 36px; padding: 0; border-radius: 8px; }
-.stave-rail button.stave-rail-tab { min-width: 36px; padding: 12px 0; border-radius: 8px; font-size: 12.5px; font-weight: 500; }
-.stave-rail button.stave-rail-tab.active { font-weight: 700; }
-.stave-rail-name { font-family: "JetBrains Mono", "Adwaita Mono", monospace; }
-.stave-editor-panel { min-width: 420px; }
+.stave-code-tabs { padding: 4px 6px; border-spacing: 2px; }
+button.stave-code-tab { min-height: 28px; padding: 0 10px; border-radius: 7px; font-size: 12.5px; font-weight: 500; }
+button.stave-code-tab.active { font-weight: 700; }
+.stave-code-tab-name { font-family: "JetBrains Mono", "Adwaita Mono", monospace; }
+.stave-panel-list row { padding: 6px 10px; }
+.stave-panel-empty { padding: 16px; }
+.stave-status-text { font-size: 12px; padding: 0 8px; }
+.stave-model .stave-tree { background: transparent; }
 .stave-editor-head { min-height: 44px; padding: 0 8px 0 16px; }
 .stave-editor-title { font-family: "JetBrains Mono", "Adwaita Mono", monospace; font-size: 13px; font-weight: 600; }
 button.stave-problem-step { min-width: 28px; min-height: 28px; padding: 0; border-radius: 14px; }
@@ -189,6 +191,8 @@ const COLOURS: &str = r#"
 headerbar.stave-header:backdrop { background-color: @headerbar_bg_color; transition: none; }
 headerbar.stave-header:backdrop > windowhandle { filter: none; }
 window.stave-window { background-color: @window_bg_color; }
+/* The panels' tabs read in both styles, focused or not. */
+panelframetabbar tabbar tab, panelframetabbar tabbar tab label { color: @window_fg_color; opacity: 1; filter: none; }
 .stave-header button.stave-icon-button:disabled { color: alpha(currentColor, 0.45); }
 .stave-header button.stave-sidebar-toggle:checked { background: alpha(currentColor, 0.1); }
 .stave-title .subtitle, .dim { color: alpha(currentColor, 0.7); }
@@ -284,7 +288,7 @@ button.stave-play:hover { background: mix(@accent_bg_color, @accent_fg_color, 0.
 .stave-card .stave-value.good { color: @success_color; }
 .stave-card .stave-value.bad { color: @error_color; }
 
-.stave-panel, .stave-dock, .stave-rail, .stave-edge-pin, .stave-pin-label { background: alpha(@view_bg_color, 0.95); color: @view_fg_color; box-shadow: 0 2px 12px alpha(black, 0.12); }
+.stave-panel, .stave-edge-pin, .stave-pin-label { background: alpha(@view_bg_color, 0.95); color: @view_fg_color; box-shadow: 0 2px 12px alpha(black, 0.12); }
 .stave-card-panel { background: @view_bg_color; color: @view_fg_color; box-shadow: 0 0 0 1px alpha(black, 0.08), 0 10px 32px alpha(black, 0.18); }
 .stave-joint-word { background: alpha(currentColor, 0.1); }
 .stave-mark.error { background: @error_color; }
@@ -299,11 +303,13 @@ button.stave-play:hover { background: mix(@accent_bg_color, @accent_fg_color, 0.
 .stave-dock button.stave-move.error { box-shadow: inset 0 0 0 1px alpha(@error_color, 0.6); }
 .stave-dock button.stave-move.warning { box-shadow: inset 0 0 0 1px alpha(@warning_color, 0.7); }
 .stave-dock button.stave-move.current { background: alpha(@accent_bg_color, 0.2); color: @accent_color; }
-.stave-rail { box-shadow: -2px 0 12px alpha(black, 0.14); }
-.stave-rail button.stave-rail-tab { background: transparent; color: alpha(currentColor, 0.8); }
-.stave-rail button.stave-rail-tab:hover { background: alpha(currentColor, 0.07); }
-.stave-rail button.stave-rail-tab.active { background: alpha(@accent_bg_color, 0.2); color: @accent_color; }
-.stave-editor-panel { background: @view_bg_color; box-shadow: -8px 0 28px alpha(black, 0.16); }
+.stave-dock { background: @headerbar_bg_color; color: @headerbar_fg_color; box-shadow: inset 0 1px @headerbar_shade_color; }
+.stave-dock .stave-camera { background: transparent; padding: 0; }
+.stave-code-head { background: @headerbar_bg_color; box-shadow: inset 0 -1px @headerbar_shade_color; }
+button.stave-code-tab { background: transparent; color: alpha(currentColor, 0.8); }
+button.stave-code-tab:hover { background: alpha(currentColor, 0.07); }
+button.stave-code-tab.active { background: alpha(@accent_bg_color, 0.2); color: @accent_color; }
+.stave-editor-column, .stave-details { background: @view_bg_color; color: @view_fg_color; }
 .stave-editor-head { background: @headerbar_bg_color; border-bottom: 1px solid alpha(currentColor, 0.1); }
 .stave-pin { background: @error_bg_color; color: @error_fg_color; box-shadow: 0 0 0 4px alpha(@error_bg_color, 0.22); }
 .stave-pin.warning { background: @warning_bg_color; color: @warning_fg_color; box-shadow: 0 0 0 4px alpha(@warning_bg_color, 0.25); }

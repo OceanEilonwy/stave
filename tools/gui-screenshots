@@ -41,12 +41,14 @@ shot() {
 
 # ---- the window (docs/screenshots/window) ----
 
-# The design with nothing chosen: the 3D view filling the window, the model
-# tree floating at its top left, the dock at the bottom, the rail of open
-# files at the right edge (V2C_Home); and a project with problems, each
-# pinned where it happens and dotted in the tree.
+# The design with nothing chosen, in the docked window's default layout
+# (canvas board B): Parts and Files above Details on the left, the 3D view
+# with its tool strip under it, Code and Problems along the bottom; and a
+# project with problems, each pinned where it happens and dotted in Parts.
 shot $window/home.png $cabinet --theme light
 shot $window/home_problems.png crates/stave-app/tests/projects/several_problems --theme light
+# The Code panel dragged to the right edge (board B2): files open there.
+shot $window/code_right.png $cabinet --theme dark --editor --select 'door_l.stile[hinge]' --layout tools/layouts/code_right.layout
 # A hinge stile chosen, light and dark: the camera frames it between the
 # tree and its card, the rest of the design dims, the tree lists the
 # joints it is in, and the card beside it says what it is (V2C_Spatial).
