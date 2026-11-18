@@ -31,6 +31,7 @@ and `broken/<folder>` for a design in `tests/broken/`.
 | Every byte is in some token (the lexer covers the input) | `lang/lexer::every_byte_is_covered`, `lang/corpus::the_tree_is_lossless` | covered |
 | The keyword list | `lang/lib::keywords_match_the_grammar`, `lang/syntax::keyword_kinds_match_the_keyword_list`, `lang/ast::an_ident_is_never_a_keyword` | covered |
 | A keyword where a new name is expected is `reserved-word` | `lang/parser::a_keyword_where_a_new_name_goes_is_reserved`, `broken/reserved_word` | covered |
+| `solved` is a keyword; `locked` and `solved` are item keywords, so the parser recovers at them | — | pending: param kinds are not built |
 | A keyword is a `NAME` after `.` and before `:` | `lang/parser::keywords_are_names_after_a_dot_and_before_a_colon`, `lang/ast::a_name_may_be_a_keyword` | covered |
 | Face and direction words, types and built-in names are not keywords | `app/features::a_part_may_be_called_like_a_face_word`, `app/spec_names::a_builtin_is_found_only_when_called` | covered |
 | Contextual words are special in one position only | `lang/lib::contextual_words_match_the_grammar`, `lang/parser::contextual_words_in_their_positions`, `lang/parser::contextual_words_are_ordinary_names_elsewhere` | covered |
@@ -171,7 +172,13 @@ and `broken/<folder>` for a design in `tests/broken/`.
 | A value worked out from itself is `type-mismatch` | `app/spec_values::a_value_worked_out_from_itself_is_a_type_mismatch` | covered |
 | `within` gives the allowed values, of the param's type | `app/spec_values::within_values_must_have_the_params_type`, `app/spec_values::a_module_params_default_must_lie_within_its_range` | covered |
 | An argument outside a component or kind param's `within` is `out-of-range` | `app/features::values_outside_within_are_out_of_range`, `app/spec_joints::a_setting_outside_the_kinds_within_is_out_of_range`, `broken/out_of_range` | covered |
-| `locked` parses and is kept | `app/spec_values::locked_is_written_last`, `lang/parser::every_item_form_parses` | partial: smart edits, which `locked` stops, are a later step |
+| The trailing `locked` of draft 3 parses and is kept, until param kinds replace it | `app/spec_values::locked_is_written_last`, `lang/parser::every_item_form_parses` | partial: smart edits, which `locked` stops, are a later step |
+| Param kinds are a prefix: `param`, `locked param`, `solved param`; `private` first | — | pending: param kinds are not built |
+| The trailing `locked` is `syntax`, with the help to write it first | `broken/locked_written_last` | pending: param kinds are not built |
+| `locked` or `solved` followed by anything but `param`, both on one param, or `private` after them is `syntax` | — | pending: param kinds are not built (tests/broken-next/locked_and_solved, private_after_locked) |
+| `locked` or `solved` on a param without a default is `missing-value` | — | pending: param kinds are not built (tests/broken-next/locked_without_default) |
+| `locked` or `solved` on a param that isn't a quantity is `type-mismatch` | — | pending: param kinds are not built (tests/broken-next/locked_not_a_quantity) |
+| A `solved param` without `within` is `missing-field` | — | pending: param kinds are not built (tests/broken-next/solved_without_within) |
 | A module param's `within` is the range the design must work over | — | pending: checking over a range needs z3 (layer 6) |
 | A misspelt type name is `unknown-name` | `app/spec_values::a_misspelt_type_name_is_an_unknown_name` | covered |
 | `let`: a named value, used before or after it is written, not passed in | `app/spec_values::a_let_is_a_named_value_used_before_or_after_it_is_written`, `app/spec_values::a_let_can_not_be_passed_into_a_component` | covered |
@@ -204,6 +211,7 @@ and `broken/<folder>` for a design in `tests/broken/`.
 | Readable on every part: sizes, `stock`, the six faces, `diameter` on round parts; not grain or shape | `app/spec_declarations::every_part_reads_its_sizes_stock_and_faces`, `app/spec_declarations::only_round_parts_have_a_diameter`, `app/spec_declarations::grain_shape_and_reference_faces_are_not_readable` | covered |
 | Only a part's length or width may be `fit` | `app/spec_declarations::only_length_and_width_may_be_fit` | covered |
 | `region`: no fields; readable faces and `across`, `up`, `deep` | `app/spec_placement::a_region_reads_its_faces_and_sizes` | covered |
+| Place params: a component may take `Region`, `Part`, `Parts` and `Anchor` params, given in the assembly body as an expression of their type | — | pending: no test pins `Parts` and `Anchor` component params yet |
 | `assembly`: the component's params as fields; its items and params readable | `app/spec_declarations::an_assembly_reads_its_components_params_and_items`, `app/features::a_component_param_without_a_default_must_be_given`, `app/spec_declarations::an_assembly_is_an_instance_of_a_component` | covered |
 | An array of assemblies | `app/spec_declarations::an_array_of_assemblies_takes_its_arguments_per_element` | covered |
 | `profile`: measure required, smooth optional, two or more stations; readable length | `app/spec_declarations::a_profile_needs_a_measure_and_two_stations`, `app/spec_declarations::profile_entries_are_typed`, `app/spec_declarations::a_turned_part_is_as_long_as_its_profile` | covered |
@@ -232,6 +240,8 @@ and `broken/<folder>` for a design in `tests/broken/`.
 | Anchors are faces or mid-planes of parts and regions | `app/spec_placement::an_anchor_is_a_face_of_a_part_or_region`, `app/spec_placement::center_on_a_region_along_a_world_axis` | covered |
 | `ground` fixes all three axes; it may be turned with `orient` | `app/spec_placement::the_ground_part_may_be_turned_with_orient`, `app/pipeline::the_clothing_cabinet_is_where_the_design_says` | covered |
 | The floor is wherever the lowest part ends up | `app/pipeline::the_clothing_cabinet_is_where_the_design_says` | covered |
+| Exactly one root: one part placed with `ground` or one region made with `box`; every other case is `ground` with its own message | — | pending: `box` is not built (tests/broken-next/root_missing, root_ground_and_box, root_two_boxes, box_in_component, box_inside_split) |
+| With a box root, the floor is the box's bottom face | — | pending: `box` is not built |
 | `against(face)`: the opposite face touches | `app/spec_placement::against_puts_the_opposite_face_on_the_anchor`, `app/features::against_and_flush_with_gaps_and_insets` | covered |
 | `against(face, gap: d)`: moved `d` outward from the face | `app/spec_placement::against_with_gap_is_measured_outward_from_the_anchor_face`, `app/features::against_and_flush_with_gaps_and_insets` | covered |
 | `flush(face)` and `flush(face, inset: d)`: same-named face, moved into the anchor's part | `app/spec_placement::flush_with_inset_moves_into_the_anchors_part`, `app/features::against_and_flush_with_gaps_and_insets` | covered |
@@ -269,6 +279,7 @@ and `broken/<folder>` for a design in `tests/broken/`.
 | A slide with a box envelope is two members | `app/pipeline::the_clothing_cabinet_is_where_the_design_says` | covered |
 | A mirrored part: same stock and sizes, reflected position and frame | `app/spec_placement::a_mirrored_part_has_its_sources_stock_sizes_and_the_reflected_position`, `app/pipeline::the_clothing_cabinet_is_where_the_design_says` | covered |
 | A mirror is about a plane | `app/spec_placement::a_mirror_is_about_a_plane` | covered |
+| A mirrored assembly re-binds `Parts` params part by part, `Anchor` params to the reflected face or mid-plane, `Region` params to the reflected region | — | pending: no test pins re-binding of these params yet |
 | A mirrored assembly keeps its item names and re-binds outside items | `app/features::mirrored_assemblies_rebind_outside_parts`, `app/pipeline::the_clothing_cabinet_is_where_the_design_says` | covered |
 | Nothing at the reflected place is `mirror` | `app/features::a_mirror_without_a_counterpart_is_an_error`, `broken/mirror` | covered |
 | The cut list marks a mirrored part; the work plan marks the pair together | — | pending: the cut list and work plan are later steps (stave-output, stave-workplan) |
@@ -301,6 +312,9 @@ and `broken/<folder>` for a design in `tests/broken/`.
 | `overlay(...)`: in front of the opening, each edge defaulting to 0mm, negative a reveal | `app/spec_placement::an_overlay_front_lies_in_front_of_the_opening` | covered |
 | `inset(reveal:)`: inside the opening, front flush, even gap | `app/spec_placement::an_inset_front_is_flush_with_the_openings_front_with_an_even_gap` | covered |
 | `meeting:` applies only between pieces of one split with nothing between them | `app/features::regions_split_and_cover_with_meeting_edges`, `app/spec_placement::meeting_applies_only_between_pieces_of_a_split_with_nothing_between_them` | covered |
+| `box(across:, up:, deep:)`: a region from three lengths, each more than 0mm (`out-of-range`) | — | pending: `box` is not built (tests/broken-next/box_size_zero) |
+| `split(region, axis, shares: [...])`: pieces in proportion to the shares, in label order | — | pending: `shares:` is not built |
+| `shares:`: one per piece and a fixed count (`type-mismatch`), each more than zero (`out-of-range`), no unit (`unit-mismatch`), not with `at:` (`type-mismatch`) | — | pending: `shares:` is not built (tests/broken-next/shares_count, shares_count_can_change, shares_zero, shares_with_unit, shares_with_at) |
 
 ### Joints and roles
 
@@ -480,6 +494,7 @@ pinned down the same way.
 | The standard kinds keep wood round their holes and mortises with `wall()`: a socket at the edge of a board or against a dado, two rung sockets too close in a turned leg, a mortise open at the top of its leg or 0.5mm from it, a dowel into another joint's empty hole | `broken/socket_at_the_edge`, `broken/socket_against_dado`, `broken/rung_holes_too_close`, `broken/mortise_open_at_the_top`, `broken/mortise_wall_too_thin`, `broken/dowel_into_empty_hole`, `app/walls::a_socket_at_the_edge_of_a_side`, `app/walls::a_socket_against_a_dado`, `app/walls::rung_holes_too_close_in_a_turned_leg`, `app/walls::a_mortise_open_at_the_top_of_its_leg`, `app/walls::a_mortise_wall_half_a_millimetre_thick`, `app/walls::a_dowel_into_another_joints_empty_hole`, `app/features::extent_along_another_parts_axis` | covered |
 | Cuts stay in their part, for every kind: a tenon or spigot no bigger than its part, a depth less than the part there, a closed cut with wood between it and every face and every closed cut of another joint; a kind's own rule speaks first | `broken/tenon_bigger_than_part`, `broken/groove_through_the_wall`, `broken/hole_breaks_out`, `broken/holes_run_together`, `app/walls::a_tenon_bigger_than_its_part`, `app/walls::a_groove_through_the_wall`, `app/walls::a_hole_that_breaks_out_of_its_board`, `app/walls::two_empty_holes_that_run_together`, `app/walls::a_kinds_own_rule_speaks_before_the_backstop` | covered |
 | Held: every part is joined to the ground part through joints and hardware, or a part of its group says `loose: true` | `broken/top_held_by_nothing`, `broken/slats_held_by_nothing`, `app/walls::a_part_nothing_joins_to_the_ground_part_is_loose`, `app/walls::a_part_meant_to_lift_out_says_so`, `app/walls::one_loose_part_lets_its_whole_group_lift_out`, `app/walls::a_joint_holds_its_parts`, `app/walls::a_top_held_by_nothing`, `app/walls::slats_held_by_nothing` | covered |
+| Held with a box root: a group is held when one of its parts stands on the floor | — | pending: `box` is not built (tests/broken-next/box_part_loose) |
 | Checking runs in layers; a later layer skips items with earlier errors | `app/features::a_name_error_poisons_only_its_item`, `app/features::a_syntax_error_leaves_out_only_its_item` | covered |
 
 ### Diagnostics
@@ -492,6 +507,9 @@ pinned down the same way.
 | Lengths in messages in project units, trailing zeros trimmed | `lang/units::display_trims_zeros`, `app/spec_values::a_require_message_fills_in_values_in_the_projects_units` | covered |
 | A syntax message's `<token>`: the text in quotes, end of line, end of file, a string, a doc comment | `lang/parser::one_mistake_one_error`, `app/spec_declarations::a_require_needs_its_message` | covered |
 | The broken-design corpus: exact code and message, `// pending:` for checks not built | `app/pipeline::broken_designs_produce_exactly_their_expected_diagnostic`, `lang/broken::broken_designs_produce_their_expected_diagnostic`, `lang/lib::the_broken_corpus_expects_documented_diagnostics` | covered |
+| Designs that need language not built yet wait in `tests/broken-next/` | — | pending: they move to `tests/broken/` with the change that builds their language |
+| Fixes: a diagnostic's help may carry patches, printed as `= fix: patch "..." { ... }`, from layer 2 on; the help is always there | — | pending: diagnostics carry their help as words only |
+| A broken design may pin its first fix with a `// fix:` line | — | pending: the corpus test does not read `// fix:` lines yet |
 | Diagnostics are sorted and the same run to run | `app/pipeline::diagnostics_are_identical_run_to_run`, `modules/memory::diagnostics_are_sorted_and_deterministic`, `cli/determinism::every_example_gives_identical_results_run_to_run` | covered |
 
 ### Tooling and editors
@@ -504,6 +522,7 @@ pinned down the same way.
 | Spans are byte offsets inside the file; lines and columns are computed at the edge | `lang/diagnostics::lines_and_columns_count_characters`, `lang/ast::spans_are_ordered_and_join`, `lang/fuzz::mutated_sources_never_panic_hang_or_lose_text` | covered |
 | Parsing is fast enough for every keystroke | `lang/timing::the_cabinet_parses_in_well_under_a_millisecond_per_file` | covered |
 | `stave fmt` layout: indentation, spacing, alignment, comments, blank lines | `lang/format::indents_and_spaces`, `lang/format::aligns_fields_in_runs`, `lang/format::aligns_consecutive_one_line_declarations`, `lang/format::keeps_comments_and_their_columns`, `lang/format::continuation_lines` | covered |
+| `stave fmt` aligns the word `param` across prefixes in a run of params | — | pending: param kinds are not built |
 | Formatting is idempotent and keeps the tree; it refuses files with errors | `lang/corpus::formatting_is_idempotent_and_keeps_the_meaning`, `lang/fuzz::mutated_sources_never_panic_hang_or_lose_text`, `lang/format::refuses_files_with_errors`, `cli/cli::fmt_skips_files_with_errors` | covered |
 | Every file of the repository is formatted | `lang/corpus::every_corpus_file_is_already_formatted`, `cli/cli::the_whole_repository_is_formatted` | covered |
 | Fast and slow tiers, incremental queries, the language server and its features | — | pending: stave-lsp is a later step |
@@ -512,7 +531,11 @@ pinned down the same way.
 
 | Rule | Tests | Status |
 |---|---|---|
-| Resize and move drags edit values through relationships; locked values stop the chain | — | pending: smart edits need z3 inverse solving, out of scope for this push (plan.md) |
+| A resize traces the size to its candidates; a `locked param`, stock fields, kind sizes and `let` numbers stop or aren't candidates | — | pending: smart edits are not built |
+| A plain number is edited in place | — | pending: smart edits are not built (the editor's first build) |
+| A single plain param is inverted with exact arithmetic (`a × p + b`); several are listed for the user to pick | — | pending: smart edits are not built (the editor's first build) |
+| Solved params are solved by z3: unknowns, equality target, every `require` and `within`, and the total order of answers | — | pending: z3 over solved params is a later stage |
+| Move drags edit one term's offset; snap replaces a term | — | pending: smart edits are not built |
 
 ### Types, units and arithmetic
 
@@ -537,6 +560,7 @@ pinned down the same way.
 | A patch uses the same grammar; every operation parses | `lang/parser::patch_files_parse`, `lang/format::formats_patch_files` | covered |
 | A patch file is told apart by its first declaration | `lang/parser::patch_files_parse`, `modules/memory::patch_file_is_not_part_of_the_module` | covered |
 | Applying patches: add, replace, set, unset, remove, rename; paths; re-checking | — | pending: applying patches is a later step |
+| A path may address a named argument of the call that makes a region (`drawer_bay.shares`) | — | pending: applying patches is a later step |
 
 ## Diagnostics
 
@@ -544,7 +568,7 @@ One row per code of the grammar's Diagnostics table and its warnings.
 
 | Code | Layer | Status | Broken design | Tests |
 |---|---|---|---|---|
-| `syntax` | 1 | covered | `broken/syntax_error` | `lang/parser::one_mistake_one_error`, `lang/spec_syntax::every_syntax_error_has_a_help_line` |
+| `syntax` | 1 | covered | `broken/syntax_error`, `broken/locked_written_last` | `lang/parser::one_mistake_one_error`, `lang/spec_syntax::every_syntax_error_has_a_help_line` |
 | `missing-value` | 1 | covered | `broken/missing_value` | `lang/parser::a_missing_value_is_reported_on_its_own_line` |
 | `reserved-word` | 1 | covered | `broken/reserved_word` | `lang/parser::a_keyword_where_a_new_name_goes_is_reserved`, `modules/memory::keyword_folder_without_alias_is_reserved_word` |
 | `unknown-unit` | 1 | covered | `broken/unknown_unit` | `lang/lexer::quantity_forms`, `app/one_mistake::a_size_decided_by_a_joint_with_its_own_error_is_not_also_undecided` |
@@ -563,7 +587,7 @@ One row per code of the grammar's Diagnostics table and its warnings.
 | `unknown-module` | 2 | covered | `broken/unknown_module` | `modules/memory::missing_folder_is_unknown_module`, `modules/memory::unknown_std_module` |
 | `not-supported` | 2, 4 | covered | `broken/not_supported` | `modules/memory::remote_source_is_not_supported`, `app/spec_names::a_file_in_another_format_version_is_not_supported`, `app/fit::a_notch_in_a_round_part_is_not_supported` |
 | `unnamed-cut` | 2 | covered | `broken/unnamed_cut` | `app/spec_joints::an_unnamed_cut_is_a_warning_once_at_its_kind`, `app/spec_joints::a_kind_nobody_uses_is_still_warned`, `app/spec_joints::a_recipes_cut_block_never_warns`, `cli/cli::check_passes_on_the_examples_and_std` |
-| `ground` | 3 | covered | `broken/ground` | `app/features::exactly_one_part_is_ground`, `app/spec_placement::ground_is_never_inside_a_component` |
+| `ground` | 3 | partial: the root box's cases and the new wording of a missing root are not built (tests/broken-next/root_*) | `broken/ground` | `app/features::exactly_one_part_is_ground`, `app/spec_placement::ground_is_never_inside_a_component` |
 | `axis-not-set` | 3 | covered | `broken/axis_not_set` | `app/features::every_axis_is_set_exactly_once`, `app/spec_placement::the_mount_face_fixes_the_axis_it_is_normal_to` |
 | `axis-set-twice` | 3 | covered | `broken/axis_set_twice` | `app/features::every_axis_is_set_exactly_once`, `app/spec_placement::a_slide_is_fixed_entirely_by_its_base` |
 | `placement-cycle` | 3 | covered | `broken/placement_cycle` | `app/features::parts_placed_against_each_other_are_a_cycle`, `app/spec_placement::a_longer_placement_cycle_lists_every_part` |
