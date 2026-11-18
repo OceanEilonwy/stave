@@ -6,10 +6,11 @@
 //! each other.
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Instant;
 
 use stave_check::{Cancelled, ContactItem, check, check_fast, check_slow, check_with_contacts};
-use stave_lang::Code;
+use stave_lang::{Code, Diagnostic, Severity};
 use stave_model::Model;
 use stave_model::solved::{CutSource, HardwareId, PartId, SolvedDesign};
 use stave_modules::ModuleSet;
@@ -41,30 +42,94 @@ fn corpus() -> Vec<PathBuf> {
 /// The model and solved design of a folder, when it solved without an
 /// error before the checks (the only designs the checks run on).
 fn solved(folder: &Path) -> Option<(Model, SolvedDesign)> {
+    solved_with_warnings(folder).map(|(model, design, _)| (model, design))
+}
+
+/// [`solved`], with the warnings the stages before the checks made.
+fn solved_with_warnings(folder: &Path) -> Option<(Model, SolvedDesign, Vec<Diagnostic>)> {
     let modules = ModuleSet::load(folder).ok()?;
-    let mut errors = modules.has_errors();
+    let mut before = modules.diagnostics.clone();
     let (defs, diagnostics) = stave_model::resolve(&modules);
-    errors |= diagnostics.iter().any(|d| d.is_error());
+    before.extend(diagnostics);
     let (model, diagnostics) = stave_model::instance::instantiate(defs, modules.root);
-    errors |= diagnostics.iter().any(|d| d.is_error());
+    before.extend(diagnostics);
     let (design, diagnostics) = stave_solve::solve(&model);
-    errors |= diagnostics.iter().any(|d| d.is_error());
+    before.extend(diagnostics);
     let design = design?;
-    (!errors).then_some((model, design))
+    let errors = modules.has_errors() || before.iter().any(Diagnostic::is_error);
+    (!errors).then_some((model, design, before))
+}
+
+/// What a folder of the corpus must report, written down independently of
+/// the checks: nothing for an example or a design of `tests/designs/`
+/// (they check clean), and for a broken design its `// expect:` line, or
+/// nothing while it is `// pending:`.
+fn expected(folder: &Path) -> Vec<(Severity, Code, String)> {
+    if !folder.starts_with(workspace().join("tests/broken")) {
+        return Vec::new();
+    }
+    let text = std::fs::read_to_string(folder.join("project.stave")).unwrap();
+    let mut lines = text.lines();
+    let first = lines.next().unwrap();
+    if lines
+        .next()
+        .is_some_and(|line| line.starts_with("// pending: "))
+    {
+        return Vec::new();
+    }
+    let (severity, rest) = match first.strip_prefix("// expect: error[") {
+        Some(rest) => (Severity::Error, rest),
+        None => (
+            Severity::Warning,
+            first.strip_prefix("// expect: warning[").unwrap(),
+        ),
+    };
+    let (code, message) = rest.split_once("] ").unwrap();
+    vec![(
+        severity,
+        Code::from_str_code(code).unwrap(),
+        message.to_owned(),
+    )]
+}
+
+/// Diagnostics as what they say, sorted and without repeats, the way the
+/// pipeline shows them.
+fn said(diagnostics: impl IntoIterator<Item = Diagnostic>) -> Vec<(Severity, Code, String)> {
+    let mut said: Vec<_> = diagnostics
+        .into_iter()
+        .map(|d| (d.severity, d.code, d.message))
+        .collect();
+    said.sort_by(|a, b| (a.1, &a.2).cmp(&(b.1, &b.2)));
+    said.dedup();
+    said
 }
 
 #[test]
 fn fast_then_slow_gives_exactly_the_single_check() {
     let mut checked = 0;
     let mut layered = 0;
+    let mut found = 0;
     for folder in corpus() {
-        let Some((model, design)) = solved(&folder) else {
+        let Some((model, design, before)) = solved_with_warnings(&folder) else {
             continue;
         };
         let what = folder.display().to_string();
         let fast = check_fast(&model, &design);
         let slow = check_slow(&model, &design, &fast, &AtomicBool::new(false))
             .unwrap_or_else(|_| panic!("{what}: never cancelled"));
+        // Against an answer that doesn't come from the checks at all: the
+        // corpus says what each design reports, and the stages before the
+        // checks with the two tiers together say exactly that.
+        let whole = said(
+            before
+                .iter()
+                .cloned()
+                .chain(slow.iter().map(|(d, _)| d.clone())),
+        );
+        assert_eq!(whole, expected(&folder), "{what}");
+        found += usize::from(!slow.is_empty());
+        // And against the single check, which doesn't take the fast
+        // tier's findings: the same diagnostics in the same order.
         let single = check_with_contacts(&model, &design);
         assert_eq!(slow, single, "{what}");
         // The fast tier's diagnostics are the single check's layers 1 to
@@ -87,20 +152,48 @@ fn fast_then_slow_gives_exactly_the_single_check() {
         layered >= 2,
         "the checks make layer 1 to 3 diagnostics: {layered}"
     );
+    assert!(
+        found >= 10,
+        "the two tiers find the broken designs' diagnostics: {found}"
+    );
 }
 
+/// Cancelled at any moment, the slow tier either says it was cancelled or
+/// gives the whole list: never a list cut short that looks complete. The
+/// flag is set from another thread at moments spread over a whole run.
 #[test]
-fn a_cancelled_slow_tier_stops() {
+fn a_cancelled_slow_tier_says_so() {
     let folder = workspace().join("examples/clothing_cabinet");
     let (model, design) = solved(&folder).unwrap();
+    let fast = check_fast(&model, &design);
+    // Set before it starts: cancelled at once.
     assert_eq!(
-        check_slow(
-            &model,
-            &design,
-            &check_fast(&model, &design),
-            &AtomicBool::new(true)
-        ),
+        check_slow(&model, &design, &fast, &AtomicBool::new(true)),
         Err(Cancelled)
+    );
+    let started = Instant::now();
+    let whole = check_slow(&model, &design, &fast, &AtomicBool::new(false)).unwrap();
+    let full_run = started.elapsed();
+    const MOMENTS: u32 = 24;
+    let mut cancelled = 0;
+    for step in 0..MOMENTS {
+        let cancel = AtomicBool::new(false);
+        let delay = full_run * step / MOMENTS;
+        let result = std::thread::scope(|scope| {
+            let run = scope.spawn(|| check_slow(&model, &design, &fast, &cancel));
+            std::thread::sleep(delay);
+            cancel.store(true, Ordering::Relaxed);
+            run.join().unwrap()
+        });
+        match result {
+            Err(Cancelled) => cancelled += 1,
+            Ok(found) => assert_eq!(found, whole, "cancelled after {delay:?}: a partial list"),
+        }
+    }
+    assert!(cancelled > 0, "some runs were cancelled part way");
+    assert_eq!(
+        Cancelled.to_string(),
+        "the check was cancelled before it finished"
     );
 }
 

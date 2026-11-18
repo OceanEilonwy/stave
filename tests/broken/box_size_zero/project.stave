@@ -1,5 +1,4 @@
 // expect: error[out-of-range] 'up' must be more than 0mm, found 0mm
-// pending: the parser does not read box(across:, up:, deep:) yet
 stave 1
 
 project "A flat box" {
