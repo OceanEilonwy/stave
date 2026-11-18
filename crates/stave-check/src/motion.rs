@@ -382,15 +382,20 @@ impl Checker<'_> {
         let root = self.mirror_root(assembly);
         let mount = self.instance_place(root).is_some_and(|p| p.mount);
         let other = self.outer(b);
-        let field = match free {
+        let edge_of = |direction: Direction| match direction {
             Direction::Right => Some("right"),
             Direction::Left => Some("left"),
             Direction::Up => Some("top"),
             Direction::Down => Some("bottom"),
             Direction::Front | Direction::Back => None,
         };
+        let field = edge_of(free);
+        // The overlay is written at the source of a mirrored front, where
+        // the edge that hits may be the other one: a mirror across the
+        // cabinet swaps left and right.
+        let source_field = edge_of(self.at_mirror_root(assembly, free));
         let smaller = |by: i64| {
-            field.map(|edge| OverlayChange::Smaller {
+            source_field.map(|edge| OverlayChange::Smaller {
                 edge,
                 by: Length::from_nm(by),
             })
@@ -415,14 +420,23 @@ impl Checker<'_> {
                 ),
                 smaller((total - gap) / 2),
             ),
-            _ if mount => match field {
-                Some(field) => (
+            _ if mount => match (field, source_field) {
+                // A mirrored front's overlay is its source's, and the
+                // edge may be the other one there.
+                (Some(_), Some(source_field)) if root != assembly => (
+                    format!(
+                        "leave at least {total_text} between {name} and {b_name}: make {}'s {source_field} overlay {more} smaller ({name} follows)",
+                        self.assembly_name(root)
+                    ),
+                    smaller(total - gap),
+                ),
+                (Some(field), _) => (
                     format!(
                         "leave at least {total_text} between {name} and {b_name}: make its {field} overlay {more} smaller"
                     ),
                     smaller(total - gap),
                 ),
-                None => (
+                (None, _) => (
                     format!("leave at least {total_text} between {name} and {b_name}"),
                     None,
                 ),

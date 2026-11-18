@@ -314,3 +314,42 @@ fn a_door_given_a_mount_gets_the_mount_that_clears() {
         ["patch \"Use left: 17mm\" { set door.mount = overlay(left: 17mm, right: 17.8mm) }"]
     );
 }
+
+const MIRRORED_DOOR_HITS_WALL: &str = include_str!("fixtures/mirrored_door_hits_wall.stave");
+
+#[test]
+fn a_mirrored_door_that_hits_gets_its_sources_overlay_on_the_mirrored_edge() {
+    // door_r's right edge hits the wall; door_r is door_l's image, so the
+    // overlay that clears is door_l's left one.
+    let fixes = proved_fixes(
+        &one_file(MIRRORED_DOOR_HITS_WALL),
+        Code::Motion,
+        "door_r.panel hits wall when door_r is opened past",
+    );
+    assert_eq!(
+        texts(&fixes),
+        ["patch \"Use left: 17mm\" { set door_l.mount = overlay(left: 17mm, right: 8mm) }"]
+    );
+}
+
+#[test]
+fn a_mirrored_door_with_its_overlay_in_the_component_gets_the_mirrored_edge() {
+    let text = MIRRORED_DOOR_HITS_WALL
+        .replace("  param mount      : Mount\n", "")
+        .replace(
+            "cover(opening, mount, thickness: ply_18.thickness)",
+            "cover(opening, overlay(left: 17.8mm, right: 8mm), thickness: ply_18.thickness)",
+        )
+        .replace("  mount:      overlay(left: 17.8mm, right: 8mm)\n", "");
+    let fixes = proved_fixes(
+        &one_file(&text),
+        Code::Motion,
+        "door_r.panel hits wall when door_r is opened past",
+    );
+    assert_eq!(
+        texts(&fixes),
+        [
+            "patch \"Use left: 17mm\" { set Door.face = cover(opening, overlay(left: 17mm, right: 8mm), thickness: ply_18.thickness) }"
+        ]
+    );
+}
