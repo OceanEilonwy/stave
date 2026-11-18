@@ -68,7 +68,7 @@ pub use lower::BrokenItem;
 pub use patch::{
     ModuleFile, ModuleKey, PatchError, PatchErrorKind, PatchTarget, PatchedFile, apply_patch,
 };
-pub use patch::{Scope, TermAddress, TermFixes, TextEdit, apply_text_edits};
+pub use patch::{Scope, TermAddress, TermFixes, TextEdit, apply_text_edits, changed_line_runs};
 pub use syntax::{GreenNode, SyntaxKind, SyntaxNode, SyntaxToken};
 
 /// The result of parsing one file.

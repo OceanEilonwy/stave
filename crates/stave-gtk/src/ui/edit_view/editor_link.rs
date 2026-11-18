@@ -27,11 +27,11 @@ use super::super::Window;
 /// The most pending lines shown before "… and N more lines".
 const SHOWN_LINES: usize = 14;
 
-/// The lines one file's text would change: from `first` (counted from 1),
+/// One place a file's text would change: from `first` (counted from 1),
 /// the old lines that go and the new lines that come in their place.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(in crate::ui) struct LineChange {
-    /// The first line that differs, from 1.
+    /// The first line that differs, from 1, in the old text.
     pub(in crate::ui) first: usize,
     /// The old lines replaced (empty for lines only inserted).
     pub(in crate::ui) removed: Vec<String>,
@@ -39,42 +39,28 @@ pub(in crate::ui) struct LineChange {
     pub(in crate::ui) added: Vec<String>,
 }
 
-/// The lines that differ between two texts: the run between their common
-/// first lines and their common last lines. `None` when they are the same.
-pub(in crate::ui) fn line_change(before: &str, after: &str) -> Option<LineChange> {
-    if before == after {
-        return None;
-    }
+/// Every place two texts differ, in order (Myers' line diff, from
+/// `stave-lang`): a rename that rewrites three uses is three places, and
+/// the lines between them are in none. Empty when they have the same
+/// lines.
+pub(in crate::ui) fn line_changes(before: &str, after: &str) -> Vec<LineChange> {
     let old: Vec<&str> = before.lines().collect();
     let new: Vec<&str> = after.lines().collect();
-    let prefix = old
-        .iter()
-        .zip(new.iter())
-        .take_while(|(a, b)| a == b)
-        .count();
-    let room = old.len().min(new.len()).saturating_sub(prefix);
-    let suffix = old
-        .iter()
-        .rev()
-        .zip(new.iter().rev())
-        .take(room)
-        .take_while(|(a, b)| a == b)
-        .count();
-    let removed = old
-        .get(prefix..old.len().saturating_sub(suffix))
-        .unwrap_or_default();
-    let added = new
-        .get(prefix..new.len().saturating_sub(suffix))
-        .unwrap_or_default();
-    if removed.is_empty() && added.is_empty() {
-        // Only a line ending changed.
-        return None;
-    }
-    Some(LineChange {
-        first: prefix.saturating_add(1),
-        removed: removed.iter().map(|line| (*line).to_owned()).collect(),
-        added: added.iter().map(|line| (*line).to_owned()).collect(),
-    })
+    let owned = |lines: Option<&[&str]>| {
+        lines
+            .unwrap_or_default()
+            .iter()
+            .map(|line| (*line).to_owned())
+            .collect::<Vec<_>>()
+    };
+    stave_lang::changed_line_runs(before, after)
+        .into_iter()
+        .map(|(old_run, new_run)| LineChange {
+            first: old_run.start.saturating_add(1),
+            removed: owned(old.get(old_run)),
+            added: owned(new.get(new_run)),
+        })
+        .collect()
 }
 
 /// What changed in a replaced line, where it is a word or a value
@@ -93,8 +79,12 @@ pub(in crate::ui) struct ValueChange {
 }
 
 /// The word or value a replaced line changes; `None` when the two lines
-/// share no start (it is shown as a line removed and a line added).
+/// share no start (it is shown as a line removed and a line added), or are
+/// the same.
 pub(in crate::ui) fn value_change(old: &str, new: &str) -> Option<ValueChange> {
+    if old == new {
+        return None;
+    }
     let word = |c: char| c.is_alphanumeric() || c == '_' || c == '.';
     let shared = old
         .char_indices()
@@ -142,6 +132,12 @@ pub(in crate::ui) fn value_change(old: &str, new: &str) -> Option<ValueChange> {
         new: new_rest.get(..new_at)?.to_owned(),
         tail: old_rest.get(old_at..)?.to_owned(),
     })
+}
+
+/// `true` when two different lines differ only in their spaces: the
+/// formatter lining up a run of declarations again.
+pub(in crate::ui) fn spacing_only(old: &str, new: &str) -> bool {
+    old != new && old.split_whitespace().eq(new.split_whitespace())
 }
 
 /// A text with every whole-word use of `from` written as `to`: how a
@@ -267,41 +263,61 @@ impl PendingPanel {
         self.lines.append(&row);
     }
 
-    /// Shows one file's pending lines.
-    fn show(&self, file: &str, verb: &str, change: &LineChange) {
+    /// Shows one file's pending lines: each place it changes, in order,
+    /// with its line number when there are several.
+    fn show(&self, file: &str, verb: &str, changes: &[LineChange]) {
         while let Some(child) = self.lines.first_child() {
             self.lines.remove(&child);
         }
-        self.head.set_label(&format!(
-            "PENDING · {verb} writes this to {file}, line {}",
-            change.first
-        ));
+        let Some(first) = changes.first() else {
+            self.root.set_visible(false);
+            return;
+        };
+        self.head.set_label(&match changes.len() {
+            1 => format!(
+                "PENDING · {verb} writes this to {file}, line {}",
+                first.first
+            ),
+            places => format!(
+                "PENDING · {verb} changes {file} in {places} places, from line {}",
+                first.first
+            ),
+        });
         let mut shown = 0usize;
-        let pairs = change.removed.len().min(change.added.len());
         let mut push = |panel: &PendingPanel, f: &dyn Fn(&PendingPanel)| {
             if shown < SHOWN_LINES {
                 f(panel);
             }
             shown += 1;
         };
-        for index in 0..pairs {
-            let (Some(old), Some(new)) = (change.removed.get(index), change.added.get(index))
-            else {
-                continue;
-            };
-            match value_change(old, new) {
-                Some(parts) => push(self, &|panel| panel.value_line(&parts)),
-                None => {
-                    push(self, &|panel| panel.line("−", old, "stave-pending-removed"));
-                    push(self, &|panel| panel.line("+", new, "stave-pending-added"));
+        for change in changes {
+            if changes.len() > 1 {
+                let place = format!("line {}", change.first);
+                push(self, &|panel| {
+                    panel.line("@", &place, "stave-pending-place")
+                });
+            }
+            let pairs = change.removed.len().min(change.added.len());
+            for (old, new) in change.removed.iter().zip(&change.added) {
+                if spacing_only(old, new) {
+                    let line = format!("{}   (spaces only: lined up again)", new.trim_end());
+                    push(self, &|panel| panel.line("≈", &line, "stave-pending-more"));
+                    continue;
+                }
+                match value_change(old, new) {
+                    Some(parts) => push(self, &|panel| panel.value_line(&parts)),
+                    None => {
+                        push(self, &|panel| panel.line("−", old, "stave-pending-removed"));
+                        push(self, &|panel| panel.line("+", new, "stave-pending-added"));
+                    }
                 }
             }
-        }
-        for old in change.removed.iter().skip(pairs) {
-            push(self, &|panel| panel.line("−", old, "stave-pending-removed"));
-        }
-        for new in change.added.iter().skip(pairs) {
-            push(self, &|panel| panel.line("+", new, "stave-pending-added"));
+            for old in change.removed.iter().skip(pairs) {
+                push(self, &|panel| panel.line("−", old, "stave-pending-removed"));
+            }
+            for new in change.added.iter().skip(pairs) {
+                push(self, &|panel| panel.line("+", new, "stave-pending-added"));
+            }
         }
         if shown > SHOWN_LINES {
             self.line(
@@ -313,6 +329,17 @@ impl PendingPanel {
         self.root.set_visible(true);
     }
 }
+
+/// The lines of the old text one place strikes through, counted from 0:
+/// from its first replaced line to the line after its last.
+pub(in crate::ui) fn struck_lines(change: &LineChange) -> (usize, usize) {
+    let first = change.first.saturating_sub(1);
+    (first, first.saturating_add(change.removed.len()))
+}
+
+/// How far above the view's bottom edge the line saying why editing in 3D
+/// is off stands: clear of the dock.
+const BLOCK_LINE_ABOVE_DOCK: i32 = 84;
 
 /// The tag that marks old lines in the text while they are pending.
 const PENDING_TAG: &str = "stave-pending-old";
@@ -363,11 +390,12 @@ impl Window {
         } else {
             texts
         };
-        let first = texts.iter().find_map(|(path, after)| {
+        let found = texts.iter().find_map(|(path, after)| {
             let before = self.text_now(path).unwrap_or_default();
-            line_change(&before, after).map(|change| (path.clone(), change))
+            let changes = line_changes(&before, after);
+            (!changes.is_empty()).then(|| (path.clone(), changes))
         });
-        let Some((path, change)) = first.filter(|_| editor_open) else {
+        let Some((path, changes)) = found.filter(|_| editor_open) else {
             panel.root.set_visible(false);
             return;
         };
@@ -375,16 +403,21 @@ impl Window {
             .file_name()
             .map_or_else(String::new, |name| name.to_string_lossy().into_owned());
         let verb = if verb == "Add" { "Add" } else { "This change" };
-        panel.show(&file, verb, &change);
-        // The text goes to the place, and its old lines are marked.
-        if let Some(line) = LineNumber::from_usize(change.first) {
+        panel.show(&file, verb, &changes);
+        // The text goes to the first place, and only the old lines each
+        // place replaces are marked.
+        if let Some(line) = changes
+            .first()
+            .and_then(|change| LineNumber::from_usize(change.first))
+        {
             self.widgets.files.reveal(&SourceLocation {
                 path: path.to_string_lossy().into_owned(),
                 line,
             });
         }
+        let replaced = changes.iter().any(|change| !change.removed.is_empty());
         if let Some(buffer) = self.widgets.files.buffer_for(&path, false)
-            && !change.removed.is_empty()
+            && replaced
         {
             let tag = buffer.tag_table().lookup(PENDING_TAG).unwrap_or_else(|| {
                 let tag = gtk::TextTag::builder()
@@ -395,13 +428,19 @@ impl Window {
                 buffer.tag_table().add(&tag);
                 tag
             });
-            let first = i32::try_from(change.first.saturating_sub(1)).unwrap_or(0);
-            let last = i32::try_from(change.first.saturating_sub(1) + change.removed.len())
-                .unwrap_or(first);
-            if let (Some(start), Some(end)) =
-                (buffer.iter_at_line(first), buffer.iter_at_line(last))
-            {
-                buffer.apply_tag(&tag, &start, &end);
+            for change in changes.iter().filter(|change| !change.removed.is_empty()) {
+                let (first, last) = struck_lines(change);
+                let (Ok(first), Ok(last)) = (i32::try_from(first), i32::try_from(last)) else {
+                    continue;
+                };
+                let start = buffer.iter_at_line(first);
+                // Past the last line: to the end of the text.
+                let end = buffer
+                    .iter_at_line(last)
+                    .unwrap_or_else(|| buffer.end_iter());
+                if let Some(start) = start {
+                    buffer.apply_tag(&tag, &start, &end);
+                }
             }
             self.editing.pending_marked.replace(Some(path));
         }
@@ -465,6 +504,28 @@ impl Window {
         None
     }
 
+    /// Shows why editing in 3D is off, when it is, low in the view above
+    /// the dock and wrapped, where it covers neither the parts list nor
+    /// the cards; puts the line back at the top of the view otherwise.
+    pub(in crate::ui) fn show_parse_block_line(&self) {
+        let hint_box = &self.widgets.hint_box;
+        let hint = &self.widgets.hint;
+        match self.parse_block_line() {
+            Some(line) => {
+                hint.set_wrap(true);
+                hint.set_max_width_chars(56);
+                hint.set_justify(gtk::Justification::Center);
+                hint_box.set_valign(gtk::Align::End);
+                hint_box.set_margin_bottom(BLOCK_LINE_ABOVE_DOCK);
+                self.show_hint(&line);
+            }
+            None => {
+                hint_box.set_valign(gtk::Align::Start);
+                hint_box.set_margin_bottom(0);
+            }
+        }
+    }
+
     /// `true` while the text reads, so the 3D view's gestures may edit it.
     pub(in crate::ui) fn gestures_allowed(&self) -> bool {
         self.parse_block_line().is_none()
@@ -480,21 +541,24 @@ mod tests {
         let before = "a\nb\nc\n";
         let after = "a\nb\nnew one\nnew two\nc\n";
         assert_eq!(
-            line_change(before, after),
-            Some(LineChange {
+            line_changes(before, after),
+            [LineChange {
                 first: 3,
                 removed: Vec::new(),
                 added: vec!["new one".to_owned(), "new two".to_owned()],
-            })
+            }]
         );
-        assert_eq!(line_change(before, before), None);
+        assert!(line_changes(before, before).is_empty());
     }
 
     #[test]
     fn a_replaced_value_shows_old_and_new() {
         let before = "assembly case : Case {\n  panel_stock: oak_19\n}\n";
         let after = "assembly case : Case {\n  panel_stock: maple_12\n}\n";
-        let change = line_change(before, after).unwrap();
+        let changes = line_changes(before, after);
+        let [change] = changes.as_slice() else {
+            panic!("one place: {changes:?}");
+        };
         assert_eq!(change.first, 2);
         assert_eq!(change.removed, vec!["  panel_stock: oak_19".to_owned()]);
         assert_eq!(change.added, vec!["  panel_stock: maple_12".to_owned()]);
@@ -520,6 +584,64 @@ mod tests {
             })
         );
         assert_eq!(value_change("abc", "xyz"), None);
+        assert_eq!(value_change("same line", "same line"), None);
+    }
+
+    /// A change in two places (a repeat growing an array and its region)
+    /// is two places: the lines between them, blank ones included, are not
+    /// shown as changed and are not struck through.
+    #[test]
+    fn a_change_in_two_places_leaves_the_lines_between_alone() {
+        let before = "region drawer_bay[bottom, top] = split(bay, up)\n\
+                      \n\
+                      stock oak_19 { a: 1 }\n\
+                      \n\
+                      // a note\n\
+                      assembly drawer[bottom, top] : Drawer {\n\
+                      }\n";
+        let after = "region drawer_bay[bottom, middle, top] = split(bay, up)\n\
+                     \n\
+                     stock oak_19 { a: 1 }\n\
+                     \n\
+                     // a note\n\
+                     assembly drawer[bottom, middle, top] : Drawer {\n\
+                     }\n";
+        let changes = line_changes(before, after);
+        assert_eq!(changes.len(), 2, "{changes:?}");
+        assert_eq!(changes[0].first, 1);
+        assert_eq!(changes[1].first, 6);
+        for change in &changes {
+            assert_eq!(change.removed.len(), 1);
+            assert_eq!(change.added.len(), 1);
+            assert!(value_change(&change.removed[0], &change.added[0]).is_some());
+        }
+        assert_eq!(struck_lines(&changes[0]), (0, 1));
+        assert_eq!(struck_lines(&changes[1]), (5, 6));
+    }
+
+    #[test]
+    fn a_line_lined_up_again_is_spacing_only() {
+        assert!(spacing_only(
+            "region a     = box()",
+            "region a          = box()"
+        ));
+        assert!(!spacing_only("region a = box()", "region a = box()"));
+        assert!(!spacing_only("region a = box()", "region b = box()"));
+    }
+
+    /// A rename that rewrites every use is one place per use.
+    #[test]
+    fn a_rename_with_uses_is_one_place_per_use() {
+        let before = "assembly drawer : Drawer {\n}\n\nx = drawer.front\n";
+        let after = renamed_text(before, "drawer", "small");
+        let changes = line_changes(before, &after);
+        assert_eq!(
+            changes
+                .iter()
+                .map(|change| change.first)
+                .collect::<Vec<_>>(),
+            [1, 4]
+        );
     }
 
     #[test]
@@ -534,7 +656,10 @@ mod tests {
     fn a_repeated_line_at_the_end_is_not_counted_twice() {
         let before = "}\n";
         let after = "}\n\nx {\n}\n";
-        let change = line_change(before, after).unwrap();
+        let changes = line_changes(before, after);
+        let [change] = changes.as_slice() else {
+            panic!("one place: {changes:?}");
+        };
         assert_eq!(change.first, 2);
         assert!(change.removed.is_empty());
         assert_eq!(change.added, vec!["", "x {", "}"]);

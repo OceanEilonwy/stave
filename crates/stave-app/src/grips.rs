@@ -742,89 +742,104 @@ impl Lister<'_, '_, '_> {
     }
 
     fn split(&self, region: RegionId) -> Result<Vec<SelectionGrip>, GripsError> {
-        let model = self.model;
-        let inst = model
-            .regions
-            .get(region.index())
-            .ok_or(GripsError::NotInDesign)?;
-        let def = model.defs.region(inst.def).ok_or(GripsError::NotInDesign)?;
-        let is_split = matches!(
-            def.value.kind,
-            RExprKind::Builtin {
-                function: Builtin::Split,
-                ..
-            }
-        );
-        if !is_split || def.array.is_none() {
-            return Err(GripsError::NotASplit);
+        split_grips(self.model, self.design, region)
+    }
+}
+
+/// The grips of a split (see [`grips`] with [`GripSelection::Split`]): the
+/// boundaries between the pieces of the split `region` is one of, read from
+/// the model and the solved design alone, so a window can draw them from
+/// the design it shows ([`crate::spaces::split_boundaries`]).
+///
+/// # Errors
+///
+/// [`GripsError::NotInDesign`] or [`GripsError::NotASplit`].
+pub fn split_grips(
+    model: &Model,
+    design: &SolvedDesign,
+    region: RegionId,
+) -> Result<Vec<SelectionGrip>, GripsError> {
+    let inst = model
+        .regions
+        .get(region.index())
+        .ok_or(GripsError::NotInDesign)?;
+    let def = model.defs.region(inst.def).ok_or(GripsError::NotInDesign)?;
+    let is_split = matches!(
+        def.value.kind,
+        RExprKind::Builtin {
+            function: Builtin::Split,
+            ..
         }
-        let name = def.decl.name.clone();
-        let pieces: Vec<RegionId> = model
+    );
+    if !is_split || def.array.is_none() {
+        return Err(GripsError::NotASplit);
+    }
+    let name = def.decl.name.clone();
+    let pieces: Vec<RegionId> = model
+        .regions
+        .iter()
+        .filter(|r| r.def == inst.def && r.ctx.instance == inst.ctx.instance)
+        .map(|r| r.id)
+        .collect();
+    let bounds = |id: RegionId| {
+        design
             .regions
             .iter()
-            .filter(|r| r.def == inst.def && r.ctx.instance == inst.ctx.instance)
-            .map(|r| r.id)
-            .collect();
-        let bounds = |id: RegionId| {
-            self.design
-                .regions
-                .iter()
-                .find(|r| r.id == id)
-                .map(|r| (r.bounds, r.name.clone()))
+            .find(|r| r.id == id)
+            .map(|r| (r.bounds, r.name.clone()))
+    };
+    let resolution = design.project.resolution;
+    let mut out = Vec::new();
+    for (lower, pair) in pieces.windows(2).enumerate() {
+        let [low, high] = pair else {
+            continue;
         };
-        let resolution = self.design.project.resolution;
-        let mut out = Vec::new();
-        for (lower, pair) in pieces.windows(2).enumerate() {
-            let [low, high] = pair else {
-                continue;
-            };
-            let (Some((low_box, low_name)), Some((high_box, high_name))) =
-                (bounds(*low), bounds(*high))
-            else {
-                continue;
-            };
-            let Some(axis) = [Axis::Across, Axis::Up, Axis::Deep]
-                .into_iter()
-                .find(|axis| low_box.max().get(*axis) == high_box.min().get(*axis))
-            else {
-                continue;
-            };
-            let size = low_box.size(axis);
-            let pair_size = size.checked_add(high_box.size(axis)).unwrap_or(size);
-            let value = Amount::Length(size.to_exact());
-            let low_end = Amount::Length(resolution.to_exact());
-            let high_end = Amount::Length(
-                pair_size
-                    .checked_sub(resolution)
-                    .unwrap_or(pair_size)
-                    .to_exact(),
-            );
-            out.push(SelectionGrip {
-                size: GripSize::Boundary {
-                    region: name.clone(),
-                    lower,
-                    low: *low,
-                    high: *high,
-                },
-                label: format!("{low_name} | {high_name}"),
-                axis: Some(axis),
-                action: GripAction::Moves(Box::new(MovableGrip {
-                    value,
-                    low: low_end,
-                    high: high_end,
-                    steps: SearchSteps::Step(Amount::Length(resolution.to_exact())),
-                    freedom: Freedom::Plain,
-                    stops: None,
-                })),
-                place: Some(PlaceInput::Share {
-                    low: *low,
-                    high: *high,
-                    axis,
-                }),
-            });
-        }
-        Ok(out)
+        let (Some((low_box, low_name)), Some((high_box, high_name))) =
+            (bounds(*low), bounds(*high))
+        else {
+            continue;
+        };
+        let Some(axis) = [Axis::Across, Axis::Up, Axis::Deep]
+            .into_iter()
+            .find(|axis| low_box.max().get(*axis) == high_box.min().get(*axis))
+        else {
+            continue;
+        };
+        let size = low_box.size(axis);
+        let pair_size = size.checked_add(high_box.size(axis)).unwrap_or(size);
+        let value = Amount::Length(size.to_exact());
+        let low_end = Amount::Length(resolution.to_exact());
+        let high_end = Amount::Length(
+            pair_size
+                .checked_sub(resolution)
+                .unwrap_or(pair_size)
+                .to_exact(),
+        );
+        out.push(SelectionGrip {
+            size: GripSize::Boundary {
+                region: name.clone(),
+                lower,
+                low: *low,
+                high: *high,
+            },
+            label: format!("{low_name} | {high_name}"),
+            axis: Some(axis),
+            action: GripAction::Moves(Box::new(MovableGrip {
+                value,
+                low: low_end,
+                high: high_end,
+                steps: SearchSteps::Step(Amount::Length(resolution.to_exact())),
+                freedom: Freedom::Plain,
+                stops: None,
+            })),
+            place: Some(PlaceInput::Share {
+                low: *low,
+                high: *high,
+                axis,
+            }),
+        });
     }
+    Ok(out)
 }
 
 /// The face a `flush` or `against` term names: `space.bottom`.

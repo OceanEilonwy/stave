@@ -142,6 +142,7 @@ forwards what people do.
 | `stave-app` | `problems` | The marks (`marks(checked)`: a `Mark` — error, warning or involved — per part or piece of hardware, per assembly and per file, for the dots), the problems grouped by part (`tree(checked, Filter)`), and a problem's `details` (eyebrow, plain title, the `stave check` text, `Fix`es, the `MotionCard`). |
 | `stave-app` | `finder` | The finder (`search(Sources, query)`): parts and assemblies, files and names (through `stave-ide`), lines of the project's own text and problems, grouped by `Kind`, each `Hit` with its `Goal` (select it, or open a place in the editor). |
 | `stave-app` | `focus`, `view` | Focus mode (its insert text with `steps`, `link` and `location`; `receives`), problems as rows, posing at a contact. |
+| `stave-app` | `spaces` | Which space an assembly fills, read from the model (`filled_spaces`: the region its component's first `Region` param is bound to), and the boundaries of a split with where a dragged one settles (`split_boundaries`, `SplitBoundary::settle`), for the window's How many, count handle and boundary handles. |
 | `stave-gtk` | `ui/mod.rs` | The window: owns the `Session`, dispatches commands, redraws on events, runs checks on a worker thread, lays out what floats over the 3D view (the card beside the part, the problem pins) and keeps what only the 3D view needs (camera, renderer, the looks, focus mode's scrub, the "Open it" slider). |
 | `stave-gtk` | `ui/header.rs`, `tree.rs`, `inspector.rs`, `chrome.rs` | The title bar (with the problems chip and the finder's field); the floating model tree; the card's pages (a part, a problem's details, focus mode); the motion bar and the Cut list's placeholder. |
 | `stave-gtk` | `ui/dock.rs`, `finder.rs` | The dock at the bottom of the 3D view (scene menu, Pull apart, X-ray, the motion slider, the moving assemblies' chips); the finder dialog (Ctrl+K). |
@@ -575,21 +576,34 @@ was. Once written, the window selects the item by its new name.
   stepper above its buttons, sending `Repeat` (one piece is no repeat).
   In the 3D view, a **count handle** (an accent pill "× 1") sits on the
   space at the top (or right, or back) of its first piece, at the
-  space's left front edge so it reads clear of the card; dragged toward
+  space's left front edge; dragged toward
   the start of the space it makes more pieces, each as long as the
   handle marks, and back, fewer (at most 12); its label follows the
   pointer and the repeat is tried when it is let go, so the ghost shows
   every copy. A selected item that fills a space has the handle too
-  while it is one piece. Which space an item fills is only guessed for
-  the handle (the smallest space holding its middle that it covers half
-  of on every axis); whether it can be repeated is the session's to say.
-- **Shares**: with an item selected that sits in a split of the project
-  (regions written as an array, `drawer_bay[bottom]`, side by side along
-  one axis), a **boundary handle** (an outlined pill with the lower
-  piece's size, "240.5 mm") sits on each boundary between neighbours.
-  Dragged, it snaps to an even division of the two pieces, to the whole
-  split's even size and to round sizes (a whole 10 mm) when near one,
-  else to a whole millimetre; let go, it sends `MoveShares`.
+  while it is one piece. Which space an item fills is read from the
+  model, not from the picture: the region its component's first `Region`
+  param is bound to (`stave_app::spaces::filled_spaces`, following `bay`,
+  `drawer_bay[same]`, `case.inside`); the same says whether How many shows
+  on its card. Whether a repeat fits is the session's to say.
+- **Shares**: with an item selected whose space is one piece of a split
+  (`drawer_bay[bottom]`), a **boundary handle** (an outlined pill with the
+  lower piece's size, "240.5 mm") sits in the middle of each boundary
+  between neighbours, on the front. The boundaries come from the session
+  (`stave_app::spaces::split_boundaries`, built on the grips' own
+  `grips::split_grips`): the region array, which pieces in label order,
+  their sizes and the axis. Dragged, the handle settles where
+  `SplitBoundary::settle` says: an even division of the two pieces, the
+  whole split's even size, or a round size (a whole 10 mm) when near one,
+  else a step of the project's `resolution:`; let go, it sends
+  `MoveShares`.
+- **Keeping clear of the panels**: a handle, the ghost's verdict pill and
+  a problem's pin are each moved, by the least distance, off any panel
+  floating over the 3D view that they would cover (the parts list, a
+  card, the menu, the dock, the line at the top, the editor's rail);
+  a verdict pill with no room left is hidden (the card says the verdict),
+  and a pin with no room is listed in the off-screen chip. A dragged
+  handle still measures from the point it stands for.
 - **Hold this** (`edit_view/hold.rs`): "Hold a distance…" on a part's
   card (or "Hold a distance from this space…" at the foot of a space's
   menu) asks, in the line at the top of the view, for the second thing;
@@ -634,17 +648,26 @@ the top of the editor's panel as **pending**, from the last try
 writes this to small_chest.stave, line 39", each inserted line marked
 "+", each removed one "−" struck through, and a line whose word or value
 changed shown in place, old struck through and new after it
-(`panel_stock: oak_19 → maple_12`); the editor goes to the line and the
-old lines are struck through in the text itself. A rename alone, tried
+(`panel_stock: oak_19 → maple_12`); a line whose only change is its
+spaces (the formatter lining up a run of declarations again) shows "≈"
+and says so. The lines are compared by a line diff
+(`stave_lang::changed_line_runs`, the one patches use), so a change in
+several places shows each place under its own "line 13", "line 31", and
+the head says "This change changes small_chest.stave in 2 places, from
+line 13"; the lines between the places are neither shown nor marked.
+The editor goes to the first place, and in the text itself only the old
+lines each place replaces are struck through. A rename alone, tried
 without a patch, shows each line of the files it rewrites with the name
 changed as a word. They go when the edit is cancelled or added.
 
 **While the text doesn't read** (an error of layer 1, a syntax error, in
 one of the project's files, as the editor's analysis has it), editing in
 the 3D view is off: a click in a space or a gap, the item's changes,
-Delete and the finder's verbs start nothing, and the line at the top of
-the view says why ("Editing in 3D is off while small_chest.stave doesn't
-read: expected end of line, found 'space'. Fix the text first.").
+Delete and the finder's verbs start nothing, and a line low in the view,
+just above the dock and wrapped, says why ("Editing in 3D is off while
+small_chest.stave doesn't read: expected end of line, found 'space'. Fix
+the text first."); it stands there, not at the top, so it covers neither
+the parts list nor a card.
 
 ### A new project
 
@@ -702,8 +725,11 @@ boundary moved to 180mm), `edit_mirror_offer.png` and `edit_mirror.png`
 goes, then what goes in red), `edit_rename_editor.png` (a rename pending
 in the text), `edit_finder_verbs.png` and `edit_finder_add.png` (the
 finder's "repeat 3", and "add shelf" opening Shelf's card),
-`edit_pending_editor.png` (a shelf's lines pending in the editor) and
-`edit_text_broken.png` (a brace typed: editing in 3D off, and why).
+`edit_pending_editor.png` (a shelf's lines pending in the editor),
+`edit_pending_two_places.png` (the drawers made three with the editor
+open: two places pending, the bays' line and the drawers' line, and the
+envelope's line lined up again) and `edit_text_broken.png` (a brace
+typed: editing in 3D off, and why).
 
 ### The widgets
 

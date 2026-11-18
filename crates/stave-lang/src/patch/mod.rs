@@ -42,7 +42,7 @@ use crate::placement::Axis;
 use crate::syntax::{SyntaxKind, SyntaxNode};
 use crate::{FORMAT_VERSION, Parse, parse_file};
 
-pub use diff::{TextEdit, apply_text_edits};
+pub use diff::{TextEdit, apply_text_edits, changed_line_runs};
 pub use placement::{TermAddress, TermFixes};
 use placement::{fixes, term_text_fixes};
 use text::{

@@ -888,6 +888,7 @@ const STYLE: &str = r#"
 .stave-pending-old-value { color: @error_color; text-decoration-line: line-through; }
 .stave-pending-new-value { color: @success_color; font-weight: 700; }
 .stave-pending-more { opacity: 0.7; }
+.stave-pending-place { opacity: 0.6; font-size: 11px; margin-top: 2px; }
 "#;
 
 /// Puts the changes' stylesheet on the display, once.

@@ -22,12 +22,14 @@ use adw::prelude::*;
 use glam::Vec3;
 use stave_app::edit::PlaceSlot;
 use stave_app::editing::{EditCommand, is_component, parse_name};
+use stave_app::spaces::{SplitBoundary, filled_spaces, split_boundaries};
 use stave_lang::placement::Axis;
-use stave_lang::units::{Length, NM_PER_MM};
-use stave_scene::{Aabb, NodeId, SceneGraph};
+use stave_lang::units::Length;
+use stave_model::ids::RegionId;
+use stave_scene::Aabb;
 
 use super::super::Window;
-use super::item_tools::{MOST, RepeatRow, item_base};
+use super::item_tools::{MOST, RepeatRow};
 
 /// The unit vector of a design axis in the 3D view's frame (across is x,
 /// up is y; the front faces +z, so deep, front to back, is −z).
@@ -85,174 +87,108 @@ pub(in crate::ui) fn count_at(fraction: f32) -> usize {
         .unwrap_or(1)
 }
 
-/// Where a boundary dragged to `raw` (the lower piece's size) settles:
-/// on half of the two pieces (an even division), on the whole split's
-/// even size, or on a round size (a whole 10 mm) when it is near one, else
-/// on a whole millimetre; never less than a millimetre either side.
-pub(in crate::ui) fn snap_boundary(raw: Length, total: Length, even: Option<Length>) -> Length {
-    let total_nm = total.nm();
-    let millimetre = NM_PER_MM;
-    let near = (total_nm / 30).max(millimetre);
-    let raw_nm = raw
-        .nm()
-        .clamp(millimetre, (total_nm - millimetre).max(millimetre));
-    let half = total_nm / 2;
-    let mut targets = vec![half];
-    if let Some(even) = even {
-        targets.push(even.nm());
+/// A rectangle of the 3D view, in its pixels.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(in crate::ui) struct Rect {
+    /// Left edge.
+    pub(in crate::ui) x: f32,
+    /// Top edge.
+    pub(in crate::ui) y: f32,
+    /// Width.
+    pub(in crate::ui) width: f32,
+    /// Height.
+    pub(in crate::ui) height: f32,
+}
+
+impl Rect {
+    fn overlaps(&self, other: &Rect) -> bool {
+        self.x < other.x + other.width
+            && other.x < self.x + self.width
+            && self.y < other.y + other.height
+            && other.y < self.y + self.height
     }
-    for target in targets {
-        if (raw_nm - target).abs() <= near {
-            return Length::from_nm(target);
+
+    fn moved(&self, dx: f32, dy: f32) -> Rect {
+        Rect {
+            x: self.x + dx,
+            y: self.y + dy,
+            ..*self
         }
     }
-    let round = 10 * millimetre;
-    let nearest_round = (raw_nm + round / 2) / round * round;
-    if (raw_nm - nearest_round).abs() <= near / 6 && nearest_round > 0 && nearest_round < total_nm {
-        return Length::from_nm(nearest_round);
+
+    fn inside(&self, width: f32, height: f32) -> bool {
+        self.x >= 0.0
+            && self.y >= 0.0
+            && self.x + self.width <= width
+            && self.y + self.height <= height
     }
-    Length::from_nm((raw_nm + millimetre / 2) / millimetre * millimetre)
 }
 
-/// The space a box fills, if it fills one: the smallest space holding its
-/// middle that it covers at least half of along every axis (a drawer in
-/// its bay, a case in the envelope; not a rail between two legs). Only
-/// for showing the count handle: whether it can be repeated is the
-/// session's to say.
-pub(in crate::ui) fn space_filled_by(
-    graph: &SceneGraph,
-    posed: &stave_scene::Posed,
-    volume: &Aabb,
-) -> Option<Aabb> {
-    let centre = volume.centre();
-    let size = volume.max - volume.min;
-    graph
-        .regions()
+/// How far a label floating at `wanted` must move so it covers none of
+/// the panels floating over the 3D view (the parts list, a card, the
+/// dock): not at all when it is clear; else the smallest move that takes
+/// it just past the edge of a panel it covers (left, right, above or
+/// below) and leaves it clear of every panel and inside the view. `None`
+/// when no such move is found.
+pub(in crate::ui) fn clear_of(
+    wanted: Rect,
+    panels: &[Rect],
+    view: (f32, f32),
+) -> Option<(f32, f32)> {
+    const GAP: f32 = 6.0;
+    let clear =
+        |rect: &Rect| rect.inside(view.0, view.1) && !panels.iter().any(|p| p.overlaps(rect));
+    if clear(&wanted) {
+        return Some((0.0, 0.0));
+    }
+    let mut moves: Vec<(f32, f32)> = panels
         .iter()
-        .filter_map(|region| graph.region_volume(posed, region.id))
-        .filter(|space| {
-            let room = space.max - space.min;
-            (0..3).all(|axis| {
-                centre[axis] >= space.min[axis]
-                    && centre[axis] <= space.max[axis]
-                    && room[axis] > 0.0
-                    && size[axis] >= room[axis] * 0.5
-            })
+        .filter(|panel| panel.overlaps(&wanted))
+        .flat_map(|panel| {
+            [
+                (panel.x - GAP - (wanted.x + wanted.width), 0.0),
+                (panel.x + panel.width + GAP - wanted.x, 0.0),
+                (0.0, panel.y - GAP - (wanted.y + wanted.height)),
+                (0.0, panel.y + panel.height + GAP - wanted.y),
+            ]
         })
-        .min_by(|a, b| {
-            let volume = |space: &Aabb| {
-                let room = space.max - space.min;
-                room.x * room.y * room.z
-            };
-            volume(a).total_cmp(&volume(b))
-        })
+        .collect();
+    moves.sort_by(|a, b| (a.0.abs() + a.1.abs()).total_cmp(&(b.0.abs() + b.1.abs())));
+    moves
+        .into_iter()
+        .find(|(dx, dy)| clear(&wanted.moved(*dx, *dy)))
 }
 
-/// A boundary between two neighbouring pieces of a split, as drawn.
+/// A boundary between two neighbouring pieces of a split, as drawn: the
+/// session's boundary ([`SplitBoundary`]: the region array, which pieces,
+/// their sizes and where a drag settles) and where it is on the screen.
 #[derive(Debug, Clone, PartialEq)]
 pub(in crate::ui) struct Boundary {
-    /// The split's region array: `drawer_bay`.
-    pub(in crate::ui) region: String,
-    /// The lower piece, from 0 in label order.
-    pub(in crate::ui) lower: usize,
-    /// The axis it splits along.
-    pub(in crate::ui) axis: Axis,
-    /// The two pieces' sizes along it.
-    pub(in crate::ui) sizes: (Length, Length),
-    /// Every piece's size, for the even division.
-    pub(in crate::ui) whole: Length,
-    /// How many pieces the split has.
-    pub(in crate::ui) pieces: usize,
-    /// The far face of the lower piece, the boundary, and the far face of
-    /// the upper, in the 3D view's frame, at the split's left (or bottom)
-    /// front edge.
+    /// The boundary, from the design.
+    pub(in crate::ui) split: SplitBoundary,
+    /// The start of the lower piece, the boundary, and the end of the
+    /// upper piece, in the 3D view's frame, on the pieces' front face.
     pub(in crate::ui) points: (Vec3, Vec3, Vec3),
 }
 
-/// The boundaries of the project's splits (regions written as an array,
-/// `drawer_bay[bottom]`, `drawer_bay[top]`, side by side along one axis),
-/// for the splits whose space holds `inside`.
-pub(in crate::ui) fn boundaries(graph: &SceneGraph, inside: Vec3) -> Vec<Boundary> {
-    let mut groups: Vec<(String, Vec<usize>)> = Vec::new();
-    for (index, region) in graph.regions().iter().enumerate() {
-        if region.assembly.is_some() {
-            continue;
-        }
-        let Some(open) = region.name.find('[') else {
-            continue;
-        };
-        let base = &region.name[..open];
-        if region.name[open..].contains('.') {
-            continue;
-        }
-        match groups.iter_mut().find(|(name, _)| name == base) {
-            Some((_, members)) => members.push(index),
-            None => groups.push((base.to_owned(), vec![index])),
-        }
+/// Where the boundaries of a split are drawn: each piece's start and end
+/// along the split, on the front of the space.
+fn drawn(split: SplitBoundary, low: &Aabb, high: &Aabb) -> Boundary {
+    let front = |point: Vec3, volume: &Aabb| match split.axis {
+        Axis::Across | Axis::Up => Vec3::new(point.x, point.y, volume.max.z),
+        Axis::Deep => point,
+    };
+    let (start, middle) = axis_ends(low, split.axis);
+    let (_, end) = axis_ends(high, split.axis);
+    let union = low.union(*high);
+    Boundary {
+        points: (
+            front(start, &union),
+            front(middle, &union),
+            front(end, &union),
+        ),
+        split,
     }
-    let mut found = Vec::new();
-    for (base, members) in groups {
-        let regions: Vec<_> = members
-            .iter()
-            .filter_map(|index| graph.regions().get(*index))
-            .collect();
-        if regions.len() < 2 {
-            continue;
-        }
-        let Some(union) = regions
-            .iter()
-            .map(|region| region.volume)
-            .reduce(Aabb::union)
-        else {
-            continue;
-        };
-        let holds = (0..3).all(|axis| {
-            inside[axis] >= union.min[axis] - 0.5 && inside[axis] <= union.max[axis] + 0.5
-        });
-        if !holds {
-            continue;
-        }
-        let Some(axis) = stave_lang::placement::Axis::ALL.into_iter().find(|axis| {
-            regions.windows(2).all(|pair| match pair {
-                [a, b] => {
-                    a.bounds.max().get(*axis) == b.bounds.min().get(*axis)
-                        || a.bounds.min().get(*axis) == b.bounds.max().get(*axis)
-                }
-                _ => false,
-            })
-        }) else {
-            continue;
-        };
-        let whole = regions
-            .iter()
-            .try_fold(Length::ZERO, |sum, region| {
-                sum.checked_add(region.bounds.size(axis))
-            })
-            .unwrap_or(Length::ZERO);
-        for (lower, pair) in regions.windows(2).enumerate() {
-            let [a, b] = pair else {
-                continue;
-            };
-            let direction = (b.volume.centre() - a.volume.centre()).normalize_or_zero();
-            let far = |volume: &Aabb, sign: f32| {
-                let half = (volume.max - volume.min) * 0.5;
-                volume.centre() + direction * sign * half.dot(direction.abs())
-            };
-            let start = at_edge(far(&a.volume, -1.0), &union, axis);
-            let middle = at_edge(far(&a.volume, 1.0), &union, axis);
-            let end = at_edge(far(&b.volume, 1.0), &union, axis);
-            found.push(Boundary {
-                region: base.clone(),
-                lower,
-                axis,
-                sizes: (a.bounds.size(axis), b.bounds.size(axis)),
-                whole,
-                pieces: regions.len(),
-                points: (start, middle, end),
-            });
-        }
-    }
-    found
 }
 
 /// A handle floating over the 3D view, dragged with the pointer.
@@ -260,6 +196,9 @@ pub(in crate::ui) struct Handle {
     /// The pill.
     pub(in crate::ui) root: gtk::Box,
     label: gtk::Label,
+    /// How far it was moved off its point to keep clear of the panels;
+    /// a drag subtracts it, so the handle still measures from its point.
+    nudge: Cell<(f32, f32)>,
 }
 
 impl Handle {
@@ -276,15 +215,21 @@ impl Handle {
         root.append(&gtk::Image::from_icon_name("view-more-horizontal-symbolic"));
         root.append(&label);
         root.set_cursor_from_name(Some("grab"));
-        Handle { root, label }
+        Handle {
+            root,
+            label,
+            nudge: Cell::new((0.0, 0.0)),
+        }
     }
 
-    fn place(&self, (x, y): (f32, f32)) {
-        self.root
-            .set_margin_start(crate::convert::int_of_f32((x - 30.0).max(0.0).round()));
-        self.root
-            .set_margin_top(crate::convert::int_of_f32((y - 14.0).max(0.0).round()));
-        self.root.set_visible(true);
+    /// Where a drag that began `at` (in the handle) began, measured from
+    /// the handle's point rather than where it was moved to.
+    fn origin(&self, (x, y): (f64, f64)) -> (f32, f32) {
+        let (dx, dy) = self.nudge.get();
+        (
+            crate::convert::f32_of_int(self.root.margin_start()) + crate::convert::f32_of(x) - dx,
+            crate::convert::f32_of_int(self.root.margin_top()) + crate::convert::f32_of(y) - dy,
+        )
     }
 }
 
@@ -304,7 +249,7 @@ pub(in crate::ui) struct Repeats {
     /// On the chosen candidate's card.
     pub(in crate::ui) row: RepeatRow,
     count: Handle,
-    boundaries: RefCell<Vec<(Handle, Boundary)>>,
+    boundaries: RefCell<Vec<(Handle, Option<Boundary>)>>,
     /// What the count handle is on: the space's box and the axis, while
     /// it shows.
     count_on: Cell<Option<(Aabb, Axis, usize)>>,
@@ -333,26 +278,83 @@ impl Repeats {
 }
 
 impl Window {
-    /// `true` when the item of the project by this name fills a space of
-    /// the design (see [`space_filled_by`]).
-    pub(in crate::ui) fn item_fills_a_space(&self, item: &str) -> bool {
+    /// The spaces the item of the project by this name fills, as the
+    /// session's model binds them ([`filled_spaces`]): one per piece.
+    fn spaces_of(&self, item: &str) -> Vec<RegionId> {
         let session = self.session.borrow();
-        let state = self.state.borrow();
-        let (Some((_, graph)), Some(posed)) = (session.drawable(), state.posed.as_ref()) else {
-            return false;
+        session
+            .shown()
+            .and_then(|checked| checked.opened.model.as_ref())
+            .map(|model| filled_spaces(model, item))
+            .unwrap_or_default()
+    }
+
+    /// `true` when the item of the project by this name fills a space of
+    /// the design: its component's space param is bound to one.
+    pub(in crate::ui) fn item_fills_a_space(&self, item: &str) -> bool {
+        !self.spaces_of(item).is_empty()
+    }
+
+    /// The panels floating over the 3D view, in its pixels, that a handle
+    /// or a label must not cover: the parts list, the cards, the menu, the
+    /// line at the top, the dock and the editor's rail.
+    pub(in crate::ui) fn floating_panels(&self) -> Vec<Rect> {
+        let design = &self.widgets.design;
+        let editing = &self.editing;
+        [
+            self.widgets.tree.root.upcast_ref::<gtk::Widget>(),
+            self.widgets.card.upcast_ref(),
+            self.widgets.dock.root.upcast_ref(),
+            self.widgets.hint_box.upcast_ref(),
+            self.widgets.files.rail.upcast_ref(),
+            editing.menu.root.upcast_ref(),
+            editing.card.root.upcast_ref(),
+            editing.changes.card.root.upcast_ref(),
+            editing.hold.card.root.upcast_ref(),
+        ]
+        .into_iter()
+        .filter(|widget| widget.is_visible())
+        .flat_map(|widget| panel_rects(widget, design))
+        .collect()
+    }
+
+    /// Where a floating label of this size, wanted with its top left at
+    /// `wanted`, goes: moved clear of the panels when it would cover one.
+    /// The move made, or `None` when it can't be cleared.
+    pub(in crate::ui) fn clear_spot(
+        &self,
+        wanted: (f32, f32),
+        size: (f32, f32),
+    ) -> Option<(f32, f32)> {
+        let view = (
+            crate::convert::f32_of_int(self.widgets.design.width()),
+            crate::convert::f32_of_int(self.widgets.design.height()),
+        );
+        let rect = Rect {
+            x: wanted.0,
+            y: wanted.1,
+            width: size.0,
+            height: size.1,
         };
-        let nodes: Vec<NodeId> = graph
-            .node_ids()
-            .filter(|id| {
-                graph
-                    .node(*id)
-                    .is_some_and(|node| item_base(&node.name) == item)
-            })
-            .collect();
-        graph
-            .bounds_of(posed, &nodes)
-            .and_then(|volume| space_filled_by(graph, posed, &volume))
-            .is_some()
+        clear_of(rect, &self.floating_panels(), view)
+    }
+
+    /// Places a handle at a point of the screen, moved clear of the
+    /// panels.
+    fn place_handle(&self, handle: &Handle, (x, y): (f32, f32)) {
+        // A hidden widget measures nothing.
+        handle.root.set_visible(true);
+        let size = natural_size(handle.root.upcast_ref());
+        let wanted = ((x - 30.0).max(0.0), (y - 14.0).max(0.0));
+        let nudge = self.clear_spot(wanted, size).unwrap_or((0.0, 0.0));
+        handle.nudge.set(nudge);
+        handle.root.set_margin_start(crate::convert::int_of_f32(
+            (wanted.0 + nudge.0).max(0.0).round(),
+        ));
+        handle.root.set_margin_top(crate::convert::int_of_f32(
+            (wanted.1 + nudge.1).max(0.0).round(),
+        ));
+        handle.root.set_visible(true);
     }
 
     /// Puts the repeat controls on the card and over the 3D view.
@@ -427,58 +429,59 @@ impl Window {
     }
 
     /// The space the count handle stands on, the axis and the count: the
-    /// candidate's space while its card shows the stepper; the selected
-    /// item's box while its card offers a first repeat.
+    /// candidate's space while its card shows the stepper; the space the
+    /// selected item fills while its card offers a first repeat.
     fn count_handle_on(&self) -> Option<(Aabb, Axis, usize)> {
+        let item = {
+            let session = self.session.borrow();
+            let state = self.state.borrow();
+            let (_, graph) = session.drawable()?;
+            let posed = state.posed.as_ref()?;
+            if let Some(chosen) = session.edit().and_then(|edit| edit.chosen()) {
+                if !self.editing.repeats.row.root.is_visible() {
+                    return None;
+                }
+                let region =
+                    chosen
+                        .candidate()
+                        .place
+                        .iter()
+                        .find_map(|param| match param.slot {
+                            PlaceSlot::Region(Some(region)) => Some(region),
+                            PlaceSlot::Region(None)
+                            | PlaceSlot::Anchor(_)
+                            | PlaceSlot::Part(_)
+                            | PlaceSlot::Parts(_) => None,
+                        })?;
+                let volume = graph.region_volume(posed, region)?;
+                let repeats = &self.editing.repeats;
+                let count = repeats
+                    .dragged_count
+                    .get()
+                    .unwrap_or_else(|| repeats.row.count());
+                return Some((volume, repeats.row.axis(), count));
+            }
+            if session.edit().is_some() || session.change().is_some() {
+                return None;
+            }
+            if !self.editing.tools.root.is_visible() {
+                return None;
+            }
+            let (design, _) = session.drawable()?;
+            let item = super::item_tools::selected_item(design, session.selection()?)?;
+            if super::item_tools::piece_count(design, &item) > 1 {
+                return None;
+            }
+            item
+        };
+        // The one space it fills, as the model binds it.
+        let [space] = self.spaces_of(&item)[..] else {
+            return None;
+        };
         let session = self.session.borrow();
         let state = self.state.borrow();
         let (_, graph) = session.drawable()?;
-        let posed = state.posed.as_ref()?;
-        if let Some(chosen) = session.edit().and_then(|edit| edit.chosen()) {
-            if !self.editing.repeats.row.root.is_visible() {
-                return None;
-            }
-            let region = chosen
-                .candidate()
-                .place
-                .iter()
-                .find_map(|param| match param.slot {
-                    PlaceSlot::Region(Some(region)) => Some(region),
-                    PlaceSlot::Region(None)
-                    | PlaceSlot::Anchor(_)
-                    | PlaceSlot::Part(_)
-                    | PlaceSlot::Parts(_) => None,
-                })?;
-            let volume = graph.region_volume(posed, region)?;
-            let repeats = &self.editing.repeats;
-            let count = repeats
-                .dragged_count
-                .get()
-                .unwrap_or_else(|| repeats.row.count());
-            return Some((volume, repeats.row.axis(), count));
-        }
-        if session.edit().is_some() || session.change().is_some() {
-            return None;
-        }
-        let tools = &self.editing.tools;
-        if !tools.root.is_visible() {
-            return None;
-        }
-        let (design, _) = session.drawable()?;
-        let item = super::item_tools::selected_item(design, session.selection()?)?;
-        if super::item_tools::piece_count(design, &item) > 1 {
-            return None;
-        }
-        let nodes: Vec<NodeId> = graph
-            .node_ids()
-            .filter(|id| {
-                graph
-                    .node(*id)
-                    .is_some_and(|node| item_base(&node.name) == item)
-            })
-            .collect();
-        let volume = graph.bounds_of(posed, &nodes)?;
-        space_filled_by(graph, posed, &volume)?;
+        let volume = graph.region_volume(state.posed.as_ref()?, space)?;
         let count = self.editing.repeats.dragged_count.get().unwrap_or(1);
         Some((volume, self.editing.tools.repeat_row().axis(), count))
     }
@@ -503,7 +506,7 @@ impl Window {
                 match point {
                     Some(point) => {
                         repeats.count.label.set_label(&format!("× {count}"));
-                        repeats.count.place(point);
+                        self.place_handle(&repeats.count, point);
                     }
                     None => repeats.count.root.set_visible(false),
                 }
@@ -525,11 +528,7 @@ impl Window {
         else {
             return;
         };
-        let root = &repeats.count.root;
-        let origin = (
-            crate::convert::f32_of_int(root.margin_start()) + crate::convert::f32_of(x),
-            crate::convert::f32_of_int(root.margin_top()) + crate::convert::f32_of(y),
-        );
+        let origin = repeats.count.origin((x, y));
         repeats.drag.set(Some(DragFrom { start, end, origin }));
     }
 
@@ -575,8 +574,8 @@ impl Window {
 
     // ---- the boundaries between pieces ----
 
-    /// The boundaries shown for the selection: of the splits holding the
-    /// selected item, while nothing is being edited.
+    /// The boundaries shown for the selection: of the split the selected
+    /// item's space is a piece of, while nothing is being edited.
     fn shown_boundaries(&self) -> Vec<Boundary> {
         {
             let session = self.session.borrow();
@@ -591,16 +590,30 @@ impl Window {
     }
 
     fn boundaries_of_selection(&self) -> Vec<Boundary> {
-        let nodes = self.selected_nodes();
-        let session = self.session.borrow();
-        let state = self.state.borrow();
-        let (Some((_, graph)), Some(posed)) = (session.drawable(), state.posed.as_ref()) else {
+        let Some(item) = self.selected_item() else {
             return Vec::new();
         };
-        graph
-            .bounds_of(posed, &nodes)
-            .map(|bounds| boundaries(graph, bounds.centre()))
-            .unwrap_or_default()
+        let Some(space) = self.spaces_of(&item).first().copied() else {
+            return Vec::new();
+        };
+        let session = self.session.borrow();
+        let state = self.state.borrow();
+        let (Some(checked), Some((_, graph)), Some(posed)) =
+            (session.shown(), session.drawable(), state.posed.as_ref())
+        else {
+            return Vec::new();
+        };
+        let (Some(model), Some(design)) = (checked.opened.model.as_ref(), checked.design()) else {
+            return Vec::new();
+        };
+        split_boundaries(model, design, space)
+            .into_iter()
+            .filter_map(|split| {
+                let low = graph.region_volume(posed, split.low)?;
+                let high = graph.region_volume(posed, split.high)?;
+                Some(drawn(split, &low, &high))
+            })
+            .collect()
     }
 
     fn place_boundary_handles(self: &Rc<Self>, focus: bool) {
@@ -611,81 +624,67 @@ impl Window {
         };
         let repeats = &self.editing.repeats;
         let dragging = repeats.dragged_boundary.get();
-        {
-            let mut handles = repeats.boundaries.borrow_mut();
-            while handles.len() < shown.len() {
-                let handle =
-                    Handle::new("Drag to move the boundary: only these two pieces change size");
-                handle.root.add_css_class("boundary");
-                self.widgets.design.add_overlay(&handle.root);
-                let index = handles.len();
-                self.connect_boundary_drag(&handle.root, index);
-                handles.push((
-                    handle,
-                    Boundary {
-                        region: String::new(),
-                        lower: 0,
-                        axis: Axis::Up,
-                        sizes: (Length::ZERO, Length::ZERO),
-                        whole: Length::ZERO,
-                        pieces: 0,
-                        points: (Vec3::ZERO, Vec3::ZERO, Vec3::ZERO),
-                    },
-                ));
-            }
-            for (index, (handle, boundary)) in handles.iter_mut().enumerate() {
-                let Some(found) = shown.get(index) else {
-                    handle.root.set_visible(false);
-                    continue;
-                };
-                *boundary = found.clone();
-                let lower = match dragging {
-                    Some((dragged, length)) if dragged == index => length,
-                    _ => found.sizes.0,
-                };
-                let total = found
-                    .sizes
-                    .0
-                    .checked_add(found.sizes.1)
-                    .unwrap_or(found.sizes.0);
-                let fraction = if total.nm() > 0 {
-                    lower.to_mm_f64() / total.to_mm_f64()
-                } else {
-                    0.5
-                };
-                let (start, _, end) = found.points;
-                let at = start + (end - start) * crate::convert::f32_of(fraction);
-                let point = {
-                    let state = self.state.borrow();
-                    self.project(&state, at)
-                };
-                handle
-                    .label
-                    .set_label(&super::hold::length_text(lower).replace("mm", " mm"));
-                match point {
-                    Some(point) => handle.place(point),
-                    None => handle.root.set_visible(false),
-                }
+        let mut handles = repeats.boundaries.borrow_mut();
+        while handles.len() < shown.len() {
+            let handle =
+                Handle::new("Drag to move the boundary: only these two pieces change size");
+            handle.root.add_css_class("boundary");
+            self.widgets.design.add_overlay(&handle.root);
+            let index = handles.len();
+            self.connect_boundary_drag(&handle.root, index);
+            handles.push((handle, None));
+        }
+        for (index, (handle, boundary)) in handles.iter_mut().enumerate() {
+            let Some(found) = shown.get(index) else {
+                handle.root.set_visible(false);
+                *boundary = None;
+                continue;
+            };
+            *boundary = Some(found.clone());
+            let lower = match dragging {
+                Some((dragged, length)) if dragged == index => length,
+                _ => found.split.sizes.0,
+            };
+            let total = found.split.pair();
+            let fraction = if total.nm() > 0 {
+                lower.to_mm_f64() / total.to_mm_f64()
+            } else {
+                0.5
+            };
+            let (start, _, end) = found.points;
+            let at = start + (end - start) * crate::convert::f32_of(fraction);
+            let point = {
+                let state = self.state.borrow();
+                self.project(&state, at)
+            };
+            handle
+                .label
+                .set_label(&super::hold::length_text(lower).replace("mm", " mm"));
+            match point {
+                Some(point) => self.place_handle(handle, point),
+                None => handle.root.set_visible(false),
             }
         }
+    }
+
+    /// The boundary the handle at `index` is on.
+    fn boundary_of_handle(&self, index: usize) -> Option<Boundary> {
+        self.editing
+            .repeats
+            .boundaries
+            .borrow()
+            .get(index)
+            .and_then(|(_, boundary)| boundary.clone())
     }
 
     fn connect_boundary_drag(self: &Rc<Self>, root: &gtk::Box, index: usize) {
         let drag = gtk::GestureDrag::new();
         let window = Rc::downgrade(self);
-        let widget = root.clone();
         drag.connect_drag_begin(move |_, x, y| {
             let Some(window) = window.upgrade() else {
                 return;
             };
-            let boundary = window
-                .editing
-                .repeats
-                .boundaries
-                .borrow()
-                .get(index)
-                .map(|(_, boundary)| boundary.clone());
-            let Some(boundary) = boundary else {
+            let Some(boundary) = window.boundary_of_handle(index) else {
                 return;
             };
             let state = window.state.borrow();
@@ -695,15 +694,15 @@ impl Window {
             else {
                 return;
             };
-            let origin = (
-                crate::convert::f32_of_int(widget.margin_start()) + crate::convert::f32_of(x),
-                crate::convert::f32_of_int(widget.margin_top()) + crate::convert::f32_of(y),
-            );
-            window
-                .editing
-                .repeats
-                .drag
-                .set(Some(DragFrom { start, end, origin }));
+            let repeats = &window.editing.repeats;
+            let origin = repeats
+                .boundaries
+                .borrow()
+                .get(index)
+                .map(|(handle, _)| handle.origin((x, y)));
+            if let Some(origin) = origin {
+                repeats.drag.set(Some(DragFrom { start, end, origin }));
+            }
         });
         let window = Rc::downgrade(self);
         drag.connect_drag_update(move |_, x, y| {
@@ -714,12 +713,7 @@ impl Window {
             let Some(from) = repeats.drag.get() else {
                 return;
             };
-            let boundary = repeats
-                .boundaries
-                .borrow()
-                .get(index)
-                .map(|(_, boundary)| boundary.clone());
-            let Some(boundary) = boundary else {
+            let Some(boundary) = window.boundary_of_handle(index) else {
                 return;
             };
             let point = (
@@ -740,12 +734,7 @@ impl Window {
             let Some((dragged, length)) = repeats.dragged_boundary.take() else {
                 return;
             };
-            let boundary = repeats
-                .boundaries
-                .borrow()
-                .get(dragged)
-                .map(|(_, boundary)| boundary.clone());
-            if let Some(boundary) = boundary {
+            if let Some(boundary) = window.boundary_of_handle(dragged) {
                 window.move_boundary(&boundary, length);
             }
         });
@@ -754,10 +743,10 @@ impl Window {
 
     /// Moves a boundary between two pieces so the lower is `length` long.
     pub(in crate::ui) fn move_boundary(self: &Rc<Self>, boundary: &Boundary, length: Length) {
-        match parse_name(&boundary.region) {
+        match parse_name(&boundary.split.region) {
             Ok(region) => self.start_change(EditCommand::MoveShares {
                 region,
-                lower: boundary.lower,
+                lower: boundary.split.lower,
                 boundary: length,
             }),
             Err(error) => self.edit_toast(&error.0),
@@ -770,14 +759,51 @@ impl Window {
     }
 }
 
+/// Where a panel floating over the 3D view is: where it was last drawn,
+/// and, for a panel placed by its margins from the top left (a card beside
+/// the selection), also where its margins now put it at its natural size,
+/// since its allocation lags a move made in the same frame.
+fn panel_rects(widget: &gtk::Widget, design: &gtk::Overlay) -> Vec<Rect> {
+    let mut rects = Vec::new();
+    if widget.halign() == gtk::Align::Start && widget.valign() == gtk::Align::Start {
+        let (width, height) = natural_size(widget);
+        let room = crate::convert::f32_of_int(design.height() - widget.margin_top()).max(0.0);
+        rects.push(Rect {
+            x: crate::convert::f32_of_int(widget.margin_start()),
+            y: crate::convert::f32_of_int(widget.margin_top()),
+            width,
+            height: height.min(room),
+        });
+    }
+    if widget.is_mapped()
+        && let Some(bounds) = widget.compute_bounds(design)
+    {
+        rects.push(Rect {
+            x: bounds.x(),
+            y: bounds.y(),
+            width: bounds.width(),
+            height: bounds.height(),
+        });
+    }
+    rects
+}
+
+/// A widget's natural size, for placing it before it is drawn. A hidden
+/// widget measures nothing: show it first.
+pub(in crate::ui) fn natural_size(widget: &gtk::Widget) -> (f32, f32) {
+    let (_, width, _, _) = widget.measure(gtk::Orientation::Horizontal, -1);
+    let (_, height, _, _) = widget.measure(gtk::Orientation::Vertical, width);
+    (
+        crate::convert::f32_of_int(width),
+        crate::convert::f32_of_int(height),
+    )
+}
+
 /// The lower piece's size for a boundary dragged to `fraction` of the
-/// two pieces, snapped.
+/// two pieces, settled where the session's boundary says
+/// ([`SplitBoundary::settle`]).
 pub(in crate::ui) fn boundary_at(boundary: &Boundary, fraction: f32) -> Length {
-    let total = boundary
-        .sizes
-        .0
-        .checked_add(boundary.sizes.1)
-        .unwrap_or(boundary.sizes.0);
+    let total = boundary.split.pair();
     // In millionths of the two pieces, so the size is worked out exactly.
     let millionths = i64::from(crate::convert::int_of_f32(
         (fraction.clamp(0.0, 1.0) * 1_000_000.0).round(),
@@ -788,10 +814,7 @@ pub(in crate::ui) fn boundary_at(boundary: &Boundary, fraction: f32) -> Length {
             .checked_mul(millionths)
             .map_or(total.nm() / 2, |nm| nm / 1_000_000),
     );
-    let even = (boundary.pieces > 0).then(|| {
-        Length::from_nm(boundary.whole.nm() / i64::try_from(boundary.pieces).unwrap_or(1))
-    });
-    snap_boundary(raw, total, even)
+    boundary.split.settle(raw)
 }
 
 #[cfg(test)]
@@ -816,25 +839,42 @@ mod tests {
         assert_eq!(fraction_along((1.0, 1.0), (2.0, 2.0), (2.0, 2.0)), 0.0);
     }
 
+    fn rect(x: f32, y: f32, width: f32, height: f32) -> Rect {
+        Rect {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+
     #[test]
-    fn a_boundary_snaps_to_even_and_round_sizes() {
-        let mm = Length::from_mm;
-        // Near half of the two: half.
-        assert_eq!(snap_boundary(mm(247), mm(500), None), mm(250));
-        // Near the whole split's even size.
-        assert_eq!(snap_boundary(mm(168), mm(500), Some(mm(166))), mm(166));
-        // Near a round size: it.
+    fn a_label_moves_clear_of_the_panels() {
+        let view = (800.0, 600.0);
+        let parts_list = rect(14.0, 64.0, 365.0, 200.0);
+        let card = rect(330.0, 64.0, 350.0, 560.0);
+        // Clear already: it stays.
         assert_eq!(
-            snap_boundary(Length::from_nm(179_600_000), mm(500), None),
-            mm(180)
+            clear_of(rect(420.0, 300.0, 60.0, 28.0), &[parts_list], view),
+            Some((0.0, 0.0))
         );
-        // Elsewhere, a whole millimetre.
+        // On the parts list, near its right edge: just past it.
         assert_eq!(
-            snap_boundary(Length::from_nm(134_400_000), mm(500), None),
-            mm(134)
+            clear_of(rect(110.0, 180.0, 60.0, 28.0), &[parts_list], view),
+            Some((0.0, 90.0))
         );
-        // Never past either end.
-        assert_eq!(snap_boundary(mm(-20), mm(500), None), mm(1));
+        // On the card's left edge: out to its left.
+        let moved = clear_of(rect(320.0, 360.0, 60.0, 28.0), &[card], view).unwrap();
+        assert_eq!(moved, (-56.0, 0.0));
+        // Nowhere to go: none.
+        assert_eq!(
+            clear_of(
+                rect(10.0, 10.0, 60.0, 28.0),
+                &[rect(0.0, 0.0, 800.0, 600.0)],
+                view
+            ),
+            None
+        );
     }
 
     #[test]

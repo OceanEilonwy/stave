@@ -222,8 +222,12 @@ shot $window/edit_finder_add.png "$(chest)" --theme light --edit-script $edits/f
 # A shelf ready to add with the editor open: the lines Add would write,
 # pending above the text.
 shot $window/edit_pending_editor.png "$(chest)" --theme light --view files --edit-script $edits/pending.edit
+# The drawers made three with the editor open: the change rewrites the
+# drawer bays' line and the drawers' line, two places apart; each shows
+# pending with its line number, and nothing between them is marked.
+shot $window/edit_pending_two_places.png "$(chest)" --theme light --view files --edit-script $edits/repeat_item.edit
 # A brace typed into the text: it doesn't read, so editing in 3D is off,
-# and the line at the top of the view says why.
+# and a line low in the view, above the dock, says why.
 shot $window/edit_text_broken.png "$(chest)" --theme light --view files --file small_chest.stave:26 --cursor space --type '}'
 
 # ---- the editor (docs/screenshots/files) ----

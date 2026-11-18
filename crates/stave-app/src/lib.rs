@@ -46,6 +46,7 @@ pub mod repeat;
 pub mod scratch;
 pub mod session;
 pub mod solve_edit;
+pub mod spaces;
 pub mod stops;
 pub mod view;
 

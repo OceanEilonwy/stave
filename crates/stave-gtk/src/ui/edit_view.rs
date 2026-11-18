@@ -695,9 +695,7 @@ impl Window {
         self.widgets.tree.set_placeholder(
             waiting.then_some("No parts yet. Click inside the box to add the first piece."),
         );
-        if let Some(line) = self.parse_block_line() {
-            self.show_hint(&line);
-        }
+        self.show_parse_block_line();
     }
 
     // ---- commands ----
@@ -1203,8 +1201,17 @@ impl Window {
         }
         label.add_css_class(verdict_class(verdict));
         label.set_label(verdict_words(verdict));
-        label.set_margin_start(crate::convert::int_of_f32((x - 50.0).max(0.0).round()));
-        label.set_margin_top(crate::convert::int_of_f32((y - 14.0).max(0.0).round()));
+        // Beside the ghost, clear of the card (which says the verdict too):
+        // hidden when there is no room.
+        let wanted = ((x - 50.0).max(0.0), (y - 14.0).max(0.0));
+        label.set_visible(true);
+        let size = repeat_handles::natural_size(label.upcast_ref());
+        let Some((dx, dy)) = self.clear_spot(wanted, size) else {
+            label.set_visible(false);
+            return;
+        };
+        label.set_margin_start(crate::convert::int_of_f32((wanted.0 + dx).round()));
+        label.set_margin_top(crate::convert::int_of_f32((wanted.1 + dy).round()));
         label.set_visible(true);
     }
 
@@ -1249,6 +1256,7 @@ mod hold;
 mod item_tools;
 mod pointing;
 mod repeat_handles;
+pub(super) use repeat_handles::natural_size;
 #[cfg(test)]
 mod tests;
 mod verbs;

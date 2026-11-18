@@ -2473,8 +2473,15 @@ impl Window {
                 continue;
             };
             let pin = self.pin(index, mark, &message);
-            pin.set_margin_start(crate::convert::int_of_f32((x - 12.0).round()).max(0));
-            pin.set_margin_top(crate::convert::int_of_f32((y - 24.0).round()).max(0));
+            // Clear of the cards and the parts list (edit_view).
+            let wanted = ((x - 12.0).max(0.0), (y - 24.0).max(0.0));
+            let size = edit_view::natural_size(pin.upcast_ref());
+            let Some((dx, dy)) = self.clear_spot(wanted, size) else {
+                off_screen.push((index, mark, message));
+                continue;
+            };
+            pin.set_margin_start(crate::convert::int_of_f32((wanted.0 + dx).round()).max(0));
+            pin.set_margin_top(crate::convert::int_of_f32((wanted.1 + dy).round()).max(0));
             self.widgets.design.add_overlay(&pin);
             self.pins.borrow_mut().push(pin.upcast());
         }
