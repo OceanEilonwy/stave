@@ -1,0 +1,32 @@
+stave 1
+
+/// A rail between two legs, under a top, that stiffens the frame.
+/// It stands on edge against the underside of the top and runs from the
+/// face of one leg to the other; its face is set back from the legs' outside
+/// faces. It is joined to the legs with mortise and tenon by default; the
+/// tenons are added to its cut length by the joint.
+component Apron {
+  param legs         : Parts                      // the two legs it runs between
+  param under        : Part                       // the top it sits under
+  param outside      : Anchor                     // the legs' outside face it lines up with: legs.leg[front_left].front
+  param start        : Anchor                     // the face of the first leg it runs from: legs.leg[front_left].right
+  param apron_stock  : Stock
+  param run          : Direction                  // which way its length runs from start: right, left, front or back
+  param width        = 90mm                       // how deep the apron is, from the top down
+  param setback      = 5mm                        // from the legs' outside face to the apron's face
+  param joinery      : JointKind = mortise_tenon  // how it is joined to the legs
+  param tenon_length = 20mm                       // how far the tenons reach into the legs
+
+  part apron : apron_stock {
+    length: fit                      // between the legs; the tenons are added by the joint
+    width:  width
+    place {
+      orient(length: run, width: up)
+      against(under.bottom)
+      against(start)
+      flush(outside, inset: setback)
+    }
+  }
+
+  joint tenons : joinery(apron, into: legs, length: tenon_length)
+}

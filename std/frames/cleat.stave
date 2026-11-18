@@ -1,0 +1,32 @@
+stave 1
+
+/// A strip glued to the inside face of an apron, under the top, that the top is screwed down through.
+/// It lies flat against the underside of the top, as long as the apron
+/// between the legs. The screws go in without glue, so the top can move
+/// with the seasons.
+component Cleat {
+  param apron       : Part       // the apron it is glued to
+  param inside      : Anchor     // the apron's inside face: apron_front.apron.back
+  param under       : Part       // the top screwed down through it
+  param start       : Anchor     // the end of the apron it starts at: apron_front.apron.left
+  param cleat_stock : Stock
+  param run         : Direction  // which way its length runs from start: right for a front cleat
+  param inward      : Direction  // which way its width reaches from the apron: back for a front cleat
+  param width       = 30mm       // how far it reaches in from the apron
+  param screws      = 3          // how many screws hold the top
+
+  part strip : cleat_stock {
+    length: apron.length
+    width:  width
+    note:   "Glue to the inside of the apron, flush with its top edge; slot the screw holes across the grain so the top can move"
+    place {
+      orient(length: run, width: inward)
+      against(under.bottom)
+      against(inside)
+      flush(start)
+    }
+  }
+
+  joint top_screws : screw(strip, into: under, count: screws, glue: false)
+  joint glue       : glued_face(strip, into: apron)
+}
