@@ -30,7 +30,14 @@ fn symbol_at(
     line: usize,
     needle: &str,
 ) -> stave_ide::SymbolId {
-    let id = analysis.file(&Document::File(folder.join(file))).unwrap();
+    // `std/casework/...` is a standard file; anything else is in the
+    // project's folder.
+    let document = if file.starts_with("std/") {
+        Document::from_source_path(file)
+    } else {
+        Document::File(folder.join(file))
+    };
+    let id = analysis.file(&document).unwrap();
     let start = analysis.line_start(id, line).unwrap();
     let text = &analysis.text(id).unwrap()[usize::try_from(start).unwrap()..];
     let column = text.lines().next().unwrap().find(needle).unwrap();
@@ -85,7 +92,7 @@ fn the_cursor_on_a_name_selects_it_in_3d() {
     // A part of a component: in the selected door if it is one, else in
     // the first door.
     assert_eq!(
-        select("casework/frame_panel_door.stave", 21, "stile", None).as_deref(),
+        select("std/casework/frame_panel_door.stave", 21, "stile", None).as_deref(),
         Some("door_l.stile[hinge]")
     );
     let door_r_panel = design
@@ -96,7 +103,7 @@ fn the_cursor_on_a_name_selects_it_in_3d() {
         .unwrap();
     assert_eq!(
         select(
-            "casework/frame_panel_door.stave",
+            "std/casework/frame_panel_door.stave",
             21,
             "stile",
             Some(&door_r_panel)

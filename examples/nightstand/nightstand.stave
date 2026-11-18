@@ -1,9 +1,9 @@
 stave 1
 
-// The drawer comes from the clothing cabinet's casework library. A folder is
-// a module, so importing it gives this project casework.Drawer, the same
-// component the cabinet uses for its two drawers.
-import "../clothing_cabinet/casework"
+// The drawer comes from the standard casework library. Importing it gives
+// this project casework.Drawer, the same component the clothing cabinet
+// uses for its two drawers.
+import "std:casework"
 
 // A nightstand: a cherry carcass with one drawer on side-mount slides and an
 // open shelf below it. The drawer front is inset: it sits inside its opening,

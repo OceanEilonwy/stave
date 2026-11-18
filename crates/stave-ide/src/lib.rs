@@ -42,7 +42,7 @@
 //! let text = analysis.text(doors).unwrap();
 //! let offset = u32::try_from(text.find("FramePanelDoor").unwrap()).unwrap();
 //! let definition = analysis.definition(FilePosition { file: doors, offset }).unwrap();
-//! assert_eq!(definition.label(&folder), "casework/frame_panel_door.stave:4");
+//! assert_eq!(definition.label(&folder), "std/casework/frame_panel_door.stave:4");
 //! ```
 
 #![forbid(unsafe_code)]

@@ -46,8 +46,10 @@
 //! 2. each imported module when its first import is reached: the importing
 //!    module's files in file-name order, each file's imports in source
 //!    order, descending into a newly found module before the next import;
-//! 3. the standard modules not reached by an import, in [`STD_MODULES`]
-//!    order (each followed by whatever it imports).
+//! 3. the prelude's standard modules not reached by an import, in
+//!    [`PRELUDE_MODULES`] order (each followed by whatever it imports). A
+//!    standard module outside the prelude (`std:casework`) is loaded only
+//!    when something imports it.
 //!
 //! Within a module, files are sorted by file name. Diagnostics are sorted by
 //! (file id, span start, span end) with a stable sort, so ties keep the
@@ -67,7 +69,7 @@ use stave_lang::diagnostics::SourceMapError;
 use stave_lang::{Diagnostic, FileId, SourceMap};
 
 pub use source::{DiskFiles, FileSource, MemoryFiles, normalize};
-pub use std_library::{STD_MODULES, std_files};
+pub use std_library::{PRELUDE_MODULES, STD_MODULES, std_files};
 
 /// Identifies a module in a [`ModuleSet`]: its index in
 /// [`ModuleSet::modules`].
@@ -93,7 +95,8 @@ pub enum ModuleSource {
     },
     /// A standard module embedded in Stave.
     Std {
-        /// One of [`STD_MODULES`]: `"joinery"`, `"hardware"` or `"tools"`.
+        /// One of [`STD_MODULES`]: `"joinery"`, `"hardware"`, `"tools"` or
+        /// `"casework"`.
         name: &'static str,
     },
 }
