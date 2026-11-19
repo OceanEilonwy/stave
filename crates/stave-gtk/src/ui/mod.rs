@@ -70,6 +70,7 @@ use stave_app::Contact;
 use stave_app::check::{self, Checked, Watcher};
 use stave_app::finder::{self as finding, Goal};
 use stave_app::focus::{self, Focus, Target};
+use stave_app::i18n::{fill_in, ntr, tr, tr_noop};
 use stave_app::inspect;
 use stave_app::link;
 use stave_app::problems::{self, Mark, Marks};
@@ -974,59 +975,64 @@ fn main_menu(recent: &gio::Menu) -> gio::Menu {
     fn section(items: &[(&str, &str)]) -> gio::Menu {
         let section = gio::Menu::new();
         for (label, action) in items {
-            section.append(Some(label), Some(action));
+            section.append(Some(&tr(label)), Some(action));
         }
         section
     }
     let project = gio::Menu::new();
     let opening = section(&[
-        ("New Project…", "win.new-project"),
-        ("Open Project…", "win.open"),
+        (tr_noop("New Project…"), "win.new-project"),
+        (tr_noop("Open Project…"), "win.open"),
     ]);
-    opening.append_submenu(Some("Open Recent"), recent);
+    opening.append_submenu(Some(&tr("Open Recent")), recent);
     project.append_section(None, &opening);
     project.append_section(
         None,
         &section(&[
-            ("Save", "win.save"),
-            ("Check Again", "win.check"),
-            ("Build Plan", "win.build"),
+            (tr_noop("Save"), "win.save"),
+            (tr_noop("Check Again"), "win.check"),
+            (tr_noop("Build Plan"), "win.build"),
         ]),
     );
-    project.append_section(None, &section(&[("Export 3D Model…", "win.export-view")]));
+    project.append_section(
+        None,
+        &section(&[(tr_noop("Export 3D Model…"), "win.export-view")]),
+    );
     let edit = gio::Menu::new();
     edit.append_section(
         None,
         &section(&[
-            ("Find…", "win.find"),
-            ("Find in the Text", "win.search"),
-            ("Format the Text", "win.format"),
+            (tr_noop("Find…"), "win.find"),
+            (tr_noop("Find in the Text"), "win.search"),
+            (tr_noop("Format the Text"), "win.format"),
         ]),
     );
     edit.append_section(
         None,
         &section(&[
-            ("Next Problem", "win.next-problem"),
-            ("Previous Problem", "win.previous-problem"),
+            (tr_noop("Next Problem"), "win.next-problem"),
+            (tr_noop("Previous Problem"), "win.previous-problem"),
         ]),
     );
     let view = gio::Menu::new();
     view.append_section(
         None,
         &section(&[
-            ("Design", "win.view-design"),
-            ("Cut List", "win.view-cut-list"),
+            (tr_noop("Design"), "win.view-design"),
+            (tr_noop("Cut List"), "win.view-cut-list"),
         ]),
     );
     view.append_section(
         None,
         &section(&[
-            ("Back", "win.back"),
-            ("Forward", "win.forward"),
-            ("Frame Everything", "win.frame"),
+            (tr_noop("Back"), "win.back"),
+            (tr_noop("Forward"), "win.forward"),
+            (tr_noop("Frame Everything"), "win.frame"),
         ]),
     );
-    // Any panel can be closed; these bring it back where it was.
+    // Any panel but the 3D view can be closed, and a first launch shows
+    // only the 3D view, Parts and Problems; these open the others, a
+    // closed one where it was.
     let panels = gio::Menu::new();
     for id in workbench::PanelId::ALL {
         panels.append(
@@ -1034,14 +1040,14 @@ fn main_menu(recent: &gio::Menu) -> gio::Menu {
             Some(&format!("win.show-panel::{}", id.word())),
         );
     }
-    panels.append(Some("Reset Layout"), Some("win.reset-layout"));
-    view.append_section(Some("Panels"), &panels);
-    view.append_section(Some("Style"), &app::style_section());
+    panels.append(Some(&tr("Reset Layout")), Some("win.reset-layout"));
+    view.append_section(Some(&tr("Panels")), &panels);
+    view.append_section(Some(&tr("Style")), &app::style_section());
     let menu = gio::Menu::new();
-    menu.append_submenu(Some("Project"), &project);
-    menu.append_submenu(Some("Edit"), &edit);
-    menu.append_submenu(Some("View"), &view);
-    menu.append_submenu(Some("Help"), &app::help_section());
+    menu.append_submenu(Some(&tr("Project")), &project);
+    menu.append_submenu(Some(&tr("Edit")), &edit);
+    menu.append_submenu(Some(&tr("View")), &view);
+    menu.append_submenu(Some(&tr("Help")), &app::help_section());
     menu
 }
 
@@ -1098,7 +1104,7 @@ pub(in crate::ui) fn build_widgets(
     let edge_pin = gtk::Button::builder()
         .child(&edge_content)
         .css_classes(["stave-edge-pin"])
-        .tooltip_text("Show the problem off screen")
+        .tooltip_text(tr("Show the problem off screen"))
         .visible(false)
         .build();
     let figure = gtk::Overlay::builder()
@@ -1235,7 +1241,10 @@ pub(in crate::ui) fn build_widgets(
     let width = i32::try_from(width).unwrap_or(1200);
     let height = i32::try_from(height).unwrap_or(800);
     window.set_application(Some(application));
-    window.set_title(Some(&format!("{folder_name} — Stave")));
+    window.set_title(Some(&fill_in(
+        &tr("{project} — Stave"),
+        &[("project", &folder_name)],
+    )));
     window.set_default_size(width, height);
     window.set_content(Some(&toolbar));
     if options.window_screenshot.is_some() {
@@ -1322,6 +1331,21 @@ fn breakpoint(width: f64) -> adw::Breakpoint {
     ))
 }
 
+/// The 3D view's description for screen readers: what is selected, and
+/// what the last check found ("door_l selected. 1 error.").
+fn view_description(selected: Option<&str>, problems: &str) -> String {
+    match selected {
+        Some(title) => fill_in(
+            &tr("{title} selected. {problems}."),
+            &[("title", &title), ("problems", &problems)],
+        ),
+        None => fill_in(
+            &tr("Nothing selected. {problems}."),
+            &[("problems", &problems)],
+        ),
+    }
+}
+
 /// A control's `f64` value as the `f32` the scene works in.
 fn narrow(value: f64) -> f32 {
     crate::convert::f32_of(value)
@@ -1331,6 +1355,18 @@ fn narrow(value: f64) -> f32 {
 mod tests {
     use super::*;
     use crate::ui::gtk_test::{on_gtk_thread, settle};
+
+    #[test]
+    fn the_3d_view_says_what_is_selected_and_found() {
+        assert_eq!(
+            view_description(Some("door_l"), "1 error"),
+            "door_l selected. 1 error."
+        );
+        assert_eq!(
+            view_description(None, "No problems"),
+            "Nothing selected. No problems."
+        );
+    }
 
     #[test]
     fn a_closed_window_says_so_and_is_freed_once_its_controller_goes() {

@@ -84,6 +84,9 @@ pub(in crate::ui) enum RenderingInput {
     },
     /// The scroll wheel turned this far.
     Zoomed(f64),
+    /// One of the view's camera keys (`view.*` actions): an arrow key
+    /// turns it, plus and minus zoom.
+    CameraKey(CameraKey),
     /// Lay one of the view's tool groups out flat or upright.
     ToolOriented {
         /// The group.
@@ -106,6 +109,40 @@ pub(in crate::ui) enum RenderingInput {
     /// Shows the frame the GPU has ready.
     PollFrame(Ticket),
 }
+
+/// How far one arrow key turns the 3D view, in the pixels of a mouse drag
+/// (about 15°).
+pub(in crate::ui) const ORBIT_KEY_STEP: f32 = 32.0;
+
+/// What a camera key does to the 3D view's camera.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(in crate::ui) enum CameraKey {
+    /// Turns it as a drag of (dx, dy) pixels would: right turns the design
+    /// right, down looks from higher up.
+    Turn(f32, f32),
+    /// Zooms in (`> 0`) or out by this many scroll steps.
+    Zoom(f32),
+}
+
+impl CameraKey {
+    /// The camera after the key.
+    pub(in crate::ui) fn apply(self, orbit: Orbit) -> Orbit {
+        match self {
+            CameraKey::Turn(dx, dy) => orbit.orbited(dx, dy),
+            CameraKey::Zoom(steps) => orbit.zoomed(steps),
+        }
+    }
+}
+
+/// The view's camera keys: each `view.*` action's name and what it does.
+pub(in crate::ui) const CAMERA_KEYS: [(&str, CameraKey); 6] = [
+    ("turn-left", CameraKey::Turn(-ORBIT_KEY_STEP, 0.0)),
+    ("turn-right", CameraKey::Turn(ORBIT_KEY_STEP, 0.0)),
+    ("look-higher", CameraKey::Turn(0.0, ORBIT_KEY_STEP)),
+    ("look-lower", CameraKey::Turn(0.0, -ORBIT_KEY_STEP)),
+    ("zoom-in", CameraKey::Zoom(1.0)),
+    ("zoom-out", CameraKey::Zoom(-1.0)),
+];
 
 impl From<RenderingInput> for WindowInput {
     fn from(message: RenderingInput) -> WindowInput {
@@ -240,6 +277,18 @@ pub(in crate::ui) fn wire(window: &mut Window) {
     });
     viewport.add_controller(scroll);
 
+    // While the view has the keyboard, the arrow keys turn it and plus and
+    // minus zoom (`view.*` actions, in the shortcuts dialog). The actions
+    // only send the window a message.
+    let actions = gio::SimpleActionGroup::new();
+    for (name, key) in CAMERA_KEYS {
+        let action = gio::SimpleAction::new(name, None);
+        let sender = input.clone();
+        action.connect_activate(move |_, _| sender.emit(RenderingInput::CameraKey(key).into()));
+        actions.add_action(&action);
+    }
+    viewport.insert_action_group("view", Some(&actions));
+
     // Escape, F and Delete anywhere in the window but a text field.
     let keys = gtk::EventControllerKey::new();
     let sender = input.clone();
@@ -307,7 +356,10 @@ impl Window {
             RenderingInput::ExportView => self.export_view(),
             RenderingInput::ExportTo(path) => self.export_to(path),
             RenderingInput::Exported { path, saved } => match saved {
-                Ok(()) => self.toast(&format!("Saved the view as {}", path.display())),
+                Ok(()) => self.toast(&fill_in(
+                    &tr("Saved the view as {file}"),
+                    &[("file", &path.display())],
+                )),
                 Err(failure) => self.show_export_failure(&failure),
             },
             RenderingInput::ShowView(view) => {
@@ -370,6 +422,7 @@ impl Window {
             RenderingInput::Zoomed(dy) => {
                 self.update_orbit(|orbit| orbit.zoomed(crate::convert::f32_of(-dy)));
             }
+            RenderingInput::CameraKey(key) => self.update_orbit(|orbit| key.apply(orbit)),
             RenderingInput::ToolOriented { group, orientation } => match group {
                 view_layout::Group::Scene => {}
                 view_layout::Group::Camera => self.widgets.camera.set_orientation(orientation),
@@ -638,7 +691,7 @@ impl Window {
             self.session.drawable().map(|(design, _)| design),
         );
         let dialog = gtk::FileDialog::builder()
-            .title("Export 3D Model (.glb, for other 3D programs)")
+            .title(tr("Export 3D Model (.glb, for other 3D programs)"))
             .initial_name(name)
             .modal(true)
             .build();
@@ -665,13 +718,13 @@ impl Window {
             .map(|((_, graph), posed)| (graph.clone(), posed.clone()));
         let Some((graph, posed)) = view else {
             self.show_export_failure(&stave_app::save_failure::SaveFailure {
-                heading: "Couldn't Export the View".to_owned(),
-                body: "There is nothing in the 3D view to save yet. Wait for the design to show, then try again.".to_owned(),
+                heading: tr("Couldn't Export the View"),
+                body: tr("There is nothing in the 3D view to save yet. Wait for the design to show, then try again."),
             });
             return;
         };
         let exporting = adw::Toast::builder()
-            .title("Exporting the view…")
+            .title(tr("Exporting the view…"))
             .timeout(0)
             .build();
         self.widgets.toasts.add_toast(exporting.clone());
@@ -685,8 +738,8 @@ impl Window {
             .await
             .unwrap_or_else(|_| {
                 Err(stave_app::save_failure::SaveFailure {
-                    heading: "Couldn't Export the View".to_owned(),
-                    body: "Stave stopped part way through making the file. Nothing was saved; try again.".to_owned(),
+                    heading: tr("Couldn't Export the View"),
+                    body: tr("Stave stopped part way through making the file. Nothing was saved; try again."),
                 })
             });
             exporting.dismiss();
@@ -707,7 +760,10 @@ impl Window {
             .close_response("cancel")
             .default_response("again")
             .build();
-        alert.add_responses(&[("cancel", "_Cancel"), ("again", "Save _Elsewhere…")]);
+        alert.add_responses(&[
+            ("cancel", tr("_Cancel").as_str()),
+            ("again", tr("Save _Elsewhere…").as_str()),
+        ]);
         alert.set_response_appearance("again", adw::ResponseAppearance::Suggested);
         let input = self.input();
         alert.connect_response(None, move |_, response| {
@@ -726,7 +782,10 @@ impl Window {
             && self.session.selection().is_none();
         if quiet {
             self.show_hint(&if explode > 0.0 {
-                format!("Pulled apart · {}%", view_tools::percent(explode))
+                fill_in(
+                    &tr("Pulled apart · {percent}%"),
+                    &[("percent", &view_tools::percent(explode))],
+                )
             } else {
                 String::new()
             });
@@ -925,7 +984,7 @@ impl Window {
             Ok(ticket) => ticket,
             Err(error) => {
                 let message = format!("{error:#}");
-                self.show_status("Can't draw in 3D", &message);
+                self.show_status(&tr("Can't draw in 3D"), &message);
                 return;
             }
         };
@@ -972,7 +1031,7 @@ impl Window {
             Ok(None) => {}
             Err(error) => {
                 let message = format!("{error:#}");
-                self.show_status("Can't draw in 3D", &message);
+                self.show_status(&tr("Can't draw in 3D"), &message);
             }
         }
         if !settled {
@@ -1214,8 +1273,9 @@ impl Window {
             })
             .tooltip_text(message)
             .build();
-        button.update_property(&[gtk::accessible::Property::Label(&format!(
-            "Show the problem: {message}"
+        button.update_property(&[gtk::accessible::Property::Label(&fill_in(
+            &tr("Show the problem: {message}"),
+            &[("message", &message)],
         ))]);
         let label = gtk::Label::builder()
             .label(message)
@@ -1287,5 +1347,41 @@ impl Window {
             crate::convert::f32_of(x - done_x),
             crate::convert::f32_of(y - done_y),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_arrow_keys_turn_the_view_and_plus_and_minus_zoom() {
+        let start = Orbit {
+            target: glam::Vec3::ZERO,
+            yaw: 1.0,
+            pitch: 0.3,
+            distance: 1000.0,
+            projection: stave_scene::Projection::default(),
+        };
+        let left = CameraKey::Turn(-ORBIT_KEY_STEP, 0.0).apply(start);
+        let right = CameraKey::Turn(ORBIT_KEY_STEP, 0.0).apply(start);
+        assert!(left.yaw > start.yaw && right.yaw < start.yaw);
+        let higher = CameraKey::Turn(0.0, ORBIT_KEY_STEP).apply(start);
+        assert!(higher.pitch > start.pitch);
+        assert!(CameraKey::Zoom(1.0).apply(start).distance < start.distance);
+        assert!(CameraKey::Zoom(-1.0).apply(start).distance > start.distance);
+        // The view's action group has every camera key.
+        let names: Vec<&str> = CAMERA_KEYS.iter().map(|(name, _)| *name).collect();
+        assert_eq!(
+            names,
+            [
+                "turn-left",
+                "turn-right",
+                "look-higher",
+                "look-lower",
+                "zoom-in",
+                "zoom-out",
+            ]
+        );
     }
 }

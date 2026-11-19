@@ -33,6 +33,10 @@ crates/stave-gtk/src/ui/edit_view/grip_text.rs
 crates/stave-gtk/src/ui/edit_writer.rs
 crates/stave-gtk/src/ui/finder.rs
 crates/stave-gtk/src/ui/inspector.rs
+crates/stave-gtk/src/ui/mod.rs
 crates/stave-gtk/src/ui/remember.rs
+crates/stave-gtk/src/ui/update/project.rs
+crates/stave-gtk/src/ui/update/rendering.rs
+crates/stave-gtk/src/ui/update/selection.rs
 data/io.github.OceanEilonwy.Stave.desktop
 data/io.github.OceanEilonwy.Stave.metainfo.xml
