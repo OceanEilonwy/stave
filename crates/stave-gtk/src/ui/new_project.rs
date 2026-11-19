@@ -19,6 +19,7 @@
 //! from `stave_schema`, the libraries a project imports from
 //! `stave_modules`, the tools from the standard library's tool kinds.
 
+use stave_app::i18n::{fill_in, tr, tr_noop};
 use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -130,7 +131,10 @@ pub(super) struct Answers {
 fn millimetres(value: f64) -> Result<Length, String> {
     let rounded = value.round();
     if !(1.0..=100_000.0).contains(&rounded) {
-        return Err(format!("{value} mm isn't a size Stave can use"));
+        return Err(fill_in(
+            &tr("{value} mm isn't a size Stave can use"),
+            &[("value", &value)],
+        ));
     }
     // Checked above: a whole number from 1 to 100 000.
     let whole = format!("{rounded:.0}")
@@ -145,12 +149,12 @@ impl Answers {
     pub(super) fn project(&self) -> Result<NewProject, String> {
         let title = self.title.trim();
         if title.is_empty() {
-            return Err("Give the project a name".to_owned());
+            return Err(tr("Give the project a name"));
         }
         let name = parse_name(self.stock_name.trim()).map_err(|_| {
-            format!(
-                "'{}' can't name the wood: use letters, digits and _",
-                self.stock_name.trim()
+            fill_in(
+                &tr("'{name}' can't name the wood: use letters, digits and _"),
+                &[("name", &self.stock_name.trim())],
             )
         })?;
         let [width, height, depth] = self.size;
@@ -180,9 +184,9 @@ impl Answers {
 
 /// The forms of stock a new project's wood is bought in, with their words.
 const FORMS: [(BoardForm, &str); 3] = [
-    (BoardForm::Solid, "solid boards"),
-    (BoardForm::Plywood, "plywood sheets"),
-    (BoardForm::Mdf, "MDF sheets"),
+    (BoardForm::Solid, tr_noop("solid boards")),
+    (BoardForm::Plywood, tr_noop("plywood sheets")),
+    (BoardForm::Mdf, tr_noop("MDF sheets")),
 ];
 
 /// The New Project dialog's fields.
@@ -224,14 +228,14 @@ fn group(title: &str, description: Option<&str>) -> adw::PreferencesGroup {
 impl NewProjectDialog {
     /// The dialog, filled with a small table's sizes and oak.
     pub(super) fn new() -> Rc<NewProjectDialog> {
-        let title = adw::EntryRow::builder().title("Name").build();
-        title.set_text("Hall table");
+        let title = adw::EntryRow::builder().title(tr("Name")).build();
+        title.set_text(&tr("Hall table"));
         let sizes = [
-            spin("Width (across), mm", 900.0, 10.0, 5000.0),
-            spin("Height (up), mm", 760.0, 10.0, 5000.0),
-            spin("Depth (front to back), mm", 400.0, 10.0, 5000.0),
+            spin(&tr("Width (across), mm"), 900.0, 10.0, 5000.0),
+            spin(&tr("Height (up), mm"), 760.0, 10.0, 5000.0),
+            spin(&tr("Depth (front to back), mm"), 400.0, 10.0, 5000.0),
         ];
-        let stock_name = adw::EntryRow::builder().title("Called").build();
+        let stock_name = adw::EntryRow::builder().title(tr("Called")).build();
         stock_name.set_text("oak_19");
         let species_words: Vec<String> = Species::ALL
             .iter()
@@ -240,29 +244,33 @@ impl NewProjectDialog {
         let species_list =
             gtk::StringList::new(&species_words.iter().map(String::as_str).collect::<Vec<_>>());
         let species = adw::ComboRow::builder()
-            .title("Species")
+            .title(tr("Species"))
             .model(&species_list)
             .build();
-        let form_list = gtk::StringList::new(&FORMS.map(|(_, words)| words));
+        let form_words = FORMS.map(|(_, words)| tr(words));
+        let form_list =
+            gtk::StringList::new(&form_words.iter().map(String::as_str).collect::<Vec<_>>());
         let form = adw::ComboRow::builder()
-            .title("Bought as")
+            .title(tr("Bought as"))
             .model(&form_list)
             .build();
-        let thickness = spin("Thickness, mm", 19.0, 1.0, 200.0);
-        let max_length = spin("Longest board you can get, mm", 2400.0, 100.0, 6000.0);
+        let thickness = spin(&tr("Thickness, mm"), 19.0, 1.0, 200.0);
+        let max_length = spin(&tr("Longest board you can get, mm"), 2400.0, 100.0, 6000.0);
 
-        let general = group("Project", None);
+        let general = group(&tr("Project"), None);
         general.add(&title);
         let size = group(
-            "Overall size",
-            Some("The box the piece fits in: the first space you click to add to"),
+            &tr("Overall size"),
+            Some(&tr(
+                "The box the piece fits in: the first space you click to add to",
+            )),
         );
         for row in &sizes {
             size.add(row);
         }
         let wood = group(
-            "Wood",
-            Some("The stock you buy; add more later in the text"),
+            &tr("Wood"),
+            Some(&tr("The stock you buy; add more later in the text")),
         );
         wood.add(&stock_name);
         wood.add(&species);
@@ -270,7 +278,10 @@ impl NewProjectDialog {
         wood.add(&thickness);
         wood.add(&max_length);
 
-        let libraries_group = group("Libraries", Some("What the menus offer to put in a space"));
+        let libraries_group = group(
+            &tr("Libraries"),
+            Some(&tr("What the menus offer to put in a space")),
+        );
         let libraries: Vec<(&'static str, gtk::CheckButton)> = importable_libraries()
             .into_iter()
             .map(|module| {
@@ -287,8 +298,8 @@ impl NewProjectDialog {
             .collect();
 
         let tools_group = group(
-            "Tools you have",
-            Some("Leave them all unticked if you have every tool"),
+            &tr("Tools you have"),
+            Some(&tr("Leave them all unticked if you have every tool")),
         );
         let flow = gtk::FlowBox::builder()
             .selection_mode(gtk::SelectionMode::None)
@@ -309,17 +320,20 @@ impl NewProjectDialog {
         tools_group.add(&flow);
 
         let folder_label = gtk::Label::builder()
-            .label("No folder chosen yet")
+            .label(tr("No folder chosen yet"))
             .xalign(0.0)
             .hexpand(true)
             .ellipsize(gtk::pango::EllipsizeMode::Start)
             .css_classes(["dim-label"])
             .build();
-        let folder_button = gtk::Button::builder().label("Choose Folder…").build();
-        let folder_row = adw::ActionRow::builder().title("Write it into").build();
+        let folder_button = gtk::Button::builder().label(tr("Choose Folder…")).build();
+        let folder_row = adw::ActionRow::builder().title(tr("Write it into")).build();
         folder_row.add_suffix(&folder_label);
         folder_row.add_suffix(&folder_button);
-        let place = group("Folder", Some("The project's .stave file is written here"));
+        let place = group(
+            &tr("Folder"),
+            Some(&tr("The project's .stave file is written here")),
+        );
         place.add(&folder_row);
 
         let error = gtk::Label::builder()
@@ -346,9 +360,9 @@ impl NewProjectDialog {
         error.set_margin_bottom(12);
         body.append(&error);
 
-        let cancel = gtk::Button::builder().label("Cancel").build();
+        let cancel = gtk::Button::builder().label(tr("Cancel")).build();
         let create = gtk::Button::builder()
-            .label("Create")
+            .label(tr("Create"))
             .css_classes(["suggested-action"])
             .build();
         let header = adw::HeaderBar::builder()
@@ -361,7 +375,7 @@ impl NewProjectDialog {
         view.add_top_bar(&header);
         view.set_content(Some(&body));
         let dialog = adw::Dialog::builder()
-            .title("New Project")
+            .title(tr("New Project"))
             .content_width(560)
             .content_height(720)
             .child(&view)
@@ -444,8 +458,12 @@ pub(super) fn create_project(
     folder: &std::path::Path,
     project: &NewProject,
 ) -> Result<PathBuf, String> {
-    std::fs::create_dir_all(folder)
-        .map_err(|error| format!("can't make the folder '{}': {error}", folder.display()))?;
+    std::fs::create_dir_all(folder).map_err(|error| {
+        fill_in(
+            &tr("can't make the folder '{folder}': {error}"),
+            &[("folder", &folder.display()), ("error", &error)],
+        )
+    })?;
     let file = new_project_file(folder, project).map_err(|error| error.to_string())?;
     write_all(std::slice::from_ref(&file), &mut DiskWriter).map_err(|error| error.to_string())?;
     Ok(file.path)
@@ -468,7 +486,7 @@ impl Window {
     /// A project just made: the envelope lit as the first space to click.
     pub(super) fn welcome_new_project(&self) {
         self.light_first_space(ENVELOPE_REGION);
-        self.show_hint("Click inside the box to add the first piece");
+        self.show_hint(&tr("Click inside the box to add the first piece"));
     }
 }
 
@@ -481,7 +499,7 @@ pub(super) fn ask(parent: &gtk::Window, created: impl Fn(PathBuf) + 'static) {
         let window = parent.clone();
         form.folder_button.connect_clicked(move |_| {
             let chooser = gtk::FileDialog::builder()
-                .title("Choose the folder for the new project")
+                .title(tr("Choose the folder for the new project"))
                 .modal(true)
                 .build();
             let form = form_weak.clone();
@@ -505,7 +523,7 @@ pub(super) fn ask(parent: &gtk::Window, created: impl Fn(PathBuf) + 'static) {
                 Err(words) => return form.show_error(Some(&words)),
             };
             let Some(folder) = form.folder.borrow().clone() else {
-                return form.show_error(Some("Choose a folder to write the project into"));
+                return form.show_error(Some(&tr("Choose a folder to write the project into")));
             };
             match create_project(&folder, &project) {
                 Ok(_) => {

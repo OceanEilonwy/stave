@@ -12,6 +12,7 @@
 //! dependants, those furthest from it first, so every operation applies to
 //! text that still holds what it removes.
 
+use crate::i18n::{fill_in, ntr, tr};
 use std::path::Path;
 
 use stave_ide::{Analysis, Document, Symbol, SymbolId};
@@ -53,17 +54,14 @@ pub enum Dependants {
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum RemoveError {
     /// The project declares no item by that name.
-    #[error("there is no item named '{0}' in this project")]
+    #[error("{}", self.text())]
     UnknownItem(String),
     /// The item is of a sort a patch can't remove.
-    #[error("'{0}' can't be removed by a patch")]
+    #[error("{}", self.text())]
     NotRemovable(String),
     /// Something still names the item, and the removal was asked for
     /// alone.
-    #[error(
-        "'{name}' is still used by {}; remove those too, or change them first",
-        .dependants.join(", ")
-    )]
+    #[error("{}", self.text())]
     StillUsed {
         /// The item.
         name: String,
@@ -73,6 +71,27 @@ pub enum RemoveError {
     /// The patch text didn't parse: a bug.
     #[error(transparent)]
     Build(#[from] PatchBuildError),
+}
+
+impl RemoveError {
+    /// The error in the window's words (translated).
+    fn text(&self) -> String {
+        match self {
+            RemoveError::UnknownItem(name) => fill_in(
+                &tr("there is no item named '{name}' in this project"),
+                &[("name", name)],
+            ),
+            RemoveError::NotRemovable(name) => fill_in(
+                &tr("'{name}' can't be removed by a patch"),
+                &[("name", name)],
+            ),
+            RemoveError::StillUsed { name, dependants } => fill_in(
+                &tr("'{name}' is still used by {users}; remove those too, or change them first"),
+                &[("name", name), ("users", &dependants.join(", "))],
+            ),
+            RemoveError::Build(error) => error.to_string(),
+        }
+    }
 }
 
 /// The item named `name` and everything that depends on it.
@@ -159,10 +178,18 @@ pub fn patch_for(removal: &Removal) -> Result<GeneratedPatch, PatchBuildError> {
         .chain(std::iter::once(&removal.item))
         .map(|item| format!("remove {} {}", item.tag.keyword(), item.name))
         .collect();
-    let summary = match removal.dependants.len() {
-        0 => format!("Remove {}", removal.item.name),
-        1 => format!("Remove {} and the item that uses it", removal.item.name),
-        n => format!("Remove {} and the {n} items that use it", removal.item.name),
+    let count = removal.dependants.len();
+    let summary = if count == 0 {
+        fill_in(&tr("Remove {item}"), &[("item", &removal.item.name)])
+    } else {
+        fill_in(
+            &ntr(
+                "Remove {item} and the item that uses it",
+                "Remove {item} and the {count} items that use it",
+                count,
+            ),
+            &[("item", &removal.item.name), ("count", &count)],
+        )
     };
     GeneratedPatch::new(&summary, &ops)
 }

@@ -16,6 +16,7 @@
 //! A folder dropped on it from Files opens too. Opening a project opens
 //! its window and closes this one.
 
+use stave_app::i18n::tr;
 use std::path::PathBuf;
 use std::rc::Rc;
 
@@ -39,29 +40,29 @@ impl StartPage {
     pub(super) fn new(shell: &Rc<Shell>) -> Rc<StartPage> {
         let menu = gio::Menu::new();
         let project = gio::Menu::new();
-        project.append(Some("New Project…"), Some("win.new-project"));
-        project.append(Some("Open Project…"), Some("win.open"));
+        project.append(Some(&tr("New Project…")), Some("win.new-project"));
+        project.append(Some(&tr("Open Project…")), Some("win.open"));
         menu.append_section(None, &project);
-        menu.append_section(Some("Style"), &app::style_section());
+        menu.append_section(Some(&tr("Style")), &app::style_section());
         menu.append_section(None, &app::help_section());
         let header = adw::HeaderBar::new();
         let menu_button = gtk::MenuButton::builder()
             .icon_name("open-menu-symbolic")
             .menu_model(&menu)
             .primary(true)
-            .tooltip_text("Main Menu")
+            .tooltip_text(tr("Main Menu"))
             .build();
-        menu_button.update_property(&[gtk::accessible::Property::Label("Main Menu")]);
+        menu_button.update_property(&[gtk::accessible::Property::Label(&tr("Main Menu"))]);
         header.pack_end(&menu_button);
 
         let open = gtk::Button::builder()
-            .label("_Open Folder…")
+            .label(tr("_Open Folder…"))
             .use_underline(true)
             .action_name("win.open")
             .css_classes(["pill", "suggested-action"])
             .build();
         let create = gtk::Button::builder()
-            .label("_New Project…")
+            .label(tr("_New Project…"))
             .use_underline(true)
             .action_name("win.new-project")
             .css_classes(["pill"])
@@ -94,10 +95,10 @@ impl StartPage {
                 "folder-open-symbolic"
             })
             .title("Stave")
-            .description(
+            .description(tr(
                 "Open a project folder to see its design, or start a new project. \
                  You can also drop a folder here.",
-            )
+            ))
             .child(&clamp)
             .vexpand(true)
             .build();
@@ -164,7 +165,7 @@ impl StartPage {
     /// Asks for a project folder and opens it.
     fn choose_folder(&self) {
         let dialog = gtk::FileDialog::builder()
-            .title("Open a project folder")
+            .title(tr("Open a project folder"))
             .modal(true)
             .build();
         let shell = self.shell.clone();
@@ -191,7 +192,7 @@ impl StartPage {
 /// The recent projects, one row each.
 fn recent_list(shell: &Rc<Shell>, recent: &[PathBuf]) -> adw::PreferencesGroup {
     let group = adw::PreferencesGroup::builder()
-        .title("Recent Projects")
+        .title(tr("Recent Projects"))
         .build();
     for folder in recent {
         let row = adw::ActionRow::builder()

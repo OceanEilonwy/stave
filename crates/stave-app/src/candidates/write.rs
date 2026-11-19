@@ -14,6 +14,7 @@
 //! imports that file still needs for the names the item uses through a
 //! module (`casework.Drawer`, `hw.bar_pull_160`).
 
+use crate::i18n::{fill_in, tr};
 use std::collections::BTreeMap;
 
 use stave_lang::ast::{self, Expr, ExprKind, Ident, Patch, PatchFile, StringPart};
@@ -71,26 +72,24 @@ struct HardwareMount {
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum WriteError {
     /// A place param still to point at or a setting still to choose.
-    #[error("still to fill in: {}", .0.join(", "))]
+    #[error("{}", self.text())]
     Incomplete(Vec<String>),
     /// The candidate names a declaration the model doesn't have.
-    #[error("the candidate's declaration is not in this project")]
+    #[error("{}", self.text())]
     UnknownDeclaration,
     /// A place param is bound to an item the model doesn't have.
-    #[error("'{0}' is bound to something that is not in this design")]
+    #[error("{}", self.text())]
     UnknownItem(String),
     /// A kind that is neither a joint nor mounted hardware (a fastener or
     /// a tool) is not placed by itself.
-    #[error("{0} is a {1} kind, which is used by a joint or a tool list, not placed by itself")]
+    #[error("{}", self.text())]
     NotPlaceable(String, &'static str),
     /// A repeat needs a component with a `Region` place param bound.
-    #[error("only a component that fills a space can be repeated")]
+    #[error("{}", self.text())]
     NotRepeatable,
     /// The file the item goes to imports a module the item needs under
     /// another name, or uses the name for another module.
-    #[error(
-        "'{file}' already uses the name '{alias}' differently; import the module there by hand first"
-    )]
+    #[error("{}", self.text())]
     ImportClash {
         /// The file.
         file: String,
@@ -99,19 +98,60 @@ pub enum WriteError {
     },
     /// The name typed for the new item is already used in the project, or
     /// is a word of the language.
-    #[error(
-        "'{0}' is already used in this project or is a word of the language; choose another name"
-    )]
+    #[error("{}", self.text())]
     NameTaken(String),
     /// The project has no file to add to.
-    #[error("the project has no file to add to")]
+    #[error("{}", self.text())]
     NoFile,
     /// A generated name couldn't be made.
     #[error(transparent)]
     Naming(#[from] NamingError),
     /// The written text didn't parse: a bug in the writer.
-    #[error("the written patch doesn't parse; please report this as a bug")]
+    #[error("{}", self.text())]
     Unparsable(Vec<Diagnostic>),
+}
+
+impl WriteError {
+    /// The error in the window's words (translated).
+    fn text(&self) -> String {
+        match self {
+            WriteError::Incomplete(v0) => fill_in(
+                &tr("still to fill in: {value}"),
+                &[("value", &v0.join(", "))],
+            ),
+            WriteError::UnknownDeclaration => {
+                tr("the candidate's declaration is not in this project")
+            }
+            WriteError::UnknownItem(v0) => fill_in(
+                &tr("'{value}' is bound to something that is not in this design"),
+                &[("value", v0)],
+            ),
+            WriteError::NotPlaceable(v0, v1) => fill_in(
+                &tr(
+                    "{value0} is a {value1} kind, which is used by a joint or a tool list, not placed by itself",
+                ),
+                &[("value0", v0), ("value1", v1)],
+            ),
+            WriteError::NotRepeatable => tr("only a component that fills a space can be repeated"),
+            WriteError::ImportClash { file, alias } => fill_in(
+                &tr(
+                    "'{file}' already uses the name '{alias}' differently; import the module there by hand first",
+                ),
+                &[("file", file), ("alias", alias)],
+            ),
+            WriteError::NameTaken(v0) => fill_in(
+                &tr(
+                    "'{value}' is already used in this project or is a word of the language; choose another name",
+                ),
+                &[("value", v0)],
+            ),
+            WriteError::NoFile => tr("the project has no file to add to"),
+            WriteError::Naming(error) => error.to_string(),
+            WriteError::Unparsable(_) => {
+                tr("the written patch doesn't parse; please report this as a bug")
+            }
+        }
+    }
 }
 
 /// One field or argument the item writes.

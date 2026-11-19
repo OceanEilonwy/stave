@@ -15,6 +15,7 @@
 //! `AdwDialog` opened by an edit script (as the removal's dialog found),
 //! and the search has to be recorded.
 
+use stave_app::i18n::{fill_in, ntr, tr};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
@@ -51,19 +52,19 @@ impl OptionSearch {
     /// A closed dialog.
     pub fn new() -> Rc<OptionSearch> {
         let entry = gtk::SearchEntry::builder()
-            .placeholder_text("Search by name or by what it is")
+            .placeholder_text(tr("Search by name or by what it is"))
             .hexpand(true)
             .margin_start(12)
             .margin_end(12)
             .margin_top(6)
             .margin_bottom(6)
             .build();
-        entry.update_property(&[gtk::accessible::Property::Label("Search the options")]);
+        entry.update_property(&[gtk::accessible::Property::Label(&tr("Search the options"))]);
         let list = gtk::ListBox::builder()
             .selection_mode(gtk::SelectionMode::Single)
             .css_classes(["stave-option-search-list"])
             .build();
-        list.update_property(&[gtk::accessible::Property::Label("Options that match")]);
+        list.update_property(&[gtk::accessible::Property::Label(&tr("Options that match"))]);
         let scrolled = gtk::ScrolledWindow::builder()
             .hscrollbar_policy(gtk::PolicyType::Never)
             .propagate_natural_height(true)
@@ -81,8 +82,8 @@ impl OptionSearch {
             .css_classes(["stave-option-search-foot"])
             .build();
         foot.append(&count);
-        for words in ["↑ ↓ move", "Enter choose", "Esc close"] {
-            foot.append(&gtk::Label::new(Some(words)));
+        for words in [tr("↑ ↓ move"), tr("Enter choose"), tr("Esc close")] {
+            foot.append(&gtk::Label::new(Some(&words)));
         }
         let content = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
@@ -99,9 +100,9 @@ impl OptionSearch {
         let close = gtk::Button::builder()
             .icon_name("window-close-symbolic")
             .css_classes(["flat", "circular"])
-            .tooltip_text("Close (Escape)")
+            .tooltip_text(tr("Close (Escape)"))
             .build();
-        close.update_property(&[gtk::accessible::Property::Label("Close")]);
+        close.update_property(&[gtk::accessible::Property::Label(&tr("Close"))]);
         let head = gtk::Box::builder()
             .css_classes(["stave-option-search-head"])
             .build();
@@ -175,7 +176,10 @@ impl OptionSearch {
     /// Opens the search for a setting, with `query` typed.
     pub fn present(self: &Rc<Self>, setting: &str, query: &str) {
         self.setting.replace(Some(setting.to_owned()));
-        let words = format!("Choose {}", setting.replace('_', " "));
+        let words = fill_in(
+            &tr("Choose {setting}"),
+            &[("setting", &setting.replace('_', " "))],
+        );
         self.title.set_label(&words);
         self.root
             .first_child()
@@ -286,9 +290,12 @@ impl OptionSearch {
         }
         if rows.is_empty() {
             let words = if query.trim().is_empty() {
-                "This setting has no options to choose from; type a value on the card.".to_owned()
+                tr("This setting has no options to choose from; type a value on the card.")
             } else {
-                format!("Nothing is called “{query}”, and nothing says so in its description.")
+                fill_in(
+                    &tr("Nothing is called “{query}”, and nothing says so in its description."),
+                    &[("query", &query)],
+                )
             };
             self.list.append(
                 &gtk::ListBoxRow::builder()
@@ -309,10 +316,25 @@ impl OptionSearch {
                     .build(),
             );
         }
-        self.count.set_label(&match found {
-            1 => format!("1 option · {fitting} fits"),
-            found => format!("{found} options · {fitting} fit"),
-        });
+        self.count.set_label(&fill_in(
+            &tr("{options} · {fitting}"),
+            &[
+                (
+                    "options",
+                    &fill_in(
+                        &ntr("{count} option", "{count} options", found),
+                        &[("count", &found)],
+                    ),
+                ),
+                (
+                    "fitting",
+                    &fill_in(
+                        &ntr("{count} fits", "{count} fit", fitting),
+                        &[("count", &fitting)],
+                    ),
+                ),
+            ],
+        ));
         self.rows.replace(rows);
         self.filling.set(false);
     }
@@ -360,9 +382,9 @@ impl OptionSearch {
             return;
         };
         if !hit.choosable() {
-            self.count.set_label(&format!(
-                "{} can't be used here: choose one that fits",
-                hit.option.text
+            self.count.set_label(&fill_in(
+                &tr("{option} can't be used here: choose one that fits"),
+                &[("option", &hit.option.text)],
             ));
             return;
         }
@@ -419,10 +441,10 @@ fn hit_row(hit: &SearchHit) -> gtk::ListBoxRow {
         .build();
     line.append(&name);
     let (class, short) = match fit {
-        OptionFit::NotChecked => ("checking", "Checking whether it fits…".to_owned()),
-        OptionFit::Fits => ("fits", "Fits".to_owned()),
+        OptionFit::NotChecked => ("checking", tr("Checking whether it fits…")),
+        OptionFit::Fits => ("fits", tr("Fits")),
         OptionFit::NeedsChoice(_) => ("needs", fit_words(fit)),
-        OptionFit::Refused(_) => ("refused", "Can't be used here".to_owned()),
+        OptionFit::Refused(_) => ("refused", tr("Can't be used here")),
     };
     let state = gtk::Box::builder()
         .spacing(4)

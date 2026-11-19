@@ -1,0 +1,59 @@
+#!/bin/sh
+# Collects every sentence the window shows into po/stave.pot, the template
+# translators start from, and brings each translation in po/LINGUAS up to
+# date with it.
+#
+#   po/update-pot          write po/POTFILES.in and po/stave.pot, merge
+#                          the template into each po/<lang>.po
+#   po/update-pot --mo     also compile each po/<lang>.po into
+#                          po/locale/<lang>/LC_MESSAGES/stave.mo, for
+#                          trying a translation:
+#                          STAVE_LOCALEDIR=po/locale LANGUAGE=<lang> stave-gtk
+#
+# The interface's words are marked in the Rust code with `tr("…")`,
+# `ntr("…", "…", count)` (a count), `trc("context", "…")` (a short word
+# with more than one meaning) and `tr_noop("…")` (a word kept in a table
+# and translated where it is shown); see crates/stave-app/src/i18n.rs. The
+# diagnostics of the core crates (stave-lang to stave-check) are the
+# compiler's messages, shared with the command line, and are not
+# translated.
+#
+# A new language: add its code (`de`, `pt_BR`) to po/LINGUAS, run this,
+# and translate po/<lang>.po.
+set -eu
+cd "$(dirname "$0")/.."
+
+{
+    echo "# Files with words to translate; po/update-pot writes this list."
+    grep -rlE '\b(tr|ntr|trc|tr_noop)\(' crates/stave-app/src crates/stave-gtk/src \
+        --include='*.rs' | grep -v 'i18n.rs' | LC_ALL=C sort
+    echo "data/io.github.OceanEilonwy.Stave.desktop"
+    echo "data/io.github.OceanEilonwy.Stave.metainfo.xml"
+} > po/POTFILES.in
+
+grep -v '^#' po/POTFILES.in | xgettext \
+    --files-from=- \
+    --output=po/stave.pot \
+    --from-code=UTF-8 \
+    --package-name=stave \
+    --msgid-bugs-address=https://github.com/OceanEilonwy/stave/issues \
+    --add-comments=TRANSLATORS: \
+    --sort-by-file \
+    --no-wrap \
+    --keyword=tr \
+    --keyword=ntr:1,2 \
+    --keyword=trc:1c,2 \
+    --keyword=tr_noop
+
+for lang in $(grep -v '^#' po/LINGUAS); do
+    if [ -f "po/$lang.po" ]; then
+        msgmerge --quiet --update --backup=none --no-wrap "po/$lang.po" po/stave.pot
+    else
+        msginit --no-translator --no-wrap --locale="$lang" \
+            --input=po/stave.pot --output-file="po/$lang.po"
+    fi
+    if [ "${1:-}" = "--mo" ]; then
+        mkdir -p "po/locale/$lang/LC_MESSAGES"
+        msgfmt --check --output-file="po/locale/$lang/LC_MESSAGES/stave.mo" "po/$lang.po"
+    fi
+done

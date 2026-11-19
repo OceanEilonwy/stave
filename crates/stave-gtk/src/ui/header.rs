@@ -12,6 +12,7 @@
 
 use adw::prelude::*;
 use gtk::gio;
+use stave_app::i18n::{fill_in, tr};
 use stave_app::session::{Activity, Build, Pill, Tone, View};
 
 use super::icons::{self, PathIcon};
@@ -74,13 +75,13 @@ impl Header {
         let menu_button = gtk::MenuButton::builder()
             .icon_name("open-menu-symbolic")
             .menu_model(menus)
-            .tooltip_text("Main Menu")
+            .tooltip_text(tr("Main Menu"))
             .css_classes(["flat", "stave-icon-button"])
             .valign(gtk::Align::Center)
             .primary(true)
             .visible(false)
             .build();
-        menu_button.update_property(&[gtk::accessible::Property::Label("Main Menu")]);
+        menu_button.update_property(&[gtk::accessible::Property::Label(&tr("Main Menu"))]);
 
         let title = adw::WindowTitle::builder()
             .title(folder_label)
@@ -90,14 +91,14 @@ impl Header {
 
         let find = gtk::Button::builder()
             .icon_name("system-search-symbolic")
-            .tooltip_text("Find a part, file, line or problem (Ctrl+K)")
+            .tooltip_text(tr("Find a part, file, line or problem (Ctrl+K)"))
             .action_name("win.find")
             .css_classes(["flat", "stave-icon-button", "stave-find"])
             .valign(gtk::Align::Center)
             .build();
-        find.update_property(&[gtk::accessible::Property::Label(
+        find.update_property(&[gtk::accessible::Property::Label(&tr(
             "Find a part, file, line or problem",
-        )]);
+        ))]);
 
         let switcher = adw::ToggleGroup::builder()
             .css_classes(["stave-switcher"])
@@ -115,7 +116,7 @@ impl Header {
                 .valign(gtk::Align::Center)
                 .build();
             content.append(&PathIcon::new(shape, 15));
-            let label = gtk::Label::new(Some(view.title()));
+            let label = gtk::Label::new(Some(&view.title()));
             content.append(&label);
             switcher_labels.push(label);
             let toggle = adw::Toggle::builder()
@@ -136,7 +137,7 @@ impl Header {
         middle.append(&title);
         middle.append(&switcher);
 
-        let scene_label = gtk::Label::new(Some("Rest"));
+        let scene_label = gtk::Label::new(Some(&tr("Rest")));
         let scene_content = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         let scene_icon = PathIcon::new(icons::SCENE, 15);
         scene_icon.add_css_class("dim");
@@ -153,7 +154,7 @@ impl Header {
         let scene = gtk::MenuButton::builder()
             .child(&scene_content)
             .popover(&popover)
-            .tooltip_text("Scene")
+            .tooltip_text(tr("Scene"))
             .css_classes(["stave-scene"])
             .valign(gtk::Align::Center)
             .build();
@@ -171,35 +172,35 @@ impl Header {
             .build();
         pill_stack.add_named(&pill_icon, Some("icon"));
         pill_stack.add_named(&pill_spinner, Some("spinner"));
-        let pill_label = gtk::Label::new(Some("Not checked yet"));
+        let pill_label = gtk::Label::new(Some(&tr("Not checked yet")));
         let pill_content = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         pill_content.append(&pill_stack);
         pill_content.append(&pill_label);
         let pill = gtk::Button::builder()
             .child(&pill_content)
             .css_classes(["stave-pill"])
-            .tooltip_text("Not checked yet")
+            .tooltip_text(tr("Not checked yet"))
             .action_name("win.next-problem")
             .valign(gtk::Align::Center)
             .build();
         let previous = gtk::Button::builder()
             .icon_name("go-previous-symbolic")
-            .tooltip_text("Previous problem (Shift+F8)")
+            .tooltip_text(tr("Previous problem (Shift+F8)"))
             .action_name("win.previous-problem")
             .css_classes(["stave-problem-step"])
             .valign(gtk::Align::Center)
             .visible(false)
             .build();
-        previous.update_property(&[gtk::accessible::Property::Label("Previous problem")]);
+        previous.update_property(&[gtk::accessible::Property::Label(&tr("Previous problem"))]);
         let next = gtk::Button::builder()
             .icon_name("go-next-symbolic")
-            .tooltip_text("Next problem (F8)")
+            .tooltip_text(tr("Next problem (F8)"))
             .action_name("win.next-problem")
             .css_classes(["stave-problem-step"])
             .valign(gtk::Align::Center)
             .visible(false)
             .build();
-        next.update_property(&[gtk::accessible::Property::Label("Next problem")]);
+        next.update_property(&[gtk::accessible::Property::Label(&tr("Next problem"))]);
         let chip = gtk::Box::builder()
             .orientation(gtk::Orientation::Horizontal)
             .css_classes(["stave-problems-chip", "unknown"])
@@ -229,11 +230,11 @@ impl Header {
         build_stack.add_named(&building, Some("building"));
         let build = gtk::Button::builder()
             .child(&build_stack)
-            .tooltip_text("Build plan (Ctrl+B)")
+            .tooltip_text(tr("Build plan (Ctrl+B)"))
             .css_classes(["stave-build"])
             .valign(gtk::Align::Center)
             .build();
-        build.update_property(&[gtk::accessible::Property::Label("Build plan")]);
+        build.update_property(&[gtk::accessible::Property::Label(&tr("Build plan"))]);
         build.set_action_name(Some("win.build"));
         // The build plan isn't made yet: pressing the button would only
         // say so. It stays hidden (and `win.build` unregistered) until it
@@ -311,7 +312,7 @@ impl Header {
             self.scenes.append(&row);
         }
         self.scene_label
-            .set_label(titles.get(current).map_or("Rest", |title| title.as_str()));
+            .set_label(&titles.get(current).map_or_else(|| tr("Rest"), Clone::clone));
         self.scene.set_sensitive(!titles.is_empty());
     }
 
@@ -339,7 +340,10 @@ impl Header {
             .set_visible_child_name(if checking { "spinner" } else { "icon" });
         self.pill_spinner.set_visible(checking);
         let tooltip = if problems > 0 {
-            format!("{line}. Show the next problem (F8)")
+            fill_in(
+                &tr("{line}. Show the next problem (F8)"),
+                &[("line", &line)],
+            )
         } else {
             line.to_owned()
         };

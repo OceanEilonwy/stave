@@ -15,6 +15,7 @@
 //!   piece a ══ ⇕ 180 mm ══ piece b   (a boundary handle)
 //! ```
 
+use stave_app::i18n::tr;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
@@ -266,9 +267,9 @@ impl Repeats {
     pub(in crate::ui) fn new() -> Repeats {
         Repeats {
             row: RepeatFoldRow::new(1),
-            count: Handle::new(
+            count: Handle::new(&tr(
                 "Drag toward the start of the space for more pieces, back for fewer",
-            ),
+            )),
             boundaries: RefCell::new(Vec::new()),
             count_on: Cell::new(None),
             drag: Cell::new(None),
@@ -647,8 +648,9 @@ impl Window {
         let mut to_hide: Vec<gtk::Box> = Vec::new();
         let mut handles = repeats.boundaries.borrow_mut();
         while handles.len() < shown.len() {
-            let handle =
-                Handle::new("Drag to move the boundary: only these two pieces change size");
+            let handle = Handle::new(&tr(
+                "Drag to move the boundary: only these two pieces change size",
+            ));
             handle.root.add_css_class("boundary");
             self.widgets.design.add_overlay(&handle.root);
             let index = handles.len();

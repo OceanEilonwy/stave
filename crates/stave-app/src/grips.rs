@@ -38,6 +38,7 @@
 //! types, and [`SelectionGrip::contract`] gives the contract value where
 //! one can be made.
 
+use crate::i18n::{fill_in, tr};
 use std::sync::atomic::AtomicBool;
 
 use stave_lang::ast::{Ident, Span};
@@ -238,13 +239,13 @@ impl FollowKind {
     }
 
     /// A short phrase for the card: "locked", "a stock size".
-    pub fn words(self) -> &'static str {
+    pub fn words(self) -> String {
         match self {
-            FollowKind::Plain => "plain",
-            FollowKind::Solved => "solved",
-            FollowKind::Locked => "locked",
-            FollowKind::StockSize => "a size of the stock",
-            FollowKind::KindSize => "a size of the hardware or joint",
+            FollowKind::Plain => tr("plain"),
+            FollowKind::Solved => tr("solved"),
+            FollowKind::Locked => tr("locked"),
+            FollowKind::StockSize => tr("a size of the stock"),
+            FollowKind::KindSize => tr("a size of the hardware or joint"),
         }
     }
 }
@@ -293,20 +294,39 @@ pub enum PlaceInput {
 #[derive(Debug, thiserror::Error)]
 pub enum GripsError {
     /// The base design does not solve.
-    #[error("the design doesn't place yet, so it has no grips; fix its errors first")]
+    #[error("{}", self.text())]
     NoDesign,
     /// The selection names nothing in the design.
-    #[error("the selection is not in this design")]
+    #[error("{}", self.text())]
     NotInDesign,
     /// The project has no envelope box.
-    #[error("this project has no envelope: its root is a part, not a box")]
+    #[error("{}", self.text())]
     NoEnvelope,
     /// The region is not a piece of a split.
-    #[error("this space is not one piece of a split, so it has no boundaries to move")]
+    #[error("{}", self.text())]
     NotASplit,
     /// A stops search failed.
     #[error(transparent)]
     Stops(#[from] StopsError),
+}
+
+impl GripsError {
+    /// The error in the window's words (translated).
+    fn text(&self) -> String {
+        match self {
+            GripsError::NoDesign => {
+                tr("the design doesn't place yet, so it has no grips; fix its errors first")
+            }
+            GripsError::NotInDesign => tr("the selection is not in this design"),
+            GripsError::NoEnvelope => {
+                tr("this project has no envelope: its root is a part, not a box")
+            }
+            GripsError::NotASplit => {
+                tr("this space is not one piece of a split, so it has no boundaries to move")
+            }
+            GripsError::Stops(error) => error.to_string(),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1123,13 +1143,13 @@ pub struct Choice {
 pub enum MoveError {
     /// No value the size follows can change: each is locked, a stock's or a
     /// kind's size, or not linear. Lists what it follows.
-    #[error("{}", stopped_message(.0))]
+    #[error("{}", self.text())]
     Stopped(Vec<FollowedValue>),
     /// The value is a param no patch can address.
-    #[error("'{0}' can't be changed by a patch: it is set inside another component")]
+    #[error("{}", self.text())]
     NotWritable(String),
     /// The target is not the kind of value the grip moves.
-    #[error("the value is not the same kind as the size (a length for a length)")]
+    #[error("{}", self.text())]
     Mismatch,
     /// The inversion has no answer.
     #[error(transparent)]
@@ -1141,17 +1161,15 @@ pub enum MoveError {
     #[error(transparent)]
     Patch(#[from] PatchBuildError),
     /// The param is not one this grip follows.
-    #[error("that value is not one this size follows")]
+    #[error("{}", self.text())]
     NotFollowed,
     /// The numbers are too large.
-    #[error("the numbers are too large")]
+    #[error("{}", self.text())]
     Overflow,
     /// The value the drag needs has no plain-number text: a count or ratio
     /// with no finite decimal (a third), which `.stave` can only write as
     /// a division. A drag writes plain numbers, so it is refused.
-    #[error(
-        "'{path}' would have to be {numerator}/{denominator}, which has no exact decimal, so a drag can't write it"
-    )]
+    #[error("{}", self.text())]
     NotPlain {
         /// The path of the param.
         path: String,
@@ -1162,26 +1180,58 @@ pub enum MoveError {
     },
 }
 
+impl MoveError {
+    /// The error in the window's words (translated).
+    fn text(&self) -> String {
+        match self {
+            MoveError::Stopped(v0) => stopped_message(v0),
+            MoveError::NotWritable(v0) => fill_in(
+                &tr("'{value}' can't be changed by a patch: it is set inside another component"),
+                &[("value", v0)],
+            ),
+            MoveError::Mismatch => {
+                tr("the value is not the same kind as the size (a length for a length)")
+            }
+            MoveError::Invert(error) => error.to_string(),
+            MoveError::Shares(error) => error.to_string(),
+            MoveError::Patch(error) => error.to_string(),
+            MoveError::NotFollowed => tr("that value is not one this size follows"),
+            MoveError::Overflow => tr("the numbers are too large"),
+            MoveError::NotPlain {
+                path,
+                numerator,
+                denominator,
+            } => fill_in(
+                &tr(
+                    "'{path}' would have to be {numerator}/{denominator}, which has no exact decimal, so a drag can't write it",
+                ),
+                &[
+                    ("path", path),
+                    ("numerator", numerator),
+                    ("denominator", denominator),
+                ],
+            ),
+        }
+    }
+}
+
 fn stopped_message(follows: &[FollowedValue]) -> String {
     if follows.is_empty() {
-        return "this size is worked out from numbers only, so a drag has nothing to change"
-            .to_owned();
+        return tr("this size is worked out from numbers only, so a drag has nothing to change");
     }
     let reasons: Vec<String> = follows
         .iter()
         .map(|f| match (f.kind, f.coefficient) {
-            (FollowKind::Plain | FollowKind::Solved, None) => {
-                format!(
-                    "{} (the size is not worked out from it in a straight line)",
-                    f.name
-                )
-            }
+            (FollowKind::Plain | FollowKind::Solved, None) => fill_in(
+                &tr("{name} (the size is not worked out from it in a straight line)"),
+                &[("name", &f.name)],
+            ),
             (kind, _) => format!("{} ({})", f.name, kind.words()),
         })
         .collect();
-    format!(
-        "nothing this size follows can change: {}",
-        reasons.join(", ")
+    fill_in(
+        &tr("nothing this size follows can change: {reasons}"),
+        &[("reasons", &reasons.join(", "))],
     )
 }
 
@@ -1285,7 +1335,10 @@ fn set_patch(path: &str, before: Amount, after: Amount) -> Result<GripPatch, Mov
         _ => MoveError::Overflow,
     })?;
     let patch = GeneratedPatch::new(
-        &format!("Set {path} to {text}"),
+        &fill_in(
+            &tr("Set {path} to {value}"),
+            &[("path", &path), ("value", &text)],
+        ),
         &[format!("set {path} = {text}")],
     )?;
     Ok(GripPatch {

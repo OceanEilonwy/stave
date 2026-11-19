@@ -8,6 +8,7 @@
 //! hold is the way in. Which spot each group is in belongs to the panel
 //! layout (`workbench`), never to a `.stave` file.
 
+use stave_app::i18n::tr;
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -238,8 +239,8 @@ impl Floats {
         widget.set_tooltip_text(Some(
             &widget
                 .tooltip_text()
-                .map(|tip| format!("{tip}\nPress and hold to move it"))
-                .unwrap_or_else(|| "Press and hold to move it".to_owned()),
+                .map(|tip| format!("{tip}\n{}", tr("Press and hold to move it")))
+                .unwrap_or_else(|| tr("Press and hold to move it")),
         ));
     }
 

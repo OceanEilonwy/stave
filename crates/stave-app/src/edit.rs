@@ -18,6 +18,7 @@
 //! [`Fix`] is a parsed [`Patch`], and diagnostics are the checker's own
 //! [`Diagnostic`]s. Ids are the resolved model's ([`stave_model::ids`]).
 
+use crate::i18n::{fill_in, ntr, tr};
 use stave_lang::ast::{
     AssemblyDef, DesignItem, Expr, Ident, ItemKind, Name, PatchOpKind, Span, StringPart, TypeName,
 };
@@ -34,27 +35,42 @@ pub use stave_lang::ast::Patch;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum ContractError {
     /// Two facing parts are two different parts.
-    #[error("a part can't face itself")]
+    #[error("{}", self.text())]
     SamePart,
     /// A refusal lists errors, never warnings.
-    #[error("a refusal lists errors only")]
+    #[error("{}", self.text())]
     NotAnError,
     /// A candidate that fits has warnings at most.
-    #[error("a candidate that fits has no errors")]
+    #[error("{}", self.text())]
     ErrorInFits,
     /// A refusal has at least one error.
-    #[error("a refusal needs at least one error")]
+    #[error("{}", self.text())]
     NoProblems,
     /// A fix changes something.
-    #[error("a fix needs at least one operation")]
+    #[error("{}", self.text())]
     EmptyPatch,
     /// A grip's value lies within its range, its range runs low to high,
     /// and its stops lie within the range.
-    #[error("a grip's value and stops must lie within its range")]
+    #[error("{}", self.text())]
     OutsideRange,
     /// A grip's step is more than zero.
-    #[error("a grip's step must be more than zero")]
+    #[error("{}", self.text())]
     StepNotPositive,
+}
+
+impl ContractError {
+    /// The error in the window's words (translated).
+    fn text(&self) -> String {
+        match self {
+            ContractError::SamePart => tr("a part can't face itself"),
+            ContractError::NotAnError => tr("a refusal lists errors only"),
+            ContractError::ErrorInFits => tr("a candidate that fits has no errors"),
+            ContractError::NoProblems => tr("a refusal needs at least one error"),
+            ContractError::EmptyPatch => tr("a fix needs at least one operation"),
+            ContractError::OutsideRange => tr("a grip's value and stops must lie within its range"),
+            ContractError::StepNotPositive => tr("a grip's step must be more than zero"),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -142,12 +158,12 @@ pub enum Heading {
 
 impl Heading {
     /// The words shown: "In this space".
-    pub fn text(self) -> &'static str {
+    pub fn text(self) -> String {
         match self {
-            Heading::InThisSpace => "In this space",
-            Heading::OnThisFace => "On this face",
-            Heading::BetweenTheseParts => "Between these parts",
-            Heading::WithTheseParts => "With these parts",
+            Heading::InThisSpace => tr("In this space"),
+            Heading::OnThisFace => tr("On this face"),
+            Heading::BetweenTheseParts => tr("Between these parts"),
+            Heading::WithTheseParts => tr("With these parts"),
         }
     }
 }
@@ -446,7 +462,14 @@ impl OptionRefusal {
         };
         match self.more {
             0 => first,
-            more => format!("{first} (and {more} more)"),
+            more => fill_in(
+                &ntr(
+                    "{first} (and {more} more)",
+                    "{first} (and {more} more)",
+                    more,
+                ),
+                &[("first", &first), ("more", &more)],
+            ),
         }
     }
 
@@ -483,16 +506,20 @@ impl Blame {
     /// doesn't fit now that panel_stock is oak_19."
     pub fn text(&self) -> String {
         match self.from {
-            SettingValue::Unset => format!(
-                "It doesn't fit now that {} is {}.",
-                self.setting.as_str(),
-                self.to_text
+            SettingValue::Unset => fill_in(
+                &tr("It doesn't fit now that {setting} is {value}."),
+                &[
+                    ("setting", &self.setting.as_str()),
+                    ("value", &self.to_text),
+                ],
             ),
             SettingValue::Default | SettingValue::Copied { .. } | SettingValue::Chosen(_) => {
-                format!(
-                    "It stopped fitting when {} became {}.",
-                    self.setting.as_str(),
-                    self.to_text
+                fill_in(
+                    &tr("It stopped fitting when {setting} became {value}."),
+                    &[
+                        ("setting", &self.setting.as_str()),
+                        ("value", &self.to_text),
+                    ],
                 )
             }
         }
@@ -505,11 +532,15 @@ impl Blame {
         let setting = self.setting.as_str();
         let value = self.from_text.as_deref().unwrap_or_default();
         match self.from {
-            SettingValue::Unset => format!("Clear {setting} again"),
-            SettingValue::Default => format!("Put {setting} back to {value}, the default"),
-            SettingValue::Copied { .. } | SettingValue::Chosen(_) => {
-                format!("Put {setting} back to {value}")
-            }
+            SettingValue::Unset => fill_in(&tr("Clear {setting} again"), &[("setting", &setting)]),
+            SettingValue::Default => fill_in(
+                &tr("Put {setting} back to {value}, the default"),
+                &[("setting", &setting), ("value", &value)],
+            ),
+            SettingValue::Copied { .. } | SettingValue::Chosen(_) => fill_in(
+                &tr("Put {setting} back to {value}"),
+                &[("setting", &setting), ("value", &value)],
+            ),
         }
     }
 }

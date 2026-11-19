@@ -4,6 +4,7 @@
 //! unsaved and one undo takes it back; otherwise to disk, as the command
 //! line does. The session decides what to write; this only writes it.
 
+use stave_app::i18n::{fill_in, tr};
 use std::cell::Cell;
 use std::io;
 use std::rc::{Rc, Weak};
@@ -84,9 +85,9 @@ fn buffer_text(buffer: &gtk::TextBuffer) -> String {
 }
 
 fn changed(file: &FileEdit) -> io::Error {
-    io::Error::other(format!(
-        "'{}' changed since the edit began; start the edit again",
-        file.path.display()
+    io::Error::other(fill_in(
+        &tr("'{file}' changed since the edit began; start the edit again"),
+        &[("file", &file.path.display())],
     ))
 }
 
@@ -112,7 +113,7 @@ pub(super) fn apply_to_buffer(buffer: &gtk::TextBuffer, file: &FileEdit) -> io::
         let end = char_offset(&file.before, edit.range.end);
         match (start, end) {
             (Some(start), Some(end)) if start <= end => ranges.push((start, end, &edit.text)),
-            _ => return Err(io::Error::other("an edit falls inside a character")),
+            _ => return Err(io::Error::other(tr("an edit falls inside a character"))),
         }
     }
     buffer.begin_user_action();
@@ -126,9 +127,9 @@ pub(super) fn apply_to_buffer(buffer: &gtk::TextBuffer, file: &FileEdit) -> io::
     if buffer_text(buffer) == file.after {
         Ok(())
     } else {
-        Err(io::Error::other(format!(
-            "'{}' didn't come out as the edit says",
-            file.path.display()
+        Err(io::Error::other(fill_in(
+            &tr("'{file}' didn't come out as the edit says"),
+            &[("file", &file.path.display())],
         )))
     }
 }

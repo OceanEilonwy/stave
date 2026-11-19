@@ -2,6 +2,7 @@
 //! the files, the finder, the 3D view's pointer and keys, and the
 //! watcher that rechecks on save.
 
+use stave_app::i18n::{fill_in, tr};
 use std::path::Path;
 use std::rc::Rc;
 
@@ -349,12 +350,16 @@ impl Window {
                     // version of the design that had no errors.
                     let name = analysis
                         .symbol(symbol)
-                        .map_or_else(|| "That".to_owned(), |found| found.name.clone());
+                        .map(|found| found.name.clone());
                     window.widgets.toasts.add_toast(
                         adw::Toast::builder()
-                            .title(format!(
-                                "{name} isn't in the 3D view, which shows the last version without errors"
-                            ))
+                            .title(match name {
+                                Some(name) => fill_in(
+                                    &tr("{name} isn't in the 3D view, which shows the last version without errors"),
+                                    &[("name", &name)],
+                                ),
+                                None => tr("That isn't in the 3D view, which shows the last version without errors"),
+                            })
                             .timeout(4)
                             .build(),
                     );
@@ -680,7 +685,9 @@ impl Window {
                 eprintln!("warning: {error}");
                 self.widgets.toasts.add_toast(
                     adw::Toast::builder()
-                        .title("Not watching the folder for changes: check again with Ctrl+R")
+                        .title(tr(
+                            "Not watching the folder for changes: check again with Ctrl+R",
+                        ))
                         .timeout(6)
                         .build(),
                 );

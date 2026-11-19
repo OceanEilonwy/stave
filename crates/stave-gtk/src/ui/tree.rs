@@ -42,6 +42,7 @@
 //! read the same are kept and only the run that differs is replaced, so
 //! the scroll position and the row with the keyboard survive a check.
 
+use stave_app::i18n::{fill_in, tr};
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
@@ -316,7 +317,7 @@ impl TreeSidebar {
             .selection_mode(gtk::SelectionMode::Single)
             .css_classes(["stave-parts"])
             .build();
-        list.update_property(&[gtk::accessible::Property::Label("Parts")]);
+        list.update_property(&[gtk::accessible::Property::Label(&tr("Parts"))]);
         // `External`: the panel may be narrower than its rows ask, so the
         // width watcher below sees the real width and the rows show less.
         let scrolled = gtk::ScrolledWindow::builder()
@@ -826,8 +827,8 @@ fn fill(list: &gtk::ListBox, state: &Rc<RefCell<TreeState>>) {
             .label(
                 state_ref
                     .placeholder
-                    .as_deref()
-                    .unwrap_or("Nothing to show yet"),
+                    .clone()
+                    .unwrap_or_else(|| tr("Nothing to show yet")),
             )
             .css_classes(["dim-label"])
             .wrap(true)
@@ -916,11 +917,11 @@ fn name_row(row: &gtk::ListBoxRow, label: &str, description: &str) {
 /// mark in words.
 fn described(detail: Option<&str>, mark: Option<Mark>) -> String {
     let mark = mark.map(|mark| match mark {
-        Mark::Error => "has an error",
-        Mark::Warning => "has a warning",
-        Mark::Involved => "involved in a problem",
+        Mark::Error => tr("has an error"),
+        Mark::Warning => tr("has a warning"),
+        Mark::Involved => tr("involved in a problem"),
     });
-    [detail, mark]
+    [detail, mark.as_deref()]
         .into_iter()
         .flatten()
         .collect::<Vec<_>>()
@@ -1056,7 +1057,7 @@ fn empty_rows(empty: &EmptyState, rows: &mut Vec<(gtk::ListBoxRow, RowKind)>) {
         if shown.is_empty() {
             continue;
         }
-        rows.push(plain_heading(group.heading()));
+        rows.push(plain_heading(&group.heading()));
         for item in shown {
             rows.push(library_row(item));
         }
@@ -1096,7 +1097,9 @@ fn library_row(item: &LibraryItem) -> (gtk::ListBoxRow, RowKind) {
     );
     let kind = match &item.location {
         Some(location) => {
-            row.set_tooltip_text(Some(item.summary.as_deref().unwrap_or("Open its text")));
+            row.set_tooltip_text(Some(
+                &item.summary.clone().unwrap_or_else(|| tr("Open its text")),
+            ));
             RowKind::Source(location.clone())
         }
         None => {
@@ -1176,7 +1179,7 @@ fn heading_row(
     name_row(&row, &heading.title, &heading.note);
     match assembly {
         Some(id) => {
-            row.set_tooltip_text(Some("Fold it"));
+            row.set_tooltip_text(Some(&tr("Fold it")));
             row.update_state(&[gtk::accessible::State::Expanded(Some(true))]);
             (row, RowKind::Heading(id))
         }
@@ -1354,7 +1357,10 @@ fn joined_row(joined: &JoinedTo, shown: &Shown<'_>) -> (gtk::ListBoxRow, RowKind
     let accessible = format!("{}: {}", joined.words, names.join(", "));
     name_row(&row, &accessible, "");
     if joined.focus.is_some() {
-        row.set_tooltip_text(Some(&format!("{accessible}. Activate to focus on it")));
+        row.set_tooltip_text(Some(&fill_in(
+            &tr("{name}. Activate to focus on it"),
+            &[("name", &accessible)],
+        )));
     }
     (
         row,
@@ -1392,7 +1398,7 @@ fn partner_link(partner: &Partner, joined: &JoinedTo, shown: &Shown<'_>) -> gtk:
         .child(&label)
         .css_classes(["stave-partner", "flat"])
         .valign(gtk::Align::Center)
-        .tooltip_text(format!("Select {}", partner.label))
+        .tooltip_text(fill_in(&tr("Select {name}"), &[("name", &partner.label)]))
         .build();
     let on_select = shown.on_select.clone();
     let state = shown.clicked.clone();
@@ -1457,7 +1463,10 @@ fn folded_row(
     }
     let mark = ids.iter().find_map(|id| shown.marks.assembly(*id));
     content.append(&super::style::mark_dot(mark));
-    let row = tree_row().child(&content).tooltip_text("Open it").build();
+    let row = tree_row()
+        .child(&content)
+        .tooltip_text(tr("Open it"))
+        .build();
     name_row(&row, label, &described(detail, mark));
     row.update_state(&[gtk::accessible::State::Expanded(Some(false))]);
     (row, RowKind::Folded(ids.to_vec()))

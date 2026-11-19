@@ -106,3 +106,10 @@ open buffers) sits beside that chain after `stave-modules` and before
   `.git/index.lock` exists, wait and retry. Never rewrite history.
 - User-facing text (diagnostics, PDF, UI) is plain, specific English and uses
   woodworking words a beginner can look up.
+- Words the window shows (`stave-gtk`, and what `stave-app` words for it)
+  are marked for translation with `stave_app::i18n`: `tr("…")`, `ntr` for
+  a count (never an `if` on the count), `fill_in` for values (whole
+  sentences with named holes, never pieces glued together), `tr_noop` for
+  a table translated where it is shown. Text that is matched on stays
+  untranslated. Run `po/update-pot` after adding a file that marks words.
+  The core crates' diagnostics stay English and unmarked.

@@ -3,6 +3,7 @@
 //! edge. It only shows the lines the session gives.
 
 use adw::prelude::*;
+use stave_app::i18n::tr;
 
 /// The Output panel.
 pub struct OutputPanel {
@@ -27,7 +28,7 @@ impl OutputPanel {
             .bottom_margin(8)
             .css_classes(["stave-output"])
             .build();
-        text.update_property(&[gtk::accessible::Property::Label("Output")]);
+        text.update_property(&[gtk::accessible::Property::Label(&tr("Output"))]);
         let root = gtk::ScrolledWindow::builder()
             .hscrollbar_policy(gtk::PolicyType::Never)
             .vexpand(true)

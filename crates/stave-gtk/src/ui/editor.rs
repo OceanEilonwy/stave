@@ -26,6 +26,7 @@
 //! Lenses and the peek are overlay children placed in the room a tag's
 //! `pixels-above-lines` / `pixels-below-lines` makes for them.
 
+use stave_app::i18n::{fill_in, ntr, tr};
 use std::cell::{Cell, RefCell};
 use std::rc::{Rc, Weak};
 
@@ -782,7 +783,7 @@ struct Search {
 impl Search {
     fn new(view: &gtk::TextView) -> Rc<Search> {
         let entry = gtk::SearchEntry::builder()
-            .placeholder_text("Find in this file")
+            .placeholder_text(tr("Find in this file"))
             .width_chars(22)
             .build();
         let count = gtk::Label::builder()
@@ -804,14 +805,18 @@ impl Search {
         };
         let previous = button(
             "go-up-symbolic",
-            "Previous match",
-            "Previous match (Shift+Enter)",
+            &tr("Previous match"),
+            &tr("Previous match (Shift+Enter)"),
         );
-        let next = button("go-down-symbolic", "Next match", "Next match (Enter)");
+        let next = button(
+            "go-down-symbolic",
+            &tr("Next match"),
+            &tr("Next match (Enter)"),
+        );
         let close = button(
             "window-close-symbolic",
-            "Close the search",
-            "Close the search (Escape)",
+            &tr("Close the search"),
+            &tr("Close the search (Escape)"),
         );
         let bar = gtk::Box::builder()
             .orientation(gtk::Orientation::Horizontal)
@@ -1036,15 +1041,21 @@ fn count_text(
         return String::new();
     }
     if total == 0 {
-        return "No matches".to_owned();
+        return tr("No matches");
     }
     let position = buffer
         .selection_bounds()
         .map_or(0, |(start, end)| context.occurrence_position(&start, &end));
-    match (position, total) {
-        (1.., _) => format!("{position} of {total}"),
-        (_, 1) => "1 match".to_owned(),
-        _ => format!("{total} matches"),
+    if position >= 1 {
+        fill_in(
+            &tr("{position} of {total}"),
+            &[("position", &position), ("total", &total)],
+        )
+    } else {
+        fill_in(
+            &ntr("{count} match", "{count} matches", total),
+            &[("count", &total)],
+        )
     }
 }
 
@@ -1397,7 +1408,7 @@ impl Editor {
         dot.add_css_class("stave-lens-dot");
         let show = super::style::as_link(
             gtk::Button::builder()
-                .label("show in 3D")
+                .label(tr("show in 3D"))
                 .css_classes(["flat", "stave-lens-link"])
                 .build(),
         );
@@ -1457,12 +1468,14 @@ impl Editor {
             match lenses.get(index) {
                 Some(lens) => {
                     slot.uses.set_label(&lens.uses);
-                    slot.uses.set_tooltip_text(Some(&format!(
-                        "List the uses of {} (Shift+F12)",
-                        lens.name
+                    slot.uses.set_tooltip_text(Some(&fill_in(
+                        &tr("List the uses of {name} (Shift+F12)"),
+                        &[("name", &lens.name)],
                     )));
-                    slot.show
-                        .set_tooltip_text(Some(&format!("Select {} in the 3D view", lens.name)));
+                    slot.show.set_tooltip_text(Some(&fill_in(
+                        &tr("Select {name} in the 3D view"),
+                        &[("name", &lens.name)],
+                    )));
                     slot.dot.set_visible(lens.shows_in_3d);
                     slot.show.set_visible(lens.shows_in_3d);
                     slot.symbol.set(Some(lens.symbol));

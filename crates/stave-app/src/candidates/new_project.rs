@@ -21,6 +21,7 @@
 //!
 //! The text is laid out as `stave fmt` lays it out.
 
+use crate::i18n::{fill_in, tr};
 use stave_lang::ast::Ident;
 use stave_lang::units::Length;
 use stave_lang::{FileId, SourceMap};
@@ -106,10 +107,10 @@ impl BoardForm {
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum NewProjectError {
     /// An overall size of zero or less.
-    #[error("the overall {0} must be more than 0mm")]
+    #[error("{}", self.text())]
     SizeNotPositive(&'static str),
     /// A stock size of zero or less.
-    #[error("{stock}'s {field} must be more than 0mm")]
+    #[error("{}", self.text())]
     StockSizeNotPositive {
         /// The stock.
         stock: String,
@@ -117,11 +118,33 @@ pub enum NewProjectError {
         field: &'static str,
     },
     /// Two stock items, or a stock and an envelope name, share a name.
-    #[error("the name '{0}' is used twice")]
+    #[error("{}", self.text())]
     DuplicateName(String),
     /// The written text didn't parse: a bug in the writer.
-    #[error("the new project's text doesn't parse; please report this as a bug")]
+    #[error("{}", self.text())]
     Unparsable,
+}
+
+impl NewProjectError {
+    /// The error in the window's words (translated).
+    fn text(&self) -> String {
+        match self {
+            NewProjectError::SizeNotPositive(v0) => fill_in(
+                &tr("the overall {value} must be more than 0mm"),
+                &[("value", v0)],
+            ),
+            NewProjectError::StockSizeNotPositive { stock, field } => fill_in(
+                &tr("{stock}'s {field} must be more than 0mm"),
+                &[("stock", stock), ("field", field)],
+            ),
+            NewProjectError::DuplicateName(v0) => {
+                fill_in(&tr("the name '{value}' is used twice"), &[("value", v0)])
+            }
+            NewProjectError::Unparsable => {
+                tr("the new project's text doesn't parse; please report this as a bug")
+            }
+        }
+    }
 }
 
 /// The text of a new project. It parses and checks: the envelope `box` is

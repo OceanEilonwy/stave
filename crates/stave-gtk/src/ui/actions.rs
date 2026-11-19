@@ -1,6 +1,7 @@
 //! The window's actions (`win.*`, the menus' and keys' targets) and
 //! opening another project folder from them; the main menu.
 
+use stave_app::i18n::{fill_in, ntr, tr, tr_noop};
 use std::cell::Cell;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -182,7 +183,7 @@ impl Window {
     /// Opens another project folder.
     pub(super) fn choose_folder(self: &Rc<Self>) {
         let dialog = gtk::FileDialog::builder()
-            .title("Open a project folder")
+            .title(tr("Open a project folder"))
             .modal(true)
             .build();
         let window = self.clone();
@@ -231,19 +232,22 @@ impl Window {
             return;
         }
         let dialog = adw::AlertDialog::builder()
-            .heading("Save Changes?")
-            .body(if count == 1 {
-                "One file has changes that aren't saved. If you don't save them, they are lost.".to_owned()
-            } else {
-                format!("{count} files have changes that aren't saved. If you don't save them, they are lost.")
-            })
+            .heading(tr("Save Changes?"))
+            .body(fill_in(
+                &ntr(
+                    "One file has changes that aren't saved. If you don't save them, they are lost.",
+                    "{count} files have changes that aren't saved. If you don't save them, they are lost.",
+                    count,
+                ),
+                &[("count", &count)],
+            ))
             .close_response("cancel")
             .default_response("save")
             .build();
         dialog.add_responses(&[
-            ("cancel", "_Cancel"),
-            ("discard", "_Don't Save"),
-            ("save", "_Save"),
+            ("cancel", tr("_Cancel").as_str()),
+            ("discard", tr("_Don't Save").as_str()),
+            ("save", tr("_Save").as_str()),
         ]);
         dialog.set_response_appearance("discard", adw::ResponseAppearance::Destructive);
         dialog.set_response_appearance("save", adw::ResponseAppearance::Suggested);
@@ -281,7 +285,7 @@ impl Window {
             inspect::PartsTree::default(),
             stave_app::part_joints::PartJoints::default(),
         );
-        self.show_status("Checking…", "");
+        self.show_status(&tr("Checking…"), "");
         self.dispatch(Command::Check);
         self.view_changed();
         self.selection_changed();
@@ -306,56 +310,59 @@ pub(super) fn main_menu(recent: &gio::Menu) -> gio::Menu {
     fn section(items: &[(&str, &str)]) -> gio::Menu {
         let section = gio::Menu::new();
         for (label, action) in items {
-            section.append(Some(label), Some(action));
+            section.append(Some(&tr(label)), Some(action));
         }
         section
     }
     let project = gio::Menu::new();
     let opening = section(&[
-        ("New Project…", "win.new-project"),
-        ("Open Project…", "win.open"),
+        (tr_noop("New Project…"), "win.new-project"),
+        (tr_noop("Open Project…"), "win.open"),
     ]);
-    opening.append_submenu(Some("Open Recent"), recent);
+    opening.append_submenu(Some(&tr("Open Recent")), recent);
     project.append_section(None, &opening);
     project.append_section(
         None,
         &section(&[
-            ("Save", "win.save"),
-            ("Check Again", "win.check"),
-            ("Build Plan", "win.build"),
+            (tr_noop("Save"), "win.save"),
+            (tr_noop("Check Again"), "win.check"),
+            (tr_noop("Build Plan"), "win.build"),
         ]),
     );
-    project.append_section(None, &section(&[("Export 3D Model…", "win.export-view")]));
+    project.append_section(
+        None,
+        &section(&[(tr_noop("Export 3D Model…"), "win.export-view")]),
+    );
     let edit = gio::Menu::new();
     edit.append_section(
         None,
         &section(&[
-            ("Find…", "win.find"),
-            ("Find in the Text", "win.search"),
-            ("Format the Text", "win.format"),
+            (tr_noop("Find…"), "win.find"),
+            (tr_noop("Find in the Text"), "win.search"),
+            (tr_noop("Format the Text"), "win.format"),
         ]),
     );
     edit.append_section(
         None,
         &section(&[
-            ("Next Problem", "win.next-problem"),
-            ("Previous Problem", "win.previous-problem"),
+            (tr_noop("Next Problem"), "win.next-problem"),
+            (tr_noop("Previous Problem"), "win.previous-problem"),
         ]),
     );
     let view = gio::Menu::new();
     view.append_section(
         None,
         &section(&[
-            ("Design", "win.view-design"),
-            ("Cut List", "win.view-cut-list"),
+            (tr_noop("Design"), "win.view-design"),
+            (tr_noop("Cut List"), "win.view-cut-list"),
         ]),
     );
     view.append_section(
         None,
         &section(&[
-            ("Back", "win.back"),
-            ("Forward", "win.forward"),
-            ("Frame Everything", "win.frame"),
+            (tr_noop("Back"), "win.back"),
+            (tr_noop("Forward"), "win.forward"),
+            (tr_noop("Frame Everything"), "win.frame"),
         ]),
     );
     // Any panel but the 3D view can be closed, and a first launch shows
@@ -364,17 +371,17 @@ pub(super) fn main_menu(recent: &gio::Menu) -> gio::Menu {
     let panels = gio::Menu::new();
     for id in workbench::PanelId::ALL {
         panels.append(
-            Some(id.title()),
+            Some(&id.title()),
             Some(&format!("win.show-panel::{}", id.word())),
         );
     }
-    panels.append(Some("Reset Layout"), Some("win.reset-layout"));
-    view.append_section(Some("Panels"), &panels);
-    view.append_section(Some("Style"), &app::style_section());
+    panels.append(Some(&tr("Reset Layout")), Some("win.reset-layout"));
+    view.append_section(Some(&tr("Panels")), &panels);
+    view.append_section(Some(&tr("Style")), &app::style_section());
     let menu = gio::Menu::new();
-    menu.append_submenu(Some("Project"), &project);
-    menu.append_submenu(Some("Edit"), &edit);
-    menu.append_submenu(Some("View"), &view);
-    menu.append_submenu(Some("Help"), &app::help_section());
+    menu.append_submenu(Some(&tr("Project")), &project);
+    menu.append_submenu(Some(&tr("Edit")), &edit);
+    menu.append_submenu(Some(&tr("View")), &view);
+    menu.append_submenu(Some(&tr("Help")), &app::help_section());
     menu
 }

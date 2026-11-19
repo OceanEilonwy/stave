@@ -24,6 +24,7 @@
 //! error there does it search again, with both tiers, inside that range. So
 //! a search is tens of checks, not one per step.
 
+use crate::i18n::{fill_in, tr};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use stave_lang::Diagnostic;
@@ -125,16 +126,16 @@ pub enum SideEnd {
 #[derive(Debug, thiserror::Error)]
 pub enum StopsError {
     /// The base design does not solve, so nothing can be checked against.
-    #[error("the design doesn't place yet, so no value can be checked; fix its errors first")]
+    #[error("{}", self.text())]
     NoDesign,
     /// The path names no param of the project or of a top-level assembly.
-    #[error("'{0}' is not a param of this project or of one of its assemblies")]
+    #[error("{}", self.text())]
     UnknownPath(String),
     /// The value is not written as a plain number.
-    #[error("'{0}' is not written as a plain number, so there is nothing to move")]
+    #[error("{}", self.text())]
     NotANumber(String),
     /// The value can't be traced in the solved design.
-    #[error("the value of '{path}' can't be worked out: {reason}")]
+    #[error("{}", self.text())]
     NotTraced {
         /// The path.
         path: String,
@@ -142,7 +143,7 @@ pub enum StopsError {
         reason: String,
     },
     /// The limit is not the same kind of value, or runs high to low.
-    #[error("the limit must be the same kind of value as '{0}' and run from low to high")]
+    #[error("{}", self.text())]
     BadLimit(String),
     /// A scratch copy could not be loaded.
     #[error(transparent)]
@@ -151,11 +152,44 @@ pub enum StopsError {
     #[error(transparent)]
     Patch(#[from] PatchBuildError),
     /// The caller cancelled the search.
-    #[error("the search was cancelled")]
+    #[error("{}", self.text())]
     Cancelled,
     /// The numbers are too large.
-    #[error("the numbers are too large")]
+    #[error("{}", self.text())]
     Overflow,
+}
+
+impl StopsError {
+    /// The error in the window's words (translated).
+    fn text(&self) -> String {
+        match self {
+            StopsError::NoDesign => {
+                tr("the design doesn't place yet, so no value can be checked; fix its errors first")
+            }
+            StopsError::UnknownPath(v0) => fill_in(
+                &tr("'{value}' is not a param of this project or of one of its assemblies"),
+                &[("value", v0)],
+            ),
+            StopsError::NotANumber(v0) => fill_in(
+                &tr("'{value}' is not written as a plain number, so there is nothing to move"),
+                &[("value", v0)],
+            ),
+            StopsError::NotTraced { path, reason } => fill_in(
+                &tr("the value of '{path}' can't be worked out: {reason}"),
+                &[("path", path), ("reason", reason)],
+            ),
+            StopsError::BadLimit(v0) => fill_in(
+                &tr(
+                    "the limit must be the same kind of value as '{value}' and run from low to high",
+                ),
+                &[("value", v0)],
+            ),
+            StopsError::Load(error) => error.to_string(),
+            StopsError::Patch(error) => error.to_string(),
+            StopsError::Cancelled => tr("the search was cancelled"),
+            StopsError::Overflow => tr("the numbers are too large"),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

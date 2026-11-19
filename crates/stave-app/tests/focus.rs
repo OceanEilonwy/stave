@@ -349,7 +349,7 @@ fn focus_on_the_chidori_turns_the_lock_last() {
         plan.bounds
     );
     assert_eq!(
-        found.plan_caption(),
+        found.plan_caption().as_deref(),
         Some("Looking down on the joint, cut through its middle")
     );
     // A joint that doesn't turn has no view from above.
@@ -584,7 +584,7 @@ fn focus_on_a_slide_follows_the_drawer() {
     assert!((plan.section.offset - middle).abs() < 1e-3);
     assert!((plan.yaw - std::f32::consts::FRAC_PI_2).abs() < 1e-6);
     assert_eq!(
-        found.plan_caption(),
+        found.plan_caption().as_deref(),
         Some("Looking down on the slide, cut through its middle")
     );
     // The gap to the side it is on is exact and marked.

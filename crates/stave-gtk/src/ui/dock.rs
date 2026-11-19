@@ -6,6 +6,7 @@
 //! problem's colour. They step aside while a problem is posed or a joint
 //! is in focus.
 
+use stave_app::i18n::{fill_in, tr};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
@@ -55,7 +56,7 @@ impl Dock {
             .build();
         moves.append(
             &gtk::Label::builder()
-                .label("Move:")
+                .label(tr("Move:"))
                 .valign(gtk::Align::Start)
                 .css_classes(["stave-dock-label"])
                 .build(),
@@ -122,18 +123,18 @@ impl Dock {
             content.append(&gtk::Label::new(Some(name)));
             let chip = gtk::Button::builder()
                 .child(&content)
-                .tooltip_text(format!("Open or close {name}"))
+                .tooltip_text(fill_in(&tr("Open or close {name}"), &[("name", &name)]))
                 .css_classes(["stave-move"])
                 .build();
             let problem = match mark {
-                Some(Mark::Error) => Some(("error", "Has an error")),
-                Some(Mark::Involved) => Some(("error", "Is part of an error")),
-                Some(Mark::Warning) => Some(("warning", "Has a warning")),
+                Some(Mark::Error) => Some(("error", tr("Has an error"))),
+                Some(Mark::Involved) => Some(("error", tr("Is part of an error"))),
+                Some(Mark::Warning) => Some(("warning", tr("Has a warning"))),
                 None => None,
             };
             if let Some((class, words)) = problem {
                 chip.add_css_class(class);
-                chip.update_property(&[gtk::accessible::Property::Description(words)]);
+                chip.update_property(&[gtk::accessible::Property::Description(&words)]);
             }
             if current == Some(*id) {
                 chip.add_css_class("current");

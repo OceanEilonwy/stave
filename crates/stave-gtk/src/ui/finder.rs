@@ -5,6 +5,7 @@
 //! chosen. Moving through the list previews a part in the 3D view; Enter
 //! goes there; Ctrl+Enter opens its text in the editor.
 
+use stave_app::i18n::{fill_in, tr};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
@@ -70,19 +71,19 @@ impl Finder {
     /// A closed finder.
     pub fn new() -> Rc<Finder> {
         let entry = gtk::SearchEntry::builder()
-            .placeholder_text("Find a part, file, line or problem")
+            .placeholder_text(tr("Find a part, file, line or problem"))
             .hexpand(true)
             .build();
-        entry.update_property(&[gtk::accessible::Property::Label(
+        entry.update_property(&[gtk::accessible::Property::Label(&tr(
             "Find a part, file, line or problem",
-        )]);
+        ))]);
         let filter_row = gtk::Box::builder()
             .orientation(gtk::Orientation::Horizontal)
             .css_classes(["stave-finder-filters"])
             .build();
         let mut filters = Vec::new();
         let all = gtk::ToggleButton::builder()
-            .label("All")
+            .label(tr("All"))
             .active(true)
             .build();
         filter_row.append(&all);
@@ -99,7 +100,9 @@ impl Finder {
             .selection_mode(gtk::SelectionMode::Single)
             .css_classes(["stave-finder-list"])
             .build();
-        list.update_property(&[gtk::accessible::Property::Label("What the finder found")]);
+        list.update_property(&[gtk::accessible::Property::Label(&tr(
+            "What the finder found",
+        ))]);
         let scrolled = gtk::ScrolledWindow::builder()
             .hscrollbar_policy(gtk::PolicyType::Never)
             .propagate_natural_height(true)
@@ -112,12 +115,12 @@ impl Finder {
             .css_classes(["stave-finder-foot"])
             .build();
         for words in [
-            "↑ ↓ show it in 3D",
-            "Enter go there",
-            "Ctrl+Enter open the text",
-            "Esc close",
+            tr("↑ ↓ show it in 3D"),
+            tr("Enter go there"),
+            tr("Ctrl+Enter open the text"),
+            tr("Esc close"),
         ] {
-            foot.append(&gtk::Label::new(Some(words)));
+            foot.append(&gtk::Label::new(Some(&words)));
         }
         let content = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
@@ -131,7 +134,7 @@ impl Finder {
             .child(&content)
             .content_width(640)
             .follows_content_size(true)
-            .title("Find")
+            .title(tr("Find"))
             .build();
         let finder = Rc::new(Finder {
             dialog,
@@ -269,11 +272,14 @@ impl Finder {
                 .iter()
                 .filter(|hit| kind.is_none_or(|kind| hit.kind == kind))
                 .count();
-            let title = kind.map_or("All", Kind::title);
+            let title = kind.map_or_else(|| tr("All"), Kind::title);
             button.set_label(&if state.hits.is_empty() {
-                title.to_owned()
+                title
             } else {
-                format!("{title} {count}")
+                fill_in(
+                    &tr("{group} {count}"),
+                    &[("group", &title), ("count", &count)],
+                )
             });
             button.set_sensitive(kind.is_none() || count > 0);
         }
@@ -311,9 +317,13 @@ impl Finder {
             }
             if rows.is_empty() {
                 let words = if query.trim().is_empty() {
-                    "Type a name: a part, a file, a word in the text or a problem; or a verb: add, remove, rename, repeat, mirror, hold"
+                    tr(
+                        // TRANSLATORS: the verbs are typed into the finder as
+                        // written here, in English.
+                        "Type a name: a part, a file, a word in the text or a problem; or a verb: add, remove, rename, repeat, mirror, hold",
+                    )
                 } else {
-                    "Nothing matches that"
+                    tr("Nothing matches that")
                 };
                 let label = gtk::Label::builder()
                     .label(words)
@@ -444,11 +454,11 @@ impl Finder {
 
 fn heading(kind: Kind) -> gtk::ListBoxRow {
     let words = match kind {
-        Kind::Part => "Parts · Enter frames it in 3D",
-        Kind::File => "Files · Enter opens the text",
-        Kind::Name => "Names · Enter opens where it is written",
-        Kind::Line => "Lines",
-        Kind::Problem => "Problems · Enter shows where it happens",
+        Kind::Part => tr("Parts · Enter frames it in 3D"),
+        Kind::File => tr("Files · Enter opens the text"),
+        Kind::Name => tr("Names · Enter opens where it is written"),
+        Kind::Line => tr("Lines"),
+        Kind::Problem => tr("Problems · Enter shows where it happens"),
     };
     let label = gtk::Label::builder()
         .label(words)
@@ -467,7 +477,7 @@ fn heading(kind: Kind) -> gtk::ListBoxRow {
 
 fn action_heading() -> gtk::ListBoxRow {
     let label = gtk::Label::builder()
-        .label("Do · Enter does it")
+        .label(tr("Do · Enter does it"))
         .xalign(0.0)
         .css_classes(["stave-finder-heading"])
         .build();

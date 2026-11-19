@@ -1,6 +1,7 @@
 //! Focus mode: opening it on a joint or a piece of hardware, framing
 //! and laying out its view, its step player and the pictures beside it.
 
+use stave_app::i18n::{fill_in, tr};
 use std::rc::Rc;
 
 use adw::prelude::*;
@@ -93,10 +94,10 @@ impl Window {
             .focus
             .as_ref()
             .is_some_and(|f| f.focus.assembles());
-        self.show_hint(if assembles {
-            "Focused on one joint · Esc to go back"
+        self.show_hint(&if assembles {
+            tr("Focused on one joint · Esc to go back")
         } else {
-            "Focused on one piece of hardware · Esc to go back"
+            tr("Focused on one piece of hardware · Esc to go back")
         });
         self.show_focus_texts(texts);
         self.show_progress();
@@ -171,13 +172,13 @@ impl Window {
             return;
         };
         let (text, hint) = match focus.focus.plan_caption().filter(|_| focus.plan) {
-            Some(caption) => (caption.to_owned(), "back ↑ · front ↓"),
+            Some(caption) => (caption.to_owned(), tr("back ↑ · front ↓")),
             None => (
-                format!("In 3D around {}", focus.focus.title),
-                "drag to turn · scroll to zoom",
+                fill_in(&tr("In 3D around {name}"), &[("name", &focus.focus.title)]),
+                tr("drag to turn · scroll to zoom"),
             ),
         };
-        self.widgets.caption.show(&text, hint);
+        self.widgets.caption.show(&text, &hint);
     }
 
     pub(super) fn leave_focus(self: &Rc<Self>) {
@@ -211,13 +212,13 @@ impl Window {
             &widgets.step_card.play,
             &widgets.step_card.play_icon,
             focus.playing,
-            "Play the assembly",
+            &tr("Play the assembly"),
         );
         focus_stage::show_playing(
             &widgets.swing_card.play,
             &widgets.swing_card.play_icon,
             focus.playing,
-            "Play the swing",
+            &tr("Play the swing"),
         );
         if let Some((_, range)) = focus.focus.motion() {
             widgets

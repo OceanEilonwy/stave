@@ -12,6 +12,7 @@
 //! moves with the scroll wheel, and tells a screen reader its value in
 //! words and where it is blocked.
 
+use stave_app::i18n::{fill_in, tr};
 use std::cell::RefCell;
 use std::rc::{Rc, Weak};
 
@@ -66,7 +67,7 @@ impl State {
     fn spoken_value(&self) -> Option<String> {
         let text = self.value_text.as_deref()?;
         Some(if self.past_blocked() {
-            format!("{text}, blocked")
+            fill_in(&tr("{value}, blocked"), &[("value", &text)])
         } else {
             text.to_owned()
         })

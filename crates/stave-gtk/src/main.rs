@@ -279,6 +279,23 @@ fn parse_size(text: &str) -> Result<(u32, u32)> {
     Ok((width, height))
 }
 
+/// Bind the `stave` text domain so the window speaks the user's language
+/// when a translation is installed. The translations are looked for in
+/// `$STAVE_LOCALEDIR`, then in `share/locale` beside the program's
+/// `bin` folder (an installed Stave), then in the system's own place.
+fn start_translations() {
+    let beside_program = std::env::current_exe().ok().and_then(|program| {
+        let locale = program.parent()?.parent()?.join("share").join("locale");
+        locale.is_dir().then_some(locale)
+    });
+    let directory = std::env::var_os("STAVE_LOCALEDIR")
+        .map(PathBuf::from)
+        .or(beside_program);
+    if let Err(error) = stave_app::i18n::init(directory.as_deref()) {
+        eprintln!("warning: translations are off: {error}");
+    }
+}
+
 fn main() -> ExitCode {
     let arguments = Arguments::parse();
     let result = match &arguments.screenshot {
@@ -315,48 +332,51 @@ fn main() -> ExitCode {
             ),
             _ => Err(anyhow::anyhow!("a screenshot needs one project folder")),
         },
-        None => ui::run(ui::Options {
-            folders: arguments.folders,
-            scene: arguments.scene,
-            select: arguments.select,
-            focus: arguments.focus,
-            plan: arguments.plan,
-            in_3d: arguments.in_3d,
-            step: arguments.step,
-            problem: arguments.diagnostic,
-            explode: arguments.explode,
-            view: arguments.view.0,
-            editor: arguments.editor || arguments.view.1 || arguments.file.is_some(),
-            finder: arguments.finder,
-            xray: arguments.xray,
-            layout: arguments.layout,
-            theme: arguments.theme,
-            window_screenshot: arguments.window_screenshot,
-            size: arguments.size,
-            maximized: false,
-            checking: arguments.checking,
-            building: arguments.building,
-            file: arguments.file,
-            wish: ui::Wish {
-                cursor: arguments.cursor,
-                peek: arguments.peek,
-                hover: arguments.hover,
-                uses: arguments.uses,
-                typing: arguments.typing,
-                follow: arguments.follow,
-                undo: arguments.undo,
-                search: arguments.search,
-            },
-            camera: ui::StartCamera {
-                turn: arguments.turn,
-                pitch: arguments.pitch,
-                frame_selection: arguments.frame_selection,
-                zoom: arguments.zoom,
-            },
-            edit_fixture: arguments.edit_fixture,
-            edit_script: arguments.edit_script,
-            new_project: arguments.new_project,
-        }),
+        None => {
+            start_translations();
+            ui::run(ui::Options {
+                folders: arguments.folders,
+                scene: arguments.scene,
+                select: arguments.select,
+                focus: arguments.focus,
+                plan: arguments.plan,
+                in_3d: arguments.in_3d,
+                step: arguments.step,
+                problem: arguments.diagnostic,
+                explode: arguments.explode,
+                view: arguments.view.0,
+                editor: arguments.editor || arguments.view.1 || arguments.file.is_some(),
+                finder: arguments.finder,
+                xray: arguments.xray,
+                layout: arguments.layout,
+                theme: arguments.theme,
+                window_screenshot: arguments.window_screenshot,
+                size: arguments.size,
+                maximized: false,
+                checking: arguments.checking,
+                building: arguments.building,
+                file: arguments.file,
+                wish: ui::Wish {
+                    cursor: arguments.cursor,
+                    peek: arguments.peek,
+                    hover: arguments.hover,
+                    uses: arguments.uses,
+                    typing: arguments.typing,
+                    follow: arguments.follow,
+                    undo: arguments.undo,
+                    search: arguments.search,
+                },
+                camera: ui::StartCamera {
+                    turn: arguments.turn,
+                    pitch: arguments.pitch,
+                    frame_selection: arguments.frame_selection,
+                    zoom: arguments.zoom,
+                },
+                edit_fixture: arguments.edit_fixture,
+                edit_script: arguments.edit_script,
+                new_project: arguments.new_project,
+            })
+        }
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,

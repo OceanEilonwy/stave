@@ -1,6 +1,7 @@
 //! Building the window's widgets: the header, the panels in the dock,
 //! the 3D view with its floating controls, and the breakpoints.
 
+use stave_app::i18n::{fill_in, tr};
 use std::path::Path;
 use std::rc::Rc;
 
@@ -79,7 +80,7 @@ pub(super) fn build_widgets(
         .child(&edge_content)
         .css_classes(["stave-edge-pin"])
         .action_name("win.show-problem")
-        .tooltip_text("Show the problem off screen")
+        .tooltip_text(tr("Show the problem off screen"))
         .visible(false)
         .build();
     let figure = gtk::Overlay::builder()
@@ -240,7 +241,10 @@ pub(super) fn build_widgets(
     let height = i32::try_from(height).unwrap_or(800);
     let window = adw::ApplicationWindow::builder()
         .application(application)
-        .title(format!("{folder_name} — Stave"))
+        .title(fill_in(
+            &tr("{project} — Stave"),
+            &[("project", &folder_name)],
+        ))
         .default_width(width)
         .default_height(height)
         .width_request(360)

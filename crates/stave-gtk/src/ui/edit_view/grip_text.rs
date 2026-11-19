@@ -14,6 +14,7 @@ pub(super) use stave_app::grip_values::{Held, grip_value};
 use stave_app::grip_values::{TypedProblem, grip_bounds};
 use stave_app::gripping::{GripDetail, GripStops, ListedGrip};
 use stave_app::grips::{FollowKind, GripAction, GripSize, MovableGrip};
+use stave_app::i18n::{fill_in, ntr, tr};
 use stave_app::stops::{Side, SideEnd, amount_text};
 use stave_lang::ast::{ExprKind, Ident};
 use stave_lang::units::{Length, Rational};
@@ -76,18 +77,50 @@ pub(super) fn amount_words(amount: Amount) -> String {
 /// what it follows; for one that can't move, why not.
 pub(super) fn label_words(listed: &ListedGrip) -> String {
     let value = amount_words(grip_value(listed));
+    match grip_note(listed) {
+        None => value,
+        Some(GripNote::Stuck(why)) => fill_in(
+            &tr("{value} · stuck: {why}"),
+            &[("value", &value), ("why", &why)],
+        ),
+        Some(GripNote::Solved) => fill_in(&tr("{value} · solved"), &[("value", &value)]),
+        Some(GripNote::Follows(list)) => fill_in(
+            &tr("{value} · follows {list}"),
+            &[("value", &value), ("list", &list)],
+        ),
+        Some(GripNote::LockedFollows(list)) => fill_in(
+            &tr("{value} · locked: follows {list}"),
+            &[("value", &value), ("list", &list)],
+        ),
+    }
+}
+
+/// What a grip is beside its value.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum GripNote {
+    /// It can't move, and why: "it can't move".
+    Stuck(String),
+    /// The solver moves it.
+    Solved,
+    /// It follows these params: "overall_width, legs.inset".
+    Follows(String),
+    /// It follows these params and none of them can move.
+    LockedFollows(String),
+}
+
+/// What a grip is beside its value; `None` for a plain size.
+fn grip_note(listed: &ListedGrip) -> Option<GripNote> {
     match (&listed.grip.action, grip_look(listed)) {
-        (GripAction::Moves(movable), GripLook::Locked) => {
+        (GripAction::Moves(_), GripLook::Locked) => {
             let why = stop_words(&listed.stops)
                 .map(|(below, _)| below)
-                .unwrap_or_else(|| "it can't move".to_owned());
-            let _ = movable;
-            format!("{value} · stuck: {why}")
+                .unwrap_or_else(|| tr("it can't move"));
+            Some(GripNote::Stuck(why))
         }
         (GripAction::Moves(movable), GripLook::Moves | GripLook::Follows) => {
             match movable.freedom {
-                Freedom::Solved => format!("{value} · solved"),
-                Freedom::Plain | Freedom::Locked | Freedom::StockField | Freedom::KindSize => value,
+                Freedom::Solved => Some(GripNote::Solved),
+                Freedom::Plain | Freedom::Locked | Freedom::StockField | Freedom::KindSize => None,
             }
         }
         (GripAction::Follows(follows), look) => {
@@ -104,16 +137,14 @@ pub(super) fn label_words(listed: &ListedGrip) -> String {
                 })
                 .collect();
             let list = if followed.is_empty() {
-                "numbers only".to_owned()
+                tr("numbers only")
             } else {
                 followed.join(", ")
             };
-            match look {
-                GripLook::Follows => format!("{value} · follows {list}"),
-                GripLook::Moves | GripLook::Locked => {
-                    format!("{value} · locked: follows {list}")
-                }
-            }
+            Some(match look {
+                GripLook::Follows => GripNote::Follows(list),
+                GripLook::Moves | GripLook::Locked => GripNote::LockedFollows(list),
+            })
         }
     }
 }
@@ -134,13 +165,16 @@ pub(super) fn side_words(side: &Side) -> String {
         SideEnd::Stopped {
             at: next,
             diagnostic,
-        } => format!(
-            "stops at {at}, because at {} {}",
-            amount_words(*next),
-            diagnostic.message
+        } => fill_in(
+            &tr("stops at {at}, because at {next} {problem}"),
+            &[
+                ("at", &at),
+                ("next", &amount_words(*next)),
+                ("problem", &diagnostic.message),
+            ],
         ),
-        SideEnd::Domain => format!("stops at {at}: the end of its range"),
-        SideEnd::Limit => format!("as far as {at} was tried"),
+        SideEnd::Domain => fill_in(&tr("stops at {at}: the end of its range"), &[("at", &at)]),
+        SideEnd::Limit => fill_in(&tr("as far as {at} was tried"), &[("at", &at)]),
     }
 }
 
@@ -206,12 +240,16 @@ pub(super) fn held_words(listed: &ListedGrip, held: Held) -> Option<String> {
 /// kind of value: a length (`400mm`), an angle (`95deg`) or a plain
 /// number. What is wrong, in words, when it can't be.
 pub(super) fn amount_like(now: Amount, text: &str) -> Result<Amount, String> {
-    let expr = stave_app::editing::parse_value(text)
-        .map_err(|error| format!("'{text}' isn't a value Stave can read: {}", error.0))?;
+    let expr = stave_app::editing::parse_value(text).map_err(|error| {
+        fill_in(
+            &tr("'{text}' isn't a value Stave can read: {reason}"),
+            &[("text", &text), ("reason", &error.0)],
+        )
+    })?;
     let wrong = || {
-        format!(
-            "'{text}' isn't the same kind of value as {}",
-            amount_words(now)
+        fill_in(
+            &tr("'{text}' isn't the same kind of value as {value}"),
+            &[("text", &text), ("value", &amount_words(now))],
         )
     };
     Ok(match (now, &expr.kind) {
@@ -239,26 +277,33 @@ pub(super) fn typed_check(listed: &ListedGrip, value: Amount) -> Result<(), Stri
         Ok(()) => return Ok(()),
         Err(TypedProblem::OutOfRange { held, low, high }) => held_words(listed, held).map_or_else(
             || {
-                format!(
-                    "this grip moves it between {} and {}",
-                    amount_words(low),
-                    amount_words(high)
+                fill_in(
+                    &tr("this grip moves it between {low} and {high}"),
+                    &[("low", &amount_words(low)), ("high", &amount_words(high))],
                 )
             },
-            |why| format!("it {why}"),
+            |why| fill_in(&tr("it {why}"), &[("why", &why)]),
         ),
-        Err(TypedProblem::OffStep { step, nearest }) => format!(
-            "it goes in steps of {}; the nearest is {}",
-            amount_words(step),
-            amount_words(nearest)
+        Err(TypedProblem::OffStep { step, nearest }) => fill_in(
+            &tr("it goes in steps of {step}; the nearest is {nearest}"),
+            &[
+                ("step", &amount_words(step)),
+                ("nearest", &amount_words(nearest)),
+            ],
         ),
         Err(TypedProblem::NotListed(values)) => {
             let words: Vec<String> = values.iter().map(|v| amount_words(*v)).collect();
-            format!("it can only be one of {}", words.join(", "))
+            fill_in(
+                &tr("it can only be one of {values}"),
+                &[("values", &words.join(", "))],
+            )
         }
-        Err(TypedProblem::Unworkable) => "it can't be worked out".to_owned(),
+        Err(TypedProblem::Unworkable) => tr("it can't be worked out"),
     };
-    Err(format!("Can't be {}: {why}", amount_words(value)))
+    Err(fill_in(
+        &tr("Can't be {value}: {why}"),
+        &[("value", &amount_words(value)), ("why", &why)],
+    ))
 }
 
 /// A param of the project a grip's switch can make solved, or plain
@@ -333,7 +378,14 @@ pub(super) fn suggested_range(value: Amount) -> (String, String) {
 
 /// One change a drag makes, in words: "overall_width 900mm to 950mm".
 pub(super) fn change_words(path: &str, from: Amount, to: Amount) -> String {
-    format!("{path} {} to {}", amount_words(from), amount_words(to))
+    fill_in(
+        &tr("{path} {from} to {to}"),
+        &[
+            ("path", &path),
+            ("from", &amount_words(from)),
+            ("to", &amount_words(to)),
+        ],
+    )
 }
 
 /// From one value to another, short: "940 → 1040 mm" (the unit once
@@ -346,12 +398,34 @@ pub(super) fn arrow_words(from: Amount, to: Amount) -> String {
     }
 }
 
-/// What a grip is beside its value, from its label's words: "follows
-/// overall_width", "solved", "stuck: …"; `None` for a plain size.
-pub(super) fn about_words(listed: &ListedGrip) -> Option<String> {
-    label_words(listed)
-        .split_once(" · ")
-        .map(|(_, about)| about.to_owned())
+/// What a grip is beside its value, as the panel's row says it: under
+/// "Follows", "overall_width"; under "Note", "solved" or "stuck: …";
+/// `None` for a plain size.
+pub(super) fn about_words(listed: &ListedGrip) -> Option<PanelAbout> {
+    let note = |words: String| PanelAbout {
+        label: tr("Note"),
+        words,
+    };
+    Some(match grip_note(listed)? {
+        GripNote::Stuck(why) => note(fill_in(&tr("stuck: {why}"), &[("why", &why)])),
+        GripNote::Solved => note(tr("solved")),
+        GripNote::Follows(list) => PanelAbout {
+            label: tr("Follows"),
+            words: list,
+        },
+        GripNote::LockedFollows(list) => {
+            note(fill_in(&tr("locked: follows {list}"), &[("list", &list)]))
+        }
+    })
+}
+
+/// A row of the panel under the value: its label and its words.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct PanelAbout {
+    /// "Follows" or "Note".
+    pub(super) label: String,
+    /// "overall_width", "solved".
+    pub(super) words: String,
 }
 
 /// The verdict's look in the panel: its class and its words, which never
@@ -386,10 +460,13 @@ pub(super) struct PanelChoice {
 pub(super) struct PanelModel {
     /// What is being changed: "divider.height".
     pub(super) title: String,
-    /// The value it is moved to and what it was: "420mm (was 400mm)".
+    /// The value it is moved to: "420mm".
     pub(super) value: Option<String>,
-    /// What the grip is beside its value: "follows overall_width".
-    pub(super) about: Option<String>,
+    /// What it was, when that differs: "400mm".
+    pub(super) was: Option<String>,
+    /// What the grip is beside its value: under "Follows",
+    /// "overall_width".
+    pub(super) about: Option<PanelAbout>,
     /// What changes and to what: "Changes overall_width 900mm to 950mm".
     pub(super) changes: Vec<String>,
     /// Several plain params could give the size: pick one.
@@ -410,17 +487,17 @@ fn panel_verdict(progress: &Progress, checking: bool) -> PanelVerdict {
     if checking {
         return PanelVerdict {
             class: "checking",
-            words: "Checking…".to_owned(),
+            words: tr("Checking…"),
         };
     }
     match progress {
         Progress::Tried(Verdict::Checking) => PanelVerdict {
             class: "checking",
-            words: "Checking…".to_owned(),
+            words: tr("Checking…"),
         },
         Progress::Tried(Verdict::Fits(_)) => PanelVerdict {
             class: "fits",
-            words: "✓ It fits".to_owned(),
+            words: tr("✓ It fits"),
         },
         Progress::Tried(Verdict::Refused(refusal)) => {
             let problems = refusal.problems();
@@ -429,15 +506,22 @@ fn panel_verdict(progress: &Progress, checking: bool) -> PanelVerdict {
             PanelVerdict {
                 class: "refused",
                 words: if more == 0 {
-                    format!("✕ It doesn't fit: {first}")
+                    fill_in(&tr("✕ It doesn't fit: {problem}"), &[("problem", &first)])
                 } else {
-                    format!("✕ It doesn't fit: {first} (and {more} more)")
+                    fill_in(
+                        &ntr(
+                            "✕ It doesn't fit: {problem} (and {count} more)",
+                            "✕ It doesn't fit: {problem} (and {count} more)",
+                            more,
+                        ),
+                        &[("problem", &first), ("count", &more)],
+                    )
                 },
             }
         }
         Progress::NeedsChoice(_) => PanelVerdict {
             class: "waiting",
-            words: "Pick which size changes".to_owned(),
+            words: tr("Pick which size changes"),
         },
         Progress::Unwritable(reason) => PanelVerdict {
             class: "refused",
@@ -463,20 +547,19 @@ fn drag_panel(
     stop: Option<String>,
 ) -> PanelModel {
     let was = listed.map(grip_value);
-    let value = detail.target.map(|target| {
+    let written = detail.target.map(|target| {
         // A movable grip shows the value written (snapped), a follows
         // grip the size it is moved to.
-        let written = match listed.map(|listed| &listed.grip.action) {
+        match listed.map(|listed| &listed.grip.action) {
             Some(GripAction::Moves(_)) => detail.changes.first().map_or(target, |change| change.to),
             Some(GripAction::Follows(_)) | None => detail.reached.unwrap_or(target),
-        };
-        match was {
-            Some(was) if was != written => {
-                format!("{} (was {})", amount_words(written), amount_words(was))
-            }
-            Some(_) | None => amount_words(written),
         }
     });
+    let value = written.map(amount_words);
+    let was_words = written
+        .zip(was)
+        .filter(|(written, was)| was != written)
+        .map(|(_, was)| amount_words(was));
     let follows = matches!(
         listed.map(|listed| &listed.grip.action),
         Some(GripAction::Follows(_))
@@ -488,9 +571,9 @@ fn drag_panel(
             .map(|change| {
                 let words = change_words(&change.path, change.from, change.to);
                 if detail.solved {
-                    format!("The solver changes {words}")
+                    fill_in(&tr("The solver changes {change}"), &[("change", &words)])
                 } else {
-                    format!("Changes {words}")
+                    fill_in(&tr("Changes {change}"), &[("change", &words)])
                 }
             })
             .collect()
@@ -523,7 +606,7 @@ fn drag_panel(
     if detail.target.is_none() && !checking {
         verdict = PanelVerdict {
             class: "waiting",
-            words: "Drag the handle, or type a value".to_owned(),
+            words: tr("Drag the handle, or type a value"),
         };
     }
     let fits = matches!(progress, Progress::Tried(Verdict::Fits(_))) && !checking;
@@ -544,6 +627,7 @@ fn drag_panel(
     PanelModel {
         title: detail.label.clone(),
         value,
+        was: was_words,
         about: listed.and_then(about_words),
         changes,
         choices,
@@ -575,6 +659,7 @@ pub(super) fn panel_model(
             Some(PanelModel {
                 title: change.summary().to_owned(),
                 value: None,
+                was: None,
                 about: None,
                 changes: Vec::new(),
                 choices: Vec::new(),

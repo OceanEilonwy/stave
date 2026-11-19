@@ -2,6 +2,7 @@
 //! the selection and the hover), picking under the pointer, and
 //! projecting points to the screen.
 
+use stave_app::i18n::tr;
 use std::rc::Rc;
 
 use adw::prelude::*;
@@ -278,7 +279,7 @@ impl Window {
             Ok(ticket) => ticket,
             Err(error) => {
                 let message = format!("{error:#}");
-                self.show_status("Can't draw in 3D", &message);
+                self.show_status(&tr("Can't draw in 3D"), &message);
                 return;
             }
         };
@@ -324,7 +325,7 @@ impl Window {
                 Ok(None) => {}
                 Err(error) => {
                     let message = format!("{error:#}");
-                    window.show_status("Can't draw in 3D", &message);
+                    window.show_status(&tr("Can't draw in 3D"), &message);
                 }
             }
             if settled {
