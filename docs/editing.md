@@ -417,7 +417,7 @@ class, stocks, mounts, a `within` list, `true`/`false`) carries an
 | `NotChecked` | its check hasn't run, or was thrown away | a spinner and "Checking whether it fits…"; it can be chosen |
 | `NeedsChoice(names)` | the candidate would still wait on something else (a place to point at, another setting with no value), so it can't be tried | "Checked once you choose …"; it can be chosen |
 | `Fits` | the candidate checks with no error with this option | a tick and "Fits" |
-| `Refused(OptionRefusal)` | it would cause errors: `first`, the checker's first error, and `more`, how many after it | greyed, a "can't" sign and "Can't be used here: error[overlap]: …"; it can't be chosen from the list |
+| `Refused(OptionRefusal)` | it would cause errors: `first`, the checker's first error, and `more`, how many after it | greyed, a "can't" sign and "Can't be used here: error[overlap]: …", or for a kind refused by its signature its plain reason, "Can't be used here: Shelf gives its joint a depth, and glued_edge has no depth"; it can't be chosen from the list |
 
 An option is tried by building the candidate in a scratch copy with that
 setting set to that option and every other setting, the place params,
@@ -427,8 +427,22 @@ as the candidate is (an error the design already had doesn't count). The
 option the setting holds now takes the candidate's own verdict without a
 second check. Options that fit (and those not checked yet, or waiting)
 come first, in the order their type lists them; the refused ones after,
-in the same order. None is hidden: what can't be chosen is shown greyed
-with the reason.
+in the same order, and of those the kinds refused by their signature
+last (`OptionRefusal::by_signature`): a kind chosen for a component that
+doesn't take what the component hands it (grammar, "Kind values") can
+never be used there, whatever the sizes, while an option refused by the
+design as it is might fit once something else changes. None is hidden:
+what can't be chosen is shown greyed with the reason.
+
+**What a refusal says first.** `OptionRefusal::line` is the line the
+lists show (the short list's tooltip, the search dialog's row, the
+command line's `refused:`): for a kind refused by its signature, the
+diagnostic's plain reason (`Diagnostic::reason`, its first note: "Shelf
+gives its joint a depth, and glued_edge has no depth"), and otherwise the
+checker's first error as `error[code]: message`; either with "(and 1
+more)" when there are others. The full diagnostic stays in
+`OptionRefusal::first`, and the card's problems show it as `stave check`
+prints it once the option is chosen.
 
 **Without waiting.** The checks are tens of scratch checks for a setting
 like a case's joinery (18 kinds), so no command runs them.
@@ -454,7 +468,12 @@ tried with the other settings, which did not change.
 On the Case in a 940 x 1780 x 580mm envelope with `oak_19`, 6 of the
 joinery's 18 options fit (cope_and_stick, dado, dowel, glued_face,
 groove, screw) and 12 are refused; the four edge joints say why in
-woodworking words, through `edge_to_edge`. Checking all 18 takes
+woodworking words, through `edge_to_edge`, and the four that can never
+be a Case's joinery come last, each with its reason: `half_lap`,
+`kanawa_tsugi` and `lap_splice` ("Case hands its joint two parts as
+piece (case.side[left] and case.side[right]), and half_lap takes one
+part there") and `suitsuki_zan` ("Case hands its joint a part as into,
+and suitsuki_zan has no into: it takes its parts only as boards"). Checking all 18 takes
 about 0.2 seconds in a debug build on the machine it was written on.
 
 ### The short list and the search
@@ -499,11 +518,13 @@ case's sides):
 > choices joinery
 joinery: 2 to choose from (1 used in this project), then search 18 options
   1. dado   default, now, fits
-  2. screw  used, refused: error[unknown-field]: the kind 'screw' has no field 'depth'
+  2. screw  used, refused: Shelf gives its joint a depth, and screw has no depth
 > search joinery edge
 joinery: 5 of 18 options match "edge"
   Standard · joinery
-    glued_edge         by name  refused: error[unknown-field]: the kind 'glued_edge' has no field 'depth'
+    splined_edge       by name  refused: error[require]: 'side_by_side' fails: a spline joins two boards lying side by side, edge to edge; these meet another way
+                       A splined edge joint: a groove along each edge and a thin strip, the spline, glued into both.
+    glued_edge         by name  refused: Shelf gives its joint a depth, and glued_edge has no depth
                        A glued edge joint (a rub joint): two boards planed straight and square along their edges and glued edge to edge.
     ...
     groove             by description  fits
@@ -681,10 +702,13 @@ What each step prints:
     'put back': Put joinery back to dowel(count: 4), the default
   ```
 - `options <setting>`: `<setting>: <n> options, <k> fit`, then one option
-  a line in the card's order (those that fit first, the refused after),
-  numbered from 1: `  3. dowel  fits`, `  8. chigiri  refused:
-  error[overlap]: case.base and case.base_joints.key[0] overlap (and 1
-  more)`, `not tried: choose <names> first`. A setting that isn't the
+  a line in the card's order (those that fit first, the refused after,
+  the kinds refused by their signature last), numbered from 1: `  3.
+  dowel  fits`, `  8. chigiri  refused: error[overlap]: case.base and
+  case.base_joints.key[0] overlap (and 1 more)`, ` 15. half_lap
+  refused: Case hands its joint two parts as piece (case.side[left] and
+  case.side[right]), and half_lap takes one part there`, `not tried:
+  choose <names> first`. A setting that isn't the
   chosen entry's is an error.
 - A change step: `<summary>: <where it stands>` (`Make 3 of drawer:
   fits`); a removal waiting on what uses the item: `Remove back: used by

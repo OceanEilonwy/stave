@@ -879,6 +879,7 @@ impl<'a> Checker<'a> {
                     merged: Vec::new(),
                     help: Some(help),
                     fixes: Vec::new(),
+                    cause: None,
                 },
                 Some(contact),
             ));

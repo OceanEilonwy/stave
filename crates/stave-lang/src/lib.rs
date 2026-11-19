@@ -60,7 +60,7 @@ pub mod syntax;
 pub mod units;
 
 pub use diagnostics::{
-    Code, Diagnostic, FileId, Label, Placement, Severity, SourceMap, place_label,
+    Cause, Code, Diagnostic, FileId, Label, Placement, Severity, SourceMap, place_label,
     render_diagnostic, render_diagnostics,
 };
 pub use diagnostics::{Fix, FixError};
