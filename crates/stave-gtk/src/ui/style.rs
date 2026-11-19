@@ -431,7 +431,6 @@ headerbar.stave-header { min-height: 34px; }
 .stave-menu-bar, .stave-menu-bar label { font-size: 0.852rem; }
 .stave-header popovermenubar.stave-menu-bar > item { min-height: 24px; padding: 0 8px; border-radius: 6px; }
 .stave-header popovermenubar.stave-menu-bar > item:hover, .stave-header popovermenubar.stave-menu-bar > item:selected { background: alpha(currentColor, 0.08); }
-.stave-project-name { padding: 0 6px 0 8px; font-size: 0.818rem; color: alpha(currentColor, 0.55); }
 .stave-header .stave-switcher { padding: 2px; border-radius: 8px; font-size: 0.818rem; }
 .stave-header .stave-switcher > toggle { min-height: 22px; padding: 0 12px; border-radius: 6px; }
 .stave-header .stave-switcher > toggle box { border-spacing: 5px; }
@@ -469,7 +468,7 @@ textview.stave-output { font-size: 0.818rem; background: transparent; }
 /// its own, added after the other sheets while the style manager says
 /// high contrast and taken away when it stops.
 const HIGH_CONTRAST: &str = r#"
-.stave-title .subtitle, .dim, .stave-project-name,
+.stave-title .subtitle, .dim,
 .stave-tree .stave-detail, .stave-tree .stave-heading,
 .stave-eyebrow, .stave-description, .stave-section, .stave-footnote, .stave-key,
 .stave-crumbs, .stave-editor-footer, .stave-lens,

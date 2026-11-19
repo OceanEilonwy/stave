@@ -1,9 +1,10 @@
 //! The title bar, one slim row (34 px): at the left a menu bar (Project,
-//! Edit, View, Help, made from the main menu) and the project's name in
-//! small grey words; the Design / Cut list switcher in the middle; at the
-//! right a find button (the finder, Ctrl+K), the problems chip (the status
-//! pill between previous and next, stepping through the problems) and the
-//! build button. Back and forward live in the View menu and on Alt+← and
+//! Edit, View, Help, made from the main menu); in the middle the
+//! project's name over its folder (an `adw::WindowTitle`, as libadwaita
+//! centres a window's title), or the Design / Cut list switcher once
+//! there is more than one view; at the right a find button (the finder,
+//! Ctrl+K), the problems chip (the status pill between previous and next,
+//! stepping through the problems) and the build button. Back and forward live in the View menu and on Alt+← and
 //! Alt+→. In a very narrow window the menu bar folds into one menu
 //! button. It also makes the scene menu, which floats on the 3D view. It
 //! only shows what the session says; the window wires its buttons to
@@ -34,8 +35,9 @@ pub struct Header {
     /// The same menus in one button, shown instead of the menu bar when
     /// the window is very narrow.
     pub menu_button: gtk::MenuButton,
-    /// The project's name, small and grey; its folder in the tooltip.
-    pub title: gtk::Label,
+    /// The project's name, its folder under it; in the middle of the bar
+    /// while the switcher is hidden.
+    pub title: adw::WindowTitle,
     /// Design / Cut list.
     pub switcher: adw::ToggleGroup,
     switcher_labels: Vec<gtk::Label>,
@@ -80,13 +82,10 @@ impl Header {
             .build();
         menu_button.update_property(&[gtk::accessible::Property::Label("Main Menu")]);
 
-        let title = gtk::Label::builder()
-            .label(folder_label)
-            .xalign(0.0)
-            .ellipsize(gtk::pango::EllipsizeMode::End)
-            .max_width_chars(28)
+        let title = adw::WindowTitle::builder()
+            .title(folder_label)
+            .css_classes(["stave-title"])
             .valign(gtk::Align::Center)
-            .css_classes(["stave-project-name"])
             .build();
 
         let find = gtk::Button::builder()
@@ -128,8 +127,14 @@ impl Header {
         }
         switcher.set_active_name(Some(View::Design.word()));
         // The Cut list view isn't made yet, so the design is the only
-        // view: the switcher stays hidden until there is a second one.
-        switcher.set_visible(View::ALL.into_iter().filter(|view| ready(*view)).count() > 1);
+        // view: the switcher stays hidden until there is a second one,
+        // and the project's name takes the middle of the bar.
+        let switching = View::ALL.into_iter().filter(|view| ready(*view)).count() > 1;
+        switcher.set_visible(switching);
+        title.set_visible(!switching);
+        let middle = gtk::Box::builder().valign(gtk::Align::Center).build();
+        middle.append(&title);
+        middle.append(&switcher);
 
         let scene_label = gtk::Label::new(Some("Rest"));
         let scene_content = gtk::Box::new(gtk::Orientation::Horizontal, 6);
@@ -236,12 +241,11 @@ impl Header {
         build.set_visible(false);
 
         let bar = adw::HeaderBar::builder()
-            .title_widget(&switcher)
+            .title_widget(&middle)
             .css_classes(["stave-header"])
             .build();
         bar.pack_start(&menu_button);
         bar.pack_start(&menu_bar);
-        bar.pack_start(&title);
         bar.pack_end(&build);
         bar.pack_end(&chip);
         bar.pack_end(&find);
@@ -269,9 +273,10 @@ impl Header {
         }
     }
 
-    /// The project's name, and its folder in the tooltip.
+    /// The project's name, and its folder under it and in the tooltip.
     pub fn show_title(&self, title: &str, folder: &str) {
-        self.title.set_label(title);
+        self.title.set_title(title);
+        self.title.set_subtitle(folder);
         self.title.set_tooltip_text(Some(folder));
     }
 
@@ -405,6 +410,21 @@ mod tests {
                 header.menu_button.icon_name().as_deref(),
                 Some("open-menu-symbolic")
             );
+        });
+    }
+
+    /// With one view the project's name, not the hidden switcher, is the
+    /// bar's centred title, with its folder under it.
+    #[test]
+    fn the_title_is_in_the_middle() {
+        crate::ui::gtk_test::on_gtk_thread(|| {
+            let header = Header::new("shelf", &gtk::gio::Menu::new());
+            header.show_title("Shelf", "~/shelf");
+            let middle = header.bar.title_widget().expect("a title widget");
+            assert!(header.title.is_ancestor(&middle));
+            assert!(header.title.is_visible());
+            assert!(!header.switcher.is_visible());
+            assert_eq!(header.title.subtitle(), "~/shelf");
         });
     }
 

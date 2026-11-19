@@ -467,6 +467,10 @@ pub struct Workbench {
     tools: Rc<RefCell<Spots>>,
     /// Told when the tool groups move (a reset, a layout applied).
     on_tools: RefCell<Option<Box<dyn Fn()>>>,
+    /// The side edges a narrow window has folded away, each with whether
+    /// it showed before: unfolded as it was when the window widens, and
+    /// remembered in the layout as it was, not as folded.
+    folded: RefCell<BTreeMap<Side, bool>>,
 }
 
 /// A tab-like button on the status bar that opens a panel on the bottom
@@ -614,6 +618,7 @@ impl Workbench {
             on_tools: RefCell::new(None),
             on_save_failed: RefCell::new(None),
             save_failed: Cell::new(false),
+            folded: RefCell::new(BTreeMap::new()),
         });
         workbench.apply(layout);
         for (button, id) in [
@@ -681,11 +686,60 @@ impl Workbench {
         self.show_status_tabs();
     }
 
-    /// Narrows the left and right edges while `breakpoint` applies, so the
-    /// Model keeps room in a narrow window.
-    pub fn narrow_edges(&self, breakpoint: &adw::Breakpoint) {
+    /// Narrows the left and right edges while `breakpoint` (a window at
+    /// most `width` sp wide) applies, so the Model, the window's main
+    /// content, keeps room; narrower still, the edges fold away as
+    /// libadwaita's split views collapse: the right edge (Details) at
+    /// 860 sp and less, the left (Parts, Files) at 600 sp and less. The
+    /// status bar's edge toggles still bring a folded edge back, and the
+    /// window widening unfolds each edge that showed before.
+    pub fn narrow_edges(self: &Rc<Self>, breakpoint: &adw::Breakpoint, width: f64) {
         breakpoint.add_setter(&self.dock, "start-width", Some(&220.to_value()));
         breakpoint.add_setter(&self.dock, "end-width", Some(&260.to_value()));
+        let mut sides = Vec::new();
+        if width <= 860.0 {
+            sides.push(Side::End);
+        }
+        if width <= 600.0 {
+            sides.push(Side::Start);
+        }
+        if sides.is_empty() {
+            return;
+        }
+        let weak = Rc::downgrade(self);
+        let folding = sides.clone();
+        breakpoint.connect_apply(move |_| {
+            if let Some(workbench) = weak.upgrade() {
+                workbench.fold(&folding);
+            }
+        });
+        let weak = Rc::downgrade(self);
+        breakpoint.connect_unapply(move |_| {
+            if let Some(workbench) = weak.upgrade() {
+                workbench.unfold(&sides);
+            }
+        });
+    }
+
+    /// Folds `sides` away, remembering whether each showed.
+    fn fold(&self, sides: &[Side]) {
+        let mut folded = self.folded.borrow_mut();
+        for side in sides {
+            folded
+                .entry(*side)
+                .or_insert_with(|| self.dock.reveals_area(side.area()));
+            self.dock.set_reveal_area(side.area(), false);
+        }
+    }
+
+    /// Unfolds `sides`, each shown again if it showed before folding.
+    fn unfold(&self, sides: &[Side]) {
+        let mut folded = self.folded.borrow_mut();
+        for side in sides {
+            if let Some(shown) = folded.remove(side) {
+                self.dock.set_reveal_area(side.area(), shown);
+            }
+        }
     }
 
     /// The spots the 3D view's tool groups are docked in, shared with
@@ -833,9 +887,16 @@ impl Workbench {
             let position = frame.position();
             record(frame, Side::Centre, position.column(), position.row());
         });
+        let folded = self.folded.borrow();
         let revealed = Side::EDGES
             .into_iter()
-            .map(|side| (side, self.dock.reveals_area(side.area())))
+            .map(|side| {
+                let shown = folded
+                    .get(&side)
+                    .copied()
+                    .unwrap_or_else(|| self.dock.reveals_area(side.area()));
+                (side, shown)
+            })
             .collect();
         Layout {
             places,
@@ -1285,5 +1346,49 @@ show bottom true
     fn the_centre_is_never_hidden() {
         let layout = Layout::from_text("view centre 0 0 0\nshow centre false\n");
         assert!(!layout.revealed.contains_key(&Side::Centre));
+    }
+
+    #[test]
+    fn a_narrow_window_folds_the_side_edges() {
+        crate::ui::gtk_test::on_gtk_thread(side_edges_fold);
+    }
+
+    /// A narrow window folds the side edges away and gives their room to
+    /// the Model; widening shows them again; the layout remembers them as
+    /// shown all along.
+    fn side_edges_fold() {
+        let contents = PanelId::ALL
+            .into_iter()
+            .map(|id| {
+                (
+                    id,
+                    gtk::Label::new(Some(id.title())).upcast::<gtk::Widget>(),
+                )
+            })
+            .collect();
+        let workbench = Workbench::new(contents, Remember::Nothing).unwrap();
+        let condition = |width| {
+            adw::BreakpointCondition::new_length(
+                adw::BreakpointConditionLengthType::MaxWidth,
+                width,
+                adw::LengthUnit::Sp,
+            )
+        };
+        let medium = adw::Breakpoint::new(condition(860.0));
+        let small = adw::Breakpoint::new(condition(600.0));
+        workbench.narrow_edges(&medium, 860.0);
+        workbench.narrow_edges(&small, 600.0);
+        let shows = |side: Side| workbench.dock.reveals_area(side.area());
+        assert!(shows(Side::Start) && shows(Side::End));
+        medium.emit_by_name::<()>("apply", &[]);
+        assert!(shows(Side::Start) && !shows(Side::End));
+        medium.emit_by_name::<()>("unapply", &[]);
+        small.emit_by_name::<()>("apply", &[]);
+        assert!(!shows(Side::Start) && !shows(Side::End));
+        let layout = workbench.layout();
+        assert_eq!(layout.revealed.get(&Side::Start), Some(&true));
+        assert_eq!(layout.revealed.get(&Side::End), Some(&true));
+        small.emit_by_name::<()>("unapply", &[]);
+        assert!(shows(Side::Start) && shows(Side::End));
     }
 }

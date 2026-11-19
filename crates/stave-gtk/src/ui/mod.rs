@@ -4171,16 +4171,14 @@ fn build_widgets(
         window.set_size_request(width, height);
     }
 
-    // Narrower windows drop the project's name first, then the switcher's
-    // words, then fold the menu bar into one menu button. Only the last
-    // breakpoint that matches applies, so each repeats the wider ones.
-    // The side edges narrow too, so the Model keeps room.
+    // Narrower windows drop the switcher's words, then fold the menu bar
+    // into one menu button; the project's name in the middle shortens
+    // itself. Only the last breakpoint that matches applies, so each
+    // repeats the wider ones. The side edges narrow too, then fold away,
+    // so the Model keeps room.
     for (width, level) in [(1000.0, 0), (860.0, 1), (760.0, 2), (600.0, 3)] {
         let narrow = breakpoint(width);
-        workbench.narrow_edges(&narrow);
-        if level >= 1 {
-            narrow.add_setter(&header.title, "visible", Some(&false.to_value()));
-        }
+        workbench.narrow_edges(&narrow, width);
         if level >= 2 {
             for label in header.switcher_labels() {
                 narrow.add_setter(label, "visible", Some(&false.to_value()));
