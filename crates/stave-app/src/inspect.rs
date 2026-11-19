@@ -1281,7 +1281,7 @@ fn inspect_part(checked: &Checked, design: &SolvedDesign, id: PartId) -> Option<
         if design.hardware_piece(hardware).is_none() {
             continue;
         }
-        let row = focus::cut_row("", &cut.kind);
+        let row = focus::cut_row(&cut.kind);
         // The name the kind gives the cut (`cut bore: ...`), or else what
         // the cut is.
         let what = match &cut.name {

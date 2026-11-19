@@ -387,8 +387,10 @@ fn tenths(length: Length) -> String {
     }
 }
 
-/// A cut for the panel: its label and size.
-pub(crate) fn cut_row(joint_kind: &str, kind: &CutKind) -> Row {
+/// A cut for the panel: its label, from the cut's operation, and size.
+/// The joint's own name heads the panel, so a dado's notch is not
+/// relabelled by matching the kind's name.
+pub(crate) fn cut_row(kind: &CutKind) -> Row {
     let millimetres = tenths;
     let mm = |length: Length| format!("{} mm", millimetres(length));
     let deep = |depth: &Depth| match depth {
@@ -440,15 +442,7 @@ pub(crate) fn cut_row(joint_kind: &str, kind: &CutKind) -> Row {
                 &[("diameter", &mm(*diameter)), ("length", &mm(*length))],
             ),
         ),
-        CutKind::Notch { depth } => (
-            match joint_kind.rsplit('.').next().unwrap_or(joint_kind) {
-                "dado" => tr_noop("Dado"),
-                "rabbet" => tr_noop("Rabbet"),
-                "groove" => tr_noop("Groove"),
-                _ => tr_noop("Notch"),
-            },
-            deep(depth),
-        ),
+        CutKind::Notch { depth } => (tr_noop("Notch"), deep(depth)),
         CutKind::Slot { width, depth, .. } => (
             tr_noop("Slot"),
             fill_in(
@@ -634,7 +628,7 @@ fn joint_focus(
                     pair: pair_index,
                 })
             {
-                let mut row = cut_row(&joint.kind, &cut.kind);
+                let mut row = cut_row(&cut.kind);
                 let per_member = matches!(cut.place, CutPlace::Member { .. });
                 if parts.len() > 2 || per_member || matches!(cut.kind, CutKind::Notch { .. }) {
                     row.value = fill_in(

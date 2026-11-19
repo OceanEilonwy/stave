@@ -511,18 +511,6 @@ msgstr ""
 msgid "{diameter} across, {length} long"
 msgstr ""
 
-#: crates/stave-app/src/focus.rs:461
-msgid "Dado"
-msgstr ""
-
-#: crates/stave-app/src/focus.rs:462
-msgid "Rabbet"
-msgstr ""
-
-#: crates/stave-app/src/focus.rs:463
-msgid "Groove"
-msgstr ""
-
 #: crates/stave-app/src/focus.rs:464
 msgid "Notch"
 msgstr ""
