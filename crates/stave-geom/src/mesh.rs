@@ -75,9 +75,10 @@ fn mm_nm(nm: i64) -> f32 {
     render::mm(Length::from_nm(nm))
 }
 
-/// The mesh of a part with its cuts made.
-pub fn cut_part(part: &Part, solid: &Solid, grain: GrainAxes) -> Geometry {
-    let frame = Frame::of_part(part);
+/// The mesh of a part with its cuts made, built in `frame` (the part's
+/// frame in the render frame, or its own frame).
+pub fn cut_part(frame: &Frame, part: &Part, solid: &Solid, grain: GrainAxes) -> Geometry {
+    let frame = *frame;
     let size = [part.cut.length, part.cut.width, part.cut.thickness].map(Length::nm);
     let length = render::mm(part.cut.length);
     let mut pieces = Vec::new();

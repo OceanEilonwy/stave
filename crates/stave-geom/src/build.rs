@@ -47,6 +47,43 @@ impl Frame {
         }
     }
 
+    /// A part's own frame, of the given handedness: the origin at the
+    /// part's corner and its length, width and thickness along `x`, `y`
+    /// and `z` (`-z` for a left-handed, mirrored part). A mesh built in it
+    /// is placed by [`crate::rest`], which is then a rotation and a
+    /// move, never a reflection, so the winding stays right.
+    pub(crate) fn own(handedness: crate::Handedness) -> Frame {
+        let thickness = match handedness {
+            crate::Handedness::Right => Vec3::Z,
+            crate::Handedness::Left => Vec3::NEG_Z,
+        };
+        Frame {
+            origin: Vec3::ZERO,
+            axes: [Vec3::X, Vec3::Y, thickness],
+        }
+    }
+
+    /// The matrix taking points in `self` to points in `world`, both
+    /// given as frames in the render frame (`self`'s axes at right
+    /// angles).
+    pub(crate) fn onto(&self, world: &Frame) -> glam::Mat4 {
+        // A point at local coordinates p is self.origin + Σ self.axes[i]·p_i
+        // here and world.origin + Σ world.axes[i]·p_i there.
+        let [a, b, c] = world.axes;
+        let to_world = glam::Mat4::from_cols(
+            a.extend(0.0),
+            b.extend(0.0),
+            c.extend(0.0),
+            world.origin.extend(1.0),
+        );
+        let [x, y, z] = self.axes;
+        // `self`'s axes are orthonormal: its inverse is its transpose.
+        let rotation = glam::Mat3::from_cols(x, y, z).transpose();
+        let from_self =
+            glam::Mat4::from_mat3(rotation) * glam::Mat4::from_translation(-self.origin);
+        to_world * from_self
+    }
+
     /// A frame from an origin and three unit axes.
     pub(crate) fn new(origin: Vec3, axes: [Vec3; 3]) -> Frame {
         Frame { origin, axes }

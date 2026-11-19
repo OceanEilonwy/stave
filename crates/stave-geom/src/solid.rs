@@ -131,7 +131,7 @@ impl Block {
 /// Disjoint blocks: boxes added and removed. The only ways to make one are
 /// a single block, adding a block (only what isn't there yet is added) and
 /// subtraction, so the blocks never overlap.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
 pub struct Blocks {
     blocks: Vec<Block>,
 }
@@ -228,7 +228,7 @@ pub fn across(axis: PartAxis) -> [PartAxis; 2] {
 
 /// Two flat faces kept on a round section, `across` apart, their normal
 /// turned `angle` from the part's width axis toward its thickness axis.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Flats {
     /// The distance between the flats.
     pub across: Length,
@@ -238,7 +238,7 @@ pub struct Flats {
 
 /// A cylinder along one of a part's axes: a round tenon, a round section,
 /// or (in [`Solid::holes`]) a hole.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Rod {
     /// The axis it runs along.
     pub axis: PartAxis,
@@ -258,7 +258,7 @@ pub struct Rod {
 /// A station of a lathe profile: a diameter at a distance along the
 /// length, in local coordinates. Two stations at the same distance are a
 /// shoulder.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ProfileStation {
     /// Local length coordinate.
     pub at: Length,
@@ -268,7 +268,7 @@ pub struct ProfileStation {
 
 /// The lathe profile of round stock or a turned part, over its whole cut
 /// length, with what joints add and the round tenons they cut.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Profile {
     /// The stations, in order along the length.
     pub stations: Vec<ProfileStation>,
@@ -394,7 +394,7 @@ fn push_zone(stations: &mut Vec<ProfileStation>, zone: &Zone) {
 }
 
 /// Why a cut was left unmade.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Unsupported {
     /// A cut other than `drill` and `spigot` on round stock or a turned
     /// part.
@@ -431,7 +431,7 @@ fn operation_noun(operation: CutOperation) -> &'static str {
 }
 
 /// A cut that was left unmade because the geometry can't make it yet.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Skipped {
     /// Its index in [`Part::cuts`].
     pub cut: usize,
@@ -441,7 +441,7 @@ pub struct Skipped {
 
 /// Why a cut's shape is not a shape: a mistake in the design, reported as
 /// `error[type-mismatch]`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, thiserror::Error)]
 pub enum ShapeError {
     /// Its polygon is not a simple polygon (an `outline` that crosses
     /// itself, or a dovetail with no width or depth).
@@ -471,7 +471,7 @@ impl ShapeError {
 }
 
 /// A cut that was left unmade because its shape is a mistake.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Misshapen {
     /// Its index among the part's cuts (see [`cut_at`]).
     pub cut: usize,
@@ -498,7 +498,7 @@ impl From<PolygonError> for Unmade {
 }
 
 /// A part with its cuts made, in its own frame.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Solid {
     blocks: Blocks,
     rods: Vec<Rod>,

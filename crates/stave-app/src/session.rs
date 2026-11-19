@@ -674,6 +674,9 @@ pub struct Session {
     next_grips: u64,
     /// Where it reads and writes.
     ports: EditPorts,
+    /// The part meshes of the last scene built, kept for the next check
+    /// ([`crate::check::run_cached`]).
+    meshes: stave_scene::MeshCache,
 }
 
 impl Session {
@@ -698,6 +701,7 @@ impl Session {
             grips: None,
             next_grips: 0,
             ports: EditPorts::default(),
+            meshes: stave_scene::MeshCache::new(),
         }
     }
 
@@ -892,6 +896,13 @@ impl Session {
     /// The project folder.
     pub fn folder(&self) -> &Path {
         &self.folder
+    }
+
+    /// The part meshes kept between checks, to hand to
+    /// [`crate::check::run_cached`] on a worker thread (a clone shares
+    /// the same store).
+    pub fn meshes(&self) -> stave_scene::MeshCache {
+        self.meshes.clone()
     }
 
     /// Where the window is.
@@ -1460,7 +1471,8 @@ impl Session {
         }
         self.last_commit = commit.files;
         events.push(Event::Edit(EditEvent::Committed));
-        let checked = crate::check::checked(&self.folder, commit.opened, started);
+        let checked =
+            crate::check::checked_with(&self.folder, commit.opened, started, &self.meshes);
         let verdict = Verdict::Checked(checked.summary);
         self.adopt(Rc::new(checked), events);
         if self.running.is_none() {

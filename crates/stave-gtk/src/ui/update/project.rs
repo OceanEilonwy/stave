@@ -432,14 +432,18 @@ impl Window {
         // The project as the editor shows it, unsaved changes included.
         let overlay = self.widgets.files.overlay_for_check();
         let input = self.input();
+        // The part meshes of the last check, so only parts whose cuts
+        // changed are meshed again.
+        let meshes = self.session.meshes();
         crate::render::profile::edit_started();
         glib::spawn_future_local(async move {
-            let outcome = gio::spawn_blocking(move || check::run_with(&folder, &overlay))
-                .await
-                .unwrap_or_else(|_| check::Outcome::CantOpen {
-                    message: "checking the design crashed".to_owned(),
-                    elapsed: Duration::ZERO,
-                });
+            let outcome =
+                gio::spawn_blocking(move || check::run_cached(&folder, &overlay, &meshes))
+                    .await
+                    .unwrap_or_else(|_| check::Outcome::CantOpen {
+                        message: "checking the design crashed".to_owned(),
+                        elapsed: Duration::ZERO,
+                    });
             crate::render::profile::edit_checked();
             // The window may have gone; then nobody needs to know.
             let _ = input.send(ProjectInput::Checked { ticket, outcome }.into());

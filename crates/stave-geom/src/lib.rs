@@ -20,6 +20,12 @@
 //! right-handed basis [`Orientation::is_reflection`] measures against, so a
 //! part's frame maps straight across.
 //!
+//! A viewer draws parts from meshes in their **own frame** instead
+//! ([`cut_part_local`], [`part_local`]), placed by [`rest`]: the mesh
+//! then depends only on the part's cuts, size, grain and [`Handedness`],
+//! so parts alike in those share one mesh and a part that moves keeps
+//! its mesh.
+//!
 //! # What is drawn
 //!
 //! - **Boards** with their cuts made ([`cut_part`] of a [`solid::Solid`]):
@@ -274,7 +280,51 @@ pub enum Extent {
 /// stations); with [`Extent::Cut`], what a joint adds to either end is
 /// drawn as a cylinder of the end station's diameter.
 pub fn part(part: &Part, extent: Extent) -> Geometry {
-    let frame = build::Frame::of_part(part);
+    part_in(&build::Frame::of_part(part), part, extent)
+}
+
+/// [`part`] in the part's own frame ([`Handedness`]), to be placed by
+/// [`rest`]: two parts alike in shape, size, grain and handedness get the
+/// same mesh wherever they are.
+pub fn part_local(part: &Part, extent: Extent) -> Geometry {
+    part_in(&build::Frame::own(handedness(part)), part, extent)
+}
+
+/// Which way round a part's own frame is: right-handed like the render
+/// frame, or left-handed (a mirrored part, [`Orientation::is_reflection`]).
+///
+/// A mesh in the part's own frame ([`part_local`], [`cut_part_local`]) is
+/// built in a frame of the same handedness, so [`rest`] only turns and
+/// moves it and never reflects it (which would turn its triangles inside
+/// out).
+///
+/// [`Orientation::is_reflection`]: stave_model::solved::Orientation::is_reflection
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum Handedness {
+    /// Length, width and thickness turn like right, up and front.
+    Right,
+    /// A mirror image: they turn the other way.
+    Left,
+}
+
+/// The handedness of a part's frame.
+pub fn handedness(part: &Part) -> Handedness {
+    if part.pose.orientation.is_reflection() {
+        Handedness::Left
+    } else {
+        Handedness::Right
+    }
+}
+
+/// Where a part's own-frame mesh ([`part_local`], [`cut_part_local`]) sits
+/// at rest: the transform from its own frame to the render frame. It is a
+/// rotation by quarter turns and a move, never a reflection.
+pub fn rest(part: &Part) -> Mat4 {
+    build::Frame::own(handedness(part)).onto(&build::Frame::of_part(part))
+}
+
+fn part_in(frame: &build::Frame, part: &Part, extent: Extent) -> Geometry {
+    let frame = *frame;
     let grain = match part.grain {
         Grain::Length => build::GrainAxes::LENGTH,
         Grain::Width => build::GrainAxes::WIDTH,
@@ -343,7 +393,23 @@ pub fn cut_part(part: &Part, solid: &solid::Solid) -> Geometry {
         Grain::Length => build::GrainAxes::LENGTH,
         Grain::Width => build::GrainAxes::WIDTH,
     };
-    mesh::cut_part(part, solid, grain)
+    mesh::cut_part(&build::Frame::of_part(part), part, solid, grain)
+}
+
+/// [`cut_part`] in the part's own frame, to be placed by [`rest`].
+///
+/// The cuts of a [`solid::Solid`] are already in the part's own frame
+/// (they are measured from its corner along its length, width and
+/// thickness), so this mesh depends only on the solid, the part's cut
+/// size, its grain and its [`Handedness`], never on where the part is:
+/// two parts alike in those get the same mesh, and a part that only moved
+/// keeps its mesh.
+pub fn cut_part_local(part: &Part, solid: &solid::Solid) -> Geometry {
+    let grain = match part.grain {
+        Grain::Length => build::GrainAxes::LENGTH,
+        Grain::Width => build::GrainAxes::WIDTH,
+    };
+    mesh::cut_part(&build::Frame::own(handedness(part)), part, solid, grain)
 }
 
 /// Lengthens a profile to cover `0 ..= length` with cylinders of its end

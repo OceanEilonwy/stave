@@ -6,6 +6,8 @@ use glam::{Mat4, Quat, Vec3};
 use stave_geom::mechanism::MechanismPath;
 use stave_geom::solid::Solid;
 use stave_geom::{Aabb, Extent, Geometry, render};
+
+use crate::cache::MeshCache;
 use stave_lang::placement::PartAxis;
 use stave_lang::units::{Angle, Length};
 use stave_model::mechanism::MotionShape;
@@ -86,8 +88,16 @@ pub struct Node {
     pub item: Item,
     /// Its name as written: `door_l.stile[hinge]`.
     pub name: String,
-    /// Its mesh and outline at rest, in world coordinates.
-    pub geometry: Geometry,
+    /// Its mesh and outline in its own frame: a part's corner at the
+    /// origin, its length, width and thickness along `x`, `y` and `z`
+    /// (`-z` for a mirrored part). Nodes alike in shape share one mesh
+    /// (four legs, two sides), so it is shared, not copied. A piece of
+    /// hardware's or a joint's member is drawn where it is, with `rest`
+    /// the identity.
+    pub local: Arc<Geometry>,
+    /// Where `local` sits at rest: its own frame to the render frame. A
+    /// pose's transform applies on top ([`Node::placed`]).
+    pub rest: Mat4,
     /// How it is shaded.
     pub material: Material,
     /// The assemblies it is inside, outermost first.
@@ -101,6 +111,17 @@ pub struct Node {
 }
 
 impl Node {
+    /// Its box at rest, in the render frame.
+    pub fn bounds(&self) -> Aabb {
+        self.local.bounds.transformed(self.rest)
+    }
+
+    /// Where its mesh is drawn for a pose's transform of it (rest to
+    /// posed, [`Posed::transforms`]): its own frame to the render frame.
+    pub fn placed(&self, posed: Mat4) -> Mat4 {
+        posed * self.rest
+    }
+
     /// The part it moves with: itself for a part, the part that carries
     /// it for a member carried by a part (a joint's pins, a hinge's cup).
     pub fn carried_by(&self) -> Option<PartId> {
@@ -578,8 +599,19 @@ fn wood(part: &Part) -> Wood {
 }
 
 impl SceneGraph {
-    /// Builds the graph of a design.
+    /// Builds the graph of a design. Parts alike in shape share one mesh.
     pub fn build(design: &SolvedDesign, options: BuildOptions) -> SceneGraph {
+        SceneGraph::build_with(design, options, &MeshCache::new())
+    }
+
+    /// Builds the graph of a design, taking the parts' meshes from the
+    /// last build that used `cache` where their cuts are the same, and
+    /// leaving in `cache` the meshes this build used.
+    pub fn build_with(
+        design: &SolvedDesign,
+        options: BuildOptions,
+        cache: &MeshCache,
+    ) -> SceneGraph {
         let assemblies_of = |mut assembly: Option<AssemblyId>| {
             let mut path = Vec::new();
             while let Some(id) = assembly {
@@ -593,22 +625,25 @@ impl SceneGraph {
             path
         };
         let mut nodes = Vec::with_capacity(design.parts().len() + design.hardware().len());
+        let mut meshes = cache.build();
         for part in design.parts() {
-            let geometry = match options.extent {
-                Extent::Cut => stave_geom::cut_part(part, &Solid::of(part, design)),
-                Extent::Drawn => stave_geom::part(part, Extent::Drawn),
+            let local = match options.extent {
+                Extent::Cut => meshes.cut_part(part, Solid::of(part, design)),
+                Extent::Drawn => Arc::new(stave_geom::part_local(part, Extent::Drawn)),
             };
             let material = Material::Wood(wood(part));
             nodes.push(Node {
                 item: Item::Part(part.id),
                 name: part.name.clone(),
-                geometry,
+                local,
+                rest: stave_geom::rest(part),
                 material,
                 assemblies: assemblies_of(part.assembly),
                 follows: None,
                 member: None,
             });
         }
+        meshes.finish();
         // Every assembly's mechanism, run once.
         let paths: Vec<Option<Arc<MechanismPath>>> = design
             .assemblies()
@@ -645,7 +680,8 @@ impl SceneGraph {
                 nodes.push(Node {
                     item: Item::Hardware(hardware.id),
                     name: format!("{} {}", hardware.name, member.name),
-                    geometry: stave_geom::body(member),
+                    local: Arc::new(stave_geom::body(member)),
+                    rest: Mat4::IDENTITY,
                     material: Material::Metal,
                     assemblies: assemblies_of(assembly),
                     follows,
@@ -666,7 +702,8 @@ impl SceneGraph {
                 name: design
                     .pair_member_name(member)
                     .unwrap_or_else(|| body.name.clone()),
-                geometry: stave_geom::body(body),
+                local: Arc::new(stave_geom::body(body)),
+                rest: Mat4::IDENTITY,
                 material: member_material(body),
                 assemblies: assemblies_of(assembly),
                 follows: None,
@@ -698,7 +735,7 @@ impl SceneGraph {
                 section: scene.section.as_ref().map(Section::of_plane),
             })
             .collect();
-        let exploded = Exploded::of(design);
+        let exploded = Exploded::of(design, &paths);
         let (explode_assembly, explode_part) = nodes
             .iter()
             .map(|node| exploded.of_node(design, node))
@@ -951,7 +988,7 @@ impl SceneGraph {
         self.node_ids()
             .filter_map(|id| {
                 let transform = posed.shown(id)?;
-                Some(self.node(id)?.geometry.bounds.transformed(transform))
+                Some(self.node(id)?.bounds().transformed(transform))
             })
             .reduce(Aabb::union)
     }
@@ -962,7 +999,7 @@ impl SceneGraph {
             .iter()
             .filter_map(|id| {
                 let transform = posed.transforms().get(id.0)?;
-                Some(self.node(*id)?.geometry.bounds.transformed(*transform))
+                Some(self.node(*id)?.bounds().transformed(*transform))
             })
             .reduce(Aabb::union)
     }
@@ -1262,7 +1299,10 @@ struct Exploded {
 }
 
 impl Exploded {
-    fn of(design: &SolvedDesign) -> Exploded {
+    /// `paths` is every assembly's mechanism, run once by the graph's
+    /// build (by [`AssemblyId`]): running one is the costliest step of a
+    /// build, so it isn't run again here.
+    fn of(design: &SolvedDesign, paths: &[Option<Arc<MechanismPath>>]) -> Exploded {
         // Distances grow with the design, so the joinery shows at a glance
         // whatever its size.
         let size = bounds_of(design.parts().iter()).map_or(0.0, |b| b.size().length());
@@ -1271,7 +1311,10 @@ impl Exploded {
         let own: Vec<Vec3> = design
             .assemblies()
             .iter()
-            .map(|assembly| Exploded::assembly_move(design, assembly, base))
+            .map(|assembly| {
+                let path = paths.get(assembly.id.index()).and_then(Option::as_deref);
+                Exploded::assembly_move(design, assembly, base, path)
+            })
             .collect();
         let assemblies = design
             .assemblies()
@@ -1302,20 +1345,17 @@ impl Exploded {
         design: &SolvedDesign,
         assembly: &stave_model::solved::Assembly,
         base: f32,
+        path: Option<&MechanismPath>,
     ) -> Vec3 {
         let members = || assembly.parts.iter().filter_map(|p| design.part(*p));
         let Some(bounds) = bounds_of(members()) else {
             return Vec3::ZERO;
         };
-        let path = assembly
-            .mechanism
-            .as_ref()
-            .and_then(|mechanism| MechanismPath::new(mechanism).ok());
-        let travel = path.as_ref().and_then(|path| match path.shape() {
+        let travel = path.and_then(|path| match path.shape() {
             MotionShape::Travel { toward, .. } => Some(toward),
             MotionShape::Turn { .. } | MotionShape::General => None,
         });
-        let swing = path.as_ref().and_then(MechanismPath::swing);
+        let swing = path.and_then(MechanismPath::swing);
         match (travel, swing) {
             (Some(toward), _) => {
                 let direction = render::direction(toward);

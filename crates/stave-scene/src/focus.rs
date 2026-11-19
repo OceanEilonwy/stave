@@ -263,11 +263,13 @@ impl SceneGraph {
             .into_iter()
             .filter_map(|id| self.node(id))
             .flat_map(|node| {
-                node.geometry
-                    .edges
-                    .segments
-                    .iter()
-                    .map(|[a, b]| [Vec3::from(*a), Vec3::from(*b)])
+                let rest = node.rest;
+                node.local.edges.segments.iter().map(move |[a, b]| {
+                    [
+                        rest.transform_point3(Vec3::from(*a)),
+                        rest.transform_point3(Vec3::from(*b)),
+                    ]
+                })
             })
             .collect()
     }

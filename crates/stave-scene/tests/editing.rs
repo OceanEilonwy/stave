@@ -202,9 +202,9 @@ fn widening_the_cabinet_marks_the_parts_that_change() {
     let ghost_base = ghosts
         .nodes()
         .find(|(_, node)| node.name == "base")
-        .map(|(_, node)| node.geometry.bounds.size().x)
+        .map(|(_, node)| node.bounds().size().x)
         .unwrap();
-    let old = graph.node(base_node).unwrap().geometry.bounds.size().x;
+    let old = graph.node(base_node).unwrap().bounds().size().x;
     assert!(
         (ghost_base - old - 100.0).abs() < 0.01,
         "{old} → {ghost_base}"
@@ -591,4 +591,47 @@ fn a_region_a_component_exposes_moves_with_its_assembly() {
     );
     let light = graph.region_highlight_posed(&open, door).unwrap();
     assert_eq!(light.volumes, vec![swung]);
+}
+
+#[test]
+fn an_edit_meshes_again_only_the_parts_whose_cuts_changed() {
+    let cache = stave_scene::MeshCache::new();
+    let base = solve_with(&[]);
+    let parts = base.parts().len();
+    let started = Instant::now();
+    let first = SceneGraph::build_with(&base, BuildOptions::default(), &cache);
+    let cold = started.elapsed();
+    let usage = cache.last_use();
+    assert_eq!(usage.made + usage.reused, parts);
+    // Parts alike in shape share a mesh even in the first build.
+    assert!(usage.made < parts, "{usage:?} for {parts} parts");
+    assert_eq!(usage.held, usage.made);
+    assert_eq!(first, SceneGraph::build(&base, BuildOptions::default()));
+
+    // The same design again: nothing is meshed.
+    let again = SceneGraph::build_with(&base, BuildOptions::default(), &cache);
+    assert_eq!(cache.last_use().made, 0);
+    assert_eq!(again, first);
+
+    // A drawer gap changed: the drawers below it move, their cuts don't.
+    let nudged = with_drawer_gap("top_gap", "20mm");
+    let started = Instant::now();
+    let graph = SceneGraph::build_with(&nudged, BuildOptions::default(), &cache);
+    let warm = started.elapsed();
+    let usage = cache.last_use();
+    assert!(
+        usage.made * 4 < parts,
+        "{} of {parts} parts meshed again",
+        usage.made
+    );
+    // The meshes kept are exactly those a fresh build makes.
+    assert_eq!(graph, SceneGraph::build(&nudged, BuildOptions::default()));
+    eprintln!(
+        "scene of {parts} parts: {:.1} ms with nothing kept, {:.1} ms after the edit \
+         ({} meshed again, {} reused)",
+        cold.as_secs_f64() * 1000.0,
+        warm.as_secs_f64() * 1000.0,
+        usage.made,
+        usage.reused,
+    );
 }

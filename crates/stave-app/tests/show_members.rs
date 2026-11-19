@@ -73,7 +73,7 @@ fn the_cabinets_dowels_are_drawn_in_beech_and_its_screws_in_steel() {
         Material::Wood(wood) if wood.species == stave_schema::species::Species::Beech
     ));
     // Four 8mm pins, 30mm long: their box is 8mm across, 30mm high.
-    let size = pins.geometry.bounds.size();
+    let size = pins.bounds().size();
     assert!((size.x - 8.0).abs() < 0.01 && (size.y - 30.0).abs() < 0.01);
     let screws = graph
         .nodes

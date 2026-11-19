@@ -137,7 +137,7 @@ impl SceneGraph {
                 if own(node) {
                     return false;
                 }
-                let solid = shrunk(node.geometry.bounds.transformed(transform), INSET);
+                let solid = shrunk(node.bounds().transformed(transform), INSET);
                 if solid.size().min_element() <= 0.0 {
                     return false;
                 }
