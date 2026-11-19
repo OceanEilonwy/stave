@@ -11,10 +11,14 @@
 //! member's cuts are made where its shapes meet each part, the holes a pin
 //! makes in both parts share their centres by construction.
 
+use std::num::NonZeroU32;
+
 use stave_lang::Code;
 use stave_lang::ast::Span;
 use stave_lang::units::ExactLength;
-use stave_model::defs::{BodyId, Carrier, FrameAxis, KindDef, LayoutDef, Word};
+use stave_model::defs::{
+    BodyId, Carrier, FrameAxis, KindDef, LayoutDef, RExpr, RExprKind, Symbol, Word,
+};
 use stave_model::value::{KindValue, Patch, Spacing, Value};
 
 use crate::eval::{Env, midpoint};
@@ -120,11 +124,10 @@ impl Solver<'_> {
             let id = BodyId::new(index).ok_or(Fault::Internal("a member's number"))?;
             let patch = self.member_patch(layout, env)?;
             let count = match &layout.count {
-                Some(count) => {
-                    usize::try_from(self.eval_count(count, env)?).map_err(|_| Fault::Overflow)?
-                }
-                None => 1,
+                Some(count) => self.member_count(count, env, owner, body.name.as_str(), place)?,
+                None => NonZeroU32::MIN,
             };
+            let count = usize::try_from(count.get()).map_err(|_| Fault::Overflow)?;
             let spacing = self.member_spacing(layout, env)?;
             let shapes = body
                 .shapes
@@ -211,6 +214,46 @@ impl Solver<'_> {
             });
         }
         Ok(out)
+    }
+
+    /// `count:` of a member: at least one, or the pair is joined by
+    /// nothing (grammar, "Joint members"). Zero is `error[out-of-range]`
+    /// at the joint, naming the kind's setting it comes from when it is
+    /// one.
+    fn member_count(
+        &mut self,
+        count: &RExpr,
+        env: &Env<'_>,
+        owner: &str,
+        member: &str,
+        place: (stave_lang::FileId, Span),
+    ) -> Solved<NonZeroU32> {
+        if let Some(count) = NonZeroU32::new(self.eval_count(count, env)?) {
+            return Ok(count);
+        }
+        let setting = match &count.kind {
+            RExprKind::Symbol(Symbol::KindParam(kind, index)) => self
+                .model
+                .defs
+                .kind(*kind)
+                .and_then(|k| k.params.get(*index))
+                .map(|param| param.decl.name.clone()),
+            _ => None,
+        };
+        let help = match setting {
+            Some(setting) => format!("give {owner} a {setting}: of at least 1"),
+            None => format!("check the settings of {owner}: it must place at least one {member}"),
+        };
+        let (file, span) = place;
+        Err(self
+            .error(
+                Code::OutOfRange,
+                format!("{owner}: it places no {member}s, so nothing joins its parts"),
+                file,
+                span,
+                help,
+            )
+            .into())
     }
 
     /// `on:`: the patch, `contact(a, b)`.

@@ -3,11 +3,11 @@
 
 use stave_lang::ast::{BaseKind, Span};
 use stave_lang::placement::{Axis, Face, PartAxis};
-use stave_lang::units::{ExactLength, Rational};
+use stave_lang::units::{ExactLength, Length, Rational};
 use stave_lang::{Code, Diagnostic, FileId, Label};
 use stave_model::defs::{
-    CutDef, DefId, JointMember, KindCallDef, MadePartDef, MadeTermKind, OperationDef, SelectorDef,
-    Size, StockField, Word,
+    CutDef, DefId, JointMember, KindCallDef, MadePartDef, MadeTermKind, OperationDef, RExprKind,
+    SelectorDef, Size, StockField, Symbol, Word,
 };
 use stave_model::ids::{JointId, KindId, PartId, RecipeId, StockId};
 use stave_model::solved::{
@@ -19,6 +19,7 @@ use stave_schema::CutOperation;
 use stave_schema::kinds::RoleType;
 use stave_schema::operations::Selector;
 use stave_schema::placement::AssemblyStepKind;
+use stave_schema::words::{Grain, StockForm};
 
 use crate::eval::{Env, KindEnv, midpoint};
 use crate::{Failure, Fault, Frame, Memo, Solved, Solver};
@@ -34,6 +35,15 @@ pub(crate) struct Binding {
     pub glue: bool,
     pub methods: Vec<RecipeId>,
     pub face: Option<Face>,
+}
+
+/// Who a cut belongs to and where to report a mistake in its sizes: a
+/// joint's name and its declaration.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct CutAt<'a> {
+    pub owner: &'a str,
+    pub file: FileId,
+    pub span: Span,
 }
 
 /// What a joint adds to one end of a part.
@@ -58,6 +68,15 @@ pub(crate) struct PartGeom {
     pub cut_box: ExactBox,
     pub reference_face: LocalFace,
     pub reference_edge: LocalFace,
+}
+
+/// The axis of a part its grain runs along: its length, or its width for
+/// `grain: width` (grammar, "part").
+pub(crate) fn grain_axis(grain: Grain) -> PartAxis {
+    match grain {
+        Grain::Length => PartAxis::Length,
+        Grain::Width => PartAxis::Width,
+    }
 }
 
 pub(crate) fn local_slot(axis: PartAxis) -> usize {
@@ -691,6 +710,26 @@ impl Solver<'_> {
                         let toward_positive = a.max(axis) == b.min(axis);
                         let orientation = self.part_orientation(part)?;
                         let local = orientation.part_axis(axis);
+                        // `extend` lengthens an end or an edge, never a
+                        // face: a part laid face to face on its
+                        // counterpart would come out thicker than any
+                        // board of its stock (grammar, "adds:").
+                        if local == PartAxis::Thickness {
+                            let (pn, qn) = (self.part_name(part), self.part_name(other));
+                            return Err(self
+                                .error(
+                                    Code::TypeMismatch,
+                                    format!(
+                                        "'{name}' would make {pn} thicker: {pn} meets {qn} with its face, but extend lengthens an end or an edge"
+                                    ),
+                                    file,
+                                    span,
+                                    format!(
+                                        "place {pn} so its end or edge meets {qn}, or use a kind without adds:"
+                                    ),
+                                )
+                                .into());
+                        }
                         let along = orientation.direction(local).is_positive();
                         let end = if along == toward_positive {
                             End::End
@@ -805,9 +844,10 @@ impl Solver<'_> {
         })
     }
 
-    /// A part's cut length must not be more than its stock's `max_length`
-    /// (grammar, "stock"). Mirror images are left to their source, so one
-    /// mistake is one error.
+    /// A part's cut length along its grain must not be more than its
+    /// stock's `max_length` (grammar, "stock"): its length, or its width
+    /// when its grain runs across it. Mirror images are left to their
+    /// source, so one mistake is one error.
     pub(crate) fn check_max_length(&mut self, part: PartId, geom: &PartGeom) -> Solved<()> {
         if self.mirror_source(part)?.is_some()
             || self
@@ -829,13 +869,115 @@ impl Solver<'_> {
         else {
             return Ok(());
         };
-        let slot = local_slot(PartAxis::Length);
-        let cut_length = [&geom.drawn, &geom.start, &geom.end]
-            .iter()
-            .filter_map(|sizes| sizes.get(slot).copied())
-            .try_fold(ExactLength::ZERO, |sum, size| sum.checked_add(size))
-            .ok_or(Fault::Overflow)?;
+        let grain = self
+            .part_body(part)
+            .map_or(Grain::Length, |body| body.grain);
+        let axis = grain_axis(grain);
+        let cut_length = geom.cut_size(axis)?;
         if cut_length <= max_length {
+            return Ok(());
+        }
+        let across = geom.cut_size(match axis {
+            PartAxis::Length => PartAxis::Width,
+            PartAxis::Width | PartAxis::Thickness => PartAxis::Length,
+        })?;
+        if self.sheet_fits_turned(stock, cut_length, across)? {
+            return Ok(());
+        }
+        let name = self.part_name(part);
+        let stock_name = self.stock_name(stock);
+        let max = stave_model::value::format_length(max_length);
+        let (file, span) = match (self.size_span(part, axis), self.part_env(part)) {
+            (Some(span), Some(env)) => (env.file, span),
+            _ => self.part_place(part),
+        };
+        let (message, help) = match grain {
+            Grain::Length => {
+                let drawn = geom
+                    .drawn
+                    .get(local_slot(axis))
+                    .copied()
+                    .unwrap_or(cut_length);
+                let help = match self.splice_suggestion(part, drawn, max_length) {
+                    Some(splice) => format!(
+                        "stock '{stock_name}' comes no longer than {max}: splice it end to end with {splice}, choosing the end joint and leaving each piece room for what its splices add, or buy longer stock"
+                    ),
+                    None => format!(
+                        "stock '{stock_name}' comes no longer than {max}: splice it end to end with lengths:, or buy longer stock"
+                    ),
+                };
+                (
+                    format!(
+                        "{name}: its cut length works out as {}, which is more than its stock's max_length of {max}",
+                        stave_model::value::format_length(cut_length)
+                    ),
+                    help,
+                )
+            }
+            Grain::Width => (
+                format!(
+                    "{name}: its grain runs across its width, and its width works out as {}, which is more than its stock's max_length of {max}",
+                    stave_model::value::format_length(cut_length)
+                ),
+                format!(
+                    "stock '{stock_name}' comes no longer than {max}, measured along the grain: make the part narrower, let its grain run along its length, or buy longer stock"
+                ),
+            ),
+        };
+        Err(self
+            .error(Code::TypeMismatch, message, file, span, help)
+            .into())
+    }
+
+    /// `true` when a part cut from a sheet (plywood, MDF) fits it turned a
+    /// quarter turn: its size `along` its grain within the sheet's
+    /// `max_width` and its size `across` within its `max_length`. A part
+    /// may lie either way on a sheet (grammar, "stock").
+    pub(crate) fn sheet_fits_turned(
+        &mut self,
+        stock: StockId,
+        along: ExactLength,
+        across: ExactLength,
+    ) -> Solved<bool> {
+        let sheet = match self.model.defs.stock(stock).map(|def| def.form) {
+            Some(StockForm::Plywood | StockForm::Mdf) => true,
+            Some(StockForm::Solid | StockForm::Dowel) | None => false,
+        };
+        if !sheet {
+            return Ok(false);
+        }
+        let (Some(max_width), Some(max_length)) = (
+            self.stock_length(stock, StockField::MaxWidth)?,
+            self.stock_length(stock, StockField::MaxLength)?,
+        ) else {
+            return Ok(false);
+        };
+        Ok(along <= max_width && across <= max_length)
+    }
+
+    /// A part's cut thickness against its stock's: nothing may make a part
+    /// thicker than the board it is cut from (grammar, "part"). The
+    /// `thickness:` field is checked where it is written; this catches what
+    /// joints add. A turned part is checked against its blank at `shape:`.
+    pub(crate) fn check_cut_thickness(&mut self, part: PartId, geom: &PartGeom) -> Solved<()> {
+        if self.mirror_source(part)?.is_some()
+            || self
+                .model
+                .parts
+                .get(part.index())
+                .is_some_and(|p| p.mirror_of.is_some())
+            || self.part_profile(part)?.is_some()
+        {
+            return Ok(());
+        }
+        let stock = self.part_stock(part)?;
+        let Some(stock_thickness) =
+            self.stock_length(stock, stave_model::defs::StockField::Thickness)?
+        else {
+            return Ok(());
+        };
+        let cut_thickness = geom.cut_size(PartAxis::Thickness)?;
+        if cut_thickness <= stock_thickness {
             return Ok(());
         }
         let name = self.part_name(part);
@@ -845,35 +987,130 @@ impl Solver<'_> {
             .stock(stock)
             .map(|s| s.decl.name.clone())
             .unwrap_or_default();
-        let drawn = geom.drawn.get(slot).copied().unwrap_or(cut_length);
-        let suggestion = self.splice_suggestion(part, drawn, max_length);
-        let (file, span) = match (self.part_body(part).cloned(), self.part_env(part)) {
-            (Some(body), Some(env)) => match &body.length {
-                stave_model::defs::Size::Expr(expr) => (env.file, expr.span),
-                stave_model::defs::Size::Fit(span) => (env.file, *span),
-            },
-            _ => (self.project_file, self.project_span),
+        let (file, span) = self.part_place(part);
+        let reason = format!(
+            "its cut thickness works out as {}, which is more than its stock's {}",
+            stave_model::value::format_length(cut_thickness),
+            stave_model::value::format_length(stock_thickness)
+        );
+        if self.noted_with_earlier_part(Code::TypeMismatch, file, span, &reason, &name) {
+            return Err(self.skip().into());
+        }
+        Err(self
+            .error(
+                Code::TypeMismatch,
+                format!("{name}: {reason}"),
+                file,
+                span,
+                format!(
+                    "a part can be planed thinner than its stock '{stock_name}', never thicker; choose thicker stock, or let the joint add to an end or an edge"
+                ),
+            )
+            .into())
+    }
+
+    /// A part a joint makes is cut from its stock like any other part
+    /// (grammar, "Joint definitions"): each size more than 0mm, never
+    /// thicker than the stock, never wider than stock sold at a fixed
+    /// width, and no longer along its grain than the stock's `max_length`.
+    /// Reported at `at`, the joint's call, once for every made part with
+    /// the same fault there.
+    fn check_made_part_stock(
+        &mut self,
+        stock: StockId,
+        name: &str,
+        [length, width, thickness]: [ExactLength; 3],
+        grain: Grain,
+        at: (FileId, Span),
+    ) -> Solved<()> {
+        let (file, span) = at;
+        let stock_name = self.stock_name(stock);
+        let size = stave_model::value::format_length;
+        let mut fault: Option<(Code, String, String)> = None;
+        for (word, value) in [
+            ("length", length),
+            ("width", width),
+            ("thickness", thickness),
+        ] {
+            if fault.is_none() && value <= ExactLength::ZERO {
+                fault = Some((
+                    Code::OutOfRange,
+                    format!("its {word} works out as {}", size(value)),
+                    format!("give the joint settings that make the part's {word} more than 0mm"),
+                ));
+            }
+        }
+        if fault.is_none()
+            && let Some(stock_thickness) = self.stock_length(stock, StockField::Thickness)?
+            && thickness > stock_thickness
+        {
+            fault = Some((
+                Code::TypeMismatch,
+                format!(
+                    "its thickness works out as {}, but {stock_name} is only {} thick",
+                    size(thickness),
+                    size(stock_thickness)
+                ),
+                format!(
+                    "choose thicker stock for the part with the joint's settings, or make the part at most {} thick",
+                    size(stock_thickness)
+                ),
+            ));
+        }
+        let fixed_width = self
+            .model
+            .defs
+            .stock(stock)
+            .is_some_and(|def| def.width.is_some());
+        if fault.is_none()
+            && fixed_width
+            && let Some(stock_width) = self.stock_length(stock, StockField::Width)?
+            && width > stock_width
+        {
+            fault = Some((
+                Code::TypeMismatch,
+                format!(
+                    "its width is {}, but {stock_name} is sold {} wide",
+                    size(width),
+                    size(stock_width)
+                ),
+                format!(
+                    "choose wider stock for the part with the joint's settings, or make the part at most {} wide",
+                    size(stock_width)
+                ),
+            ));
+        }
+        if fault.is_none()
+            && let Some(max_length) = self.stock_length(stock, StockField::MaxLength)?
+        {
+            let along = match grain {
+                Grain::Length => length,
+                Grain::Width => width,
+            };
+            if along > max_length {
+                fault = Some((
+                    Code::TypeMismatch,
+                    format!(
+                        "its length along the grain works out as {}, which is more than its stock's max_length of {}",
+                        size(along),
+                        size(max_length)
+                    ),
+                    format!(
+                        "stock '{stock_name}' comes no longer than {}: choose longer stock for the part with the joint's settings, or make the part shorter",
+                        size(max_length)
+                    ),
+                ));
+            }
+        }
+        let Some((code, reason, help)) = fault else {
+            return Ok(());
         };
-        Err(self.error(
-            Code::TypeMismatch,
-            format!(
-                "{name}: its cut length works out as {}, which is more than its stock's max_length of {}",
-                stave_model::value::format_length(cut_length),
-                stave_model::value::format_length(max_length)
-            ),
-            file,
-            span,
-            match suggestion {
-                Some(splice) => format!(
-                    "stock '{stock_name}' comes no longer than {}: splice it end to end with {splice}, choosing the end joint and leaving each piece room for what its splices add, or buy longer stock",
-                    stave_model::value::format_length(max_length)
-                ),
-                None => format!(
-                    "stock '{stock_name}' comes no longer than {}: splice it end to end with lengths:, or buy longer stock",
-                    stave_model::value::format_length(max_length)
-                ),
-            },
-        ).into())
+        if self.noted_with_earlier_part(code, file, span, &reason, name) {
+            return Err(self.skip().into());
+        }
+        Err(self
+            .error(code, format!("{name}: {reason}"), file, span, help)
+            .into())
     }
 
     /// The reference face and edge (grammar, "Faces to cut").
@@ -1257,6 +1494,110 @@ impl Solver<'_> {
         }
     }
 
+    /// Every size of a cut is more than zero (grammar, "Cut operations"):
+    /// a 0mm tenon cuts the whole extension away and joins nothing, a 0mm
+    /// long one is a butt joint by another name. `error[cut-size]` at the
+    /// joint, naming the kind's setting the size comes from when it is
+    /// one.
+    pub(crate) fn check_cut_size(
+        &mut self,
+        at: CutAt<'_>,
+        name: Option<&stave_model::defs::CutName>,
+        operation: &OperationDef,
+        kind: &CutKind,
+        part: PartId,
+    ) -> Solved<()> {
+        let length = |depth: &Depth| match depth {
+            Depth::Length(length) => Some(*length),
+            Depth::Through => None,
+        };
+        let sizes: Vec<(&str, &str, Option<Length>)> = match kind {
+            CutKind::Notch { depth } => vec![("depth", "deep", length(depth))],
+            CutKind::Slot { width, depth, .. } => vec![
+                ("width", "wide", Some(*width)),
+                ("depth", "deep", length(depth)),
+            ],
+            CutKind::Pocket {
+                width,
+                thickness,
+                depth,
+            } => vec![
+                ("width", "wide", Some(*width)),
+                ("thickness", "thick", Some(*thickness)),
+                ("depth", "deep", length(depth)),
+            ],
+            CutKind::Tenon {
+                length,
+                width,
+                thickness,
+            } => vec![
+                ("length", "long", Some(*length)),
+                ("width", "wide", Some(*width)),
+                ("thickness", "thick", Some(*thickness)),
+            ],
+            CutKind::Spigot { length, diameter } => vec![
+                ("length", "long", Some(*length)),
+                ("diameter", "across", Some(*diameter)),
+            ],
+            CutKind::Round {
+                diameter, flats, ..
+            } => vec![
+                ("diameter", "across", Some(*diameter)),
+                ("flats", "across its flats", *flats),
+            ],
+            CutKind::Drill { diameter, depth } => vec![
+                ("diameter", "across", Some(*diameter)),
+                ("depth", "deep", length(depth)),
+            ],
+            CutKind::DovetailSocket { neck, depth, .. }
+            | CutKind::DovetailTail { neck, depth, .. } => vec![
+                ("neck", "wide at its neck", Some(*neck)),
+                ("depth", "deep", Some(*depth)),
+            ],
+            CutKind::Outline { depth, .. } => vec![("depth", "deep", length(depth))],
+        };
+        let Some((argument, word, size)) = sizes.into_iter().find_map(|(argument, word, size)| {
+            size.filter(|size| *size <= Length::ZERO)
+                .map(|size| (argument, word, size))
+        }) else {
+            return Ok(());
+        };
+        let cut = name.map_or_else(|| operation.operation.word().to_owned(), |n| n.words());
+        let part_name = self.part_name(part);
+        let size = stave_model::value::format_length(size.into());
+        // The setting the size comes from, when the operation reads one of
+        // the kind's params straight.
+        let setting = operation
+            .args
+            .iter()
+            .find(|arg| arg.name == argument)
+            .and_then(|arg| match &arg.value.kind {
+                RExprKind::Symbol(Symbol::KindParam(kind, index)) => self
+                    .model
+                    .defs
+                    .kind(*kind)
+                    .and_then(|k| k.params.get(*index))
+                    .map(|param| param.decl.name.clone()),
+                _ => None,
+            });
+        let help = match setting {
+            Some(setting) => format!("give {} a {setting}: of more than 0mm", at.owner),
+            None => format!(
+                "check the settings of {}: its {cut}'s {argument} must come out more than 0mm",
+                at.owner
+            ),
+        };
+        Err(self
+            .error(
+                Code::CutSize,
+                format!("{}: its {cut} on {part_name} is {size} {word}", at.owner),
+                at.file,
+                at.span,
+                help,
+            )
+            .into())
+    }
+
     /// The cuts of one `cut selector { }` entry for one pair.
     pub(crate) fn pair_cuts(
         &mut self,
@@ -1264,6 +1605,7 @@ impl Solver<'_> {
         pair: &PairWork,
         geoms: &GeomTable,
         env: &Env<'_>,
+        at: CutAt<'_>,
     ) -> Solved<Vec<(PartId, LocalFace, CutPlace, CutKind)>> {
         // A cut on a kind's only `Parts` role is made on each of its parts
         // that meets the other part of the selector.
@@ -1291,6 +1633,7 @@ impl Solver<'_> {
                 self.selector_place(&cut.selector, pair, geoms, env.file, target)?;
             for operation in &cut.operations {
                 let kind = self.cut_kind(operation, env)?;
+                self.check_cut_size(at, cut.name.as_ref(), operation, &kind, part)?;
                 self.check_tongue(operation, &place, face, env)?;
                 out.push((part, face, place.clone(), kind));
             }
@@ -1387,6 +1730,7 @@ impl Solver<'_> {
         geoms: &GeomTable,
         env: &Env<'_>,
         name: &str,
+        at: (FileId, Span),
     ) -> Solved<MadeGeom> {
         let body = &made.body;
         let stock = match self.eval(&body.stock, env)? {
@@ -1445,6 +1789,7 @@ impl Solver<'_> {
                 .ok_or(Fault::Earlier)?,
         };
         let drawn = [length, width, thickness];
+        self.check_made_part_stock(stock, name, drawn, body.grain, at)?;
         // Orientation.
         let mut orientation = None;
         let mut of_part = None;

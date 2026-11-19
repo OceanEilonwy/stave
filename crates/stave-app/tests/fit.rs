@@ -640,6 +640,48 @@ joint seat : flatten(rail, into: post)",
     );
 }
 
+#[test]
+fn a_tenon_into_a_mortise_stave_cannot_cut_is_not_blamed_on_the_mortise() {
+    let opened = common::open(
+        "stock dowel_40 { species: beech, form: dowel, diameter: 40mm }
+part post : dowel_40 {
+  length: 200mm
+  place {
+    orient(length: up)
+    against(base.top)
+    flush(base.left)
+    flush(base.front)
+  }
+}
+part rail : pine_19 {
+  length: 200mm
+  width:  60mm
+  place {
+    orient(length: right, width: up)
+    against(post.right)
+    against(base.top, gap: 50mm)
+    center(post, deep)
+  }
+}
+joint rail_tenon : mortise_tenon(rail, into: post, thickness: 8mm, length: 15mm, shoulder: 5mm)",
+    );
+    let found = common::diagnostics(&opened);
+    assert_eq!(
+        found,
+        [
+            "not-supported: cutting a mortise in a round or turned part is not supported yet",
+            "overlap: rail and post overlap",
+        ],
+        "{found:?}"
+    );
+    assert_eq!(
+        opened.diagnostics[1].help.as_deref(),
+        Some(
+            "Stave can't cut a mortise in a round or turned part yet, so the tenon on rail is checked against the solid wood of post; check this fit by hand on a test piece, or join them with a joint whose cut in post is a drilled hole"
+        )
+    );
+}
+
 /// Every message of a design, with the notes a merged diagnostic carries
 /// (the other mistakes its line causes).
 fn messages_and_notes(opened: &stave_app::Opened) -> Vec<String> {

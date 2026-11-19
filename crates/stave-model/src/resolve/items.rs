@@ -436,9 +436,35 @@ impl<'a> Resolver<'a> {
                         *span,
                     );
                 }
+                // Both ends of the wrong unit are one mistake: the high
+                // end's diagnostic is dropped when it repeats the low end's.
+                let before = self.diagnostics.len();
+                let low = self.value(cx, lo, &expect);
+                let low_found: Vec<(Code, String)> = self
+                    .diagnostics
+                    .get(before..)
+                    .unwrap_or_default()
+                    .iter()
+                    .map(|d| (d.code, d.message.clone()))
+                    .collect();
+                let between = self.diagnostics.len();
+                let high = self.value(cx, hi, &expect);
+                let mut index = between;
+                while index < self.diagnostics.len() {
+                    let repeated = self.diagnostics.get(index).is_some_and(|d| {
+                        low_found
+                            .iter()
+                            .any(|(code, message)| *code == d.code && *message == d.message)
+                    });
+                    if repeated {
+                        self.diagnostics.remove(index);
+                    } else {
+                        index += 1;
+                    }
+                }
                 Domain::Range {
-                    low: self.value(cx, lo, &expect),
-                    high: self.value(cx, hi, &expect),
+                    low,
+                    high,
                     span: *span,
                 }
             }
@@ -469,11 +495,31 @@ impl<'a> Resolver<'a> {
         }
     }
 
+    /// An item's array: its labels, or its count. A single bracketed name
+    /// that names nothing is one label, which isn't an array (grammar,
+    /// "Arrays"): `error[type-mismatch]`, and the item is not an array.
     pub(crate) fn lower_array(
         &mut self,
         cx: &Cx,
+        name: &ast::Ident,
         array: Option<&ast::ArraySpec>,
     ) -> Option<ArrayDef> {
+        if let Some(ast::ArraySpec::Count(count)) = array
+            && let ast::ExprKind::Name(label) = &count.kind
+            && self
+                .lookup(&Cx { array: None, ..*cx }, label.as_str())
+                .is_none()
+        {
+            let (name, label) = (name.as_str(), label.as_str());
+            self.error_help(
+                Code::TypeMismatch,
+                format!("one label isn't an array: '{label}' is the only label of '{name}'"),
+                cx.file,
+                count.span,
+                format!("name it '{name}_{label}' instead, or give two or more labels, as in {name}[{label}, other]"),
+            );
+            return None;
+        }
         Some(match array? {
             ast::ArraySpec::Labels(labels) => ArrayDef::Labels(
                 labels
@@ -500,7 +546,7 @@ impl<'a> Resolver<'a> {
         syntax: &ast::Region,
         origin: Origin<'_>,
     ) -> RegionDef {
-        let array = self.lower_array(cx, syntax.array.as_ref());
+        let array = self.lower_array(cx, &syntax.name, syntax.array.as_ref());
         let value = match self.whole_region_box(cx, &syntax.value) {
             Some(args) if array.is_none() => {
                 let value = self.region_box(cx, args, syntax.value.span);
@@ -733,7 +779,7 @@ impl<'a> Resolver<'a> {
         syntax: &ast::Part,
         origin: Origin<'_>,
     ) -> PartDef {
-        let array = self.lower_array(cx, syntax.array.as_ref());
+        let array = self.lower_array(cx, &syntax.name, syntax.array.as_ref());
         let what = format!("part '{}'", syntax.name.as_str());
         let kind = match &syntax.def {
             ast::PartDef::FromStock { stock, body } => {
@@ -1086,7 +1132,7 @@ impl<'a> Resolver<'a> {
         syntax: &ast::Joint,
         origin: Origin<'_>,
     ) -> JointDef {
-        let array = self.lower_array(cx, syntax.array.as_ref());
+        let array = self.lower_array(cx, &syntax.name, syntax.array.as_ref());
         let what = format!("joint '{}'", syntax.name.as_str());
         let call = self.lower_kind_call(
             cx,
@@ -1109,7 +1155,7 @@ impl<'a> Resolver<'a> {
         syntax: &ast::Hardware,
         origin: Origin<'_>,
     ) -> HardwareDef {
-        let array = self.lower_array(cx, syntax.array.as_ref());
+        let array = self.lower_array(cx, &syntax.name, syntax.array.as_ref());
         let what = format!("hardware '{}'", syntax.name.as_str());
         let call = self.lower_kind_call(cx, &syntax.call, None, &what, syntax.name.as_str());
         let place_block = syntax.body.as_ref().and_then(|b| b.place.as_ref());
@@ -1329,7 +1375,7 @@ impl<'a> Resolver<'a> {
         syntax: &ast::Assembly,
         origin: Origin<'_>,
     ) -> AssemblyDef {
-        let array = self.lower_array(cx, syntax.array.as_ref());
+        let array = self.lower_array(cx, &syntax.name, syntax.array.as_ref());
         let kind = match &syntax.def {
             ast::AssemblyDef::Instance { component, body } => {
                 let symbol = self.lookup_ref(cx, component);

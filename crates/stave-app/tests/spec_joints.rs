@@ -668,13 +668,29 @@ fn extensions_of_two_joints_at_the_same_end_add_up() {
 #[test]
 fn adds_takes_a_list_of_extends() {
     let opened = with_parts(
-        "kind k : joint {\n  adds: [extend(piece, by: 3mm), extend(into, by: 2mm)]\n}\njoint j : k(shelf, into: side)",
+        "kind k : joint {\n  adds: [extend(piece, by: 3mm), extend(piece, by: 2mm)]\n}\njoint j : k(shelf, into: side)",
     );
     let design = solved(&opened);
-    assert_eq!(part(design, "shelf").cut.length, mm("203"));
-    // The side butts against the shelf's end with its face: it grows in
-    // its thickness, toward the shelf.
-    assert_eq!(part(design, "side").cut.thickness, mm("21"));
+    // The two extensions of the shelf's end add up.
+    assert_eq!(part(design, "shelf").cut.length, mm("205"));
+}
+
+#[test]
+fn extend_through_a_face_is_a_type_mismatch() {
+    // The side meets the shelf's end with its face: extending it would
+    // make it thicker than its stock.
+    let opened = with_parts(
+        "kind k : joint {\n  adds: [extend(piece, by: 3mm), extend(into, by: 2mm)]\n}\njoint j : k(shelf, into: side)",
+    );
+    let diagnostic = the_diagnostic(
+        &opened,
+        "type-mismatch",
+        "'j' would make side thicker: side meets shelf with its face, but extend lengthens an end or an edge",
+    );
+    assert_eq!(
+        diagnostic.help.as_deref(),
+        Some("place side so its end or edge meets shelf, or use a kind without adds:")
+    );
 }
 
 #[test]

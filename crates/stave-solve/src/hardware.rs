@@ -21,7 +21,7 @@ use stave_model::solved::Rules;
 use stave_model::value::{AnchorOwner, AnchorValue, ExactBox, Value};
 
 use crate::eval::{Env, KindEnv, midpoint};
-use crate::joints::Binding;
+use crate::joints::{Binding, CutAt};
 use crate::mechanism::{ExactPoint, HardwareMechanism};
 use crate::place::Siblings;
 use crate::rules::{AdjustSetting, Call, Offset};
@@ -1359,11 +1359,20 @@ impl Solver<'_> {
                 return Err(Fault::Internal("a member a cut is made by").into());
             };
             let operations = cut.operations.clone();
+            let cut_name = cut.name.clone();
             let kinds = self.in_kind(binding, kind, |solver, kind_env| {
-                operations
-                    .iter()
-                    .map(|operation| solver.cut_kind(operation, kind_env))
-                    .collect::<Solved<Vec<_>>>()
+                let mut kinds = Vec::new();
+                for operation in &operations {
+                    let made = solver.cut_kind(operation, kind_env)?;
+                    let at = CutAt {
+                        owner: name,
+                        file,
+                        span,
+                    };
+                    solver.check_cut_size(at, cut_name.as_ref(), operation, &made, part)?;
+                    kinds.push(made);
+                }
+                Ok(kinds)
             })?;
             let part_box = self.drawn_box(part)?;
             for shape in &placed.shapes {

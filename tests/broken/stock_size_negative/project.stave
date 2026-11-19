@@ -1,0 +1,17 @@
+// expect: error[out-of-range] 'max_width' must be more than 0mm, found -100mm
+stave 1
+
+// A board can't come less than nothing wide: a stock's sizes are all more
+// than 0mm. Without the check, the base would not be glued up from boards.
+
+project "A stock size below zero" {
+  units: mm
+}
+
+stock oak { species: white_oak, form: solid, thickness: 19mm, max_width: -100mm, max_length: 2400mm }
+
+part base : oak {
+  length: 600mm
+  width:  200mm
+  place { ground }
+}

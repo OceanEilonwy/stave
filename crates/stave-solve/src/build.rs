@@ -7,7 +7,7 @@ use stave_lang::ast::Span;
 use stave_lang::placement::{Axis, PartAxis};
 use stave_lang::units::{ExactLength, Length};
 use stave_lang::{Code, Diagnostic, FileId, Label};
-use stave_model::defs::{BodyId, DefId, Word};
+use stave_model::defs::{BodyId, DefId, StockField, Word};
 use stave_model::ids::{AssemblyId, HardwareId, JointId, PartId, RegionId, SceneId, StockId};
 use stave_model::instance::Ctx;
 use stave_model::mechanism::MemberIndex;
@@ -25,7 +25,9 @@ use crate::hardware::{
     HardwareCut, MemberCarrier, Placed, PlacedMember, RoleBound, WorldShape, crossing_face,
     world_index, world_shape,
 };
-use crate::joints::{GeomTable, JointWork, Making, PairWork, PartGeom, local_slot, round_length};
+use crate::joints::{
+    CutAt, GeomTable, JointWork, Making, PairWork, PartGeom, local_slot, round_length,
+};
 use crate::mechanism::AssemblyMechanism;
 use crate::members::{LaidOut, WorldMemberCut};
 use crate::mirror_cuts::MirroredJoint;
@@ -411,6 +413,30 @@ pub(crate) fn build(solver: &mut Solver<'_>) -> Option<SolvedDesign> {
         }
     }
 
+    // Every size of every stock of the project, used or not, so a size of
+    // 0mm or less is reported once, at the stock.
+    for index in 0..solver.model.defs.stocks.len() {
+        let stock = StockId::from_usize(index);
+        let in_project = solver.model.defs.stock(stock).is_some_and(|def| {
+            solver.module_ctx(DefId::Stock(stock)).is_some()
+                && def.decl.scope == stave_model::defs::Scope::Module(solver.model.root)
+        });
+        if !in_project {
+            continue;
+        }
+        for field in [
+            StockField::Thickness,
+            StockField::Diameter,
+            StockField::Width,
+            StockField::MaxWidth,
+            StockField::MaxLength,
+        ] {
+            let result = solver.stock_length(stock, field);
+            let (file, span) = solver.place_of(DefId::Stock(stock));
+            let _ = solver.settled(result, file, span);
+        }
+    }
+
     // 2. Joints, pass A: pairs, requires, extensions.
     let mut work: Vec<Option<JointWork>> = Vec::new();
     for index in 0..solver.model.joints.len() {
@@ -437,11 +463,15 @@ pub(crate) fn build(solver: &mut Solver<'_>) -> Option<SolvedDesign> {
         if let Some(geom) = solver.settled(result, file, span) {
             let checked = solver.check_max_length(part, &geom);
             let _ = solver.settled(checked, file, span);
+            let checked = solver.check_cut_thickness(part, &geom);
+            let _ = solver.settled(checked, file, span);
+            let checked = solver.check_turned_blank(part);
+            let _ = solver.settled(checked, file, span);
             geoms.set(part, geom);
         }
     }
 
-    solver.warn_missing_max_length();
+    solver.warn_missing_stock_limits(&geoms);
 
     // 4. Joints, pass B: made parts, cuts, steps.
     let mut cuts: Vec<Vec<Cut>> = vec![Vec::new(); part_count];
@@ -838,7 +868,8 @@ impl Solver<'_> {
                     kind: Some(&pair.env),
                     array: None,
                 };
-                let placed = self.place_made_part(made_def, pair, geoms, &env, &name)?;
+                let at = self.joint_place(joint);
+                let placed = self.place_made_part(made_def, pair, geoms, &env, &name, at)?;
                 let note_text = match &made_def.body.note {
                     Some(text) => Some(self.format_text(text, &env)?),
                     None => None,
@@ -879,7 +910,13 @@ impl Solver<'_> {
             }
             // Cuts.
             for cut in &joint_def.cuts {
-                for (part, face, place, cut_kind) in self.pair_cuts(cut, pair, geoms, &env)? {
+                let (file, span) = self.joint_place(joint);
+                let at = CutAt {
+                    owner: &inst.name,
+                    file,
+                    span,
+                };
+                for (part, face, place, cut_kind) in self.pair_cuts(cut, pair, geoms, &env, at)? {
                     if let Some(list) = cuts.get_mut(part.index()) {
                         list.push(Cut {
                             source: CutSource::Joint {
@@ -908,11 +945,17 @@ impl Solver<'_> {
                 ) else {
                     return Err(Fault::Internal("a part").into());
                 };
-                let kinds = cut
-                    .operations
-                    .iter()
-                    .map(|operation| self.cut_kind(operation, &env))
-                    .collect::<Solved<Vec<_>>>()?;
+                let mut kinds = Vec::new();
+                for operation in &cut.operations {
+                    let kind = self.cut_kind(operation, &env)?;
+                    let at = CutAt {
+                        owner: &inst.name,
+                        file: place.0,
+                        span: place.1,
+                    };
+                    self.check_cut_size(at, cut.name.as_ref(), operation, &kind, part)?;
+                    kinds.push(kind);
+                }
                 let Some(geom) = geoms.get(part).cloned() else {
                     return Err(Fault::Earlier.into());
                 };
@@ -2272,7 +2315,7 @@ impl Solver<'_> {
                     return Err(self
                         .error(
                             Code::OutOfRange,
-                            format!("'resolution' must be within more than 0mm, found {value}"),
+                            format!("'resolution' must be more than 0mm, found {value}"),
                             project.file,
                             expr.span,
                             "write a positive length, such as 0.5mm",

@@ -1,0 +1,18 @@
+// expect: error[type-mismatch] panel: its thickness is 10mm, but plywood can't be planed; ply_18 is 18mm thick
+stave 1
+
+// A sheet can't be planed thinner the way a board can: the panel needs a
+// 10mm sheet.
+
+project "Plywood planed thinner" {
+  units: mm
+}
+
+stock ply_18 { species: birch, form: plywood, thickness: 18mm, max_width: 1220mm, max_length: 2440mm }
+
+part panel : ply_18 {
+  length:    600mm
+  width:     400mm
+  thickness: 10mm
+  place { ground }
+}
