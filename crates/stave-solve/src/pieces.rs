@@ -1419,7 +1419,7 @@ impl Solver<'_> {
             pairs: vec![JointPair {
                 roles,
                 contact: pair.contact,
-                extensions: pair.extensions.clone(),
+                extensions: std::mem::take(&mut pair.extensions),
                 cut_order,
                 insert,
                 made_parts: made_ids,
@@ -1565,14 +1565,14 @@ impl Solver<'_> {
     /// cuts of other parts that name it, the assemblies and scenes that
     /// list it. The first piece is renamed `<part>.piece[1]` and lists the
     /// pieces.
-    pub(crate) fn rebind_pieces(&self, design: &mut SolvedDesign, splits: &[Split]) {
+    pub(crate) fn rebind_pieces(&self, design: &mut SolvedDesign, splits: Vec<Split>) {
         for split in splits {
             rebind_split(design, split);
         }
     }
 }
 
-fn rebind_split(design: &mut SolvedDesign, split: &Split) {
+fn rebind_split(design: &mut SolvedDesign, split: Split) {
     let whole = split.whole;
     let boxes: Vec<(PartId, WorldBox)> = split
         .pieces
@@ -1808,13 +1808,13 @@ fn rebind_split(design: &mut SolvedDesign, split: &Split) {
         }
     }
     // The first piece.
-    let pieces = NonEmpty::new(split.pieces.clone());
+    let pieces = NonEmpty::new(split.pieces);
     if let Some(part) = design.parts.get_mut(whole.index()) {
         part.name = format!("{}.piece[1]", split.name);
         part.pieces = pieces.map(|parts| solved::Pieces {
-            name: split.name.clone(),
+            name: split.name,
             parts,
-            splices: split.splices.clone(),
+            splices: split.splices,
         });
     }
 }

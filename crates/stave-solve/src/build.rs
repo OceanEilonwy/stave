@@ -154,7 +154,8 @@ fn reflect_members(
                     .iter()
                     .map(shape)
                     .collect::<Solved<Vec<_>>>()?,
-                ..member.clone()
+                body: member.body,
+                name: member.name.clone(),
             })
         })
         .collect()
@@ -234,18 +235,17 @@ fn member_shape(shape: &WorldShape) -> Solved<solved::MemberShape> {
     })
 }
 /// A piece of hardware's members in the solved design.
-/// A piece of hardware's members in the solved design.
 /// A placed member that its kind's mechanism places is the member of its
 /// assembly's mechanism it became; with no mechanism moving it (hardware
 /// outside a moving assembly) it stays with the piece.
 fn members(
     hardware: HardwareId,
-    placed: &[PlacedMember],
+    placed: Vec<PlacedMember>,
     placed_by: &BTreeMap<(HardwareId, BodyId), MemberIndex>,
     piece: PartId,
 ) -> Solved<Vec<solved::Body>> {
     placed
-        .iter()
+        .into_iter()
         .map(|member| {
             let carrier = match member.carrier {
                 MemberCarrier::Part(part) => solved::BodyCarrier::Part(part),
@@ -265,7 +265,7 @@ fn members(
                     owner: BodyOwner::Hardware { hardware },
                     body: member.body,
                 },
-                member.name.clone(),
+                member.name,
                 carrier,
                 shapes,
             )
@@ -638,9 +638,9 @@ pub(crate) fn build(solver: &mut Solver<'_>) -> Option<SolvedDesign> {
     // 9. Write everything out. A failure here is settled at the project,
     // so a design withheld is always explained.
     let (file, span) = (solver.project_file, solver.project_span);
-    let parts = solver.write_parts(&geoms, cuts, memberships, &made, boards);
+    let parts = solver.write_parts(&geoms, cuts, memberships, made, boards);
     let parts = solver.settled(parts, file, span)?;
-    let hardware = solver.write_hardware(&placed, &mechanisms);
+    let hardware = solver.write_hardware(placed, &mechanisms);
     let hardware = solver.settled(hardware, file, span)?;
     let regions = solver.write_regions();
     let regions = solver.settled(regions, file, span)?;
@@ -668,14 +668,14 @@ pub(crate) fn build(solver: &mut Solver<'_>) -> Option<SolvedDesign> {
         scenes,
         requires,
         overruns: {
-            let mut overruns = solver.overruns.clone();
+            let mut overruns = std::mem::take(&mut solver.overruns);
             overruns.sort_by_key(|o| o.part);
             overruns.dedup();
             overruns
         },
         wall_rules: std::mem::take(&mut solver.wall_rules),
     };
-    solver.rebind_pieces(&mut design, &splits);
+    solver.rebind_pieces(&mut design, splits);
     Some(design)
 }
 
@@ -830,7 +830,7 @@ impl Solver<'_> {
         let pair_count = work.pairs.len();
         let mut pairs = Vec::new();
         let mut note = None;
-        let mut fastener_totals: Vec<(String, Length, Length, u32)> = Vec::new();
+        let mut fastener_totals: Vec<(stave_model::ids::KindId, Length, Length, u32)> = Vec::new();
         for (pair_index, pair) in work.pairs.iter_mut().enumerate() {
             if pair.making == Making::Withheld {
                 // The parts don't meet as the kind needs: its rule has
@@ -1076,18 +1076,12 @@ impl Solver<'_> {
                     Value::Length(l) => round_length(l)?,
                     _ => return Err(Fault::Earlier.into()),
                 };
-                let name = self
-                    .model
-                    .defs
-                    .kind(fastener.kind)
-                    .map(|k| k.decl.name.clone())
-                    .unwrap_or_default();
                 match fastener_totals
                     .iter_mut()
-                    .find(|(n, d, l, _)| *n == name && *d == diameter && *l == length)
+                    .find(|(k, d, l, _)| *k == fastener.kind && *d == diameter && *l == length)
                 {
                     Some(entry) => entry.3 = entry.3.saturating_add(count),
-                    None => fastener_totals.push((name, diameter, length, count)),
+                    None => fastener_totals.push((fastener.kind, diameter, length, count)),
                 }
             }
             if note.is_none()
@@ -1098,7 +1092,7 @@ impl Solver<'_> {
             pairs.push(JointPair {
                 roles: pair_roles(kind, pair),
                 contact: pair.contact,
-                extensions: pair.extensions.clone(),
+                extensions: std::mem::take(&mut pair.extensions),
                 cut_order,
                 insert,
                 made_parts: made_ids,
@@ -1106,7 +1100,13 @@ impl Solver<'_> {
                 members,
             });
         }
-        for (name, diameter, length, count) in fastener_totals {
+        for (kind, diameter, length, count) in fastener_totals {
+            let name = self
+                .model
+                .defs
+                .kind(kind)
+                .map(|k| k.decl.name.clone())
+                .unwrap_or_default();
             fasteners.push(FastenerUse {
                 joint,
                 kind: name,
@@ -1130,7 +1130,7 @@ impl Solver<'_> {
             glue: work.binding.glue,
             methods,
             pairs,
-            unmatched: work.unmatched.clone(),
+            unmatched: std::mem::take(&mut work.unmatched),
             note,
             origin: JointOrigin::Declared,
         })
@@ -1175,8 +1175,7 @@ impl Solver<'_> {
                     .defs
                     .modules
                     .get(module.index())
-                    .map(|m| m.name.clone())
-                    .unwrap_or_default();
+                    .map_or("", |m| m.name.as_str());
                 format!("{module_name}.{}", def.decl.name)
             }
             _ => def.decl.name.clone(),
@@ -1305,7 +1304,7 @@ impl Solver<'_> {
             .filter_map(|j| j.mirror_of.map(|s| (j.id, s)))
             .collect();
         for (joint, source) in mirrored_joints {
-            let Some(Some(source_joint)) = joints.get(source.index()).cloned() else {
+            let Some(Some(mut copy)) = joints.get(source.index()).cloned() else {
                 continue;
             };
             let Some(inst) = self.model.joints.get(joint.index()) else {
@@ -1321,9 +1320,8 @@ impl Solver<'_> {
             let Some((axis, plane)) = self.settled(plane, file, span) else {
                 continue;
             };
-            let mut copy = source_joint.clone();
             copy.id = joint;
-            copy.name = inst.name.clone();
+            let source_name = std::mem::replace(&mut copy.name, inst.name.clone());
             copy.assembly = Some(assembly);
             let mut failed = false;
             let mut map = |this: &mut Self, part: PartId| -> PartId {
@@ -1378,7 +1376,7 @@ impl Solver<'_> {
                 }
                 pair.members = members;
                 for require in &mut pair.requires {
-                    require.name = require.name.replacen(&source_joint.name, &inst.name, 1);
+                    require.name = require.name.replacen(&source_name, &inst.name, 1);
                 }
                 for role in &mut pair.roles {
                     role.part = map(self, role.part);
@@ -1401,8 +1399,7 @@ impl Solver<'_> {
             let source_cuts = work
                 .get(source.index())
                 .and_then(Option::as_ref)
-                .map(|w| w.member_cuts.clone())
-                .unwrap_or_default();
+                .map_or(&[][..], |w| w.member_cuts.as_slice());
             for cut in source_cuts {
                 if part_map.contains_key(&cut.part) {
                     continue;
@@ -1437,10 +1434,10 @@ impl Solver<'_> {
                             pair: cut.pair,
                         },
                         body: cut.body,
-                        name: cut.name,
+                        name: cut.name.clone(),
                         face,
                         shape: &shape,
-                        kind: cut.kind,
+                        kind: cut.kind.clone(),
                     },
                 );
                 let made = made.and_then(|made| match cuts.get_mut(part.index()) {
@@ -1543,8 +1540,8 @@ impl Solver<'_> {
             };
             let own = match &mechanism {
                 Some(reflected) => {
-                    let kind_name = source_placed.kind_name.clone();
-                    let checked = self.check_mechanism(hardware, &roles, reflected, &kind_name);
+                    let checked =
+                        self.check_mechanism(hardware, &roles, reflected, &source_placed.kind_name);
                     match self.settled(checked, file, span) {
                         Some(own) => own,
                         None => continue,
@@ -1749,13 +1746,15 @@ impl Solver<'_> {
         geoms: &GeomTable,
         cuts: Vec<Vec<Cut>>,
         memberships: Vec<Vec<JointId>>,
-        made: &[MadeInfo],
+        made: Vec<MadeInfo>,
         mut boards: Vec<Option<solved::Boards>>,
     ) -> Solved<Vec<solved::Part>> {
         let mut parts = Vec::new();
         let mut cuts = cuts.into_iter();
         let mut memberships = memberships.into_iter();
         let total = self.model.parts.len() + made.len();
+        // Made parts follow the declared ones, in order.
+        let mut made = made.into_iter();
         for index in 0..total {
             let id = PartId::from_usize(index);
             let part_cuts = cuts.next().unwrap_or_default();
@@ -1851,9 +1850,7 @@ impl Solver<'_> {
                         loose,
                     )
                 } else {
-                    let info = made
-                        .get(index - self.model.parts.len())
-                        .ok_or(Fault::Internal("a made part"))?;
+                    let info = made.next().ok_or(Fault::Internal("a made part"))?;
                     // A piece of a spliced part is cut as its part is.
                     let (grain, note, loose) = match info.origin {
                         PartOrigin::Piece { part, .. } => parts
@@ -1865,10 +1862,10 @@ impl Solver<'_> {
                         | PartOrigin::Mirror { .. }
                         | PartOrigin::MirroredAssembly { .. }
                         | PartOrigin::Made { .. }
-                        | PartOrigin::Boards { .. } => (Grain::Length, info.note.clone(), false),
+                        | PartOrigin::Boards { .. } => (Grain::Length, info.note, false),
                     };
                     (
-                        info.name.clone(),
+                        info.name,
                         info.assembly,
                         info.origin,
                         info.stock,
@@ -1936,7 +1933,7 @@ impl Solver<'_> {
 
     fn write_hardware(
         &mut self,
-        placed: &[Option<Placed>],
+        placed: Vec<Option<Placed>>,
         mechanisms: &[Option<AssemblyMechanism>],
     ) -> Solved<Vec<Hardware>> {
         let placed_by: BTreeMap<(HardwareId, BodyId), MemberIndex> = mechanisms
@@ -1945,7 +1942,7 @@ impl Solver<'_> {
             .flat_map(|m| m.bodies.iter().map(|(key, index)| (*key, *index)))
             .collect();
         let mut out = Vec::new();
-        for (index, entry) in placed.iter().enumerate() {
+        for (index, entry) in placed.into_iter().enumerate() {
             let Some(hw) = entry else {
                 return Err(Fault::Earlier.into());
             };
@@ -1954,7 +1951,7 @@ impl Solver<'_> {
             };
             let base = HardwareBase::from_base(hw.base)
                 .ok_or(Fault::Internal("a piece of hardware's base"))?;
-            let members = members(inst.id, &hw.members, &placed_by, hw.piece)?;
+            let members = members(inst.id, hw.members, &placed_by, hw.piece)?;
             // Around every member; with none, the face it is mounted on.
             let bounds = match members
                 .iter()
@@ -1972,14 +1969,14 @@ impl Solver<'_> {
             out.push(Hardware {
                 id: inst.id,
                 name: inst.name.clone(),
-                kind: hw.kind_name.clone(),
+                kind: hw.kind_name,
                 kind_id: hw.kind,
                 base,
                 assembly: inst.assembly,
                 piece: hw.piece,
                 mount_face: hw.mount_face,
                 bounds,
-                model: hw.model.clone(),
+                model: hw.model,
                 roles: hw
                     .roles
                     .iter()
@@ -1991,9 +1988,9 @@ impl Solver<'_> {
                         solved::RoleName::new(name).map(|name| (name, value))
                     })
                     .collect(),
-                fasteners: hw.fasteners.clone(),
+                fasteners: hw.fasteners,
                 members,
-                own_mechanism: hw.own.clone(),
+                own_mechanism: hw.own,
                 settings: hw
                     .settings
                     .iter()
@@ -2011,7 +2008,7 @@ impl Solver<'_> {
                 rules: hw.rules,
                 entries: hw
                     .entries
-                    .iter()
+                    .into_iter()
                     .filter_map(|(name, value)| {
                         let value = match value {
                             Value::Length(length) => {
@@ -2023,11 +2020,11 @@ impl Solver<'_> {
                             Value::Count(count) if count.is_integer() => {
                                 solved::EntryValue::Count(u32::try_from(count.numerator()).ok()?)
                             }
-                            Value::Bool(value) => solved::EntryValue::Bool(*value),
-                            Value::Text(text) => solved::EntryValue::Text(text.clone()),
+                            Value::Bool(value) => solved::EntryValue::Bool(value),
+                            Value::Text(text) => solved::EntryValue::Text(text),
                             _ => return None,
                         };
-                        Some((solved::EntryName::new(name)?, value))
+                        Some((solved::EntryName::new(&name)?, value))
                     })
                     .collect(),
             });
