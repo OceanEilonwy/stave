@@ -794,7 +794,7 @@ impl Window {
     pub(in crate::ui) fn render_removal(
         &self,
         backdrop: crate::render::Backdrop,
-    ) -> Option<anyhow::Result<crate::render::Image>> {
+    ) -> Option<anyhow::Result<crate::render::Ticket>> {
         let session = self.session.borrow();
         let change = session.change()?;
         if !matches!(change.request(), ChangeRequest::Remove { .. }) {
@@ -845,7 +845,7 @@ impl Window {
                 *tint = [r, g, b, 0.7];
             }
         }
-        Some(renderer.render(&crate::render::Frame {
+        Some(renderer.submit(&crate::render::Frame {
             scene: graph,
             posed,
             orbit,
