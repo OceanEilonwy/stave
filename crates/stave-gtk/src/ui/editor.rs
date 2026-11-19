@@ -25,17 +25,30 @@
 //!
 //! Lenses and the peek are overlay children placed in the room a tag's
 //! `pixels-above-lines` / `pixels-below-lines` makes for them.
+//!
+//! The search bar is a relm4 component, [`EditorSearch`]
+//! (docs/relm4-migration.md), owned by the editor through a `Bridge`: what
+//! it is told is queued, and its widgets only send messages. The rest of
+//! the editor is still plain widgets, because the Files page relies on
+//! [`Editor::show_buffer`] and [`Editor::go_to`] taking effect at once: it
+//! reads the cursor straight after, and quiets its own cursor handler
+//! around them. It becomes a component when the Files page does. Until
+//! then its state is in cells, shared out and never borrowed across a GTK
+//! call.
 
-use std::cell::{Cell, RefCell};
-use std::rc::{Rc, Weak};
+use std::cell::Cell;
+use std::rc::Rc;
 
 use adw::prelude::*;
 use gtk::glib;
 use gtk::subclass::prelude::*;
+use relm4::{Component, ComponentParts, ComponentSender};
 use sourceview5::prelude::*;
 use sourceview5::subclass::prelude::*;
 use stave_ide::{SymbolId, SymbolKind, TokenClass};
 use stave_lang::Severity;
+
+use super::relm4_shim::Bridge;
 
 /// The text's own spacing above and below each line: 13 px type on
 /// 23 px lines, as the design has it.
@@ -725,249 +738,327 @@ pub struct Run {
     pub end: u32,
 }
 
-/// The search bar over the text (Ctrl+F in the editor), and the search of
-/// the buffer showing.
-struct Search {
-    revealer: gtk::Revealer,
-    entry: gtk::SearchEntry,
-    count: gtk::Label,
+/// The search bar over the text (Ctrl+F in the editor) and the search of
+/// the buffer showing: a relm4 component (docs/relm4-migration.md). Its
+/// model is the only state, only its update changes it, and its widgets'
+/// handlers (and the search's count) only send [`EditorSearchInput`]
+/// messages. It tells nobody anything: what it finds, it selects in the
+/// text.
+pub struct EditorSearch {
+    /// The text it searches.
+    view: gtk::TextView,
     settings: sourceview5::SearchSettings,
     /// The search of the buffer showing, while the bar is open.
-    context: RefCell<Option<sourceview5::SearchContext>>,
-    view: glib::WeakRef<gtk::TextView>,
+    context: Option<sourceview5::SearchContext>,
+    /// "3 of 12", "No matches", or nothing.
+    count: String,
 }
 
-impl Search {
-    fn new(view: &gtk::TextView) -> Rc<Search> {
-        let entry = gtk::SearchEntry::builder()
-            .placeholder_text("Find in this file")
-            .width_chars(22)
-            .build();
-        let count = gtk::Label::builder()
-            .css_classes(["dim-label", "numeric"])
-            .width_chars(9)
-            .xalign(1.0)
-            .build();
-        let button = |icon: &str, tooltip: &str| {
-            gtk::Button::builder()
-                .icon_name(icon)
-                .tooltip_text(tooltip)
-                .css_classes(["flat", "circular"])
-                .valign(gtk::Align::Center)
-                .build()
-        };
-        let previous = button("go-up-symbolic", "Previous match (Shift+Enter)");
-        let next = button("go-down-symbolic", "Next match (Enter)");
-        let close = button("window-close-symbolic", "Close the search (Escape)");
-        let bar = gtk::Box::builder()
-            .orientation(gtk::Orientation::Horizontal)
-            .spacing(4)
-            .css_classes(["card"])
-            .build();
-        for margin in [
-            gtk::Widget::set_margin_top,
-            gtk::Widget::set_margin_bottom,
-            gtk::Widget::set_margin_start,
-            gtk::Widget::set_margin_end,
-        ] {
-            margin(entry.upcast_ref(), 6);
-        }
-        entry.set_margin_end(0);
-        close.set_margin_end(6);
-        bar.append(&entry);
-        bar.append(&count);
-        bar.append(&previous);
-        bar.append(&next);
-        bar.append(&close);
-        let revealer = gtk::Revealer::builder()
-            .transition_type(gtk::RevealerTransitionType::SlideDown)
-            .halign(gtk::Align::End)
-            .valign(gtk::Align::Start)
-            .margin_end(18)
-            .margin_top(6)
-            .child(&bar)
-            .reveal_child(false)
-            .build();
-        // Hidden while closed, so it takes no pointer events.
-        revealer.set_visible(false);
-        let settings = sourceview5::SearchSettings::builder()
-            .wrap_around(true)
-            .case_sensitive(false)
-            .build();
-        let search = Rc::new(Search {
-            revealer,
-            entry,
-            count,
-            settings,
-            context: RefCell::new(None),
-            view: view.downgrade(),
-        });
-        search.connect(&previous, &next, &close);
-        search
-    }
+/// What the editor's search bar is told.
+#[derive(Debug)]
+pub enum EditorSearchInput {
+    /// Open the bar with the selection (one line of it) as the text to
+    /// find, or the last one (Ctrl+F in the text).
+    StartSearch,
+    /// Open the bar on this text and highlight its matches, leaving the
+    /// selection where it is: [`Editor::find`] has already selected the
+    /// first match from the cursor, at once, so whatever its caller does
+    /// next acts on the match.
+    Find(String),
+    /// Close the bar and its highlights, and give the text the keyboard.
+    CloseSearch,
+    /// The editor shows another buffer: search that one.
+    BufferShown,
+    /// People changed the text to find.
+    Typed,
+    /// People asked for the next match (Enter, Ctrl+G, the ↓ button).
+    Next,
+    /// People asked for the previous match (Shift+Enter, Ctrl+Shift+G,
+    /// the ↑ button).
+    Previous,
+    /// The search counted its matches again.
+    Counted,
+}
 
-    fn connect(self: &Rc<Self>, previous: &gtk::Button, next: &gtk::Button, close: &gtk::Button) {
-        let weak = Rc::downgrade(self);
-        let with = move |action: fn(&Search)| {
-            let weak: Weak<Search> = weak.clone();
-            move || {
-                if let Some(search) = weak.upgrade() {
-                    action(&search);
-                }
-            }
-        };
-        let changed = with(Search::text_changed);
-        self.entry.connect_search_changed(move |_| changed());
-        let forward = with(Search::next);
-        self.entry.connect_activate(move |_| forward());
-        let forward = with(Search::next);
-        self.entry.connect_next_match(move |_| forward());
-        let backward = with(Search::previous);
-        self.entry.connect_previous_match(move |_| backward());
-        let stop = with(Search::close);
-        self.entry.connect_stop_search(move |_| stop());
-        let forward = with(Search::next);
-        next.connect_clicked(move |_| forward());
-        let backward = with(Search::previous);
-        previous.connect_clicked(move |_| backward());
-        let stop = with(Search::close);
-        close.connect_clicked(move |_| stop());
-        // Shift+Enter goes back.
-        let keys = gtk::EventControllerKey::new();
-        let backward = with(Search::previous);
-        keys.connect_key_pressed(move |_, key, _, modifiers| {
-            let shift = modifiers.contains(gtk::gdk::ModifierType::SHIFT_MASK);
-            if shift && matches!(key, gtk::gdk::Key::Return | gtk::gdk::Key::KP_Enter) {
-                backward();
-                return glib::Propagation::Stop;
-            }
-            glib::Propagation::Proceed
-        });
-        self.entry.add_controller(keys);
-    }
-
-    fn is_open(&self) -> bool {
-        self.revealer.reveals_child()
+impl EditorSearch {
+    /// `true` while the bar is open.
+    fn is_open(root: &gtk::Revealer) -> bool {
+        root.reveals_child()
     }
 
     /// Opens the bar with the selection (one line of it) as the text to
     /// find, or the last one.
-    fn open(&self) {
-        let Some(view) = self.view.upgrade() else {
-            return;
-        };
-        let buffer = view.buffer();
+    fn open(
+        &mut self,
+        widgets: &EditorSearchWidgets,
+        root: &gtk::Revealer,
+        sender: &ComponentSender<Self>,
+    ) {
+        let buffer = self.view.buffer();
         if let Some((start, end)) = buffer.selection_bounds()
             && start.line() == end.line()
         {
-            self.entry.set_text(&buffer.text(&start, &end, false));
+            widgets.entry.set_text(&buffer.text(&start, &end, false));
         }
-        self.revealer.set_visible(true);
-        self.revealer.set_reveal_child(true);
-        self.attach();
+        root.set_visible(true);
+        root.set_reveal_child(true);
+        self.attach(root, sender);
         self.settings
-            .set_search_text(Some(self.entry.text().as_str()).filter(|t| !t.is_empty()));
-        self.refresh_count();
-        self.entry.grab_focus();
-        self.entry.select_region(0, -1);
+            .set_search_text(Some(widgets.entry.text().as_str()).filter(|t| !t.is_empty()));
+        self.refresh_count(&widgets.entry);
+        widgets.entry.grab_focus();
+        widgets.entry.select_region(0, -1);
     }
 
-    /// Opens the bar and finds `text` from the cursor at once.
-    fn find(&self, text: &str) {
-        self.open();
-        self.entry.set_text(text);
-        self.text_changed();
-    }
-
-    fn close(&self) {
-        if !self.is_open() {
+    fn close(&mut self, root: &gtk::Revealer) {
+        if !Self::is_open(root) {
             return;
         }
-        self.revealer.set_reveal_child(false);
-        self.revealer.set_visible(false);
+        root.set_reveal_child(false);
+        root.set_visible(false);
         self.settings.set_search_text(None);
-        self.context.replace(None);
-        if let Some(view) = self.view.upgrade() {
-            view.grab_focus();
-        }
+        self.context = None;
+        self.view.grab_focus();
     }
 
-    /// Searches the buffer showing, if the bar is open.
-    fn attach(&self) {
+    /// Searches the buffer showing, if the bar is open; its count comes
+    /// back as [`EditorSearchInput::Counted`].
+    fn attach(&mut self, root: &gtk::Revealer, sender: &ComponentSender<Self>) {
         let buffer = self
             .view
-            .upgrade()
-            .and_then(|view| view.buffer().downcast::<sourceview5::Buffer>().ok());
-        let context = buffer.filter(|_| self.is_open()).map(|buffer| {
+            .buffer()
+            .downcast::<sourceview5::Buffer>()
+            .ok()
+            .filter(|_| Self::is_open(root));
+        self.context = buffer.map(|buffer| {
             let context = sourceview5::SearchContext::new(&buffer, Some(&self.settings));
             context.set_highlight(true);
-            let search = self.view.clone();
-            let count = self.count.downgrade();
-            let entry = self.entry.downgrade();
-            context.connect_occurrences_count_notify(move |context| {
-                if let (Some(view), Some(count), Some(entry)) =
-                    (search.upgrade(), count.upgrade(), entry.upgrade())
-                {
-                    count.set_label(&count_text(context, &view.buffer(), &entry.text()));
-                }
+            let sender = sender.clone();
+            context.connect_occurrences_count_notify(move |_| {
+                sender.input_sender().emit(EditorSearchInput::Counted);
             });
             context
         });
-        self.context.replace(context);
+    }
+
+    /// Opens the bar on `text`, whose first match from the cursor the
+    /// editor has already selected: the selection stays.
+    fn show_found(
+        &mut self,
+        text: &str,
+        widgets: &EditorSearchWidgets,
+        root: &gtk::Revealer,
+        sender: &ComponentSender<Self>,
+    ) {
+        self.open(widgets, root, sender);
+        widgets.entry.set_text(text);
+        self.settings
+            .set_search_text(Some(text).filter(|t| !t.is_empty()));
+        self.refresh_count(&widgets.entry);
     }
 
     /// The text to find changed: find it from the start of the selection,
     /// so a longer text keeps the match it had.
-    fn text_changed(&self) {
-        let text = self.entry.text();
+    fn text_changed(&mut self, entry: &gtk::SearchEntry) {
+        let text = entry.text();
         self.settings
             .set_search_text(Some(text.as_str()).filter(|t| !t.is_empty()));
         if !text.is_empty() {
-            self.step(true, true);
+            self.step(entry, true, true);
         }
-        self.refresh_count();
-    }
-
-    fn next(&self) {
-        self.step(true, false);
-    }
-
-    fn previous(&self) {
-        self.step(false, false);
+        self.refresh_count(entry);
     }
 
     /// Selects the next (or previous) match and scrolls to it; `again`
     /// starts from the selection's start, to keep the match there.
-    fn step(&self, forward: bool, again: bool) {
-        let (Some(view), Some(context)) = (self.view.upgrade(), self.context.borrow().clone())
-        else {
+    fn step(&mut self, entry: &gtk::SearchEntry, forward: bool, again: bool) {
+        let Some(context) = self.context.clone() else {
             return;
         };
-        let buffer = view.buffer();
-        let (start, end) = buffer.selection_bounds().unwrap_or_else(|| {
-            let cursor = buffer.iter_at_mark(&buffer.get_insert());
-            (cursor, cursor)
-        });
-        let found = match (forward, again) {
-            (true, true) => context.forward(&start),
-            (true, false) => context.forward(&end),
-            (false, _) => context.backward(&start),
-        };
-        if let Some((from, to, _)) = found {
-            buffer.select_range(&from, &to);
-            view.scroll_to_mark(&buffer.get_insert(), 0.2, false, 0.0, 0.0);
-        }
-        self.refresh_count();
+        select_match(&self.view, &context, forward, again);
+        self.refresh_count(entry);
     }
 
-    fn refresh_count(&self) {
-        let (Some(view), Some(context)) = (self.view.upgrade(), self.context.borrow().clone())
-        else {
-            self.count.set_label("");
-            return;
+    fn refresh_count(&mut self, entry: &gtk::SearchEntry) {
+        self.count = self
+            .context
+            .as_ref()
+            .map(|context| count_text(context, &self.view.buffer(), &entry.text()))
+            .unwrap_or_default();
+    }
+}
+
+#[relm4::component(pub)]
+impl Component for EditorSearch {
+    type Init = gtk::TextView;
+    type Input = EditorSearchInput;
+    type Output = ();
+    type CommandOutput = ();
+
+    view! {
+        gtk::Revealer {
+            set_transition_type: gtk::RevealerTransitionType::SlideDown,
+            set_halign: gtk::Align::End,
+            set_valign: gtk::Align::Start,
+            set_margin_end: 18,
+            set_margin_top: 6,
+            set_reveal_child: false,
+            // Hidden while closed, so it takes no pointer events.
+            set_visible: false,
+
+            gtk::Box {
+                set_orientation: gtk::Orientation::Horizontal,
+                set_spacing: 4,
+                add_css_class: "card",
+
+                #[name = "entry"]
+                gtk::SearchEntry {
+                    set_placeholder_text: Some("Find in this file"),
+                    set_width_chars: 22,
+                    set_margin_top: 6,
+                    set_margin_bottom: 6,
+                    set_margin_start: 6,
+                    connect_search_changed[sender] => move |_| {
+                        sender.input_sender().emit(EditorSearchInput::Typed);
+                    },
+                    connect_activate[sender] => move |_| {
+                        sender.input_sender().emit(EditorSearchInput::Next);
+                    },
+                    connect_next_match[sender] => move |_| {
+                        sender.input_sender().emit(EditorSearchInput::Next);
+                    },
+                    connect_previous_match[sender] => move |_| {
+                        sender.input_sender().emit(EditorSearchInput::Previous);
+                    },
+                    connect_stop_search[sender] => move |_| {
+                        sender.input_sender().emit(EditorSearchInput::CloseSearch);
+                    },
+                    // Shift+Enter goes back.
+                    add_controller = gtk::EventControllerKey {
+                        connect_key_pressed[sender] => move |_, key, _, modifiers| {
+                            let shift = modifiers.contains(gtk::gdk::ModifierType::SHIFT_MASK);
+                            if shift && matches!(key, gtk::gdk::Key::Return | gtk::gdk::Key::KP_Enter) {
+                                sender.input_sender().emit(EditorSearchInput::Previous);
+                                return glib::Propagation::Stop;
+                            }
+                            glib::Propagation::Proceed
+                        },
+                    },
+                },
+
+                gtk::Label {
+                    set_css_classes: &["dim-label", "numeric"],
+                    set_width_chars: 9,
+                    set_xalign: 1.0,
+                    #[watch]
+                    set_label: &model.count,
+                },
+
+                gtk::Button {
+                    set_icon_name: "go-up-symbolic",
+                    set_tooltip_text: Some("Previous match (Shift+Enter)"),
+                    set_css_classes: &["flat", "circular"],
+                    set_valign: gtk::Align::Center,
+                    connect_clicked[sender] => move |_| {
+                        sender.input_sender().emit(EditorSearchInput::Previous);
+                    },
+                },
+
+                gtk::Button {
+                    set_icon_name: "go-down-symbolic",
+                    set_tooltip_text: Some("Next match (Enter)"),
+                    set_css_classes: &["flat", "circular"],
+                    set_valign: gtk::Align::Center,
+                    connect_clicked[sender] => move |_| {
+                        sender.input_sender().emit(EditorSearchInput::Next);
+                    },
+                },
+
+                gtk::Button {
+                    set_icon_name: "window-close-symbolic",
+                    set_tooltip_text: Some("Close the search (Escape)"),
+                    set_css_classes: &["flat", "circular"],
+                    set_valign: gtk::Align::Center,
+                    set_margin_end: 6,
+                    connect_clicked[sender] => move |_| {
+                        sender.input_sender().emit(EditorSearchInput::CloseSearch);
+                    },
+                },
+            },
+        }
+    }
+
+    fn init(
+        view: gtk::TextView,
+        root: Self::Root,
+        sender: ComponentSender<Self>,
+    ) -> ComponentParts<Self> {
+        let model = EditorSearch {
+            view,
+            settings: search_settings(),
+            context: None,
+            count: String::new(),
         };
-        self.count
-            .set_label(&count_text(&context, &view.buffer(), &self.entry.text()));
+        let widgets = view_output!();
+        ComponentParts { model, widgets }
+    }
+
+    fn update_with_view(
+        &mut self,
+        widgets: &mut Self::Widgets,
+        message: EditorSearchInput,
+        sender: ComponentSender<Self>,
+        root: &Self::Root,
+    ) {
+        match message {
+            EditorSearchInput::StartSearch => self.open(widgets, root, &sender),
+            EditorSearchInput::Find(text) => self.show_found(&text, widgets, root, &sender),
+            EditorSearchInput::CloseSearch => self.close(root),
+            EditorSearchInput::BufferShown => {
+                if Self::is_open(root) {
+                    self.attach(root, &sender);
+                    self.refresh_count(&widgets.entry);
+                }
+            }
+            EditorSearchInput::Typed => self.text_changed(&widgets.entry),
+            EditorSearchInput::Next => self.step(&widgets.entry, true, false),
+            EditorSearchInput::Previous => self.step(&widgets.entry, false, false),
+            EditorSearchInput::Counted => self.refresh_count(&widgets.entry),
+        }
+        self.update_view(widgets, sender);
+    }
+}
+
+/// How the search bar searches: round past the end, ignoring case.
+fn search_settings() -> sourceview5::SearchSettings {
+    sourceview5::SearchSettings::builder()
+        .wrap_around(true)
+        .case_sensitive(false)
+        .build()
+}
+
+/// Selects the next (or previous) match `context` finds in the view's
+/// text and scrolls to it; `again` starts from the selection's start, to
+/// keep the match there.
+fn select_match(
+    view: &gtk::TextView,
+    context: &sourceview5::SearchContext,
+    forward: bool,
+    again: bool,
+) {
+    let buffer = view.buffer();
+    let (start, end) = buffer.selection_bounds().unwrap_or_else(|| {
+        let cursor = buffer.iter_at_mark(&buffer.get_insert());
+        (cursor, cursor)
+    });
+    let found = match (forward, again) {
+        (true, true) => context.forward(&start),
+        (true, false) => context.forward(&end),
+        (false, _) => context.backward(&start),
+    };
+    if let Some((from, to, _)) = found {
+        buffer.select_range(&from, &to);
+        view.scroll_to_mark(&buffer.get_insert(), 0.2, false, 0.0, 0.0);
     }
 }
 
@@ -1006,11 +1097,15 @@ pub struct Editor {
     table: gtk::TextTagTable,
     tags: Tags,
     marks: Marks,
-    search: Rc<Search>,
+    /// The search bar: it owns the component (dropping the editor shuts
+    /// it down).
+    search: Bridge<EditorSearch>,
     dark: Cell<bool>,
     /// The lens rows, made as needed and kept (GTK can't take an overlay
-    /// back out of a text view, so they are hidden when not used).
-    lenses: RefCell<Vec<LensSlot>>,
+    /// back out of a text view, so they are hidden when not used). Shared
+    /// out (see [`Editor::lens_slots`]) rather than borrowed, so nothing
+    /// is borrowed while the rows are changed.
+    lenses: Cell<Rc<[Rc<LensSlot>]>>,
     /// How many of the lens rows are in use.
     lenses_used: Cell<usize>,
     /// Where the peek goes, and the line it sits under while it shows.
@@ -1029,8 +1124,19 @@ pub struct Editor {
     on_show: LensCallback,
 }
 
-/// What a lens's link calls, set once the page connects it.
-type LensCallback = Rc<RefCell<Option<Rc<dyn Fn(SymbolId)>>>>;
+/// What a lens's link calls, set once the page connects it. It is cloned
+/// out of its cell before it is called (see [`current`]).
+type LensCallback = Rc<Cell<Option<Rc<dyn Fn(SymbolId)>>>>;
+
+/// What is in a cell, cloned out (and left there): a callback, so it may
+/// replace itself while it runs, or rows shared out rather than borrowed.
+/// Nothing is borrowed, so nothing can be borrowed twice when GTK calls
+/// back in. (Used by the finder and the option search too.)
+pub(super) fn current<T: Clone + Default>(cell: &Cell<T>) -> T {
+    let value = cell.take();
+    cell.set(value.clone());
+    value
+}
 
 /// What a lens says: "2 uses · show in 3D" above a line.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1128,9 +1234,9 @@ impl Editor {
             .visible(false)
             .build();
         view.add_overlay(&card_box, 0, 0);
-        let search = Search::new(&view);
+        let search = Bridge::<EditorSearch>::launch(view.clone());
         let root = gtk::Overlay::builder().child(&scrolled).build();
-        root.add_overlay(&search.revealer);
+        root.add_overlay(search.widget());
         let editor = Editor {
             root,
             view,
@@ -1141,15 +1247,15 @@ impl Editor {
             marks,
             search,
             dark: Cell::new(false),
-            lenses: RefCell::new(Vec::new()),
+            lenses: Cell::new(Rc::from([])),
             lenses_used: Cell::new(0),
             peek_box,
             peek_line: Cell::new(None),
             peek_tagged: Cell::new(None),
             card_box,
             scroll_ticket: Rc::new(Cell::new(0)),
-            on_uses: Rc::new(RefCell::new(None)),
-            on_show: Rc::new(RefCell::new(None)),
+            on_uses: Rc::new(Cell::new(None)),
+            on_show: Rc::new(Cell::new(None)),
         };
         editor.colour(adw::StyleManager::default().is_dark());
         editor
@@ -1182,10 +1288,7 @@ impl Editor {
         self.view.set_buffer(Some(buffer));
         self.view.set_editable(editable);
         self.view.set_cursor_visible(true);
-        if self.search.is_open() {
-            self.search.attach();
-            self.search.refresh_count();
-        }
+        self.search.send(EditorSearchInput::BufferShown);
         self.marks.queue_draw();
     }
 
@@ -1289,27 +1392,45 @@ impl Editor {
                 .view
                 .root()
                 .and_then(|root| root.focus())
-                .is_some_and(|focus| focus.is_ancestor(&self.search.revealer))
+                .is_some_and(|focus| focus.is_ancestor(self.search.widget()))
     }
 
-    /// Opens the search bar (Ctrl+F in the text).
+    /// Opens the search bar (Ctrl+F in the text), when the main loop next
+    /// runs.
     pub fn start_search(&self) {
-        self.search.open();
+        self.search.send(EditorSearchInput::StartSearch);
     }
 
-    /// Opens the search bar and finds `text` from the cursor.
+    /// Finds `text` from the cursor and selects it at once, as before, so
+    /// what the caller does next (follow, uses, peek, hover at the cursor)
+    /// acts on the match; the search bar opens on `text` when the main
+    /// loop next runs. Selecting moves the cursor, so the text's own
+    /// "mark-set" handlers run inside this call, as they always did; the
+    /// search component is not running then, and anything they tell the
+    /// bar is queued.
     pub fn find(&self, text: &str) {
-        self.search.find(text);
+        if !text.is_empty()
+            && let Ok(buffer) = self.view.buffer().downcast::<sourceview5::Buffer>()
+        {
+            let settings = search_settings();
+            settings.set_search_text(Some(text));
+            let context = sourceview5::SearchContext::new(&buffer, Some(&settings));
+            context.set_highlight(false);
+            select_match(&self.view, &context, true, true);
+        }
+        self.search.send(EditorSearchInput::Find(text.to_owned()));
     }
 
-    /// `true` while the search bar is open.
+    /// `true` while the search bar is open (as of the last message it
+    /// handled).
     pub fn has_search(&self) -> bool {
-        self.search.is_open()
+        EditorSearch::is_open(self.search.widget())
     }
 
-    /// Closes the search bar and its highlights.
+    /// Closes the search bar and its highlights, when the main loop next
+    /// runs.
     pub fn close_search(&self) {
-        self.search.close();
+        self.search.send(EditorSearchInput::CloseSearch);
     }
 
     fn clear_overlays(&self) {
@@ -1320,12 +1441,17 @@ impl Editor {
 
     /// A lens's "2 uses" was clicked.
     pub fn connect_lens_uses(&self, callback: impl Fn(SymbolId) + 'static) {
-        *self.on_uses.borrow_mut() = Some(Rc::new(callback));
+        self.on_uses.set(Some(Rc::new(callback)));
     }
 
     /// A lens's "show in 3D" was clicked.
     pub fn connect_lens_show(&self, callback: impl Fn(SymbolId) + 'static) {
-        *self.on_show.borrow_mut() = Some(Rc::new(callback));
+        self.on_show.set(Some(Rc::new(callback)));
+    }
+
+    /// The lens rows made so far, shared out of their cell.
+    fn lens_slots(&self) -> Rc<[Rc<LensSlot>]> {
+        current(&self.lenses)
     }
 
     fn lens_slot(&self) -> LensSlot {
@@ -1356,7 +1482,7 @@ impl Editor {
                 let symbol = symbol.clone();
                 let callbacks = callbacks.clone();
                 Rc::new(move || {
-                    let callback = callbacks.borrow().clone();
+                    let callback = current(&callbacks);
                     if let (Some(callback), Some(symbol)) = (callback, symbol.get()) {
                         callback(symbol);
                     }
@@ -1395,11 +1521,13 @@ impl Editor {
         let buffer = self.view.buffer();
         let (start, end) = buffer.bounds();
         buffer.remove_tag(&self.tags.lens, &start, &end);
-        while self.lenses.borrow().len() < lenses.len() {
-            let slot = self.lens_slot();
-            self.lenses.borrow_mut().push(slot);
+        let mut slots = self.lens_slots();
+        if slots.len() < lenses.len() {
+            let made = (slots.len()..lenses.len()).map(|_| Rc::new(self.lens_slot()));
+            slots = slots.iter().cloned().chain(made).collect();
+            self.lenses.set(Rc::clone(&slots));
         }
-        for (index, slot) in self.lenses.borrow().iter().enumerate() {
+        for (index, slot) in slots.iter().enumerate() {
             match lenses.get(index) {
                 Some(lens) => {
                     slot.uses.set_label(&lens.uses);
@@ -1503,8 +1631,7 @@ impl Editor {
         let next = line.saturating_add(1);
         let used = self.lenses_used.get();
         let lens_below = self
-            .lenses
-            .borrow()
+            .lens_slots()
             .iter()
             .take(used)
             .any(|slot| slot.line.get() == next);
@@ -1549,7 +1676,7 @@ impl Editor {
         self.size_peek();
         let buffer = self.view.buffer();
         let used = self.lenses_used.get();
-        for slot in self.lenses.borrow().iter().take(used) {
+        for slot in self.lens_slots().iter().take(used) {
             if let Some(iter) = buffer.iter_at_line(slot.line.get()) {
                 // Just above the line's text, whatever room is above it.
                 let text_top = self.view.iter_location(&iter).y();
@@ -1655,7 +1782,142 @@ impl Editor {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::RefCell;
+
     use super::*;
+    use crate::ui::gtk_test::{on_gtk_thread, settle};
+
+    #[test]
+    fn a_dropped_editor_frees_its_search_bar() {
+        on_gtk_thread(search_bar_is_freed);
+    }
+
+    /// Dropping the editor drops the search bar's controller, which shuts
+    /// the component down when the main loop next runs: the bar, the
+    /// model (with the search and the input channel the runtime held) and
+    /// the editor's widgets are all freed.
+    fn search_bar_is_freed() {
+        let editor = Editor::new();
+        let buffer = editor.new_buffer("door\nshelf\n");
+        editor.show_buffer(&buffer, true);
+        editor.find("door");
+        settle();
+        assert!(editor.has_search(), "the bar is open");
+        let bar = editor.search.widget().downgrade();
+        let root = editor.root.downgrade();
+        let view = editor.view.downgrade();
+        let input = editor.search.sender().clone();
+        drop(editor);
+        settle();
+        assert!(bar.upgrade().is_none(), "the search bar is freed");
+        assert!(root.upgrade().is_none(), "the editor is freed");
+        assert!(view.upgrade().is_none(), "the text view is freed");
+        assert!(
+            input.send(EditorSearchInput::CloseSearch).is_err(),
+            "the component's runtime, and with it the model, is gone"
+        );
+    }
+
+    #[test]
+    fn find_selects_the_match_before_it_returns() {
+        on_gtk_thread(find_selects_at_once);
+    }
+
+    /// The Files page's `--search` wish finds the text and then, in the
+    /// same call, follows, lists the uses of, peeks at or hovers over what
+    /// is at the cursor: the match must be selected before `find` returns.
+    /// The bar opening when the main loop runs leaves the match selected.
+    fn find_selects_at_once() {
+        let editor = Editor::new();
+        let text = "shelf\npart side\nshelf\n";
+        let lines = LineStarts::new(text);
+        let buffer = editor.new_buffer(text);
+        editor.show_buffer(&buffer, true);
+        if let Some(line) = buffer.iter_at_line(1) {
+            buffer.place_cursor(&line);
+        }
+        let second = text
+            .rfind("shelf")
+            .and_then(|at| u32::try_from(at).ok())
+            .unwrap_or_default();
+
+        editor.find("shelf");
+        assert_eq!(
+            editor.cursor(&lines),
+            second,
+            "the cursor is on the next shelf as soon as find returns"
+        );
+        assert!(!editor.has_search(), "the bar opens when the loop runs");
+
+        settle();
+        assert!(editor.has_search(), "the bar is open");
+        assert_eq!(
+            editor.cursor(&lines),
+            second,
+            "opening the bar did not move on to another match"
+        );
+        let selected = buffer
+            .selection_bounds()
+            .map(|(start, end)| buffer.text(&start, &end, false).to_string());
+        assert_eq!(selected.as_deref(), Some("shelf"));
+    }
+
+    #[test]
+    fn closing_the_search_from_inside_its_own_step_is_queued_not_re_entered() {
+        on_gtk_thread(search_is_queued);
+    }
+
+    /// When the old search bar selected a match, GTK's "mark-set" ran the
+    /// Files page's handlers right then, inside the step: one that closed
+    /// the search dropped the search the step was still using and moved
+    /// the keyboard mid-step. Now what the bar is told is queued, and a
+    /// close asked for from inside its step waits until the step is done.
+    fn search_is_queued() {
+        let editor = Rc::new(Editor::new());
+        let buffer = editor.new_buffer("door\nshelf\ndoor\n");
+        editor.show_buffer(&buffer, true);
+        editor.find("door");
+        assert!(!editor.has_search(), "opening the bar is only queued");
+        settle();
+        assert!(editor.has_search(), "the bar is open");
+        let selected = |buffer: &gtk::TextBuffer| {
+            buffer
+                .selection_bounds()
+                .map(|(start, end)| (start.line(), buffer.text(&start, &end, false).to_string()))
+        };
+        assert_eq!(selected(&buffer), Some((0, "door".to_owned())));
+
+        // Whether the bar was still open each time the cursor moved while
+        // it stepped, after closing it from there.
+        let open: Rc<RefCell<Vec<bool>>> = Rc::default();
+        let log = Rc::clone(&open);
+        let weak = Rc::downgrade(&editor);
+        let handler = buffer.connect_mark_set(move |buffer, _, mark| {
+            let Some(editor) = weak.upgrade() else {
+                return;
+            };
+            if *mark == buffer.get_insert() {
+                editor.close_search();
+                log.borrow_mut().push(editor.has_search());
+            }
+        });
+        // Enter in the bar: the next match.
+        editor.search.send(EditorSearchInput::Next);
+        assert!(open.borrow().is_empty(), "the step is only queued");
+        settle();
+        assert!(!open.borrow().is_empty(), "the step moved the cursor");
+        assert!(
+            open.borrow().iter().all(|open| *open),
+            "the close waited for the step"
+        );
+        assert!(!editor.has_search(), "and then closed the bar");
+        assert_eq!(
+            selected(&buffer),
+            Some((2, "door".to_owned())),
+            "the step found the next door"
+        );
+        buffer.disconnect(handler);
+    }
 
     #[test]
     fn a_view_with_no_height_yet_is_not_scrolled() {
