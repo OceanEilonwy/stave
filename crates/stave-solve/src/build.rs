@@ -4,7 +4,7 @@
 use std::collections::{BTreeMap, HashMap};
 
 use stave_lang::ast::Span;
-use stave_lang::placement::{Axis, PartAxis};
+use stave_lang::placement::{Axis, PartAxis, PerPartAxis};
 use stave_lang::units::{ExactLength, Length};
 use stave_lang::{Code, Diagnostic, FileId, Label};
 use stave_model::defs::{BodyId, DefId, StockField, Word};
@@ -27,9 +27,7 @@ use crate::hardware::{
     HardwareCut, MemberCarrier, Placed, PlacedMember, RoleBound, WorldShape, crossing_face,
     world_index, world_shape,
 };
-use crate::joints::{
-    CutAt, GeomTable, JointWork, Making, PairWork, PartGeom, local_slot, round_length,
-};
+use crate::joints::{CutAt, GeomTable, JointWork, Making, PairWork, PartGeom, round_length};
 use crate::mechanism::AssemblyMechanism;
 use crate::members::{LaidOut, WorldMemberCut};
 use crate::mirror_cuts::MirroredJoint;
@@ -752,7 +750,7 @@ fn member_cut(geom: &PartGeom, cut: MemberCut<'_>) -> Solved<Cut> {
         region = region.with(axis, low, high.max(low));
     }
     let local_box = |world: &ExactBox| -> Solved<LocalBox> {
-        let [length, width, thickness] = geom.local_box(world)?;
+        let [length, width, thickness] = geom.local_box(world)?.into_array();
         let corner = |pick: fn(&(ExactLength, ExactLength)) -> ExactLength| -> Solved<LocalPoint> {
             Ok(LocalPoint {
                 length: round_length(pick(&length))?,
@@ -1890,20 +1888,15 @@ impl Solver<'_> {
                     )
                 };
             let stock = self.write_stock(stock)?;
-            let size = |values: [ExactLength; 3]| -> Solved<Size3> {
-                let [length, width, thickness] = values;
+            let size = |values: PerPartAxis<ExactLength>| -> Solved<Size3> {
+                let [length, width, thickness] = values.into_array();
                 Ok(Size3 {
                     length: round_length(length)?,
                     width: round_length(width)?,
                     thickness: round_length(thickness)?,
                 })
             };
-            let mut cut_values = [ExactLength::ZERO; 3];
-            for axis in PartAxis::ALL {
-                if let Some(slot) = cut_values.get_mut(local_slot(axis)) {
-                    *slot = geom.cut_size(axis)?;
-                }
-            }
+            let cut_values = PerPartAxis::try_from_fn(|axis| geom.cut_size(axis))?;
             let mut origin_values = [ExactLength::ZERO; 3];
             for axis in PartAxis::ALL {
                 let direction = geom.orientation.direction(axis);

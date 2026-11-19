@@ -4,7 +4,7 @@
 use std::rc::Rc;
 
 use stave_lang::ast::{BaseKind, Span};
-use stave_lang::placement::{Axis, Face, PartAxis};
+use stave_lang::placement::{Axis, Face, PartAxis, PerAxis, PerPartAxis};
 use stave_lang::units::{Angle, ExactLength, Length, Rational};
 use stave_lang::{Code, Diagnostic, FileId, Label};
 use stave_model::defs::{
@@ -63,11 +63,11 @@ pub(crate) struct Extend {
 pub(crate) struct PartGeom {
     pub orientation: Orientation,
     /// Drawn size per local axis (length, width, thickness).
-    pub drawn: [ExactLength; 3],
+    pub drawn: PerPartAxis<ExactLength>,
     /// What is added at the start of each local axis.
-    pub start: [ExactLength; 3],
+    pub start: PerPartAxis<ExactLength>,
     /// What is added at the end of each local axis.
-    pub end: [ExactLength; 3],
+    pub end: PerPartAxis<ExactLength>,
     pub drawn_box: ExactBox,
     pub cut_box: ExactBox,
     pub reference_face: LocalFace,
@@ -83,30 +83,13 @@ pub(crate) fn grain_axis(grain: Grain) -> PartAxis {
     }
 }
 
-pub(crate) fn local_slot(axis: PartAxis) -> usize {
-    match axis {
-        PartAxis::Length => 0,
-        PartAxis::Width => 1,
-        PartAxis::Thickness => 2,
-    }
-}
-
 impl PartGeom {
     /// Cut size along a local axis.
     pub fn cut_size(&self, axis: PartAxis) -> Solved<ExactLength> {
-        let slot = local_slot(axis);
-        let (d, s, e) = (
-            self.drawn.get(slot),
-            self.start.get(slot),
-            self.end.get(slot),
-        );
-        match (d, s, e) {
-            (Some(d), Some(s), Some(e)) => d
-                .checked_add(*s)
-                .and_then(|x| x.checked_add(*e))
-                .ok_or(Failure::Fault(Fault::Overflow)),
-            _ => Err(Fault::Internal("a part's size").into()),
-        }
+        self.drawn[axis]
+            .checked_add(self.start[axis])
+            .and_then(|x| x.checked_add(self.end[axis]))
+            .ok_or(Failure::Fault(Fault::Overflow))
     }
 
     /// World coordinate of local 0 along the world axis of `axis`.
@@ -131,17 +114,13 @@ impl PartGeom {
     }
 
     /// A world box in this part's frame.
-    pub fn local_box(&self, world: &ExactBox) -> Solved<[(ExactLength, ExactLength); 3]> {
-        let mut out = [(ExactLength::ZERO, ExactLength::ZERO); 3];
-        for axis in PartAxis::ALL {
+    pub fn local_box(&self, world: &ExactBox) -> Solved<PerPartAxis<(ExactLength, ExactLength)>> {
+        PerPartAxis::try_from_fn(|axis| {
             let w = self.orientation.direction(axis).axis();
             let a = self.local(axis, world.min(w))?;
             let b = self.local(axis, world.max(w))?;
-            if let Some(slot) = out.get_mut(local_slot(axis)) {
-                *slot = if a <= b { (a, b) } else { (b, a) };
-            }
-        }
-        Ok(out)
+            Ok(if a <= b { (a, b) } else { (b, a) })
+        })
     }
 
     /// The local face on the `positive` side of a world axis.
@@ -775,15 +754,10 @@ impl Solver<'_> {
     /// Geometry of a declared part, once joints have added to it.
     pub(crate) fn part_geom(&mut self, part: PartId) -> Solved<PartGeom> {
         let orientation = self.part_orientation(part)?;
-        let mut drawn = [ExactLength::ZERO; 3];
-        for axis in PartAxis::ALL {
-            if let Some(slot) = drawn.get_mut(local_slot(axis)) {
-                *slot = self.drawn_size(part, axis)?;
-            }
-        }
+        let drawn = PerPartAxis::try_from_fn(|axis| self.drawn_size(part, axis))?;
         let drawn_box = self.drawn_box(part)?;
-        let mut start = [ExactLength::ZERO; 3];
-        let mut end = [ExactLength::ZERO; 3];
+        let mut start = PerPartAxis::from_fn(|_| ExactLength::ZERO);
+        let mut end = PerPartAxis::from_fn(|_| ExactLength::ZERO);
         let extends = match self.model.parts.get(part.index()).and_then(|p| p.mirror_of) {
             // A part of a mirrored assembly has its source's extensions:
             // its frame is the reflection, so local ends match.
@@ -799,25 +773,18 @@ impl Solver<'_> {
                 .unwrap_or_default(),
         };
         for extend in extends {
-            let slot = local_slot(extend.axis);
             let target = if extend.end == End::Start {
-                start.get_mut(slot)
+                &mut start[extend.axis]
             } else {
-                end.get_mut(slot)
+                &mut end[extend.axis]
             };
-            if let Some(target) = target {
-                *target = target.checked_add(extend.by).ok_or(Fault::Overflow)?;
-            }
+            *target = target.checked_add(extend.by).ok_or(Fault::Overflow)?;
         }
         let mut cut_box = drawn_box;
         for axis in PartAxis::ALL {
-            let slot = local_slot(axis);
             let direction = orientation.direction(axis);
             let world = direction.axis();
-            let (s, e) = (
-                start.get(slot).copied().unwrap_or(ExactLength::ZERO),
-                end.get(slot).copied().unwrap_or(ExactLength::ZERO),
-            );
+            let (s, e) = (start[axis], end[axis]);
             let (low_add, high_add) = if direction.is_positive() {
                 (s, e)
             } else {
@@ -895,11 +862,7 @@ impl Solver<'_> {
         };
         let (message, help) = match grain {
             Grain::Length => {
-                let drawn = geom
-                    .drawn
-                    .get(local_slot(axis))
-                    .copied()
-                    .unwrap_or(cut_length);
+                let drawn = geom.drawn[axis];
                 let help = match self.splice_suggestion(part, drawn, max_length) {
                     Some(splice) => format!(
                         "stock '{stock_name}' comes no longer than {max}: splice it end to end with {splice}, choosing the end joint and leaving each piece room for what its splices add, or buy longer stock"
@@ -1021,11 +984,12 @@ impl Solver<'_> {
         &mut self,
         stock: StockId,
         name: &str,
-        [length, width, thickness]: [ExactLength; 3],
+        drawn: PerPartAxis<ExactLength>,
         grain: Grain,
         at: (FileId, Span),
     ) -> Solved<()> {
         let (file, span) = at;
+        let [length, width, thickness] = drawn.into_array();
         let stock_name = self.stock_name(stock);
         let size = stave_model::value::format_length;
         let mut fault: Option<(Code, String, String)> = None;
@@ -1240,17 +1204,9 @@ impl Solver<'_> {
             } else {
                 (high, low)
             };
-            let slot = local_slot(axis);
-            let size = geom.drawn_box.size(world).ok_or(Fault::Overflow)?;
-            if let (Some(d), Some(s), Some(e)) = (
-                geom.drawn.get_mut(slot),
-                geom.start.get_mut(slot),
-                geom.end.get_mut(slot),
-            ) {
-                *d = size;
-                *s = start;
-                *e = end;
-            }
+            geom.drawn[axis] = geom.drawn_box.size(world).ok_or(Fault::Overflow)?;
+            geom.start[axis] = start;
+            geom.end[axis] = end;
         }
         Ok((part, geom))
     }
@@ -1784,7 +1740,7 @@ impl Solver<'_> {
                 .stock_length(stock, StockField::Thickness)?
                 .ok_or(Fault::Earlier)?,
         };
-        let drawn = [length, width, thickness];
+        let drawn = PerPartAxis::new(length, width, thickness);
         self.check_made_part_stock(stock, name, drawn, body.grain, at)?;
         // Orientation.
         let mut orientation = None;
@@ -1816,22 +1772,10 @@ impl Solver<'_> {
         let Some(orientation) = orientation else {
             return Err(Fault::Earlier.into());
         };
-        let size_along = |axis: Axis| {
-            drawn
-                .get(local_slot(orientation.part_axis(axis)))
-                .copied()
-                .unwrap_or(ExactLength::ZERO)
-        };
-        let mut lows: [Option<ExactLength>; 3] = [None, None, None];
-        let axis_index = |axis: Axis| match axis {
-            Axis::Across => 0,
-            Axis::Up => 1,
-            Axis::Deep => 2,
-        };
+        let size_along = |axis: Axis| drawn[orientation.part_axis(axis)];
+        let mut lows: PerAxis<Option<ExactLength>> = PerAxis::default();
         let mut set = |this: &mut Self, axis: Axis, low: ExactLength, span: Span| -> Solved<()> {
-            let slot = lows
-                .get_mut(axis_index(axis))
-                .ok_or(Fault::Internal("an axis of a made part"))?;
+            let slot = &mut lows[axis];
             if slot.is_some() {
                 return Err(this
                     .error(
@@ -1957,7 +1901,7 @@ impl Solver<'_> {
         }
         let mut extents = Vec::new();
         for axis in [Axis::Across, Axis::Up, Axis::Deep] {
-            let Some(Some(low)) = lows.get(axis_index(axis)).copied() else {
+            let Some(low) = lows[axis] else {
                 return Err(self.axis_not_set(name, axis, env.file, made.span).into());
             };
             extents.push((
@@ -1990,8 +1934,8 @@ impl Solver<'_> {
             geom: PartGeom {
                 orientation,
                 drawn,
-                start: [ExactLength::ZERO; 3],
-                end: [ExactLength::ZERO; 3],
+                start: PerPartAxis::from_fn(|_| ExactLength::ZERO),
+                end: PerPartAxis::from_fn(|_| ExactLength::ZERO),
                 drawn_box,
                 cut_box: drawn_box,
                 reference_face: reference(PartAxis::Thickness),
@@ -2044,13 +1988,12 @@ pub(crate) fn round_length(length: ExactLength) -> Solved<stave_lang::units::Len
         .ok_or(Failure::Fault(Fault::Overflow))
 }
 
-fn local_box(local: &[(ExactLength, ExactLength); 3]) -> Solved<LocalBox> {
+fn local_box(local: &PerPartAxis<(ExactLength, ExactLength)>) -> Solved<LocalBox> {
     let point = |pick: fn(&(ExactLength, ExactLength)) -> ExactLength| -> Solved<LocalPoint> {
-        let [l, w, t] = local;
         Ok(LocalPoint {
-            length: round_length(pick(l))?,
-            width: round_length(pick(w))?,
-            thickness: round_length(pick(t))?,
+            length: round_length(pick(&local[PartAxis::Length]))?,
+            width: round_length(pick(&local[PartAxis::Width]))?,
+            thickness: round_length(pick(&local[PartAxis::Thickness]))?,
         })
     };
     Ok(LocalBox {

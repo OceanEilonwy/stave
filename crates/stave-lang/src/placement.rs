@@ -153,6 +153,144 @@ pub enum Direction {
     Back,
 }
 
+/// One value for each part axis, read and written by [`PartAxis`] so no
+/// number stands for an axis.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct PerPartAxis<T>([T; 3]);
+
+impl<T> PerPartAxis<T> {
+    /// The values along the length, the width and the thickness.
+    pub const fn new(length: T, width: T, thickness: T) -> Self {
+        PerPartAxis([length, width, thickness])
+    }
+
+    /// The value `value` gives each axis.
+    pub fn from_fn(mut value: impl FnMut(PartAxis) -> T) -> Self {
+        PerPartAxis(PartAxis::ALL.map(&mut value))
+    }
+
+    /// The value `value` gives each axis, or its first error.
+    pub fn try_from_fn<E>(mut value: impl FnMut(PartAxis) -> Result<T, E>) -> Result<Self, E> {
+        Ok(PerPartAxis([
+            value(PartAxis::Length)?,
+            value(PartAxis::Width)?,
+            value(PartAxis::Thickness)?,
+        ]))
+    }
+
+    /// Each value changed by `change`.
+    pub fn map<U>(self, change: impl FnMut(T) -> U) -> PerPartAxis<U> {
+        PerPartAxis(self.0.map(change))
+    }
+
+    /// Each axis with its value, in the order of [`PartAxis::ALL`].
+    pub fn iter(&self) -> impl Iterator<Item = (PartAxis, &T)> {
+        PartAxis::ALL.into_iter().zip(&self.0)
+    }
+
+    /// The values in the order of [`PartAxis::ALL`].
+    pub fn into_array(self) -> [T; 3] {
+        self.0
+    }
+}
+
+impl<T> std::ops::Index<PartAxis> for PerPartAxis<T> {
+    type Output = T;
+
+    fn index(&self, axis: PartAxis) -> &T {
+        let [length, width, thickness] = &self.0;
+        match axis {
+            PartAxis::Length => length,
+            PartAxis::Width => width,
+            PartAxis::Thickness => thickness,
+        }
+    }
+}
+
+impl<T> std::ops::IndexMut<PartAxis> for PerPartAxis<T> {
+    fn index_mut(&mut self, axis: PartAxis) -> &mut T {
+        let [length, width, thickness] = &mut self.0;
+        match axis {
+            PartAxis::Length => length,
+            PartAxis::Width => width,
+            PartAxis::Thickness => thickness,
+        }
+    }
+}
+
+/// One value for each world axis, read and written by [`Axis`] so no
+/// number stands for an axis.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct PerAxis<T> {
+    /// Left to right.
+    pub across: T,
+    /// Floor to ceiling.
+    pub up: T,
+    /// Front to back.
+    pub deep: T,
+}
+
+impl<T> PerAxis<T> {
+    /// The value `value` gives each axis.
+    pub fn from_fn(mut value: impl FnMut(Axis) -> T) -> Self {
+        PerAxis {
+            across: value(Axis::Across),
+            up: value(Axis::Up),
+            deep: value(Axis::Deep),
+        }
+    }
+
+    /// The value `value` gives each axis, or its first error.
+    pub fn try_from_fn<E>(mut value: impl FnMut(Axis) -> Result<T, E>) -> Result<Self, E> {
+        Ok(PerAxis {
+            across: value(Axis::Across)?,
+            up: value(Axis::Up)?,
+            deep: value(Axis::Deep)?,
+        })
+    }
+
+    /// Each axis with its value: across, up, deep.
+    pub fn iter(&self) -> impl Iterator<Item = (Axis, &T)> {
+        [
+            (Axis::Across, &self.across),
+            (Axis::Up, &self.up),
+            (Axis::Deep, &self.deep),
+        ]
+        .into_iter()
+    }
+
+    /// Each value changed by `change`.
+    pub fn map<U>(self, mut change: impl FnMut(T) -> U) -> PerAxis<U> {
+        PerAxis {
+            across: change(self.across),
+            up: change(self.up),
+            deep: change(self.deep),
+        }
+    }
+}
+
+impl<T> std::ops::Index<Axis> for PerAxis<T> {
+    type Output = T;
+
+    fn index(&self, axis: Axis) -> &T {
+        match axis {
+            Axis::Across => &self.across,
+            Axis::Up => &self.up,
+            Axis::Deep => &self.deep,
+        }
+    }
+}
+
+impl<T> std::ops::IndexMut<Axis> for PerAxis<T> {
+    fn index_mut(&mut self, axis: Axis) -> &mut T {
+        match axis {
+            Axis::Across => &mut self.across,
+            Axis::Up => &mut self.up,
+            Axis::Deep => &mut self.deep,
+        }
+    }
+}
+
 impl Direction {
     /// Every direction.
     pub const ALL: [Direction; 6] = [
@@ -710,6 +848,30 @@ mod tests {
     use super::*;
 
     const BASE: PartId = PartId(0);
+
+    #[test]
+    fn per_axis_tables_are_read_and_written_by_axis() {
+        let mut sizes = PerPartAxis::new(10, 20, 30);
+        sizes[PartAxis::Width] += 1;
+        assert_eq!(sizes[PartAxis::Length], 10);
+        assert_eq!(sizes[PartAxis::Width], 21);
+        assert_eq!(sizes[PartAxis::Thickness], 30);
+        assert_eq!(
+            sizes.iter().map(|(axis, _)| axis).collect::<Vec<_>>(),
+            PartAxis::ALL.to_vec()
+        );
+        assert_eq!(
+            PerPartAxis::try_from_fn(|axis| if axis == PartAxis::Width {
+                Err(axis)
+            } else {
+                Ok(0)
+            }),
+            Err(PartAxis::Width)
+        );
+        let mut low = PerAxis::from_fn(|axis| axis.word().len());
+        low[Axis::Deep] = 0;
+        assert_eq!((low.across, low.up, low.deep), (6, 2, 0));
+    }
 
     fn count(n: u32) -> NonZeroU32 {
         NonZeroU32::new(n).unwrap()

@@ -17,7 +17,7 @@
 use std::collections::BTreeMap;
 
 use stave_lang::ast::{BaseKind, Span};
-use stave_lang::placement::{Axis, PartAxis};
+use stave_lang::placement::{PartAxis, PerAxis, PerPartAxis};
 use stave_lang::units::{ExactLength, Rational};
 use stave_lang::{Code, Diagnostic, FileId, Label};
 use stave_model::defs::{DefId, StockField};
@@ -35,7 +35,7 @@ use stave_schema::words::{Grain, StockForm};
 
 use crate::build::MadeInfo;
 use crate::eval::{Env, KindEnv};
-use crate::joints::{CutAt, GeomTable, PairWork, PartGeom, local_slot, round_length};
+use crate::joints::{CutAt, GeomTable, PairWork, PartGeom, round_length};
 use crate::{Failure, Fault, Solved, Solver};
 
 /// The first id that stands for a board rather than a part. Parts, made
@@ -72,9 +72,9 @@ pub(crate) struct BoardPart {
     pub orientation: Orientation,
     /// Its drawn size per local axis: its share of the part's width, the
     /// part's cut length and thickness.
-    pub drawn: [ExactLength; 3],
-    /// Its low corner per world axis (across, up, deep).
-    pub min: [ExactLength; 3],
+    pub drawn: PerPartAxis<ExactLength>,
+    /// Its low corner per world axis.
+    pub min: PerAxis<ExactLength>,
 }
 
 /// One joint kind a part's boards are joined by, bound.
@@ -98,14 +98,6 @@ struct Application {
     method: usize,
     seam: Option<SeamIndex>,
     pair: PairWork,
-}
-
-fn world_slot(axis: Axis) -> usize {
-    match axis {
-        Axis::Across => 0,
-        Axis::Up => 1,
-        Axis::Deep => 2,
-    }
 }
 
 impl Solver<'_> {
@@ -277,13 +269,8 @@ impl Solver<'_> {
             let Some(mut board_geom) = geoms.get(*board).cloned() else {
                 return Err(Fault::Internal("a board").into());
             };
-            let slot = local_slot(axis);
-            if let (Some(s), Some(e)) =
-                (board_geom.start.get_mut(slot), board_geom.end.get_mut(slot))
-            {
-                *s = *start;
-                *e = *end;
-            }
+            board_geom.start[axis] = *start;
+            board_geom.end[axis] = *end;
             let direction = board_geom.orientation.direction(axis);
             let world = direction.axis();
             let (low_add, high_add) = if direction.is_positive() {
@@ -618,14 +605,10 @@ impl Solver<'_> {
                     ))
                 }
             };
-        let mut drawn = [ExactLength::ZERO; 3];
+        let mut drawn = PerPartAxis::new(share, share, share);
         for each in PartAxis::ALL {
-            if let Some(slot) = drawn.get_mut(local_slot(each)) {
-                *slot = if each == axis {
-                    share
-                } else {
-                    geom.cut_size(each)?
-                };
+            if each != axis {
+                drawn[each] = geom.cut_size(each)?;
             }
         }
         let first = self
@@ -647,12 +630,7 @@ impl Solver<'_> {
                 .checked_add(1)
                 .and_then(BoardIndex::new)
                 .ok_or(Fault::Overflow)?;
-            let mut min = [ExactLength::ZERO; 3];
-            for each in Axis::ALL {
-                if let Some(slot) = min.get_mut(world_slot(each)) {
-                    *slot = bounds.min(each);
-                }
-            }
+            let min = PerAxis::from_fn(|each| bounds.min(each));
             self.boards.insert(
                 id,
                 BoardPart {
@@ -669,8 +647,8 @@ impl Solver<'_> {
                 PartGeom {
                     orientation: geom.orientation,
                     drawn,
-                    start: [ExactLength::ZERO; 3],
-                    end: [ExactLength::ZERO; 3],
+                    start: PerPartAxis::from_fn(|_| ExactLength::ZERO),
+                    end: PerPartAxis::from_fn(|_| ExactLength::ZERO),
                     drawn_box: bounds,
                     cut_box: bounds,
                     reference_face: geom.reference_face,

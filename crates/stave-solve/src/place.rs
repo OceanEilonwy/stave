@@ -5,7 +5,7 @@
 //! box along each world axis, as exact fractions.
 
 use stave_lang::ast::Span;
-use stave_lang::placement::{Axis, Corner, Direction, Face, PartAxis};
+use stave_lang::placement::{Axis, Corner, Direction, Face, PartAxis, PerAxis, PerPartAxis};
 use stave_lang::units::{ExactLength, Length, Rational};
 use stave_lang::{Code, Diagnostic, FileId, Label};
 use stave_model::defs::{
@@ -28,28 +28,12 @@ use crate::{Accounted, Failure, Fault, Frame, Memo, Reported, Solved, Solver};
 #[derive(Debug, Clone, Default)]
 pub(crate) struct PartState<'m> {
     pub orientation: Memo<Orientation>,
-    pub sizes: [Memo<ExactLength>; 3],
-    pub mins: [Memo<ExactLength>; 3],
+    pub sizes: PerPartAxis<Memo<ExactLength>>,
+    pub mins: PerAxis<Memo<ExactLength>>,
     pub terms: Memo<Terms<'m>>,
     /// For an image, its source and the mirror plane; `None` for a part
     /// that is not one. Remembered once worked out: a failure is not.
     pub mirror: Option<Option<(PartId, Axis, ExactLength)>>,
-}
-
-fn axis_slot(axis: Axis) -> usize {
-    match axis {
-        Axis::Across => 0,
-        Axis::Up => 1,
-        Axis::Deep => 2,
-    }
-}
-
-fn part_axis_slot(axis: PartAxis) -> usize {
-    match axis {
-        PartAxis::Length => 0,
-        PartAxis::Width => 1,
-        PartAxis::Thickness => 2,
-    }
 }
 
 /// A placement term that fixes one axis.
@@ -118,14 +102,14 @@ pub struct Terms<'m> {
     pub ground: bool,
     /// `orient(length:, width:)` and its span.
     pub orient: Option<(&'m RExpr, Option<&'m RExpr>, Span)>,
-    /// The term fixing each world axis (across, up, deep).
-    pub axes: [Option<AxisTerm<'m>>; 3],
+    /// The term fixing each world axis.
+    pub axes: PerAxis<Option<AxisTerm<'m>>>,
 }
 
 impl<'m> Terms<'m> {
     /// The term fixing an axis.
     pub fn axis(&self, axis: Axis) -> Option<&AxisTerm<'m>> {
-        self.axes.get(axis_slot(axis)).and_then(Option::as_ref)
+        self.axes[axis].as_ref()
     }
 }
 
@@ -764,23 +748,22 @@ impl<'m> Solver<'m> {
         hardware: bool,
     ) -> Solved<Terms<'m>> {
         let mut terms = Terms::default();
-        let mut first_spans: [Option<Span>; 3] = [None, None, None];
+        let mut first_spans: PerAxis<Option<Span>> = PerAxis::default();
         let mut assign = |this: &mut Self,
                           terms: &mut Terms<'m>,
                           axis: Axis,
                           term: AxisTerm<'m>|
          -> Solved<()> {
-            let slot = axis_slot(axis);
-            if terms.ground || terms.axes.get(slot).is_some_and(Option::is_some) {
+            if terms.ground || terms.axes[axis].is_some() {
                 let mut diagnostic = Diagnostic::error(
                     Code::AxisSetTwice,
                     format!("{name}: position along '{}' is set twice", axis.word()),
                     Label::new(env.file, term.span),
                 );
-                if let Some(Some(first)) = first_spans.get(slot) {
+                if let Some(first) = first_spans[axis] {
                     diagnostic = diagnostic.with_label(Label::with_message(
                         env.file,
-                        *first,
+                        first,
                         "first set here",
                     ));
                 }
@@ -792,12 +775,8 @@ impl<'m> Solver<'m> {
                 let reported = this.report(diagnostic.with_help(help));
                 return Err(reported.into());
             }
-            if let Some(span) = first_spans.get_mut(slot) {
-                *span = Some(term.span);
-            }
-            if let Some(entry) = terms.axes.get_mut(slot) {
-                *entry = Some(term);
-            }
+            first_spans[axis] = Some(term.span);
+            terms.axes[axis] = Some(term);
             Ok(())
         };
         let mut failed: Option<Accounted> = None;
@@ -805,7 +784,7 @@ impl<'m> Solver<'m> {
             let span = term.span;
             let result: Solved<()> = match &term.kind {
                 PlaceTermKind::Ground => {
-                    if terms.axes.iter().any(Option::is_some) {
+                    if terms.axes.iter().any(|(_, term)| term.is_some()) {
                         let axis = Axis::ALL
                             .into_iter()
                             .find(|a| terms.axis(*a).is_some())
@@ -966,21 +945,16 @@ impl<'m> Solver<'m> {
 
     /// A part's drawn size along one of its own axes.
     pub(crate) fn drawn_size(&mut self, part: PartId, axis: PartAxis) -> Solved<ExactLength> {
-        let slot = part_axis_slot(axis);
         if let Some(board) = self.boards.get(&part) {
-            return Ok(board
-                .drawn
-                .get(slot)
-                .copied()
-                .ok_or(Fault::Internal("a board's size"))?);
+            return Ok(board.drawn[axis]);
         }
-        match self.parts.get(part.index()).and_then(|s| s.sizes.get(slot)) {
+        match self.parts.get(part.index()).map(|s| &s.sizes[axis]) {
             Some(Memo::Done(size)) => return Ok(*size),
             Some(Memo::Failed(accounted)) => return Err((*accounted).into()),
             Some(Memo::Busy) => return Err(self.cycle(Frame::Size(part, axis)).into()),
             _ => {}
         }
-        self.set_size(part, slot, Memo::Busy);
+        self.set_size(part, axis, Memo::Busy);
         let at = self
             .part_body(part)
             .zip(self.part_env(part))
@@ -1011,17 +985,13 @@ impl<'m> Solver<'m> {
         });
         let (file, span) = at.unwrap_or_else(|| self.part_place(part));
         let (memo, result) = self.remember(result, file, span);
-        self.set_size(part, slot, memo);
+        self.set_size(part, axis, memo);
         result
     }
 
-    fn set_size(&mut self, part: PartId, slot: usize, memo: Memo<ExactLength>) {
-        if let Some(entry) = self
-            .parts
-            .get_mut(part.index())
-            .and_then(|s| s.sizes.get_mut(slot))
-        {
-            *entry = memo;
+    fn set_size(&mut self, part: PartId, axis: PartAxis, memo: Memo<ExactLength>) {
+        if let Some(state) = self.parts.get_mut(part.index()) {
+            state.sizes[axis] = memo;
         }
     }
 
@@ -1899,28 +1869,23 @@ impl<'m> Solver<'m> {
 
     /// The low end of a part's drawn box along a world axis.
     pub(crate) fn part_min(&mut self, part: PartId, axis: Axis) -> Solved<ExactLength> {
-        let slot = axis_slot(axis);
         if let Some(board) = self.boards.get(&part) {
-            return Ok(board
-                .min
-                .get(slot)
-                .copied()
-                .ok_or(Fault::Internal("a board's position"))?);
+            return Ok(board.min[axis]);
         }
-        match self.parts.get(part.index()).and_then(|s| s.mins.get(slot)) {
+        match self.parts.get(part.index()).map(|s| &s.mins[axis]) {
             Some(Memo::Done(v)) => return Ok(*v),
             Some(Memo::Failed(accounted)) => return Err((*accounted).into()),
             Some(Memo::Busy) => return Err(self.cycle(Frame::Position(part, axis)).into()),
             _ => {}
         }
-        self.set_min(part, slot, Memo::Busy);
+        self.set_min(part, axis, Memo::Busy);
         let at = self.term_location(part, axis);
         self.enter(Frame::Position(part, axis), at);
         let result = self.compute_min(part, axis);
         self.leave();
         let (file, span) = at.unwrap_or_else(|| self.part_place(part));
         let (memo, result) = self.remember(result, file, span);
-        self.set_min(part, slot, memo);
+        self.set_min(part, axis, memo);
         result
     }
 
@@ -1933,13 +1898,9 @@ impl<'m> Solver<'m> {
             .map(|b| (env.file, b.place_span.unwrap_or(b.span)))
     }
 
-    fn set_min(&mut self, part: PartId, slot: usize, memo: Memo<ExactLength>) {
-        if let Some(entry) = self
-            .parts
-            .get_mut(part.index())
-            .and_then(|s| s.mins.get_mut(slot))
-        {
-            *entry = memo;
+    fn set_min(&mut self, part: PartId, axis: Axis, memo: Memo<ExactLength>) {
+        if let Some(state) = self.parts.get_mut(part.index()) {
+            state.mins[axis] = memo;
         }
     }
 
