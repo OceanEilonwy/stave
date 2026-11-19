@@ -15,6 +15,7 @@
 use adw::prelude::*;
 use relm4::{Component, ComponentParts, ComponentSender};
 use stave_app::focus::{self, Focus};
+use stave_app::i18n::{fill_in, tr};
 use stave_app::session::SourceLocation;
 
 use super::icons::{self, PathIcon};
@@ -195,7 +196,7 @@ impl Component for FocusPanelComponent {
             tint,
             fade,
         } = init;
-        let eyebrow = label(&["stave-eyebrow", "stave-eyebrow-bold"]);
+        let eyebrow = label(&["stave-eyebrow", "stave-eyebrow-bold", "stave-caps"]);
         eyebrow.set_hexpand(true);
         let input = sender.input_sender().clone();
         done.connect_clicked(move |_| input.emit(FocusPanelInput::DonePressed));
@@ -210,7 +211,7 @@ impl Component for FocusPanelComponent {
         head.append(&description);
         let more_text = label(&["stave-description"]);
         let more = gtk::Expander::builder()
-            .label("More")
+            .label(tr("More"))
             .child(&more_text)
             .css_classes(["stave-more"])
             .visible(false)
@@ -220,9 +221,9 @@ impl Component for FocusPanelComponent {
         let members = card();
         let rows = card();
 
-        let (xray_row, xray_label) = toggle_row("X-ray", "see into the part", &xray);
-        let (tint_row, _) = toggle_row("Tint cut faces", "holes, mortises, dados", &tint);
-        let (fade_row, _) = toggle_row("Fade other parts", "", &fade);
+        let (xray_row, xray_label) = toggle_row(&tr("X-ray"), &tr("see into the part"), &xray);
+        let (tint_row, _) = toggle_row(&tr("Tint cut faces"), &tr("holes, mortises, dados"), &tint);
+        let (fade_row, _) = toggle_row(&tr("Fade other parts"), "", &fade);
         let checks = [
             (
                 &xray,
@@ -241,8 +242,8 @@ impl Component for FocusPanelComponent {
         toggles.append(&xray_row);
         toggles.append(&tint_row);
         toggles.append(&fade_row);
-        let show_title = label(&["stave-section"]);
-        show_title.set_label("SHOW");
+        let show_title = label(&["stave-section", "stave-caps"]);
+        show_title.set_label(&tr("Show"));
         let show_section = gtk::Box::new(gtk::Orientation::Vertical, 8);
         show_section.append(&show_title);
         show_section.append(&toggles);
@@ -250,15 +251,15 @@ impl Component for FocusPanelComponent {
         let insert_link = super::style::as_link(
             gtk::Button::builder()
                 .css_classes(["flat", "stave-link"])
-                .tooltip_text("Show the joint's kind in the text")
+                .tooltip_text(tr("Show the joint's kind in the text"))
                 .valign(gtk::Align::Center)
                 .build(),
         );
         let input = sender.input_sender().clone();
         insert_link.connect_clicked(move |_| input.emit(FocusPanelInput::LinkPressed));
         let insert_head = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-        let insert_title = label(&["stave-section"]);
-        insert_title.set_label("HOW IT GOES TOGETHER");
+        let insert_title = label(&["stave-section", "stave-caps"]);
+        insert_title.set_label(&tr("How it goes together"));
         insert_title.set_hexpand(true);
         insert_title.set_wrap(false);
         insert_title.set_ellipsize(gtk::pango::EllipsizeMode::End);
@@ -272,7 +273,7 @@ impl Component for FocusPanelComponent {
             .css_classes(["stave-code"])
             .build();
         let insert_note = label(&["stave-footnote"]);
-        insert_note.set_label("The animation plays the joint’s own insert steps, the same ones the assembly check runs backwards. What you see is what was checked.");
+        insert_note.set_label(&tr("The animation plays the joint’s own insert steps, the same ones the assembly check runs backwards. What you see is what was checked."));
         let insert_section = gtk::Box::new(gtk::Orientation::Vertical, 8);
         insert_section.append(&insert_head);
         insert_section.append(&insert_code);
@@ -363,7 +364,7 @@ fn show(widgets: &FocusPanelWidgets, root: &gtk::Box, focus: Option<&Focus>) {
     let joint = focus.assembles();
     widgets
         .eyebrow
-        .set_label(if joint { "JOINT" } else { "HARDWARE" });
+        .set_label(&if joint { tr("Joint") } else { tr("Hardware") });
     widgets.heading.set_label(&focus.heading);
     // The first paragraph (two sentences at most), the rest under More.
     let full = focus.description.as_deref().unwrap_or(&focus.title);
@@ -422,7 +423,7 @@ fn show(widgets: &FocusPanelWidgets, root: &gtk::Box, focus: Option<&Focus>) {
             .build();
         line.append(
             &gtk::Label::builder()
-                .label(entry.label)
+                .label(tr(entry.label))
                 .xalign(0.0)
                 .valign(gtk::Align::Start)
                 .css_classes(["stave-key"])
@@ -437,7 +438,7 @@ fn show(widgets: &FocusPanelWidgets, root: &gtk::Box, focus: Option<&Focus>) {
             .css_classes(["stave-value"])
             .build();
         if matches!(entry.label, "Fit" | "Swing check" | "Slide check") {
-            let good = entry.value.starts_with("touches") || entry.value.starts_with("clear");
+            let good = entry.value == focus::fits_words() || entry.value == focus::clear_words();
             value.add_css_class(if good { "good" } else { "bad" });
         }
         line.append(&value);
@@ -446,12 +447,11 @@ fn show(widgets: &FocusPanelWidgets, root: &gtk::Box, focus: Option<&Focus>) {
     widgets.rows.set_visible(!focus.rows.is_empty());
 
     widgets.show_section.set_visible(joint);
-    let receives = focus.receives.as_deref().unwrap_or("the part");
-    set_toggle_text(
-        &widgets.xray_label,
-        "X-ray",
-        &format!("see into {receives}"),
-    );
+    let see_into = match focus.receives.as_deref() {
+        Some(receives) => fill_in(&tr("see into {part}"), &[("part", &receives)]),
+        None => tr("see into the part"),
+    };
+    set_toggle_text(&widgets.xray_label, &tr("X-ray"), &see_into);
 
     match &focus.insert {
         Some(insert) => {
@@ -495,15 +495,15 @@ impl FocusPanel {
     pub fn new() -> FocusPanel {
         let done = gtk::Button::builder()
             .child(&PathIcon::new(icons::CLOSE, 12))
-            .tooltip_text("Leave focus mode (Esc)")
+            .tooltip_text(tr("Leave focus mode (Esc)"))
             .css_classes(["flat", "circular", "stave-close"])
             .valign(gtk::Align::Center)
             .build();
-        done.update_property(&[gtk::accessible::Property::Label("Leave focus mode")]);
+        done.update_property(&[gtk::accessible::Property::Label(&tr("Leave focus mode"))]);
         let (xray, tint, fade) = (
-            check("X-ray"),
-            check("Tint cut faces"),
-            check("Fade other parts"),
+            check(&tr("X-ray")),
+            check(&tr("Tint cut faces")),
+            check(&tr("Fade other parts")),
         );
         let bridge = Bridge::<FocusPanelComponent>::launch(FocusPanelInit {
             done: done.clone(),

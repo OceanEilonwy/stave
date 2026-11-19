@@ -24,10 +24,6 @@ use stave_lang::Severity;
 
 use super::relm4_shim::Bridge;
 
-/// What the field says before anything is typed, and what screen readers
-/// call it.
-const PLACEHOLDER: &str = "Find a part, file, line or problem";
-
 /// Something the finder can do rather than go to: a verb typed in the
 /// field ("add shelf", "remove", "rename door_left"), listed first under
 /// "Do".
@@ -221,9 +217,13 @@ impl FinderComponent {
         }
         if rows.is_empty() {
             let words = if self.query.trim().is_empty() {
-                "Type a name: a part, a file, a word in the text or a problem; or a verb: add, remove, rename, repeat, mirror, hold"
+                tr(
+                    // TRANSLATORS: the verbs are typed into the finder as
+                    // written here, in English.
+                    "Type a name: a part, a file, a word in the text or a problem; or a verb: add, remove, rename, repeat, mirror, hold",
+                )
             } else {
-                "Nothing matches that"
+                tr("Nothing matches that")
             };
             let label = gtk::Label::builder()
                 .label(words)
@@ -380,7 +380,7 @@ impl Component for FinderComponent {
         adw::Dialog {
             set_content_width: 640,
             set_follows_content_size: true,
-            set_title: "Find",
+            set_title: &tr("Find"),
 
             #[wrap(Some)]
             set_child = &gtk::Box {
@@ -389,9 +389,13 @@ impl Component for FinderComponent {
 
                 #[name = "entry"]
                 gtk::SearchEntry {
-                    set_placeholder_text: Some(PLACEHOLDER),
+                    // What the field says before anything is typed, and
+                    // what screen readers call it.
+                    set_placeholder_text: Some(&tr("Find a part, file, line or problem")),
                     set_hexpand: true,
-                    update_property: &[gtk::accessible::Property::Label(PLACEHOLDER)],
+                    update_property: &[gtk::accessible::Property::Label(&tr(
+                        "Find a part, file, line or problem",
+                    ))],
                     connect_search_changed[sender] => move |entry| {
                         sender.input_sender().emit(FinderInput::Typed(entry.text().into()));
                     },
@@ -425,7 +429,9 @@ impl Component for FinderComponent {
                     gtk::ListBox {
                         set_selection_mode: gtk::SelectionMode::Single,
                         add_css_class: "stave-finder-list",
-                        update_property: &[gtk::accessible::Property::Label("What the finder found")],
+                        update_property: &[gtk::accessible::Property::Label(&tr(
+                            "What the finder found",
+                        ))],
                         connect_row_activated[sender] => move |_, row| {
                             sender.input_sender().emit(FinderInput::RowActivated(row.clone()));
                         },
@@ -439,10 +445,10 @@ impl Component for FinderComponent {
 
                 gtk::Box {
                     add_css_class: "stave-finder-foot",
-                    gtk::Label { set_label: "↑ ↓ show it in 3D" },
-                    gtk::Label { set_label: "Enter go there" },
-                    gtk::Label { set_label: "Ctrl+Enter open the text" },
-                    gtk::Label { set_label: "Esc close" },
+                    gtk::Label { set_label: &tr("↑ ↓ show it in 3D") },
+                    gtk::Label { set_label: &tr("Enter go there") },
+                    gtk::Label { set_label: &tr("Ctrl+Enter open the text") },
+                    gtk::Label { set_label: &tr("Esc close") },
                 },
             },
         }
@@ -457,7 +463,7 @@ impl Component for FinderComponent {
         // A filter for all, then one per kind, in one group.
         let filter_row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         let all = gtk::ToggleButton::builder()
-            .label("All")
+            .label(tr("All"))
             .active(true)
             .build();
         let mut filters = vec![Filter {
@@ -615,11 +621,11 @@ impl Finder {
 
 fn heading(kind: Kind) -> gtk::ListBoxRow {
     let words = match kind {
-        Kind::Part => "PARTS · Enter frames it in 3D",
-        Kind::File => "FILES · Enter opens the text",
-        Kind::Name => "NAMES · Enter opens where it is written",
-        Kind::Line => "LINES",
-        Kind::Problem => "PROBLEMS · Enter shows where it happens",
+        Kind::Part => tr("Parts · Enter frames it in 3D"),
+        Kind::File => tr("Files · Enter opens the text"),
+        Kind::Name => tr("Names · Enter opens where it is written"),
+        Kind::Line => tr("Lines"),
+        Kind::Problem => tr("Problems · Enter shows where it happens"),
     };
     let label = gtk::Label::builder()
         .label(words)
@@ -638,7 +644,7 @@ fn heading(kind: Kind) -> gtk::ListBoxRow {
 
 fn action_heading() -> gtk::ListBoxRow {
     let label = gtk::Label::builder()
-        .label("DO · Enter does it")
+        .label(tr("Do · Enter does it"))
         .xalign(0.0)
         .css_classes(["stave-finder-heading"])
         .build();

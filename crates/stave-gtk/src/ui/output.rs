@@ -9,6 +9,7 @@
 
 use adw::prelude::*;
 use relm4::{Component, ComponentParts, ComponentSender};
+use stave_app::i18n::tr;
 
 use super::relm4_shim::Bridge;
 
@@ -50,7 +51,7 @@ impl Component for OutputPanelComponent {
                 set_top_margin: 8,
                 set_bottom_margin: 8,
                 add_css_class: "stave-output",
-                update_property: &[gtk::accessible::Property::Label("Output")],
+                update_property: &[gtk::accessible::Property::Label(&tr("Output"))],
             },
         }
     }
