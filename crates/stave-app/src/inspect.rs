@@ -217,7 +217,7 @@ pub fn degrees(angle: Angle) -> String {
 }
 
 /// A length in millimetres: `1029.5 mm`.
-fn mm(length: Length) -> String {
+pub(crate) fn mm(length: Length) -> String {
     let text = length.to_string();
     let number = text.strip_suffix("mm").unwrap_or(&text);
     format!("{number} mm")
@@ -225,7 +225,11 @@ fn mm(length: Length) -> String {
 
 /// A name with its assembly's prefix taken off: `stile[hinge]` for
 /// `door_l.stile[hinge]` in `door_l`.
-fn relative<'a>(design: &SolvedDesign, name: &'a str, assembly: Option<AssemblyId>) -> &'a str {
+pub(crate) fn relative<'a>(
+    design: &SolvedDesign,
+    name: &'a str,
+    assembly: Option<AssemblyId>,
+) -> &'a str {
     assembly
         .and_then(|id| design.assemblies.get(id.index()))
         .and_then(|a| name.strip_prefix(a.name.as_str()))
@@ -274,7 +278,7 @@ fn member_swatch(body: &Body) -> Swatch {
 }
 
 /// `rail` and `top` for `rail[top]`; the whole name and `None` otherwise.
-fn split_index(name: &str) -> (&str, Option<&str>) {
+pub(crate) fn split_index(name: &str) -> (&str, Option<&str>) {
     match name.strip_suffix(']').and_then(|n| n.rsplit_once('[')) {
         Some((base, index)) if !base.contains('[') => (base, Some(index)),
         _ => (name, None),
@@ -367,7 +371,7 @@ fn group(singles: Vec<Single>) -> Vec<TreeEntry> {
 
 /// `stile[hinge]`; `feet[4]` for numbered members or more than two;
 /// `hinges[lower, upper]` for two named ones; `side_l, side_r` otherwise.
-fn group_label(labels: &[String]) -> String {
+pub(crate) fn group_label(labels: &[String]) -> String {
     let [first, ..] = labels else {
         return String::new();
     };

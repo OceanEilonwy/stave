@@ -44,6 +44,7 @@ pub mod link;
 pub mod naming;
 pub mod option_fits;
 pub mod param_kind;
+pub mod part_joints;
 pub mod problems;
 pub mod remove;
 pub mod repeat;
