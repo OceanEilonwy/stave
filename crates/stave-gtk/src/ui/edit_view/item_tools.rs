@@ -90,8 +90,14 @@ const AXIS_WORDS: [&str; 3] = [AXES[0].1, AXES[1].1, AXES[2].1];
 /// [`RepeatRowInput::Show`] fills it in with its handlers blocked.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::ui) struct RepeatRowComponent {
+    /// The count shown, within the stepper's range.
     count: usize,
     axis: Axis,
+    /// The smallest count the stepper offers.
+    least: usize,
+    /// How many [`RepeatRowInput::Show`] messages it has handled, so its
+    /// owner can tell a change people made before the last one it sent.
+    shows: u64,
     /// Whether the axis list shows (only while the count can choose it).
     axis_shown: bool,
     /// Whether it says "×" in place of "How many".
@@ -111,6 +117,12 @@ impl RepeatRowComponent {
             .and_then(|index| u32::try_from(index).ok())
             .unwrap_or(0)
     }
+}
+
+/// `count` as the stepper clamps it, to `least..=MOST` (GTK takes the
+/// upper bound first, then the lower, and so does this).
+fn clamp_count(count: usize, least: usize) -> usize {
+    count.min(MOST).max(least)
 }
 
 /// The axis at a place in the list (stacked up when out of it).
@@ -151,6 +163,10 @@ pub(in crate::ui) enum RepeatRowOutput {
         count: usize,
         /// The axis.
         axis: Axis,
+        /// How many [`RepeatRowInput::Show`] messages the row had handled
+        /// when people made the change: fewer than its owner sent means a
+        /// later `Show` replaced it.
+        shows: u64,
     },
 }
 
@@ -221,8 +237,10 @@ impl Component for RepeatRowComponent {
 
     fn init(least: usize, root: Self::Root, sender: ComponentSender<Self>) -> ComponentParts<Self> {
         let model = RepeatRowComponent {
-            count: 1,
+            count: clamp_count(1, least),
             axis: Axis::Up,
+            least,
+            shows: 0,
             axis_shown: true,
             short: false,
         };
@@ -242,9 +260,10 @@ impl Component for RepeatRowComponent {
                 axis,
                 axis_shown,
             } => {
-                self.count = count;
+                self.count = clamp_count(count, self.least);
                 self.axis = axis;
                 self.axis_shown = axis_shown;
+                self.shows = self.shows.wrapping_add(1);
                 false
             }
             RepeatRowInput::Shorten => {
@@ -253,6 +272,7 @@ impl Component for RepeatRowComponent {
                 false
             }
             RepeatRowInput::CountChanged(count) => {
+                let count = clamp_count(count, self.least);
                 let changed = count != self.count;
                 self.count = count;
                 changed
@@ -269,7 +289,30 @@ impl Component for RepeatRowComponent {
             let _ = sender.output(RepeatRowOutput::Changed {
                 count: self.count,
                 axis: self.axis,
+                shows: self.shows,
             });
+        }
+    }
+}
+
+/// What a [`RepeatRow`] says it shows, at once: the count and axis `show`
+/// last set or people last chose, while the stepper itself follows when the
+/// main loop next runs. Edit scripts read it between steps of one turn of
+/// the loop, as the old row's stepper was read.
+#[derive(Debug)]
+struct RepeatShown {
+    /// The count (within the stepper's range) and the axis.
+    value: Cell<(usize, Axis)>,
+    /// How many `show` calls were sent to the component.
+    shows: Cell<u64>,
+}
+
+impl RepeatShown {
+    /// Takes a change people made, unless a `show` sent after it has
+    /// replaced it (the component handled fewer shows than were sent).
+    fn take_change(&self, count: usize, axis: Axis, shows: u64) {
+        if shows == self.shows.get() {
+            self.value.set((count, axis));
         }
     }
 }
@@ -280,6 +323,10 @@ pub(in crate::ui) struct RepeatRow {
     /// The row; its owner shows and hides it.
     pub(in crate::ui) root: gtk::Box,
     bridge: Bridge<RepeatRowComponent>,
+    /// The smallest count it offers.
+    least: usize,
+    /// What it shows, readable at once (plain values: no cycle).
+    shown: Rc<RepeatShown>,
 }
 
 impl RepeatRow {
@@ -287,10 +334,19 @@ impl RepeatRow {
     /// offers is `least`.
     pub(in crate::ui) fn new(least: usize) -> RepeatRow {
         let bridge = Bridge::<RepeatRowComponent>::launch(least);
-        RepeatRow {
+        let shown = Rc::new(RepeatShown {
+            value: Cell::new((clamp_count(1, least), Axis::Up)),
+            shows: Cell::new(0),
+        });
+        let row = RepeatRow {
             root: bridge.widget().clone(),
             bridge,
-        }
+            least,
+            shown,
+        };
+        // Until a callback is connected, people's changes are still taken.
+        row.connect_changed(|_, _| {});
+        row
     }
 
     /// Says "×" in place of "How many" (in full in the stepper's tooltip
@@ -304,6 +360,8 @@ impl RepeatRow {
     /// Shows a count and an axis without reporting them; the axis list
     /// shows only while the count can still choose it.
     pub(in crate::ui) fn show(&self, count: usize, axis: Axis, axis_shown: bool) {
+        self.shown.value.set((clamp_count(count, self.least), axis));
+        self.shown.shows.set(self.shown.shows.get().wrapping_add(1));
         self.bridge.send(RepeatRowInput::Show {
             count,
             axis,
@@ -311,21 +369,29 @@ impl RepeatRow {
         });
     }
 
-    /// The count shown, as of the last message the row handled.
+    /// The count shown: what [`RepeatRow::show`] last set (clamped as the
+    /// stepper clamps it) or people last chose, at once, though the stepper
+    /// itself follows when the main loop next runs.
     pub(in crate::ui) fn count(&self) -> usize {
-        self.bridge.model().count
+        self.shown.value.get().0
     }
 
-    /// The axis chosen, as of the last message the row handled.
+    /// The axis chosen: what [`RepeatRow::show`] last set or people last
+    /// chose, at once.
     pub(in crate::ui) fn axis(&self) -> Axis {
-        self.bridge.model().axis
+        self.shown.value.get().1
     }
 
     /// Calls `callback` with the count and axis when the user changes
-    /// either.
+    /// either; [`RepeatRow::count`] and [`RepeatRow::axis`] already say
+    /// them when it runs.
     pub(in crate::ui) fn connect_changed(&self, callback: impl Fn(usize, Axis) + 'static) {
+        let shown = Rc::clone(&self.shown);
         self.bridge.connect(move |output| match output {
-            RepeatRowOutput::Changed { count, axis } => callback(count, axis),
+            RepeatRowOutput::Changed { count, axis, shows } => {
+                shown.take_change(count, axis, shows);
+                callback(count, axis);
+            }
         });
     }
 
@@ -1092,6 +1158,62 @@ mod tests {
         assert_eq!(list.selected(), 2);
         assert!(!list.is_visible(), "the axis list follows the model");
         assert!(heard.borrow().is_empty(), "showing it reports nothing");
+    }
+
+    #[test]
+    fn a_shown_count_and_axis_read_back_at_once() {
+        on_gtk_thread(shown_reads_back_at_once);
+    }
+
+    /// Edit scripts run their steps in one turn of the main loop and read
+    /// the row between them (`repeat 2 deep`, then `repeat 3` keeps the
+    /// axis), as the old row's stepper was read: what `show` set reads back
+    /// before the component has handled it, clamped as the stepper clamps.
+    fn shown_reads_back_at_once() {
+        let row = RepeatRow::new(2);
+        assert_eq!((row.count(), row.axis()), (2, Axis::Up), "starts at least");
+        row.show(3, Axis::Deep, true);
+        assert_eq!((row.count(), row.axis()), (3, Axis::Deep), "no settle");
+        row.show(40, Axis::Deep, true);
+        assert_eq!(row.count(), MOST, "clamped to the most");
+        row.show(0, Axis::Across, true);
+        assert_eq!((row.count(), row.axis()), (2, Axis::Across), "clamped up");
+        settle();
+        let Some((spin, list)) = row.controls() else {
+            panic!("the row has a stepper and an axis list");
+        };
+        assert_eq!(spin.value_as_int(), 2, "the stepper agrees");
+        assert_eq!(list.selected(), 1);
+        assert_eq!((row.count(), row.axis()), (2, Axis::Across));
+    }
+
+    #[test]
+    fn a_change_people_made_before_a_show_does_not_outlive_it() {
+        on_gtk_thread(show_replaces_an_earlier_change);
+    }
+
+    /// People change the count, and the window shows another before the
+    /// main loop runs: the callback still hears the change (the old row
+    /// called it before the show), but the show is what the row says and
+    /// what the stepper holds.
+    fn show_replaces_an_earlier_change() {
+        let row = RepeatRow::new(1);
+        let heard: Rc<RefCell<Vec<(usize, Axis)>>> = Rc::default();
+        let log = Rc::clone(&heard);
+        row.connect_changed(move |count, axis| log.borrow_mut().push((count, axis)));
+        let Some((spin, _)) = row.controls() else {
+            panic!("the row has a stepper and an axis list");
+        };
+        spin.set_value(5.0);
+        row.show(3, Axis::Deep, true);
+        settle();
+        assert_eq!(*heard.borrow(), vec![(5, Axis::Up)]);
+        assert_eq!((row.count(), row.axis()), (3, Axis::Deep));
+        assert_eq!(spin.value_as_int(), 3);
+        // A change after the show is taken again.
+        spin.set_value(6.0);
+        settle();
+        assert_eq!((row.count(), row.axis()), (6, Axis::Deep));
     }
 
     #[test]
