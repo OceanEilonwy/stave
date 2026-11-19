@@ -19,6 +19,7 @@ use std::rc::Rc;
 use adw::prelude::*;
 use gtk::glib;
 use relm4::{Component, ComponentParts, ComponentSender};
+use stave_app::i18n::{fill_in, tr};
 use stave_app::inspect::Token;
 use stave_app::problems::{Report, ReportPlace, Role};
 use stave_app::session::SourceLocation;
@@ -27,11 +28,13 @@ use stave_lang::Severity;
 use super::relm4_shim::Bridge;
 use super::style::CODE;
 
-/// The Problems panel's state: how many problems it lists, whether the
-/// 3D view shows an older design than theirs, and which one is selected.
+/// The Problems panel's state: the problems it lists, whether the 3D
+/// view shows an older design than theirs, and which one is selected.
 #[derive(Debug)]
 pub struct ProblemsComponent {
-    count: usize,
+    /// The problems the rows show, in order, so a new check replaces only
+    /// the rows that changed.
+    shown: Vec<Report>,
     stale: bool,
     selected: Option<usize>,
 }
@@ -80,7 +83,11 @@ impl ProblemsComponent {
 
     /// Which page shows: the list, or why it is empty.
     fn page(&self) -> &'static str {
-        if self.count > 0 { "list" } else { "empty" }
+        if self.shown.is_empty() {
+            "empty"
+        } else {
+            "list"
+        }
     }
 }
 
@@ -103,14 +110,14 @@ impl Component for ProblemsComponent {
                     // Over the list while the 3D view shows an older design
                     // than the one these problems are about.
                     gtk::Label {
-                        set_label: "The 3D view shows the last version without errors until these are fixed.",
+                        set_label: &tr("The 3D view shows the last version without errors until these are fixed."),
                         set_xalign: 0.0,
                         set_wrap: true,
                         add_css_class: "dim",
                         add_css_class: "caption",
                         add_css_class: "stave-problems-stale",
                         #[watch]
-                        set_visible: model.stale && model.count > 0,
+                        set_visible: model.stale && !model.shown.is_empty(),
                     },
                     #[name = "list"]
                     gtk::ListBox {
@@ -132,8 +139,8 @@ impl Component for ProblemsComponent {
             },
             add_named[Some("empty")] = &adw::StatusPage {
                 set_icon_name: Some("object-select-symbolic"),
-                set_title: "No problems",
-                set_description: Some("Every part fits, every joint closes and everything that moves moves clear."),
+                set_title: &tr("No problems"),
+                set_description: Some(&tr("Every part fits, every joint closes and everything that moves moves clear.")),
                 add_css_class: "compact",
             },
             #[watch]
@@ -143,7 +150,7 @@ impl Component for ProblemsComponent {
 
     fn init((): (), root: Self::Root, sender: ComponentSender<Self>) -> ComponentParts<Self> {
         let model = ProblemsComponent {
-            count: 0,
+            shown: Vec::new(),
             stale: false,
             selected: None,
         };
@@ -166,12 +173,9 @@ impl Component for ProblemsComponent {
             } => {
                 let list = &widgets.list;
                 list.block_signal(&widgets.row_selected);
-                list.remove_all();
-                for report in &reports {
-                    list.append(&report_row(report, sender.input_sender()));
-                }
+                replace_changed_rows(list, &self.shown, &reports, sender.input_sender());
                 list.unblock_signal(&widgets.row_selected);
-                self.count = reports.len();
+                self.shown = reports;
                 self.stale = stale;
                 self.selected = selected;
             }
@@ -224,7 +228,11 @@ impl ProblemsPanel {
     }
 
     /// Lists these problems in full, the `selected` one marked. `stale`
-    /// says the 3D view shows the last design that had no errors.
+    /// says the 3D view shows the last design that had no errors. Rows
+    /// for problems that are the same at the start and the end of the
+    /// list are kept; only the run between is replaced, so the scroll
+    /// position and the keyboard's row survive a check that changed
+    /// nothing, or little.
     pub fn show(&self, reports: &[Report], selected: Option<usize>, stale: bool) {
         self.bridge.send(ProblemsInput::Show {
             reports: reports.to_vec(),
@@ -236,6 +244,44 @@ impl ProblemsPanel {
     /// Marks the selected problem, or none.
     pub fn show_selected(&self, selected: Option<usize>) {
         self.bridge.send(ProblemsInput::ShowSelected(selected));
+    }
+}
+
+/// Replaces the rows showing `shown` with rows for `reports`: rows for
+/// problems that are the same at the start and the end of both lists are
+/// kept, and only the run between is removed and built again.
+fn replace_changed_rows(
+    list: &gtk::ListBox,
+    shown: &[Report],
+    reports: &[Report],
+    input: &relm4::Sender<ProblemsInput>,
+) {
+    let prefix = shown
+        .iter()
+        .zip(reports)
+        .take_while(|(old, new)| old == new)
+        .count();
+    let suffix = shown
+        .iter()
+        .skip(prefix)
+        .rev()
+        .zip(reports.iter().skip(prefix).rev())
+        .take_while(|(old, new)| old == new)
+        .count();
+    let removed = shown.len().saturating_sub(prefix).saturating_sub(suffix);
+    let at = i32::try_from(prefix).unwrap_or(i32::MAX);
+    for _ in 0..removed {
+        if let Some(row) = list.row_at_index(at) {
+            list.remove(&row);
+        }
+    }
+    let added = reports.len().saturating_sub(prefix).saturating_sub(suffix);
+    for (offset, report) in reports.iter().skip(prefix).take(added).enumerate() {
+        let position = prefix
+            .checked_add(offset)
+            .and_then(|position| i32::try_from(position).ok())
+            .unwrap_or(-1);
+        list.insert(&report_row(report, input), position);
     }
 }
 
@@ -283,10 +329,10 @@ fn report_row(report: &Report, input: &relm4::Sender<ProblemsInput>) -> gtk::Box
         text.append(&place_block(place, report.severity, input));
     }
     for note in &report.notes {
-        text.append(&fact("note", note, "stave-problem-note"));
+        text.append(&fact(&tr("note"), note, "stave-problem-note"));
     }
     if let Some(help) = &report.help {
-        text.append(&fact("help", help, "stave-problem-help"));
+        text.append(&fact(&tr("help"), help, "stave-problem-help"));
     }
     row.append(&text);
     row
@@ -312,16 +358,17 @@ fn place_block(
         gtk::Button::builder()
             .label(&place.shown)
             .css_classes(["flat", "stave-link", "stave-problem-place"])
-            .tooltip_text("Show this place in the Code panel")
+            .tooltip_text(tr("Show this place in the Code panel"))
             .build(),
     );
     let input = input.clone();
     let location = place.location.clone();
     link.connect_clicked(move |_| input.emit(ProblemsInput::OpenPlace(location.clone())));
     line.append(&link);
+    let also_here = tr("also here");
     let what: &str = match place.role {
         Role::Primary => &place.message,
-        Role::Secondary if place.message.is_empty() => "also here",
+        Role::Secondary if place.message.is_empty() => &also_here,
         Role::Secondary => &place.message,
     };
     if !what.is_empty() {
@@ -343,9 +390,15 @@ fn place_block(
         .wrap_mode(gtk::pango::WrapMode::WordChar)
         .css_classes(["stave-code", "stave-problem-snippet"])
         .build();
-    snippet.update_property(&[gtk::accessible::Property::Label(&format!(
-        "Line {}: {}{}{}",
-        place.location.line, place.before, place.marked, place.after
+    snippet.update_property(&[gtk::accessible::Property::Label(&fill_in(
+        &tr("Line {line}: {text}"),
+        &[
+            ("line", &place.location.line),
+            (
+                "text",
+                &format!("{}{}{}", place.before, place.marked, place.after),
+            ),
+        ],
     ))]);
     block.append(&snippet);
     block
@@ -554,8 +607,8 @@ impl Component for FilesListComponent {
             },
             add_named[Some("empty")] = &adw::StatusPage {
                 set_icon_name: Some("folder-symbolic"),
-                set_title: "No files",
-                set_description: Some("This folder has no .stave files."),
+                set_title: &tr("No files"),
+                set_description: Some(&tr("This folder has no .stave files.")),
                 add_css_class: "compact",
             },
             #[watch]
@@ -756,6 +809,57 @@ mod tests {
             notes: vec!["for door_l and side_l".to_owned()],
             help: Some("open it less far".to_owned()),
         }
+    }
+
+    /// A problem saying `message`, with no places.
+    fn problem(message: &str) -> Report {
+        Report {
+            severity: Severity::Error,
+            code: *stave_lang::Code::ALL.first().expect("a code"),
+            message: message.to_owned(),
+            places: Vec::new(),
+            notes: Vec::new(),
+            help: None,
+        }
+    }
+
+    /// The row widgets, in order.
+    fn rows(list: &gtk::ListBox) -> Vec<gtk::ListBoxRow> {
+        (0..).map_while(|index| list.row_at_index(index)).collect()
+    }
+
+    #[test]
+    fn a_new_check_replaces_only_the_problems_that_changed() {
+        on_gtk_thread(problems_update_in_place);
+    }
+
+    fn problems_update_in_place() {
+        let panel = ProblemsPanel::new();
+        let list = list_of(&panel.root);
+        let first = vec![problem("a"), problem("b"), problem("c")];
+        panel.show(&first, None, false);
+        settle();
+        let before = rows(&list);
+        assert_eq!(before.len(), 3);
+        panel.show(&first, None, false);
+        settle();
+        assert_eq!(rows(&list), before, "the same problems keep their rows");
+        let second = vec![problem("a"), problem("x"), problem("y"), problem("c")];
+        panel.show(&second, Some(2), false);
+        settle();
+        let after = rows(&list);
+        assert_eq!(after.len(), 4);
+        assert_eq!(after.first(), before.first(), "a is kept");
+        assert_eq!(after.last(), before.last(), "c is kept");
+        assert!(!after.contains(&before[1]), "b is replaced");
+        assert_eq!(
+            list.selected_row().map(|row| row.index()),
+            Some(2),
+            "the selected problem is marked"
+        );
+        panel.show(&[], None, false);
+        settle();
+        assert!(rows(&list).is_empty());
     }
 
     #[test]

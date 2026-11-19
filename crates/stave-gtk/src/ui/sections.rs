@@ -25,6 +25,7 @@
 //! callbacks every link shares, each in a [`Cell`] and cloned out before
 //! it is called, so nothing is borrowed while a callback or GTK runs.
 
+use stave_app::i18n::{fill_in, tr, tr_noop};
 use std::cell::Cell;
 use std::rc::Rc;
 
@@ -90,8 +91,8 @@ impl LinkHandlers {
             .css_classes(["stave-name-link"])
             .valign(gtk::Align::Center)
             .tooltip_text(match link.target {
-                LinkTarget::Select(_) => format!("Select {}", link.name),
-                LinkTarget::Space(_) => format!("The space {}", link.name),
+                LinkTarget::Select(_) => fill_in(&tr("Select {name}"), &[("name", &link.name)]),
+                LinkTarget::Space(_) => fill_in(&tr("The space {name}"), &[("name", &link.name)]),
             })
             .build();
         button.set_cursor_from_name(Some("pointer"));
@@ -286,17 +287,17 @@ pub(super) fn name_field(text: &str) -> gtk::Label {
 /// reads "Apply" (Enter), at the right.
 pub(super) fn footer_buttons() -> (gtk::Box, gtk::Button, gtk::Button) {
     let cancel = gtk::Button::builder()
-        .label("Cancel")
-        .tooltip_text("Leave the design as it is (Esc)")
+        .label(tr("Cancel"))
+        .tooltip_text(tr("Leave the design as it is (Esc)"))
         .css_classes(["stave-footer-button"])
         .build();
-    cancel.set_child(Some(&key_hint("Cancel", "Esc")));
+    cancel.set_child(Some(&key_hint(&tr("Cancel"), &tr("Esc"))));
     let apply = gtk::Button::builder()
         .css_classes(["suggested-action", "stave-footer-button"])
         .build();
-    apply.set_child(Some(&key_hint(APPLY, "Enter")));
-    apply.update_property(&[gtk::accessible::Property::Label(APPLY)]);
-    cancel.update_property(&[gtk::accessible::Property::Label("Cancel")]);
+    apply.set_child(Some(&key_hint(&tr(APPLY), &tr("Enter"))));
+    apply.update_property(&[gtk::accessible::Property::Label(&tr(APPLY))]);
+    cancel.update_property(&[gtk::accessible::Property::Label(&tr("Cancel"))]);
     let buttons = gtk::Box::builder()
         .spacing(6)
         .halign(gtk::Align::End)
@@ -320,8 +321,8 @@ pub(super) fn set_button_words(button: &gtk::Button, words: &str) {
     button.update_property(&[gtk::accessible::Property::Label(words)]);
 }
 
-/// What every commit button says.
-pub(super) const APPLY: &str = "Apply";
+/// What every commit button says (translated where it is shown).
+pub(super) const APPLY: &str = tr_noop("Apply");
 
 /// A button's words and its key, dimmed: "Apply  Enter".
 fn key_hint(words: &str, key: &str) -> gtk::Box {
