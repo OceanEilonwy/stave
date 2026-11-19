@@ -11,16 +11,24 @@
 //!   slider with the blocked range hatched and the handle red past the
 //!   contact.
 //!
-//! The window sets their values and hears back only from what people do.
+//! Each is a relm4 component (docs/relm4-migration.md): its model is the
+//! only state, only its `update` changes it, and its widgets' handlers
+//! only send it messages. The structs named after them ([`StepCard`],
+//! [`SwingCard`], [`Caption`], [`Pictures`], [`ProblemCard`]) keep the
+//! older API in front of the components until the window moves to relm4
+//! too. The window sets their values and hears back only from what people
+//! do.
 
-use std::cell::{Cell, RefCell};
+use std::cell::Cell;
 use std::rc::Rc;
 
 use adw::prelude::*;
 use gtk::gdk;
+use relm4::{Component, ComponentParts, ComponentSender, RelmWidgetExt};
 use stave_app::problems::MotionCard;
 
 use super::icons::{self, PathIcon};
+use super::relm4_shim::Bridge;
 use super::slider::Slider;
 use super::viewport::{Sizing, Viewport};
 
@@ -37,13 +45,6 @@ fn play_button(label: &str) -> (gtk::Button, PathIcon) {
     (button, icon)
 }
 
-fn dim(text: &str) -> gtk::Label {
-    gtk::Label::builder()
-        .label(text)
-        .css_classes(["stave-card-dim"])
-        .build()
-}
-
 /// Shows play or pause on a play button.
 pub fn show_playing(button: &gtk::Button, icon: &PathIcon, playing: bool, label: &str) {
     icon.set_shape(if playing { icons::PAUSE } else { icons::PLAY });
@@ -52,7 +53,267 @@ pub fn show_playing(button: &gtk::Button, icon: &PathIcon, playing: bool, label:
     button.update_property(&[gtk::accessible::Property::Label(text)]);
 }
 
-/// The joint's step player, floating at the bottom of the view.
+/// A callback for one kind of a component's outputs.
+type Callback<T> = Rc<dyn Fn(T)>;
+
+/// One callback the window connected, for one kind of output from a
+/// component. It is cloned out before it is called, so the callback may
+/// connect another; nothing is borrowed while it runs.
+pub(super) struct Slot<T> {
+    callback: Cell<Option<Callback<T>>>,
+}
+
+impl<T> Default for Slot<T> {
+    fn default() -> Self {
+        Slot {
+            callback: Cell::new(None),
+        }
+    }
+}
+
+impl<T> Slot<T> {
+    /// Calls `callback` from now on, instead of the one connected before.
+    pub(super) fn connect(&self, callback: impl Fn(T) + 'static) {
+        self.callback.set(Some(Rc::new(callback)));
+    }
+
+    /// Calls the callback with `value`, or drops it when none is
+    /// connected.
+    pub(super) fn deliver(&self, value: T) {
+        let callback = self.callback.take();
+        self.callback.set(callback.clone());
+        if let Some(callback) = callback {
+            callback(value);
+        }
+    }
+}
+
+/// A card's slider as the window still reaches it: what people move it to
+/// reaches the callback connected with [`Scrub::connect_changed`], and
+/// [`Scrub::set_value`] moves it without calling back. The slider itself
+/// belongs to the card's component.
+pub struct Scrub {
+    changed: Rc<Slot<f64>>,
+    move_to: Box<dyn Fn(f64)>,
+}
+
+impl Scrub {
+    /// Calls `callback` with the value whenever people move the slider.
+    pub fn connect_changed(&self, callback: impl Fn(f64) + 'static) {
+        self.changed.connect(callback);
+    }
+
+    /// Moves the slider, without calling back. Queued, as every setter.
+    pub fn set_value(&self, value: f64) {
+        (self.move_to)(value);
+    }
+}
+
+/// A slider the window only listens to (the component alone sets it):
+/// what people move it to reaches the callback connected with
+/// [`SliderChanges::connect_changed`].
+pub struct SliderChanges {
+    changed: Rc<Slot<f64>>,
+}
+
+impl SliderChanges {
+    /// Listens for people moving the slider; returns the handle and the
+    /// slot its owner delivers to.
+    pub(super) fn new() -> (SliderChanges, Rc<Slot<f64>>) {
+        let changed = Rc::new(Slot::default());
+        (
+            SliderChanges {
+                changed: Rc::clone(&changed),
+            },
+            changed,
+        )
+    }
+
+    /// Calls `callback` with the value whenever people move the slider.
+    pub fn connect_changed(&self, callback: impl Fn(f64) + 'static) {
+        self.changed.connect(callback);
+    }
+}
+
+/// The step line's markup: the lead in bold, the call in monospace.
+fn step_markup(step: Option<&str>) -> String {
+    let escape = |t: &str| gtk::glib::markup_escape_text(t).to_string();
+    match step.map(|step| step.split_once(" · ").unwrap_or((step, ""))) {
+        Some((lead, "")) => format!("<b>{}</b>", escape(lead)),
+        Some((lead, text)) => format!(
+            "<b>{}</b> · <span font_family=\"monospace\" size=\"92%\">{}</span>",
+            escape(lead),
+            escape(text)
+        ),
+        None => String::new(),
+    }
+}
+
+/// The joint's step player: what it shows, and its slider.
+pub struct StepCardComponent {
+    /// The step line, as markup.
+    markup: String,
+    /// The step line in full, for its tooltip.
+    tooltip: Option<String>,
+    /// How far the part is from home.
+    status: String,
+    /// Apart (0) to together (1).
+    scrub: Slider,
+    /// Where the card's messages go, for the window's handle on its slider.
+    input: relm4::Sender<StepCardInput>,
+}
+
+/// What a step player is made with: the play button the window still
+/// shows play or pause on.
+#[derive(Debug)]
+pub struct StepCardInit {
+    /// Plays the joint going together.
+    pub play: gtk::Button,
+}
+
+/// What a step player is told.
+#[derive(Debug)]
+pub enum StepCardInput {
+    /// Show the step ("Step 1 of 1 · push(rung, along: length)") and the
+    /// distance from home.
+    ShowFrame {
+        /// The step, if there is one.
+        step: Option<String>,
+        /// The distance from home.
+        status: String,
+    },
+    /// Move the slider, without telling anyone.
+    SetProgress(f64),
+    /// People moved the slider.
+    Scrubbed(f64),
+    /// People pressed play.
+    PlayPressed,
+}
+
+/// What a step player tells its owner.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum StepCardOutput {
+    /// People pressed play (or pause).
+    Play,
+    /// People moved the slider to this progress.
+    Scrubbed(f64),
+}
+
+#[relm4::component(pub)]
+impl Component for StepCardComponent {
+    type Init = StepCardInit;
+    type Input = StepCardInput;
+    type Output = StepCardOutput;
+    type CommandOutput = ();
+
+    view! {
+        gtk::Box {
+            set_orientation: gtk::Orientation::Horizontal,
+            set_spacing: 14,
+            set_valign: gtk::Align::End,
+            set_margin_start: 16,
+            set_margin_end: 16,
+            set_margin_bottom: 16,
+            add_css_class: "stave-focus-card",
+            set_visible: false,
+            update_property: &[gtk::accessible::Property::Label("Assembly steps")],
+
+            #[local_ref]
+            play -> gtk::Button {
+                connect_clicked[sender] => move |_| {
+                    sender.input_sender().emit(StepCardInput::PlayPressed);
+                },
+            },
+            gtk::Box {
+                set_orientation: gtk::Orientation::Vertical,
+                set_spacing: 6,
+                set_hexpand: true,
+
+                gtk::Box {
+                    set_orientation: gtk::Orientation::Horizontal,
+                    set_spacing: 12,
+
+                    gtk::Label {
+                        set_use_markup: true,
+                        set_xalign: 0.0,
+                        set_hexpand: true,
+                        set_ellipsize: gtk::pango::EllipsizeMode::End,
+                        #[watch]
+                        set_markup: &model.markup,
+                        #[watch]
+                        set_tooltip_text: model.tooltip.as_deref(),
+                    },
+                    gtk::Label {
+                        set_xalign: 1.0,
+                        add_css_class: "stave-card-dim",
+                        #[watch]
+                        set_label: &model.status,
+                    },
+                },
+                #[local_ref]
+                scrub_area -> gtk::DrawingArea {},
+                gtk::Box {
+                    set_orientation: gtk::Orientation::Horizontal,
+
+                    gtk::Label {
+                        set_label: "apart",
+                        set_hexpand: true,
+                        set_xalign: 0.0,
+                        add_css_class: "stave-card-dim",
+                    },
+                    gtk::Label {
+                        set_label: "together",
+                        add_css_class: "stave-card-dim",
+                    },
+                },
+            },
+        }
+    }
+
+    fn init(
+        init: Self::Init,
+        root: Self::Root,
+        sender: ComponentSender<Self>,
+    ) -> ComponentParts<Self> {
+        let play = &init.play;
+        let scrub = Slider::new("Apart to together", 22, 22.0, 2.0);
+        let input = sender.input_sender().clone();
+        let forward = input.clone();
+        scrub.connect_changed(move |value| forward.emit(StepCardInput::Scrubbed(value)));
+        let scrub_area = &scrub.root.clone();
+        let model = StepCardComponent {
+            markup: String::new(),
+            tooltip: None,
+            status: String::new(),
+            scrub,
+            input,
+        };
+        let widgets = view_output!();
+        ComponentParts { model, widgets }
+    }
+
+    fn update(&mut self, message: StepCardInput, sender: ComponentSender<Self>, _: &Self::Root) {
+        match message {
+            StepCardInput::ShowFrame { step, status } => {
+                self.markup = step_markup(step.as_deref());
+                self.tooltip = step;
+                self.status = status;
+            }
+            StepCardInput::SetProgress(value) => self.scrub.set_value(value),
+            StepCardInput::Scrubbed(value) => {
+                // Nobody listening is not a mistake.
+                let _ = sender.output(StepCardOutput::Scrubbed(value));
+            }
+            StepCardInput::PlayPressed => {
+                let _ = sender.output(StepCardOutput::Play);
+            }
+        }
+    }
+}
+
+/// The joint's step player, floating at the bottom of the view, behind
+/// the API the window still uses. It owns the component: dropping it shuts
+/// the component down. Setters are queued.
 pub struct StepCard {
     /// The card.
     pub root: gtk::Box,
@@ -60,87 +321,187 @@ pub struct StepCard {
     pub play: gtk::Button,
     /// The play button's icon.
     pub play_icon: PathIcon,
-    step: gtk::Label,
-    status: gtk::Label,
     /// Apart (0) to together (1).
-    pub scrub: Slider,
+    pub scrub: Scrub,
+    bridge: Bridge<StepCardComponent>,
 }
 
 impl StepCard {
     /// A hidden card.
     pub fn new() -> StepCard {
         let (play, play_icon) = play_button("Play the assembly");
-        let step = gtk::Label::builder()
-            .use_markup(true)
-            .xalign(0.0)
-            .hexpand(true)
-            .ellipsize(gtk::pango::EllipsizeMode::End)
-            .build();
-        let status = gtk::Label::builder()
-            .xalign(1.0)
-            .css_classes(["stave-card-dim"])
-            .build();
-        let line = gtk::Box::new(gtk::Orientation::Horizontal, 12);
-        line.append(&step);
-        line.append(&status);
-        let scrub = Slider::new("Apart to together", 22, 22.0, 2.0);
-        let ends = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-        let apart = dim("apart");
-        apart.set_hexpand(true);
-        apart.set_xalign(0.0);
-        ends.append(&apart);
-        ends.append(&dim("together"));
-        let column = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
-            .spacing(6)
-            .hexpand(true)
-            .build();
-        column.append(&line);
-        column.append(&scrub.root);
-        column.append(&ends);
-        let root = gtk::Box::builder()
-            .orientation(gtk::Orientation::Horizontal)
-            .spacing(14)
-            .valign(gtk::Align::End)
-            .margin_start(16)
-            .margin_end(16)
-            .margin_bottom(16)
-            .css_classes(["stave-focus-card"])
-            .visible(false)
-            .build();
-        root.update_property(&[gtk::accessible::Property::Label("Assembly steps")]);
-        root.append(&play);
-        root.append(&column);
+        let bridge = Bridge::<StepCardComponent>::launch(StepCardInit { play: play.clone() });
+        let changed = Rc::new(Slot::default());
+        let forward = Rc::clone(&changed);
+        bridge.connect(move |output| match output {
+            StepCardOutput::Scrubbed(value) => forward.deliver(value),
+            // The window hears the play button on the button itself.
+            StepCardOutput::Play => {}
+        });
+        let input = bridge.model().input.clone();
+        let scrub = Scrub {
+            changed,
+            move_to: Box::new(move |value| input.emit(StepCardInput::SetProgress(value))),
+        };
         StepCard {
-            root,
+            root: bridge.widget().clone(),
             play,
             play_icon,
-            step,
-            status,
             scrub,
+            bridge,
         }
     }
 
     /// Shows the step ("Step 1 of 1 · push(rung, along: length)") and the
     /// distance from home.
     pub fn show_frame(&self, step: Option<&str>, status: &str) {
-        let escape = |t: &str| gtk::glib::markup_escape_text(t).to_string();
-        let markup = match step.map(|step| step.split_once(" · ").unwrap_or((step, ""))) {
-            Some((lead, "")) => format!("<b>{}</b>", escape(lead)),
-            Some((lead, text)) => format!(
-                "<b>{}</b> · <span font_family=\"monospace\" size=\"92%\">{}</span>",
-                escape(lead),
-                escape(text)
-            ),
-            None => String::new(),
-        };
-        self.step.set_markup(&markup);
-        self.step.set_tooltip_text(step);
-        self.status.set_label(status);
+        self.bridge.send(StepCardInput::ShowFrame {
+            step: step.map(str::to_owned),
+            status: status.to_owned(),
+        });
     }
 }
 
-/// Hardware focus: the swing (or slide) card under the small views.
+/// Hardware focus's swing (or slide) card: what it shows, and its slider.
+pub struct SwingCardComponent {
+    /// What moves.
+    name: String,
+    /// The reading: "45°", "250 mm".
+    value: String,
+    /// Closed (0) to fully open (1).
+    scrub: Slider,
+    /// Where the card's messages go, for the window's handle on its slider.
+    input: relm4::Sender<SwingCardInput>,
+}
+
+/// What a swing card is made with: the play button the window still
+/// shows play or pause on.
+#[derive(Debug)]
+pub struct SwingCardInit {
+    /// Plays the door opening.
+    pub play: gtk::Button,
+}
+
+/// What a swing card is told.
+#[derive(Debug)]
+pub enum SwingCardInput {
+    /// Name what moves, and whether it turns (a door) or slides (a drawer).
+    ShowName {
+        /// What moves.
+        name: String,
+        /// It turns.
+        turns: bool,
+    },
+    /// Show the reading: "45°", "250 mm".
+    ShowValue(String),
+    /// Move the slider, without telling anyone.
+    SetProgress(f64),
+    /// People moved the slider.
+    Scrubbed(f64),
+    /// People pressed play.
+    PlayPressed,
+}
+
+/// What a swing card tells its owner.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum SwingCardOutput {
+    /// People pressed play (or pause).
+    Play,
+    /// People moved the slider to this progress.
+    Scrubbed(f64),
+}
+
+#[relm4::component(pub)]
+impl Component for SwingCardComponent {
+    type Init = SwingCardInit;
+    type Input = SwingCardInput;
+    type Output = SwingCardOutput;
+    type CommandOutput = ();
+
+    view! {
+        gtk::Box {
+            set_orientation: gtk::Orientation::Horizontal,
+            set_spacing: 14,
+            add_css_class: "stave-focus-card",
+            set_visible: false,
+            update_property: &[gtk::accessible::Property::Label("Swing the door")],
+
+            #[local_ref]
+            play -> gtk::Button {
+                connect_clicked[sender] => move |_| {
+                    sender.input_sender().emit(SwingCardInput::PlayPressed);
+                },
+            },
+            gtk::Label {
+                add_css_class: "heading",
+                add_css_class: "stave-card-name",
+                #[watch]
+                set_label: &model.name,
+            },
+            #[local_ref]
+            scrub_area -> gtk::DrawingArea {},
+            gtk::Label {
+                set_xalign: 1.0,
+                set_width_chars: 6,
+                add_css_class: "stave-card-value",
+                #[watch]
+                set_label: &model.value,
+            },
+        }
+    }
+
+    fn init(
+        init: Self::Init,
+        root: Self::Root,
+        sender: ComponentSender<Self>,
+    ) -> ComponentParts<Self> {
+        let play = &init.play;
+        let scrub = Slider::new("Door angle", 22, 22.0, 2.0);
+        let input = sender.input_sender().clone();
+        let forward = input.clone();
+        scrub.connect_changed(move |value| forward.emit(SwingCardInput::Scrubbed(value)));
+        let scrub_area = &scrub.root.clone();
+        let model = SwingCardComponent {
+            name: String::new(),
+            value: String::new(),
+            scrub,
+            input,
+        };
+        let widgets = view_output!();
+        ComponentParts { model, widgets }
+    }
+
+    fn update(&mut self, message: SwingCardInput, sender: ComponentSender<Self>, _: &Self::Root) {
+        match message {
+            SwingCardInput::ShowName { name, turns } => {
+                self.name = name;
+                let label = if turns {
+                    "Door angle"
+                } else {
+                    "How far it slides out"
+                };
+                self.scrub
+                    .root
+                    .update_property(&[gtk::accessible::Property::Label(label)]);
+            }
+            SwingCardInput::ShowValue(text) => {
+                self.scrub.set_value_text(&text);
+                self.value = text;
+            }
+            SwingCardInput::SetProgress(value) => self.scrub.set_value(value),
+            SwingCardInput::Scrubbed(value) => {
+                let _ = sender.output(SwingCardOutput::Scrubbed(value));
+            }
+            SwingCardInput::PlayPressed => {
+                let _ = sender.output(SwingCardOutput::Play);
+            }
+        }
+    }
+}
+
+/// Hardware focus: the swing (or slide) card under the small views, behind
+/// the API the window still uses. It owns the component: dropping it shuts
+/// the component down. Setters are queued.
 pub struct SwingCard {
     /// The card.
     pub root: gtk::Box,
@@ -148,201 +509,223 @@ pub struct SwingCard {
     pub play: gtk::Button,
     /// The play button's icon.
     pub play_icon: PathIcon,
-    name: gtk::Label,
     /// Closed (0) to fully open (1).
-    pub scrub: Slider,
-    value: gtk::Label,
+    pub scrub: Scrub,
+    bridge: Bridge<SwingCardComponent>,
 }
 
 impl SwingCard {
     /// A hidden card.
     pub fn new() -> SwingCard {
         let (play, play_icon) = play_button("Play the swing");
-        let name = gtk::Label::builder()
-            .css_classes(["heading", "stave-card-name"])
-            .build();
-        let scrub = Slider::new("Door angle", 22, 22.0, 2.0);
-        let value = gtk::Label::builder()
-            .xalign(1.0)
-            .width_chars(6)
-            .css_classes(["stave-card-value"])
-            .build();
-        let root = gtk::Box::builder()
-            .orientation(gtk::Orientation::Horizontal)
-            .spacing(14)
-            .css_classes(["stave-focus-card"])
-            .visible(false)
-            .build();
-        root.update_property(&[gtk::accessible::Property::Label("Swing the door")]);
-        root.append(&play);
-        root.append(&name);
-        root.append(&scrub.root);
-        root.append(&value);
+        let bridge = Bridge::<SwingCardComponent>::launch(SwingCardInit { play: play.clone() });
+        let changed = Rc::new(Slot::default());
+        let forward = Rc::clone(&changed);
+        bridge.connect(move |output| match output {
+            SwingCardOutput::Scrubbed(value) => forward.deliver(value),
+            // The window hears the play button on the button itself.
+            SwingCardOutput::Play => {}
+        });
+        let input = bridge.model().input.clone();
+        let scrub = Scrub {
+            changed,
+            move_to: Box::new(move |value| input.emit(SwingCardInput::SetProgress(value))),
+        };
         SwingCard {
-            root,
+            root: bridge.widget().clone(),
             play,
             play_icon,
-            name,
             scrub,
-            value,
+            bridge,
         }
     }
 
     /// Names what moves.
     pub fn show_name(&self, name: &str, turns: bool) {
-        self.name.set_label(name);
-        self.scrub
-            .root
-            .update_property(&[gtk::accessible::Property::Label(if turns {
-                "Door angle"
-            } else {
-                "How far it slides out"
-            })]);
+        self.bridge.send(SwingCardInput::ShowName {
+            name: name.to_owned(),
+            turns,
+        });
     }
 
     /// Shows the reading: "45°", "250 mm".
     pub fn show_value(&self, text: &str) {
-        self.value.set_label(text);
-        self.scrub.set_value_text(text);
+        self.bridge.send(SwingCardInput::ShowValue(text.to_owned()));
+    }
+}
+
+/// The caption's markup: the first two words in bold, as the design has
+/// it.
+fn caption_markup(text: &str) -> String {
+    let escape = |t: &str| gtk::glib::markup_escape_text(t).to_string();
+    let mut words = text.splitn(3, ' ');
+    match (words.next(), words.next(), words.next()) {
+        (Some(a), Some(b), Some(rest)) => {
+            format!("<b>{} {}</b> {}", escape(a), escape(b), escape(rest))
+        }
+        _ => format!("<b>{}</b>", escape(text)),
+    }
+}
+
+/// The line over hardware focus's view: what it shows.
+#[derive(Debug, Default)]
+pub struct CaptionComponent {
+    /// What the view looks at, as markup.
+    markup: String,
+    /// Which way is which, at the end.
+    hint: String,
+}
+
+/// What the caption is told.
+#[derive(Debug)]
+pub enum CaptionInput {
+    /// "**Looking down** on the hinge, through the cabinet top" and a hint
+    /// at the end.
+    Show {
+        /// What the view looks at.
+        text: String,
+        /// Which way is which ("back ↑ · front ↓"); empty for none.
+        hint: String,
+    },
+}
+
+#[relm4::component(pub)]
+impl Component for CaptionComponent {
+    type Init = ();
+    type Input = CaptionInput;
+    type Output = ();
+    type CommandOutput = ();
+
+    view! {
+        gtk::Box {
+            set_orientation: gtk::Orientation::Horizontal,
+            set_spacing: 12,
+            add_css_class: "stave-focus-caption",
+            set_visible: false,
+
+            gtk::Label {
+                set_use_markup: true,
+                set_xalign: 0.0,
+                set_hexpand: true,
+                set_ellipsize: gtk::pango::EllipsizeMode::End,
+                #[watch]
+                set_markup: &model.markup,
+            },
+            gtk::Label {
+                add_css_class: "stave-card-dim",
+                set_ellipsize: gtk::pango::EllipsizeMode::Start,
+                #[watch]
+                set_label: &model.hint,
+                #[watch]
+                set_visible: !model.hint.is_empty(),
+            },
+        }
+    }
+
+    fn init(
+        _init: Self::Init,
+        root: Self::Root,
+        _sender: ComponentSender<Self>,
+    ) -> ComponentParts<Self> {
+        let model = CaptionComponent::default();
+        let widgets = view_output!();
+        ComponentParts { model, widgets }
+    }
+
+    fn update(&mut self, message: CaptionInput, _: ComponentSender<Self>, _: &Self::Root) {
+        match message {
+            CaptionInput::Show { text, hint } => {
+                self.markup = caption_markup(&text);
+                self.hint = hint;
+            }
+        }
     }
 }
 
 /// The line over hardware focus's view: what it looks at and which way is
-/// which.
+/// which, behind the API the window still uses. Setters are queued.
 pub struct Caption {
     /// The line.
     pub root: gtk::Box,
-    lead: gtk::Label,
-    hint: gtk::Label,
+    bridge: Bridge<CaptionComponent>,
 }
 
 impl Caption {
     /// A hidden line.
     pub fn new() -> Caption {
-        let lead = gtk::Label::builder()
-            .use_markup(true)
-            .xalign(0.0)
-            .hexpand(true)
-            .ellipsize(gtk::pango::EllipsizeMode::End)
-            .build();
-        let hint = gtk::Label::builder()
-            .css_classes(["stave-card-dim"])
-            .ellipsize(gtk::pango::EllipsizeMode::Start)
-            .build();
-        let root = gtk::Box::builder()
-            .orientation(gtk::Orientation::Horizontal)
-            .spacing(12)
-            .css_classes(["stave-focus-caption"])
-            .visible(false)
-            .build();
-        root.append(&lead);
-        root.append(&hint);
-        Caption { root, lead, hint }
+        let bridge = Bridge::<CaptionComponent>::launch(());
+        Caption {
+            root: bridge.widget().clone(),
+            bridge,
+        }
     }
 
     /// "**Looking down** on the hinge, through the cabinet top" and a hint
     /// at the end.
     pub fn show(&self, text: &str, hint: &str) {
-        let escape = |t: &str| gtk::glib::markup_escape_text(t).to_string();
-        // The first two words in bold, as the design has it.
-        let mut words = text.splitn(3, ' ');
-        let markup = match (words.next(), words.next(), words.next()) {
-            (Some(a), Some(b), Some(rest)) => {
-                format!("<b>{} {}</b> {}", escape(a), escape(b), escape(rest))
-            }
-            _ => format!("<b>{}</b>", escape(text)),
-        };
-        self.lead.set_markup(&markup);
-        self.hint.set_label(hint);
-        self.hint.set_visible(!hint.is_empty());
+        self.bridge.send(CaptionInput::Show {
+            text: text.to_owned(),
+            hint: hint.to_owned(),
+        });
     }
 }
 
-/// Called when the pictures need rendering again at a new size.
-type ResizeHandler = Rc<dyn Fn()>;
-
-/// Hardware focus's three small views at fixed angles. Each is rendered
-/// at its slot's size in device pixels and drawn one texel to a pixel, so
-/// it is sharp at any size and scale.
-pub struct Pictures {
-    /// The row.
-    pub root: gtk::Box,
+/// Hardware focus's three small views: their slots and their size.
+pub struct PicturesComponent {
     /// The slots, one a picture, in order, with their captions.
-    slots: RefCell<Vec<(Viewport, String)>>,
+    slots: Vec<(Viewport, String)>,
     /// The slots' size in device pixels when last reported.
-    size: Rc<Cell<(u32, u32)>>,
-    /// Called when the slots' size in device pixels changes.
-    on_resize: Rc<RefCell<Option<ResizeHandler>>>,
+    size: (u32, u32),
 }
 
-impl Pictures {
-    /// A hidden row.
-    pub fn new() -> Pictures {
-        let root = gtk::Box::builder()
-            .orientation(gtk::Orientation::Horizontal)
-            .spacing(12)
-            .homogeneous(true)
-            .css_classes(["stave-pictures"])
-            .visible(false)
-            .build();
-        Pictures {
-            root,
-            slots: RefCell::new(Vec::new()),
-            size: Rc::new(Cell::new((0, 0))),
-            on_resize: Rc::new(RefCell::new(None)),
-        }
-    }
+/// What the small views are told.
+#[derive(Debug)]
+pub enum PicturesInput {
+    /// Lay out a picture for each caption, empty until
+    /// [`PicturesInput::ShowTextures`]. The same captions as last time
+    /// keep the pictures as they are.
+    Show(Vec<String>),
+    /// Show the rendered pictures, in the order of the captions.
+    ShowTextures(Vec<gdk::Texture>),
+    /// Ring the picture at this index.
+    ShowCurrent(Option<usize>),
+    /// A picture's size in device pixels changed.
+    SlotResized {
+        /// Its width in device pixels.
+        width: u32,
+        /// Its height in device pixels.
+        height: u32,
+    },
+    /// People pressed the picture at this index.
+    Pressed(usize),
+}
 
-    /// Calls `handler` when the pictures' size in device pixels changes
-    /// (the window resized, or moved to a screen of another scale): they
-    /// need rendering again at [`Pictures::device_size`].
-    pub fn connect_resized(&self, handler: impl Fn() + 'static) {
-        self.on_resize.replace(Some(Rc::new(handler)));
-    }
+/// What the small views tell their owner.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PicturesOutput {
+    /// Their size in device pixels changed: they need rendering again.
+    Resized,
+    /// People chose the picture at this index: go to its pose.
+    Chosen(usize),
+}
 
-    /// The size, in device pixels, to render the pictures at; `None`
-    /// before they have been given room.
-    pub fn device_size(&self) -> Option<(u32, u32)> {
-        let slots = self.slots.borrow();
-        let (slot, _) = slots.first()?;
-        (slot.width() > 1 && slot.height() > 1).then(|| slot.device_size())
-    }
-
-    /// Lays out a picture for each caption, each a button that goes to its
-    /// pose, empty until [`Pictures::show_textures`]. The same captions
-    /// as last time keep the pictures as they are.
-    pub fn show(&self, captions: &[String], on_choose: impl Fn(usize) + Clone + 'static) {
-        let unchanged = self
-            .slots
-            .borrow()
-            .iter()
-            .map(|(_, caption)| caption)
-            .eq(captions.iter());
-        if unchanged {
-            return;
+impl PicturesComponent {
+    /// Builds a picture for each caption in `root`, in place of the old.
+    fn lay_out(&mut self, root: &gtk::Box, captions: Vec<String>, sender: &ComponentSender<Self>) {
+        while let Some(child) = root.first_child() {
+            root.remove(&child);
         }
-        while let Some(child) = self.root.first_child() {
-            self.root.remove(&child);
-        }
-        self.size.set((0, 0));
+        self.size = (0, 0);
         let count = captions.len();
         let mut slots = Vec::with_capacity(count);
-        for (index, caption) in captions.iter().enumerate() {
+        for (index, caption) in captions.into_iter().enumerate() {
             let picture = Viewport::picture(Sizing::Picture {
                 natural_width: 320,
                 minimum_height: 110,
             });
-            let size = self.size.clone();
-            let on_resize = self.on_resize.clone();
+            let input = sender.input_sender().clone();
             picture.connect_resized(move |width, height| {
-                if size.replace((width, height)) == (width, height) {
-                    return;
-                }
-                // Cloned out so that the handler may set a new one.
-                let handler = on_resize.borrow().clone();
-                if let Some(handler) = handler {
-                    handler();
-                }
+                input.emit(PicturesInput::SlotResized { width, height });
             });
             let words = if index == 0 {
                 "closed"
@@ -355,7 +738,7 @@ impl Pictures {
                 .use_markup(true)
                 .label(format!(
                     "<b>{}</b> {words}",
-                    gtk::glib::markup_escape_text(caption)
+                    gtk::glib::markup_escape_text(&caption)
                 ))
                 .xalign(0.0)
                 .ellipsize(gtk::pango::EllipsizeMode::End)
@@ -369,158 +752,793 @@ impl Pictures {
                 .css_classes(["stave-picture"])
                 .tooltip_text(format!("Show it at {caption}"))
                 .build();
-            let choose = on_choose.clone();
-            button.connect_clicked(move |_| choose(index));
-            self.root.append(&button);
-            slots.push((picture, caption.clone()));
+            let input = sender.input_sender().clone();
+            button.connect_clicked(move |_| input.emit(PicturesInput::Pressed(index)));
+            root.append(&button);
+            slots.push((picture, caption));
         }
-        self.slots.replace(slots);
+        self.slots = slots;
+    }
+}
+
+impl Component for PicturesComponent {
+    type Init = ();
+    type Input = PicturesInput;
+    type Output = PicturesOutput;
+    type CommandOutput = ();
+    type Root = gtk::Box;
+    type Widgets = ();
+
+    fn init_root() -> gtk::Box {
+        gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing(12)
+            .homogeneous(true)
+            .css_classes(["stave-pictures"])
+            .visible(false)
+            .build()
+    }
+
+    fn init(_: (), _: gtk::Box, _: ComponentSender<Self>) -> ComponentParts<Self> {
+        let model = PicturesComponent {
+            slots: Vec::new(),
+            size: (0, 0),
+        };
+        ComponentParts { model, widgets: () }
+    }
+
+    fn update(&mut self, message: PicturesInput, sender: ComponentSender<Self>, root: &gtk::Box) {
+        match message {
+            PicturesInput::Show(captions) => {
+                let unchanged = self
+                    .slots
+                    .iter()
+                    .map(|(_, caption)| caption)
+                    .eq(captions.iter());
+                if !unchanged {
+                    self.lay_out(root, captions, &sender);
+                }
+            }
+            PicturesInput::ShowTextures(textures) => {
+                for ((slot, _), texture) in self.slots.iter().zip(textures) {
+                    slot.show_frame(texture);
+                }
+            }
+            PicturesInput::ShowCurrent(current) => {
+                let mut child = root.first_child();
+                let mut index = 0;
+                while let Some(widget) = child {
+                    widget.set_class_active("current", current == Some(index));
+                    index += 1;
+                    child = widget.next_sibling();
+                }
+            }
+            PicturesInput::SlotResized { width, height } => {
+                // Every slot is the same size: the first to report says it.
+                if self.size != (width, height) {
+                    self.size = (width, height);
+                    let _ = sender.output(PicturesOutput::Resized);
+                }
+            }
+            PicturesInput::Pressed(index) => {
+                let _ = sender.output(PicturesOutput::Chosen(index));
+            }
+        }
+    }
+}
+
+/// Hardware focus's three small views at fixed angles, behind the API the
+/// window still uses. Each is rendered at its slot's size in device pixels
+/// and drawn one texel to a pixel, so it is sharp at any size and scale.
+/// Setters are queued.
+pub struct Pictures {
+    /// The row.
+    pub root: gtk::Box,
+    /// Called when the slots' size in device pixels changes.
+    resized: Rc<Slot<()>>,
+    /// Called with the index of the picture people chose.
+    chosen: Rc<Slot<usize>>,
+    bridge: Bridge<PicturesComponent>,
+}
+
+impl Pictures {
+    /// A hidden row.
+    pub fn new() -> Pictures {
+        let bridge = Bridge::<PicturesComponent>::launch(());
+        let resized = Rc::new(Slot::default());
+        let chosen = Rc::new(Slot::default());
+        let (on_resized, on_chosen) = (Rc::clone(&resized), Rc::clone(&chosen));
+        bridge.connect(move |output| match output {
+            PicturesOutput::Resized => on_resized.deliver(()),
+            PicturesOutput::Chosen(index) => on_chosen.deliver(index),
+        });
+        Pictures {
+            root: bridge.widget().clone(),
+            resized,
+            chosen,
+            bridge,
+        }
+    }
+
+    /// Calls `handler` when the pictures' size in device pixels changes
+    /// (the window resized, or moved to a screen of another scale): they
+    /// need rendering again at [`Pictures::device_size`].
+    pub fn connect_resized(&self, handler: impl Fn() + 'static) {
+        self.resized.connect(move |()| handler());
+    }
+
+    /// The size, in device pixels, to render the pictures at; `None`
+    /// before they have been given room (or before a queued
+    /// [`Pictures::show`] has laid them out).
+    pub fn device_size(&self) -> Option<(u32, u32)> {
+        // Copied out, so nothing is borrowed while GTK is asked.
+        let slot = self
+            .bridge
+            .model()
+            .slots
+            .first()
+            .map(|(slot, _)| slot.clone())?;
+        (slot.width() > 1 && slot.height() > 1).then(|| slot.device_size())
+    }
+
+    /// Lays out a picture for each caption, each a button that calls
+    /// `on_choose` with its index, empty until [`Pictures::show_textures`].
+    /// The same captions as last time keep the pictures as they are.
+    pub fn show(&self, captions: &[String], on_choose: impl Fn(usize) + Clone + 'static) {
+        self.chosen.connect(on_choose);
+        self.bridge.send(PicturesInput::Show(captions.to_vec()));
     }
 
     /// Shows the rendered pictures, in the order of the captions.
     pub fn show_textures(&self, textures: Vec<gdk::Texture>) {
-        for ((slot, _), texture) in self.slots.borrow().iter().zip(textures) {
-            slot.show_frame(texture);
-        }
+        self.bridge.send(PicturesInput::ShowTextures(textures));
     }
 
     /// Rings the picture at `current`.
     pub fn show_current(&self, current: Option<usize>) {
-        let mut child = self.root.first_child();
-        let mut index = 0;
-        while let Some(widget) = child {
-            if current == Some(index) {
-                widget.add_css_class("current");
-            } else {
-                widget.remove_css_class("current");
+        self.bridge.send(PicturesInput::ShowCurrent(current));
+    }
+}
+
+/// A selected problem's motion card: what it shows, and its slider.
+pub struct ProblemCardComponent {
+    /// A motion is posed: the card shows.
+    shown: bool,
+    /// "**Swing door** to see where it hits", as markup.
+    lead: String,
+    /// The reading at the slider.
+    value: String,
+    /// The reading is past the contact: it shows red.
+    past: bool,
+    /// The words under the slider's start, blocked range and end.
+    start: String,
+    blocked: String,
+    end: String,
+    /// Closed to fully open, in degrees or millimetres.
+    scrub: Slider,
+}
+
+/// What a problem's motion card is told.
+#[derive(Debug)]
+pub enum ProblemCardInput {
+    /// Show the card for a motion, the slider at `amount` (radians or
+    /// millimetres); no card hides it.
+    Show {
+        /// The motion, if one is posed.
+        card: Option<MotionCard>,
+        /// Where the slider is.
+        amount: f32,
+    },
+    /// Show the reading at `amount`: red once it is past the contact.
+    ShowValue {
+        /// The motion.
+        card: MotionCard,
+        /// Where the slider is.
+        amount: f32,
+    },
+    /// People moved the slider.
+    Moved(f64),
+}
+
+/// What a problem's motion card tells its owner.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ProblemCardOutput {
+    /// People moved the slider to this value (degrees or millimetres).
+    Moved(f64),
+}
+
+impl ProblemCardComponent {
+    /// Takes the reading at `amount`.
+    fn show_value(&mut self, card: &MotionCard, amount: f32) {
+        let text = card.amount_text(amount);
+        self.scrub.set_value_text(&text);
+        self.value = text;
+        self.past = amount >= card.contact;
+    }
+}
+
+#[relm4::component(pub)]
+impl Component for ProblemCardComponent {
+    type Init = ();
+    type Input = ProblemCardInput;
+    type Output = ProblemCardOutput;
+    type CommandOutput = ();
+
+    view! {
+        adw::Clamp {
+            set_maximum_size: 620,
+            set_tightening_threshold: 620,
+            set_valign: gtk::Align::End,
+            set_margin_start: 16,
+            set_margin_end: 16,
+            set_margin_bottom: 16,
+            #[watch]
+            set_visible: model.shown,
+
+            #[wrap(Some)]
+            set_child = &gtk::Box {
+                set_orientation: gtk::Orientation::Vertical,
+                set_spacing: 8,
+                add_css_class: "stave-focus-card",
+                add_css_class: "stave-problem-card",
+
+                gtk::Box {
+                    set_orientation: gtk::Orientation::Horizontal,
+                    set_spacing: 12,
+
+                    gtk::Label {
+                        set_use_markup: true,
+                        set_xalign: 0.0,
+                        set_hexpand: true,
+                        #[watch]
+                        set_markup: &model.lead,
+                    },
+                    gtk::Label {
+                        add_css_class: "stave-card-value",
+                        #[watch]
+                        set_label: &model.value,
+                        #[watch]
+                        set_class_active: ("blocked", model.past),
+                    },
+                },
+                #[local_ref]
+                scrub_area -> gtk::DrawingArea {},
+                gtk::Box {
+                    set_orientation: gtk::Orientation::Horizontal,
+                    set_homogeneous: true,
+
+                    gtk::Label {
+                        add_css_class: "stave-card-dim",
+                        set_xalign: 0.0,
+                        set_hexpand: true,
+                        #[watch]
+                        set_label: &model.start,
+                    },
+                    gtk::Label {
+                        add_css_class: "stave-card-blocked",
+                        set_hexpand: true,
+                        #[watch]
+                        set_label: &model.blocked,
+                    },
+                    gtk::Label {
+                        add_css_class: "stave-card-dim",
+                        set_xalign: 1.0,
+                        set_hexpand: true,
+                        #[watch]
+                        set_label: &model.end,
+                    },
+                },
+            },
+        }
+    }
+
+    fn init(
+        _init: Self::Init,
+        root: Self::Root,
+        sender: ComponentSender<Self>,
+    ) -> ComponentParts<Self> {
+        let scrub = Slider::new("Swing it", 26, 22.0, 2.0);
+        let input = sender.input_sender().clone();
+        scrub.connect_changed(move |value| input.emit(ProblemCardInput::Moved(value)));
+        let scrub_area = &scrub.root.clone();
+        let model = ProblemCardComponent {
+            shown: false,
+            lead: String::new(),
+            value: String::new(),
+            past: false,
+            start: String::new(),
+            blocked: String::new(),
+            end: String::new(),
+            scrub,
+        };
+        let widgets = view_output!();
+        ComponentParts { model, widgets }
+    }
+
+    fn update(&mut self, message: ProblemCardInput, sender: ComponentSender<Self>, _: &Self::Root) {
+        match message {
+            ProblemCardInput::Show { card: None, .. } => self.shown = false,
+            ProblemCardInput::Show {
+                card: Some(card),
+                amount,
+            } => {
+                let escape = |t: &str| gtk::glib::markup_escape_text(t).to_string();
+                let lead = card.lead();
+                self.lead = format!(
+                    "<b>{}</b> <span alpha=\"70%\">to see where it hits</span>",
+                    escape(&lead)
+                );
+                let (full, contact, value) = if card.turns {
+                    (
+                        f64::from(card.full).to_degrees(),
+                        f64::from(card.contact).to_degrees(),
+                        f64::from(amount).to_degrees(),
+                    )
+                } else {
+                    (
+                        f64::from(card.full),
+                        f64::from(card.contact),
+                        f64::from(amount),
+                    )
+                };
+                self.scrub.set_range(0.0, full.max(0.1));
+                self.scrub.set_blocked_from(Some(contact));
+                self.scrub.set_value(value);
+                self.scrub
+                    .root
+                    .update_property(&[gtk::accessible::Property::Label(&lead)]);
+                self.start.clone_from(&card.start);
+                self.blocked.clone_from(&card.blocked);
+                self.end.clone_from(&card.end);
+                self.show_value(&card, amount);
+                self.shown = true;
             }
-            index += 1;
-            child = widget.next_sibling();
+            ProblemCardInput::ShowValue { card, amount } => self.show_value(&card, amount),
+            ProblemCardInput::Moved(value) => {
+                let _ = sender.output(ProblemCardOutput::Moved(value));
+            }
         }
     }
 }
 
 /// A selected problem's motion card: swing the door to see where it hits.
+/// It keeps the API the window still uses and owns the component. Setters
+/// are queued.
 pub struct ProblemCard {
     /// The card, to overlay on the view.
     pub root: adw::Clamp,
-    lead: gtk::Label,
-    value: gtk::Label,
-    /// Closed to fully open, in degrees or millimetres.
-    pub scrub: Slider,
-    start: gtk::Label,
-    blocked: gtk::Label,
-    end: gtk::Label,
+    /// Closed to fully open, in degrees or millimetres: the card sets it
+    /// whenever it shows a motion.
+    pub scrub: SliderChanges,
+    bridge: Bridge<ProblemCardComponent>,
 }
 
 impl ProblemCard {
     /// A hidden card.
     pub fn new() -> ProblemCard {
-        let lead = gtk::Label::builder()
-            .use_markup(true)
-            .xalign(0.0)
-            .hexpand(true)
-            .build();
-        let value = gtk::Label::builder()
-            .css_classes(["stave-card-value", "blocked"])
-            .build();
-        let line = gtk::Box::new(gtk::Orientation::Horizontal, 12);
-        line.append(&lead);
-        line.append(&value);
-        let scrub = Slider::new("Swing it", 26, 22.0, 2.0);
-        let start = dim("");
-        start.set_xalign(0.0);
-        start.set_hexpand(true);
-        let blocked = gtk::Label::builder()
-            .css_classes(["stave-card-blocked"])
-            .hexpand(true)
-            .build();
-        let end = dim("");
-        end.set_xalign(1.0);
-        end.set_hexpand(true);
-        let ends = gtk::Box::builder()
-            .orientation(gtk::Orientation::Horizontal)
-            .homogeneous(true)
-            .build();
-        ends.append(&start);
-        ends.append(&blocked);
-        ends.append(&end);
-        let content = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
-            .spacing(8)
-            .css_classes(["stave-focus-card", "stave-problem-card"])
-            .build();
-        content.append(&line);
-        content.append(&scrub.root);
-        content.append(&ends);
-        let root = adw::Clamp::builder()
-            .maximum_size(620)
-            .tightening_threshold(620)
-            .child(&content)
-            .valign(gtk::Align::End)
-            .margin_start(16)
-            .margin_end(16)
-            .margin_bottom(16)
-            .visible(false)
-            .build();
+        let bridge = Bridge::<ProblemCardComponent>::launch(());
+        let (scrub, changed) = SliderChanges::new();
+        bridge.connect(move |output| match output {
+            ProblemCardOutput::Moved(value) => changed.deliver(value),
+        });
         ProblemCard {
-            root,
-            lead,
-            value,
+            root: bridge.widget().clone(),
             scrub,
-            start,
-            blocked,
-            end,
+            bridge,
         }
     }
 
     /// Shows the card for a motion, the slider at `amount` (radians or
     /// millimetres); `None` hides it.
     pub fn show(&self, card: Option<&MotionCard>, amount: f32) {
-        let Some(card) = card else {
-            self.root.set_visible(false);
-            return;
-        };
-        let escape = |t: &str| gtk::glib::markup_escape_text(t).to_string();
-        self.lead.set_markup(&format!(
-            "<b>{}</b> <span alpha=\"70%\">to see where it hits</span>",
-            escape(&card.lead())
-        ));
-        let (full, contact, value) = if card.turns {
-            (
-                f64::from(card.full).to_degrees(),
-                f64::from(card.contact).to_degrees(),
-                f64::from(amount).to_degrees(),
-            )
-        } else {
-            (
-                f64::from(card.full),
-                f64::from(card.contact),
-                f64::from(amount),
-            )
-        };
-        self.scrub.set_range(0.0, full.max(0.1));
-        self.scrub.set_blocked_from(Some(contact));
-        self.scrub.set_value(value);
-        self.scrub
-            .root
-            .update_property(&[gtk::accessible::Property::Label(&card.lead())]);
-        self.start.set_label(&card.start);
-        self.blocked.set_label(&card.blocked);
-        self.end.set_label(&card.end);
-        self.show_value(card, amount);
-        self.root.set_visible(true);
+        self.bridge.send(ProblemCardInput::Show {
+            card: card.cloned(),
+            amount,
+        });
     }
 
     /// Shows the reading at `amount`: red once it is past the contact.
     pub fn show_value(&self, card: &MotionCard, amount: f32) {
-        let text = card.amount_text(amount);
-        self.value.set_label(&text);
-        self.scrub.set_value_text(&text);
-        if amount >= card.contact {
-            self.value.add_css_class("blocked");
-        } else {
-            self.value.remove_css_class("blocked");
+        self.bridge.send(ProblemCardInput::ShowValue {
+            card: card.clone(),
+            amount,
+        });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::RefCell;
+
+    use stave_model::ids::AssemblyId;
+
+    use super::*;
+    use crate::ui::gtk_test::{on_gtk_thread, settle};
+
+    /// Fires a press on a slider `x` pixels across, as GTK would.
+    fn press(slider: &gtk::DrawingArea, x: f64) {
+        let controllers = slider.observe_controllers();
+        let drag = (0..controllers.n_items())
+            .filter_map(|index| controllers.item(index))
+            .find_map(|item| item.downcast::<gtk::GestureDrag>().ok());
+        let Some(drag) = drag else {
+            panic!("the slider has a drag controller");
+        };
+        drag.emit_by_name::<()>("drag-begin", &[&x, &0.0_f64]);
+    }
+
+    /// A callback's captures, to see them freed: a strong token for the
+    /// callback and a weak one to watch.
+    fn token() -> (Rc<()>, std::rc::Weak<()>) {
+        let token = Rc::new(());
+        let weak = Rc::downgrade(&token);
+        (token, weak)
+    }
+
+    #[test]
+    fn a_dropped_step_card_is_freed() {
+        on_gtk_thread(step_card_is_freed);
+    }
+
+    /// The old card's slider kept its own state in shared cells; now
+    /// dropping the card shuts its component down when the main loop next
+    /// runs, and that frees the card, its slider and the window's
+    /// callback.
+    fn step_card_is_freed() {
+        let card = StepCard::new();
+        let (held, callback) = token();
+        card.scrub.connect_changed(move |_| {
+            let _ = &held;
+        });
+        let root = card.root.downgrade();
+        let slider = card.bridge.model().scrub.root.downgrade();
+        let input = card.bridge.sender().clone();
+        settle();
+        assert!(root.upgrade().is_some(), "the card lives while held");
+        drop(card);
+        settle();
+        assert!(root.upgrade().is_none(), "the card is freed");
+        assert!(slider.upgrade().is_none(), "its slider is freed");
+        assert!(
+            input.send(StepCardInput::PlayPressed).is_err(),
+            "the component's runtime, and with it the model, is gone"
+        );
+        assert!(callback.upgrade().is_none(), "the callback is freed");
+    }
+
+    #[test]
+    fn a_step_cards_setters_do_not_call_back() {
+        on_gtk_thread(step_card_setters);
+    }
+
+    fn step_card_setters() {
+        let card = StepCard::new();
+        let calls = Rc::new(Cell::new(0));
+        let counted = Rc::clone(&calls);
+        card.scrub
+            .connect_changed(move |_| counted.set(counted.get() + 1));
+        card.show_frame(Some("Step 1 of 1 · push(rung, along: length)"), "6 mm");
+        card.scrub.set_value(0.5);
+        assert_eq!(card.bridge.model().status, "", "setters are queued");
+        settle();
+        let model = card.bridge.model();
+        assert_eq!(
+            model.markup,
+            "<b>Step 1 of 1</b> · <span font_family=\"monospace\" size=\"92%\">\
+             push(rung, along: length)</span>"
+        );
+        assert_eq!(model.status, "6 mm");
+        assert_eq!(model.scrub.value(), 0.5, "the slider moved");
+        assert_eq!(calls.get(), 0, "setters never call back");
+    }
+
+    #[test]
+    fn a_press_on_the_step_cards_slider_is_queued_not_re_entered() {
+        on_gtk_thread(step_card_presses_are_queued);
+    }
+
+    /// People's press on the slider reaches the window only after both
+    /// the slider and the card have handled it, never from inside either;
+    /// a press fired from inside the window's callback is queued too.
+    fn step_card_presses_are_queued() {
+        let card = Rc::new(StepCard::new());
+        let slider = card.bridge.model().scrub.root.clone();
+        let heard: Rc<RefCell<Vec<f64>>> = Rc::default();
+        let log = Rc::clone(&heard);
+        let weak = Rc::downgrade(&card);
+        let inner = slider.clone();
+        card.scrub.connect_changed(move |value| {
+            let Some(card) = weak.upgrade() else {
+                return;
+            };
+            // Reading the model here would panic if the card were still
+            // in its update.
+            let _ = card.bridge.model().status.len();
+            if log.borrow().is_empty() {
+                press(&inner, 0.0);
+            }
+            log.borrow_mut().push(value);
+        });
+        // An unrealised slider is 0 px wide: a press past the handle is
+        // the upper end.
+        press(&slider, 1000.0);
+        assert!(heard.borrow().is_empty(), "nothing has run yet");
+        settle();
+        assert_eq!(
+            *heard.borrow(),
+            vec![1.0, 0.0],
+            "the inner press came after"
+        );
+    }
+
+    #[test]
+    fn a_dropped_swing_card_is_freed_and_its_setters_do_not_call_back() {
+        on_gtk_thread(swing_card);
+    }
+
+    fn swing_card() {
+        let card = SwingCard::new();
+        let (held, callback) = token();
+        let calls = Rc::new(Cell::new(0));
+        let counted = Rc::clone(&calls);
+        card.scrub.connect_changed(move |_| {
+            let _ = &held;
+            counted.set(counted.get() + 1);
+        });
+        card.show_name("door", true);
+        card.show_value("45°");
+        card.scrub.set_value(0.25);
+        settle();
+        {
+            let model = card.bridge.model();
+            assert_eq!(model.name, "door");
+            assert_eq!(model.value, "45°");
+            assert_eq!(model.scrub.value(), 0.25);
         }
+        assert_eq!(calls.get(), 0, "setters never call back");
+        let root = card.root.downgrade();
+        let input = card.bridge.sender().clone();
+        drop(card);
+        settle();
+        assert!(root.upgrade().is_none(), "the card is freed");
+        assert!(input.send(SwingCardInput::PlayPressed).is_err());
+        assert!(callback.upgrade().is_none(), "the callback is freed");
+    }
+
+    #[test]
+    fn the_swing_cards_play_button_is_heard_after_its_update() {
+        on_gtk_thread(swing_play_is_queued);
+    }
+
+    fn swing_play_is_queued() {
+        let card = SwingCard::new();
+        let heard: Rc<RefCell<Vec<SwingCardOutput>>> = Rc::default();
+        let log = Rc::clone(&heard);
+        card.bridge
+            .connect(move |output| log.borrow_mut().push(output));
+        card.play.emit_clicked();
+        assert!(heard.borrow().is_empty(), "the press is only queued");
+        settle();
+        assert_eq!(*heard.borrow(), vec![SwingCardOutput::Play]);
+    }
+
+    #[test]
+    fn the_caption_bolds_its_first_two_words_and_is_freed() {
+        on_gtk_thread(caption);
+    }
+
+    fn caption() {
+        let caption = Caption::new();
+        caption.show("Looking down on the hinge", "back ↑ · front ↓");
+        settle();
+        assert_eq!(
+            caption.bridge.model().markup,
+            "<b>Looking down</b> on the hinge"
+        );
+        caption.show("Above", "");
+        settle();
+        assert_eq!(caption.bridge.model().markup, "<b>Above</b>");
+        assert_eq!(caption.bridge.model().hint, "");
+        let root = caption.root.downgrade();
+        drop(caption);
+        settle();
+        assert!(root.upgrade().is_none(), "the line is freed");
+    }
+
+    #[test]
+    fn pictures_are_laid_out_once_and_chosen_by_message() {
+        on_gtk_thread(pictures_choose);
+    }
+
+    /// The old pictures called the window from inside a button's click;
+    /// now the click is a message, and the choice reaches the window after
+    /// the update.
+    fn pictures_choose() {
+        let pictures = Pictures::new();
+        let chosen: Rc<RefCell<Vec<usize>>> = Rc::default();
+        let log = Rc::clone(&chosen);
+        let captions = vec!["0°".to_owned(), "45°".to_owned(), "110°".to_owned()];
+        pictures.show(&captions, move |index| log.borrow_mut().push(index));
+        assert!(pictures.root.first_child().is_none(), "show is queued");
+        settle();
+        let buttons: Vec<gtk::Widget> =
+            std::iter::successors(pictures.root.first_child(), gtk::Widget::next_sibling).collect();
+        assert_eq!(buttons.len(), 3);
+        // The same captions keep the same pictures.
+        pictures.show(&captions, |_| {});
+        settle();
+        assert_eq!(pictures.root.first_child().as_ref(), buttons.first());
+        pictures.show_current(Some(1));
+        settle();
+        let rung: Vec<bool> = buttons
+            .iter()
+            .map(|button| button.has_css_class("current"))
+            .collect();
+        assert_eq!(rung, vec![false, true, false]);
+        assert_eq!(pictures.device_size(), None, "no room yet");
+        let Some(button) = buttons
+            .get(2)
+            .and_then(|button| button.downcast_ref::<gtk::Button>())
+        else {
+            panic!("each picture is a button");
+        };
+        let log = Rc::clone(&chosen);
+        pictures.show(&captions, move |index| log.borrow_mut().push(index + 100));
+        button.emit_clicked();
+        assert!(chosen.borrow().is_empty(), "the click is only queued");
+        settle();
+        assert_eq!(*chosen.borrow(), vec![102], "the last callback hears it");
+    }
+
+    #[test]
+    fn a_resize_heard_from_inside_its_callback_is_queued() {
+        on_gtk_thread(pictures_resize);
+    }
+
+    /// The old pictures' resize handler ran inside the slot's allocation;
+    /// now it is a message, reported once per size, and the window may
+    /// ask the pictures their size from inside its callback.
+    fn pictures_resize() {
+        let pictures = Rc::new(Pictures::new());
+        pictures.show(&["closed".to_owned()], |_| {});
+        let heard = Rc::new(Cell::new(0));
+        let count = Rc::clone(&heard);
+        let weak = Rc::downgrade(&pictures);
+        pictures.connect_resized(move || {
+            count.set(count.get() + 1);
+            if let Some(pictures) = weak.upgrade() {
+                let _ = pictures.device_size();
+                pictures.bridge.send(PicturesInput::SlotResized {
+                    width: 640,
+                    height: 360,
+                });
+            }
+        });
+        for _ in 0..3 {
+            pictures.bridge.send(PicturesInput::SlotResized {
+                width: 640,
+                height: 360,
+            });
+        }
+        assert_eq!(heard.get(), 0, "queued");
+        settle();
+        assert_eq!(heard.get(), 1, "once for a size, however often it is said");
+    }
+
+    #[test]
+    fn dropped_pictures_are_freed() {
+        on_gtk_thread(pictures_freed);
+    }
+
+    fn pictures_freed() {
+        let pictures = Pictures::new();
+        let (held, callback) = token();
+        pictures.connect_resized(move || {
+            let _ = &held;
+        });
+        pictures.show(&["closed".to_owned(), "open".to_owned()], |_| {});
+        settle();
+        let root = pictures.root.downgrade();
+        let slot = pictures
+            .bridge
+            .model()
+            .slots
+            .first()
+            .map(|(slot, _)| slot.downgrade());
+        let input = pictures.bridge.sender().clone();
+        drop(pictures);
+        settle();
+        assert!(root.upgrade().is_none(), "the row is freed");
+        assert!(
+            slot.and_then(|slot| slot.upgrade()).is_none(),
+            "its pictures are freed"
+        );
+        assert!(input.send(PicturesInput::ShowCurrent(None)).is_err());
+        assert!(callback.upgrade().is_none(), "the callback is freed");
+    }
+
+    /// A door that first touches at about 30° of 110°.
+    fn door() -> MotionCard {
+        let Some(assembly) = AssemblyId::from_index(0) else {
+            panic!("the first assembly has an id");
+        };
+        MotionCard {
+            assembly,
+            name: "door".to_owned(),
+            turns: true,
+            full: 110_f32.to_radians(),
+            contact: 30_f32.to_radians(),
+            shown: 31_f32.to_radians(),
+            start: "closed 0°".to_owned(),
+            blocked: "blocked from 30°".to_owned(),
+            end: "opens to 110°".to_owned(),
+        }
+    }
+
+    #[test]
+    fn the_problem_card_shows_a_motion_without_calling_back() {
+        on_gtk_thread(problem_card_shows);
+    }
+
+    fn problem_card_shows() {
+        let card = ProblemCard::new();
+        let calls = Rc::new(Cell::new(0));
+        let counted = Rc::clone(&calls);
+        card.scrub
+            .connect_changed(move |_| counted.set(counted.get() + 1));
+        let door = door();
+        card.show(Some(&door), 10_f32.to_radians());
+        assert!(!card.root.is_visible(), "queued");
+        settle();
+        assert!(card.root.is_visible());
+        {
+            let model = card.bridge.model();
+            assert!(model.lead.contains("<b>Swing door</b>"));
+            assert_eq!(model.value, "10°");
+            assert!(!model.past);
+            assert_eq!(model.blocked, "blocked from 30°");
+            assert!((model.scrub.value() - 10.0).abs() < 1e-3, "in degrees");
+        }
+        card.show_value(&door, 40_f32.to_radians());
+        settle();
+        assert!(card.bridge.model().past, "red past the contact");
+        card.show(None, 0.0);
+        settle();
+        assert!(!card.root.is_visible());
+        assert_eq!(calls.get(), 0, "setters never call back");
+    }
+
+    #[test]
+    fn a_swing_of_the_problem_card_is_queued_and_the_card_is_freed() {
+        on_gtk_thread(problem_card_swings);
+    }
+
+    fn problem_card_swings() {
+        let card = ProblemCard::new();
+        let (held, callback) = token();
+        let heard: Rc<RefCell<Vec<f64>>> = Rc::default();
+        let log = Rc::clone(&heard);
+        card.scrub.connect_changed(move |value| {
+            let _ = &held;
+            log.borrow_mut().push(value);
+        });
+        card.show(Some(&door()), 0.0);
+        settle();
+        let slider = card.bridge.model().scrub.root.clone();
+        press(&slider, 1000.0);
+        assert!(heard.borrow().is_empty(), "queued");
+        settle();
+        assert_eq!(heard.borrow().len(), 1);
+        assert!(
+            heard
+                .borrow()
+                .iter()
+                .all(|value| (value - 110.0).abs() < 1e-3)
+        );
+        let root = card.root.downgrade();
+        drop((card, slider));
+        settle();
+        assert!(root.upgrade().is_none(), "the card is freed");
+        assert!(callback.upgrade().is_none(), "the callback is freed");
     }
 }
