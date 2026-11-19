@@ -230,6 +230,9 @@ impl Solver<'_> {
         let Some(kind_def) = self.model.defs.kind(kind).cloned() else {
             return Err(Fault::Internal("a kind's declaration").into());
         };
+        // A kind chosen through a param that doesn't take what this call
+        // hands it is one error, in the words of the choice.
+        self.check_kind_signature(call, env, kind, &kind_name, owner)?;
         let mut roles: Vec<Option<Value>> = vec![None; kind_def.roles.len()];
         let mut settings = given;
         let mut glue = true;

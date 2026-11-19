@@ -60,6 +60,7 @@ pub mod sequence;
 pub mod solid;
 pub mod sweep;
 pub mod wall;
+pub mod whole;
 
 use glam::{Mat4, Vec3};
 use stave_lang::placement::Axis;

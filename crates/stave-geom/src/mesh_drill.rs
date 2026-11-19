@@ -193,7 +193,7 @@ struct Facet {
 /// whose frame is `frame`.
 pub(crate) fn drill(geometry: &mut Geometry, frame: &Frame, grain: GrainAxes, rod: &Rod) {
     let hole = Hole::of(rod);
-    let vertices = geometry.mesh.vertices.clone();
+    let vertices = &geometry.mesh.vertices;
     let local: Vec<Vec3> = vertices
         .iter()
         .map(|vertex| frame.local(Vec3::from(vertex.position)))
@@ -266,7 +266,7 @@ pub(crate) fn drill(geometry: &mut Geometry, frame: &Frame, grain: GrainAxes, ro
                 for points in loops {
                     let first = u32::try_from(added.len()).unwrap_or(u32::MAX);
                     for point in &points {
-                        added.push(blend(&vertices, &facet.indices, point));
+                        added.push(blend(vertices, &facet.indices, point));
                     }
                     let flats: Vec<Vec2> = points.iter().map(|p| p.flat).collect();
                     for [a, b, c] in ear_clip(&flats) {

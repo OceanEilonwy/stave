@@ -1,0 +1,42 @@
+// expect: error[wall] shelves: its housing for shelf goes right across side and cuts it in two
+stave 1
+
+// A home-made housing cut right through a standing side, across its whole
+// width: each side of the cut keeps its own wood, but the side is in two
+// pieces and the cut list would still list one side.
+
+project "A housing right through" {
+  units: mm
+}
+
+stock pine { species: pine, form: solid, thickness: 19mm, max_width: 300mm, max_length: 2400mm }
+
+/// A housing that goes right through, as a beginner might write one.
+kind housing : joint {
+  insert: [push(piece, along: width)]
+
+  cut housing: crossing(into, piece) {
+    notch(depth: through)
+  }
+}
+
+part side : pine {
+  length: 800mm
+  width:  300mm
+  place {
+    ground
+    orient(length: up, width: back)
+  }
+}
+
+part shelf : pine {
+  length: 400mm
+  width:  300mm
+  place {
+    against(side.right, gap: -19mm)
+    flush(side.bottom, inset: 300mm)
+    flush(side.front)
+  }
+}
+
+joint shelves : housing(shelf, into: side)

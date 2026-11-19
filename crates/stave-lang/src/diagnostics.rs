@@ -397,6 +397,21 @@ pub struct Diagnostic {
     /// after the help, the one the help recommends first. Empty when the
     /// help asks for a judgement.
     pub fixes: Vec<Fix>,
+    /// Why it was reported, for the causes a tool treats apart from the
+    /// rest; `None` for most diagnostics.
+    pub cause: Option<Cause>,
+}
+
+/// A cause of a diagnostic that a tool treats apart from the rest
+/// (grammar, "Kind values"). A diagnostic with a cause says it in one
+/// plain sentence, its first note ([`Diagnostic::reason`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Cause {
+    /// A kind value that reached a joint or hardware declaration through
+    /// a param doesn't take what the declaration hands it: a setting or a
+    /// role it doesn't have, or several parts where it takes one. It can
+    /// never be used there, whatever the sizes.
+    KindSignature,
 }
 
 impl Diagnostic {
@@ -411,6 +426,7 @@ impl Diagnostic {
             merged: Vec::new(),
             help: None,
             fixes: Vec::new(),
+            cause: None,
         }
     }
 
@@ -441,6 +457,22 @@ impl Diagnostic {
     pub fn with_note(mut self, note: impl Into<String>) -> Self {
         self.notes.push(note.into());
         self
+    }
+
+    /// Records why it was reported, with the reason in one plain
+    /// sentence, which becomes the first note.
+    #[must_use]
+    pub fn with_cause(mut self, cause: Cause, reason: impl Into<String>) -> Self {
+        self.notes.insert(0, reason.into());
+        self.cause = Some(cause);
+        self
+    }
+
+    /// The plain one-sentence reason of a diagnostic with a cause: its
+    /// first note.
+    pub fn reason(&self) -> Option<&str> {
+        self.cause?;
+        self.notes.first().map(String::as_str)
     }
 
     /// Adds a secondary label.

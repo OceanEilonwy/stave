@@ -430,18 +430,31 @@ pub struct OptionRefusal {
 }
 
 impl OptionRefusal {
-    /// The reason in one line, as the list shows it: `error[overlap]:
-    /// case.base and case.base_joints.key[0] overlap`, with `(and 1 more)`
-    /// when there are others.
+    /// The reason in one line, as the list shows it: the plain sentence a
+    /// kind refused by its signature gives ("Shelf gives its joint a
+    /// depth, and glued_edge has no depth"), otherwise the checker's
+    /// first error, `error[overlap]: case.base and case.base_joints.key[0]
+    /// overlap`; with `(and 1 more)` when there are others. The full
+    /// diagnostic is [`OptionRefusal::first`].
     pub fn line(&self) -> String {
-        let first = format!(
-            "{}[{}]: {}",
-            self.first.severity, self.first.code, self.first.message
-        );
+        let first = match self.first.reason() {
+            Some(reason) => reason.to_owned(),
+            None => format!(
+                "{}[{}]: {}",
+                self.first.severity, self.first.code, self.first.message
+            ),
+        };
         match self.more {
             0 => first,
             more => format!("{first} (and {more} more)"),
         }
+    }
+
+    /// `true` when the option can never be used for this candidate,
+    /// whatever the sizes: a kind that doesn't take what the component
+    /// hands it ([`stave_lang::Cause::KindSignature`]).
+    pub fn by_signature(&self) -> bool {
+        self.first.cause == Some(stave_lang::Cause::KindSignature)
     }
 }
 
