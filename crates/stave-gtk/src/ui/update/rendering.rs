@@ -49,6 +49,8 @@ pub(in crate::ui) enum RenderingInput {
         /// It is dark now.
         dark: bool,
     },
+    /// The 3D view went off screen: another tab in its frame covers it.
+    Hidden,
     /// The view has a new size, in device pixels.
     Resized {
         /// Its width.
@@ -232,6 +234,10 @@ pub(in crate::ui) fn wire(window: &mut Window) {
     viewport.connect_resized(move |width, height| {
         sender.emit(RenderingInput::Resized { width, height }.into());
     });
+    // A view covered by another tab draws nothing more, so a screenshot
+    // waiting for its frame must hear of it.
+    let sender = input.clone();
+    viewport.connect_unmap(move |_| sender.emit(RenderingInput::Hidden.into()));
     // Left drag turns; a left click selects.
     let orbit_drag = gtk::GestureDrag::builder()
         .button(gdk::BUTTON_PRIMARY)
@@ -420,6 +426,7 @@ impl Window {
                 self.render_pictures();
                 self.widgets.files.restyle(dark);
             }
+            RenderingInput::Hidden => self.capture_if_view_hidden(),
             RenderingInput::Resized { width, height } => self.resized(width, height),
             RenderingInput::DragBegun { grab_focus } => {
                 self.state.drag_applied = (0.0, 0.0);
@@ -920,17 +927,25 @@ impl Window {
 
     /// Draws on the next frame; several requests before then draw once.
     pub(in crate::ui) fn request_render(&mut self) {
-        // The Model hidden behind an open file's tab draws nothing, so a
-        // screenshot asked for is taken without it.
-        if self.widgets.window.is_mapped() && !self.widgets.viewport.is_mapped() {
-            self.capture_if_asked();
-        }
+        self.capture_if_view_hidden();
         if self.state.render_queued {
             return;
         }
         self.state.render_queued = true;
         // Drawn on the view's next frame, so several requests draw once.
         self.on_next_frame(|_| RenderingInput::RenderNow.into());
+    }
+
+    /// The Model hidden behind another tab (an open file's) draws nothing,
+    /// so a screenshot asked for is taken without waiting for its frame.
+    /// Called when a render is asked for and when the view is covered: the
+    /// tab covering it may come after the last request (the Code panel is
+    /// brought forward by a message, handled after the render it asked
+    /// for), and a view covered before it had a size never draws.
+    pub(in crate::ui) fn capture_if_view_hidden(&mut self) {
+        if self.widgets.window.is_mapped() && !self.widgets.viewport.is_mapped() {
+            self.capture_if_asked();
+        }
     }
 
     pub(in crate::ui) fn render_now(&mut self) {
@@ -1404,7 +1419,74 @@ fn frames_must_draw(display: &gdk::Display) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+    use std::time::Duration;
+
+    use relm4::{Component, ComponentController};
+
     use super::*;
+    use crate::ui::gtk_test::{on_gtk_thread, settle};
+
+    #[test]
+    fn a_screenshot_with_the_code_tab_over_the_model_is_taken() {
+        on_gtk_thread(screenshot_with_the_code_tab_over_the_model);
+    }
+
+    /// With the editor open from the start, the Code tab is brought
+    /// forward over the Model by a message handled after the window asked
+    /// the view for its first frame, and the view, covered before it had a
+    /// size, never draws. Its being covered starts the screenshot.
+    fn screenshot_with_the_code_tab_over_the_model() {
+        let id = "org.stave.RenderingTest.EditorScreenshot";
+        let application = adw::Application::new(Some(id), gio::ApplicationFlags::NON_UNIQUE);
+        if let Err(error) = application.register(gio::Cancellable::NONE) {
+            panic!("the test's application registers: {error}");
+        }
+        let folder = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../examples/wall_shelf")
+            .canonicalize()
+            .unwrap();
+        let layout = Some(std::env::temp_dir().join("stave-rendering-test-no-layout"));
+        // The widgets are built as for any window: a screenshot's settings
+        // (its font, its dpi) would stay with the GTK thread every test
+        // shares.
+        let built = Options {
+            editor: true,
+            layout: layout.clone(),
+            ..Options::default()
+        };
+        let options = Options {
+            editor: true,
+            layout,
+            window_screenshot: Some(std::env::temp_dir().join("stave-rendering-test-editor.png")),
+            ..Options::default()
+        };
+        let builder = Window::builder();
+        let root = builder.widget().clone();
+        let widgets =
+            build_widgets(&root, &application, &folder, &gio::Menu::new(), &built).unwrap();
+        let controller = builder
+            .launch(WindowInit {
+                widgets,
+                folder,
+                options,
+            })
+            .detach();
+        let mut taken = false;
+        for _ in 0..3_000 {
+            settle();
+            if controller.model().state.window_screenshot.is_none() {
+                taken = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        controller.widget().close();
+        settle();
+        drop(controller);
+        settle();
+        assert!(taken, "the screenshot wasn't started in 30 seconds");
+    }
 
     #[test]
     fn the_arrow_keys_turn_the_view_and_plus_and_minus_zoom() {
