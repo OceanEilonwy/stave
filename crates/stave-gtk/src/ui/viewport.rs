@@ -199,6 +199,18 @@ pub enum Sizing {
     },
 }
 
+/// What became of a frame of the live view given to [`Viewport::show_live`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Shown {
+    /// It is on screen.
+    Yes,
+    /// Its size can't be a texture's.
+    No,
+    /// GTK refused it as a dmabuf; frames from now on go by readback, so
+    /// drawing it again shows it.
+    Refused,
+}
+
 impl Viewport {
     /// A small picture sized as `sizing` says, not expanding.
     pub fn picture(sizing: Sizing) -> Viewport {
@@ -233,18 +245,34 @@ impl Viewport {
         self.queue_draw();
     }
 
-    /// Shows a frame of the live view straight from the GPU's mapped
-    /// buffer: GTK reads the padded rows where they are, so they are not
-    /// copied on the CPU, and the buffer goes back to the renderer when the
-    /// next frame replaces this one. False when its size can't be a
-    /// texture's.
-    pub fn show_live(&self, frame: crate::render::LiveFrame) -> bool {
+    /// Shows a frame of the live view without copying it on the CPU: a
+    /// dmabuf goes to GTK as it is, and a mapped readback buffer is read
+    /// by GTK where it lies, padded rows and all (the buffer goes back to
+    /// the renderer when the next frame replaces this one).
+    pub fn show_live(&self, frame: crate::render::LiveFrame) -> Shown {
+        match frame {
+            crate::render::LiveFrame::Mapped(frame) => self.show_mapped(frame),
+            crate::render::LiveFrame::Dmabuf(frame) => match frame.into_texture() {
+                Ok(texture) => {
+                    self.show_frame(texture);
+                    Shown::Yes
+                }
+                Err(error) => {
+                    eprintln!("stave: the 3D view's frames go by readback now: {error:#}");
+                    Shown::Refused
+                }
+            },
+        }
+    }
+
+    /// Shows a frame in a mapped readback buffer.
+    fn show_mapped(&self, frame: crate::render::MappedFrame) -> Shown {
         let (Ok(width), Ok(height), Ok(stride)) = (
             i32::try_from(frame.width()),
             i32::try_from(frame.height()),
             usize::try_from(frame.stride()),
         ) else {
-            return false;
+            return Shown::No;
         };
         let bytes = glib::Bytes::from_owned(frame);
         // Alpha is 1 everywhere, so the bytes are premultiplied already:
@@ -257,7 +285,7 @@ impl Viewport {
             stride,
         );
         self.show_frame(texture.upcast());
-        true
+        Shown::Yes
     }
 
     /// Says what it shows to screen readers: `name` ("3D view of Wall

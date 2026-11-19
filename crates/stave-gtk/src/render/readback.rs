@@ -10,6 +10,10 @@
 //! At most [`IN_FLIGHT`] frames wait on the GPU at once. With the one GTK
 //! shows and a spare or two, the buffers form a small ring that only grows
 //! while GTK holds on to old frames.
+//!
+//! When frames can go to GTK as dmabufs ([`super::dmabuf`]), a frame is
+//! copied into one instead of a buffer, and the ring waits for the GPU to
+//! finish its submission instead of for a mapping; nothing is read back.
 
 use std::collections::VecDeque;
 use std::sync::mpsc::{Receiver, TryRecvError};
@@ -18,7 +22,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, Result, anyhow};
 
-use super::profile;
+use super::{dmabuf, profile};
 
 /// The most frames waiting on the GPU at once. Submitting another first
 /// waits for the oldest, so a GPU that falls behind slows the view down
@@ -79,10 +83,18 @@ fn give_back(spares: &Spares, buffer: wgpu::Buffer) {
     }
 }
 
-/// A frame copied into a buffer and submitted.
+/// Where a frame is copied for the window.
+pub(super) enum Output {
+    /// A readback buffer, mapped once the GPU is done.
+    Buffer(wgpu::Buffer),
+    /// A dmabuf GTK reads itself.
+    Dmabuf(dmabuf::Frame),
+}
+
+/// A frame copied out and submitted.
 pub(super) struct Drawn {
     /// Where the frame is being copied.
-    pub buffer: wgpu::Buffer,
+    pub output: Output,
     /// How it lies there.
     pub layout: Layout,
     /// The submission that copies it.
@@ -177,19 +189,29 @@ impl Ring {
         Ok(())
     }
 
-    /// Starts mapping a drawn frame, and numbers it.
-    pub fn push(&mut self, drawn: Drawn) -> Ticket {
+    /// Starts mapping a drawn frame (or, for a dmabuf, waiting for its
+    /// submission to finish), and numbers it.
+    pub fn push(&mut self, queue: &wgpu::Queue, drawn: Drawn) -> Ticket {
         let ticket = Ticket(self.next);
         self.next += 1;
         let (sender, mapped) = std::sync::mpsc::channel();
-        drawn
-            .buffer
-            .slice(..)
-            .map_async(wgpu::MapMode::Read, move |result| {
-                // The ring may be gone (the device was opened again); then
-                // nobody waits for this frame.
-                let _ = sender.send(result);
-            });
+        // The ring may be gone (the device was opened again); then nobody
+        // waits for this frame.
+        match &drawn.output {
+            Output::Buffer(buffer) => {
+                buffer
+                    .slice(..)
+                    .map_async(wgpu::MapMode::Read, move |result| {
+                        let _ = sender.send(result);
+                    });
+            }
+            Output::Dmabuf(_) => {
+                // Everything submitted so far, this frame last.
+                queue.on_submitted_work_done(move || {
+                    let _ = sender.send(Ok(()));
+                });
+            }
+        }
         self.pending.push_back(Pending {
             ticket,
             drawn,
@@ -218,24 +240,42 @@ impl Ring {
         let Some((_, drawn)) = self.ready.take() else {
             return Ok(None);
         };
-        let view = match drawn.buffer.slice(..).get_mapped_range() {
-            Ok(view) => view,
-            Err(error) => {
-                drawn.buffer.unmap();
-                self.give_back(drawn.buffer);
-                return Err(anyhow!("couldn't read the frame back: {error}"));
+        let frame = match drawn.output {
+            Output::Buffer(buffer) => {
+                let view = match buffer.slice(..).get_mapped_range() {
+                    Ok(view) => view,
+                    Err(error) => {
+                        buffer.unmap();
+                        self.give_back(buffer);
+                        return Err(anyhow!("couldn't read the frame back: {error}"));
+                    }
+                };
+                LiveFrame::Mapped(MappedFrame {
+                    layout: drawn.layout,
+                    view: Some(view),
+                    buffer: Some(buffer),
+                    spares: self.spares.clone(),
+                })
             }
+            Output::Dmabuf(frame) => LiveFrame::Dmabuf(frame),
         };
         if let Some(mut timings) = drawn.timings {
             timings.gpu_wait = drawn.submitted.elapsed();
             timings.print();
         }
-        Ok(Some(LiveFrame {
-            layout: drawn.layout,
-            view: Some(view),
-            buffer: Some(drawn.buffer),
-            spares: self.spares.clone(),
-        }))
+        Ok(Some(frame))
+    }
+
+    /// Lets go of a finished frame not shown: a mapped buffer is unmapped
+    /// and kept, a dmabuf goes back to its pool.
+    fn release(&self, output: Output) {
+        match output {
+            Output::Buffer(buffer) => {
+                buffer.unmap();
+                self.give_back(buffer);
+            }
+            Output::Dmabuf(frame) => drop(frame),
+        }
     }
 
     /// Moves the frames that have finished, oldest first, out of
@@ -260,8 +300,7 @@ impl Ring {
                         self.settled = ticket.0 + 1;
                         self.failed = None;
                         if let Some((_, older)) = self.ready.replace((ticket, drawn)) {
-                            older.buffer.unmap();
-                            self.give_back(older.buffer);
+                            self.release(older.output);
                         }
                     }
                 }
@@ -276,8 +315,7 @@ impl Ring {
             self.settled = ticket.0 + 1;
             self.failed = Some(failure);
             if let Some((_, older)) = self.ready.take() {
-                older.buffer.unmap();
-                self.give_back(older.buffer);
+                self.release(older.output);
             }
         }
     }
@@ -289,15 +327,25 @@ impl Ring {
     }
 }
 
+/// A finished frame of the live view.
+#[derive(Debug)]
+pub enum LiveFrame {
+    /// In the GPU's mapped readback buffer.
+    Mapped(MappedFrame),
+    /// In a dmabuf, for GTK to read itself.
+    Dmabuf(dmabuf::Frame),
+}
+
 /// A finished frame of the live view, still in the GPU's mapped readback
-/// buffer: sRGB RGBA, rows top to bottom, each [`LiveFrame::stride`] bytes
-/// apart, with alpha 1 everywhere (so straight and premultiplied alike).
+/// buffer: sRGB RGBA, rows top to bottom, each [`MappedFrame::stride`]
+/// bytes apart, with alpha 1 everywhere (so straight and premultiplied
+/// alike).
 ///
 /// It is meant to be wrapped as it is in a texture (it is `AsRef<[u8]>`
 /// and `Send`, as `glib::Bytes::from_owned` asks). Dropping it unmaps the
 /// buffer and gives it back to the ring.
 #[derive(Debug)]
-pub struct LiveFrame {
+pub struct MappedFrame {
     layout: Layout,
     /// `None` only while dropping.
     view: Option<wgpu::BufferView>,
@@ -306,7 +354,7 @@ pub struct LiveFrame {
     spares: Spares,
 }
 
-impl LiveFrame {
+impl MappedFrame {
     /// Pixels across.
     pub fn width(&self) -> u32 {
         self.layout.width
@@ -323,13 +371,13 @@ impl LiveFrame {
     }
 }
 
-impl AsRef<[u8]> for LiveFrame {
+impl AsRef<[u8]> for MappedFrame {
     fn as_ref(&self) -> &[u8] {
         self.view.as_deref().unwrap_or(&[])
     }
 }
 
-impl Drop for LiveFrame {
+impl Drop for MappedFrame {
     fn drop(&mut self) {
         // The view must go before the buffer can be unmapped.
         drop(self.view.take());

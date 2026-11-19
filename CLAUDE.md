@@ -53,6 +53,10 @@ invalid states unrepresentable.
 - **No panics in library code:** no `unwrap`, `expect`, `panic!`, indexing that
   can fail, or lossy `as` casts outside tests. Use `TryFrom`, checked
   arithmetic and `?`. Library crates use `thiserror`; binaries use `anyhow`.
+- **No `unsafe`:** every crate forbids `unsafe_code`, with one exception:
+  `stave-gtk`'s `render/dmabuf.rs` (handing frames to GTK as dmabufs) is
+  allowed it, `stave-gtk` denies it everywhere else, and each `unsafe`
+  block there carries a `// SAFETY:` comment.
 - **Floats** (`f32`/`f64`) only at the geometry and rendering boundary
   (`stave-geom`, `stave-scene`, `stave-gtk`, drawings in `stave-output`).
   Convert from exact values in one place.
