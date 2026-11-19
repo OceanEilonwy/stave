@@ -865,9 +865,15 @@ fn short_list_search_and_blame_on_the_card() {
         Ok(EditCommand::UseDefault(joinery_name.clone()))
     );
 
-    // The search, as the window wires it: the session's setting, searched
-    // by stave_app.
-    let search = OptionSearch::new();
+    // The search, as the window drives it: given the session's setting,
+    // which it searches with stave_app itself.
+    let heard: Rc<RefCell<Vec<OptionSearchOutput>>> = Rc::default();
+    let search = {
+        let heard = heard.clone();
+        OptionSearchComponent::builder()
+            .launch(())
+            .connect_receiver(move |_, output| heard.borrow_mut().push(output))
+    };
     let setting = session
         .edit()
         .unwrap()
@@ -879,33 +885,51 @@ fn short_list_search_and_blame_on_the_card() {
         .find(|setting| setting.name.as_str() == "joinery")
         .unwrap()
         .clone();
-    search.connect_search(move |query| stave_app::choices::search(&setting, query));
-    let chosen: Rc<RefCell<Vec<(String, String)>>> = Rc::default();
-    {
-        let chosen = chosen.clone();
-        search.connect_chosen(move |setting, text| chosen.borrow_mut().push((setting, text)));
-    }
+    let ask = |message: OptionSearchInput| {
+        search.sender().send(message).unwrap();
+        settle();
+    };
+    let type_query = |query: &str| {
+        search.widgets().entry().set_text(query);
+        ask(OptionSearchInput::QueryChanged);
+    };
+    let selected = || search.widgets().selected(&search.model().rows());
     // Over the window's panels, as the window puts it.
     let sheet = gtk::Overlay::builder()
         .child(&gtk::Label::new(Some("the panels")))
         .build();
-    sheet.add_overlay(&search.root);
+    sheet.add_overlay(search.widget());
     let window = shown_in_window(sheet.upcast_ref(), 900, 700);
-    assert!(!search.root.is_visible(), "closed until asked for");
-    search.present("joinery", "");
-    assert!(search.root.is_visible());
-    let all = search.rows();
+    assert!(!search.widget().is_visible(), "closed until asked for");
+    search
+        .sender()
+        .send(OptionSearchInput::Present {
+            name: "joinery".to_owned(),
+            setting: Some(Box::new(setting.clone())),
+            query: String::new(),
+        })
+        .unwrap();
+    assert!(!search.widget().is_visible(), "only queued");
+    settle();
+    assert!(search.widget().is_visible());
+    let all = search.model().rows();
     assert_eq!(all.len(), 18, "every option, with nothing typed");
     // The arrow keys move through them.
-    let first = search.selected().unwrap();
-    search.press_arrow(true);
-    assert_ne!(search.selected().unwrap(), first);
-    search.press_arrow(false);
-    assert_eq!(search.selected().unwrap(), first);
+    let first = selected().unwrap();
+    ask(OptionSearchInput::Step(1));
+    assert_ne!(selected().unwrap(), first);
+    ask(OptionSearchInput::Step(-1));
+    assert_eq!(selected().unwrap(), first);
+    // A copy of another setting doesn't change what it lists.
+    let mut other = setting.clone();
+    other.name = parse_name("mount").unwrap();
+    other.options.clear();
+    ask(OptionSearchInput::Update(Box::new(other)));
+    assert_eq!(search.model().rows().len(), 18);
 
     // "key": chigiri, by its description, refused; Enter chooses nothing.
-    search.type_query("key");
-    let found = search.rows();
+    type_query("key");
+    let found = search.model().rows();
     assert_eq!(
         found
             .iter()
@@ -918,22 +942,58 @@ fn short_list_search_and_blame_on_the_card() {
     let words = words_in(row.upcast_ref());
     assert!(words.contains("butterfly key"), "{words}");
     assert!(words.contains("Can't be used here"), "{words}");
-    search.choose_selected();
-    assert!(chosen.borrow().is_empty());
-    assert_eq!(search.setting().as_deref(), Some("joinery"), "still open");
+    ask(OptionSearchInput::ChooseSelected);
+    assert!(heard.borrow().is_empty());
+    assert_eq!(search.model().setting(), Some("joinery"), "still open");
 
-    // "dow": dowel by its name; it fits, and Enter chooses it.
-    search.type_query("dow");
-    assert_eq!(search.selected().as_deref(), Some("dowel"));
-    let words = words_in(search.rows()[0].0.upcast_ref());
+    // "dow": dowel by its name; it fits, and Enter chooses it: the search
+    // says it closed, then what was chosen.
+    type_query("dow");
+    assert_eq!(selected().as_deref(), Some("dowel"));
+    let words = words_in(search.model().rows()[0].0.upcast_ref());
     assert!(words.contains("Fits"), "{words}");
-    search.choose_selected();
+    ask(OptionSearchInput::ChooseSelected);
     assert_eq!(
-        chosen.borrow_mut().drain(..).collect::<Vec<_>>(),
-        [("joinery".to_owned(), "dowel".to_owned())]
+        heard.borrow_mut().drain(..).collect::<Vec<_>>(),
+        [
+            OptionSearchOutput::Closed,
+            OptionSearchOutput::Chosen {
+                setting: "joinery".to_owned(),
+                value: "dowel".to_owned()
+            }
+        ]
     );
-    assert!(!search.root.is_visible(), "choosing closes it");
-    assert_eq!(search.setting(), None);
+    assert!(!search.widget().is_visible(), "choosing closes it");
+    assert_eq!(search.model().setting(), None);
+
+    // Escape in the field closes it, choosing nothing.
+    ask(OptionSearchInput::Present {
+        name: "joinery".to_owned(),
+        setting: Some(Box::new(setting)),
+        query: "dow".to_owned(),
+    });
+    let entry = search.widgets().entry();
+    let controllers = entry.observe_controllers();
+    let keys = (0..controllers.n_items())
+        .filter_map(|index| controllers.item(index))
+        .filter_map(|item| item.downcast::<gtk::EventControllerKey>().ok())
+        .find(|keys| keys.propagation_phase() == gtk::PropagationPhase::Capture)
+        .expect("the field's own keys");
+    assert!(keys.emit_by_name::<bool>(
+        "key-pressed",
+        &[
+            &glib::translate::IntoGlib::into_glib(gtk::gdk::Key::Escape),
+            &0u32,
+            &gtk::gdk::ModifierType::empty(),
+        ],
+    ));
+    assert!(search.widget().is_visible(), "only queued");
+    settle();
+    assert!(!search.widget().is_visible());
+    assert_eq!(
+        heard.borrow_mut().drain(..).collect::<Vec<_>>(),
+        [OptionSearchOutput::Closed]
+    );
     window.destroy();
 
     // chigiri typed: the card puts the blame first, with the way back.

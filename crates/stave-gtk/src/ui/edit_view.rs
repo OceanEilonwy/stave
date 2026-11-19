@@ -57,7 +57,7 @@ use super::edit_menu::{
 };
 use super::edit_panel::EditPanel;
 use super::edit_writer::BufferWriter;
-use super::option_search::OptionSearch;
+use super::option_search::{OptionSearchComponent, OptionSearchInput, OptionSearchOutput};
 use super::update::editing::EditingInput;
 use super::{EDGE, Window, WindowInput};
 use crate::render::{Backdrop, Frame, Ticket};
@@ -97,7 +97,9 @@ pub(super) struct EditView {
     /// Whether the panel showed a card when last drawn.
     panel_shown: bool,
     /// The search over a setting's options.
-    pub(super) search: Rc<OptionSearch>,
+    pub(super) search: Controller<OptionSearchComponent>,
+    /// The setting the search was opened on, until it says it closed.
+    search_open: Option<String>,
     /// On the part's card: add onto the face that was clicked.
     face_button: gtk::Button,
     /// Whether the editor shows, for the writer (a commit opens the file
@@ -196,7 +198,10 @@ impl EditView {
             card_open_options: None,
             panel,
             panel_shown: false,
-            search: OptionSearch::new(),
+            search: OptionSearchComponent::builder()
+                .launch(())
+                .forward(input, search_heard),
+            search_open: None,
             face_button,
             editor_open: Rc::new(Cell::new(false)),
             grips: grips::GripView::new(),
@@ -231,6 +236,18 @@ fn card_heard(output: EditCardOutput) -> WindowInput {
         EditCardOutput::OptionsOpen(setting) => EditingInput::CardOptionsOpen(setting),
         EditCardOutput::Link(target) => EditingInput::LinkClicked(target),
         EditCardOutput::Hover(target) => EditingInput::LinkHovered(target),
+    }
+    .into()
+}
+
+/// What the option search tells the window, as the window's input.
+fn search_heard(output: OptionSearchOutput) -> WindowInput {
+    match output {
+        OptionSearchOutput::Closed => EditingInput::OptionSearchClosed,
+        OptionSearchOutput::Chosen { setting, value } => EditingInput::OptionChosen {
+            setting,
+            text: value,
+        },
     }
     .into()
 }
@@ -510,8 +527,7 @@ impl Window {
         let design = &self.widgets.design;
         design.add_overlay(editing.menu.widget());
         self.widgets.edit_holder.append(&editing.panel.root);
-        self.widgets.sheet.add_overlay(&editing.search.root);
-        self.connect_option_search();
+        self.widgets.sheet.add_overlay(editing.search.widget());
         self.widgets.details.append(&editing.face_button);
         self.install_edit_writer();
         self.connect_changes();
@@ -962,9 +978,19 @@ impl Window {
                     }
                 }
                 // An open search shows each answer as it comes.
-                if let Some(name) = self.editing.search.setting() {
-                    self.give_option_search(&name);
-                    self.editing.search.refresh();
+                if let Some(setting) = self
+                    .editing
+                    .search_open
+                    .as_deref()
+                    .and_then(|name| self.searched_setting(name))
+                {
+                    // Only fails once the search has shut down, with the
+                    // window.
+                    let _ = self
+                        .editing
+                        .search
+                        .sender()
+                        .send(OptionSearchInput::Update(Box::new(setting)));
                 }
             }
             EditEvent::Committed => {
@@ -1187,8 +1213,8 @@ impl Window {
         // open, is checked first.
         let job = match self
             .editing
-            .search
-            .setting()
+            .search_open
+            .clone()
             .or_else(|| self.editing.card_open_options.clone())
         {
             Some(open) => job.prefer(&open),
@@ -1286,24 +1312,11 @@ impl Window {
             .unwrap_or(false)
     }
 
-    /// What is chosen in the search dialog is set as a value typed on the
-    /// card would be; closed, the keyboard goes back to the card.
-    fn connect_option_search(&self) {
-        let search = &self.editing.search;
-        let input = self.input();
-        search.connect_chosen(move |setting, text| {
-            input.emit(EditingInput::OptionChosen { setting, text }.into());
-        });
-        let input = self.input();
-        search.connect_closed(move || input.emit(EditingInput::OptionSearchClosed.into()));
-    }
-
-    /// Gives the search dialog the setting it searches, as the session has
-    /// it now: it lists what a query matches from that copy, at once, with
-    /// no call back into the window.
-    fn give_option_search(&self, name: &str) {
-        let setting = self
-            .session
+    /// The chosen candidate's setting of this name, as the session has it
+    /// now: the copy the search dialog searches, so it never calls back
+    /// into the window.
+    fn searched_setting(&self, name: &str) -> Option<stave_app::edit::SettingParam> {
+        self.session
             .edit()
             .and_then(Edit::chosen)
             .and_then(|chosen| {
@@ -1313,13 +1326,7 @@ impl Window {
                     .iter()
                     .find(|setting| setting.name.as_str() == name)
                     .cloned()
-            });
-        self.editing.search.connect_search(move |query| {
-            setting
-                .as_ref()
-                .map(|setting| stave_app::choices::search(setting, query))
-                .unwrap_or_default()
-        });
+            })
     }
 
     /// An option chosen in the search dialog, set as a value typed on the
@@ -1333,7 +1340,8 @@ impl Window {
 
     /// The search dialog closed: the keyboard goes back to the card, so
     /// Enter and Escape work there again.
-    pub(in crate::ui) fn option_search_closed(&self) {
+    pub(in crate::ui) fn option_search_closed(&mut self) {
+        self.editing.search_open = None;
         let card = self.editing.card.widget();
         if card.is_visible() {
             card.grab_focus();
@@ -1343,8 +1351,18 @@ impl Window {
     /// Opens the search over a setting's options, `query` typed; the
     /// options' check is started again with that setting first.
     pub(super) fn open_option_search(&mut self, setting: &str, query: &str) {
-        self.give_option_search(setting);
-        self.editing.search.present(setting, query);
+        let found = self.searched_setting(setting).map(Box::new);
+        self.editing.search_open = Some(setting.to_owned());
+        // Only fails once the search has shut down, with the window.
+        let _ = self
+            .editing
+            .search
+            .sender()
+            .send(OptionSearchInput::Present {
+                name: setting.to_owned(),
+                setting: found,
+                query: query.to_owned(),
+            });
         // Checked with that setting first.
         self.stop_options_check();
         self.start_options_check();
