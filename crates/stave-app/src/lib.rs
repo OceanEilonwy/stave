@@ -41,6 +41,7 @@ pub mod inspect;
 pub mod item_offer;
 pub mod link;
 pub mod naming;
+pub mod option_fits;
 pub mod param_kind;
 pub mod problems;
 pub mod remove;

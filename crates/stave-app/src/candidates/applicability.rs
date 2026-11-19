@@ -146,7 +146,7 @@ fn unwritable(error: &super::WriteError) -> Diagnostic {
 
 /// A message about a candidate that has no place in a file to point at:
 /// a diagnostic without a label.
-fn unchecked(message: &str) -> Diagnostic {
+pub(crate) fn unchecked(message: &str) -> Diagnostic {
     Diagnostic {
         severity: Severity::Error,
         code: Code::NotSupported,

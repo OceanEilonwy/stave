@@ -16,6 +16,7 @@ use crate::ui::new_project::{
     Answers, NewProjectDialog, create_project, importable_libraries, standard_tools,
 };
 use stave_app::candidates::new_project::BoardForm;
+use stave_app::editing::entry_matches;
 use stave_app::session::Event;
 use stave_lang::placement::Face;
 use stave_schema::species::Species;
@@ -88,6 +89,8 @@ fn card_actions_become_the_sessions_commands() {
         command_for(CardAction::Fix { problem: 1, fix: 0 }),
         Ok(EditCommand::ApplyFix { problem: 1, fix: 0 })
     );
+    assert_eq!(command_for(CardAction::PutBack), Ok(EditCommand::PutBack));
+    assert!(tries_again(&EditCommand::PutBack));
     assert_eq!(command_for(CardAction::Add), Ok(EditCommand::Add));
     assert_eq!(command_for(CardAction::Cancel), Ok(EditCommand::Cancel));
     // Choosing, binding, setting, renaming and fixing try it again; the
@@ -250,8 +253,12 @@ fn menu_and_card_on_the_session() {
     // The mount is chosen from its list of options, or typed.
     let lists = card.option_lists();
     assert!(
-        lists.iter().any(|(param, _)| param.as_str() == "mount"),
-        "{lists:?}"
+        lists.iter().any(|(param, _, _)| param.as_str() == "mount"),
+        "{:?}",
+        lists
+            .iter()
+            .map(|(param, _, _)| param.as_str())
+            .collect::<Vec<_>>()
     );
     let (_, mount) = card
         .entries()
@@ -585,4 +592,152 @@ fn a_menu_entry_is_found_by_its_declaration_when_it_is_chosen() {
             .declaration,
         declaration
     );
+}
+
+#[test]
+fn the_cards_options_show_their_fit_and_a_blamed_setting_can_be_put_back() {
+    on_gtk_thread(options_and_blame_on_the_card);
+}
+
+/// The owner's case: the Case chosen for a new project's envelope, its
+/// joinery's options checked and drawn, a refused one that can't be
+/// chosen, then chigiri typed, blamed, and put back from the card.
+fn options_and_blame_on_the_card() {
+    let answers = Answers {
+        title: "Case test".to_owned(),
+        size: [940.0, 1780.0, 580.0],
+        stock_name: "oak_19".to_owned(),
+        species: Species::WhiteOak,
+        form: BoardForm::Solid,
+        thickness: 19.0,
+        max_length: 2700.0,
+        imports: vec!["std:casework".to_owned()],
+        tools: Vec::new(),
+    };
+    let folder = std::env::temp_dir().join(format!("stave-gtk-options-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&folder);
+    create_project(&folder, &answers.project().unwrap()).unwrap();
+    let mut session = Session::new(folder.clone());
+    let envelope = {
+        let opened = stave_app::open(&folder).unwrap();
+        let model = opened.model.as_ref().unwrap();
+        model
+            .regions
+            .iter()
+            .find(|r| r.name == "envelope")
+            .unwrap()
+            .id
+    };
+    send(&mut session, EditCommand::Start(Picked::Region(envelope)));
+    let index = session
+        .edit()
+        .unwrap()
+        .menu()
+        .iter()
+        .position(|candidate| entry_matches(candidate, "casework.Case"))
+        .unwrap();
+    send(&mut session, EditCommand::Choose(index));
+    send(
+        &mut session,
+        EditCommand::Set {
+            name: parse_name("panel_stock").unwrap(),
+            value: parse_value("oak_19").unwrap(),
+        },
+    );
+    session.check_setting_options(Some("joinery"), &AtomicBool::new(false));
+
+    let menu = EditMenu::new();
+    let card = EditCard::new();
+    let actions: Rc<RefCell<Vec<CardAction>>> = Rc::default();
+    {
+        let actions = actions.clone();
+        card.connect_action(move |action| actions.borrow_mut().push(action));
+    }
+    draw_edit(&menu, &card, &session, false);
+    assert!(card.open_options("joinery"));
+    let (_, toggle, list) = card
+        .option_lists()
+        .into_iter()
+        .find(|(param, _, _)| param.as_str() == "joinery")
+        .unwrap();
+    assert!(toggle.is_active());
+    let rows: Vec<gtk::Button> = {
+        let mut rows = Vec::new();
+        let mut child = list.first_child();
+        while let Some(widget) = child {
+            child = widget.next_sibling();
+            if let Ok(button) = widget.downcast::<gtk::Button>() {
+                rows.push(button);
+            }
+        }
+        rows
+    };
+    assert_eq!(rows.len(), 18);
+    let row = |text: &str| -> gtk::Button {
+        rows.iter()
+            .find(|row| {
+                // A row's first label is its option's text.
+                let mut words = String::new();
+                let mut stack = vec![row.upcast_ref::<gtk::Widget>().clone()];
+                while let Some(widget) = stack.pop() {
+                    if let Some(label) = widget.downcast_ref::<gtk::Label>() {
+                        words.push_str(&label.label());
+                        words.push('\n');
+                    }
+                    let mut child = widget.first_child();
+                    while let Some(next) = child {
+                        child = next.next_sibling();
+                        stack.push(next);
+                    }
+                }
+                words.lines().any(|line| line == text)
+            })
+            .unwrap_or_else(|| panic!("no row for {text}"))
+            .clone()
+    };
+    // A refused option is greyed, still focusable to read why, and never
+    // reports; one that fits reports the value.
+    let chigiri = row("chigiri");
+    assert!(chigiri.has_css_class("stave-edit-unavailable"));
+    assert!(chigiri.is_focusable());
+    chigiri.emit_clicked();
+    assert!(actions.borrow().is_empty());
+    let dado = row("dado");
+    assert!(!dado.has_css_class("stave-edit-unavailable"));
+    dado.emit_clicked();
+    assert_eq!(
+        actions.borrow_mut().drain(..).collect::<Vec<_>>(),
+        [CardAction::Choose {
+            param: parse_name("joinery").unwrap(),
+            text: "dado".to_owned(),
+        }]
+    );
+
+    // chigiri typed: the card puts the blame first, with the way back.
+    send(
+        &mut session,
+        EditCommand::Set {
+            name: parse_name("joinery").unwrap(),
+            value: parse_value("chigiri").unwrap(),
+        },
+    );
+    draw_edit(&menu, &card, &session, false);
+    let put_back = card
+        .put_back_button()
+        .expect("the card offers the way back");
+    assert_eq!(
+        put_back.label().map(|label| label.to_string()),
+        Some("Put joinery back to dowel(count: 4), the default".to_owned())
+    );
+    put_back.emit_clicked();
+    for action in actions.borrow_mut().drain(..).collect::<Vec<_>>() {
+        send(&mut session, command_for(action).unwrap());
+    }
+    let chosen = session.edit().unwrap().chosen().unwrap();
+    assert!(matches!(
+        chosen.progress(),
+        Progress::Tried(Verdict::Fits(_))
+    ));
+    draw_edit(&menu, &card, &session, false);
+    assert!(card.put_back_button().is_none());
 }

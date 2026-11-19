@@ -1,0 +1,6 @@
+# chigiri typed as the Case's joinery: refused, the card says first that
+# it stopped fitting when the joinery changed, and offers to put it back.
+select region envelope
+choose casework.Case
+set panel_stock = oak_19
+set joinery = chigiri

@@ -62,8 +62,8 @@ use stave_app::candidates::Repeat;
 use stave_app::candidates::new_project::{BoardForm, NewProject, NewStock, StockCut};
 use stave_app::change::{Change, ChangeDetail, new_project_file};
 use stave_app::edit::{
-    Applicability, Candidate, FacingPair, MenuGroup, PartFace, Picked, PlaceSlot, SettingValue,
-    Verdict,
+    Applicability, Blame, Candidate, FacingPair, MenuGroup, OptionFit, PartFace, Picked, PlaceSlot,
+    SettingValue, Verdict,
 };
 use stave_app::editing::{
     Edit, EditCommand, EditEvent, Progress, entry_matches, parse_length, parse_name, parse_value,
@@ -163,6 +163,11 @@ pub enum Step {
     /// (`set apron_front.setback = 8mm`): the assembly, the param and the
     /// value as typed.
     SetParam(Ident, Ident, String),
+    /// List a setting's options, each with whether the candidate fits
+    /// with it (`options joinery`).
+    Options(String),
+    /// Put back the setting a refusal blames to its value before.
+    PutBack,
     /// Name the new item.
     Name(String),
     /// Make the chosen entry so many pieces split along an axis; `repeat
@@ -334,6 +339,8 @@ fn parse_step(line: &str) -> Result<Step> {
             setting(rest)
         }
         ["name", name] => Ok(Step::Name((*name).to_owned())),
+        ["options", setting] => Ok(Step::Options((*setting).to_owned())),
+        ["put", "back"] => Ok(Step::PutBack),
         ["repeat", count] => Ok(Step::RepeatChosen(chosen_repeat(count, None)?)),
         ["repeat", first, second] if first.parse::<usize>().is_ok() => {
             Ok(Step::RepeatChosen(chosen_repeat(first, Some(second))?))
@@ -750,6 +757,41 @@ impl Runner<'_> {
                 },
                 out,
             ),
+            Step::Options(name) => {
+                let edit = self.edit()?;
+                let Some(chosen) = edit.chosen() else {
+                    bail!("choose something from the menu first");
+                };
+                if !chosen
+                    .candidate()
+                    .settings
+                    .iter()
+                    .any(|setting| setting.name.as_str() == name)
+                {
+                    bail!("there is no setting called '{name}'");
+                }
+                let never = std::sync::atomic::AtomicBool::new(false);
+                let events: Vec<EditEvent> = self
+                    .session
+                    .check_setting_options(Some(name), &never)
+                    .into_iter()
+                    .filter_map(|event| match event {
+                        Event::Edit(event) => Some(event),
+                        _ => None,
+                    })
+                    .collect();
+                if let Some(failed) = rejected(&events) {
+                    writeln!(out, "rejected: {failed}")?;
+                    return Ok(false);
+                }
+                options_list(self.edit()?, name, out)?;
+                Ok(true)
+            }
+            Step::PutBack => {
+                self.edit()?;
+                let events = self.send(EditCommand::PutBack);
+                self.outcome(&events, verbose, out)
+            }
             Step::Name(name) => {
                 self.edit()?;
                 let events = self.send(EditCommand::Rename(parse_name(name)?));
@@ -1072,6 +1114,11 @@ impl Runner<'_> {
             writeln!(out, "{}", change_line(change))?;
         } else if let Some(chosen) = self.session.edit().and_then(Edit::chosen) {
             writeln!(out, "{}", progress_line(chosen.progress()))?;
+            if events.contains(&EditEvent::SettingChanged)
+                && let Some(blame) = chosen.blame()
+            {
+                blame_lines(blame, out)?;
+            }
         }
         Ok(true)
     }
@@ -1434,6 +1481,57 @@ fn list(edit: &Edit, out: &mut String) -> Result<()> {
     Ok(())
 }
 
+/// What a refusal blames, indented under where the candidate stands: the
+/// sentence the card puts first and what `put back` does.
+fn blame_lines(blame: &Blame, out: &mut String) -> Result<()> {
+    writeln!(out, "  {}", blame.text())?;
+    writeln!(out, "  'put back': {}", blame.put_back_label())?;
+    Ok(())
+}
+
+/// A setting's options in the card's order, numbered from 1, each with
+/// whether the chosen candidate fits with it.
+fn options_list(edit: &Edit, name: &str, out: &mut String) -> Result<()> {
+    let Some(setting) = edit.chosen().and_then(|chosen| {
+        chosen
+            .candidate()
+            .settings
+            .iter()
+            .find(|setting| setting.name.as_str() == name)
+    }) else {
+        bail!("there is no setting called '{name}'");
+    };
+    let fitting = setting
+        .options
+        .iter()
+        .filter(|option| option.fit == OptionFit::Fits)
+        .count();
+    match setting.options.len() {
+        0 => writeln!(out, "{name}: no options to choose from; type a value")?,
+        1 => writeln!(out, "{name}: 1 option, {fitting} fits")?,
+        count => writeln!(out, "{name}: {count} options, {fitting} fit")?,
+    }
+    let width = setting
+        .options
+        .iter()
+        .map(|option| option.text.len())
+        .max()
+        .unwrap_or(0);
+    for (index, option) in setting.options.iter().enumerate() {
+        let pad = " ".repeat(width - option.text.len());
+        let state = match &option.fit {
+            OptionFit::NotChecked => "not checked".to_owned(),
+            OptionFit::NeedsChoice(names) => {
+                format!("not tried: choose {} first", names_text(names))
+            }
+            OptionFit::Fits => "fits".to_owned(),
+            OptionFit::Refused(refusal) => format!("refused: {}", refusal.line()),
+        };
+        writeln!(out, "{:>3}. {}{pad}  {state}", index + 1, option.text)?;
+    }
+    Ok(())
+}
+
 /// How the command line names a menu entry: `casework.Shelf`, or the bare
 /// label for the project's own declarations.
 fn entry_name(candidate: &Candidate) -> String {
@@ -1496,6 +1594,9 @@ fn card(edit: &Edit, out: &mut String) -> Result<()> {
         writeln!(out, "  {key}{}  {value}", " ".repeat(width - key.len()))?;
     }
     writeln!(out, "verdict: {}", progress_line(chosen.progress()))?;
+    if let Some(blame) = chosen.blame() {
+        blame_lines(blame, out)?;
+    }
     if let Some(tried) = chosen.tried() {
         out.push_str(&render_diagnostics(tried.sources(), &tried.shown()));
         if let Progress::Tried(Verdict::Refused(refusal)) = chosen.progress() {

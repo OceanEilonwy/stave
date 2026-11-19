@@ -320,7 +320,9 @@ pub struct SettingParam {
     /// `Mount`; the kinds of that class in scope for a kind type; the
     /// values of a `within [..]` list for a quantity. Empty when the type
     /// has no list (a quantity with a range or no domain: see
-    /// [`SettingParam::range`]).
+    /// [`SettingParam::range`]). On the chosen candidate, each carries its
+    /// [`OptionFit`], and the refused ones come after the rest, each part
+    /// in the order above.
     pub options: Vec<SettingOption>,
     /// For a quantity whose param has `within low..high`, the two ends as
     /// written.
@@ -354,6 +356,135 @@ pub struct SettingOption {
     /// The first sentence of its declaration's `///` doc comment, when it
     /// has one.
     pub hint: Option<String>,
+    /// Whether the chosen candidate fits with the setting set to this
+    /// option and every other setting as it stands: tried in a scratch
+    /// copy, as a menu entry's [`Applicability`] is. Always
+    /// [`OptionFit::NotChecked`] on a menu entry not chosen.
+    pub fit: OptionFit,
+    /// Where it is listed by its type, before the refused options are
+    /// put last: they keep this order among themselves.
+    pub(crate) position: usize,
+}
+
+impl SettingOption {
+    /// An option with this text and hint, not checked yet.
+    pub fn new(text: String, hint: Option<String>) -> Self {
+        Self {
+            text,
+            hint,
+            fit: OptionFit::NotChecked,
+            position: 0,
+        }
+    }
+}
+
+/// Whether one option of a setting fits the chosen candidate
+/// (`docs/editing.md`, "Options are checked").
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OptionFit {
+    /// Not checked yet: the check for it hasn't run, or was thrown away
+    /// because the candidate changed since.
+    NotChecked,
+    /// Can't be tried until these are pointed at or chosen (place params
+    /// first): the candidate would not be complete even with this option.
+    /// Not a refusal.
+    NeedsChoice(NonEmpty<Name>),
+    /// The candidate checks with no error with this option.
+    Fits,
+    /// The candidate would cause errors with this option: the first, as
+    /// `stave check` words it.
+    Refused(OptionRefusal),
+}
+
+impl OptionFit {
+    /// `true` for [`OptionFit::Refused`]: the option can't be picked from
+    /// the list.
+    pub fn is_refused(&self) -> bool {
+        matches!(self, OptionFit::Refused(_))
+    }
+}
+
+/// Why an option is refused: the checker's first error for it, and how
+/// many more there are.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OptionRefusal {
+    /// The first error, in the checker's order: its code and message as
+    /// `stave check` words them.
+    pub first: Diagnostic,
+    /// How many errors there are after the first.
+    pub more: usize,
+}
+
+impl OptionRefusal {
+    /// The reason in one line, as the list shows it: `error[overlap]:
+    /// case.base and case.base_joints.key[0] overlap`, with `(and 1 more)`
+    /// when there are others.
+    pub fn line(&self) -> String {
+        let first = format!(
+            "{}[{}]: {}",
+            self.first.severity, self.first.code, self.first.message
+        );
+        match self.more {
+            0 => first,
+            more => format!("{first} (and {more} more)"),
+        }
+    }
+}
+
+/// What the card puts first when a change to one setting turned a
+/// candidate that fitted, or that still needed that choice, into one that
+/// is refused (`docs/editing.md`, "Blame and the way back"): which
+/// setting, from what, to what. [`crate::editing::EditCommand::PutBack`]
+/// puts the setting back to [`Blame::from`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct Blame {
+    /// The setting that was changed.
+    pub setting: Ident,
+    /// Where its value came from before the change; putting it back
+    /// restores exactly this (a default stays a default).
+    pub from: SettingValue,
+    /// The value it had before, as `.stave` text; `None` when it had none
+    /// yet ([`SettingValue::Unset`]).
+    pub from_text: Option<String>,
+    /// The value it was changed to, as `.stave` text.
+    pub to_text: String,
+}
+
+impl Blame {
+    /// The sentence the card puts first: "It stopped fitting when joinery
+    /// became chigiri.", or, for a setting that had no value yet, "It
+    /// doesn't fit now that panel_stock is oak_19."
+    pub fn text(&self) -> String {
+        match self.from {
+            SettingValue::Unset => format!(
+                "It doesn't fit now that {} is {}.",
+                self.setting.as_str(),
+                self.to_text
+            ),
+            SettingValue::Default | SettingValue::Copied { .. } | SettingValue::Chosen(_) => {
+                format!(
+                    "It stopped fitting when {} became {}.",
+                    self.setting.as_str(),
+                    self.to_text
+                )
+            }
+        }
+    }
+
+    /// The label of the action that puts it back: "Put joinery back to
+    /// dowel(count: 4), the default", "Put frame back to oak_19", "Clear
+    /// panel_stock again".
+    pub fn put_back_label(&self) -> String {
+        let setting = self.setting.as_str();
+        let value = self.from_text.as_deref().unwrap_or_default();
+        match self.from {
+            SettingValue::Unset => format!("Clear {setting} again"),
+            SettingValue::Default => format!("Put {setting} back to {value}, the default"),
+            SettingValue::Copied { .. } | SettingValue::Chosen(_) => {
+                format!("Put {setting} back to {value}")
+            }
+        }
+    }
 }
 
 /// The two ends of a `within low..high` domain, as written.

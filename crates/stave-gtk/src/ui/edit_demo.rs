@@ -187,6 +187,7 @@ pub fn show(design: &gtk::Overlay, showcase: Showcase) {
             card.show(
                 &CardModel {
                     applied: &[],
+                    blame: None,
                     heading,
                     candidate,
                     name: &name,

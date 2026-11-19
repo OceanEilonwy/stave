@@ -813,6 +813,7 @@ impl Window {
             | EditEvent::RepeatChanged
             | EditEvent::DependantsIncluded
             | EditEvent::FixApplied
+            | EditEvent::OptionsChanged
             | EditEvent::Rejected(_) => {}
         }
         self.request_render();

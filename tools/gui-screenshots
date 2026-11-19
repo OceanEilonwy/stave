@@ -193,6 +193,18 @@ shot $window/new_project.png "$scratch/chest" --theme light --new-project
 "$stave" edit "$scratch/hall_table" --script $edits/new_project.script >/dev/null
 shot $window/new_project_opened.png "$scratch/hall_table" --theme light
 shot $window/new_project_menu.png "$scratch/hall_table" --theme light --edit-script $edits/envelope_menu.edit
+# The owner's case (docs/editing.md, "Options are checked"): Case
+# chosen for a new project's envelope, its wood picked, and its joinery's
+# list open: the seven kinds that fit first, then the refused ones greyed
+# with the checker's reason (light and dark); then chigiri typed: the card
+# says first that it stopped fitting when the joinery changed and offers
+# to put it back, the checker's words below (light and dark). Taller
+# than the default size so the list shows both kinds of option.
+"$stave" edit "$scratch/case_test" --script $edits/case_test.script >/dev/null
+shot $window/edit_setting_options.png "$scratch/case_test" --theme light --size 1440x1200 --edit-script $edits/setting_options.edit
+shot $window/edit_setting_options_dark.png "$scratch/case_test" --theme dark --size 1440x1200 --edit-script $edits/setting_options.edit
+shot $window/edit_setting_blame.png "$scratch/case_test" --theme light --size 1440x1200 --edit-script $edits/setting_blame.edit
+shot $window/edit_setting_blame_dark.png "$scratch/case_test" --theme dark --size 1440x1200 --edit-script $edits/setting_blame.edit
 
 # Changing what is there (docs/gui.md, "Changing what is there"): the small
 # chest with a divider and two drawers, and the side table as far as its
