@@ -602,9 +602,9 @@ without an import or a prefix:
 
 | Module | Folder | Provides |
 |---|---|---|
-| `std:joinery` | `std/joinery` | joint kinds (`dado`, `rabbet`, `groove`, `dowel`, `round_tenon`, `socket`, `screw`, `cope_and_stick`, `mortise_tenon`, `half_lap`) and the standard recipes |
-| `std:hardware` | `std/hardware` | hardware kinds (`side_mount_slide`, `euro_hinge`, `butt_hinge`, `knob`, `bar_pull`) and fasteners (`dowel_pin`, `wood_screw`) |
-| `std:tools` | `std/tools` | tool kinds (`square`, `chisel`, `router`, `drill`, `lathe`, ...) |
+| `std:joinery` | `std/joinery` | joint kinds (`dado`, `rabbet`, `groove`, `dowel`, `round_tenon`, `socket`, `screw`, `cope_and_stick`, `mortise_tenon`, `half_lap`, `glued_face`), edge joints for parts made of boards (`glued_edge`, `tongue_and_groove`, `splined_edge`, `chigiri`, `suitsuki_zan`; see [Boards](#boards)), splices (`lap_splice`, `kanawa_tsugi`; see [Splices](#splices)) and the standard recipes |
+| `std:hardware` | `std/hardware` | hardware kinds (`side_mount_slide`, `euro_hinge`, `wide_hinge_165`, `butt_hinge`, `knob`, `bar_pull`) and fasteners (`dowel_pin`, `wood_screw`) |
+| `std:tools` | `std/tools` | tool kinds: marking and measuring (`pencil`, `marking_knife`, `square`, `tape`, `marking_gauge`, `mortise_gauge`, `sliding_bevel`, `dividers`, `calipers`, `awl`), hand tools (`tenon_saw`, `dovetail_saw`, `chisel`, `mortise_chisel`, `mallet`, `router_plane`, `shoulder_plane`, `block_plane`, `spokeshave`, `rasp`, `brace`, `auger_bit`, `screwdriver`, `clamps`), power tools (`drill`, `depth_stop`, `router`, `straight_bit`, `dovetail_bit`, `table_saw`, `dado_stack`, `bandsaw`) and turning (`lathe`, `roughing_gouge`, `spindle_gouge`, `parting_tool`) |
 
 Beginners write `dado(...)`, not `joinery.dado(...)`. Anything from outside
 `std` is always qualified (`japanese.ari_tsugi`), so a joint from someone else
@@ -905,7 +905,7 @@ hardware list and the work plan read them:
 
 | Base | Required | Optional |
 |---|---|---|
-| `fastener` | `diameter`, `length`: `Length` | `envelope`, `model`, `license`, `species` |
+| `fastener` | `diameter`, `length`: `Length` | `envelope` (read by nothing; see [Hardware](#hardware)), `model`, `license`, `species` |
 | `tool` | | `title`: `Text`; `powered`: `Bool` (default `false`) |
 
 A fastener's `species` is a species word, as a stock's is: what it is
@@ -1561,6 +1561,59 @@ and may add settings. Giving the same setting twice is
 `error[duplicate-name]`. A kind value's settings and fields are readable:
 `slide.length`, `slide.clearance`.
 
+**A kind chosen through a param must take what the declaration hands
+it.** A `JointKind` (or other kind type) param says only what class of
+kind it takes, not which roles and settings; the declaration that uses it
+decides that (`joint housing : joinery(board, into: sides, depth: depth)`
+hands its kind a part as `piece`, parts as `into` and a `depth`). When
+the kind that reaches such a declaration through a param (a component's
+or the project's) has no setting the declaration gives it, no role it
+names, or takes one part where it is handed several (or something else
+the role doesn't take), or the declaration hands nothing to one of its
+roles, the kind can never be used there, whatever the sizes. That is one
+`error[type-mismatch]` at the place the kind was chosen: the assembly's
+argument, or the param's default when it was not set (followed through a
+component that only passes the param on to another). The message names
+the kind, the param and its component; the first note says why, naming
+who hands what; the help names the kinds of the same class in scope
+there that take what is handed, by the same test; the declaration that
+uses the kind is a secondary place:
+
+```
+error[type-mismatch]: 'glued_edge' can't be the joinery of Shelf
+  --> shelf_test.stave:27:16
+   |
+27 |   joinery:     glued_edge
+   |                ^^^^^^^^^^
+  ::: std/casework/shelf.stave:26:47
+   |
+26 |   joint housing : joinery(board, into: sides, depth: depth)
+   |                                               ----- Shelf uses joinery here
+   = note: Shelf gives its joint a depth, and glued_edge has no depth
+   = help: choose a kind that takes what Shelf hands its joint: cope_and_stick, dado, dowel, groove, rabbet, socket, splined_edge, tongue_and_groove
+```
+
+The reason has one of four shapes: `<Shelf> gives its joint a <depth>,
+and <kind> has no <depth>`; `<Case> hands its joint a part as <into>,
+and <kind> has no <into>: it takes its parts only as <boards>`; `<Case>
+hands its joint two parts as <piece> (<case.side[left] and
+case.side[right]>), and <kind> takes one part there`; `<Housed> hands its
+joint nothing as <brace>, and <kind> needs one part there`. For a param of
+the project itself the message is `'<kind>' can't be the project's
+<joinery>` and the reason names the declaration (`the project gives
+housing a depth, ...`); for hardware it says `its hardware`. When no kind
+in scope takes what is handed, the help says so: `no joint kind in scope
+takes what <Shelf> hands its joint; use another component, or write a kind
+that does`. Nothing else is checked, cut or made for that declaration, and
+a second declaration whose kind fails the same way at the same choice (the
+Case's `base_joints` and `top_joints`, the elements of an array) is not a
+second error: it is a note on the first, `the same for top_joints`, and
+its line another secondary place. A kind written in the declaration itself
+(`joint j : glued_edge(a, into: b, depth: 9mm)`) keeps the messages of
+[Joints and hardware](#joints-and-hardware): there the field was written
+for that kind, and `the kind 'glued_edge' has no field 'depth'` is what to
+say.
+
 ### Roles and pairs
 
 - A role is `Part` (exactly one part) or `Parts` (one part or a list). A
@@ -1695,6 +1748,16 @@ checked, angled ones included (see "Angled cuts" below). The only cuts the
 geometry can't make yet are cuts other than `drill` and `spigot` on round
 stock or a turned part: those are `warning[not-supported]`, and the part is
 drawn and checked without them.
+
+**Joints with nothing cut.** A kind need not cut anything: with no
+`cut`, `insert:` or `adds:`, it only says the parts are held together.
+std's `glued_face` is one: two parts glued face to face, as a cleat glued
+inside an apron, a lining, or a leg doubled up from two boards
+(`joint cleat_glue : glued_face(cleat, into: apron)`). Its parts must
+meet like any joint's, and the joint holds them (see [Held](#held)); its
+`note:` goes on the work plan. Two boards glued edge to edge to make a
+wide part are not a joint between parts but the part's
+[boards](#boards), joined by `glued_edge`.
 
 #### Joint members
 
@@ -2097,15 +2160,23 @@ kind brass_knob_26 : pull {
 }
 ```
 
-A butt hinge sinks a leaf into each part and cuts a mortise for each; a
-cup hinge bores its cup; a pull drills a hole for each screw. Each is a
-`cut` of the kind (see [Faces to cut](#faces-to-cut)). `fastener` kinds are
+A butt hinge sinks a leaf into each part and cuts a mortise for each (its
+rule `leaf_fits` keeps each leaf on the wood: no wider than
+`contact(piece, on).width`, the patch where the two parts close, which on
+a box side's edge is the side's thickness); a cup hinge bores its cup; a
+pull drills a hole for each screw. Each is a `cut` of the kind (see
+[Faces to cut](#faces-to-cut)). `fastener` kinds are
 only ever used through a `uses:` or as what a joint member is (`member pin :
 dowel_pin(...)`), and `tool` kinds are listed in a
 project's `tools:` and a recipe's `tools:`.
 
 **Envelopes.** Outside a member, `box(length:, width:, thickness:)` and
-`cylinder(diameter:, length:)` are envelopes: a fastener's size.
+`cylinder(diameter:, length:)` are envelopes, the only values a fastener's
+optional `envelope` entry takes. Nothing reads an envelope: no check and no
+drawing. A fastener placed as a [joint member](#joint-members) is drawn
+and checked by the member's shape, and one in a `uses:` is only counted.
+The entry is still accepted, so an older library checks, but the standard
+fasteners don't write it.
 
 #### Adjustment
 
@@ -2687,8 +2758,8 @@ These are looked up when a bare name is called (see [Names](#names), rule 3).
 | `turned(profile)` | `Shape` | turned on a lathe to a profile |
 | `joined(by:)` | `Boards` | how the boards of a part are joined: `by:` is a joint kind value or a list of them; see [Boards](#boards) |
 | `spliced(by:, at:, from:)` | `Splices` | where a part is spliced end to end into pieces: `by:` a joint kind value, `at:` a length or a list of them, measured from the end `from:` names; see [Splices](#splices) |
-| `box(length:, width:, thickness:)` | `Envelope` | a hardware envelope. Written `box(across:, up:, deep:)`, with those three argument names, it is instead the `Region` that is the project's root; see [Regions](#regions) |
-| `cylinder(diameter:, length:)` | `Envelope` | a hardware envelope; its axis stands off the mount face |
+| `box(length:, width:, thickness:)` | `Envelope` | a fastener's `envelope`, which nothing reads (see [Hardware](#hardware)). Written `box(across:, up:, deep:)`, with those three argument names, it is instead the `Region` that is the project's root; see [Regions](#regions) |
+| `cylinder(diameter:, length:)` | `Envelope` | a fastener's `envelope`, which nothing reads (see [Hardware](#hardware)) |
 | `model(source, align:, sha256:)` | `Model` | a `.glb` model; optional `align: node("name")` and `sha256: "<hex>"` (see [Hardware](#hardware)) |
 | `ends(inset:)`, `pitch(d)`, `gap(d)` | `Spacing` | used by `spaced`, with the bare words `evenly` and `ends` |
 | `contact(a, b)` | `Patch` | the patch where two parts touch, read as `.length` (its longer side) and `.width` (its shorter side); see below |
@@ -3032,10 +3103,10 @@ error[require]: 'socket_wall' fails: the socket comes too close to a face of the
 
 ### Cuts stay in their part
 
-Four backstops hold for every kind, whatever its rules, because no kind
-should be able to get them wrong. The first three are reported at the
-joint's or hardware's call, in layer 4, the fourth at the part's
-`lengths:`:
+Five backstops hold for every kind, whatever its rules, because no kind
+should be able to get them wrong. All but the splice backstop are
+reported at the joint's or hardware's call, in layer 4; that one at the
+part's `lengths:`:
 
 - **Cuts only remove wood** (`error[cut-size]`). A `tenon` wider or
   thicker than the part across its end (for a tongue, along its edge), or
@@ -3072,6 +3143,20 @@ joint's or hardware's call, in layer 4, the fourth at the part's
   both pieces' wood belongs to the splice: `shelf_dados: its dado in
   side_l crosses the splice between side_l.piece[1] and side_l.piece[2]`.
   How near a cut may come to a splice is the splice kind's `wall()` rule.
+- **A part stays one piece** (`error[wall]`). Once every cut is made, a
+  board's wood must be one connected piece: pieces that touch only along
+  an edge are two. Each of two housings cut from opposite faces may keep
+  to its own depth and still meet the other across the board, and a cut
+  that goes `through` right across a part parts it; the cut list would
+  still list one part. Reported at the cut that, made after the cuts
+  before it, first parts the wood: `shelves: its housing for shelf_r
+  meets the housing for shelf_l and cuts divider in two` (help: `together
+  the two cuts go right through divider and leave no wood between them;
+  make one of them shallower, or move one of the joints so the cuts don't
+  line up`), or for one cut `shelves: its housing for shelf goes right
+  across side and cuts it in two`. A cut of another joint is named `the
+  <housing> of <joint>`. A part made of boards is tested as one board
+  with its own cuts; round and turned parts are not tested yet.
 
 One mistake, one error. A kind's own rule says it first: when one fails
 the design isn't checked further, so std's `tenon_thin` speaks for a tenon
@@ -3082,7 +3167,8 @@ too deep gets no wall error, and its part is left out of the overlap
 check, which would only report the same mistake as parts that no longer
 fit. Two closed cuts that run into each other are one error, for the
 first. Nothing here is reported for a part or member that already
-overlaps something.
+overlaps something, and a part whose cuts already failed a `wall()` rule
+or a size gets no error for being in pieces.
 
 ### Held
 
@@ -3138,7 +3224,7 @@ shape of their messages are fixed, because tests and AI tools match on them.
 | 2 | `duplicate-name` | `'<name>' is declared twice` |
 | 2 | `ambiguous-name` | `'<name>' could be <this> or <that> here` |
 | 2 | `unit-mismatch` | `can't <add> <a length> and <an angle>`, or `'<field>' needs <a length>, found <a count>` |
-| 2, 4 | `type-mismatch` | `'<field>' needs <a part>, found <a region>` (for a param kind `'<locked>' needs a length, an angle, a ratio or a count, found <a stock>`; for shares `'shares' needs <3> numbers, one for each piece of <drawer_bay>, found <2>` or `'shares' needs a fixed number of pieces, found a count that can change`), `split takes 'at:' or 'shares:', not both`, or for a cut's shape `<joint>: the outline crosses itself between mark <n> and mark <n + 1>` |
+| 2, 4 | `type-mismatch` | `'<field>' needs <a part>, found <a region>` (for a param kind `'<locked>' needs a length, an angle, a ratio or a count, found <a stock>`; for shares `'shares' needs <3> numbers, one for each piece of <drawer_bay>, found <2>` or `'shares' needs a fixed number of pieces, found a count that can change`), `split takes 'at:' or 'shares:', not both`, for a cut's shape `<joint>: the outline crosses itself between mark <n> and mark <n + 1>`, or for a kind chosen through a param that doesn't take what its declaration hands it `'<kind>' can't be the <joinery> of <Shelf>` (`'<kind>' can't be the project's <joinery>`), its reason the first note (see [Kind values](#kind-values)) |
 | 2 | `unknown-field` | `<a part> has no field '<name>'` |
 | 2 | `missing-field` | `<what> is missing '<name>'` (`solved param 'overall_width' is missing 'within'`); a warning for a stock with no `max_length`: `<stock> doesn't say how long its <boards> are, so Stave can't check part lengths` |
 | 2 | `out-of-range` | `'<param>' must be within <domain>, found <value>`, or for a size that must be positive `'<up>' must be more than <0mm>, found <value>` (`'shares' must each be more than 0, found <value>`) |
@@ -3157,7 +3243,7 @@ shape of their messages are fixed, because tests and AI tools match on them.
 | 4 | `no-contact` | `<joint or hardware>: <part> meets none of the parts it should join`, or for `contact(a, b)` `<a> and <b> don't touch` |
 | 4 | `overlap` | `<a> and <b> overlap` |
 | 4 | `adjust` | `<hardware>: the <member> would sit <offset> off its place on the <member>; it adjusts <d>`, or for an axis no `adjust` covers `<hardware>: the <member> would sit <offset> off its place <across>; it doesn't adjust that way` |
-| 4 | `wall` | `<joint>: its <hole> in <part> breaks out of the <left end> of <part>`, `<joint>: its <bore> in <part> runs into the <bore> of <other>` (`meets` when they only touch), or `<joint>: its <dado> in <part> crosses the splice between <part>.piece[1] and <part>.piece[2]`; see [Cuts stay in their part](#cuts-stay-in-their-part) |
+| 4 | `wall` | `<joint>: its <hole> in <part> breaks out of the <left end> of <part>`, `<joint>: its <bore> in <part> runs into the <bore> of <other>` (`meets` when they only touch), `<joint>: its <dado> in <part> crosses the splice between <part>.piece[1] and <part>.piece[2]`, or `<joint>: its <housing> for <other> meets the <housing> for <other> and cuts <part> in two` (`goes right across <part> and cuts it in two` for one cut); see [Cuts stay in their part](#cuts-stay-in-their-part) |
 | 4 | `cut-size` | `<joint>: its <tenon> on <part> is <25mm> <thick>, but <part> is only <19mm> <thick>`, `... is <80mm> across, but <part> is only <70mm> across at that end`, or `<joint>: its <groove> in <part> is <12mm> deep, but <part> is only <12mm> <thick> there` |
 | 5 | `motion` | `<a> hits <b> when <assembly> is <open>`; `<assembly>'s hardware doesn't move alike`; `<hardware>: <members> lock at <value>`; `<hardware>: <members> may come within 0.1mm of locking near <value>` |
 | 6 | `require` | `'<name>' fails: <message>` |

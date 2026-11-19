@@ -266,9 +266,13 @@ fn piece(plane: &Plane, corners: &[DVec3], matrix: &DMat4) -> Option<Piece> {
 
 /// The range along the plane's axis of an element moved by `matrix`.
 fn element_range(plane: &Plane, element: &Element, matrix: &DMat4) -> (f64, f64) {
-    let corners: Vec<DVec3> = match element {
-        Element::Box(region) => corners_of(region).to_vec(),
-        Element::Outline(corners) => corners.clone(),
+    let boxed;
+    let corners: &[DVec3] = match element {
+        Element::Box(region) => {
+            boxed = corners_of(region);
+            &boxed
+        }
+        Element::Outline(corners) => corners,
     };
     corners
         .iter()

@@ -268,6 +268,11 @@ kind butt_hinge : hinge {
   param opening_angle = 180deg within 90deg..180deg
   /// The knuckle: the barrel the pin runs through, outside the edge.
   param knuckle_diameter = 5mm within [4mm, 5mm, 6mm]
+  // Each leaf lies in the patch where the two parts close on each other,
+  // reaching in from the pin edge: across a box side's edge, that patch is
+  // as wide as the side is thick. A wider leaf runs off the wood, its
+  // mortise open to the inside and its screw holes over air.
+  require leaf_fits : leaf_width <= contact(piece, on).width "a hinge leaf wider than the edge it is housed in hangs off the wood"
 
   // On the face of the lid or door that closes against the box, the pin
   // on the edge where the two parts are flush. The design says where

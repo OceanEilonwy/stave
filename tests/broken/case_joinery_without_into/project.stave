@@ -1,0 +1,27 @@
+// expect: error[type-mismatch] 'suitsuki_zan' can't be the joinery of Case
+stave 1
+
+// A case whose joinery is suitsuki_zan, the battens let across the boards
+// of a panel. The Case hands its joint the base as the part to join the
+// sides into, and suitsuki_zan takes only the boards it crosses: it can
+// never be the Case's joinery. One error at the choice.
+
+import "std:casework"
+
+project "Case joined with battens" {
+  units: mm
+}
+
+param overall_width  = 940mm
+param overall_height = 1780mm
+param overall_depth  = 580mm
+
+region envelope = box(across: overall_width, up: overall_height, deep: overall_depth)
+
+stock oak_19 { species: white_oak, form: solid, thickness: 19mm, max_width: 200mm, max_length: 2700mm }
+
+assembly case : casework.Case {
+  space:       envelope
+  panel_stock: oak_19
+  joinery:     suitsuki_zan
+}

@@ -18,6 +18,8 @@
 //! box is left out of that piece, which only ever finds more wood than
 //! there is; no example cuts one part along two axes at an angle.
 
+use std::borrow::Cow;
+
 use glam::DVec3;
 use stave_lang::placement::Axis;
 use stave_lang::units::Length;
@@ -196,11 +198,12 @@ impl Piece {
 
     /// The piece seen along `axis`: itself, or (a whole box) the same box
     /// along another axis.
-    fn along(&self, axis: Axis) -> Option<Piece> {
+    fn along(&self, axis: Axis) -> Option<Cow<'_, Piece>> {
         if self.axis == axis {
-            return Some(self.clone());
+            return Some(Cow::Borrowed(self));
         }
-        self.whole.map(|whole| Piece::of_box(&whole, axis))
+        self.whole
+            .map(|whole| Cow::Owned(Piece::of_box(&whole, axis)))
     }
 
     /// The corners in 3D.
@@ -247,16 +250,25 @@ impl Piece {
         ))
     }
 
-    /// The piece less a cut: pieces that never overlap each other.
-    fn minus(&self, cut: &Piece) -> Vec<Piece> {
-        let Some(piece) = self.along(cut.axis) else {
-            return vec![self.clone()];
-        };
-        let low = piece.range.0.max(cut.range.0);
-        let high = piece.range.1.min(cut.range.1);
-        if high <= low || !polygons_overlap(&piece.corners, &cut.corners) {
-            return vec![self.clone()];
+    /// The piece less a cut: pieces that never overlap each other. A
+    /// piece the cut doesn't reach is handed back as it is.
+    fn minus(self, cut: &Piece) -> Vec<Piece> {
+        let reached = self.along(cut.axis).and_then(|piece| {
+            let low = piece.range.0.max(cut.range.0);
+            let high = piece.range.1.min(cut.range.1);
+            (high > low && polygons_overlap(&piece.corners, &cut.corners))
+                .then_some((piece, low, high))
+        });
+        match reached {
+            Some((piece, low, high)) => piece.cut_within(cut, low, high),
+            None => vec![self],
         }
+    }
+
+    /// A piece (seen along the cut's axis) less a cut that overlaps it
+    /// over `low..high` along that axis.
+    fn cut_within(&self, cut: &Piece, low: f64, high: f64) -> Vec<Piece> {
+        let piece = self;
         let mut out = Vec::new();
         // The part of a box beyond a cut's ends is a box (the ends are
         // whole nanometres).
@@ -392,7 +404,7 @@ fn polygons_overlap(a: &[[f64; 2]], b: &[[f64; 2]]) -> bool {
 pub(crate) fn residual(region: &WorldBox, cuts: &[Piece]) -> Vec<Piece> {
     let mut pieces = vec![Piece::of_box(region, Axis::Up)];
     for cut in cuts {
-        pieces = pieces.iter().flat_map(|p| p.minus(cut)).collect();
+        pieces = pieces.into_iter().flat_map(|p| p.minus(cut)).collect();
         if pieces.is_empty() {
             break;
         }

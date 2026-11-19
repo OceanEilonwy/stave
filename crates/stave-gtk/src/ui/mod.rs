@@ -2000,21 +2000,47 @@ impl Window {
                     let session = window.session.borrow();
                     let state = window.state.borrow();
                     match (session.drawable(), state.posed.as_ref()) {
-                        (Some((_, graph)), Some(posed)) => {
-                            stave_app::export_view::save_glb(graph, posed, &path)
-                                .map_err(|error| error.to_string())
-                        }
-                        _ => Err("there is nothing to save yet".to_owned()),
+                        (Some((_, graph)), Some(posed)) => Some(
+                            stave_app::export_view::save_glb(graph, posed, &path).map_err(
+                                |error| stave_app::save_failure::describe_export(&error, &path),
+                            ),
+                        ),
+                        _ => None,
                     }
                 };
-                let title = match saved {
-                    Ok(()) => format!("Saved {}", path.display()),
-                    Err(error) => format!("Couldn't save the view: {error}"),
+                let failure = match saved {
+                    Some(Ok(())) => {
+                        window.widgets.toasts.add_toast(
+                            adw::Toast::builder()
+                                .title(format!("Saved the view as {}", path.display()))
+                                .timeout(4)
+                                .build(),
+                        );
+                        return;
+                    }
+                    Some(Err(failure)) => failure,
+                    None => stave_app::save_failure::SaveFailure {
+                        heading: "Couldn't Export the View".to_owned(),
+                        body: "There is nothing in the 3D view to save yet. Wait for the design to show, then try again.".to_owned(),
+                    },
                 };
-                window
-                    .widgets
-                    .toasts
-                    .add_toast(adw::Toast::builder().title(title).timeout(4).build());
+                // A failed save stays until it is answered, and offers
+                // another place to save to.
+                let alert = adw::AlertDialog::builder()
+                    .heading(&failure.heading)
+                    .body(&failure.body)
+                    .close_response("cancel")
+                    .default_response("again")
+                    .build();
+                alert.add_responses(&[("cancel", "_Cancel"), ("again", "Save _Elsewhere…")]);
+                alert.set_response_appearance("again", adw::ResponseAppearance::Suggested);
+                let again = window.clone();
+                alert.connect_response(None, move |_, response| {
+                    if response == "again" {
+                        again.export_view();
+                    }
+                });
+                alert.present(Some(&window.widgets.window));
             },
         );
     }

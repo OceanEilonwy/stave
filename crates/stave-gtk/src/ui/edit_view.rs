@@ -269,6 +269,7 @@ pub(super) fn card_verdict(progress: &Progress, checking: bool) -> Option<Verdic
                 merged: Vec::new(),
                 help: None,
                 fixes: Vec::new(),
+                cause: None,
             };
             let problem = Problem::new(diagnostic, Vec::new()).ok()?;
             Refusal::new(vec![problem]).ok().map(Verdict::Refused)

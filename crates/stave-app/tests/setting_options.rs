@@ -162,6 +162,10 @@ fn refused_code(options: &[SettingOption], text: &str) -> Code {
     }
 }
 
+fn by_signature(fit: &OptionFit) -> bool {
+    matches!(fit, OptionFit::Refused(refusal) if refusal.by_signature())
+}
+
 fn check_options(session: &mut Session, only: Option<&str>) -> Vec<EditEvent> {
     session
         .check_setting_options(only, &AtomicBool::new(false))
@@ -196,19 +200,37 @@ fn the_cases_joinery_options_are_checked_each_with_the_checkers_reason() {
     assert_eq!(refused_code(&joinery, "half_lap"), Code::TypeMismatch);
     assert_eq!(refused_code(&joinery, "mortise_tenon"), Code::Require);
 
-    // The ones that fit first, in their own order, the refused after.
+    // The ones that fit first, in their own order, then the refused: those
+    // refused by the design as it is, then the kinds refused by their
+    // signature, which can never work for a Case; each part in its own
+    // order.
     let first_refused = joinery
         .iter()
         .position(|option| option.fit.is_refused())
         .unwrap();
+    let first_signature = joinery
+        .iter()
+        .position(|option| by_signature(&option.fit))
+        .unwrap();
     assert!(joinery[first_refused..].iter().all(|o| o.fit.is_refused()));
     assert!(joinery[..first_refused].iter().all(|o| !o.fit.is_refused()));
+    assert!(
+        joinery[first_signature..]
+            .iter()
+            .all(|o| by_signature(&o.fit))
+    );
+    assert!(
+        joinery[..first_signature]
+            .iter()
+            .all(|o| !by_signature(&o.fit))
+    );
     let texts = |part: &[SettingOption]| -> Vec<String> {
         part.iter().map(|option| option.text.clone()).collect()
     };
-    let (fitting, refused) = (
+    let (fitting, refused, never) = (
         texts(&joinery[..first_refused]),
-        texts(&joinery[first_refused..]),
+        texts(&joinery[first_refused..first_signature]),
+        texts(&joinery[first_signature..]),
     );
     let mut sorted = fitting.clone();
     sorted.sort();
@@ -216,6 +238,11 @@ fn the_cases_joinery_options_are_checked_each_with_the_checkers_reason() {
     let mut sorted = refused.clone();
     sorted.sort();
     assert_eq!(refused, sorted, "the refused options keep the listed order");
+    assert_eq!(
+        never,
+        ["half_lap", "kanawa_tsugi", "lap_splice", "suitsuki_zan"],
+        "the kinds refused by their signature come last, in the listed order"
+    );
     // Nothing is hidden.
     assert_eq!(joinery.len(), before.len());
 }
@@ -438,4 +465,214 @@ fn a_candidate_already_refused_gets_no_blame() {
     assert!(session.edit().unwrap().chosen().unwrap().blame().is_none());
     let events = send(&mut session, EditCommand::PutBack);
     assert!(events.contains(&EditEvent::Rejected(Rejection::NothingToPutBack)));
+}
+
+// ---------------------------------------------------------------------------
+// A kind chosen through a param that doesn't take what the component hands
+// it (grammar, "Kind values"): one error in the words of the choice, and
+// the option's reason is its plain sentence.
+// ---------------------------------------------------------------------------
+
+/// A session on a project with a Case in the envelope and a Shelf chosen
+/// for the case's inside, between its sides, with `oak_19`.
+fn shelf_chosen(name: &str) -> Session {
+    let folder = new_case_project(name);
+    let mut session = case_chosen(&folder, true);
+    let events = send(&mut session, EditCommand::Add);
+    assert!(events.contains(&EditEvent::Committed), "{events:?}");
+    let opened = stave_app::open(&folder).unwrap();
+    let model = opened.model.as_ref().unwrap();
+    let inside = model
+        .regions
+        .iter()
+        .find(|region| region.name == "case.inside")
+        .unwrap()
+        .id;
+    let sides: Vec<_> = ["case.side[left]", "case.side[right]"]
+        .iter()
+        .map(|name| model.parts.iter().find(|p| p.name == *name).unwrap().id)
+        .collect();
+    let mut session = Session::new(folder.clone());
+    send(&mut session, EditCommand::Start(Picked::Region(inside)));
+    let index = session
+        .edit()
+        .unwrap()
+        .menu()
+        .iter()
+        .position(|candidate| entry_matches(candidate, "casework.Shelf"))
+        .unwrap();
+    send(&mut session, EditCommand::Choose(index));
+    send(
+        &mut session,
+        EditCommand::Bind(Picked::Group(
+            stave_model::nonempty::NonEmpty::new(sides).unwrap(),
+        )),
+    );
+    set(&mut session, "panel_stock", "oak_19");
+    assert!(
+        matches!(progress(&session), Progress::Tried(Verdict::Fits(_))),
+        "{:?}",
+        progress(&session)
+    );
+    session
+}
+
+fn refusal(options: &[SettingOption], text: &str) -> stave_app::edit::OptionRefusal {
+    match fit_of(options, text) {
+        OptionFit::Refused(refusal) => refusal,
+        other => panic!("{text} should be refused, is {other:?}"),
+    }
+}
+
+#[test]
+fn glued_edge_cant_be_a_shelfs_joinery_and_says_why_in_one_sentence() {
+    let mut session = shelf_chosen("shelf-joinery");
+    check_options(&mut session, Some("joinery"));
+    let joinery = options(&session, "joinery");
+    assert_eq!(fit_of(&joinery, "dado"), OptionFit::Fits);
+
+    let glued = refusal(&joinery, "glued_edge");
+    assert!(glued.by_signature());
+    assert_eq!(glued.first.code, Code::TypeMismatch);
+    assert_eq!(
+        glued.first.message,
+        "'glued_edge' can't be the joinery of Shelf"
+    );
+    // What the lists show first is the plain sentence, not the checker's
+    // line; the full diagnostic stays on the refusal.
+    assert_eq!(
+        glued.line(),
+        "Shelf gives its joint a depth, and glued_edge has no depth"
+    );
+    assert_eq!(
+        glued.first.notes.first().map(String::as_str),
+        Some("Shelf gives its joint a depth, and glued_edge has no depth")
+    );
+    assert_eq!(
+        glued.first.help.as_deref(),
+        Some(
+            "choose a kind that takes what Shelf hands its joint: cope_and_stick, dado, dowel, groove, rabbet, socket, splined_edge, tongue_and_groove"
+        )
+    );
+    // Nothing else for that joint.
+    assert_eq!(glued.more, 0);
+
+    // The search shows the same sentence.
+    let setting = session
+        .edit()
+        .unwrap()
+        .chosen()
+        .unwrap()
+        .candidate()
+        .settings
+        .iter()
+        .find(|s| s.name.as_str() == "joinery")
+        .unwrap()
+        .clone();
+    let found = stave_app::choices::search(&setting, "edge");
+    let hit = found
+        .iter()
+        .flat_map(|group| group.hits.iter())
+        .find(|hit| hit.option.text == "glued_edge")
+        .unwrap();
+    assert!(!hit.choosable());
+    match &hit.option.fit {
+        OptionFit::Refused(refusal) => assert_eq!(
+            refusal.line(),
+            "Shelf gives its joint a depth, and glued_edge has no depth"
+        ),
+        other => panic!("{other:?}"),
+    }
+
+    // Every kind with a depth that the shelf could take comes before the
+    // ones that can never be its joinery.
+    let first_signature = joinery
+        .iter()
+        .position(|option| by_signature(&option.fit))
+        .unwrap();
+    assert!(
+        joinery[first_signature..]
+            .iter()
+            .all(|o| by_signature(&o.fit))
+    );
+    let never: Vec<&str> = joinery[first_signature..]
+        .iter()
+        .map(|o| o.text.as_str())
+        .collect();
+    assert!(never.contains(&"glued_edge") && never.contains(&"screw"));
+    assert!(!never.contains(&"dado") && !never.contains(&"splined_edge"));
+}
+
+#[test]
+fn typing_glued_edge_on_a_shelf_blames_the_joinery_and_offers_the_way_back() {
+    let mut session = shelf_chosen("shelf-typed");
+    set(&mut session, "joinery", "glued_edge");
+    let Progress::Tried(Verdict::Refused(refused)) = progress(&session) else {
+        panic!("{:?}", progress(&session));
+    };
+    let problems = refused.problems();
+    assert_eq!(problems.count(), 1);
+    let diagnostic = problems.first().diagnostic();
+    assert_eq!(diagnostic.code, Code::TypeMismatch);
+    assert_eq!(
+        diagnostic.message,
+        "'glued_edge' can't be the joinery of Shelf"
+    );
+    assert_eq!(
+        diagnostic.reason(),
+        Some("Shelf gives its joint a depth, and glued_edge has no depth")
+    );
+    let chosen = session.edit().unwrap().chosen().unwrap();
+    let blame = chosen.blame().expect("the refusal blames the joinery");
+    assert_eq!(blame.setting.as_str(), "joinery");
+    assert_eq!(blame.to_text, "glued_edge");
+    assert_eq!(
+        blame.put_back_label(),
+        "Put joinery back to dado, the default"
+    );
+    send(&mut session, EditCommand::PutBack);
+    assert!(matches!(
+        progress(&session),
+        Progress::Tried(Verdict::Fits(_))
+    ));
+}
+
+#[test]
+fn a_one_part_kind_and_a_kind_without_into_cant_be_a_cases_joinery() {
+    let folder = new_case_project("case-signature");
+    let mut session = case_chosen(&folder, true);
+    check_options(&mut session, Some("joinery"));
+    let joinery = options(&session, "joinery");
+
+    let half_lap = refusal(&joinery, "half_lap");
+    assert!(half_lap.by_signature());
+    assert_eq!(half_lap.first.code, Code::TypeMismatch);
+    assert_eq!(
+        half_lap.first.message,
+        "'half_lap' can't be the joinery of Case"
+    );
+    assert_eq!(
+        half_lap.line(),
+        "Case hands its joint two parts as piece (case.side[left] and case.side[right]), and half_lap takes one part there"
+    );
+    // One error for both of the Case's joints, which are handed the same.
+    assert_eq!(half_lap.more, 0);
+    assert!(
+        half_lap
+            .first
+            .notes
+            .contains(&"the same for top_joints".to_owned())
+    );
+
+    let battens = refusal(&joinery, "suitsuki_zan");
+    assert!(battens.by_signature());
+    assert_eq!(
+        battens.first.message,
+        "'suitsuki_zan' can't be the joinery of Case"
+    );
+    assert_eq!(
+        battens.line(),
+        "Case hands its joint a part as into, and suitsuki_zan has no into: it takes its parts only as boards"
+    );
+    assert_eq!(battens.more, 0);
 }
