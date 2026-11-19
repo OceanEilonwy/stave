@@ -35,6 +35,13 @@
 //! card while the keyboard is in it, so the card takes the keyboard when it
 //! appears and each time it is shown again (unless the keyboard is already
 //! inside it, say in a setting being typed).
+//!
+//! Two drivers draw it with the same code ([`CardView`], drawn by
+//! `build_body`): [`EditCard`], the API the window uses today, which draws
+//! at once and reports what people do from the widget's own signal; and
+//! [`EditCardComponent`], the relm4 component the window will own once it
+//! is one (docs/relm4-migration.md), whose widgets only send it messages
+//! and whose model alone holds the card's state.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -50,10 +57,11 @@ use stave_lang::Diagnostic;
 use stave_lang::ast::{Expr, Ident};
 use stave_model::ids::AssemblyId;
 
-use super::sections::{self, LinkHandlers};
-use stave_app::inspect::NameLink;
+use relm4::{Component, ComponentParts, ComponentSender};
+use stave_app::inspect::{LinkTarget, NameLink};
 
-type ActionCallback = Rc<dyn Fn(CardAction)>;
+use super::sections::{self, LinkHandlers};
+
 /// A short list's rows, each by its entry's text (the search row by "").
 #[cfg(test)]
 pub type ChoiceRows = Vec<(String, gtk::Button)>;
@@ -281,13 +289,953 @@ pub fn fit_icon(fit: &OptionFit) -> &'static str {
     }
 }
 
-/// The card for a chosen candidate.
+/// A slot for a callback: the one connected last. It is cloned out before
+/// it is called, so the callback may connect another, or call back in,
+/// with nothing borrowed.
+pub(super) struct Callback<T> {
+    callback: Cell<Option<CallbackFn<T>>>,
+}
+
+/// A callback, shared so it can be cloned out of its slot.
+type CallbackFn<T> = Rc<dyn Fn(T)>;
+
+impl<T> Default for Callback<T> {
+    fn default() -> Self {
+        Callback {
+            callback: Cell::new(None),
+        }
+    }
+}
+
+impl<T> Callback<T> {
+    /// Calls `callback` from now on, instead of the one connected before.
+    pub(super) fn connect(&self, callback: impl Fn(T) + 'static) {
+        self.callback.set(Some(Rc::new(callback)));
+    }
+
+    /// Calls the callback with `value`, or drops it when none is
+    /// connected.
+    pub(super) fn call(&self, value: T) {
+        let callback = self.callback.take();
+        self.callback.set(callback.clone());
+        if let Some(callback) = callback {
+            callback(value);
+        }
+    }
+}
+
+/// What the card says about one place param: what fills it, as written,
+/// with the names in it as links; no value while it is still to point
+/// at.
+#[derive(Debug, Clone, PartialEq)]
+struct PlaceWords {
+    value: Option<String>,
+    links: Vec<NameLink>,
+}
+
+/// What the card says about one setting: the value written for it, if
+/// there is one to show, and its type and where its value comes from
+/// (the row's tooltip, [`setting_about`]).
+#[derive(Debug, Clone, PartialEq)]
+struct SettingWords {
+    value: Option<String>,
+    about: String,
+}
+
+/// What the card shows, owned, with the words for the contract's ids and
+/// expressions already said, so it can travel in a message
+/// ([`EditCardInput::Show`]).
+#[derive(Debug, Clone)]
+pub struct CardView {
+    heading: Heading,
+    candidate: Candidate,
+    name: String,
+    verdict: Option<Verdict>,
+    applied: Vec<String>,
+    blame: Option<Blame>,
+    /// One for each of the candidate's place params, in order.
+    places: Vec<PlaceWords>,
+    /// One for each of the candidate's settings, in order.
+    settings: Vec<SettingWords>,
+}
+
+impl CardView {
+    /// What the card shows for `model`, its ids and expressions said in
+    /// `words`.
+    pub fn new(model: &CardModel<'_>, words: &dyn Words) -> CardView {
+        let candidate = model.candidate;
+        let places = candidate
+            .place
+            .iter()
+            .map(|param| {
+                let value = param.text.clone().or_else(|| words.place(&param.slot));
+                let links = value
+                    .as_deref()
+                    .map(|value| words.links(value))
+                    .unwrap_or_default();
+                PlaceWords { value, links }
+            })
+            .collect();
+        let settings = candidate
+            .settings
+            .iter()
+            .map(|setting| SettingWords {
+                value: value_text(&setting.value, words),
+                about: setting_about(setting, words),
+            })
+            .collect();
+        CardView {
+            heading: model.heading,
+            candidate: candidate.clone(),
+            name: model.name.to_owned(),
+            verdict: model.verdict.cloned(),
+            applied: model.applied.to_vec(),
+            blame: model.blame.cloned(),
+            places,
+            settings,
+        }
+    }
+
+    /// `true` when Add may be pressed ([`can_add`]).
+    fn can_add(&self) -> bool {
+        can_add(&self.candidate, self.verdict.as_ref())
+    }
+}
+
+/// What people did in the card's body, as its widgets report it.
+#[derive(Debug, Clone, PartialEq)]
+pub enum BodyEvent {
+    /// A button or a setting's entry asks for this.
+    Action(CardAction),
+    /// People chose an entry of a short list: the list closes, then this.
+    Picked(CardAction),
+    /// People pressed a short list's button: it opened (`true`) or
+    /// closed.
+    Toggled {
+        /// The setting.
+        param: String,
+        /// Whether it is open now.
+        open: bool,
+    },
+}
+
+/// Where the body's widgets report what people do: a closure that only
+/// passes the event on (to a component's input, or to the old callback).
+trait Report: Fn(BodyEvent) + Clone + 'static {}
+
+impl<R: Fn(BodyEvent) + Clone + 'static> Report for R {}
+
+/// One setting's short list on the card: shown in place under its row when
+/// its button is pressed (a popover would close each time a check's answer
+/// redraws it, and can't be drawn into a screenshot).
+#[derive(Clone)]
+struct ChoiceList {
+    /// The setting.
+    param: Ident,
+    /// The button that shows and hides it.
+    toggle: gtk::ToggleButton,
+    /// The rows' box.
+    list: gtk::Box,
+    /// Each entry's row, by its text; the search row last, by "".
+    rows: Vec<(String, gtk::Button)>,
+}
+
+/// The widgets a show draws that the card keeps: each setting's entry,
+/// each fix's button, each short list and the put-back button.
+#[derive(Clone, Default)]
+struct Built {
+    /// Each setting's entry, by param.
+    entries: Vec<(Ident, gtk::Entry)>,
+    /// Each fix's button, with its problem and fix index.
+    fixes: Vec<((usize, usize), gtk::Button)>,
+    /// Each setting's short list.
+    options: Vec<ChoiceList>,
+    /// The put-back button, while a refusal is blamed on a setting.
+    put_back: Option<gtk::Button>,
+}
+
+/// The card's frame: what stays from one show to the next.
+#[derive(Clone, Debug)]
+struct CardFrame {
+    /// The body, filled by each show; it scrolls.
+    body: gtk::Box,
+    scrolled: gtk::ScrolledWindow,
+    /// The name it is written under, retyped in place.
+    name: gtk::EditableLabel,
+    add: gtk::Button,
+    cancel: gtk::Button,
+    /// Where the window puts the repeat controls' count and direction.
+    repeat_slot: gtk::Box,
+    /// Where the window puts "Repeat…", on the buttons' line.
+    repeat_button_slot: gtk::Box,
+    /// Where the window puts the "Pending" section, last in the body.
+    pending_slot: gtk::Box,
+}
+
+/// The card's root: it holds the keyboard itself, so Enter and Escape work
+/// before anything in it is clicked. Empty until [`fill_card`].
+fn card_root() -> gtk::Box {
+    if let Some(display) = gdk::Display::default() {
+        install_style(&display);
+    }
+    gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .css_classes(["stave-edit-card"])
+        .hexpand(true)
+        .vexpand(true)
+        .accessible_role(gtk::AccessibleRole::Group)
+        .focusable(true)
+        .build()
+}
+
+/// Puts the card's frame in its root: the scrolled body, then the foot
+/// with the repeat slots and Cancel and Apply. No handlers are connected.
+fn fill_card(root: &gtk::Box) -> CardFrame {
+    let body = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(0)
+        .css_classes(["stave-edit-body"])
+        .build();
+    let scrolled = gtk::ScrolledWindow::builder()
+        .hscrollbar_policy(gtk::PolicyType::Never)
+        .vexpand(true)
+        .child(&body)
+        .build();
+    let name = gtk::EditableLabel::builder()
+        .hexpand(true)
+        .css_classes(["stave-edit-name", "stave-name-field"])
+        .tooltip_text("The name it is written under. Click to retype it.")
+        .build();
+    name.update_property(&[gtk::accessible::Property::Label("Name")]);
+    let (apply_buttons, cancel, add) = sections::footer_buttons();
+    let repeat_button_slot = gtk::Box::builder()
+        .hexpand(true)
+        .halign(gtk::Align::Start)
+        .valign(gtk::Align::Center)
+        .build();
+    let buttons = gtk::Box::builder()
+        .spacing(8)
+        .css_classes(["stave-edit-buttons"])
+        .build();
+    buttons.append(&repeat_button_slot);
+    buttons.append(&apply_buttons);
+    let repeat_slot = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .css_classes(["stave-edit-repeat-slot"])
+        .build();
+    let foot = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .css_classes(["stave-edit-foot"])
+        .build();
+    foot.append(&repeat_slot);
+    foot.append(&buttons);
+    let pending_slot = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .build();
+    root.append(&scrolled);
+    root.append(&foot);
+    CardFrame {
+        body,
+        scrolled,
+        name,
+        add,
+        cancel,
+        repeat_slot,
+        repeat_button_slot,
+        pending_slot,
+    }
+}
+
+/// What a key does on the card: Escape cancels; Enter adds, when Add is
+/// enabled. Either is the card's alone, so it never reaches the window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CardKey {
+    Escape,
+    Enter,
+}
+
+impl CardKey {
+    fn of(key: gdk::Key) -> Option<CardKey> {
+        match key {
+            gdk::Key::Escape => Some(CardKey::Escape),
+            gdk::Key::Return | gdk::Key::KP_Enter | gdk::Key::ISO_Enter => Some(CardKey::Enter),
+            _ => None,
+        }
+    }
+}
+
+/// Listens for Enter and Escape on the card, passing them to `pressed`.
+fn listen_for_keys(root: &gtk::Box, pressed: impl Fn(CardKey) + 'static) {
+    let keys = gtk::EventControllerKey::new();
+    keys.connect_key_pressed(move |_, key, _, _| match CardKey::of(key) {
+        Some(card_key) => {
+            pressed(card_key);
+            glib::Propagation::Stop
+        }
+        None => glib::Propagation::Proceed,
+    });
+    root.add_controller(keys);
+}
+
+/// Draws a candidate, its name and its verdict into the card's body, and
+/// returns the widgets the card keeps. `open` is the setting whose short
+/// list stays open. Add, the keyboard and scrolling are the caller's.
+fn build_body(
+    root: &gtk::Box,
+    frame: &CardFrame,
+    view: &CardView,
+    open: Option<&str>,
+    links: &LinkHandlers,
+    report: &impl Report,
+) -> Built {
+    let body = &frame.body;
+    while let Some(child) = body.first_child() {
+        body.remove(&child);
+    }
+    let candidate = &view.candidate;
+    let label = candidate.entry.label.as_str();
+    root.update_property(&[gtk::accessible::Property::Label(&format!("Add {label}"))]);
+
+    // The header: the name it is written under, retyped in place, in a
+    // monospace field, and what it is and where it comes from on the
+    // right; the hint under it on one line, in full in its tooltip.
+    frame.name.set_text(&view.name);
+    if let Some(parent) = frame.name.parent()
+        && let Ok(parent) = parent.downcast::<gtk::Box>()
+    {
+        parent.remove(&frame.name);
+    }
+    let from = text(label, &["stave-edit-origin"]);
+    from.set_wrap(false);
+    from.set_xalign(1.0);
+    from.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    from.set_max_width_chars(18);
+    from.set_tooltip_text(Some(&format!(
+        "{label} · {}",
+        origin(view.heading, &candidate.entry.group)
+    )));
+    body.append(&sections::header(
+        None,
+        &frame.name,
+        Some(from.upcast_ref()),
+    ));
+    if let Some(hint) = &candidate.entry.hint {
+        let hint_label = text(hint, &["stave-edit-hint-line"]);
+        hint_label.set_wrap(false);
+        hint_label.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        hint_label.set_tooltip_text(Some(hint));
+        body.append(&hint_label);
+    }
+
+    // Where it goes: each place it fills, its names as links.
+    if !candidate.place.is_empty() {
+        let (section, rows) = sections::section("Placed in", "", true);
+        for (param, words) in candidate.place.iter().zip(&view.places) {
+            rows.append(&place_row(param, words, links));
+        }
+        body.append(&section);
+    }
+
+    if !view.applied.is_empty() {
+        body.append(&applied_section(&view.applied));
+    }
+    let mut built = Built::default();
+    let (section, verdict_body) = sections::section("Verdict", "", true);
+    verdict_body.append(&verdict_section(view, root.width(), report, &mut built));
+    body.append(&section);
+    if !candidate.settings.is_empty() {
+        body.append(&settings_section(view, open, report, &mut built));
+    }
+    body.append(&frame.pending_slot);
+    built
+}
+
+/// Enables Add when it may be pressed, its tooltip saying why not when it
+/// may not. Returns whether it is enabled.
+fn show_add(add: &gtk::Button, view: &CardView) -> bool {
+    let enabled = view.can_add();
+    add.set_sensitive(enabled);
+    add.set_tooltip_text(Some(
+        add_blocked_reason(&view.candidate, view.verdict.as_ref())
+            .unwrap_or("Write it into the design (Enter)"),
+    ));
+    enabled
+}
+
+/// The settings, one row each: those that need a choice first, then those
+/// with a value, then those left at their defaults (the default's value
+/// dimmed in the entry). The type and where each value comes from are the
+/// row's tooltip, not a line of its own.
+fn settings_section(
+    view: &CardView,
+    open: Option<&str>,
+    report: &impl Report,
+    built: &mut Built,
+) -> gtk::Box {
+    let settings = &view.candidate.settings;
+    let (section, body) = sections::section("Settings", &settings.len().to_string(), true);
+    let order = |(setting, _): &(&SettingParam, &SettingWords)| match setting.value {
+        SettingValue::Unset => 0,
+        SettingValue::Copied { .. } | SettingValue::Chosen(_) => 1,
+        SettingValue::Default => 2,
+    };
+    let mut ordered: Vec<(&SettingParam, &SettingWords)> =
+        settings.iter().zip(&view.settings).collect();
+    ordered.sort_by_key(order);
+    let rows = rows_card();
+    for (setting, words) in ordered {
+        let (row, entry, list) = setting_row(setting, words, open, report);
+        rows.append(&row);
+        if let Some(list) = list {
+            if let Some(revealer) = list.list.parent() {
+                rows.append(&revealer);
+            }
+            built.options.push(list);
+        }
+        built.entries.push((setting.name.clone(), entry));
+    }
+    body.append(&rows);
+    section
+}
+
+/// One setting's row: its name on the left, its value on the right in an
+/// entry (typed, Enter sets it) with the button that opens its short
+/// list. Its short list, when it has one, goes under the row.
+fn setting_row(
+    setting: &SettingParam,
+    words: &SettingWords,
+    open: Option<&str>,
+    report: &impl Report,
+) -> (gtk::Box, gtk::Entry, Option<ChoiceList>) {
+    let name = setting.name.as_str();
+    let about = &words.about;
+    let line = row_box();
+    line.add_css_class("stave-edit-setting");
+    line.set_tooltip_text(Some(about));
+    let key = key_label(name, about);
+    line.append(&key);
+    let value = &words.value;
+    let unset = matches!(setting.value, SettingValue::Unset);
+    let entry = gtk::Entry::builder()
+        .text(value.as_deref().unwrap_or(""))
+        .placeholder_text(match setting.value {
+            SettingValue::Unset => "Choose…".to_owned(),
+            SettingValue::Default => default_placeholder(setting),
+            SettingValue::Copied { .. } | SettingValue::Chosen(_) => String::new(),
+        })
+        .hexpand(true)
+        .width_chars(4)
+        .css_classes(["stave-edit-entry"])
+        .tooltip_text(match value {
+            Some(value) => format!("{value}\n{about}"),
+            None => format!("{}\n{about}", default_placeholder(setting)),
+        })
+        .build();
+    entry.update_property(&[
+        gtk::accessible::Property::Label(name),
+        gtk::accessible::Property::Description(about),
+    ]);
+    if unset {
+        entry.add_css_class("warning");
+        line.add_css_class("stave-edit-needs-choice");
+    }
+    {
+        let report = report.clone();
+        let param = setting.name.clone();
+        entry.connect_activate(move |entry| {
+            let typed = entry.text().trim().to_owned();
+            if typed.is_empty() {
+                return;
+            }
+            report(BodyEvent::Action(CardAction::Choose {
+                param: param.clone(),
+                text: typed,
+            }));
+        });
+    }
+    let control = gtk::Box::builder()
+        .css_classes(["linked", "stave-edit-control"])
+        .hexpand(true)
+        .build();
+    control.append(&entry);
+    let choices = short_list(setting);
+    let list = (!choices.is_empty() || !setting.options.is_empty())
+        .then(|| choice_list(setting, &choices, open == Some(name), report));
+    if let Some(list) = &list {
+        control.append(&list.toggle);
+    }
+    line.append(&control);
+    // A long value is said in full under its row, wrapped, so it is never
+    // cut off (`overlay(left: 18mm, right: 18mm, …)`).
+    let shown = value
+        .clone()
+        .or_else(|| (setting.value == SettingValue::Default).then(|| default_placeholder(setting)));
+    if let Some(shown) = shown.filter(|shown| shown.chars().count() > LONG_VALUE) {
+        let row = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .css_classes(["stave-card-row", "stave-edit-row", "stave-edit-long"])
+            .build();
+        line.remove_css_class("stave-card-row");
+        line.remove_css_class("stave-edit-row");
+        row.append(&line);
+        let full = text(&shown, &["stave-edit-long-value"]);
+        full.set_selectable(true);
+        row.append(&full);
+        return (row, entry, list);
+    }
+    (line, entry, list)
+}
+
+/// A setting's short list ([`stave_app::choices::short_list`]): its
+/// default, the values the project already uses, the value it holds now,
+/// then "Search…" over every option; and the button that shows it in
+/// place under the setting. The list sits in a revealer, the rows' box's
+/// parent, which follows the button.
+fn choice_list(
+    setting: &SettingParam,
+    choices: &[ShortChoice],
+    open: bool,
+    report: &impl Report,
+) -> ChoiceList {
+    let name = setting.name.as_str();
+    let list = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .css_classes(["stave-edit-choices"])
+        .accessible_role(gtk::AccessibleRole::List)
+        .build();
+    list.update_property(&[gtk::accessible::Property::Label(&format!(
+        "What {} can be",
+        spaced(name)
+    ))]);
+    // A slide (of no length, so it is instant): a revealer that doesn't
+    // slide keeps the room of what it hides.
+    let revealer = gtk::Revealer::builder()
+        .child(&list)
+        .reveal_child(open)
+        .transition_type(gtk::RevealerTransitionType::SlideDown)
+        .transition_duration(0)
+        .build();
+    let toggle = gtk::ToggleButton::builder()
+        .icon_name("pan-down-symbolic")
+        .active(open)
+        .valign(gtk::Align::Center)
+        .css_classes(["stave-edit-options-toggle"])
+        .tooltip_text(format!("Choose {}", spaced(name)))
+        .build();
+    toggle.update_property(&[gtk::accessible::Property::Label(&format!(
+        "Choose {}",
+        spaced(name)
+    ))]);
+    toggle.update_state(&[gtk::accessible::State::Expanded(Some(open))]);
+    // The list shows while the button is down: a binding, which holds
+    // neither widget.
+    toggle
+        .bind_property("active", &revealer, "reveal-child")
+        .sync_create()
+        .build();
+    {
+        let report = report.clone();
+        let param = name.to_owned();
+        toggle.connect_toggled(move |toggle| {
+            let open = toggle.is_active();
+            toggle.update_state(&[gtk::accessible::State::Expanded(Some(open))]);
+            report(BodyEvent::Toggled {
+                param: param.clone(),
+                open,
+            });
+        });
+    }
+    let mut choice_list = ChoiceList {
+        param: setting.name.clone(),
+        toggle,
+        list,
+        rows: Vec::new(),
+    };
+    fill_choices(&mut choice_list, choices, setting.options.len(), report);
+    choice_list
+}
+
+/// The rows of a short list, from the setting as the session has it.
+fn fill_choices(
+    list: &mut ChoiceList,
+    choices: &[ShortChoice],
+    options: usize,
+    report: &impl Report,
+) {
+    while let Some(child) = list.list.first_child() {
+        list.list.remove(&child);
+    }
+    let mut rows = Vec::with_capacity(choices.len().saturating_add(1));
+    for choice in choices {
+        let row = choice_row(&list.param, choice, report);
+        list.list.append(&row);
+        rows.push((choice.text.clone(), row));
+    }
+    if options > 0 {
+        let row = search_row(&list.param, options, report);
+        list.list.append(&row);
+        rows.push((String::new(), row));
+    }
+    list.rows = rows;
+}
+
+/// One entry of a short list: a tick for the value it holds now, its
+/// text, why it is listed ("default", "used", "now") and its fit, never by
+/// colour alone. A refused one is greyed and never reports.
+fn choice_row(param: &Ident, choice: &ShortChoice, report: &impl Report) -> gtk::Button {
+    let content = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    let mark = gtk::Image::from_icon_name(if choice.current {
+        "object-select-symbolic"
+    } else {
+        match &choice.fit {
+            Some(fit @ OptionFit::Refused(_)) => fit_icon(fit),
+            Some(_) | None => "",
+        }
+    });
+    mark.add_css_class("stave-edit-choice-mark");
+    mark.set_pixel_size(14);
+    content.append(&mark);
+    let words = text(&choice.text, &["stave-edit-option"]);
+    words.set_hexpand(true);
+    content.append(&words);
+    let tag = match choice.role {
+        ChoiceRole::Default => "default",
+        ChoiceRole::Recent => "used here",
+        ChoiceRole::Current => "now",
+    };
+    content.append(&text(tag, &["stave-edit-choice-tag"]));
+    let button = gtk::Button::builder()
+        .child(&content)
+        .css_classes(["flat", "stave-edit-choice"])
+        .build();
+    let state = choice.fit.as_ref().map(fit_words);
+    let description = [Some(tag.to_owned()), state, choice.hint.clone()]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join(". ");
+    button.update_property(&[
+        gtk::accessible::Property::Label(&choice.text),
+        gtk::accessible::Property::Description(&description),
+    ]);
+    button.set_tooltip_text(Some(&description));
+    if choice.choosable() {
+        let report = report.clone();
+        let param = param.clone();
+        let chosen = choice.text.clone();
+        let default = choice.role == ChoiceRole::Default;
+        button.connect_clicked(move |_| {
+            report(BodyEvent::Picked(if default {
+                CardAction::UseDefault {
+                    param: param.clone(),
+                }
+            } else {
+                CardAction::Choose {
+                    param: param.clone(),
+                    text: chosen.clone(),
+                }
+            }));
+        });
+    } else {
+        // Still focusable, so the reason can be read, but marked
+        // unavailable and never reported.
+        button.add_css_class("stave-edit-unavailable");
+        button.update_state(&[gtk::accessible::State::Disabled(true)]);
+    }
+    button
+}
+
+/// "Search all 18…": the dialog over every option of the setting.
+fn search_row(param: &Ident, options: usize, report: &impl Report) -> gtk::Button {
+    let content = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    let icon = gtk::Image::from_icon_name("system-search-symbolic");
+    icon.set_pixel_size(14);
+    content.append(&icon);
+    let words = text(
+        &if options == 1 {
+            "Search the 1 option…".to_owned()
+        } else {
+            format!("Search all {options}…")
+        },
+        &[],
+    );
+    words.set_hexpand(true);
+    content.append(&words);
+    let button = gtk::Button::builder()
+        .child(&content)
+        .css_classes(["flat", "stave-edit-choice", "stave-edit-search"])
+        .tooltip_text("Search every option by its name and what it is, each with whether it fits")
+        .build();
+    let report = report.clone();
+    let param = param.clone();
+    button.connect_clicked(move |_| {
+        report(BodyEvent::Action(CardAction::Search {
+            param: param.clone(),
+        }));
+    });
+    button
+}
+
+/// Redraws a short list's rows from `candidate`'s setting of the same
+/// name, keeping the keyboard on the entry it was on. Returns the row to
+/// give the keyboard back to, if any: the caller focuses it once nothing
+/// of its own is borrowed.
+fn refill_choices(
+    list: &mut ChoiceList,
+    candidate: &Candidate,
+    report: &impl Report,
+) -> Option<gtk::Button> {
+    let setting = candidate
+        .settings
+        .iter()
+        .find(|setting| setting.name.as_str() == list.param.as_str())?;
+    let focused = focused_choice(list);
+    fill_choices(list, &short_list(setting), setting.options.len(), report);
+    let focused = focused?;
+    list.rows
+        .iter()
+        .find(|(text, _)| *text == focused)
+        .map(|(_, row)| row.clone())
+}
+
+/// The verdict: checking, fits (with its warnings), or refused with each
+/// problem's message, help and fixes. Its words scroll inside a box of
+/// their own, so a long refusal never pushes the settings, Add or Cancel
+/// out of reach. `width` is the card's.
+fn verdict_section(
+    view: &CardView,
+    width: i32,
+    report: &impl Report,
+    built: &mut Built,
+) -> gtk::Widget {
+    let verdict = view.verdict.as_ref();
+    let section = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(6)
+        .css_classes(["stave-edit-verdict"])
+        .build();
+    // What the user just did comes first, with the way back; the checker's
+    // own words stay below.
+    if let (Some(blame), Some(Verdict::Refused(_))) = (&view.blame, verdict) {
+        let (block, button) = blame_block(blame, report);
+        section.append(&block);
+        built.put_back = Some(button);
+    }
+    let status = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    section.append(&status);
+    // The checker's words, and the fixes' buttons.
+    let words = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(6)
+        .build();
+    let buttons = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(4)
+        .css_classes(["stave-edit-fixes"])
+        .build();
+    match verdict {
+        None => {
+            status.append(&gtk::Image::from_icon_name("dialog-information-symbolic"));
+            let missing = if view.candidate.unbound_place().next().is_some() {
+                "Point at what is missing on the model; then it is checked."
+            } else {
+                "Choose the settings that need a choice; then it is checked."
+            };
+            let words = text(missing, &["stave-description"]);
+            words.set_hexpand(true);
+            status.append(&words);
+        }
+        Some(Verdict::Checking) => {
+            status.append(&gtk::Spinner::builder().spinning(true).build());
+            status.append(&text("Checking whether it fits…", &["stave-edit-status"]));
+        }
+        Some(Verdict::Fits(fits)) => {
+            section.add_css_class("fits");
+            status.append(&gtk::Image::from_icon_name("object-select-symbolic"));
+            status.append(&text("It fits", &["stave-edit-status"]));
+            for warning in fits.warnings() {
+                words.append(&diagnostic_block(warning));
+            }
+        }
+        Some(Verdict::Refused(refusal)) => {
+            section.add_css_class("refused");
+            status.append(&gtk::Image::from_icon_name("dialog-error-symbolic"));
+            let count = refusal.problems().iter().count();
+            status.append(&text(
+                &if count == 1 {
+                    "It doesn't fit: 1 problem".to_owned()
+                } else {
+                    format!("It doesn't fit: {count} problems")
+                },
+                &["stave-edit-status"],
+            ));
+            for (problem_index, problem) in refusal.problems().iter().enumerate() {
+                words.append(&problem_block(
+                    problem_index,
+                    problem,
+                    &buttons,
+                    report,
+                    built,
+                ));
+            }
+        }
+    }
+    // The checker's words scroll in a box of their own, as tall as they
+    // are at the card's width up to the bound (a scrolled box inside the
+    // card's own scrolled body is otherwise squeezed to its scrollbar's
+    // height); the blame, the verdict's line and the buttons (the fixes,
+    // each with its problem in its tooltip) stay in sight.
+    if words.first_child().is_some() {
+        let across = width.max(LEAST_WIDTH).saturating_sub(24);
+        let (_, tall, _, _) = words.measure(gtk::Orientation::Vertical, across);
+        section.append(
+            &gtk::ScrolledWindow::builder()
+                .hscrollbar_policy(gtk::PolicyType::Never)
+                .propagate_natural_height(true)
+                .min_content_height(tall.min(VERDICT_HEIGHT))
+                .max_content_height(VERDICT_HEIGHT)
+                .css_classes(["stave-edit-verdict-box"])
+                .child(&words)
+                .build(),
+        );
+    }
+    if buttons.first_child().is_some() {
+        section.append(&buttons);
+    }
+    section.upcast()
+}
+
+/// The setting change a refusal is blamed on, in plain words, and the
+/// button that puts it back.
+fn blame_block(blame: &Blame, report: &impl Report) -> (gtk::Box, gtk::Button) {
+    let block = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(6)
+        .css_classes(["stave-edit-blame"])
+        .build();
+    let line = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    let icon = gtk::Image::from_icon_name("edit-undo-symbolic");
+    icon.set_valign(gtk::Align::Start);
+    line.append(&icon);
+    let words = text(&blame.text(), &["stave-edit-blame-text"]);
+    words.set_hexpand(true);
+    line.append(&words);
+    block.append(&line);
+    let label = blame.put_back_label();
+    let button = gtk::Button::builder()
+        .label(&label)
+        .halign(gtk::Align::Start)
+        .css_classes(["pill", "stave-edit-put-back"])
+        .tooltip_text("Put the setting back as it was, when it still fitted")
+        .build();
+    if let Some(child) = button.child()
+        && let Ok(label) = child.downcast::<gtk::Label>()
+    {
+        label.set_wrap(true);
+        label.set_wrap_mode(gtk::pango::WrapMode::WordChar);
+        label.set_justify(gtk::Justification::Left);
+    }
+    button.update_property(&[
+        gtk::accessible::Property::Label(&label),
+        gtk::accessible::Property::Description(&blame.text()),
+    ]);
+    let reporter = report.clone();
+    button.connect_clicked(move |_| reporter(BodyEvent::Action(CardAction::PutBack)));
+    block.append(&button);
+    (block, button)
+}
+
+/// One problem: its message and help as the checker words them, and a
+/// button per fix.
+fn problem_block(
+    problem_index: usize,
+    problem: &Problem,
+    buttons: &gtk::Box,
+    report: &impl Report,
+    built: &mut Built,
+) -> gtk::Box {
+    let block = diagnostic_block(problem.diagnostic());
+    if problem.fixes().is_empty() {
+        block.append(&text(
+            "No fix can be applied for you: change a setting or point somewhere else.",
+            &["stave-footnote"],
+        ));
+        return block;
+    }
+    // Each fix's button on its own line, its label wrapped (a FlowBox asks
+    // for its widest child, which held the card open wider than its
+    // panel), under the checker's words, out of their scrolling.
+    let head = diagnostic_head(problem.diagnostic());
+    for (fix_index, fix) in problem.fixes().iter().enumerate() {
+        let label = fix.label();
+        let button = gtk::Button::builder()
+            .label(&label)
+            .halign(gtk::Align::Start)
+            .css_classes(["pill", "stave-edit-fix"])
+            .tooltip_text(format!("Add this change to what is tried. It fixes {head}"))
+            .build();
+        if let Some(child) = button.child()
+            && let Ok(label) = child.downcast::<gtk::Label>()
+        {
+            label.set_wrap(true);
+            label.set_wrap_mode(gtk::pango::WrapMode::WordChar);
+        }
+        let report = report.clone();
+        button.connect_clicked(move |_| {
+            report(BodyEvent::Action(CardAction::Fix {
+                problem: problem_index,
+                fix: fix_index,
+            }));
+        });
+        buttons.append(&button);
+        built.fixes.push(((problem_index, fix_index), button));
+    }
+    block
+}
+
+/// The row a short list belongs to, in the card of rows (a long value's
+/// row holds its line and the value in full); its short list comes after
+/// it.
+fn options_row(list: &ChoiceList) -> Option<gtk::Widget> {
+    let mut at = list.toggle.parent()?;
+    while !at.parent()?.has_css_class("stave-edit-rows") {
+        at = at.parent()?;
+    }
+    Some(at)
+}
+
+/// Lays the window out to find where the open short list is, scrolls it
+/// into sight and lays the window out again to show it scrolled: for an
+/// edit script, whose picture is taken from the last layout. Returns
+/// whether the target is in sight (so let go).
+fn scroll_now(root: &gtk::Box, frame: &CardFrame, target: &gtk::Widget) -> bool {
+    let Some(window) = root
+        .root()
+        .and_then(|root| root.downcast::<gtk::Window>().ok())
+    else {
+        return false;
+    };
+    let (width, height) = (window.width(), window.height());
+    if width <= 0 || height <= 0 {
+        return false;
+    }
+    window.allocate(width, height, -1, None);
+    let done = scroll_to_target(&frame.scrolled.vadjustment(), &frame.body, target);
+    window.allocate(width, height, -1, None);
+    done
+}
+
+/// The card for a chosen candidate, behind the API the window uses today:
+/// a show draws at once and what people do is reported at once, from the
+/// widget's own signal, because the window's code and its tests read the
+/// card straight after showing it. [`EditCardComponent`] is the same card
+/// as a relm4 component, for the window to own once it is one
+/// (docs/relm4-migration.md).
 pub struct EditCard {
     /// The card: its body scrolls; the repeat fold and Add and Cancel stay
     /// at its foot.
     pub root: gtk::Box,
-    body: gtk::Box,
-    scrolled: gtk::ScrolledWindow,
+    frame: CardFrame,
     /// Where the window puts the repeat controls' count and direction,
     /// above the buttons.
     pub repeat_slot: gtk::Box,
@@ -301,807 +1249,165 @@ pub struct EditCard {
     /// A row to bring into sight once the layout has room for it (an open
     /// short list).
     scroll_target: Rc<RefCell<Option<gtk::Widget>>>,
-    add: gtk::Button,
-    name: gtk::EditableLabel,
     /// The name as last shown, so only a retyped one is reported.
     shown_name: Rc<RefCell<String>>,
     add_enabled: Rc<Cell<bool>>,
-    /// Each setting's entry, by param (for tests).
-    entries: RefCell<Vec<(Ident, gtk::Entry)>>,
-    /// Each fix's button, with its problem and fix index (for tests).
-    fixes: RefCell<Vec<((usize, usize), gtk::Button)>>,
-    /// Each setting's short list, by param, and the button that opens it.
-    options: RefCell<Vec<ChoiceList>>,
+    /// What the last show drew that the card keeps.
+    built: RefCell<Built>,
     /// The setting whose short list is open, kept across redraws.
     open_options: Rc<RefCell<Option<String>>>,
-    /// The put-back button, while a refusal is blamed on a setting (for
-    /// tests).
-    put_back: RefCell<Option<gtk::Button>>,
-    on_action: Rc<RefCell<Option<ActionCallback>>>,
-}
-
-/// One setting's short list on the card: shown in place under its row when
-/// its button is pressed (a popover would close each time a check's answer
-/// redraws it, and can't be drawn into a screenshot).
-#[derive(Clone)]
-struct ChoiceList {
-    /// The setting.
-    param: Ident,
-    /// The button that shows and hides it.
-    toggle: gtk::ToggleButton,
-    /// What shows and hides.
-    revealer: gtk::Revealer,
-    /// The rows.
-    list: gtk::Box,
-    /// Each entry's row, by its text; the search row last, by "".
-    rows: Rc<RefCell<Vec<(String, gtk::Button)>>>,
+    on_action: Rc<Callback<CardAction>>,
 }
 
 impl EditCard {
     /// An empty card.
     pub fn new() -> EditCard {
-        if let Some(display) = gdk::Display::default() {
-            install_style(&display);
-        }
-        let on_action: Rc<RefCell<Option<ActionCallback>>> = Rc::new(RefCell::new(None));
-        let body = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
-            .spacing(0)
-            .css_classes(["stave-edit-body"])
-            .build();
-        let scrolled = gtk::ScrolledWindow::builder()
-            .hscrollbar_policy(gtk::PolicyType::Never)
-            .vexpand(true)
-            .child(&body)
-            .build();
-        let name = gtk::EditableLabel::builder()
-            .hexpand(true)
-            .css_classes(["stave-edit-name", "stave-name-field"])
-            .tooltip_text("The name it is written under. Click to retype it.")
-            .build();
-        name.update_property(&[gtk::accessible::Property::Label("Name")]);
-        let (apply_buttons, cancel, add) = sections::footer_buttons();
-        let repeat_button_slot = gtk::Box::builder()
-            .hexpand(true)
-            .halign(gtk::Align::Start)
-            .valign(gtk::Align::Center)
-            .build();
-        let buttons = gtk::Box::builder()
-            .spacing(8)
-            .css_classes(["stave-edit-buttons"])
-            .build();
-        buttons.append(&repeat_button_slot);
-        buttons.append(&apply_buttons);
-        let repeat_slot = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
-            .css_classes(["stave-edit-repeat-slot"])
-            .build();
-        let foot = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
-            .css_classes(["stave-edit-foot"])
-            .build();
-        foot.append(&repeat_slot);
-        foot.append(&buttons);
-        let pending_slot = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
-            .build();
-        let root = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
-            .css_classes(["stave-edit-card"])
-            .hexpand(true)
-            .vexpand(true)
-            .accessible_role(gtk::AccessibleRole::Group)
-            // It holds the keyboard itself, so Enter and Escape work
-            // before anything in it is clicked.
-            .focusable(true)
-            .build();
-        root.append(&scrolled);
-        root.append(&foot);
-
+        let root = card_root();
+        let frame = fill_card(&root);
+        let on_action: Rc<Callback<CardAction>> = Rc::default();
         let add_enabled = Rc::new(Cell::new(false));
         let shown_name = Rc::new(RefCell::new(String::new()));
-        let send = {
+        {
             let on_action = on_action.clone();
-            move |action: CardAction| {
-                let callback = on_action.borrow().clone();
-                if let Some(callback) = callback {
-                    callback(action);
-                }
-            }
-        };
-        {
-            let send = send.clone();
-            add.connect_clicked(move |_| send(CardAction::Add));
+            frame
+                .add
+                .connect_clicked(move |_| on_action.call(CardAction::Add));
         }
         {
-            let send = send.clone();
-            cancel.connect_clicked(move |_| send(CardAction::Cancel));
+            let on_action = on_action.clone();
+            frame
+                .cancel
+                .connect_clicked(move |_| on_action.call(CardAction::Cancel));
         }
         {
-            let send = send.clone();
+            let on_action = on_action.clone();
             let shown = shown_name.clone();
-            name.connect_editing_notify(move |label| {
+            frame.name.connect_editing_notify(move |label| {
                 if label.is_editing() {
                     return;
                 }
                 let text = label.text().trim().to_owned();
                 if text.is_empty() {
-                    label.set_text(&shown.borrow());
+                    let before = shown.borrow().clone();
+                    label.set_text(&before);
                     return;
                 }
                 if text != *shown.borrow() {
                     shown.replace(text.clone());
-                    send(CardAction::Rename(text));
+                    on_action.call(CardAction::Rename(text));
                 }
             });
         }
-        let keys = gtk::EventControllerKey::new();
         {
-            let send = send.clone();
+            let on_action = on_action.clone();
             let enabled = add_enabled.clone();
-            keys.connect_key_pressed(move |_, key, _, _| key_action(key, enabled.get(), &send));
+            listen_for_keys(&root, move |key| match key {
+                CardKey::Escape => on_action.call(CardAction::Cancel),
+                CardKey::Enter => {
+                    if enabled.get() {
+                        on_action.call(CardAction::Add);
+                    }
+                }
+            });
         }
-        root.add_controller(keys);
         root.connect_map(take_focus);
 
         let scroll_target: Rc<RefCell<Option<gtk::Widget>>> = Rc::new(RefCell::new(None));
         {
             let target = scroll_target.clone();
-            let body = body.clone();
-            scrolled.vadjustment().connect_changed(move |adjustment| {
-                scroll_to_target(adjustment, &body, &target);
-            });
+            let body = frame.body.clone();
+            frame
+                .scrolled
+                .vadjustment()
+                .connect_changed(move |adjustment| {
+                    scroll_to_held(adjustment, &body, &target);
+                });
         }
         EditCard {
             root,
-            body,
-            scrolled,
-            repeat_slot,
-            repeat_button_slot,
-            pending_slot,
+            repeat_slot: frame.repeat_slot.clone(),
+            repeat_button_slot: frame.repeat_button_slot.clone(),
+            pending_slot: frame.pending_slot.clone(),
+            frame,
             links: LinkHandlers::default(),
             scroll_target,
-            add,
-            name,
             shown_name,
             add_enabled,
-            entries: RefCell::new(Vec::new()),
-            fixes: RefCell::new(Vec::new()),
-            options: RefCell::new(Vec::new()),
+            built: RefCell::default(),
             open_options: Rc::new(RefCell::new(None)),
-            put_back: RefCell::new(None),
             on_action,
         }
     }
 
     /// Calls `callback` with each thing the user does on the card.
     pub fn connect_action(&self, callback: impl Fn(CardAction) + 'static) {
-        self.on_action.replace(Some(Rc::new(callback)));
+        self.on_action.connect(callback);
+    }
+
+    /// Where the body's widgets report: the callback, at once.
+    fn report(&self) -> impl Report {
+        let on_action = Rc::clone(&self.on_action);
+        let open_options = Rc::clone(&self.open_options);
+        move |event| match event {
+            BodyEvent::Action(action) => on_action.call(action),
+            BodyEvent::Picked(action) => {
+                open_options.replace(None);
+                on_action.call(action);
+            }
+            BodyEvent::Toggled { param, open } => {
+                let mut open_now = open_options.borrow_mut();
+                if open {
+                    *open_now = Some(param);
+                } else if open_now.as_deref() == Some(param.as_str()) {
+                    *open_now = None;
+                }
+            }
+        }
     }
 
     /// Shows a candidate, its name and its verdict.
     pub fn show(&self, model: &CardModel<'_>, words: &dyn Words) {
-        while let Some(child) = self.body.first_child() {
-            self.body.remove(&child);
-        }
-        let candidate = model.candidate;
-        let label = candidate.entry.label.as_str();
-        self.root
-            .update_property(&[gtk::accessible::Property::Label(&format!("Add {label}"))]);
-
-        // The header: the name it is written under, retyped in place, in
-        // a monospace field, and what it is and where it comes from on
-        // the right; the hint under it on one line, in full in its
-        // tooltip.
-        self.shown_name.replace(model.name.to_owned());
-        self.name.set_text(model.name);
-        if let Some(parent) = self.name.parent()
-            && let Ok(parent) = parent.downcast::<gtk::Box>()
-        {
-            parent.remove(&self.name);
-        }
-        let from = text(label, &["stave-edit-origin"]);
-        from.set_wrap(false);
-        from.set_xalign(1.0);
-        from.set_ellipsize(gtk::pango::EllipsizeMode::End);
-        from.set_max_width_chars(18);
-        from.set_tooltip_text(Some(&format!(
-            "{label} · {}",
-            origin(model.heading, &candidate.entry.group)
-        )));
-        self.body
-            .append(&sections::header(None, &self.name, Some(from.upcast_ref())));
-        if let Some(hint) = &candidate.entry.hint {
-            let hint_label = text(hint, &["stave-edit-hint-line"]);
-            hint_label.set_wrap(false);
-            hint_label.set_ellipsize(gtk::pango::EllipsizeMode::End);
-            hint_label.set_tooltip_text(Some(hint));
-            self.body.append(&hint_label);
-        }
-
-        // Where it goes: each place it fills, its names as links.
-        if !candidate.place.is_empty() {
-            let (section, rows) = sections::section("Placed in", "", true);
-            for param in &candidate.place {
-                rows.append(&place_row(param, words, &self.links));
-            }
-            self.body.append(&section);
-        }
-
-        if !model.applied.is_empty() {
-            self.body.append(&applied_section(model.applied));
-        }
-        let mut fixes = Vec::new();
-        self.put_back.replace(None);
-        let (section, verdict_body) = sections::section("Verdict", "", true);
-        verdict_body.append(&self.verdict_section(
-            model.verdict,
-            model.blame,
-            candidate,
-            &mut fixes,
-        ));
-        self.body.append(&section);
-        self.fixes.replace(fixes);
-        let mut entries = Vec::new();
-        self.options.borrow_mut().clear();
-        if !candidate.settings.is_empty() {
-            self.body
-                .append(&self.settings_section(&candidate.settings, words, &mut entries));
-        }
-        self.entries.replace(entries);
-        self.body.append(&self.pending_slot);
-
-        let enabled = can_add(candidate, model.verdict);
-        self.add_enabled.set(enabled);
-        self.add.set_sensitive(enabled);
-        self.add.set_tooltip_text(Some(
-            add_blocked_reason(candidate, model.verdict)
-                .unwrap_or("Write it into the design (Enter)"),
-        ));
+        let view = CardView::new(model, words);
+        self.shown_name.replace(view.name.clone());
+        let open = self.open_options.borrow().clone();
+        let built = build_body(
+            &self.root,
+            &self.frame,
+            &view,
+            open.as_deref(),
+            &self.links,
+            &self.report(),
+        );
+        self.built.replace(built);
+        self.add_enabled.set(show_add(&self.frame.add, &view));
         take_focus(&self.root);
         self.scroll_to_open_options();
-    }
-
-    /// The settings, one row each: those that need a choice first, then
-    /// those with a value, then those left at their defaults (the
-    /// default's value dimmed in the entry). The type and where each value
-    /// comes from are the row's tooltip, not a line of its own.
-    fn settings_section(
-        &self,
-        settings: &[SettingParam],
-        words: &dyn Words,
-        entries: &mut Vec<(Ident, gtk::Entry)>,
-    ) -> gtk::Box {
-        let (section, body) = sections::section("Settings", &settings.len().to_string(), true);
-        let order = |setting: &&SettingParam| match setting.value {
-            SettingValue::Unset => 0,
-            SettingValue::Copied { .. } | SettingValue::Chosen(_) => 1,
-            SettingValue::Default => 2,
-        };
-        let mut ordered: Vec<&SettingParam> = settings.iter().collect();
-        ordered.sort_by_key(order);
-        let rows = rows_card();
-        for setting in ordered {
-            let (row, entry, list) = self.setting_row(setting, words);
-            rows.append(&row);
-            if let Some(list) = list {
-                rows.append(&list.revealer);
-                self.options.borrow_mut().push(list);
-            }
-            entries.push((setting.name.clone(), entry));
-        }
-        body.append(&rows);
-        section
-    }
-
-    /// One setting's row: its name on the left, its value on the right in
-    /// an entry (typed, Enter sets it) with the button that opens its
-    /// short list. Its short list, when it has one, goes under the row.
-    fn setting_row(
-        &self,
-        setting: &SettingParam,
-        words: &dyn Words,
-    ) -> (gtk::Box, gtk::Entry, Option<ChoiceList>) {
-        let name = setting.name.as_str();
-        let about = setting_about(setting, words);
-        let line = row_box();
-        line.add_css_class("stave-edit-setting");
-        line.set_tooltip_text(Some(&about));
-        let key = key_label(name, &about);
-        line.append(&key);
-        let value = value_text(&setting.value, words);
-        let unset = matches!(setting.value, SettingValue::Unset);
-        let entry = gtk::Entry::builder()
-            .text(value.as_deref().unwrap_or(""))
-            .placeholder_text(match setting.value {
-                SettingValue::Unset => "Choose…".to_owned(),
-                SettingValue::Default => default_placeholder(setting),
-                SettingValue::Copied { .. } | SettingValue::Chosen(_) => String::new(),
-            })
-            .hexpand(true)
-            .width_chars(4)
-            .css_classes(["stave-edit-entry"])
-            .tooltip_text(match &value {
-                Some(value) => format!("{value}\n{about}"),
-                None => format!("{}\n{about}", default_placeholder(setting)),
-            })
-            .build();
-        entry.update_property(&[
-            gtk::accessible::Property::Label(name),
-            gtk::accessible::Property::Description(&about),
-        ]);
-        if unset {
-            entry.add_css_class("warning");
-            line.add_css_class("stave-edit-needs-choice");
-        }
-        {
-            let on_action = self.on_action.clone();
-            let param = setting.name.clone();
-            entry.connect_activate(move |entry| {
-                let typed = entry.text().trim().to_owned();
-                if typed.is_empty() {
-                    return;
-                }
-                let callback = on_action.borrow().clone();
-                if let Some(callback) = callback {
-                    callback(CardAction::Choose {
-                        param: param.clone(),
-                        text: typed,
-                    });
-                }
-            });
-        }
-        let control = gtk::Box::builder()
-            .css_classes(["linked", "stave-edit-control"])
-            .hexpand(true)
-            .build();
-        control.append(&entry);
-        let choices = short_list(setting);
-        let list = (!choices.is_empty() || !setting.options.is_empty())
-            .then(|| self.choice_list(setting, &choices));
-        if let Some(list) = &list {
-            control.append(&list.toggle);
-        }
-        line.append(&control);
-        // A long value is said in full under its row, wrapped, so it is
-        // never cut off (`overlay(left: 18mm, right: 18mm, …)`).
-        let shown = value.clone().or_else(|| {
-            (setting.value == SettingValue::Default).then(|| default_placeholder(setting))
-        });
-        if let Some(shown) = shown.filter(|shown| shown.chars().count() > LONG_VALUE) {
-            let row = gtk::Box::builder()
-                .orientation(gtk::Orientation::Vertical)
-                .css_classes(["stave-card-row", "stave-edit-row", "stave-edit-long"])
-                .build();
-            line.remove_css_class("stave-card-row");
-            line.remove_css_class("stave-edit-row");
-            row.append(&line);
-            let full = text(&shown, &["stave-edit-long-value"]);
-            full.set_selectable(true);
-            row.append(&full);
-            return (row, entry, list);
-        }
-        (line, entry, list)
-    }
-
-    /// A setting's short list ([`stave_app::choices::short_list`]): its
-    /// default, the values the project already uses, the value it holds
-    /// now, then "Search…" over every option; and the button that shows it
-    /// in place under the setting.
-    fn choice_list(&self, setting: &SettingParam, choices: &[ShortChoice]) -> ChoiceList {
-        let name = setting.name.as_str();
-        let list = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
-            .css_classes(["stave-edit-choices"])
-            .accessible_role(gtk::AccessibleRole::List)
-            .build();
-        list.update_property(&[gtk::accessible::Property::Label(&format!(
-            "What {} can be",
-            spaced(name)
-        ))]);
-        let open = self.open_options.borrow().as_deref() == Some(name);
-        // A slide (of no length, so it is instant): a revealer that
-        // doesn't slide keeps the room of what it hides.
-        let revealer = gtk::Revealer::builder()
-            .child(&list)
-            .reveal_child(open)
-            .transition_type(gtk::RevealerTransitionType::SlideDown)
-            .transition_duration(0)
-            .build();
-        let toggle = gtk::ToggleButton::builder()
-            .icon_name("pan-down-symbolic")
-            .active(open)
-            .valign(gtk::Align::Center)
-            .css_classes(["stave-edit-options-toggle"])
-            .tooltip_text(format!("Choose {}", spaced(name)))
-            .build();
-        toggle.update_property(&[gtk::accessible::Property::Label(&format!(
-            "Choose {}",
-            spaced(name)
-        ))]);
-        toggle.update_state(&[gtk::accessible::State::Expanded(Some(open))]);
-        {
-            let revealer = revealer.downgrade();
-            let open_options = self.open_options.clone();
-            let param = name.to_owned();
-            toggle.connect_toggled(move |toggle| {
-                let active = toggle.is_active();
-                toggle.update_state(&[gtk::accessible::State::Expanded(Some(active))]);
-                if let Some(revealer) = revealer.upgrade() {
-                    revealer.set_reveal_child(active);
-                }
-                let mut open = open_options.borrow_mut();
-                if active {
-                    *open = Some(param.clone());
-                } else if open.as_deref() == Some(param.as_str()) {
-                    *open = None;
-                }
-            });
-        }
-        let choice_list = ChoiceList {
-            param: setting.name.clone(),
-            toggle,
-            revealer,
-            list,
-            rows: Rc::new(RefCell::new(Vec::new())),
-        };
-        self.fill_choices(&choice_list, choices, setting.options.len());
-        choice_list
-    }
-
-    /// The rows of a short list, from the setting as the session has it.
-    fn fill_choices(&self, list: &ChoiceList, choices: &[ShortChoice], options: usize) {
-        while let Some(child) = list.list.first_child() {
-            list.list.remove(&child);
-        }
-        let mut rows = Vec::new();
-        for choice in choices {
-            let row = self.choice_row(&list.param, choice);
-            list.list.append(&row);
-            rows.push((choice.text.clone(), row));
-        }
-        if options > 0 {
-            let row = self.search_row(&list.param, options);
-            list.list.append(&row);
-            rows.push((String::new(), row));
-        }
-        list.rows.replace(rows);
-    }
-
-    /// One entry of a short list: a tick for the value it holds now, its
-    /// text, why it is listed ("default", "used", "now") and its fit,
-    /// never by colour alone. A refused one is greyed and never reports.
-    fn choice_row(&self, param: &Ident, choice: &ShortChoice) -> gtk::Button {
-        let content = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-        let mark = gtk::Image::from_icon_name(if choice.current {
-            "object-select-symbolic"
-        } else {
-            match &choice.fit {
-                Some(fit @ OptionFit::Refused(_)) => fit_icon(fit),
-                Some(_) | None => "",
-            }
-        });
-        mark.add_css_class("stave-edit-choice-mark");
-        mark.set_pixel_size(14);
-        content.append(&mark);
-        let words = text(&choice.text, &["stave-edit-option"]);
-        words.set_hexpand(true);
-        content.append(&words);
-        let tag = match choice.role {
-            ChoiceRole::Default => "default",
-            ChoiceRole::Recent => "used here",
-            ChoiceRole::Current => "now",
-        };
-        content.append(&text(tag, &["stave-edit-choice-tag"]));
-        let button = gtk::Button::builder()
-            .child(&content)
-            .css_classes(["flat", "stave-edit-choice"])
-            .build();
-        let state = choice.fit.as_ref().map(fit_words);
-        let description = [Some(tag.to_owned()), state.clone(), choice.hint.clone()]
-            .into_iter()
-            .flatten()
-            .collect::<Vec<_>>()
-            .join(". ");
-        button.update_property(&[
-            gtk::accessible::Property::Label(&choice.text),
-            gtk::accessible::Property::Description(&description),
-        ]);
-        button.set_tooltip_text(Some(&description));
-        let choosable = choice.choosable();
-        if !choosable {
-            // Still focusable, so the reason can be read, but marked
-            // unavailable and never reported.
-            button.add_css_class("stave-edit-unavailable");
-            button.update_state(&[gtk::accessible::State::Disabled(true)]);
-        }
-        let on_action = self.on_action.clone();
-        let param = param.clone();
-        let chosen = choice.text.clone();
-        let default = choice.role == ChoiceRole::Default;
-        let open_options = self.open_options.clone();
-        button.connect_clicked(move |_| {
-            if !choosable {
-                return;
-            }
-            open_options.replace(None);
-            let callback = on_action.borrow().clone();
-            if let Some(callback) = callback {
-                callback(if default {
-                    CardAction::UseDefault {
-                        param: param.clone(),
-                    }
-                } else {
-                    CardAction::Choose {
-                        param: param.clone(),
-                        text: chosen.clone(),
-                    }
-                });
-            }
-        });
-        button
-    }
-
-    /// "Search all 18…": the dialog over every option of the setting.
-    fn search_row(&self, param: &Ident, options: usize) -> gtk::Button {
-        let content = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-        let icon = gtk::Image::from_icon_name("system-search-symbolic");
-        icon.set_pixel_size(14);
-        content.append(&icon);
-        let words = text(
-            &if options == 1 {
-                "Search the 1 option…".to_owned()
-            } else {
-                format!("Search all {options}…")
-            },
-            &[],
-        );
-        words.set_hexpand(true);
-        content.append(&words);
-        let button = gtk::Button::builder()
-            .child(&content)
-            .css_classes(["flat", "stave-edit-choice", "stave-edit-search"])
-            .tooltip_text(
-                "Search every option by its name and what it is, each with whether it fits",
-            )
-            .build();
-        let on_action = self.on_action.clone();
-        let param = param.clone();
-        button.connect_clicked(move |_| {
-            let callback = on_action.borrow().clone();
-            if let Some(callback) = callback {
-                callback(CardAction::Search {
-                    param: param.clone(),
-                });
-            }
-        });
-        button
     }
 
     /// Redraws the settings' short lists from `candidate` (the same
     /// candidate the card shows) without rebuilding the card, so an open
     /// list stays open and the keyboard stays on the entry it was on.
     pub fn update_options(&self, candidate: &Candidate) {
-        let lists = self.options.borrow().clone();
-        for list in lists {
-            let Some(setting) = candidate
-                .settings
-                .iter()
-                .find(|setting| setting.name.as_str() == list.param.as_str())
-            else {
-                continue;
-            };
-            let focused = focused_choice(&list);
-            self.fill_choices(&list, &short_list(setting), setting.options.len());
-            // Found first, so that focus handlers run with nothing borrowed.
-            let row = focused.and_then(|text| {
-                list.rows
-                    .borrow()
-                    .iter()
-                    .find(|(t, _)| *t == text)
-                    .map(|(_, row)| row.clone())
-            });
+        // Copied out, so the redraw (whose focus changes may call back)
+        // runs with nothing borrowed.
+        let lists = self.built.borrow().options.clone();
+        let report = self.report();
+        for mut list in lists {
+            let row = refill_choices(&mut list, candidate, &report);
+            // Kept only while the card still shows the same list.
+            if let Some(kept) = self
+                .built
+                .borrow_mut()
+                .options
+                .iter_mut()
+                .find(|kept| kept.toggle == list.toggle)
+            {
+                kept.rows = list.rows;
+            }
             if let Some(row) = row {
                 row.grab_focus();
             }
         }
-    }
-
-    /// The verdict: checking, fits (with its warnings), or refused with
-    /// each problem's message, help and fixes. Its words scroll inside a
-    /// box of their own, so a long refusal never pushes the settings, Add
-    /// or Cancel out of reach.
-    fn verdict_section(
-        &self,
-        verdict: Option<&Verdict>,
-        blame: Option<&Blame>,
-        candidate: &Candidate,
-        fixes: &mut Vec<((usize, usize), gtk::Button)>,
-    ) -> gtk::Widget {
-        let section = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
-            .spacing(6)
-            .css_classes(["stave-edit-verdict"])
-            .build();
-        // What the user just did comes first, with the way back; the
-        // checker's own words stay below.
-        if let (Some(blame), Some(Verdict::Refused(_))) = (blame, verdict) {
-            section.append(&self.blame_block(blame));
-        }
-        let status = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-        section.append(&status);
-        // The checker's words, and the fixes' buttons.
-        let words = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
-            .spacing(6)
-            .build();
-        let buttons = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
-            .spacing(4)
-            .css_classes(["stave-edit-fixes"])
-            .build();
-        match verdict {
-            None => {
-                status.append(&gtk::Image::from_icon_name("dialog-information-symbolic"));
-                let missing = if candidate.unbound_place().next().is_some() {
-                    "Point at what is missing on the model; then it is checked."
-                } else {
-                    "Choose the settings that need a choice; then it is checked."
-                };
-                let words = text(missing, &["stave-description"]);
-                words.set_hexpand(true);
-                status.append(&words);
-            }
-            Some(Verdict::Checking) => {
-                status.append(&gtk::Spinner::builder().spinning(true).build());
-                status.append(&text("Checking whether it fits…", &["stave-edit-status"]));
-            }
-            Some(Verdict::Fits(fits)) => {
-                section.add_css_class("fits");
-                status.append(&gtk::Image::from_icon_name("object-select-symbolic"));
-                status.append(&text("It fits", &["stave-edit-status"]));
-                for warning in fits.warnings() {
-                    words.append(&diagnostic_block(warning));
-                }
-            }
-            Some(Verdict::Refused(refusal)) => {
-                section.add_css_class("refused");
-                status.append(&gtk::Image::from_icon_name("dialog-error-symbolic"));
-                let count = refusal.problems().iter().count();
-                status.append(&text(
-                    &if count == 1 {
-                        "It doesn't fit: 1 problem".to_owned()
-                    } else {
-                        format!("It doesn't fit: {count} problems")
-                    },
-                    &["stave-edit-status"],
-                ));
-                for (problem_index, problem) in refusal.problems().iter().enumerate() {
-                    words.append(&self.problem_block(problem_index, problem, &buttons, fixes));
-                }
-            }
-        }
-        // The checker's words scroll in a box of their own, as tall as
-        // they are at the card's width up to the bound (a scrolled box
-        // inside the card's own scrolled body is otherwise squeezed to its
-        // scrollbar's height); the blame, the verdict's line and the
-        // buttons (the fixes, each with its problem in its tooltip) stay in
-        // sight.
-        if words.first_child().is_some() {
-            let across = self.root.width().max(LEAST_WIDTH).saturating_sub(24);
-            let (_, tall, _, _) = words.measure(gtk::Orientation::Vertical, across);
-            section.append(
-                &gtk::ScrolledWindow::builder()
-                    .hscrollbar_policy(gtk::PolicyType::Never)
-                    .propagate_natural_height(true)
-                    .min_content_height(tall.min(VERDICT_HEIGHT))
-                    .max_content_height(VERDICT_HEIGHT)
-                    .css_classes(["stave-edit-verdict-box"])
-                    .child(&words)
-                    .build(),
-            );
-        }
-        if buttons.first_child().is_some() {
-            section.append(&buttons);
-        }
-        section.upcast()
-    }
-
-    /// The setting change a refusal is blamed on, in plain words, and the
-    /// button that puts it back.
-    fn blame_block(&self, blame: &Blame) -> gtk::Box {
-        let block = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
-            .spacing(6)
-            .css_classes(["stave-edit-blame"])
-            .build();
-        let line = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-        let icon = gtk::Image::from_icon_name("edit-undo-symbolic");
-        icon.set_valign(gtk::Align::Start);
-        line.append(&icon);
-        let words = text(&blame.text(), &["stave-edit-blame-text"]);
-        words.set_hexpand(true);
-        line.append(&words);
-        block.append(&line);
-        let label = blame.put_back_label();
-        let button = gtk::Button::builder()
-            .label(&label)
-            .halign(gtk::Align::Start)
-            .css_classes(["pill", "stave-edit-put-back"])
-            .tooltip_text("Put the setting back as it was, when it still fitted")
-            .build();
-        if let Some(child) = button.child()
-            && let Ok(label) = child.downcast::<gtk::Label>()
-        {
-            label.set_wrap(true);
-            label.set_wrap_mode(gtk::pango::WrapMode::WordChar);
-            label.set_justify(gtk::Justification::Left);
-        }
-        button.update_property(&[
-            gtk::accessible::Property::Label(&label),
-            gtk::accessible::Property::Description(&blame.text()),
-        ]);
-        let on_action = self.on_action.clone();
-        button.connect_clicked(move |_| {
-            let callback = on_action.borrow().clone();
-            if let Some(callback) = callback {
-                callback(CardAction::PutBack);
-            }
-        });
-        block.append(&button);
-        self.put_back.replace(Some(button));
-        block
-    }
-
-    /// One problem: its message and help as the checker words them, and a
-    /// button per fix.
-    fn problem_block(
-        &self,
-        problem_index: usize,
-        problem: &Problem,
-        buttons: &gtk::Box,
-        fixes: &mut Vec<((usize, usize), gtk::Button)>,
-    ) -> gtk::Box {
-        let block = diagnostic_block(problem.diagnostic());
-        if problem.fixes().is_empty() {
-            block.append(&text(
-                "No fix can be applied for you: change a setting or point somewhere else.",
-                &["stave-footnote"],
-            ));
-            return block;
-        }
-        // Each fix's button on its own line, its label wrapped (a FlowBox
-        // asks for its widest child, which held the card open wider than
-        // its panel), under the checker's words, out of their scrolling.
-        let head = diagnostic_head(problem.diagnostic());
-        for (fix_index, fix) in problem.fixes().iter().enumerate() {
-            let label = fix.label();
-            let button = gtk::Button::builder()
-                .label(&label)
-                .halign(gtk::Align::Start)
-                .css_classes(["pill", "stave-edit-fix"])
-                .tooltip_text(format!("Add this change to what is tried. It fixes {head}"))
-                .build();
-            if let Some(child) = button.child()
-                && let Ok(label) = child.downcast::<gtk::Label>()
-            {
-                label.set_wrap(true);
-                label.set_wrap_mode(gtk::pango::WrapMode::WordChar);
-            }
-            let on_action = self.on_action.clone();
-            button.connect_clicked(move |_| {
-                let callback = on_action.borrow().clone();
-                if let Some(callback) = callback {
-                    callback(CardAction::Fix {
-                        problem: problem_index,
-                        fix: fix_index,
-                    });
-                }
-            });
-            buttons.append(&button);
-            fixes.push(((problem_index, fix_index), button));
-        }
-        block
     }
 
     /// The card's own key controller (for tests).
@@ -1117,62 +1423,53 @@ impl EditCard {
     /// The Add and Cancel buttons (for tests).
     #[cfg(test)]
     pub fn buttons(&self) -> (gtk::Button, gtk::Button) {
-        let cancel = self
-            .add
-            .prev_sibling()
-            .and_then(|widget| widget.downcast::<gtk::Button>().ok())
-            .expect("Cancel sits before Add");
-        (self.add.clone(), cancel)
+        (self.frame.add.clone(), self.frame.cancel.clone())
     }
 
     /// The name field (for tests).
     #[cfg(test)]
     pub fn name_field(&self) -> gtk::EditableLabel {
-        self.name.clone()
+        self.frame.name.clone()
     }
 
     /// Each setting's entry (for tests).
     #[cfg(test)]
     pub fn entries(&self) -> Vec<(Ident, gtk::Entry)> {
-        self.entries.borrow().clone()
+        self.built.borrow().entries.clone()
     }
 
     /// Each setting's short list, with the button that shows it and its
     /// rows by text (the search row by "") (for tests).
     #[cfg(test)]
     pub fn option_lists(&self) -> Vec<(Ident, gtk::ToggleButton, ChoiceRows)> {
-        self.options
+        self.built
             .borrow()
+            .options
             .iter()
-            .map(|list| {
-                (
-                    list.param.clone(),
-                    list.toggle.clone(),
-                    list.rows.borrow().clone(),
-                )
-            })
+            .map(|list| (list.param.clone(), list.toggle.clone(), list.rows.clone()))
             .collect()
     }
 
     /// The scrolled body (for tests).
     #[cfg(test)]
     pub fn scrolled(&self) -> gtk::ScrolledWindow {
-        self.scrolled.clone()
+        self.frame.scrolled.clone()
     }
 
     /// Opens the short list of a setting, as pressing its button does;
     /// `false` when the card shows no list for it.
     pub fn open_options(&self, param: &str) -> bool {
         let found = self
-            .options
+            .built
             .borrow()
+            .options
             .iter()
             .find(|list| list.param.as_str() == param)
-            .cloned();
-        let Some(list) = found else {
+            .map(|list| list.toggle.clone());
+        let Some(toggle) = found else {
             return false;
         };
-        list.toggle.set_active(true);
+        toggle.set_active(true);
         self.scroll_to_open_options();
         true
     }
@@ -1184,20 +1481,13 @@ impl EditCard {
         let Some(open) = open else {
             return;
         };
-        // The setting's row in the card of rows (a long value's row holds
-        // its line and the value in full); its short list comes after it.
         let row = self
-            .options
+            .built
             .borrow()
+            .options
             .iter()
             .find(|list| list.param.as_str() == open)
-            .and_then(|list| {
-                let mut at = list.toggle.parent()?;
-                while !at.parent()?.has_css_class("stave-edit-rows") {
-                    at = at.parent()?;
-                }
-                Some(at)
-            });
+            .and_then(options_row);
         let Some(row) = row else {
             return;
         };
@@ -1205,16 +1495,16 @@ impl EditCard {
         // Tried until it is laid out and in sight (a few frames at most);
         // the adjustment's own changes try too.
         let target = self.scroll_target.clone();
-        let body = self.body.clone();
-        let scrolled = self.scrolled.downgrade();
+        let body = self.frame.body.clone();
+        let scrolled = self.frame.scrolled.downgrade();
         let tries = Cell::new(0_u32);
-        glib::timeout_add_local(std::time::Duration::from_millis(40), move || {
+        glib::timeout_add_local(SCROLL_TRY, move || {
             tries.set(tries.get().saturating_add(1));
             let Some(scrolled) = scrolled.upgrade() else {
                 return glib::ControlFlow::Break;
             };
-            let done = scroll_to_target(&scrolled.vadjustment(), &body, &target);
-            if done || tries.get() > 50 {
+            let done = scroll_to_held(&scrolled.vadjustment(), &body, &target);
+            if done || tries.get() > SCROLL_TRIES {
                 glib::ControlFlow::Break
             } else {
                 glib::ControlFlow::Continue
@@ -1227,21 +1517,12 @@ impl EditCard {
     /// script, whose picture is taken from the last layout (the window's
     /// own frames do this a frame later otherwise).
     pub fn scroll_to_open_options_now(&self) {
-        let Some(window) = self
-            .root
-            .root()
-            .and_then(|root| root.downcast::<gtk::Window>().ok())
-        else {
-            return;
-        };
-        let (width, height) = (window.width(), window.height());
-        if width <= 0 || height <= 0 {
-            return;
+        let target = self.scroll_target.borrow().clone();
+        if let Some(target) = target
+            && scroll_now(&self.root, &self.frame, &target)
+        {
+            self.scroll_target.replace(None);
         }
-        window.allocate(width, height, -1, None);
-        let adjustment = self.scrolled.vadjustment();
-        scroll_to_target(&adjustment, &self.body, &self.scroll_target);
-        window.allocate(width, height, -1, None);
     }
 
     /// The setting whose short list is open, if any.
@@ -1252,13 +1533,362 @@ impl EditCard {
     /// The button that puts back the setting a refusal blames, while the
     /// card shows one.
     pub fn put_back_button(&self) -> Option<gtk::Button> {
-        self.put_back.borrow().clone()
+        self.built.borrow().put_back.clone()
     }
 
     /// Each fix's button with its problem and fix index (for tests).
     #[cfg(test)]
     pub fn fix_buttons(&self) -> Vec<((usize, usize), gtk::Button)> {
-        self.fixes.borrow().clone()
+        self.built.borrow().fixes.clone()
+    }
+}
+
+/// [`scroll_to_target`] for the row held in `target`, letting it go once
+/// it is in sight. Returns whether there is nothing left to bring into
+/// sight.
+fn scroll_to_held(
+    adjustment: &gtk::Adjustment,
+    body: &gtk::Box,
+    target: &RefCell<Option<gtk::Widget>>,
+) -> bool {
+    // Copied out: scrolling emits the adjustment's signals.
+    let Some(row) = target.borrow().clone() else {
+        return true;
+    };
+    let done = scroll_to_target(adjustment, body, &row);
+    if done {
+        target.replace(None);
+    }
+    done
+}
+
+/// The card for a chosen candidate as a relm4 component. Its model is the
+/// card's state: what the last show drew, the open short list, the name
+/// as shown and whether Add is enabled. Only
+/// [`EditCardComponent::update_with_view`] changes it; the card's widgets
+/// only send [`EditCardInput`] messages, so nothing they do runs while an
+/// update does.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the relm4 card the window will own once it is a component; until then only tests launch it (docs/relm4-migration.md)"
+    )
+)]
+pub struct EditCardComponent {
+    /// The setting whose short list is open, kept across redraws.
+    open_options: Option<String>,
+    /// The name as last shown, so only a retyped one is reported.
+    shown_name: String,
+    add_enabled: bool,
+    /// What the last show drew that the card keeps.
+    built: Built,
+    /// Where the links in "Placed in" report: to the card's own input.
+    links: LinkHandlers,
+    /// A row to bring into sight once the layout has room for it.
+    scroll_target: Option<gtk::Widget>,
+}
+
+/// What the card is told: what to show, and what people did on it.
+#[derive(Debug)]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the relm4 card the window will own once it is a component; until then only tests launch it (docs/relm4-migration.md)"
+    )
+)]
+pub enum EditCardInput {
+    /// Show this candidate, its name and its verdict.
+    Show(Box<CardView>),
+    /// Redraw the settings' short lists from this candidate (the one the
+    /// card shows) without rebuilding the card.
+    UpdateOptions(Box<Candidate>),
+    /// Open the short list of this setting, as pressing its button does;
+    /// answered by [`EditCardOutput::OptionsOpened`].
+    OpenOptions(String),
+    /// Bring the open short list into sight at once, laying the window
+    /// out (for an edit script's picture).
+    ScrollToOpenOptions,
+    /// People did something in the body.
+    Body(BodyEvent),
+    /// People pressed Add.
+    Add,
+    /// People pressed Cancel, or Escape.
+    Cancel,
+    /// People pressed Enter: Add, when it is enabled.
+    Enter,
+    /// People finished retyping the name: the text it holds.
+    NameEdited(String),
+    /// The body's layout changed: try to bring the target into sight.
+    LaidOut,
+    /// A link in "Placed in" was clicked.
+    Link(LinkTarget),
+    /// The pointer entered a link (`Some`) or left it.
+    Hover(Option<LinkTarget>),
+}
+
+/// What the card tells its owner.
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the relm4 card the window will own once it is a component; until then only tests launch it (docs/relm4-migration.md)"
+    )
+)]
+pub enum EditCardOutput {
+    /// People did this on the card.
+    Action(CardAction),
+    /// The answer to [`EditCardInput::OpenOptions`]: `false` when the card
+    /// shows no short list for that setting.
+    OptionsOpened(bool),
+    /// A link in "Placed in" was clicked.
+    Link(LinkTarget),
+    /// The pointer entered a link (`Some`) or left it.
+    Hover(Option<LinkTarget>),
+}
+
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the relm4 card the window will own once it is a component; until then only tests launch it (docs/relm4-migration.md)"
+    )
+)]
+impl EditCardComponent {
+    /// Where the body's widgets report: the card's own input.
+    fn report(sender: &ComponentSender<Self>) -> impl Report {
+        let input = sender.input_sender().clone();
+        move |event| input.emit(EditCardInput::Body(event))
+    }
+
+    /// Notes the row of the open short list as the one to bring into
+    /// sight, and tries again every few milliseconds until it is laid out
+    /// (the adjustment's own changes try too).
+    fn scroll_to_open_options(&mut self, sender: &ComponentSender<Self>) {
+        let Some(open) = &self.open_options else {
+            return;
+        };
+        let Some(row) = self
+            .built
+            .options
+            .iter()
+            .find(|list| list.param.as_str() == open.as_str())
+            .and_then(options_row)
+        else {
+            return;
+        };
+        self.scroll_target = Some(row);
+        let input = sender.input_sender().clone();
+        let mut tries = 0_u32;
+        glib::timeout_add_local(SCROLL_TRY, move || {
+            tries = tries.saturating_add(1);
+            // Stops once the card is gone, or after a bound; a try with
+            // nothing left to scroll does nothing.
+            if tries > SCROLL_TRIES || input.send(EditCardInput::LaidOut).is_err() {
+                glib::ControlFlow::Break
+            } else {
+                glib::ControlFlow::Continue
+            }
+        });
+    }
+
+    /// Passes on what people did.
+    fn act(sender: &ComponentSender<Self>, action: CardAction) {
+        // Nobody listening is not a mistake.
+        let _ = sender.output(EditCardOutput::Action(action));
+    }
+}
+
+/// The card component's widgets: its frame.
+#[derive(Debug)]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the relm4 card the window will own once it is a component; until then only tests launch it (docs/relm4-migration.md)"
+    )
+)]
+pub struct EditCardWidgets {
+    frame: CardFrame,
+}
+
+impl Component for EditCardComponent {
+    type Init = ();
+    type Input = EditCardInput;
+    type Output = EditCardOutput;
+    type CommandOutput = ();
+    type Root = gtk::Box;
+    type Widgets = EditCardWidgets;
+
+    fn init_root() -> gtk::Box {
+        card_root()
+    }
+
+    fn init(_: (), root: gtk::Box, sender: ComponentSender<Self>) -> ComponentParts<Self> {
+        let frame = fill_card(&root);
+        let input = sender.input_sender();
+        {
+            let input = input.clone();
+            frame
+                .add
+                .connect_clicked(move |_| input.emit(EditCardInput::Add));
+        }
+        {
+            let input = input.clone();
+            frame
+                .cancel
+                .connect_clicked(move |_| input.emit(EditCardInput::Cancel));
+        }
+        {
+            let input = input.clone();
+            frame.name.connect_editing_notify(move |label| {
+                if !label.is_editing() {
+                    input.emit(EditCardInput::NameEdited(label.text().into()));
+                }
+            });
+        }
+        {
+            let input = input.clone();
+            listen_for_keys(&root, move |key| {
+                input.emit(match key {
+                    CardKey::Escape => EditCardInput::Cancel,
+                    CardKey::Enter => EditCardInput::Enter,
+                });
+            });
+        }
+        root.connect_map(take_focus);
+        {
+            let input = input.clone();
+            frame
+                .scrolled
+                .vadjustment()
+                .connect_changed(move |_| input.emit(EditCardInput::LaidOut));
+        }
+        let links = LinkHandlers::default();
+        {
+            let input = input.clone();
+            links.connect_click(move |target| input.emit(EditCardInput::Link(target)));
+        }
+        {
+            let input = input.clone();
+            links.connect_hover(move |target| input.emit(EditCardInput::Hover(target)));
+        }
+        ComponentParts {
+            model: EditCardComponent {
+                open_options: None,
+                shown_name: String::new(),
+                add_enabled: false,
+                built: Built::default(),
+                links,
+                scroll_target: None,
+            },
+            widgets: EditCardWidgets { frame },
+        }
+    }
+
+    fn update_with_view(
+        &mut self,
+        widgets: &mut EditCardWidgets,
+        message: EditCardInput,
+        sender: ComponentSender<Self>,
+        root: &gtk::Box,
+    ) {
+        let frame = &widgets.frame;
+        match message {
+            EditCardInput::Show(view) => {
+                self.shown_name.clone_from(&view.name);
+                self.built = build_body(
+                    root,
+                    frame,
+                    &view,
+                    self.open_options.as_deref(),
+                    &self.links,
+                    &Self::report(&sender),
+                );
+                self.add_enabled = show_add(&frame.add, &view);
+                take_focus(root);
+                self.scroll_to_open_options(&sender);
+            }
+            EditCardInput::UpdateOptions(candidate) => {
+                let report = Self::report(&sender);
+                let rows: Vec<gtk::Button> = self
+                    .built
+                    .options
+                    .iter_mut()
+                    .filter_map(|list| refill_choices(list, &candidate, &report))
+                    .collect();
+                for row in rows {
+                    row.grab_focus();
+                }
+            }
+            EditCardInput::OpenOptions(param) => {
+                let toggle = self
+                    .built
+                    .options
+                    .iter()
+                    .find(|list| list.param.as_str() == param)
+                    .map(|list| list.toggle.clone());
+                let opened = toggle.is_some();
+                if let Some(toggle) = toggle {
+                    self.open_options = Some(param);
+                    // Its handler only reports the toggle, which the
+                    // model already holds.
+                    toggle.set_active(true);
+                    self.scroll_to_open_options(&sender);
+                }
+                let _ = sender.output(EditCardOutput::OptionsOpened(opened));
+            }
+            EditCardInput::ScrollToOpenOptions => {
+                if let Some(target) = &self.scroll_target
+                    && scroll_now(root, frame, target)
+                {
+                    self.scroll_target = None;
+                }
+            }
+            EditCardInput::Body(BodyEvent::Action(action)) => Self::act(&sender, action),
+            EditCardInput::Body(BodyEvent::Picked(action)) => {
+                self.open_options = None;
+                Self::act(&sender, action);
+            }
+            EditCardInput::Body(BodyEvent::Toggled { param, open }) => {
+                if open {
+                    self.open_options = Some(param);
+                } else if self.open_options.as_deref() == Some(param.as_str()) {
+                    self.open_options = None;
+                }
+            }
+            EditCardInput::Add => Self::act(&sender, CardAction::Add),
+            EditCardInput::Cancel => Self::act(&sender, CardAction::Cancel),
+            EditCardInput::Enter => {
+                if self.add_enabled {
+                    Self::act(&sender, CardAction::Add);
+                }
+            }
+            EditCardInput::NameEdited(text) => {
+                let text = text.trim();
+                if text.is_empty() {
+                    frame.name.set_text(&self.shown_name);
+                } else if text != self.shown_name {
+                    self.shown_name = text.to_owned();
+                    Self::act(&sender, CardAction::Rename(text.to_owned()));
+                }
+            }
+            EditCardInput::LaidOut => {
+                if let Some(target) = &self.scroll_target
+                    && scroll_to_target(&frame.scrolled.vadjustment(), &frame.body, target)
+                {
+                    self.scroll_target = None;
+                }
+            }
+            EditCardInput::Link(target) => {
+                let _ = sender.output(EditCardOutput::Link(target));
+            }
+            EditCardInput::Hover(target) => {
+                let _ = sender.output(EditCardOutput::Hover(target));
+            }
+        }
     }
 }
 
@@ -1274,17 +1904,15 @@ const LEAST_WIDTH: i32 = 300;
 /// the setting's name: it is also said in full under the row.
 const LONG_VALUE: usize = 18;
 
+/// How often the card tries to bring an open short list into sight while
+/// it is being laid out, and how many times at most.
+const SCROLL_TRY: std::time::Duration = std::time::Duration::from_millis(40);
+const SCROLL_TRIES: u32 = 50;
+
 /// Brings the target row near the top of what the card shows, once the
-/// layout has room to: then the target is let go, so the user's own
-/// scrolling isn't undone.
-fn scroll_to_target(
-    adjustment: &gtk::Adjustment,
-    body: &gtk::Box,
-    target: &Rc<RefCell<Option<gtk::Widget>>>,
-) -> bool {
-    let Some(row) = target.borrow().clone() else {
-        return true;
-    };
+/// layout has room to. Returns `true` once it is in sight, when the target
+/// is let go, so the user's own scrolling isn't undone.
+fn scroll_to_target(adjustment: &gtk::Adjustment, body: &gtk::Box, row: &gtk::Widget) -> bool {
     if !row.is_mapped() {
         return false;
     }
@@ -1300,7 +1928,6 @@ fn scroll_to_target(
     let bottom = top + f64::from(bounds.height()) + list;
     let (value, page) = (adjustment.value(), adjustment.page_size());
     if top >= value && bottom <= value + page {
-        target.replace(None);
         return true;
     }
     // As little as brings the list's foot into sight, never past the
@@ -1308,18 +1935,13 @@ fn scroll_to_target(
     let wanted = (bottom - page).min(top - 4.0).max(0.0);
     let reach = adjustment.upper() - page;
     adjustment.set_value(wanted.min(reach));
-    if reach >= wanted {
-        target.replace(None);
-        return true;
-    }
-    false
+    reach >= wanted
 }
 
 /// The text of the short list's entry whose row holds the keyboard.
 fn focused_choice(list: &ChoiceList) -> Option<String> {
     let focus = list.list.root()?.focus()?;
     list.rows
-        .borrow()
         .iter()
         .find(|(_, row)| focus == *row.upcast_ref::<gtk::Widget>() || focus.is_ancestor(row))
         .map(|(text, _)| text.clone())
@@ -1327,19 +1949,18 @@ fn focused_choice(list: &ChoiceList) -> Option<String> {
 
 /// A place param's row: what fills it (each name a link to what it
 /// names), or the prompt to point at it.
-fn place_row(param: &PlaceParam, words: &dyn Words, handlers: &LinkHandlers) -> gtk::Box {
+fn place_row(param: &PlaceParam, words: &PlaceWords, handlers: &LinkHandlers) -> gtk::Box {
     let row = row_box();
     row.append(&key_label(param.name.as_str(), &param.prompt));
-    match param.text.clone().or_else(|| words.place(&param.slot)) {
+    match &words.value {
         Some(value) => {
-            let links = words.links(&value);
-            if links.is_empty() {
-                let label = value_label(&value);
-                label.set_tooltip_text(Some(&value));
+            if words.links.is_empty() {
+                let label = value_label(value);
+                label.set_tooltip_text(Some(value));
                 row.append(&label);
             } else {
-                let shown = handlers.links(&links);
-                shown.set_tooltip_text(Some(&value));
+                let shown = handlers.links(&words.links);
+                shown.set_tooltip_text(Some(value));
                 row.append(&shown);
             }
         }
@@ -1400,24 +2021,6 @@ fn take_focus(root: &gtk::Box) {
         .is_some_and(|focus| focus == *root.upcast_ref::<gtk::Widget>() || focus.is_ancestor(root));
     if !inside {
         root.grab_focus();
-    }
-}
-
-/// What a key does on the card.
-fn key_action(key: gdk::Key, add_enabled: bool, send: &dyn Fn(CardAction)) -> glib::Propagation {
-    if key == gdk::Key::Escape {
-        send(CardAction::Cancel);
-        glib::Propagation::Stop
-    } else if matches!(
-        key,
-        gdk::Key::Return | gdk::Key::KP_Enter | gdk::Key::ISO_Enter
-    ) {
-        if add_enabled {
-            send(CardAction::Add);
-        }
-        glib::Propagation::Stop
-    } else {
-        glib::Propagation::Proceed
     }
 }
 
@@ -1637,6 +2240,7 @@ mod tests {
     use crate::ui::edit_demo::FixtureWords;
     use crate::ui::edit_menu::tests::greyed;
     use crate::ui::edit_menu::{Checked, EditMenu, MenuItem};
+    use crate::ui::relm4_shim::Bridge;
     use stave_app::edit::{Declaration, Fits, clothing_cabinet_fixture};
 
     #[test]
@@ -1963,5 +2567,250 @@ mod tests {
             }
         }
         None
+    }
+
+    /// The card's view of the fixture's Drawer: refused (the fixture's
+    /// verdict) or fitting, optionally with a recent value for
+    /// `front_stock` (one more row in its short list).
+    fn drawer_view(fits: bool, recent: Option<&str>) -> CardView {
+        let fixture = clothing_cabinet_fixture().unwrap();
+        let mut drawer = fixture.candidates[0].clone();
+        if let Some(recent) = recent {
+            drawer.settings[1].recent = vec![recent.to_owned()];
+        }
+        let fitting = Verdict::Fits(Fits::new(Vec::new()).unwrap());
+        CardView::new(
+            &CardModel {
+                applied: &[],
+                blame: None,
+                heading: fixture.picked.heading(),
+                candidate: &drawer,
+                name: "drawer_2",
+                verdict: Some(if fits { &fitting } else { &fixture.verdict }),
+            },
+            &FixtureWords,
+        )
+    }
+
+    /// The card component's Apply and Cancel buttons, found in its frame.
+    fn footer_of(root: &gtk::Box) -> (gtk::Button, gtk::Button) {
+        let mut stack: Vec<gtk::Widget> = vec![root.clone().upcast()];
+        while let Some(widget) = stack.pop() {
+            if widget.has_css_class("suggested-action")
+                && let Ok(add) = widget.clone().downcast::<gtk::Button>()
+            {
+                let cancel = add
+                    .prev_sibling()
+                    .and_then(|widget| widget.downcast::<gtk::Button>().ok())
+                    .expect("Cancel sits before Apply");
+                return (add, cancel);
+            }
+            let mut child = widget.first_child();
+            while let Some(each) = child {
+                child = each.next_sibling();
+                stack.push(each);
+            }
+        }
+        panic!("the card has an Apply button");
+    }
+
+    /// Fires the card's key controller as a key press would.
+    fn press_key(root: &gtk::Box, key: gdk::Key) -> bool {
+        let controllers = root.observe_controllers();
+        let keys = (0..controllers.n_items())
+            .filter_map(|index| controllers.item(index))
+            .find_map(|item| item.downcast::<gtk::EventControllerKey>().ok())
+            .expect("the card listens for keys");
+        keys.emit_by_name::<bool>(
+            "key-pressed",
+            &[
+                &glib::translate::IntoGlib::into_glib(key),
+                &0u32,
+                &gdk::ModifierType::empty(),
+            ],
+        )
+    }
+
+    #[test]
+    fn a_dropped_card_component_is_freed() {
+        crate::ui::gtk_test::on_gtk_thread(card_component_is_freed);
+    }
+
+    /// Dropping the bridge shuts the card down when the main loop next
+    /// runs: its widget, what its model kept of the last show, its
+    /// links' handlers and the callback are all freed.
+    fn card_component_is_freed() {
+        use crate::ui::gtk_test::settle;
+        let card = Bridge::<EditCardComponent>::launch(());
+        card.send(EditCardInput::Show(Box::new(drawer_view(false, None))));
+        let token = Rc::new(());
+        let held = Rc::clone(&token);
+        card.connect(move |_| {
+            let _ = &held;
+        });
+        let callback = Rc::downgrade(&token);
+        drop(token);
+        settle();
+        let root = card.widget().downgrade();
+        let entry = card.model().built.entries[0].1.downgrade();
+        let fix = card.model().built.fixes[0].1.downgrade();
+        let input = card.sender().clone();
+        assert!(root.upgrade().is_some(), "the card lives while held");
+        drop(card);
+        settle();
+        assert!(root.upgrade().is_none(), "the card is freed");
+        assert!(
+            entry.upgrade().is_none() && fix.upgrade().is_none(),
+            "what the show drew is freed"
+        );
+        assert!(
+            input.send(EditCardInput::Cancel).is_err(),
+            "the component's runtime, and with it the model, is gone"
+        );
+        assert!(callback.upgrade().is_none(), "the callback is freed");
+    }
+
+    #[test]
+    fn the_card_components_setters_draw_it_and_report_no_action() {
+        crate::ui::gtk_test::on_gtk_thread(card_component_setters);
+    }
+
+    /// Show, UpdateOptions and OpenOptions change the model and the
+    /// widgets, are only queued until the main loop runs, and never
+    /// report an action; OpenOptions answers whether it opened a list.
+    fn card_component_setters() {
+        use crate::ui::gtk_test::settle;
+        let card = Bridge::<EditCardComponent>::launch(());
+        let heard: Rc<RefCell<Vec<EditCardOutput>>> = Rc::default();
+        let log = Rc::clone(&heard);
+        card.connect(move |output| log.borrow_mut().push(output));
+
+        card.send(EditCardInput::Show(Box::new(drawer_view(false, None))));
+        assert!(card.model().built.entries.is_empty(), "only queued");
+        settle();
+        let (add, _) = footer_of(card.widget());
+        {
+            let model = card.model();
+            assert_eq!(model.shown_name, "drawer_2");
+            assert!(!model.add_enabled && !add.is_sensitive());
+            assert_eq!(model.built.fixes.len(), 1);
+            assert!(
+                !model.built.options.is_empty(),
+                "copied settings list their value"
+            );
+        }
+        let front_stock_rows = |card: &Bridge<EditCardComponent>| {
+            card.model()
+                .built
+                .options
+                .iter()
+                .find(|list| list.param.as_str() == "front_stock")
+                .map(|list| list.rows.len())
+        };
+        let rows = front_stock_rows(&card).expect("front_stock has a short list");
+
+        // A redraw of the short lists alone: one more row for a value the
+        // project uses.
+        let fixture = clothing_cabinet_fixture().unwrap();
+        let mut drawer = fixture.candidates[0].clone();
+        drawer.settings[1].recent = vec!["walnut_19".to_owned()];
+        card.send(EditCardInput::UpdateOptions(Box::new(drawer)));
+        settle();
+        assert_eq!(front_stock_rows(&card), Some(rows + 1));
+
+        // Opening a list answers, and keeps it open across a redraw.
+        card.send(EditCardInput::OpenOptions("front_stock".to_owned()));
+        card.send(EditCardInput::OpenOptions("no_such_setting".to_owned()));
+        // Off screen there is no window to lay out: it waits, quietly.
+        card.send(EditCardInput::ScrollToOpenOptions);
+        settle();
+        assert_eq!(card.model().open_options.as_deref(), Some("front_stock"));
+        card.send(EditCardInput::Show(Box::new(drawer_view(true, None))));
+        settle();
+        {
+            let model = card.model();
+            assert_eq!(model.open_options.as_deref(), Some("front_stock"));
+            let list = model
+                .built
+                .options
+                .iter()
+                .find(|list| list.param.as_str() == "front_stock")
+                .expect("still listed");
+            assert!(list.toggle.is_active(), "drawn open again");
+            assert!(model.add_enabled && add.is_sensitive());
+        }
+        assert_eq!(
+            *heard.borrow(),
+            [
+                EditCardOutput::OptionsOpened(true),
+                EditCardOutput::OptionsOpened(false)
+            ],
+            "only the answers; no action"
+        );
+    }
+
+    #[test]
+    fn what_people_do_while_an_action_is_heard_is_queued_not_re_entered() {
+        crate::ui::gtk_test::on_gtk_thread(card_input_is_queued);
+    }
+
+    /// The old card called the window from inside the button's signal,
+    /// with its own state borrowed; a window that redrew the card, or a
+    /// key pressed meanwhile, re-entered it. Now a press only queues a
+    /// message, the window hears the action after the update has
+    /// returned (reading the model there would panic if it had not), and
+    /// a redraw, a key and a button pressed from inside the callback are
+    /// handled afterwards, in order: Enter finds Add disabled by the
+    /// redraw sent before it.
+    fn card_input_is_queued() {
+        use crate::ui::gtk_test::settle;
+        let card = Rc::new(Bridge::<EditCardComponent>::launch(()));
+        card.send(EditCardInput::Show(Box::new(drawer_view(true, None))));
+        settle();
+        let (add, cancel) = footer_of(card.widget());
+        // (what was heard, whether Add was enabled in the model then)
+        let heard: Rc<RefCell<Vec<(EditCardOutput, bool)>>> = Rc::default();
+        let log = Rc::clone(&heard);
+        let weak = Rc::downgrade(&card);
+        let inner_cancel = cancel.clone();
+        card.connect(move |output| {
+            let Some(card) = weak.upgrade() else {
+                return;
+            };
+            let enabled = card.model().add_enabled;
+            let first = log.borrow().is_empty();
+            log.borrow_mut().push((output, enabled));
+            if first {
+                card.send(EditCardInput::Show(Box::new(drawer_view(false, None))));
+                assert!(press_key(card.widget(), gdk::Key::Return), "the card's key");
+                inner_cancel.emit_clicked();
+                assert!(card.model().add_enabled, "nothing has run yet");
+            }
+        });
+        add.emit_clicked();
+        assert!(heard.borrow().is_empty(), "the press is only queued");
+        settle();
+        assert_eq!(
+            *heard.borrow(),
+            [
+                (EditCardOutput::Action(CardAction::Add), true),
+                (EditCardOutput::Action(CardAction::Cancel), false)
+            ],
+            "Enter came after the refused redraw, so it added nothing"
+        );
+
+        // A retyped name is reported once; an emptied one is put back.
+        heard.borrow_mut().clear();
+        card.send(EditCardInput::NameEdited("  ".to_owned()));
+        card.send(EditCardInput::NameEdited("tall_drawer".to_owned()));
+        card.send(EditCardInput::NameEdited("tall_drawer".to_owned()));
+        settle();
+        assert_eq!(
+            *heard.borrow(),
+            [(
+                EditCardOutput::Action(CardAction::Rename("tall_drawer".to_owned())),
+                false
+            )]
+        );
     }
 }
