@@ -79,11 +79,70 @@ pub(in crate::ui) enum ProjectInput {
         /// How long it stays.
         seconds: u32,
     },
-    /// Closing found unsaved changes: ask about them first.
+    /// People (or the application, or a screenshot that is done) asked
+    /// to close the window: remember its size and the layout, then close
+    /// it, asking about unsaved changes first.
     CloseAsked,
-    /// The unsaved changes are dealt with: close.
+    /// The unsaved changes are dealt with: let go of what is left and
+    /// close.
     CloseNow,
+    /// People answered the question about unsaved changes.
+    UnsavedAnswered {
+        /// What they chose.
+        answer: UnsavedAnswer,
+        /// What was waiting on the answer: sent unless they chose to stay
+        /// or saving failed.
+        then: Box<WindowInput>,
+    },
+    /// With `--window-screenshot`: look again whether the window has
+    /// drawn, and save it once it has.
+    CaptureTick(Capture),
 }
+
+/// What people answered when asked about unsaved changes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::ui) enum UnsavedAnswer {
+    /// Save every file with changes, then go on.
+    Save,
+    /// Throw the changes away and go on.
+    Discard,
+    /// Stay: nothing happens.
+    Stay,
+}
+
+impl UnsavedAnswer {
+    /// The answer an alert dialog's response id stands for; anything but
+    /// Save and Don't Save (Cancel, Escape) is staying.
+    fn from_response(response: &str) -> UnsavedAnswer {
+        match response {
+            "save" => UnsavedAnswer::Save,
+            "discard" => UnsavedAnswer::Discard,
+            _ => UnsavedAnswer::Stay,
+        }
+    }
+}
+
+/// A window screenshot on its way: where it goes, the window's drawing
+/// and how many times it has been looked at.
+#[derive(Debug)]
+pub(in crate::ui) struct Capture {
+    /// Where the PNG goes.
+    path: PathBuf,
+    /// Follows the window's drawing.
+    paintable: gtk::WidgetPaintable,
+    /// How many times the window has been looked at so far.
+    waited: u32,
+}
+
+/// How many looks the window gets to be on screen and drawn before the
+/// screenshot is given up.
+const CAPTURE_LOOKS: u32 = 25;
+
+/// How many looks the window always gets, so it has settled.
+const CAPTURE_SETTLE_LOOKS: u32 = 3;
+
+/// How long between looks.
+const CAPTURE_INTERVAL: Duration = Duration::from_millis(300);
 
 impl From<ProjectInput> for WindowInput {
     fn from(message: ProjectInput) -> WindowInput {
@@ -203,32 +262,27 @@ pub(in crate::ui) fn wire(window: &Window) {
             .into(),
         );
     });
-    // The Details panel asks whether a file has unsaved changes.
-    let files = Rc::clone(&widgets.files);
-    widgets
-        .inspector
-        .connect_unsaved(move |path| files.is_unsaved(Path::new(path)));
+    // The Details panel asks whether a file has unsaved changes. A query
+    // the inspector still asks synchronously: it holds the files page
+    // weakly, so it never keeps it alive.
+    let files = Rc::downgrade(&widgets.files);
+    widgets.inspector.connect_unsaved(move |path| {
+        files
+            .upgrade()
+            .is_some_and(|files| files.is_unsaved(Path::new(path)))
+    });
 
-    // Closing the window remembers its size and the layout, and asks
-    // about unsaved changes first.
-    let files = Rc::clone(&widgets.files);
-    let workbench = Rc::clone(&widgets.workbench);
-    let output = window.sender.output_sender().clone();
+    // Closing the window is a message: the window remembers its size and
+    // the layout and asks about unsaved changes in its own update, never
+    // inside the signal. Once the window has shut down nobody can ask, so
+    // it just closes.
     let sender = input;
-    root.connect_close_request(move |root| {
-        if let Some(application) = root.application() {
-            output.emit(WindowOutput::Closing {
-                size: root.default_size(),
-                maximized: root.is_maximized(),
-                hold: application.hold(),
-            });
+    root.connect_close_request(move |_| {
+        if sender.send(ProjectInput::CloseAsked.into()).is_ok() {
+            glib::Propagation::Stop
+        } else {
+            glib::Propagation::Proceed
         }
-        workbench.save();
-        if !files.has_unsaved() {
-            return glib::Propagation::Proceed;
-        }
-        sender.emit(ProjectInput::CloseAsked.into());
-        glib::Propagation::Stop
     });
 }
 
@@ -306,12 +360,50 @@ impl Window {
                     .toasts
                     .add_toast(adw::Toast::builder().title(text).timeout(seconds).build());
             }
-            ProjectInput::CloseAsked => self.ask_about_unsaved(ProjectInput::CloseNow),
+            ProjectInput::CloseAsked => self.close_asked(),
             ProjectInput::CloseNow => {
                 self.widgets.files.forget_unsaved();
-                self.widgets.window.close();
+                self.close_asked();
             }
+            ProjectInput::UnsavedAnswered { answer, then } => {
+                let go_on = match answer {
+                    UnsavedAnswer::Save => self.widgets.files.save_all(),
+                    UnsavedAnswer::Discard => true,
+                    UnsavedAnswer::Stay => false,
+                };
+                if go_on {
+                    self.send(*then);
+                }
+            }
+            ProjectInput::CaptureTick(capture) => self.capture_tick(capture),
         }
+    }
+
+    /// Closing was asked for: tells the application the window's size
+    /// (holding it until that is saved), remembers the layout, and closes
+    /// the window, or first asks about unsaved changes. A window already
+    /// closed (asked twice before the first was handled) is left alone.
+    fn close_asked(&mut self) {
+        let root = &self.widgets.window;
+        if !root.is_realized() {
+            return;
+        }
+        if let Some(application) = root.application() {
+            // Nobody listening is not a mistake (a test's window).
+            let _ = self.sender.output(WindowOutput::Closing {
+                size: root.default_size(),
+                maximized: root.is_maximized(),
+                hold: application.hold(),
+            });
+        }
+        self.widgets.workbench.save();
+        if self.widgets.files.has_unsaved() {
+            self.ask_about_unsaved(ProjectInput::CloseNow);
+            return;
+        }
+        // Not `close`: that asks again (`close-request`), and the asking
+        // is done.
+        self.widgets.window.destroy();
     }
 
     /// Runs a check on a worker thread; its outcome comes back as
@@ -641,43 +733,61 @@ impl Window {
         let Some(path) = self.state.window_screenshot.take() else {
             return;
         };
-        let window = self.widgets.window.clone();
-        // What `--type` typed is never saved, and closing doesn't ask.
-        let files = self.widgets.files.clone();
-        // An open finder would keep the window from closing.
-        let finder = self.widgets.finder.dialog.clone();
         // The paintable follows the window's drawing from now on.
-        let paintable = gtk::WidgetPaintable::new(Some(&window));
-        let mut waited = 0;
-        glib::timeout_add_local(Duration::from_millis(300), move || {
-            // Wait until the window is on screen and drawn.
-            waited += 1;
-            // A tick makes the frame clock run, so GTK draws the window.
-            window.queue_draw();
-            window.add_tick_callback(|_, _| glib::ControlFlow::Break);
-            if (!window.is_mapped() || waited < 3) && waited < 25 {
-                return glib::ControlFlow::Continue;
-            }
-            // A view that hasn't drawn since it changed draws nothing yet:
-            // try again on the next round.
-            let Some(node) = window_node(&window, &paintable) else {
-                if waited < 25 {
-                    return glib::ControlFlow::Continue;
-                }
-                eprintln!("error: the window drew nothing");
-                files.forget_unsaved();
-                finder.force_close();
-                close_for_good(&window);
-                return glib::ControlFlow::Break;
-            };
-            if let Err(error) = save_node(&window, &node, &path) {
-                eprintln!("error: {error:#}");
-            }
-            files.forget_unsaved();
-            finder.force_close();
-            close_for_good(&window);
-            glib::ControlFlow::Break
+        let paintable = gtk::WidgetPaintable::new(Some(&self.widgets.window));
+        self.capture_later(Capture {
+            path,
+            paintable,
+            waited: 0,
         });
+    }
+
+    /// Looks at the window again shortly, as a [`ProjectInput::CaptureTick`].
+    fn capture_later(&self, capture: Capture) {
+        let input = self.input();
+        glib::timeout_add_local_once(CAPTURE_INTERVAL, move || {
+            // The window may have gone; then there is nothing to save.
+            let _ = input.send(ProjectInput::CaptureTick(capture).into());
+        });
+    }
+
+    /// Saves the window once it is on screen and drawn (or gives up after
+    /// a while), then closes it for good.
+    fn capture_tick(&mut self, mut capture: Capture) {
+        let window = &self.widgets.window;
+        // Wait until the window is on screen and drawn.
+        capture.waited = capture.waited.saturating_add(1);
+        // A tick makes the frame clock run, so GTK draws the window.
+        window.queue_draw();
+        window.add_tick_callback(|_, _| glib::ControlFlow::Break);
+        let patient = capture.waited < CAPTURE_LOOKS;
+        if (!window.is_mapped() || capture.waited < CAPTURE_SETTLE_LOOKS) && patient {
+            self.capture_later(capture);
+            return;
+        }
+        // A view that hasn't drawn since it changed draws nothing yet:
+        // try again on the next round.
+        match window_node(window, &capture.paintable) {
+            Some(node) => {
+                if let Err(error) = save_node(window, &node, &capture.path) {
+                    eprintln!("error: {error:#}");
+                }
+            }
+            None if patient => {
+                self.capture_later(capture);
+                return;
+            }
+            None => eprintln!("error: the window drew nothing"),
+        }
+        // What `--type` typed is never saved, and closing doesn't ask.
+        self.widgets.files.forget_unsaved();
+        // An open finder would keep the window from closing.
+        self.widgets.finder.dialog.force_close();
+        // Stops the application; its `close` only queues a request
+        // (`close-request` sends a message), so the window closes here,
+        // before the main loop stops.
+        close_for_good(&self.widgets.window);
+        self.close_asked();
     }
 
     pub(in crate::ui) fn check_status_changed(&self) {
@@ -746,11 +856,11 @@ impl Window {
     }
 
     /// Asks what to do with unsaved changes (save, throw away or stay),
-    /// then sends `then`, unless people chose to stay.
+    /// then sends `then`, unless people chose to stay or saving failed.
+    /// The answer comes back as [`ProjectInput::UnsavedAnswered`].
     pub(in crate::ui) fn ask_about_unsaved(&mut self, then: impl Into<WindowInput>) {
         let then = then.into();
-        let files = &self.widgets.files;
-        let count = files.unsaved_count();
+        let count = self.widgets.files.unsaved_count();
         if count == 0 {
             self.send(then);
             return;
@@ -772,18 +882,21 @@ impl Window {
         ]);
         dialog.set_response_appearance("discard", adw::ResponseAppearance::Destructive);
         dialog.set_response_appearance("save", adw::ResponseAppearance::Suggested);
+        // The answer and what waits on it go back to the window as a
+        // message: the dialog holds no part of the window.
         let input = self.input();
-        let files = Rc::clone(files);
         let then = Cell::new(Some(then));
         dialog.connect_response(None, move |_, response| {
-            let go_on = match response {
-                "save" => files.save_all(),
-                "discard" => true,
-                _ => false,
-            };
-            if go_on && let Some(then) = then.take() {
-                input.emit(then);
-            }
+            let Some(then) = then.take() else { return };
+            let answer = UnsavedAnswer::from_response(response);
+            // The window may have gone; then nobody needs to know.
+            let _ = input.send(
+                ProjectInput::UnsavedAnswered {
+                    answer,
+                    then: Box::new(then),
+                }
+                .into(),
+            );
         });
         dialog.present(Some(&self.widgets.window));
     }
@@ -853,5 +966,177 @@ impl Window {
                 }
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::RefCell;
+
+    use super::*;
+    use crate::ui::gtk_test::{on_gtk_thread, settle};
+
+    /// A project window on the wall shelf, in an application of its own,
+    /// with what it tells the application recorded.
+    struct Opened {
+        application: adw::Application,
+        controller: relm4::Controller<Window>,
+        root: adw::ApplicationWindow,
+        folder: PathBuf,
+        /// What the window told the application, by name.
+        said: Rc<RefCell<Vec<&'static str>>>,
+        /// GTK has taken the window out of the application.
+        removed: Rc<Cell<bool>>,
+        removed_handler: glib::SignalHandlerId,
+    }
+
+    impl Opened {
+        fn open(id: &str) -> Opened {
+            let application = adw::Application::new(Some(id), gio::ApplicationFlags::NON_UNIQUE);
+            if let Err(error) = application.register(gio::Cancellable::NONE) {
+                panic!("the test's application registers: {error}");
+            }
+            let folder = Path::new(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../examples/wall_shelf"
+            ))
+            .canonicalize()
+            .unwrap();
+            // A layout of its own, which is never written.
+            let options = Options {
+                layout: Some(std::env::temp_dir().join("stave-project-test-no-layout")),
+                ..Options::default()
+            };
+            let builder = Window::builder();
+            let root = builder.widget().clone();
+            let widgets =
+                build_widgets(&root, &application, &folder, &gio::Menu::new(), &options).unwrap();
+            let removed = Rc::new(Cell::new(false));
+            let heard = Rc::clone(&removed);
+            let removed_handler = application.connect_window_removed(move |_, _| heard.set(true));
+            let said = Rc::new(RefCell::new(Vec::new()));
+            let record = Rc::clone(&said);
+            let controller = builder
+                .launch(WindowInit {
+                    widgets,
+                    folder: folder.clone(),
+                    options,
+                })
+                .connect_receiver(move |_, output| {
+                    record.borrow_mut().push(match output {
+                        WindowOutput::GoToFolder(_) => "go to folder",
+                        WindowOutput::Opened(_) => "opened",
+                        // The hold is let go here, as the application does
+                        // once it has saved the size.
+                        WindowOutput::Closing { .. } => "closing",
+                    });
+                });
+            settle();
+            Opened {
+                application,
+                controller,
+                root,
+                folder,
+                said,
+                removed,
+                removed_handler,
+            }
+        }
+
+        /// Changes the shelf's file in the editor without saving it.
+        fn change_a_file(&self) {
+            let path = self.folder.join("shelf.stave");
+            let buffer = self
+                .controller
+                .model()
+                .widgets
+                .files
+                .buffer_for(&path, true)
+                .unwrap();
+            buffer.insert(&mut buffer.end_iter(), "\n");
+            settle();
+            assert!(self.controller.model().widgets.files.has_unsaved());
+        }
+
+        /// Answers the question about unsaved changes showing over the
+        /// window, as clicking a button does.
+        fn answer(&self, response: &str) {
+            let Some(dialog) = self.root.visible_dialog() else {
+                panic!("the window asks about the unsaved changes");
+            };
+            let Ok(alert) = dialog.downcast::<adw::AlertDialog>() else {
+                panic!("the question is an alert");
+            };
+            alert.emit_by_name::<()>("response", &[&response]);
+            alert.force_close();
+            settle();
+        }
+
+        fn finish(self) {
+            self.application.disconnect(self.removed_handler);
+            self.root.destroy();
+            drop(self.controller);
+            settle();
+        }
+    }
+
+    #[test]
+    fn closing_is_a_queued_message_that_closes_the_window_once_handled() {
+        on_gtk_thread(close_request_is_queued);
+    }
+
+    /// `close-request` only queues a message: inside the signal nothing is
+    /// read or changed (the bc79bd8 class: a borrow held while `close`
+    /// emitted it). Once the main loop runs, the window says it is closing
+    /// (holding the application) and closes, just once.
+    fn close_request_is_queued() {
+        let opened = Opened::open("org.stave.ProjectTest.CloseQueued");
+        opened.root.close();
+        assert!(!opened.removed.get(), "the request is only queued");
+        assert!(opened.said.borrow().is_empty());
+        // Asked again before the first was handled: closes once.
+        opened.root.close();
+        settle();
+        assert!(opened.removed.get(), "the window has closed");
+        assert_eq!(*opened.said.borrow(), ["closing"]);
+        opened.finish();
+    }
+
+    #[test]
+    fn closing_with_unsaved_changes_asks_and_goes_on_by_message() {
+        on_gtk_thread(unsaved_changes_are_asked_about);
+    }
+
+    /// With a file changed, closing asks first: Cancel keeps the window
+    /// and the changes; Don't Save, answered by message to the window,
+    /// lets go of them and closes it.
+    fn unsaved_changes_are_asked_about() {
+        let opened = Opened::open("org.stave.ProjectTest.Unsaved");
+        opened.change_a_file();
+        opened.root.close();
+        settle();
+        assert!(!opened.removed.get(), "the window waits for an answer");
+        opened.answer("cancel");
+        assert!(!opened.removed.get(), "Cancel keeps the window open");
+        assert!(opened.controller.model().widgets.files.has_unsaved());
+        opened.root.close();
+        settle();
+        opened.answer("discard");
+        assert!(opened.removed.get(), "Don't Save closes the window");
+        assert!(!opened.controller.model().widgets.files.has_unsaved());
+        // Each time closing was asked, and once more as it went on.
+        assert_eq!(*opened.said.borrow(), ["closing", "closing", "closing"]);
+        opened.finish();
+    }
+
+    #[test]
+    fn people_s_answers_are_read_from_the_dialog_s_responses() {
+        assert_eq!(UnsavedAnswer::from_response("save"), UnsavedAnswer::Save);
+        assert_eq!(
+            UnsavedAnswer::from_response("discard"),
+            UnsavedAnswer::Discard
+        );
+        assert_eq!(UnsavedAnswer::from_response("cancel"), UnsavedAnswer::Stay);
+        assert_eq!(UnsavedAnswer::from_response(""), UnsavedAnswer::Stay);
     }
 }
