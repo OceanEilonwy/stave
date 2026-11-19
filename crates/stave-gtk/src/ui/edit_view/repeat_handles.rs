@@ -642,6 +642,9 @@ impl Window {
         };
         let repeats = &self.editing.repeats;
         let dragging = repeats.dragged_boundary.get();
+        // Handles to hide once the borrow is let go: hiding the dragged
+        // handle ends its drag, and the drag's end reads the boundaries.
+        let mut to_hide: Vec<gtk::Box> = Vec::new();
         let mut handles = repeats.boundaries.borrow_mut();
         while handles.len() < shown.len() {
             let handle =
@@ -654,7 +657,7 @@ impl Window {
         }
         for (index, (handle, boundary)) in handles.iter_mut().enumerate() {
             let Some(found) = shown.get(index) else {
-                handle.root.set_visible(false);
+                to_hide.push(handle.root.clone());
                 *boundary = None;
                 continue;
             };
@@ -680,8 +683,12 @@ impl Window {
                 .set_label(&super::hold::length_text(lower).replace("mm", " mm"));
             match point {
                 Some(point) => self.place_handle(handle, point),
-                None => handle.root.set_visible(false),
+                None => to_hide.push(handle.root.clone()),
             }
+        }
+        drop(handles);
+        for root in to_hide {
+            root.set_visible(false);
         }
     }
 

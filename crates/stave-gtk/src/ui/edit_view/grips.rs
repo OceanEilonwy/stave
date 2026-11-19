@@ -1673,9 +1673,18 @@ impl Window {
         if hidden {
             grips.area.set_visible(false);
             grips.readout.show(None);
-            for marks in &grips.state.borrow().marks {
-                marks.handle.set_visible(false);
-                marks.label.set_visible(false);
+            // Hidden with nothing borrowed: hiding a handle mid-drag ends
+            // its drag, and the drag's end borrows the grips' state.
+            let marks: Vec<(gtk::Widget, gtk::Box)> = grips
+                .state
+                .borrow()
+                .marks
+                .iter()
+                .map(|marks| (marks.handle.clone(), marks.label.clone()))
+                .collect();
+            for (handle, label) in marks {
+                handle.set_visible(false);
+                label.set_visible(false);
             }
             return;
         }
@@ -1685,6 +1694,8 @@ impl Window {
         let open = session.change().and_then(drag_index).or(state.open);
         let mut drawing = Vec::new();
         let mut labels = Vec::new();
+        // Handles to hide once the borrows are let go (see above).
+        let mut to_hide: Vec<gtk::Widget> = Vec::new();
         let (view_width, view_height) = (
             f64::from(self.widgets.design.width()),
             f64::from(self.widgets.design.height()),
@@ -1710,7 +1721,7 @@ impl Window {
             let start = self.project(&view, place.start);
             let end = self.project(&view, place.at(value));
             let (Some(start), Some(end), true) = (start, end, shown) else {
-                marks.handle.set_visible(false);
+                to_hide.push(marks.handle.clone());
                 marks.label.set_visible(false);
                 continue;
             };
@@ -1832,7 +1843,11 @@ impl Window {
         grips.area.queue_draw();
         drop(state);
         drop(view);
-        self.show_grip_section(&session);
+        drop(session);
+        for handle in to_hide {
+            handle.set_visible(false);
+        }
+        self.show_grip_section(&self.session.borrow());
     }
 
     /// Draws the size section of the change's card for a change the grips
