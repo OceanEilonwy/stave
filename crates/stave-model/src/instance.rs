@@ -719,7 +719,8 @@ impl Builder {
                 match defs.assembly(id).map(|a| &a.kind) {
                     Some(AssemblyKind::Instance { component, .. }) => {
                         let component = *component;
-                        let labels = elements.clone().unwrap_or_else(|| vec![String::new()]);
+                        let single = [String::new()];
+                        let labels: &[String] = elements.as_deref().unwrap_or(&single);
                         let mut ids = Vec::new();
                         for (index, label) in labels.iter().enumerate() {
                             let element = elements.as_ref().map(|_| index);
@@ -816,20 +817,21 @@ impl Builder {
         let source_instance = mirror_of
             .and_then(|m| self.model.assemblies.get(m.index()))
             .map(|a| a.inner);
+        let prefix = format!("{name}.");
         let inner = self.new_instance(
             module,
             InstanceKind::Component {
                 component,
                 assembly: assembly_id,
             },
-            format!("{name}."),
+            prefix.clone(),
             source_instance,
         );
         self.model.assemblies.push(AssemblyInst {
             id: assembly_id,
             def,
             ctx,
-            name: name.clone(),
+            name,
             parent,
             component,
             inner,
@@ -842,13 +844,7 @@ impl Builder {
         // Params first, so arguments are attached before counts need them.
         for item in items {
             if let DefId::Param(_) = item {
-                self.instantiate_item(
-                    *item,
-                    inner,
-                    Some(assembly_id),
-                    &format!("{name}."),
-                    source_instance,
-                );
+                self.instantiate_item(*item, inner, Some(assembly_id), &prefix, source_instance);
             }
         }
         if source_instance.is_none() {
@@ -856,13 +852,7 @@ impl Builder {
         }
         for &item in items {
             if !matches!(item, DefId::Param(_)) {
-                self.instantiate_item(
-                    item,
-                    inner,
-                    Some(assembly_id),
-                    &format!("{name}."),
-                    source_instance,
-                );
+                self.instantiate_item(item, inner, Some(assembly_id), &prefix, source_instance);
             }
         }
         assembly_id

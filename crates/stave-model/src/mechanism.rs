@@ -627,7 +627,9 @@ impl Mechanism {
                 })
                 .collect(),
             hardware: self.hardware.iter().map(|h| rebind(*h)).collect(),
-            ..self.clone()
+            entries: self.entries.clone(),
+            drive: self.drive,
+            stop: self.stop.clone(),
         }
     }
 

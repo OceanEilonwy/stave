@@ -1301,10 +1301,10 @@ impl Resolver<'_> {
                         name.span(),
                         retired.help,
                     ),
-                    None => kept.push(arg.clone()),
+                    None => kept.push(arg),
                 }
             }
-            let parsed = self.split_args(cx, head, &kept, &names, 0);
+            let parsed = self.split_args(cx, head, kept, &names, 0);
             let mut args = Vec::new();
             let mut marks = Vec::new();
             for argument in spec.arguments {

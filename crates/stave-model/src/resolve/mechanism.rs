@@ -709,7 +709,7 @@ impl Resolver<'_> {
         for entry in &block.entries {
             match entry {
                 ast::MechanismEntry::Pivot { members, at, span } => {
-                    let pair = self.pair(cx, kind, bodies, members, "pivot");
+                    let pair = self.pair(cx, kind, bodies, members.each_ref(), "pivot");
                     let at = self.point(cx, at, "at");
                     match (pair, at) {
                         (Some(bodies), Some(at)) => constraints.push(ConstraintDef::Pivot {
@@ -726,7 +726,7 @@ impl Resolver<'_> {
                     to,
                     span,
                 } => {
-                    let pair = self.pair(cx, kind, bodies, members, "slot");
+                    let pair = self.pair(cx, kind, bodies, members.each_ref(), "slot");
                     let from = self.point(cx, from, "from");
                     let to = self.point(cx, to, "to");
                     match (pair, from, to) {
@@ -746,7 +746,7 @@ impl Resolver<'_> {
                     along,
                     span,
                 } => {
-                    let pair = self.pair(cx, kind, bodies, members, "rail");
+                    let pair = self.pair(cx, kind, bodies, members.each_ref(), "rail");
                     let axis = FrameAxis::from_word(along.as_str());
                     if axis.is_none() {
                         self.error_help(
@@ -772,7 +772,7 @@ impl Resolver<'_> {
                     ratio,
                     span,
                 } => {
-                    let pair = self.pair(cx, kind, bodies, &[member.clone(), to.clone()], "couple");
+                    let pair = self.pair(cx, kind, bodies, [member, to], "couple");
                     let ratio = self.value(cx, ratio, &Expect::ty(Ty::Ratio).named("couple"));
                     match pair {
                         Some([body, to]) => couplings.push(CouplingDef {
@@ -1028,7 +1028,7 @@ impl Resolver<'_> {
         cx: &Cx,
         kind: &str,
         bodies: &[BodyDef],
-        members: &[ast::Ident; 2],
+        members: [&ast::Ident; 2],
         entry: &str,
     ) -> Option<[BodyId; 2]> {
         let [a, b] = members;

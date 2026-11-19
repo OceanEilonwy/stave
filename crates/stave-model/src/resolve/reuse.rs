@@ -171,7 +171,6 @@ pub(super) struct State {
     component_names: Vec<BTreeMap<String, Entry>>,
     kind_names: HashMap<KindId, BTreeMap<String, Symbol>>,
     kind_cut_names: HashMap<KindId, Vec<String>>,
-    imports: HashMap<FileId, BTreeMap<String, ModuleId>>,
     prelude: BTreeMap<String, Entry>,
     module_items: Vec<Vec<super::DefId>>,
     component_items: Vec<Vec<super::DefId>>,
@@ -202,7 +201,6 @@ impl Resolver<'_> {
             component_names,
             kind_names,
             kind_cut_names,
-            imports,
             prelude,
             module_items,
             component_items,
@@ -225,7 +223,6 @@ impl Resolver<'_> {
             component_names: component_names.clone(),
             kind_names: kind_names.clone(),
             kind_cut_names: kind_cut_names.clone(),
-            imports: imports.clone(),
             prelude: prelude.clone(),
             module_items: module_items.clone(),
             component_items: component_items.clone(),
@@ -253,7 +250,6 @@ impl Resolver<'_> {
             component_names,
             kind_names,
             kind_cut_names,
-            imports,
             prelude,
             module_items,
             component_items,
@@ -276,7 +272,6 @@ impl Resolver<'_> {
         self.kind_names = kind_names;
         self.kind_cut_names = kind_cut_names;
         self.in_kind_require = false;
-        self.imports = imports;
         self.prelude = prelude;
         self.module_items = module_items;
         self.component_items = component_items;

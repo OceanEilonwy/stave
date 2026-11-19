@@ -59,10 +59,12 @@ pub(crate) fn path_expr(path: &ast::Path) -> ast::Expr {
         span: path.root.span(),
     };
     for segment in &path.segments {
+        // The span is taken first so `expr` can move into the new node.
+        let start = expr.span;
         let (kind, end) = match segment {
             ast::PathSegment::Member(name) => (
                 ExprKind::Member {
-                    base: Box::new(expr.clone()),
+                    base: Box::new(expr),
                     member: name.clone(),
                 },
                 name.span(),
@@ -74,7 +76,7 @@ pub(crate) fn path_expr(path: &ast::Path) -> ast::Expr {
                 };
                 (
                     ExprKind::Index {
-                        base: Box::new(expr.clone()),
+                        base: Box::new(expr),
                         index: index.clone(),
                     },
                     end,
@@ -82,7 +84,7 @@ pub(crate) fn path_expr(path: &ast::Path) -> ast::Expr {
             }
         };
         expr = ast::Expr {
-            span: expr.span.to(end),
+            span: start.to(end),
             kind,
         };
     }
@@ -96,7 +98,7 @@ impl<'a> Resolver<'a> {
         &mut self,
         cx: &Cx,
         head: &str,
-        args: &'c [ast::Arg],
+        args: impl IntoIterator<Item = &'c ast::Arg>,
         named: &[&str],
         positional_max: usize,
     ) -> CallArgs<'c> {
