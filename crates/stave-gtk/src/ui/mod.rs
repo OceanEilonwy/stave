@@ -39,6 +39,7 @@ mod gtk_test;
 mod header;
 mod icons;
 mod inspector;
+mod launch;
 mod new_project;
 mod option_search;
 mod output;
@@ -241,6 +242,10 @@ pub struct Options {
     pub edit_script: Option<PathBuf>,
     /// Open the new project dialog.
     pub new_project: bool,
+    /// The options given (as `--scene`) that a Stave already running
+    /// leaves out: it is handed only the folders and `--theme` (see
+    /// `launch`), and this launch says which were left.
+    pub not_forwarded: Vec<String>,
 }
 
 /// Where the 3D view's camera starts, from the command line.
@@ -257,8 +262,8 @@ pub struct StartCamera {
 }
 
 /// Runs Stave until its last window is closed. If Stave is already
-/// running, the folders are handed to it instead (except for
-/// `--window-screenshot`, which always runs on its own).
+/// running, the folders and `--theme` are handed to it instead (see
+/// `launch`; `--window-screenshot` always runs on its own).
 pub fn run(options: Options) -> Result<()> {
     let folders = options
         .folders
@@ -275,7 +280,7 @@ pub fn run(options: Options) -> Result<()> {
     // libadwaita ignores it, and writing it is deprecated (GTK warns "Use
     // GtkSettings:gtk-interface-color-scheme instead").
     adw::init().context("can't start GTK (is there a display?)")?;
-    let mut flags = gio::ApplicationFlags::HANDLES_OPEN;
+    let mut flags = APPLICATION_FLAGS;
     if options.window_screenshot.is_some() {
         flags |= gio::ApplicationFlags::NON_UNIQUE;
     }
@@ -283,9 +288,49 @@ pub fn run(options: Options) -> Result<()> {
         .application_id(app::APP_ID)
         .flags(flags)
         .build();
-    // The application's component: GApplication's signals only queue its
-    // messages. Activating and opening hold the application until the
-    // message is handled, so it doesn't end before its first window.
+    let launch = launch::Launch {
+        theme: options.theme,
+        folders,
+    };
+    let not_forwarded = options.not_forwarded.clone();
+    let shell = start_shell(&application, options);
+    // Registering finds out whether another Stave is already running (it
+    // would be anyway, as the application runs): if so, it is handed the
+    // launch, and options it leaves out are named rather than dropped
+    // without a word.
+    if !not_forwarded.is_empty()
+        && application.register(gio::Cancellable::NONE).is_ok()
+        && application.is_remote()
+    {
+        eprintln!(
+            "note: Stave is already running, so this was handed to it without {}; \
+             close Stave first to start with them",
+            not_forwarded.join(", ")
+        );
+    }
+    // GApplication carries the launch's command line to the Stave that
+    // handles it: this process if it is the first Stave, or the one
+    // already running.
+    let status = application.run_with_args(&launch.to_arguments());
+    // The application, its windows and the start page go with it.
+    drop(shell);
+    if status != glib::ExitCode::SUCCESS {
+        bail!("Stave stopped with an error");
+    }
+    Ok(())
+}
+
+/// How Stave's application runs: each launch's command line comes to the
+/// Stave that handles it (`launch`); opening from Files or a D-Bus
+/// activation still arrives as `open` or `activate`.
+const APPLICATION_FLAGS: gio::ApplicationFlags =
+    gio::ApplicationFlags::HANDLES_COMMAND_LINE.union(gio::ApplicationFlags::HANDLES_OPEN);
+
+/// Starts the application's component and connects GApplication's
+/// signals to it: they only queue its messages. Activating, opening and a
+/// launch's command line hold the application until the message is
+/// handled, so it doesn't end before its first window.
+fn start_shell(application: &adw::Application, options: Options) -> relm4::Controller<app::Shell> {
     let shell = app::Shell::builder()
         .launch(app::ShellInit {
             application: application.clone(),
@@ -303,21 +348,20 @@ pub fn run(options: Options) -> Result<()> {
         let folders = files.iter().filter_map(gio::File::path).collect();
         input.emit(app::ShellInput::Open(folders, application.hold()));
     });
-    // GApplication reads the folders as files to open: in this process
-    // if it is the first Stave, or handed to the one already running.
-    let mut arguments = vec!["stave-gtk".to_owned()];
-    arguments.extend(
-        folders
-            .iter()
-            .map(|folder| gio::File::for_path(folder).uri().to_string()),
-    );
-    let status = application.run_with_args(&arguments);
-    // The application, its windows and the start page go with it.
-    drop(shell);
-    if status != glib::ExitCode::SUCCESS {
-        bail!("Stave stopped with an error");
-    }
-    Ok(())
+    let input = shell.sender().clone();
+    application.connect_command_line(move |application, command_line| {
+        match launch::Launch::from_arguments(&command_line.arguments()) {
+            Ok(launch) => {
+                input.emit(app::ShellInput::Launch(launch, application.hold()));
+                glib::ExitCode::SUCCESS
+            }
+            Err(error) => {
+                eprintln!("error: a launch of Stave was not understood: {error:#}");
+                glib::ExitCode::FAILURE
+            }
+        }
+    });
+    shell
 }
 
 /// What the command line asks the window to start with, applied once the
@@ -1607,6 +1651,76 @@ mod tests {
             Theme::System.apply();
             assert_eq!(manager.color_scheme(), adw::ColorScheme::Default);
         });
+    }
+
+    /// A launch's `--theme` reaches the application through GApplication's
+    /// command line (as it does from a second `stave-gtk --theme dark`
+    /// while Stave runs): the style manager turns dark, app-wide, and the
+    /// style menu ticks Dark.
+    #[test]
+    fn a_launch_with_a_theme_restyles_the_running_application() {
+        on_gtk_thread(launch_restyles);
+    }
+
+    fn launch_restyles() {
+        let application = adw::Application::new(
+            Some("org.stave.WindowTest.LaunchTheme"),
+            APPLICATION_FLAGS | gio::ApplicationFlags::NON_UNIQUE,
+        );
+        // Started light, as if light were the style remembered.
+        let shell = start_shell(
+            &application,
+            Options {
+                theme: Some(Theme::Light),
+                ..Options::default()
+            },
+        );
+        let seen: Rc<Cell<Option<(adw::ColorScheme, bool)>>> = Rc::default();
+        let heard = Rc::clone(&seen);
+        // The launch shows the start page once its style is set: that is
+        // when to look, and to stop.
+        application.connect_window_added(move |application, _| {
+            if heard.get().is_none() {
+                let style = application
+                    .lookup_action("style")
+                    .and_then(|action| action.state())
+                    .and_then(|state| state.str().map(str::to_owned));
+                heard.set(Some((
+                    adw::StyleManager::default().color_scheme(),
+                    style.as_deref() == Some("dark"),
+                )));
+            }
+            application.quit();
+        });
+        // So a launch that never arrives fails rather than hangs.
+        let timed_out = Rc::new(Cell::new(false));
+        let late = Rc::clone(&timed_out);
+        let weak = application.downgrade();
+        let timeout = glib::timeout_add_local(Duration::from_secs(30), move || {
+            late.set(true);
+            if let Some(application) = weak.upgrade() {
+                application.quit();
+            }
+            glib::ControlFlow::Break
+        });
+        let launch = launch::Launch {
+            theme: Some(Theme::Dark),
+            folders: Vec::new(),
+        };
+        let status = application.run_with_args(&launch.to_arguments());
+        if !timed_out.get() {
+            timeout.remove();
+        }
+        for window in application.windows() {
+            window.destroy();
+        }
+        drop(shell);
+        settle();
+        let seen = seen.get();
+        Theme::System.apply();
+        assert_eq!(status, glib::ExitCode::SUCCESS);
+        assert!(!timed_out.get(), "the launch never showed a window");
+        assert_eq!(seen, Some((adw::ColorScheme::ForceDark, true)));
     }
 
     /// Every word the style menu and `--theme` take names its theme.
