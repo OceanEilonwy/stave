@@ -377,6 +377,9 @@ struct State {
     pictures_timer: Option<glib::SourceId>,
     /// X-ray: everything but the selection see-through.
     xray: bool,
+    /// What a partner link in the Parts panel points at, while the pointer
+    /// is over it: outlined like the selection.
+    hovered: Vec<stave_scene::Item>,
     /// The latest check's marks, when its ids are the shown design's.
     marks: Marks,
     /// Editing steps to run once the design is drawn (`--edit-script`).
@@ -508,6 +511,7 @@ impl Window {
                 hold_checks: false,
                 linking: false,
                 xray: false,
+                hovered: Vec::new(),
                 marks: Marks::default(),
                 edit_script: None,
             }),
@@ -709,7 +713,10 @@ impl Window {
         let Some((design, graph)) = shown.drawable() else {
             return;
         };
-        widgets.tree.show_tree(inspect::parts_tree(design));
+        widgets.tree.show_tree(
+            inspect::parts_tree(design),
+            stave_app::part_joints::PartJoints::new(design),
+        );
         let first = {
             let mut state = self.state.borrow_mut();
             let fresh = !state
@@ -950,7 +957,7 @@ impl Window {
     }
 
     fn selection_changed(self: &Rc<Self>) {
-        let (selection, inspection, problem, joints, focused) = {
+        let (selection, inspection, problem, focused) = {
             let session = self.session.borrow();
             let selection = session.selection().cloned();
             let inspection = session
@@ -965,19 +972,10 @@ impl Window {
             } else {
                 None
             };
-            // The joints a selected part is in, listed under it in the
-            // tree.
-            let joints = selection
-                .as_ref()
-                .and_then(Selection::item)
-                .zip(session.drawable())
-                .map(|(item, (design, _))| focus::targets_of(design, item))
-                .unwrap_or_default();
             (
                 selection,
                 inspection,
                 problem.zip(details),
-                joints,
                 session.focus().is_some(),
             )
         };
@@ -996,7 +994,7 @@ impl Window {
             .workbench
             .status
             .set_label(linked.as_deref().unwrap_or(""));
-        widgets.tree.show_selection(selection.as_ref(), joints);
+        widgets.tree.show_selection(selection.as_ref());
         widgets.problems.show_selected(match &selection {
             Some(Selection::Problem(index)) => Some(index.0),
             _ => None,
@@ -1572,6 +1570,20 @@ impl Window {
         items
             .into_iter()
             .flat_map(|item| graph.nodes_of(item).into_iter().take(1))
+            .collect()
+    }
+
+    /// The nodes of what the pointer is over in the Parts panel.
+    fn hovered_nodes(&self) -> Vec<NodeId> {
+        let session = self.session.borrow();
+        let state = self.state.borrow();
+        let Some((_, graph)) = session.drawable() else {
+            return Vec::new();
+        };
+        state
+            .hovered
+            .iter()
+            .flat_map(|item| graph.nodes_of(*item).into_iter().take(1))
             .collect()
     }
 
@@ -2176,7 +2188,10 @@ impl Window {
     }
 
     fn render_now(self: &Rc<Self>) {
-        let selection = self.selected_nodes();
+        let mut selection = self.selected_nodes();
+        // What a partner link in the Parts panel points at is outlined
+        // too, while the pointer is over it.
+        selection.extend(self.hovered_nodes());
         let backdrop = self.backdrop();
         let looks = if self.state.borrow().focus.is_some() {
             None
@@ -2829,7 +2844,10 @@ impl Window {
         }
         self.watch();
         self.show_folder();
-        self.widgets.tree.show_tree(inspect::PartsTree::default());
+        self.widgets.tree.show_tree(
+            inspect::PartsTree::default(),
+            stave_app::part_joints::PartJoints::default(),
+        );
         self.show_status("Checking…", "");
         self.dispatch(Command::Check);
         self.view_changed();
@@ -2907,6 +2925,23 @@ impl Window {
         widgets.tree.connect_focus(move |target| {
             if let Some(window) = window.upgrade() {
                 window.dispatch(Command::Focus(target));
+            }
+        });
+        let window = Rc::downgrade(self);
+        widgets.tree.connect_hover(move |items| {
+            let Some(window) = window.upgrade() else {
+                return;
+            };
+            // The panel may say so while the window is busy with its state.
+            let changed = match window.state.try_borrow_mut() {
+                Ok(mut state) if state.hovered != items => {
+                    state.hovered = items;
+                    true
+                }
+                Ok(_) | Err(_) => false,
+            };
+            if changed {
+                window.request_render();
             }
         });
         let window = Rc::downgrade(self);

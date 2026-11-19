@@ -68,6 +68,10 @@ pub enum Glyph {
     Pull,
     /// A mirror image of another assembly.
     Mirror,
+    /// What an assembly turns on.
+    Turn,
+    /// What an assembly slides in.
+    Travel,
 }
 
 /// How an assembly moves.
@@ -727,8 +731,8 @@ fn joined_to(design: &SolvedDesign, glyphs: &[Glyph], id: PartId) -> Vec<JoinedT
         };
         rows.push(JoinedTo {
             glyph: match motion {
-                Motion::Turn => Glyph::Hinge,
-                Motion::Travel => Glyph::Slide,
+                Motion::Turn => Glyph::Turn,
+                Motion::Travel => Glyph::Travel,
             },
             words: words.to_owned(),
             partners: outside
@@ -981,6 +985,16 @@ impl Density {
     pub fn folded_detail(self) -> bool {
         matches!(self, Density::Full)
     }
+
+    /// The most characters a partner's name keeps before it is cut short
+    /// (it keeps them ahead of the joint's words, which are cut first).
+    pub fn partner_chars(self) -> usize {
+        match self {
+            Density::Full => 22,
+            Density::Compact => 16,
+            Density::Narrow => 10,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1084,7 +1098,7 @@ mod tests {
                     "euro hinge ×2, back face",
                     vec!["hinges[lower, upper]"]
                 ),
-                (Glyph::Hinge, "turns on", vec!["side_l"]),
+                (Glyph::Turn, "turns on", vec!["side_l"]),
             ]
         );
         // Partners are things to select, and light every one they name.
@@ -1275,6 +1289,7 @@ mod tests {
         assert!(!Density::Compact.chip_counts() && !Density::Compact.heading_notes());
         assert!(!Density::Compact.badge() && Density::Narrow.badge());
         assert!(Density::Full.joined_words() && !Density::Compact.joined_words());
+        assert!(Density::Full.partner_chars() > Density::Narrow.partner_chars());
     }
 
     #[test]
