@@ -1,0 +1,41 @@
+#!/bin/sh
+# Installs Stave for the desktop under a prefix (default ~/.local): the
+# binary, the desktop file, the AppStream metainfo and the icons, so it
+# shows in the app grid and in Files' "Open With".
+#
+#   cargo build --release -p stave-gtk
+#   tools/install-desktop                 (into ~/.local)
+#   tools/install-desktop /usr/local      (needs the rights to write there)
+#
+# STAVE_GTK names the binary (default: target/release/stave-gtk under
+# CARGO_TARGET_DIR, or ./target).
+set -eu
+
+prefix=${1:-$HOME/.local}
+here=$(cd "$(dirname "$0")/.." && pwd)
+id=io.github.OceanEilonwy.Stave
+binary=${STAVE_GTK:-${CARGO_TARGET_DIR:-$here/target}/release/stave-gtk}
+
+if [ ! -x "$binary" ]; then
+    echo "no binary at $binary: run 'cargo build --release -p stave-gtk' first" >&2
+    exit 1
+fi
+
+install -Dm755 "$binary" "$prefix/bin/stave-gtk"
+install -Dm644 "$here/data/$id.desktop" "$prefix/share/applications/$id.desktop"
+install -Dm644 "$here/data/$id.metainfo.xml" "$prefix/share/metainfo/$id.metainfo.xml"
+install -Dm644 "$here/data/icons/hicolor/scalable/apps/$id.svg" \
+    "$prefix/share/icons/hicolor/scalable/apps/$id.svg"
+install -Dm644 "$here/data/icons/hicolor/symbolic/apps/$id-symbolic.svg" \
+    "$prefix/share/icons/hicolor/symbolic/apps/$id-symbolic.svg"
+
+command -v update-desktop-database >/dev/null 2>&1 &&
+    update-desktop-database -q "$prefix/share/applications" || true
+command -v gtk4-update-icon-cache >/dev/null 2>&1 &&
+    gtk4-update-icon-cache -qtf "$prefix/share/icons/hicolor" || true
+
+echo "installed Stave under $prefix"
+case ":$PATH:" in
+*":$prefix/bin:"*) ;;
+*) echo "note: $prefix/bin is not on PATH; the desktop file runs 'stave-gtk' from PATH" >&2 ;;
+esac

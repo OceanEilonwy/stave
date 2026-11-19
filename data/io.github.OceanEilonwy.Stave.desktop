@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Stave
+GenericName=Woodworking Design
+Comment=Design furniture in words, see it in 3D and check it can be built
+Exec=stave-gtk %U
+Icon=io.github.OceanEilonwy.Stave
+Terminal=false
+Categories=Graphics;3DGraphics;Engineering;
+Keywords=woodworking;furniture;cabinet;joinery;joint;cut list;carpentry;CAD;
+MimeType=inode/directory;
+StartupNotify=true

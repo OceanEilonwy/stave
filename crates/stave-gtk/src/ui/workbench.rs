@@ -15,7 +15,7 @@
 //! The Code panel holds the open files as its own tabs, so a file always
 //! opens wherever the Code panel is.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::path::PathBuf;
@@ -391,6 +391,9 @@ pub enum Remember {
     From(PathBuf),
 }
 
+/// What is told a short line (a failure to save).
+type Told = Box<dyn Fn(&str)>;
+
 /// The dock and its panels.
 pub struct Workbench {
     /// The dock above the status bar, for the window's content.
@@ -406,6 +409,10 @@ pub struct Workbench {
     /// The layout last applied or saved, to bring a closed panel back
     /// where it was.
     last: RefCell<Layout>,
+    /// Told, once, when the layout can't be written.
+    on_save_failed: RefCell<Option<Told>>,
+    /// A failure to write the layout has been told.
+    save_failed: Cell<bool>,
 }
 
 impl Workbench {
@@ -520,6 +527,8 @@ impl Workbench {
             status,
             remembers,
             last: RefCell::new(layout.clone()),
+            on_save_failed: RefCell::new(None),
+            save_failed: Cell::new(false),
         });
         workbench.apply(&layout);
         // A panel dropped somewhere new is remembered at once, so closing
@@ -644,10 +653,25 @@ impl Workbench {
             return;
         }
         let path = layout_path();
-        if let Some(folder) = path.parent() {
-            let _ = std::fs::create_dir_all(folder);
+        let written = path
+            .parent()
+            .map_or(Ok(()), std::fs::create_dir_all)
+            .and_then(|()| std::fs::write(&path, layout.to_text()));
+        if let Err(error) = written {
+            eprintln!("warning: can't write '{}': {error}", path.display());
+            if !self.save_failed.replace(true)
+                && let Some(told) = self.on_save_failed.borrow().as_ref()
+            {
+                told(&format!(
+                    "Stave couldn't save the panel layout for next time: {error}"
+                ));
+            }
         }
-        let _ = std::fs::write(path, layout.to_text());
+    }
+
+    /// Tells `told` when the layout can't be written (once).
+    pub fn connect_save_failed(&self, told: impl Fn(&str) + 'static) {
+        self.on_save_failed.replace(Some(Box::new(told)));
     }
 
     /// Board B again.
