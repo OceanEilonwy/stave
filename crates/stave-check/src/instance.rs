@@ -72,10 +72,10 @@ impl Checker<'_> {
 
     /// The assembly a mirrored one is the image of (itself otherwise).
     pub(crate) fn mirror_root(&self, mut assembly: AssemblyId) -> AssemblyId {
-        for _ in 0..self.design.assemblies.len() {
+        for _ in 0..self.design.assemblies().len() {
             match self
                 .design
-                .assemblies
+                .assemblies()
                 .get(assembly.index())
                 .and_then(|a| a.mirror_of)
             {
@@ -98,8 +98,8 @@ impl Checker<'_> {
         direction: Direction,
     ) -> Direction {
         let mut direction = direction;
-        for _ in 0..self.design.assemblies.len() {
-            let Some(found) = self.design.assemblies.get(assembly.index()) else {
+        for _ in 0..self.design.assemblies().len() {
+            let Some(found) = self.design.assembly(assembly) else {
                 break;
             };
             let Some(source) = found.mirror_of else {

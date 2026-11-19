@@ -217,8 +217,8 @@ impl GripView {
 /// one).
 fn top_level(design: &stave_model::solved::SolvedDesign, id: AssemblyId) -> Option<AssemblyId> {
     let mut found = id;
-    for _ in 0..=design.assemblies.len() {
-        match design.assemblies.get(found.index())?.parent {
+    for _ in 0..=design.assemblies().len() {
+        match design.assembly(found)?.parent {
             Some(parent) => found = parent,
             None => return Some(found),
         }

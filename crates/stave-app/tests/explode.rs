@@ -50,7 +50,7 @@ fn an_exploded_side_table_pulls_the_legs_off_the_aprons() {
         .find(|id| graph.node(*id).is_some_and(|n| n.name == "leg[front_left]"))
         .unwrap();
     let at = |amount: f32| {
-        graph.pose_with(rest, &[], amount).transforms[node.index()]
+        graph.pose_with(rest, &[], amount).transforms()[node.index()]
             .transform_point3(glam::Vec3::ZERO)
     };
     assert!(at(0.5).length() < 1e-3);
@@ -81,7 +81,7 @@ fn hardware_explodes_with_its_part_and_scenes_say_when_they_explode() {
         );
         members += 1;
     }
-    assert!(members >= design.hardware.len());
+    assert!(members >= design.hardware().len());
 }
 
 #[test]
@@ -94,7 +94,7 @@ fn a_problem_poses_the_design_where_it_hits_and_shows_the_shared_wood() {
         .expect("a motion problem has a contact");
     let motion = contact.motion.expect("it is a motion");
     let range = view::contact_motion_range(&graph, contact).unwrap();
-    assert!(range.turns);
+    assert!(range.turns());
     let shown = graph.amount(motion.assembly, motion.shown).unwrap();
     assert!(
         // It first touches the wall at 0.6deg (its hinge edge swings
@@ -113,10 +113,10 @@ fn a_problem_poses_the_design_where_it_hits_and_shows_the_shared_wood() {
         .iter()
         .find(|id| graph.node(**id).unwrap().name == "door.panel")
         .unwrap();
-    assert_ne!(posed.transforms[door.index()], glam::Mat4::IDENTITY);
+    assert_ne!(posed.transforms()[door.index()], glam::Mat4::IDENTITY);
     // A slider moves it back to closed.
     let closed = view::pose_at_contact(&graph, contact, Some(0.0)).unwrap();
-    assert_eq!(closed.transforms[door.index()], glam::Mat4::IDENTITY);
+    assert_eq!(closed.transforms()[door.index()], glam::Mat4::IDENTITY);
 }
 
 #[test]
@@ -157,7 +157,8 @@ fn assemblies_move_out_whole_first_drawers_forward_doors_off_their_hinges() {
             .unwrap_or_else(|| panic!("no node '{name}'"))
     };
     let half = graph.pose_with(rest, &[], 0.5);
-    let moved = |name: &str| half.transforms[node(name).index()].transform_point3(glam::Vec3::ZERO);
+    let moved =
+        |name: &str| half.transforms()[node(name).index()].transform_point3(glam::Vec3::ZERO);
     // The drawer comes out toward the viewer by more than its depth, as a
     // whole: its front and its back move together.
     let depth = design
@@ -183,7 +184,7 @@ fn assemblies_move_out_whole_first_drawers_forward_doors_off_their_hinges() {
         })
         .unwrap();
     assert!(
-        half.transforms[member.index()]
+        half.transforms()[member.index()]
             .transform_point3(glam::Vec3::ZERO)
             .z
             .abs()

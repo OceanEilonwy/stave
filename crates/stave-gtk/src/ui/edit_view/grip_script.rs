@@ -90,7 +90,7 @@ impl Window {
                     let session = &self.session;
                     let (design, _) = session.drawable().ok_or("nothing is drawn yet")?;
                     design
-                        .assemblies
+                        .assemblies()
                         .iter()
                         .find(|assembly| assembly.name == *name)
                         .map(|assembly| assembly.id)

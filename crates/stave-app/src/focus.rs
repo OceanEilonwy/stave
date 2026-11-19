@@ -101,7 +101,7 @@ impl FindError {
 /// The joint (and pair, default the first) or piece of hardware with this
 /// name.
 pub fn find(design: &SolvedDesign, name: &str, pair: Option<usize>) -> Result<Target, FindError> {
-    if let Some(joint) = design.joints.iter().find(|j| j.name == name) {
+    if let Some(joint) = design.joints().iter().find(|j| j.name == name) {
         let index = pair.unwrap_or(0);
         if index >= joint.pairs.len() {
             return Err(FindError::NoPair {
@@ -115,14 +115,14 @@ pub fn find(design: &SolvedDesign, name: &str, pair: Option<usize>) -> Result<Ta
             pair: PairIndex::from_usize(index),
         });
     }
-    if let Some(hardware) = design.hardware.iter().find(|h| h.name == name) {
+    if let Some(hardware) = design.hardware().iter().find(|h| h.name == name) {
         return Ok(Target::Hardware(hardware.id));
     }
     let names: Vec<&str> = design
-        .joints
+        .joints()
         .iter()
         .map(|j| j.name.as_str())
-        .chain(design.hardware.iter().map(|h| h.name.as_str()))
+        .chain(design.hardware().iter().map(|h| h.name.as_str()))
         .take(12)
         .collect();
     Err(FindError::NotFound {
@@ -137,7 +137,7 @@ pub fn find(design: &SolvedDesign, name: &str, pair: Option<usize>) -> Result<Ta
 pub fn targets_of(design: &SolvedDesign, item: Item) -> Vec<(Target, String)> {
     match item {
         Item::Part(part) => design
-            .joints
+            .joints()
             .iter()
             .flat_map(|joint| {
                 joint
@@ -173,7 +173,7 @@ pub fn title(design: &SolvedDesign, target: Target) -> String {
     let name = |id: PartId| design.part(id).map_or("?", |p| p.name.as_str());
     match target {
         Target::Joint { joint, pair } => {
-            let Some(joint) = design.joints.get(joint.index()) else {
+            let Some(joint) = design.joint(joint) else {
                 return String::new();
             };
             let Some(pair) = joint.pair(pair) else {
@@ -189,7 +189,7 @@ pub fn title(design: &SolvedDesign, target: Target) -> String {
             }
         }
         Target::Hardware(id) => design
-            .hardware
+            .hardware()
             .get(id.index())
             .map_or_else(String::new, |h| format!("{} ({})", h.name, h.kind)),
     }
@@ -497,9 +497,7 @@ pub fn open(
 ) -> Option<Focus> {
     let focus = match target {
         Target::Joint { joint, pair } => joint_focus(opened, design, graph, joint, pair)?,
-        Target::Hardware(id) => {
-            hardware_focus(opened, design, graph, design.hardware.get(id.index())?)?
-        }
+        Target::Hardware(id) => hardware_focus(opened, design, graph, design.hardware_piece(id)?)?,
     };
     Some(focus)
 }
@@ -515,7 +513,7 @@ fn joint_focus(
     joint_id: JointId,
     pair_index: PairIndex,
 ) -> Option<Focus> {
-    let joint = design.joints.get(joint_id.index())?;
+    let joint = design.joint(joint_id)?;
     let pair = joint.pair(pair_index)?;
     let target = Target::Joint {
         joint: joint_id,
@@ -832,10 +830,10 @@ fn moving_assembly(
             return Some((id, range));
         }
         seen += 1;
-        if seen > design.assemblies.len() {
+        if seen > design.assemblies().len() {
             break;
         }
-        assembly = design.assemblies.get(id.index())?.parent;
+        assembly = design.assembly(id)?.parent;
     }
     None
 }
@@ -843,7 +841,7 @@ fn moving_assembly(
 /// The parts inside an assembly, its sub-assemblies' included.
 fn assembly_parts(design: &SolvedDesign, assembly: AssemblyId) -> Vec<PartId> {
     design
-        .parts
+        .parts()
         .iter()
         .filter(|part| {
             let mut current = part.assembly;
@@ -853,10 +851,10 @@ fn assembly_parts(design: &SolvedDesign, assembly: AssemblyId) -> Vec<PartId> {
                     return true;
                 }
                 steps += 1;
-                if steps > design.assemblies.len() {
+                if steps > design.assemblies().len() {
                     break;
                 }
-                current = design.assemblies.get(id.index()).and_then(|a| a.parent);
+                current = design.assembly(id).and_then(|a| a.parent);
             }
             false
         })
@@ -919,7 +917,7 @@ fn hardware_focus(
     let play = match moves {
         Some((assembly, range)) => {
             let mechanism = design
-                .assemblies
+                .assemblies()
                 .get(assembly.index())
                 .and_then(|a| a.mechanism.as_ref());
             let motion = mechanism.and_then(|m| MechanismPath::new(m).ok());
@@ -929,12 +927,12 @@ fn hardware_focus(
                 Some(MotionShape::Turn { .. } | MotionShape::General) | None => None,
             };
             rows.push(Row {
-                label: if range.turns {
+                label: if range.turns() {
                     tr_noop("Opens to")
                 } else {
                     tr_noop("Pulls out")
                 },
-                value: amount_text(range, range.full),
+                value: amount_text(range, range.full()),
             });
             key_pose_rows = key_poses(range)
                 .into_iter()
@@ -949,7 +947,7 @@ fn hardware_focus(
                 .map(solid)
                 .collect();
             let fixed_parts: Vec<&Part> = design
-                .parts
+                .parts()
                 .iter()
                 .filter(|p| !inside.contains(&p.id))
                 .collect();
@@ -994,7 +992,7 @@ fn hardware_focus(
                     && contact.motion.is_some_and(|m| m.assembly == assembly)
             });
             rows.push(Row {
-                label: if range.turns {
+                label: if range.turns() {
                     tr_noop("Swing check")
                 } else {
                     tr_noop("Slide check")
@@ -1018,7 +1016,7 @@ fn hardware_focus(
             if !path.is_empty() {
                 rows.push(Row {
                     label: tr_noop("Dotted line"),
-                    value: if range.turns {
+                    value: if range.turns() {
                         tr("the path of the door's front edge: solid where it has been")
                     } else {
                         tr("the path of the drawer's front: solid where it has been")
@@ -1027,7 +1025,7 @@ fn hardware_focus(
             }
             match (toward, swing) {
                 (Some(toward), _) => {
-                    plan = Plan::slide(graph, &hardware_nodes, toward, range.full);
+                    plan = Plan::slide(graph, &hardware_nodes, toward, range.full());
                 }
                 (None, Some((free, _))) => {
                     plan = Plan::of(graph, &hardware_nodes, &path, pinned_held(hardware));
@@ -1104,7 +1102,7 @@ fn side_of(design: &SolvedDesign, hardware: &Hardware, inside: &[PartId]) -> Opt
         })
     };
     design
-        .parts
+        .parts()
         .iter()
         .filter(|p| !inside.contains(&p.id))
         .find(|p| held.iter().any(|member| touching(&p.cut_box(), member)))
@@ -1184,7 +1182,7 @@ impl Focus {
     pub fn plan_caption(&self) -> Option<String> {
         self.plan.as_ref()?;
         Some(match self.target {
-            Target::Hardware(_) if self.motion().is_some_and(|(_, range)| !range.turns) => {
+            Target::Hardware(_) if self.motion().is_some_and(|(_, range)| !range.turns()) => {
                 tr("Looking down on the slide, cut through its middle")
             }
             Target::Hardware(_) => tr("Looking down on the hinge, through the cabinet top"),

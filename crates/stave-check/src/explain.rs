@@ -341,7 +341,7 @@ fn joint_member(checker: &Checker<'_>, a: Item, b: Item, deepest: &Overlap) -> O
             };
             let inside = checker
                 .design
-                .parts
+                .parts()
                 .iter()
                 .find(|part| {
                     stave_geom::collide::intersection(&part.cut_box(), &deepest.region).is_some()

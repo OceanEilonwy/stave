@@ -192,9 +192,7 @@ impl SceneGraph {
     /// render-frame transform, on top of where they are posed.
     pub fn move_part(&self, posed: &mut Posed, part: PartId, transform: Mat4) {
         for id in self.carried_nodes(part) {
-            if let Some(slot) = posed.transforms.get_mut(id.index()) {
-                *slot = transform * *slot;
-            }
+            posed.move_node(id, transform);
         }
     }
 
@@ -209,7 +207,7 @@ impl SceneGraph {
         let count = samples.max(1);
         (0..=count)
             .filter_map(|k| {
-                let amount = range.full * f32::from(k) / f32::from(count);
+                let amount = range.full() * f32::from(k) / f32::from(count);
                 Some(
                     self.motion_transform(assembly, amount)?
                         .transform_point3(point),
@@ -358,7 +356,7 @@ impl GapMark {
         let (on_moving, on_fixed) = closest.points?;
         let range = graph.motion_range(assembly)?;
         // Radians for a turn; nanometres along a slide, millimetres here.
-        let at = render::narrow(if range.turns {
+        let at = render::narrow(if range.turns() {
             closest.at
         } else {
             closest.at * 1e-6
@@ -374,7 +372,7 @@ impl GapMark {
     /// Whether a motion at `amount` is where this gap is measured: within
     /// 2° of a turn, 2mm of a slide.
     pub fn is_at(&self, range: MotionRange, amount: f32) -> bool {
-        let tolerance = if range.turns {
+        let tolerance = if range.turns() {
             2.0_f32.to_radians()
         } else {
             2.0
@@ -418,7 +416,7 @@ fn whole(value: f64) -> String {
 /// An amount of a motion as text: `45°` for a hinge (radians given),
 /// `250 mm` for a slide.
 pub fn amount_text(range: MotionRange, amount: f32) -> String {
-    if range.turns {
+    if range.turns() {
         format!("{}°", whole(f64::from(amount).to_degrees()))
     } else {
         format!("{} mm", whole(f64::from(amount)))
@@ -429,16 +427,16 @@ pub fn amount_text(range: MotionRange, amount: f32) -> String {
 /// way for a slide) and fully open, as scrub amounts (0 to 1) with their
 /// captions.
 pub fn key_poses(range: MotionRange) -> Vec<(f32, String)> {
-    let amounts = if range.turns {
-        [0.0, 45.0_f32.to_radians().min(range.full), range.full]
+    let amounts = if range.turns() {
+        [0.0, 45.0_f32.to_radians().min(range.full()), range.full()]
     } else {
-        [0.0, range.full * 0.5, range.full]
+        [0.0, range.full() * 0.5, range.full()]
     };
     amounts
         .into_iter()
         .map(|amount| {
-            let progress = if range.full > 0.0 {
-                amount / range.full
+            let progress = if range.full() > 0.0 {
+                amount / range.full()
             } else {
                 0.0
             };
@@ -571,11 +569,11 @@ impl MotionPlay {
     /// is marked.
     pub fn closest_progress(&self) -> Option<f32> {
         let gap = self.gap.as_ref()?;
-        (self.range.full > 0.0).then(|| gap.at / self.range.full)
+        (self.range.full() > 0.0).then(|| gap.at / self.range.full())
     }
 
     fn frame(&self, graph: &SceneGraph, scene: &SceneEntry, progress: f32) -> PlayFrame {
-        let amount = self.range.full * progress;
+        let amount = self.range.full() * progress;
         let posed = graph.pose_with(scene, &[(self.assembly, amount)], 0.0);
         let mut overlay = Overlay::default();
         // The path: travelled solid, still to come dotted, its ends marked.
@@ -584,7 +582,7 @@ impl MotionPlay {
         overlay.add_path(&self.path, travelled);
         for (point, amount) in [
             (self.path.first(), 0.0),
-            (self.path.last(), self.range.full),
+            (self.path.last(), self.range.full()),
         ] {
             if let Some(point) = point {
                 overlay.markers.push(Note {
@@ -609,14 +607,14 @@ impl MotionPlay {
             });
         }
         label_anchors(graph, &posed, &self.anchors, &mut overlay);
-        let closed = if self.range.turns {
+        let closed = if self.range.turns() {
             amount <= 1e-4
         } else {
             amount <= 1e-3
         };
         let status = if closed {
-            if self.range.turns { "closed" } else { "shut" }.to_owned()
-        } else if self.range.turns {
+            if self.range.turns() { "closed" } else { "shut" }.to_owned()
+        } else if self.range.turns() {
             format!("open {}", amount_text(self.range, amount))
         } else {
             format!("out {}", amount_text(self.range, amount))
@@ -867,7 +865,7 @@ pub fn motion_zone(
         if let Some(range) = graph.motion_range(assembly) {
             for k in 0..=16_u16 {
                 if let Some(transform) =
-                    graph.motion_transform(assembly, range.full * f32::from(k) / 16.0)
+                    graph.motion_transform(assembly, range.full() * f32::from(k) / 16.0)
                 {
                     points.push(transform.transform_point3(gap.moving));
                 }
@@ -898,7 +896,7 @@ impl SceneGraph {
         let count = samples.max(1);
         (0..=count)
             .filter_map(|k| {
-                let amount = range.full * f32::from(k) / f32::from(count);
+                let amount = range.full() * f32::from(k) / f32::from(count);
                 let posed = self.pose_with(scene, &[(assembly, amount)], 0.0);
                 self.bounds_of(&posed, nodes)
             })

@@ -1367,7 +1367,7 @@ fn a_hinge_kind_without_a_mechanism_does_not_move() {
 
     assert!(
         design(&opened)
-            .assemblies
+            .assemblies()
             .iter()
             .all(|a| a.mechanism.is_none())
     );

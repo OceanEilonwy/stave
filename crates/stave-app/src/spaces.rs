@@ -240,7 +240,7 @@ pub fn split_boundaries(
     };
     let size = |id: RegionId, axis: Axis| {
         design
-            .regions
+            .regions()
             .iter()
             .find(|r| r.id == id)
             .map(|r| r.bounds.size(axis))
@@ -350,7 +350,7 @@ assembly drawer[bottom, top] : casework.Drawer {
             ids.iter()
                 .map(|id| {
                     design
-                        .regions
+                        .regions()
                         .iter()
                         .find(|r| r.id == *id)
                         .map(|r| r.name.clone())

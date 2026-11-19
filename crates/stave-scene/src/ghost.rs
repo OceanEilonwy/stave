@@ -281,8 +281,10 @@ impl Ghosts {
                 *slot = true;
             }
         }
-        for (visible, ghost) in posed.visible.iter_mut().zip(ghost) {
-            *visible = *visible && ghost;
+        for (node, ghost) in self.graph.node_ids().zip(ghost) {
+            if !ghost {
+                posed.set_shown(node, false);
+            }
         }
         posed
     }

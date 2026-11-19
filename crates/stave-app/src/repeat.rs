@@ -689,7 +689,7 @@ pub fn move_shares(
     let size = |label: &str| {
         let piece = format!("{name}[{label}]");
         design
-            .regions
+            .regions()
             .iter()
             .find(|region| region.name == piece)
             .map(|region| region.bounds.size(split.axis))
@@ -1061,7 +1061,7 @@ pub(crate) fn handed(
     let model = scope.model();
     let Some(space) = crate::spaces::filled_spaces(model, assembly)
         .first()
-        .and_then(|region| design.regions.iter().find(|found| found.id == *region))
+        .and_then(|region| design.regions().iter().find(|found| found.id == *region))
     else {
         return false;
     };
@@ -1299,7 +1299,7 @@ fn reflected_mirror(
     let first = named.first()?;
     let prefix = format!("{assembly}.");
     let own: Vec<WorldBox> = design
-        .parts
+        .parts()
         .iter()
         .filter(|part| part.name.starts_with(&prefix))
         .map(drawn_box)
@@ -1312,7 +1312,7 @@ fn reflected_mirror(
         let centre = low.checked_add(high)?;
         let first_box = world(first);
         let (first_centre, _) = doubled_centre(&first_box, axis)?;
-        for other in &design.parts {
+        for other in design.parts() {
             if other.id == first.id {
                 continue;
             }
@@ -1330,7 +1330,7 @@ fn reflected_mirror(
             let all = named.iter().all(|part| {
                 let bounds = world(part);
                 design
-                    .parts
+                    .parts()
                     .iter()
                     .any(|candidate| reflects(&bounds, &world(candidate), axis, plane))
             });
@@ -1348,7 +1348,7 @@ fn reflected_mirror(
                 .map(|part| part.name.clone())
                 .or_else(|| {
                     design
-                        .regions
+                        .regions()
                         .iter()
                         .find(|region| !region.name.starts_with(&prefix) && halves(&region.bounds))
                         .map(|region| region.name.clone())
@@ -1622,7 +1622,7 @@ mod tests {
         let tried = fits(ASSEMBLIES, &files, &patch);
         let design = tried.opened().and_then(|o| o.design.as_ref()).unwrap();
         let fronts: Vec<&str> = design
-            .parts
+            .parts()
             .iter()
             .map(|p| p.name.as_str())
             .filter(|n| n.starts_with("drawer[") && n.ends_with("].front"))
@@ -1781,7 +1781,7 @@ mod tests {
         let tried = fits(&folder, &files, &patch);
         let design = tried.opened().and_then(|o| o.design.as_ref()).unwrap();
         let slats = design
-            .parts
+            .parts()
             .iter()
             .filter(|p| p.name.starts_with("slat["))
             .count();
@@ -1824,7 +1824,7 @@ mod tests {
         // base and carry the top. Pieces a and b are 125mm and 250mm.
         let piece = |label: &str| {
             design
-                .regions
+                .regions()
                 .iter()
                 .find(|r| r.name == format!("shelf_bay[{label}]"))
                 .unwrap()
@@ -1852,7 +1852,7 @@ mod tests {
         let moved = tried.opened().and_then(|o| o.design.as_ref()).unwrap();
         let size = |label: &str| {
             moved
-                .regions
+                .regions()
                 .iter()
                 .find(|r| r.name == format!("shelf_bay[{label}]"))
                 .unwrap()
@@ -1887,7 +1887,7 @@ mod tests {
         let tried = fits(&folder, &files, &patch);
         let moved = tried.opened().and_then(|o| o.design.as_ref()).unwrap();
         let left = moved
-            .regions
+            .regions()
             .iter()
             .find(|r| r.name == "box_bay[left]")
             .unwrap();
@@ -1943,7 +1943,7 @@ mod tests {
             let tried = fits(&folder, &files, &patch);
             let moved = tried.opened().and_then(|o| o.design.as_ref()).unwrap();
             let left = moved
-                .regions
+                .regions()
                 .iter()
                 .find(|r| r.name == "box_bay[left]")
                 .unwrap();
@@ -2004,7 +2004,7 @@ mod tests {
         let design = tried.opened().and_then(|o| o.design.as_ref()).unwrap();
         assert!(
             design
-                .parts
+                .parts()
                 .iter()
                 .any(|p| p.name.starts_with("frame_panel_door_right."))
         );
@@ -2033,7 +2033,7 @@ mod tests {
         let design = tried.opened().and_then(|o| o.design.as_ref()).unwrap();
         assert!(
             design
-                .parts
+                .parts()
                 .iter()
                 .any(|p| p.name.starts_with("door_right."))
         );

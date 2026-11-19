@@ -40,7 +40,7 @@ type PartKey = (String, Length, Length, Length, usize);
 /// names compare equal.
 fn parts(design: &SolvedDesign) -> Vec<PartKey> {
     let mut parts: Vec<PartKey> = design
-        .parts
+        .parts()
         .iter()
         .map(|part| {
             (
@@ -62,7 +62,7 @@ fn parts(design: &SolvedDesign) -> Vec<PartKey> {
 /// counted, not declarations.
 fn joints(design: &SolvedDesign) -> BTreeMap<String, usize> {
     let mut joints = BTreeMap::new();
-    for joint in &design.joints {
+    for joint in design.joints() {
         *joints.entry(joint.kind.clone()).or_insert(0) += joint.pairs.len();
     }
     joints
@@ -74,7 +74,7 @@ fn the_assemblies_cabinet_checks_clean() {
     let design = solved(&opened);
     // Only the base, the sides and the top are outside an assembly.
     let mut loose: Vec<&str> = design
-        .parts
+        .parts()
         .iter()
         .filter(|part| part.assembly.is_none())
         .map(|part| part.name.as_str())
@@ -113,10 +113,10 @@ fn a_selected_assembly_stands_for_everything_inside_it() {
     let opened = clean("clothing_cabinet_assemblies");
     let design = solved(&opened);
     let outer = design
-        .assemblies
+        .assemblies()
         .iter()
-        .find(|a| a.parent.is_none() && design.assemblies.iter().any(|b| b.parent == Some(a.id)))
-        .or_else(|| design.assemblies.first())
+        .find(|a| a.parent.is_none() && design.assemblies().iter().any(|b| b.parent == Some(a.id)))
+        .or_else(|| design.assemblies().first())
         .expect("an assembly");
     let items = items_in(design, &Selection::Assembly(outer.id));
     assert!(!items.is_empty());
@@ -126,25 +126,25 @@ fn a_selected_assembly_stands_for_everything_inside_it() {
             if id == outer.id {
                 return true;
             }
-            assembly = design.assemblies.get(id.index()).and_then(|a| a.parent);
+            assembly = design.assembly(id).and_then(|a| a.parent);
         }
         false
     };
     let expected: Vec<Item> = design
-        .parts
+        .parts()
         .iter()
         .filter(|p| within(p.assembly))
         .map(|p| Item::Part(p.id))
         .chain(
             design
-                .hardware
+                .hardware()
                 .iter()
                 .filter(|h| within(h.assembly))
                 .map(|h| Item::Hardware(h.id)),
         )
         .collect();
     assert_eq!(items, expected);
-    let part = design.parts.first().expect("a part");
+    let part = design.parts().first().expect("a part");
     assert_eq!(
         items_in(design, &Selection::Part(part.id)),
         vec![Item::Part(part.id)]

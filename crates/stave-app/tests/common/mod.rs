@@ -223,7 +223,7 @@ pub fn help(opened: &Opened) -> String {
 /// A region by name.
 pub fn region<'d>(design: &'d SolvedDesign, name: &str) -> &'d stave_model::solved::Region {
     design
-        .regions
+        .regions()
         .iter()
         .find(|r| r.name == name)
         .unwrap_or_else(|| panic!("no region '{name}'"))
@@ -241,7 +241,7 @@ pub fn bounds(world: &stave_model::solved::WorldBox) -> [(Length, Length); 3] {
 /// A joint by name.
 pub fn joint<'d>(design: &'d SolvedDesign, name: &str) -> &'d stave_model::solved::Joint {
     design
-        .joints
+        .joints()
         .iter()
         .find(|j| j.name == name)
         .unwrap_or_else(|| panic!("no joint '{name}'"))
@@ -250,7 +250,7 @@ pub fn joint<'d>(design: &'d SolvedDesign, name: &str) -> &'d stave_model::solve
 /// A piece of hardware by name.
 pub fn hardware<'d>(design: &'d SolvedDesign, name: &str) -> &'d stave_model::solved::Hardware {
     design
-        .hardware
+        .hardware()
         .iter()
         .find(|h| h.name == name)
         .unwrap_or_else(|| panic!("no hardware '{name}'"))

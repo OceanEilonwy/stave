@@ -240,7 +240,7 @@ mod tests {
         let design = tried.opened().and_then(|o| o.design.as_ref()).unwrap();
         assert!(design.part_named("base").is_some());
         assert!(design.part_named("shelf.board").is_none());
-        assert!(!design.parts.iter().any(|p| p.name.starts_with("drawer")));
+        assert!(!design.parts().iter().any(|p| p.name.starts_with("drawer")));
     }
 
     #[test]

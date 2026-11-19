@@ -849,7 +849,7 @@ impl ProblemCardComponent {
         let text = card.amount_text(amount);
         self.scrub.set_value_text(&text);
         self.value = text;
-        self.past = amount >= card.contact;
+        self.past = amount >= card.contact();
     }
 }
 
@@ -964,16 +964,16 @@ impl Component for ProblemCardComponent {
                     &tr("{name} <span alpha=\"70%\">to see where it hits</span>"),
                     &[("name", &format!("<b>{}</b>", escape(&lead)))],
                 );
-                let (full, contact, value) = if card.turns {
+                let (full, contact, value) = if card.turns() {
                     (
-                        f64::from(card.full).to_degrees(),
-                        f64::from(card.contact).to_degrees(),
+                        f64::from(card.full()).to_degrees(),
+                        f64::from(card.contact()).to_degrees(),
                         f64::from(amount).to_degrees(),
                     )
                 } else {
                     (
-                        f64::from(card.full),
-                        f64::from(card.contact),
+                        f64::from(card.full()),
+                        f64::from(card.contact()),
                         f64::from(amount),
                     )
                 };
@@ -1046,6 +1046,8 @@ mod tests {
     use std::cell::{Cell, RefCell};
     use std::rc::Rc;
 
+    use stave_app::problems::MotionTravel;
+    use stave_lang::units::Angle;
     use stave_model::ids::AssemblyId;
 
     use super::*;
@@ -1374,10 +1376,11 @@ mod tests {
         MotionCard {
             assembly,
             name: "door".to_owned(),
-            turns: true,
-            full: 110_f32.to_radians(),
-            contact: 30_f32.to_radians(),
-            shown: 31_f32.to_radians(),
+            travel: MotionTravel::Swing {
+                full: Angle::from_deg(110),
+                contact: Angle::from_deg(30),
+                shown: Angle::from_deg(31),
+            },
             start: "closed 0°".to_owned(),
             blocked: "blocked from 30°".to_owned(),
             end: "opens to 110°".to_owned(),

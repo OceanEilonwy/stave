@@ -157,7 +157,7 @@ pub(crate) fn models(
     // Each file once: `None` when it can't be read.
     let mut files: BTreeMap<PathBuf, Option<ReadFile>> = BTreeMap::new();
     let mut out: Vec<Diagnostic> = Vec::new();
-    for hardware in &design.hardware {
+    for hardware in design.hardware() {
         let Some(model) = &hardware.model else {
             continue;
         };

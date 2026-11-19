@@ -142,7 +142,7 @@ fn a_joint_traces_its_steps_forwards() {
     let (opened, _) = graph("examples/stool");
     let design = opened.design.as_ref().unwrap();
     let joint = design
-        .joints
+        .joints()
         .iter()
         .find(|j| j.name == "rung_sockets")
         .unwrap();
@@ -171,7 +171,7 @@ fn a_joint_traces_its_steps_forwards() {
     // The chidori: slide, slide on the diagonal, quarter turn.
     let (opened, _) = graph("examples/joint_samples");
     let design = opened.design.as_ref().unwrap();
-    let joint = design.joints.iter().find(|j| j.name == "node").unwrap();
+    let joint = design.joints().iter().find(|j| j.name == "node").unwrap();
     let pair = &joint.pairs[0];
     let members = pair_members(pair);
     let parts: Vec<&Part> = members.iter().map(|id| design.part(*id).unwrap()).collect();
@@ -245,13 +245,13 @@ fn focus_on_a_socket_plays_the_rung_in() {
     let leg = graph
         .node_of(Item::Part(part(design, "leg[front_left]").id))
         .unwrap();
-    let moved = frame.posed.transforms[rung.index()].transform_point3(Vec3::ZERO);
+    let moved = frame.posed.transforms()[rung.index()].transform_point3(Vec3::ZERO);
     assert!(
         (moved.x - 5.98).abs() < 0.05 && moved.y.abs() < 1e-3,
         "{moved}"
     );
     assert_eq!(
-        frame.posed.transforms[leg.index()].transform_point3(Vec3::ZERO),
+        frame.posed.transforms()[leg.index()].transform_point3(Vec3::ZERO),
         Vec3::ZERO
     );
     // The leg is see-through, the rung as it is, the seat a ghost; and the
@@ -315,7 +315,7 @@ fn focus_finds_joints_pairs_and_hardware_by_name() {
     assert!(labels.contains(&"shelf into side_l (dado)"), "{labels:?}");
     assert!(labels.contains(&"rod into side_l (socket)"), "{labels:?}");
     let hinge = design
-        .hardware
+        .hardware()
         .iter()
         .find(|h| h.name == "door_l.hinges[upper]")
         .unwrap();
@@ -493,7 +493,7 @@ fn focus_on_a_cup_hinge_names_its_members_and_measures_its_swing() {
     // From above: cut just above the arm, framed on the hinge and path.
     let plan = found.plan().unwrap();
     let hinge = design
-        .hardware
+        .hardware()
         .iter()
         .find(|h| h.name == "door_l.hinges[upper]")
         .unwrap();
@@ -515,7 +515,7 @@ fn the_smallest_gap_over_a_swing_is_within_the_bound() {
     let (opened, _) = graph("examples/clothing_cabinet");
     let design = opened.design.as_ref().unwrap();
     let door = design
-        .assemblies
+        .assemblies()
         .iter()
         .find(|a| a.name == "door_l")
         .unwrap();
@@ -538,7 +538,7 @@ fn the_smallest_gap_over_a_swing_is_within_the_bound() {
     assert!((0.0..=110.0_f64.to_radians() + 1e-9).contains(&at));
     // A drawer slides out past the dividers above and below it, exactly.
     let drawer = design
-        .assemblies
+        .assemblies()
         .iter()
         .find(|a| a.name == "drawer[top]")
         .unwrap();
@@ -573,7 +573,7 @@ fn focus_on_a_slide_follows_the_drawer() {
     // the drawer travels across the picture.
     let design = opened.design.as_ref().unwrap();
     let slide = design
-        .hardware
+        .hardware()
         .iter()
         .find(|h| h.name == "drawer[top].slides[left]")
         .unwrap();
@@ -648,7 +648,7 @@ fn hardware_focus_frames_the_whole_motion() {
         let frame = found.frame(&graph, rest, progress, &Options::default());
         let design = opened.design.as_ref().unwrap();
         let hinge = design
-            .hardware
+            .hardware()
             .iter()
             .find(|h| h.name == "door_l.hinges[upper]")
             .unwrap();
@@ -813,11 +813,11 @@ fn no_cup_hinge_puts_steel_in_wood() {
                 if id == target {
                     return true;
                 }
-                assembly = design.assemblies.get(id.index()).and_then(|a| a.parent);
+                assembly = design.assembly(id).and_then(|a| a.parent);
             }
             false
         };
-        for hardware in &design.hardware {
+        for hardware in design.hardware() {
             let mechanism = hardware
                 .members
                 .iter()
@@ -826,7 +826,7 @@ fn no_cup_hinge_puts_steel_in_wood() {
                 continue;
             }
             let assembly = hardware.assembly.unwrap();
-            let mechanism = design.assemblies[assembly.index()]
+            let mechanism = design.assemblies()[assembly.index()]
                 .mechanism
                 .as_ref()
                 .unwrap();
@@ -834,7 +834,7 @@ fn no_cup_hinge_puts_steel_in_wood() {
             for member in &hardware.members {
                 let carried = match member.carrier {
                     BodyCarrier::Part(part) => design.part(part).unwrap().assembly,
-                    BodyCarrier::Region(region) => design.regions[region.index()].assembly,
+                    BodyCarrier::Region(region) => design.regions()[region.index()].assembly,
                     BodyCarrier::Link(_) => Some(assembly),
                 };
                 let mover = match member.carrier {
@@ -845,7 +845,7 @@ fn no_cup_hinge_puts_steel_in_wood() {
                     BodyCarrier::Part(_) | BodyCarrier::Region(_) => Mover::Fixed(Placement::REST),
                 };
                 let steel = WorldSolid::of_body(member);
-                for part in &design.parts {
+                for part in design.parts() {
                     let wood = WorldSolid::of_part(part, &Solid::of(part, design));
                     let part_mover = if inside(part.assembly, assembly) {
                         Mover::Rigid(&path)

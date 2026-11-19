@@ -1006,7 +1006,7 @@ impl Session {
         match latest.design() {
             // No errors and nothing solved: a library, which places nothing.
             None => Err(Reason::Library),
-            Some(design) if design.parts.is_empty() && design.hardware.is_empty() => {
+            Some(design) if design.parts().is_empty() && design.hardware().is_empty() => {
                 Err(Reason::NoParts)
             }
             Some(_) => Ok(()),
@@ -1717,28 +1717,28 @@ impl Carry<'_> {
         match selection {
             Selection::Part(id) => {
                 let name = &old.part(*id)?.name;
-                new.parts
+                new.parts()
                     .iter()
                     .find(|p| &p.name == name)
                     .map(|p| Selection::Part(p.id))
             }
             Selection::Hardware(id) => {
-                let name = &old.hardware.get(id.index())?.name;
-                new.hardware
+                let name = &old.hardware_piece(*id)?.name;
+                new.hardware()
                     .iter()
                     .find(|h| &h.name == name)
                     .map(|h| Selection::Hardware(h.id))
             }
             Selection::Assembly(id) => {
-                let name = &old.assemblies.get(id.index())?.name;
-                new.assemblies
+                let name = &old.assembly(*id)?.name;
+                new.assemblies()
                     .iter()
                     .find(|a| &a.name == name)
                     .map(|a| Selection::Assembly(a.id))
             }
             Selection::Joint { joint, pair } => {
-                let name = &old.joints.get(joint.index())?.name;
-                new.joints
+                let name = &old.joint(*joint)?.name;
+                new.joints()
                     .iter()
                     .find(|j| &j.name == name && j.pair(*pair).is_some())
                     .map(|j| Selection::Joint {
@@ -1747,14 +1747,14 @@ impl Carry<'_> {
                     })
             }
             Selection::Member(member) => {
-                let joint = &old.joints.get(member.joint.index())?.name;
+                let joint = &old.joint(member.joint)?.name;
                 let body = &old.pair_member(*member)?.name;
                 new.pair_members()
                     .find(|(found, found_body)| {
                         found.pair == member.pair
                             && &found_body.name == body
                             && new
-                                .joints
+                                .joints()
                                 .get(found.joint.index())
                                 .is_some_and(|j| &j.name == joint)
                     })

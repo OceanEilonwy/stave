@@ -32,7 +32,7 @@ const EXAMPLES: [&str; 8] = [
 
 /// Each part's offset when fully exploded, by part id.
 fn offsets(design: &SolvedDesign, graph: &SceneGraph) -> Vec<Vec3> {
-    let mut offsets = vec![Vec3::ZERO; design.parts.len()];
+    let mut offsets = vec![Vec3::ZERO; design.parts().len()];
     for id in graph.node_ids() {
         if let Some(Item::Part(part)) = graph.node(id).map(|node| node.item) {
             offsets[part.index()] = graph.explode_offset(id);
@@ -84,7 +84,7 @@ fn the_stool_rungs_come_out_of_their_sockets_with_the_legs() {
 /// it comes out of, for pairs inside one assembly.
 fn movers(design: &SolvedDesign) -> Vec<(PartId, Vec<PartId>)> {
     let mut movers = Vec::new();
-    for joint in &design.joints {
+    for joint in design.joints() {
         for pair in &joint.pairs {
             let Some(step) = pair
                 .insert
@@ -143,7 +143,7 @@ fn no_part_is_left_where_it_was_unless_the_rule_keeps_it() {
         let offsets = offsets(&design, &graph);
         let movers = movers(&design);
         let mut stays = Vec::new();
-        for part in &design.parts {
+        for part in design.parts() {
             if offsets[part.id.index()].length() > 0.5 {
                 continue;
             }
@@ -176,6 +176,9 @@ fn no_part_is_left_where_it_was_unless_the_rule_keeps_it() {
             }
         }
         println!("{example}: stays {stays:?}");
-        assert!(stays.len() < design.parts.len(), "{example}: nothing moves");
+        assert!(
+            stays.len() < design.parts().len(),
+            "{example}: nothing moves"
+        );
     }
 }

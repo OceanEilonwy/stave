@@ -330,7 +330,7 @@ fn solid(design: &SolvedDesign, path: &str) -> Result<Solid, HoldError> {
         return Ok(Solid::Part(part.drawn_box()));
     }
     design
-        .regions
+        .regions()
         .iter()
         .find(|region| region.name == path)
         .map(|region| Solid::Region(region.bounds))

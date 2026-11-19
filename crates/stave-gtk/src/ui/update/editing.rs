@@ -379,8 +379,18 @@ mod tests {
         let (bay, side_l) = {
             let model = controller.model();
             let (design, _) = model.session.drawable().unwrap();
-            let bay = design.regions.iter().find(|r| r.name == "bay").unwrap().id;
-            let side = design.parts.iter().find(|p| p.name == "side_l").unwrap().id;
+            let bay = design
+                .regions()
+                .iter()
+                .find(|r| r.name == "bay")
+                .unwrap()
+                .id;
+            let side = design
+                .parts()
+                .iter()
+                .find(|p| p.name == "side_l")
+                .unwrap()
+                .id;
             (bay, side)
         };
 

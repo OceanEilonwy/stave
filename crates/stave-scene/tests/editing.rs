@@ -153,7 +153,7 @@ fn adding_a_shelf_ghosts_exactly_the_shelf_and_leaves_the_base_alone() {
 
     // The ghosts are posed alone: only their nodes are shown.
     let posed = ghosts.pose("rest", 0.0);
-    let shown = posed.visible.iter().filter(|shown| **shown).count();
+    let shown = posed.visible().iter().filter(|shown| **shown).count();
     assert_eq!(shown, names.len());
 
     // Removing the candidate leaves the base scene exactly as it was.
@@ -345,7 +345,7 @@ fn a_part_is_covered_by_what_stands_in_front_of_it() {
 fn a_grip_on_the_dividers_height_sits_between_the_base_and_the_divider() {
     let (design, graph) = base();
     let divider = design
-        .assemblies
+        .assemblies()
         .iter()
         .find(|assembly| assembly.name == "divider")
         .unwrap()
@@ -428,7 +428,7 @@ fn with_drawer_gap(param: &str, value: &str) -> SolvedDesign {
 fn two_gaps_of_one_value_are_told_apart_by_which_moves() {
     let (design, graph) = base();
     let drawer = design
-        .assemblies
+        .assemblies()
         .iter()
         .find(|assembly| assembly.name == "drawer[top]")
         .unwrap()
@@ -583,7 +583,7 @@ fn a_region_a_component_exposes_moves_with_its_assembly() {
             node.name.starts_with("door_l.") && matches!(node.item, Item::Part(_))
         })
         .unwrap();
-    assert_eq!(open.region(door), open.transforms[stile.index()]);
+    assert_eq!(open.region(door), open.transforms()[stile.index()]);
     // A declared region stays put.
     assert_eq!(
         graph.region_volume(&open, bay),

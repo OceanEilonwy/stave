@@ -7,6 +7,7 @@ use stave_geom::mechanism::MechanismPath;
 use stave_geom::solid::Solid;
 use stave_geom::{Aabb, Extent, Geometry, render};
 use stave_lang::placement::PartAxis;
+use stave_lang::units::{Angle, Length};
 use stave_model::mechanism::MotionShape;
 use stave_model::mechanism::{DriveValue, MemberIndex};
 use stave_model::solved::{
@@ -155,20 +156,16 @@ enum AssemblyMove {
         through: Vec3,
         /// Unit axis; turning by a positive angle opens.
         axis: Vec3,
-        /// Radians.
-        opening: f32,
+        /// How far it opens.
+        opening: Angle,
     },
     Travel {
         toward: Vec3,
-        /// Millimetres.
-        travel: f32,
+        /// How far it slides out.
+        travel: Length,
     },
     /// Posed by the solver (a cup hinge's linkage).
-    General {
-        path: Arc<MechanismPath>,
-        /// Radians or millimetres.
-        full: f32,
-    },
+    General { path: Arc<MechanismPath> },
 }
 
 impl AssemblyMove {
@@ -185,48 +182,34 @@ impl AssemblyMove {
                 AssemblyMove::Turn {
                     through: render::point(pivot.through),
                     axis: free.cross(swing).normalize_or(render::axis(pivot.axis)),
-                    opening: render::radians(opening),
+                    opening,
                 }
             }
             MotionShape::Travel { toward, travel } => AssemblyMove::Travel {
                 toward: render::direction(toward),
-                travel: render::mm(travel),
+                travel,
             },
             MotionShape::General => AssemblyMove::General {
                 path: Arc::clone(path),
-                full: match path.extent() {
-                    DriveValue::Turn(angle) => render::radians(angle),
-                    DriveValue::Travel(length) => render::mm(length),
-                },
             },
         }
     }
 
-    /// `true` for a motion that turns.
-    fn turns(&self) -> bool {
+    /// How far this motion goes, exact.
+    fn range(&self) -> MotionRange {
         match self {
-            AssemblyMove::Turn { .. } => true,
-            AssemblyMove::Travel { .. } => false,
-            AssemblyMove::General { path, .. } => path.turns(),
+            AssemblyMove::Turn { opening, .. } => MotionRange::Swing { full: *opening },
+            AssemblyMove::Travel { travel, .. } => MotionRange::Slide { full: *travel },
+            AssemblyMove::General { path } => match path.extent() {
+                DriveValue::Turn(full) => MotionRange::Swing { full },
+                DriveValue::Travel(full) => MotionRange::Slide { full },
+            },
         }
     }
 
     /// The amount a pose value means for this motion (radians or mm).
     fn amount(&self, value: PoseValue) -> f32 {
-        let full = match self {
-            AssemblyMove::Turn { opening, .. } => *opening,
-            AssemblyMove::Travel { travel, .. } => *travel,
-            AssemblyMove::General { full, .. } => *full,
-        };
-        match (self.turns(), value) {
-            (_, PoseValue::Closed) => 0.0,
-            (_, PoseValue::Open) => full,
-            (true, PoseValue::Angle(angle)) => render::radians(angle),
-            (false, PoseValue::Travel(length)) => render::mm(length),
-            // A value of the other kind is a type error the checker
-            // reports; it doesn't move anything.
-            (true, PoseValue::Travel(_)) | (false, PoseValue::Angle(_)) => 0.0,
-        }
+        self.range().amount(value)
     }
 
     fn transform(&self, amount: f32) -> Mat4 {
@@ -373,28 +356,131 @@ pub struct Highlight {
     pub volumes: Vec<Aabb>,
 }
 
-/// The range of an assembly's motion, for a slider.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct MotionRange {
-    /// `true` for a hinge (radians), `false` for a slide (millimetres).
-    pub turns: bool,
-    /// Fully open.
-    pub full: f32,
+/// The range of an assembly's motion, for a slider: exact, with its unit
+/// carried by the variant, so a swing's range can't be read as a length.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MotionRange {
+    /// It turns on a hinge (a door), fully open at `full`.
+    Swing {
+        /// Fully open.
+        full: Angle,
+    },
+    /// It slides (a drawer), fully out at `full`.
+    Slide {
+        /// Fully out.
+        full: Length,
+    },
 }
 
-/// Where every node is in one scene, and whether it is shown.
+impl MotionRange {
+    /// `true` for a swing, whose render amounts are radians; `false` for a
+    /// slide, whose render amounts are millimetres.
+    pub fn turns(self) -> bool {
+        match self {
+            MotionRange::Swing { .. } => true,
+            MotionRange::Slide { .. } => false,
+        }
+    }
+
+    /// Fully open, as a render amount: radians for a swing, millimetres
+    /// for a slide.
+    pub fn full(self) -> f32 {
+        match self {
+            MotionRange::Swing { full } => render::radians(full),
+            MotionRange::Slide { full } => render::mm(full),
+        }
+    }
+
+    /// The angle a pose value means for a swing: `None` for a slide.
+    pub fn angle(self, value: PoseValue) -> Option<Angle> {
+        match self {
+            MotionRange::Swing { full } => Some(match value {
+                PoseValue::Closed => Angle::ZERO,
+                PoseValue::Open => full,
+                PoseValue::Angle(angle) => angle,
+                // A value of the other kind is a type error the checker
+                // reports; it doesn't move anything.
+                PoseValue::Travel(_) => Angle::ZERO,
+            }),
+            MotionRange::Slide { .. } => None,
+        }
+    }
+
+    /// The travel a pose value means for a slide: `None` for a swing.
+    pub fn travel(self, value: PoseValue) -> Option<Length> {
+        match self {
+            MotionRange::Slide { full } => Some(match value {
+                PoseValue::Closed => Length::ZERO,
+                PoseValue::Open => full,
+                PoseValue::Travel(length) => length,
+                // A value of the other kind is a type error the checker
+                // reports; it doesn't move anything.
+                PoseValue::Angle(_) => Length::ZERO,
+            }),
+            MotionRange::Swing { .. } => None,
+        }
+    }
+
+    /// The render amount (radians or millimetres) a pose value means.
+    pub fn amount(self, value: PoseValue) -> f32 {
+        match (self.angle(value), self.travel(value)) {
+            (Some(angle), _) => render::radians(angle),
+            (None, Some(length)) => render::mm(length),
+            (None, None) => 0.0,
+        }
+    }
+}
+
+/// Where every node is in one scene, and whether it is shown. The
+/// tables are private so each holds one entry per node of the graph that
+/// posed it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Posed {
     /// Per node: rest to posed.
-    pub transforms: Vec<Mat4>,
+    transforms: Vec<Mat4>,
     /// Per node: shown in this scene.
-    pub visible: Vec<bool>,
+    visible: Vec<bool>,
     /// Per region, in [`RegionId`] order: rest to posed. A region a
     /// component exposes moves with its assembly; the others stay put.
-    pub regions: Vec<Mat4>,
+    regions: Vec<Mat4>,
 }
 
 impl Posed {
+    /// Per node, in [`NodeId`] order: rest to posed, shown or not.
+    pub fn transforms(&self) -> &[Mat4] {
+        &self.transforms
+    }
+
+    /// Per node, in [`NodeId`] order: whether it is shown.
+    pub fn visible(&self) -> &[bool] {
+        &self.visible
+    }
+
+    /// Per region, in [`RegionId`] order: rest to posed.
+    pub fn regions(&self) -> &[Mat4] {
+        &self.regions
+    }
+
+    /// Where one node is posed, shown or not; `None` for a node this pose
+    /// doesn't know.
+    pub fn transform(&self, node: NodeId) -> Option<Mat4> {
+        self.transforms().get(node.0).copied()
+    }
+
+    /// Moves one node by `transform`, on top of where it is posed.
+    pub fn move_node(&mut self, node: NodeId, transform: Mat4) {
+        if let Some(slot) = self.transforms.get_mut(node.0) {
+            *slot = transform * *slot;
+        }
+    }
+
+    /// Shows or hides one node.
+    pub fn set_shown(&mut self, node: NodeId, shown: bool) {
+        if let Some(slot) = self.visible.get_mut(node.0) {
+            *slot = shown;
+        }
+    }
+
     /// The pose of a region (identity for one this pose doesn't know).
     pub fn region(&self, region: RegionId) -> Mat4 {
         self.regions
@@ -406,7 +492,7 @@ impl Posed {
     /// The pose of one node, if it is shown.
     pub fn shown(&self, node: NodeId) -> Option<Mat4> {
         match self.visible.get(node.0) {
-            Some(true) => self.transforms.get(node.0).copied(),
+            Some(true) => self.transforms().get(node.0).copied(),
             Some(false) | None => None,
         }
     }
@@ -501,13 +587,13 @@ impl SceneGraph {
                     break;
                 }
                 path.push(id);
-                assembly = design.assemblies.get(id.index()).and_then(|a| a.parent);
+                assembly = design.assembly(id).and_then(|a| a.parent);
             }
             path.reverse();
             path
         };
-        let mut nodes = Vec::with_capacity(design.parts.len() + design.hardware.len());
-        for part in &design.parts {
+        let mut nodes = Vec::with_capacity(design.parts().len() + design.hardware().len());
+        for part in design.parts() {
             let geometry = match options.extent {
                 Extent::Cut => stave_geom::cut_part(part, &Solid::of(part, design)),
                 Extent::Drawn => stave_geom::part(part, Extent::Drawn),
@@ -525,7 +611,7 @@ impl SceneGraph {
         }
         // Every assembly's mechanism, run once.
         let paths: Vec<Option<Arc<MechanismPath>>> = design
-            .assemblies
+            .assemblies()
             .iter()
             .map(|assembly| {
                 let mechanism = assembly.mechanism.as_ref()?;
@@ -534,20 +620,17 @@ impl SceneGraph {
             .collect();
         // Every member of every piece of hardware, drawn as its shapes and
         // named `<hardware> <member>`.
-        for hardware in &design.hardware {
+        for hardware in design.hardware() {
             for member in &hardware.members {
                 let (assembly, follows) = match member.carrier {
                     BodyCarrier::Part(part) => (design.part(part).and_then(|p| p.assembly), None),
-                    BodyCarrier::Region(region) => (
-                        design.regions.get(region.index()).and_then(|r| r.assembly),
-                        None,
-                    ),
+                    BodyCarrier::Region(region) => {
+                        (design.region(region).and_then(|r| r.assembly), None)
+                    }
                     // A link stays with what is outside its assembly and
                     // follows the assembly's mechanism.
                     BodyCarrier::Link(member) => {
-                        let own = hardware
-                            .assembly
-                            .and_then(|id| design.assemblies.get(id.index()));
+                        let own = hardware.assembly.and_then(|id| design.assembly(id));
                         let follows = own.and_then(|assembly| {
                             let path = paths.get(assembly.id.index())?.as_ref()?;
                             Some(MemberFollower {
@@ -575,9 +658,7 @@ impl SceneGraph {
         for (member, body) in design.pair_members() {
             let assembly = match body.carrier {
                 BodyCarrier::Part(part) => design.part(part).and_then(|p| p.assembly),
-                BodyCarrier::Region(region) => {
-                    design.regions.get(region.index()).and_then(|r| r.assembly)
-                }
+                BodyCarrier::Region(region) => design.region(region).and_then(|r| r.assembly),
                 BodyCarrier::Link(_) => None,
             };
             nodes.push(Node {
@@ -630,7 +711,7 @@ impl SceneGraph {
             })
             .collect();
         let regions: Vec<RegionNode> = design
-            .regions
+            .regions()
             .iter()
             .map(|region| RegionNode {
                 id: region.id,
@@ -666,20 +747,7 @@ impl SceneGraph {
     /// The range of an assembly's motion; `None` when it has none.
     pub fn motion_range(&self, assembly: AssemblyId) -> Option<MotionRange> {
         let motion = self.motions.get(assembly.index())?.as_ref()?;
-        Some(match motion {
-            AssemblyMove::Turn { opening, .. } => MotionRange {
-                turns: true,
-                full: *opening,
-            },
-            AssemblyMove::Travel { travel, .. } => MotionRange {
-                turns: false,
-                full: *travel,
-            },
-            AssemblyMove::General { full, .. } => MotionRange {
-                turns: motion.turns(),
-                full: *full,
-            },
-        })
+        Some(motion.range())
     }
 
     /// Where an assembly's motion moves it at an amount (radians or
@@ -893,7 +961,7 @@ impl SceneGraph {
         nodes
             .iter()
             .filter_map(|id| {
-                let transform = posed.transforms.get(id.0)?;
+                let transform = posed.transforms().get(id.0)?;
                 Some(self.node(*id)?.geometry.bounds.transformed(*transform))
             })
             .reduce(Aabb::union)
@@ -992,7 +1060,7 @@ fn explode_offsets(design: &SolvedDesign, base: f32) -> Vec<Vec3> {
         partners: Vec<PartId>,
     }
     let mut moves: Vec<Move> = Vec::new();
-    for joint in &design.joints {
+    for joint in design.joints() {
         for pair in &joint.pairs {
             // A turn moves nothing out: the last push (or drive) does.
             let Some((step, tilt)) = last_slide(pair) else {
@@ -1045,7 +1113,7 @@ fn explode_offsets(design: &SolvedDesign, base: f32) -> Vec<Vec3> {
     };
     // Per part: its moves (direction, distance) and the part it moves out
     // of first.
-    let mut own: Vec<Moves> = vec![(Vec::new(), None); design.parts.len()];
+    let mut own: Vec<Moves> = vec![(Vec::new(), None); design.parts().len()];
     let mut add = |part: &Part, direction: Vec3, parent: PartId| {
         if let Some((list, first)) = own.get_mut(part.id.index()) {
             let distance = explode_distance(part, direction, base);
@@ -1096,7 +1164,7 @@ fn explode_offsets(design: &SolvedDesign, base: f32) -> Vec<Vec3> {
         }
         offset
     };
-    let mut offsets: Vec<Vec3> = (0..design.parts.len())
+    let mut offsets: Vec<Vec3> = (0..design.parts().len())
         .map(|index| composed(index, None))
         .collect();
     // A held part that nothing else moves goes with what all the parts it
@@ -1105,7 +1173,7 @@ fn explode_offsets(design: &SolvedDesign, base: f32) -> Vec<Vec3> {
     // a seat drops with them, so the legs pull off its ends and its tenons
     // still point at their sockets. When they share no move (the two sides
     // of a carcass a shelf is housed in move apart) it stays.
-    for part in &design.parts {
+    for part in design.parts() {
         let index = part.id.index();
         if !pinned(part.id) || offsets.get(index).is_none_or(|o| o.length() > STILL) {
             continue;
@@ -1197,16 +1265,16 @@ impl Exploded {
     fn of(design: &SolvedDesign) -> Exploded {
         // Distances grow with the design, so the joinery shows at a glance
         // whatever its size.
-        let size = bounds_of(design.parts.iter()).map_or(0.0, |b| b.size().length());
+        let size = bounds_of(design.parts().iter()).map_or(0.0, |b| b.size().length());
         let base = (size * 0.06).max(40.0);
         let parts = explode_offsets(design, base);
         let own: Vec<Vec3> = design
-            .assemblies
+            .assemblies()
             .iter()
             .map(|assembly| Exploded::assembly_move(design, assembly, base))
             .collect();
         let assemblies = design
-            .assemblies
+            .assemblies()
             .iter()
             .map(|assembly| {
                 let mut offset = Vec3::ZERO;
@@ -1218,7 +1286,7 @@ impl Exploded {
                     }
                     seen.push(id);
                     offset += own.get(id.index()).copied().unwrap_or(Vec3::ZERO);
-                    current = design.assemblies.get(id.index()).and_then(|a| a.parent);
+                    current = design.assembly(id).and_then(|a| a.parent);
                 }
                 offset
             })
@@ -1260,7 +1328,7 @@ impl Exploded {
             }
             (None, None) => {
                 // The first joint between a part inside and one outside.
-                for joint in &design.joints {
+                for joint in design.joints() {
                     for pair in &joint.pairs {
                         let parts: Vec<PartId> = pair.roles.iter().map(|r| r.part).collect();
                         let inside = |p: &PartId| assembly.parts.contains(p);
@@ -1309,7 +1377,7 @@ impl Exploded {
             // A joint's member goes with the part that carries it.
             Item::Member(_) => node.carried_by().map_or((Vec3::ZERO, Vec3::ZERO), of_part),
             Item::Hardware(id) => {
-                let Some(hardware) = design.hardware.get(id.index()) else {
+                let Some(hardware) = design.hardware_piece(id) else {
                     return (Vec3::ZERO, Vec3::ZERO);
                 };
                 // A member goes with the part it is `with:`; a link with
@@ -1326,12 +1394,12 @@ impl Exploded {
                         });
                         bounds.and_then(|bounds| {
                             design
-                                .parts
+                                .parts()
                                 .iter()
                                 .filter(|p| {
                                     hardware
                                         .assembly
-                                        .and_then(|a| design.assemblies.get(a.index()))
+                                        .and_then(|a| design.assembly(a))
                                         .is_none_or(|a| !a.parts.contains(&p.id))
                                 })
                                 .find(|p| touching(&p.cut_box(), &bounds))

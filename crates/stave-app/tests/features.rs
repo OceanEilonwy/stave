@@ -398,7 +398,7 @@ joint panel_grooves : groove(panel, into: [side, stop], depth: 5mm)"
     assert_eq!(panel.drawn.width, mm("281"));
     assert_eq!(panel.cut.width, mm("291"));
     assert_eq!(panel.drawn_offset.width, mm("5"));
-    let joint = &design.joints[0];
+    let joint = &design.joints()[0];
     assert!(
         joint
             .pairs
@@ -477,7 +477,7 @@ part door : pine_19 {
     let design = design(&opened);
     let region = |name: &str| {
         design
-            .regions
+            .regions()
             .iter()
             .find(|r| r.name == name)
             .unwrap()
@@ -520,7 +520,7 @@ region bay[low, high] = split(space, up, at: shelf)",
     let design = design(&opened);
     let bay = |name: &str| {
         design
-            .regions
+            .regions()
             .iter()
             .find(|r| r.name == name)
             .unwrap()
@@ -603,7 +603,7 @@ assembly flap_r = mirror(flap_l, about: mid(base, across))",
     assert_eq!(leaf.pose.orientation.width(), Direction::Left);
     assert!(matches!(leaf.origin, PartOrigin::MirroredAssembly { .. }));
     let hinge = design
-        .hardware
+        .hardware()
         .iter()
         .find(|h| h.name == "flap_r.hinge")
         .unwrap();
@@ -872,7 +872,7 @@ fn hardware_on_its_mount_face() {
         )
     ));
     let design = design(&opened);
-    let knob = common::member_bounds(&design.hardware[0], "knob");
+    let knob = common::member_bounds(&design.hardware()[0], "knob");
     // A 30mm knob standing 28mm off the front face (deep 0).
     assert_eq!((knob.min().deep, knob.max().deep), (mm("-28"), mm("0")));
     assert_eq!((knob.min().across, knob.max().across), (mm("35"), mm("65")));
@@ -1089,7 +1089,7 @@ fn butt_hinge_leaves_are_housed_in_both_parts_at_the_flush_edge() {
     // A 40mm hinge has 12mm leaves, 1.5mm thick; the lid's back edge is
     // flush with the back's back face, so the pin is there.
     let hinge = design
-        .hardware
+        .hardware()
         .iter()
         .find(|h| h.name == "lid.hinge[left]")
         .unwrap();
@@ -1145,7 +1145,11 @@ fn butt_hinge_leaves_are_housed_in_both_parts_at_the_flush_edge() {
     // face the parts close on, the knuckle's radius (2.5mm) behind the
     // flush edge. (It turned about the edge itself before the knuckle was
     // declared.)
-    let lid = design.assemblies.iter().find(|a| a.name == "lid").unwrap();
+    let lid = design
+        .assemblies()
+        .iter()
+        .find(|a| a.name == "lid")
+        .unwrap();
     let shape = lid.mechanism.as_ref().map(|m| m.shape());
     let Some(stave_model::mechanism::MotionShape::Turn { line: pivot, .. }) = shape else {
         panic!("the lid has no turn: {shape:?}");
@@ -1213,7 +1217,7 @@ assembly flap_r = mirror(flap_l, about: mid(base, across))",
     );
     assert_eq!((right.min.length, right.max.length), (mm("20"), mm("60")));
     let mirrored = design
-        .hardware
+        .hardware()
         .iter()
         .find(|h| h.name == "flap_r.hinge")
         .unwrap();

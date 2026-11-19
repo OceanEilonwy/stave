@@ -24,7 +24,7 @@ fn checked(folder: &Path) -> Checked {
 fn part_item(checked: &Checked, name: &str) -> Item {
     let design = checked.design().expect("the design solves");
     let part = design
-        .parts
+        .parts()
         .iter()
         .find(|p| p.name == name)
         .unwrap_or_else(|| panic!("no part '{name}'"));
@@ -37,7 +37,7 @@ fn a_door_that_hits_a_wall_marks_the_door_the_wall_and_the_file() {
     let design = checked.design().expect("it solves");
     let marks = problems::marks(&checked);
     let door = design
-        .assemblies
+        .assemblies()
         .iter()
         .find(|a| a.name == "door")
         .expect("a door");

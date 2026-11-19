@@ -154,7 +154,7 @@ impl Contact {
                 BodyOwner::Hardware { hardware } => vec![ContactItem::Hardware(hardware)],
                 BodyOwner::Joint { joint, pair } => {
                     let parts = design
-                        .joints
+                        .joints()
                         .get(joint.index())
                         .and_then(|joint| joint.pair(pair))
                         .map(|pair| pair.roles.iter().map(|role| ContactItem::Part(role.part)));
@@ -392,7 +392,7 @@ impl<'a> Checker<'a> {
     /// range, when the fast tier has done it.
     fn new(model: &'a Model, design: &'a SolvedDesign, mechanisms: Option<Mechanisms>) -> Self {
         let solids: Vec<Solid> = design
-            .parts
+            .parts()
             .iter()
             .map(|part| Solid::of(part, design))
             .collect();
@@ -403,13 +403,13 @@ impl<'a> Checker<'a> {
                     break;
                 }
                 chain.push(id);
-                assembly = design.assemblies.get(id.index()).and_then(|a| a.parent);
+                assembly = design.assembly(id).and_then(|a| a.parent);
             }
             chain.reverse();
             chain
         };
         let mut bodies = Vec::new();
-        for (part, solid) in design.parts.iter().zip(&solids) {
+        for (part, solid) in design.parts().iter().zip(&solids) {
             let world = WorldSolid::of_part(part, solid);
             if let Some(bounds) = world.bounds() {
                 bodies.push(Body {
@@ -421,14 +421,13 @@ impl<'a> Checker<'a> {
                 });
             }
         }
-        for hardware in &design.hardware {
+        for hardware in design.hardware() {
             for member in &hardware.members {
                 let (assembly, link) = match member.carrier {
                     BodyCarrier::Part(part) => (design.part(part).and_then(|p| p.assembly), None),
-                    BodyCarrier::Region(region) => (
-                        design.regions.get(region.index()).and_then(|r| r.assembly),
-                        None,
-                    ),
+                    BodyCarrier::Region(region) => {
+                        (design.region(region).and_then(|r| r.assembly), None)
+                    }
                     BodyCarrier::Link(link) => (
                         hardware.assembly,
                         hardware.assembly.map(|assembly| (assembly, link)),
@@ -448,7 +447,7 @@ impl<'a> Checker<'a> {
         }
         // Every joint's members (a dowel's pins), where its kind laid them
         // out: they move with the pair's first part.
-        for joint in &design.joints {
+        for joint in design.joints() {
             for pair in &joint.pairs {
                 for member in &pair.members {
                     let assembly = match member.carrier {
@@ -481,7 +480,7 @@ impl<'a> Checker<'a> {
             failed: BTreeSet::new(),
             posed_failed: BTreeSet::new(),
             misfit: design
-                .hardware
+                .hardware()
                 .iter()
                 .filter(|hardware| match hardware.rules {
                     Rules::Hold => false,
@@ -506,7 +505,7 @@ impl<'a> Checker<'a> {
     /// it splices.
     fn joint_place(&self, joint: stave_model::solved::JointId) -> Option<(FileId, Span)> {
         if let Some(stave_model::solved::JointOrigin::Splice { part, .. }) =
-            self.design.joints.get(joint.index()).map(|j| j.origin)
+            self.design.joint(joint).map(|j| j.origin)
         {
             return self.lengths_place(part);
         }
@@ -588,12 +587,8 @@ impl<'a> Checker<'a> {
     /// A member's body, wherever it is.
     pub(crate) fn member(&self, member: BodyRef) -> Option<&stave_model::solved::Body> {
         let members = match member.owner {
-            BodyOwner::Hardware { hardware } => {
-                &self.design.hardware.get(hardware.index())?.members
-            }
-            BodyOwner::Joint { joint, pair } => {
-                &self.design.joints.get(joint.index())?.pair(pair)?.members
-            }
+            BodyOwner::Hardware { hardware } => &self.design.hardware_piece(hardware)?.members,
+            BodyOwner::Joint { joint, pair } => &self.design.joint(joint)?.pair(pair)?.members,
         };
         members.iter().find(|m| m.id == member)
     }
@@ -614,7 +609,7 @@ impl<'a> Checker<'a> {
                         format!("{}'s {name}", self.hardware_name(hardware))
                     }
                     BodyOwner::Joint { joint, pair } => {
-                        let found = self.design.joints.get(joint.index());
+                        let found = self.design.joint(joint);
                         let between = found
                             .filter(|joint| joint.pairs.len() > 1)
                             .and_then(|joint| joint.pair(pair))
@@ -633,7 +628,7 @@ impl<'a> Checker<'a> {
 
     pub(crate) fn hardware_name(&self, hardware: HardwareId) -> String {
         self.design
-            .hardware
+            .hardware()
             .get(hardware.index())
             .map(|h| h.name.clone())
             .unwrap_or_default()
@@ -653,7 +648,7 @@ impl<'a> Checker<'a> {
     /// Every member of a piece of hardware, as items.
     fn members_of(&self, hardware: HardwareId) -> Vec<Item> {
         self.design
-            .hardware
+            .hardware()
             .get(hardware.index())
             .map(|h| h.members.iter().map(|m| Item::Member(m.id)).collect())
             .unwrap_or_default()
@@ -668,7 +663,7 @@ impl<'a> Checker<'a> {
 
     pub(crate) fn joint_name(&self, joint: stave_model::solved::JointId) -> String {
         self.design
-            .joints
+            .joints()
             .get(joint.index())
             .map(|j| j.name.clone())
             .unwrap_or_default()
@@ -680,7 +675,7 @@ impl<'a> Checker<'a> {
 
     fn misshapen(&mut self) {
         let mut found = Vec::new();
-        for (part, solid) in self.design.parts.iter().zip(&self.solids) {
+        for (part, solid) in self.design.parts().iter().zip(&self.solids) {
             for misshapen in solid.misshapen() {
                 if let Some(cut) = stave_geom::solid::cut_at(part, misshapen.cut) {
                     found.push((part.id, cut.source, misshapen.error));
@@ -725,7 +720,7 @@ impl<'a> Checker<'a> {
     fn not_supported(&mut self) {
         // Per source: what can't be cut, and the parts drawn uncut.
         let mut found: BTreeMap<SourceKey, (Vec<String>, Vec<PartId>)> = BTreeMap::new();
-        for (part, solid) in self.design.parts.iter().zip(&self.solids) {
+        for (part, solid) in self.design.parts().iter().zip(&self.solids) {
             for skipped in solid.skipped() {
                 let Some(cut) = part.cuts.get(skipped.cut) else {
                     continue;
@@ -790,7 +785,7 @@ impl<'a> Checker<'a> {
 
     fn contact(&mut self) {
         let mut problems = Vec::new();
-        for joint in &self.design.joints {
+        for joint in self.design.joints() {
             // Every listed part, in role order, and how it meets its
             // counterparts once cut.
             let mut touched: Vec<(PartId, Meeting)> = Vec::new();
@@ -928,7 +923,7 @@ impl<'a> Checker<'a> {
                 AnchorItem::Part(id) => self.part_name(id),
                 AnchorItem::Region(id) => self
                     .design
-                    .regions
+                    .regions()
                     .get(id.index())
                     .map(|r| r.name.clone())
                     .unwrap_or_default(),
@@ -1037,7 +1032,7 @@ impl<'a> Checker<'a> {
 
     /// The joint pair two parts are in together, if any.
     fn shared_joint(&self, a: PartId, b: PartId) -> Option<(stave_model::solved::JointId, usize)> {
-        self.design.joints.iter().find_map(|joint| {
+        self.design.joints().iter().find_map(|joint| {
             joint.pairs.iter().enumerate().find_map(|(index, pair)| {
                 let has = |part: PartId| {
                     pair.roles.iter().any(|r| r.part == part) || pair.made_parts.contains(&part)
@@ -1055,7 +1050,7 @@ impl<'a> Checker<'a> {
                 Some((joint, pair)) => {
                     let position = |part: PartId| {
                         self.design
-                            .joints
+                            .joints()
                             .get(joint.index())
                             .and_then(|j| j.pairs.get(pair))
                             .and_then(|p| p.roles.iter().position(|r| r.part == part))
@@ -1205,7 +1200,7 @@ impl<'a> Checker<'a> {
 
     fn assembly_name(&self, assembly: AssemblyId) -> String {
         self.design
-            .assemblies
+            .assemblies()
             .get(assembly.index())
             .map(|a| a.name.clone())
             .unwrap_or_default()

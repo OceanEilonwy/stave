@@ -382,7 +382,7 @@ fn making_the_door_bay_400mm_wide_by_cabinet_width_re_solves_to_400mm() {
     );
     let design = design.unwrap();
     let solved = design
-        .regions
+        .regions()
         .iter()
         .find(|r| r.name == "door_bay[left]")
         .unwrap();

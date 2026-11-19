@@ -31,8 +31,8 @@ use stave_model::defs::{DefId, StockField};
 use stave_model::ids::{JointId, PairIndex, PartId, StockId};
 use stave_model::nonempty::NonEmpty;
 use stave_model::solved::{
-    self, BoardIndex, BodyCarrier, Contact, Cut, CutKind, CutPlace, CutSource, Depth, End, Joint,
-    JointOrigin, JointPair, PartOrigin, PieceIndex, RoleBinding, SolvedDesign, WorldBox,
+    self, BoardIndex, BodyCarrier, Contact, Cut, CutKind, CutPlace, CutSource, Depth, DesignDraft,
+    End, Joint, JointOrigin, JointPair, PartOrigin, PieceIndex, RoleBinding, WorldBox,
 };
 use stave_model::value::{KindValue, Splicing, Value};
 use stave_schema::CutOperation;
@@ -1574,14 +1574,14 @@ impl Solver<'_> {
     /// cuts of other parts that name it, the assemblies and scenes that
     /// list it. The first piece is renamed `<part>.piece[1]` and lists the
     /// pieces.
-    pub(crate) fn rebind_pieces(&self, design: &mut SolvedDesign, splits: Vec<Split>) {
+    pub(crate) fn rebind_pieces(&self, design: &mut DesignDraft, splits: Vec<Split>) {
         for split in splits {
             rebind_split(design, split);
         }
     }
 }
 
-fn rebind_split(design: &mut SolvedDesign, split: Split) {
+fn rebind_split(design: &mut DesignDraft, split: Split) {
     let whole = split.whole;
     let boxes: Vec<(PartId, WorldBox)> = split
         .pieces
@@ -1589,7 +1589,7 @@ fn rebind_split(design: &mut SolvedDesign, split: Split) {
         .filter_map(|id| design.part(*id).map(|p| (*id, p.cut_box())))
         .collect();
     // The piece that holds a cut from `source`, if any.
-    let piece_with = |design: &SolvedDesign, source: CutSource| -> Option<PartId> {
+    let piece_with = |design: &DesignDraft, source: CutSource| -> Option<PartId> {
         split.pieces.iter().copied().find(|id| {
             design
                 .part(*id)

@@ -115,7 +115,7 @@ impl Checker<'_> {
             CutSource::Joint { joint, pair } => {
                 let parts: Vec<String> = self
                     .design
-                    .joints
+                    .joints()
                     .get(joint.index())
                     .and_then(|j| j.pair(pair))
                     .map(|p| p.roles.iter().map(|r| self.part_name(r.part)).collect())
@@ -170,7 +170,7 @@ impl Checker<'_> {
     /// ([`Checker::held_back_cut_sizes`]): the kind's words come first.
     pub(crate) fn cut_sizes(&mut self) {
         let mut found: Vec<SizeProblem> = Vec::new();
-        for (part, solid) in self.design.parts.iter().zip(&self.solids) {
+        for (part, solid) in self.design.parts().iter().zip(&self.solids) {
             let walls = Walls::of(part, self.design, solid);
             for (index, cut) in part.cuts.iter().enumerate() {
                 let noun = cut_noun(cut);
@@ -296,7 +296,7 @@ impl Checker<'_> {
         let design = self.design;
         {
             let walls: Vec<Walls<'_>> = design
-                .parts
+                .parts()
                 .iter()
                 .zip(&solids)
                 .map(|(part, solid)| Walls::of(part, design, solid))
@@ -316,7 +316,7 @@ impl Checker<'_> {
     fn wall_rule(&mut self, rule: &WallRule, walls: &[Walls<'_>]) {
         let mut least: Option<(PartId, Wall, usize)> = None;
         let mut copies = 0usize;
-        for (part, part_walls) in self.design.parts.iter().zip(walls) {
+        for (part, part_walls) in self.design.parts().iter().zip(walls) {
             for (index, cut) in part.cuts.iter().enumerate() {
                 if cut.source != rule.source || cut.name.as_ref() != Some(&rule.cut) {
                     continue;
@@ -431,7 +431,7 @@ impl Checker<'_> {
         // One mistake, one error: two cuts that run into each other are
         // reported once, for the first; the second leaves the first alone.
         let mut flagged: Vec<CutSource> = Vec::new();
-        for (part, part_walls) in self.design.parts.iter().zip(walls) {
+        for (part, part_walls) in self.design.parts().iter().zip(walls) {
             for (index, cut) in part.cuts.iter().enumerate() {
                 if !part_walls.is_closed(index)
                     || self.wall_failed.contains(&cut.source)

@@ -196,7 +196,7 @@ impl Swing {
     /// these tests read how the pipeline represents a hinged motion.
     fn of(design: &SolvedDesign) -> Swing {
         let door = design
-            .assemblies
+            .assemblies()
             .iter()
             .find(|a| a.name == "door")
             .expect("the door assembly");
@@ -512,7 +512,7 @@ fn nothing_passes_through_wood_at_any_side_screw_setting() {
                 let opened = open_clean(thickness, cup_inset, overlay);
                 let design = common::design(&opened);
                 assert!(
-                    design.assemblies.iter().any(|a| a.mechanism.is_some()),
+                    design.assemblies().iter().any(|a| a.mechanism.is_some()),
                     "the door moves"
                 );
             }

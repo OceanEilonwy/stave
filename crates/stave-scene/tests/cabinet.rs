@@ -36,7 +36,7 @@ fn every_part_and_hardware_has_a_node() {
     let (design, graph) = cabinet();
     let carried = |test: &dyn Fn(&Hardware, BodyCarrier) -> bool| {
         design
-            .hardware
+            .hardware()
             .iter()
             .flat_map(|h| h.members.iter().map(move |m| (h, m.carrier)))
             .filter(|(h, carrier)| test(h, *carrier))
@@ -57,7 +57,7 @@ fn every_part_and_hardware_has_a_node() {
     // hardware, named `<hardware> <member>`, and one for each joint pair's
     // member, named `<joint>'s <member>` (with the pair's parts when the
     // joint has several pairs).
-    let members: usize = design.hardware.iter().map(|h| h.members.len()).sum();
+    let members: usize = design.hardware().iter().map(|h| h.members.len()).sum();
     let pair_members = design.pair_members().count();
     assert_eq!(
         pair_members, 6,
@@ -65,9 +65,9 @@ fn every_part_and_hardware_has_a_node() {
     );
     assert_eq!(
         graph.nodes.len(),
-        design.parts.len() + members + pair_members
+        design.parts().len() + members + pair_members
     );
-    for hardware in &design.hardware {
+    for hardware in design.hardware() {
         for member in &hardware.members {
             let name = format!("{} {}", hardware.name, member.name);
             assert!(graph.nodes.iter().any(|node| node.name == name), "{name}");
@@ -96,7 +96,7 @@ fn every_part_and_hardware_has_a_node() {
         .find(|node| node.name == "door_r.stile[hinge]")
         .unwrap();
     let door_r = design
-        .assemblies
+        .assemblies()
         .iter()
         .find(|a| a.name == "door_r")
         .unwrap();
@@ -272,7 +272,7 @@ fn a_scene_can_show_one_assembly() {
 fn the_joint_samples_build() {
     let design = solve("joint_samples");
     let graph = SceneGraph::build(&design, BuildOptions::default());
-    assert_eq!(graph.nodes.len(), design.parts.len());
+    assert_eq!(graph.nodes.len(), design.parts().len());
     let glb = graph.to_glb(&graph.rest()).unwrap();
     assert_eq!(&glb[0..4], b"glTF");
 }
@@ -336,7 +336,7 @@ fn every_example_builds_and_poses_every_scene() {
         let design = solve(example);
         let graph = SceneGraph::build(&design, BuildOptions::default());
         assert!(
-            graph.nodes.len() >= design.parts.len(),
+            graph.nodes.len() >= design.parts().len(),
             "{example}: every part has a node"
         );
         for scene in &design.scenes {
@@ -355,7 +355,7 @@ fn every_example_builds_and_poses_every_scene() {
 fn the_hinge_links_follow_the_door() {
     let (design, graph) = cabinet();
     let door = design
-        .assemblies
+        .assemblies()
         .iter()
         .find(|a| a.name == "door_l")
         .unwrap();
@@ -401,8 +401,8 @@ fn the_hinge_links_follow_the_door() {
         let posed = graph.pose_with(rest, &[(door.id, degrees.to_radians())], 0.0);
         for (first, second, at) in &pivots {
             let pin = world(*at);
-            let a = posed.transforms[first.index()].transform_point3(pin);
-            let b = posed.transforms[second.index()].transform_point3(pin);
+            let a = posed.transforms()[first.index()].transform_point3(pin);
+            let b = posed.transforms()[second.index()].transform_point3(pin);
             assert!(close(a, b), "{degrees}deg: a pivot came apart: {a} {b}");
         }
     }

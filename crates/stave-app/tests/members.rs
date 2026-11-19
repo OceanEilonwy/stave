@@ -54,7 +54,7 @@ fn a_dowel_lays_its_pins_out_evenly_on_the_patch() {
         "{SIDE_ON_BASE}joint side_dowels : dowel(side, into: base, count: 3)"
     ));
     let design = design(&opened);
-    let pair = &design.joints[0].pairs[0];
+    let pair = &design.joints()[0].pairs[0];
     let [pin] = pair.members.as_slice() else {
         panic!("one member: {:?}", pair.members);
     };
@@ -176,7 +176,7 @@ fn peg_kind(layout: &str) -> String {
 fn peg_centres(layout: &str) -> Vec<stave_lang::units::Length> {
     let opened = open(&peg_kind(layout));
     let design = common::solved(&opened);
-    design.joints[0].pairs[0].members[0]
+    design.joints()[0].pairs[0].members[0]
         .shapes()
         .iter()
         .map(|shape| match shape {
@@ -421,7 +421,7 @@ assembly post_r = mirror(post_l, about: mid(base, across))",
     );
     let design = design(&opened);
     let centre = |joint: &str| {
-        let joint = design.joints.iter().find(|j| j.name == joint).unwrap();
+        let joint = design.joints().iter().find(|j| j.name == joint).unwrap();
         let member = &joint.pairs[0].members[0];
         assert!(matches!(member.id.owner, BodyOwner::Joint { joint: id, .. } if id == joint.id));
         match member.shapes() {

@@ -738,7 +738,7 @@ fn uses_lists_fasteners_per_pair_with_a_count() {
         .collect();
     assert_eq!(uses, [("dowel_pin", 3), ("wood_screw", 1)]);
     assert_eq!(design.fasteners[0].diameter, mm("6"));
-    assert!(design.hardware.is_empty(), "fasteners are never placed");
+    assert!(design.hardware().is_empty(), "fasteners are never placed");
     only_error(
         &open("kind k : joint {\n  uses: knob\n}"),
         "type-mismatch",
@@ -1302,7 +1302,7 @@ fn a_pull_bores_one_hole_or_two_holes_centres_apart() {
                     depth: Depth::Through,
                 },
             ) if *diameter == mm("4") => Some((
-                design.hardware[hardware.index()].name.clone(),
+                design.hardware()[hardware.index()].name.clone(),
                 stave_lang::units::Length::from_nm(
                     (footprint.min.length.nm() + footprint.max.length.nm()) / 2,
                 ),

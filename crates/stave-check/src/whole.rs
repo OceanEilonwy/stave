@@ -34,7 +34,7 @@ impl Checker<'_> {
         };
         let parts: Vec<String> = self
             .design
-            .joints
+            .joints()
             .get(joint.index())
             .and_then(|j| j.pair(pair))
             .map(|p| {
@@ -51,7 +51,7 @@ impl Checker<'_> {
     /// Every part still one piece of wood once its cuts are made.
     pub(crate) fn whole_parts(&mut self) {
         let mut found = Vec::new();
-        for (part, solid) in self.design.parts.iter().zip(&self.solids) {
+        for (part, solid) in self.design.parts().iter().zip(&self.solids) {
             if self.failed.contains(&Item::Part(part.id)) {
                 continue;
             }

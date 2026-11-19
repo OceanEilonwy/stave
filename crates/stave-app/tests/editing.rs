@@ -307,7 +307,7 @@ fn choosing_the_shelf_and_adding_it_gives_a_design_with_one_more_shelf() {
         shown
             .design()
             .unwrap()
-            .parts
+            .parts()
             .iter()
             .any(|p| p.name == "sweater_shelf.board")
     );

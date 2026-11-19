@@ -14,10 +14,10 @@ use stave_model::ids::{
 use stave_model::instance::Ctx;
 use stave_model::mechanism::MemberIndex;
 use stave_model::solved::{
-    self, Assembly, BodyOwner, Cut, CutPlace, CutSource, FastenerUse, Hardware, HardwareBase,
-    Joint, JointOrigin, JointPair, LocalBox, LocalPoint, PartOrigin, Point, PoseValue, ProjectInfo,
-    Region, RequireResult, RoleBinding, Scene, SceneItem, ScenePose, Shape, Size3, SolvedDesign,
-    Station, Stock, Tool,
+    self, Assembly, BodyOwner, Cut, CutPlace, CutSource, DesignDraft, FastenerUse, Hardware,
+    HardwareBase, Joint, JointOrigin, JointPair, LocalBox, LocalPoint, PartOrigin, Point,
+    PoseValue, ProjectInfo, Region, RequireResult, RoleBinding, Scene, SceneItem, ScenePose, Shape,
+    Size3, SolvedDesign, Station, Stock, Tool,
 };
 use stave_model::value::{ExactBox, Value};
 use stave_schema::words::{Grain, MotionWord, StockForm};
@@ -34,7 +34,7 @@ use crate::mechanism::AssemblyMechanism;
 use crate::members::{LaidOut, WorldMemberCut};
 use crate::mirror_cuts::MirroredJoint;
 use crate::place::reflect;
-use crate::{Fault, Solved, Solver};
+use crate::{Failure, Fault, Solved, Solver};
 
 /// A part a joint made.
 pub(crate) struct MadeInfo {
@@ -659,7 +659,7 @@ pub(crate) fn build(solver: &mut Solver<'_>) -> Option<SolvedDesign> {
     {
         return None;
     }
-    let mut design = SolvedDesign {
+    let mut draft = DesignDraft {
         project,
         parts,
         hardware,
@@ -677,8 +677,10 @@ pub(crate) fn build(solver: &mut Solver<'_>) -> Option<SolvedDesign> {
         },
         wall_rules: std::mem::take(&mut solver.wall_rules),
     };
-    solver.rebind_pieces(&mut design, splits);
-    Some(design)
+    solver.rebind_pieces(&mut draft, splits);
+    let design = SolvedDesign::new(draft)
+        .map_err(|_| Failure::Fault(Fault::Internal("a solved design's tables")));
+    solver.settled(design, file, span)
 }
 
 /// Which part each of a joint's roles names in one pair.

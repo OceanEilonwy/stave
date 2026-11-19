@@ -45,14 +45,14 @@ fn solved(opened: &Opened) -> &SolvedDesign {
 /// to an assembly.
 fn assert_built_from_a_box(design: &SolvedDesign) {
     let roots: Vec<&str> = design
-        .regions
+        .regions()
         .iter()
         .filter(|region| region.root)
         .map(|region| region.name.as_str())
         .collect();
     assert_eq!(roots, ["envelope"]);
     let loose: Vec<&str> = design
-        .parts
+        .parts()
         .iter()
         .filter(|part| part.assembly.is_none())
         .map(|part| part.name.as_str())
@@ -68,7 +68,7 @@ type PartKey = (String, Length, Length, Length, usize);
 /// names compare equal.
 fn parts(design: &SolvedDesign) -> Vec<PartKey> {
     let mut parts: Vec<PartKey> = design
-        .parts
+        .parts()
         .iter()
         .map(|part| {
             (
@@ -88,7 +88,7 @@ fn parts(design: &SolvedDesign) -> Vec<PartKey> {
 /// makes, so one declaration joining several parts counts each pair.
 fn joints(design: &SolvedDesign) -> BTreeMap<String, usize> {
     let mut joints = BTreeMap::new();
-    for joint in &design.joints {
+    for joint in design.joints() {
         *joints.entry(joint.kind.clone()).or_insert(0) += joint.pairs.len();
     }
     joints
@@ -143,7 +143,7 @@ fn the_chests_drawer_bays_are_in_the_ratio_of_its_shares() {
     let design = solved(&opened);
     let region = |name: &str| {
         design
-            .regions
+            .regions()
             .iter()
             .find(|region| region.name == name)
             .unwrap_or_else(|| panic!("no region {name}"))

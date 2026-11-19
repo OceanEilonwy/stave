@@ -91,17 +91,17 @@ pub fn check_fast(model: &Model, design: &SolvedDesign) -> Fast {
 /// explains, sorted by item.
 fn box_overlaps(design: &SolvedDesign) -> Vec<BoxOverlap> {
     let mut boxes: Vec<(Thing, WorldBox)> = design
-        .parts
+        .parts()
         .iter()
         .map(|part| (Thing::Part(part.id), part.pose.world_box(part.cut)))
         .collect();
     let members = design
-        .hardware
+        .hardware()
         .iter()
         .flat_map(|hardware| &hardware.members)
         .chain(
             design
-                .joints
+                .joints()
                 .iter()
                 .flat_map(|joint| &joint.pairs)
                 .flat_map(|pair| &pair.members),
@@ -245,7 +245,7 @@ struct Explained {
 impl Explained {
     fn of(design: &SolvedDesign) -> Self {
         let pairs = design
-            .joints
+            .joints()
             .iter()
             .flat_map(|joint| {
                 joint.indexed_pairs().map(|(index, pair)| {
@@ -266,7 +266,7 @@ impl Explained {
             })
             .collect();
         let cuts = design
-            .parts
+            .parts()
             .iter()
             .flat_map(|part| {
                 part.cuts.iter().filter_map(|cut| {
@@ -281,7 +281,7 @@ impl Explained {
             .collect();
         Explained {
             misfit: design
-                .hardware
+                .hardware()
                 .iter()
                 .filter(|hardware| match hardware.rules {
                     Rules::Hold => false,
@@ -293,7 +293,7 @@ impl Explained {
             pairs,
             cuts,
             board_parts: design
-                .parts
+                .parts()
                 .iter()
                 // Only a board joint's parts sit in another part without
                 // being in a joint pair with it.

@@ -16,7 +16,7 @@ use crate::{Checker, Item};
 impl Checker<'_> {
     pub(crate) fn sequences(&mut self) {
         let mut found = Vec::new();
-        for joint in &self.design.joints {
+        for joint in self.design.joints() {
             for pair in &joint.pairs {
                 if pair.insert.is_empty() {
                     continue;

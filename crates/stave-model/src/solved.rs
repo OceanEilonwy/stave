@@ -410,9 +410,10 @@ pub struct LocalBox {
 // The design
 // ---------------------------------------------------------------------------
 
-/// A fully placed design.
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct SolvedDesign {
+/// A design as the solver writes it out, before [`SolvedDesign::new`]
+/// checks that every table is indexed by its ids.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DesignDraft {
     /// Title, units, tools.
     pub project: ProjectInfo,
     /// Every part: declared parts, mirror images, parts of mirrored
@@ -442,7 +443,187 @@ pub struct SolvedDesign {
     pub wall_rules: Vec<WallRule>,
 }
 
+/// A fully placed design. Its parts, hardware, joints, regions and
+/// assemblies are each indexed by their ids; the tables are private so
+/// that holds, and are read through [`SolvedDesign::parts`] and the like.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct SolvedDesign {
+    /// Title, units, tools.
+    pub project: ProjectInfo,
+    /// Every part: declared parts, mirror images, parts of mirrored
+    /// assemblies and parts joints make. Indexed by [`PartId`].
+    parts: Vec<Part>,
+    /// Every piece of mounted hardware. Indexed by [`HardwareId`].
+    hardware: Vec<Hardware>,
+    /// Fasteners the joints use (never placed).
+    pub fasteners: Vec<FastenerUse>,
+    /// Every joint. Indexed by [`JointId`].
+    joints: Vec<Joint>,
+    /// Every region. Indexed by [`RegionId`].
+    regions: Vec<Region>,
+    /// Every assembly. Indexed by [`AssemblyId`].
+    assemblies: Vec<Assembly>,
+    /// The scenes; the first is always the built-in `rest`.
+    pub scenes: Vec<Scene>,
+    /// Every `require` of the project and its components, at the current
+    /// values.
+    pub requires: Vec<RequireResult>,
+    /// Elements spaced with `pitch` or `gap` that run past their `to`
+    /// anchor (the fit check reports them as `overlap`).
+    pub overruns: Vec<Overrun>,
+    /// The kinds' rules that read `wall(cut)`, for every pair or piece of
+    /// hardware: measured by the fit check once every cut is made
+    /// (grammar, "Walls").
+    pub wall_rules: Vec<WallRule>,
+}
+
+impl DesignDraft {
+    /// The part with an id.
+    pub fn part(&self, id: PartId) -> Option<&Part> {
+        self.parts.get(id.index())
+    }
+}
+
+/// A table of a [`DesignDraft`] whose entries are not at their ids.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("the solved design's {table} table has an entry at {index} whose id is not {index}")]
+pub struct DesignError {
+    /// The table: `parts`, `hardware`, `joints`, `regions` or `assemblies`.
+    pub table: &'static str,
+    /// The first entry out of place.
+    pub index: usize,
+}
+
+/// `Ok` when every entry of `table` sits at its id's index.
+fn indexed<T>(
+    table: &'static str,
+    entries: &[T],
+    index_of: impl Fn(&T) -> usize,
+) -> Result<(), DesignError> {
+    match entries
+        .iter()
+        .enumerate()
+        .find(|(index, entry)| index_of(entry) != *index)
+    {
+        Some((index, _)) => Err(DesignError { table, index }),
+        None => Ok(()),
+    }
+}
+
 impl SolvedDesign {
+    /// The design a draft describes, once each table is checked to be
+    /// indexed by its ids.
+    pub fn new(draft: DesignDraft) -> Result<SolvedDesign, DesignError> {
+        indexed("parts", &draft.parts, |part| part.id.index())?;
+        indexed("hardware", &draft.hardware, |hardware| hardware.id.index())?;
+        indexed("joints", &draft.joints, |joint| joint.id.index())?;
+        indexed("regions", &draft.regions, |region| region.id.index())?;
+        indexed("assemblies", &draft.assemblies, |assembly| {
+            assembly.id.index()
+        })?;
+        let DesignDraft {
+            project,
+            parts,
+            hardware,
+            fasteners,
+            joints,
+            regions,
+            assemblies,
+            scenes,
+            requires,
+            overruns,
+            wall_rules,
+        } = draft;
+        Ok(SolvedDesign {
+            project,
+            parts,
+            hardware,
+            fasteners,
+            joints,
+            regions,
+            assemblies,
+            scenes,
+            requires,
+            overruns,
+            wall_rules,
+        })
+    }
+
+    /// Back to a draft, to change and check again.
+    pub fn into_draft(self) -> DesignDraft {
+        let SolvedDesign {
+            project,
+            parts,
+            hardware,
+            fasteners,
+            joints,
+            regions,
+            assemblies,
+            scenes,
+            requires,
+            overruns,
+            wall_rules,
+        } = self;
+        DesignDraft {
+            project,
+            parts,
+            hardware,
+            fasteners,
+            joints,
+            regions,
+            assemblies,
+            scenes,
+            requires,
+            overruns,
+            wall_rules,
+        }
+    }
+
+    /// Every part, in [`PartId`] order.
+    pub fn parts(&self) -> &[Part] {
+        &self.parts
+    }
+
+    /// Every piece of mounted hardware, in [`HardwareId`] order.
+    pub fn hardware(&self) -> &[Hardware] {
+        &self.hardware
+    }
+
+    /// The piece of hardware with an id.
+    pub fn hardware_piece(&self, id: HardwareId) -> Option<&Hardware> {
+        self.hardware.get(id.index())
+    }
+
+    /// Every joint, in [`JointId`] order.
+    pub fn joints(&self) -> &[Joint] {
+        &self.joints
+    }
+
+    /// The joint with an id.
+    pub fn joint(&self, id: JointId) -> Option<&Joint> {
+        self.joints.get(id.index())
+    }
+
+    /// Every region, in [`RegionId`] order.
+    pub fn regions(&self) -> &[Region] {
+        &self.regions
+    }
+
+    /// The region with an id.
+    pub fn region(&self, id: RegionId) -> Option<&Region> {
+        self.regions.get(id.index())
+    }
+
+    /// Every assembly, in [`AssemblyId`] order.
+    pub fn assemblies(&self) -> &[Assembly] {
+        &self.assemblies
+    }
+
+    /// The assembly with an id.
+    pub fn assembly(&self, id: AssemblyId) -> Option<&Assembly> {
+        self.assemblies.get(id.index())
+    }
+
     /// The part with an id.
     pub fn part(&self, id: PartId) -> Option<&Part> {
         self.parts.get(id.index())

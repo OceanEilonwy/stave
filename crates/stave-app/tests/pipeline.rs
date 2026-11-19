@@ -304,7 +304,7 @@ fn the_clothing_cabinet_is_where_the_design_says() {
     // Openings and bays.
     let region = |name: &str| {
         design
-            .regions
+            .regions()
             .iter()
             .find(|r| r.name == name)
             .unwrap()
@@ -416,7 +416,7 @@ fn the_clothing_cabinet_is_where_the_design_says() {
     );
 
     // Hardware.
-    let hardware = |name: &str| design.hardware.iter().find(|h| h.name == name).unwrap();
+    let hardware = |name: &str| design.hardware().iter().find(|h| h.name == name).unwrap();
     // A slide is two members in the 12.7mm gap: the drawer member against
     // the drawer side (31.7), the cabinet member against the opening's side
     // (19).
@@ -486,7 +486,7 @@ fn the_clothing_cabinet_is_where_the_design_says() {
     assert_eq!((knob.min().deep, knob.min().up), (mm("-49"), mm("1091.75")));
 
     // Motions.
-    let assembly = |name: &str| design.assemblies.iter().find(|a| a.name == name).unwrap();
+    let assembly = |name: &str| design.assemblies().iter().find(|a| a.name == name).unwrap();
     // The doors move on their cup hinges' mechanism, in the kind's frame:
     // the plane across the hinge edge through the cup's centre on the
     // stile's back face (across 23.5, deep 0), `across` toward the middle
@@ -520,7 +520,7 @@ fn the_clothing_cabinet_is_where_the_design_says() {
 
     // Joints and cuts.
     let dados = design
-        .joints
+        .joints()
         .iter()
         .find(|j| j.name == "shelf_dados")
         .unwrap();
@@ -570,7 +570,7 @@ fn the_clothing_cabinet_is_where_the_design_says() {
             .collect::<Vec<_>>(),
         ["rest", "all_open", "drawer_bench"]
     );
-    assert_eq!(design.parts.len(), 34);
+    assert_eq!(design.parts().len(), 34);
 }
 
 /// The door's hinge edge, front corner, as the left door of the cabinet
@@ -585,7 +585,7 @@ fn the_cabinet_doors_move_on_their_hinges_linkage() {
     let opened = stave_app::open(&workspace().join("examples/clothing_cabinet")).unwrap();
     let design = common::design(&opened);
     let door = design
-        .assemblies
+        .assemblies()
         .iter()
         .find(|a| a.name == "door_l")
         .unwrap();

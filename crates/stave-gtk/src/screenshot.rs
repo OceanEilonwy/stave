@@ -131,19 +131,19 @@ pub fn pose_shot(design: &SolvedDesign, scene: &SceneGraph, shot: &Shot) -> Resu
     let mut overrides = Vec::new();
     for (name, value) in &shot.open {
         let assembly = design
-            .assemblies
+            .assemblies()
             .iter()
             .find(|a| a.name == *name)
             .with_context(|| format!("there is no assembly '{name}'"))?;
         let range = scene
             .motion_range(assembly.id)
             .with_context(|| format!("'{name}' doesn't move"))?;
-        let amount = if range.turns {
+        let amount = if range.turns() {
             value.to_radians()
         } else {
             *value
         };
-        overrides.push((assembly.id, amount.clamp(0.0, range.full)));
+        overrides.push((assembly.id, amount.clamp(0.0, range.full())));
     }
     let mut posed = scene.pose_with(entry, &overrides, amount);
     for prefix in &shot.hide {
@@ -152,9 +152,7 @@ pub fn pose_shot(design: &SolvedDesign, scene: &SceneGraph, shot: &Shot) -> Resu
             bail!("nothing is called '{prefix}'");
         }
         for id in hidden {
-            if let Some(slot) = posed.visible.get_mut(id.index()) {
-                *slot = false;
-            }
+            posed.set_shown(id, false);
         }
     }
     Ok(posed)
@@ -277,17 +275,17 @@ pub fn render_focus(
     let mut progress = focus_shot.step.unwrap_or(0.5);
     if let Some((assembly, range)) = focus.motion() {
         let name = design
-            .assemblies
+            .assemblies()
             .get(assembly.index())
             .map(|a| a.name.as_str());
         if let Some((_, value)) = shot.open.iter().find(|(n, _)| Some(n.as_str()) == name) {
-            let amount = if range.turns {
+            let amount = if range.turns() {
                 value.to_radians()
             } else {
                 *value
             };
-            progress = if range.full > 0.0 {
-                amount / range.full
+            progress = if range.full() > 0.0 {
+                amount / range.full()
             } else {
                 0.0
             };
@@ -306,9 +304,7 @@ pub fn render_focus(
     let mut posed = frame.posed;
     for prefix in &shot.hide {
         for id in nodes_named(scene, prefix) {
-            if let Some(slot) = posed.visible.get_mut(id.index()) {
-                *slot = false;
-            }
+            posed.set_shown(id, false);
         }
     }
     let plan = from_above.then(|| focus.plan()).flatten();
