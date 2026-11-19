@@ -1561,6 +1561,59 @@ and may add settings. Giving the same setting twice is
 `error[duplicate-name]`. A kind value's settings and fields are readable:
 `slide.length`, `slide.clearance`.
 
+**A kind chosen through a param must take what the declaration hands
+it.** A `JointKind` (or other kind type) param says only what class of
+kind it takes, not which roles and settings; the declaration that uses it
+decides that (`joint housing : joinery(board, into: sides, depth: depth)`
+hands its kind a part as `piece`, parts as `into` and a `depth`). When
+the kind that reaches such a declaration through a param (a component's
+or the project's) has no setting the declaration gives it, no role it
+names, or takes one part where it is handed several (or something else
+the role doesn't take), or the declaration hands nothing to one of its
+roles, the kind can never be used there, whatever the sizes. That is one
+`error[type-mismatch]` at the place the kind was chosen: the assembly's
+argument, or the param's default when it was not set (followed through a
+component that only passes the param on to another). The message names
+the kind, the param and its component; the first note says why, naming
+who hands what; the help names the kinds of the same class in scope
+there that take what is handed, by the same test; the declaration that
+uses the kind is a secondary place:
+
+```
+error[type-mismatch]: 'glued_edge' can't be the joinery of Shelf
+  --> shelf_test.stave:27:16
+   |
+27 |   joinery:     glued_edge
+   |                ^^^^^^^^^^
+  ::: std/casework/shelf.stave:26:47
+   |
+26 |   joint housing : joinery(board, into: sides, depth: depth)
+   |                                               ----- Shelf uses joinery here
+   = note: Shelf gives its joint a depth, and glued_edge has no depth
+   = help: choose a kind that takes what Shelf hands its joint: cope_and_stick, dado, dowel, groove, rabbet, socket, splined_edge, tongue_and_groove
+```
+
+The reason has one of four shapes: `<Shelf> gives its joint a <depth>,
+and <kind> has no <depth>`; `<Case> hands its joint a part as <into>,
+and <kind> has no <into>: it takes its parts only as <boards>`; `<Case>
+hands its joint two parts as <piece> (<case.side[left] and
+case.side[right]>), and <kind> takes one part there`; `<Housed> hands its
+joint nothing as <brace>, and <kind> needs one part there`. For a param of
+the project itself the message is `'<kind>' can't be the project's
+<joinery>` and the reason names the declaration (`the project gives
+housing a depth, ...`); for hardware it says `its hardware`. When no kind
+in scope takes what is handed, the help says so: `no joint kind in scope
+takes what <Shelf> hands its joint; use another component, or write a kind
+that does`. Nothing else is checked, cut or made for that declaration, and
+a second declaration whose kind fails the same way at the same choice (the
+Case's `base_joints` and `top_joints`, the elements of an array) is not a
+second error: it is a note on the first, `the same for top_joints`, and
+its line another secondary place. A kind written in the declaration itself
+(`joint j : glued_edge(a, into: b, depth: 9mm)`) keeps the messages of
+[Joints and hardware](#joints-and-hardware): there the field was written
+for that kind, and `the kind 'glued_edge' has no field 'depth'` is what to
+say.
+
 ### Roles and pairs
 
 - A role is `Part` (exactly one part) or `Parts` (one part or a list). A
@@ -3138,7 +3191,7 @@ shape of their messages are fixed, because tests and AI tools match on them.
 | 2 | `duplicate-name` | `'<name>' is declared twice` |
 | 2 | `ambiguous-name` | `'<name>' could be <this> or <that> here` |
 | 2 | `unit-mismatch` | `can't <add> <a length> and <an angle>`, or `'<field>' needs <a length>, found <a count>` |
-| 2, 4 | `type-mismatch` | `'<field>' needs <a part>, found <a region>` (for a param kind `'<locked>' needs a length, an angle, a ratio or a count, found <a stock>`; for shares `'shares' needs <3> numbers, one for each piece of <drawer_bay>, found <2>` or `'shares' needs a fixed number of pieces, found a count that can change`), `split takes 'at:' or 'shares:', not both`, or for a cut's shape `<joint>: the outline crosses itself between mark <n> and mark <n + 1>` |
+| 2, 4 | `type-mismatch` | `'<field>' needs <a part>, found <a region>` (for a param kind `'<locked>' needs a length, an angle, a ratio or a count, found <a stock>`; for shares `'shares' needs <3> numbers, one for each piece of <drawer_bay>, found <2>` or `'shares' needs a fixed number of pieces, found a count that can change`), `split takes 'at:' or 'shares:', not both`, for a cut's shape `<joint>: the outline crosses itself between mark <n> and mark <n + 1>`, or for a kind chosen through a param that doesn't take what its declaration hands it `'<kind>' can't be the <joinery> of <Shelf>` (`'<kind>' can't be the project's <joinery>`), its reason the first note (see [Kind values](#kind-values)) |
 | 2 | `unknown-field` | `<a part> has no field '<name>'` |
 | 2 | `missing-field` | `<what> is missing '<name>'` (`solved param 'overall_width' is missing 'within'`); a warning for a stock with no `max_length`: `<stock> doesn't say how long its <boards> are, so Stave can't check part lengths` |
 | 2 | `out-of-range` | `'<param>' must be within <domain>, found <value>`, or for a size that must be positive `'<up>' must be more than <0mm>, found <value>` (`'shares' must each be more than 0, found <value>`) |

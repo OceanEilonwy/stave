@@ -314,10 +314,22 @@ pub(crate) fn prepare(
     }
 }
 
-/// Puts the refused options after the rest, each part in the order the
-/// options are listed by their type.
+/// Puts the refused options after the rest, and of those the kinds
+/// refused by their signature last (they can never work for this
+/// component, whatever the sizes), each part in the order the options are
+/// listed by their type.
 pub(crate) fn sort_options(options: &mut [SettingOption]) {
-    options.sort_by_key(|option| (option.fit.is_refused(), option.position));
+    options.sort_by_key(|option| (refusal_rank(&option.fit), option.position));
+}
+
+/// 0 for an option not refused, 1 for one refused by what the design
+/// is now, 2 for a kind refused by its signature.
+fn refusal_rank(fit: &OptionFit) -> u8 {
+    match fit {
+        OptionFit::Refused(refusal) if refusal.by_signature() => 2,
+        OptionFit::Refused(_) => 1,
+        OptionFit::NotChecked | OptionFit::NeedsChoice(_) | OptionFit::Fits => 0,
+    }
 }
 
 /// Records a found fit in `candidate`; `false` when it has no such setting

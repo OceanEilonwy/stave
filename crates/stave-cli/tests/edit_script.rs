@@ -389,9 +389,11 @@ fn a_script_lists_a_settings_options_blames_a_refusal_and_puts_it_back() {
     for edge in ["chigiri", "splined_edge"] {
         assert!(row(edge).contains("  refused: error["), "{}", row(edge));
     }
+    // A kind that can never be a Case's joinery says why in one sentence.
     assert!(
-        row("half_lap")
-            .contains("refused: error[type-mismatch]: 'piece' needs a part, found parts"),
+        row("half_lap").ends_with(
+            "refused: Case hands its joint two parts as piece (case.side[left] and case.side[right]), and half_lap takes one part there"
+        ),
         "{}",
         row("half_lap")
     );
