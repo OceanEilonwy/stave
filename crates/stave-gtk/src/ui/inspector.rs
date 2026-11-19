@@ -276,7 +276,8 @@ impl Inspector {
             .filter(|c| c.section == ConnectionSection::HowItWorks)
             .collect();
         if !how.is_empty() {
-            let (section_box, body) = sections::section(inspection.connections_title, "", true);
+            let (section_box, body) =
+                sections::section(&tr(inspection.connections_title), "", true);
             for connection in how {
                 body.append(&self.connection_row(connection));
             }
@@ -339,11 +340,11 @@ impl Inspector {
     /// as links.
     fn field_row(&self, field: &Field) -> gtk::Box {
         if field.links.is_empty() {
-            return sections::row(field.label, &sections::value(&field.value));
+            return sections::row(&tr(field.label), &sections::value(&field.value));
         }
         let links = self.links.links(&field.links);
         links.set_tooltip_text(Some(&field.value));
-        sections::row(field.label, &links)
+        sections::row(&tr(field.label), &links)
     }
 
     /// A joint, hardware or cut row: its name on the left (opening focus

@@ -3,6 +3,7 @@
 //! place of the operating system's error text. The interface shows it in
 //! a dialog; work is never lost quietly.
 
+use crate::i18n::{fill_in, tr};
 use std::io;
 use std::path::Path;
 
@@ -16,18 +17,20 @@ pub struct SaveFailure {
 }
 
 /// What a failed write means, by why the system refused it.
-pub fn advice(error: &io::Error) -> &'static str {
+pub fn advice(error: &io::Error) -> String {
     match error.kind() {
-        io::ErrorKind::PermissionDenied | io::ErrorKind::ReadOnlyFilesystem => {
-            "The folder can't be written to. Save a copy somewhere else, or check that the folder isn't read-only."
-        }
+        io::ErrorKind::PermissionDenied | io::ErrorKind::ReadOnlyFilesystem => tr(
+            "The folder can't be written to. Save a copy somewhere else, or check that the folder isn't read-only.",
+        ),
         io::ErrorKind::StorageFull | io::ErrorKind::QuotaExceeded => {
-            "The disk is full. Make some room and try again, or save a copy on another disk."
+            tr("The disk is full. Make some room and try again, or save a copy on another disk.")
         }
-        io::ErrorKind::NotFound => {
-            "The folder the file was in isn't there any more (it may have been moved, renamed or unplugged). Save a copy somewhere else."
-        }
-        _ => "Something stopped the file being written. Try again, or save a copy somewhere else.",
+        io::ErrorKind::NotFound => tr(
+            "The folder the file was in isn't there any more (it may have been moved, renamed or unplugged). Save a copy somewhere else.",
+        ),
+        _ => tr(
+            "Something stopped the file being written. Try again, or save a copy somewhere else.",
+        ),
     }
 }
 
@@ -36,35 +39,43 @@ pub fn advice(error: &io::Error) -> &'static str {
 pub fn describe(error: &stave_ide::SaveError, folder: &Path) -> SaveFailure {
     match error {
         stave_ide::SaveError::Unwritable { path, source } => SaveFailure {
-            heading: format!("Couldn't Save {}", file_name(path)),
-            body: format!(
-                "{} Your changes are still in the editor.\n\nFile: {}",
-                advice(source),
-                path.strip_prefix(folder).unwrap_or(path).display()
+            heading: couldnt_save(&file_name(path)),
+            body: fill_in(
+                &tr("{advice} Your changes are still in the editor.\n\nFile: {file}"),
+                &[
+                    ("advice", &advice(source)),
+                    ("file", &path.strip_prefix(folder).unwrap_or(path).display()),
+                ],
             ),
         },
         stave_ide::SaveError::ReadOnly(name) => SaveFailure {
-            heading: format!("Couldn't Save {name}"),
-            body: "This file is part of Stave's standard library and can't be changed. Save a copy in your project folder to change it there.".to_owned(),
+            heading: couldnt_save(name),
+            body: tr(
+                "This file is part of Stave's standard library and can't be changed. Save a copy in your project folder to change it there.",
+            ),
         },
         stave_ide::SaveError::NotOpen(name) => SaveFailure {
-            heading: format!("Couldn't Save {name}"),
-            body: "The file isn't open in the editor any more, so there is nothing to save. Open it again to make changes.".to_owned(),
+            heading: couldnt_save(name),
+            body: tr(
+                "The file isn't open in the editor any more, so there is nothing to save. Open it again to make changes.",
+            ),
         },
     }
 }
 
 /// Puts a failed "Export 3D Model…" into words.
 pub fn describe_export(error: &crate::export_view::SaveError, path: &Path) -> SaveFailure {
-    let heading = format!("Couldn't Save {}", file_name(path));
+    let heading = couldnt_save(&file_name(path));
     match error {
         crate::export_view::SaveError::Export(_) => SaveFailure {
             heading,
-            body: "The 3D view couldn't be turned into a glTF file. Check the design for problems, then try again.".to_owned(),
+            body: tr(
+                "The 3D view couldn't be turned into a glTF file. Check the design for problems, then try again.",
+            ),
         },
         crate::export_view::SaveError::Write { source, .. } => SaveFailure {
             heading,
-            body: format!("{}\n\nFile: {}", advice(source), path.display()),
+            body: advice_and_file(&advice(source), path),
         },
     }
 }
@@ -73,9 +84,22 @@ pub fn describe_export(error: &crate::export_view::SaveError, path: &Path) -> Sa
 /// the open document as it was.
 pub fn save_copy(path: &Path, text: &str) -> Result<(), SaveFailure> {
     std::fs::write(path, text).map_err(|error| SaveFailure {
-        heading: format!("Couldn't Save {}", file_name(path)),
-        body: format!("{}\n\nFile: {}", advice(&error), path.display()),
+        heading: couldnt_save(&file_name(path)),
+        body: advice_and_file(&advice(&error), path),
     })
+}
+
+/// "Couldn't Save shelf.stave".
+fn couldnt_save(name: &str) -> String {
+    fill_in(&tr("Couldn't Save {file}"), &[("file", &name)])
+}
+
+/// The advice, then the file it is about.
+fn advice_and_file(advice: &str, path: &Path) -> String {
+    fill_in(
+        &tr("{advice}\n\nFile: {file}"),
+        &[("advice", &advice), ("file", &path.display())],
+    )
 }
 
 fn file_name(path: &Path) -> String {

@@ -4,7 +4,7 @@
 //! (its kind, its stock and size, how it moves, its joints and cuts, and
 //! where it is written in the text, with the snippet highlighted).
 
-use crate::i18n::tr;
+use crate::i18n::{fill_in, ntr, tr, tr_noop};
 use stave_lang::Severity;
 use stave_lang::units::{Angle, Length};
 use stave_lang::{SourceMap, SyntaxKind};
@@ -247,8 +247,10 @@ pub(crate) fn relative<'a>(
 /// "turns 110°", "slides out 400 mm".
 fn motion_words(mechanism: &Mechanism) -> String {
     match mechanism.drive().extent() {
-        DriveValue::Turn(angle) => format!("turns {}", degrees(angle)),
-        DriveValue::Travel(travel) => format!("slides out {}", mm(travel)),
+        DriveValue::Turn(angle) => fill_in(&tr("turns {angle}"), &[("angle", &degrees(angle))]),
+        DriveValue::Travel(travel) => {
+            fill_in(&tr("slides out {length}"), &[("length", &mm(travel))])
+        }
     }
 }
 
@@ -428,7 +430,7 @@ pub fn parts_tree(design: &SolvedDesign) -> PartsTree {
             .map(|part| {
                 let label = relative(design, &part.name, part.assembly).to_owned();
                 let detail = match part.shape {
-                    Shape::Turned { .. } => "turned".to_owned(),
+                    Shape::Turned { .. } => tr("turned"),
                     Shape::Board | Shape::Round { .. } => part.stock.name.clone(),
                 };
                 let mirror_of = match part.origin {
@@ -543,7 +545,7 @@ pub fn parts_tree(design: &SolvedDesign) -> PartsTree {
             (Some(source), _) => design
                 .assemblies
                 .get(source.index())
-                .map(|s| format!("mirror of {}", s.name)),
+                .map(|s| fill_in(&tr("mirror of {name}"), &[("name", &s.name)])),
             (None, Some(motion)) => Some(motion_words(motion)),
             (None, None) => Some(assembly.component.clone()),
         };
@@ -769,8 +771,14 @@ fn moves_row(design: &SolvedDesign, moving: Option<AssemblyId>) -> Option<Row> {
     let assembly = design.assemblies.get(moving?.index())?;
     let motion = assembly.mechanism.as_ref()?;
     Some(Row {
-        label: "Moves",
-        value: format!("with {}, {}", assembly.name, motion_words(motion)),
+        label: tr_noop("Moves"),
+        value: fill_in(
+            &tr("with {assembly}, {motion}"),
+            &[
+                ("assembly", &assembly.name),
+                ("motion", &motion_words(motion)),
+            ],
+        ),
     })
 }
 
@@ -1079,7 +1087,7 @@ fn with_names(links: &[NameLink]) -> String {
         return String::new();
     }
     let names: Vec<&str> = links.iter().map(|link| link.name.as_str()).collect();
-    format!("with {}", names.join(", "))
+    fill_in(&tr("with {names}"), &[("names", &names.join(", "))])
 }
 
 /// The hardware mounted on a part, one row per kind and face
@@ -1096,7 +1104,7 @@ fn hardware_on(design: &SolvedDesign, part: &Part) -> Vec<Connection> {
             .next()
             .unwrap_or(&hardware.kind)
             .to_owned();
-        let face = format!("{} face", hardware.mount_face.word());
+        let face = fill_in(&tr("{face} face"), &[("face", &hardware.mount_face.word())]);
         match groups.iter_mut().find(|(k, f, _)| *k == kind && *f == face) {
             Some((_, _, ids)) => ids.push(hardware.id),
             None => groups.push((kind, face, vec![hardware.id])),
@@ -1130,7 +1138,10 @@ fn hardware_on(design: &SolvedDesign, part: &Part) -> Vec<Connection> {
                 } else {
                     format!("{kind} ×{}", ids.len())
                 },
-                rest: format!("on its {face}: {}", with_names(&partners)),
+                rest: fill_in(
+                    &tr("on its {face}: {names}"),
+                    &[("face", &face), ("names", &with_names(&partners))],
+                ),
                 partners,
                 note: face,
                 section: ConnectionSection::Joined,
@@ -1141,7 +1152,7 @@ fn hardware_on(design: &SolvedDesign, part: &Part) -> Vec<Connection> {
     if !hinged_on.is_empty() {
         rows.push(Connection {
             swatch: hardware_swatch(),
-            lead: "hinged on".to_owned(),
+            lead: tr("hinged on"),
             rest: with_names(&hinged_on),
             partners: hinged_on,
             note: String::new(),
@@ -1197,7 +1208,7 @@ fn inspect_part(checked: &Checked, design: &SolvedDesign, id: PartId) -> Option<
     };
     let description = model.and_then(|m| part_decl(m, declared)).and_then(docs);
     let thickness = match part.shape {
-        Shape::Round { diameter } => format!("{} across", mm(diameter)),
+        Shape::Round { diameter } => fill_in(&tr("{length} across"), &[("length", &mm(diameter))]),
         Shape::Board | Shape::Turned { .. } => part
             .stock
             .thickness
@@ -1205,7 +1216,7 @@ fn inspect_part(checked: &Checked, design: &SolvedDesign, id: PartId) -> Option<
     };
     let mut rows = vec![
         Row {
-            label: "Stock",
+            label: tr_noop("Stock"),
             value: format!(
                 "{} · {}, {thickness}",
                 part.stock.name,
@@ -1213,7 +1224,7 @@ fn inspect_part(checked: &Checked, design: &SolvedDesign, id: PartId) -> Option<
             ),
         },
         Row {
-            label: "Finished size",
+            label: tr_noop("Finished size"),
             value: format!(
                 "{} × {} × {}",
                 mm(part.cut.length).trim_end_matches(" mm"),
@@ -1222,14 +1233,17 @@ fn inspect_part(checked: &Checked, design: &SolvedDesign, id: PartId) -> Option<
             ),
         },
         Row {
-            label: "Grain",
-            value: format!("along the {}", part.grain.word()),
+            label: tr_noop("Grain"),
+            value: fill_in(
+                &tr("along the {direction}"),
+                &[("direction", &part.grain.word())],
+            ),
         },
     ];
     if let Shape::Turned { profile, .. } = &part.shape {
         rows.push(Row {
-            label: "Shape",
-            value: format!("turned to {profile}"),
+            label: tr_noop("Shape"),
+            value: fill_in(&tr("turned to {profile}"), &[("profile", &profile)]),
         });
     }
     let mut rows: Vec<Field> = rows.into_iter().map(Field::from).collect();
@@ -1237,7 +1251,7 @@ fn inspect_part(checked: &Checked, design: &SolvedDesign, id: PartId) -> Option<
         && let Some(source) = design.part(source)
     {
         rows.push(Field {
-            label: "Mirror of",
+            label: tr_noop("Mirror of"),
             value: source.name.clone(),
             links: vec![part_link(design, source.id, part.assembly)],
         });
@@ -1246,7 +1260,7 @@ fn inspect_part(checked: &Checked, design: &SolvedDesign, id: PartId) -> Option<
     rows.extend(moves_row(design, moves_with).map(Field::from));
     if let Some(note) = &part.note {
         rows.push(Field {
-            label: "Note",
+            label: tr_noop("Note"),
             value: note.clone(),
             links: Vec::new(),
         });
@@ -1354,7 +1368,7 @@ fn inspect_part(checked: &Checked, design: &SolvedDesign, id: PartId) -> Option<
         swatch: Some(part_swatch(part)),
         checks: failing_checks(checked, Item::Part(id)),
         rows,
-        connections_title: "Joints and cuts",
+        connections_title: tr_noop("Joints and cuts"),
         connections,
         moves_with,
         source,
@@ -1373,18 +1387,21 @@ fn inspect_hardware(
         .and_then(|k| docs(&k.decl));
     let piece = design.part(hardware.piece).map_or("?", |p| p.name.as_str());
     let what = match hardware.base {
-        HardwareBase::Hinge => "hinge",
-        HardwareBase::Slide => "drawer slide",
-        HardwareBase::Pull => "pull",
+        HardwareBase::Hinge => tr("hinge"),
+        HardwareBase::Slide => tr("drawer slide"),
+        HardwareBase::Pull => tr("pull"),
     };
     let mut rows = vec![
         Field::from(Row {
-            label: "Kind",
+            label: tr_noop("Kind"),
             value: format!("{} ({what})", hardware.kind),
         }),
         Field {
-            label: "Mounted on",
-            value: format!("{piece}, {} face", hardware.mount_face.word()),
+            label: tr_noop("Mounted on"),
+            value: fill_in(
+                &tr("{piece}, {face} face"),
+                &[("piece", &piece), ("face", &hardware.mount_face.word())],
+            ),
             links: vec![part_link(design, hardware.piece, None)],
         },
     ];
@@ -1392,7 +1409,7 @@ fn inspect_hardware(
     rows.extend(moves_row(design, moves_with).map(Field::from));
     let connections = vec![Connection {
         swatch: hardware_swatch(),
-        lead: "See how it works".to_owned(),
+        lead: tr("See how it works"),
         rest: String::new(),
         partners: Vec::new(),
         note: String::new(),
@@ -1409,7 +1426,7 @@ fn inspect_hardware(
         swatch: Some(hardware_swatch()),
         checks: failing_checks(checked, Item::Hardware(id)),
         rows,
-        connections_title: "How it works",
+        connections_title: tr_noop("How it works"),
         connections,
         moves_with,
         source,
@@ -1429,12 +1446,12 @@ fn inspect_assembly(
         .and_then(|(m, a)| m.defs.component(a.component))
         .and_then(|c| docs(&c.decl));
     let mut rows = vec![Row {
-        label: "Component",
+        label: tr_noop("Component"),
         value: assembly.component.clone(),
     }];
     if let Some(motion) = &assembly.mechanism {
         rows.push(Row {
-            label: "Moves",
+            label: tr_noop("Moves"),
             value: motion_words(motion),
         });
     }
@@ -1444,7 +1461,7 @@ fn inspect_assembly(
         .and_then(|s| design.assemblies.get(s.index()))
     {
         rows.push(Field {
-            label: "Mirror of",
+            label: tr_noop("Mirror of"),
             value: source.name.clone(),
             links: vec![NameLink {
                 name: source.name.clone(),
@@ -1453,16 +1470,17 @@ fn inspect_assembly(
         });
     }
     rows.push(Field::from(Row {
-        label: "Inside",
-        value: format!(
-            "{} {}, {} of hardware",
-            assembly.parts.len(),
-            if assembly.parts.len() == 1 {
-                "part"
-            } else {
-                "parts"
-            },
-            assembly.hardware.len()
+        label: tr_noop("Inside"),
+        value: fill_in(
+            &ntr(
+                "{parts} part, {hardware} of hardware",
+                "{parts} parts, {hardware} of hardware",
+                assembly.parts.len(),
+            ),
+            &[
+                ("parts", &assembly.parts.len()),
+                ("hardware", &assembly.hardware.len()),
+            ],
         ),
     }));
     let moves_with = moving(design, Some(id));
@@ -1483,7 +1501,7 @@ fn inspect_assembly(
         swatch: None,
         checks: Vec::new(),
         rows,
-        connections_title: "Joints and cuts",
+        connections_title: tr_noop("Joints and cuts"),
         connections: Vec::new(),
         moves_with,
         source,
@@ -1533,31 +1551,31 @@ fn inspect_member(
     };
     let mut rows = vec![
         Row {
-            label: "Placed by",
+            label: tr_noop("Placed by"),
             value: format!("{} ({})", joint.name, joint.kind),
         },
         Row {
-            label: "Pair",
+            label: tr_noop("Pair"),
             value: focus::title(design, target),
         },
     ];
     rows.extend(body.item.as_ref().map(|item| Row {
-        label: "Fastener",
+        label: tr_noop("Fastener"),
         value: crate::view::item_text(item),
     }));
     rows.push(Row {
-        label: "Copies",
+        label: tr_noop("Copies"),
         value: body.copies().to_string(),
     });
     rows.push(Row {
-        label: "Each",
+        label: tr_noop("Each"),
         value: crate::view::copy_text(body),
     });
     let mut rows: Vec<Field> = rows.into_iter().map(Field::from).collect();
     let carrier = body.carried_by().and_then(|part| design.part(part));
     if let Some(part) = carrier {
         rows.push(Field {
-            label: "Goes in with",
+            label: tr_noop("Goes in with"),
             value: part.name.clone(),
             links: vec![part_link(design, part.id, None)],
         });
@@ -1579,10 +1597,10 @@ fn inspect_member(
         swatch: Some(member_swatch(body)),
         checks: failing_checks(checked, Item::Member(member)),
         rows,
-        connections_title: "How it goes together",
+        connections_title: tr_noop("How it goes together"),
         connections: vec![Connection {
             swatch: member_swatch(body),
-            lead: "See how it goes together".to_owned(),
+            lead: tr("See how it goes together"),
             rest: String::new(),
             partners: Vec::new(),
             note: String::new(),
@@ -1608,11 +1626,11 @@ fn inspect_joint(
     let target = Target::Joint { joint: id, pair };
     let rows = vec![
         Row {
-            label: "Kind",
+            label: tr_noop("Kind"),
             value: joint.kind.clone(),
         },
         Row {
-            label: "Pair",
+            label: tr_noop("Pair"),
             value: focus::title(design, target),
         },
     ];
@@ -1630,10 +1648,10 @@ fn inspect_joint(
         swatch: None,
         checks: Vec::new(),
         rows: rows.into_iter().map(Field::from).collect(),
-        connections_title: "How it goes together",
+        connections_title: tr_noop("How it goes together"),
         connections: vec![Connection {
             swatch: hardware_swatch(),
-            lead: "See how it goes together".to_owned(),
+            lead: tr("See how it goes together"),
             rest: String::new(),
             partners: Vec::new(),
             note: String::new(),

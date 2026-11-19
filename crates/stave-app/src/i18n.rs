@@ -58,9 +58,10 @@ pub fn tr(message: &str) -> String {
 /// otherwise). The chosen template usually holds `{count}`; fill it with
 /// [`fill_in`].
 #[must_use]
-pub fn ntr(singular: &str, plural: &str, count: usize) -> String {
-    // gettext counts in `u32`; past that, every language uses its plural.
-    let count = u32::try_from(count).unwrap_or(u32::MAX);
+pub fn ntr(singular: &str, plural: &str, count: impl TryInto<u32>) -> String {
+    // gettext counts in `u32`; past that (or below 0), every language uses
+    // its plural.
+    let count = count.try_into().unwrap_or(u32::MAX);
     gettextrs::dngettext(DOMAIN, singular, plural, count)
 }
 

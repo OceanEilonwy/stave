@@ -86,6 +86,7 @@
 //! rate: a piece in which one moves holds only its own target. The same
 //! drag gives the same values every time.
 
+use crate::i18n::tr;
 use std::collections::BTreeMap;
 use std::sync::atomic::AtomicBool;
 
@@ -122,16 +123,16 @@ const NUMBER_SCALE: i64 = 1_000_000_000;
 #[derive(Debug, thiserror::Error)]
 pub enum SolveEditError {
     /// The project's design doesn't solve, so there is nothing to edit.
-    #[error("the design has errors that stop it being placed; fix them first")]
+    #[error("{}", self.text())]
     NoDesign,
     /// The size couldn't be traced.
     #[error(transparent)]
     Trace(#[from] TraceError),
     /// The target is not the same kind of value as the size.
-    #[error("the target is not the same kind of value as the size")]
+    #[error("{}", self.text())]
     Mismatch,
     /// The numbers are too large to work with exactly.
-    #[error("the numbers are too large")]
+    #[error("{}", self.text())]
     Overflow,
     /// The solver failed.
     #[error(transparent)]
@@ -142,6 +143,23 @@ pub enum SolveEditError {
     /// The scratch check couldn't run, or was cancelled.
     #[error(transparent)]
     Try(#[from] TryError),
+}
+
+impl SolveEditError {
+    /// The error in the window's words (translated).
+    fn text(&self) -> String {
+        match self {
+            SolveEditError::NoDesign => {
+                tr("the design has errors that stop it being placed; fix them first")
+            }
+            SolveEditError::Trace(error) => error.to_string(),
+            SolveEditError::Mismatch => tr("the target is not the same kind of value as the size"),
+            SolveEditError::Overflow => tr("the numbers are too large"),
+            SolveEditError::Smt(error) => error.to_string(),
+            SolveEditError::Patch(error) => error.to_string(),
+            SolveEditError::Try(error) => error.to_string(),
+        }
+    }
 }
 
 /// Why a size is left to single-param inversion.

@@ -24,6 +24,7 @@
 //! change started from to the final text, so a file changed since is
 //! never overwritten.
 
+use crate::i18n::{fill_in, tr};
 use std::collections::BTreeMap;
 use std::io;
 use std::num::NonZeroU32;
@@ -260,8 +261,18 @@ pub enum ChangeError {
     /// The change can't be written for this design, in words (an
     /// unknown item, a repeat of something that fills no space, no
     /// mirror image, a name already used, ...).
-    #[error("{0}")]
+    #[error("{}", self.text())]
     Unwritable(String),
+}
+
+impl ChangeError {
+    /// The error in the window's words (translated).
+    fn text(&self) -> String {
+        match self {
+            ChangeError::Start(error) => error.to_string(),
+            ChangeError::Unwritable(v0) => fill_in(&tr("{value}"), &[("value", v0)]),
+        }
+    }
 }
 
 impl Change {

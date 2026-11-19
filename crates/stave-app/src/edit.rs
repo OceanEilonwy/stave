@@ -18,6 +18,7 @@
 //! [`Fix`] is a parsed [`Patch`], and diagnostics are the checker's own
 //! [`Diagnostic`]s. Ids are the resolved model's ([`stave_model::ids`]).
 
+use crate::i18n::tr;
 use stave_lang::ast::{
     AssemblyDef, DesignItem, Expr, Ident, ItemKind, Name, PatchOpKind, Span, StringPart, TypeName,
 };
@@ -34,27 +35,42 @@ pub use stave_lang::ast::Patch;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum ContractError {
     /// Two facing parts are two different parts.
-    #[error("a part can't face itself")]
+    #[error("{}", self.text())]
     SamePart,
     /// A refusal lists errors, never warnings.
-    #[error("a refusal lists errors only")]
+    #[error("{}", self.text())]
     NotAnError,
     /// A candidate that fits has warnings at most.
-    #[error("a candidate that fits has no errors")]
+    #[error("{}", self.text())]
     ErrorInFits,
     /// A refusal has at least one error.
-    #[error("a refusal needs at least one error")]
+    #[error("{}", self.text())]
     NoProblems,
     /// A fix changes something.
-    #[error("a fix needs at least one operation")]
+    #[error("{}", self.text())]
     EmptyPatch,
     /// A grip's value lies within its range, its range runs low to high,
     /// and its stops lie within the range.
-    #[error("a grip's value and stops must lie within its range")]
+    #[error("{}", self.text())]
     OutsideRange,
     /// A grip's step is more than zero.
-    #[error("a grip's step must be more than zero")]
+    #[error("{}", self.text())]
     StepNotPositive,
+}
+
+impl ContractError {
+    /// The error in the window's words (translated).
+    fn text(&self) -> String {
+        match self {
+            ContractError::SamePart => tr("a part can't face itself"),
+            ContractError::NotAnError => tr("a refusal lists errors only"),
+            ContractError::ErrorInFits => tr("a candidate that fits has no errors"),
+            ContractError::NoProblems => tr("a refusal needs at least one error"),
+            ContractError::EmptyPatch => tr("a fix needs at least one operation"),
+            ContractError::OutsideRange => tr("a grip's value and stops must lie within its range"),
+            ContractError::StepNotPositive => tr("a grip's step must be more than zero"),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

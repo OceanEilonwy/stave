@@ -301,7 +301,7 @@ impl FocusPanel {
                 .build();
             line.append(
                 &gtk::Label::builder()
-                    .label(entry.label)
+                    .label(tr(entry.label))
                     .xalign(0.0)
                     .valign(gtk::Align::Start)
                     .css_classes(["stave-key"])
@@ -317,7 +317,9 @@ impl FocusPanel {
                 .build();
             if matches!(entry.label, "Fit" | "Swing check" | "Slide check") {
                 value.add_css_class(
-                    if entry.value.starts_with("touches") || entry.value.starts_with("clear") {
+                    if entry.value == stave_app::focus::fits_words()
+                        || entry.value == stave_app::focus::clear_words()
+                    {
                         "good"
                     } else {
                         "bad"

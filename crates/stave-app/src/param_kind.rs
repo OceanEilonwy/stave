@@ -15,6 +15,7 @@
 //! top-level params can be changed: a library's are read-only, and a
 //! component's params are set per assembly.
 
+use crate::i18n::{fill_in, tr};
 use stave_lang::ast::{DesignItem, ItemKind, ParamMark};
 
 use crate::candidates::EditScope;
@@ -39,18 +40,16 @@ pub enum NewParamKind {
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ParamKindError {
     /// The project has no top-level param by that name.
-    #[error("there is no param named '{0}' in this project")]
+    #[error("{}", self.text())]
     UnknownParam(String),
     /// The param is locked.
-    #[error(
-        "'{0}' is a locked param, which no edit changes; take 'locked' off it in the text first"
-    )]
+    #[error("{}", self.text())]
     Locked(String),
     /// The param has no default, so there is nothing to solve from.
-    #[error("'{0}' has no default value, so it can't be solved for")]
+    #[error("{}", self.text())]
     NoDefault(String),
     /// The param is already of that kind.
-    #[error("'{name}' is already a {kind} param")]
+    #[error("{}", self.text())]
     Already {
         /// The param.
         name: String,
@@ -58,11 +57,42 @@ pub enum ParamKindError {
         kind: &'static str,
     },
     /// The source text couldn't be read back.
-    #[error("the text of '{0}' couldn't be read")]
+    #[error("{}", self.text())]
     Unreadable(String),
     /// The written patch didn't parse.
     #[error(transparent)]
     Build(#[from] PatchBuildError),
+}
+
+impl ParamKindError {
+    /// The error in the window's words (translated).
+    fn text(&self) -> String {
+        match self {
+            ParamKindError::UnknownParam(v0) => fill_in(
+                &tr("there is no param named '{value}' in this project"),
+                &[("value", v0)],
+            ),
+            ParamKindError::Locked(v0) => fill_in(
+                &tr(
+                    "'{value}' is a locked param, which no edit changes; take 'locked' off it in the text first",
+                ),
+                &[("value", v0)],
+            ),
+            ParamKindError::NoDefault(v0) => fill_in(
+                &tr("'{value}' has no default value, so it can't be solved for"),
+                &[("value", v0)],
+            ),
+            ParamKindError::Already { name, kind } => fill_in(
+                &tr("'{name}' is already a {kind} param"),
+                &[("name", name), ("kind", kind)],
+            ),
+            ParamKindError::Unreadable(v0) => fill_in(
+                &tr("the text of '{value}' couldn't be read"),
+                &[("value", v0)],
+            ),
+            ParamKindError::Build(error) => error.to_string(),
+        }
+    }
 }
 
 /// The patch that gives the project's param `name` another kind (see the

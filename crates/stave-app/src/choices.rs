@@ -14,6 +14,7 @@
 //! is described ([`crate::edit::SettingParam::recent`]); nothing is kept
 //! outside the `.stave` files.
 
+use crate::i18n::{fill_in, tr};
 use std::cmp::Ordering;
 
 use stave_lang::ast::TypeName;
@@ -205,7 +206,7 @@ impl SearchGroup {
     pub fn title(&self) -> String {
         match &self.group {
             Some(group) => group_title(group),
-            None => "Values".to_owned(),
+            None => tr("Values"),
         }
     }
 }
@@ -214,9 +215,11 @@ impl SearchGroup {
 /// module, by the name it is imported under), "Standard · joinery".
 pub fn group_title(group: &MenuGroup) -> String {
     match group {
-        MenuGroup::Project => "In this project".to_owned(),
+        MenuGroup::Project => tr("In this project"),
         MenuGroup::Module(name) => name.as_str().to_owned(),
-        MenuGroup::Standard(name) => format!("Standard · {}", name.as_str()),
+        MenuGroup::Standard(name) => {
+            fill_in(&tr("Standard · {module}"), &[("module", &name.as_str())])
+        }
     }
 }
 

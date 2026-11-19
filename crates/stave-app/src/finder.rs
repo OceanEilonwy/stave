@@ -215,7 +215,7 @@ fn files_and_names(analysis: &Analysis, query: &str) -> Vec<Hit> {
             label: found.label,
             detail: if is_file {
                 if found.location.document.is_read_only() {
-                    "read only".to_owned()
+                    tr("read only")
                 } else {
                     String::new()
                 }

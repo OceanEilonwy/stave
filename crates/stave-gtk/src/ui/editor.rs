@@ -1053,11 +1053,7 @@ fn count_text(
         )
     } else {
         fill_in(
-            &ntr(
-                "{count} match",
-                "{count} matches",
-                usize::try_from(total).unwrap_or(0),
-            ),
+            &ntr("{count} match", "{count} matches", total),
             &[("count", &total)],
         )
     }

@@ -39,6 +39,7 @@
 //! The prepared base is never changed by trying: every candidate and
 //! every change is tried from the design as it was when the edit began.
 
+use crate::i18n::{fill_in, tr};
 use std::cell::RefCell;
 use std::fmt;
 use std::io;
@@ -418,10 +419,21 @@ pub enum StartError {
     Scope(#[from] ScopeError),
     /// The design doesn't solve, so there is nothing to check an edit
     /// against.
-    #[error(
-        "the design can't be edited by pointing until it places: fix the errors `stave check` shows first"
-    )]
+    #[error("{}", self.text())]
     NotSolved,
+}
+
+impl StartError {
+    /// The error in the window's words (translated).
+    fn text(&self) -> String {
+        match self {
+            StartError::Load(error) => error.to_string(),
+            StartError::Scope(error) => error.to_string(),
+            StartError::NotSolved => tr(
+                "the design can't be edited by pointing until it places: fix the errors `stave check` shows first",
+            ),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -576,19 +588,33 @@ pub struct FileEdit {
 #[derive(Debug, thiserror::Error)]
 pub enum CommitError {
     /// No candidate is chosen.
-    #[error("choose something from the menu first")]
+    #[error("{}", self.text())]
     NothingChosen,
     /// The candidate doesn't fit.
-    #[error("the edit doesn't fit, so nothing was written")]
+    #[error("{}", self.text())]
     DoesNotFit,
     /// A file couldn't be written (the files before it were).
-    #[error("can't write '{}': {source}", path.display())]
+    #[error("{}", self.text())]
     Write {
         /// The file.
         path: PathBuf,
         /// What went wrong.
         source: io::Error,
     },
+}
+
+impl CommitError {
+    /// The error in the window's words (translated).
+    fn text(&self) -> String {
+        match self {
+            CommitError::NothingChosen => tr("choose something from the menu first"),
+            CommitError::DoesNotFit => tr("the edit doesn't fit, so nothing was written"),
+            CommitError::Write { path, source } => fill_in(
+                &tr("can't write '{path}': {source}"),
+                &[("path", &path.display()), ("source", source)],
+            ),
+        }
+    }
 }
 
 impl Edit {

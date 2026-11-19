@@ -25,6 +25,7 @@
 //! navigation layer knows), so a mirror comes as the rename's text edits
 //! ([`stave_ide::Analysis::rename`]) and a patch that applies after them.
 
+use crate::i18n::{fill_in, tr, tr_noop};
 use std::num::NonZeroU32;
 
 use stave_ide::{Analysis, RenameEdit, RenameError};
@@ -58,9 +59,12 @@ pub struct GeneratedPatch {
     pub parse: Parse<ast::PatchFile>,
 }
 
+/// What a [`PatchBuildError`] says.
+const PATCH_BUG: &str = tr_noop("the written patch doesn't parse; please report this as a bug");
+
 /// A generated patch didn't parse: a bug in the writer.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[error("the written patch doesn't parse; please report this as a bug")]
+#[error("{}", tr(PATCH_BUG))]
 pub struct PatchBuildError(pub Vec<Diagnostic>);
 
 impl GeneratedPatch {
@@ -104,10 +108,10 @@ impl GeneratedPatch {
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum RepeatError {
     /// The project has no top-level item by that name.
-    #[error("there is no item named '{0}' in this project")]
+    #[error("{}", self.text())]
     UnknownItem(String),
     /// The item isn't of the sort the request needs.
-    #[error("'{name}' can't be repeated this way: {reason}")]
+    #[error("{}", self.text())]
     NotRepeatable {
         /// The item.
         name: String,
@@ -115,7 +119,7 @@ pub enum RepeatError {
         reason: String,
     },
     /// The repeat already has that many pieces.
-    #[error("'{name}' already has {count} pieces")]
+    #[error("{}", self.text())]
     SameCount {
         /// The item.
         name: String,
@@ -123,10 +127,10 @@ pub enum RepeatError {
         count: usize,
     },
     /// A first repeat needs the axis to split along.
-    #[error("say which way to split the space for '{0}': across, up or deep")]
+    #[error("{}", self.text())]
     NoAxis(String),
     /// `shares:` with the wrong number of entries.
-    #[error("{pieces} pieces need {pieces} shares, found {found}")]
+    #[error("{}", self.text())]
     SharesCount {
         /// How many pieces.
         pieces: usize,
@@ -134,10 +138,10 @@ pub enum RepeatError {
         found: usize,
     },
     /// The split's shares are not plain numbers, so a grip can't move them.
-    #[error("the shares of '{0}' are not plain numbers, so they can't be moved by a grip")]
+    #[error("{}", self.text())]
     SharesNotNumbers(String),
     /// The grip names pieces the split doesn't have.
-    #[error("'{region}' has no pieces {lower} and {upper}")]
+    #[error("{}", self.text())]
     NoSuchPieces {
         /// The region.
         region: String,
@@ -147,20 +151,16 @@ pub enum RepeatError {
         upper: usize,
     },
     /// The boundary is dragged onto or past the far side of a piece.
-    #[error(
-        "the boundary must leave both pieces more than 0mm; it can move between 0mm and {pair}"
-    )]
+    #[error("{}", self.text())]
     BoundaryOutside {
         /// The two pieces' sizes together.
         pair: Length,
     },
     /// The design has no solved region by that name (it didn't solve).
-    #[error("the design has no solved space named '{0}'; it must solve before a grip can move it")]
+    #[error("{}", self.text())]
     NotSolved(String),
     /// No mirror image was found for the assembly.
-    #[error(
-        "'{0}' isn't placed against a part that has a mirror image, or in one of two matching spaces, so it has no mirror image to add"
-    )]
+    #[error("{}", self.text())]
     NoMirror(String),
     /// The rename a mirror makes was refused.
     #[error(transparent)]
@@ -170,11 +170,75 @@ pub enum RepeatError {
     Naming(#[from] NamingError),
     /// Arithmetic that doesn't fit the exact numbers (a bug, or sizes of
     /// kilometres).
-    #[error("the sizes are too large to work with exactly")]
+    #[error("{}", self.text())]
     Overflow,
     /// The written patch didn't parse: a bug.
     #[error(transparent)]
     Build(#[from] PatchBuildError),
+}
+
+impl RepeatError {
+    /// The error in the window's words (translated).
+    fn text(&self) -> String {
+        match self {
+            RepeatError::UnknownItem(v0) => fill_in(
+                &tr("there is no item named '{value}' in this project"),
+                &[("value", v0)],
+            ),
+            RepeatError::NotRepeatable { name, reason } => fill_in(
+                &tr("'{name}' can't be repeated this way: {reason}"),
+                &[("name", name), ("reason", reason)],
+            ),
+            RepeatError::SameCount { name, count } => fill_in(
+                &tr("'{name}' already has {count} pieces"),
+                &[("name", name), ("count", count)],
+            ),
+            RepeatError::NoAxis(v0) => fill_in(
+                &tr("say which way to split the space for '{value}': across, up or deep"),
+                &[("value", v0)],
+            ),
+            RepeatError::SharesCount { pieces, found } => fill_in(
+                &tr("{pieces} pieces need {pieces} shares, found {found}"),
+                &[("pieces", pieces), ("found", found)],
+            ),
+            RepeatError::SharesNotNumbers(v0) => fill_in(
+                &tr(
+                    "the shares of '{value}' are not plain numbers, so they can't be moved by a grip",
+                ),
+                &[("value", v0)],
+            ),
+            RepeatError::NoSuchPieces {
+                region,
+                lower,
+                upper,
+            } => fill_in(
+                &tr("'{region}' has no pieces {lower} and {upper}"),
+                &[("region", region), ("lower", lower), ("upper", upper)],
+            ),
+            RepeatError::BoundaryOutside { pair } => fill_in(
+                &tr(
+                    "the boundary must leave both pieces more than 0mm; it can move between 0mm and {pair}",
+                ),
+                &[("pair", pair)],
+            ),
+            RepeatError::NotSolved(v0) => fill_in(
+                &tr(
+                    "the design has no solved space named '{value}'; it must solve before a grip can move it",
+                ),
+                &[("value", v0)],
+            ),
+            RepeatError::NoMirror(v0) => fill_in(
+                &tr(
+                    "'{value}' isn't placed against a part that has a mirror image, or in one of two matching spaces, so it has no mirror image to add",
+                ),
+                &[("value", v0)],
+            ),
+            RepeatError::Rename(error) => error.to_string(),
+            RepeatError::Naming(error) => error.to_string(),
+            RepeatError::Overflow => tr("the sizes are too large to work with exactly"),
+            RepeatError::Build(error) => error.to_string(),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -29,6 +29,7 @@
 //! refused by the check, and once written the rule refuses any later edit
 //! that would break it.
 
+use crate::i18n::{fill_in, tr};
 use stave_lang::ast::{DesignItem, Ident, ItemKind};
 use stave_lang::placement::{Axis, Face};
 use stave_lang::units::Length;
@@ -101,24 +102,24 @@ pub struct HeldPatch {
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum HoldError {
     /// The reason is empty; it is the message the rule shows when broken.
-    #[error("say why this must hold: it is the message shown when a change breaks it")]
+    #[error("{}", self.text())]
     NoReason,
     /// Both things are the same.
-    #[error("'{0}' was picked twice; a distance needs two different things")]
+    #[error("{}", self.text())]
     SameThing(String),
     /// A thing's first name is not an item of the project.
-    #[error("there is no item named '{0}' in this project")]
+    #[error("{}", self.text())]
     UnknownItem(String),
     /// A thing is not a part or a region of the solved design (an
     /// assembly, say), so there is nothing to measure it by.
-    #[error("'{0}' is not a part or a region; pick a part, a region or one of their faces")]
+    #[error("{}", self.text())]
     NotMeasurable(String),
     /// Two faces that are not parallel have no distance between them.
-    #[error("'{0}' and '{1}' are not parallel; pick two faces across the same axis")]
+    #[error("{}", self.text())]
     NotParallel(String, String),
     /// The two things are apart along more than one axis, so no single
     /// distance is the one between them.
-    #[error("'{0}' and '{1}' are apart along more than one axis; pick two faces instead")]
+    #[error("{}", self.text())]
     NotOneAxis(String, String),
     /// A generated name couldn't be made.
     #[error(transparent)]
@@ -126,6 +127,45 @@ pub enum HoldError {
     /// The written patch didn't parse: a bug.
     #[error(transparent)]
     Build(#[from] PatchBuildError),
+}
+
+impl HoldError {
+    /// The error in the window's words (translated).
+    fn text(&self) -> String {
+        match self {
+            HoldError::NoReason => {
+                tr("say why this must hold: it is the message shown when a change breaks it")
+            }
+            HoldError::SameThing(v0) => fill_in(
+                &tr("'{value}' was picked twice; a distance needs two different things"),
+                &[("value", v0)],
+            ),
+            HoldError::UnknownItem(v0) => fill_in(
+                &tr("there is no item named '{value}' in this project"),
+                &[("value", v0)],
+            ),
+            HoldError::NotMeasurable(v0) => fill_in(
+                &tr(
+                    "'{value}' is not a part or a region; pick a part, a region or one of their faces",
+                ),
+                &[("value", v0)],
+            ),
+            HoldError::NotParallel(v0, v1) => fill_in(
+                &tr(
+                    "'{value0}' and '{value1}' are not parallel; pick two faces across the same axis",
+                ),
+                &[("value0", v0), ("value1", v1)],
+            ),
+            HoldError::NotOneAxis(v0, v1) => fill_in(
+                &tr(
+                    "'{value0}' and '{value1}' are apart along more than one axis; pick two faces instead",
+                ),
+                &[("value0", v0), ("value1", v1)],
+            ),
+            HoldError::Naming(error) => error.to_string(),
+            HoldError::Build(error) => error.to_string(),
+        }
+    }
 }
 
 /// The patch that adds the held rule (see the module's notes). It is added
