@@ -140,7 +140,7 @@ pub(crate) struct Solver<'m> {
     pub(crate) params: Vec<Memo<Value>>,
     pub(crate) lets: Vec<Memo<Value>>,
     pub(crate) regions: Vec<Memo<RegionValue>>,
-    pub(crate) parts: Vec<place::PartState>,
+    pub(crate) parts: Vec<place::PartState<'m>>,
     pub(crate) joints: Vec<Memo<joints::Binding>>,
     pub(crate) hardware: Vec<Memo<hardware::Placed>>,
     pub(crate) stack: Vec<(Frame, Option<(FileId, Span)>)>,

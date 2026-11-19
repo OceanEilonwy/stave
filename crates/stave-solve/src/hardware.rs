@@ -703,7 +703,7 @@ impl Solver<'_> {
             .flat_map(|(_, boxes)| boxes.iter().map(|(b, _, _)| *b))
             .reduce(|a, b| a.union(&b));
         for world in Axis::ALL {
-            let term = terms.axis(world).cloned();
+            let term = terms.axis(world).copied();
             let frame_axis = [FrameAxis::Along, FrameAxis::Across, FrameAxis::Depth]
                 .into_iter()
                 .find(|axis| frame.direction(*axis).axis() == world)

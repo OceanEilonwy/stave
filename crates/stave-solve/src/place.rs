@@ -26,11 +26,11 @@ use crate::{Accounted, Failure, Fault, Frame, Memo, Reported, Solved, Solver};
 
 /// What is remembered about a part while it is placed.
 #[derive(Debug, Clone, Default)]
-pub(crate) struct PartState {
+pub(crate) struct PartState<'m> {
     pub orientation: Memo<Orientation>,
     pub sizes: [Memo<ExactLength>; 3],
     pub mins: [Memo<ExactLength>; 3],
-    pub terms: Memo<Terms>,
+    pub terms: Memo<Terms<'m>>,
     /// For an image, its source and the mirror plane; `None` for a part
     /// that is not one. Remembered once worked out: a failure is not.
     pub mirror: Option<Option<(PartId, Axis, ExactLength)>>,
@@ -53,77 +53,78 @@ fn part_axis_slot(axis: PartAxis) -> usize {
 }
 
 /// A placement term that fixes one axis.
-#[derive(Debug, Clone, PartialEq)]
-pub enum AxisTermKind {
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum AxisTermKind<'m> {
     /// `against(face, gap: d)`
     Against {
         /// The face.
-        face: RExpr,
+        face: &'m RExpr,
         /// The gap.
-        gap: Option<RExpr>,
+        gap: Option<&'m RExpr>,
     },
     /// `flush(face, inset: d)`
     Flush {
         /// The face.
-        face: RExpr,
+        face: &'m RExpr,
         /// The inset.
-        inset: Option<RExpr>,
+        inset: Option<&'m RExpr>,
     },
     /// `center(item, axis)`
     CenterOn {
         /// The part or region.
-        item: RExpr,
+        item: &'m RExpr,
     },
     /// `center(from: a, to: b)`
     CenterBetween {
         /// One plane.
-        from: RExpr,
+        from: &'m RExpr,
         /// The other.
-        to: RExpr,
+        to: &'m RExpr,
     },
     /// `spaced(spacing, from: a, to: b)`
     Spaced {
         /// The spacing.
-        spacing: RExpr,
+        spacing: &'m RExpr,
         /// The first plane.
-        from: RExpr,
+        from: &'m RExpr,
         /// The last plane.
-        to: RExpr,
+        to: &'m RExpr,
     },
     /// One axis of `corners(part, inset: d)`: flush with this face of the part.
     Corner {
         /// The part.
-        part: RExpr,
+        part: &'m RExpr,
         /// The inset.
-        inset: Option<RExpr>,
+        inset: Option<&'m RExpr>,
         /// The face of the part on this axis.
         face: Face,
     },
 }
 
 /// A term with where it is written.
-#[derive(Debug, Clone, PartialEq)]
-pub struct AxisTerm {
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AxisTerm<'m> {
     /// The term.
-    pub kind: AxisTermKind,
+    pub kind: AxisTermKind<'m>,
     /// Where it is written.
     pub span: Span,
 }
 
-/// A `place { }` block sorted by axis.
-#[derive(Debug, Clone, PartialEq, Default)]
-pub struct Terms {
+/// A `place { }` block sorted by axis. It borrows the expressions from
+/// the model, so it is cheap to copy.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct Terms<'m> {
     /// `true` for the ground part.
     pub ground: bool,
     /// `orient(length:, width:)` and its span.
-    pub orient: Option<(RExpr, Option<RExpr>, Span)>,
+    pub orient: Option<(&'m RExpr, Option<&'m RExpr>, Span)>,
     /// The term fixing each world axis (across, up, deep).
-    pub axes: [Option<AxisTerm>; 3],
+    pub axes: [Option<AxisTerm<'m>>; 3],
 }
 
-impl Terms {
+impl<'m> Terms<'m> {
     /// The term fixing an axis.
-    pub fn axis(&self, axis: Axis) -> Option<&AxisTerm> {
+    pub fn axis(&self, axis: Axis) -> Option<&AxisTerm<'m>> {
         self.axes.get(axis_slot(axis)).and_then(Option::as_ref)
     }
 }
@@ -619,7 +620,7 @@ impl<'m> Solver<'m> {
                     .into()),
             }
         };
-        let length_direction = direction(self, &length)?;
+        let length_direction = direction(self, length)?;
         let width_direction = match &width {
             Some(width) => direction(self, width)?,
             None => {
@@ -653,9 +654,9 @@ impl<'m> Solver<'m> {
     // Terms
     // -----------------------------------------------------------------------
 
-    pub(crate) fn part_terms(&mut self, part: PartId) -> Solved<Terms> {
+    pub(crate) fn part_terms(&mut self, part: PartId) -> Solved<Terms<'m>> {
         match self.parts.get(part.index()).map(|s| &s.terms) {
-            Some(Memo::Done(terms)) => return Ok(terms.clone()),
+            Some(Memo::Done(terms)) => return Ok(*terms),
             Some(Memo::Failed(accounted)) => return Err((*accounted).into()),
             _ => {}
         }
@@ -668,7 +669,7 @@ impl<'m> Solver<'m> {
         result
     }
 
-    fn compute_part_terms(&mut self, part: PartId) -> Solved<Terms> {
+    fn compute_part_terms(&mut self, part: PartId) -> Solved<Terms<'m>> {
         if let Some(inst) = self.model.parts.get(part.index())
             && self.poisoned(DefId::Part(inst.def))
         {
@@ -756,46 +757,49 @@ impl<'m> Solver<'m> {
     /// term on an axis.
     pub(crate) fn sort_terms(
         &mut self,
-        place: &[PlaceTerm],
+        place: &'m [PlaceTerm],
         env: &Env<'_>,
         name: &str,
         label: Option<&str>,
         hardware: bool,
-    ) -> Solved<Terms> {
+    ) -> Solved<Terms<'m>> {
         let mut terms = Terms::default();
         let mut first_spans: [Option<Span>; 3] = [None, None, None];
-        let mut assign =
-            |this: &mut Self, terms: &mut Terms, axis: Axis, term: AxisTerm| -> Solved<()> {
-                let slot = axis_slot(axis);
-                if terms.ground || terms.axes.get(slot).is_some_and(Option::is_some) {
-                    let mut diagnostic = Diagnostic::error(
-                        Code::AxisSetTwice,
-                        format!("{name}: position along '{}' is set twice", axis.word()),
-                        Label::new(env.file, term.span),
-                    );
-                    if let Some(Some(first)) = first_spans.get(slot) {
-                        diagnostic = diagnostic.with_label(Label::with_message(
-                            env.file,
-                            *first,
-                            "first set here",
-                        ));
-                    }
-                    let help = if terms.ground {
-                        "'ground' already fixes every axis; remove this term".to_owned()
-                    } else {
-                        format!("keep one term for '{}' and remove the other", axis.word())
-                    };
-                    let reported = this.report(diagnostic.with_help(help));
-                    return Err(reported.into());
+        let mut assign = |this: &mut Self,
+                          terms: &mut Terms<'m>,
+                          axis: Axis,
+                          term: AxisTerm<'m>|
+         -> Solved<()> {
+            let slot = axis_slot(axis);
+            if terms.ground || terms.axes.get(slot).is_some_and(Option::is_some) {
+                let mut diagnostic = Diagnostic::error(
+                    Code::AxisSetTwice,
+                    format!("{name}: position along '{}' is set twice", axis.word()),
+                    Label::new(env.file, term.span),
+                );
+                if let Some(Some(first)) = first_spans.get(slot) {
+                    diagnostic = diagnostic.with_label(Label::with_message(
+                        env.file,
+                        *first,
+                        "first set here",
+                    ));
                 }
-                if let Some(span) = first_spans.get_mut(slot) {
-                    *span = Some(term.span);
-                }
-                if let Some(entry) = terms.axes.get_mut(slot) {
-                    *entry = Some(term);
-                }
-                Ok(())
-            };
+                let help = if terms.ground {
+                    "'ground' already fixes every axis; remove this term".to_owned()
+                } else {
+                    format!("keep one term for '{}' and remove the other", axis.word())
+                };
+                let reported = this.report(diagnostic.with_help(help));
+                return Err(reported.into());
+            }
+            if let Some(span) = first_spans.get_mut(slot) {
+                *span = Some(term.span);
+            }
+            if let Some(entry) = terms.axes.get_mut(slot) {
+                *entry = Some(term);
+            }
+            Ok(())
+        };
         let mut failed: Option<Accounted> = None;
         for term in place {
             let span = term.span;
@@ -832,7 +836,7 @@ impl<'m> Solver<'m> {
                         );
                         Err(reported.into())
                     } else {
-                        terms.orient = Some((length.clone(), width.clone(), span));
+                        terms.orient = Some((length, width.as_ref(), span));
                         Ok(())
                     }
                 }
@@ -844,8 +848,8 @@ impl<'m> Solver<'m> {
                             axis,
                             AxisTerm {
                                 kind: AxisTermKind::Against {
-                                    face: face.clone(),
-                                    gap: gap.clone(),
+                                    face,
+                                    gap: gap.as_ref(),
                                 },
                                 span,
                             },
@@ -860,8 +864,8 @@ impl<'m> Solver<'m> {
                             axis,
                             AxisTerm {
                                 kind: AxisTermKind::Flush {
-                                    face: face.clone(),
-                                    inset: inset.clone(),
+                                    face,
+                                    inset: inset.as_ref(),
                                 },
                                 span,
                             },
@@ -874,7 +878,7 @@ impl<'m> Solver<'m> {
                         &mut terms,
                         axis,
                         AxisTerm {
-                            kind: AxisTermKind::CenterOn { item: item.clone() },
+                            kind: AxisTermKind::CenterOn { item },
                             span,
                         },
                     ),
@@ -885,7 +889,7 @@ impl<'m> Solver<'m> {
                     let from_axis = self.anchor_axis(from, env);
                     let to_axis = self.anchor_axis(to, env);
                     match (from_axis, to_axis) {
-                        (Ok(a), Ok(b)) if a == b => assign(self, &mut terms, a, AxisTerm { kind: AxisTermKind::CenterBetween { from: from.clone(), to: to.clone() }, span }),
+                        (Ok(a), Ok(b)) if a == b => assign(self, &mut terms, a, AxisTerm { kind: AxisTermKind::CenterBetween { from, to }, span }),
                         (Ok(a), Ok(b)) => Err(self.error(Code::TypeMismatch, format!("'center' needs two parallel planes, found one across '{}' and one across '{}'", a.word(), b.word()), env.file, span, "name two faces across the same axis").into()),
                         (Err(failure), _) | (_, Err(failure)) => Err(failure),
                     }
@@ -910,11 +914,7 @@ impl<'m> Solver<'m> {
                                 &mut terms,
                                 a,
                                 AxisTerm {
-                                    kind: AxisTermKind::Spaced {
-                                        spacing: spacing.clone(),
-                                        from: from.clone(),
-                                        to: to.clone(),
-                                    },
+                                    kind: AxisTermKind::Spaced { spacing, from, to },
                                     span,
                                 },
                             ),
@@ -936,8 +936,8 @@ impl<'m> Solver<'m> {
                         Err(Fault::Earlier.into())
                     } else {
                         match label.and_then(Corner::from_word) {
-                            Some(corner) => assign(self, &mut terms, Axis::Across, AxisTerm { kind: AxisTermKind::Corner { part: part.clone(), inset: inset.clone(), face: corner.across_face() }, span })
-                                .and_then(|()| assign(self, &mut terms, Axis::Deep, AxisTerm { kind: AxisTermKind::Corner { part: part.clone(), inset: inset.clone(), face: corner.deep_face() }, span })),
+                            Some(corner) => assign(self, &mut terms, Axis::Across, AxisTerm { kind: AxisTermKind::Corner { part, inset: inset.as_ref(), face: corner.across_face() }, span })
+                                .and_then(|()| assign(self, &mut terms, Axis::Deep, AxisTerm { kind: AxisTermKind::Corner { part, inset: inset.as_ref(), face: corner.deep_face() }, span })),
                             None => Err(self.error(
                                 Code::TypeMismatch,
                                 format!("'corners' needs the labels front_left, front_right, back_left and back_right, found '{}'", label.unwrap_or(name)),
@@ -1488,7 +1488,7 @@ impl<'m> Solver<'m> {
         let orientation = self.part_orientation(part)?;
         let world = orientation.direction(axis).axis();
         let terms = self.part_terms(part)?;
-        let Some(term) = terms.axis(world).cloned() else {
+        let Some(term) = terms.axis(world).copied() else {
             return Err(self
                 .fit_undecided(
                     &name,
@@ -1683,7 +1683,7 @@ impl<'m> Solver<'m> {
         }
     }
 
-    fn optional_length(&mut self, expr: &Option<RExpr>, env: &Env<'_>) -> Solved<ExactLength> {
+    fn optional_length(&mut self, expr: Option<&RExpr>, env: &Env<'_>) -> Solved<ExactLength> {
         match expr {
             Some(expr) => self.eval_length(expr, env),
             None => Ok(ExactLength::ZERO),
@@ -1701,7 +1701,7 @@ impl<'m> Solver<'m> {
         match &term.kind {
             AxisTermKind::Against { face, gap } => {
                 let (anchor, face) = self.face_anchor(face, env, "against")?;
-                let gap = self.optional_length(gap, env)?;
+                let gap = self.optional_length(*gap, env)?;
                 if face.is_positive() {
                     Ok((add(anchor.position, gap)?, true))
                 } else {
@@ -1710,7 +1710,7 @@ impl<'m> Solver<'m> {
             }
             AxisTermKind::Flush { face, inset } => {
                 let (anchor, face) = self.face_anchor(face, env, "flush")?;
-                let inset = self.optional_length(inset, env)?;
+                let inset = self.optional_length(*inset, env)?;
                 if face.is_positive() {
                     Ok((sub(anchor.position, inset)?, false))
                 } else {
@@ -1720,7 +1720,7 @@ impl<'m> Solver<'m> {
             AxisTermKind::Corner { part, inset, face } => {
                 let other = self.eval_part(part, env)?;
                 let position = self.part_anchor(other, *face)?.position;
-                let inset = self.optional_length(inset, env)?;
+                let inset = self.optional_length(*inset, env)?;
                 if face.is_positive() {
                     Ok((sub(position, inset)?, false))
                 } else {
@@ -1924,17 +1924,13 @@ impl<'m> Solver<'m> {
         result
     }
 
-    fn term_location(&mut self, part: PartId, axis: Axis) -> Option<(FileId, Span)> {
+    fn term_location(&self, part: PartId, axis: Axis) -> Option<(FileId, Span)> {
         let env = self.part_env(part)?;
-        let terms = match self.parts.get(part.index()).map(|s| &s.terms) {
-            Some(Memo::Done(terms)) => terms.clone(),
-            _ => {
-                return self
-                    .part_body(part)
-                    .map(|b| (env.file, b.place_span.unwrap_or(b.span)));
-            }
-        };
-        terms.axis(axis).map(|t| (env.file, t.span))
+        if let Some(Memo::Done(terms)) = self.parts.get(part.index()).map(|s| &s.terms) {
+            return terms.axis(axis).map(|t| (env.file, t.span));
+        }
+        self.part_body(part)
+            .map(|b| (env.file, b.place_span.unwrap_or(b.span)))
     }
 
     fn set_min(&mut self, part: PartId, slot: usize, memo: Memo<ExactLength>) {
@@ -1964,7 +1960,7 @@ impl<'m> Solver<'m> {
         let Some(env) = self.part_env(part) else {
             return Err(Fault::Internal("where a part is declared").into());
         };
-        let Some(term) = terms.axis(axis).cloned() else {
+        let Some(term) = terms.axis(axis).copied() else {
             return Err(Fault::Internal("the term that places a part").into());
         };
         let size = self.size_along(part, axis)?;
