@@ -101,6 +101,8 @@ mod imp {
             self.end.add_css_class("stave-tab-end");
             self.menu.set_icon_name("pan-down-symbolic");
             self.menu.set_tooltip_text(Some("Move or close this panel"));
+            self.menu
+                .update_property(&[gtk::accessible::Property::Label("Panel menu")]);
             self.menu.add_css_class("flat");
             self.menu.add_css_class("stave-tab-menu");
             self.end.append(&self.menu);
@@ -439,6 +441,11 @@ mod tests {
         // The × is not a Tab stop.
         let close = before[0].last_child().unwrap();
         assert!(!close.is_focusable());
+        // Every icon button (the ×s, the ▾ menu) has a name.
+        assert_eq!(
+            crate::ui::gtk_test::unnamed_buttons(&strip),
+            Vec::<String>::new()
+        );
         window.destroy();
     }
 }

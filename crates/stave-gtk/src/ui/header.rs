@@ -219,6 +219,7 @@ impl Header {
             .valign(gtk::Align::Center)
             .visible(false)
             .build();
+        previous.update_property(&[gtk::accessible::Property::Label("Previous problem")]);
         let next = gtk::Button::builder()
             .icon_name("go-next-symbolic")
             .tooltip_text("Next problem (F8)")
@@ -227,6 +228,7 @@ impl Header {
             .valign(gtk::Align::Center)
             .visible(false)
             .build();
+        next.update_property(&[gtk::accessible::Property::Label("Next problem")]);
         let chip = gtk::Box::builder()
             .orientation(gtk::Orientation::Horizontal)
             .css_classes(["stave-problems-chip", "unknown"])
@@ -275,6 +277,7 @@ impl Header {
             .valign(gtk::Align::Center)
             .primary(true)
             .build();
+        menu.update_property(&[gtk::accessible::Property::Label("Main menu")]);
 
         let find_box = gtk::Box::builder()
             .halign(gtk::Align::Center)
@@ -426,5 +429,25 @@ impl Header {
             }
         }
         self.build.set_tooltip_text(Some(tooltip));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_title_bar_button_has_a_name() {
+        crate::ui::gtk_test::on_gtk_thread(title_bar_buttons_are_named);
+    }
+
+    /// Icon-only buttons (previous, next, the main menu, ...) have an
+    /// accessible name, not only a tooltip.
+    fn title_bar_buttons_are_named() {
+        let header = Header::new("shelf", &gtk::gio::Menu::new());
+        assert_eq!(
+            crate::ui::gtk_test::unnamed_buttons(&header.bar),
+            Vec::<String>::new()
+        );
     }
 }

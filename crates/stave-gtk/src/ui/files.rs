@@ -291,6 +291,7 @@ impl FilesPage {
             .tooltip_text("Close the list of uses (Escape)")
             .css_classes(["flat", "circular"])
             .build();
+        uses_close.update_property(&[gtk::accessible::Property::Label("Close the list of uses")]);
         let uses_head = gtk::Box::builder()
             .orientation(gtk::Orientation::Horizontal)
             .css_classes(["stave-uses-head"])

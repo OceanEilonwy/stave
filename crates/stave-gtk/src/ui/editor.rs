@@ -748,17 +748,29 @@ impl Search {
             .width_chars(9)
             .xalign(1.0)
             .build();
-        let button = |icon: &str, tooltip: &str| {
-            gtk::Button::builder()
+        // An icon button: its name for screen readers is the tooltip
+        // without the key.
+        let button = |icon: &str, name: &str, tooltip: &str| {
+            let button = gtk::Button::builder()
                 .icon_name(icon)
                 .tooltip_text(tooltip)
                 .css_classes(["flat", "circular"])
                 .valign(gtk::Align::Center)
-                .build()
+                .build();
+            button.update_property(&[gtk::accessible::Property::Label(name)]);
+            button
         };
-        let previous = button("go-up-symbolic", "Previous match (Shift+Enter)");
-        let next = button("go-down-symbolic", "Next match (Enter)");
-        let close = button("window-close-symbolic", "Close the search (Escape)");
+        let previous = button(
+            "go-up-symbolic",
+            "Previous match",
+            "Previous match (Shift+Enter)",
+        );
+        let next = button("go-down-symbolic", "Next match", "Next match (Enter)");
+        let close = button(
+            "window-close-symbolic",
+            "Close the search",
+            "Close the search (Escape)",
+        );
         let bar = gtk::Box::builder()
             .orientation(gtk::Orientation::Horizontal)
             .spacing(4)
