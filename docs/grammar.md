@@ -1787,7 +1787,11 @@ There is no way to switch this check off. Every cut operation is made and
 checked, angled ones included (see "Angled cuts" below). The only cuts the
 geometry can't make yet are cuts other than `drill` and `spigot` on round
 stock or a turned part: those are `warning[not-supported]`, and the part is
-drawn and checked without them.
+drawn and checked without them. An overlap where such a cut would have made
+room doesn't blame the cut's size: its help says Stave couldn't cut it
+(`Stave can't cut a mortise in a round or turned part yet, so the tenon on
+rail is checked against the solid wood of post; check this fit by hand on a
+test piece, or join them with a joint whose cut in post is a drilled hole`).
 
 **Joints with nothing cut.** A kind need not cut anything: with no
 `cut`, `insert:` or `adds:`, it only says the parts are held together.

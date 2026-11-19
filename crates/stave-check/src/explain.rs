@@ -193,20 +193,20 @@ fn cavity(
     deepest: &Overlap,
 ) -> Option<String> {
     let design = checker.design;
-    let (host, guest, cut) = [(b, a), (a, b)].into_iter().find_map(|(host, guest)| {
+    let (host, guest, index, cut) = [(b, a), (a, b)].into_iter().find_map(|(host, guest)| {
         let part = design.part(host)?;
-        part.cuts
-            .iter()
-            .find_map(|cut| match (&cut.place, cut.kind.operation()) {
+        part.cuts.iter().enumerate().find_map(|(index, cut)| {
+            match (&cut.place, cut.kind.operation()) {
                 (
                     CutPlace::Crossing { other, .. },
                     CutOperation::Notch
                     | CutOperation::Slot
                     | CutOperation::Pocket
                     | CutOperation::Drill,
-                ) if *other == guest => Some((host, guest, cut)),
+                ) if *other == guest => Some((host, guest, index, cut)),
                 _ => None,
-            })
+            }
+        })
     })?;
     let host_part = design.part(host)?;
     let guest_part = design.part(guest)?;
@@ -232,8 +232,20 @@ fn cavity(
             ))
         })
         .unwrap_or_else(|| (guest_part.name.clone(), guest_part.name.clone()));
-    let normal = host_part.pose.orientation.direction(cut.face.axis).axis();
     let host_name = &host_part.name;
+    // A cavity the geometry couldn't cut (warned as not supported): the
+    // guest is measured against solid wood, so its size isn't the fault.
+    if let Some(skipped) = checker
+        .solids
+        .get(host.index())
+        .and_then(|solid| solid.skipped().iter().find(|skipped| skipped.cut == index))
+    {
+        return Some(format!(
+            "Stave can't cut {} yet, so {feature} is checked against the solid wood of {host_name}; check this fit by hand on a test piece, or join them with a joint whose cut in {host_name} is a drilled hole",
+            skipped.reason.description()
+        ));
+    }
+    let normal = host_part.pose.orientation.direction(cut.face.axis).axis();
     let depth = length_text(deepest.depth);
     if deepest.axis == normal {
         return Some(format!(
