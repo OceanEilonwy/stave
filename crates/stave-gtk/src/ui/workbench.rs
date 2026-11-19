@@ -28,11 +28,11 @@
 //! drag about; the queries read them there. [`Workbench`] keeps the older
 //! API in front of it until the window moves to relm4 too.
 
-use std::cell::{Cell, RefCell};
+use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::path::PathBuf;
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 
 use adw::prelude::*;
 use gtk::{gio, glib};
@@ -895,8 +895,9 @@ pub enum WorkbenchInput {
 /// What a workbench tells its owner.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WorkbenchOutput {
-    /// The tool groups moved with the layout (applied or reset): where
-    /// they are now.
+    /// The tool groups moved (a layout applied or reset, or a group
+    /// docked): where they are now. Told after every change, in order, so
+    /// the last one told is always where they are.
     ToolsChanged(Spots),
     /// The layout couldn't be saved: a line saying why (told once).
     SaveFailed(String),
@@ -1089,6 +1090,8 @@ impl Component for WorkbenchComponent {
             }
             WorkbenchInput::DockTool { group, spot } => {
                 self.tools.dock(group, spot);
+                // Nobody listening is not a mistake.
+                let _ = sender.output(WorkbenchOutput::ToolsChanged(self.tools.clone()));
                 self.save(yard, &sender);
             }
             WorkbenchInput::ShowProblemCount(count) => {
@@ -1122,11 +1125,8 @@ impl Component for WorkbenchComponent {
 }
 
 /// What the workbench's shim passes its outputs on to.
+#[derive(Default)]
 struct WorkbenchCallbacks {
-    /// Where the tool groups are, for the view's floating controls to
-    /// read when they are told to refresh (the old API's hand-over; see
-    /// [`Workbench::tools`]).
-    tools: Rc<RefCell<Spots>>,
     on_tools: Slot<dyn Fn()>,
     on_save_failed: Slot<dyn Fn(&str)>,
 }
@@ -1150,7 +1150,30 @@ pub struct Workbench {
     /// Whether the layout is written to the user's file.
     remembers: bool,
     callbacks: Rc<WorkbenchCallbacks>,
-    bridge: Bridge<WorkbenchComponent>,
+    /// Shared only with [`ToolSpots`], which holds it weakly to read the
+    /// model.
+    bridge: Rc<Bridge<WorkbenchComponent>>,
+}
+
+/// Where the 3D view's tool groups are docked, read from the workbench's
+/// component, which keeps the only record of it: the view's floating
+/// controls ask when they are told to refresh. It holds the workbench
+/// weakly, so it never keeps it alive.
+#[derive(Clone)]
+pub struct ToolSpots(Weak<Bridge<WorkbenchComponent>>);
+
+impl ToolSpots {
+    /// Where the tool groups are, as of the last message the workbench
+    /// handled; `None` once the workbench is gone.
+    ///
+    /// Not to be called from inside the workbench's own update (a signal
+    /// it emits synchronously while it handles a message): an output
+    /// callback, as the tools callback is, is fine.
+    pub fn now(&self) -> Option<Spots> {
+        let bridge = self.0.upgrade()?;
+        let spots = bridge.model().tools.clone();
+        Some(spots)
+    }
 }
 
 impl Workbench {
@@ -1176,11 +1199,7 @@ impl Workbench {
             .ellipsize(gtk::pango::EllipsizeMode::End)
             .css_classes(["stave-status-text"])
             .build();
-        let callbacks = Rc::new(WorkbenchCallbacks {
-            tools: Rc::new(RefCell::new(layout.tools.clone())),
-            on_tools: Slot::default(),
-            on_save_failed: Slot::default(),
-        });
+        let callbacks = Rc::new(WorkbenchCallbacks::default());
         let bridge = Bridge::<WorkbenchComponent>::launch(WorkbenchInit {
             yard: yard.clone(),
             status: status.clone(),
@@ -1189,8 +1208,9 @@ impl Workbench {
         });
         let told = Rc::clone(&callbacks);
         bridge.connect(move |output| match output {
-            WorkbenchOutput::ToolsChanged(spots) => {
-                told.tools.replace(spots);
+            // The callback reads the spots with `ToolSpots::now`, which is
+            // never older than these.
+            WorkbenchOutput::ToolsChanged(_) => {
                 if let Some(callback) = told.on_tools.get() {
                     callback();
                 }
@@ -1207,7 +1227,7 @@ impl Workbench {
             yard,
             remembers,
             callbacks,
-            bridge,
+            bridge: Rc::new(bridge),
         }))
     }
 
@@ -1231,15 +1251,16 @@ impl Workbench {
             .send(WorkbenchInput::NarrowEdges(breakpoint.clone()));
     }
 
-    /// Where the 3D view's tool groups are docked, as the workbench last
-    /// told: the view's floating controls read it when they refresh. It
-    /// is a hand-over from the old API, not shared state: the workbench's
-    /// own record is in its component, and only this shim writes here.
-    pub fn tools(&self) -> Rc<RefCell<Spots>> {
-        Rc::clone(&self.callbacks.tools)
+    /// Where the 3D view's tool groups are docked, for the view's
+    /// floating controls to read when they refresh. The record stays in
+    /// the workbench's component; this only reads it.
+    pub fn tools(&self) -> ToolSpots {
+        ToolSpots(Rc::downgrade(&self.bridge))
     }
 
-    /// Calls `callback` when the tool groups move with the layout.
+    /// Calls `callback` after the tool groups move: a layout applied or
+    /// reset, or a group docked. It runs once the move is handled, so
+    /// [`ToolSpots::now`] read from it sees where they are now.
     pub fn connect_tools(&self, callback: impl Fn() + 'static) {
         self.callbacks.on_tools.set(Rc::new(callback));
     }
@@ -1247,7 +1268,6 @@ impl Workbench {
     /// Docks a tool group in a spot (the group there takes its old spot)
     /// and remembers it.
     pub fn dock_tool(&self, group: Group, spot: Spot) {
-        self.callbacks.tools.borrow_mut().dock(group, spot);
         self.bridge.send(WorkbenchInput::DockTool { group, spot });
     }
 
@@ -1324,6 +1344,8 @@ impl Workbench {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::RefCell;
+
     use super::*;
     use crate::ui::gtk_test::{on_gtk_thread, settle};
 
@@ -1659,7 +1681,8 @@ show bottom true
     }
 
     /// Presenting, moving and counting change the dock and the model but
-    /// tell nobody; only a layout applied says the tool groups moved.
+    /// tell nobody; only the tool groups moving (a group docked, a layout
+    /// applied) is told.
     fn setters_do_not_call_back() {
         let Ok(workbench) = Workbench::new(labels(), Remember::Nothing) else {
             panic!("the dock is built");
@@ -1667,11 +1690,14 @@ show bottom true
         let heard: Rc<RefCell<Vec<Spots>>> = Rc::default();
         let log = Rc::clone(&heard);
         let tools = workbench.tools();
-        workbench.connect_tools(move || log.borrow_mut().push(tools.borrow().clone()));
+        workbench.connect_tools(move || {
+            if let Some(spots) = tools.now() {
+                log.borrow_mut().push(spots);
+            }
+        });
         workbench.show_problem_count(3);
         workbench.present(PanelId::Code);
         workbench.move_to(PanelId::Files, Side::End);
-        workbench.dock_tool(Group::Camera, Spot::BottomLeft);
         settle();
         assert!(workbench.is_shown(PanelId::Code));
         assert_eq!(
@@ -1694,12 +1720,71 @@ show bottom true
             "a move is saved as the last layout"
         );
         assert!(heard.borrow().is_empty(), "setters never call back");
+        let mut docked = Spots::default();
+        docked.dock(Group::Camera, Spot::BottomLeft);
+        workbench.dock_tool(Group::Camera, Spot::BottomLeft);
+        settle();
+        assert_eq!(*heard.borrow(), vec![docked.clone()], "a dock is told");
         let mut moved = Layout::default();
         moved.tools.dock(Group::Scene, Spot::Right);
         workbench.apply(moved.clone());
         settle();
-        assert_eq!(*heard.borrow(), vec![moved.tools.clone()]);
-        assert_eq!(*workbench.tools().borrow(), moved.tools);
+        assert_eq!(*heard.borrow(), vec![docked, moved.tools.clone()]);
+        assert_eq!(workbench.tools().now(), Some(moved.tools));
+    }
+
+    #[test]
+    fn the_tool_spots_read_after_a_reset_and_a_dock_are_the_latest() {
+        on_gtk_thread(tool_spots_follow_reset_then_dock);
+    }
+
+    /// A reset and a dock in the same turn of the main loop: every time
+    /// the tools callback runs it reads the component's own record, and
+    /// the last read is where the groups end up, as saved.
+    fn tool_spots_follow_reset_then_dock() {
+        let Ok(workbench) = Workbench::new(labels(), Remember::Nothing) else {
+            panic!("the dock is built");
+        };
+        let mut start = Layout::default();
+        start.tools.dock(Group::Scene, Spot::Right);
+        workbench.apply(start);
+        settle();
+        let heard: Rc<RefCell<Vec<Spots>>> = Rc::default();
+        let log = Rc::clone(&heard);
+        let tools = workbench.tools();
+        workbench.connect_tools(move || {
+            if let Some(spots) = tools.now() {
+                log.borrow_mut().push(spots);
+            }
+        });
+        workbench.reset();
+        workbench.dock_tool(Group::Motion, Spot::TopLeft);
+        settle();
+        let mut expected = Spots::default();
+        expected.dock(Group::Motion, Spot::TopLeft);
+        assert_eq!(heard.borrow().last(), Some(&expected), "the last read");
+        assert_eq!(workbench.layout().tools, expected);
+        assert_eq!(workbench.bridge.model().last.tools, expected, "as saved");
+    }
+
+    #[test]
+    fn tool_spots_never_keep_the_workbench_alive() {
+        on_gtk_thread(tool_spots_are_weak);
+    }
+
+    /// The floating controls hold the workbench's [`ToolSpots`]: once the
+    /// workbench is dropped they read nothing, and it is freed all the same.
+    fn tool_spots_are_weak() {
+        let Ok(workbench) = Workbench::new(labels(), Remember::Nothing) else {
+            panic!("the dock is built");
+        };
+        let tools = workbench.tools();
+        assert_eq!(tools.now(), Some(Spots::default()));
+        let root = workbench.root.downgrade();
+        drop(workbench);
+        settle();
+        assert!(root.upgrade().is_none(), "the dock is freed");
+        assert_eq!(tools.now(), None);
     }
 
     #[test]

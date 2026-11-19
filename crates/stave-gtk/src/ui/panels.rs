@@ -17,6 +17,7 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use adw::prelude::*;
+use gtk::glib;
 use relm4::{Component, ComponentParts, ComponentSender};
 use stave_app::inspect::Token;
 use stave_app::problems::{Report, ReportPlace, Role};
@@ -50,8 +51,13 @@ pub enum ProblemsInput {
     },
     /// Mark the selected problem, or none, without telling anyone.
     ShowSelected(Option<usize>),
-    /// People chose the problem at this index.
-    Chose(usize),
+    /// People chose the problem in this row. A row from an older listing
+    /// (replaced by a [`ProblemsInput::Show`] queued before the choice)
+    /// no longer means any of the problems listed, so it is let go.
+    Chose(gtk::ListBoxRow),
+    /// People cleared the selection (with Ctrl and a click): nothing is
+    /// selected now, and nobody is told.
+    Cleared,
     /// People clicked one of a problem's places.
     OpenPlace(SourceLocation),
 }
@@ -117,9 +123,10 @@ impl Component for ProblemsComponent {
                         #[block_signal(row_selected)]
                         select_row: model.selected_row(list.upcast_ref()).as_ref(),
                         connect_row_selected[sender] => move |_, row| {
-                            if let Some(index) = row.and_then(|row| usize::try_from(row.index()).ok()) {
-                                sender.input_sender().emit(ProblemsInput::Chose(index));
-                            }
+                            sender.input_sender().emit(match row {
+                                Some(row) => ProblemsInput::Chose(row.clone()),
+                                None => ProblemsInput::Cleared,
+                            });
                         } @row_selected,
                     },
                 },
@@ -170,11 +177,15 @@ impl Component for ProblemsComponent {
                 self.selected = selected;
             }
             ProblemsInput::ShowSelected(selected) => self.selected = selected,
-            ProblemsInput::Chose(index) => {
-                self.selected = Some(index);
-                // Nobody listening is not a mistake.
-                let _ = sender.output(ProblemsOutput::Choose(index));
+            ProblemsInput::Chose(row) => {
+                let listed = row.parent().as_ref() == Some(widgets.list.upcast_ref());
+                if let Some(index) = listed.then(|| usize::try_from(row.index()).ok()).flatten() {
+                    self.selected = Some(index);
+                    // Nobody listening is not a mistake.
+                    let _ = sender.output(ProblemsOutput::Choose(index));
+                }
             }
+            ProblemsInput::Cleared => self.selected = None,
             ProblemsInput::OpenPlace(location) => {
                 let _ = sender.output(ProblemsOutput::Source(location));
             }
@@ -493,7 +504,9 @@ fn push_piece(
 /// The Files panel's state: the `.stave` files it lists, in order.
 #[derive(Debug)]
 pub struct FilesListComponent {
-    paths: Vec<PathBuf>,
+    /// Shared, never changed, with the list's `row-activated` handler for
+    /// this listing, so a row always names the file it shows.
+    paths: Rc<[PathBuf]>,
 }
 
 /// What the Files panel is told.
@@ -502,8 +515,9 @@ pub enum FilesListInput {
     /// List the `.stave` files in this project folder and the folders in
     /// it.
     SetFolder(PathBuf),
-    /// People chose the file in this row.
-    Activated(usize),
+    /// People chose this file (the one its row showed when they chose
+    /// it, even if another folder's listing is queued).
+    Activated(PathBuf),
 }
 
 /// What the Files panel tells its owner.
@@ -562,11 +576,6 @@ impl Component for FilesListComponent {
                         add_css_class: "stave-panel-list",
                         // Compact rows, like the Parts panel's (style.rs, SHELL).
                         add_css_class: "stave-files-list",
-                        connect_row_activated[sender] => move |_, row| {
-                            if let Ok(index) = usize::try_from(row.index()) {
-                                sender.input_sender().emit(FilesListInput::Activated(index));
-                            }
-                        },
                     },
                 },
             },
@@ -581,8 +590,16 @@ impl Component for FilesListComponent {
         }
     }
 
-    fn init((): (), root: Self::Root, sender: ComponentSender<Self>) -> ComponentParts<Self> {
-        let model = FilesListComponent { paths: Vec::new() };
+    additional_fields! {
+        /// The list's `row-activated` handler for the current listing.
+        activation: Option<glib::SignalHandlerId>,
+    }
+
+    fn init((): (), root: Self::Root, _sender: ComponentSender<Self>) -> ComponentParts<Self> {
+        let model = FilesListComponent {
+            paths: Rc::from(Vec::new()),
+        };
+        let activation = None;
         let widgets = view_output!();
         ComponentParts { model, widgets }
     }
@@ -599,18 +616,33 @@ impl Component for FilesListComponent {
                 let mut paths = Vec::new();
                 collect_stave_files(&folder, &mut paths);
                 paths.sort();
+                let paths: Rc<[PathBuf]> = Rc::from(paths);
                 let list = &widgets.list;
+                if let Some(handler) = widgets.activation.take() {
+                    list.disconnect(handler);
+                }
                 list.remove_all();
-                for path in &paths {
+                for path in paths.iter() {
                     list.append(&file_row(path, &folder));
                 }
+                // The rows and the files they show change together: a row
+                // activated before this listing is handled still names its
+                // own file, and one activated after names the new one.
+                let shown = Rc::clone(&paths);
+                let input = sender.input_sender().clone();
+                widgets.activation = Some(list.connect_row_activated(move |_, row| {
+                    let path = usize::try_from(row.index())
+                        .ok()
+                        .and_then(|index| shown.get(index));
+                    if let Some(path) = path {
+                        input.emit(FilesListInput::Activated(path.clone()));
+                    }
+                }));
                 self.paths = paths;
             }
-            FilesListInput::Activated(index) => {
-                if let Some(path) = self.paths.get(index) {
-                    // Nobody listening is not a mistake.
-                    let _ = sender.output(FilesListOutput::Open(path.clone()));
-                }
+            FilesListInput::Activated(path) => {
+                // Nobody listening is not a mistake.
+                let _ = sender.output(FilesListOutput::Open(path));
             }
         }
         self.update_view(widgets, sender);
@@ -859,6 +891,65 @@ mod tests {
         assert_eq!(list.selected_row().map(|row| row.index()), Some(0));
     }
 
+    #[test]
+    fn a_cleared_selection_stays_cleared() {
+        on_gtk_thread(cleared_selection_stays_cleared);
+    }
+
+    /// People clear the selection (Ctrl and a click): the panel tells
+    /// nobody, and nothing it handles afterwards selects the row again.
+    fn cleared_selection_stays_cleared() {
+        let panel = ProblemsPanel::new();
+        let chosen: Rc<RefCell<Vec<usize>>> = Rc::default();
+        let log = Rc::clone(&chosen);
+        panel.connect_choose(move |index| log.borrow_mut().push(index));
+        panel.show(&[report(3), report(9)], None, false);
+        settle();
+        let list = list_of(&panel.root);
+        list.select_row(list.row_at_index(1).as_ref());
+        settle();
+        assert_eq!(*chosen.borrow(), vec![1]);
+        list.unselect_all();
+        settle();
+        assert!(list.selected_row().is_none(), "cleared by people");
+        // Any later update (here a place's link clicked) leaves it so.
+        let link = list
+            .row_at_index(0)
+            .and_then(|row| find_button(row.upcast_ref()));
+        if let Some(link) = link {
+            link.emit_clicked();
+        }
+        settle();
+        assert!(list.selected_row().is_none(), "never selected again");
+        assert_eq!(*chosen.borrow(), vec![1], "clearing tells nobody");
+    }
+
+    #[test]
+    fn a_row_of_an_older_listing_chooses_nothing() {
+        on_gtk_thread(older_rows_choose_nothing);
+    }
+
+    /// A row chosen while a new listing is queued belonged to the old
+    /// problems: its number would mean a different problem in the new
+    /// ones, so the choice is let go.
+    fn older_rows_choose_nothing() {
+        let panel = ProblemsPanel::new();
+        let chosen: Rc<RefCell<Vec<usize>>> = Rc::default();
+        let log = Rc::clone(&chosen);
+        panel.connect_choose(move |index| log.borrow_mut().push(index));
+        panel.show(&[report(3), report(9)], None, false);
+        settle();
+        let list = list_of(&panel.root);
+        panel.show(&[report(4), report(5)], None, false);
+        list.select_row(list.row_at_index(1).as_ref());
+        settle();
+        assert!(chosen.borrow().is_empty(), "the old row means nothing now");
+        assert!(list.selected_row().is_none());
+        list.select_row(list.row_at_index(1).as_ref());
+        settle();
+        assert_eq!(*chosen.borrow(), vec![1], "a row of the new listing does");
+    }
+
     /// The first button inside a widget.
     fn find_button(widget: &gtk::Widget) -> Option<gtk::Button> {
         if let Ok(button) = widget.clone().downcast::<gtk::Button>() {
@@ -892,7 +983,9 @@ mod tests {
         settle();
         assert!(root.upgrade().is_none(), "the list is freed");
         assert!(
-            input.send(FilesListInput::Activated(0)).is_err(),
+            input
+                .send(FilesListInput::Activated(cabinet().join("doors.stave")))
+                .is_err(),
             "the component's runtime, and with it the model, is gone"
         );
         assert!(callback.upgrade().is_none(), "the callback is freed");
@@ -911,9 +1004,11 @@ mod tests {
     /// The old list read its paths from a `RefCell` inside GTK's
     /// `row-activated` and called its callback there; a callback that
     /// listed another folder replaced the paths under it. Now the folder
-    /// is listed when the main loop runs, a row only queues a message, the
-    /// callback runs after the update, and a folder listed or a row
-    /// activated from inside it is queued too.
+    /// is listed when the main loop runs, a row only queues a message
+    /// naming its own file, the callback runs after the update, and a
+    /// folder listed or a row activated from inside it is queued too. The
+    /// row activated before the new folder's listing is handled still
+    /// opens the cabinet file it showed, never one of the new folder's.
     fn files_are_queued() {
         let files = FilesList::new();
         files.set_folder(&cabinet());
@@ -923,17 +1018,19 @@ mod tests {
         let Some(first) = list.row_at_index(0) else {
             panic!("the cabinet has files");
         };
+        let other = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/box");
         let heard: Rc<RefCell<Vec<PathBuf>>> = Rc::default();
         let (log, weak) = (Rc::clone(&heard), Rc::downgrade(&files));
+        let inner = other.clone();
         files.connect_open(move |path| {
             let Some(files) = weak.upgrade() else {
                 return;
             };
             let first_call = log.borrow().is_empty();
             if first_call {
-                // An empty folder: queued, so the row below is still the
-                // cabinet's when it is activated.
-                files.set_folder(Path::new(env!("CARGO_MANIFEST_DIR")).join("src").as_path());
+                // A folder with files of its own: queued, so the row below
+                // is still the cabinet's when it is activated.
+                files.set_folder(&inner);
                 if let Some(list) = list_in(files.root.upcast_ref())
                     && let Some(row) = list.row_at_index(0)
                 {
@@ -946,8 +1043,24 @@ mod tests {
         assert!(heard.borrow().is_empty(), "the choice is only queued");
         settle();
         let opened = heard.borrow().clone();
-        assert_eq!(opened.len(), 1, "the inner row came after the new folder");
-        assert!(opened.iter().all(|path| path.starts_with(cabinet())));
-        assert_eq!(files.root.visible_child_name().as_deref(), Some("empty"));
+        assert_eq!(opened.len(), 2, "the outer row, then the inner one");
+        assert!(
+            opened.iter().all(|path| path.starts_with(cabinet())),
+            "each row opened the cabinet file it showed: {opened:?}"
+        );
+        assert_eq!(opened.first(), opened.get(1), "both were the first row");
+        // The new folder's rows open the new folder's files.
+        let Some(row) = list.row_at_index(0) else {
+            panic!("the box has files");
+        };
+        activate(&list, &row);
+        settle();
+        assert!(
+            heard
+                .borrow()
+                .last()
+                .is_some_and(|path| path.starts_with(&other)),
+            "a row of the new listing opens its own file"
+        );
     }
 }
