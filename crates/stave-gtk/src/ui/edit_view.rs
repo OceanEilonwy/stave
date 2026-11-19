@@ -1458,6 +1458,7 @@ pub(in crate::ui) mod changes;
 #[cfg(test)]
 mod changes_tests;
 mod editor_link;
+pub(in crate::ui) use editor_link::block_line;
 mod grip_layer;
 pub(in crate::ui) mod grip_panel;
 mod grip_script;

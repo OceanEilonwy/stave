@@ -150,6 +150,9 @@ impl From<RenderingInput> for WindowInput {
     }
 }
 
+/// The name of the window's key controller for Delete.
+pub(in crate::ui) const DELETE_KEYS: &str = "delete-keys";
+
 /// Wires the view's actions, the header's view and scene, the view's
 /// toolbars, its gestures and keys, and the style to [`RenderingInput`]s.
 pub(in crate::ui) fn wire(window: &mut Window) {
@@ -298,9 +301,16 @@ pub(in crate::ui) fn wire(window: &mut Window) {
     shortcuts.set_scope(gtk::ShortcutScope::Local);
     root.add_controller(shortcuts);
 
-    // Delete anywhere in the window but a text field.
+    // Delete anywhere in the window but a text field. Whether there is
+    // something to remove is decided at once, as before relm4: from the
+    // copy the window keeps after each message, and from the editor's
+    // analysis (while the text doesn't read Delete says so), so a Delete
+    // with nothing to remove is passed on to other widgets.
     let keys = gtk::EventControllerKey::new();
+    keys.set_name(Some(DELETE_KEYS));
     let sender = input.clone();
+    let removable = Rc::clone(&window.state.removable);
+    let files = Rc::downgrade(&widgets.files);
     keys.connect_key_pressed(move |controller, key, _, modifiers| {
         let Some(root) = controller
             .widget()
@@ -317,8 +327,16 @@ pub(in crate::ui) fn wire(window: &mut Window) {
         match key {
             // Delete removes the selection, saying first what goes.
             gdk::Key::Delete | gdk::Key::KP_Delete => {
-                sender.emit(EditingInput::RemoveSelected.into());
-                glib::Propagation::Stop
+                let blocked = files
+                    .upgrade()
+                    .and_then(|files| files.analysis())
+                    .is_some_and(|analysis| edit_view::block_line(&analysis).is_some());
+                if removable.get() || blocked {
+                    sender.emit(EditingInput::RemoveSelected.into());
+                    glib::Propagation::Stop
+                } else {
+                    glib::Propagation::Proceed
+                }
             }
             _ => glib::Propagation::Proceed,
         }
