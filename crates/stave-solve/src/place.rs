@@ -1115,7 +1115,7 @@ impl<'m> Solver<'m> {
             .model
             .defs
             .stock(stock)
-            .is_some_and(|def| def.width.is_some());
+            .is_some_and(|def| def.fixed_width().is_some());
         if !fixed {
             return Ok(());
         }

@@ -7,7 +7,7 @@ use stave_lang::ast::Span;
 use stave_lang::placement::{Axis, PartAxis, PerPartAxis};
 use stave_lang::units::{ExactLength, Length};
 use stave_lang::{Code, Diagnostic, FileId, Label};
-use stave_model::defs::{BodyId, DefId, StockField, Word};
+use stave_model::defs::{BodyId, DefId, StockField, StockSectionDef, Word};
 use stave_model::ids::{
     AssemblyId, HardwareId, JointId, PairIndex, PartId, RegionId, SceneId, StockId,
 };
@@ -17,7 +17,7 @@ use stave_model::solved::{
     self, Assembly, BodyOwner, Cut, CutPlace, CutSource, DesignDraft, FastenerUse, Hardware,
     HardwareBase, Joint, JointOrigin, JointPair, LocalBox, LocalPoint, PartOrigin, Point,
     PoseValue, ProjectInfo, Region, RequireResult, RoleBinding, Scene, SceneItem, ScenePose, Shape,
-    Size3, SolvedDesign, Station, Stock, Tool,
+    Size3, SolvedDesign, Station, Stock, StockSection, Tool,
 };
 use stave_model::value::{ExactBox, Value};
 use stave_schema::kinds::BaseField;
@@ -1736,16 +1736,18 @@ impl Solver<'_> {
             name: def.decl.name.clone(),
             species: def.species,
             form: def.form,
-            thickness: if def.form == StockForm::Dowel {
-                None
-            } else {
-                length(self, F::Thickness)?
-            },
-            diameter: length(self, F::Diameter)?,
-            width: if def.width.is_some() {
-                length(self, F::Width)?
-            } else {
-                None
+            section: match &def.section {
+                Some(StockSectionDef::Board { width, .. }) => StockSection::Board {
+                    thickness: length(self, F::Thickness)?.ok_or(Fault::Earlier)?,
+                    width: match width {
+                        Some(_) => length(self, F::Width)?,
+                        None => None,
+                    },
+                },
+                Some(StockSectionDef::Dowel { .. }) => StockSection::Dowel {
+                    diameter: length(self, F::Diameter)?.ok_or(Fault::Earlier)?,
+                },
+                None => return Err(Fault::Earlier.into()),
             },
             max_width: length(self, F::MaxWidth)?,
             max_length: length(self, F::MaxLength)?,

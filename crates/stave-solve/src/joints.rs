@@ -1027,7 +1027,7 @@ impl Solver<'_> {
             .model
             .defs
             .stock(stock)
-            .is_some_and(|def| def.width.is_some());
+            .is_some_and(|def| def.fixed_width().is_some());
         if fault.is_none()
             && fixed_width
             && let Some(stock_width) = self.stock_length(stock, StockField::Width)?

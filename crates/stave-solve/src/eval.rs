@@ -9,7 +9,7 @@ use stave_lang::units::{ExactLength, Rational};
 use stave_lang::{Code, Diagnostic, FileId, Label};
 use stave_model::defs::{
     ArrayDef, BaseEntry, BuiltinCall, DefId, Index, Member, OpeningFaces, RExpr, RExprKind,
-    SplitBy, StockField, Symbol, Text, TextPart, Word,
+    SplitBy, StockField, StockSectionDef, Symbol, Text, TextPart, Word,
 };
 use stave_model::ids::{InstanceId, KindId, PartId, StockId};
 use stave_model::instance::{Ctx, ItemSlot, ParamSource, Slot};
@@ -19,7 +19,6 @@ use stave_model::value::{
 };
 use stave_schema::functions::Builtin;
 use stave_schema::kinds::{BaseField, JointSetting};
-use stave_schema::words::StockForm;
 
 use crate::fixes::Written;
 use crate::{Fault, Frame, Memo, Reported, Solved, Solver};
@@ -1280,32 +1279,32 @@ impl<'m> Solver<'m> {
         let (expr, written) = match field {
             StockField::Species => return Ok(Value::Word(Word::Species(def.species))),
             StockField::Form => return Ok(Value::Word(Word::StockForm(def.form))),
-            StockField::Thickness => match (&def.thickness, def.form) {
-                (Some(t), _) => (t, "thickness"),
-                (None, StockForm::Dowel) => match &def.diameter {
-                    Some(d) => (d, "diameter"),
-                    None => return Err(Fault::Earlier.into()),
-                },
-                (None, _) => return Err(Fault::Earlier.into()),
+            StockField::Thickness => match &def.section {
+                Some(StockSectionDef::Board { thickness, .. }) => (thickness, "thickness"),
+                Some(StockSectionDef::Dowel { diameter }) => (diameter, "diameter"),
+                None => return Err(Fault::Earlier.into()),
             },
-            StockField::Diameter => (
-                def.diameter.as_ref().ok_or_else(|| {
-                    self.error(
-                        Code::UnknownField,
-                        format!("stock '{}' has no field 'diameter'", def.decl.name),
-                        def.decl.file,
-                        span,
-                        "only dowel stock has a diameter",
-                    )
-                })?,
-                "diameter",
-            ),
-            StockField::Width => match (&def.width, def.form) {
-                (Some(w), _) => (w, "width"),
-                (None, StockForm::Dowel) => {
-                    (def.diameter.as_ref().ok_or(Fault::Earlier)?, "diameter")
+            StockField::Diameter => match &def.section {
+                Some(StockSectionDef::Dowel { diameter }) => (diameter, "diameter"),
+                Some(StockSectionDef::Board { .. }) => {
+                    return Err(self
+                        .error(
+                            Code::UnknownField,
+                            format!("stock '{}' has no field 'diameter'", def.decl.name),
+                            def.decl.file,
+                            span,
+                            "only dowel stock has a diameter",
+                        )
+                        .into());
                 }
-                (None, _) => {
+                None => return Err(Fault::Earlier.into()),
+            },
+            StockField::Width => match &def.section {
+                Some(StockSectionDef::Board {
+                    width: Some(width), ..
+                }) => (width, "width"),
+                Some(StockSectionDef::Dowel { diameter }) => (diameter, "diameter"),
+                Some(StockSectionDef::Board { width: None, .. }) => {
                     return Err(self
                         .error(
                             Code::UnknownField,
@@ -1316,6 +1315,7 @@ impl<'m> Solver<'m> {
                         )
                         .into());
                 }
+                None => return Err(Fault::Earlier.into()),
             },
             StockField::MaxWidth => (
                 def.max_width.as_ref().ok_or_else(|| {
@@ -1404,9 +1404,12 @@ impl<'m> Solver<'m> {
             return Err(Fault::Internal("a stock's declaration").into());
         };
         let present = match field {
-            StockField::Thickness => def.thickness.is_some() || def.form == StockForm::Dowel,
-            StockField::Diameter => def.diameter.is_some(),
-            StockField::Width => def.width.is_some() || def.form == StockForm::Dowel,
+            StockField::Thickness => def.section.is_some(),
+            StockField::Diameter => matches!(def.section, Some(StockSectionDef::Dowel { .. })),
+            StockField::Width => matches!(
+                def.section,
+                Some(StockSectionDef::Dowel { .. } | StockSectionDef::Board { width: Some(_), .. })
+            ),
             StockField::MaxWidth => def.max_width.is_some(),
             StockField::MaxLength => def.max_length.is_some(),
             StockField::Species | StockField::Form => false,

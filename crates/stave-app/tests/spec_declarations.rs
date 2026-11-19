@@ -186,6 +186,16 @@ fn dowel_stock_is_sized_by_diameter() {
         "unknown-field",
         "stock 'd' has no field 'diameter'",
     );
+    the_diagnostic(
+        &open("stock d { species: beech, form: dowel, diameter: 10mm, thickness: 12mm }"),
+        "unknown-field",
+        "stock 'd' has no field 'thickness'",
+    );
+    the_diagnostic(
+        &open("stock d { species: beech, form: dowel, diameter: 10mm, width: 40mm }"),
+        "unknown-field",
+        "stock 'd' has no field 'width'",
+    );
 }
 
 #[test]

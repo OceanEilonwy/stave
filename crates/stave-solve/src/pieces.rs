@@ -267,7 +267,7 @@ impl Solver<'_> {
             let name = def.decl.name.clone();
             let label = Label::new(def.decl.file, def.decl.name_span);
             if def.max_length.is_some() {
-                if def.max_width.is_some() || def.width.is_some() {
+                if def.max_width.is_some() || def.fixed_width().is_some() {
                     continue;
                 }
                 if let Some((message, help)) = self.too_wide_to_tell(&name, sheet, &parts, geoms) {

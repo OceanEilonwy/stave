@@ -186,7 +186,7 @@ and `broken/<folder>` for a design in `tests/broken/`.
 | A misspelt type name is `unknown-name` | `app/spec_values::a_misspelt_type_name_is_an_unknown_name` | covered |
 | `let`: a named value, used before or after it is written, not passed in | `app/spec_values::a_let_is_a_named_value_used_before_or_after_it_is_written`, `app/spec_values::a_let_can_not_be_passed_into_a_component` | covered |
 | `stock`: species, form and thickness required; species and forms are word lists | `app/spec_declarations::stock_needs_species_form_and_thickness`, `app/spec_declarations::species_and_forms_are_closed_word_lists`, `schema/species::species_match_the_grammar`, `schema/words::stock_forms_match_the_grammar` | covered |
-| Dowel stock is sized by diameter; only dowels have one | `app/spec_declarations::dowel_stock_is_sized_by_diameter` | covered |
+| Dowel stock is sized by diameter, and has no thickness or width of its own; only dowels have a diameter | `app/spec_declarations::dowel_stock_is_sized_by_diameter` | covered |
 | Every size of a stock is more than 0mm, or `out-of-range` at the field, once | `broken/stock_size_negative` | covered |
 | Every stock field is readable | `app/spec_declarations::every_stock_field_is_readable` | covered |
 | Parts cut from stock with a `width:` take that width | `app/spec_declarations::a_part_cut_from_stock_with_a_width_takes_that_width` | covered |

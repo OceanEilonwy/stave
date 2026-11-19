@@ -773,16 +773,42 @@ pub struct StockDef {
     pub species: Species,
     /// `form:`
     pub form: StockForm,
-    /// `thickness:`; required except for dowels.
-    pub thickness: Option<RExpr>,
-    /// `diameter:`; dowels only.
-    pub diameter: Option<RExpr>,
-    /// `width:`
-    pub width: Option<RExpr>,
+    /// Its cross-section: a board's thickness or a dowel's diameter, as
+    /// its form needs; `None` when that size is missing or misspelt,
+    /// which has been reported.
+    pub section: Option<StockSectionDef>,
     /// `max_width:`
     pub max_width: Option<RExpr>,
     /// `max_length:`
     pub max_length: Option<RExpr>,
+}
+
+impl StockDef {
+    /// `width:`, for a board sold at a fixed width.
+    pub fn fixed_width(&self) -> Option<&RExpr> {
+        match &self.section {
+            Some(StockSectionDef::Board { width, .. }) => width.as_ref(),
+            Some(StockSectionDef::Dowel { .. }) | None => None,
+        }
+    }
+}
+
+/// A stock's cross-section, by its form: a board (`solid`, `plywood`,
+/// `mdf`) has a thickness and perhaps a fixed width, a dowel a diameter.
+#[derive(Debug, Clone, PartialEq)]
+pub enum StockSectionDef {
+    /// A board or sheet.
+    Board {
+        /// `thickness:`
+        thickness: RExpr,
+        /// `width:`, when it is sold at a fixed width.
+        width: Option<RExpr>,
+    },
+    /// Round stock.
+    Dowel {
+        /// `diameter:`
+        diameter: RExpr,
+    },
 }
 
 /// A drawn size: an expression or `fit`.
