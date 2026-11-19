@@ -1,7 +1,10 @@
 //! The window's look: libadwaita's, with the design's own sizes and
 //! colours for the title bar's switcher, pill and build button, the parts
-//! tree, the inspector's cards and the status bar. Colours come in a light
-//! and a dark set, swapped when the style changes.
+//! tree, the inspector's cards and the status bar. Colours are
+//! libadwaita's named colours, so they follow the light, dark and
+//! high-contrast styles the moment the style manager changes; where the
+//! design's own translucent tints would stay faint in high contrast, the
+//! `HIGH_CONTRAST` sheet makes them solid.
 
 use gtk::gdk;
 
@@ -278,10 +281,14 @@ button.stave-lens-link:hover { background: alpha(@accent_color, 0.1); }
 .stave-use-place { color: @accent_color; }
 .stave-use-line { color: alpha(currentColor, 0.6); }
 .stave-chip { background: alpha(@view_bg_color, 0.92); color: @accent_color; box-shadow: 0 1px 6px alpha(black, 0.1); }
+/* The stage is the 3D view's own ground colour (render::Backdrop draws
+   #e8e5df light, #242428 dark), so the page round the view matches the
+   picture; it is the one place a fixed colour must stay. What sits on it
+   is in the window's text colour, which libadwaita darkens or lightens
+   for high contrast. */
 .stave-stage { background: #e8e5df; }
 .stave-stage.dark { background: #242428; }
-.stave-empty { color: #3d3846; }
-.stave-empty.dark { color: alpha(white, 0.9); }
+.stave-empty { color: @window_fg_color; }
 .stave-empty-icon, .stave-empty-description { opacity: 0.75; }
 .stave-toolbar, .stave-plan-switch { background: alpha(@view_bg_color, 0.92); color: @view_fg_color; box-shadow: 0 1px 6px alpha(black, 0.1); }
 .stave-camera { background: alpha(@view_bg_color, 0.88); color: @view_fg_color; }
@@ -300,8 +307,7 @@ button.stave-lens-link:hover { background: alpha(@accent_color, 0.1); }
 button.stave-play { background: @accent_bg_color; color: @accent_fg_color; }
 button.stave-play:hover { background: mix(@accent_bg_color, @accent_fg_color, 0.1); }
 .stave-card-value.blocked, .stave-card-blocked { color: @error_color; }
-.stave-focus-caption { color: #3d3846; }
-.stave-stage.dark .stave-focus-caption { color: alpha(white, 0.85); }
+.stave-focus-caption { color: @window_fg_color; }
 .stave-pictures button.stave-picture { background: alpha(@view_bg_color, 0.45); color: @view_fg_color; }
 .stave-pictures button.stave-picture:hover { background: alpha(@view_bg_color, 0.7); }
 .stave-pictures button.stave-picture.current { background: @view_bg_color; box-shadow: 0 0 0 2px @accent_bg_color; }
@@ -432,7 +438,7 @@ stavetabstrip button.stave-tab-show { min-height: 26px; font-size: 12px; }
 stavetabstrip .stave-tab-end button { min-height: 20px; min-width: 20px; margin: 3px 4px; }
 stavetabstrip button.stave-file-tab { padding-right: 10px; }
 .stave-file-tab-name { font-family: "JetBrains Mono", "Adwaita Mono", monospace; font-weight: 500; font-size: 11.5px; }
-.stave-mark.unsaved { min-width: 7px; min-height: 7px; border-radius: 4px; background: #f6d32d; }
+.stave-mark.unsaved { min-width: 7px; min-height: 7px; border-radius: 4px; background: @warning_bg_color; }
 
 panelstatusbar { min-height: 24px; font-size: 12px; }
 panelstatusbar button, panelstatusbar menubutton > button { min-height: 22px; padding: 0 8px; border-radius: 0; }
@@ -447,6 +453,38 @@ textview.stave-output { font-size: 12px; background: transparent; }
 .stave-dock-targets { color: @accent_color; }
 .stave-dragging { opacity: 0.85; box-shadow: 0 6px 18px alpha(black, 0.35); }
 .stave-camera.flat-row, .stave-camera.flat-row.joined { border-radius: 10px; }
+"#;
+
+/// High contrast (libadwaita's high-contrast style, or the desktop's
+/// "high contrast" setting): the design's dimmed words take the full text
+/// colour, its translucent floating cards turn solid with an edge, and the
+/// faint lines between rows and round code blocks darken. A provider of
+/// its own, added after the other sheets while the style manager says
+/// high contrast and taken away when it stops.
+const HIGH_CONTRAST: &str = r#"
+.stave-title .subtitle, .dim, .stave-project-name,
+.stave-tree .stave-detail, .stave-tree .stave-heading,
+.stave-eyebrow, .stave-description, .stave-section, .stave-footnote, .stave-key,
+.stave-crumbs, .stave-editor-footer, .stave-lens,
+.stave-peek-what, .stave-peek-number,
+.stave-hover-kind, .stave-hover-where, .stave-hover-help,
+.stave-use-line, .stave-tool-end, .stave-card-dim,
+.stave-problem-icon.note, .stave-problem-note,
+.stave-dock .stave-dock-label, button.stave-code-tab,
+.stave-finder-heading, .stave-finder-foot,
+button.stave-status-tab, .stave-status-text, stavetabstrip .stave-tab,
+.stave-problems-chip.unknown button.stave-pill { color: inherit; }
+.stave-empty-icon, .stave-empty-description { opacity: 1; }
+.stave-floating, .stave-chip, .stave-toolbar, .stave-plan-switch, .stave-camera,
+.stave-moves, .stave-focus-card, .stave-panel, .stave-edge-pin, .stave-pin-label,
+.stave-contact-key, .stave-pictures button.stave-picture {
+  background: @view_bg_color; box-shadow: 0 0 0 1px @view_fg_color;
+}
+.stave-card > .stave-card-row { border-bottom-color: alpha(currentColor, 0.5); }
+.stave-crumbs, .stave-editor-footer { box-shadow: none; }
+.stave-code, .stave-dark .stave-code { box-shadow: inset 0 0 0 1px @window_fg_color; }
+.stave-panel-list > row:selected { background: @accent_bg_color; color: @accent_fg_color; }
+.stave-dock button.stave-move { box-shadow: inset 0 0 0 1px alpha(currentColor, 0.6); }
 "#;
 
 #[cfg(test)]
@@ -483,9 +521,24 @@ pub fn mark_dot(mark: Option<stave_app::problems::Mark>) -> gtk::Box {
     dot
 }
 
-/// Installs the window's style for `display`. Every colour is one of
-/// libadwaita's named colours, so nothing needs swapping when the style
-/// turns light or dark.
+/// Adds the high-contrast sheet to `display` while `on`, takes it away
+/// otherwise.
+fn show_high_contrast(display: &gdk::Display, provider: &gtk::CssProvider, on: bool) {
+    // Removing first means adding twice never stacks two copies.
+    gtk::style_context_remove_provider_for_display(display, provider);
+    if on {
+        gtk::style_context_add_provider_for_display(
+            display,
+            provider,
+            gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+        );
+    }
+}
+
+/// Installs the window's style for `display`. Colours are libadwaita's
+/// named colours (the 3D view's stage and the always-dark code blocks
+/// aside), so nothing needs swapping when the style turns light, dark or
+/// high contrast.
 pub fn install(display: &gdk::Display) {
     let provider = gtk::CssProvider::new();
     provider.load_from_string(&format!("{SHARED}{COLOURS}{SHELL}"));
@@ -494,6 +547,14 @@ pub fn install(display: &gdk::Display) {
         &provider,
         gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
     );
+    let high_contrast = gtk::CssProvider::new();
+    high_contrast.load_from_string(HIGH_CONTRAST);
+    let manager = adw::StyleManager::for_display(display);
+    show_high_contrast(display, &high_contrast, manager.is_high_contrast());
+    let shown = display.clone();
+    manager.connect_high_contrast_notify(move |manager| {
+        show_high_contrast(&shown, &high_contrast, manager.is_high_contrast());
+    });
     // A selectable label (a problem's `stave check` text, focus mode's
     // insert line) would otherwise select all its text whenever it takes
     // the keyboard focus, so it looks highlighted for no reason. It can
@@ -503,7 +564,7 @@ pub fn install(display: &gdk::Display) {
 
 #[cfg(test)]
 mod tests {
-    use super::{CODE, CODE_BACKGROUNDS, COLOURS};
+    use super::{CODE, CODE_BACKGROUNDS, COLOURS, HIGH_CONTRAST, SHARED, SHELL};
 
     /// The relative luminance of `#rrggbb` (WCAG 2).
     fn luminance(hex: &str) -> f64 {
@@ -559,5 +620,108 @@ mod tests {
                 "{tone}"
             );
         }
+    }
+
+    /// The `#rrggbb` colours written in `sheet`.
+    fn hex_colours(sheet: &str) -> Vec<&str> {
+        sheet
+            .match_indices('#')
+            .filter_map(|(at, _)| sheet.get(at..at + 7))
+            .filter(|colour| colour[1..].chars().all(|c| c.is_ascii_hexdigit()))
+            .collect()
+    }
+
+    /// Every colour follows libadwaita's style (light, dark, high
+    /// contrast) except the 3D view's stage, which must match the picture
+    /// the renderer draws, and the code blocks, dark in every style with
+    /// colours tested above.
+    #[test]
+    fn colours_are_named_except_the_stage_and_the_code_blocks() {
+        let fixed = ["#e8e5df", "#242428", "#1e1e24", "#121216", "#e7e5ea"];
+        let css = |sheet: &'static str| {
+            // Comments may name colours.
+            let mut rules = String::new();
+            for (index, part) in sheet.split("/*").enumerate() {
+                rules.push_str(if index == 0 {
+                    part
+                } else {
+                    part.split_once("*/").map_or("", |(_, rest)| rest)
+                });
+            }
+            rules
+        };
+        for sheet in [SHARED, COLOURS, SHELL, HIGH_CONTRAST] {
+            let rules = css(sheet);
+            for colour in hex_colours(&rules) {
+                assert!(fixed.contains(&colour), "{colour} is not a named colour");
+            }
+        }
+    }
+
+    /// Every sheet parses in the GTK this runs on: a rule GTK can't read
+    /// is dropped without a word at run time.
+    #[test]
+    fn the_sheets_parse() {
+        crate::ui::gtk_test::on_gtk_thread(|| {
+            for sheet in [
+                format!("{SHARED}{COLOURS}{SHELL}"),
+                HIGH_CONTRAST.to_owned(),
+            ] {
+                let errors = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+                let provider = gtk::CssProvider::new();
+                let seen = errors.clone();
+                provider.connect_parsing_error(move |_, section, error| {
+                    seen.borrow_mut().push(format!(
+                        "line {}: {error}",
+                        section.start_location().lines() + 1
+                    ));
+                });
+                provider.load_from_string(&sheet);
+                assert_eq!(*errors.borrow(), Vec::<String>::new());
+            }
+        });
+    }
+
+    /// In high contrast a dimmed detail takes the full text colour.
+    #[test]
+    fn high_contrast_undims_the_details() {
+        crate::ui::gtk_test::on_gtk_thread(|| {
+            use gtk::prelude::*;
+            let Some(display) = gtk::gdk::Display::default() else {
+                return;
+            };
+            let detail = gtk::Label::builder()
+                .label("18 mm")
+                .css_classes(["stave-detail"])
+                .build();
+            let tree = gtk::Box::builder().css_classes(["stave-tree"]).build();
+            tree.append(&detail);
+            let window = gtk::Window::builder().child(&tree).build();
+            let sheets = gtk::CssProvider::new();
+            sheets.load_from_string(&format!("{SHARED}{COLOURS}{SHELL}"));
+            gtk::style_context_add_provider_for_display(
+                &display,
+                &sheets,
+                gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+            );
+            let high_contrast = gtk::CssProvider::new();
+            high_contrast.load_from_string(HIGH_CONTRAST);
+            window.present();
+            let alpha = |on: bool| {
+                super::show_high_contrast(&display, &high_contrast, on);
+                // The style is worked out again on the next frame.
+                let context = gtk::glib::MainContext::default();
+                for _ in 0..50 {
+                    context.iteration(false);
+                }
+                detail.color().alpha()
+            };
+            let normal = alpha(false);
+            let high = alpha(true);
+            super::show_high_contrast(&display, &high_contrast, false);
+            gtk::style_context_remove_provider_for_display(&display, &sheets);
+            window.destroy();
+            assert!(normal < high, "{normal} then {high}");
+        });
     }
 }
