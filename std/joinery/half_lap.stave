@@ -8,6 +8,9 @@ kind half_lap : joint {
     into:  Part
   }
   require same_thickness : piece.thickness == into.thickness "both parts need the same thickness for flush faces"
+  // Lifted part way out of each other, the laps would stand apart. Parts
+  // that don't overlap at all are left to the check that joints meet.
+  require crosses_fully : extent([piece, into], thickness, of: into) == into.thickness || extent([piece, into], thickness, of: into) >= piece.thickness + into.thickness "the parts must cross by their whole thickness for the laps to meet"
 
   insert: [push(piece, along: thickness)]
 

@@ -917,8 +917,8 @@ fn through_cuts_all_the_way() {
         "kind k : joint {\n  cut housing: crossing(into, piece) {\n    notch(depth: through)\n  }\n}\njoint j : k(shelf, into: side)",
     );
     // The notch goes right across the side, so the side is in two: the
-    // design still solves, with that one error.
-    let side = part(opened.design.as_ref().unwrap(), "side");
+    // design still solves, and the cut is recorded.
+    let side = part(solved(&opened), "side");
     assert!(side.cuts.iter().any(|c| c.kind
         == CutKind::Notch {
             depth: Depth::Through

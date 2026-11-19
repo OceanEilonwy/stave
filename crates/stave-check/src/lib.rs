@@ -16,7 +16,9 @@
 //!    out of the overlap check, which would only report the same mistake
 //!    again.
 //! 2. **Contact** (`error[no-contact]`): every part a joint lists must touch
-//!    at least one of its counterparts, after every cut.
+//!    at least one of its counterparts over an area, after every cut; a
+//!    part that touches only along an edge or at a corner (an offset half
+//!    lap whose notches don't meet) is reported as such.
 //! 3. **Spacing** (`error[overlap]`): an element spaced with `pitch` or
 //!    `gap` that runs past its `to` anchor. Hardware whose kind's
 //!    `require` or `adjust` failed where the solver placed it
@@ -31,7 +33,10 @@
 //!    (a fixed order, so the result is the same on every run); the narrow
 //!    phase measures the shared wood exactly ([`stave_geom::collide`]).
 //!    Touching within the 0.05mm contact tolerance is fine.
-//! 5. **Scene poses** (`error[motion]`): each scene's poses applied, every
+//! 5. **Joints across motions** (`error[motion]`, [`motion`]): a joint's
+//!    parts must move alike; a joint between a part an assembly's motion
+//!    moves and a part it doesn't would hold the assembly shut.
+//!    **Scene poses** (`error[motion]`): each scene's poses applied, every
 //!    moved body against everything that moved differently (a link its
 //!    hinge's mechanism turns moves differently from its door).
 //! 6. **Sweeps** (`error[motion]`, [`motion`]): every motion through its
@@ -218,7 +223,7 @@ fn run<'m, S: tiers::Stop + ?Sized>(
     stop.check()?;
     let mut checker = Checker::new(model, design, fast.and_then(|fast| fast.mechanisms.clone()));
     checker.given = fast.map(|fast| fast.made.clone().into_iter());
-    let steps: [fn(&mut Checker<'m>); 10] = [
+    let steps: [fn(&mut Checker<'m>); 12] = [
         Checker::misfits,
         Checker::misshapen,
         Checker::not_supported,
@@ -228,6 +233,8 @@ fn run<'m, S: tiers::Stop + ?Sized>(
         Checker::overruns,
         Checker::rest,
         Checker::walls,
+        Checker::edge_contacts,
+        Checker::joint_motions,
         Checker::scenes,
     ];
     for step in steps {
@@ -315,6 +322,17 @@ impl Item {
     }
 }
 
+/// How a joint's part meets its counterparts once every cut is made.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Meeting {
+    /// It touches none of them.
+    Apart,
+    /// It touches this one, but only along an edge or at a corner.
+    Edge(PartId),
+    /// It touches one over an area.
+    Area,
+}
+
 /// An item's solid and where it moves.
 struct Body {
     item: Item,
@@ -356,6 +374,11 @@ struct Checker<'a> {
     /// Cuts too big or too deep that a wall rule of their own kind
     /// measures: reported after the wall rules, only if those didn't.
     held_back: Vec<walls::SizeProblem>,
+    /// Joint parts that, once cut, touch a counterpart only along an
+    /// edge: reported after the wall rules and cut sizes, only if those
+    /// found nothing wrong with the joint's cuts (a cut too deep is the
+    /// mistake, and the edge only what it leaves).
+    edge_only: Vec<(stave_model::solved::JointId, PartId, PartId)>,
     /// The layer 1 to 3 diagnostics the fast tier already made, in
     /// order: [`Checker::report`] takes them instead of its own.
     given: Option<std::vec::IntoIter<(Diagnostic, Option<Contact>)>>,
@@ -468,6 +491,7 @@ impl<'a> Checker<'a> {
                 .collect(),
             wall_failed: Vec::new(),
             held_back: Vec::new(),
+            edge_only: Vec::new(),
             given: None,
             diagnostics: Vec::new(),
             next_contact: None,
@@ -773,48 +797,83 @@ impl<'a> Checker<'a> {
     fn contact(&mut self) {
         let mut problems = Vec::new();
         for joint in &self.design.joints {
-            // Every listed part, in role order, and whether it touches a
-            // counterpart.
-            let mut touched: Vec<(PartId, bool)> = Vec::new();
+            // Every listed part, in role order, and how it meets its
+            // counterparts once cut.
+            let mut touched: Vec<(PartId, Meeting)> = Vec::new();
             for pair in &joint.pairs {
                 let parts: Vec<PartId> = pair.roles.iter().map(|r| r.part).collect();
                 for (index, part) in parts.iter().enumerate() {
                     let position = match touched.iter().position(|(p, _)| p == part) {
                         Some(position) => position,
                         None => {
-                            touched.push((*part, false));
+                            touched.push((*part, Meeting::Apart));
                             touched.len() - 1
                         }
                     };
-                    if touched.get(position).is_some_and(|(_, done)| *done) {
+                    if touched
+                        .get(position)
+                        .is_some_and(|(_, meeting)| *meeting == Meeting::Area)
+                    {
                         continue;
                     }
                     let Some(own) = self.world_part(*part) else {
                         continue;
                     };
-                    let touches_any = parts.iter().enumerate().any(|(other_index, other)| {
-                        other_index != index
-                            && other != part
-                            && self
-                                .world_part(*other)
-                                .is_some_and(|solid| collide::touches(&own, &solid))
-                    });
-                    if touches_any && let Some(entry) = touched.get_mut(position) {
-                        entry.1 = true;
+                    for (other_index, other) in parts.iter().enumerate() {
+                        if other_index == index || other == part {
+                            continue;
+                        }
+                        let Some(solid) = self.world_part(*other) else {
+                            continue;
+                        };
+                        let meeting = if collide::touches_over_area(&own, &solid) {
+                            Meeting::Area
+                        } else if collide::touches(&own, &solid) {
+                            Meeting::Edge(*other)
+                        } else {
+                            continue;
+                        };
+                        if let Some(entry) = touched.get_mut(position) {
+                            // An area beats an edge; the first edge found
+                            // is the one named.
+                            match (entry.1, meeting) {
+                                (Meeting::Area, _) | (Meeting::Edge(_), Meeting::Edge(_)) => {}
+                                (Meeting::Apart | Meeting::Edge(_), _) => entry.1 = meeting,
+                            }
+                        }
+                        if meeting == Meeting::Area {
+                            break;
+                        }
                     }
                 }
             }
-            let mut apart: Vec<PartId> = joint.unmatched.clone();
-            for (part, touches) in touched {
-                if !touches && !apart.contains(&part) {
-                    apart.push(part);
+            let mut apart: Vec<(PartId, Meeting)> = joint
+                .unmatched
+                .iter()
+                .map(|part| (*part, Meeting::Apart))
+                .collect();
+            for (part, meeting) in touched {
+                if meeting != Meeting::Area && !apart.iter().any(|(p, _)| *p == part) {
+                    apart.push((part, meeting));
                 }
             }
-            for part in apart {
-                problems.push((joint.id, part));
+            for (part, meeting) in apart {
+                // Two parts that touch only along an edge are one mistake.
+                let mirrored = |(j, p, m): &(stave_model::solved::JointId, PartId, Meeting)| {
+                    *j == joint.id
+                        && matches!(meeting, Meeting::Edge(other) if other == *p)
+                        && *m == Meeting::Edge(part)
+                };
+                if !problems.iter().any(mirrored) {
+                    problems.push((joint.id, part, meeting));
+                }
             }
         }
-        for (joint, part) in problems {
+        for (joint, part, meeting) in problems {
+            if let Meeting::Edge(other) = meeting {
+                self.edge_only.push((joint, part, other));
+                continue;
+            }
             let (joint_name, part_name) = (self.joint_name(joint), self.part_name(part));
             self.next_contact = Some(Contact::of(self.design, &[Item::Part(part)], &[]));
             self.report(
@@ -825,6 +884,39 @@ impl<'a> Checker<'a> {
                 Vec::new(),
                 Some(format!(
                     "place {part_name} so it touches a part it joins in '{joint_name}', or take it out of the joint"
+                )),
+            );
+        }
+    }
+
+    /// The joint parts that touch only along an edge once cut, unless a
+    /// wall rule or a cut size already reported the joint's cuts.
+    fn edge_contacts(&mut self) {
+        for (joint, part, other) in std::mem::take(&mut self.edge_only) {
+            let cuts_failed = self.wall_failed.iter().any(|source| {
+                matches!(source, CutSource::Joint { joint: failed, .. } if *failed == joint)
+            });
+            if cuts_failed || self.reported.contains(&part) || self.reported.contains(&other) {
+                continue;
+            }
+            let (joint_name, part_name, other_name) = (
+                self.joint_name(joint),
+                self.part_name(part),
+                self.part_name(other),
+            );
+            self.next_contact = Some(Contact::of(
+                self.design,
+                &[Item::Part(part), Item::Part(other)],
+                &[],
+            ));
+            self.report(
+                Severity::Error,
+                Code::NoContact,
+                format!("{joint_name}: once cut, {part_name} and {other_name} touch only along an edge"),
+                self.joint_place(joint),
+                Vec::new(),
+                Some(format!(
+                    "place {part_name} and {other_name} so their cuts meet face to face, or make the cuts no deeper than the parts cross"
                 )),
             );
         }
