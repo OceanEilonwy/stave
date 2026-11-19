@@ -526,11 +526,12 @@ impl Workbench {
             panels,
             status,
             remembers,
-            last: RefCell::new(layout.clone()),
+            // `apply` below puts the real one here.
+            last: RefCell::new(Layout::default()),
             on_save_failed: RefCell::new(None),
             save_failed: Cell::new(false),
         });
-        workbench.apply(&layout);
+        workbench.apply(layout);
         // A panel dropped somewhere new is remembered at once, so closing
         // it later brings it back there.
         let weak = Rc::downgrade(&workbench);
@@ -544,7 +545,7 @@ impl Workbench {
 
     /// Puts every panel where `layout` says, closing the ones it leaves
     /// out, and shows the edges it shows.
-    pub fn apply(&self, layout: &Layout) {
+    pub fn apply(&self, layout: Layout) {
         for widget in self.panels.values() {
             detach(widget);
         }
@@ -569,7 +570,7 @@ impl Workbench {
                 && !layout.frames(side).is_empty();
             self.dock.set_reveal_area(side.area(), shown);
         }
-        self.last.replace(layout.clone());
+        self.last.replace(layout);
     }
 
     /// Adds these panels to a frame, in order.
@@ -648,15 +649,16 @@ impl Workbench {
     /// Remembers the layout for next time (not while taking screenshots).
     pub fn save(&self) {
         let layout = self.layout();
-        self.last.replace(layout.clone());
-        if !self.remembers {
+        let text = self.remembers.then(|| layout.to_text());
+        self.last.replace(layout);
+        let Some(text) = text else {
             return;
-        }
+        };
         let path = layout_path();
         let written = path
             .parent()
             .map_or(Ok(()), std::fs::create_dir_all)
-            .and_then(|()| std::fs::write(&path, layout.to_text()));
+            .and_then(|()| std::fs::write(&path, text));
         if let Err(error) = written {
             eprintln!("warning: can't write '{}': {error}", path.display());
             // Cloned out so that `told` may set a new handler.
@@ -678,7 +680,7 @@ impl Workbench {
 
     /// Board B again.
     pub fn reset(&self) {
-        self.apply(&Layout::default());
+        self.apply(Layout::default());
         self.save();
     }
 

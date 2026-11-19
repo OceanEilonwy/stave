@@ -433,7 +433,7 @@ fn sync_selection(list: &gtk::ListBox, state_cell: &Rc<RefCell<TreeState>>) {
                     Some(row.clone())
                 }
                 RowKind::Source(location)
-                    if *selection == Selection::Location(location.clone()) =>
+                    if matches!(selection, Selection::Location(l) if l == location) =>
                 {
                     Some(row.clone())
                 }

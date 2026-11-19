@@ -1364,11 +1364,8 @@ impl FilesPage {
         for (index, tab) in state.tabs.iter().enumerate() {
             let dirty = state.buffers.is_dirty(&tab.document);
             let name = tab.document.file_name();
-            tab.label.set_label(&if dirty {
-                format!("{name} •")
-            } else {
-                name.clone()
-            });
+            tab.label
+                .set_label(&if dirty { format!("{name} •") } else { name });
             if Some(index) == state.active {
                 tab.button.add_css_class("active");
             } else {

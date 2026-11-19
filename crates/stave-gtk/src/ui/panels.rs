@@ -236,15 +236,15 @@ impl ProblemsPanel {
             }
         });
         line.append(&link);
-        let what = match place.role {
-            Role::Primary => place.message.clone(),
-            Role::Secondary if place.message.is_empty() => "also here".to_owned(),
-            Role::Secondary => place.message.clone(),
+        let what: &str = match place.role {
+            Role::Primary => &place.message,
+            Role::Secondary if place.message.is_empty() => "also here",
+            Role::Secondary => &place.message,
         };
         if !what.is_empty() {
             line.append(
                 &gtk::Label::builder()
-                    .label(&what)
+                    .label(what)
                     .xalign(0.0)
                     .wrap(true)
                     .css_classes(["dim", "caption"])

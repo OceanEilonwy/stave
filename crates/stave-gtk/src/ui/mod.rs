@@ -895,7 +895,7 @@ impl Window {
             }
         }
         if wanted.wish != Wish::default() {
-            self.widgets.files.wish(wanted.wish.clone());
+            self.widgets.files.wish(wanted.wish);
         }
         if wanted.checking || wanted.building {
             self.state.borrow_mut().hold_checks = true;
