@@ -9,6 +9,7 @@
 pub mod profile;
 
 use std::num::NonZeroU64;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, Result, anyhow, bail};
@@ -202,9 +203,22 @@ struct Target {
     readback: wgpu::Buffer,
 }
 
+/// What the GPU reported outside any call's result: wgpu's callbacks
+/// write it, the next frame reads it.
+#[derive(Debug, Default)]
+struct Trouble {
+    /// Why the device was lost (a driver reset, suspend, an external GPU
+    /// unplugged): it must be opened again.
+    lost: Option<String>,
+    /// The first error since the last frame began. Without a handler wgpu
+    /// panics on one, taking the window and unsaved edits with it.
+    error: Option<String>,
+}
+
 /// The wgpu device, pipelines and the uploaded scene.
 pub struct Renderer {
     device: wgpu::Device,
+    trouble: Arc<Mutex<Trouble>>,
     queue: wgpu::Queue,
     adapter_name: String,
     globals: wgpu::Buffer,
@@ -321,11 +335,16 @@ fn scene_group(
 
 impl Renderer {
     /// Opens a GPU without a window. Fails when no adapter is available.
+    ///
+    /// It asks for the low-power adapter (the integrated one on a laptop
+    /// with two), which draws a few hundred parts with ease and leaves the
+    /// discrete GPU asleep; `WGPU_POWER_PREF=high` asks for the other.
     pub fn new() -> Result<Renderer> {
         let instance =
             wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::HighPerformance,
+            power_preference:
+                wgpu::PowerPreference::from_env().unwrap_or(wgpu::PowerPreference::LowPower),
             force_fallback_adapter: false,
             compatible_surface: None,
             apply_limit_buckets: false,
@@ -341,6 +360,24 @@ impl Renderer {
             trace: wgpu::Trace::Off,
         }))
         .context("the graphics adapter refused a device")?;
+        let trouble = Arc::new(Mutex::new(Trouble::default()));
+        {
+            let trouble = Arc::clone(&trouble);
+            device.on_uncaptured_error(Arc::new(move |error: wgpu::Error| {
+                eprintln!("stave: the GPU reported an error: {error}");
+                if let Ok(mut trouble) = trouble.lock() {
+                    trouble.error.get_or_insert_with(|| error.to_string());
+                }
+            }));
+        }
+        {
+            let trouble = Arc::clone(&trouble);
+            device.set_device_lost_callback(move |reason, message| {
+                if let Ok(mut trouble) = trouble.lock() {
+                    trouble.lost = Some(format!("{reason:?}: {message}"));
+                }
+            });
+        }
 
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("viewport"),
@@ -823,6 +860,7 @@ impl Renderer {
             translucent_section_pipeline,
             overlay_pipeline,
             device,
+            trouble,
             queue,
             adapter_name,
             globals,
@@ -998,7 +1036,57 @@ impl Renderer {
     }
 
     /// Draws a frame and reads it back.
+    ///
+    /// When the device has been lost it is opened again, the frame's scene
+    /// uploaded to it, and the frame drawn there; an error the GPU reports
+    /// while drawing fails the frame instead of the application.
     pub fn render(&mut self, frame: &Frame<'_>) -> Result<Image> {
+        self.recover_if_lost(frame.scene)?;
+        let drawn = self.draw(frame);
+        // A device lost while drawing: once more, on a new one.
+        let drawn = match drawn {
+            Err(_) if self.is_lost() => {
+                self.recover_if_lost(frame.scene)?;
+                self.draw(frame)
+            }
+            drawn => drawn,
+        };
+        let error = self
+            .trouble
+            .lock()
+            .ok()
+            .and_then(|mut trouble| trouble.error.take());
+        match error {
+            Some(error) => Err(anyhow!("the GPU couldn't draw the frame: {error}")),
+            None => drawn,
+        }
+    }
+
+    /// Whether wgpu has said the device is lost.
+    fn is_lost(&self) -> bool {
+        self.trouble
+            .lock()
+            .is_ok_and(|trouble| trouble.lost.is_some())
+    }
+
+    /// Opens the GPU again and uploads `scene` to it, when the device has
+    /// been lost.
+    fn recover_if_lost(&mut self, scene: &SceneGraph) -> Result<()> {
+        let lost = self
+            .trouble
+            .lock()
+            .ok()
+            .and_then(|mut trouble| trouble.lost.take());
+        if let Some(reason) = lost {
+            eprintln!("stave: the graphics device was lost ({reason}); opening it again");
+            *self = Renderer::new()
+                .context("the graphics device was lost and couldn't be opened again")?;
+            self.upload(scene);
+        }
+        Ok(())
+    }
+
+    fn draw(&mut self, frame: &Frame<'_>) -> Result<Image> {
         let (width, height) = (frame.width.max(1), frame.height.max(1));
         let limit = self.device.limits().max_texture_dimension_2d;
         if width > limit || height > limit {
@@ -1916,4 +2004,70 @@ pub fn write_png(image: &Image, path: &std::path::Path) -> Result<()> {
 pub fn aspect(width: u32, height: u32) -> f32 {
     let pixels = |n: u32| f32::from(u16::try_from(n.max(1)).unwrap_or(u16::MAX));
     pixels(width) / pixels(height)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use super::*;
+
+    /// A renderer, or `None` (and a note) on a machine without a GPU
+    /// adapter wgpu can use.
+    fn renderer() -> Option<Renderer> {
+        match Renderer::new() {
+            Ok(renderer) => Some(renderer),
+            Err(error) => {
+                eprintln!("skipped: {error:#}");
+                None
+            }
+        }
+    }
+
+    /// The stool's scene, at rest.
+    fn stool() -> (SceneGraph, Posed) {
+        let folder = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/stool");
+        let opened = stave_app::open(&folder).unwrap();
+        let scene = stave_app::view::scene(opened.design.as_ref().unwrap());
+        let posed = scene.rest();
+        (scene, posed)
+    }
+
+    fn frame<'a>(scene: &'a SceneGraph, posed: &'a Posed, yaw: f32) -> Frame<'a> {
+        let bounds = scene.bounds(posed).unwrap();
+        let orbit = Orbit::framing(bounds, aspect(96, 64));
+        Frame {
+            scene,
+            posed,
+            orbit: Orbit {
+                yaw: orbit.yaw + yaw,
+                ..orbit
+            },
+            selection: &[],
+            highlight: None,
+            section: None,
+            looks: None,
+            overlay: None,
+            tint_cut_faces: true,
+            lit: None,
+            tints: None,
+            backdrop: Backdrop::Light,
+            width: 96,
+            height: 64,
+        }
+    }
+
+    #[test]
+    fn a_lost_device_is_opened_again_and_the_frame_drawn() {
+        let Some(mut renderer) = renderer() else {
+            return;
+        };
+        let (scene, posed) = stool();
+        renderer.upload(&scene);
+        let before = renderer.render(&frame(&scene, &posed, 0.0)).unwrap();
+        renderer.device.destroy();
+        let after = renderer.render(&frame(&scene, &posed, 0.0)).unwrap();
+        assert_eq!(before.rgba.len(), after.rgba.len());
+        assert!(!renderer.is_lost());
+    }
 }
