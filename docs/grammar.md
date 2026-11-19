@@ -761,6 +761,11 @@ A named value. Not a knob: it has no range and can't be passed in.
 | `max_width` | `Length` | no | yes | the widest board you can get. A `solid` part wider than this is made of boards (see [Boards](#boards)); a `plywood` or `mdf` part wider than this is `error[type-mismatch]` |
 | `max_length` | `Length` | no, but see the warning below | yes | the longest board (or sheet) you can get; a part whose cut length is longer is `error[type-mismatch]`, unless its `lengths:` splices it into pieces that each fit (see [Splices](#splices)) |
 
+Every size of a stock (`thickness`, `diameter`, `width`, `max_width`,
+`max_length`) must be more than 0mm, whether or not a part is cut from it:
+`error[out-of-range]` at the field, `'max_width' must be more than 0mm, found
+-100mm`.
+
 A `solid`, `plywood` or `mdf` stock that a part is cut from and that has no
 `max_length` is `warning[missing-field]` at the stock, once: `oak_19 doesn't
 say how long its boards are, so Stave can't check part lengths` (`sheets`
