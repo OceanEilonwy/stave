@@ -492,7 +492,7 @@ impl Shell {
             style::install(&display);
         }
         gtk::Window::set_default_icon_name(APP_ID);
-        adw::StyleManager::default().set_color_scheme(self.theme.scheme());
+        self.theme.apply();
         let application = &self.application;
         let actions: [(&str, ShellAction); 3] = [
             ("quit", || ShellInput::Quit),
@@ -715,7 +715,7 @@ impl Shell {
 
     /// The style was chosen in the menu: it shows and is remembered.
     fn set_theme(&mut self, theme: Theme) {
-        adw::StyleManager::default().set_color_scheme(theme.scheme());
+        theme.apply();
         if !self.remembers {
             return;
         }
