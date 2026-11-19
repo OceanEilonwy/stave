@@ -149,8 +149,14 @@ pub fn param_kind_patch(
         ""
     };
     let (mark, summary) = match kind {
-        NewParamKind::Solved { .. } => ("solved ", format!("Let the solver change {name}")),
-        NewParamKind::Plain => ("", format!("Make {name} a plain param")),
+        NewParamKind::Solved { .. } => (
+            "solved ",
+            fill_in(&tr("Let the solver change {name}"), &[("name", &name)]),
+        ),
+        NewParamKind::Plain => (
+            "",
+            fill_in(&tr("Make {name} a plain param"), &[("name", &name)]),
+        ),
     };
     let op = format!("replace {private}{mark}param {name}{ty} = {default}{within}");
     Ok(GeneratedPatch::new(&summary, &[op])?)

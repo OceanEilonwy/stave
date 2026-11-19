@@ -219,11 +219,7 @@ pub fn hold_patch(
         name.as_str(),
         quoted(reason)
     )];
-    let summary = format!(
-        "Hold {measure} {} {}",
-        request.bound.operator(),
-        request.value
-    );
+    let summary = fill_in(&tr("Hold {condition}"), &[("condition", &condition)]);
     let patch = GeneratedPatch::new(&summary, &ops)?;
     Ok(HeldPatch {
         name,

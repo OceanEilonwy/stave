@@ -86,7 +86,7 @@
 //! rate: a piece in which one moves holds only its own target. The same
 //! drag gives the same values every time.
 
-use crate::i18n::tr;
+use crate::i18n::{fill_in, tr};
 use std::collections::BTreeMap;
 use std::sync::atomic::AtomicBool;
 
@@ -297,9 +297,15 @@ pub fn solve_size(
     for change in &changes {
         let text = value_text(change.to).ok_or(SolveEditError::Overflow)?;
         ops.push(format!("set {} = {text}", change.path));
-        said.push(format!("{} to {text}", change.path));
+        said.push(fill_in(
+            &tr("{path} to {value}"),
+            &[("path", &change.path), ("value", &text)],
+        ));
     }
-    let patch = GeneratedPatch::new(&format!("Set {}", said.join(", ")), &ops)?;
+    let patch = GeneratedPatch::new(
+        &fill_in(&tr("Set {changes}"), &[("changes", &said.join(", "))]),
+        &ops,
+    )?;
     let tried = base.try_patch(PATCH_NAME, &patch.parse, cancel)?;
     let edit = SolvedEdit {
         changes,
@@ -326,10 +332,13 @@ pub fn changes_patch(changes: &[ParamChange]) -> Result<GeneratedPatch, SolveEdi
     for change in changes {
         let text = value_text(change.to).ok_or(SolveEditError::Overflow)?;
         ops.push(format!("set {} = {text}", change.path));
-        said.push(format!("{} to {text}", change.path));
+        said.push(fill_in(
+            &tr("{path} to {value}"),
+            &[("path", &change.path), ("value", &text)],
+        ));
     }
     Ok(GeneratedPatch::new(
-        &format!("Set {}", said.join(", ")),
+        &fill_in(&tr("Set {changes}"), &[("changes", &said.join(", "))]),
         &ops,
     )?)
 }

@@ -1688,14 +1688,14 @@ mod tests {
         // A place param still to point at blocks Add whatever the verdict.
         assert!(!can_add(door, Some(&fits)));
         assert_eq!(
-            add_blocked_reason(door, Some(&fits)),
+            add_blocked_reason(door, Some(&fits)).as_deref(),
             Some("Point at what is still missing on the model first")
         );
         let mut unset = drawer.clone();
         unset.settings[0].value = SettingValue::Unset;
         assert!(!can_add(&unset, Some(&fits)));
         assert_eq!(
-            add_blocked_reason(drawer, Some(&fixture.verdict)),
+            add_blocked_reason(drawer, Some(&fixture.verdict)).as_deref(),
             Some("It doesn't fit yet: use a fix or change a setting")
         );
         assert_eq!(add_blocked_reason(drawer, Some(&fits)), None);

@@ -2218,7 +2218,8 @@ mod tests {
         send(&mut session, EditCommand::DragTo(mm_amount(6.0).unwrap()));
         let moved = panel(&session);
         assert_eq!(moved.title, "apron_front.setback");
-        assert_eq!(moved.value.as_deref(), Some("6mm (was 5mm)"));
+        assert_eq!(moved.value.as_deref(), Some("6mm"));
+        assert_eq!(moved.was.as_deref(), Some("5mm"));
         assert_eq!(moved.verdict.words, "✓ It fits");
         assert!(moved.can_apply);
         // The readout at the top of the view says it in one line.

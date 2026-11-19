@@ -223,9 +223,9 @@ impl EditMenu {
 
     /// Shows the menu for a selection of this kind with these entries.
     pub fn show(&self, heading: Heading, items: &[MenuItem<'_>]) {
-        self.heading.set_label(heading.text());
+        self.heading.set_label(&heading.text());
         self.root
-            .update_property(&[gtk::accessible::Property::Label(heading.text())]);
+            .update_property(&[gtk::accessible::Property::Label(&heading.text())]);
         while let Some(child) = self.list.first_child() {
             self.list.remove(&child);
         }

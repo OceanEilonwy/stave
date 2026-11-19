@@ -18,7 +18,7 @@
 //! [`Fix`] is a parsed [`Patch`], and diagnostics are the checker's own
 //! [`Diagnostic`]s. Ids are the resolved model's ([`stave_model::ids`]).
 
-use crate::i18n::tr;
+use crate::i18n::{fill_in, ntr, tr};
 use stave_lang::ast::{
     AssemblyDef, DesignItem, Expr, Ident, ItemKind, Name, PatchOpKind, Span, StringPart, TypeName,
 };
@@ -158,12 +158,12 @@ pub enum Heading {
 
 impl Heading {
     /// The words shown: "In this space".
-    pub fn text(self) -> &'static str {
+    pub fn text(self) -> String {
         match self {
-            Heading::InThisSpace => "In this space",
-            Heading::OnThisFace => "On this face",
-            Heading::BetweenTheseParts => "Between these parts",
-            Heading::WithTheseParts => "With these parts",
+            Heading::InThisSpace => tr("In this space"),
+            Heading::OnThisFace => tr("On this face"),
+            Heading::BetweenTheseParts => tr("Between these parts"),
+            Heading::WithTheseParts => tr("With these parts"),
         }
     }
 }
@@ -462,7 +462,14 @@ impl OptionRefusal {
         };
         match self.more {
             0 => first,
-            more => format!("{first} (and {more} more)"),
+            more => fill_in(
+                &ntr(
+                    "{first} (and {more} more)",
+                    "{first} (and {more} more)",
+                    more,
+                ),
+                &[("first", &first), ("more", &more)],
+            ),
         }
     }
 
@@ -499,16 +506,20 @@ impl Blame {
     /// doesn't fit now that panel_stock is oak_19."
     pub fn text(&self) -> String {
         match self.from {
-            SettingValue::Unset => format!(
-                "It doesn't fit now that {} is {}.",
-                self.setting.as_str(),
-                self.to_text
+            SettingValue::Unset => fill_in(
+                &tr("It doesn't fit now that {setting} is {value}."),
+                &[
+                    ("setting", &self.setting.as_str()),
+                    ("value", &self.to_text),
+                ],
             ),
             SettingValue::Default | SettingValue::Copied { .. } | SettingValue::Chosen(_) => {
-                format!(
-                    "It stopped fitting when {} became {}.",
-                    self.setting.as_str(),
-                    self.to_text
+                fill_in(
+                    &tr("It stopped fitting when {setting} became {value}."),
+                    &[
+                        ("setting", &self.setting.as_str()),
+                        ("value", &self.to_text),
+                    ],
                 )
             }
         }
@@ -521,11 +532,15 @@ impl Blame {
         let setting = self.setting.as_str();
         let value = self.from_text.as_deref().unwrap_or_default();
         match self.from {
-            SettingValue::Unset => format!("Clear {setting} again"),
-            SettingValue::Default => format!("Put {setting} back to {value}, the default"),
-            SettingValue::Copied { .. } | SettingValue::Chosen(_) => {
-                format!("Put {setting} back to {value}")
-            }
+            SettingValue::Unset => fill_in(&tr("Clear {setting} again"), &[("setting", &setting)]),
+            SettingValue::Default => fill_in(
+                &tr("Put {setting} back to {value}, the default"),
+                &[("setting", &setting), ("value", &value)],
+            ),
+            SettingValue::Copied { .. } | SettingValue::Chosen(_) => fill_in(
+                &tr("Put {setting} back to {value}"),
+                &[("setting", &setting), ("value", &value)],
+            ),
         }
     }
 }

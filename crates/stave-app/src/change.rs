@@ -331,12 +331,12 @@ impl Change {
         index: usize,
         grip: crate::grips::SelectionGrip,
     ) -> Change {
-        let summary = format!("Drag {}", grip.label);
+        let summary = fill_in(&tr("Drag {grip}"), &[("grip", &grip.label)]);
         let drag = GripDrag::new(index, grip);
         let mut change = Change::empty(folder, files, base, ChangeRequest::Grip { index });
         change.summary = summary;
         change.detail = ChangeDetail::Grip(Box::new(drag.detail().clone()));
-        change.progress = Progress::Unwritable("move the grip, or type a value for it".to_owned());
+        change.progress = Progress::Unwritable(tr("move the grip, or type a value for it"));
         change.grip = Some(Box::new(drag));
         change
     }
@@ -397,8 +397,11 @@ impl Change {
             DragOutcome::Stands(progress) => {
                 if let ChangeDetail::Grip(detail) = &self.detail {
                     self.summary = match detail.target.and_then(crate::stops::amount_text) {
-                        Some(value) => format!("Drag {} to {value}", detail.label),
-                        None => format!("Drag {}", detail.label),
+                        Some(value) => fill_in(
+                            &tr("Drag {grip} to {value}"),
+                            &[("grip", &detail.label), ("value", &value)],
+                        ),
+                        None => fill_in(&tr("Drag {grip}"), &[("grip", &detail.label)]),
                     };
                 }
                 self.patch = None;
@@ -704,9 +707,9 @@ impl Change {
                     ));
                 }
                 let symbol = analysis.project_symbol(item.as_str()).ok_or_else(|| {
-                    ChangeError::Unwritable(format!(
-                        "there is no item named '{}' in this project",
-                        item.as_str()
+                    ChangeError::Unwritable(fill_in(
+                        &tr("there is no item named '{name}' in this project"),
+                        &[("name", &item.as_str())],
                     ))
                 })?;
                 let edits = analysis
@@ -805,7 +808,7 @@ impl Change {
             }
             Err(TryError::Load(error)) => self.progress = Progress::Unwritable(error.to_string()),
             Err(TryError::Cancelled(_)) => {
-                self.progress = Progress::Unwritable("the check was stopped".to_owned());
+                self.progress = Progress::Unwritable(tr("the check was stopped"));
             }
         }
         self.tried_patch = Some(text);

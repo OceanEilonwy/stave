@@ -1335,7 +1335,10 @@ fn set_patch(path: &str, before: Amount, after: Amount) -> Result<GripPatch, Mov
         _ => MoveError::Overflow,
     })?;
     let patch = GeneratedPatch::new(
-        &format!("Set {path} to {text}"),
+        &fill_in(
+            &tr("Set {path} to {value}"),
+            &[("path", &path), ("value", &text)],
+        ),
         &[format!("set {path} = {text}")],
     )?;
     Ok(GripPatch {

@@ -317,9 +317,9 @@ impl Finder {
             }
             if rows.is_empty() {
                 let words = if query.trim().is_empty() {
-                    // TRANSLATORS: the verbs are typed into the finder as
-                    // written here, in English.
                     tr(
+                        // TRANSLATORS: the verbs are typed into the finder as
+                        // written here, in English.
                         "Type a name: a part, a file, a word in the text or a problem; or a verb: add, remove, rename, repeat, mirror, hold",
                     )
                 } else {

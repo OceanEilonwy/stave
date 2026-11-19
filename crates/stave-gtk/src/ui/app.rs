@@ -576,7 +576,10 @@ impl Shell {
             .developer_name(tr("The Stave contributors"))
             .version(env!("CARGO_PKG_VERSION"))
             .comments(tr("Woodworking design for beginners: describe a project in words, see it in 3D, and let Stave check that it can be built."))
-            .translator_credits(tr("translator-credits"))
+            .translator_credits(tr(
+                // TRANSLATORS: your name, and others who translated, one per line.
+                "translator-credits",
+            ))
             .license_type(gtk::License::Agpl30)
             .website(WEBSITE)
             .issue_url(ISSUES)
