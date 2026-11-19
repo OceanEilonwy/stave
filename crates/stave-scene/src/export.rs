@@ -90,7 +90,8 @@ impl SceneGraph {
             let (Some(transform), Some(node)) = (posed.shown(id), self.node(id)) else {
                 continue;
             };
-            let mesh = &node.geometry.mesh;
+            let mesh = &node.local.mesh;
+            let transform = node.placed(transform);
             if mesh.indices.is_empty() {
                 continue;
             }

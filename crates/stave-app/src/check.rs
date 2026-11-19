@@ -6,14 +6,24 @@
 //! a check ([`crate::session::Event::CheckStarted`]) and hands the
 //! [`Outcome`] back to [`crate::session::Session::finish_check`], which
 //! replaces the old result whole.
+//!
+//! The session keeps a [`MeshCache`] ([`crate::session::Session::meshes`])
+//! that a viewer hands to [`run_cached`]: each check then makes afresh only
+//! the part meshes whose cuts changed since the last one, and the rest
+//! come from the cache.
+//!
+//! With the environment variable `STAVE_PROFILE` set (to anything but `0`
+//! or nothing), each check prints to standard error how long reading and
+//! solving, building the scene (with how many part meshes it made and
+//! reused) and listing the problems took.
 
 use std::path::{Path, PathBuf};
-use std::sync::mpsc;
+use std::sync::{OnceLock, mpsc};
 use std::time::{Duration, Instant};
 
 use stave_lang::Severity;
 use stave_model::solved::SolvedDesign;
-use stave_scene::SceneGraph;
+use stave_scene::{MeshCache, SceneGraph};
 
 use crate::Opened;
 use crate::view::{self, Problem};
@@ -112,9 +122,21 @@ pub enum Outcome {
 /// Checks a project folder: runs the whole pipeline and builds the scene.
 /// Blocking; call it off the main thread.
 pub fn run(folder: &Path) -> Outcome {
+    run_cached(folder, &stave_ide::Overlay::new(), &MeshCache::new())
+}
+
+/// Checks a project folder as the editor shows it ([`run_with`]), taking
+/// the part meshes whose cuts haven't changed from `meshes` and leaving
+/// in it the meshes of this check. Blocking; call it off the main thread.
+pub fn run_cached(folder: &Path, overlay: &stave_ide::Overlay, meshes: &MeshCache) -> Outcome {
     let started = Instant::now();
-    match crate::open(folder) {
-        Ok(opened) => Outcome::Checked(Box::new(checked(folder, opened, started))),
+    let opened = if overlay.is_empty() {
+        crate::open(folder)
+    } else {
+        crate::open_with(folder, overlay)
+    };
+    match opened {
+        Ok(opened) => Outcome::Checked(Box::new(checked_with(folder, opened, started, meshes))),
         Err(error) => Outcome::CantOpen {
             message: error.to_string(),
             elapsed: started.elapsed(),
@@ -126,23 +148,57 @@ pub fn run(folder: &Path) -> Outcome {
 /// unsaved changes are read in place of their files (grammar, "Modules in
 /// an editor"). Blocking; call it off the main thread.
 pub fn run_with(folder: &Path, overlay: &stave_ide::Overlay) -> Outcome {
-    if overlay.is_empty() {
-        return run(folder);
-    }
-    let started = Instant::now();
-    match crate::open_with(folder, overlay) {
-        Ok(opened) => Outcome::Checked(Box::new(checked(folder, opened, started))),
-        Err(error) => Outcome::CantOpen {
-            message: error.to_string(),
-            elapsed: started.elapsed(),
-        },
-    }
+    run_cached(folder, overlay, &MeshCache::new())
 }
 
 /// Wraps a pipeline result as a check (for tests and in-memory projects).
 pub fn checked(folder: &Path, opened: Opened, started: Instant) -> Checked {
-    let scene = opened.design.as_ref().map(view::scene);
+    checked_with(folder, opened, started, &MeshCache::new())
+}
+
+/// Whether `STAVE_PROFILE` asks for timings. Read once.
+fn profiling() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        std::env::var_os("STAVE_PROFILE").is_some_and(|value| !value.is_empty() && value != "0")
+    })
+}
+
+/// Milliseconds, for a log line.
+fn milliseconds(duration: Duration) -> f64 {
+    duration.as_secs_f64() * 1000.0
+}
+
+/// [`checked`], taking unchanged part meshes from `meshes` and leaving
+/// this check's in it.
+pub fn checked_with(
+    folder: &Path,
+    opened: Opened,
+    started: Instant,
+    meshes: &MeshCache,
+) -> Checked {
+    let solved = started.elapsed();
+    let scene_started = Instant::now();
+    let scene = opened
+        .design
+        .as_ref()
+        .map(|design| view::scene_with(design, meshes));
+    let scene_time = scene_started.elapsed();
+    let problems_started = Instant::now();
     let problems = view::problems(&opened, folder);
+    if profiling() {
+        let usage = meshes.last_use();
+        eprintln!(
+            "stave-profile: check: open and solve {:.2} ms, scene {:.2} ms \
+             ({} part meshes made, {} reused, {} held), problems {:.2} ms",
+            milliseconds(solved),
+            milliseconds(scene_time),
+            usage.made,
+            usage.reused,
+            usage.held,
+            milliseconds(problems_started.elapsed()),
+        );
+    }
     let errors = problems
         .iter()
         .filter(|p| p.severity == Severity::Error)

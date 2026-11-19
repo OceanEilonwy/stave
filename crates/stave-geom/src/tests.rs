@@ -172,6 +172,88 @@ fn every_frame_faces_outward() {
     }
 }
 
+/// A mesh moved by a transform: positions as points, normals as
+/// directions.
+fn placed(geometry: &Geometry, transform: Mat4) -> Mesh {
+    let mut mesh = geometry.mesh.clone();
+    for vertex in &mut mesh.vertices {
+        vertex.position = transform
+            .transform_point3(Vec3::from(vertex.position))
+            .to_array();
+        vertex.normal = transform
+            .transform_vector3(Vec3::from(vertex.normal))
+            .to_array();
+    }
+    mesh
+}
+
+/// Two meshes alike up to float rounding: the same triangles, positions
+/// and normals within a thousandth, the grain coordinates and cut flags
+/// exactly.
+fn assert_same_mesh(a: &Mesh, b: &Mesh) {
+    assert_eq!(a.indices, b.indices);
+    assert_eq!(a.vertices.len(), b.vertices.len());
+    for (a, b) in a.vertices.iter().zip(&b.vertices) {
+        assert!(
+            (Vec3::from(a.position) - Vec3::from(b.position))
+                .abs()
+                .max_element()
+                < 1e-3,
+            "{a:?} != {b:?}"
+        );
+        assert!((Vec3::from(a.normal) - Vec3::from(b.normal)).length() < 1e-4);
+        assert_eq!(a.grain, b.grain);
+        assert_eq!(a.cut, b.cut);
+    }
+}
+
+#[test]
+fn a_mesh_in_its_own_frame_placed_at_rest_is_the_mesh_in_place() {
+    for length in Direction::ALL {
+        for width in Direction::ALL {
+            let Ok(orientation) = Orientation::from_length_and_width(length, width) else {
+                continue;
+            };
+            for orientation in [orientation, orientation.mirrored(Axis::Deep)] {
+                for shape in [Shape::Board, Shape::Round { diameter: mm(40) }] {
+                    let board = part(orientation, point(10, 20, 30), size(300, 100, 19), shape);
+                    let rest = super::rest(&board);
+                    // Turns and moves, never reflects.
+                    assert!(rest.determinant() > 0.0);
+                    let local = super::part_local(&board, Extent::Cut);
+                    let world = super::part(&board, Extent::Cut);
+                    let moved = placed(&local, rest);
+                    assert_same_mesh(&moved, &world.mesh);
+                    assert_outward(&moved);
+                    assert_close(local.bounds.transformed(rest), world.bounds);
+                    let solid = solid::Solid::of(&board, &design_of(&board));
+                    let local = super::cut_part_local(&board, &solid);
+                    let world = super::cut_part(&board, &solid);
+                    assert_same_mesh(&placed(&local, rest), &world.mesh);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn parts_alike_but_for_where_they_are_share_one_mesh() {
+    let at = |origin: Point| {
+        part(
+            frame(Direction::Up, Direction::Back),
+            origin,
+            size(700, 45, 45),
+            Shape::Board,
+        )
+    };
+    let (one, other) = (at(point(0, 0, 0)), at(point(512, 0, 300)));
+    assert_eq!(
+        super::part_local(&one, Extent::Cut),
+        super::part_local(&other, Extent::Cut)
+    );
+    assert_ne!(super::rest(&one), super::rest(&other));
+}
+
 #[test]
 fn the_drawn_extent_leaves_out_what_joints_add() {
     // A divider 862 drawn, 880 cut: 9mm tongues at both ends.

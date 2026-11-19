@@ -14,7 +14,8 @@ use stave_model::solved::{
     WorldBox,
 };
 pub use stave_scene::{
-    BuildOptions, Extent, Highlight, Item, Look, MotionRange, NodeId, Posed, SceneEntry, SceneGraph,
+    BuildOptions, Extent, Highlight, Item, Look, MeshCache, MotionRange, NodeId, Posed, SceneEntry,
+    SceneGraph,
 };
 
 use crate::{Contact, ContactItem};
@@ -28,11 +29,18 @@ use crate::Opened;
 /// it is visible. Parts that fit meet face to face without overlapping, so
 /// nothing flickers.
 pub fn scene(design: &SolvedDesign) -> SceneGraph {
-    SceneGraph::build(
+    scene_with(design, &MeshCache::new())
+}
+
+/// [`scene`], taking the part meshes whose cuts haven't changed from
+/// `meshes` (the last build that used it) and leaving this build's in it.
+pub fn scene_with(design: &SolvedDesign, meshes: &MeshCache) -> SceneGraph {
+    SceneGraph::build_with(
         design,
         BuildOptions {
             extent: Extent::Cut,
         },
+        meshes,
     )
 }
 

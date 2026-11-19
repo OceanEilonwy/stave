@@ -25,6 +25,7 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+mod cache;
 pub mod camera;
 mod cover;
 pub mod export;
@@ -35,6 +36,7 @@ mod grip;
 mod pick;
 mod space;
 
+pub use cache::{CacheUse, MeshCache};
 pub use camera::{Orbit, Projection, Ray};
 pub use cover::Subject;
 pub use focus::{

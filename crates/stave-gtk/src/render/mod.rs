@@ -1124,7 +1124,7 @@ impl Renderer {
         self.rest_bounds = scene
             .nodes
             .iter()
-            .map(|node| node.geometry.bounds)
+            .map(stave_scene::Node::bounds)
             .reduce(Aabb::union);
     }
 
@@ -1365,7 +1365,7 @@ impl Renderer {
                 let index = usize::try_from(*index).ok()?;
                 let node = frame.scene.nodes.get(index)?;
                 let transform = frame.posed.transforms().get(index)?;
-                Some(node.geometry.bounds.transformed(*transform))
+                Some(node.bounds().transformed(*transform))
             })
             .reduce(Aabb::union)
             .and_then(|bounds| screen_rect(view_projection, bounds, width, height));
@@ -1428,10 +1428,14 @@ impl Renderer {
             );
         scratch.casters.clear();
         scratch.casters.extend(casting.clone().map(|(index, _)| {
+            // Where the mesh is drawn: a part that moved casts its shadow
+            // elsewhere though its mesh (in its own frame) is the same.
             let model = usize::try_from(index)
                 .ok()
-                .and_then(|index| frame.posed.transforms().get(index))
-                .copied()
+                .and_then(|index| {
+                    let node = frame.scene.nodes.get(index)?;
+                    Some(node.placed(*frame.posed.transforms().get(index)?))
+                })
                 .unwrap_or(Mat4::IDENTITY);
             (index, model.to_cols_array_2d())
         }));
@@ -1867,12 +1871,16 @@ impl Renderer {
         scratch
             .nodes
             .extend(scene.nodes.iter().enumerate().map(|(index, node)| {
-                let model = frame
-                    .posed
-                    .transforms()
-                    .get(index)
-                    .copied()
-                    .unwrap_or(Mat4::IDENTITY);
+                // The mesh is in the node's own frame: its rest place,
+                // then the pose.
+                let model = node.placed(
+                    frame
+                        .posed
+                        .transforms()
+                        .get(index)
+                        .copied()
+                        .unwrap_or(Mat4::IDENTITY),
+                );
                 let seed = crate::convert::f32_of_index(index % 97) * 1.618;
                 let (colour, params) = match node.material {
                     Material::Wood(wood) => (
@@ -2016,12 +2024,7 @@ impl Scratch {
                 continue;
             };
             // How far the node's centre is from the eye, where it is now.
-            let distance = node
-                .geometry
-                .bounds
-                .transformed(transform)
-                .centre()
-                .distance(eye);
+            let distance = node.bounds().transformed(transform).centre().distance(eye);
             let look = frame
                 .looks
                 .and_then(|looks| looks.get(id.index()).copied())
@@ -2992,10 +2995,11 @@ mod tests {
     /// Moves a node's mesh and outline up by `millimetres`, as an edit
     /// to one part would change it.
     fn raise(node: &mut stave_scene::Node, millimetres: f32) {
-        for vertex in &mut node.geometry.mesh.vertices {
+        let geometry = std::sync::Arc::make_mut(&mut node.local);
+        for vertex in &mut geometry.mesh.vertices {
             vertex.position[1] += millimetres;
         }
-        for segment in &mut node.geometry.edges.segments {
+        for segment in &mut geometry.edges.segments {
             for point in segment {
                 point[1] += millimetres;
             }
@@ -3154,7 +3158,15 @@ mod tests {
                 .upload(&renderer.device, &renderer.queue, &many)
         );
         assert!(renderer.meshes.failed().is_none());
-        assert_eq!(renderer.meshes.held(), many.len());
+        // Nodes alike in shape (the stool's legs) share one mesh.
+        let mut distinct: Vec<&stave_geom::Geometry> = Vec::new();
+        for node in &scene.nodes {
+            if !distinct.iter().any(|mesh| **mesh == *node.local) {
+                distinct.push(&node.local);
+            }
+        }
+        assert!(distinct.len() < scene.nodes.len());
+        assert_eq!(renderer.meshes.held(), distinct.len() * 60);
         // The stool again, written into the grown buffers, looks the same.
         renderer.upload(&scene);
         assert_eq!(

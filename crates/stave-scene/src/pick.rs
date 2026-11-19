@@ -159,29 +159,37 @@ impl SceneGraph {
             let (Some(transform), Some(node)) = (posed.shown(id), self.node(id)) else {
                 continue;
             };
-            // Into the node's rest frame; affine maps keep the ray
-            // parameter, so distances compare directly.
+            // Into the node's rest frame, and on into its mesh's own
+            // frame; affine maps keep the ray parameter, so distances
+            // compare directly.
             let inverse = transform.inverse();
             let origin = inverse.transform_point3(ray.origin);
             let direction = inverse.transform_vector3(ray.direction);
-            let Some(entry) = node.geometry.bounds.ray_entry(origin, direction) else {
+            let own = node.rest.inverse();
+            let (local_origin, local_direction) = (
+                own.transform_point3(origin),
+                own.transform_vector3(direction),
+            );
+            let Some(entry) = node.local.bounds.ray_entry(local_origin, local_direction) else {
                 continue;
             };
             if best.is_some_and(|(hit, ..)| entry > hit.distance) {
                 continue;
             }
             let nearest = node
-                .geometry
+                .local
                 .mesh
                 .triangles()
                 .filter_map(|triangle| {
-                    triangle_hit(origin, direction, triangle).map(|t| (t, triangle))
+                    triangle_hit(local_origin, local_direction, triangle).map(|t| (t, triangle))
                 })
                 .reduce(|a, b| if b.0 < a.0 { b } else { a });
             if let Some((distance, [a, b, c])) = nearest
                 && best.is_none_or(|(hit, ..)| distance < hit.distance)
             {
-                let normal = (b - a).cross(c - a);
+                // The surface's normal in the rest frame: `rest` turns and
+                // moves, never reflects.
+                let normal = node.rest.transform_vector3((b - a).cross(c - a));
                 best = Some((
                     Hit {
                         node: id,

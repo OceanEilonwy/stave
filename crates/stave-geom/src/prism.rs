@@ -86,7 +86,7 @@ fn twice_area(points: &[Point2]) -> i128 {
 
 /// Why a list of points is not a polygon. Marks are counted from 1, the
 /// way a beginner counts them in the file.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, thiserror::Error)]
 pub enum PolygonError {
     /// Fewer than three points.
     #[error("an outline needs at least three marks, found {count}")]
@@ -483,7 +483,7 @@ impl DepthRange {
 /// A cut that is a polygon on a face cut straight down: the polygon as
 /// marked, its convex pieces, and the range it covers along the face's
 /// axis.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Prism {
     face_axis: PartAxis,
     outline: Polygon,

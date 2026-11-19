@@ -4,6 +4,10 @@
 //! A pass binds each buffer once and draws node after node from it, so a
 //! design of hundreds of parts costs a few binds a pass, not thousands.
 //!
+//! A node's mesh is in its own frame, so nodes alike in shape (four legs,
+//! two sides) share one mesh, held once and drawn from the same range;
+//! their node transforms place each copy.
+//!
 //! Meshes are kept by their content. A new check result usually changes
 //! few parts (often none: a renamed part, an edited comment), so an upload
 //! writes only the meshes the buffers don't hold yet, and nothing at all
@@ -14,6 +18,7 @@
 use std::collections::{HashMap, HashSet};
 use std::hash::{BuildHasher as _, Hasher as _, RandomState};
 use std::ops::Range;
+use std::sync::Arc;
 
 use anyhow::{Context as _, Result, bail};
 use stave_geom::{Geometry, Vertex};
@@ -301,7 +306,16 @@ impl MeshStore {
     /// Puts `nodes`' meshes in the buffers, writing only those not there
     /// already. Returns whether anything a node draws changed.
     pub fn upload(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, nodes: &[Node]) -> bool {
-        let keys: Vec<MeshKey> = nodes.iter().map(|node| self.key(&node.geometry)).collect();
+        // A mesh shared by several nodes is hashed once.
+        let mut shared: HashMap<*const Geometry, MeshKey> = HashMap::new();
+        let keys: Vec<MeshKey> = nodes
+            .iter()
+            .map(|node| {
+                *shared
+                    .entry(Arc::as_ptr(&node.local))
+                    .or_insert_with(|| self.key(&node.local))
+            })
+            .collect();
         if self.failed.is_none() && keys == self.keys {
             return false;
         }
@@ -360,7 +374,7 @@ impl MeshStore {
                 ranges.push(*range);
                 continue;
             }
-            let mesh = &node.geometry.mesh;
+            let mesh = &node.local.mesh;
             let base = self.vertices.write(bytemuck::cast_slice(&mesh.vertices))?;
             rebased.clear();
             for index in &mesh.indices {
@@ -373,7 +387,7 @@ impl MeshStore {
             let first_index = self.indices.write(bytemuck::cast_slice(&rebased))?;
             let first_edge_point = self
                 .edges
-                .write(bytemuck::cast_slice(&node.geometry.edges.segments))?;
+                .write(bytemuck::cast_slice(&node.local.edges.segments))?;
             let range = MeshRange {
                 first_index,
                 index_count: u32::try_from(key.indices)?,

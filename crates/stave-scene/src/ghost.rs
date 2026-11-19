@@ -13,6 +13,7 @@
 //! never by index: adding a part renumbers the parts after it.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use stave_model::solved::{Part, SolvedDesign};
 
@@ -144,7 +145,9 @@ fn same_node(
         // Hardware and joint members are drawn from their exact shapes,
         // so the same shapes in the same place draw the same mesh.
         (Item::Hardware(_) | Item::Member(_), _) | (Item::Part(_), _) => {
-            base_node.geometry == candidate_node.geometry
+            (Arc::ptr_eq(&base_node.local, &candidate_node.local)
+                || base_node.local == candidate_node.local)
+                && base_node.rest == candidate_node.rest
                 && base_node.material == candidate_node.material
         }
     }
