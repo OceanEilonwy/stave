@@ -182,7 +182,7 @@ its own bridge. Nothing is borrowed across a callback or a GTK call.
    }
    ```
 
-   This replaces `updating_controls` in `mod.rs` and `syncing` in
+   This replaced `updating_controls` in `mod.rs` and `syncing` in
    `tree.rs`. Setters that did not call back (`set_value` and friends)
    become inputs whose `update` sends no output. A component that fills
    a list imperatively (in `update_with_view`) calls
@@ -401,12 +401,20 @@ them.
   handler while it plays; `Clock` in `State` keeps the last frame time
   and whether a tick is already asked for, so pausing and playing again
   never runs two clocks.
-- Controls the window sets itself on raw widgets of a leaf (Pull apart,
-  focus mode's checks and From above switch, the motion slider) have
-  their handler ids in `Window::controls`; `block_controls` /
-  `unblock_controls` wrap the setting, as `#[block_signal]` would. They
-  go once those leaves are owned as controllers and send outputs for
-  people's changes only.
+- Each leaf the window wires hands it its component's own Output enum
+  through `connect_outputs(impl Fn(<Leaf>Output))` (the shim's
+  `Bridge::connect`), and `wire` maps each variant to a group's input.
+  There are no per-output callback slots in front of them any more.
+- Controls the window also sets (Pull apart, From above, focus mode's
+  checks, the motion slider) are set by their own components with the
+  handler blocked (`#[block_signal]`, or `block_signal` in
+  `update_with_view`), so their outputs are people's changes only. The
+  window shows focus mode's options and From above from its model after
+  opening focus mode and after each of people's changes, so a change made
+  in the same turn as the window's own ends as the model has it.
+- Leaf-to-leaf links go through the window too: the floating controls'
+  `Orient`/`Docked` and the workbench's `ToolsChanged` are
+  `RenderingInput::ToolOriented`, `ToolDocked` and `ToolsMoved`.
 - Request and reply (rule 9): the finder's searches go out as
   `SelectionInput::FinderSearch` / `EditingInput::FinderActions` and are
   answered with `Finder::show_hits` / `show_actions`. The option search
@@ -430,21 +438,43 @@ them.
   value were sent after a short timeout or an idle; they are queued
   messages now.
 
-### Left for the group lanes
+### Done by the group lanes and the integration
 
-- Own each leaf as a `Controller` (or `Bridge`) in the model and forward
-  its outputs in `wire`, deleting the shims, `Window::controls` and the
-  rest of the callback plumbing in the leaves (`TreeSidebar`'s `Slot`
-  and `TreeCallbacks`, `Finder`'s callbacks, `focus_stage`'s `Slot`,
-  `workbench`'s `Slot`).
-- `EditView` still keeps its own state in `Cell`s and `RefCell`s
-  (`state`, `grips.state`, `repeats`, `options`, `verbs`, `immediate`):
-  move them into plain fields of the model.
-- `FilesPage` is still called synchronously (the L3 list: `save_all`,
-  `forget_unsaved` before `close`, `buffer_for` in `BufferWriter`,
-  `overlay_for_check` before a check, `set_folder` before a check). The
-  closing path already answers with messages (`CloseAsked`,
-  `CloseNow`); `ask_about_unsaved` still calls `save_all` from its
-  dialog's response.
+- Every handler is an `impl Window` method on `&mut self`: closing, the
+  unsaved-changes question and `--window-screenshot` answer with messages
+  (`ProjectInput::CloseAsked`, `UnsavedAnswered`, `CaptureTick`).
+- `Window::controls`, `block_controls` and `unblock_controls` are gone;
+  the motion bar is a component (`chrome::MotionBarComponent`).
+- The selection, rendering and project leaves reach the window by their
+  outputs (`connect_outputs`); the `Slot`s and callback structs of
+  `tree.rs`, `focus_stage.rs`, `panels.rs`, `inspector.rs`, `finder.rs`
+  and `workbench.rs` are gone, as are `ToolSpots`, the Finder's
+  `Rc::new_cyclic` and the weak links between the workbench and the
+  floating controls.
+- `EditView`'s state, `pending_marked`, `verbs`, `immediate`,
+  `panel_shown` and `options`, the grips' state, the hold's step, the
+  changes' asked item, the item tools' offer and the boundary handles are
+  plain fields of the model.
+
+### Still to do
+
+- `FilesPage` (`files.rs`) is not a component: it keeps its state in
+  `RefCell`s behind `Rc<FilesPage>`, its own handlers hold it weakly, and
+  the window, `BufferWriter` (`edit_writer.rs`), the tab strip and the
+  inspector's unsaved query reach it synchronously or through a `Weak`.
+  Moving it is the L3 list: `save_all`, `forget_unsaved`, `buffer_for`,
+  `overlay_for_check`, `set_folder`; `connect_unsaved` becomes
+  `InspectorInput::Unsaved`, `set_page_tabs` becomes `TabStripInput`.
+- The window still uses the synchronous `EditCard` and `EditMenu`;
+  `EditCardComponent` and `EditMenuComponent` are only launched by tests.
+  The edit flow (and `edit_view/tests.rs`) reads the card straight after
+  showing it, so moving to the components means answering
+  `open_options` and the card's queries by message.
+- `OptionSearch` is still synchronous (see `option_search.rs`), and the
+  editing leaves (`EditCard`, `EditMenu`, `ChangeCard`, `GripPanel`,
+  `RepeatRow`, `ItemTools`, `HoldCard`) still take per-output callbacks.
+- `Repeats` keeps its drag in `Cell`s, and the grips' drawing is an
+  `Rc<RefCell<..>>` shared with their draw function: give the draw
+  function a copy, as the slider does.
 - Replace `Unprinted` payloads with `Debug` types where the types can
   have it.
