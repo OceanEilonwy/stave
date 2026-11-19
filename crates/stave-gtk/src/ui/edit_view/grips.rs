@@ -24,6 +24,7 @@
 //! along the handle's direction on screen becomes a value to send, and
 //! what the session holds is drawn.
 
+use stave_app::i18n::{fill_in, tr};
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -1004,7 +1005,10 @@ impl Window {
                 let lock = gtk::Image::builder()
                     .icon_name("changes-prevent-symbolic")
                     .css_classes(["stave-grip-lock"])
-                    .tooltip_text(format!("{} can't be dragged: {words}", listed.grip.label))
+                    .tooltip_text(fill_in(
+                        &tr("{grip} can't be dragged: {why}"),
+                        &[("grip", &listed.grip.label), ("why", &words)],
+                    ))
                     .build();
                 lock.upcast()
             }
@@ -1013,15 +1017,15 @@ impl Window {
                     .css_classes(["stave-grip-handle"])
                     .focusable(true)
                     .accessible_role(gtk::AccessibleRole::Slider)
-                    .tooltip_text(format!(
-                        "Drag {}: {words}. Hold Ctrl for round numbers.",
-                        listed.grip.label
+                    .tooltip_text(fill_in(
+                        &tr("Drag {grip}: {value}. Hold Ctrl for round numbers."),
+                        &[("grip", &listed.grip.label), ("value", &words)],
                     ))
                     .build();
                 handle.set_cursor_from_name(Some("grab"));
-                handle.update_property(&[gtk::accessible::Property::Label(&format!(
-                    "Drag {}",
-                    listed.grip.label
+                handle.update_property(&[gtk::accessible::Property::Label(&fill_in(
+                    &tr("Drag {grip}"),
+                    &[("grip", &listed.grip.label)],
                 ))]);
                 self.connect_handle(&handle, index);
                 handle.upcast()
@@ -1060,15 +1064,18 @@ impl Window {
                 let number = gtk::Button::builder()
                     .label(amount_words(grip_value(listed)))
                     .css_classes(["flat", "stave-grip-number"])
-                    .tooltip_text(format!("{words}. Click to type a value"))
+                    .tooltip_text(fill_in(
+                        &tr("{value}. Click to type a value"),
+                        &[("value", &words)],
+                    ))
                     .build();
                 let entry = gtk::Entry::builder()
                     .text(amount_words(grip_value(listed)))
                     .width_chars(9)
                     .build();
-                entry.update_property(&[gtk::accessible::Property::Label(&format!(
-                    "Value of {}",
-                    listed.grip.label
+                entry.update_property(&[gtk::accessible::Property::Label(&fill_in(
+                    &tr("Value of {grip}"),
+                    &[("grip", &listed.grip.label)],
                 ))]);
                 let stack = gtk::Stack::builder()
                     .hhomogeneous(false)
@@ -1131,18 +1138,22 @@ impl Window {
         let menu = gtk::MenuButton::builder()
             .icon_name("view-more-symbolic")
             .css_classes(["flat"])
-            .tooltip_text("Let the solver move this")
+            .tooltip_text(tr("Let the solver move this"))
             .build();
+        menu.update_property(&[gtk::accessible::Property::Label(&tr(
+            "Let the solver move this",
+        ))]);
         let popover = gtk::Popover::builder().child(&content).build();
         menu.set_popover(Some(&popover));
         let only = switches.len() == 1;
         for switch in switches {
             let row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
-            let words = if only {
-                format!("Let the solver move this ({})", switch.param.as_str())
+            let template = if only {
+                tr("Let the solver move this ({param})")
             } else {
-                format!("Let the solver move {}", switch.param.as_str())
+                tr("Let the solver move {param}")
             };
+            let words = fill_in(&template, &[("param", &switch.param.as_str())]);
             row.append(
                 &gtk::Label::builder()
                     .label(&words)
@@ -1166,7 +1177,7 @@ impl Window {
                 .build();
             range.append(
                 &gtk::Label::builder()
-                    .label("The solver keeps it within:")
+                    .label(tr("The solver keeps it within:"))
                     .xalign(0.0)
                     .css_classes(["stave-grip-note"])
                     .build(),
@@ -1177,14 +1188,14 @@ impl Window {
                 .text(&high_text)
                 .width_chars(8)
                 .build();
-            low.update_property(&[gtk::accessible::Property::Label("Lowest value")]);
-            high.update_property(&[gtk::accessible::Property::Label("Highest value")]);
+            low.update_property(&[gtk::accessible::Property::Label(&tr("Lowest value"))]);
+            high.update_property(&[gtk::accessible::Property::Label(&tr("Highest value"))]);
             ends.append(&low);
-            ends.append(&gtk::Label::new(Some("to")));
+            ends.append(&gtk::Label::new(Some(&tr("to"))));
             ends.append(&high);
             range.append(&ends);
             let make = gtk::Button::builder()
-                .label("Make it solved")
+                .label(tr("Make it solved"))
                 .css_classes(["suggested-action"])
                 .halign(gtk::Align::End)
                 .build();
@@ -1509,7 +1520,10 @@ impl Window {
                 self.send_edit_later(EditCommand::MakeSolved { param, low, high });
             }
             (Err(error), _) | (_, Err(error)) => {
-                self.edit_toast(&format!("That range can't be read: {}", error.0));
+                self.edit_toast(&fill_in(
+                    &tr("That range can't be read: {reason}"),
+                    &[("reason", &error.0)],
+                ));
             }
         }
     }
@@ -1593,14 +1607,16 @@ impl Window {
                     // another number: refused, and its try dropped.
                     (_, Some(written)) if written.raw() != value.raw() => {
                         self.drop_typed_change(index);
-                        Some(format!(
-                            "Can't be {}: it would be written as {}",
-                            amount_words(value),
-                            amount_words(written)
+                        Some(fill_in(
+                            &tr("Can't be {value}: it would be written as {written}"),
+                            &[
+                                ("value", &amount_words(value)),
+                                ("written", &amount_words(written)),
+                            ],
                         ))
                     }
                     (Some(progress), _) => typed_refusal(&progress),
-                    (None, _) => Some("it can't be tried".to_owned()),
+                    (None, _) => Some(tr("it can't be tried")),
                 }
             }
         };
@@ -1907,7 +1923,9 @@ impl Window {
             });
             if let Some((index, switches)) = switches {
                 let menu = self.switch_menu(index, &switches);
-                menu.set_tooltip_text(Some("Options: let the solver move this, and its range"));
+                menu.set_tooltip_text(Some(&tr(
+                    "Options: let the solver move this, and its range",
+                )));
                 grips.panel.options.append(&menu);
             }
         }

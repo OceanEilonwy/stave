@@ -96,16 +96,16 @@ impl GripPanelWidgets {
             .hexpand(true)
             .width_chars(6)
             .css_classes(["stave-grip-value"])
-            .tooltip_text("Type a value and press Enter")
+            .tooltip_text(tr("Type a value and press Enter"))
             .build();
-        value.update_property(&[gtk::accessible::Property::Label("Value")]);
+        value.update_property(&[gtk::accessible::Property::Label(&tr("Value"))]);
         let options = gtk::Box::builder().valign(gtk::Align::Center).build();
         let was = gtk::Label::builder()
             .css_classes(["stave-row-note"])
             .build();
         let about = sections::value("");
         about.set_hexpand(true);
-        let about_label = sections::row_label("Follows");
+        let about_label = sections::row_label(&tr("Follows"));
         let about_row = gtk::Box::builder()
             .spacing(6)
             .css_classes(["stave-field-row"])
@@ -115,10 +115,10 @@ impl GripPanelWidgets {
             .orientation(gtk::Orientation::Vertical)
             .accessible_role(gtk::AccessibleRole::RadioGroup)
             .build();
-        choices.update_property(&[gtk::accessible::Property::Label("Which size changes?")]);
+        choices.update_property(&[gtk::accessible::Property::Label(&tr("Which size changes?"))]);
         let stop = sections::value("");
         stop.add_css_class("stave-grip-stop");
-        let stop_row = sections::row("Stops", &stop);
+        let stop_row = sections::row(&tr("Stops"), &stop);
         let waiting = sections::words("", &["stave-row-note"]);
         GripPanelWidgets {
             note,
@@ -172,12 +172,12 @@ impl Component for GripPanelComponent {
         root: gtk::Box,
         sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
-        root.append(&sections::row("Grip", &widgets.note));
+        root.append(&sections::row(&tr("Grip"), &widgets.note));
         let value_line = gtk::Box::builder().spacing(4).hexpand(true).build();
         value_line.append(&widgets.value);
         value_line.append(&widgets.was);
         value_line.append(&widgets.options);
-        root.append(&sections::row("Value", &value_line));
+        root.append(&sections::row(&tr("Value"), &value_line));
         widgets.about_row.append(&widgets.about_label);
         widgets.about_row.append(&widgets.about);
         root.append(&widgets.about_row);
@@ -262,9 +262,10 @@ impl GripPanelComponent {
         widgets.changes.set_visible(!model.changes.is_empty());
         clear(&widgets.choices);
         if !model.choices.is_empty() {
-            widgets
-                .choices
-                .append(&sections::words("Which size changes?", &["stave-grip-ask"]));
+            widgets.choices.append(&sections::words(
+                &tr("Which size changes?"),
+                &["stave-grip-ask"],
+            ));
             let mut group: Option<gtk::CheckButton> = None;
             for choice in &model.choices {
                 let row = gtk::Box::builder()
@@ -345,7 +346,7 @@ pub(super) struct GripPanel {
 impl GripPanel {
     /// The section, hidden.
     pub(super) fn new() -> GripPanel {
-        let (root, body) = sections::section("Size", "", true);
+        let (root, body) = sections::section(&tr("Size"), "", true);
         root.set_visible(false);
         let widgets = GripPanelWidgets::new();
         let options = widgets.options.clone();
