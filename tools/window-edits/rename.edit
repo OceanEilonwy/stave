@@ -1,4 +1,4 @@
 # The drawers' name retyped on their card: a rename everywhere it is
-# used, tried; with the editor open, the line it changes is pending.
+# used, tried; the line it changes shows in the card's Pending section.
 pick drawer[bottom]
 rename drawer_small

@@ -1,0 +1,20 @@
+# The compact board with the 3D view's tool groups docked elsewhere: the
+# camera column lying flat at the bottom left, the chips standing upright
+# on the right edge, the scene menu at the bottom right and the motion
+# slider at the top left.
+view centre 0 0 0
+code centre 0 0 1
+parts start 0 0 0
+files start 0 1 0
+details end 0 0 0
+edit end 0 0 1
+problems bottom 0 0 0
+output bottom 0 0 1
+show start true
+show end true
+show top false
+show bottom false
+tool camera bottom-left
+tool moves right
+tool scene bottom-right
+tool motion top-left

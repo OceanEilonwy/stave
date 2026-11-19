@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use stave_app::editing::{EditCommand, parse_name};
 use stave_app::session::{Command, Event, Selection, Session};
 
-use super::changes::change_words;
+use super::changes::{Commit, change_words};
 use super::item_tools::{piece_count, selected_item};
 
 fn fixture(name: &str) -> PathBuf {
@@ -48,7 +48,9 @@ fn a_removal_names_what_goes_with_it_before_anything_goes() {
     assert_eq!(words.eyebrow, "CHANGE · REMOVE");
     assert!(words.waiting_on_dependants, "{words:?}");
     assert!(words.dependants.contains(&"side_r".to_owned()), "{words:?}");
-    assert_eq!(words.add_label, "Remove");
+    // Apply keeps a destructive look for a removal.
+    assert_eq!(words.commit, Commit::Remove);
+    assert_eq!(words.item.as_deref(), Some("side_l"));
     assert!(!words.can_add, "nothing is removed before the user says");
     assert!(words.verdict.is_none());
 
@@ -82,7 +84,7 @@ fn a_rename_says_what_it_rewrites_and_fits() {
     }));
     let words = change_words(session.change().expect("a rename"), false);
     assert_eq!(words.eyebrow, "CHANGE · RENAME");
-    assert_eq!(words.add_label, "Rename");
+    assert_eq!(words.commit, Commit::Write);
     assert!(
         words
             .lines

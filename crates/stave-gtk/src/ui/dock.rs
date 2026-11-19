@@ -71,6 +71,21 @@ impl Dock {
         })
     }
 
+    /// Lays the chips out in a row (docked in a corner) or a column
+    /// (docked on the right edge), one chip per line.
+    pub fn moves_orientation_setter(&self) -> impl Fn(gtk::Orientation) + 'static {
+        let moves = self.moves.clone();
+        let chips = self.chips.clone();
+        let natural = chips.natural_line_length();
+        move |orientation| {
+            moves.set_orientation(orientation);
+            chips.set_natural_line_length(match orientation {
+                gtk::Orientation::Vertical => 0,
+                _ => natural,
+            });
+        }
+    }
+
     /// Calls `callback` with the assembly whose chip was chosen.
     pub fn connect_move(&self, callback: impl Fn(AssemblyId) + 'static) {
         self.on_move.replace(Some(Rc::new(callback)));

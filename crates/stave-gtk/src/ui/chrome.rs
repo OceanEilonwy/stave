@@ -45,6 +45,27 @@ impl MotionBar {
         }
     }
 
+    /// Lays the bar out in a row (docked in a corner) or standing upright
+    /// (docked on the right edge), its slider turned to match.
+    pub fn orientation_setter(&self) -> impl Fn(gtk::Orientation) + 'static {
+        let root = self.root.clone();
+        let scale = self.scale.clone();
+        move |orientation| {
+            root.set_orientation(orientation);
+            scale.set_orientation(orientation);
+            match orientation {
+                gtk::Orientation::Vertical => {
+                    scale.set_width_request(-1);
+                    scale.set_height_request(160);
+                }
+                _ => {
+                    scale.set_width_request(220);
+                    scale.set_height_request(-1);
+                }
+            }
+        }
+    }
+
     /// Shows the bar for `name`, from `start` to `end` words, the slider
     /// from 0 to `full` at `value`; `None` hides it.
     pub fn show(&self, what: Option<(&str, &str, &str, f64, f64)>) {
