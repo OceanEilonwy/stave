@@ -1,6 +1,8 @@
-//! The Code panel: the open files as tabs across the top, one each with a
-//! dot for its worst problem, then breadcrumbs, the editor, the uses panel
-//! and a footer; "No file open" while none is. The panel is docked
+//! The Code panel: the open files as tabs (one each with a dot for its
+//! worst problem and a yellow ● while unsaved, shown in the strip of the
+//! frame holding the panel, beside the Model: [`FilesPage::page_tabs`]),
+//! then breadcrumbs, the editor, the uses panel and a footer; "No file
+//! open" while none is. The panel is docked
 //! wherever people put it, so files open there. Files are opened from the
 //! Files panel, with the finder (Ctrl+K) or by following a link.
 //!
@@ -362,6 +364,10 @@ impl FilesPage {
             .orientation(gtk::Orientation::Vertical)
             .css_classes(["stave-editor-column"])
             .build();
+        // The open files show as tabs in the strip of the frame holding
+        // this panel (`page_tabs`), beside the Model; this row stays out
+        // of sight.
+        head.set_visible(false);
         column.append(&head);
         column.append(&placeholder);
         column.append(&body);
@@ -454,6 +460,7 @@ impl FilesPage {
         self.show_body(false);
         self.show_crumbs(&[]);
         self.analyse_now();
+        super::tab_strip::page_tabs_changed();
     }
 
     /// The unsaved texts, for a check that reads what the editor shows.
@@ -492,6 +499,15 @@ impl FilesPage {
     /// `true` if some document has changes that aren't saved.
     pub fn has_unsaved(&self) -> bool {
         self.state.borrow().buffers.dirty().next().is_some()
+    }
+
+    /// `true` if the file at `path` has changes that aren't saved.
+    pub fn is_unsaved(&self, path: &std::path::Path) -> bool {
+        self.state
+            .borrow()
+            .buffers
+            .dirty()
+            .any(|document| matches!(document, Document::File(file) if file == path))
     }
 
     /// How many documents have unsaved changes.
@@ -1416,6 +1432,46 @@ impl FilesPage {
                 tab.document.display(&state.folder)
             }));
         }
+        drop(state);
+        super::tab_strip::page_tabs_changed();
+    }
+
+    /// The open files as tabs for the strip of the frame holding this
+    /// panel (beside the Model): name, worst problem, unsaved or not, the
+    /// current one; showing one opens it here, as its old button did.
+    pub fn page_tabs(self: &Rc<Self>) -> Vec<super::tab_strip::PageTab> {
+        let state = self.state.borrow();
+        state
+            .tabs
+            .iter()
+            .enumerate()
+            .map(|(index, tab)| {
+                let dirty = state.buffers.is_dirty(&tab.document);
+                let shown = tab.document.display(&state.folder);
+                let page = Rc::downgrade(self);
+                let key = tab.document.clone();
+                super::tab_strip::PageTab {
+                    title: tab.document.file_name(),
+                    tooltip: if dirty {
+                        format!("{shown} — not saved (Ctrl+S saves)")
+                    } else {
+                        shown
+                    },
+                    unsaved: dirty,
+                    mark: state.marks.file(&tab.document.source_path()),
+                    active: Some(index) == state.active,
+                    show: Rc::new(move || {
+                        if let Some(page) = page.upgrade() {
+                            page.open_document(&key);
+                            let callback = page.callbacks.borrow().on_open.clone();
+                            if let Some(callback) = callback {
+                                callback();
+                            }
+                        }
+                    }),
+                }
+            })
+            .collect()
     }
 
     // ---- navigation ----

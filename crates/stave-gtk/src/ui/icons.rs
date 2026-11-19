@@ -39,15 +39,6 @@ const fn stroke(width: f32, paths: &'static [&'static str]) -> Shape {
     }
 }
 
-/// Back.
-pub const BACK: Shape = stroke(1.8, &["M10 3.5L5.5 8L10 12.5"]);
-/// Forward.
-pub const FORWARD: Shape = stroke(1.8, &["M6 3.5L10.5 8L6 12.5"]);
-/// Open a project folder.
-pub const FOLDER: Shape = stroke(
-    1.5,
-    &["M1.5 4.5a1 1 0 0 1 1-1h3.5l1.5 1.5h6a1 1 0 0 1 1 1v6.5a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1z"],
-);
 /// The design: a box.
 pub const PARTS: Shape = stroke(
     1.5,
@@ -68,6 +59,10 @@ pub const SCENE: Shape = stroke(
 );
 /// A small downward chevron (the scene menu).
 pub const CHEVRON_DOWN: Shape = stroke(2.2, &["M4 6L8 10L12 6"]);
+/// An open tree row's chevron.
+pub const EXPANDED: Shape = stroke(2.0, &["M4 6L8 10L12 6"]);
+/// A closed tree row's chevron.
+pub const COLLAPSED: Shape = stroke(2.0, &["M6 4L10 8L6 12"]);
 /// No problems: a tick.
 pub const CHECK: Shape = stroke(1.8, &["M3.5 8.5L6.5 11.5L12.5 4.5"]);
 /// Warnings only: an exclamation mark in a triangle, a different shape
@@ -253,6 +248,11 @@ impl PathIcon {
         icon.imp().shape.set(shape);
         icon.imp().size.set(size);
         icon
+    }
+
+    /// The shape it draws.
+    pub fn shape(&self) -> Shape {
+        self.imp().shape.get()
     }
 
     /// Draws another shape.

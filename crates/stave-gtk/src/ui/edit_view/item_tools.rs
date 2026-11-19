@@ -7,7 +7,7 @@
 //! command: one path for the mouse and the keyboard.
 //!
 //! ```text
-//! CHANGE IT
+//! ▾ Change                          drawer   (a section of the Inspector)
 //! Name        [drawer          ]
 //! How many    [- 2 +]  stacked [up ▾]
 //! And the other side · adds door_right   (o )
@@ -29,6 +29,7 @@ use stave_lang::placement::Axis;
 use stave_model::solved::SolvedDesign;
 
 use super::super::Window;
+use super::super::sections;
 
 /// The axes a repeat can split along, in the order the list shows them,
 /// with the word for how the pieces stand.
@@ -334,40 +335,24 @@ struct Shown {
 impl ItemTools {
     /// The panel, hidden.
     pub(in crate::ui) fn new() -> ItemTools {
-        let root = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
-            .spacing(8)
-            .css_classes(["stave-item-tools"])
-            .margin_start(16)
-            .margin_end(16)
-            .margin_bottom(16)
-            .visible(false)
-            .build();
-        let title = gtk::Label::builder()
-            .label("CHANGE IT")
-            .xalign(0.0)
-            .css_classes(["stave-section"])
-            .build();
-        root.append(&title);
+        // A section of the Inspector, "Change" with the item as its note.
+        let (root, body, title) = sections::section_noted("Change", true);
+        root.add_css_class("stave-item-tools");
+        root.add_css_class("stave-edit-card");
+        root.set_visible(false);
         let rows = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
-            .css_classes(["stave-card"])
-            .overflow(gtk::Overflow::Hidden)
+            .css_classes(["stave-card", "stave-edit-rows"])
             .build();
+        body.append(&rows);
         let name_row = gtk::Box::builder()
-            .spacing(10)
-            .css_classes(["stave-card-row"])
+            .spacing(6)
+            .css_classes(["stave-card-row", "stave-edit-row"])
             .build();
-        name_row.append(
-            &gtk::Label::builder()
-                .label("Name")
-                .xalign(0.0)
-                .css_classes(["stave-key"])
-                .build(),
-        );
+        name_row.append(&sections::row_label("Name"));
         let name = gtk::EditableLabel::builder()
             .hexpand(true)
-            .css_classes(["stave-edit-name"])
+            .css_classes(["stave-edit-name", "stave-name-field"])
             .tooltip_text("Click to retype the name: it changes everywhere it is used")
             .build();
         name.update_property(&[gtk::accessible::Property::Label("Name")]);
@@ -375,10 +360,11 @@ impl ItemTools {
         rows.append(&name_row);
         let repeat = RepeatFoldRow::new(1);
         repeat.root.add_css_class("stave-card-row");
+        repeat.root.add_css_class("stave-edit-row");
         rows.append(&repeat.root);
         let mirror_row = gtk::Box::builder()
             .spacing(10)
-            .css_classes(["stave-card-row"])
+            .css_classes(["stave-card-row", "stave-edit-row"])
             .build();
         let mirror_words = gtk::Label::builder()
             .xalign(0.0)
@@ -395,7 +381,7 @@ impl ItemTools {
         rows.append(&mirror_row);
         let buttons = gtk::Box::builder()
             .spacing(8)
-            .css_classes(["stave-card-row", "stave-item-buttons"])
+            .css_classes(["stave-card-row", "stave-edit-row", "stave-item-buttons"])
             .build();
         let hold = gtk::Button::builder()
             .label("Hold a distance…")
@@ -412,7 +398,6 @@ impl ItemTools {
         buttons.append(&hold);
         buttons.append(&remove);
         rows.append(&buttons);
-        root.append(&rows);
         ItemTools {
             root,
             title,
@@ -557,9 +542,8 @@ impl Window {
         };
         let count = offer.pieces;
         tools.filling.set(true);
-        tools
-            .title
-            .set_label(&format!("CHANGE {item}").to_uppercase());
+        tools.title.set_label(&item);
+        tools.title.set_visible(true);
         tools.name.set_text(&item);
         tools
             .repeat

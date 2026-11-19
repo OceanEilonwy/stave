@@ -7,13 +7,22 @@
 //! view of Wall shelf") and its description what is selected and what the
 //! last check found. Its CSS node is `staveviewport`, outlined while it
 //! has the keyboard.
+//!
+//! While the 3D view is being resized (a window dragged larger, a panel
+//! slid open) it shows the last frame stretched, and reports the new size
+//! once it has held still for [`SETTLE`], so the scene isn't drawn again at
+//! every pixel of the drag.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
+use std::time::Duration;
 
 use gtk::glib;
 use gtk::prelude::*;
 use gtk::subclass::prelude::*;
+
+/// How long the 3D view's size must hold still before it is reported.
+const SETTLE: Duration = Duration::from_millis(100);
 
 mod imp {
     use super::*;
@@ -26,6 +35,10 @@ mod imp {
         pub frame: RefCell<Option<gtk::gdk::Texture>>,
         pub on_resize: RefCell<Option<ResizeHandler>>,
         pub sizing: Cell<super::Sizing>,
+        /// The size last reported, in device pixels.
+        pub reported: Cell<(u32, u32)>,
+        /// A report waiting for the size to hold still.
+        pub settling: RefCell<Option<glib::SourceId>>,
     }
 
     #[glib::object_subclass]
@@ -45,20 +58,60 @@ mod imp {
             self.parent_constructed();
             // A window moved to a screen of another scale keeps its
             // logical size: the device size changes all the same.
-            self.obj()
-                .connect_scale_factor_notify(|viewport| viewport.imp().report_size());
+            self.obj().connect_scale_factor_notify(|viewport| {
+                let imp = viewport.imp();
+                imp.stop_settling();
+                imp.report_size();
+            });
         }
     }
 
     impl Viewport {
         fn report_size(&self) {
             let (width, height) = self.obj().device_size();
+            self.reported.set((width, height));
             // Cloned out so that the handler may set a new one, or come
             // back here through a synchronous allocation.
             let handler = self.on_resize.borrow().clone();
             if let Some(handler) = handler {
                 handler(width, height);
             }
+        }
+
+        /// Drops a report waiting for the size to hold still.
+        fn stop_settling(&self) {
+            if let Some(source) = self.settling.take() {
+                source.remove();
+            }
+        }
+
+        /// Reports a new size: at once for the first, for a picture, or
+        /// before anything is shown; for the 3D view showing a frame, once
+        /// the size has held still for [`super::SETTLE`].
+        fn size_changed(&self) {
+            let size = self.obj().device_size();
+            if size == self.reported.get() {
+                // Back where it was: nothing to draw again.
+                self.stop_settling();
+                return;
+            }
+            let showing = self.frame.borrow().is_some() && self.reported.get().0 > 1;
+            let settles = showing && self.sizing.get() == super::Sizing::View;
+            self.stop_settling();
+            if !settles {
+                self.report_size();
+                return;
+            }
+            let viewport = self.obj().downgrade();
+            let source = glib::timeout_add_local_once(super::SETTLE, move || {
+                if let Some(viewport) = viewport.upgrade() {
+                    let imp = viewport.imp();
+                    // It has run: there is nothing left to remove.
+                    imp.settling.take();
+                    imp.report_size();
+                }
+            });
+            self.settling.replace(Some(source));
         }
     }
 
@@ -95,7 +148,7 @@ mod imp {
 
         fn size_allocate(&self, width: i32, height: i32, baseline: i32) {
             self.parent_size_allocate(width, height, baseline);
-            self.report_size();
+            self.size_changed();
         }
 
         fn snapshot(&self, snapshot: &gtk::Snapshot) {
@@ -216,8 +269,9 @@ impl Viewport {
         ]);
     }
 
-    /// Calls `handler` with the size in device pixels whenever it may have
-    /// changed (on every allocation and change of scale).
+    /// Calls `handler` with the size in device pixels when it changes: at
+    /// once on a change of scale or the first allocation, and once a resize
+    /// of the 3D view has held still for [`SETTLE`].
     pub fn connect_resized(&self, handler: impl Fn(u32, u32) + 'static) {
         self.imp().on_resize.replace(Some(Rc::new(handler)));
     }

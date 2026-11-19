@@ -1,11 +1,16 @@
-//! The title bar (V2C_Home.dc.html): back and forward, the project's
-//! title, the finder's field (Ctrl+K), the Design / Cut list switcher, the
-//! problems chip (the status pill between previous and next, stepping
-//! through the problems) and the build button. It also makes the scene
-//! menu, which the window puts in the dock. It only shows what the
-//! session says; the window wires its buttons to session commands.
+//! The title bar, one slim row (34 px): at the left a menu bar (Project,
+//! Edit, View, Help, made from the main menu) and the project's name in
+//! small grey words; the Design / Cut list switcher in the middle; at the
+//! right a find button (the finder, Ctrl+K), the problems chip (the status
+//! pill between previous and next, stepping through the problems) and the
+//! build button. Back and forward live in the View menu and on Alt+← and
+//! Alt+→. In a very narrow window the menu bar folds into one menu
+//! button. It also makes the scene menu, which floats on the 3D view. It
+//! only shows what the session says; the window wires its buttons to
+//! session commands.
 
 use adw::prelude::*;
+use gtk::gio;
 use stave_app::session::{Activity, Build, Pill, Tone, View};
 
 use super::icons::{self, PathIcon};
@@ -24,18 +29,13 @@ pub fn ready(view: View) -> bool {
 pub struct Header {
     /// The bar itself.
     pub bar: adw::HeaderBar,
-    /// Back (Alt+←).
-    pub back: gtk::Button,
-    /// Forward (Alt+→).
-    pub forward: gtk::Button,
-    /// Opens another project folder.
-    pub open: gtk::Button,
-    /// The project's title and folder.
-    pub title_box: gtk::Box,
-    title: gtk::Label,
-    subtitle: gtk::Label,
-    /// Opens the finder (Ctrl+K).
-    pub find: gtk::Button,
+    /// The menu bar: Project, Edit, View, Help.
+    pub menu_bar: gtk::PopoverMenuBar,
+    /// The same menus in one button, shown instead of the menu bar when
+    /// the window is very narrow.
+    pub menu_button: gtk::MenuButton,
+    /// The project's name, small and grey; its folder in the tooltip.
+    pub title: gtk::Label,
     /// Design / Cut list.
     pub switcher: adw::ToggleGroup,
     switcher_labels: Vec<gtk::Label>,
@@ -61,74 +61,40 @@ pub struct Header {
     build_stack: gtk::Stack,
 }
 
-fn icon_button(shape: icons::Shape, tooltip: &str) -> gtk::Button {
-    let button = gtk::Button::builder()
-        .child(&PathIcon::new(shape, 16))
-        .tooltip_text(tooltip)
-        .css_classes(["flat", "stave-icon-button"])
-        .valign(gtk::Align::Center)
-        .build();
-    button.update_property(&[gtk::accessible::Property::Label(tooltip)]);
-    button
-}
-
 impl Header {
-    /// A title bar for a project in `folder` (shown as the subtitle until
-    /// the design is loaded).
-    pub fn new(folder_label: &str, menu: &gtk::gio::Menu) -> Header {
-        let back = icon_button(icons::BACK, "Back (Alt+←)");
-        let forward = icon_button(icons::FORWARD, "Forward (Alt+→)");
-        back.set_sensitive(false);
-        forward.set_sensitive(false);
-        let open = icon_button(icons::FOLDER, "Open a project folder (Ctrl+O)");
+    /// A title bar for a project in `folder_label` (shown as its name
+    /// until the design is loaded), its menu bar made of `menus`: one
+    /// submenu each for Project, Edit, View and Help.
+    pub fn new(folder_label: &str, menus: &gio::Menu) -> Header {
+        let menu_bar = gtk::PopoverMenuBar::from_model(Some(menus));
+        menu_bar.add_css_class("stave-menu-bar");
+        menu_bar.set_valign(gtk::Align::Center);
+        let menu_button = gtk::MenuButton::builder()
+            .child(&PathIcon::new(icons::MENU, 16))
+            .menu_model(menus)
+            .tooltip_text("Main menu")
+            .css_classes(["flat", "stave-icon-button"])
+            .valign(gtk::Align::Center)
+            .primary(true)
+            .visible(false)
+            .build();
+        menu_button.update_property(&[gtk::accessible::Property::Label("Main menu")]);
 
         let title = gtk::Label::builder()
             .label(folder_label)
             .xalign(0.0)
             .ellipsize(gtk::pango::EllipsizeMode::End)
-            .css_classes(["title"])
-            .build();
-        let subtitle = gtk::Label::builder()
-            .xalign(0.0)
-            .ellipsize(gtk::pango::EllipsizeMode::End)
-            .css_classes(["subtitle"])
-            .build();
-        let title_box = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
+            .max_width_chars(28)
             .valign(gtk::Align::Center)
-            .css_classes(["stave-title"])
+            .css_classes(["stave-project-name"])
             .build();
-        title_box.append(&title);
-        title_box.append(&subtitle);
 
-        // The finder's field: a button that looks like a search entry.
-        let find_content = gtk::Box::builder()
-            .orientation(gtk::Orientation::Horizontal)
-            .spacing(8)
-            .build();
-        find_content.append(&gtk::Image::from_icon_name("system-search-symbolic"));
-        let find_words = gtk::Label::builder()
-            .label("Find a part, file, line or problem")
-            .xalign(0.0)
-            .hexpand(true)
-            .ellipsize(gtk::pango::EllipsizeMode::End)
-            .css_classes(["dim-label"])
-            .build();
-        find_content.append(&find_words);
-        find_content.append(
-            &gtk::Label::builder()
-                .label("Ctrl K")
-                .css_classes(["stave-key", "dim-label"])
-                .build(),
-        );
         let find = gtk::Button::builder()
-            .child(&find_content)
-            .tooltip_text("Find a part, file, line or problem (Ctrl+K)")
+            .icon_name("system-search-symbolic")
+            .tooltip_text("Find a part, file, line or problem (Ctrl K)")
             .action_name("win.find")
-            .css_classes(["stave-find"])
+            .css_classes(["flat", "stave-icon-button", "stave-find"])
             .valign(gtk::Align::Center)
-            .hexpand(true)
-            .width_request(260)
             .build();
         find.update_property(&[gtk::accessible::Property::Label(
             "Find a part, file, line or problem",
@@ -269,44 +235,22 @@ impl Header {
         // builds a plan.
         build.set_visible(false);
 
-        let menu = gtk::MenuButton::builder()
-            .child(&PathIcon::new(icons::MENU, 16))
-            .menu_model(menu)
-            .tooltip_text("Main menu")
-            .css_classes(["flat", "stave-icon-button"])
-            .valign(gtk::Align::Center)
-            .primary(true)
-            .build();
-        menu.update_property(&[gtk::accessible::Property::Label("Main menu")]);
-
-        let find_box = gtk::Box::builder()
-            .halign(gtk::Align::Center)
-            .hexpand(true)
-            .build();
-        find_box.append(&find);
-        find.set_width_request(420);
         let bar = adw::HeaderBar::builder()
-            .title_widget(&find_box)
+            .title_widget(&switcher)
             .css_classes(["stave-header"])
             .build();
-        bar.pack_start(&back);
-        bar.pack_start(&forward);
-        bar.pack_start(&open);
-        bar.pack_start(&title_box);
-        bar.pack_end(&menu);
+        bar.pack_start(&menu_button);
+        bar.pack_start(&menu_bar);
+        bar.pack_start(&title);
         bar.pack_end(&build);
         bar.pack_end(&chip);
-        bar.pack_end(&switcher);
+        bar.pack_end(&find);
 
         Header {
             bar,
-            back,
-            forward,
-            open,
-            title_box,
+            menu_bar,
+            menu_button,
             title,
-            subtitle,
-            find,
             switcher,
             switcher_labels,
             scene,
@@ -325,16 +269,10 @@ impl Header {
         }
     }
 
-    /// The project's title and folder.
-    pub fn show_title(&self, title: &str, subtitle: &str) {
+    /// The project's name, and its folder in the tooltip.
+    pub fn show_title(&self, title: &str, folder: &str) {
         self.title.set_label(title);
-        self.subtitle.set_label(subtitle);
-    }
-
-    /// Back and Forward's state.
-    pub fn show_history(&self, back: bool, forward: bool) {
-        self.back.set_sensitive(back);
-        self.forward.set_sensitive(forward);
+        self.title.set_tooltip_text(Some(folder));
     }
 
     /// The view showing.
@@ -344,19 +282,9 @@ impl Header {
         }
     }
 
-    /// The finder's field, hidden when the window is narrow.
-    pub fn find_box(&self) -> &gtk::Button {
-        &self.find
-    }
-
     /// The switcher's words, hidden when the window is narrow.
     pub fn switcher_labels(&self) -> &[gtk::Label] {
         &self.switcher_labels
-    }
-
-    /// The project's folder under its title, hidden when narrow.
-    pub fn subtitle(&self) -> &gtk::Label {
-        &self.subtitle
     }
 
     /// The scenes to choose from (titles) and the one showing.

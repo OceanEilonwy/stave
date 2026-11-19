@@ -1,6 +1,8 @@
 //! The Edit panel of the docked window (`docs/gui.md`, "Editing in the 3D
 //! view"): the card for a chosen candidate, the card for a change of the
-//! design, or the hold card, whichever is in progress, docked as any other
+//! design (with a grip's size section), or the hold card, whichever is in
+//! progress, each drawn as the Inspector is, with Cancel (Esc) and Apply
+//! (Enter) at its foot, docked as any other
 //! panel is (a tab, dragged to any area, resized by the splitters, its
 //! place remembered with the rest of the layout). While nothing is in
 //! progress it stays where it is and says how to start.

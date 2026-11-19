@@ -1,7 +1,7 @@
 # The Case chosen for a new project's envelope and its wood picked: its
 # card in the Edit panel, a tab beside Details, one compact row a setting
 # (the defaults dimmed in their entries), "Repeat…" folded beside Cancel
-# and Add.
+# and Apply.
 select region envelope
 choose casework.Case
 set panel_stock = oak_19

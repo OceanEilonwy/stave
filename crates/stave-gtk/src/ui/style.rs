@@ -33,8 +33,11 @@ button.stave-build { min-width: 36px; min-height: 34px; padding: 0; border-radiu
 .stave-sidebar { padding: 12px 10px; }
 .stave-tree { background: none; font-size: 13px; }
 .stave-tree > row { padding: 0; border-radius: 6px; min-height: 0; margin: 0 0 1px 0; }
-.stave-tree .stave-entry { padding: 5px 8px 5px 4px; border-spacing: 8px; }
-.stave-tree .stave-assembly { padding: 5px 8px 5px 4px; border-spacing: 8px; font-weight: 600; }
+.stave-tree .stave-entry { padding: 5px 8px 5px 20px; border-spacing: 8px; }
+.stave-tree .stave-entry.nested { padding-left: 34px; }
+.stave-tree .stave-entry.nested2 { padding-left: 48px; }
+.stave-tree .stave-assembly { padding: 5px 8px; border-spacing: 8px; font-weight: 600; }
+.stave-tree .stave-assembly.nested { padding-left: 22px; }
 .stave-tree .stave-detail { font-size: 12px; }
 .stave-tree .stave-assembly .stave-detail { font-weight: 500; }
 .stave-tree .stave-heading { padding: 10px 8px 6px 8px; font-size: 12px; font-weight: 700; letter-spacing: 0.02em; }
@@ -146,7 +149,7 @@ expander.stave-more title > arrow { min-width: 12px; min-height: 12px; }
 .stave-panel { border-radius: 14px; }
 .stave-model-head { padding: 8px 10px 0 14px; }
 .stave-model-note { padding: 6px 14px 12px 14px; font-size: 12px; }
-.stave-tree .stave-joint { padding: 4px 8px 4px 18px; border-spacing: 8px; font-size: 12.5px; }
+.stave-tree .stave-joint { padding: 4px 8px 4px 34px; border-spacing: 8px; font-size: 12.5px; }
 .stave-joint-word { font-size: 10px; font-weight: 700; padding: 1px 4px; border-radius: 3px; }
 .stave-mark { min-width: 8px; min-height: 8px; border-radius: 4px; }
 .stave-mark.warning { border-radius: 2px; }
@@ -398,6 +401,54 @@ pub fn as_link(button: gtk::Button) -> gtk::Button {
     button
 }
 
+/// The window shell (compact H2): the 34 px header with its menu bar,
+/// 26 px tab strips with the open files beside the Model, the status bar
+/// with Problems and Output folded into it, and the tool groups' drop
+/// outlines. Loaded after `SHARED` and `COLOURS`, so these win.
+const SHELL: &str = r#"
+/* The Files panel: 24 px rows, like the Parts panel's. */
+.stave-panel-list.stave-files-list > row { min-height: 24px; padding: 2px 10px; margin: 0 4px; font-size: 12.5px; }
+.stave-panel-list.stave-files-list > row image { -gtk-icon-size: 14px; }
+headerbar.stave-header { min-height: 34px; }
+.stave-header > windowhandle > box { padding: 0 4px; min-height: 34px; }
+.stave-header > windowhandle > box > box { border-spacing: 4px; }
+.stave-header windowcontrols button { min-width: 22px; min-height: 22px; padding: 2px; margin: 0; }
+.stave-header button.stave-icon-button { min-width: 26px; min-height: 26px; border-radius: 6px; }
+.stave-header popovermenubar.stave-menu-bar { min-height: 26px; }
+.stave-menu-bar, .stave-menu-bar label { font-size: 12.5px; }
+.stave-header popovermenubar.stave-menu-bar > item { min-height: 24px; padding: 0 8px; border-radius: 6px; }
+.stave-header popovermenubar.stave-menu-bar > item:hover, .stave-header popovermenubar.stave-menu-bar > item:selected { background: alpha(currentColor, 0.08); }
+.stave-project-name { padding: 0 6px 0 8px; font-size: 12px; color: alpha(currentColor, 0.55); }
+.stave-header .stave-switcher { padding: 2px; border-radius: 8px; font-size: 12px; }
+.stave-header .stave-switcher > toggle { min-height: 22px; padding: 0 12px; border-radius: 6px; }
+.stave-header .stave-switcher > toggle box { border-spacing: 5px; }
+.stave-header .stave-switcher.compact > toggle { padding: 0 8px; }
+.stave-header button.stave-pill { min-height: 24px; padding: 0 10px; border-radius: 12px; font-size: 12px; }
+.stave-header button.stave-problem-step { min-width: 22px; min-height: 22px; }
+.stave-header button.stave-build { min-width: 30px; min-height: 26px; border-radius: 6px; }
+
+stavetabstrip { min-height: 26px; }
+stavetabstrip button.stave-tab-show { min-height: 26px; font-size: 12px; }
+stavetabstrip .stave-tab-end button { min-height: 20px; min-width: 20px; margin: 3px 4px; }
+stavetabstrip button.stave-file-tab { padding-right: 10px; }
+.stave-file-tab-name { font-family: "JetBrains Mono", "Adwaita Mono", monospace; font-weight: 500; font-size: 11.5px; }
+.stave-mark.unsaved { min-width: 7px; min-height: 7px; border-radius: 4px; background: #f6d32d; }
+
+panelstatusbar { min-height: 24px; font-size: 12px; }
+panelstatusbar button, panelstatusbar menubutton > button { min-height: 22px; padding: 0 8px; border-radius: 0; }
+button.stave-status-tab { min-height: 22px; padding: 0 10px; border-radius: 0; font-size: 12px; font-weight: 600; color: alpha(currentColor, 0.75); }
+button.stave-status-tab:hover { color: currentColor; background: alpha(currentColor, 0.06); }
+button.stave-status-tab.shown { color: currentColor; background: alpha(currentColor, 0.08); box-shadow: inset 0 2px @accent_bg_color; }
+.stave-status-count { min-width: 16px; padding: 0 5px; border-radius: 8px; font-size: 11px; background: alpha(@success_color, 0.18); color: @success_color; }
+.stave-status-count.some { background: alpha(@warning_color, 0.2); color: @warning_color; }
+.stave-status-text { font-size: 11.5px; color: alpha(currentColor, 0.7); }
+textview.stave-output { font-size: 12px; background: transparent; }
+
+.stave-dock-targets { color: @accent_color; }
+.stave-dragging { opacity: 0.85; box-shadow: 0 6px 18px alpha(black, 0.35); }
+.stave-camera.flat-row, .stave-camera.flat-row.joined { border-radius: 10px; }
+"#;
+
 #[cfg(test)]
 const CODE_BACKGROUNDS: [&str; 2] = ["#1e1e24", "#121216"];
 
@@ -437,7 +488,7 @@ pub fn mark_dot(mark: Option<stave_app::problems::Mark>) -> gtk::Box {
 /// turns light or dark.
 pub fn install(display: &gdk::Display) {
     let provider = gtk::CssProvider::new();
-    provider.load_from_string(&format!("{SHARED}{COLOURS}"));
+    provider.load_from_string(&format!("{SHARED}{COLOURS}{SHELL}"));
     gtk::style_context_add_provider_for_display(
         display,
         &provider,

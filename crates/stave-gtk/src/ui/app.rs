@@ -10,7 +10,7 @@
 
 use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
-use std::rc::{Rc, Weak};
+use std::rc::Rc;
 
 use adw::prelude::*;
 use anyhow::{Context as _, Result, bail};
@@ -319,10 +319,16 @@ pub(super) const OTHER_KEYS: &[(KeySection, &str, &str)] = &[
 /// line's options for the first window.
 pub(super) struct Shell {
     application: adw::Application,
-    /// The project windows (closed ones drop out when looked at).
-    windows: RefCell<Vec<Weak<Window>>>,
-    /// The start page, while it shows.
-    start: RefCell<Option<Rc<StartPage>>>,
+    /// The project windows, owned here from opening until their GTK
+    /// window is destroyed. The windows' own handlers hold them only
+    /// weakly (so a closed window is freed), which makes this their one
+    /// owner: without it a window is dropped as soon as it opens and its
+    /// background check's result has nowhere to land.
+    windows: RefCell<Vec<Rc<Window>>>,
+    /// The start page, while it shows. A `Cell`, not a `RefCell`: it is
+    /// only taken and set, so no borrow can be held while closing the page
+    /// re-enters `start_closed` through GTK's `close-request` signal.
+    start: Cell<Option<Rc<StartPage>>>,
     /// The command line's options, taken by the first project window.
     first: Cell<Option<Options>>,
     /// The style the window starts with: the command line's, or the one
@@ -350,7 +356,7 @@ impl Shell {
         Rc::new(Shell {
             application: application.clone(),
             windows: RefCell::new(Vec::new()),
-            start: RefCell::new(None),
+            start: Cell::new(None),
             theme: options.theme.unwrap_or(remembered.theme),
             first: Cell::new(Some(options)),
             remembered: Cell::new(remembered),
@@ -434,7 +440,7 @@ impl Shell {
         if new_project {
             page.ask_new_project();
         }
-        *self.start.borrow_mut() = Some(page);
+        self.start.set(Some(page));
     }
 
     /// Opens a project folder in a window of its own, or brings forward
@@ -467,9 +473,9 @@ impl Shell {
         }
         match Window::open(&self.application, folder.clone(), options, self.clone()) {
             Ok(window) => {
-                self.windows.borrow_mut().push(Rc::downgrade(&window));
+                self.own(&window);
                 self.record_recent(&folder);
-                if let Some(page) = self.start.borrow_mut().take() {
+                if let Some(page) = self.start.take() {
                     page.window.close();
                 }
                 Some(window)
@@ -489,18 +495,40 @@ impl Shell {
 
     /// The start page has closed.
     pub(super) fn start_closed(&self) {
-        self.start.borrow_mut().take();
+        self.start.take();
+    }
+
+    /// Keeps a project window alive until its GTK window is destroyed.
+    fn own(self: &Rc<Self>, window: &Rc<Window>) {
+        self.windows.borrow_mut().push(Rc::clone(window));
+        let shell = Rc::downgrade(self);
+        let closing = Rc::downgrade(window);
+        window.widgets.window.connect_destroy(move |_| {
+            let Some(shell) = shell.upgrade() else {
+                return;
+            };
+            // Taken out under the borrow, dropped after it: dropping the
+            // window drops its widgets, whose own handlers may look at the
+            // windows again.
+            let gone = {
+                let mut windows = shell.windows.borrow_mut();
+                let at = windows
+                    .iter()
+                    .position(|window| std::ptr::eq(Rc::as_ptr(window), closing.as_ptr()));
+                at.map(|at| windows.remove(at))
+            };
+            drop(gone);
+        });
     }
 
     /// The open project windows.
     fn windows(&self) -> Vec<Rc<Window>> {
-        let mut windows = self.windows.borrow_mut();
-        windows.retain(|window| {
-            window
-                .upgrade()
-                .is_some_and(|window| window.widgets.window.application().is_some())
-        });
-        windows.iter().filter_map(Weak::upgrade).collect()
+        self.windows
+            .borrow()
+            .iter()
+            .filter(|window| window.widgets.window.application().is_some())
+            .cloned()
+            .collect()
     }
 
     /// The project window showing this folder.
@@ -529,8 +557,9 @@ impl Shell {
             .or(windows.first());
         if let Some(window) = in_front {
             window.widgets.toasts.add_toast(toast());
-        } else if let Some(page) = self.start.borrow().as_ref() {
+        } else if let Some(page) = self.start.take() {
             page.toasts.add_toast(toast());
+            self.start.set(Some(page));
         }
     }
 

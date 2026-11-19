@@ -115,8 +115,6 @@ fn the_card_shows_checking_then_the_tries_verdict() {
         refusal.problems().first().diagnostic().message,
         "the name is taken"
     );
-    assert_eq!(verdict_words(GhostVerdict::Refused), "✕ It doesn't fit");
-    assert_eq!(verdict_words(GhostVerdict::Fits), "✓ It fits");
     assert_eq!(ghost_tint(GhostVerdict::Fits)[3], GHOST_TINT);
 }
 
