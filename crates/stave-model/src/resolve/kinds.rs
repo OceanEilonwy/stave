@@ -1,18 +1,24 @@
 //! Lowering kinds (joint, hardware, fastener and tool kinds) and recipes.
 
 use std::collections::BTreeMap;
+use std::num::NonZeroU32;
 
 use stave_lang::ast::BaseKind;
 use stave_lang::ast::{self, ExprKind, Span};
 use stave_lang::placement::PartAxis;
 use stave_lang::{Code, Diagnostic, Label};
 use stave_schema::fields::{self, Requirement};
-use stave_schema::kinds::{JOINT_DEFAULT_ROLES, RESERVED_JOINT_SETTINGS, RoleType, base};
+use stave_schema::kinds::{
+    BaseField, JOINT_DEFAULT_ROLES, RESERVED_JOINT_SETTINGS, RoleType, base,
+};
 use stave_schema::operations::{
-    ArgumentDefault, MARK, Selector, cut_operation, operation, retired_argument,
+    ArgumentDefault, Feature, MARK, Measurement, Selector, StepTarget, cut_operation, operation,
+    retired_argument,
 };
 use stave_schema::placement::{AssemblyStepKind, EXTEND, MadePartTerm};
-use stave_schema::recipes::{CuttingStep, MarkingStep, NeedKind};
+use stave_schema::recipes::{
+    COMMON_STEP_ARGUMENTS, CUTTING_STEP_ARGUMENTS, CuttingStep, MarkingStep, NeedKind,
+};
 use stave_schema::words::WordSet;
 use stave_schema::{CutOperation, Operation};
 
@@ -20,10 +26,11 @@ use super::expr::Expect;
 use super::items::kind_ids;
 use super::{Body, Cx, Origin, Resolver};
 use crate::defs::{
-    CutDef, CutName, CutStepDef, DefId, ExtendDef, HardwareKindDef, JointKindDef, JointMember,
-    KindDef, MadePartDef, MadeTerm, MadeTermKind, MarkStepDef, Need, OperationDef, ParamDef, RExpr,
-    RExprKind, RecipeDef, RequireDef, RoleDef, RoleIndex, SelectorDef, Setting, StepDef,
-    StepMotionDef, Symbol, UseDef, Word,
+    BaseEntry, CutDef, CutName, CutStepDef, DefId, ExtendDef, HardwareKindDef, JointKindDef,
+    JointMember, KindBody, KindDef, KindFields, MadePartDef, MadeTerm, MadeTermKind, MarkStepDef,
+    MountedBase, MountedKindDef, Need, OperationDef, ParamDef, RExpr, RExprKind, RecipeDef,
+    RequireDef, RoleDef, RoleIndex, SelectorDef, Setting, StepDef, StepMotionDef, Symbol, UseDef,
+    Word,
 };
 use crate::ids::KindId;
 use crate::types::Ty;
@@ -449,17 +456,42 @@ impl Resolver<'_> {
         } else {
             None
         };
+        // A param of the entry's name is read before a field of it.
+        let spec = base(base_kind);
+        let base_entries = BaseField::ALL
+            .into_iter()
+            .filter(|field| spec.entry(field.word()).is_some())
+            .filter_map(|field| {
+                let word = field.word();
+                let entry = match params.iter().position(|p| p.decl.name == word) {
+                    Some(index) => BaseEntry::Param(index),
+                    None => BaseEntry::Field(kind_fields.iter().position(|f| f.name == word)?),
+                };
+                Some((field, entry))
+            })
+            .collect();
+        let fields = KindFields {
+            settings: kind_fields,
+            base_entries,
+        };
+        let body = match (joint, MountedBase::new(base_kind)) {
+            (Some(joint), _) => KindBody::Joint(joint),
+            (None, Some(base)) => KindBody::Mounted(Box::new(MountedKindDef {
+                base,
+                fields,
+                mechanism,
+                hardware,
+            })),
+            (None, None) if base_kind == BaseKind::Tool => KindBody::Tool(fields),
+            (None, None) => KindBody::Fastener(fields),
+        };
         KindDef {
             decl: self.decl(DefId::Kind(id), &syntax.name, origin),
-            base: base_kind,
             roles,
             params,
             requires,
-            fields: kind_fields,
-            joint,
             bodies: bodies.unwrap_or_default(),
-            mechanism,
-            hardware,
+            body,
         }
     }
 
@@ -1647,13 +1679,15 @@ impl Resolver<'_> {
         Some(id)
     }
 
-    fn word_arg(
+    /// A step argument that is one word from `allowed`.
+    fn word_arg<T: Copy>(
         &mut self,
         cx: &Cx,
         expr: &ast::Expr,
-        allowed: &[&str],
+        allowed: &[T],
+        word: fn(T) -> &'static str,
         what: &str,
-    ) -> Option<String> {
+    ) -> Option<T> {
         let ExprKind::Name(ident) = &expr.kind else {
             self.error(
                 Code::TypeMismatch,
@@ -1663,20 +1697,72 @@ impl Resolver<'_> {
             );
             return None;
         };
-        if allowed.contains(&ident.as_str()) {
-            Some(ident.as_str().to_owned())
-        } else {
-            self.unknown(
-                Code::UnknownName,
-                format!("unknown name '{}'", ident.as_str()),
-                cx.file,
-                ident.span(),
-                ident.as_str(),
-                allowed.iter().copied(),
-                format!("here '{what}' is one of: {}", allowed.join(", ")),
-            );
-            None
+        if let Some(found) = allowed
+            .iter()
+            .copied()
+            .find(|item| word(*item) == ident.as_str())
+        {
+            return Some(found);
         }
+        let words: Vec<&str> = allowed.iter().copied().map(word).collect();
+        self.unknown(
+            Code::UnknownName,
+            format!("unknown name '{}'", ident.as_str()),
+            cx.file,
+            ident.span(),
+            ident.as_str(),
+            words.iter().copied(),
+            format!("here '{what}' is one of: {}", words.join(", ")),
+        );
+        None
+    }
+
+    /// `passes:`: a whole number of at least one, written out.
+    fn passes_arg(&mut self, cx: &Cx, expr: &ast::Expr) -> Option<NonZeroU32> {
+        let value = self.value(cx, expr, &Expect::ty(Ty::Count).named("passes"));
+        // A negative literal is lowered as `-` applied to a number.
+        let (found, passes) = match &value.kind {
+            RExprKind::Number(number) => (
+                number.to_string(),
+                number
+                    .is_integer()
+                    .then(|| u32::try_from(number.numerator()).ok())
+                    .flatten()
+                    .and_then(NonZeroU32::new),
+            ),
+            RExprKind::Unary {
+                op: ast::UnaryOp::Neg,
+                operand,
+            } if matches!(operand.kind, RExprKind::Number(_)) => {
+                let found = match &operand.kind {
+                    RExprKind::Number(number) => format!("-{number}"),
+                    _ => String::new(),
+                };
+                (found, None)
+            }
+            // Reported where it was lowered.
+            RExprKind::Error => return None,
+            _ => {
+                self.error_help(
+                    Code::TypeMismatch,
+                    "'passes' needs a number written out",
+                    cx.file,
+                    expr.span,
+                    "write how many passes to take, such as passes: 2",
+                );
+                return None;
+            }
+        };
+        if passes.is_none() {
+            self.error_help(
+                Code::OutOfRange,
+                format!("'passes' must be a whole number of at least 1, found {found}"),
+                cx.file,
+                expr.span,
+                "write how many passes to take, such as passes: 2",
+            );
+        }
+        passes
     }
 
     fn note_arg(&mut self, cx: &Cx, expr: Option<&ast::Expr>) -> Option<String> {
@@ -1695,24 +1781,30 @@ impl Resolver<'_> {
             self.unknown(Code::UnknownName, format!("unknown name '{head}'"), cx.file, call.head.span(), head, MarkingStep::ALL.map(MarkingStep::word), "a marking step is knife, pencil, line, gauge, square_around, centre_mark, transfer, hatch or template");
             return None;
         };
-        let named: &[&str] = if step.takes_measurement() {
-            &["on", "with", "note"]
-        } else {
-            &["with", "note"]
-        };
-        let parsed = self.split_args(cx, head, &call.args, named, 1);
+        let named: Vec<&str> = step
+            .arguments()
+            .iter()
+            .map(|argument| argument.name)
+            .chain(COMMON_STEP_ARGUMENTS)
+            .collect();
+        let parsed = self.split_args(cx, head, &call.args, &named, 1);
         let Some(target) = parsed.positional.first() else {
             self.missing_argument(cx, head, "a feature", call.span);
             return None;
         };
-        let allowed = if step.takes_measurement() {
-            spec.measurements
+        let target = if step.takes_measurement() {
+            StepTarget::Measurement(self.word_arg(
+                cx,
+                target,
+                spec.measurements,
+                Measurement::word,
+                head,
+            )?)
         } else {
-            spec.features
+            StepTarget::Feature(self.word_arg(cx, target, spec.features, Feature::word, head)?)
         };
-        let target = self.word_arg(cx, target, allowed, head)?;
         let on = match parsed.get("on") {
-            Some(e) => self.word_arg(cx, e, spec.features, "on"),
+            Some(e) => self.word_arg(cx, e, spec.features, Feature::word, "on"),
             None => {
                 if step.takes_measurement() {
                     self.missing_argument(cx, head, "on:", call.span);
@@ -1754,39 +1846,34 @@ impl Resolver<'_> {
             );
             return None;
         };
-        let named: &[&str] = if step.takes_diameter() {
-            &["to", "passes", "guide", "diameter", "with", "note"]
-        } else {
-            &["to", "passes", "guide", "with", "note"]
-        };
-        let parsed = self.split_args(cx, head, &call.args, named, 1);
+        let named: Vec<&str> = CUTTING_STEP_ARGUMENTS
+            .into_iter()
+            .filter(|name| step.takes_diameter() || *name != "diameter")
+            .chain(COMMON_STEP_ARGUMENTS)
+            .collect();
+        let parsed = self.split_args(cx, head, &call.args, &named, 1);
         let Some(feature) = parsed.positional.first() else {
             self.missing_argument(cx, head, "a feature", call.span);
             return None;
         };
-        let feature = self.word_arg(cx, feature, spec.features, head)?;
-        let both: Vec<&str> = spec
+        let feature = self.word_arg(cx, feature, spec.features, Feature::word, head)?;
+        let both: Vec<StepTarget> = spec
             .measurements
             .iter()
-            .chain(spec.features)
             .copied()
+            .map(StepTarget::Measurement)
+            .chain(spec.features.iter().copied().map(StepTarget::Feature))
             .collect();
         let to = parsed
             .get("to")
-            .and_then(|e| self.word_arg(cx, e, &both, "to"));
+            .and_then(|e| self.word_arg(cx, e, &both, StepTarget::word, "to"));
         let guide = parsed
             .get("guide")
-            .and_then(|e| self.word_arg(cx, e, spec.features, "guide"));
+            .and_then(|e| self.word_arg(cx, e, spec.features, Feature::word, "guide"));
         let diameter = parsed
             .get("diameter")
-            .and_then(|e| self.word_arg(cx, e, spec.measurements, "diameter"));
-        let passes = parsed.get("passes").and_then(|e| {
-            let value = self.value(cx, e, &Expect::ty(Ty::Count).named("passes"));
-            match value.kind {
-                RExprKind::Number(n) if n.is_integer() => u32::try_from(n.numerator()).ok(),
-                _ => None,
-            }
-        });
+            .and_then(|e| self.word_arg(cx, e, spec.measurements, Measurement::word, "diameter"));
+        let passes = parsed.get("passes").and_then(|e| self.passes_arg(cx, e));
         let with = parsed
             .get("with")
             .and_then(|e| self.step_tool(cx, e, tools));

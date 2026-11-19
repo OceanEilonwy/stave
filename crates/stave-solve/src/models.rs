@@ -6,9 +6,11 @@
 use std::path::{Path, PathBuf};
 
 use stave_lang::units::{ExactLength, Length};
+use stave_model::defs::BaseEntry;
 use stave_model::defs::{BodyId, ConstraintDef, KindDef};
 use stave_model::solved::{DeclaredNode, DeclaredValue, FramePoint, FrameShape, Model};
 use stave_model::value::ModelRef;
+use stave_schema::kinds::BaseField;
 
 use crate::hardware::{FrameShapes, Outline};
 use crate::joints::Binding;
@@ -67,7 +69,7 @@ impl Solver<'_> {
                 }
             }
         }
-        if let Some(mechanism) = &kind.mechanism {
+        if let Some(mechanism) = kind.mechanism() {
             let body_name = |id: BodyId| -> Solved<&str> {
                 kind.bodies
                     .get(id.index())
@@ -97,13 +99,12 @@ impl Solver<'_> {
                 }
             }
         }
-        let (file, span) = kind
-            .fields
-            .iter()
-            .find(|field| field.name == "model")
-            .map_or((kind.decl.file, kind.decl.name_span), |field| {
-                (kind.decl.file, field.value.span)
-            });
+        let span = match kind.base_entry(BaseField::Model) {
+            Some(BaseEntry::Field(index)) => kind.fields().get(index).map(|field| field.value.span),
+            Some(BaseEntry::Param(index)) => kind.params.get(index).map(|param| param.decl.span),
+            None => None,
+        };
+        let (file, span) = (kind.decl.file, span.unwrap_or(kind.decl.name_span));
         Ok(Model {
             source: model.source.clone(),
             node: model.align.clone(),

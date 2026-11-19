@@ -226,7 +226,7 @@ fn entries_in_kind_order(hardware: &Hardware, kind: Option<&KindDef>) -> Vec<Str
             .params
             .iter()
             .map(|param| param.decl.name.as_str())
-            .chain(kind.fields.iter().map(|field| field.name.as_str()))
+            .chain(kind.fields().iter().map(|field| field.name.as_str()))
             .collect(),
         None => hardware.entries.keys().map(EntryName::as_str).collect(),
     };

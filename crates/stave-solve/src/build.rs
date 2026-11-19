@@ -7,7 +7,7 @@ use stave_lang::ast::Span;
 use stave_lang::placement::{Axis, PartAxis, PerPartAxis};
 use stave_lang::units::{ExactLength, Length};
 use stave_lang::{Code, Diagnostic, FileId, Label};
-use stave_model::defs::{BodyId, DefId, StockField, Word};
+use stave_model::defs::{BodyId, DefId, StockField, StockSectionDef, Word};
 use stave_model::ids::{
     AssemblyId, HardwareId, JointId, PairIndex, PartId, RegionId, SceneId, StockId,
 };
@@ -17,9 +17,10 @@ use stave_model::solved::{
     self, Assembly, BodyOwner, Cut, CutPlace, CutSource, DesignDraft, FastenerUse, Hardware,
     HardwareBase, Joint, JointOrigin, JointPair, LocalBox, LocalPoint, PartOrigin, Point,
     PoseValue, ProjectInfo, Region, RequireResult, RoleBinding, Scene, SceneItem, ScenePose, Shape,
-    Size3, SolvedDesign, Station, Stock, Tool,
+    Size3, SolvedDesign, Station, Stock, StockSection, Tool,
 };
 use stave_model::value::{ExactBox, Value};
+use stave_schema::kinds::BaseField;
 use stave_schema::words::{Grain, MotionWord, StockForm};
 
 use crate::eval::{Env, midpoint};
@@ -827,8 +828,10 @@ impl Solver<'_> {
         let Some(ctx) = self.module_ctx(DefId::Kind(kind_id)) else {
             return Err(Fault::Internal("the file an item is declared in").into());
         };
-        let no_joint = stave_model::defs::JointKindDef::default();
-        let joint_def = kind.joint.as_ref().unwrap_or(&no_joint);
+        // The resolver gives every joint, splice and method a joint kind.
+        let Some(joint_def) = kind.joint() else {
+            return Err(Fault::Internal("a joint kind's entries").into());
+        };
         let pair_count = work.pairs.len();
         let mut pairs = Vec::new();
         let mut note = None;
@@ -1075,12 +1078,13 @@ impl Solver<'_> {
                 }
             }
             for (fastener, count, span) in counted {
-                let diameter = match self.kind_entry(&fastener, "diameter", kind.decl.file, span)? {
-                    Value::Length(l) => round_length(l)?,
+                let file = kind.decl.file;
+                let diameter = match self.base_field(&fastener, BaseField::Diameter, file, span)? {
+                    Some(Value::Length(l)) => round_length(l)?,
                     _ => return Err(Fault::Earlier.into()),
                 };
-                let length = match self.kind_entry(&fastener, "length", kind.decl.file, span)? {
-                    Value::Length(l) => round_length(l)?,
+                let length = match self.base_field(&fastener, BaseField::Length, file, span)? {
+                    Some(Value::Length(l)) => round_length(l)?,
                     _ => return Err(Fault::Earlier.into()),
                 };
                 match fastener_totals
@@ -1159,14 +1163,9 @@ impl Solver<'_> {
             return Err(Fault::Internal("a kind's declaration").into());
         };
         let kind = def.decl.name.clone();
-        let says_wood = def.param("species").is_some() || def.field("species").is_some();
-        let wood = if says_wood {
-            match self.kind_entry(item, "species", file, span)? {
-                Value::Word(stave_model::defs::Word::Species(species)) => Some(species),
-                _ => None,
-            }
-        } else {
-            None
+        let wood = match self.base_field(item, BaseField::Species, file, span)? {
+            Some(Value::Word(stave_model::defs::Word::Species(species))) => Some(species),
+            _ => None,
         };
         Ok(solved::MemberItem { kind, wood })
     }
@@ -1737,16 +1736,18 @@ impl Solver<'_> {
             name: def.decl.name.clone(),
             species: def.species,
             form: def.form,
-            thickness: if def.form == StockForm::Dowel {
-                None
-            } else {
-                length(self, F::Thickness)?
-            },
-            diameter: length(self, F::Diameter)?,
-            width: if def.width.is_some() {
-                length(self, F::Width)?
-            } else {
-                None
+            section: match &def.section {
+                Some(StockSectionDef::Board { width, .. }) => StockSection::Board {
+                    thickness: length(self, F::Thickness)?.ok_or(Fault::Earlier)?,
+                    width: match width {
+                        Some(_) => length(self, F::Width)?,
+                        None => None,
+                    },
+                },
+                Some(StockSectionDef::Dowel { .. }) => StockSection::Dowel {
+                    diameter: length(self, F::Diameter)?.ok_or(Fault::Earlier)?,
+                },
+                None => return Err(Fault::Earlier.into()),
             },
             max_width: length(self, F::MaxWidth)?,
             max_length: length(self, F::MaxLength)?,
@@ -2336,33 +2337,26 @@ impl Solver<'_> {
             Some(list) => {
                 let mut tools = Vec::new();
                 for tool in list {
-                    let Some(kind) = self.model.defs.kind(*tool) else {
+                    if self.model.defs.kind(*tool).is_none() {
                         continue;
+                    }
+                    let kind_value =
+                        stave_model::value::KindValue::new(*tool, self.kind_name(*tool));
+                    let title = match self.base_field(
+                        &kind_value,
+                        BaseField::Title,
+                        project.file,
+                        project.span,
+                    )? {
+                        Some(Value::Text(text)) => Some(text),
+                        _ => None,
                     };
-                    let kind_value = stave_model::value::KindValue {
-                        kind: *tool,
-                        name: self.kind_name(*tool),
-                        settings: Vec::new(),
-                    };
-                    let title = match kind.field("title") {
-                        Some(_) => match self.kind_entry(
-                            &kind_value,
-                            "title",
-                            project.file,
-                            project.span,
-                        )? {
-                            Value::Text(text) => Some(text),
-                            _ => None,
-                        },
-                        None => None,
-                    };
-                    let powered = match kind.field("powered") {
-                        Some(_) => {
-                            self.kind_entry(&kind_value, "powered", project.file, project.span)?
-                                == Value::Bool(true)
-                        }
-                        None => false,
-                    };
+                    let powered = self.base_field(
+                        &kind_value,
+                        BaseField::Powered,
+                        project.file,
+                        project.span,
+                    )? == Some(Value::Bool(true));
                     tools.push(Tool {
                         name: self.kind_name(*tool),
                         title,

@@ -304,7 +304,7 @@ impl<'a> EditScope<'a> {
         let kind = self.model.defs.kind(id)?;
         // A fastener or a tool is used by a joint or a tool list, never
         // placed by itself, so it is not a menu entry.
-        match kind.base {
+        match kind.base() {
             ast::BaseKind::Joint
             | ast::BaseKind::Slide
             | ast::BaseKind::Hinge
@@ -331,12 +331,12 @@ impl<'a> EditScope<'a> {
         }
         // A joint joins parts that meet: offered on parts that don't, it
         // could never apply, so it is not listed.
-        if kind.base == ast::BaseKind::Joint && !self.joined_parts_meet(&place) {
+        if kind.base() == ast::BaseKind::Joint && !self.joined_parts_meet(&place) {
             return None;
         }
         let settings = kind.params.iter().filter_map(kind_setting).collect();
         // Hardware offered on a face is mounted on that face.
-        let mounted_on = match (picked, kind.base) {
+        let mounted_on = match (picked, kind.base()) {
             (
                 Picked::Face(face),
                 ast::BaseKind::Slide | ast::BaseKind::Hinge | ast::BaseKind::Pull,

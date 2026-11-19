@@ -762,16 +762,42 @@ pub struct Stock {
     /// What is bought.
     #[serde(serialize_with = "serialize_word")]
     pub form: StockForm,
-    /// Finished thickness; `None` for dowels.
-    pub thickness: Option<Length>,
-    /// Diameter of dowel stock.
-    pub diameter: Option<Length>,
-    /// A fixed width the stock is sold at.
-    pub width: Option<Length>,
+    /// Its cross-section, by its form.
+    #[serde(flatten)]
+    pub section: StockSection,
     /// The widest board available.
     pub max_width: Option<Length>,
     /// The longest board available.
     pub max_length: Option<Length>,
+}
+
+impl Stock {
+    /// The finished thickness of a board stock; `None` for a dowel.
+    pub fn board_thickness(&self) -> Option<Length> {
+        match self.section {
+            StockSection::Board { thickness, .. } => Some(thickness),
+            StockSection::Dowel { .. } => None,
+        }
+    }
+}
+
+/// A stock's cross-section, by its form: a board (`solid`, `plywood`,
+/// `mdf`) has a thickness and perhaps a fixed width, a dowel a diameter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(untagged)]
+pub enum StockSection {
+    /// A board or sheet.
+    Board {
+        /// Finished thickness.
+        thickness: Length,
+        /// A fixed width the stock is sold at.
+        width: Option<Length>,
+    },
+    /// Round stock.
+    Dowel {
+        /// Its diameter.
+        diameter: Length,
+    },
 }
 
 /// Where a part comes from.

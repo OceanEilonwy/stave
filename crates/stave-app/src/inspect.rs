@@ -1176,7 +1176,7 @@ fn inspect_part(checked: &Checked, design: &SolvedDesign, id: PartId) -> Option<
         Shape::Round { diameter } => fill_in(&tr("{length} across"), &[("length", &mm(diameter))]),
         Shape::Board | Shape::Turned { .. } => part
             .stock
-            .thickness
+            .board_thickness()
             .map_or_else(|| mm(part.cut.thickness), mm),
     };
     let mut rows = vec![

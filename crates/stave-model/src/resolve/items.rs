@@ -18,7 +18,7 @@ use crate::defs::{
     ArrayDef, AssemblyDef, AssemblyKind, DefId, Domain, HardwareDef, JointDef, KindCallDef,
     LibraryDef, MirrorDef, PartBodyDef, PartDef, PartKind, PlaceTerm, PlaceTermKind, PoseDef,
     ProfileDef, ProjectDef, RExpr, RExprKind, RegionDef, RequireDef, SceneDef, Setting, Size,
-    StockDef, Symbol, Word,
+    StockDef, StockSectionDef, Symbol, Word,
 };
 use crate::ids::{KindId, RecipeId};
 use crate::types::{KindTy, Ty};
@@ -662,22 +662,32 @@ impl<'a> Resolver<'a> {
         let width = length("width");
         let max_width = length("max_width");
         let max_length = length("max_length");
-        if found.contains_key("form") {
-            if form == StockForm::Dowel {
-                if diameter.is_none() && !misspells(&syntax.body.fields, fields::STOCK, "diameter")
-                {
+        let misspelt = |name| misspells(&syntax.body.fields, fields::STOCK, name);
+        let section = if form == StockForm::Dowel {
+            for (name, written) in [("thickness", &thickness), ("width", &width)] {
+                if let Some(written) = written {
                     self.error_help(
-                        Code::MissingField,
-                        format!("{what} is missing 'diameter'"),
+                        Code::UnknownField,
+                        format!("{what} has no field '{name}'"),
                         cx.file,
-                        syntax.body.span,
-                        "dowel stock is sized by diameter: ...",
+                        written.span,
+                        "dowel stock is round: its diameter is its thickness and its width",
                     );
                 }
-            } else {
-                if thickness.is_none()
-                    && !misspells(&syntax.body.fields, fields::STOCK, "thickness")
-                {
+            }
+            if diameter.is_none() && found.contains_key("form") && !misspelt("diameter") {
+                self.error_help(
+                    Code::MissingField,
+                    format!("{what} is missing 'diameter'"),
+                    cx.file,
+                    syntax.body.span,
+                    "dowel stock is sized by diameter: ...",
+                );
+            }
+            diameter.map(|diameter| StockSectionDef::Dowel { diameter })
+        } else {
+            if found.contains_key("form") {
+                if thickness.is_none() && !misspelt("thickness") {
                     self.error_help(
                         Code::MissingField,
                         format!("{what} is missing 'thickness'"),
@@ -696,14 +706,13 @@ impl<'a> Resolver<'a> {
                     );
                 }
             }
-        }
+            thickness.map(|thickness| StockSectionDef::Board { thickness, width })
+        };
         StockDef {
             decl: self.decl(def, &syntax.name, origin),
             species,
             form,
-            thickness,
-            diameter,
-            width,
+            section,
             max_width,
             max_length,
         }

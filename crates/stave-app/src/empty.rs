@@ -229,7 +229,7 @@ pub fn library(checked: &Checked) -> Option<Library> {
     let mut groups: Vec<(LibraryGroup, Vec<LibraryItem>)> = Vec::new();
     for id in &module.items {
         let group = match *id {
-            DefId::Kind(kind) => match defs.kind(kind).map(|kind| kind.base) {
+            DefId::Kind(kind) => match defs.kind(kind).map(|kind| kind.base()) {
                 Some(BaseKind::Joint) => LibraryGroup::Joints,
                 Some(BaseKind::Slide | BaseKind::Hinge | BaseKind::Pull) => LibraryGroup::Hardware,
                 Some(BaseKind::Fastener) => LibraryGroup::Fasteners,

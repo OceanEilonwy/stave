@@ -11,7 +11,7 @@ use stave_lang::Code;
 use stave_lang::ast::{BinaryOp, Span};
 use stave_lang::placement::{Axis, PartAxis};
 use stave_lang::units::Rational;
-use stave_model::defs::{Member, RExpr, RExprKind, Symbol};
+use stave_model::defs::{BuiltinCall, Member, RExpr, RExprKind, Symbol};
 use stave_model::ids::PartId;
 use stave_model::value::{ExactBox, Patch, Value};
 use stave_schema::functions::{Builtin, PatchSize};
@@ -62,22 +62,19 @@ fn patch_size_read(expr: &RExpr) -> Option<(&RExpr, &RExpr, PatchSize)> {
         base,
         member: Member::PatchSize(size),
     } = &expr.kind
-        && let RExprKind::Builtin {
-            function: Builtin::Contact,
-            args,
-        } = &base.kind
+        && let RExprKind::Builtin(call) = &base.kind
+        && let BuiltinCall::Contact { a, b } = &**call
     {
-        let a = args.iter().find(|arg| arg.name == "a")?;
-        let b = args.iter().find(|arg| arg.name == "b")?;
-        return Some((&a.value, &b.value, *size));
+        return Some((a, b, *size));
     }
     match &expr.kind {
         RExprKind::Member { base, .. } | RExprKind::Index { base, .. } => patch_size_read(base),
         RExprKind::Unary { operand, .. } => patch_size_read(operand),
         RExprKind::Binary { lhs, rhs, .. } => patch_size_read(lhs).or_else(|| patch_size_read(rhs)),
-        RExprKind::Builtin { args, .. } | RExprKind::KindValue { settings: args, .. } => {
-            args.iter().find_map(|arg| patch_size_read(&arg.value))
-        }
+        RExprKind::Builtin(call) => call.arguments().find_map(patch_size_read),
+        RExprKind::KindValue { settings, .. } => settings
+            .iter()
+            .find_map(|setting| patch_size_read(&setting.value)),
         RExprKind::List(items) => items.iter().find_map(patch_size_read),
         RExprKind::Length(_)
         | RExprKind::Angle(_)
@@ -108,9 +105,14 @@ fn params_read(expr: &RExpr, out: &mut Vec<usize>) {
             params_read(lhs, out);
             params_read(rhs, out);
         }
-        RExprKind::Builtin { args, .. } | RExprKind::KindValue { settings: args, .. } => {
-            for arg in args {
-                params_read(&arg.value, out);
+        RExprKind::Builtin(call) => {
+            for argument in call.arguments() {
+                params_read(argument, out);
+            }
+        }
+        RExprKind::KindValue { settings, .. } => {
+            for setting in settings {
+                params_read(&setting.value, out);
             }
         }
         RExprKind::List(items) => {
@@ -309,7 +311,7 @@ impl Solver<'_> {
             | RExprKind::SelfElement(_)
             | RExprKind::Member { .. }
             | RExprKind::Index { .. }
-            | RExprKind::Builtin { .. }
+            | RExprKind::Builtin(_)
             | RExprKind::KindValue { .. }
             | RExprKind::Unary { .. }
             | RExprKind::List(_)

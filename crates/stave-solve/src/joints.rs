@@ -18,6 +18,7 @@ use stave_model::solved::{
 };
 use stave_model::value::{ExactBox, KindValue, Value};
 use stave_schema::CutOperation;
+use stave_schema::kinds::JointSetting;
 use stave_schema::kinds::RoleType;
 use stave_schema::operations::Selector;
 use stave_schema::words::{Grain, StockForm};
@@ -225,6 +226,8 @@ impl Solver<'_> {
             kind,
             name: kind_name,
             settings: given,
+            glue: given_glue,
+            methods: given_methods,
         } = kind_value;
         if self.model.defs.is_poisoned(DefId::Kind(kind)) {
             return Err(self.skip().into());
@@ -237,8 +240,8 @@ impl Solver<'_> {
         self.check_kind_signature(call, env, kind, &kind_name, owner)?;
         let mut roles: Vec<Option<Value>> = vec![None; kind_def.roles.len()];
         let mut settings = given;
-        let mut glue = true;
-        let mut methods = Vec::new();
+        let mut glue = given_glue.unwrap_or(true);
+        let mut methods = given_methods;
         let mut face = None;
         if let Some(positional) = &call.positional {
             let value = self.eval(positional, env)?;
@@ -265,29 +268,26 @@ impl Solver<'_> {
                 }
                 continue;
             }
-            match (setting.name.as_str(), kind_def.base) {
-                ("glue", BaseKind::Joint) => {
-                    glue = value == Value::Bool(true);
-                    continue;
-                }
-                ("methods", BaseKind::Joint) => {
-                    if let Value::List(items) = &value {
-                        methods.extend(items.iter().filter_map(|v| match v {
-                            Value::Recipe(r) => Some(*r),
-                            _ => None,
-                        }));
-                    } else if let Value::Recipe(r) = value {
-                        methods.push(r);
+            if kind_def.base() == BaseKind::Joint {
+                match JointSetting::from_word(&setting.name) {
+                    Some(JointSetting::Glue) => {
+                        glue = value == Value::Bool(true);
+                        continue;
                     }
-                    continue;
-                }
-                ("face", base) if base.is_mounted_hardware() => {
-                    if let Value::Word(Word::Face(f)) = value {
-                        face = Some(f);
+                    Some(JointSetting::Methods) => {
+                        methods.extend(crate::eval::recipes(&value));
+                        continue;
                     }
-                    continue;
+                    None => {}
                 }
-                _ => {}
+            }
+            if kind_def.base().is_mounted_hardware()
+                && setting.name == stave_schema::kinds::FACE_SETTING
+            {
+                if let Value::Word(Word::Face(f)) = value {
+                    face = Some(f);
+                }
+                continue;
             }
             if kind_def.param(&setting.name).is_none() {
                 return Err(self
@@ -434,7 +434,7 @@ impl Solver<'_> {
         let result = self
             .bind_call(&def.call, &env, &what, DefId::Joint(inst.def))
             .and_then(|binding| {
-                let base = self.model.defs.kind(binding.kind).map(|k| k.base);
+                let base = self.model.defs.kind(binding.kind).map(|k| k.base());
                 if base == Some(BaseKind::Joint) {
                     Ok(binding)
                 } else {
@@ -664,7 +664,7 @@ impl Solver<'_> {
             requires.push(results);
             // What the joint adds.
             let mut extensions = Vec::new();
-            if let (Some(joint_def), Making::Made) = (&kind.joint, making) {
+            if let (Some(joint_def), Making::Made) = (kind.joint(), making) {
                 for extend in &joint_def.adds {
                     let by = self.eval_length(&extend.by, &kind_env)?;
                     let members: &[PartId] = if across {
@@ -1027,7 +1027,7 @@ impl Solver<'_> {
             .model
             .defs
             .stock(stock)
-            .is_some_and(|def| def.width.is_some());
+            .is_some_and(|def| def.fixed_width().is_some());
         if fault.is_none()
             && fixed_width
             && let Some(stock_width) = self.stock_length(stock, StockField::Width)?
@@ -1638,7 +1638,12 @@ impl Solver<'_> {
         pair: &PairWork,
         env: &Env<'_>,
     ) -> Solved<Vec<AssemblyStep>> {
-        let Some(joint) = self.model.defs.kind(kind).and_then(|k| k.joint.as_ref()) else {
+        let Some(joint) = self
+            .model
+            .defs
+            .kind(kind)
+            .and_then(stave_model::defs::KindDef::joint)
+        else {
             return Ok(Vec::new());
         };
         let mut steps = Vec::new();

@@ -78,7 +78,7 @@ fn takes_setting(kind: &KindDef, name: &str) -> bool {
     if kind.param(name).is_some() {
         return true;
     }
-    match kind.base {
+    match kind.base() {
         BaseKind::Joint => {
             stave_schema::fields::find(stave_schema::fields::JOINT_IMPLICIT_SETTINGS, name)
                 .is_some()
@@ -380,7 +380,7 @@ impl Solver<'_> {
             Some(component) => format!("'{kind_name}' can't be the {param_name} of {component}"),
             None => format!("'{kind_name}' can't be the project's {param_name}"),
         };
-        let thing = if kind_def.base == BaseKind::Joint {
+        let thing = if kind_def.base() == BaseKind::Joint {
             "joint"
         } else {
             "hardware"
@@ -444,7 +444,7 @@ impl Solver<'_> {
                 *span,
             ),
         };
-        let accepted = self.kinds_taking(kind_def.base, kind, handed, choice.file);
+        let accepted = self.kinds_taking(kind_def.base(), kind, handed, choice.file);
         let help = if accepted.is_empty() {
             format!(
                 "no {thing} kind in scope takes what {who} hands {its}; use another component, or write a kind that does"
@@ -512,7 +512,7 @@ impl Solver<'_> {
                 };
                 let own = scope.module == Some(module);
                 if id == refused
-                    || kind.base != base
+                    || kind.base() != base
                     || kind.decl.scope != Scope::Module(module)
                     || (kind.decl.private && !own)
                     || defs.is_poisoned(*item)

@@ -19,6 +19,7 @@ use stave_model::instance::ItemSlot;
 use stave_model::solved::CutKind;
 use stave_model::solved::Rules;
 use stave_model::value::{AnchorOwner, AnchorValue, ExactBox, Value};
+use stave_schema::kinds::BaseField;
 
 use crate::eval::{Env, KindEnv, midpoint};
 use crate::joints::{Binding, CutAt};
@@ -464,13 +465,13 @@ impl Solver<'_> {
         let Some(kind) = self.model.defs.kind(binding.kind) else {
             return Err(Fault::Internal("a kind's declaration").into());
         };
-        if !kind.base.is_mounted_hardware() {
+        if !kind.base().is_mounted_hardware() {
             return Err(self
                 .error(
                     Code::TypeMismatch,
                     format!(
                         "'{name}' needs a slide, hinge or pull kind, found a {} kind",
-                        kind.base.word()
+                        kind.base().word()
                     ),
                     env.file,
                     def.call.kind.span,
@@ -479,16 +480,22 @@ impl Solver<'_> {
                 .into());
         }
         // Reported where the kind is resolved.
-        let Some(hardware_kind) = &kind.hardware else {
+        let Some(hardware_kind) = kind.hardware() else {
             return Err(Fault::Earlier.into());
         };
         let roles = self.hardware_roles(kind, &binding)?;
         let entries = self.hardware_entries(&binding, kind, env.file, span)?;
         let fasteners = self.hardware_fasteners(&binding, kind, &hardware_kind.uses)?;
-        let model = match entries.get("model") {
+        let written_model = self.base_field_in(
+            &KindEnv::of_binding(&binding),
+            BaseField::Model,
+            env.file,
+            span,
+        )?;
+        let model = match written_model {
             Some(Value::Model(model)) => {
                 let declared = self.declared_shapes(&binding, kind)?;
-                Some(self.hardware_model(&binding, kind, model, &declared)?)
+                Some(self.hardware_model(&binding, kind, &model, &declared)?)
             }
             _ => None,
         };
@@ -513,7 +520,7 @@ impl Solver<'_> {
             span,
         )?;
         // The kind's mechanism moves it, counted on its own first.
-        let (mechanism, own) = match &kind.mechanism {
+        let (mechanism, own) = match kind.mechanism() {
             Some(def) => {
                 let mechanism = self.kind_mechanism(&binding, kind, &binding.name, def, &frame)?;
                 let own = self.check_mechanism(hardware, &roles, &mechanism, &binding.name)?;
@@ -539,7 +546,7 @@ impl Solver<'_> {
         Ok(Placed {
             kind: binding.kind,
             kind_name: binding.name,
-            base: kind.base,
+            base: kind.base(),
             piece,
             mount_face,
             roles,
@@ -604,7 +611,7 @@ impl Solver<'_> {
             return Err(Fault::Internal("a kind's declaration").into());
         };
         let kind_name = &binding.name;
-        let Some(hardware_kind) = &kind.hardware else {
+        let Some(hardware_kind) = kind.hardware() else {
             return Err(Fault::Earlier.into());
         };
         let Some(Value::Part(piece)) = binding.roles.first().cloned() else {
@@ -902,16 +909,16 @@ impl Solver<'_> {
                     Some(count) => solver.eval_count(count, kind_env)?,
                     None => 1,
                 };
-                let mut size = |name: &str| -> Solved<Length> {
-                    match solver.kind_entry(&fastener, name, file, used.span)? {
-                        Value::Length(length) => length
+                let mut size = |field: BaseField| -> Solved<Length> {
+                    match solver.base_field(&fastener, field, file, used.span)? {
+                        Some(Value::Length(length)) => length
                             .to_nearest_length()
                             .ok_or(Failure::Fault(Fault::Overflow)),
                         _ => Err(Fault::Earlier.into()),
                     }
                 };
-                let diameter = size("diameter")?;
-                let length = size("length")?;
+                let diameter = size(BaseField::Diameter)?;
+                let length = size(BaseField::Length)?;
                 let name = solver
                     .model
                     .defs
@@ -969,7 +976,7 @@ impl Solver<'_> {
             kind: Some(&kind_env),
             array: None,
         };
-        for field in &kind.fields {
+        for field in kind.fields() {
             let value = self.eval(&field.value, &kind_eval)?;
             entries.insert(field.name.clone(), value);
         }
@@ -1514,7 +1521,7 @@ fn member_carrier(
             Carrier::Body(other) => current = *other,
             Carrier::Mechanism => {
                 return kind
-                    .mechanism
+                    .mechanism()
                     .is_some()
                     .then_some(MemberCarrier::Link(current));
             }

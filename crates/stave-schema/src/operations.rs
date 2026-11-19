@@ -123,6 +123,164 @@ pub enum FaceRemoval {
     Every,
 }
 
+/// A place on a part that a recipe step refers to (grammar, "Features").
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum Feature {
+    /// `shape`: the turned shape.
+    Shape,
+    /// `stations`: the stations along a turning.
+    Stations,
+    /// `blank`: the square blank.
+    Blank,
+    /// `centre`: the centre.
+    Centre,
+    /// `walls`: the walls of a recess.
+    Walls,
+    /// `floor`: the floor of a recess.
+    Floor,
+    /// `waste`: the waste.
+    Waste,
+    /// `open_edges`: the edges a recess opens onto.
+    OpenEdges,
+    /// `outline`: the outline.
+    Outline,
+    /// `cheeks`: the cheeks.
+    Cheeks,
+    /// `shoulders`: the shoulders.
+    Shoulders,
+    /// `shoulder`: the one shoulder of a round tenon.
+    Shoulder,
+    /// `flat_faces`: the flat faces left on a rounded section.
+    FlatFaces,
+}
+
+impl Feature {
+    /// Every feature, in the order the grammar first lists them.
+    pub const ALL: [Feature; 13] = [
+        Feature::Shape,
+        Feature::Stations,
+        Feature::Blank,
+        Feature::Centre,
+        Feature::Walls,
+        Feature::Floor,
+        Feature::Waste,
+        Feature::OpenEdges,
+        Feature::Outline,
+        Feature::Cheeks,
+        Feature::Shoulders,
+        Feature::Shoulder,
+        Feature::FlatFaces,
+    ];
+
+    /// The word as written.
+    pub fn word(self) -> &'static str {
+        match self {
+            Feature::Shape => "shape",
+            Feature::Stations => "stations",
+            Feature::Blank => "blank",
+            Feature::Centre => "centre",
+            Feature::Walls => "walls",
+            Feature::Floor => "floor",
+            Feature::Waste => "waste",
+            Feature::OpenEdges => "open_edges",
+            Feature::Outline => "outline",
+            Feature::Cheeks => "cheeks",
+            Feature::Shoulders => "shoulders",
+            Feature::Shoulder => "shoulder",
+            Feature::FlatFaces => "flat_faces",
+        }
+    }
+
+    /// The feature a word names, if it names one.
+    pub fn from_word(word: &str) -> Option<Feature> {
+        Feature::ALL.into_iter().find(|item| item.word() == word)
+    }
+}
+
+/// A number of an operation that a recipe step sets a tool to (grammar, "Features").
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum Measurement {
+    /// `length`: the length.
+    Length,
+    /// `largest`: the largest.
+    Largest,
+    /// `depth`: the depth.
+    Depth,
+    /// `width`: the width.
+    Width,
+    /// `thickness`: the thickness.
+    Thickness,
+    /// `diameter`: the diameter.
+    Diameter,
+    /// `flats`: the flats.
+    Flats,
+    /// `neck`: the neck.
+    Neck,
+    /// `angle`: the angle.
+    Angle,
+    /// `slope`: the slope.
+    Slope,
+}
+
+impl Measurement {
+    /// Every measurement, in the order the grammar first lists them.
+    pub const ALL: [Measurement; 10] = [
+        Measurement::Length,
+        Measurement::Largest,
+        Measurement::Depth,
+        Measurement::Width,
+        Measurement::Thickness,
+        Measurement::Diameter,
+        Measurement::Flats,
+        Measurement::Neck,
+        Measurement::Angle,
+        Measurement::Slope,
+    ];
+
+    /// The word as written.
+    pub fn word(self) -> &'static str {
+        match self {
+            Measurement::Length => "length",
+            Measurement::Largest => "largest",
+            Measurement::Depth => "depth",
+            Measurement::Width => "width",
+            Measurement::Thickness => "thickness",
+            Measurement::Diameter => "diameter",
+            Measurement::Flats => "flats",
+            Measurement::Neck => "neck",
+            Measurement::Angle => "angle",
+            Measurement::Slope => "slope",
+        }
+    }
+
+    /// The measurement a word names, if it names one.
+    pub fn from_word(word: &str) -> Option<Measurement> {
+        Measurement::ALL
+            .into_iter()
+            .find(|item| item.word() == word)
+    }
+}
+
+/// What a step's positional argument or `to:` names: a feature or a
+/// measurement.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum StepTarget {
+    /// A place on the part.
+    Feature(Feature),
+    /// A number a tool is set to.
+    Measurement(Measurement),
+}
+
+impl StepTarget {
+    /// The word as written.
+    pub fn word(self) -> &'static str {
+        match self {
+            StepTarget::Feature(feature) => feature.word(),
+            StepTarget::Measurement(measurement) => measurement.word(),
+        }
+    }
+}
+
 /// Everything the catalog knows about an operation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct OperationSpec {
@@ -134,9 +292,9 @@ pub struct OperationSpec {
     /// not written in a `cut` block.
     pub selectors: &'static [Selector],
     /// Places on the part a recipe step can refer to.
-    pub features: &'static [&'static str],
+    pub features: &'static [Feature],
     /// Numbers a recipe step can set a tool to.
-    pub measurements: &'static [&'static str],
+    pub measurements: &'static [Measurement],
     /// What it does to the part's faces.
     pub removes: FaceRemoval,
 }
@@ -201,6 +359,8 @@ pub fn operation(operation: Operation) -> &'static OperationSpec {
 }
 
 use ArgumentDefault as D;
+use Feature as F;
+use Measurement as M;
 use Selector::{Crossing, End, Side};
 const LENGTH: ValueType = ValueType::Type(TypeName::Length);
 const ANGLE: ValueType = ValueType::Type(TypeName::Angle);
@@ -213,8 +373,8 @@ const TURNING: OperationSpec = OperationSpec {
     operation: Operation::Turning,
     arguments: &[],
     selectors: &[],
-    features: &["shape", "stations", "blank", "centre"],
-    measurements: &["length", "largest"],
+    features: &[F::Shape, F::Stations, F::Blank, F::Centre],
+    measurements: &[M::Length, M::Largest],
     removes: FaceRemoval::Every,
 };
 
@@ -224,8 +384,8 @@ pub fn cut_operation(cut: CutOperation) -> &'static OperationSpec {
         operation: Operation::Cut(CutOperation::Notch),
         arguments: &[argument("depth", DEPTH, D::Required)],
         selectors: &[Crossing],
-        features: &["walls", "floor", "waste", "open_edges"],
-        measurements: &["depth"],
+        features: &[F::Walls, F::Floor, F::Waste, F::OpenEdges],
+        measurements: &[M::Depth],
         removes: FaceRemoval::Never,
     };
     const SLOT: OperationSpec = OperationSpec {
@@ -237,8 +397,8 @@ pub fn cut_operation(cut: CutOperation) -> &'static OperationSpec {
             argument("from_centre", BOOL, D::Bool(false)),
         ],
         selectors: &[Crossing],
-        features: &["walls", "floor", "waste", "open_edges"],
-        measurements: &["width", "depth"],
+        features: &[F::Walls, F::Floor, F::Waste, F::OpenEdges],
+        measurements: &[M::Width, M::Depth],
         removes: FaceRemoval::Never,
     };
     const POCKET: OperationSpec = OperationSpec {
@@ -249,8 +409,8 @@ pub fn cut_operation(cut: CutOperation) -> &'static OperationSpec {
             argument("depth", DEPTH, D::Required),
         ],
         selectors: &[Crossing, End, Side],
-        features: &["walls", "floor", "waste", "outline"],
-        measurements: &["width", "thickness", "depth"],
+        features: &[F::Walls, F::Floor, F::Waste, F::Outline],
+        measurements: &[M::Width, M::Thickness, M::Depth],
         removes: FaceRemoval::Never,
     };
     const TENON: OperationSpec = OperationSpec {
@@ -261,8 +421,8 @@ pub fn cut_operation(cut: CutOperation) -> &'static OperationSpec {
             argument("thickness", LENGTH, D::Required),
         ],
         selectors: &[End, Crossing],
-        features: &["cheeks", "shoulders", "waste"],
-        measurements: &["length", "width", "thickness"],
+        features: &[F::Cheeks, F::Shoulders, F::Waste],
+        measurements: &[M::Length, M::Width, M::Thickness],
         removes: FaceRemoval::TheEnd,
     };
     const SPIGOT: OperationSpec = OperationSpec {
@@ -272,8 +432,8 @@ pub fn cut_operation(cut: CutOperation) -> &'static OperationSpec {
             argument("diameter", LENGTH, D::Required),
         ],
         selectors: &[End],
-        features: &["shoulder", "waste", "centre"],
-        measurements: &["length", "diameter"],
+        features: &[F::Shoulder, F::Waste, F::Centre],
+        measurements: &[M::Length, M::Diameter],
         removes: FaceRemoval::TheEnd,
     };
     const ROUND: OperationSpec = OperationSpec {
@@ -284,8 +444,8 @@ pub fn cut_operation(cut: CutOperation) -> &'static OperationSpec {
             argument("flats_angle", ANGLE, D::Angle(0)),
         ],
         selectors: &[Crossing],
-        features: &["shoulders", "waste", "centre", "flat_faces"],
-        measurements: &["diameter", "flats", "length"],
+        features: &[F::Shoulders, F::Waste, F::Centre, F::FlatFaces],
+        measurements: &[M::Diameter, M::Flats, M::Length],
         removes: FaceRemoval::Never,
     };
     const DRILL: OperationSpec = OperationSpec {
@@ -295,8 +455,8 @@ pub fn cut_operation(cut: CutOperation) -> &'static OperationSpec {
             argument("depth", DEPTH, D::Required),
         ],
         selectors: &[Crossing, End, Side],
-        features: &["centre"],
-        measurements: &["diameter", "depth"],
+        features: &[F::Centre],
+        measurements: &[M::Diameter, M::Depth],
         removes: FaceRemoval::Never,
     };
     // Exactly one of `angle` and `slope` is given; the solver says so when
@@ -311,16 +471,16 @@ pub fn cut_operation(cut: CutOperation) -> &'static OperationSpec {
         operation: Operation::Cut(CutOperation::DovetailSocket),
         arguments: DOVETAIL_ARGUMENTS,
         selectors: &[End, Crossing],
-        features: &["walls", "floor", "waste", "outline"],
-        measurements: &["neck", "depth", "angle", "slope"],
+        features: &[F::Walls, F::Floor, F::Waste, F::Outline],
+        measurements: &[M::Neck, M::Depth, M::Angle, M::Slope],
         removes: FaceRemoval::Never,
     };
     const DOVETAIL_TAIL: OperationSpec = OperationSpec {
         operation: Operation::Cut(CutOperation::DovetailTail),
         arguments: DOVETAIL_ARGUMENTS,
         selectors: &[End, Crossing],
-        features: &["cheeks", "shoulders", "waste", "outline"],
-        measurements: &["neck", "depth", "angle", "slope"],
+        features: &[F::Cheeks, F::Shoulders, F::Waste, F::Outline],
+        measurements: &[M::Neck, M::Depth, M::Angle, M::Slope],
         removes: FaceRemoval::TheEnd,
     };
     const OUTLINE: OperationSpec = OperationSpec {
@@ -331,8 +491,8 @@ pub fn cut_operation(cut: CutOperation) -> &'static OperationSpec {
             argument("from_depth", LENGTH, D::Length(0)),
         ],
         selectors: &[Side],
-        features: &["outline", "waste"],
-        measurements: &["depth"],
+        features: &[F::Outline, F::Waste],
+        measurements: &[M::Depth],
         removes: FaceRemoval::EdgesWhenThrough,
     };
     match cut {
@@ -398,16 +558,44 @@ mod tests {
     }
 
     #[test]
+    fn every_feature_and_measurement_belongs_to_an_operation() {
+        let specs: Vec<&OperationSpec> = Operation::all().map(super::operation).collect();
+        for feature in Feature::ALL {
+            assert!(
+                specs.iter().any(|spec| spec.features.contains(&feature)),
+                "{}",
+                feature.word()
+            );
+            assert_eq!(Feature::from_word(feature.word()), Some(feature));
+        }
+        for measurement in Measurement::ALL {
+            assert!(
+                specs
+                    .iter()
+                    .any(|spec| spec.measurements.contains(&measurement)),
+                "{}",
+                measurement.word()
+            );
+            assert_eq!(
+                Measurement::from_word(measurement.word()),
+                Some(measurement)
+            );
+        }
+    }
+
+    #[test]
     fn features_and_measurements_match_the_grammar() {
         let rows = table_rows("| Operation | Features | Measurements |\n");
         assert_eq!(rows.len(), 11);
         for row in rows {
             let operation = Operation::from_word(row[0].trim_matches('`')).unwrap();
             let spec = super::operation(operation);
-            assert_eq!(words(&row[1]), spec.features, "{}", operation.word());
-            assert_eq!(words(&row[2]), spec.measurements, "{}", operation.word());
+            let features: Vec<&str> = spec.features.iter().map(|f| f.word()).collect();
+            let measurements: Vec<&str> = spec.measurements.iter().map(|m| m.word()).collect();
+            assert_eq!(words(&row[1]), features, "{}", operation.word());
+            assert_eq!(words(&row[2]), measurements, "{}", operation.word());
             for feature in spec.features {
-                assert!(!spec.measurements.contains(feature));
+                assert!(Measurement::from_word(feature.word()).is_none());
             }
         }
     }

@@ -3,7 +3,7 @@ use stave_lang::placement::{Axis, Direction, PartAxis};
 use stave_lang::units::Length;
 use stave_model::solved::{
     Body, BodyCarrier, BodyOwner, BodyRef, End, HardwareId, LocalFace, MemberShape, Orientation,
-    Part, PartId, PartOrigin, Point, Pose, Shape, Size3, Station, Stock, WorldBox,
+    Part, PartId, PartOrigin, Point, Pose, Shape, Size3, Station, Stock, StockSection, WorldBox,
 };
 use stave_schema::species::Species;
 use stave_schema::words::{Grain, Measure, StockForm};
@@ -44,9 +44,10 @@ fn part(orientation: Orientation, origin: Point, cut: Size3, shape: Shape) -> Pa
             name: "oak_19".into(),
             species: Species::WhiteOak,
             form: StockForm::Solid,
-            thickness: Some(cut.thickness),
-            diameter: None,
-            width: None,
+            section: StockSection::Board {
+                thickness: cut.thickness,
+                width: None,
+            },
             max_width: None,
             max_length: None,
         },

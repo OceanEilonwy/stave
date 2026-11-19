@@ -226,7 +226,7 @@ impl EditScope<'_> {
             Declaration::Component(id) => (DefId::Component(id), "assembly"),
             Declaration::Kind(id) => {
                 let kind = defs.kind(id).ok_or(WriteError::UnknownDeclaration)?;
-                let keyword = match kind.base {
+                let keyword = match kind.base() {
                     ast::BaseKind::Joint => "joint",
                     ast::BaseKind::Slide | ast::BaseKind::Hinge | ast::BaseKind::Pull => "hardware",
                     base @ (ast::BaseKind::Fastener | ast::BaseKind::Tool) => {
@@ -525,12 +525,7 @@ impl EditScope<'_> {
             face_argument: None,
             place: None,
         };
-        let Some(hardware) = self
-            .model
-            .defs
-            .kind(id)
-            .and_then(|kind| kind.hardware.as_ref())
-        else {
+        let Some(hardware) = self.model.defs.kind(id).and_then(|kind| kind.hardware()) else {
             return out;
         };
         let piece = candidate.place.first().and_then(|param| match &param.slot {

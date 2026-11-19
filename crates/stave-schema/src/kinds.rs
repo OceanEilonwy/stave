@@ -65,9 +65,71 @@ impl BaseSpec {
     }
 }
 
-const fn entry(name: &'static str, ty: ValueType, requirement: Requirement) -> FieldSpec {
+/// An entry a base kind fixes (grammar, "Kinds"): the closed vocabulary of
+/// fastener, tool and hardware entries, written as a field or declared as a
+/// param of the same name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum BaseField {
+    /// `diameter`: a fastener's diameter.
+    Diameter,
+    /// `length`: a fastener's length.
+    Length,
+    /// `envelope`: a fastener's envelope.
+    Envelope,
+    /// `model`: a 3D model of the hardware or fastener.
+    Model,
+    /// `moving`: which node of a hardware model moves.
+    Moving,
+    /// `license`: the licence of the model.
+    License,
+    /// `species`: the wood a fastener (a dowel, a biscuit) is made of.
+    Species,
+    /// `title`: a tool's name for people.
+    Title,
+    /// `powered`: `true` for a power tool.
+    Powered,
+}
+
+impl BaseField {
+    /// Every base field.
+    pub const ALL: [BaseField; 9] = [
+        BaseField::Diameter,
+        BaseField::Length,
+        BaseField::Envelope,
+        BaseField::Model,
+        BaseField::Moving,
+        BaseField::License,
+        BaseField::Species,
+        BaseField::Title,
+        BaseField::Powered,
+    ];
+
+    /// The entry's name as written.
+    pub const fn word(self) -> &'static str {
+        match self {
+            BaseField::Diameter => "diameter",
+            BaseField::Length => "length",
+            BaseField::Envelope => "envelope",
+            BaseField::Model => "model",
+            BaseField::Moving => "moving",
+            BaseField::License => "license",
+            BaseField::Species => "species",
+            BaseField::Title => "title",
+            BaseField::Powered => "powered",
+        }
+    }
+
+    /// The base field with this name, if it is one.
+    pub fn from_word(word: &str) -> Option<BaseField> {
+        BaseField::ALL
+            .into_iter()
+            .find(|field| field.word() == word)
+    }
+}
+
+const fn entry(field: BaseField, ty: ValueType, requirement: Requirement) -> FieldSpec {
     FieldSpec {
-        name,
+        name: field.word(),
         ty,
         requirement,
         readable: true,
@@ -92,9 +154,9 @@ pub const JOINT_DEFAULT_ROLES: &[RoleSpec] = &[
 ];
 
 const HARDWARE_OPTIONAL: [FieldSpec; 3] = [
-    entry("model", Type(TypeName::Model), Optional),
-    entry("moving", Type(TypeName::Text), Optional),
-    entry("license", Type(TypeName::Text), Optional),
+    entry(BaseField::Model, Type(TypeName::Model), Optional),
+    entry(BaseField::Moving, Type(TypeName::Text), Optional),
+    entry(BaseField::License, Type(TypeName::Text), Optional),
 ];
 
 const JOINT: BaseSpec = BaseSpec {
@@ -124,15 +186,15 @@ const PULL: BaseSpec = BaseSpec {
 const FASTENER: BaseSpec = BaseSpec {
     base: BaseKind::Fastener,
     required: &[
-        entry("diameter", LENGTH, Required),
-        entry("length", LENGTH, Required),
+        entry(BaseField::Diameter, LENGTH, Required),
+        entry(BaseField::Length, LENGTH, Required),
     ],
     optional: &[
-        entry("envelope", Type(TypeName::Envelope), Optional),
-        entry("model", Type(TypeName::Model), Optional),
-        entry("license", Type(TypeName::Text), Optional),
+        entry(BaseField::Envelope, Type(TypeName::Envelope), Optional),
+        entry(BaseField::Model, Type(TypeName::Model), Optional),
+        entry(BaseField::License, Type(TypeName::Text), Optional),
         entry(
-            "species",
+            BaseField::Species,
             ValueType::Words(crate::words::WordSet::Species),
             Optional,
         ),
@@ -143,8 +205,8 @@ const TOOL: BaseSpec = BaseSpec {
     base: BaseKind::Tool,
     required: &[],
     optional: &[
-        entry("title", Type(TypeName::Text), Optional),
-        entry("powered", Type(TypeName::Bool), Optional),
+        entry(BaseField::Title, Type(TypeName::Text), Optional),
+        entry(BaseField::Powered, Type(TypeName::Bool), Optional),
     ],
 };
 
@@ -165,7 +227,38 @@ pub const FACE_SETTING: &str = "face";
 
 /// Names a joint kind can't give a role, param or made part, because every
 /// joint call accepts them.
-pub const RESERVED_JOINT_SETTINGS: [&str; 2] = ["glue", "methods"];
+pub const RESERVED_JOINT_SETTINGS: [&str; 2] =
+    [JointSetting::Glue.word(), JointSetting::Methods.word()];
+
+/// A setting every joint kind's call accepts without declaring it
+/// (grammar, "Joints"), apart from the kind's own params.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum JointSetting {
+    /// `glue: false`: the joint is not glued.
+    Glue,
+    /// `methods: [recipe, ...]`: the recipes the joint may be made with.
+    Methods,
+}
+
+impl JointSetting {
+    /// Both settings.
+    pub const ALL: [JointSetting; 2] = [JointSetting::Glue, JointSetting::Methods];
+
+    /// The setting's name as written.
+    pub const fn word(self) -> &'static str {
+        match self {
+            JointSetting::Glue => "glue",
+            JointSetting::Methods => "methods",
+        }
+    }
+
+    /// The joint setting with this name, if it is one.
+    pub fn from_word(word: &str) -> Option<JointSetting> {
+        JointSetting::ALL
+            .into_iter()
+            .find(|setting| setting.word() == word)
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -180,6 +273,37 @@ mod tests {
                 ticked(names)
             })
             .collect()
+    }
+
+    /// Every entry a base fixes is a [`BaseField`], and every base field is
+    /// an entry of some base.
+    #[test]
+    fn base_fields_are_the_bases_entries() {
+        let bases = [
+            BaseKind::Joint,
+            BaseKind::Slide,
+            BaseKind::Hinge,
+            BaseKind::Pull,
+            BaseKind::Fastener,
+            BaseKind::Tool,
+        ];
+        for spec in bases.iter().flat_map(|b| {
+            let spec = base(*b);
+            spec.required.iter().chain(spec.optional)
+        }) {
+            assert!(BaseField::from_word(spec.name).is_some(), "{}", spec.name);
+        }
+        for field in BaseField::ALL {
+            assert!(
+                bases.iter().any(|b| base(*b).entry(field.word()).is_some()),
+                "{}",
+                field.word()
+            );
+            assert_eq!(BaseField::from_word(field.word()), Some(field));
+        }
+        for setting in JointSetting::ALL {
+            assert_eq!(JointSetting::from_word(setting.word()), Some(setting));
+        }
     }
 
     /// The fastener and tool rows: the two bases whose entries are fixed.

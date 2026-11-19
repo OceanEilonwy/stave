@@ -14,12 +14,14 @@ use stave_lang::placement::{Axis, Direction, Face, PartAxis};
 use stave_lang::units::{ExactAngle, ExactLength, Rational};
 use stave_modules::ModuleId;
 use stave_schema::functions::Builtin;
+use stave_schema::kinds::BaseField;
 use stave_schema::operations::Selector;
 use stave_schema::placement::AssemblyStepKind;
 use stave_schema::recipes::{CuttingStep, MarkingStep, NeedKind};
 use stave_schema::species::Species;
 use stave_schema::words::{Grain, Measure, MotionWord, OutputUnit, StockForm};
 use stave_schema::{CutOperation, Operation};
+use std::collections::BTreeMap;
 
 use crate::ids::{
     AssemblyDefId, ComponentId, HardwareDefId, JointDefId, KindId, LetDefId, MadeIndex, ParamDefId,
@@ -280,13 +282,8 @@ pub enum RExprKind {
         /// The index.
         index: Index,
     },
-    /// A built-in function call.
-    Builtin {
-        /// The function.
-        function: Builtin,
-        /// Its arguments, by parameter name (positional ones included).
-        args: Vec<Setting>,
-    },
+    /// A built-in function call, its arguments checked and in place.
+    Builtin(Box<BuiltinCall>),
     /// A kind value with settings: `side_mount_slide(length: 450mm)`.
     KindValue {
         /// The kind, or a kind value to add settings to.
@@ -318,6 +315,353 @@ pub enum RExprKind {
     Wall(CutName),
     /// Something that could not be resolved; already reported.
     Error,
+}
+
+/// A built-in function call with each argument in its own field, as the
+/// resolver checked it. A required argument that was missing or could not
+/// be resolved is an [`RExprKind::Error`] expression, already reported.
+#[derive(Debug, Clone, PartialEq)]
+pub enum BuiltinCall {
+    /// `between(a, b)`
+    Between {
+        /// The first part, face or region.
+        a: RExpr,
+        /// The second.
+        b: RExpr,
+    },
+    /// `extent(items, axis)` or `extent(items, axis, of: part)`
+    Extent {
+        /// The parts measured.
+        items: RExpr,
+        /// The axis: a world axis, or with `of:` one of its own axes.
+        axis: RExpr,
+        /// The part or contact patch whose axis `axis` names.
+        of: Option<RExpr>,
+    },
+    /// `mid(item, axis)`
+    Mid {
+        /// The part or region.
+        item: RExpr,
+        /// The axis across which the mid-plane lies.
+        axis: RExpr,
+    },
+    /// `opening(left:, right:, bottom:, top:, front:, back:)`
+    Opening(OpeningFaces),
+    /// `split(region, axis)`, with `at:` or `shares:`
+    Split {
+        /// The region split.
+        region: RExpr,
+        /// The axis it is split along.
+        axis: RExpr,
+        /// How the pieces are sized.
+        by: SplitBy,
+    },
+    /// `cover(region, mount, thickness:)`
+    Cover {
+        /// The region covered.
+        region: RExpr,
+        /// How the cover sits on it.
+        mount: RExpr,
+        /// The cover's thickness.
+        thickness: RExpr,
+    },
+    /// `overlay(left:, right:, top:, bottom:, meeting:)`; an edge left
+    /// out overlays by nothing.
+    Overlay {
+        /// Overlay on the left edge.
+        left: Option<RExpr>,
+        /// Overlay on the right edge.
+        right: Option<RExpr>,
+        /// Overlay on the top edge.
+        top: Option<RExpr>,
+        /// Overlay on the bottom edge.
+        bottom: Option<RExpr>,
+        /// Overlay on an edge shared with a neighbouring front.
+        meeting: Option<RExpr>,
+    },
+    /// `inset(reveal:)`
+    Inset {
+        /// The gap round the front.
+        reveal: RExpr,
+    },
+    /// `turned(profile)`
+    Turned {
+        /// The profile turned.
+        profile: RExpr,
+    },
+    /// `joined(by:)`
+    Joined {
+        /// The joint kind or kinds.
+        by: RExpr,
+    },
+    /// `spliced(by:, at:, from:)`
+    Spliced {
+        /// The joint kind each splice is made with.
+        by: RExpr,
+        /// Where each splice is, from `from`.
+        at: RExpr,
+        /// The end the positions are measured from.
+        from: RExpr,
+    },
+    /// `box(length:, width:, thickness:)`: an envelope.
+    Box {
+        /// Its length.
+        length: RExpr,
+        /// Its width.
+        width: RExpr,
+        /// Its thickness.
+        thickness: RExpr,
+    },
+    /// `box(across:, up:, deep:)`: the project's root region.
+    RegionBox {
+        /// Its size across.
+        across: RExpr,
+        /// Its size up.
+        up: RExpr,
+        /// Its size deep.
+        deep: RExpr,
+    },
+    /// `cylinder(diameter:, length:)`
+    Cylinder {
+        /// Its diameter.
+        diameter: RExpr,
+        /// Its length.
+        length: RExpr,
+    },
+    /// `model(source, align:, sha256:)`
+    Model {
+        /// The model file.
+        source: RExpr,
+        /// The node put on the kind's origin.
+        align: Option<RExpr>,
+        /// The file's SHA-256, when pinned.
+        sha256: Option<RExpr>,
+    },
+    /// `node("name")`, written only as `model(align:)`: the name itself.
+    Node {
+        /// The node's name.
+        name: RExpr,
+    },
+    /// `ends(inset:)`
+    Ends {
+        /// How far in from each end.
+        inset: RExpr,
+    },
+    /// `pitch(d)`
+    Pitch {
+        /// The distance from one to the next.
+        distance: RExpr,
+    },
+    /// `gap(d)`
+    Gap {
+        /// The gap between neighbours.
+        distance: RExpr,
+    },
+    /// `contact(a, b)`
+    Contact {
+        /// The first part.
+        a: RExpr,
+        /// The second part.
+        b: RExpr,
+    },
+    /// `edge_to_edge(a, b)`
+    EdgeToEdge {
+        /// The first part.
+        a: RExpr,
+        /// The second part.
+        b: RExpr,
+    },
+}
+
+/// The six planes of `opening(...)`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OpeningFaces {
+    /// `left:`
+    pub left: RExpr,
+    /// `right:`
+    pub right: RExpr,
+    /// `bottom:`
+    pub bottom: RExpr,
+    /// `top:`
+    pub top: RExpr,
+    /// `front:`
+    pub front: RExpr,
+    /// `back:`
+    pub back: RExpr,
+}
+
+impl OpeningFaces {
+    /// The plane given for a face.
+    pub fn face(&self, face: Face) -> &RExpr {
+        match face {
+            Face::Left => &self.left,
+            Face::Right => &self.right,
+            Face::Bottom => &self.bottom,
+            Face::Top => &self.top,
+            Face::Front => &self.front,
+            Face::Back => &self.back,
+        }
+    }
+
+    /// The faces in the order an opening's bounds are made: low and high
+    /// across, up, then deep.
+    pub const ORDER: [Face; 6] = [
+        Face::Left,
+        Face::Right,
+        Face::Bottom,
+        Face::Top,
+        Face::Front,
+        Face::Back,
+    ];
+}
+
+/// How `split(...)` sizes its pieces.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SplitBy {
+    /// Neither `at:` nor `shares:`: equal pieces, one per array element.
+    Equal,
+    /// `at: part`: the two pieces either side of the part.
+    At(RExpr),
+    /// `shares: [n, ...]`: one relative size per piece.
+    Shares(RExpr),
+}
+
+impl BuiltinCall {
+    /// The function called.
+    pub fn function(&self) -> Builtin {
+        match self {
+            BuiltinCall::Between { .. } => Builtin::Between,
+            BuiltinCall::Extent { .. } => Builtin::Extent,
+            BuiltinCall::Mid { .. } => Builtin::Mid,
+            BuiltinCall::Opening(_) => Builtin::Opening,
+            BuiltinCall::Split { .. } => Builtin::Split,
+            BuiltinCall::Cover { .. } => Builtin::Cover,
+            BuiltinCall::Overlay { .. } => Builtin::Overlay,
+            BuiltinCall::Inset { .. } => Builtin::Inset,
+            BuiltinCall::Turned { .. } => Builtin::Turned,
+            BuiltinCall::Joined { .. } => Builtin::Joined,
+            BuiltinCall::Spliced { .. } => Builtin::Spliced,
+            BuiltinCall::Box { .. } => Builtin::Box,
+            BuiltinCall::RegionBox { .. } => Builtin::RegionBox,
+            BuiltinCall::Cylinder { .. } => Builtin::Cylinder,
+            BuiltinCall::Model { .. } | BuiltinCall::Node { .. } => Builtin::Model,
+            BuiltinCall::Ends { .. } => Builtin::Ends,
+            BuiltinCall::Pitch { .. } => Builtin::Pitch,
+            BuiltinCall::Gap { .. } => Builtin::Gap,
+            BuiltinCall::Contact { .. } => Builtin::Contact,
+            BuiltinCall::EdgeToEdge { .. } => Builtin::EdgeToEdge,
+        }
+    }
+
+    /// The two parts of a question about how two parts meet
+    /// (`edge_to_edge(a, b)`), or `None` for a call that asks none.
+    pub fn meeting_question(&self) -> Option<(&RExpr, &RExpr)> {
+        match self {
+            BuiltinCall::EdgeToEdge { a, b } => Some((a, b)),
+            BuiltinCall::Between { .. }
+            | BuiltinCall::Extent { .. }
+            | BuiltinCall::Mid { .. }
+            | BuiltinCall::Opening(_)
+            | BuiltinCall::Split { .. }
+            | BuiltinCall::Cover { .. }
+            | BuiltinCall::Overlay { .. }
+            | BuiltinCall::Inset { .. }
+            | BuiltinCall::Turned { .. }
+            | BuiltinCall::Joined { .. }
+            | BuiltinCall::Spliced { .. }
+            | BuiltinCall::Box { .. }
+            | BuiltinCall::RegionBox { .. }
+            | BuiltinCall::Cylinder { .. }
+            | BuiltinCall::Model { .. }
+            | BuiltinCall::Node { .. }
+            | BuiltinCall::Ends { .. }
+            | BuiltinCall::Pitch { .. }
+            | BuiltinCall::Gap { .. }
+            | BuiltinCall::Contact { .. } => None,
+        }
+    }
+
+    /// Every argument given, in the order the function's parameters are
+    /// listed, for walking the expressions inside a call.
+    pub fn arguments(&self) -> impl Iterator<Item = &RExpr> {
+        let slots: [Option<&RExpr>; 6] = match self {
+            BuiltinCall::Between { a, b }
+            | BuiltinCall::Contact { a, b }
+            | BuiltinCall::EdgeToEdge { a, b } => [Some(a), Some(b), None, None, None, None],
+            BuiltinCall::Extent { items, axis, of } => {
+                [Some(items), Some(axis), of.as_ref(), None, None, None]
+            }
+            BuiltinCall::Mid { item, axis } => [Some(item), Some(axis), None, None, None, None],
+            BuiltinCall::Opening(faces) => [
+                Some(&faces.left),
+                Some(&faces.right),
+                Some(&faces.bottom),
+                Some(&faces.top),
+                Some(&faces.front),
+                Some(&faces.back),
+            ],
+            BuiltinCall::Split { region, axis, by } => {
+                let by = match by {
+                    SplitBy::Equal => None,
+                    SplitBy::At(expr) | SplitBy::Shares(expr) => Some(expr),
+                };
+                [Some(region), Some(axis), by, None, None, None]
+            }
+            BuiltinCall::Cover {
+                region,
+                mount,
+                thickness,
+            } => [Some(region), Some(mount), Some(thickness), None, None, None],
+            BuiltinCall::Overlay {
+                left,
+                right,
+                top,
+                bottom,
+                meeting,
+            } => [
+                left.as_ref(),
+                right.as_ref(),
+                top.as_ref(),
+                bottom.as_ref(),
+                meeting.as_ref(),
+                None,
+            ],
+            BuiltinCall::Inset { reveal: one }
+            | BuiltinCall::Turned { profile: one }
+            | BuiltinCall::Joined { by: one }
+            | BuiltinCall::Node { name: one }
+            | BuiltinCall::Ends { inset: one }
+            | BuiltinCall::Pitch { distance: one }
+            | BuiltinCall::Gap { distance: one } => [Some(one), None, None, None, None, None],
+            BuiltinCall::Spliced { by, at, from } => {
+                [Some(by), Some(at), Some(from), None, None, None]
+            }
+            BuiltinCall::Box {
+                length,
+                width,
+                thickness,
+            } => [Some(length), Some(width), Some(thickness), None, None, None],
+            BuiltinCall::RegionBox { across, up, deep } => {
+                [Some(across), Some(up), Some(deep), None, None, None]
+            }
+            BuiltinCall::Cylinder { diameter, length } => {
+                [Some(diameter), Some(length), None, None, None, None]
+            }
+            BuiltinCall::Model {
+                source,
+                align,
+                sha256,
+            } => [
+                Some(source),
+                align.as_ref(),
+                sha256.as_ref(),
+                None,
+                None,
+                None,
+            ],
+        };
+        slots.into_iter().flatten()
+    }
 }
 
 impl RExpr {
@@ -429,16 +773,42 @@ pub struct StockDef {
     pub species: Species,
     /// `form:`
     pub form: StockForm,
-    /// `thickness:`; required except for dowels.
-    pub thickness: Option<RExpr>,
-    /// `diameter:`; dowels only.
-    pub diameter: Option<RExpr>,
-    /// `width:`
-    pub width: Option<RExpr>,
+    /// Its cross-section: a board's thickness or a dowel's diameter, as
+    /// its form needs; `None` when that size is missing or misspelt,
+    /// which has been reported.
+    pub section: Option<StockSectionDef>,
     /// `max_width:`
     pub max_width: Option<RExpr>,
     /// `max_length:`
     pub max_length: Option<RExpr>,
+}
+
+impl StockDef {
+    /// `width:`, for a board sold at a fixed width.
+    pub fn fixed_width(&self) -> Option<&RExpr> {
+        match &self.section {
+            Some(StockSectionDef::Board { width, .. }) => width.as_ref(),
+            Some(StockSectionDef::Dowel { .. }) | None => None,
+        }
+    }
+}
+
+/// A stock's cross-section, by its form: a board (`solid`, `plywood`,
+/// `mdf`) has a thickness and perhaps a fixed width, a dowel a diameter.
+#[derive(Debug, Clone, PartialEq)]
+pub enum StockSectionDef {
+    /// A board or sheet.
+    Board {
+        /// `thickness:`
+        thickness: RExpr,
+        /// `width:`, when it is sold at a fixed width.
+        width: Option<RExpr>,
+    },
+    /// Round stock.
+    Dowel {
+        /// `diameter:`
+        diameter: RExpr,
+    },
 }
 
 /// A drawn size: an expression or `fit`.
@@ -732,28 +1102,159 @@ pub struct RoleDef {
 pub struct KindDef {
     /// Where it is.
     pub decl: Decl,
-    /// What it is a kind of.
-    pub base: BaseKind,
     /// Its roles, in order; the first takes the positional argument.
     pub roles: Vec<RoleDef>,
     /// Its params, in order.
     pub params: Vec<ParamDef>,
     /// Its requires, checked per pair.
     pub requires: Vec<RequireDef>,
-    /// Fields of a hardware, fastener or tool kind, by name.
-    pub fields: Vec<Setting>,
-    /// The joint entries, for a joint kind.
-    pub joint: Option<JointKindDef>,
     /// The members with a body (`member arm { ... }`), in source order;
-    /// a [`BodyId`] indexes this list.
+    /// a [`BodyId`] indexes this list. Empty for a fastener or tool kind.
     pub bodies: Vec<BodyDef>,
+    /// What it is a kind of, with the entries only that base has.
+    pub body: KindBody,
+}
+
+/// What a kind is a kind of, with the entries only that base has: a joint
+/// kind has joint entries and no fields, a slide, hinge or pull kind has
+/// its mount and cuts, and only a mounted kind has a mechanism.
+#[derive(Debug, Clone, PartialEq)]
+pub enum KindBody {
+    /// A `joint` kind.
+    Joint(JointKindDef),
+    /// A `slide`, `hinge` or `pull` kind.
+    Mounted(Box<MountedKindDef>),
+    /// A `fastener` kind.
+    Fastener(KindFields),
+    /// A `tool` kind.
+    Tool(KindFields),
+}
+
+/// A base whose kinds are mounted on a part: `slide`, `hinge` or `pull`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum MountedBase {
+    /// A drawer slide.
+    Slide,
+    /// A hinge.
+    Hinge,
+    /// A knob or pull.
+    Pull,
+}
+
+impl MountedBase {
+    /// The mounted base `base` is, or `None` for a joint, fastener or tool.
+    pub fn new(base: BaseKind) -> Option<MountedBase> {
+        match base {
+            BaseKind::Slide => Some(MountedBase::Slide),
+            BaseKind::Hinge => Some(MountedBase::Hinge),
+            BaseKind::Pull => Some(MountedBase::Pull),
+            BaseKind::Joint | BaseKind::Fastener | BaseKind::Tool => None,
+        }
+    }
+
+    /// The base kind it is.
+    pub fn base(self) -> BaseKind {
+        match self {
+            MountedBase::Slide => BaseKind::Slide,
+            MountedBase::Hinge => BaseKind::Hinge,
+            MountedBase::Pull => BaseKind::Pull,
+        }
+    }
+}
+
+/// The entries of a slide, hinge or pull kind.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MountedKindDef {
+    /// Which of the three it is.
+    pub base: MountedBase,
+    /// Its fields.
+    pub fields: KindFields,
     /// How the bodies move, when the kind says.
     pub mechanism: Option<MechanismDef>,
-    /// Where it sits and what it cuts, for a slide, hinge or pull kind.
+    /// Where it sits and what it cuts; `None` when one of those entries
+    /// is missing or did not lower, which has been reported.
     pub hardware: Option<HardwareKindDef>,
 }
 
+/// The fields of a hardware, fastener or tool kind.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct KindFields {
+    /// Its fields, by name: the entries its base fixes and, for a mounted
+    /// kind, any catalogue data.
+    pub settings: Vec<Setting>,
+    /// Where each entry its base fixes is given, found once when the kind
+    /// is resolved; see [`KindDef::base_entry`].
+    pub base_entries: BTreeMap<BaseField, BaseEntry>,
+}
+
+/// Where a kind gives one of the entries its base fixes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum BaseEntry {
+    /// A param of the kind, by its index in [`KindDef::params`]: a kind
+    /// value may set it.
+    Param(usize),
+    /// A field of the kind, by its index in [`KindDef::fields`].
+    Field(usize),
+}
+
 impl KindDef {
+    /// What it is a kind of.
+    pub fn base(&self) -> BaseKind {
+        match &self.body {
+            KindBody::Joint(_) => BaseKind::Joint,
+            KindBody::Mounted(mounted) => mounted.base.base(),
+            KindBody::Fastener(_) => BaseKind::Fastener,
+            KindBody::Tool(_) => BaseKind::Tool,
+        }
+    }
+
+    /// The joint entries, for a joint kind.
+    pub fn joint(&self) -> Option<&JointKindDef> {
+        match &self.body {
+            KindBody::Joint(joint) => Some(joint),
+            KindBody::Mounted(_) | KindBody::Fastener(_) | KindBody::Tool(_) => None,
+        }
+    }
+
+    /// The entries of a slide, hinge or pull kind.
+    pub fn mounted(&self) -> Option<&MountedKindDef> {
+        match &self.body {
+            KindBody::Mounted(mounted) => Some(mounted.as_ref()),
+            KindBody::Joint(_) | KindBody::Fastener(_) | KindBody::Tool(_) => None,
+        }
+    }
+
+    /// Where it sits and what it cuts, for a slide, hinge or pull kind
+    /// whose entries lowered.
+    pub fn hardware(&self) -> Option<&HardwareKindDef> {
+        self.mounted()?.hardware.as_ref()
+    }
+
+    /// How its bodies move, for a slide, hinge or pull kind that says.
+    pub fn mechanism(&self) -> Option<&MechanismDef> {
+        self.mounted()?.mechanism.as_ref()
+    }
+
+    /// Its fields; a joint kind has none.
+    pub fn kind_fields(&self) -> Option<&KindFields> {
+        match &self.body {
+            KindBody::Joint(_) => None,
+            KindBody::Mounted(mounted) => Some(&mounted.fields),
+            KindBody::Fastener(fields) | KindBody::Tool(fields) => Some(fields),
+        }
+    }
+
+    /// Its fields, by name; empty for a joint kind.
+    pub fn fields(&self) -> &[Setting] {
+        self.kind_fields().map_or(&[], |fields| &fields.settings)
+    }
+
+    /// Where the kind gives a base entry (`diameter`, `species`, `model`,
+    /// ...), or `None` when it gives none.
+    pub fn base_entry(&self, field: BaseField) -> Option<BaseEntry> {
+        self.kind_fields()?.base_entries.get(&field).copied()
+    }
+
     /// The role at `index`.
     pub fn role(&self, index: RoleIndex) -> Option<&RoleDef> {
         self.roles.get(index.index())
@@ -1319,7 +1820,7 @@ impl KindDef {
 
     /// A field by name.
     pub fn field(&self, name: &str) -> Option<&Setting> {
-        self.fields.iter().find(|f| f.name == name)
+        self.fields().iter().find(|f| f.name == name)
     }
 }
 
@@ -1568,9 +2069,9 @@ pub struct MarkStepDef {
     /// The step.
     pub step: MarkingStep,
     /// Its positional argument: a feature or (for `gauge`) a measurement.
-    pub target: String,
+    pub target: stave_schema::operations::StepTarget,
     /// `on:` of `gauge`.
-    pub on: Option<String>,
+    pub on: Option<stave_schema::operations::Feature>,
     /// `with:`
     pub with: Option<KindId>,
     /// `note:`
@@ -1585,15 +2086,15 @@ pub struct CutStepDef {
     /// The step.
     pub step: CuttingStep,
     /// The feature it works on.
-    pub feature: String,
+    pub feature: stave_schema::operations::Feature,
     /// `to:`: a measurement or a feature.
-    pub to: Option<String>,
-    /// `passes:`
-    pub passes: Option<u32>,
+    pub to: Option<stave_schema::operations::StepTarget>,
+    /// `passes:`, a whole number of at least one.
+    pub passes: Option<std::num::NonZeroU32>,
     /// `guide:`
-    pub guide: Option<String>,
-    /// `diameter:` of `bore`.
-    pub diameter: Option<String>,
+    pub guide: Option<stave_schema::operations::Feature>,
+    /// `diameter:` of `bore`: the measurement that names the bit.
+    pub diameter: Option<stave_schema::operations::Measurement>,
     /// `with:`
     pub with: Option<KindId>,
     /// `note:`

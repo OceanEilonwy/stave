@@ -187,8 +187,18 @@ pub const JOINT_KIND: &[FieldSpec] = &[
 
 /// Settings every joint kind accepts in its call without declaring them.
 pub const JOINT_IMPLICIT_SETTINGS: &[FieldSpec] = &[
-    field("glue", Type(TypeName::Bool), Optional, false),
-    field("methods", ListOf(&RECIPE), Optional, false),
+    field(
+        crate::kinds::JointSetting::Glue.word(),
+        Type(TypeName::Bool),
+        Optional,
+        false,
+    ),
+    field(
+        crate::kinds::JointSetting::Methods.word(),
+        ListOf(&RECIPE),
+        Optional,
+        false,
+    ),
 ];
 
 /// The extra argument a fastener kind value takes in a joint's `uses:`.

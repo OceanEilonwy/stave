@@ -267,7 +267,7 @@ impl Solver<'_> {
             let name = def.decl.name.clone();
             let label = Label::new(def.decl.file, def.decl.name_span);
             if def.max_length.is_some() {
-                if def.max_width.is_some() || def.width.is_some() {
+                if def.max_width.is_some() || def.fixed_width().is_some() {
                     continue;
                 }
                 if let Some((message, help)) = self.too_wide_to_tell(&name, sheet, &parts, geoms) {
@@ -821,7 +821,7 @@ impl Solver<'_> {
         let Some(kind) = self.model.defs.kind(value.kind) else {
             return Err(Fault::Internal("a kind's declaration").into());
         };
-        if kind.base != BaseKind::Joint {
+        if kind.base() != BaseKind::Joint {
             return Err(self.fail(
                 place,
                 Code::TypeMismatch,
@@ -846,30 +846,16 @@ impl Solver<'_> {
                 "a splice joins two pieces, so its kind has two roles that are parts",
             ));
         }
-        let mut glue = true;
-        let mut methods = Vec::new();
-        let mut settings = Vec::new();
-        for (name, setting) in &value.settings {
-            match name.as_str() {
-                "glue" => glue = *setting == Value::Bool(true),
-                "methods" => {
-                    if let Value::List(items) = setting {
-                        for item in items {
-                            if let Value::Recipe(recipe) = item
-                                && let Some(def) = self.model.defs.recipe(*recipe)
-                            {
-                                methods.push(def.decl.name.clone());
-                            }
-                        }
-                    }
-                }
-                _ => settings.push((name.clone(), setting.clone())),
-            }
-        }
+        let methods = value
+            .methods
+            .iter()
+            .filter_map(|recipe| self.model.defs.recipe(*recipe))
+            .map(|def| def.decl.name.clone())
+            .collect();
         Ok(Method {
             value: value.clone(),
-            settings,
-            glue,
+            settings: value.settings.clone(),
+            glue: value.glue.unwrap_or(true),
             methods,
         })
     }
@@ -1016,7 +1002,7 @@ impl Solver<'_> {
             });
         }
         let mut extensions = Vec::new();
-        if let Some(joint_def) = &kind.joint {
+        if let Some(joint_def) = kind.joint() {
             for extend in &joint_def.adds {
                 let by = self.eval_length(&extend.by, &kind_env)?;
                 let Some(piece) = parts.get(extend.role.index()).copied() else {
@@ -1276,8 +1262,10 @@ impl Solver<'_> {
         let Some(ctx) = self.module_ctx(DefId::Kind(kind_id)) else {
             return Err(Fault::Internal("the file an item is declared in").into());
         };
-        let no_joint = stave_model::defs::JointKindDef::default();
-        let joint_def = kind.joint.as_ref().unwrap_or(&no_joint);
+        // The resolver gives every joint, splice and method a joint kind.
+        let Some(joint_def) = kind.joint() else {
+            return Err(Fault::Internal("a joint kind's entries").into());
+        };
         let joint_name = format!("{name}.splice[{}]", splice + 1);
         let assembly = self.model.parts.get(part.index()).and_then(|p| p.assembly);
         let pair = &mut work.pair;

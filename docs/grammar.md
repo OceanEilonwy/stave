@@ -757,11 +757,16 @@ A named value. Not a knob: it has no range and can't be passed in.
 |---|---|---|---|---|
 | `species` | species word | yes | yes | `white_oak`, `red_oak`, `hard_maple`, `soft_maple`, `walnut`, `cherry`, `ash`, `beech`, `birch`, `pine`, `spruce`, `fir`, `cedar`, `hinoki`, `poplar`, `mahogany`, `teak` |
 | `form` | `solid` \| `plywood` \| `mdf` \| `dowel` | yes | yes | what you buy |
-| `thickness` | `Length` | yes, except `dowel` | yes | finished thickness |
+| `thickness` | `Length` | yes, except `dowel`, which has none | yes | finished thickness. A dowel's reads as its diameter |
 | `diameter` | `Length` | `dowel` only, required | yes | diameter of round stock |
-| `width` | `Length` | no | yes | stock sold at a fixed width (a square blank, a strip). Parts cut from it take this width unless they write their own: narrower is ripped from it, wider is `error[type-mismatch]` at the part's `width:` (`base: its width is 150mm, but strip is sold 40mm wide`) |
+| `width` | `Length` | no; `dowel` has none | yes | stock sold at a fixed width (a dowel's reads as its diameter) (a square blank, a strip). Parts cut from it take this width unless they write their own: narrower is ripped from it, wider is `error[type-mismatch]` at the part's `width:` (`base: its width is 150mm, but strip is sold 40mm wide`) |
 | `max_width` | `Length` | no | yes | the widest board you can get. A `solid` part wider than this is made of boards (see [Boards](#boards)); a `plywood` or `mdf` part wider than this is `error[type-mismatch]` |
 | `max_length` | `Length` | no, but see the warning below | yes | the longest board (or sheet) you can get; a part whose cut length along its grain (its length, or its width for `grain: width`) is longer is `error[type-mismatch]`, unless its `lengths:` splices it into pieces that each fit (see [Splices](#splices)) |
+
+`thickness` or `width` written on `dowel` stock, or `diameter` on any
+other, is `error[unknown-field]` at the field (`stock 'd' has no field
+'thickness'`), with the help `dowel stock is round: its diameter is its
+thickness and its width`.
 
 Every size of a stock (`thickness`, `diameter`, `width`, `max_width`,
 `max_length`) must be more than 0mm, whether or not a part is cut from it:
@@ -2723,7 +2728,7 @@ card, and `note: "..."`.
 | Argument | Type | Meaning |
 |---|---|---|
 | `to:` | a measurement or a feature | where to stop: `saw(walls, to: depth)`, `saw(cheeks, to: shoulders)` |
-| `passes:` | `Count` | how many passes to take |
+| `passes:` | `Count`, written out | how many passes to take: a whole number of at least 1 (`passes: 2`). 0 or less is `error[out-of-range]`; a param or other expression is `error[type-mismatch]` |
 | `guide:` | a feature | what the fence or guide follows |
 | `diameter:` | a measurement (`bore` only) | the bit to use |
 

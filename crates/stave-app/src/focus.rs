@@ -778,7 +778,7 @@ pub fn clear_words() -> String {
 
 /// A joint kind's `insert:` steps as written, and the file and line.
 fn insert_text(opened: &Opened, kind: &KindDef) -> Option<InsertText> {
-    let steps = &kind.joint.as_ref()?.insert;
+    let steps = &kind.joint()?.insert;
     let first = steps.first()?;
     let file = opened.sources.get(kind.decl.file)?;
     let texts: Vec<&str> = steps
