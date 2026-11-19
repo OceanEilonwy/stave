@@ -45,6 +45,7 @@ mod models;
 mod pieces;
 mod place;
 mod rules;
+mod signature;
 pub mod trace;
 mod walls;
 
