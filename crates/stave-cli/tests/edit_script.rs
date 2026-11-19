@@ -375,7 +375,7 @@ fn a_script_lists_a_settings_options_blames_a_refusal_and_puts_it_back() {
         .and_then(|rest| rest.split("> set joinery").next())
         .unwrap();
     let mut lines = listing.lines();
-    assert_eq!(lines.next(), Some("joinery: 18 options, 7 fit"));
+    assert_eq!(lines.next(), Some("joinery: 18 options, 6 fit"));
     let rows: Vec<&str> = lines.collect();
     assert_eq!(rows.len(), 18, "{listing}");
     let row = |name: &str| -> &str {
@@ -396,15 +396,23 @@ fn a_script_lists_a_settings_options_blames_a_refusal_and_puts_it_back() {
         row("half_lap")
     );
     assert!(row("mortise_tenon").contains("refused: error[require]:"));
-    // The seven that fit first, then the eleven refused.
+    // The six that fit first, then the twelve refused: glued_edge is an
+    // edge joint, and a case's corner is not edge to edge.
     assert!(
-        rows[..7].iter().all(|row| row.ends_with("  fits")),
+        rows[..6].iter().all(|row| row.ends_with("  fits")),
         "{listing}"
     );
     assert!(
-        rows[7..].iter().all(|row| row.contains("  refused: ")),
+        rows[6..].iter().all(|row| row.contains("  refused: ")),
         "{listing}"
     );
+    for edge in ["glued_edge", "chigiri"] {
+        assert!(
+            row(edge).contains("refused: error[require]: 'side_by_side' fails"),
+            "{}",
+            row(edge)
+        );
+    }
     assert!(rows[0].starts_with("  1. "), "{listing}");
 
     let blamed = "> set joinery = chigiri\nrefused: 2 errors\n  It stopped fitting when joinery became chigiri.\n  'put back': Put joinery back to dowel(count: 4), the default\n";

@@ -418,24 +418,28 @@ open in the editor the change stays unsaved there.
   "CHANGE …" heading overlaps the row above it.
 - Library place params prompt "Point at the under." (they have `//`
   comments, not `///`); the card shows raw param names.
-- **Some standard joint kinds don't yet say where they apply** (for the
-  owner to decide; nothing under `std/` or in the checker's rules was
-  changed). The card now checks a setting's options and greys the ones
+- **Only the four edge joints say where they apply.** `chigiri`,
+  `splined_edge`, `tongue_and_groove` and `glued_edge` ask
+  `edge_to_edge` and refuse a corner in woodworking words. For the
+  other kinds the card checks a setting's options and greys the ones
   that can't work, but the reason a beginner reads is whatever the
-  checker happens to hit first, not a woodworking one. As the Case's
+  checker happens to hit first. As the Case's
   corner joint (940 x 1780 x 580mm, `oak_19`) these are refused with
   errors about order, types, fields or a failing require rather than
   "this joint isn't for a corner": `rabbet` (error[order]); `half_lap`,
   `lap_splice` and `kanawa_tsugi` (error[type-mismatch]: "'piece' needs a
   part, found parts"); `socket` and `suitsuki_zan` (error[unknown-field]);
-  `round_tenon` and `mortise_tenon` (a `require` of the kind fails). The
-  edge joints (`chigiri`, `splined_edge`, `tongue_and_groove`,
-  `glued_edge`) are being given a predicate of their own, `edge_to_edge`,
-  on another branch.
+  `round_tenon` and `mortise_tenon` (a `require` of the kind fails).
+  They need siblings of `edge_to_edge` that are not written yet (end to
+  end for `lap_splice` and `kanawa_tsugi`, an edge meeting a face for
+  `rabbet`, parts that cross for `half_lap`); `socket`, `round_tenon`
+  and `mortise_tenon` lack a rule about roundness or sizes, not about
+  how the parts meet.
 - **Some kinds check clean as a case's corner joint though a woodworker
   wouldn't use them there**: `glued_face`, `groove` and `cope_and_stick`
   are listed as fitting the Case's joinery, so the card offers them
-  among the options that fit.
+  among the options that fit. `glued_face` needs a face-to-face
+  question and `cope_and_stick` an end meeting an edge in one plane.
 - **The card's list of options is drawn in the card, not as a popover**,
   so the card grows by the list's height while it is open; on a short
   view (the docked layout at 1440x900 leaves the card about 360 pixels)

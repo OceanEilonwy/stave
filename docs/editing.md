@@ -448,9 +448,10 @@ settings; an answer for an older ticket is dropped, and the job is run
 again. The options of the setting just set keep their answers: they were
 tried with the other settings, which did not change.
 
-On the Case in a 940 x 1780 x 580mm envelope with `oak_19`, 7 of the
-joinery's 18 options fit (cope_and_stick, dado, dowel, glued_edge,
-glued_face, groove, screw) and 11 are refused; checking all 18 takes
+On the Case in a 940 x 1780 x 580mm envelope with `oak_19`, 6 of the
+joinery's 18 options fit (cope_and_stick, dado, dowel, glued_face,
+groove, screw) and 12 are refused; the four edge joints say why in
+woodworking words, through `edge_to_edge`. Checking all 18 takes
 about 0.2 seconds in a debug build on the machine it was written on.
 
 ### Blame and the way back
