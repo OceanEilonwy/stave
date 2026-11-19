@@ -4,7 +4,8 @@
 //! They stay in the build so the costs of a frame and of an edit can be
 //! measured on any machine without a special build: each frame prints its
 //! split (encoding the commands, submitting them, waiting for the GPU,
-//! copying the pixels out, and making the GTK texture), and each check
+//! copying the pixels out, and making the GTK texture) and whether it went
+//! to GTK as a dmabuf or by readback, and each check
 //! prints how long it took from the edit until its first frame was shown.
 //! With the variable unset nothing is timed and nothing is printed.
 
@@ -67,6 +68,8 @@ pub struct FrameTimings {
     pub readback: Duration,
     /// Whether the shadow map was drawn again (false: kept from before).
     pub shadow_drawn: bool,
+    /// Whether the frame went to GTK as a dmabuf (false: by readback).
+    pub dmabuf: bool,
 }
 
 impl FrameTimings {
@@ -74,7 +77,7 @@ impl FrameTimings {
     pub fn print(&self) {
         eprintln!(
             "stave-profile: frame {}x{} encode {:.2} ms, submit {:.2} ms, gpu wait {:.2} ms, \
-             readback {:.2} ms, shadow {}",
+             readback {:.2} ms, shadow {}, via {}",
             self.width,
             self.height,
             milliseconds(self.encode),
@@ -82,6 +85,7 @@ impl FrameTimings {
             milliseconds(self.gpu_wait),
             milliseconds(self.readback),
             if self.shadow_drawn { "drawn" } else { "kept" },
+            if self.dmabuf { "dmabuf" } else { "readback" },
         );
     }
 }

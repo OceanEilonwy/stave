@@ -399,7 +399,24 @@ impl Window {
             settle_for_screenshot();
         }
         let widgets = build_widgets(application, &folder, &shell, &options)?;
-        let renderer = Renderer::new().map_err(|error| format!("{error:#}"));
+        let renderer = Renderer::new()
+            .map(|mut renderer| {
+                // The live view's frames go to GTK as dmabufs where both
+                // sides can, and by readback otherwise.
+                let display = gtk::prelude::WidgetExt::display(&widgets.window);
+                let accepted = crate::render::display_modifiers(&display);
+                let used = renderer.use_dmabufs(accepted);
+                if crate::render::profile::enabled() {
+                    match used {
+                        Ok(()) => eprintln!("stave-profile: frames go to GTK as dmabufs"),
+                        Err(error) => {
+                            eprintln!("stave-profile: frames go by readback: {error:#}");
+                        }
+                    }
+                }
+                renderer
+            })
+            .map_err(|error| format!("{error:#}"));
         let window = Rc::new(Window {
             widgets,
             session: RefCell::new(Session::new(folder)),

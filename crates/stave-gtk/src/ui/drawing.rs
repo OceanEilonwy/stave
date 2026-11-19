@@ -14,6 +14,7 @@ use stave_scene::{NodeId, Orbit};
 
 use crate::render::{Backdrop, Frame, Highlighted};
 
+use super::viewport::Shown;
 use super::{EDGE, State, Window, edit_view};
 
 impl Window {
@@ -253,8 +254,10 @@ impl Window {
                     let shown = crate::render::profile::time("gtk texture", || {
                         window.widgets.viewport.show_live(frame)
                     });
-                    if shown {
-                        crate::render::profile::frame_shown();
+                    match shown {
+                        Shown::Yes => crate::render::profile::frame_shown(),
+                        Shown::No => {}
+                        Shown::Refused => window.request_render(),
                     }
                     window.show_pins();
                     window.place_ghost_verdict();

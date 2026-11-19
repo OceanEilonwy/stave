@@ -8,13 +8,25 @@
 //! frame ([`Renderer::submit`]) and a later tick takes it
 //! ([`Renderer::take_ready`]) and hands GTK the mapped buffer as it is (see
 //! [`readback`]). Screenshots wait ([`Renderer::render`]).
+//!
+//! Where the GPU and the display can share memory (Vulkan with dmabuf
+//! export, and a GTK that imports the layout), the live view skips the
+//! readback altogether: its frames are copied on the GPU into dmabufs GTK
+//! reads itself ([`dmabuf`], enabled by [`Renderer::use_dmabufs`]). Any
+//! failure there puts the live view back on the readback path.
 
+// The one module allowed `unsafe` code; see its own documentation.
+#[allow(unsafe_code)]
+mod dmabuf;
 mod meshes;
 pub mod profile;
 mod readback;
 
+#[cfg(test)]
+use dmabuf::Frame as DmabufFrame;
+pub use dmabuf::display_modifiers;
 use meshes::MeshRange;
-pub use readback::{LiveFrame, Ticket};
+pub use readback::{LiveFrame, MappedFrame, Ticket};
 
 use std::num::NonZeroU64;
 use std::sync::{Arc, Mutex};
@@ -390,6 +402,13 @@ pub struct Renderer {
     targets_made: u64,
     /// The readback buffers and the frames in them.
     ring: readback::Ring,
+    /// The DRM format modifiers GTK imports dmabufs of [`dmabuf::FOURCC`]
+    /// with, as [`Renderer::use_dmabufs`] was given them (kept to make the
+    /// exporter again on a new device).
+    dmabuf_accepted: Vec<u64>,
+    /// Makes the dmabufs the live view's frames go to GTK in; `None` when
+    /// they go by readback.
+    dmabuf: Option<dmabuf::Exporter>,
     /// The box around every node at rest (where the floor is), from the
     /// last upload.
     rest_bounds: Option<Aabb>,
@@ -486,9 +505,16 @@ impl Renderer {
         }))
         .context("no graphics adapter found (wgpu)")?;
         let adapter_name = adapter.get_info().name;
+        // Asked for when there, for the live view's dmabufs; nothing needs
+        // it otherwise.
+        let required_features = if dmabuf::wanted() {
+            adapter.features() & wgpu::Features::VULKAN_EXTERNAL_MEMORY_DMA_BUF
+        } else {
+            wgpu::Features::empty()
+        };
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("stave"),
-            required_features: wgpu::Features::empty(),
+            required_features,
             // The meshes share a few buffers, which a large design can
             // make bigger than the downlevel 256 MB: ask for what the
             // adapter has.
@@ -1032,6 +1058,8 @@ impl Renderer {
             still_target: None,
             targets_made: 0,
             ring: readback::Ring::default(),
+            dmabuf_accepted: Vec::new(),
+            dmabuf: None,
             rest_bounds: None,
             nodes_written: Vec::new(),
             scratch: Scratch::default(),
@@ -1049,6 +1077,27 @@ impl Renderer {
     /// The adapter's name, for logs.
     pub fn adapter_name(&self) -> &str {
         &self.adapter_name
+    }
+
+    /// Sends the live view's frames to GTK as dmabufs from now on, laid
+    /// out with one of `accepted` (the DRM format modifiers the display
+    /// imports [`dmabuf::FOURCC`] with). An error says why they keep going
+    /// by readback: the GPU or its driver can't export them, none of those
+    /// layouts suits it, or `STAVE_DMABUF=0` turned them off.
+    pub fn use_dmabufs(&mut self, accepted: Vec<u64>) -> Result<()> {
+        self.dmabuf_accepted = accepted;
+        self.dmabuf = None;
+        if !dmabuf::wanted() {
+            bail!("turned off by STAVE_DMABUF=0");
+        }
+        self.dmabuf = Some(dmabuf::Exporter::new(&self.device, &self.dmabuf_accepted)?);
+        Ok(())
+    }
+
+    /// Whether the live view's frames go to GTK as dmabufs.
+    #[cfg(test)]
+    pub fn uses_dmabufs(&self) -> bool {
+        self.dmabuf.as_ref().is_some_and(dmabuf::Exporter::usable)
     }
 
     /// Uploads a scene's meshes, replacing the previous scene's. Only
@@ -1200,7 +1249,7 @@ impl Renderer {
             return Err(error);
         }
         let drawn = self.draw_checked(frame, Slot::Live)?;
-        Ok(self.ring.push(drawn))
+        Ok(self.ring.push(&self.queue, drawn))
     }
 
     /// The newest submitted frame that has arrived, if one has since the
@@ -1263,9 +1312,14 @@ impl Renderer {
         if let Some(reason) = lost {
             eprintln!("stave: the graphics device was lost ({reason}); opening it again");
             let ring = readback::Ring::after(&self.ring);
+            let accepted = std::mem::take(&mut self.dmabuf_accepted);
+            let had_dmabufs = self.dmabuf.is_some();
             *self = Renderer::new()
                 .context("the graphics device was lost and couldn't be opened again")?;
             self.ring = ring;
+            if had_dmabufs && let Err(error) = self.use_dmabufs(accepted) {
+                eprintln!("stave: the 3D view's frames go by readback now: {error:#}");
+            }
             self.upload(scene);
         }
         Ok(())
@@ -1327,7 +1381,7 @@ impl Renderer {
             self.ensure_mask(slot);
         }
         let layout = readback::Layout::new(width, height);
-        let buffer = self.ring.buffer(&self.device, layout);
+        let output = self.output(slot, layout);
         let volumes = match frame.highlight.filter(|h| !h.volumes.is_empty()) {
             Some(highlight) => {
                 box_vertices(highlight.volumes, &mut scratch.faces, &mut scratch.lines);
@@ -1606,27 +1660,38 @@ impl Renderer {
                 overlay.draw(&mut pass);
             }
         }
-        encoder.copy_texture_to_buffer(
-            wgpu::TexelCopyTextureInfo {
-                texture: &target.resolved,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::TexelCopyBufferInfo {
-                buffer: &buffer,
-                layout: wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(layout.padded_row),
-                    rows_per_image: Some(height),
+        let resolved = wgpu::TexelCopyTextureInfo {
+            texture: &target.resolved,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        };
+        let copied = wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        };
+        match &output {
+            readback::Output::Buffer(buffer) => encoder.copy_texture_to_buffer(
+                resolved,
+                wgpu::TexelCopyBufferInfo {
+                    buffer,
+                    layout: wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(layout.padded_row),
+                        rows_per_image: Some(height),
+                    },
                 },
-            },
-            wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-        );
+                copied,
+            ),
+            // The same bytes: the dmabuf's format is the target's without
+            // the sRGB view, and copies don't convert.
+            readback::Output::Dmabuf(frame) => {
+                if let Some(texture) = frame.texture() {
+                    encoder.copy_texture_to_texture(resolved, texture.as_image_copy(), copied);
+                }
+            }
+        }
         let encoded = started.map(|_| Instant::now());
         let submission = self.queue.submit([encoder.finish()]);
         if shadow_drawn {
@@ -1650,11 +1715,12 @@ impl Renderer {
                 gpu_wait: Duration::ZERO,
                 readback: Duration::ZERO,
                 shadow_drawn,
+                dmabuf: matches!(output, readback::Output::Dmabuf(_)),
             }),
             _ => None,
         };
         Ok(readback::Drawn {
-            buffer,
+            output,
             layout,
             submission,
             submitted,
@@ -1666,12 +1732,17 @@ impl Renderer {
     /// it out without the rows' padding.
     fn read_back(&mut self, drawn: readback::Drawn) -> Result<Image> {
         let readback::Drawn {
-            buffer,
+            output,
             layout,
             submission,
             submitted,
             timings,
         } = drawn;
+        let buffer = match output {
+            readback::Output::Buffer(buffer) => buffer,
+            // Still pictures are never drawn into dmabufs (see `output`).
+            readback::Output::Dmabuf(_) => bail!("a still picture went to a dmabuf"),
+        };
         let slice = buffer.slice(..);
         let (sender, receiver) = std::sync::mpsc::channel();
         slice.map_async(wgpu::MapMode::Read, move |result| {
@@ -1710,6 +1781,27 @@ impl Renderer {
             height: layout.height,
             rgba,
         })
+    }
+
+    /// Where a frame of `layout` drawn into `slot` is copied for the
+    /// window: a dmabuf for the live view when GTK takes them, otherwise
+    /// a readback buffer. A dmabuf that can't be made puts the live view
+    /// on readback for good.
+    fn output(&mut self, slot: Slot, layout: readback::Layout) -> readback::Output {
+        if let (Slot::Live, Some(exporter)) = (slot, &mut self.dmabuf) {
+            if exporter.usable() {
+                match exporter.frame(&self.device, layout.width, layout.height) {
+                    Ok(frame) => return readback::Output::Dmabuf(frame),
+                    Err(error) => {
+                        eprintln!("stave: the 3D view's frames go by readback now: {error:#}");
+                        self.dmabuf = None;
+                    }
+                }
+            } else {
+                self.dmabuf = None;
+            }
+        }
+        readback::Output::Buffer(self.ring.buffer(&self.device, layout))
     }
 
     /// Binds the shared vertex and index buffers, for [`draw_mesh`].
@@ -2550,7 +2642,7 @@ mod tests {
     }
 
     /// Waits for the GPU, then takes the newest frame that has arrived.
-    fn wait_and_take(renderer: &mut Renderer) -> Option<LiveFrame> {
+    fn wait_and_take_live(renderer: &mut Renderer) -> Option<LiveFrame> {
         renderer
             .device
             .poll(wgpu::PollType::wait_indefinitely())
@@ -2558,8 +2650,17 @@ mod tests {
         renderer.take_ready().unwrap()
     }
 
+    /// As [`wait_and_take_live`], for a renderer whose frames go by
+    /// readback.
+    fn wait_and_take(renderer: &mut Renderer) -> Option<MappedFrame> {
+        wait_and_take_live(renderer).map(|frame| match frame {
+            LiveFrame::Mapped(frame) => frame,
+            LiveFrame::Dmabuf(frame) => panic!("a dmabuf without asking: {frame:?}"),
+        })
+    }
+
     /// A live frame's rows without their padding.
-    fn unpadded(frame: &LiveFrame) -> Vec<u8> {
+    fn unpadded(frame: &MappedFrame) -> Vec<u8> {
         let row = usize::try_from(frame.width()).unwrap() * 4;
         let stride = usize::try_from(frame.stride()).unwrap();
         frame
@@ -2587,6 +2688,104 @@ mod tests {
         // the padded rows, not a copy without them.
         assert_eq!(live.stride(), 512);
         assert_eq!(unpadded(&live), still.rgba);
+    }
+
+    /// A renderer whose live frames go to dmabufs laid out linearly (the
+    /// one layout every driver that exports dmabufs offers, standing in for
+    /// GTK's list); `None`, saying why, when this GPU can't.
+    fn dmabuf_renderer() -> Option<Renderer> {
+        let mut renderer = renderer()?;
+        const LINEAR: u64 = 0;
+        match renderer.use_dmabufs(vec![LINEAR]) {
+            Ok(()) => Some(renderer),
+            Err(error) => {
+                eprintln!("skipped: no dmabufs here: {error:#}");
+                None
+            }
+        }
+    }
+
+    /// Waits for the newest live frame and says it went to a dmabuf.
+    fn wait_and_take_dmabuf(renderer: &mut Renderer) -> DmabufFrame {
+        match wait_and_take_live(renderer) {
+            Some(LiveFrame::Dmabuf(frame)) => frame,
+            Some(LiveFrame::Mapped(_)) => panic!("the frame went by readback"),
+            None => panic!("no frame arrived"),
+        }
+    }
+
+    #[test]
+    fn a_live_frame_in_a_dmabuf_holds_what_a_screenshot_does() {
+        let Some(mut renderer) = dmabuf_renderer() else {
+            return;
+        };
+        assert!(renderer.uses_dmabufs());
+        let (scene, posed) = stool();
+        renderer.upload(&scene);
+        let still = renderer.render(&frame(&scene, &posed, 0.0)).unwrap();
+        let ticket = renderer.submit(&frame(&scene, &posed, 0.0)).unwrap();
+        let live = wait_and_take_dmabuf(&mut renderer);
+        assert!(renderer.settled(ticket));
+        // Read through a second texture imported from the dmabuf's
+        // descriptor, with the layout it reports, as GTK imports it.
+        let seen = dmabuf::read_through_import(&renderer.device, &renderer.queue, &live).unwrap();
+        assert_eq!(seen, still.rgba);
+    }
+
+    #[test]
+    fn still_pictures_go_by_readback_while_the_live_view_uses_dmabufs() {
+        let Some(mut renderer) = dmabuf_renderer() else {
+            return;
+        };
+        let (scene, posed) = stool();
+        renderer.upload(&scene);
+        renderer.render(&frame(&scene, &posed, 0.0)).unwrap();
+        assert_eq!(renderer.ring.made(), 1);
+        assert_eq!(
+            renderer.dmabuf.as_ref().map(dmabuf::Exporter::made),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn a_frame_s_dmabuf_is_used_again_once_gtk_lets_it_go() {
+        let Some(mut renderer) = dmabuf_renderer() else {
+            return;
+        };
+        let made = |renderer: &Renderer| renderer.dmabuf.as_ref().map(dmabuf::Exporter::made);
+        let (scene, posed) = stool();
+        renderer.upload(&scene);
+        for _ in 0..2 {
+            renderer.submit(&frame(&scene, &posed, 0.0)).unwrap();
+            drop(wait_and_take_dmabuf(&mut renderer));
+        }
+        assert_eq!(made(&renderer), Some(1));
+        // Held, the frame's dmabuf isn't drawn into again: another is made.
+        renderer.submit(&frame(&scene, &posed, 0.0)).unwrap();
+        let held = wait_and_take_dmabuf(&mut renderer);
+        renderer.submit(&frame(&scene, &posed, 0.0)).unwrap();
+        assert_eq!(made(&renderer), Some(2));
+        drop(held);
+        // No readback buffer was ever needed.
+        assert_eq!(renderer.ring.made(), 0);
+    }
+
+    #[test]
+    fn a_resized_view_gets_dmabufs_of_its_new_size() {
+        let Some(mut renderer) = dmabuf_renderer() else {
+            return;
+        };
+        let (scene, posed) = stool();
+        renderer.upload(&scene);
+        renderer.submit(&frame(&scene, &posed, 0.0)).unwrap();
+        drop(wait_and_take_dmabuf(&mut renderer));
+        let mut wider = frame(&scene, &posed, 0.0);
+        wider.width = 128;
+        let still = renderer.render(&wider).unwrap();
+        renderer.submit(&wider).unwrap();
+        let live = wait_and_take_dmabuf(&mut renderer);
+        let seen = dmabuf::read_through_import(&renderer.device, &renderer.queue, &live).unwrap();
+        assert_eq!(seen, still.rgba);
     }
 
     #[test]
