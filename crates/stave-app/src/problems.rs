@@ -14,6 +14,7 @@
 //! line), and, for a door or drawer that hits something, what the motion
 //! card needs: where along its travel it is blocked.
 
+use crate::i18n::{fill_in, ntr, tr};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
@@ -108,43 +109,43 @@ impl Category {
     }
 
     /// Its name on a row: "Motion", "No contact".
-    pub fn title(self) -> &'static str {
+    pub fn title(self) -> String {
         match self {
-            Category::Motion => "Motion",
-            Category::Overlap => "Overlap",
-            Category::NoContact => "No contact",
-            Category::Adjust => "Adjustment",
-            Category::Mechanism => "Mechanism",
-            Category::Order => "Order",
-            Category::Requirement => "Requirement",
-            Category::Placement => "Placement",
-            Category::Syntax => "Syntax",
-            Category::Name => "Name",
-            Category::Value => "Value",
-            Category::Cut => "Cut",
-            Category::Hardware => "Hardware",
-            Category::NotSupported => "Not supported yet",
+            Category::Motion => tr("Motion"),
+            Category::Overlap => tr("Overlap"),
+            Category::NoContact => tr("No contact"),
+            Category::Adjust => tr("Adjustment"),
+            Category::Mechanism => tr("Mechanism"),
+            Category::Order => tr("Order"),
+            Category::Requirement => tr("Requirement"),
+            Category::Placement => tr("Placement"),
+            Category::Syntax => tr("Syntax"),
+            Category::Name => tr("Name"),
+            Category::Value => tr("Value"),
+            Category::Cut => tr("Cut"),
+            Category::Hardware => tr("Hardware"),
+            Category::NotSupported => tr("Not supported yet"),
         }
     }
 
     /// A plain-English title for a problem of this kind, when nothing more
     /// specific can be said.
-    fn plain_title(self) -> &'static str {
+    fn plain_title(self) -> String {
         match self {
-            Category::Motion => "A door or drawer hits something as it moves",
-            Category::Overlap => "Wood passes through wood",
-            Category::NoContact => "The joint's parts don't meet",
-            Category::Adjust => "The hardware can't be adjusted to fit",
-            Category::Mechanism => "The hardware's moving parts can't work as written",
-            Category::Order => "The joint can't be put together in this order",
-            Category::Requirement => "A requirement doesn't hold",
-            Category::Placement => "Where a part goes isn't settled",
-            Category::Syntax => "Stave can't read the text here",
-            Category::Name => "A name isn't right",
-            Category::Value => "A value is the wrong kind or size",
-            Category::Cut => "A cut can't be made with your tools",
-            Category::Hardware => "The hardware doesn't match its size",
-            Category::NotSupported => "Stave can't do this yet",
+            Category::Motion => tr("A door or drawer hits something as it moves"),
+            Category::Overlap => tr("Wood passes through wood"),
+            Category::NoContact => tr("The joint's parts don't meet"),
+            Category::Adjust => tr("The hardware can't be adjusted to fit"),
+            Category::Mechanism => tr("The hardware's moving parts can't work as written"),
+            Category::Order => tr("The joint can't be put together in this order"),
+            Category::Requirement => tr("A requirement doesn't hold"),
+            Category::Placement => tr("Where a part goes isn't settled"),
+            Category::Syntax => tr("Stave can't read the text here"),
+            Category::Name => tr("A name isn't right"),
+            Category::Value => tr("A value is the wrong kind or size"),
+            Category::Cut => tr("A cut can't be made with your tools"),
+            Category::Hardware => tr("The hardware doesn't match its size"),
+            Category::NotSupported => tr("Stave can't do this yet"),
         }
     }
 }
@@ -217,8 +218,11 @@ impl ProblemRow {
     /// "Motion", or "Overlap (2)" when it stands for more than one.
     pub fn title(&self) -> String {
         match self.count() {
-            1 => self.category.title().to_owned(),
-            count => format!("{} ({count})", self.category.title()),
+            1 => self.category.title(),
+            count => fill_in(
+                &tr("{category} ({count})"),
+                &[("category", &self.category.title()), ("count", &count)],
+            ),
         }
     }
 
@@ -361,7 +365,7 @@ fn item_of(contact_item: ContactItem) -> Item {
 }
 
 /// Whether an item is inside an assembly (at any depth).
-fn inside(design: &SolvedDesign, item: Item, assembly: AssemblyId) -> bool {
+pub(crate) fn inside(design: &SolvedDesign, item: Item, assembly: AssemblyId) -> bool {
     let mut current = match item {
         Item::Part(id) => design.part(id).and_then(|p| p.assembly),
         Item::Hardware(id) => design.hardware.get(id.index()).and_then(|h| h.assembly),
@@ -407,7 +411,7 @@ fn about_and_involved(
                 .partition(|item| inside(design, **item, motion.assembly)),
             None => first_only(&items),
         },
-        Category::Overlap => (items.clone(), Vec::new()),
+        Category::Overlap => (items, Vec::new()),
         Category::NoContact
         | Category::Adjust
         | Category::Mechanism
@@ -736,11 +740,12 @@ pub struct MotionCard {
 impl MotionCard {
     /// The card's lead: "Swing door", "Slide drawer[top]".
     pub fn lead(&self) -> String {
-        format!(
-            "{} {}",
-            if self.turns { "Swing" } else { "Slide" },
-            self.name
-        )
+        let template = if self.turns {
+            tr("Swing {name}")
+        } else {
+            tr("Slide {name}")
+        };
+        fill_in(&template, &[("name", &self.name)])
     }
 
     /// An amount (radians or millimetres) as the card writes it: `90.1°`,
@@ -799,7 +804,7 @@ pub fn details(checked: &Checked, index: ProblemIndex) -> Option<Details> {
         .as_ref()
         .and_then(|contact| motion_card(checked, contact));
     let title = specific_title(checked, category, problem.contact.as_ref())
-        .unwrap_or_else(|| category.plain_title().to_owned());
+        .unwrap_or_else(|| category.plain_title());
     let mut explanation = sentence(&diagnostic.message);
     for note in &diagnostic.notes {
         explanation.push(' ');
@@ -819,10 +824,15 @@ pub fn details(checked: &Checked, index: ProblemIndex) -> Option<Details> {
         })
         .unwrap_or_default();
     Some(Details {
-        eyebrow: format!(
-            "{} · {}",
-            diagnostic.severity.word().to_uppercase(),
-            category.title().to_uppercase()
+        eyebrow: fill_in(
+            &tr("{severity} · {category}"),
+            &[
+                (
+                    "severity",
+                    &severity_word(diagnostic.severity).to_uppercase(),
+                ),
+                ("category", &category.title().to_uppercase()),
+            ],
         ),
         severity: diagnostic.severity,
         category,
@@ -980,6 +990,15 @@ fn capitalised(text: &str) -> String {
     })
 }
 
+/// A severity in the window's words: "error", "warning", "note".
+pub fn severity_word(severity: Severity) -> String {
+    match severity {
+        Severity::Error => tr("error"),
+        Severity::Warning => tr("warning"),
+        Severity::Note => tr("note"),
+    }
+}
+
 /// The rendered text with the project folder's own files named relative
 /// to it (`project.stave:82:10`), as `stave check .` prints them from
 /// inside the folder.
@@ -1046,10 +1065,14 @@ fn specific_title(
                 .as_ref()
                 .and_then(|graph| graph.motion_range(motion.assembly))
                 .is_none_or(|range| range.turns);
-            Some(format!(
-                "{name} hits {} as it {}",
-                hits.join(" and "),
-                if turns { "opens" } else { "slides out" }
+            let template = if turns {
+                tr("{name} hits {things} as it opens")
+            } else {
+                tr("{name} hits {things} as it slides out")
+            };
+            Some(fill_in(
+                &template,
+                &[("name", &name), ("things", &hits.join(&tr(" and ")))],
             ))
         }
         Category::Overlap
@@ -1084,14 +1107,86 @@ fn motion_card(checked: &Checked, contact: &Contact) -> Option<MotionCard> {
         blocked: String::new(),
         end: String::new(),
     };
-    card.start = format!("closed {}", card.amount_text(0.0));
-    card.blocked = format!("blocked from {}", card.amount_text(card.contact));
-    card.end = format!(
-        "{} {}",
-        if card.turns { "opens to" } else { "slides out" },
-        card.amount_text(card.full)
+    card.start = fill_in(
+        &tr("closed {amount}"),
+        &[("amount", &card.amount_text(0.0))],
     );
+    card.blocked = fill_in(
+        &tr("blocked from {amount}"),
+        &[("amount", &card.amount_text(card.contact))],
+    );
+    let end = if card.turns {
+        tr("opens to {amount}")
+    } else {
+        tr("slides out {amount}")
+    };
+    card.end = fill_in(&end, &[("amount", &card.amount_text(card.full))]);
     Some(card)
+}
+
+// ---------------------------------------------------------------------------
+// Pins: the problems marked where they happen in the 3D view
+// ---------------------------------------------------------------------------
+
+/// The most problems pinned in the 3D view at once.
+pub const PIN_LIMIT: usize = 12;
+
+/// A problem pinned where it happens in the 3D view.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Pinned {
+    /// Which problem.
+    pub index: ProblemIndex,
+    /// Its mark: an error's or a warning's.
+    pub mark: Mark,
+}
+
+/// The problems that get a pin in the 3D view, in `stave check` order:
+/// those the design knows the place of, errors and warnings (notes get
+/// none), the first `limit` of them. While a problem is posed only its own
+/// pin shows.
+pub fn pins(
+    problems: &[crate::view::Problem],
+    posed: Option<ProblemIndex>,
+    limit: usize,
+) -> Vec<Pinned> {
+    problems
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| posed.is_none_or(|posed| posed.0 == *index))
+        .filter(|(_, problem)| problem.contact.is_some())
+        .filter_map(|(index, problem)| {
+            Some(Pinned {
+                index: ProblemIndex(index),
+                mark: Mark::of(problem.severity)?,
+            })
+        })
+        .take(limit)
+        .collect()
+}
+
+/// The words on the chip at the view's edge that names the first pinned
+/// problem whose place is off screen, and how many more are:
+/// "Off screen: error · The door hits the side · 2 more".
+pub fn off_screen_text(mark: Mark, message: &str, more: usize) -> String {
+    let words = match mark {
+        Mark::Warning => tr("warning"),
+        Mark::Error | Mark::Involved => tr("error"),
+    };
+    if more == 0 {
+        fill_in(
+            &tr("Off screen: {words} · {message}"),
+            &[("words", &words), ("message", &message)],
+        )
+    } else {
+        fill_in(
+            &ntr(
+                "Off screen: {words} · {message} · {more} more",
+                "Off screen: {words} · {message} · {more} more",
+                more,
+            ),
+            &[("words", &words), ("message", &message), ("more", &more)],
+        )
+    }
 }
 
 #[cfg(test)]

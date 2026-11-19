@@ -5,6 +5,7 @@
 //! contact" key shown while a problem is posed, and focus mode's "From
 //! above" / "In 3D" switch. `view_layout` says where each one goes.
 
+use stave_app::i18n::{fill_in, tr};
 use std::cell::Cell;
 
 use adw::prelude::*;
@@ -64,27 +65,27 @@ impl ViewToolbar {
     pub fn new() -> ViewToolbar {
         let xray = icon_toggle(
             icons::XRAY,
-            "X-ray",
-            "X-ray: see through everything but the selection",
+            &tr("X-ray"),
+            &tr("X-ray: see through everything but the selection"),
         );
         let pull = icon_toggle(
             icons::PULL_APART,
-            "Pull apart",
-            "Pull apart: move the parts away from each other along their joints",
+            &tr("Pull apart"),
+            &tr("Pull apart: move the parts away from each other along their joints"),
         );
         let play_icon = PathIcon::new(icons::PLAY, 13);
         let play = gtk::Button::builder()
             .child(&play_icon)
-            .tooltip_text("Play: pull apart from together")
+            .tooltip_text(tr("Play: pull apart from together"))
             .css_classes(["stave-tool-play", "circular", "flat"])
             .valign(gtk::Align::Center)
             .build();
-        play.update_property(&[gtk::accessible::Property::Label("Play pull apart")]);
-        let slider = Slider::new("How far apart", 18, 12.0, 1.5);
+        play.update_property(&[gtk::accessible::Property::Label(&tr("Play pull apart"))]);
+        let slider = Slider::new(&tr("How far apart"), 24, 12.0, 1.5);
         let ends = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         ends.append(
             &gtk::Label::builder()
-                .label("together")
+                .label(tr("together"))
                 .xalign(0.0)
                 .hexpand(true)
                 .css_classes(["stave-tool-end"])
@@ -92,7 +93,7 @@ impl ViewToolbar {
         );
         ends.append(
             &gtk::Label::builder()
-                .label("apart")
+                .label(tr("apart"))
                 .xalign(1.0)
                 .css_classes(["stave-tool-end"])
                 .build(),
@@ -113,7 +114,7 @@ impl ViewToolbar {
             .name("pull-apart-slider")
             .visible(false)
             .build();
-        popout.update_property(&[gtk::accessible::Property::Label("Pull apart")]);
+        popout.update_property(&[gtk::accessible::Property::Label(&tr("Pull apart"))]);
         popout.append(&play);
         popout.append(&column);
         let section = gtk::Box::builder()
@@ -147,14 +148,16 @@ impl ViewToolbar {
         self.pull.set_active(on);
         self.popout.set_visible(on && self.offered.get());
         self.slider.set_value(f64::from(amount));
-        self.slider
-            .set_value_text(&format!("{}%, parts apart", percent(amount)));
+        self.slider.set_value_text(&fill_in(
+            &tr("{percent}%, parts apart"),
+            &[("percent", &percent(amount))],
+        ));
         self.play_icon
             .set_shape(if playing { icons::PAUSE } else { icons::PLAY });
-        self.play.set_tooltip_text(Some(if playing {
-            "Pause"
+        self.play.set_tooltip_text(Some(&if playing {
+            tr("Pause")
         } else {
-            "Play: pull apart from together"
+            tr("Play: pull apart from together")
         }));
     }
 
@@ -192,13 +195,17 @@ impl CameraToolbar {
     pub fn new(tools: &ViewToolbar) -> CameraToolbar {
         let fit = icon_button(
             icons::FIT,
-            "Fit to view (F)",
+            &tr("Fit to view (F)"),
             &["stave-camera-button", "flat"],
         );
-        let front = icon_button(icons::FRONT, "Front view", &["stave-camera-button", "flat"]);
+        let front = icon_button(
+            icons::FRONT,
+            &tr("Front view"),
+            &["stave-camera-button", "flat"],
+        );
         let turn = icon_button(
             icons::TURN,
-            "Turn to the back",
+            &tr("Turn to the back"),
             &["stave-camera-button", "flat"],
         );
         let root = gtk::Box::builder()
@@ -230,6 +237,30 @@ impl CameraToolbar {
             turn,
         }
     }
+
+    /// Lays the buttons out in a column (docked on the right edge) or a
+    /// row (docked in a corner), X-ray and Pull apart with them.
+    pub fn orientation_setter(&self, tools: &ViewToolbar) -> impl Fn(gtk::Orientation) + 'static {
+        let root = self.root.clone();
+        let section = tools.section.clone();
+        move |orientation| {
+            root.set_orientation(orientation);
+            section.set_orientation(orientation);
+            if let Some(line) = section
+                .first_child()
+                .and_then(|child| child.downcast::<gtk::Separator>().ok())
+            {
+                line.set_orientation(match orientation {
+                    gtk::Orientation::Vertical => gtk::Orientation::Horizontal,
+                    _ => gtk::Orientation::Vertical,
+                });
+            }
+            match orientation {
+                gtk::Orientation::Vertical => root.remove_css_class("flat-row"),
+                _ => root.add_css_class("flat-row"),
+            }
+        }
+    }
 }
 
 /// The key shown while a problem is posed: a red square and "Shared wood
@@ -249,7 +280,7 @@ pub fn contact_key() -> gtk::Box {
         false,
         10,
     ));
-    root.append(&gtk::Label::new(Some("Shared wood at first contact")));
+    root.append(&gtk::Label::new(Some(&tr("Shared wood at first contact"))));
     root
 }
 
@@ -275,8 +306,8 @@ impl PlanSwitch {
             button.update_property(&[gtk::accessible::Property::Label(label)]);
             button
         };
-        let from_above = toggle(icons::FROM_ABOVE, "From above");
-        let in_3d = toggle(icons::PARTS, "In 3D");
+        let from_above = toggle(icons::FROM_ABOVE, &tr("From above"));
+        let in_3d = toggle(icons::PARTS, &tr("In 3D"));
         in_3d.set_group(Some(&from_above));
         in_3d.set_active(true);
         let root = gtk::Box::builder()
@@ -289,7 +320,7 @@ impl PlanSwitch {
             .css_classes(["stave-plan-switch"])
             .visible(false)
             .build();
-        root.update_property(&[gtk::accessible::Property::Label("Hinge view")]);
+        root.update_property(&[gtk::accessible::Property::Label(&tr("Hinge view"))]);
         root.append(&from_above);
         root.append(&in_3d);
         PlanSwitch {
@@ -328,7 +359,7 @@ impl EmptyView {
         let icon = PathIcon::new(icons::PARTS, 48);
         icon.add_css_class("stave-empty-icon");
         let title = gtk::Label::builder()
-            .label("Checking…")
+            .label(tr("Checking…"))
             .wrap(true)
             .justify(gtk::Justification::Center)
             .css_classes(["stave-empty-title"])
@@ -341,7 +372,7 @@ impl EmptyView {
             .visible(false)
             .build();
         let open = gtk::Button::builder()
-            .label("Open a Project…")
+            .label(tr("Open a Project…"))
             .action_name("win.open")
             .halign(gtk::Align::Center)
             .css_classes(["pill", "suggested-action"])

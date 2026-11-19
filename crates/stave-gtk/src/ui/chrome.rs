@@ -2,6 +2,7 @@
 //! at the bottom right of the 3D view) and the Cut list's placeholder page.
 
 use adw::prelude::*;
+use stave_app::i18n::{fill_in, tr};
 
 /// The floating bar at the bottom right of the 3D view: a name, words at each
 /// end and a slider ("door_l  closed ——— 110°").
@@ -45,6 +46,27 @@ impl MotionBar {
         }
     }
 
+    /// Lays the bar out in a row (docked in a corner) or standing upright
+    /// (docked on the right edge), its slider turned to match.
+    pub fn orientation_setter(&self) -> impl Fn(gtk::Orientation) + 'static {
+        let root = self.root.clone();
+        let scale = self.scale.clone();
+        move |orientation| {
+            root.set_orientation(orientation);
+            scale.set_orientation(orientation);
+            match orientation {
+                gtk::Orientation::Vertical => {
+                    scale.set_width_request(-1);
+                    scale.set_height_request(160);
+                }
+                _ => {
+                    scale.set_width_request(220);
+                    scale.set_height_request(-1);
+                }
+            }
+        }
+    }
+
     /// Shows the bar for `name`, from `start` to `end` words, the slider
     /// from 0 to `full` at `value`; `None` hides it.
     pub fn show(&self, what: Option<(&str, &str, &str, f64, f64)>) {
@@ -58,7 +80,10 @@ impl MotionBar {
         self.scale.set_range(0.0, full.max(0.1));
         self.scale.set_value(value);
         self.scale
-            .update_property(&[gtk::accessible::Property::Label(&format!("Open {name}"))]);
+            .update_property(&[gtk::accessible::Property::Label(&fill_in(
+                &tr("Open {name}"),
+                &[("name", &name)],
+            ))]);
         self.root.set_visible(true);
     }
 }
@@ -66,8 +91,8 @@ impl MotionBar {
 /// The Cut list view, until it is built.
 pub fn cut_list_page() -> adw::StatusPage {
     adw::StatusPage::builder()
-        .title("Cut list is coming")
-        .description("Every board to cut, sized and rounded once, will be listed here. It has its own design and isn't part of this version yet. Meanwhile, “stave dump” lists every part and its size.")
+        .title(tr("Cut list is coming"))
+        .description(tr("Every board to cut, sized and rounded once, will be listed here. It isn't part of this version yet."))
         .css_classes(["stave-placeholder"])
         .build()
 }

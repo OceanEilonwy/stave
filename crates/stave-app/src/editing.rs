@@ -39,6 +39,7 @@
 //! The prepared base is never changed by trying: every candidate and
 //! every change is tried from the design as it was when the edit began.
 
+use crate::i18n::{fill_in, tr};
 use std::cell::RefCell;
 use std::fmt;
 use std::io;
@@ -373,32 +374,41 @@ impl Rejection {
     /// The words for it.
     pub fn text(&self) -> String {
         match self {
-            Rejection::NoEdit => "nothing is being edited".to_owned(),
-            Rejection::NothingChosen => "choose something from the menu first".to_owned(),
-            Rejection::NoSuchEntry(index) => format!("the menu has no entry {}", index + 1),
-            Rejection::PickFillsNothing => {
-                "that isn't what the card is asking you to point at".to_owned()
-            }
-            Rejection::NoSuchSetting(name) => format!("there is no setting called '{name}'"),
-            Rejection::NameUnavailable(name) => format!(
-                "'{name}' can't be used: it is already used in this project, is a word of the language, or is not a name"
+            Rejection::NoEdit => tr("nothing is being edited"),
+            Rejection::NothingChosen => tr("choose something from the menu first"),
+            Rejection::NoSuchEntry(index) => fill_in(
+                &tr("the menu has no entry {number}"),
+                &[("number", &(index + 1))],
             ),
-            Rejection::NoSuchFix => "there is no such fix".to_owned(),
+            Rejection::PickFillsNothing => tr("that isn't what the card is asking you to point at"),
+            Rejection::NoSuchSetting(name) => fill_in(
+                &tr("there is no setting called '{name}'"),
+                &[("name", name)],
+            ),
+            Rejection::NameUnavailable(name) => fill_in(
+                &tr(
+                    "'{name}' can't be used: it is already used in this project, is a word of the language, or is not a name",
+                ),
+                &[("name", name)],
+            ),
+            Rejection::NoSuchFix => tr("there is no such fix"),
             Rejection::NothingToPutBack => {
-                "nothing to put back: no setting change made it stop fitting".to_owned()
+                tr("nothing to put back: no setting change made it stop fitting")
             }
-            Rejection::NoDefault(name) => format!("'{name}' has no default: choose a value"),
-            Rejection::DoesNotFit => "the edit doesn't fit, so nothing was written".to_owned(),
+            Rejection::NoDefault(name) => fill_in(
+                &tr("'{name}' has no default: choose a value"),
+                &[("name", name)],
+            ),
+            Rejection::DoesNotFit => tr("the edit doesn't fit, so nothing was written"),
             Rejection::CantStart(message) | Rejection::CantWrite(message) => message.clone(),
-            Rejection::NothingToInclude => {
-                "there is no removal waiting on what depends on it".to_owned()
-            }
-            Rejection::NoGrips => "list the grips of something first".to_owned(),
-            Rejection::NoSuchGrip(index) => format!("there is no grip {}", index + 1),
-            Rejection::NotDragging => "no grip is being dragged".to_owned(),
-            Rejection::NotAChoice => {
-                "that is not one of the sizes this grip could change".to_owned()
-            }
+            Rejection::NothingToInclude => tr("there is no removal waiting on what depends on it"),
+            Rejection::NoGrips => tr("list the grips of something first"),
+            Rejection::NoSuchGrip(index) => fill_in(
+                &tr("there is no grip {number}"),
+                &[("number", &(index + 1))],
+            ),
+            Rejection::NotDragging => tr("no grip is being dragged"),
+            Rejection::NotAChoice => tr("that is not one of the sizes this grip could change"),
         }
     }
 }
@@ -418,10 +428,21 @@ pub enum StartError {
     Scope(#[from] ScopeError),
     /// The design doesn't solve, so there is nothing to check an edit
     /// against.
-    #[error(
-        "the design can't be edited by pointing until it places: fix the errors `stave check` shows first"
-    )]
+    #[error("{}", self.text())]
     NotSolved,
+}
+
+impl StartError {
+    /// The error in the window's words (translated).
+    fn text(&self) -> String {
+        match self {
+            StartError::Load(error) => error.to_string(),
+            StartError::Scope(error) => error.to_string(),
+            StartError::NotSolved => tr(
+                "the design can't be edited by pointing until it places: fix the errors `stave check` shows first",
+            ),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -576,19 +597,33 @@ pub struct FileEdit {
 #[derive(Debug, thiserror::Error)]
 pub enum CommitError {
     /// No candidate is chosen.
-    #[error("choose something from the menu first")]
+    #[error("{}", self.text())]
     NothingChosen,
     /// The candidate doesn't fit.
-    #[error("the edit doesn't fit, so nothing was written")]
+    #[error("{}", self.text())]
     DoesNotFit,
     /// A file couldn't be written (the files before it were).
-    #[error("can't write '{}': {source}", path.display())]
+    #[error("{}", self.text())]
     Write {
         /// The file.
         path: PathBuf,
         /// What went wrong.
         source: io::Error,
     },
+}
+
+impl CommitError {
+    /// The error in the window's words (translated).
+    fn text(&self) -> String {
+        match self {
+            CommitError::NothingChosen => tr("choose something from the menu first"),
+            CommitError::DoesNotFit => tr("the edit doesn't fit, so nothing was written"),
+            CommitError::Write { path, source } => fill_in(
+                &tr("can't write '{path}': {source}"),
+                &[("path", &path.display()), ("source", source)],
+            ),
+        }
+    }
 }
 
 impl Edit {
@@ -1089,7 +1124,7 @@ fn attempt(base: &EditBase<'_>, chosen: &Chosen) -> Attempt {
         Ok(attempted) => attempted,
         // Never set, so never cancelled.
         Err(Cancelled) => (
-            Progress::Unwritable("the check was stopped".to_owned()),
+            Progress::Unwritable(tr("the check was stopped")),
             None,
             None,
             None,
@@ -1408,9 +1443,9 @@ pub trait WriteEdits {
 
 /// The file changed since the edit began.
 fn changed_since(file: &FileEdit) -> io::Error {
-    io::Error::other(format!(
-        "'{}' changed since the edit began; start the edit again",
-        file.path.display()
+    io::Error::other(fill_in(
+        &tr("'{file}' changed since the edit began; start the edit again"),
+        &[("file", &file.path.display())],
     ))
 }
 

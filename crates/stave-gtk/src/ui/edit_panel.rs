@@ -1,11 +1,14 @@
 //! The Edit panel of the docked window (`docs/gui.md`, "Editing in the 3D
 //! view"): the card for a chosen candidate, the card for a change of the
-//! design, or the hold card, whichever is in progress, docked as any other
+//! design (with a grip's size section), or the hold card, whichever is in
+//! progress, each drawn as the Inspector is, with Cancel (Esc) and Apply
+//! (Enter) at its foot, docked as any other
 //! panel is (a tab, dragged to any area, resized by the splitters, its
 //! place remembered with the rest of the layout). While nothing is in
 //! progress it stays where it is and says how to start.
 
 use adw::prelude::*;
+use stave_app::i18n::tr;
 
 /// The panel's content.
 pub struct EditPanel {
@@ -20,10 +23,10 @@ impl EditPanel {
     pub fn new(cards: &[&gtk::Widget]) -> EditPanel {
         let empty = adw::StatusPage::builder()
             .icon_name("document-edit-symbolic")
-            .title("Nothing being added")
-            .description(
+            .title(tr("Nothing being added"))
+            .description(tr(
                 "Click inside a space, or in the gap between two parts, to add something there; or select a part and choose “Add something onto its face” in Details. Select a part or an assembly to change it in Details.",
-            )
+            ))
             .css_classes(["compact", "stave-edit-empty"])
             .build();
         let holder = gtk::Box::builder()

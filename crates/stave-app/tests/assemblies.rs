@@ -104,3 +104,49 @@ fn the_assemblies_cabinet_has_the_same_joints_as_the_hand_written_one() {
     }
     assert_eq!(written, assembled);
 }
+
+#[test]
+fn a_selected_assembly_stands_for_everything_inside_it() {
+    use stave_app::inspect::items_in;
+    use stave_app::session::Selection;
+    use stave_scene::Item;
+    let opened = clean("clothing_cabinet_assemblies");
+    let design = solved(&opened);
+    let outer = design
+        .assemblies
+        .iter()
+        .find(|a| a.parent.is_none() && design.assemblies.iter().any(|b| b.parent == Some(a.id)))
+        .or_else(|| design.assemblies.first())
+        .expect("an assembly");
+    let items = items_in(design, &Selection::Assembly(outer.id));
+    assert!(!items.is_empty());
+    // Everything listed is inside it at some depth; everything inside it is listed.
+    let within = |mut assembly: Option<stave_model::solved::AssemblyId>| {
+        while let Some(id) = assembly {
+            if id == outer.id {
+                return true;
+            }
+            assembly = design.assemblies.get(id.index()).and_then(|a| a.parent);
+        }
+        false
+    };
+    let expected: Vec<Item> = design
+        .parts
+        .iter()
+        .filter(|p| within(p.assembly))
+        .map(|p| Item::Part(p.id))
+        .chain(
+            design
+                .hardware
+                .iter()
+                .filter(|h| within(h.assembly))
+                .map(|h| Item::Hardware(h.id)),
+        )
+        .collect();
+    assert_eq!(items, expected);
+    let part = design.parts.first().expect("a part");
+    assert_eq!(
+        items_in(design, &Selection::Part(part.id)),
+        vec![Item::Part(part.id)]
+    );
+}

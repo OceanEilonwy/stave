@@ -13,6 +13,7 @@
 //!
 //! `docs/gui.md` describes how the window's views use this contract.
 
+use crate::i18n::{fill_in, ntr, tr};
 use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -52,10 +53,10 @@ impl View {
     pub const ALL: [View; 2] = [View::Design, View::CutList];
 
     /// Its name in the switcher: "Design", "Cut list".
-    pub fn title(self) -> &'static str {
+    pub fn title(self) -> String {
         match self {
-            View::Design => "Design",
-            View::CutList => "Cut list",
+            View::Design => tr("Design"),
+            View::CutList => tr("Cut list"),
         }
     }
 
@@ -132,6 +133,30 @@ impl SourceLocation {
         let path = Path::new(&self.path);
         let shown = path.strip_prefix(folder).unwrap_or(path);
         format!("{}:{}", shown.display(), self.line)
+    }
+
+    /// The place a `FILE[:LINE]` written on the command line names, the
+    /// inverse of [`SourceLocation::display`]: a path relative to `folder`
+    /// (or `std/...` for the standard library) with an optional line, the
+    /// first line when none is given or it is not a number. `None` for
+    /// line 0.
+    pub fn parse(folder: &Path, text: &str) -> Option<SourceLocation> {
+        let (path, line) = match text.rsplit_once(':') {
+            Some((path, line)) => match line.parse::<u32>() {
+                Ok(line) => (path, line),
+                Err(_) => (text, 1),
+            },
+            None => (text, 1),
+        };
+        let path = if path.starts_with("std/") {
+            path.to_owned()
+        } else {
+            folder.join(path).display().to_string()
+        };
+        Some(SourceLocation {
+            path,
+            line: LineNumber::new(line)?,
+        })
     }
 }
 
@@ -306,9 +331,9 @@ impl CheckStatus {
             Activity::Idle
         };
         let (tone, label) = match self.verdict() {
-            None if self.is_checking() => (Tone::Unknown, "Checking…".to_owned()),
-            None => (Tone::Unknown, "Not checked yet".to_owned()),
-            Some(Verdict::CantOpen(_)) => (Tone::Errors, "Can't open".to_owned()),
+            None if self.is_checking() => (Tone::Unknown, tr("Checking…")),
+            None => (Tone::Unknown, tr("Not checked yet")),
+            Some(Verdict::CantOpen(_)) => (Tone::Errors, tr("Can't open")),
             Some(Verdict::Checked(summary)) => {
                 let tone = if summary.errors > 0 {
                     Tone::Errors
@@ -317,10 +342,19 @@ impl CheckStatus {
                 } else {
                     Tone::Clean
                 };
-                let label = match summary.problems() {
-                    0 => "No problems".to_owned(),
-                    1 => "1 problem".to_owned(),
-                    count => format!("{count} problems"),
+                // Errors and warnings counted apart, so the words say
+                // which there are without the pill's colour.
+                let label = match (summary.errors, summary.warnings) {
+                    (0, 0) => tr("No problems"),
+                    (errors, 0) => errors_text(errors),
+                    (0, warnings) => warnings_text(warnings),
+                    (errors, warnings) => fill_in(
+                        &tr("{errors}, {warnings}"),
+                        &[
+                            ("errors", &errors_text(errors)),
+                            ("warnings", &warnings_text(warnings)),
+                        ],
+                    ),
                 };
                 (tone, label)
             }
@@ -336,49 +370,78 @@ impl CheckStatus {
     /// 26 ms", or "Checking again… last result: 1 error".
     pub fn line(&self) -> String {
         match self {
-            CheckStatus::Idle => "Not checked yet".to_owned(),
-            CheckStatus::Checking { last: None } => "Checking the project…".to_owned(),
+            CheckStatus::Idle => tr("Not checked yet"),
+            CheckStatus::Checking { last: None } => tr("Checking the project…"),
             CheckStatus::Checking { last: Some(last) } => {
                 let result = match last {
                     Verdict::Checked(summary) => {
                         let mut counts = Vec::new();
                         if summary.errors > 0 || summary.warnings == 0 {
-                            counts.push(plural(summary.errors, "error", "errors"));
+                            counts.push(errors_text(summary.errors));
                         }
                         if summary.warnings > 0 {
-                            counts.push(plural(summary.warnings, "warning", "warnings"));
+                            counts.push(warnings_text(summary.warnings));
                         }
                         counts.join(", ")
                     }
-                    Verdict::CantOpen(_) => "the folder couldn't be opened".to_owned(),
+                    Verdict::CantOpen(_) => tr("the folder couldn't be opened"),
                 };
-                format!("Checking again… last result: {result}")
+                fill_in(
+                    &tr("Checking again… last result: {result}"),
+                    &[("result", &result)],
+                )
             }
-            CheckStatus::Done(Verdict::Checked(summary)) => format!(
-                "Checked {} · {} · {} · {}",
-                plural(summary.files, "file", "files"),
-                plural(summary.errors, "error", "errors"),
-                plural(summary.warnings, "warning", "warnings"),
-                duration_text(summary.elapsed)
+            CheckStatus::Done(Verdict::Checked(summary)) => fill_in(
+                &tr("Checked {files} · {errors} · {warnings} · {time}"),
+                &[
+                    ("files", &files_text(summary.files)),
+                    ("errors", &errors_text(summary.errors)),
+                    ("warnings", &warnings_text(summary.warnings)),
+                    ("time", &duration_text(summary.elapsed)),
+                ],
             ),
-            CheckStatus::Done(Verdict::CantOpen(message)) => format!("Can't open: {message}"),
+            CheckStatus::Done(Verdict::CantOpen(message)) => {
+                fill_in(&tr("Can't open: {message}"), &[("message", &message)])
+            }
         }
     }
 }
 
 /// `1 file`, `10 files`.
-fn plural(count: usize, one: &str, many: &str) -> String {
-    format!("{count} {}", if count == 1 { one } else { many })
+fn files_text(count: usize) -> String {
+    fill_in(
+        &ntr("{count} file", "{count} files", count),
+        &[("count", &count)],
+    )
+}
+
+/// `1 error`, `2 errors`.
+fn errors_text(count: usize) -> String {
+    fill_in(
+        &ntr("{count} error", "{count} errors", count),
+        &[("count", &count)],
+    )
+}
+
+/// `1 warning`, `2 warnings`.
+fn warnings_text(count: usize) -> String {
+    fill_in(
+        &ntr("{count} warning", "{count} warnings", count),
+        &[("count", &count)],
+    )
 }
 
 /// `26 ms`, `1.4 s`.
 fn duration_text(elapsed: Duration) -> String {
     let millis = elapsed.as_millis();
     if millis < 1000 {
-        format!("{millis} ms")
+        fill_in(&tr("{millis} ms"), &[("millis", &millis)])
     } else {
         let tenths = millis / 100;
-        format!("{}.{} s", tenths / 10, tenths % 10)
+        fill_in(
+            &tr("{seconds}.{tenths} s"),
+            &[("seconds", &(tenths / 10)), ("tenths", &(tenths % 10))],
+        )
     }
 }
 
@@ -410,7 +473,7 @@ pub enum Activity {
 pub struct Pill {
     /// Its colour.
     pub tone: Tone,
-    /// "No problems", "3 problems".
+    /// "No problems", "1 error", "2 warnings", "1 error, 2 warnings".
     pub label: String,
     /// Whether a check is running.
     pub activity: Activity,
@@ -437,19 +500,32 @@ pub enum Notice {
 
 impl Notice {
     /// Its words.
-    pub fn text(self) -> &'static str {
+    pub fn text(self) -> String {
         match self {
-            Notice::BuildPlanNotBuilt => "The build plan (PDF) isn't built yet",
+            Notice::BuildPlanNotBuilt => tr("The build plan (PDF) isn't built yet"),
             Notice::BuildPlanHasErrors => {
-                "Fix the problems first: the build plan needs a design without errors"
+                tr("Fix the problems first: the build plan needs a design without errors")
             }
         }
     }
 }
 
 /// One check run, numbered so a stale run's outcome can be told apart.
+/// Numbers come from one counter for the whole process, never per
+/// session: a window that opens another folder makes a new session while
+/// the old one's check may still be running, and a fresh count would give
+/// the new check the old one's number, so the old outcome would be taken
+/// for the new folder's.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct CheckTicket(u64);
+
+impl CheckTicket {
+    /// A ticket no other check in this process has had.
+    fn next() -> CheckTicket {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        CheckTicket(NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed))
+    }
+}
 
 /// What a view asks the session to do.
 #[derive(Debug, Clone, PartialEq)]
@@ -577,7 +653,6 @@ pub struct Session {
     explode: Explode,
     status: CheckStatus,
     build: Build,
-    next_ticket: u64,
     running: Option<CheckTicket>,
     queued: Queued,
     /// The last check's result.
@@ -611,7 +686,6 @@ impl Session {
             explode: Explode::TOGETHER,
             status: CheckStatus::Idle,
             build: Build::Idle,
-            next_ticket: 0,
             running: None,
             queued: Queued::Nothing,
             latest: None,
@@ -939,10 +1013,10 @@ impl Session {
 
     /// The build button's tooltip: its name and shortcut, what it is
     /// doing, or why there is nothing to build.
-    pub fn build_tooltip(&self) -> &'static str {
+    pub fn build_tooltip(&self) -> String {
         match (self.build, self.buildable()) {
-            (Build::Building, _) => "Building the plan…",
-            (Build::Idle, Ok(())) => "Build plan (Ctrl+B)",
+            (Build::Building, _) => tr("Building the plan…"),
+            (Build::Idle, Ok(())) => tr("Build plan (Ctrl+B)"),
             (Build::Idle, Err(reason)) => reason.nothing_to_build(),
         }
     }
@@ -1027,9 +1101,10 @@ impl Session {
             Command::Select(selection) => {
                 if selection != self.place.selection || self.place.focus.is_some() {
                     let place = Place {
+                        view: self.place.view,
                         selection,
                         focus: None,
-                        ..self.place.clone()
+                        editor: self.place.editor,
                     };
                     self.go(place, &mut events);
                 }
@@ -1087,13 +1162,11 @@ impl Session {
             }
             Command::Link(selection) => {
                 if selection != self.place.selection {
-                    let before = self.place.clone();
+                    let had_focus = self.place.focus.is_some();
                     self.place.selection = selection;
                     self.place.focus = None;
-                    if before.selection != self.place.selection {
-                        events.push(Event::SelectionChanged);
-                    }
-                    if before.focus.is_some() {
+                    events.push(Event::SelectionChanged);
+                    if had_focus {
                         events.push(Event::FocusChanged);
                     }
                 }
@@ -1473,8 +1546,7 @@ impl Session {
             self.queued = Queued::Again;
             return;
         }
-        let ticket = CheckTicket(self.next_ticket);
-        self.next_ticket = self.next_ticket.saturating_add(1);
+        let ticket = CheckTicket::next();
         self.running = Some(ticket);
         let last = self.status.verdict().cloned();
         self.status = CheckStatus::Checking { last };
@@ -1501,16 +1573,16 @@ impl Session {
                 .map_or(&[], |c| c.problems.as_slice()),
             new_problems: &checked.problems,
         };
-        let before = self.place.clone();
-        self.place = carry.place(&self.place);
-        for place in self.back.iter_mut().chain(self.forward.iter_mut()) {
-            *place = carry.place(place);
-        }
-        if self.place.selection != before.selection {
+        let place = carry.place(&self.place);
+        if place.selection != self.place.selection {
             events.push(Event::SelectionChanged);
         }
-        if self.place.focus != before.focus {
+        if place.focus != self.place.focus {
             events.push(Event::FocusChanged);
+        }
+        self.place = place;
+        for place in self.back.iter_mut().chain(self.forward.iter_mut()) {
+            *place = carry.place(place);
         }
         // A scene that is gone falls back to the first.
         let scene_exists = self.scene.as_deref().is_none_or(|name| {
@@ -1540,10 +1612,9 @@ impl Session {
     /// Moves to a new place, remembering the current one for Back.
     fn go(&mut self, place: Place, events: &mut Vec<Event>) {
         let current = std::mem::replace(&mut self.place, place);
-        let changed_from = current.clone();
+        self.place_events(&current, events);
         push_limited(&mut self.back, current);
         self.forward.clear();
-        self.place_events(&changed_from, events);
     }
 
     fn changed_place_events(&self, events: &mut Vec<Event>) {
@@ -1624,7 +1695,9 @@ impl Carry<'_> {
     fn selection(&self, selection: &Selection) -> Option<Selection> {
         if let Selection::Problem(ProblemIndex(index)) = selection {
             let old = self.old_problems.get(*index)?;
-            let key = |p: &Problem| (p.code.clone(), p.message.clone(), p.location.clone());
+            fn key(p: &Problem) -> (&str, &str, Option<&str>) {
+                (&p.code, &p.message, p.location.as_deref())
+            }
             let wanted = key(old);
             return self
                 .new_problems
@@ -1705,6 +1778,50 @@ impl Carry<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_pill_counts_errors_and_warnings_apart() {
+        let words = |errors, warnings| {
+            let pill = CheckStatus::Done(Verdict::Checked(Summary {
+                errors,
+                warnings,
+                files: 1,
+                elapsed: Duration::ZERO,
+            }))
+            .pill();
+            (pill.tone, pill.label)
+        };
+        assert_eq!(words(0, 0), (Tone::Clean, "No problems".to_owned()));
+        assert_eq!(words(1, 0), (Tone::Errors, "1 error".to_owned()));
+        assert_eq!(words(0, 2), (Tone::Warnings, "2 warnings".to_owned()));
+        assert_eq!(
+            words(3, 1),
+            (Tone::Errors, "3 errors, 1 warning".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_file_and_line_from_the_command_line_names_a_place() {
+        let folder = Path::new("/work/bench");
+        let place = |text| SourceLocation::parse(folder, text);
+        let line = |number| LineNumber::new(number).expect("not 0");
+        assert_eq!(
+            place("doors.stave:9"),
+            Some(SourceLocation {
+                path: "/work/bench/doors.stave".to_owned(),
+                line: line(9),
+            })
+        );
+        assert_eq!(
+            place("std/hinges.stave"),
+            Some(SourceLocation {
+                path: "std/hinges.stave".to_owned(),
+                line: line(1),
+            })
+        );
+        assert_eq!(place("doors.stave:top").map(|p| p.line), Some(line(1)));
+        assert_eq!(place("doors.stave:0"), None);
+    }
 
     #[test]
     fn explode_amounts_stay_between_0_and_1() {

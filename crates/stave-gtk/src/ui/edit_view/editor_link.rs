@@ -1,20 +1,22 @@
 //! The editor link (`docs/gui.md`, "The text while editing in 3D"):
-//! while an edit or a change is in progress and the editor is open, the
-//! lines its patch would write or change show in the editor as pending,
-//! above the text, with the old lines marked in the text itself; they go
-//! when the edit is cancelled or added. While the text doesn't read (a
-//! syntax error in one of the project's files), editing in the 3D view is
-//! off, and a line at the top of the view says why.
+//! while an edit or a change is in progress, the lines its patch would
+//! write or change show as a small diff in the "Pending" section of the
+//! card in the Edit panel (`@ line N`, then `−` and `+` lines); when the
+//! editor is open, it goes to the first place and the old lines are
+//! marked in the text itself. They go when the edit is cancelled or
+//! applied. While the text doesn't read (a syntax error in one of the
+//! project's files), editing in the 3D view is off, and a line at the top
+//! of the view says why.
 //!
 //! ```text
-//! ┌ cabinet.stave ──────────────────────────────┐
-//! │ PENDING · Add writes this, line 88           │
-//! │ + assembly shelf : casework.Shelf {          │
-//! │ − panel_stock: oak_19                        │
-//! │ + panel_stock: maple_12                      │
-//! │  85  ...the text, the old lines tinted...    │
+//! ▾ Pending                        cabinet.stave
+//!   @ line 88
+//!   + assembly shelf : casework.Shelf {
+//!   − panel_stock: oak_19
+//!   + panel_stock: maple_12
 //! ```
 
+use stave_app::i18n::{fill_in, ntr, tr};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
@@ -23,6 +25,7 @@ use stave_app::session::{Editor, LineNumber, Session, SourceLocation};
 use stave_ide::Document;
 
 use super::super::Window;
+use super::super::sections;
 
 /// The most pending lines shown before "… and N more lines".
 const SHOWN_LINES: usize = 14;
@@ -179,110 +182,121 @@ pub(in crate::ui) fn pending_texts(session: &Session) -> Vec<(PathBuf, String)> 
         .unwrap_or_default()
 }
 
-/// The pending lines' panel, above the editor's text.
+/// The "Pending" section of the card in progress: the lines Apply would
+/// write, as a small diff.
 pub(in crate::ui) struct PendingPanel {
-    /// The panel.
+    /// The section, moved into the card in progress.
     pub(in crate::ui) root: gtk::Box,
-    head: gtk::Label,
+    note: gtk::Label,
     lines: gtk::Box,
 }
 
+/// What would write the pending lines, for the note above them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Writer {
+    /// The edit in progress, written by Apply.
+    Apply,
+    /// The change in progress.
+    Change,
+}
+
 impl PendingPanel {
-    /// The panel, hidden.
+    /// The section, hidden.
     pub(in crate::ui) fn new() -> PendingPanel {
-        let head = gtk::Label::builder()
+        let (root, body) = sections::section(&tr("Pending"), "", true);
+        root.set_visible(false);
+        let note = gtk::Label::builder()
             .xalign(0.0)
             .wrap(true)
-            .css_classes(["stave-pending-head"])
+            .css_classes(["stave-row-note"])
             .build();
+        body.append(&note);
         let lines = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
-            .css_classes(["stave-pending-lines"])
+            .css_classes(["stave-diff"])
             .build();
-        let root = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
-            .spacing(4)
-            .css_classes(["stave-pending"])
-            .visible(false)
-            .build();
-        root.append(&head);
-        root.append(
+        body.append(
             &gtk::ScrolledWindow::builder()
                 .hscrollbar_policy(gtk::PolicyType::Automatic)
                 .vscrollbar_policy(gtk::PolicyType::Never)
                 .child(&lines)
                 .build(),
         );
-        PendingPanel { root, head, lines }
+        PendingPanel { root, note, lines }
     }
 
     fn line(&self, mark: &str, text: &str, class: &str) {
-        let row = gtk::Box::builder().spacing(6).css_classes([class]).build();
-        row.append(
-            &gtk::Label::builder()
-                .label(mark)
-                .css_classes(["stave-pending-mark"])
-                .build(),
-        );
-        row.append(
-            &gtk::Label::builder()
-                .label(text)
-                .xalign(0.0)
-                .selectable(false)
-                .css_classes(["stave-pending-text"])
-                .build(),
-        );
-        self.lines.append(&row);
+        self.parts_line(mark, &[(text, "stave-pending-text")], class);
     }
 
-    fn value_line(&self, change: &ValueChange) {
-        let row = gtk::Box::builder()
-            .spacing(0)
-            .css_classes(["stave-pending-changed"])
-            .build();
+    /// A line of runs of text, each with its own class.
+    fn parts_line(&self, mark: &str, parts: &[(&str, &str)], class: &str) {
+        let row = gtk::Box::builder().spacing(0).css_classes([class]).build();
         row.append(
             &gtk::Label::builder()
-                .label("~ ")
+                .label(format!("{mark} "))
                 .css_classes(["stave-pending-mark"])
                 .build(),
         );
-        for (words, class) in [
-            (change.head.as_str(), "stave-pending-text"),
-            (change.old.as_str(), "stave-pending-old-value"),
-            (" → ", "stave-pending-text"),
-            (change.new.as_str(), "stave-pending-new-value"),
-            (change.tail.as_str(), "stave-pending-text"),
-        ] {
+        for (words, part_class) in parts {
+            if words.is_empty() {
+                continue;
+            }
             row.append(
                 &gtk::Label::builder()
-                    .label(words)
-                    .css_classes([class])
+                    .label(*words)
+                    .xalign(0.0)
+                    .selectable(false)
+                    .css_classes([*part_class])
                     .build(),
             );
         }
         self.lines.append(&row);
     }
 
+    /// A replaced value as a `−` line and a `+` line, the words that
+    /// change marked in each.
+    fn value_lines(&self, change: &ValueChange) {
+        self.parts_line(
+            "−",
+            &[
+                (change.head.as_str(), "stave-pending-text"),
+                (change.old.as_str(), "stave-pending-old-value"),
+                (change.tail.as_str(), "stave-pending-text"),
+            ],
+            "stave-diff-removed",
+        );
+        self.parts_line(
+            "+",
+            &[
+                (change.head.as_str(), "stave-pending-text"),
+                (change.new.as_str(), "stave-pending-new-value"),
+                (change.tail.as_str(), "stave-pending-text"),
+            ],
+            "stave-diff-added",
+        );
+    }
+
     /// Shows one file's pending lines: each place it changes, in order,
-    /// with its line number when there are several.
-    fn show(&self, file: &str, verb: &str, changes: &[LineChange]) {
+    /// each after its `@ line N`.
+    fn show(&self, file: &str, writer: Writer, changes: &[LineChange]) {
         while let Some(child) = self.lines.first_child() {
             self.lines.remove(&child);
         }
-        let Some(first) = changes.first() else {
+        if changes.is_empty() {
             self.root.set_visible(false);
             return;
+        }
+        let template = match (writer, changes.len()) {
+            (Writer::Apply, 1) => tr("Apply would write this to {file}"),
+            (Writer::Change, 1) => tr("This change would write this to {file}"),
+            (Writer::Apply, _) => tr("Apply would change {file} in {places} places"),
+            (Writer::Change, _) => tr("This change would change {file} in {places} places"),
         };
-        self.head.set_label(&match changes.len() {
-            1 => format!(
-                "PENDING · {verb} writes this to {file}, line {}",
-                first.first
-            ),
-            places => format!(
-                "PENDING · {verb} changes {file} in {places} places, from line {}",
-                first.first
-            ),
-        });
+        self.note.set_label(&fill_in(
+            &template,
+            &[("file", &file), ("places", &changes.len())],
+        ));
         let mut shown = 0usize;
         let mut push = |panel: &PendingPanel, f: &dyn Fn(&PendingPanel)| {
             if shown < SHOWN_LINES {
@@ -291,42 +305,80 @@ impl PendingPanel {
             shown += 1;
         };
         for change in changes {
-            if changes.len() > 1 {
-                let place = format!("line {}", change.first);
-                push(self, &|panel| {
-                    panel.line("@", &place, "stave-pending-place")
-                });
-            }
+            let place = fill_in(&tr("line {line}"), &[("line", &change.first)]);
+            push(self, &|panel| panel.line("@", &place, "stave-diff-place"));
             let pairs = change.removed.len().min(change.added.len());
             for (old, new) in change.removed.iter().zip(&change.added) {
                 if spacing_only(old, new) {
-                    let line = format!("{}   (spaces only: lined up again)", new.trim_end());
-                    push(self, &|panel| panel.line("≈", &line, "stave-pending-more"));
+                    let line = fill_in(
+                        &tr("{text}   (spaces only: lined up again)"),
+                        &[("text", &new.trim_end())],
+                    );
+                    push(self, &|panel| panel.line("≈", &line, "stave-diff-place"));
                     continue;
                 }
                 match value_change(old, new) {
-                    Some(parts) => push(self, &|panel| panel.value_line(&parts)),
+                    Some(parts) => push(self, &|panel| panel.value_lines(&parts)),
                     None => {
-                        push(self, &|panel| panel.line("−", old, "stave-pending-removed"));
-                        push(self, &|panel| panel.line("+", new, "stave-pending-added"));
+                        push(self, &|panel| panel.line("−", old, "stave-diff-removed"));
+                        push(self, &|panel| panel.line("+", new, "stave-diff-added"));
                     }
                 }
             }
             for old in change.removed.iter().skip(pairs) {
-                push(self, &|panel| panel.line("−", old, "stave-pending-removed"));
+                push(self, &|panel| panel.line("−", old, "stave-diff-removed"));
             }
             for new in change.added.iter().skip(pairs) {
-                push(self, &|panel| panel.line("+", new, "stave-pending-added"));
+                push(self, &|panel| panel.line("+", new, "stave-diff-added"));
             }
         }
         if shown > SHOWN_LINES {
             self.line(
                 "…",
-                &format!("and {} more lines", shown - SHOWN_LINES),
-                "stave-pending-more",
+                &fill_in(
+                    &ntr(
+                        "and {count} more line",
+                        "and {count} more lines",
+                        shown - SHOWN_LINES,
+                    ),
+                    &[("count", &(shown - SHOWN_LINES))],
+                ),
+                "stave-diff-place",
             );
         }
         self.root.set_visible(true);
+    }
+
+    /// Moves the section into `slot` (the card in progress), unless it is
+    /// there already.
+    fn move_into(&self, slot: &gtk::Box) {
+        if self.root.parent().as_ref() == Some(slot.upcast_ref()) {
+            return;
+        }
+        if let Some(parent) = self.root.parent().and_downcast::<gtk::Box>() {
+            parent.remove(&self.root);
+        }
+        slot.append(&self.root);
+    }
+
+    /// The words it shows, top to bottom (for tests).
+    #[cfg(test)]
+    pub(in crate::ui) fn words(&self) -> Vec<String> {
+        let mut words = Vec::new();
+        let mut row = self.lines.first_child();
+        while let Some(line) = row {
+            let mut text = String::new();
+            let mut part = line.first_child();
+            while let Some(label) = part {
+                if let Some(label) = label.downcast_ref::<gtk::Label>() {
+                    text.push_str(&label.label());
+                }
+                part = label.next_sibling();
+            }
+            words.push(text);
+            row = line.next_sibling();
+        }
+        words
     }
 }
 
@@ -345,15 +397,9 @@ const BLOCK_LINE_ABOVE_DOCK: i32 = 84;
 const PENDING_TAG: &str = "stave-pending-old";
 
 impl Window {
-    /// Puts the pending lines' panel into the editor's panel, above the
-    /// text.
-    pub(in crate::ui) fn connect_editor_link(&self) {
-        let panel = &self.editing.pending.root;
-        let column = &self.widgets.files.root;
-        // After the head and the breadcrumbs.
-        let after = column.first_child().and_then(|head| head.next_sibling());
-        column.insert_child_after(panel, after.as_ref());
-    }
+    /// The pending lines live in the card in progress (see
+    /// [`Window::update_pending`]); nothing goes into the Code panel.
+    pub(in crate::ui) fn connect_editor_link(&self) {}
 
     /// The text of a file of the project as the editor has it (unsaved
     /// changes included), else as on disk.
@@ -367,19 +413,21 @@ impl Window {
             .or_else(|| std::fs::read_to_string(path).ok())
     }
 
-    /// Shows the edit's or the change's pending lines in the editor, or
-    /// takes them away.
+    /// Shows the edit's or the change's pending lines in the "Pending"
+    /// section of the card in progress, or takes them away; with the
+    /// editor open, its text goes to the first place and the old lines are
+    /// marked.
     pub(in crate::ui) fn update_pending(self: &Rc<Self>) {
-        let (texts, verb, editor_open) = {
+        let (texts, writer, editor_open) = {
             let session = self.session.borrow();
-            let verb = if session.change().is_some() {
-                "this change"
+            let writer = if session.change().is_some() {
+                Writer::Change
             } else {
-                "Add"
+                Writer::Apply
             };
             (
                 pending_texts(&session),
-                verb,
+                writer,
                 session.editor() == Editor::Open,
             )
         };
@@ -395,15 +443,23 @@ impl Window {
             let changes = line_changes(&before, after);
             (!changes.is_empty()).then(|| (path.clone(), changes))
         });
-        let Some((path, changes)) = found.filter(|_| editor_open) else {
+        let Some((path, changes)) = found else {
             panel.root.set_visible(false);
             return;
         };
         let file = path
             .file_name()
             .map_or_else(String::new, |name| name.to_string_lossy().into_owned());
-        let verb = if verb == "Add" { "Add" } else { "This change" };
-        panel.show(&file, verb, &changes);
+        // In the card that shows: the change's, else the edit's.
+        if self.editing.changes.card.root.is_visible() {
+            panel.move_into(&self.editing.changes.card.pending_slot);
+        } else {
+            panel.move_into(&self.editing.card.pending_slot);
+        }
+        panel.show(&file, writer, &changes);
+        if !editor_open {
+            return;
+        }
         // The text goes to the first place, and only the old lines each
         // place replaces are marked.
         if let Some(line) = changes
@@ -495,9 +551,11 @@ impl Window {
                         .map_or_else(String::new, |name| name.to_string_lossy().into_owned()),
                     Document::Std { file, .. } => (*file).to_owned(),
                 };
-                return Some(format!(
-                    "Editing in 3D is off while {name} doesn't read: {}. Fix the text first.",
-                    diagnostic.message
+                return Some(fill_in(
+                    &tr(
+                        "Editing in 3D is off while {file} doesn't read: {problem}. Fix the text first.",
+                    ),
+                    &[("file", &name), ("problem", &diagnostic.message)],
                 ));
             }
         }
@@ -535,6 +593,40 @@ impl Window {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The Pending section shows each place as `@ line N`, then the
+    /// lines that go and come as `−` and `+` lines.
+    #[test]
+    fn the_pending_section_is_a_small_diff() {
+        crate::ui::gtk_test::on_gtk_thread(|| {
+            let panel = PendingPanel::new();
+            let before =
+                "assembly case : Case {\n  panel_stock: oak_19\n}\n\npart top : oak_19 {\n}\n";
+            let after = "assembly case : Case {\n  panel_stock: maple_12\n}\n\npart top : oak_19 {\n}\npart shelf : oak_19 {\n}\n";
+            panel.show("cabinet.stave", Writer::Apply, &line_changes(before, after));
+            assert!(panel.root.is_visible());
+            let words = panel.words();
+            assert_eq!(
+                words.get(..3),
+                Some(
+                    [
+                        "@ line 2".to_owned(),
+                        "−   panel_stock: oak_19".to_owned(),
+                        "+   panel_stock: maple_12".to_owned(),
+                    ]
+                    .as_slice()
+                ),
+                "{words:?}"
+            );
+            assert!(
+                words.iter().any(|line| line.starts_with("@ line "))
+                    && words.contains(&"+ part shelf : oak_19 {".to_owned()),
+                "{words:?}"
+            );
+            panel.show("cabinet.stave", Writer::Apply, &[]);
+            assert!(!panel.root.is_visible());
+        });
+    }
 
     #[test]
     fn inserted_lines_are_found_between_the_common_ones() {

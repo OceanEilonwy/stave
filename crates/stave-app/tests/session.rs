@@ -201,7 +201,7 @@ fn while_checking_again_the_pill_keeps_its_last_colour_and_words() {
     let mut session = checked_session(folder);
     let before = session.check_status().pill();
     assert_eq!(before.tone, Tone::Errors);
-    assert_eq!(before.label, "1 problem");
+    assert_eq!(before.label, "1 error");
 
     session.apply(Command::Check);
     let during = session.check_status().pill();
@@ -228,6 +228,26 @@ fn a_stale_check_is_dropped_and_a_check_asked_for_meanwhile_runs_next() {
     assert!(session.finish_check(first, check::run(&folder)).is_empty());
     session.finish_check(second, check::run(&folder));
     assert!(!session.check_status().is_checking());
+}
+
+#[test]
+fn a_check_from_before_another_folder_was_opened_is_not_taken_for_its() {
+    // The window replaces its session when it opens another folder; the
+    // old folder's check can still be running and must not land.
+    let old_folder = example("stool");
+    let mut old = Session::new(old_folder.clone());
+    let old_ticket = started(&old.apply(Command::Check)).unwrap();
+    let new_folder = example("bookshelf");
+    let mut new = Session::new(new_folder.clone());
+    let new_ticket = started(&new.apply(Command::Check)).unwrap();
+    assert_ne!(old_ticket, new_ticket);
+    assert!(
+        new.finish_check(old_ticket, check::run(&old_folder))
+            .is_empty()
+    );
+    assert!(new.check_status().is_checking());
+    new.finish_check(new_ticket, check::run(&new_folder));
+    assert!(!new.check_status().is_checking());
 }
 
 #[test]
@@ -475,6 +495,8 @@ fn the_inspector_describes_a_door_part() {
     let shown = session.shown().unwrap().clone();
     let inspection = inspect::inspect(&shown, &stile).unwrap();
     assert_eq!(inspection.eyebrow, "PART · IN door_l");
+    assert_eq!(inspection.kind, "Part");
+    assert_eq!(inspection.within.as_deref(), Some("door_l"));
     assert_eq!(inspection.title, "stile[hinge]");
     let rows: Vec<String> = inspection
         .rows

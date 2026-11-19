@@ -31,6 +31,7 @@ pub mod print;
 mod project_tests;
 pub mod write;
 
+use crate::i18n::tr;
 use std::cmp::Ordering;
 
 use stave_lang::ast::{self, Ident, Name, Span, TypeName};
@@ -56,8 +57,19 @@ pub use write::{Repeat, WriteError, WrittenPatch};
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ScopeError {
     /// Names and types didn't resolve far enough to have a model.
-    #[error("the project has no resolved model; fix its name and type errors first")]
+    #[error("{}", self.text())]
     NoModel,
+}
+
+impl ScopeError {
+    /// The error in the window's words (translated).
+    fn text(&self) -> String {
+        match self {
+            ScopeError::NoModel => {
+                tr("the project has no resolved model; fix its name and type errors first")
+            }
+        }
+    }
 }
 
 /// One file of the project's own module, parsed again for the editor: the

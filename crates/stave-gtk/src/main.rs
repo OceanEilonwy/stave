@@ -1,6 +1,7 @@
 //! `stave-gtk`: the Stave viewer.
 //!
 //! ```text
+//! stave-gtk                                            (the start page)
 //! stave-gtk examples/clothing_cabinet
 //! stave-gtk examples/clothing_cabinet --screenshot cabinet.png --scene all_open --size 1600x1000
 //! stave-gtk examples/wall_shelf --screenshot back.png --turn 180     (seen from behind)
@@ -12,9 +13,10 @@
 //!     --frame 'door_l.hinges[lower]' --pitch 90 --section up=660   (a hinge from above)
 //! ```
 //!
-//! Without `--screenshot` it opens a libadwaita window. With it, it renders
-//! one frame offscreen with the default framing, writes a PNG and exits,
-//! without touching GTK or a display.
+//! Without `--screenshot` it opens a libadwaita window for each folder (or
+//! the start page, given none), or hands the folders to the Stave already
+//! running. With it, it renders one frame offscreen with the default
+//! framing, writes a PNG and exits, without touching GTK or a display.
 
 #![forbid(unsafe_code)]
 
@@ -32,8 +34,9 @@ use clap::Parser;
 #[derive(Debug, Parser)]
 #[command(name = "stave-gtk", version, about = "Show a .stave design in 3D")]
 struct Arguments {
-    /// The project folder.
-    folder: PathBuf,
+    /// The project folders (or a `.stave` file in one); none shows the
+    /// start page.
+    folders: Vec<PathBuf>,
     /// Render one frame to this PNG and exit.
     #[arg(long, value_name = "PNG")]
     screenshot: Option<PathBuf>,
@@ -50,12 +53,14 @@ struct Arguments {
     #[arg(long, value_name = "PNG")]
     window_screenshot: Option<PathBuf>,
     /// The size in pixels: of the screenshot (default 1600x1000), or of
-    /// the window (default 1440x900).
+    /// the window (default: as it was last time, 1200x800 at first;
+    /// 1440x900 with --window-screenshot).
     #[arg(long, value_name = "WIDTHxHEIGHT", value_parser = parse_size)]
     size: Option<(u32, u32)>,
-    /// The window's style: system, light or dark.
-    #[arg(long, value_name = "STYLE", default_value = "system", value_parser = parse_theme)]
-    theme: ui::Theme,
+    /// The window's style: system, light or dark (default: the one chosen
+    /// last time).
+    #[arg(long, value_name = "STYLE", value_parser = parse_theme)]
+    theme: Option<ui::Theme>,
     /// The view the window starts in: design or cut-list (`parts` and
     /// `files` name the design too; `files` opens the editor beside it).
     #[arg(long, value_name = "VIEW", default_value = "design", value_parser = parse_view)]
@@ -274,80 +279,104 @@ fn parse_size(text: &str) -> Result<(u32, u32)> {
     Ok((width, height))
 }
 
+/// Bind the `stave` text domain so the window speaks the user's language
+/// when a translation is installed. The translations are looked for in
+/// `$STAVE_LOCALEDIR`, then in `share/locale` beside the program's
+/// `bin` folder (an installed Stave), then in the system's own place.
+fn start_translations() {
+    let beside_program = std::env::current_exe().ok().and_then(|program| {
+        let locale = program.parent()?.parent()?.join("share").join("locale");
+        locale.is_dir().then_some(locale)
+    });
+    let directory = std::env::var_os("STAVE_LOCALEDIR")
+        .map(PathBuf::from)
+        .or(beside_program);
+    if let Err(error) = stave_app::i18n::init(directory.as_deref()) {
+        eprintln!("warning: translations are off: {error}");
+    }
+}
+
 fn main() -> ExitCode {
     let arguments = Arguments::parse();
     let result = match &arguments.screenshot {
-        Some(output) => screenshot::run(
-            &arguments.folder,
-            output,
-            &screenshot::Shot {
-                scene: arguments.scene.clone(),
+        Some(output) => match arguments.folders.as_slice() {
+            [folder] => screenshot::run(
+                folder,
+                output,
+                &screenshot::Shot {
+                    scene: arguments.scene,
+                    explode: arguments.explode,
+                    turn: arguments.turn,
+                    pitch: arguments.pitch,
+                    frame: arguments.frame,
+                    open: arguments.open,
+                    hide: arguments.hide,
+                    section: arguments.section,
+                    flat: arguments.flat,
+                    no_tint: arguments.no_tint,
+                    focus: arguments.focus.map(|name| screenshot::FocusShot {
+                        name,
+                        pair: arguments.pair,
+                        step: arguments.step,
+                        plan: arguments.plan,
+                        in_3d: arguments.in_3d,
+                        options: stave_app::focus::Options {
+                            xray: !arguments.no_xray,
+                            tint_cut_faces: !arguments.no_tint,
+                            fade_others: !arguments.no_fade,
+                        },
+                    }),
+                },
+                arguments.diagnostic,
+                arguments.size.unwrap_or((1600, 1000)),
+            ),
+            _ => Err(anyhow::anyhow!("a screenshot needs one project folder")),
+        },
+        None => {
+            start_translations();
+            ui::run(ui::Options {
+                folders: arguments.folders,
+                scene: arguments.scene,
+                select: arguments.select,
+                focus: arguments.focus,
+                plan: arguments.plan,
+                in_3d: arguments.in_3d,
+                step: arguments.step,
+                problem: arguments.diagnostic,
                 explode: arguments.explode,
-                turn: arguments.turn,
-                pitch: arguments.pitch,
-                frame: arguments.frame.clone(),
-                open: arguments.open.clone(),
-                hide: arguments.hide.clone(),
-                section: arguments.section,
-                flat: arguments.flat,
-                no_tint: arguments.no_tint,
-                focus: arguments.focus.clone().map(|name| screenshot::FocusShot {
-                    name,
-                    pair: arguments.pair,
-                    step: arguments.step,
-                    plan: arguments.plan,
-                    in_3d: arguments.in_3d,
-                    options: stave_app::focus::Options {
-                        xray: !arguments.no_xray,
-                        tint_cut_faces: !arguments.no_tint,
-                        fade_others: !arguments.no_fade,
-                    },
-                }),
-            },
-            arguments.diagnostic,
-            arguments.size.unwrap_or((1600, 1000)),
-        ),
-        None => ui::run(ui::Options {
-            folder: arguments.folder,
-            scene: arguments.scene,
-            select: arguments.select,
-            focus: arguments.focus,
-            plan: arguments.plan,
-            in_3d: arguments.in_3d,
-            step: arguments.step,
-            problem: arguments.diagnostic,
-            explode: arguments.explode,
-            view: arguments.view.0,
-            editor: arguments.editor || arguments.view.1 || arguments.file.is_some(),
-            finder: arguments.finder,
-            xray: arguments.xray,
-            layout: arguments.layout,
-            theme: arguments.theme,
-            window_screenshot: arguments.window_screenshot,
-            size: arguments.size.unwrap_or((1440, 900)),
-            checking: arguments.checking,
-            building: arguments.building,
-            file: arguments.file,
-            wish: ui::Wish {
-                cursor: arguments.cursor,
-                peek: arguments.peek,
-                hover: arguments.hover,
-                uses: arguments.uses,
-                typing: arguments.typing,
-                follow: arguments.follow,
-                undo: arguments.undo,
-                search: arguments.search,
-            },
-            camera: ui::StartCamera {
-                turn: arguments.turn,
-                pitch: arguments.pitch,
-                frame_selection: arguments.frame_selection,
-                zoom: arguments.zoom,
-            },
-            edit_fixture: arguments.edit_fixture,
-            edit_script: arguments.edit_script,
-            new_project: arguments.new_project,
-        }),
+                view: arguments.view.0,
+                editor: arguments.editor || arguments.view.1 || arguments.file.is_some(),
+                finder: arguments.finder,
+                xray: arguments.xray,
+                layout: arguments.layout,
+                theme: arguments.theme,
+                window_screenshot: arguments.window_screenshot,
+                size: arguments.size,
+                maximized: false,
+                checking: arguments.checking,
+                building: arguments.building,
+                file: arguments.file,
+                wish: ui::Wish {
+                    cursor: arguments.cursor,
+                    peek: arguments.peek,
+                    hover: arguments.hover,
+                    uses: arguments.uses,
+                    typing: arguments.typing,
+                    follow: arguments.follow,
+                    undo: arguments.undo,
+                    search: arguments.search,
+                },
+                camera: ui::StartCamera {
+                    turn: arguments.turn,
+                    pitch: arguments.pitch,
+                    frame_selection: arguments.frame_selection,
+                    zoom: arguments.zoom,
+                },
+                edit_fixture: arguments.edit_fixture,
+                edit_script: arguments.edit_script,
+                new_project: arguments.new_project,
+            })
+        }
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,

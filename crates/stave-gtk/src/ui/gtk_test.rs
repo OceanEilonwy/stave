@@ -27,6 +27,15 @@ pub(crate) fn on_gtk_thread(body: impl FnOnce() + Send + 'static) -> bool {
             if !up {
                 return;
             }
+            // The simple input method, not the desktop's: on Wayland,
+            // GTK's text-input listener looks up the focused entry's
+            // display, and an event still queued for an entry whose window
+            // an earlier test destroyed reaches a freed widget in the next
+            // test's main loop (SIGSEGV in `gtk_widget_get_display`). No
+            // test exercises an input method, so none is listened to.
+            if let Some(settings) = gtk::Settings::default() {
+                settings.set_gtk_im_module(Some("gtk-im-context-simple"));
+            }
             for (job, done) in received {
                 let _ = done.send(catch_unwind(AssertUnwindSafe(job)));
             }
@@ -50,4 +59,51 @@ pub(crate) fn on_gtk_thread(body: impl FnOnce() + Send + 'static) -> bool {
         Ok(()) => true,
         Err(panic) => resume_unwind(panic),
     }
+}
+
+/// The buttons under `root` (itself included) that show no words and have
+/// no accessible name, by their tooltip: a screen reader would call each
+/// just "button". A menu button counts as one button, not its inner one.
+pub(crate) fn unnamed_buttons(root: &impl gtk::prelude::IsA<gtk::Widget>) -> Vec<String> {
+    use gtk::prelude::*;
+
+    fn shows_words(widget: &gtk::Widget) -> bool {
+        if let Some(label) = widget.downcast_ref::<gtk::Label>() {
+            return !label.label().is_empty();
+        }
+        let mut child = widget.first_child();
+        while let Some(next) = child {
+            if shows_words(&next) {
+                return true;
+            }
+            child = next.next_sibling();
+        }
+        false
+    }
+
+    fn walk(widget: &gtk::Widget, unnamed: &mut Vec<String>) {
+        let menu = widget.is::<gtk::MenuButton>();
+        if (menu || widget.is::<gtk::Button>())
+            && !shows_words(widget)
+            && !gtk::test_accessible_has_property(widget, gtk::AccessibleProperty::Label)
+        {
+            unnamed.push(
+                widget
+                    .tooltip_text()
+                    .map_or_else(|| widget.type_().name().to_owned(), String::from),
+            );
+        }
+        if menu {
+            return;
+        }
+        let mut child = widget.first_child();
+        while let Some(next) = child {
+            walk(&next, unnamed);
+            child = next.next_sibling();
+        }
+    }
+
+    let mut unnamed = Vec::new();
+    walk(root.as_ref(), &mut unnamed);
+    unnamed
 }

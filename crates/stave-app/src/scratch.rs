@@ -51,6 +51,7 @@
 //! itself, with a diagnostic pointing at the error that stops the design
 //! being placed: strict commit never writes what wasn't checked.
 
+use crate::i18n::tr;
 use std::collections::BTreeMap;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -633,8 +634,17 @@ pub struct DiskWriter;
 #[derive(Debug, thiserror::Error)]
 pub enum CommitError {
     /// The candidate doesn't fit.
-    #[error("the edit was refused, so nothing was written")]
+    #[error("{}", self.text())]
     Refused,
+}
+
+impl CommitError {
+    /// The error in the window's words (translated).
+    fn text(&self) -> String {
+        match self {
+            CommitError::Refused => tr("the edit was refused, so nothing was written"),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

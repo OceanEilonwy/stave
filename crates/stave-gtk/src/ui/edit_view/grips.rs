@@ -3,15 +3,20 @@
 //! split's boundaries drawn on the model as dimensions with handles, a
 //! drag that moves the value live with its ghost and verdict, a value
 //! typed in place, the sizes to pick from when a size follows several,
-//! and the switch that lets the solver move a param.
+//! and the switch that lets the solver move a param. The view shows only
+//! the gizmo (small round handles with an arrow the way a drag makes the
+//! size larger) and, while a drag is open, a one-line readout at its top
+//! (`overall_width 940 → 1040 mm`); what the drag changes, the sizes to
+//! pick from, the stop and the verdict are in the Edit panel's change
+//! card (`grip_panel.rs`), whose Apply writes it.
 //!
 //! ```text
 //! selection / a click in a space ──ListGrips──▶ GripsChanged ──▶ handles and labels on the model
 //!                                               StopsJob on a worker ──▶ GripStopsFound ──▶ the range's hard ends
-//! press a handle ──BeginDrag(i)──▶ move ──DragTo(value)──▶ DragMoved / VerdictChanged ──▶ panel, ghost
+//! press a handle ──BeginDrag(i)──▶ move ──DragTo(value)──▶ DragMoved / VerdictChanged ──▶ readout, Edit panel, ghost
 //! let go ──▶ Add when it fits          Escape or Cancel ──▶ nothing written
 //! click the number ──▶ entry ──Enter──▶ TypeGripValue ──▶ Add when it fits, else why, still editable
-//! the switch ──▶ MakeSolved / MakePlain ──▶ panel ──Apply──▶ Add
+//! the switch (⋮) ──▶ MakeSolved / MakePlain ──▶ Edit panel ──Apply──▶ Add
 //! ```
 //!
 //! The session decides everything: what a grip moves, where it snaps, what
@@ -19,6 +24,7 @@
 //! along the handle's direction on screen becomes a value to send, and
 //! what the session holds is drawn.
 
+use stave_app::i18n::{fill_in, tr};
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -42,7 +48,7 @@ use stave_model::trace::Amount;
 use stave_scene::{FaceOf, GripFace, GripOf, GripPlace, Item, SceneGraph};
 
 use super::grip_layer::GripLayer;
-use super::grip_panel::{GripPanel, PanelAction, install_style};
+use super::grip_panel::{GripPanel, PanelAction, Readout, install_style};
 use super::grip_text::{
     GripLook, Held, RangeEnd, SolverSwitch, amount_like, amount_words, grip_look, grip_range,
     grip_value, held_words, label_words, length_mm, mm_amount, panel_model, solver_switches,
@@ -50,8 +56,8 @@ use super::grip_text::{
 };
 use crate::ui::{EDGE, Window};
 
-/// The handle's size, in pixels (16 inside a 3 px ring).
-const HANDLE: f64 = 22.0;
+/// The handle's size, in pixels (8 inside a 2 px ring).
+const HANDLE: f64 = 12.0;
 /// How far a dimension's label stands off its line, in pixels.
 const LABEL_OFFSET: f64 = 18.0;
 /// The design's red (#e01b24) and its pale stripe (#f6b8bb), as on the
@@ -65,8 +71,10 @@ pub(in crate::ui) struct GripView {
     area: gtk::DrawingArea,
     /// The handles and labels, under the window's floating cards.
     layer: GripLayer,
-    /// The card beside a drag.
+    /// The size a drag moves, as a section of the change's card.
     panel: GripPanel,
+    /// The one line at the top of the view while a drag is open.
+    readout: Readout,
     /// What the area draws, worked out after each frame.
     drawing: Rc<RefCell<Vec<Drawn>>>,
     state: RefCell<GripState>,
@@ -100,6 +108,8 @@ struct GripState {
     typing: Option<usize>,
     /// A listing from the new design is on its way.
     relist_queued: bool,
+    /// The grip whose options (⋮) the size section holds.
+    options_for: Option<usize>,
 }
 
 /// Where a grip sits, at rest, in the render frame (millimetres).
@@ -193,6 +203,7 @@ impl GripView {
             area,
             layer: GripLayer::new(),
             panel: GripPanel::new(),
+            readout: Readout::new(),
             drawing,
             state: RefCell::new(GripState::default()),
         }
@@ -480,6 +491,35 @@ fn draw(area: &gtk::DrawingArea, context: &gtk::cairo::Context, drawing: &[Drawn
             context.close_path();
             let _ = context.fill();
         }
+        // A short arrow out past the handle: the way a drag makes it
+        // larger.
+        if drawn.look != GripLook::Locked {
+            let base = (ex + along.0 * 9.0, ey + along.1 * 9.0);
+            let tip = (ex + along.0 * 19.0, ey + along.1 * 19.0);
+            let arrow = |context: &gtk::cairo::Context| {
+                context.move_to(base.0, base.1);
+                context.line_to(tip.0 - along.0 * 4.0, tip.1 - along.1 * 4.0);
+            };
+            arrow(context);
+            context.set_source_rgba(halo.0, halo.1, halo.2, 0.8);
+            context.set_line_width(4.5);
+            let _ = context.stroke();
+            arrow(context);
+            context.set_source_rgb(accent.0, accent.1, accent.2);
+            context.set_line_width(1.75);
+            let _ = context.stroke();
+            context.move_to(tip.0, tip.1);
+            context.line_to(
+                tip.0 - along.0 * 6.0 + across.0 * 3.5,
+                tip.1 - along.1 * 6.0 + across.1 * 3.5,
+            );
+            context.line_to(
+                tip.0 - along.0 * 6.0 - across.0 * 3.5,
+                tip.1 - along.1 * 6.0 - across.1 * 3.5,
+            );
+            context.close_path();
+            let _ = context.fill();
+        }
     }
 }
 
@@ -561,7 +601,7 @@ impl Window {
         let design = &self.widgets.design;
         design.add_overlay(&grips.area);
         design.add_overlay(&grips.layer);
-        design.add_overlay(&grips.panel.root);
+        design.add_overlay(&grips.readout.root);
         // The window's floating cards stay above the grips: put back on
         // top in the order they were laid (nothing has the keyboard yet).
         let widgets = &self.widgets;
@@ -571,7 +611,6 @@ impl Window {
             widgets.edge_pin.upcast_ref(),
             editing.menu.root.upcast_ref(),
             editing.card.root.upcast_ref(),
-            editing.verdict.upcast_ref(),
         ] {
             if floating.parent().as_ref() == Some(design.upcast_ref()) {
                 design.remove_overlay(floating);
@@ -585,8 +624,20 @@ impl Window {
             };
             match action {
                 PanelAction::Pick(param) => window.pick_later(param),
-                PanelAction::Apply => window.send_edit_later(EditCommand::Add),
-                PanelAction::Cancel => window.send_edit_later(EditCommand::Cancel),
+                PanelAction::Type(text) => {
+                    let open = {
+                        let session = window.session.borrow();
+                        session.change().and_then(drag_index).or(window
+                            .editing
+                            .grips
+                            .state
+                            .borrow()
+                            .open)
+                    };
+                    if let Some(index) = open {
+                        window.apply_typed(index, &text);
+                    }
+                }
             }
         });
     }
@@ -957,7 +1008,10 @@ impl Window {
                 let lock = gtk::Image::builder()
                     .icon_name("changes-prevent-symbolic")
                     .css_classes(["stave-grip-lock"])
-                    .tooltip_text(format!("{} can't be dragged: {words}", listed.grip.label))
+                    .tooltip_text(fill_in(
+                        &tr("{grip} can't be dragged: {why}"),
+                        &[("grip", &listed.grip.label), ("why", &words)],
+                    ))
                     .build();
                 lock.upcast()
             }
@@ -966,18 +1020,15 @@ impl Window {
                     .css_classes(["stave-grip-handle"])
                     .focusable(true)
                     .accessible_role(gtk::AccessibleRole::Slider)
-                    .tooltip_text(format!(
-                        "Drag {}: {words}. Hold Ctrl for round numbers.",
-                        listed.grip.label
+                    .tooltip_text(fill_in(
+                        &tr("Drag {grip}: {value}. Hold Ctrl for round numbers."),
+                        &[("grip", &listed.grip.label), ("value", &words)],
                     ))
                     .build();
                 handle.set_cursor_from_name(Some("grab"));
-                if place.look == GripLook::Follows {
-                    handle.add_css_class("follows");
-                }
-                handle.update_property(&[gtk::accessible::Property::Label(&format!(
-                    "Drag {}",
-                    listed.grip.label
+                handle.update_property(&[gtk::accessible::Property::Label(&fill_in(
+                    &tr("Drag {grip}"),
+                    &[("grip", &listed.grip.label)],
                 ))]);
                 self.connect_handle(&handle, index);
                 handle.upcast()
@@ -1008,31 +1059,26 @@ impl Window {
                 label.add_css_class("locked");
                 row.set_spacing(6);
                 row.append(&gtk::Image::from_icon_name("changes-prevent-symbolic"));
-                row.append(
-                    &gtk::Label::builder()
-                        .label(&words)
-                        .wrap(true)
-                        .max_width_chars(36)
-                        .build(),
-                );
+                row.append(&gtk::Label::new(Some(&amount_words(grip_value(listed)))));
+                label.set_tooltip_text(Some(&words));
                 (None, None)
             }
             GripLook::Moves | GripLook::Follows => {
-                if place.look == GripLook::Follows {
-                    label.add_css_class("follows");
-                }
                 let number = gtk::Button::builder()
-                    .label(&words)
+                    .label(amount_words(grip_value(listed)))
                     .css_classes(["flat", "stave-grip-number"])
-                    .tooltip_text("Click to type a value")
+                    .tooltip_text(fill_in(
+                        &tr("{value}. Click to type a value"),
+                        &[("value", &words)],
+                    ))
                     .build();
                 let entry = gtk::Entry::builder()
                     .text(amount_words(grip_value(listed)))
                     .width_chars(9)
                     .build();
-                entry.update_property(&[gtk::accessible::Property::Label(&format!(
-                    "Value of {}",
-                    listed.grip.label
+                entry.update_property(&[gtk::accessible::Property::Label(&fill_in(
+                    &tr("Value of {grip}"),
+                    &[("grip", &listed.grip.label)],
                 ))]);
                 let stack = gtk::Stack::builder()
                     .hhomogeneous(false)
@@ -1102,18 +1148,22 @@ impl Window {
         let menu = gtk::MenuButton::builder()
             .icon_name("view-more-symbolic")
             .css_classes(["flat"])
-            .tooltip_text("Let the solver move this")
+            .tooltip_text(tr("Let the solver move this"))
             .build();
+        menu.update_property(&[gtk::accessible::Property::Label(&tr(
+            "Let the solver move this",
+        ))]);
         let popover = gtk::Popover::builder().child(&content).build();
         menu.set_popover(Some(&popover));
         let only = switches.len() == 1;
         for switch in switches {
             let row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
-            let words = if only {
-                format!("Let the solver move this ({})", switch.param.as_str())
+            let template = if only {
+                tr("Let the solver move this ({param})")
             } else {
-                format!("Let the solver move {}", switch.param.as_str())
+                tr("Let the solver move {param}")
             };
+            let words = fill_in(&template, &[("param", &switch.param.as_str())]);
             row.append(
                 &gtk::Label::builder()
                     .label(&words)
@@ -1137,7 +1187,7 @@ impl Window {
                 .build();
             range.append(
                 &gtk::Label::builder()
-                    .label("The solver keeps it within:")
+                    .label(tr("The solver keeps it within:"))
                     .xalign(0.0)
                     .css_classes(["stave-grip-note"])
                     .build(),
@@ -1148,14 +1198,14 @@ impl Window {
                 .text(&high_text)
                 .width_chars(8)
                 .build();
-            low.update_property(&[gtk::accessible::Property::Label("Lowest value")]);
-            high.update_property(&[gtk::accessible::Property::Label("Highest value")]);
+            low.update_property(&[gtk::accessible::Property::Label(&tr("Lowest value"))]);
+            high.update_property(&[gtk::accessible::Property::Label(&tr("Highest value"))]);
             ends.append(&low);
-            ends.append(&gtk::Label::new(Some("to")));
+            ends.append(&gtk::Label::new(Some(&tr("to"))));
             ends.append(&high);
             range.append(&ends);
             let make = gtk::Button::builder()
-                .label("Make it solved")
+                .label(tr("Make it solved"))
                 .css_classes(["suggested-action"])
                 .halign(gtk::Align::End)
                 .build();
@@ -1199,7 +1249,10 @@ impl Window {
                         });
                     }
                     (Err(error), _) | (_, Err(error)) => {
-                        window.edit_toast(&format!("That range can't be read: {}", error.0));
+                        window.edit_toast(&fill_in(
+                            &tr("That range can't be read: {reason}"),
+                            &[("reason", &error.0)],
+                        ));
                     }
                 }
             });
@@ -1557,14 +1610,16 @@ impl Window {
                     // another number: refused, and its try dropped.
                     (_, Some(written)) if written.raw() != value.raw() => {
                         self.drop_typed_change(index);
-                        Some(format!(
-                            "Can't be {}: it would be written as {}",
-                            amount_words(value),
-                            amount_words(written)
+                        Some(fill_in(
+                            &tr("Can't be {value}: it would be written as {written}"),
+                            &[
+                                ("value", &amount_words(value)),
+                                ("written", &amount_words(written)),
+                            ],
                         ))
                     }
                     (Some(progress), _) => typed_refusal(&progress),
-                    (None, _) => Some("it can't be tried".to_owned()),
+                    (None, _) => Some(tr("it can't be tried")),
                 }
             }
         };
@@ -1633,10 +1688,19 @@ impl Window {
         let grips = &self.editing.grips;
         if hidden {
             grips.area.set_visible(false);
-            grips.panel.root.set_visible(false);
-            for marks in &grips.state.borrow().marks {
-                marks.handle.set_visible(false);
-                marks.label.set_visible(false);
+            grips.readout.show(None);
+            // Hidden with nothing borrowed: hiding a handle mid-drag ends
+            // its drag, and the drag's end borrows the grips' state.
+            let marks: Vec<(gtk::Widget, gtk::Box)> = grips
+                .state
+                .borrow()
+                .marks
+                .iter()
+                .map(|marks| (marks.handle.clone(), marks.label.clone()))
+                .collect();
+            for (handle, label) in marks {
+                handle.set_visible(false);
+                label.set_visible(false);
             }
             return;
         }
@@ -1646,7 +1710,8 @@ impl Window {
         let open = session.change().and_then(drag_index).or(state.open);
         let mut drawing = Vec::new();
         let mut labels = Vec::new();
-        let mut panel_at = None;
+        // Handles to hide once the borrows are let go (see above).
+        let mut to_hide: Vec<gtk::Widget> = Vec::new();
         let (view_width, view_height) = (
             f64::from(self.widgets.design.width()),
             f64::from(self.widgets.design.height()),
@@ -1672,7 +1737,7 @@ impl Window {
             let start = self.project(&view, place.start);
             let end = self.project(&view, place.at(value));
             let (Some(start), Some(end), true) = (start, end, shown) else {
-                marks.handle.set_visible(false);
+                to_hide.push(marks.handle.clone());
                 marks.label.set_visible(false);
                 continue;
             };
@@ -1711,18 +1776,17 @@ impl Window {
                 && stack.visible_child_name().as_deref() == Some("number")
                 && let Some(number) = stack.child_by_name("number").and_downcast::<gtk::Button>()
             {
-                let words = match target.and_then(mm_amount) {
-                    Some(moved) if active => amount_words(moved),
-                    Some(_) | None => label_words(listed),
-                };
-                number.set_label(&words);
+                number.set_label(&amount_words(grip_value(listed)));
+            }
+            // While a drag is open its value is in the readout and the
+            // Edit panel, not beside the handle (unless it is being typed).
+            if active && state.typing != Some(place.index) {
+                marks.label.set_visible(false);
+                continue;
             }
             // Measured once shown: a hidden widget measures nothing.
             marks.label.set_visible(true);
             labels.push((&marks.label, start, end, measured(&marks.label)));
-            if active {
-                panel_at = Some(end);
-            }
         }
         // Each label beside its line, where it covers no handle, no label
         // placed before it and no card floating over the view (the menu
@@ -1795,19 +1859,26 @@ impl Window {
         grips.area.queue_draw();
         drop(state);
         drop(view);
-        self.place_grip_panel(&session, panel_at);
+        drop(session);
+        for handle in to_hide {
+            handle.set_visible(false);
+        }
+        self.show_grip_section(&self.session.borrow());
     }
 
-    /// Draws the panel for a change the grips started, beside the handle.
-    fn place_grip_panel(&self, session: &stave_app::session::Session, at: Option<(f64, f64)>) {
+    /// Draws the size section of the change's card for a change the grips
+    /// started (a drag, or a param made solved or plain), with the grip's
+    /// options, and the readout at the top of the view.
+    fn show_grip_section(self: &Rc<Self>, session: &stave_app::session::Session) {
         let grips = &self.editing.grips;
-        let (held, stop) = {
+        let (stop, open) = {
             let state = grips.state.borrow();
+            let open = session.change().and_then(drag_index).or(state.open);
             let stop = state
                 .held
-                .zip(state.open)
+                .zip(open)
                 .and_then(|(held, index)| held_words(session.grips()?.grips().get(index)?, held));
-            (state.gesture.is_some(), stop)
+            (stop, open)
         };
         let model = session.change().and_then(|change| {
             panel_model(
@@ -1819,32 +1890,46 @@ impl Window {
         });
         let Some(model) = model else {
             grips.panel.root.set_visible(false);
+            grips.readout.show(None);
             return;
         };
-        grips.panel.show(&model, held);
-        // Measured once shown: a hidden widget measures nothing.
+        let slot = &self.editing.changes.card.grip_slot;
+        if grips.panel.root.parent().as_ref() != Some(slot.upcast_ref()) {
+            if let Some(parent) = grips.panel.root.parent().and_downcast::<gtk::Box>() {
+                parent.remove(&grips.panel.root);
+            }
+            slot.append(&grips.panel.root);
+        }
+        grips.panel.show(&model);
         grips.panel.root.set_visible(true);
-        let (width, height) = grips.panel.size();
-        let (view_width, view_height) = (
-            f64::from(self.widgets.design.width()),
-            f64::from(self.widgets.design.height()),
-        );
-        let edge = f64::from(EDGE);
-        let rail = f64::from(self.right_column());
-        // Beside the handle, level with it, inside the view and clear of
-        // the dock at the bottom.
-        let (x, y) = at.map_or((view_width - width - rail - 2.0 * edge, edge), |(x, y)| {
-            (x + 28.0, y - height / 2.0)
+        grips.readout.show(model.readout.as_ref());
+        // The grip's options (⋮), made again only for another grip.
+        let wanted = open.filter(|index| {
+            session
+                .grips()
+                .and_then(|grips| grips.grips().get(*index))
+                .is_some_and(|listed| {
+                    grip_look(listed) != GripLook::Locked && !solver_switches(listed).is_empty()
+                })
         });
-        // No room on the right of the handle: on its left.
-        let right_most = view_width - width - rail - 2.0 * edge;
-        let x = match at {
-            Some((handle, _)) if x > right_most => handle - 28.0 - width,
-            Some(_) | None => x,
-        };
-        let x = x.min(right_most).max(edge);
-        let y = y.min(view_height - height - 96.0).max(edge);
-        put(&grips.panel.root, x, y);
+        let had = grips.state.borrow().options_for;
+        if wanted != had {
+            grips.state.borrow_mut().options_for = wanted;
+            while let Some(child) = grips.panel.options.first_child() {
+                grips.panel.options.remove(&child);
+            }
+            let switches = wanted.and_then(|index| {
+                let listed = session.grips()?.grips().get(index)?.clone();
+                Some((index, solver_switches(&listed)))
+            });
+            if let Some((index, switches)) = switches {
+                let menu = self.switch_menu(index, &switches);
+                menu.set_tooltip_text(Some(&tr(
+                    "Options: let the solver move this, and its range",
+                )));
+                grips.panel.options.append(&menu);
+            }
+        }
     }
 
     // ---- driving it without a pointer (screenshots) ----
@@ -2016,18 +2101,12 @@ fn measured(widget: &impl IsA<gtk::Widget>) -> (f64, f64) {
     (f64::from(width), f64::from(height))
 }
 
-/// Puts an overlay child at a point of the view.
-fn put(widget: &impl IsA<gtk::Widget>, x: f64, y: f64) {
-    widget.set_margin_start(crate::convert::int_of(x.max(0.0)));
-    widget.set_margin_top(crate::convert::int_of(y.max(0.0)));
-}
-
 #[cfg(test)]
 mod tests {
     use std::path::{Path, PathBuf};
 
     use super::*;
-    use crate::ui::edit_view::grip_text::PanelModel;
+    use crate::ui::edit_view::grip_text::{PanelChoice, PanelModel};
     use crate::ui::gtk_test::on_gtk_thread;
     use stave_app::session::Session;
 
@@ -2139,9 +2218,15 @@ mod tests {
         send(&mut session, EditCommand::DragTo(mm_amount(6.0).unwrap()));
         let moved = panel(&session);
         assert_eq!(moved.title, "apron_front.setback");
-        assert_eq!(moved.value.as_deref(), Some("6mm (was 5mm)"));
+        assert_eq!(moved.value.as_deref(), Some("6mm"));
+        assert_eq!(moved.was.as_deref(), Some("5mm"));
         assert_eq!(moved.verdict.words, "✓ It fits");
         assert!(moved.can_apply);
+        // The readout at the top of the view says it in one line.
+        assert_eq!(
+            moved.readout.as_ref().map(|(_, value)| value.as_str()),
+            Some("5 → 6 mm")
+        );
 
         // A size that follows two plain params: both, each with its value,
         // to pick from before anything is tried.
@@ -2154,6 +2239,14 @@ mod tests {
             ["overall_width 500mm to 520mm", "legs.inset 25mm to 15mm"]
         );
         assert_eq!(choosing.verdict.words, "Pick which size changes");
+        // Each choice is a radio row: the name, and the value on the right.
+        assert_eq!(choosing.choices[0].name, "overall_width");
+        assert_eq!(choosing.choices[0].value, "500 → 520 mm");
+        let about = choosing.about.as_ref().unwrap();
+        assert_eq!(
+            (about.label.as_str(), about.words.as_str()),
+            ("Follows", "overall_width, legs.inset")
+        );
         assert!(!choosing.can_apply);
         let width = choosing.choices[0].param;
         send(&mut session, EditCommand::PickParam(width));
@@ -2161,6 +2254,10 @@ mod tests {
         assert!(picked.choices[0].picked);
         assert_eq!(picked.changes, ["Changes overall_width 500mm to 520mm"]);
         assert!(picked.can_apply);
+        assert_eq!(
+            picked.readout,
+            Some(("overall_width".to_owned(), "500 → 520 mm".to_owned()))
+        );
         let _ = std::fs::remove_dir_all(&folder);
     }
 
@@ -2216,41 +2313,64 @@ mod tests {
     }
 
     #[test]
-    fn the_panel_says_the_value_the_stop_and_the_verdict_and_applies_only_a_fit() {
+    fn the_size_section_lists_the_sizes_as_radios_and_the_readout_is_one_line() {
         on_gtk_thread(|| {
             let panel = GripPanel::new();
+            let readout = Readout::new();
+            let choice = |name: &str, value: &str, picked: bool| PanelChoice {
+                param: ParamId::from_index(usize::from(picked)).unwrap(),
+                words: format!("{name} {value}"),
+                name: name.to_owned(),
+                value: value.to_owned(),
+                possible: true,
+                picked,
+            };
             let model = PanelModel {
-                title: "divider.height".to_owned(),
-                value: Some("700mm (was 500mm)".to_owned()),
+                title: "case.base.length".to_owned(),
+                value: Some("1000mm".to_owned()),
+                was: Some("900mm".to_owned()),
+                about: Some(super::super::grip_text::PanelAbout {
+                    label: "Follows".to_owned(),
+                    words: "overall_width".to_owned(),
+                }),
                 changes: Vec::new(),
-                choices: Vec::new(),
-                stop: Some("stops at 180mm".to_owned()),
+                choices: vec![
+                    choice("overall_width", "940 → 1040 mm", true),
+                    choice("case.overhang", "20 → -30 mm", false),
+                ],
+                stop: Some("stops at 1200mm".to_owned()),
                 verdict: super::super::grip_text::PanelVerdict {
                     class: "fits",
                     words: "✓ It fits".to_owned(),
                 },
                 can_apply: true,
+                readout: Some(("overall_width".to_owned(), "940 → 1040 mm".to_owned())),
             };
-            panel.show(&model, true);
+            panel.show(&model);
             assert_eq!(
                 panel.words(),
                 [
-                    "divider.height",
-                    "700mm (was 500mm)",
-                    "stops at 180mm",
-                    "✓ It fits"
+                    "case.base.length",
+                    "1000mm",
+                    "was 900mm",
+                    "overall_width",
+                    "stops at 1200mm"
                 ]
             );
-            panel.show(&model, false);
-            assert!(panel.can_apply());
-            panel.show(
-                &PanelModel {
-                    can_apply: false,
-                    ..model
-                },
-                false,
+            assert_eq!(
+                panel.radios(),
+                [
+                    ("overall_width".to_owned(), true),
+                    ("case.overhang".to_owned(), false)
+                ]
             );
-            assert!(!panel.can_apply());
+            readout.show(model.readout.as_ref());
+            assert_eq!(
+                readout.words().as_deref(),
+                Some("overall_width 940 → 1040 mm")
+            );
+            readout.show(None);
+            assert_eq!(readout.words(), None);
         });
     }
 }

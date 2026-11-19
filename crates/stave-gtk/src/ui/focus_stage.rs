@@ -13,6 +13,7 @@
 //!
 //! The window sets their values and hears back only from what people do.
 
+use stave_app::i18n::{fill_in, tr};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
@@ -47,9 +48,13 @@ fn dim(text: &str) -> gtk::Label {
 /// Shows play or pause on a play button.
 pub fn show_playing(button: &gtk::Button, icon: &PathIcon, playing: bool, label: &str) {
     icon.set_shape(if playing { icons::PAUSE } else { icons::PLAY });
-    let text = if playing { "Pause" } else { label };
-    button.set_tooltip_text(Some(text));
-    button.update_property(&[gtk::accessible::Property::Label(text)]);
+    let text = if playing {
+        tr("Pause")
+    } else {
+        label.to_owned()
+    };
+    button.set_tooltip_text(Some(&text));
+    button.update_property(&[gtk::accessible::Property::Label(&text)]);
 }
 
 /// The joint's step player, floating at the bottom of the view.
@@ -69,7 +74,7 @@ pub struct StepCard {
 impl StepCard {
     /// A hidden card.
     pub fn new() -> StepCard {
-        let (play, play_icon) = play_button("Play the assembly");
+        let (play, play_icon) = play_button(&tr("Play the assembly"));
         let step = gtk::Label::builder()
             .use_markup(true)
             .xalign(0.0)
@@ -83,7 +88,7 @@ impl StepCard {
         let line = gtk::Box::new(gtk::Orientation::Horizontal, 12);
         line.append(&step);
         line.append(&status);
-        let scrub = Slider::new("Apart to together", 22, 22.0, 2.0);
+        let scrub = Slider::new(&tr("Apart to together"), 22, 22.0, 2.0);
         let ends = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         let apart = dim("apart");
         apart.set_hexpand(true);
@@ -108,7 +113,7 @@ impl StepCard {
             .css_classes(["stave-focus-card"])
             .visible(false)
             .build();
-        root.update_property(&[gtk::accessible::Property::Label("Assembly steps")]);
+        root.update_property(&[gtk::accessible::Property::Label(&tr("Assembly steps"))]);
         root.append(&play);
         root.append(&column);
         StepCard {
@@ -157,11 +162,11 @@ pub struct SwingCard {
 impl SwingCard {
     /// A hidden card.
     pub fn new() -> SwingCard {
-        let (play, play_icon) = play_button("Play the swing");
+        let (play, play_icon) = play_button(&tr("Play the swing"));
         let name = gtk::Label::builder()
             .css_classes(["heading", "stave-card-name"])
             .build();
-        let scrub = Slider::new("Door angle", 22, 22.0, 2.0);
+        let scrub = Slider::new(&tr("Door angle"), 22, 22.0, 2.0);
         let value = gtk::Label::builder()
             .xalign(1.0)
             .width_chars(6)
@@ -173,7 +178,7 @@ impl SwingCard {
             .css_classes(["stave-focus-card"])
             .visible(false)
             .build();
-        root.update_property(&[gtk::accessible::Property::Label("Swing the door")]);
+        root.update_property(&[gtk::accessible::Property::Label(&tr("Swing the door"))]);
         root.append(&play);
         root.append(&name);
         root.append(&scrub.root);
@@ -193,10 +198,10 @@ impl SwingCard {
         self.name.set_label(name);
         self.scrub
             .root
-            .update_property(&[gtk::accessible::Property::Label(if turns {
-                "Door angle"
+            .update_property(&[gtk::accessible::Property::Label(&if turns {
+                tr("Door angle")
             } else {
-                "How far it slides out"
+                tr("How far it slides out")
             })]);
     }
 
@@ -259,7 +264,7 @@ impl Caption {
 }
 
 /// Called when the pictures need rendering again at a new size.
-type ResizeHandler = Box<dyn Fn()>;
+type ResizeHandler = Rc<dyn Fn()>;
 
 /// Hardware focus's three small views at fixed angles. Each is rendered
 /// at its slot's size in device pixels and drawn one texel to a pixel, so
@@ -297,7 +302,7 @@ impl Pictures {
     /// (the window resized, or moved to a screen of another scale): they
     /// need rendering again at [`Pictures::device_size`].
     pub fn connect_resized(&self, handler: impl Fn() + 'static) {
-        self.on_resize.replace(Some(Box::new(handler)));
+        self.on_resize.replace(Some(Rc::new(handler)));
     }
 
     /// The size, in device pixels, to render the pictures at; `None`
@@ -335,25 +340,26 @@ impl Pictures {
             let size = self.size.clone();
             let on_resize = self.on_resize.clone();
             picture.connect_resized(move |width, height| {
-                if size.replace((width, height)) != (width, height)
-                    && let Some(handler) = on_resize.borrow().as_ref()
-                {
+                if size.replace((width, height)) == (width, height) {
+                    return;
+                }
+                // Cloned out so that the handler may set a new one.
+                let handler = on_resize.borrow().clone();
+                if let Some(handler) = handler {
                     handler();
                 }
             });
-            let words = if index == 0 {
-                "closed"
+            let template = if index == 0 {
+                tr("{caption} closed")
             } else if index + 1 == count {
-                "fully open"
+                tr("{caption} fully open")
             } else {
-                "part way"
+                tr("{caption} part way")
             };
+            let caption_markup = format!("<b>{}</b>", gtk::glib::markup_escape_text(caption));
             let label = gtk::Label::builder()
                 .use_markup(true)
-                .label(format!(
-                    "<b>{}</b> {words}",
-                    gtk::glib::markup_escape_text(caption)
-                ))
+                .label(fill_in(&template, &[("caption", &caption_markup)]))
                 .xalign(0.0)
                 .ellipsize(gtk::pango::EllipsizeMode::End)
                 .css_classes(["stave-picture-caption"])
@@ -364,7 +370,10 @@ impl Pictures {
             let button = gtk::Button::builder()
                 .child(&cell)
                 .css_classes(["stave-picture"])
-                .tooltip_text(format!("Show it at {caption}"))
+                .tooltip_text(fill_in(
+                    &tr("Show it at {caption}"),
+                    &[("caption", &caption)],
+                ))
                 .build();
             let choose = on_choose.clone();
             button.connect_clicked(move |_| choose(index));
@@ -424,7 +433,7 @@ impl ProblemCard {
         let line = gtk::Box::new(gtk::Orientation::Horizontal, 12);
         line.append(&lead);
         line.append(&value);
-        let scrub = Slider::new("Swing it", 26, 22.0, 2.0);
+        let scrub = Slider::new(&tr("Swing it"), 26, 22.0, 2.0);
         let start = dim("");
         start.set_xalign(0.0);
         start.set_hexpand(true);
@@ -479,9 +488,9 @@ impl ProblemCard {
             return;
         };
         let escape = |t: &str| gtk::glib::markup_escape_text(t).to_string();
-        self.lead.set_markup(&format!(
-            "<b>{}</b> <span alpha=\"70%\">to see where it hits</span>",
-            escape(&card.lead())
+        self.lead.set_markup(&fill_in(
+            &tr("{name} <span alpha=\"70%\">to see where it hits</span>"),
+            &[("name", &format!("<b>{}</b>", escape(&card.lead())))],
         ));
         let (full, contact, value) = if card.turns {
             (
@@ -497,7 +506,7 @@ impl ProblemCard {
             )
         };
         self.scrub.set_range(0.0, full.max(0.1));
-        self.scrub.set_blocked_from(Some(contact));
+        self.scrub.set_blocked(Some((contact, &card.blocked)));
         self.scrub.set_value(value);
         self.scrub
             .root

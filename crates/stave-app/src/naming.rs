@@ -14,6 +14,7 @@
 //! fixed ([`ENVELOPE_PARAMS`], [`ENVELOPE_REGION`]) and every other param
 //! is named by the user.
 
+use crate::i18n::{fill_in, tr};
 use std::collections::BTreeSet;
 use std::num::NonZeroUsize;
 
@@ -34,12 +35,27 @@ pub const ENVELOPE_REGION: &str = "envelope";
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum NamingError {
     /// What the name is made from has no letters a name can use.
-    #[error("'{0}' gives no name: a name needs a letter")]
+    #[error("{}", self.text())]
     NoName(String),
     /// Every number up to the limit is taken (a bug, or a design with
     /// billions of names).
-    #[error("every name from '{0}' is taken")]
+    #[error("{}", self.text())]
     Exhausted(String),
+}
+
+impl NamingError {
+    /// The error in the window's words (translated).
+    fn text(&self) -> String {
+        match self {
+            NamingError::NoName(v0) => fill_in(
+                &tr("'{value}' gives no name: a name needs a letter"),
+                &[("value", v0)],
+            ),
+            NamingError::Exhausted(v0) => {
+                fill_in(&tr("every name from '{value}' is taken"), &[("value", v0)])
+            }
+        }
+    }
 }
 
 /// The names already used in a scope, which a generated name must not

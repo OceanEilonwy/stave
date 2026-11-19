@@ -20,6 +20,7 @@
 //! the ids a grip carries are those the drag reads. A commit makes the
 //! list stale, so the session drops it.
 
+use crate::i18n::{fill_in, tr};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -561,7 +562,7 @@ impl GripDrag {
                             .collect();
                         match NonEmpty::new(names) {
                             Some(names) => DragOutcome::Stands(Progress::NeedsChoice(names)),
-                            None => stands("pick which size changes".to_owned()),
+                            None => stands(tr("pick which size changes")),
                         }
                     }
                 }
@@ -615,7 +616,7 @@ fn solved_move(drag: &mut Drag, detail: &mut GripDetail, target: Amount) -> Drag
                 detail.reached = Some(reached);
             }
             if changes.is_empty() {
-                return stands("the size is already that".to_owned());
+                return stands(tr("the size is already that"));
             }
             let patch = match changes_patch(&changes) {
                 Ok(patch) => patch,
@@ -632,7 +633,7 @@ fn solved_move(drag: &mut Drag, detail: &mut GripDetail, target: Amount) -> Drag
             detail.blockers = blockers;
             stands(words)
         }
-        Ok(DragStep::TimedOut) => stands("the solver ran out of time".to_owned()),
+        Ok(DragStep::TimedOut) => stands(tr("the solver ran out of time")),
         Err(error) => stands(error.to_string()),
     }
 }
@@ -641,22 +642,31 @@ fn solved_move(drag: &mut Drag, detail: &mut GripDetail, target: Amount) -> Drag
 /// it: "can't reach 1500mm: the rule 'fits_the_room' stops it (the cabinet
 /// must fit the alcove)".
 pub fn blocked_text(target: Amount, blockers: &[Blocker]) -> String {
-    let value = amount_text(target).unwrap_or_else(|| "that value".to_owned());
+    let value = amount_text(target).unwrap_or_else(|| tr("that value"));
     let mut reasons = Vec::new();
     for blocker in blockers {
         match blocker {
             Blocker::Require { name, message } => {
-                reasons.push(format!("the rule '{name}' stops it ({message})"));
+                reasons.push(fill_in(
+                    &tr("the rule '{name}' stops it ({message})"),
+                    &[("name", name), ("message", message)],
+                ));
             }
             Blocker::Within { path, .. } => {
-                reasons.push(format!("'{path}' would leave its range"));
+                reasons.push(fill_in(
+                    &tr("'{path}' would leave its range"),
+                    &[("path", path)],
+                ));
             }
             Blocker::Size => {}
         }
     }
     if reasons.is_empty() {
-        format!("can't reach {value}")
+        fill_in(&tr("can't reach {value}"), &[("value", &value)])
     } else {
-        format!("can't reach {value}: {}", reasons.join("; "))
+        fill_in(
+            &tr("can't reach {value}: {reasons}"),
+            &[("value", &value), ("reasons", &reasons.join("; "))],
+        )
     }
 }

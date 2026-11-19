@@ -7,6 +7,7 @@
 //! inspector says what a library folder is and how a project uses it
 //! ([`EmptyState::inspector`], [`EmptyState::sidebar`]).
 
+use crate::i18n::{fill_in, ntr, tr, tr_noop};
 use stave_lang::ast::BaseKind;
 use stave_model::defs::{Decl, DefId};
 
@@ -31,13 +32,13 @@ pub enum Reason {
 impl Reason {
     /// Why the build button is off, in words: "Nothing to build: a
     /// library has no parts".
-    pub fn nothing_to_build(self) -> &'static str {
+    pub fn nothing_to_build(self) -> String {
         match self {
-            Reason::Checking => "Nothing to build yet: the design is still being checked",
-            Reason::CantOpen => "Nothing to build: the folder couldn't be opened",
-            Reason::Errors => "Nothing to build yet: fix the problems first",
-            Reason::Library => "Nothing to build: a library has no parts",
-            Reason::NoParts => "Nothing to build: the project has no parts yet",
+            Reason::Checking => tr("Nothing to build yet: the design is still being checked"),
+            Reason::CantOpen => tr("Nothing to build: the folder couldn't be opened"),
+            Reason::Errors => tr("Nothing to build yet: fix the problems first"),
+            Reason::Library => tr("Nothing to build: a library has no parts"),
+            Reason::NoParts => tr("Nothing to build: the project has no parts yet"),
         }
     }
 }
@@ -108,16 +109,16 @@ pub enum LibraryGroup {
 
 impl LibraryGroup {
     /// The sidebar's heading: "JOINT KINDS".
-    pub fn heading(self) -> &'static str {
+    pub fn heading(self) -> String {
         match self {
-            LibraryGroup::Joints => "JOINT KINDS",
-            LibraryGroup::Hardware => "HARDWARE KINDS",
-            LibraryGroup::Fasteners => "FASTENERS",
-            LibraryGroup::Tools => "TOOLS",
-            LibraryGroup::Recipes => "RECIPES",
-            LibraryGroup::Components => "COMPONENTS",
-            LibraryGroup::Stock => "STOCK",
-            LibraryGroup::Profiles => "PROFILES",
+            LibraryGroup::Joints => tr("JOINT KINDS"),
+            LibraryGroup::Hardware => tr("HARDWARE KINDS"),
+            LibraryGroup::Fasteners => tr("FASTENERS"),
+            LibraryGroup::Tools => tr("TOOLS"),
+            LibraryGroup::Recipes => tr("RECIPES"),
+            LibraryGroup::Components => tr("COMPONENTS"),
+            LibraryGroup::Stock => tr("STOCK"),
+            LibraryGroup::Profiles => tr("PROFILES"),
         }
     }
 }
@@ -137,25 +138,33 @@ impl EmptyState {
     /// What the inspector says, since there is nothing to select.
     pub fn inspector(&self) -> Note {
         let note = |title: &str, description: &str| Note {
-            title: title.to_owned(),
-            description: description.to_owned(),
+            title: tr(title),
+            description: if description.is_empty() {
+                String::new()
+            } else {
+                tr(description)
+            },
             code: None,
             after: None,
         };
         match self.reason {
-            Reason::Checking => note("Checking…", ""),
+            Reason::Checking => note(tr_noop("Checking…"), ""),
             Reason::CantOpen => note(
-                "Nothing to inspect",
-                "Open a project folder to see its parts here.",
+                tr_noop("Nothing to inspect"),
+                tr_noop("Open a project folder to see its parts here."),
             ),
             Reason::Errors => note(
-                "Nothing to inspect yet",
-                "Once the errors are fixed, click a part in the list or in the 3D view to see its stock, size, joints and where it is written.",
+                tr_noop("Nothing to inspect yet"),
+                tr_noop(
+                    "Once the errors are fixed, click a part in the list or in the 3D view to see its stock, size, joints and where it is written.",
+                ),
             ),
             Reason::Library => self.library_note(),
             Reason::NoParts => note(
-                "No parts yet",
-                "Add a part to the project's text; then click it in the list or in the 3D view to see it here.",
+                tr_noop("No parts yet"),
+                tr_noop(
+                    "Add a part to the project's text; then click it in the list or in the 3D view to see it here.",
+                ),
             ),
         }
     }
@@ -173,24 +182,29 @@ impl EmptyState {
             .and_then(|(_, items)| items.first())
             .map_or("a_kind", |item| item.name.as_str());
         Note {
-            title: "A library folder".to_owned(),
-            description: "A library holds kinds of joints and hardware, recipes and components for projects to use. It has no parts of its own, so there is nothing to select or build here. To use it, import it at the top of a project file:".to_owned(),
+            title: tr("A library folder"),
+            description: tr(
+                "A library holds kinds of joints and hardware, recipes and components for projects to use. It has no parts of its own, so there is nothing to select or build here. To use it, import it at the top of a project file:",
+            ),
             code: Some(format!("import \"../{name}\" as {name}")),
-            after: Some(format!(
-                "Then name what you need through it, such as {name}.{example}. Click a name in the list to read how it is written."
+            after: Some(fill_in(
+                &tr(
+                    "Then name what you need through it, such as {name}.{example}. Click a name in the list to read how it is written.",
+                ),
+                &[("name", &name), ("example", &example)],
             )),
         }
     }
 
     /// What the parts sidebar says when it has no parts to list (a library
     /// lists what it defines under this line).
-    pub fn sidebar(&self) -> &'static str {
+    pub fn sidebar(&self) -> String {
         match self.reason {
-            Reason::Checking => "Checking…",
-            Reason::CantOpen => "No folder open",
-            Reason::Errors => "The parts appear once the errors are fixed",
-            Reason::Library => "A library has no parts. It defines:",
-            Reason::NoParts => "No parts yet",
+            Reason::Checking => tr("Checking…"),
+            Reason::CantOpen => tr("No folder open"),
+            Reason::Errors => tr("The parts appear once the errors are fixed"),
+            Reason::Library => tr("A library has no parts. It defines:"),
+            Reason::NoParts => tr("No parts yet"),
         }
     }
 }
@@ -272,10 +286,6 @@ pub fn library(checked: &Checked) -> Option<Library> {
     })
 }
 
-fn plural(count: usize, one: &str, many: &str) -> String {
-    format!("{count} {}", if count == 1 { one } else { many })
-}
-
 /// The empty state for what the session holds, or `None` when there is a
 /// design with parts to draw.
 pub fn of(session: &Session) -> Option<EmptyState> {
@@ -283,8 +293,10 @@ pub fn of(session: &Session) -> Option<EmptyState> {
         if design.parts.is_empty() && design.hardware.is_empty() {
             return Some(EmptyState {
                 reason: Reason::NoParts,
-                title: "No parts yet".to_owned(),
-                description: "The project places no parts. Add a part to its text and it appears here as soon as the file is saved.".to_owned(),
+                title: tr("No parts yet"),
+                description: tr(
+                    "The project places no parts. Add a part to its text and it appears here as soon as the file is saved.",
+                ),
                 offers_open: false,
                 library: None,
             });
@@ -294,32 +306,38 @@ pub fn of(session: &Session) -> Option<EmptyState> {
     let state = match session.latest() {
         Some(latest) if latest.summary.errors > 0 => EmptyState {
             reason: Reason::Errors,
-            title: "Nothing to show yet".to_owned(),
-            description: format!(
-                "The design has {}, so it can't be put together yet. The problems chip at the top steps through them (F8).",
-                plural(latest.summary.errors, "error", "errors")
+            title: tr("Nothing to show yet"),
+            description: fill_in(
+                &ntr(
+                    "The design has {count} error, so it can't be put together yet. The problems chip at the top steps through them (F8).",
+                    "The design has {count} errors, so it can't be put together yet. The problems chip at the top steps through them (F8).",
+                    latest.summary.errors,
+                ),
+                &[("count", &latest.summary.errors)],
             ),
             offers_open: false,
             library: None,
         },
         Some(latest) => EmptyState {
             reason: Reason::Library,
-            title: "Nothing to show".to_owned(),
-            description: "This folder is a library of kinds and components, with no parts to place. Open a project that uses it to see it in 3D.".to_owned(),
+            title: tr("Nothing to show"),
+            description: tr(
+                "This folder is a library of kinds and components, with no parts to place. Open a project that uses it to see it in 3D.",
+            ),
             offers_open: true,
             library: library(latest),
         },
         None => match session.check_status().verdict() {
             Some(Verdict::CantOpen(message)) => EmptyState {
                 reason: Reason::CantOpen,
-                title: "Can't open the folder".to_owned(),
+                title: tr("Can't open the folder"),
                 description: message.clone(),
                 offers_open: true,
                 library: None,
             },
             Some(Verdict::Checked(_)) | None => EmptyState {
                 reason: Reason::Checking,
-                title: "Checking…".to_owned(),
+                title: tr("Checking…"),
                 description: String::new(),
                 offers_open: false,
                 library: None,

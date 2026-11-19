@@ -20,6 +20,7 @@
 //! doc comments, a kind's `insert:` steps as written, and a hardware kind's
 //! documented `member`s.
 
+use crate::i18n::{fill_in, tr, tr_noop};
 use stave_geom::clearance::{box_centre, closest_for};
 use stave_geom::mechanism::MechanismPath;
 
@@ -62,7 +63,7 @@ pub enum Target {
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum FindError {
     /// No joint or hardware has that name.
-    #[error("no joint or hardware is called '{name}'; try one of: {names}")]
+    #[error("{}", self.text())]
     NotFound {
         /// The name asked for.
         name: String,
@@ -70,7 +71,7 @@ pub enum FindError {
         names: String,
     },
     /// The joint has fewer pairs.
-    #[error("joint '{name}' has {count} pairs, numbered from 0; there is no pair {pair}")]
+    #[error("{}", self.text())]
     NoPair {
         /// The joint.
         name: String,
@@ -79,6 +80,22 @@ pub enum FindError {
         /// The pair asked for.
         pair: usize,
     },
+}
+
+impl FindError {
+    /// The error in the window's words (translated).
+    fn text(&self) -> String {
+        match self {
+            FindError::NotFound { name, names } => fill_in(
+                &tr("no joint or hardware is called '{name}'; try one of: {names}"),
+                &[("name", name), ("names", names)],
+            ),
+            FindError::NoPair { name, count, pair } => fill_in(
+                &tr("joint '{name}' has {count} pairs, numbered from 0; there is no pair {pair}"),
+                &[("name", name), ("count", count), ("pair", pair)],
+            ),
+        }
+    }
 }
 
 /// The joint (and pair, default the first) or piece of hardware with this
@@ -166,7 +183,10 @@ pub fn title(design: &SolvedDesign, target: Target) -> String {
             };
             let parts: Vec<&str> = pair.roles.iter().map(|r| name(r.part)).collect();
             match parts.as_slice() {
-                [piece, into] => format!("{piece} into {into} ({})", joint.kind),
+                [piece, into] => fill_in(
+                    &tr("{piece} into {into} ({kind})"),
+                    &[("piece", piece), ("into", into), ("kind", &joint.kind)],
+                ),
                 _ => format!("{} ({})", parts.join(", "), joint.kind),
             }
         }
@@ -388,24 +408,30 @@ pub(crate) fn cut_row(joint_kind: &str, kind: &CutKind) -> Row {
     let millimetres = tenths;
     let mm = |length: Length| format!("{} mm", millimetres(length));
     let deep = |depth: &Depth| match depth {
-        Depth::Length(length) => format!("{} deep", mm(*length)),
-        Depth::Through => "all the way through".to_owned(),
+        Depth::Length(length) => fill_in(&tr("{length} deep"), &[("length", &mm(*length))]),
+        Depth::Through => tr("all the way through"),
     };
     let (label, value) = match kind {
-        CutKind::Drill { diameter, depth } => {
-            ("Hole", format!("{} across, {}", mm(*diameter), deep(depth)))
-        }
+        CutKind::Drill { diameter, depth } => (
+            tr_noop("Hole"),
+            fill_in(
+                &tr("{diameter} across, {depth}"),
+                &[("diameter", &mm(*diameter)), ("depth", &deep(depth))],
+            ),
+        ),
         CutKind::Pocket {
             width,
             thickness,
             depth,
         } => (
-            "Mortise",
-            format!(
-                "{} × {} mm, {}",
-                millimetres(*thickness),
-                millimetres(*width),
-                deep(depth)
+            tr_noop("Mortise"),
+            fill_in(
+                &tr("{thickness} × {width} mm, {depth}"),
+                &[
+                    ("thickness", &millimetres(*thickness)),
+                    ("width", &millimetres(*width)),
+                    ("depth", &deep(depth)),
+                ],
             ),
         ),
         CutKind::Tenon {
@@ -413,34 +439,46 @@ pub(crate) fn cut_row(joint_kind: &str, kind: &CutKind) -> Row {
             width,
             thickness,
         } => (
-            "Tenon",
-            format!(
-                "{} long, {} × {} mm",
-                mm(*length),
-                millimetres(*thickness),
-                millimetres(*width)
+            tr_noop("Tenon"),
+            fill_in(
+                &tr("{length} long, {thickness} × {width} mm"),
+                &[
+                    ("length", &mm(*length)),
+                    ("thickness", &millimetres(*thickness)),
+                    ("width", &millimetres(*width)),
+                ],
             ),
         ),
         CutKind::Spigot { length, diameter } => (
-            "Round tenon",
-            format!("{} across, {} long", mm(*diameter), mm(*length)),
+            tr_noop("Round tenon"),
+            fill_in(
+                &tr("{diameter} across, {length} long"),
+                &[("diameter", &mm(*diameter)), ("length", &mm(*length))],
+            ),
         ),
         CutKind::Notch { depth } => (
             match joint_kind.rsplit('.').next().unwrap_or(joint_kind) {
-                "dado" => "Dado",
-                "rabbet" => "Rabbet",
-                "groove" => "Groove",
-                _ => "Notch",
+                "dado" => tr_noop("Dado"),
+                "rabbet" => tr_noop("Rabbet"),
+                "groove" => tr_noop("Groove"),
+                _ => tr_noop("Notch"),
             },
             deep(depth),
         ),
-        CutKind::Slot { width, depth, .. } => {
-            ("Slot", format!("{} wide, {}", mm(*width), deep(depth)))
-        }
-        CutKind::Round { diameter, .. } => ("Round section", format!("{} across", mm(*diameter))),
-        CutKind::DovetailSocket { .. } => ("Dovetail socket", "angled sides".to_owned()),
-        CutKind::DovetailTail { .. } => ("Dovetail tail", "angled sides".to_owned()),
-        CutKind::Outline { .. } => ("Outline", "cut to a drawn shape".to_owned()),
+        CutKind::Slot { width, depth, .. } => (
+            tr_noop("Slot"),
+            fill_in(
+                &tr("{width} wide, {depth}"),
+                &[("width", &mm(*width)), ("depth", &deep(depth))],
+            ),
+        ),
+        CutKind::Round { diameter, .. } => (
+            tr_noop("Round section"),
+            fill_in(&tr("{length} across"), &[("length", &mm(*diameter))]),
+        ),
+        CutKind::DovetailSocket { .. } => (tr_noop("Dovetail socket"), tr("angled sides")),
+        CutKind::DovetailTail { .. } => (tr_noop("Dovetail tail"), tr("angled sides")),
+        CutKind::Outline { .. } => (tr_noop("Outline"), tr("cut to a drawn shape")),
     };
     Row { label, value }
 }
@@ -552,26 +590,29 @@ fn joint_focus(
     match roles.as_slice() {
         [(_, piece), (_, into)] => {
             rows.push(Row {
-                label: "Goes in",
+                label: tr_noop("Goes in"),
                 value: piece.clone(),
             });
             rows.push(Row {
-                label: "Receives it",
+                label: tr_noop("Receives it"),
                 value: into.clone(),
             });
         }
         _ => {
             for (role, part) in &roles {
                 rows.push(Row {
-                    label: "Part",
-                    value: format!("{part} (the {role})"),
+                    label: tr_noop("Part"),
+                    value: fill_in(
+                        &tr("{part} (the {role})"),
+                        &[("part", part), ("role", role)],
+                    ),
                 });
             }
         }
     }
     if !pair.made_parts.is_empty() {
         rows.push(Row {
-            label: "Made by the joint",
+            label: tr_noop("Made by the joint"),
             value: pair
                 .made_parts
                 .iter()
@@ -588,12 +629,15 @@ fn joint_focus(
             .map(|item| format!(" ({})", crate::view::item_text(item)))
             .unwrap_or_default();
         rows.push(Row {
-            label: "Places",
-            value: format!(
-                "{} × {}{what}, {}",
-                body.copies(),
-                body.name.replace('_', " "),
-                crate::view::copy_text(body)
+            label: tr_noop("Places"),
+            value: fill_in(
+                &tr("{count} × {name}{what}, {each}"),
+                &[
+                    ("count", &body.copies()),
+                    ("name", &body.name.replace('_', " ")),
+                    ("what", &what),
+                    ("each", &crate::view::copy_text(body)),
+                ],
             ),
         });
     }
@@ -611,7 +655,10 @@ fn joint_focus(
                 let mut row = cut_row(&joint.kind, &cut.kind);
                 let per_member = matches!(cut.place, CutPlace::Member { .. });
                 if parts.len() > 2 || per_member || matches!(cut.kind, CutKind::Notch { .. }) {
-                    row.value = format!("{}, in {}", row.value, part.name);
+                    row.value = fill_in(
+                        &tr("{cut}, in {part}"),
+                        &[("cut", &row.value), ("part", &part.name)],
+                    );
                 }
                 match cuts.iter_mut().find(|(seen, _)| *seen == row) {
                     Some((_, count)) => *count = count.saturating_add(1),
@@ -631,7 +678,7 @@ fn joint_focus(
         }
     }));
     rows.push(Row {
-        label: "Fit",
+        label: tr_noop("Fit"),
         value: fit_text(&parts, &solids),
     });
 
@@ -667,7 +714,10 @@ fn joint_focus(
     };
     Some(Focus {
         target,
-        context: format!("{} · Joint focus · {title}", design.project.title),
+        context: fill_in(
+            &tr("{project} · Joint focus · {title}"),
+            &[("project", &design.project.title), ("title", &title)],
+        ),
         title,
         heading,
         summary: description.clone(),
@@ -679,15 +729,15 @@ fn joint_focus(
         key_poses: vec![
             KeyPose {
                 progress: 0.0,
-                caption: "apart".to_owned(),
+                caption: tr("apart"),
             },
             KeyPose {
                 progress: 0.5,
-                caption: "half way".to_owned(),
+                caption: tr("half way"),
             },
             KeyPose {
                 progress: 1.0,
-                caption: "together".to_owned(),
+                caption: tr("together"),
             },
         ],
         closest: None,
@@ -729,12 +779,25 @@ fn fit_text(parts: &[&Part], solids: &[Solid]) -> String {
             .any(|(j, b)| j != i && touches(a, b));
     }
     match deepest {
-        Some(depth) if depth > CONTACT_TOLERANCE => {
-            format!("wood overlaps by {} mm", tenths(depth))
-        }
-        Some(_) | None if all_touch => "touches, nothing overlaps".to_owned(),
-        Some(_) | None => "a part doesn't touch the others".to_owned(),
+        Some(depth) if depth > CONTACT_TOLERANCE => fill_in(
+            &tr("wood overlaps by {depth} mm"),
+            &[("depth", &tenths(depth))],
+        ),
+        Some(_) | None if all_touch => fits_words(),
+        Some(_) | None => tr("a part doesn't touch the others"),
     }
+}
+
+/// What the Fit row says when every part touches and none overlaps: the
+/// window shows it as good.
+pub fn fits_words() -> String {
+    tr("touches, nothing overlaps")
+}
+
+/// What the swing or slide check says when nothing is hit: the window
+/// shows it as good.
+pub fn clear_words() -> String {
+    tr("clear all the way")
 }
 
 /// A joint kind's `insert:` steps as written, and the file and line.
@@ -882,7 +945,11 @@ fn hardware_focus(
                 Some(MotionShape::Turn { .. } | MotionShape::General) | None => None,
             };
             rows.push(Row {
-                label: if range.turns { "Opens to" } else { "Pulls out" },
+                label: if range.turns {
+                    tr_noop("Opens to")
+                } else {
+                    tr_noop("Pulls out")
+                },
                 value: amount_text(range, range.full),
             });
             key_pose_rows = key_poses(range)
@@ -917,7 +984,7 @@ fn hardware_focus(
                         closest_for(&moving, std::slice::from_ref(side), motion, prefer)
                 {
                     rows.push(Row {
-                        label: "Closest to the side",
+                        label: tr_noop("Closest to the side"),
                         value: gap_text(found.gap),
                     });
                     gap_mark = GapMark::new(graph, assembly, &found, &gap_text(found.gap));
@@ -927,7 +994,7 @@ fn hardware_focus(
                 {
                     if Some(part.id) != on {
                         rows.push(Row {
-                            label: "Closest to anything",
+                            label: tr_noop("Closest to anything"),
                             value: format!("{}: {}", part.name, gap_text(found.gap)),
                         });
                         if gap_mark.is_none() {
@@ -944,13 +1011,13 @@ fn hardware_focus(
             });
             rows.push(Row {
                 label: if range.turns {
-                    "Swing check"
+                    tr_noop("Swing check")
                 } else {
-                    "Slide check"
+                    tr_noop("Slide check")
                 },
                 value: match hit {
                     Some((diagnostic, _)) => diagnostic.message.clone(),
-                    None => "clear all the way".to_owned(),
+                    None => clear_words(),
                 },
             });
             let rest = graph.rest();
@@ -966,13 +1033,12 @@ fn hardware_focus(
             };
             if !path.is_empty() {
                 rows.push(Row {
-                    label: "Dotted line",
+                    label: tr_noop("Dotted line"),
                     value: if range.turns {
-                        "the path of the door's front edge: solid where it has been"
+                        tr("the path of the door's front edge: solid where it has been")
                     } else {
-                        "the path of the drawer's front: solid where it has been"
-                    }
-                    .to_owned(),
+                        tr("the path of the drawer's front: solid where it has been")
+                    },
                 });
             }
             match (toward, swing) {
@@ -994,21 +1060,24 @@ fn hardware_focus(
                 gap: gap_mark,
             })
         }
-        None => Play::Fixed(anchors.clone()),
+        None => Play::Fixed(anchors),
     };
     // The base's words; the kind's doc comment, shown under it, says which
     // hinge, slide or pull it is.
     let heading = match hardware.base {
-        HardwareBase::Hinge => "How this hinge works",
-        HardwareBase::Slide => "How this drawer slide works",
-        HardwareBase::Pull => "How this pull is fixed",
+        HardwareBase::Hinge => tr("How this hinge works"),
+        HardwareBase::Slide => tr("How this drawer slide works"),
+        HardwareBase::Pull => tr("How this pull is fixed"),
     };
     let title = title(design, target);
     Some(Focus {
         target,
-        context: format!("{} · Hardware · {title}", design.project.title),
+        context: fill_in(
+            &tr("{project} · Hardware · {title}"),
+            &[("project", &design.project.title), ("title", &title)],
+        ),
         title,
-        heading: heading.to_owned(),
+        heading,
         description: kind.and_then(doc_text),
         summary: kind.and_then(summary_text),
         rows,
@@ -1128,14 +1197,14 @@ impl Focus {
     }
 
     /// What the view from above shows, in words.
-    pub fn plan_caption(&self) -> Option<&'static str> {
+    pub fn plan_caption(&self) -> Option<String> {
         self.plan.as_ref()?;
         Some(match self.target {
             Target::Hardware(_) if self.motion().is_some_and(|(_, range)| !range.turns) => {
-                "Looking down on the slide, cut through its middle"
+                tr("Looking down on the slide, cut through its middle")
             }
-            Target::Hardware(_) => "Looking down on the hinge, through the cabinet top",
-            Target::Joint { .. } => "Looking down on the joint, cut through its middle",
+            Target::Hardware(_) => tr("Looking down on the hinge, through the cabinet top"),
+            Target::Joint { .. } => tr("Looking down on the joint, cut through its middle"),
         })
     }
 

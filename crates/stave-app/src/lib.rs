@@ -34,16 +34,19 @@ pub mod empty;
 pub mod export_view;
 pub mod finder;
 pub mod focus;
+pub mod format;
 pub mod grip_values;
 pub mod gripping;
 pub mod grips;
 pub mod hold;
+pub mod i18n;
 pub mod inspect;
 pub mod item_offer;
 pub mod link;
 pub mod naming;
 pub mod option_fits;
 pub mod param_kind;
+pub mod part_joints;
 pub mod problems;
 pub mod remove;
 pub mod repeat;
@@ -173,7 +176,6 @@ fn run(
     let root_files = modules
         .module(modules.root)
         .map_or(0, |module| module.files.len());
-    let mut diagnostics = modules.diagnostics.clone();
     let finish = |sources: SourceMap,
                   model,
                   design,
@@ -195,13 +197,17 @@ fn run(
     let root_has_header = modules
         .module(modules.root)
         .is_some_and(|module| module.header.is_some());
-    let cycle = diagnostics
+    let cycle = modules
+        .diagnostics
         .iter()
         .any(|d| d.code == stave_lang::Code::ImportCycle);
     if !root_has_header || cycle {
-        return finish(modules.sources, None, None, diagnostics, Vec::new());
+        return finish(modules.sources, None, None, modules.diagnostics, Vec::new());
     }
+    // Resolving reads the loader's diagnostics (to know whether errors came
+    // before it), so they are moved out only afterwards.
     let (defs, resolve_diagnostics) = resolve(&modules);
+    let mut diagnostics = modules.diagnostics;
     diagnostics.extend(resolve_diagnostics);
     let (model, instance_diagnostics) = stave_model::instance::instantiate(defs, modules.root);
     diagnostics.extend(instance_diagnostics);

@@ -1,9 +1,26 @@
 //! The panels' headers: a slim strip of flush tabs, as in an IDE, each as
 //! wide as its title (libadwaita's tab bar, which libpanel offers, draws
 //! rounded tabs a fixed 220 px wide). A tab shows its panel, its × closes
-//! it, dragging it docks the panel elsewhere (libpanel's drop targets take
+//! it (the Model's tab has none: the 3D view can't be closed), dragging it docks the panel elsewhere (libpanel's drop targets take
 //! a dragged `panel::Widget`), and the menu at the end holds the shown
 //! panel's own menu ("Move to the Right", ...).
+//!
+//! For the keyboard and screen readers: the strip is a tab list and each
+//! tab a tab, the shown one selected; showing another page restyles the
+//! tabs in place, so the tab with the keyboard keeps it; one Tab stop per
+//! tab (the × is for the pointer; the menu closes a panel); and
+//! Ctrl+Page Up / Ctrl+Page Down show the previous and next tab while the
+//! keyboard is anywhere in the frame.
+//!
+//! A panel can show its own tabs in place of its one tab
+//! ([`set_page_tabs`], given that window's panel widget, so each window's
+//! panel shows its own): the Code panel's open files appear this way, one
+//! tab each (name, and a yellow ● while unsaved), beside the Model's tab
+//! in the frame they share. Clicking one shows the panel on that file.
+
+use stave_app::i18n::{fill_in, tr};
+use std::cell::RefCell;
+use std::rc::Rc;
 
 use adw::prelude::*;
 use adw::subclass::prelude::*;
@@ -11,24 +28,112 @@ use gtk::{gdk, glib};
 use panel::prelude::*;
 use panel::subclass::prelude::*;
 
+use super::icons::{self, PathIcon};
+
+/// The icon name that gives a tab the Model's cube.
+pub const MODEL_ICON: &str = "stave-model";
+
+/// One of a panel's own tabs.
+pub struct PageTab {
+    /// The tab's words.
+    pub title: String,
+    /// Its tooltip.
+    pub tooltip: String,
+    /// It has unsaved changes: a yellow ● after the words.
+    pub unsaved: bool,
+    /// The worst problem in it, as a dot before the words.
+    pub mark: Option<stave_app::problems::Mark>,
+    /// It is the panel's current one.
+    pub active: bool,
+    /// Shows it (the panel is brought to the front first).
+    pub show: Rc<dyn Fn()>,
+}
+
+type PageTabs = Rc<dyn Fn() -> Vec<PageTab>>;
+
+thread_local! {
+    /// Each panel's own tabs, by the panel widget itself: every window has
+    /// its own Code panel, so an id ("code") would let the last window
+    /// opened answer for all of them. A closed window's entry is pruned.
+    static PAGE_TABS: RefCell<Vec<(glib::WeakRef<panel::Widget>, PageTabs)>> =
+        const { RefCell::new(Vec::new()) };
+    /// Every strip, to remake them when a panel's tabs change.
+    static STRIPS: RefCell<Vec<glib::WeakRef<TabStrip>>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Lets this panel show its own tabs (when `tabs` gives any) in place of
+/// its one tab, in whatever frame holds it.
+pub fn set_page_tabs(panel: &panel::Widget, tabs: impl Fn() -> Vec<PageTab> + 'static) {
+    PAGE_TABS.with(|all| {
+        let mut all = all.borrow_mut();
+        all.retain(|(widget, _)| widget.upgrade().is_some_and(|widget| widget != *panel));
+        all.push((panel.downgrade(), Rc::new(tabs)));
+    });
+    page_tabs_changed();
+}
+
+/// A panel's own tabs changed: every strip makes its tabs again.
+pub fn page_tabs_changed() {
+    let strips: Vec<TabStrip> = STRIPS.with(|strips| {
+        let mut strips = strips.borrow_mut();
+        strips.retain(|strip| strip.upgrade().is_some());
+        strips.iter().filter_map(glib::WeakRef::upgrade).collect()
+    });
+    for strip in strips {
+        strip.refresh();
+    }
+}
+
+/// A panel's own tabs, if it has any.
+fn page_tabs(panel: &panel::Widget) -> Vec<PageTab> {
+    let tabs = PAGE_TABS.with(|all| {
+        all.borrow()
+            .iter()
+            .find(|(widget, _)| widget.upgrade().is_some_and(|widget| widget == *panel))
+            .map(|(_, tabs)| Rc::clone(tabs))
+    });
+    // Called outside the borrow: the tabs read the files page, which may
+    // ask for the strips to be made again.
+    tabs.map(|tabs| tabs()).unwrap_or_default()
+}
+
 mod imp {
     use std::cell::RefCell;
 
     use super::*;
 
     /// The strip's state.
-    #[derive(Default)]
     pub struct TabStrip {
         /// The frame whose pages are the tabs.
         pub frame: glib::WeakRef<panel::Frame>,
-        /// The tabs.
+        /// The tabs' box: a tab list.
         pub tabs: gtk::Box,
+        /// One tab per page, in the frame's order.
+        pub shown_tabs: RefCell<Vec<super::Tab>>,
         /// Widgets the frame adds at the end, then the menu.
         pub end: gtk::Box,
         /// The shown panel's menu.
         pub menu: gtk::MenuButton,
         /// Watching the frame's pages, to remake the tabs.
         pub watch: RefCell<Option<(gtk::SelectionModel, glib::SignalHandlerId)>>,
+        /// Ctrl+Page Up / Down on the frame, and the frame it is on.
+        pub keys: RefCell<Option<(glib::WeakRef<panel::Frame>, gtk::ShortcutController)>>,
+    }
+
+    impl Default for TabStrip {
+        fn default() -> Self {
+            TabStrip {
+                frame: glib::WeakRef::new(),
+                tabs: gtk::Box::builder()
+                    .accessible_role(gtk::AccessibleRole::TabList)
+                    .build(),
+                shown_tabs: RefCell::new(Vec::new()),
+                end: gtk::Box::default(),
+                menu: gtk::MenuButton::default(),
+                watch: RefCell::new(None),
+                keys: RefCell::new(None),
+            }
+        }
     }
 
     #[glib::object_subclass]
@@ -74,12 +179,17 @@ mod imp {
             self.tabs.add_css_class("stave-tabs");
             self.end.add_css_class("stave-tab-end");
             self.menu.set_icon_name("pan-down-symbolic");
-            self.menu.set_tooltip_text(Some("Move or close this panel"));
+            self.menu
+                .set_tooltip_text(Some(&tr("Move or close this panel")));
+            self.menu
+                .update_property(&[gtk::accessible::Property::Label(&tr("Panel menu"))]);
             self.menu.add_css_class("flat");
             self.menu.add_css_class("stave-tab-menu");
             self.end.append(&self.menu);
             self.tabs.set_parent(&*obj);
             self.end.set_parent(&*obj);
+            let weak = obj.downgrade();
+            STRIPS.with(|strips| strips.borrow_mut().push(weak));
         }
 
         fn dispose(&self) {
@@ -93,7 +203,7 @@ mod imp {
 
     impl FrameHeaderImpl for TabStrip {
         fn page_changed(&self, _widget: Option<&panel::Widget>) {
-            self.obj().refresh();
+            self.obj().mark_shown();
         }
 
         fn can_drop(&self, _widget: &panel::Widget) -> bool {
@@ -136,7 +246,17 @@ impl TabStrip {
         if let Some((pages, handler)) = imp.watch.take() {
             pages.disconnect(handler);
         }
+        if let Some((old, keys)) = imp.keys.take()
+            && let Some(old) = old.upgrade()
+        {
+            old.remove_controller(&keys);
+        }
         imp.frame.set(frame);
+        if let Some(frame) = frame {
+            let keys = step_keys();
+            frame.add_controller(keys.clone());
+            imp.keys.replace(Some((frame.downgrade(), keys)));
+        }
         if let Some(frame) = frame {
             let pages = frame.pages();
             let strip = self.downgrade();
@@ -150,22 +270,64 @@ impl TabStrip {
         self.refresh();
     }
 
-    /// Makes the tabs again: one per page, the shown one marked.
+    /// Makes the tabs again (pages came or went, or a panel's own tabs
+    /// changed): one per page, or one per own tab of a page that has
+    /// them, the shown one marked. The tab at the place the keyboard was
+    /// takes it back.
     fn refresh(&self) {
         let imp = self.imp();
+        let focused = imp
+            .shown_tabs
+            .borrow()
+            .iter()
+            .position(|tab| tab.show.has_focus());
         while let Some(child) = imp.tabs.first_child() {
             imp.tabs.remove(&child);
         }
+        let mut tabs = Vec::new();
+        if let Some(frame) = imp.frame.upgrade() {
+            for index in 0..frame.n_pages() {
+                let Some(page) = frame.page(index) else {
+                    continue;
+                };
+                // By the panel widget: each window's panel answers for itself.
+                let own = page_tabs(&page);
+                if own.is_empty() {
+                    tabs.push(tab(&frame, &page));
+                } else {
+                    tabs.extend(own.into_iter().map(|own| own_tab(&frame, &page, own)));
+                }
+            }
+        }
+        for made in &tabs {
+            imp.tabs.append(&made.root);
+        }
+        if let Some(index) = focused
+            && let Some(made) = tabs.get(index.min(tabs.len().saturating_sub(1)))
+        {
+            made.show.grab_focus();
+        }
+        imp.shown_tabs.replace(tabs);
+        self.mark_shown();
+    }
+
+    /// Marks the shown page's tab, in place: the tab the keyboard is on
+    /// stays where it is.
+    fn mark_shown(&self) {
+        let imp = self.imp();
         let Some(frame) = imp.frame.upgrade() else {
             imp.menu.set_visible(false);
             return;
         };
         let shown = frame.visible_child();
-        for index in 0..frame.n_pages() {
-            if let Some(page) = frame.page(index) {
-                imp.tabs
-                    .append(&tab(&frame, &page, shown.as_ref() == Some(&page)));
-            }
+        for tab in imp.shown_tabs.borrow().iter() {
+            tab.mark(
+                tab.active
+                    && tab
+                        .page
+                        .upgrade()
+                        .is_some_and(|page| shown.as_ref() == Some(&page)),
+            );
         }
         let menu = shown.as_ref().and_then(|page| page.menu_model());
         imp.menu.set_visible(menu.is_some());
@@ -173,20 +335,101 @@ impl TabStrip {
     }
 }
 
-/// One tab: the panel's icon and title, a × to close it; clicking shows
-/// it, dragging docks it elsewhere.
-fn tab(frame: &panel::Frame, page: &panel::Widget, shown: bool) -> gtk::Box {
+/// One page's tab.
+pub struct Tab {
+    /// The page it shows.
+    page: glib::WeakRef<panel::Widget>,
+    /// The tab: the show button and the ×.
+    root: gtk::Box,
+    /// What the keyboard and a screen reader take for the tab.
+    show: gtk::Button,
+    /// It is its page's current one: a page's own tab that isn't (another
+    /// open file) is never marked shown.
+    active: bool,
+}
+
+impl Tab {
+    /// Marks the tab shown or not: its look and its selected state.
+    fn mark(&self, shown: bool) {
+        if shown {
+            self.root.add_css_class("shown");
+        } else {
+            self.root.remove_css_class("shown");
+        }
+        self.show
+            .update_state(&[gtk::accessible::State::Selected(Some(shown))]);
+    }
+}
+
+/// Ctrl+Page Up and Ctrl+Page Down: the previous and the next tab of the
+/// frame the keyboard is in. After the focused widget had its turn (the
+/// text editor keeps its own Ctrl+Page keys).
+fn step_keys() -> gtk::ShortcutController {
+    let keys = gtk::ShortcutController::new();
+    for (trigger, step) in [("<Control>Page_Up", -1), ("<Control>Page_Down", 1)] {
+        let action = gtk::CallbackAction::new(move |widget, _| {
+            match widget.downcast_ref::<panel::Frame>() {
+                Some(frame) if show_step(frame, step) => glib::Propagation::Stop,
+                _ => glib::Propagation::Proceed,
+            }
+        });
+        keys.add_shortcut(gtk::Shortcut::new(
+            gtk::ShortcutTrigger::parse_string(trigger),
+            Some(action),
+        ));
+    }
+    keys
+}
+
+/// Shows the page `step` places after the shown one (before it when
+/// negative), going round. `false` when there is only one page or none.
+fn show_step(frame: &panel::Frame, step: i32) -> bool {
+    let count = frame.n_pages();
+    if count < 2 {
+        return false;
+    }
+    let shown = frame.visible_child();
+    let current = (0..count)
+        .find(|index| {
+            frame
+                .page(*index)
+                .is_some_and(|page| shown.as_ref() == Some(&page))
+        })
+        .unwrap_or(0);
+    let next = if step < 0 {
+        current.checked_sub(1).unwrap_or(count - 1)
+    } else {
+        current.saturating_add(1) % count
+    };
+    let Some(page) = frame.page(next) else {
+        return false;
+    };
+    frame.set_visible_child(&page);
+    true
+}
+
+/// One tab: the panel's icon and title, a × to close it (not the 3D
+/// view's, which can't be closed); clicking shows it, dragging docks it
+/// elsewhere.
+fn tab(frame: &panel::Frame, page: &panel::Widget) -> Tab {
     let title = page.title().map(|t| t.to_string()).unwrap_or_default();
     let label = gtk::Label::builder()
         .label(&title)
         .css_classes(["stave-tab-title"])
         .build();
     let inner = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-    if let Some(icon) = page.icon_name() {
-        inner.append(&gtk::Image::from_icon_name(&icon));
+    match page.icon_name() {
+        Some(icon) if icon == MODEL_ICON => {
+            let cube = PathIcon::new(icons::PARTS, 14);
+            cube.set_valign(gtk::Align::Center);
+            inner.append(&cube);
+        }
+        Some(icon) => inner.append(&gtk::Image::from_icon_name(&icon)),
+        None => {}
     }
     inner.append(&label);
     let show = gtk::Button::builder()
+        .accessible_role(gtk::AccessibleRole::Tab)
         .child(&inner)
         .css_classes(["flat", "stave-tab-show"])
         .tooltip_text(&title)
@@ -198,28 +441,97 @@ fn tab(frame: &panel::Frame, page: &panel::Widget, shown: bool) -> gtk::Box {
             frame.set_visible_child(&page);
         }
     });
+    let root = gtk::Box::builder().css_classes(["stave-tab"]).build();
+    root.append(&show);
+    // Read as a property: `id()` asserts on a panel that has none.
+    let id = page.property::<Option<String>>("id");
+    if id.as_deref() == Some(super::workbench::PanelId::View.word()) {
+        root.add_css_class("stave-tab-fixed");
+        carry_on_drag(&root, page);
+        return Tab {
+            page: page.downgrade(),
+            root,
+            show,
+            active: true,
+        };
+    }
     let close = gtk::Button::builder()
         .icon_name("window-close-symbolic")
         .css_classes(["flat", "stave-tab-close"])
-        .tooltip_text(format!("Close {title}"))
+        .tooltip_text(fill_in(&tr("Close {title}"), &[("title", &title)]))
+        .focusable(false)
         .build();
+    close.update_property(&[gtk::accessible::Property::Label(&fill_in(
+        &tr("Close {title}"),
+        &[("title", &title)],
+    ))]);
     let page_weak = page.downgrade();
     close.connect_clicked(move |_| {
         if let Some(page) = page_weak.upgrade() {
             page.close();
         }
     });
-    let root = gtk::Box::builder()
-        .css_classes(if shown {
-            vec!["stave-tab", "shown"]
-        } else {
-            vec!["stave-tab"]
-        })
-        .build();
-    root.append(&show);
     root.append(&close);
-    // Dragging a tab carries its panel; libpanel's drop targets (the
-    // edges, the middle, other frames) take it.
+    carry_on_drag(&root, page);
+    Tab {
+        page: page.downgrade(),
+        root,
+        show,
+        active: true,
+    }
+}
+
+/// One of a panel's own tabs (an open file): its problem dot, its words
+/// and a yellow ● while unsaved; clicking shows the panel on it, dragging
+/// docks the whole panel elsewhere.
+fn own_tab(frame: &panel::Frame, page: &panel::Widget, own: PageTab) -> Tab {
+    let inner = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    let dot = super::style::mark_dot(own.mark);
+    inner.append(&dot);
+    inner.append(
+        &gtk::Label::builder()
+            .label(&own.title)
+            .css_classes(["stave-tab-title", "stave-file-tab-name"])
+            .build(),
+    );
+    if own.unsaved {
+        let unsaved = gtk::Box::builder()
+            .css_classes(["stave-mark", "unsaved"])
+            .valign(gtk::Align::Center)
+            .tooltip_text(tr("Not saved (Ctrl+S saves)"))
+            .build();
+        unsaved.update_property(&[gtk::accessible::Property::Label(&tr("not saved"))]);
+        inner.append(&unsaved);
+    }
+    let show = gtk::Button::builder()
+        .accessible_role(gtk::AccessibleRole::Tab)
+        .child(&inner)
+        .css_classes(["flat", "stave-tab-show", "stave-file-tab"])
+        .tooltip_text(&own.tooltip)
+        .build();
+    let frame_weak = frame.downgrade();
+    let page_weak = page.downgrade();
+    let show_own = own.show.clone();
+    show.connect_clicked(move |_| {
+        if let (Some(frame), Some(page)) = (frame_weak.upgrade(), page_weak.upgrade()) {
+            frame.set_visible_child(&page);
+        }
+        show_own();
+    });
+    let root = gtk::Box::builder().css_classes(["stave-tab"]).build();
+    root.append(&show);
+    carry_on_drag(&root, page);
+    Tab {
+        page: page.downgrade(),
+        root,
+        show,
+        active: own.active,
+    }
+}
+
+/// Dragging a tab carries its panel; libpanel's drop targets (the edges,
+/// the middle, other frames) take it.
+fn carry_on_drag(root: &gtk::Box, page: &panel::Widget) {
     let drag = gtk::DragSource::builder()
         .actions(gdk::DragAction::MOVE)
         .build();
@@ -235,5 +547,111 @@ fn tab(frame: &panel::Frame, page: &panel::Widget, shown: bool) -> gtk::Box {
         }
     });
     root.add_controller(drag);
-    root
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_models_tab_has_no_close_button() {
+        crate::ui::gtk_test::on_gtk_thread(|| {
+            panel::init();
+            let frame = panel::Frame::new();
+            let model = panel::Widget::builder().title("Model").build();
+            model.set_id(super::super::workbench::PanelId::View.word());
+            let parts = panel::Widget::builder().title("Parts").build();
+            assert!(
+                tab(&frame, &model)
+                    .root
+                    .last_child()
+                    .is_some_and(|child| { !child.has_css_class("stave-tab-close") })
+            );
+            assert!(
+                tab(&frame, &parts)
+                    .root
+                    .last_child()
+                    .is_some_and(|child| { child.has_css_class("stave-tab-close") })
+            );
+        });
+    }
+
+    #[test]
+    fn tabs_stay_put_when_another_page_shows() {
+        crate::ui::gtk_test::on_gtk_thread(tabs_stay_put);
+    }
+
+    /// Showing another page restyles the tabs in place (the focused tab
+    /// survives), and Ctrl+Page Down / Up step through the pages, round.
+    fn tabs_stay_put() {
+        panel::init();
+        let frame = panel::Frame::new();
+        let strip = TabStrip::new();
+        frame.set_header(Some(&strip));
+        let pages: Vec<panel::Widget> = ["Parts", "Problems", "Details"]
+            .into_iter()
+            .map(|title| {
+                let page = panel::Widget::builder().title(title).build();
+                page.set_child(Some(&gtk::Label::new(Some(title))));
+                frame.add(&page);
+                page
+            })
+            .collect();
+        let window = gtk::Window::builder().child(&frame).build();
+        window.present();
+        let context = glib::MainContext::default();
+        for _ in 0..20 {
+            context.iteration(false);
+        }
+        let roots = || -> Vec<gtk::Widget> {
+            let tabs = &strip.imp().tabs;
+            let mut roots = Vec::new();
+            let mut child = tabs.first_child();
+            while let Some(widget) = child {
+                child = widget.next_sibling();
+                roots.push(widget);
+            }
+            roots
+        };
+        let before = roots();
+        assert_eq!(before.len(), 3);
+        assert_eq!(
+            strip.imp().tabs.accessible_role(),
+            gtk::AccessibleRole::TabList
+        );
+        let show = |index: usize| strip.imp().shown_tabs.borrow()[index].show.clone();
+        assert_eq!(show(0).accessible_role(), gtk::AccessibleRole::Tab);
+        let focus = || gtk::prelude::GtkWindowExt::focus(&window);
+        assert!(show(1).grab_focus());
+        assert_eq!(focus().as_ref(), Some(show(1).upcast_ref()));
+        frame.set_visible_child(&pages[1]);
+        assert_eq!(roots(), before, "the tabs were made again");
+        assert_eq!(
+            focus().as_ref(),
+            Some(show(1).upcast_ref()),
+            "the tab lost the keyboard"
+        );
+        let shown: Vec<bool> = before
+            .iter()
+            .map(|tab| tab.has_css_class("shown"))
+            .collect();
+        assert_eq!(shown, [false, true, false]);
+        // Ctrl+Page Down, then round from the last to the first.
+        assert!(show_step(&frame, 1));
+        assert_eq!(frame.visible_child().as_ref(), Some(&pages[2]));
+        assert!(show_step(&frame, 1));
+        assert_eq!(frame.visible_child().as_ref(), Some(&pages[0]));
+        assert!(show_step(&frame, -1));
+        assert_eq!(frame.visible_child().as_ref(), Some(&pages[2]));
+        // The × is not a Tab stop.
+        let close = before[0].last_child().unwrap();
+        assert!(!close.is_focusable());
+        assert!(close.has_css_class("stave-tab-close"));
+        // Every icon button (the ×s, the ▾ menu) has a name.
+        assert_eq!(
+            crate::ui::gtk_test::unnamed_buttons(&strip),
+            Vec::<String>::new()
+        );
+        window.destroy();
+    }
 }

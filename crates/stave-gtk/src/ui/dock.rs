@@ -6,6 +6,7 @@
 //! problem's colour. They step aside while a problem is posed or a joint
 //! is in focus.
 
+use stave_app::i18n::{fill_in, tr};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
@@ -55,7 +56,7 @@ impl Dock {
             .build();
         moves.append(
             &gtk::Label::builder()
-                .label("Move:")
+                .label(tr("Move:"))
                 .valign(gtk::Align::Start)
                 .css_classes(["stave-dock-label"])
                 .build(),
@@ -69,6 +70,21 @@ impl Dock {
             offered: Cell::new(true),
             on_move: RefCell::new(None),
         })
+    }
+
+    /// Lays the chips out in a row (docked in a corner) or a column
+    /// (docked on the right edge), one chip per line.
+    pub fn moves_orientation_setter(&self) -> impl Fn(gtk::Orientation) + 'static {
+        let moves = self.moves.clone();
+        let chips = self.chips.clone();
+        let natural = chips.natural_line_length();
+        move |orientation| {
+            moves.set_orientation(orientation);
+            chips.set_natural_line_length(match orientation {
+                gtk::Orientation::Vertical => 0,
+                _ => natural,
+            });
+        }
     }
 
     /// Calls `callback` with the assembly whose chip was chosen.
@@ -99,15 +115,26 @@ impl Dock {
         self.has_moves.set(visible);
         self.moves.set_visible(visible && self.offered.get());
         for (id, name, mark) in moving {
+            // The tree's mark beside the name: a round dot for an
+            // error, a square one for a warning, so the chip's ring is
+            // not the only sign.
+            let content = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+            content.append(&super::style::mark_dot(*mark));
+            content.append(&gtk::Label::new(Some(name)));
             let chip = gtk::Button::builder()
-                .label(name)
-                .tooltip_text(format!("Open or close {name}"))
+                .child(&content)
+                .tooltip_text(fill_in(&tr("Open or close {name}"), &[("name", &name)]))
                 .css_classes(["stave-move"])
                 .build();
-            match mark {
-                Some(Mark::Error | Mark::Involved) => chip.add_css_class("error"),
-                Some(Mark::Warning) => chip.add_css_class("warning"),
-                None => {}
+            let problem = match mark {
+                Some(Mark::Error) => Some(("error", tr("Has an error"))),
+                Some(Mark::Involved) => Some(("error", tr("Is part of an error"))),
+                Some(Mark::Warning) => Some(("warning", tr("Has a warning"))),
+                None => None,
+            };
+            if let Some((class, words)) = problem {
+                chip.add_css_class(class);
+                chip.update_property(&[gtk::accessible::Property::Description(&words)]);
             }
             if current == Some(*id) {
                 chip.add_css_class("current");
@@ -123,5 +150,64 @@ impl Dock {
             });
             wrap.append(&chip);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_chip_shows_its_problem_by_shape_too() {
+        crate::ui::gtk_test::on_gtk_thread(chips_show_marks);
+    }
+
+    /// Each chip with a problem carries the tree's mark (round for an
+    /// error, square for a warning) and says the problem to a screen
+    /// reader; a chip with none shows no mark.
+    fn chips_show_marks() {
+        let scene = gtk::MenuButton::new();
+        let motion = MotionBar::new();
+        let dock = Dock::new(&scene, &motion);
+        dock.show_moves(
+            &[
+                (
+                    AssemblyId::from_usize(0),
+                    "door_l".to_owned(),
+                    Some(Mark::Error),
+                ),
+                (
+                    AssemblyId::from_usize(1),
+                    "door_r".to_owned(),
+                    Some(Mark::Warning),
+                ),
+                (AssemblyId::from_usize(2), "drawer".to_owned(), None),
+            ],
+            None,
+        );
+        let mut marks = Vec::new();
+        let mut chip = dock.chips.first_child();
+        while let Some(widget) = chip {
+            chip = widget.next_sibling();
+            let dot = widget
+                .first_child()
+                .and_then(|content| content.first_child())
+                .expect("the chip's mark");
+            assert!(dot.has_css_class("stave-mark"));
+            marks.push((
+                dot.is_visible(),
+                dot.has_css_class("error"),
+                dot.has_css_class("warning"),
+                gtk::test_accessible_has_property(&widget, gtk::AccessibleProperty::Description),
+            ));
+        }
+        assert_eq!(
+            marks,
+            [
+                (true, true, false, true),
+                (true, false, true, true),
+                (false, false, false, false),
+            ]
+        );
     }
 }

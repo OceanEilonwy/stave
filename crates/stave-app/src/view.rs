@@ -2,6 +2,7 @@
 //! design, a description of the selected part or hardware, and the
 //! project's problems as plain rows.
 
+use crate::i18n::{fill_in, ntr, tr};
 use std::path::Path;
 
 use stave_lang::placement::Axis;
@@ -58,7 +59,10 @@ pub struct Description {
 /// A length in millimetres without the unit: `1149.5`.
 fn millimetres(length: Length) -> String {
     let text = length.to_string();
-    text.strip_suffix("mm").map_or(text.clone(), str::to_owned)
+    match text.strip_suffix("mm") {
+        Some(number) => number.to_owned(),
+        None => text,
+    }
 }
 
 fn size_text(length: Length, width: Length, thickness: Length) -> String {
@@ -201,9 +205,7 @@ pub fn describe(design: &SolvedDesign, item: Item) -> Option<Description> {
                 HardwareBase::Hinge => "Hinge",
                 HardwareBase::Pull => "Pull",
             };
-            let piece = design
-                .part(hardware.piece)
-                .map_or_else(|| "?".to_owned(), |p| p.name.clone());
+            let piece = design.part(hardware.piece).map_or("?", |p| p.name.as_str());
             let members = hardware.members.iter().map(|member| Row {
                 label: "Member",
                 value: member_text(design, hardware, member),
@@ -241,8 +243,10 @@ pub fn describe(design: &SolvedDesign, item: Item) -> Option<Description> {
 /// What a joint's member is in words: "dowel_pin, beech", "wood_screw,
 /// steel".
 pub fn item_text(item: &MemberItem) -> String {
-    let made_of = item.wood.map_or("steel", |species| species.title());
-    format!("{}, {}", item.kind, made_of.to_lowercase())
+    let made_of = item
+        .wood
+        .map_or_else(|| tr("steel"), |species| species.title().to_lowercase());
+    format!("{}, {made_of}", item.kind)
 }
 
 /// One copy of a joint's member in words, from its shapes: "cylinder 8 mm
@@ -257,22 +261,34 @@ pub fn copy_text(body: &Body) -> String {
                 end,
                 ..
             },
-        ] => format!(
-            "cylinder {} mm across, {} mm long",
-            millimetres(*diameter),
-            millimetres(Length::from_nm(end.nm().saturating_sub(start.nm())))
+        ] => fill_in(
+            &tr("cylinder {diameter} mm across, {length} mm long"),
+            &[
+                ("diameter", &millimetres(*diameter)),
+                (
+                    "length",
+                    &millimetres(Length::from_nm(end.nm().saturating_sub(start.nm()))),
+                ),
+            ],
         ),
-        [MemberShape::Bar { thickness, .. }] => {
-            format!("bar {} mm thick", millimetres(*thickness))
-        }
-        [MemberShape::Prism { .. }] => "outline".to_owned(),
+        [MemberShape::Bar { thickness, .. }] => fill_in(
+            &tr("bar {thickness} mm thick"),
+            &[("thickness", &millimetres(*thickness))],
+        ),
+        [MemberShape::Prism { .. }] => tr("outline"),
         [MemberShape::Box(region)] => {
             let mut sizes = Axis::ALL.map(|axis| region.size(axis));
             sizes.sort_unstable_by(|a, b| b.cmp(a));
             let [length, width, thickness] = sizes;
-            format!("box {}", size_text(length, width, thickness))
+            fill_in(
+                &tr("box {size}"),
+                &[("size", &size_text(length, width, thickness))],
+            )
         }
-        [] | [_, _, ..] => format!("{} shapes", shapes.len()),
+        [] | [_, _, ..] => fill_in(
+            &ntr("{count} shape", "{count} shapes", shapes.len()),
+            &[("count", &shapes.len())],
+        ),
     }
 }
 
@@ -374,9 +390,7 @@ fn member_text(design: &SolvedDesign, hardware: &Hardware, member: &Body) -> Str
     let held = match member.carrier {
         BodyCarrier::Part(part) if part == hardware.piece => String::new(),
         BodyCarrier::Part(part) => {
-            let name = design
-                .part(part)
-                .map_or_else(|| "?".to_owned(), |p| p.name.clone());
+            let name = design.part(part).map_or("?", |p| p.name.as_str());
             if sunk {
                 format!(", housed in {name}")
             } else {
@@ -387,7 +401,7 @@ fn member_text(design: &SolvedDesign, hardware: &Hardware, member: &Body) -> Str
             let name = design
                 .regions
                 .get(region.index())
-                .map_or_else(|| "?".to_owned(), |r| r.name.clone());
+                .map_or("?", |r| r.name.as_str());
             format!(", fixed in {name}")
         }
         BodyCarrier::Link(_) => ", moved by the mechanism".to_owned(),
