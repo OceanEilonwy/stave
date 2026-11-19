@@ -12,7 +12,6 @@ use stave_model::nonempty::NonEmpty;
 use super::super::Window;
 use super::super::finder::Action;
 use super::item_tools::MOST;
-use crate::ui::update::editing::EditingInput;
 
 /// A verb typed in the finder.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -111,19 +110,6 @@ pub(in crate::ui) enum Run {
 }
 
 impl Window {
-    /// The finder lists the verbs a query names (answered from the
-    /// window's update) and runs the one chosen.
-    pub(in crate::ui) fn connect_verbs(&self) {
-        let input = self.input();
-        self.widgets.finder.connect_actions_request(move |query| {
-            input.emit(EditingInput::FinderActions(query).into());
-        });
-        let input = self.input();
-        self.widgets.finder.connect_action(move |index| {
-            input.emit(EditingInput::RunFinderAction(index).into());
-        });
-    }
-
     /// The verbs a query names, as the finder lists them; what each does
     /// is kept until one is chosen.
     pub(in crate::ui) fn finder_actions(&self, query: &str) -> Vec<Action> {

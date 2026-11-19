@@ -523,7 +523,7 @@ pub(in crate::ui) struct Widgets {
     /// The problems pinned off screen: one chip at the view's edge.
     edge_pin: gtk::Button,
     edge_label: gtk::Label,
-    finder: Rc<Finder>,
+    finder: Finder,
     view_stack: gtk::Stack,
     empty: view_tools::EmptyView,
     viewport: Viewport,

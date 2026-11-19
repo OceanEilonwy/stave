@@ -9,12 +9,12 @@
 //!
 //! The panel is a relm4 component, [`FocusPanelComponent`]: its model is
 //! the only state, only its update changes it, and its widgets' handlers
-//! only send it messages. [`FocusPanel`] keeps the older API in front of
-//! it until the window moves to relm4 too.
+//! only send it messages. [`FocusPanel`] owns it; the window hears
+//! people's presses as [`FocusPanelOutput`]s.
 
 use adw::prelude::*;
 use relm4::{Component, ComponentParts, ComponentSender};
-use stave_app::focus::Focus;
+use stave_app::focus::{self, Focus};
 use stave_app::session::SourceLocation;
 
 use super::icons::{self, PathIcon};
@@ -102,8 +102,7 @@ pub struct FocusPanelComponent {
     insert_location: Option<SourceLocation>,
 }
 
-/// What the focus panel is made with: the controls the window still
-/// reaches.
+/// What the focus panel is made with: its close button and its checks.
 #[derive(Debug)]
 pub struct FocusPanelInit {
     /// Leaves focus mode.
@@ -121,6 +120,9 @@ pub struct FocusPanelInit {
 pub enum FocusPanelInput {
     /// Show a focus, or hide the panel (`None`).
     Show(Option<Box<Focus>>),
+    /// Show these options on the X-ray, Tint and Fade checks, without
+    /// telling anyone.
+    ShowOptions(focus::Options),
     /// People pressed the link to the joint's kind.
     LinkPressed,
     /// People pressed the close button.
@@ -163,6 +165,9 @@ pub struct FocusPanelWidgets {
     insert_section: gtk::Box,
     insert_link: gtk::Button,
     insert_code: gtk::Label,
+    /// The X-ray, Tint and Fade checks with their handlers, blocked while
+    /// `ShowOptions` sets them.
+    checks: [(gtk::CheckButton, gtk::glib::SignalHandlerId); 3],
 }
 
 impl Component for FocusPanelComponent {
@@ -218,17 +223,20 @@ impl Component for FocusPanelComponent {
         let (xray_row, xray_label) = toggle_row("X-ray", "see into the part", &xray);
         let (tint_row, _) = toggle_row("Tint cut faces", "holes, mortises, dados", &tint);
         let (fade_row, _) = toggle_row("Fade other parts", "", &fade);
-        for (check, toggled) in [
+        let checks = [
             (
                 &xray,
                 FocusPanelInput::XrayToggled as fn(bool) -> FocusPanelInput,
             ),
             (&tint, FocusPanelInput::TintToggled),
             (&fade, FocusPanelInput::FadeToggled),
-        ] {
+        ]
+        .map(|(check, toggled)| {
             let input = sender.input_sender().clone();
-            check.connect_active_notify(move |check| input.emit(toggled(check.is_active())));
-        }
+            let handler =
+                check.connect_active_notify(move |check| input.emit(toggled(check.is_active())));
+            (check.clone(), handler)
+        });
         let toggles = card();
         toggles.append(&xray_row);
         toggles.append(&tint_row);
@@ -289,6 +297,7 @@ impl Component for FocusPanelComponent {
             insert_section,
             insert_link,
             insert_code,
+            checks,
         };
         ComponentParts {
             model: FocusPanelComponent::default(),
@@ -310,6 +319,21 @@ impl Component for FocusPanelComponent {
                     .and_then(|focus| focus.insert.as_ref())
                     .and_then(|insert| insert.location.clone());
                 show(widgets, root, focus.as_deref());
+                None
+            }
+            FocusPanelInput::ShowOptions(options) => {
+                let [xray, tint, fade] = &widgets.checks;
+                for ((check, handler), on) in [
+                    (xray, options.xray),
+                    (tint, options.tint_cut_faces),
+                    (fade, options.fade_others),
+                ] {
+                    // What `#[block_signal]` does: the window's setting is
+                    // not people's change.
+                    check.block_signal(handler);
+                    check.set_active(on);
+                    check.unblock_signal(handler);
+                }
                 None
             }
             FocusPanelInput::LinkPressed => {
@@ -445,20 +469,24 @@ fn show(widgets: &FocusPanelWidgets, root: &gtk::Box, focus: Option<&Focus>) {
     }
 }
 
-/// Focus mode's side panel, behind the API the window still uses. It owns
-/// the component: dropping it shuts the component down. Setters are
-/// queued.
+/// Focus mode's side panel. It owns the component: dropping it shuts the
+/// component down. Setters are queued; the window hears people's presses
+/// as [`FocusPanelOutput`]s.
 pub struct FocusPanel {
     /// The panel, ready to put in the side panel.
     pub root: gtk::Box,
     /// Leaves focus mode.
-    pub done: gtk::Button,
+    #[cfg(test)]
+    pub(in crate::ui) done: gtk::Button,
     /// Draws the receiving part see-through.
-    pub xray: gtk::CheckButton,
+    #[cfg(test)]
+    pub(in crate::ui) xray: gtk::CheckButton,
     /// Tints the faces cuts made.
-    pub tint: gtk::CheckButton,
+    #[cfg(test)]
+    pub(in crate::ui) tint: gtk::CheckButton,
     /// Fades the other parts.
-    pub fade: gtk::CheckButton,
+    #[cfg(test)]
+    pub(in crate::ui) fade: gtk::CheckButton,
     bridge: Bridge<FocusPanelComponent>,
 }
 
@@ -485,30 +513,34 @@ impl FocusPanel {
         });
         FocusPanel {
             root: bridge.widget().clone(),
+            #[cfg(test)]
             done,
+            #[cfg(test)]
             xray,
+            #[cfg(test)]
             tint,
+            #[cfg(test)]
             fade,
             bridge,
         }
     }
 
-    /// Calls `callback` when the link to the joint's kind is clicked.
-    pub fn connect_source(&self, callback: impl Fn(SourceLocation) + 'static) {
-        self.bridge.connect(move |output| match output {
-            FocusPanelOutput::Source(location) => callback(location),
-            // The window hears these on the controls themselves.
-            FocusPanelOutput::Done
-            | FocusPanelOutput::Xray(_)
-            | FocusPanelOutput::Tint(_)
-            | FocusPanelOutput::Fade(_) => {}
-        });
+    /// Calls `callback` with each of people's presses from now on, instead
+    /// of the one connected before.
+    pub fn connect_outputs(&self, callback: impl Fn(FocusPanelOutput) + 'static) {
+        self.bridge.connect(callback);
     }
 
     /// Shows a focus, or hides the panel (`None`).
     pub fn show(&self, focus: Option<&Focus>) {
         self.bridge
             .send(FocusPanelInput::Show(focus.cloned().map(Box::new)));
+    }
+
+    /// Shows focus mode's options on the X-ray, Tint and Fade checks,
+    /// without calling back.
+    pub fn show_options(&self, options: focus::Options) {
+        self.bridge.send(FocusPanelInput::ShowOptions(options));
     }
 }
 
@@ -593,7 +625,10 @@ mod tests {
         let heard: Rc<RefCell<Vec<SourceLocation>>> = Rc::default();
         let log = Rc::clone(&heard);
         let weak = Rc::downgrade(&panel);
-        panel.connect_source(move |location| {
+        panel.connect_outputs(move |output| {
+            let FocusPanelOutput::Source(location) = output else {
+                return;
+            };
             log.borrow_mut().push(location);
             if let Some(panel) = weak.upgrade() {
                 // The window leaving focus from inside its callback.
@@ -648,7 +683,7 @@ mod tests {
         let log = Rc::clone(&heard);
         let token = Rc::new(());
         let held = Rc::clone(&token);
-        panel.bridge.connect(move |output| {
+        panel.connect_outputs(move |output| {
             let _ = &held;
             log.borrow_mut().push(output);
         });
@@ -678,5 +713,35 @@ mod tests {
         assert!(done.upgrade().is_none(), "its controls are freed");
         assert!(input.send(FocusPanelInput::Show(None)).is_err());
         assert!(callback.upgrade().is_none(), "the callback is freed");
+    }
+
+    #[test]
+    fn showing_the_options_sets_the_checks_without_calling_back() {
+        on_gtk_thread(show_options_sets_checks);
+    }
+
+    /// The window shows its options on the checks with their handlers
+    /// blocked, so it never hears its own setting as people's change; the
+    /// last of several in one turn wins.
+    fn show_options_sets_checks() {
+        let panel = FocusPanel::new();
+        let heard: Rc<RefCell<Vec<FocusPanelOutput>>> = Rc::default();
+        let log = Rc::clone(&heard);
+        panel.connect_outputs(move |output| log.borrow_mut().push(output));
+        panel.xray.set_active(false);
+        panel.fade.set_active(false);
+        settle();
+        assert_eq!(
+            *heard.borrow(),
+            vec![FocusPanelOutput::Xray(false), FocusPanelOutput::Fade(false)]
+        );
+        let mut options = focus::Options::default();
+        panel.show_options(options);
+        options.tint_cut_faces = false;
+        panel.show_options(options);
+        assert!(!panel.xray.is_active(), "show_options is queued");
+        settle();
+        assert!(panel.xray.is_active() && !panel.tint.is_active() && panel.fade.is_active());
+        assert_eq!(heard.borrow().len(), 2, "show_options never calls back");
     }
 }

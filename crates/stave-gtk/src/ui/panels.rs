@@ -26,7 +26,6 @@ use stave_lang::Severity;
 
 use super::relm4_shim::Bridge;
 use super::style::CODE;
-use super::workbench::Slot;
 
 /// The Problems panel's state: how many problems it lists, whether the
 /// 3D view shows an older design than theirs, and which one is selected.
@@ -194,24 +193,16 @@ impl Component for ProblemsComponent {
     }
 }
 
-/// What the Problems panel's shim passes its outputs on to.
-#[derive(Default)]
-struct ProblemsCallbacks {
-    on_choose: Slot<dyn Fn(usize)>,
-    on_source: Slot<dyn Fn(SourceLocation)>,
-}
-
-/// The Problems panel, behind the API the window still uses: it owns the
-/// [`ProblemsComponent`] (dropping it shuts the component down), passes
-/// its setters on as [`ProblemsInput`] messages and its
-/// [`ProblemsOutput`]s to the callbacks.
+/// The Problems panel: it owns the [`ProblemsComponent`] (dropping it
+/// shuts the component down), passes its setters on as [`ProblemsInput`]
+/// messages and its [`ProblemsOutput`]s to the callback connected with
+/// [`ProblemsPanel::connect_outputs`].
 ///
 /// Setters are queued: they take effect when the main loop next runs,
 /// after whatever called them has returned.
 pub struct ProblemsPanel {
     /// The panel's content.
     pub root: gtk::Stack,
-    callbacks: Rc<ProblemsCallbacks>,
     bridge: Bridge<ProblemsComponent>,
 }
 
@@ -219,35 +210,17 @@ impl ProblemsPanel {
     /// An empty list.
     pub fn new() -> Rc<ProblemsPanel> {
         let bridge = Bridge::<ProblemsComponent>::launch(());
-        let callbacks = Rc::new(ProblemsCallbacks::default());
-        let told = Rc::clone(&callbacks);
-        bridge.connect(move |output| match output {
-            ProblemsOutput::Choose(index) => {
-                if let Some(callback) = told.on_choose.get() {
-                    callback(index);
-                }
-            }
-            ProblemsOutput::Source(location) => {
-                if let Some(callback) = told.on_source.get() {
-                    callback(location);
-                }
-            }
-        });
         Rc::new(ProblemsPanel {
             root: bridge.widget().clone(),
-            callbacks,
             bridge,
         })
     }
 
-    /// A problem was chosen (its index in the latest check's problems).
-    pub fn connect_choose(&self, callback: impl Fn(usize) + 'static) {
-        self.callbacks.on_choose.set(Rc::new(callback));
-    }
-
-    /// One of a problem's places was clicked, to open in the Code panel.
-    pub fn connect_source(&self, callback: impl Fn(SourceLocation) + 'static) {
-        self.callbacks.on_source.set(Rc::new(callback));
+    /// Calls `callback` from now on, instead of the one connected before,
+    /// when a problem is chosen (its index in the latest check's problems)
+    /// or one of a problem's places is clicked, to open in the Code panel.
+    pub fn connect_outputs(&self, callback: impl Fn(ProblemsOutput) + 'static) {
+        self.bridge.connect(callback);
     }
 
     /// Lists these problems in full, the `selected` one marked. `stale`
@@ -649,10 +622,10 @@ impl Component for FilesListComponent {
     }
 }
 
-/// The Files panel, behind the API the window still uses: it owns the
-/// [`FilesListComponent`] (dropping it shuts the component down), passes
-/// its setter on as a [`FilesListInput`] message and its
-/// [`FilesListOutput`] to the callback.
+/// The Files panel: it owns the [`FilesListComponent`] (dropping it shuts
+/// the component down), passes its setter on as a [`FilesListInput`]
+/// message and its [`FilesListOutput`] to the callback connected with
+/// [`FilesList::connect_outputs`].
 ///
 /// The setter is queued: it takes effect when the main loop next runs,
 /// after whatever called it has returned.
@@ -672,11 +645,10 @@ impl FilesList {
         })
     }
 
-    /// A file was chosen.
-    pub fn connect_open(&self, callback: impl Fn(PathBuf) + 'static) {
-        self.bridge.connect(move |output| match output {
-            FilesListOutput::Open(path) => callback(path),
-        });
+    /// Calls `callback` with each file people choose from now on, instead
+    /// of the one connected before.
+    pub fn connect_outputs(&self, callback: impl Fn(FilesListOutput) + 'static) {
+        self.bridge.connect(callback);
     }
 
     /// Lists the `.stave` files in a project folder and the folders in it
@@ -796,12 +768,9 @@ mod tests {
     fn problems_panel_is_freed() {
         let panel = ProblemsPanel::new();
         let token = Rc::new(());
-        let (choose, source) = (Rc::clone(&token), Rc::clone(&token));
-        panel.connect_choose(move |_| {
-            let _ = &choose;
-        });
-        panel.connect_source(move |_| {
-            let _ = &source;
+        let held = Rc::clone(&token);
+        panel.connect_outputs(move |_| {
+            let _ = &held;
         });
         let callbacks = Rc::downgrade(&token);
         drop(token);
@@ -828,7 +797,7 @@ mod tests {
         let panel = ProblemsPanel::new();
         let calls = Rc::new(RefCell::new(0));
         let counted = Rc::clone(&calls);
-        panel.connect_choose(move |_| *counted.borrow_mut() += 1);
+        panel.connect_outputs(move |_| *counted.borrow_mut() += 1);
         assert_eq!(panel.root.visible_child_name().as_deref(), Some("empty"));
         panel.show(&[report(3), report(9)], Some(1), true);
         settle();
@@ -862,7 +831,14 @@ mod tests {
         let list = list_of(&panel.root);
         let heard: Rc<RefCell<Vec<String>>> = Rc::default();
         let (log, weak) = (Rc::clone(&heard), Rc::downgrade(&panel));
-        panel.connect_choose(move |index| {
+        panel.connect_outputs(move |output| {
+            let index = match output {
+                ProblemsOutput::Choose(index) => index,
+                ProblemsOutput::Source(location) => {
+                    log.borrow_mut().push(format!("source {}", location.line));
+                    return;
+                }
+            };
             let Some(panel) = weak.upgrade() else {
                 return;
             };
@@ -874,10 +850,6 @@ mod tests {
                 link.emit_clicked();
             }
             log.borrow_mut().push(format!("choose {index}"));
-        });
-        let log = Rc::clone(&heard);
-        panel.connect_source(move |location| {
-            log.borrow_mut().push(format!("source {}", location.line));
         });
         // People choose the second problem.
         list.select_row(list.row_at_index(1).as_ref());
@@ -902,7 +874,11 @@ mod tests {
         let panel = ProblemsPanel::new();
         let chosen: Rc<RefCell<Vec<usize>>> = Rc::default();
         let log = Rc::clone(&chosen);
-        panel.connect_choose(move |index| log.borrow_mut().push(index));
+        panel.connect_outputs(move |output| {
+            if let ProblemsOutput::Choose(index) = output {
+                log.borrow_mut().push(index);
+            }
+        });
         panel.show(&[report(3), report(9)], None, false);
         settle();
         let list = list_of(&panel.root);
@@ -936,7 +912,11 @@ mod tests {
         let panel = ProblemsPanel::new();
         let chosen: Rc<RefCell<Vec<usize>>> = Rc::default();
         let log = Rc::clone(&chosen);
-        panel.connect_choose(move |index| log.borrow_mut().push(index));
+        panel.connect_outputs(move |output| {
+            if let ProblemsOutput::Choose(index) = output {
+                log.borrow_mut().push(index);
+            }
+        });
         panel.show(&[report(3), report(9)], None, false);
         settle();
         let list = list_of(&panel.root);
@@ -970,7 +950,7 @@ mod tests {
         let files = FilesList::new();
         let token = Rc::new(());
         let held = Rc::clone(&token);
-        files.connect_open(move |_| {
+        files.connect_outputs(move |_| {
             let _ = &held;
         });
         let callback = Rc::downgrade(&token);
@@ -1022,7 +1002,7 @@ mod tests {
         let heard: Rc<RefCell<Vec<PathBuf>>> = Rc::default();
         let (log, weak) = (Rc::clone(&heard), Rc::downgrade(&files));
         let inner = other.clone();
-        files.connect_open(move |path| {
+        files.connect_outputs(move |FilesListOutput::Open(path)| {
             let Some(files) = weak.upgrade() else {
                 return;
             };

@@ -4,6 +4,13 @@
 
 use super::add_action;
 use crate::ui::chrome::{MotionBarOutput, MotionShown};
+use crate::ui::dock::DockOutput;
+use crate::ui::finder::FinderOutput;
+use crate::ui::focus_panel::FocusPanelOutput;
+use crate::ui::focus_stage::{PicturesOutput, ProblemCardOutput, StepCardOutput, SwingCardOutput};
+use crate::ui::inspector::InspectorOutput;
+use crate::ui::panels::{FilesListOutput, ProblemsOutput};
+use crate::ui::tree::TreeOutput;
 use crate::ui::view_tools::PlanSwitchOutput;
 // The window's own items and imports, as the handlers had them in mod.rs.
 use crate::ui::*;
@@ -108,113 +115,128 @@ pub(in crate::ui) fn wire(window: &mut Window) {
     root.add_action(&off_screen);
 
     let sender = input.clone();
-    widgets
-        .problems
-        .connect_choose(move |index| sender.emit(SelectionInput::ShowProblem(index).into()));
+    widgets.problems.connect_outputs(move |output| {
+        sender.emit(
+            match output {
+                ProblemsOutput::Choose(index) => SelectionInput::ShowProblem(index),
+                ProblemsOutput::Source(location) => SelectionInput::GoToSource(location),
+            }
+            .into(),
+        );
+    });
     let sender = input.clone();
     widgets
-        .problems
-        .connect_source(move |location| sender.emit(SelectionInput::GoToSource(location).into()));
+        .file_list
+        .connect_outputs(move |output| match output {
+            FilesListOutput::Open(path) => {
+                if let Some(line) = LineNumber::new(1) {
+                    sender.emit(
+                        SelectionInput::GoToSource(SourceLocation {
+                            path: path.display().to_string(),
+                            line,
+                        })
+                        .into(),
+                    );
+                }
+            }
+        });
     let sender = input.clone();
-    widgets.file_list.connect_open(move |path| {
-        if let Some(line) = LineNumber::new(1) {
-            sender.emit(
-                SelectionInput::GoToSource(SourceLocation {
-                    path: path.display().to_string(),
-                    line,
-                })
-                .into(),
-            );
+    widgets.tree.connect_outputs(move |output| {
+        sender.emit(
+            match output {
+                TreeOutput::Select(selection) => SelectionInput::SelectAndFrame(Some(selection)),
+                TreeOutput::Source(location) => SelectionInput::GoToSource(location),
+                TreeOutput::Focus(target) => SelectionInput::Focus(target),
+                TreeOutput::Hover(items) => SelectionInput::Hovered(items),
+            }
+            .into(),
+        );
+    });
+    let sender = input.clone();
+    widgets.dock.connect_outputs(move |output| match output {
+        DockOutput::Move(assembly) => {
+            sender.emit(SelectionInput::Select(Some(Selection::Assembly(assembly))).into());
         }
     });
+    // A link the inspector draws is the editing group's: a click selects
+    // or lights what it names.
     let sender = input.clone();
-    widgets.tree.connect_select(move |selection| {
-        sender.emit(SelectionInput::SelectAndFrame(Some(selection)).into());
+    widgets.inspector.connect_outputs(move |output| {
+        sender.emit(match output {
+            InspectorOutput::Focus(target) => SelectionInput::Focus(target).into(),
+            InspectorOutput::Source(location) => SelectionInput::GoToSource(location).into(),
+            InspectorOutput::Link(target) => EditingInput::LinkClicked(target).into(),
+        });
     });
-    let sender = input.clone();
-    widgets
-        .tree
-        .connect_source(move |location| sender.emit(SelectionInput::GoToSource(location).into()));
-    let sender = input.clone();
-    widgets
-        .tree
-        .connect_focus(move |target| sender.emit(SelectionInput::Focus(target).into()));
-    let sender = input.clone();
-    widgets
-        .tree
-        .connect_hover(move |items| sender.emit(SelectionInput::Hovered(items).into()));
-    let sender = input.clone();
-    widgets.dock.connect_move(move |assembly| {
-        sender.emit(SelectionInput::Select(Some(Selection::Assembly(assembly))).into());
-    });
-    let sender = input.clone();
-    widgets
-        .inspector
-        .connect_focus(move |target| sender.emit(SelectionInput::Focus(target).into()));
-    let sender = input.clone();
-    widgets
-        .inspector
-        .connect_source(move |location| sender.emit(SelectionInput::GoToSource(location).into()));
 
-    // The finder finds through `stave_app::finder`; the window answers its
+    // The finder finds through `stave_app::finder`, and lists the verbs a
+    // query names through the editing group; the window answers both
     // searches from its own update.
     let sender = input.clone();
-    widgets.finder.connect_search_request(move |query| {
-        sender.emit(SelectionInput::FinderSearch(query).into())
-    });
-    let sender = input.clone();
-    widgets.finder.connect_hit(move |hit, choice| {
-        sender.emit(SelectionInput::FinderHit { hit, choice }.into());
+    widgets.finder.connect_outputs(move |output| {
+        sender.emit(match output {
+            FinderOutput::Search(query) => SelectionInput::FinderSearch(query).into(),
+            FinderOutput::Hit { hit, choice } => SelectionInput::FinderHit { hit, choice }.into(),
+            FinderOutput::SearchActions(query) => EditingInput::FinderActions(query).into(),
+            FinderOutput::Action(index) => EditingInput::RunFinderAction(index).into(),
+        });
     });
 
-    // Focus mode's panel and its controls in the 3D view's area.
-    let focus_panel = &widgets.inspector.focus;
+    // Focus mode's panel and its controls in the 3D view's area. The
+    // panel turns its checks on when it shows a new focus, with their
+    // handlers blocked, so these hear people alone; messages are handled
+    // in the order the checks changed, so the model ends as they show.
     let sender = input.clone();
-    focus_panel
-        .done
-        .connect_clicked(move |_| sender.emit(SelectionInput::LeaveFocus.into()));
+    widgets.inspector.focus.connect_outputs(move |output| {
+        sender.emit(
+            match output {
+                FocusPanelOutput::Done => SelectionInput::LeaveFocus,
+                FocusPanelOutput::Source(location) => SelectionInput::GoToSource(location),
+                FocusPanelOutput::Xray(on) => SelectionInput::FocusXray(on),
+                FocusPanelOutput::Tint(on) => SelectionInput::FocusTint(on),
+                FocusPanelOutput::Fade(on) => SelectionInput::FocusFade(on),
+            }
+            .into(),
+        );
+    });
     let sender = input.clone();
-    focus_panel
-        .connect_source(move |location| sender.emit(SelectionInput::GoToSource(location).into()));
-    for scrub in [&widgets.step_card.scrub, &widgets.swing_card.scrub] {
-        let sender = input.clone();
-        scrub
-            .connect_changed(move |value| sender.emit(SelectionInput::FocusScrubbed(value).into()));
-    }
-    for play in [&widgets.step_card.play, &widgets.swing_card.play] {
-        let sender = input.clone();
-        play.connect_clicked(move |_| sender.emit(SelectionInput::PlayFocus.into()));
-    }
+    widgets.step_card.connect_outputs(move |output| {
+        sender.emit(
+            match output {
+                StepCardOutput::Play => SelectionInput::PlayFocus,
+                StepCardOutput::Scrubbed(value) => SelectionInput::FocusScrubbed(value),
+            }
+            .into(),
+        );
+    });
+    let sender = input.clone();
+    widgets.swing_card.connect_outputs(move |output| {
+        sender.emit(
+            match output {
+                SwingCardOutput::Play => SelectionInput::PlayFocus,
+                SwingCardOutput::Scrubbed(value) => SelectionInput::FocusScrubbed(value),
+            }
+            .into(),
+        );
+    });
     let sender = input.clone();
     widgets
         .problem_card
-        .scrub
-        .connect_changed(move |value| sender.emit(SelectionInput::ProblemMoved(value).into()));
-    let sender = input.clone();
-    widgets
-        .pictures
-        .connect_resized(move || sender.emit(SelectionInput::PicturesResized.into()));
-
-    // Focus mode's checks, which the window turns on when it opens focus
-    // mode. Each says what the check now shows. The window only ever
-    // turns them on, to what the model already has, so its own change
-    // comes back queued as a value the model has and changes nothing
-    // (`Window::switch_focus`): no handler is blocked. Messages are
-    // handled in the order the checks changed, so the model ends as the
-    // checks show.
-    for (check, message) in [
-        (
-            &focus_panel.xray,
-            SelectionInput::FocusXray as fn(bool) -> SelectionInput,
-        ),
-        (&focus_panel.tint, SelectionInput::FocusTint),
-        (&focus_panel.fade, SelectionInput::FocusFade),
-    ] {
-        let sender = input.clone();
-        check.connect_active_notify(move |check| {
-            sender.emit(message(check.is_active()).into());
+        .connect_outputs(move |output| match output {
+            ProblemCardOutput::Moved(value) => {
+                sender.emit(SelectionInput::ProblemMoved(value).into())
+            }
         });
-    }
+    let sender = input.clone();
+    widgets.pictures.connect_outputs(move |output| {
+        sender.emit(
+            match output {
+                PicturesOutput::Resized => SelectionInput::PicturesResized,
+                PicturesOutput::Chosen(index) => SelectionInput::PictureChosen(index),
+            }
+            .into(),
+        );
+    });
 
     // From above and the motion slider are set by their components with
     // their handlers blocked, so these hear people alone.
@@ -519,14 +541,7 @@ impl Window {
                 .focus
                 .show(state.focus.as_ref().map(|f| &f.focus));
         }
-        // The checks show what the model now has (every option on); their
-        // handlers hear it, queued, as values the model already has.
-        let panel = &self.widgets.inspector.focus;
-        panel.xray.set_active(true);
-        panel.tint.set_active(true);
-        panel.fade.set_active(true);
-        // The switch never calls back for the window's own change.
-        self.widgets.plan_switch.show(plan);
+        self.show_focus_controls();
         self.widgets.inspector.show_focus();
         let assembles = self
             .state
@@ -644,8 +659,8 @@ impl Window {
         };
         let progress = f64::from(focus.progress);
         let widgets = &self.widgets;
-        widgets.step_card.scrub.set_value(progress);
-        widgets.swing_card.scrub.set_value(progress);
+        widgets.step_card.set_progress(progress);
+        widgets.swing_card.set_progress(progress);
         focus_stage::show_playing(
             &widgets.step_card.play,
             &widgets.step_card.play_icon,
@@ -689,20 +704,33 @@ impl Window {
         self.show_focus_change();
     }
 
-    /// One of focus mode's checks or its From above switch now shows
+    /// People set one of focus mode's checks or its From above switch to
     /// `on`: the option `switch` picks out follows it and focus poses
-    /// again. A value the option already has is the window's own setting
-    /// coming back (or nothing new) and changes nothing.
+    /// again. A value the option already has changes nothing.
     fn switch_focus(&mut self, on: bool, switch: impl FnOnce(&mut FocusState) -> &mut bool) {
         let Some(focus) = self.state.focus.as_mut() else {
             return;
         };
         let option = switch(focus);
-        if *option == on {
-            return;
-        }
+        let changed = *option != on;
         *option = on;
-        self.show_focus_change();
+        // The controls show the model again: a change people made while
+        // the window was setting them (focus mode opening in the same
+        // turn) is shown, never left behind.
+        self.show_focus_controls();
+        if changed {
+            self.show_focus_change();
+        }
+    }
+
+    /// Shows focus mode's options on its checks and From above on its
+    /// switch, as the model has them. Neither calls back.
+    fn show_focus_controls(&self) {
+        let Some(focus) = self.state.focus.as_ref() else {
+            return;
+        };
+        self.widgets.inspector.focus.show_options(focus.options);
+        self.widgets.plan_switch.show(focus.plan);
     }
 
     /// Focus changed: poses again and shows it.
@@ -796,11 +824,8 @@ impl Window {
                 Some(_) | None => Vec::new(),
             }
         };
-        let input = self.input();
         self.widgets.pictures.root.set_visible(!captions.is_empty());
-        self.widgets.pictures.show(&captions, move |index| {
-            input.emit(SelectionInput::PictureChosen(index).into());
-        });
+        self.widgets.pictures.show(&captions);
         let Some((width, height)) = self.widgets.pictures.device_size() else {
             return;
         };
@@ -1217,8 +1242,8 @@ mod tests {
 
     /// People's changes to focus mode's checks reach the model once the
     /// main loop runs; the window turning them on again when it opens
-    /// focus mode comes back as what the model already has, with no
-    /// guard round it, and leaves the model as the checks show.
+    /// focus mode is never heard back, and the checks end as the model
+    /// has them.
     fn checks_follow_people() {
         let (_application, controller) =
             open_window("clothing_cabinet", "org.stave.SelectionTest.Checks");
@@ -1242,7 +1267,7 @@ mod tests {
         assert_eq!(options(&controller), Some((false, true, false)));
 
         // Leaving and opening focus mode again turns every option on; the
-        // checks' handlers hear that and change nothing.
+        // checks show it without calling back.
         let input = controller.sender().clone();
         input.send(SelectionInput::LeaveFocus.into()).unwrap();
         input.send(SelectionInput::Focus(target).into()).unwrap();

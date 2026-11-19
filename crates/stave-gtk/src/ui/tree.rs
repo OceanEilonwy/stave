@@ -518,10 +518,10 @@ impl Component for TreeComponent {
     }
 }
 
-/// The Parts panel, behind the callback API the window still uses: it
-/// owns the component (dropping it shuts the component down), passes its
-/// setters on as [`TreeInput`] messages and each [`TreeOutput`] to the
-/// callback connected for it.
+/// The Parts panel: it owns the component (dropping it shuts the
+/// component down), passes its setters on as [`TreeInput`] messages and
+/// each [`TreeOutput`] to the callback connected with
+/// [`TreeSidebar::connect_outputs`].
 ///
 /// Setters are queued: they take effect when the main loop next runs,
 /// after whatever called them has returned. Callbacks run from the main
@@ -530,58 +530,6 @@ pub struct TreeSidebar {
     /// The panel's content.
     pub root: gtk::Box,
     bridge: Bridge<TreeComponent>,
-    callbacks: Rc<TreeCallbacks>,
-}
-
-/// A callback the window connects.
-type Callback<T> = Rc<dyn Fn(T)>;
-
-/// One callback the window connected, if any. It sits in a [`Cell`] and
-/// is cloned out before it is called, so it may connect another.
-struct Slot<T> {
-    callback: Cell<Option<Callback<T>>>,
-}
-
-impl<T> Default for Slot<T> {
-    fn default() -> Self {
-        Slot {
-            callback: Cell::new(None),
-        }
-    }
-}
-
-impl<T> Slot<T> {
-    fn set(&self, callback: impl Fn(T) + 'static) {
-        self.callback.set(Some(Rc::new(callback)));
-    }
-
-    fn call(&self, value: T) {
-        let callback = self.callback.take();
-        self.callback.set(callback.clone());
-        if let Some(callback) = callback {
-            callback(value);
-        }
-    }
-}
-
-/// Where each [`TreeOutput`] goes.
-#[derive(Default)]
-struct TreeCallbacks {
-    select: Slot<Selection>,
-    source: Slot<SourceLocation>,
-    focus: Slot<Target>,
-    hover: Slot<Vec<Item>>,
-}
-
-impl TreeCallbacks {
-    fn deliver(&self, output: TreeOutput) {
-        match output {
-            TreeOutput::Select(selection) => self.select.call(selection),
-            TreeOutput::Source(location) => self.source.call(location),
-            TreeOutput::Focus(target) => self.focus.call(target),
-            TreeOutput::Hover(items) => self.hover.call(items),
-        }
-    }
 }
 
 fn rgba(swatch: Swatch) -> gtk::gdk::RGBA {
@@ -597,36 +545,17 @@ impl TreeSidebar {
     /// An empty panel.
     pub fn new() -> TreeSidebar {
         let bridge = Bridge::<TreeComponent>::launch(());
-        let callbacks = Rc::new(TreeCallbacks::default());
-        let routed = Rc::clone(&callbacks);
-        bridge.connect(move |output| routed.deliver(output));
         TreeSidebar {
             root: bridge.widget().clone(),
             bridge,
-            callbacks,
         }
     }
 
-    /// Calls `callback` with what a row stands for when it is chosen.
-    pub fn connect_select(&self, callback: impl Fn(Selection) + 'static) {
-        self.callbacks.select.set(callback);
-    }
-
-    /// Calls `callback` with where a library's item is written when its
-    /// row is chosen.
-    pub fn connect_source(&self, callback: impl Fn(SourceLocation) + 'static) {
-        self.callbacks.source.set(callback);
-    }
-
-    /// Calls `callback` with a joint to focus on when its row is chosen.
-    pub fn connect_focus(&self, callback: impl Fn(Target) + 'static) {
-        self.callbacks.focus.set(callback);
-    }
-
-    /// Calls `callback` with what a partner link stands for while the
-    /// pointer is over it, and with nothing when it leaves.
-    pub fn connect_hover(&self, callback: impl Fn(Vec<Item>) + 'static) {
-        self.callbacks.hover.set(callback);
+    /// Calls `callback` with each [`TreeOutput`] from now on (a row
+    /// chosen, a library's item to open, a joint to focus on, a partner
+    /// link under the pointer), instead of the one connected before.
+    pub fn connect_outputs(&self, callback: impl Fn(TreeOutput) + 'static) {
+        self.bridge.connect(callback);
     }
 
     /// Shows a new tree and its joints, keeping what is folded.
@@ -1511,9 +1440,13 @@ mod tests {
         let sidebar = TreeSidebar::new();
         let list = list_of(&sidebar);
         let chosen = Rc::new(RefCell::new(Vec::new()));
-        sidebar.connect_select({
+        sidebar.connect_outputs({
             let chosen = Rc::clone(&chosen);
-            move |selection| chosen.borrow_mut().push(selection)
+            move |output| {
+                if let TreeOutput::Select(selection) = output {
+                    chosen.borrow_mut().push(selection);
+                }
+            }
         });
         sidebar.show_tree(
             stave_app::inspect::parts_tree(&design),
@@ -1567,19 +1500,7 @@ mod tests {
         let sidebar = TreeSidebar::new();
         let token = Rc::new(());
         let held = Rc::clone(&token);
-        sidebar.connect_select(move |_| {
-            let _ = &held;
-        });
-        let held = Rc::clone(&token);
-        sidebar.connect_source(move |_| {
-            let _ = &held;
-        });
-        let held = Rc::clone(&token);
-        sidebar.connect_focus(move |_| {
-            let _ = &held;
-        });
-        let held = Rc::clone(&token);
-        sidebar.connect_hover(move |_| {
+        sidebar.connect_outputs(move |_| {
             let _ = &held;
         });
         let callbacks = Rc::downgrade(&token);
@@ -1630,12 +1551,12 @@ mod tests {
         let sidebar = TreeSidebar::new();
         let heard: Rc<RefCell<Vec<TreeOutput>>> = Rc::default();
         let log = Rc::clone(&heard);
-        sidebar
-            .connect_select(move |selection| log.borrow_mut().push(TreeOutput::Select(selection)));
-        let log = Rc::clone(&heard);
-        sidebar.connect_focus(move |target| log.borrow_mut().push(TreeOutput::Focus(target)));
-        let log = Rc::clone(&heard);
-        sidebar.connect_source(move |location| log.borrow_mut().push(TreeOutput::Source(location)));
+        sidebar.connect_outputs(move |output| match output {
+            TreeOutput::Select(_) | TreeOutput::Focus(_) | TreeOutput::Source(_) => {
+                log.borrow_mut().push(output);
+            }
+            TreeOutput::Hover(_) => {}
+        });
         sidebar.set_placeholder(Some("No parts yet"));
         settle();
         assert_eq!(
@@ -1707,7 +1628,10 @@ mod tests {
         let weak = Rc::downgrade(&sidebar);
         let inner = list.clone();
         let then = second_row.clone();
-        sidebar.connect_select(move |selection| {
+        sidebar.connect_outputs(move |output| {
+            let TreeOutput::Select(selection) = output else {
+                return;
+            };
             let Some(sidebar) = weak.upgrade() else {
                 return;
             };

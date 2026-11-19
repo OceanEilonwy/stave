@@ -17,10 +17,7 @@
 //! [`SwingCard`], [`Caption`], [`Pictures`], [`ProblemCard`]) keep the
 //! older API in front of the components until the window moves to relm4
 //! too. The window sets their values and hears back only from what people
-//! do.
-
-use std::cell::Cell;
-use std::rc::Rc;
+//! do, as each component's output.
 
 use adw::prelude::*;
 use gtk::gdk;
@@ -53,88 +50,6 @@ pub fn show_playing(button: &gtk::Button, icon: &PathIcon, playing: bool, label:
     button.update_property(&[gtk::accessible::Property::Label(text)]);
 }
 
-/// A callback for one kind of a component's outputs.
-type Callback<T> = Rc<dyn Fn(T)>;
-
-/// One callback the window connected, for one kind of output from a
-/// component. It is cloned out before it is called, so the callback may
-/// connect another; nothing is borrowed while it runs.
-pub(super) struct Slot<T> {
-    callback: Cell<Option<Callback<T>>>,
-}
-
-impl<T> Default for Slot<T> {
-    fn default() -> Self {
-        Slot {
-            callback: Cell::new(None),
-        }
-    }
-}
-
-impl<T> Slot<T> {
-    /// Calls `callback` from now on, instead of the one connected before.
-    pub(super) fn connect(&self, callback: impl Fn(T) + 'static) {
-        self.callback.set(Some(Rc::new(callback)));
-    }
-
-    /// Calls the callback with `value`, or drops it when none is
-    /// connected.
-    pub(super) fn deliver(&self, value: T) {
-        let callback = self.callback.take();
-        self.callback.set(callback.clone());
-        if let Some(callback) = callback {
-            callback(value);
-        }
-    }
-}
-
-/// A card's slider as the window still reaches it: what people move it to
-/// reaches the callback connected with [`Scrub::connect_changed`], and
-/// [`Scrub::set_value`] moves it without calling back. The slider itself
-/// belongs to the card's component.
-pub struct Scrub {
-    changed: Rc<Slot<f64>>,
-    move_to: Box<dyn Fn(f64)>,
-}
-
-impl Scrub {
-    /// Calls `callback` with the value whenever people move the slider.
-    pub fn connect_changed(&self, callback: impl Fn(f64) + 'static) {
-        self.changed.connect(callback);
-    }
-
-    /// Moves the slider, without calling back. Queued, as every setter.
-    pub fn set_value(&self, value: f64) {
-        (self.move_to)(value);
-    }
-}
-
-/// A slider the window only listens to (the component alone sets it):
-/// what people move it to reaches the callback connected with
-/// [`SliderChanges::connect_changed`].
-pub struct SliderChanges {
-    changed: Rc<Slot<f64>>,
-}
-
-impl SliderChanges {
-    /// Listens for people moving the slider; returns the handle and the
-    /// slot its owner delivers to.
-    pub(super) fn new() -> (SliderChanges, Rc<Slot<f64>>) {
-        let changed = Rc::new(Slot::default());
-        (
-            SliderChanges {
-                changed: Rc::clone(&changed),
-            },
-            changed,
-        )
-    }
-
-    /// Calls `callback` with the value whenever people move the slider.
-    pub fn connect_changed(&self, callback: impl Fn(f64) + 'static) {
-        self.changed.connect(callback);
-    }
-}
-
 /// The step line's markup: the lead in bold, the call in monospace.
 fn step_markup(step: Option<&str>) -> String {
     let escape = |t: &str| gtk::glib::markup_escape_text(t).to_string();
@@ -159,8 +74,6 @@ pub struct StepCardComponent {
     status: String,
     /// Apart (0) to together (1).
     scrub: Slider,
-    /// Where the card's messages go, for the window's handle on its slider.
-    input: relm4::Sender<StepCardInput>,
 }
 
 /// What a step player is made with: the play button the window still
@@ -278,15 +191,13 @@ impl Component for StepCardComponent {
         let play = &init.play;
         let scrub = Slider::new("Apart to together", 22, 22.0, 2.0);
         let input = sender.input_sender().clone();
-        let forward = input.clone();
-        scrub.connect_changed(move |value| forward.emit(StepCardInput::Scrubbed(value)));
+        scrub.connect_changed(move |value| input.emit(StepCardInput::Scrubbed(value)));
         let scrub_area = &scrub.root.clone();
         let model = StepCardComponent {
             markup: String::new(),
             tooltip: None,
             status: String::new(),
             scrub,
-            input,
         };
         let widgets = view_output!();
         ComponentParts { model, widgets }
@@ -311,18 +222,18 @@ impl Component for StepCardComponent {
     }
 }
 
-/// The joint's step player, floating at the bottom of the view, behind
-/// the API the window still uses. It owns the component: dropping it shuts
-/// the component down. Setters are queued.
+/// The joint's step player, floating at the bottom of the view. It owns
+/// the component: dropping it shuts the component down. Setters are
+/// queued; people's presses and moves reach the window as
+/// [`StepCardOutput`]s.
 pub struct StepCard {
     /// The card.
     pub root: gtk::Box,
-    /// Plays the joint going together.
+    /// Plays the joint going together (the window shows play or pause on
+    /// it).
     pub play: gtk::Button,
     /// The play button's icon.
     pub play_icon: PathIcon,
-    /// Apart (0) to together (1).
-    pub scrub: Scrub,
     bridge: Bridge<StepCardComponent>,
 }
 
@@ -331,25 +242,23 @@ impl StepCard {
     pub fn new() -> StepCard {
         let (play, play_icon) = play_button("Play the assembly");
         let bridge = Bridge::<StepCardComponent>::launch(StepCardInit { play: play.clone() });
-        let changed = Rc::new(Slot::default());
-        let forward = Rc::clone(&changed);
-        bridge.connect(move |output| match output {
-            StepCardOutput::Scrubbed(value) => forward.deliver(value),
-            // The window hears the play button on the button itself.
-            StepCardOutput::Play => {}
-        });
-        let input = bridge.model().input.clone();
-        let scrub = Scrub {
-            changed,
-            move_to: Box::new(move |value| input.emit(StepCardInput::SetProgress(value))),
-        };
         StepCard {
             root: bridge.widget().clone(),
             play,
             play_icon,
-            scrub,
             bridge,
         }
+    }
+
+    /// Calls `callback` with each of people's presses and moves from now
+    /// on, instead of the one connected before.
+    pub fn connect_outputs(&self, callback: impl Fn(StepCardOutput) + 'static) {
+        self.bridge.connect(callback);
+    }
+
+    /// Moves the slider (apart 0 to together 1), without calling back.
+    pub fn set_progress(&self, progress: f64) {
+        self.bridge.send(StepCardInput::SetProgress(progress));
     }
 
     /// Shows the step ("Step 1 of 1 · push(rung, along: length)") and the
@@ -370,8 +279,6 @@ pub struct SwingCardComponent {
     value: String,
     /// Closed (0) to fully open (1).
     scrub: Slider,
-    /// Where the card's messages go, for the window's handle on its slider.
-    input: relm4::Sender<SwingCardInput>,
 }
 
 /// What a swing card is made with: the play button the window still
@@ -458,14 +365,12 @@ impl Component for SwingCardComponent {
         let play = &init.play;
         let scrub = Slider::new("Door angle", 22, 22.0, 2.0);
         let input = sender.input_sender().clone();
-        let forward = input.clone();
-        scrub.connect_changed(move |value| forward.emit(SwingCardInput::Scrubbed(value)));
+        scrub.connect_changed(move |value| input.emit(SwingCardInput::Scrubbed(value)));
         let scrub_area = &scrub.root.clone();
         let model = SwingCardComponent {
             name: String::new(),
             value: String::new(),
             scrub,
-            input,
         };
         let widgets = view_output!();
         ComponentParts { model, widgets }
@@ -499,18 +404,17 @@ impl Component for SwingCardComponent {
     }
 }
 
-/// Hardware focus: the swing (or slide) card under the small views, behind
-/// the API the window still uses. It owns the component: dropping it shuts
-/// the component down. Setters are queued.
+/// Hardware focus: the swing (or slide) card under the small views. It
+/// owns the component: dropping it shuts the component down. Setters are
+/// queued; people's presses and moves reach the window as
+/// [`SwingCardOutput`]s.
 pub struct SwingCard {
     /// The card.
     pub root: gtk::Box,
-    /// Plays the door opening.
+    /// Plays the door opening (the window shows play or pause on it).
     pub play: gtk::Button,
     /// The play button's icon.
     pub play_icon: PathIcon,
-    /// Closed (0) to fully open (1).
-    pub scrub: Scrub,
     bridge: Bridge<SwingCardComponent>,
 }
 
@@ -519,25 +423,23 @@ impl SwingCard {
     pub fn new() -> SwingCard {
         let (play, play_icon) = play_button("Play the swing");
         let bridge = Bridge::<SwingCardComponent>::launch(SwingCardInit { play: play.clone() });
-        let changed = Rc::new(Slot::default());
-        let forward = Rc::clone(&changed);
-        bridge.connect(move |output| match output {
-            SwingCardOutput::Scrubbed(value) => forward.deliver(value),
-            // The window hears the play button on the button itself.
-            SwingCardOutput::Play => {}
-        });
-        let input = bridge.model().input.clone();
-        let scrub = Scrub {
-            changed,
-            move_to: Box::new(move |value| input.emit(SwingCardInput::SetProgress(value))),
-        };
         SwingCard {
             root: bridge.widget().clone(),
             play,
             play_icon,
-            scrub,
             bridge,
         }
+    }
+
+    /// Calls `callback` with each of people's presses and moves from now
+    /// on, instead of the one connected before.
+    pub fn connect_outputs(&self, callback: impl Fn(SwingCardOutput) + 'static) {
+        self.bridge.connect(callback);
+    }
+
+    /// Moves the slider (closed 0 to fully open 1), without calling back.
+    pub fn set_progress(&self, progress: f64) {
+        self.bridge.send(SwingCardInput::SetProgress(progress));
     }
 
     /// Names what moves.
@@ -827,17 +729,13 @@ impl Component for PicturesComponent {
     }
 }
 
-/// Hardware focus's three small views at fixed angles, behind the API the
-/// window still uses. Each is rendered at its slot's size in device pixels
-/// and drawn one texel to a pixel, so it is sharp at any size and scale.
-/// Setters are queued.
+/// Hardware focus's three small views at fixed angles. Each is rendered at
+/// its slot's size in device pixels and drawn one texel to a pixel, so it
+/// is sharp at any size and scale. Setters are queued; the window hears
+/// [`PicturesOutput`]s.
 pub struct Pictures {
     /// The row.
     pub root: gtk::Box,
-    /// Called when the slots' size in device pixels changes.
-    resized: Rc<Slot<()>>,
-    /// Called with the index of the picture people chose.
-    chosen: Rc<Slot<usize>>,
     bridge: Bridge<PicturesComponent>,
 }
 
@@ -845,26 +743,18 @@ impl Pictures {
     /// A hidden row.
     pub fn new() -> Pictures {
         let bridge = Bridge::<PicturesComponent>::launch(());
-        let resized = Rc::new(Slot::default());
-        let chosen = Rc::new(Slot::default());
-        let (on_resized, on_chosen) = (Rc::clone(&resized), Rc::clone(&chosen));
-        bridge.connect(move |output| match output {
-            PicturesOutput::Resized => on_resized.deliver(()),
-            PicturesOutput::Chosen(index) => on_chosen.deliver(index),
-        });
         Pictures {
             root: bridge.widget().clone(),
-            resized,
-            chosen,
             bridge,
         }
     }
 
-    /// Calls `handler` when the pictures' size in device pixels changes
-    /// (the window resized, or moved to a screen of another scale): they
-    /// need rendering again at [`Pictures::device_size`].
-    pub fn connect_resized(&self, handler: impl Fn() + 'static) {
-        self.resized.connect(move |()| handler());
+    /// Calls `callback` from now on, instead of the one connected before,
+    /// when the pictures' size in device pixels changes (the window
+    /// resized, or moved to a screen of another scale: they need rendering
+    /// again at [`Pictures::device_size`]) and when people choose one.
+    pub fn connect_outputs(&self, callback: impl Fn(PicturesOutput) + 'static) {
+        self.bridge.connect(callback);
     }
 
     /// The size, in device pixels, to render the pictures at; `None`
@@ -881,11 +771,11 @@ impl Pictures {
         (slot.width() > 1 && slot.height() > 1).then(|| slot.device_size())
     }
 
-    /// Lays out a picture for each caption, each a button that calls
-    /// `on_choose` with its index, empty until [`Pictures::show_textures`].
-    /// The same captions as last time keep the pictures as they are.
-    pub fn show(&self, captions: &[String], on_choose: impl Fn(usize) + Clone + 'static) {
-        self.chosen.connect(on_choose);
+    /// Lays out a picture for each caption, each a button that is heard
+    /// as [`PicturesOutput::Chosen`] with its index, empty until
+    /// [`Pictures::show_textures`]. The same captions as last time keep
+    /// the pictures as they are.
+    pub fn show(&self, captions: &[String]) {
         self.bridge.send(PicturesInput::Show(captions.to_vec()));
     }
 
@@ -1102,14 +992,12 @@ impl Component for ProblemCardComponent {
 }
 
 /// A selected problem's motion card: swing the door to see where it hits.
-/// It keeps the API the window still uses and owns the component. Setters
-/// are queued.
+/// It owns the component. Setters are queued; people's swings of its
+/// slider (closed to fully open, in degrees or millimetres) reach the
+/// window as [`ProblemCardOutput::Moved`].
 pub struct ProblemCard {
     /// The card, to overlay on the view.
     pub root: adw::Clamp,
-    /// Closed to fully open, in degrees or millimetres: the card sets it
-    /// whenever it shows a motion.
-    pub scrub: SliderChanges,
     bridge: Bridge<ProblemCardComponent>,
 }
 
@@ -1117,15 +1005,16 @@ impl ProblemCard {
     /// A hidden card.
     pub fn new() -> ProblemCard {
         let bridge = Bridge::<ProblemCardComponent>::launch(());
-        let (scrub, changed) = SliderChanges::new();
-        bridge.connect(move |output| match output {
-            ProblemCardOutput::Moved(value) => changed.deliver(value),
-        });
         ProblemCard {
             root: bridge.widget().clone(),
-            scrub,
             bridge,
         }
+    }
+
+    /// Calls `callback` with each of people's swings from now on, instead
+    /// of the one connected before.
+    pub fn connect_outputs(&self, callback: impl Fn(ProblemCardOutput) + 'static) {
+        self.bridge.connect(callback);
     }
 
     /// Shows the card for a motion, the slider at `amount` (radians or
@@ -1148,7 +1037,8 @@ impl ProblemCard {
 
 #[cfg(test)]
 mod tests {
-    use std::cell::RefCell;
+    use std::cell::{Cell, RefCell};
+    use std::rc::Rc;
 
     use stave_model::ids::AssemblyId;
 
@@ -1187,7 +1077,7 @@ mod tests {
     fn step_card_is_freed() {
         let card = StepCard::new();
         let (held, callback) = token();
-        card.scrub.connect_changed(move |_| {
+        card.connect_outputs(move |_| {
             let _ = &held;
         });
         let root = card.root.downgrade();
@@ -1215,10 +1105,9 @@ mod tests {
         let card = StepCard::new();
         let calls = Rc::new(Cell::new(0));
         let counted = Rc::clone(&calls);
-        card.scrub
-            .connect_changed(move |_| counted.set(counted.get() + 1));
+        card.connect_outputs(move |_| counted.set(counted.get() + 1));
         card.show_frame(Some("Step 1 of 1 · push(rung, along: length)"), "6 mm");
-        card.scrub.set_value(0.5);
+        card.set_progress(0.5);
         assert_eq!(card.bridge.model().status, "", "setters are queued");
         settle();
         let model = card.bridge.model();
@@ -1247,7 +1136,10 @@ mod tests {
         let log = Rc::clone(&heard);
         let weak = Rc::downgrade(&card);
         let inner = slider.clone();
-        card.scrub.connect_changed(move |value| {
+        card.connect_outputs(move |output| {
+            let StepCardOutput::Scrubbed(value) = output else {
+                return;
+            };
             let Some(card) = weak.upgrade() else {
                 return;
             };
@@ -1281,13 +1173,13 @@ mod tests {
         let (held, callback) = token();
         let calls = Rc::new(Cell::new(0));
         let counted = Rc::clone(&calls);
-        card.scrub.connect_changed(move |_| {
+        card.connect_outputs(move |_| {
             let _ = &held;
             counted.set(counted.get() + 1);
         });
         card.show_name("door", true);
         card.show_value("45°");
-        card.scrub.set_value(0.25);
+        card.set_progress(0.25);
         settle();
         {
             let model = card.bridge.model();
@@ -1314,8 +1206,7 @@ mod tests {
         let card = SwingCard::new();
         let heard: Rc<RefCell<Vec<SwingCardOutput>>> = Rc::default();
         let log = Rc::clone(&heard);
-        card.bridge
-            .connect(move |output| log.borrow_mut().push(output));
+        card.connect_outputs(move |output| log.borrow_mut().push(output));
         card.play.emit_clicked();
         assert!(heard.borrow().is_empty(), "the press is only queued");
         settle();
@@ -1357,15 +1248,20 @@ mod tests {
         let pictures = Pictures::new();
         let chosen: Rc<RefCell<Vec<usize>>> = Rc::default();
         let log = Rc::clone(&chosen);
+        pictures.connect_outputs(move |output| {
+            if let PicturesOutput::Chosen(index) = output {
+                log.borrow_mut().push(index);
+            }
+        });
         let captions = vec!["0°".to_owned(), "45°".to_owned(), "110°".to_owned()];
-        pictures.show(&captions, move |index| log.borrow_mut().push(index));
+        pictures.show(&captions);
         assert!(pictures.root.first_child().is_none(), "show is queued");
         settle();
         let buttons: Vec<gtk::Widget> =
             std::iter::successors(pictures.root.first_child(), gtk::Widget::next_sibling).collect();
         assert_eq!(buttons.len(), 3);
         // The same captions keep the same pictures.
-        pictures.show(&captions, |_| {});
+        pictures.show(&captions);
         settle();
         assert_eq!(pictures.root.first_child().as_ref(), buttons.first());
         pictures.show_current(Some(1));
@@ -1383,7 +1279,11 @@ mod tests {
             panic!("each picture is a button");
         };
         let log = Rc::clone(&chosen);
-        pictures.show(&captions, move |index| log.borrow_mut().push(index + 100));
+        pictures.connect_outputs(move |output| {
+            if let PicturesOutput::Chosen(index) = output {
+                log.borrow_mut().push(index + 100);
+            }
+        });
         button.emit_clicked();
         assert!(chosen.borrow().is_empty(), "the click is only queued");
         settle();
@@ -1400,11 +1300,14 @@ mod tests {
     /// ask the pictures their size from inside its callback.
     fn pictures_resize() {
         let pictures = Rc::new(Pictures::new());
-        pictures.show(&["closed".to_owned()], |_| {});
+        pictures.show(&["closed".to_owned()]);
         let heard = Rc::new(Cell::new(0));
         let count = Rc::clone(&heard);
         let weak = Rc::downgrade(&pictures);
-        pictures.connect_resized(move || {
+        pictures.connect_outputs(move |output| {
+            if output != PicturesOutput::Resized {
+                return;
+            }
             count.set(count.get() + 1);
             if let Some(pictures) = weak.upgrade() {
                 let _ = pictures.device_size();
@@ -1433,10 +1336,10 @@ mod tests {
     fn pictures_freed() {
         let pictures = Pictures::new();
         let (held, callback) = token();
-        pictures.connect_resized(move || {
+        pictures.connect_outputs(move |_| {
             let _ = &held;
         });
-        pictures.show(&["closed".to_owned(), "open".to_owned()], |_| {});
+        pictures.show(&["closed".to_owned(), "open".to_owned()]);
         settle();
         let root = pictures.root.downgrade();
         let slot = pictures
@@ -1484,8 +1387,7 @@ mod tests {
         let card = ProblemCard::new();
         let calls = Rc::new(Cell::new(0));
         let counted = Rc::clone(&calls);
-        card.scrub
-            .connect_changed(move |_| counted.set(counted.get() + 1));
+        card.connect_outputs(move |_| counted.set(counted.get() + 1));
         let door = door();
         card.show(Some(&door), 10_f32.to_radians());
         assert!(!card.root.is_visible(), "queued");
@@ -1518,7 +1420,7 @@ mod tests {
         let (held, callback) = token();
         let heard: Rc<RefCell<Vec<f64>>> = Rc::default();
         let log = Rc::clone(&heard);
-        card.scrub.connect_changed(move |value| {
+        card.connect_outputs(move |ProblemCardOutput::Moved(value)| {
             let _ = &held;
             log.borrow_mut().push(value);
         });

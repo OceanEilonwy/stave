@@ -54,8 +54,6 @@ use super::sections::{self, LinkHandlers};
 use super::style::CODE;
 
 type UnsavedCallback = Rc<dyn Fn(&str) -> bool>;
-/// Where one of the inspector's callbacks is kept.
-type Slot<T> = Cell<Option<Rc<dyn Fn(T)>>>;
 
 /// Which of the inspector's pages shows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -632,28 +630,10 @@ fn clear(container: &gtk::Box) {
     }
 }
 
-/// Calls the callback in `slot`, if one is connected. It is cloned out
-/// first, so the callback is free to connect another.
-fn call<T>(slot: &Slot<T>, value: T) {
-    let callback = slot.take();
-    slot.set(callback.clone());
-    if let Some(callback) = callback {
-        callback(value);
-    }
-}
-
-/// Where the inspector's outputs go while the window connects them one by
-/// one: each slot is taken and put back around a call, never borrowed.
-#[derive(Default)]
-struct Callbacks {
-    focus: Slot<Target>,
-    source: Slot<SourceLocation>,
-}
-
-/// The inspector panel, behind the callback API the window still uses:
-/// it owns the component (dropping it shuts the component down), passes
-/// its setters on as [`InspectorInput`] messages and its
-/// [`InspectorOutput`]s to the callbacks.
+/// The inspector panel: it owns the component (dropping it shuts the
+/// component down), passes its setters on as [`InspectorInput`] messages
+/// and its [`InspectorOutput`]s to the callback connected with
+/// [`Inspector::connect_outputs`].
 ///
 /// Setters are queued: they take effect when the main loop next runs,
 /// after whatever called them has returned.
@@ -664,7 +644,6 @@ pub struct Inspector {
     pub focus: FocusPanel,
     /// Where the links it draws report clicks and hovers.
     pub links: LinkHandlers,
-    callbacks: Rc<Callbacks>,
     /// Asked, as an inspection is shown, whether its file has unsaved
     /// changes.
     unsaved: Cell<Option<UnsavedCallback>>,
@@ -680,32 +659,20 @@ impl Inspector {
             focus: focus.root.clone(),
             links: links.clone(),
         });
-        let callbacks = Rc::new(Callbacks::default());
-        let outputs = Rc::clone(&callbacks);
-        let link_handlers = links.clone();
-        bridge.connect(move |output| match output {
-            InspectorOutput::Focus(target) => call(&outputs.focus, target),
-            InspectorOutput::Source(location) => call(&outputs.source, location),
-            InspectorOutput::Link(target) => link_handlers.click_target(target),
-        });
         Inspector {
             root: bridge.widget().clone(),
             focus,
             links,
-            callbacks,
             unsaved: Cell::new(None),
             bridge,
         }
     }
 
-    /// Calls `callback` when a joint or hardware row asks for focus mode.
-    pub fn connect_focus(&self, callback: impl Fn(Target) + 'static) {
-        self.callbacks.focus.set(Some(Rc::new(callback)));
-    }
-
-    /// Calls `callback` when the file:line link is clicked.
-    pub fn connect_source(&self, callback: impl Fn(SourceLocation) + 'static) {
-        self.callbacks.source.set(Some(Rc::new(callback)));
+    /// Calls `callback` with each of people's clicks from now on (a row
+    /// asking for focus mode, the file:line link, a problem's link),
+    /// instead of the one connected before.
+    pub fn connect_outputs(&self, callback: impl Fn(InspectorOutput) + 'static) {
+        self.bridge.connect(callback);
     }
 
     /// Asks `callback` whether a file (by its path) has unsaved changes,
@@ -820,7 +787,7 @@ mod tests {
         let inspector = Inspector::new();
         let token = Rc::new(());
         let held = Rc::clone(&token);
-        inspector.connect_source(move |_| {
+        inspector.connect_outputs(move |_| {
             let _ = &held;
         });
         let held = Rc::clone(&token);
@@ -854,9 +821,7 @@ mod tests {
         let inspector = Inspector::new();
         let calls = Rc::new(RefCell::new(0));
         let counted = Rc::clone(&calls);
-        inspector.connect_focus(move |_| *counted.borrow_mut() += 1);
-        let counted = Rc::clone(&calls);
-        inspector.connect_source(move |_| *counted.borrow_mut() += 1);
+        inspector.connect_outputs(move |_| *counted.borrow_mut() += 1);
         let page = |inspector: &Inspector| inspector.root.visible_child_name();
 
         inspector.show(inspection().as_ref());
@@ -915,7 +880,10 @@ mod tests {
         let log = Rc::clone(&heard);
         let weak = Rc::downgrade(&inspector);
         let inner = link.clone();
-        inspector.connect_source(move |location| {
+        inspector.connect_outputs(move |output| {
+            let InspectorOutput::Source(location) = output else {
+                return;
+            };
             let Some(inspector) = weak.upgrade() else {
                 return;
             };

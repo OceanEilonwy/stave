@@ -431,7 +431,6 @@ impl Window {
         self.connect_hold();
         self.connect_repeats();
         self.connect_editor_link();
-        self.connect_verbs();
 
         let editing = &self.editing;
         let input = self.input();

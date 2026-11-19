@@ -203,10 +203,10 @@ impl Component for DockComponent {
     }
 }
 
-/// The floating controls, behind the API the window still uses: it owns
-/// the [`DockComponent`] (dropping it shuts the component down), passes
-/// its setters on as [`DockInput`] messages and its [`DockOutput`] to the
-/// callback.
+/// The floating controls: it owns the [`DockComponent`] (dropping it
+/// shuts the component down), passes its setters on as [`DockInput`]
+/// messages and its [`DockOutput`] to the callback connected with
+/// [`Dock::connect_outputs`].
 ///
 /// Setters are queued: they take effect when the main loop next runs,
 /// after whatever called them has returned.
@@ -245,11 +245,10 @@ impl Dock {
         move |orientation| input.emit(DockInput::SetMovesOrientation(orientation))
     }
 
-    /// Calls `callback` with the assembly whose chip was chosen.
-    pub fn connect_move(&self, callback: impl Fn(AssemblyId) + 'static) {
-        self.bridge.connect(move |output| match output {
-            DockOutput::Move(assembly) => callback(assembly),
-        });
+    /// Calls `callback` with each chip people choose from now on, instead
+    /// of the one connected before.
+    pub fn connect_outputs(&self, callback: impl Fn(DockOutput) + 'static) {
+        self.bridge.connect(callback);
     }
 
     /// Offers the controls, or takes them away while a problem is posed
@@ -325,7 +324,7 @@ mod tests {
         let dock = dock();
         let token = Rc::new(());
         let held = Rc::clone(&token);
-        dock.connect_move(move |_| {
+        dock.connect_outputs(move |_| {
             let _ = &held;
         });
         let callback = Rc::downgrade(&token);
@@ -356,7 +355,7 @@ mod tests {
         let dock = dock();
         let calls = Rc::new(RefCell::new(0));
         let counted = Rc::clone(&calls);
-        dock.connect_move(move |_| *counted.borrow_mut() += 1);
+        dock.connect_outputs(move |_| *counted.borrow_mut() += 1);
         dock.show_moves(&moving(), Some(AssemblyId::from_usize(1)));
         settle();
         let shown = chips(&dock);
@@ -393,7 +392,7 @@ mod tests {
         let heard: Rc<RefCell<Vec<(AssemblyId, usize)>>> = Rc::default();
         let log = Rc::clone(&heard);
         let weak = Rc::downgrade(&dock);
-        dock.connect_move(move |assembly| {
+        dock.connect_outputs(move |DockOutput::Move(assembly)| {
             let Some(dock) = weak.upgrade() else {
                 return;
             };
