@@ -256,6 +256,46 @@ when that check is done, gives
 `Notice::BuildPlanNotBuilt` ("The build plan (PDF) isn't built yet"): the
 PDF doesn't exist yet, and the button says so honestly.
 
+## Starting Stave
+
+Stave is one application, `io.github.OceanEilonwy.Stave` (`ui/app.rs`),
+with a window per project folder. `stave-gtk FOLDER...` opens each folder
+in a window (a `.stave` file opens its folder); started again while it
+runs, or asked by Files to open a folder, it hands the folders to the
+Stave already running (`HANDLES_OPEN`), which opens a window for each or
+brings forward the one already showing it. The command line's other
+window options apply to the first window of a Stave that was not
+running. `--window-screenshot` always runs on its own (`NON_UNIQUE`) and
+needs one folder.
+
+Started with no folder (from the app grid or the dock), Stave shows the
+**start page** (`ui/start_page.rs`): an `AdwStatusPage` with Open
+Folder… and New Project… and, under them, the recent projects
+(`gtk::RecentManager`, the folders Stave opened that are still there,
+newest first). Opening a project opens its window and closes the start
+page. A folder (or a `.stave` file) dropped from Files onto the start
+page or a project window opens it; in a project window it replaces the
+project there, after asking about unsaved changes, as Open Project… does.
+
+Ctrl+W closes the window (`window.close`, asking about unsaved changes)
+and Ctrl+Q closes every window (`app.quit`), each asking. The shortcuts
+dialog (`adw::ShortcutsDialog`) lists every key: the actions' keys come
+from the one table `app::ACCELERATORS` that also binds them, and the keys
+widgets handle themselves (F, Esc, Delete in the 3D view; F12, Alt+F12,
+Shift+F12 in the editor) from `app::OTHER_KEYS`.
+
+Stave remembers the window's size, whether it was maximised and the
+style chosen in the menu, in `~/.config/stave/window` (a GLib key file,
+`ui/remember.rs`; a key file rather than GSettings so that `cargo run`
+needs no installed schema), and the panel layout in
+`~/.config/stave/layout`. `--size` and `--theme` override them for one
+run; screenshots neither read nor write them. A failure to write either
+file is said once, in a toast. The first window is 1200x800.
+
+The desktop file, the AppStream metainfo and the icons are in `data/`;
+`tools/install-desktop` installs them, with the binary, under
+`~/.local` (it does not build).
+
 ## The window
 
 ```
@@ -390,11 +430,13 @@ menu puts board B back.
   not to trust the window. The title
   is `Session::title()`. The main menu starts a new project ("New
   Project…", `win.new-project`, see [A new project](#a-new-project)),
-  opens a project folder (Ctrl+O),
-  checks again (Ctrl+R), frames everything, exports the view as glTF
-  ("Export View as glTF…", `win.export-view`, with
+  opens a project folder (Ctrl+O) or a recent one ("Open Recent",
+  `win.open-recent`), checks again (Ctrl+R), frames everything, exports
+  the view as glTF ("Export View as glTF…", `win.export-view`, with
   `stave_app::export_view::save_glb`, the same file `stave export`
-  writes) and sets the style (follow system, light, dark).
+  writes), sets the style (follow system, light, dark: `app.style`,
+  remembered), and ends with "Keyboard Shortcuts" (`app.shortcuts`,
+  Ctrl+?) and "About Stave" (`app.about`).
 - **Model tree** (`TreeSidebar`, top left): the carcass, then assemblies
   with their motion ("turns 110°", "slides out 500 mm", "mirror of
   door_l"). Rows that are the same part (one stock and size under one

@@ -17,6 +17,7 @@
 //! tree, the inspector, focus mode, problems) and `stave-scene` (poses,
 //! camera, picking); this module only wires widgets to them.
 
+mod app;
 mod chrome;
 mod dock;
 mod edit_card;
@@ -39,7 +40,9 @@ mod inspector;
 mod new_project;
 mod option_search;
 mod panels;
+mod remember;
 mod slider;
+mod start_page;
 mod style;
 mod tab_strip;
 mod tree;
@@ -161,9 +164,11 @@ impl Theme {
 }
 
 /// How to open the window.
+#[derive(Default)]
 pub struct Options {
-    /// The project folder.
-    pub folder: PathBuf,
+    /// The project folders, each in a window of its own; none shows the
+    /// start page.
+    pub folders: Vec<PathBuf>,
     /// The scene to start in.
     pub scene: Option<String>,
     /// The item to start with selected, by name.
@@ -191,12 +196,16 @@ pub struct Options {
     pub xray: bool,
     /// Lay the panels out from this file instead of the user's own.
     pub layout: Option<PathBuf>,
-    /// Light, dark or the system's.
-    pub theme: Theme,
+    /// Light, dark or the system's; `None` for the style chosen last
+    /// time.
+    pub theme: Option<Theme>,
     /// Save the window to this PNG once drawn, then close.
     pub window_screenshot: Option<PathBuf>,
-    /// The window's size, in logical pixels.
-    pub size: (u32, u32),
+    /// The window's size, in logical pixels; `None` for the size it had
+    /// last time.
+    pub size: Option<(u32, u32)>,
+    /// Start maximised (as it was last time).
+    pub maximized: bool,
     /// For the screenshot: hold a second check running, to show the
     /// checking state.
     pub checking: bool,
@@ -230,14 +239,17 @@ pub struct StartCamera {
     pub zoom: Option<f32>,
 }
 
-/// Opens the window and runs until it is closed.
+/// Runs Stave until its last window is closed. If Stave is already
+/// running, the folders are handed to it instead (except for
+/// `--window-screenshot`, which always runs on its own).
 pub fn run(options: Options) -> Result<()> {
-    let folder = options
-        .folder
-        .canonicalize()
-        .with_context(|| format!("can't find the folder '{}'", options.folder.display()))?;
-    if !folder.is_dir() {
-        bail!("'{}' is not a folder", folder.display());
+    let folders = options
+        .folders
+        .iter()
+        .map(|folder| app::project_folder(folder))
+        .collect::<Result<Vec<PathBuf>>>()?;
+    if options.window_screenshot.is_some() && folders.len() != 1 {
+        bail!("--window-screenshot needs one project folder");
     }
     gtk::init().context("can't start GTK (is there a display?)")?;
     // Some desktops (KDE among them) write the old GTK 3 dark-theme switch
@@ -251,22 +263,35 @@ pub fn run(options: Options) -> Result<()> {
         settings.set_gtk_application_prefer_dark_theme(false);
     }
     adw::init().context("can't start GTK (is there a display?)")?;
+    let mut flags = gio::ApplicationFlags::HANDLES_OPEN;
+    if options.window_screenshot.is_some() {
+        flags |= gio::ApplicationFlags::NON_UNIQUE;
+    }
     let application = adw::Application::builder()
-        .application_id("org.stave.Viewer")
-        .flags(gio::ApplicationFlags::NON_UNIQUE)
+        .application_id(app::APP_ID)
+        .flags(flags)
         .build();
-    let options = Rc::new(RefCell::new(Some(Options { folder, ..options })));
-    application.connect_activate(move |application| {
-        if let Some(options) = options.borrow_mut().take()
-            && let Err(error) = Window::open(application, options)
-        {
-            eprintln!("error: {error:#}");
-            application.quit();
+    let shell = app::Shell::new(&application, options);
+    let this = shell.clone();
+    application.connect_startup(move |_| this.startup());
+    let this = shell.clone();
+    application.connect_activate(move |_| this.activate());
+    application.connect_open(move |_, files, _| {
+        for path in files.iter().filter_map(gio::File::path) {
+            shell.open_folder(&path);
         }
     });
-    let status = application.run_with_args::<&str>(&[]);
+    // GApplication reads the folders as files to open: in this process
+    // if it is the first Stave, or handed to the one already running.
+    let mut arguments = vec!["stave-gtk".to_owned()];
+    arguments.extend(
+        folders
+            .iter()
+            .map(|folder| gio::File::for_path(folder).uri().to_string()),
+    );
+    let status = application.run_with_args(&arguments);
     if status != glib::ExitCode::SUCCESS {
-        bail!("the viewer stopped with an error");
+        bail!("Stave stopped with an error");
     }
     Ok(())
 }
@@ -493,22 +518,26 @@ struct Window {
     watcher: RefCell<Option<Watcher>>,
     /// Editing in the 3D view: the menu, the card and the ghost.
     editing: edit_view::EditView,
+    /// The application: the other windows, recent projects, what is
+    /// remembered.
+    shell: Rc<app::Shell>,
 }
 
 impl Window {
-    fn open(application: &adw::Application, options: Options) -> Result<()> {
+    fn open(
+        application: &adw::Application,
+        folder: PathBuf,
+        options: Options,
+        shell: Rc<app::Shell>,
+    ) -> Result<Rc<Window>> {
         if options.window_screenshot.is_some() {
             settle_for_screenshot();
         }
-        adw::StyleManager::default().set_color_scheme(options.theme.scheme());
-        if let Some(display) = gdk::Display::default() {
-            style::install(&display);
-        }
-        let widgets = build_widgets(application, &options)?;
+        let widgets = build_widgets(application, &folder, &shell, &options)?;
         let renderer = Renderer::new().map_err(|error| format!("{error:#}"));
         let window = Rc::new(Window {
             widgets,
-            session: RefCell::new(Session::new(options.folder.clone())),
+            session: RefCell::new(Session::new(folder)),
             state: RefCell::new(State {
                 wanted: Some(Wanted {
                     scene: options.scene,
@@ -554,8 +583,9 @@ impl Window {
             pins: RefCell::new(Pins::default()),
             watcher: RefCell::new(None),
             editing: edit_view::EditView::new(),
+            shell,
         });
-        window.install_actions(options.theme);
+        window.install_actions();
         window.connect_events();
         window.connect_editing();
         if let Some(showcase) = options.edit_fixture {
@@ -581,10 +611,13 @@ impl Window {
             &window.widgets.window,
             Some(window.widgets.viewport.upcast_ref::<gtk::Widget>()),
         );
+        if options.maximized {
+            window.widgets.window.maximize();
+        }
         window.widgets.window.present();
         window.show_folder();
         window.dispatch(Command::Check);
-        Ok(())
+        Ok(window)
     }
 
     // ---- the session ----
@@ -2709,7 +2742,7 @@ impl Window {
 
     // ---- events ----
 
-    fn install_actions(self: &Rc<Self>, theme: Theme) {
+    fn install_actions(self: &Rc<Self>) {
         let window = &self.widgets.window;
         let add = |name: &str, handler: Box<dyn Fn()>| {
             let action = gio::SimpleAction::new(name, None);
@@ -2854,40 +2887,22 @@ impl Window {
             )))));
         });
         window.add_action(&off_screen);
-        let style = gio::SimpleAction::new_stateful(
-            "style",
-            Some(glib::VariantTy::STRING),
-            &theme.word().to_variant(),
-        );
-        style.connect_activate(|action, parameter| {
-            let Some(word) = parameter.and_then(|p| p.get::<String>()) else {
-                return;
-            };
-            if let Some(theme) = Theme::from_word(&word) {
-                adw::StyleManager::default().set_color_scheme(theme.scheme());
-                action.set_state(&word.to_variant());
+        // Open Recent: a folder named in the menu.
+        let recent = gio::SimpleAction::new("open-recent", Some(glib::VariantTy::STRING));
+        let this = self.clone();
+        recent.connect_activate(move |_, parameter| {
+            if let Some(path) = parameter.and_then(glib::Variant::str) {
+                this.go_to_folder(PathBuf::from(path));
             }
         });
-        window.add_action(&style);
-        if let Some(application) = window.application() {
-            for (action, accels) in [
-                ("win.back", &["<Alt>Left"][..]),
-                ("win.forward", &["<Alt>Right"]),
-                ("win.check", &["<Control>r"]),
-                ("win.search", &["<Control>f"]),
-                ("win.find", &["<Control>k"]),
-                ("win.model", &["F9"]),
-                ("win.open", &["<Control>o"]),
-                ("win.editor", &["<Control>e"]),
-                ("win.next-problem", &["F8"]),
-                ("win.previous-problem", &["<Shift>F8"]),
-                ("win.view-design", &["<Control>1"]),
-                ("win.save", &["<Control>s"]),
-                ("win.format", &["<Control><Shift>i"]),
-            ] {
-                application.set_accels_for_action(action, accels);
+        window.add_action(&recent);
+        // A folder dragged in from Files.
+        let this = Rc::downgrade(self);
+        window.add_controller(app::folder_drop(move |path| {
+            if let Some(this) = this.upgrade() {
+                this.go_to_folder(path);
             }
-        }
+        }));
     }
 
     /// Opens another project folder.
@@ -2903,10 +2918,33 @@ impl Window {
             move |result| {
                 let Ok(folder) = result else { return };
                 let Some(path) = folder.path() else { return };
-                let next = window.clone();
-                window.ask_about_unsaved(move || next.open_folder(path));
+                window.go_to_folder(path);
             },
         );
+    }
+
+    /// Shows a project folder: brings forward the window already showing
+    /// it, or opens it in this one once unsaved changes are dealt with. A
+    /// `.stave` file opens its folder.
+    fn go_to_folder(self: &Rc<Self>, path: PathBuf) {
+        let folder = match app::project_folder(&path) {
+            Ok(folder) => folder,
+            Err(error) => {
+                self.widgets.toasts.add_toast(
+                    adw::Toast::builder()
+                        .title(format!("{error:#}"))
+                        .timeout(5)
+                        .build(),
+                );
+                return;
+            }
+        };
+        if let Some(other) = self.shell.window_showing(&folder) {
+            other.widgets.window.present();
+            return;
+        }
+        let next = self.clone();
+        self.ask_about_unsaved(move || next.open_folder(folder));
     }
 
     /// Asks what to do with unsaved changes (save, throw away or stay),
@@ -2951,6 +2989,7 @@ impl Window {
     }
 
     fn open_folder(self: &Rc<Self>, folder: PathBuf) {
+        self.shell.record_recent(&folder);
         *self.session.borrow_mut() = Session::new(folder);
         self.editing_folder_changed();
         {
@@ -3253,12 +3292,22 @@ impl Window {
                     .add_toast(adw::Toast::builder().title(text).timeout(4).build());
             }
         });
+        let window = Rc::downgrade(self);
+        self.widgets.workbench.connect_save_failed(move |text| {
+            if let Some(window) = window.upgrade() {
+                window
+                    .widgets
+                    .toasts
+                    .add_toast(adw::Toast::builder().title(text).timeout(5).build());
+            }
+        });
         // Closing the window asks about unsaved changes first.
         let window = Rc::downgrade(self);
         self.widgets.window.connect_close_request(move |_| {
             let Some(window) = window.upgrade() else {
                 return glib::Propagation::Proceed;
             };
+            window.shell.remember_window(&window.widgets.window);
             window.widgets.workbench.save();
             if !window.widgets.files.has_unsaved() {
                 return glib::Propagation::Proceed;
@@ -3613,11 +3662,12 @@ fn settle_for_screenshot() {
     }
 }
 
-fn main_menu() -> gio::Menu {
+fn main_menu(recent: &gio::Menu) -> gio::Menu {
     let menu = gio::Menu::new();
     let project = gio::Menu::new();
     project.append(Some("New Project…"), Some("win.new-project"));
     project.append(Some("Open Project…"), Some("win.open"));
+    project.append_submenu(Some("Open Recent"), recent);
     project.append(Some("Check Again"), Some("win.check"));
     project.append(Some("Frame Everything"), Some("win.frame"));
     project.append(Some("Export View as glTF…"), Some("win.export-view"));
@@ -3632,20 +3682,19 @@ fn main_menu() -> gio::Menu {
     }
     panels.append(Some("Reset Layout"), Some("win.reset-layout"));
     menu.append_section(Some("Panels"), &panels);
-    let style = gio::Menu::new();
-    style.append(Some("Follow System Style"), Some("win.style::system"));
-    style.append(Some("Light"), Some("win.style::light"));
-    style.append(Some("Dark"), Some("win.style::dark"));
-    menu.append_section(Some("Style"), &style);
+    menu.append_section(Some("Style"), &app::style_section());
+    menu.append_section(None, &app::help_section());
     menu
 }
 
-fn build_widgets(application: &adw::Application, options: &Options) -> Result<Widgets> {
-    let folder_name = options.folder.file_name().map_or_else(
-        || options.folder.display().to_string(),
-        |name| name.to_string_lossy().into_owned(),
-    );
-    let header = Header::new(&folder_name, &main_menu());
+fn build_widgets(
+    application: &adw::Application,
+    folder: &Path,
+    shell: &app::Shell,
+    options: &Options,
+) -> Result<Widgets> {
+    let folder_name = app::folder_name(folder);
+    let header = Header::new(&folder_name, &main_menu(shell.recent_menu()));
 
     // The 3D view, its controls floating on it (`view_layout` keeps them
     // apart): the scene menu at the top left; the camera buttons, X-ray
@@ -3810,9 +3859,9 @@ fn build_widgets(application: &adw::Application, options: &Options) -> Result<Wi
     toolbar.add_top_bar(&header.bar);
     toolbar.set_content(Some(&toasts));
 
-    let (width, height) = options.size;
-    let width = i32::try_from(width).unwrap_or(1440);
-    let height = i32::try_from(height).unwrap_or(900);
+    let (width, height) = options.size.unwrap_or((1200, 800));
+    let width = i32::try_from(width).unwrap_or(1200);
+    let height = i32::try_from(height).unwrap_or(800);
     let window = adw::ApplicationWindow::builder()
         .application(application)
         .title(format!("{folder_name} — Stave"))
