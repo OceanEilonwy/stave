@@ -6,7 +6,10 @@
 //! every GDK backend without sharing GPU memory between wgpu and GTK, and
 //! frames are only drawn when something changes.
 
+pub mod profile;
+
 use std::num::NonZeroU64;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, Result, anyhow, bail};
 use glam::{Mat4, Vec3};
@@ -851,6 +854,12 @@ impl Renderer {
 
     /// Uploads a scene's meshes, replacing the previous scene's.
     pub fn upload(&mut self, scene: &SceneGraph) {
+        let started = profile::start();
+        self.upload_meshes(scene);
+        profile::finish(&format!("upload of {} meshes", scene.nodes.len()), started);
+    }
+
+    fn upload_meshes(&mut self, scene: &SceneGraph) {
         self.meshes = scene
             .nodes
             .iter()
@@ -998,6 +1007,7 @@ impl Renderer {
         if self.meshes.len() != frame.scene.nodes.len() {
             bail!("the scene changed without being uploaded");
         }
+        let started = profile::start();
         self.write_uniforms(frame, width, height);
         self.ensure_target(width, height);
         let target = self.target.as_ref().context("no render target")?;
@@ -1305,15 +1315,33 @@ impl Renderer {
                 depth_or_array_layers: 1,
             },
         );
+        let encoded = started.map(|_| Instant::now());
         self.queue.submit([encoder.finish()]);
-        self.read_back(width, height)
+        let submitted = started.map(|_| Instant::now());
+        let (image, gpu_wait, readback) = self.read_back(width, height)?;
+        if let (Some(started), Some(encoded), Some(submitted)) = (started, encoded, submitted) {
+            profile::FrameTimings {
+                width,
+                height,
+                encode: encoded.duration_since(started),
+                submit: submitted.duration_since(encoded),
+                gpu_wait,
+                readback,
+                shadow_drawn: true,
+            }
+            .print();
+        }
+        Ok(image)
     }
 
-    fn read_back(&self, width: u32, height: u32) -> Result<Image> {
+    /// Waits for the frame and copies it out; also says how long the wait
+    /// and the copy took (zero unless `STAVE_PROFILE` is set).
+    fn read_back(&self, width: u32, height: u32) -> Result<(Image, Duration, Duration)> {
         let target = self
             .target
             .as_ref()
             .ok_or_else(|| anyhow!("no render target"))?;
+        let waiting = profile::start();
         let slice = target.readback.slice(..);
         let (sender, receiver) = std::sync::mpsc::channel();
         slice.map_async(wgpu::MapMode::Read, move |result| {
@@ -1327,6 +1355,7 @@ impl Renderer {
             .recv()
             .context("the GPU didn't finish the frame")?
             .context("couldn't read the frame back")?;
+        let mapped_at = profile::start();
         let row = usize::try_from(width)? * 4;
         let padded = usize::try_from(target.padded_row)?;
         let mut rgba = Vec::with_capacity(row * usize::try_from(height)?);
@@ -1337,11 +1366,23 @@ impl Renderer {
             }
         }
         target.readback.unmap();
-        Ok(Image {
-            width,
-            height,
-            rgba,
-        })
+        let copied_at = mapped_at.map(|_| Instant::now());
+        let (gpu_wait, readback) = match (waiting, mapped_at, copied_at) {
+            (Some(waiting), Some(mapped_at), Some(copied_at)) => (
+                mapped_at.duration_since(waiting),
+                copied_at.duration_since(mapped_at),
+            ),
+            _ => (Duration::ZERO, Duration::ZERO),
+        };
+        Ok((
+            Image {
+                width,
+                height,
+                rgba,
+            },
+            gpu_wait,
+            readback,
+        ))
     }
 
     /// Vertex buffers of boxes: their faces (triangles) and edges (lines).

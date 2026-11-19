@@ -612,6 +612,7 @@ impl Window {
         // The project as the editor shows it, unsaved changes included.
         let overlay = self.widgets.files.overlay_for_check();
         let window = Rc::downgrade(self);
+        crate::render::profile::edit_started();
         glib::spawn_future_local(async move {
             let outcome = gio::spawn_blocking(move || check::run_with(&folder, &overlay))
                 .await
@@ -619,6 +620,7 @@ impl Window {
                     message: "checking the design crashed".to_owned(),
                     elapsed: Duration::ZERO,
                 });
+            crate::render::profile::edit_checked();
             let Some(window) = window.upgrade() else {
                 return;
             };
@@ -2273,8 +2275,11 @@ impl Window {
         };
         match rendered {
             Ok(image) => {
-                if let Some(texture) = texture(image) {
+                if let Some(texture) =
+                    crate::render::profile::time("gtk texture", || texture(image))
+                {
                     self.widgets.viewport.show_frame(texture);
+                    crate::render::profile::frame_shown();
                 }
                 self.show_pins();
                 self.place_ghost_verdict();
