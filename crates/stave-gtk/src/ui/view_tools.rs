@@ -12,23 +12,14 @@
 //! keep the older API in front of the components until the window moves
 //! to relm4 too.
 //!
-//! The Pull apart toggle and the plan switch's buttons are the one
-//! exception to "the view follows the model". The window still connects
-//! its own handlers on those public toggles and guards them with
-//! `updating_controls` around `show`, so `show` must set them at once,
-//! inside that guard, as it always did. A `#[watch] #[block_signal]` set
-//! would come later from the main loop, with the guard down, and would
-//! replay every queued `show` onto the toggle, each heard by the window's
-//! handler (blocking only stops the component's own). So the shims set
-//! the toggles and queue `Show` first; the component's handler then
-//! reports a change the model already holds, and it sends nothing. When
-//! the window hears the components' outputs instead, the toggles go back
-//! to `#[watch] #[block_signal]` sets from the model.
+//! The window hears each group only through its outputs, which come from
+//! people's presses alone: the Pull apart toggle and the plan switch's
+//! buttons are set from the model with their handlers blocked
+//! (`#[block_signal]`), so the window showing them is never heard back.
 
 use adw::prelude::*;
 use relm4::{Component, ComponentParts, ComponentSender, RelmWidgetExt};
 
-use super::focus_stage::SliderChanges;
 use super::icons::{self, PathIcon};
 use super::relm4_shim::Bridge;
 use super::slider::Slider;
@@ -211,15 +202,17 @@ impl Component for ViewToolbarComponent {
             },
         },
 
-        // Set by [`ViewToolbar::show`] at once, not from the model: see
-        // the module's notes.
+        // Set from the model without hearing it back.
         #[local_ref]
         pull -> gtk::ToggleButton {
+            #[watch]
+            #[block_signal(pull_toggled)]
+            set_active: model.on,
             connect_toggled[sender] => move |button| {
                 sender
                     .input_sender()
                     .emit(ViewToolbarInput::PullToggled(button.is_active()));
-            },
+            } @pull_toggled,
         },
     }
 
@@ -287,22 +280,28 @@ impl Component for ViewToolbarComponent {
 
 /// The view's own tools, in the camera column: X-ray and Pull apart, and
 /// while Pull apart is on its play button and "together … apart" slider,
-/// popping out to the left of its button. It keeps the API the window
-/// still uses and owns the component: dropping it shuts the component
-/// down. Setters are queued, except that [`ViewToolbar::show`] sets the
-/// Pull apart toggle at once, as the window's handler on it expects.
+/// popping out to the left of its button. It owns the component:
+/// dropping it shuts the component down. Setters are queued; the window
+/// hears people's presses as [`ViewToolbarOutput`]s.
 pub struct ViewToolbar {
-    /// See through everything but the selection.
+    /// See through everything but the selection: the window turns it on
+    /// for `--xray`, as if people had pressed it.
     pub xray: gtk::ToggleButton,
     /// Pull apart, on or off.
-    pub pull: gtk::ToggleButton,
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "tests press it; the window hears its output")
+    )]
+    pull: gtk::ToggleButton,
     /// The play button and the slider, floating beside Pull apart while
     /// it is on.
     pub popout: gtk::Box,
     /// Plays the pulling apart from together to apart.
-    pub play: gtk::Button,
-    /// How far apart, 0 to 1: the toolbar sets it in [`ViewToolbar::show`].
-    pub slider: SliderChanges,
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "tests press it; the window hears its output")
+    )]
+    play: gtk::Button,
     /// X-ray and Pull apart with the line above them, for the camera
     /// column.
     section: gtk::Box,
@@ -350,39 +349,31 @@ impl ViewToolbar {
             play: play.clone(),
             play_icon,
         });
-        let (slider, changed) = SliderChanges::new();
-        bridge.connect(move |output| match output {
-            ViewToolbarOutput::Apart(value) => changed.deliver(value),
-            // The window hears these on the buttons themselves.
-            ViewToolbarOutput::Xray(_) | ViewToolbarOutput::Pull(_) | ViewToolbarOutput::Play => {}
-        });
         ViewToolbar {
             xray,
             pull,
             popout: bridge.widget().clone(),
             play,
-            slider,
             section,
             line,
             bridge,
         }
     }
 
-    /// Shows Pull apart on (with its slider at `amount`) or off.
-    ///
-    /// The toggle is set at once, as it always was, so a handler the
-    /// window connected on [`ViewToolbar::pull`] hears it while the
-    /// window's own guard is still up, never later from the main loop.
-    /// `Show` is queued first, so when the component's handler's
-    /// `PullToggled` arrives the model already agrees and it sends
-    /// nothing.
+    /// Calls `callback` with each of people's presses and slides from now
+    /// on, instead of the one connected before.
+    pub fn connect_outputs(&self, callback: impl Fn(ViewToolbarOutput) + 'static) {
+        self.bridge.connect(callback);
+    }
+
+    /// Shows Pull apart on (with its slider at `amount`) or off, without
+    /// calling back.
     pub fn show(&self, on: bool, amount: f32, playing: bool) {
         self.bridge.send(ViewToolbarInput::Show {
             on,
             amount,
             playing,
         });
-        self.pull.set_active(on);
     }
 
     /// Offers the tools, or takes them away while a problem is posed or
@@ -568,17 +559,26 @@ impl Component for CameraComponent {
 }
 
 /// The column of buttons at the top right of the view: fit, front view
-/// and turn to the back, then X-ray and Pull apart. It keeps the API the
-/// window still uses and owns the component. Setters are queued.
+/// and turn to the back, then X-ray and Pull apart. It owns the
+/// component. Setters are queued; the window hears people's presses as
+/// [`CameraOutput`]s.
 pub struct CameraToolbar {
     /// The column, to float on the view.
     pub root: gtk::Box,
     /// Frames everything (or the selection).
     pub fit: gtk::Button,
     /// Looks at the front.
-    pub front: gtk::Button,
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "tests press it; the window hears its output")
+    )]
+    front: gtk::Button,
     /// Turns the view half way round.
-    pub turn: gtk::Button,
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "tests press it; the window hears its output")
+    )]
+    turn: gtk::Button,
     bridge: Bridge<CameraComponent>,
 }
 
@@ -611,6 +611,12 @@ impl CameraToolbar {
             turn,
             bridge,
         }
+    }
+
+    /// Calls `callback` with each of people's presses from now on, instead
+    /// of the one connected before.
+    pub fn connect_outputs(&self, callback: impl Fn(CameraOutput) + 'static) {
+        self.bridge.connect(callback);
     }
 
     /// Lays the buttons out in a column (docked on the right edge) or a
@@ -697,15 +703,15 @@ impl Component for PlanSwitchComponent {
             set_visible: false,
             update_property: &[gtk::accessible::Property::Label("Hinge view")],
 
-            // Both buttons are set by [`PlanSwitch::show`] at once, not
-            // from the model: see the module's notes.
+            // Both buttons are set from the model in `Show`, with this
+            // handler blocked (pressing either button toggles this one).
             #[local_ref]
             from_above -> gtk::ToggleButton {
                 connect_toggled[sender] => move |button| {
                     sender
                         .input_sender()
                         .emit(PlanSwitchInput::Toggled(button.is_active()));
-                },
+                } @from_above_toggled,
             },
             #[local_ref]
             in_3d -> gtk::ToggleButton {
@@ -728,9 +734,28 @@ impl Component for PlanSwitchComponent {
         ComponentParts { model, widgets }
     }
 
-    fn update(&mut self, message: PlanSwitchInput, sender: ComponentSender<Self>, _: &Self::Root) {
+    fn update_with_view(
+        &mut self,
+        widgets: &mut Self::Widgets,
+        message: PlanSwitchInput,
+        sender: ComponentSender<Self>,
+        _: &Self::Root,
+    ) {
         match message {
-            PlanSwitchInput::Show { plan } => self.plan = plan,
+            PlanSwitchInput::Show { plan } => {
+                self.plan = plan;
+                // What `#[block_signal]` does, round both buttons: turning
+                // either on toggles "From above".
+                widgets.from_above.block_signal(&widgets.from_above_toggled);
+                if plan {
+                    widgets.from_above.set_active(true);
+                } else {
+                    widgets.in_3d.set_active(true);
+                }
+                widgets
+                    .from_above
+                    .unblock_signal(&widgets.from_above_toggled);
+            }
             PlanSwitchInput::Toggled(plan) => {
                 if self.plan != plan {
                     self.plan = plan;
@@ -742,16 +767,23 @@ impl Component for PlanSwitchComponent {
 }
 
 /// Focus mode's switch between the view from above and the view in 3D. It
-/// keeps the API the window still uses and owns the component.
-/// [`PlanSwitch::show`] sets the buttons at once, as the window's handler
-/// on [`PlanSwitch::from_above`] expects.
+/// owns the component. [`PlanSwitch::show`] is queued and never calls
+/// back; the window hears people's presses as [`PlanSwitchOutput`]s.
 pub struct PlanSwitch {
     /// The switch, to overlay on the view.
     pub root: gtk::Box,
     /// From above (plan).
-    pub from_above: gtk::ToggleButton,
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "tests press it; the window hears its output")
+    )]
+    from_above: gtk::ToggleButton,
     /// In 3D.
-    pub in_3d: gtk::ToggleButton,
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "tests press it; the window hears its output")
+    )]
+    in_3d: gtk::ToggleButton,
     bridge: Bridge<PlanSwitchComponent>,
 }
 
@@ -782,20 +814,15 @@ impl PlanSwitch {
         }
     }
 
-    /// Shows which view is on.
-    ///
-    /// The buttons are set at once, as they always were, so a handler the
-    /// window connected on [`PlanSwitch::from_above`] hears it while the
-    /// window's own guard is still up, never later from the main loop.
-    /// `Show` is queued first, so when the component's handler's `Toggled`
-    /// arrives the model already agrees and it sends nothing.
+    /// Calls `callback` with each of people's choices from now on,
+    /// instead of the one connected before.
+    pub fn connect_outputs(&self, callback: impl Fn(PlanSwitchOutput) + 'static) {
+        self.bridge.connect(callback);
+    }
+
+    /// Shows which view is on, without calling back.
     pub fn show(&self, plan: bool) {
         self.bridge.send(PlanSwitchInput::Show { plan });
-        if plan {
-            self.from_above.set_active(true);
-        } else {
-            self.in_3d.set_active(true);
-        }
     }
 }
 
@@ -951,7 +978,7 @@ impl EmptyView {
 
 #[cfg(test)]
 mod tests {
-    use std::cell::{Cell, RefCell};
+    use std::cell::RefCell;
     use std::rc::Rc;
 
     use super::*;
@@ -968,7 +995,7 @@ mod tests {
         let tools = ViewToolbar::new();
         let token = Rc::new(());
         let held = Rc::clone(&token);
-        tools.slider.connect_changed(move |_| {
+        tools.connect_outputs(move |_| {
             let _ = &held;
         });
         let callback = Rc::downgrade(&token);
@@ -993,9 +1020,8 @@ mod tests {
         on_gtk_thread(show_does_not_call_back);
     }
 
-    /// `show` sets the toggle after telling the model, so the component's
-    /// own handler reports a change of nothing: `show` and `offer` never
-    /// send an output.
+    /// `show` sets the toggle from the model with its handler blocked:
+    /// `show` and `offer` never send an output.
     fn show_does_not_call_back() {
         let tools = ViewToolbar::new();
         let heard: Rc<RefCell<Vec<ViewToolbarOutput>>> = Rc::default();
@@ -1004,7 +1030,7 @@ mod tests {
             .bridge
             .connect(move |output| log.borrow_mut().push(output));
         tools.show(true, 0.4, true);
-        assert!(tools.pull.is_active(), "the toggle is set at once");
+        assert!(!tools.pull.is_active(), "show is queued");
         settle();
         assert!(tools.pull.is_active());
         assert!(tools.popout.is_visible(), "the slider pops out");
@@ -1026,49 +1052,29 @@ mod tests {
     }
 
     #[test]
-    fn showing_pull_apart_reaches_the_windows_handler_only_under_its_guard() {
-        on_gtk_thread(show_stays_under_the_windows_guard);
+    fn showing_pull_apart_several_times_in_one_turn_never_calls_back() {
+        on_gtk_thread(several_shows_never_call_back);
     }
 
-    /// The window connects its own handler on `pull` and raises
-    /// `updating_controls` around `show`, so the handler returns early.
-    /// `show` must change the toggle while that guard is up, never later
-    /// from the main loop; two shows in one turn of it must not reach the
-    /// handler either, or the first would read as people pressing it.
-    fn show_stays_under_the_windows_guard() {
+    /// The window can show Pull apart several times in one turn of the
+    /// main loop (leaving a problem and opening another). Each `Show` is
+    /// applied in order with the toggle's handler blocked, so none reads
+    /// as people pressing it and the last one wins.
+    fn several_shows_never_call_back() {
         let tools = ViewToolbar::new();
-        let updating_controls = Rc::new(Cell::new(false));
-        let pressed: Rc<RefCell<Vec<bool>>> = Rc::default();
-        let (guard, log) = (Rc::clone(&updating_controls), Rc::clone(&pressed));
-        tools.pull.connect_toggled(move |button| {
-            if !guard.get() {
-                log.borrow_mut().push(button.is_active());
-            }
-        });
         let heard: Rc<RefCell<Vec<ViewToolbarOutput>>> = Rc::default();
         let outputs = Rc::clone(&heard);
-        tools
-            .bridge
-            .connect(move |output| outputs.borrow_mut().push(output));
-        let show = |on: bool| {
-            updating_controls.set(true);
-            tools.show(on, 0.0, false);
-            updating_controls.set(false);
-        };
-        show(true);
-        show(false);
-        show(true);
+        tools.connect_outputs(move |output| outputs.borrow_mut().push(output));
+        tools.show(true, 0.0, false);
+        tools.show(false, 0.0, false);
+        tools.show(true, 0.0, false);
         settle();
         assert!(tools.pull.is_active());
         assert!(tools.bridge.model().on, "the model agrees");
-        show(false);
+        tools.show(false, 0.0, false);
         settle();
         assert!(!tools.pull.is_active());
-        assert!(
-            pressed.borrow().is_empty(),
-            "the window's handler never ran"
-        );
-        assert!(heard.borrow().is_empty(), "nor did the component call back");
+        assert!(heard.borrow().is_empty(), "the component never called back");
     }
 
     #[test]
@@ -1187,9 +1193,8 @@ mod tests {
         on_gtk_thread(plan_switch);
     }
 
-    /// Showing the view from above sets the buttons after telling the
-    /// model, so the component's own handler reports a change of nothing:
-    /// only people's presses are heard, each after its update.
+    /// Showing the view from above sets the buttons with the handler
+    /// blocked: only people's presses are heard, each after its update.
     fn plan_switch() {
         let switch = Rc::new(PlanSwitch::new());
         settle();
@@ -1232,52 +1237,32 @@ mod tests {
     }
 
     #[test]
-    fn showing_the_plan_reaches_the_windows_handler_only_under_its_guard() {
-        on_gtk_thread(plan_show_stays_under_the_windows_guard);
+    fn showing_the_plan_several_times_in_one_turn_never_calls_back() {
+        on_gtk_thread(several_plan_shows_never_call_back);
     }
 
-    /// The window connects its own handler on `from_above` and raises
-    /// `updating_controls` around `show`, so `update_focus` returns early.
-    /// `show` must change the buttons while that guard is up, never later
-    /// from the main loop: leaving focus on one joint and entering another
-    /// shows twice in one turn, and the first must not write a stale plan.
-    fn plan_show_stays_under_the_windows_guard() {
+    /// Leaving focus on one joint and entering another shows the switch
+    /// twice in one turn. Each `Show` is applied in order with the
+    /// handler blocked, so the first never writes a stale plan back and
+    /// the last one wins.
+    fn several_plan_shows_never_call_back() {
         let switch = PlanSwitch::new();
         settle();
-        let updating_controls = Rc::new(Cell::new(false));
-        let pressed: Rc<RefCell<Vec<bool>>> = Rc::default();
-        let (guard, log) = (Rc::clone(&updating_controls), Rc::clone(&pressed));
-        switch.from_above.connect_toggled(move |button| {
-            if !guard.get() {
-                log.borrow_mut().push(button.is_active());
-            }
-        });
         let heard: Rc<RefCell<Vec<PlanSwitchOutput>>> = Rc::default();
         let outputs = Rc::clone(&heard);
-        switch
-            .bridge
-            .connect(move |output| outputs.borrow_mut().push(output));
-        let show = |plan: bool| {
-            updating_controls.set(true);
-            switch.show(plan);
-            updating_controls.set(false);
-        };
-        show(true);
-        assert!(switch.from_above.is_active(), "set at once");
-        show(false);
-        show(true);
+        switch.connect_outputs(move |output| outputs.borrow_mut().push(output));
+        switch.show(true);
+        assert!(!switch.from_above.is_active(), "show is queued");
+        switch.show(false);
+        switch.show(true);
         settle();
         assert!(switch.from_above.is_active());
         assert!(switch.bridge.model().plan, "the model agrees");
-        show(false);
+        switch.show(false);
         settle();
         assert!(switch.in_3d.is_active());
         assert!(!switch.bridge.model().plan);
-        assert!(
-            pressed.borrow().is_empty(),
-            "the window's handler never ran"
-        );
-        assert!(heard.borrow().is_empty(), "nor did the component call back");
+        assert!(heard.borrow().is_empty(), "the component never called back");
     }
 
     #[test]

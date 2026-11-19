@@ -4,6 +4,7 @@
 
 use super::add_action;
 use crate::render::Ticket;
+use crate::ui::view_tools::{CameraOutput, ViewToolbarOutput};
 // The window's own items and imports, as the handlers had them in mod.rs.
 use crate::ui::*;
 
@@ -117,34 +118,29 @@ pub(in crate::ui) fn wire(window: &mut Window) {
         );
     });
     let sender = input.clone();
-    widgets.view_toolbar.xray.connect_toggled(move |button| {
-        sender.emit(RenderingInput::Xray(button.is_active()).into())
+    widgets.view_toolbar.connect_outputs(move |output| {
+        sender.emit(
+            match output {
+                ViewToolbarOutput::Xray(on) => RenderingInput::Xray(on),
+                ViewToolbarOutput::Pull(on) => RenderingInput::PullApart(on),
+                ViewToolbarOutput::Play => RenderingInput::PlayExplode,
+                ViewToolbarOutput::Apart(value) => RenderingInput::ExplodeSlid(value),
+            }
+            .into(),
+        );
     });
-    let toolbar = &widgets.view_toolbar;
-    let sender = input.clone();
-    // Set by the window too (`show_view_toolbar`): blocked while it does.
-    let pull = toolbar.pull.connect_toggled(move |button| {
-        sender.emit(RenderingInput::PullApart(button.is_active()).into());
-    });
-    let pull = (toolbar.pull.clone().upcast::<glib::Object>(), pull);
-    let sender = input.clone();
-    toolbar
-        .play
-        .connect_clicked(move |_| sender.emit(RenderingInput::PlayExplode.into()));
-    let sender = input.clone();
-    toolbar
-        .slider
-        .connect_changed(move |value| sender.emit(RenderingInput::ExplodeSlid(value).into()));
     let camera = &widgets.camera;
     camera.fit.set_action_name(Some("win.frame"));
     let sender = input.clone();
-    camera
-        .front
-        .connect_clicked(move |_| sender.emit(RenderingInput::LookFront.into()));
-    let sender = input.clone();
-    camera
-        .turn
-        .connect_clicked(move |_| sender.emit(RenderingInput::TurnAround.into()));
+    camera.connect_outputs(move |output| {
+        sender.emit(
+            match output {
+                CameraOutput::Front => RenderingInput::LookFront,
+                CameraOutput::Turn => RenderingInput::TurnAround,
+            }
+            .into(),
+        );
+    });
 
     // The style changed: the 3D view's backdrop follows. The style manager
     // outlives the window, so the handler goes in `shutdown`.
@@ -266,7 +262,6 @@ pub(in crate::ui) fn wire(window: &mut Window) {
     });
     root.add_controller(history);
 
-    window.controls.push(pull);
     window.style_handler = Some(style);
     window.show_backdrop(adw::StyleManager::default().is_dark());
 }
@@ -562,11 +557,8 @@ impl Window {
         let state = &mut self.state;
         state.pull_apart |= explode > 0.0;
         let (on, playing) = (state.pull_apart, state.exploding);
-        // Pull apart's toggle is set at once: its handler is blocked, so
-        // the window does not hear its own change.
-        self.block_controls();
+        // The toolbar never calls back for the window's own change.
         self.widgets.view_toolbar.show(on, explode, playing);
-        self.unblock_controls();
     }
 
     /// The pull apart play button: plays from together to apart (from the

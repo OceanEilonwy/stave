@@ -3,6 +3,8 @@
 //! finder's hits.
 
 use super::add_action;
+use crate::ui::chrome::{MotionBarOutput, MotionShown};
+use crate::ui::view_tools::PlanSwitchOutput;
 // The window's own items and imports, as the handlers had them in mod.rs.
 use crate::ui::*;
 
@@ -214,25 +216,20 @@ pub(in crate::ui) fn wire(window: &mut Window) {
         });
     }
 
-    // The controls the window sets to values that can differ from one
-    // setting to the next: their handlers are blocked while it does
-    // (`Window::block_controls`), as `#[block_signal]` would. From above
-    // can be shown twice in one turn (leaving one joint's focus and
-    // opening another's), and an echo of the first would write a stale
-    // plan; moving the motion slider's range can move its value on the
-    // way.
+    // From above and the motion slider are set by their components with
+    // their handlers blocked, so these hear people alone.
     let sender = input.clone();
-    let from_above = &widgets.plan_switch.from_above;
-    let handler = from_above.connect_toggled(move |button| {
-        sender.emit(SelectionInput::FocusPlan(button.is_active()).into());
-    });
-    window.controls.push((from_above.clone().upcast(), handler));
+    widgets
+        .plan_switch
+        .connect_outputs(move |output| match output {
+            PlanSwitchOutput::FromAbove(plan) => {
+                sender.emit(SelectionInput::FocusPlan(plan).into())
+            }
+        });
     let sender = input;
-    let scale = &widgets.motion.scale;
-    let handler = scale.connect_value_changed(move |scale| {
-        sender.emit(SelectionInput::MotionMoved(scale.value()).into());
+    widgets.motion.connect_outputs(move |output| match output {
+        MotionBarOutput::Moved(value) => sender.emit(SelectionInput::MotionMoved(value).into()),
     });
-    window.controls.push((scale.clone().upcast(), handler));
 }
 
 impl Window {
@@ -451,7 +448,7 @@ impl Window {
             (
                 moving,
                 state.opening.map(|o| o.assembly),
-                self.widgets.motion.root.is_visible(),
+                state.motion_shown,
             )
         };
         // While the selection's own slider shows, the chips step aside
@@ -509,7 +506,7 @@ impl Window {
                 overlay: Overlay::default(),
             });
         }
-        self.widgets.motion.show(None);
+        self.show_motion(None);
         self.show_problem_controls(None);
         self.layout_for_focus(moving_name.as_deref());
         self.hide_pins();
@@ -528,11 +525,8 @@ impl Window {
         panel.xray.set_active(true);
         panel.tint.set_active(true);
         panel.fade.set_active(true);
-        // The switch's handler is blocked, so the window does not hear
-        // its own change.
-        self.block_controls();
+        // The switch never calls back for the window's own change.
         self.widgets.plan_switch.show(plan);
-        self.unblock_controls();
         self.widgets.inspector.show_focus();
         let assembles = self
             .state
@@ -905,7 +899,6 @@ impl Window {
             });
             state.opening.map_or(0.0, |o| o.amount)
         };
-        self.block_controls();
         match &found {
             Some((_, range, name)) => {
                 let (full, value, end) = if range.turns {
@@ -918,18 +911,24 @@ impl Window {
                 } else {
                     (range.full, amount, format!("{} mm", range.full.round()))
                 };
-                self.widgets.motion.show(Some((
-                    name,
-                    "closed",
-                    &end,
-                    f64::from(full),
-                    f64::from(value),
-                )));
+                self.show_motion(Some(MotionShown {
+                    name: name.clone(),
+                    start: "closed".to_owned(),
+                    end,
+                    full: f64::from(full),
+                    value: f64::from(value),
+                }));
             }
-            None => self.widgets.motion.show(None),
+            None => self.show_motion(None),
         }
-        self.unblock_controls();
         self.repose();
+    }
+
+    /// Shows the motion bar (its slider moving without calling back), or
+    /// hides it.
+    pub(in crate::ui) fn show_motion(&mut self, shown: Option<MotionShown>) {
+        self.state.motion_shown = shown.is_some();
+        self.widgets.motion.show(shown);
     }
 
     /// The motion bar moved: the selection opening.
@@ -1024,7 +1023,7 @@ impl Window {
                 turns,
             });
         }
-        self.widgets.motion.show(None);
+        self.show_motion(None);
         self.repose();
         {
             let session = &self.session;

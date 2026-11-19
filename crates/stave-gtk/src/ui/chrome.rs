@@ -1,86 +1,200 @@
 //! The smaller pieces of the window: the motion bar ("Open it", floating
 //! at the bottom right of the 3D view) and the Cut list's placeholder page.
+//!
+//! The motion bar is a relm4 component, [`MotionBarComponent`]
+//! (docs/relm4-migration.md): what it shows is its model, only its
+//! update changes it, and the slider's handler only sends a message. The
+//! window sets it with [`MotionBarInput::Show`], which moves the slider
+//! with its handler blocked, and hears only people's moves as
+//! [`MotionBarOutput::Moved`].
 
 use adw::prelude::*;
+use relm4::{Component, ComponentParts, ComponentSender};
 
-/// The floating bar at the bottom right of the 3D view: a name, words at each
-/// end and a slider ("door_l  closed ——— 110°").
+use super::relm4_shim::Bridge;
+
+/// What the motion bar shows: a name, words at each end and the slider's
+/// range and value.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MotionShown {
+    /// What moves.
+    pub name: String,
+    /// The words at the slider's start ("closed").
+    pub start: String,
+    /// The words at its end ("110°").
+    pub end: String,
+    /// The slider's end, from 0.
+    pub full: f64,
+    /// Where the slider is.
+    pub value: f64,
+}
+
+/// The motion bar's state: what it shows, if anything, and which way it
+/// lies.
+#[derive(Debug)]
+pub struct MotionBarComponent {
+    /// What it shows; `None` hides it.
+    shown: Option<MotionShown>,
+    /// A row (docked in a corner) or upright (docked on the right edge).
+    orientation: gtk::Orientation,
+    /// The component's own input, for the orientation setter it hands out.
+    input: relm4::Sender<MotionBarInput>,
+}
+
+/// What the motion bar is told.
+#[derive(Debug)]
+pub enum MotionBarInput {
+    /// Show this, or hide the bar: the slider moves without telling
+    /// anyone.
+    Show(Option<MotionShown>),
+    /// Lay the bar out in a row or upright, its slider turned to match.
+    SetOrientation(gtk::Orientation),
+    /// People moved the slider to this value.
+    Moved(f64),
+}
+
+/// What the motion bar tells its owner.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum MotionBarOutput {
+    /// People moved the slider to this value.
+    Moved(f64),
+}
+
+#[relm4::component(pub)]
+impl Component for MotionBarComponent {
+    type Init = ();
+    type Input = MotionBarInput;
+    type Output = MotionBarOutput;
+    type CommandOutput = ();
+
+    view! {
+        gtk::Box {
+            add_css_class: "stave-floating",
+            set_halign: gtk::Align::Center,
+            set_valign: gtk::Align::End,
+            set_margin_bottom: 14,
+            #[watch]
+            set_orientation: model.orientation,
+            #[watch]
+            set_visible: model.shown.is_some(),
+
+            #[name = "name"]
+            gtk::Label {
+                add_css_class: "heading",
+            },
+            #[name = "start"]
+            gtk::Label {
+                add_css_class: "stave-key",
+            },
+            #[name = "scale"]
+            gtk::Scale::with_range(gtk::Orientation::Horizontal, 0.0, 1.0, 0.1) {
+                set_draw_value: false,
+                #[watch]
+                set_orientation: model.orientation,
+                #[watch]
+                set_width_request: match model.orientation {
+                    gtk::Orientation::Vertical => -1,
+                    _ => 220,
+                },
+                #[watch]
+                set_height_request: match model.orientation {
+                    gtk::Orientation::Vertical => 160,
+                    _ => -1,
+                },
+                connect_value_changed[sender] => move |scale| {
+                    sender.input_sender().emit(MotionBarInput::Moved(scale.value()));
+                } @moved,
+            },
+            #[name = "end"]
+            gtk::Label {
+                add_css_class: "stave-key",
+            },
+        }
+    }
+
+    fn init(_: (), root: Self::Root, sender: ComponentSender<Self>) -> ComponentParts<Self> {
+        let model = MotionBarComponent {
+            shown: None,
+            orientation: gtk::Orientation::Horizontal,
+            input: sender.input_sender().clone(),
+        };
+        let widgets = view_output!();
+        ComponentParts { model, widgets }
+    }
+
+    fn update_with_view(
+        &mut self,
+        widgets: &mut Self::Widgets,
+        message: MotionBarInput,
+        sender: ComponentSender<Self>,
+        _root: &Self::Root,
+    ) {
+        match message {
+            MotionBarInput::Show(shown) => {
+                if let Some(shown) = &shown {
+                    widgets.name.set_label(&shown.name);
+                    widgets.start.set_label(&shown.start);
+                    widgets.end.set_label(&shown.end);
+                    // Changing the range can move the value on the way:
+                    // neither is heard back.
+                    let scale = &widgets.scale;
+                    scale.block_signal(&widgets.moved);
+                    scale.set_range(0.0, shown.full.max(0.1));
+                    scale.set_value(shown.value);
+                    scale.unblock_signal(&widgets.moved);
+                    scale.update_property(&[gtk::accessible::Property::Label(&format!(
+                        "Open {}",
+                        shown.name
+                    ))]);
+                }
+                self.shown = shown;
+            }
+            MotionBarInput::SetOrientation(orientation) => self.orientation = orientation,
+            MotionBarInput::Moved(value) => {
+                // Nobody listening is not a mistake.
+                let _ = sender.output(MotionBarOutput::Moved(value));
+            }
+        }
+        self.update_view(widgets, sender);
+    }
+}
+
+/// The floating bar at the bottom right of the 3D view: a name, words at
+/// each end and a slider ("door_l  closed ——— 110°"). It owns the
+/// [`MotionBarComponent`]: dropping it shuts the component down. Setters
+/// are queued.
 pub struct MotionBar {
     /// The bar, to overlay on the view.
     pub root: gtk::Box,
-    name: gtk::Label,
-    start: gtk::Label,
-    end: gtk::Label,
-    /// The slider.
-    pub scale: gtk::Scale,
+    bridge: Bridge<MotionBarComponent>,
 }
 
 impl MotionBar {
     /// A hidden bar.
     pub fn new() -> MotionBar {
-        let name = gtk::Label::builder().css_classes(["heading"]).build();
-        let start = gtk::Label::builder().css_classes(["stave-key"]).build();
-        let end = gtk::Label::builder().css_classes(["stave-key"]).build();
-        let scale = gtk::Scale::with_range(gtk::Orientation::Horizontal, 0.0, 1.0, 0.1);
-        scale.set_width_request(220);
-        scale.set_draw_value(false);
-        let root = gtk::Box::builder()
-            .orientation(gtk::Orientation::Horizontal)
-            .css_classes(["stave-floating"])
-            .halign(gtk::Align::Center)
-            .valign(gtk::Align::End)
-            .margin_bottom(14)
-            .visible(false)
-            .build();
-        root.append(&name);
-        root.append(&start);
-        root.append(&scale);
-        root.append(&end);
+        let bridge = Bridge::<MotionBarComponent>::launch(());
         MotionBar {
-            root,
-            name,
-            start,
-            end,
-            scale,
+            root: bridge.widget().clone(),
+            bridge,
         }
     }
 
     /// Lays the bar out in a row (docked in a corner) or standing upright
     /// (docked on the right edge), its slider turned to match.
     pub fn orientation_setter(&self) -> impl Fn(gtk::Orientation) + 'static {
-        let root = self.root.clone();
-        let scale = self.scale.clone();
-        move |orientation| {
-            root.set_orientation(orientation);
-            scale.set_orientation(orientation);
-            match orientation {
-                gtk::Orientation::Vertical => {
-                    scale.set_width_request(-1);
-                    scale.set_height_request(160);
-                }
-                _ => {
-                    scale.set_width_request(220);
-                    scale.set_height_request(-1);
-                }
-            }
-        }
+        let input = self.bridge.model().input.clone();
+        move |orientation| input.emit(MotionBarInput::SetOrientation(orientation))
     }
 
-    /// Shows the bar for `name`, from `start` to `end` words, the slider
-    /// from 0 to `full` at `value`; `None` hides it.
-    pub fn show(&self, what: Option<(&str, &str, &str, f64, f64)>) {
-        let Some((name, start, end, full, value)) = what else {
-            self.root.set_visible(false);
-            return;
-        };
-        self.name.set_label(name);
-        self.start.set_label(start);
-        self.end.set_label(end);
-        self.scale.set_range(0.0, full.max(0.1));
-        self.scale.set_value(value);
-        self.scale
-            .update_property(&[gtk::accessible::Property::Label(&format!("Open {name}"))]);
-        self.root.set_visible(true);
+    /// Calls `callback` with each of people's moves from now on, instead
+    /// of the one connected before.
+    pub fn connect_outputs(&self, callback: impl Fn(MotionBarOutput) + 'static) {
+        self.bridge.connect(callback);
+    }
+
+    /// Shows the bar, or hides it with `None`, without calling back.
+    pub fn show(&self, shown: Option<MotionShown>) {
+        self.bridge.send(MotionBarInput::Show(shown));
     }
 }
 
@@ -91,4 +205,72 @@ pub fn cut_list_page() -> adw::StatusPage {
         .description("Every board to cut, sized and rounded once, will be listed here. It isn't part of this version yet.")
         .css_classes(["stave-placeholder"])
         .build()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    use super::*;
+    use crate::ui::gtk_test::{on_gtk_thread, settle};
+
+    /// The bar for a door, 0 to 110 at `value`.
+    fn door(value: f64) -> Option<MotionShown> {
+        Some(MotionShown {
+            name: "door_l".to_owned(),
+            start: "closed".to_owned(),
+            end: "110°".to_owned(),
+            full: 110.0,
+            value,
+        })
+    }
+
+    /// The bar's slider.
+    fn scale(bar: &MotionBar) -> Option<gtk::Scale> {
+        std::iter::successors(bar.root.first_child(), gtk::Widget::next_sibling)
+            .find_map(|child| child.downcast::<gtk::Scale>().ok())
+    }
+
+    #[test]
+    fn the_motion_bar_hears_people_not_its_own_show() {
+        on_gtk_thread(motion_bar);
+    }
+
+    /// Showing the bar (twice in one turn, the range changing) moves the
+    /// slider without calling back; people's moves are heard after the
+    /// update; dropping the bar frees it.
+    fn motion_bar() {
+        let bar = MotionBar::new();
+        let heard: Rc<RefCell<Vec<MotionBarOutput>>> = Rc::default();
+        let log = Rc::clone(&heard);
+        bar.connect_outputs(move |output| log.borrow_mut().push(output));
+        bar.show(door(40.0));
+        assert!(!bar.root.is_visible(), "show is queued");
+        bar.show(door(80.0));
+        settle();
+        assert!(bar.root.is_visible());
+        let Some(scale) = scale(&bar) else {
+            panic!("the bar has a slider");
+        };
+        assert!((scale.value() - 80.0).abs() < 1e-9, "the last show wins");
+        assert!(heard.borrow().is_empty(), "show never calls back");
+        scale.set_value(30.0);
+        assert!(heard.borrow().is_empty(), "a move is only queued");
+        settle();
+        assert_eq!(*heard.borrow(), vec![MotionBarOutput::Moved(30.0)]);
+        let orient = bar.orientation_setter();
+        orient(gtk::Orientation::Vertical);
+        settle();
+        assert_eq!(scale.orientation(), gtk::Orientation::Vertical);
+        bar.show(None);
+        settle();
+        assert!(!bar.root.is_visible());
+        let root = bar.root.downgrade();
+        let input = bar.bridge.sender().clone();
+        drop(bar);
+        settle();
+        assert!(root.upgrade().is_none(), "the bar is freed");
+        assert!(input.send(MotionBarInput::Show(None)).is_err());
+    }
 }

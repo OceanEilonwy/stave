@@ -436,6 +436,8 @@ struct State {
     drag_applied: (f64, f64),
     problem: Option<ShownProblem>,
     opening: Option<Opening>,
+    /// The motion bar shows (it was last told to show something).
+    motion_shown: bool,
     focus: Option<FocusState>,
     /// "Pull apart" is on (its slider shows), even at 0.
     pull_apart: bool,
@@ -576,10 +578,6 @@ pub(in crate::ui) struct Window {
     /// Where the window's handlers, timers and background work send its
     /// messages.
     sender: ComponentSender<Window>,
-    /// The handlers of the controls the window also sets itself (Pull
-    /// apart, focus mode's checks and switch, the motion slider): blocked
-    /// while it does, so it never hears its own changes.
-    controls: Vec<(glib::Object, glib::SignalHandlerId)>,
     /// The handler on the style manager, which outlives the window:
     /// disconnected when the window shuts down.
     style_handler: Option<glib::SignalHandlerId>,
@@ -693,6 +691,7 @@ impl Component for Window {
                 drag_applied: (0.0, 0.0),
                 problem: None,
                 opening: None,
+                motion_shown: false,
                 focus: None,
                 pull_apart: false,
                 exploding: false,
@@ -708,7 +707,6 @@ impl Component for Window {
             watcher: None,
             editing: edit_view::EditView::new(),
             sender,
-            controls: Vec::new(),
             style_handler: None,
         };
         update::project::wire(&window);
@@ -782,21 +780,6 @@ impl Window {
     fn send(&self, message: impl Into<WindowInput>) {
         // Only fails once the window has gone, when nobody needs to know.
         let _ = self.sender.input_sender().send(message.into());
-    }
-
-    /// Blocks the handlers of the controls the window sets itself, before
-    /// it sets them (what `#[block_signal]` does in a view).
-    fn block_controls(&self) {
-        for (control, handler) in &self.controls {
-            control.block_signal(handler);
-        }
-    }
-
-    /// Unblocks them once it has.
-    fn unblock_controls(&self) {
-        for (control, handler) in &self.controls {
-            control.unblock_signal(handler);
-        }
     }
 
     /// Sends a command to the session and redraws what changed.
