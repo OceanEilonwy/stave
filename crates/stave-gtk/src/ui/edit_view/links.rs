@@ -9,7 +9,6 @@ use std::rc::Rc;
 
 use stave_app::inspect::LinkTarget;
 use stave_app::session::{Command, Selection};
-use stave_scene::NodeId;
 
 use super::super::Window;
 use super::super::sections::LinkHandlers;
@@ -62,20 +61,9 @@ impl Window {
         });
     }
 
-    /// The nodes the link under the pointer names, to outline with the
-    /// selection.
-    pub(in crate::ui) fn link_hover_nodes(&self) -> Vec<NodeId> {
-        let Some(Hovered::Item(selection)) = self.editing.state.borrow().link_hover.clone() else {
-            return Vec::new();
-        };
-        let session = self.session.borrow();
-        let Some((_, graph)) = session.drawable() else {
-            return Vec::new();
-        };
-        selection
-            .item()
-            .into_iter()
-            .flat_map(|item| graph.nodes_of(item).into_iter().take(1))
-            .collect()
+    /// Hands `with` the link under the pointer, borrowed: what the frame
+    /// lists outline with the selection.
+    pub(in crate::ui) fn with_link_hover<R>(&self, with: impl FnOnce(Option<&Hovered>) -> R) -> R {
+        with(self.editing.state.borrow().link_hover.as_ref())
     }
 }

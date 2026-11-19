@@ -51,20 +51,6 @@ impl Window {
             .collect()
     }
 
-    /// The nodes of what the pointer is over in the Parts panel.
-    pub(super) fn hovered_nodes(&self) -> Vec<NodeId> {
-        let session = self.session.borrow();
-        let state = self.state.borrow();
-        let Some((_, graph)) = session.drawable() else {
-            return Vec::new();
-        };
-        state
-            .hovered
-            .iter()
-            .flat_map(|item| graph.nodes_of(*item).into_iter().take(1))
-            .collect()
-    }
-
     /// F: frames the selection (every part of a selected assembly), or
     /// everything.
     pub(super) fn frame(self: &Rc<Self>) {
