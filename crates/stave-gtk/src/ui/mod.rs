@@ -168,6 +168,13 @@ impl Theme {
             Theme::Dark => adw::ColorScheme::ForceDark,
         }
     }
+
+    /// Shows this style: sets libadwaita's colour scheme, which every
+    /// window, the stylesheet, the editor and the 3D view follow (through
+    /// the style manager's `dark`). The one place the style is set.
+    fn apply(self) {
+        adw::StyleManager::default().set_color_scheme(self.scheme());
+    }
 }
 
 /// How to open the window.
@@ -259,16 +266,11 @@ pub fn run(options: Options) -> Result<()> {
         bail!("--window-screenshot needs one project folder");
     }
     gtk::init().context("can't start GTK (is there a display?)")?;
-    // Some desktops (KDE among them) write the old GTK 3 dark-theme switch
-    // into settings.ini; libadwaita warns about it and ignores it. Light
-    // and dark come from AdwStyleManager's colour scheme alone (the style
-    // menu, or the system's preference through the settings portal), so
-    // the old switch is turned off before libadwaita starts.
-    if let Some(settings) = gtk::Settings::default()
-        && settings.is_gtk_application_prefer_dark_theme()
-    {
-        settings.set_gtk_application_prefer_dark_theme(false);
-    }
+    // Light and dark come from AdwStyleManager's colour scheme alone (see
+    // `Theme::apply`). GtkSettings' old dark-theme switch, which some
+    // desktops (KDE among them) write into settings.ini, is left alone:
+    // libadwaita ignores it, and writing it is deprecated (GTK warns "Use
+    // GtkSettings:gtk-interface-color-scheme instead").
     adw::init().context("can't start GTK (is there a display?)")?;
     let mut flags = gio::ApplicationFlags::HANDLES_OPEN;
     if options.window_screenshot.is_some() {
@@ -472,6 +474,11 @@ struct State {
     marks: Rc<Marks>,
     /// Editing steps to run once the design is drawn (`--edit-script`).
     edit_script: Option<PathBuf>,
+    /// Whether Delete has something to remove ([`Window::has_removable`]),
+    /// set after each message. The window's key handler reads this copy
+    /// to take Delete or pass it on, without asking the model from inside
+    /// GTK's signal.
+    removable: Rc<Cell<bool>>,
 }
 
 /// The clock of something that plays frame by frame: the frame time it
@@ -723,6 +730,7 @@ impl Component for Window {
                 hovered: Vec::new(),
                 marks: Rc::default(),
                 edit_script: options.edit_script,
+                removable: Rc::default(),
             },
             pins: Pins::default(),
             watcher: None,
@@ -763,6 +771,7 @@ impl Component for Window {
         root.present();
         window.show_folder();
         window.dispatch(Command::Check);
+        window.state.removable.set(window.has_removable());
         ComponentParts {
             model: window,
             widgets: (),
@@ -781,6 +790,8 @@ impl Component for Window {
             WindowInput::Editing(message) => self.update_editing(message),
             WindowInput::Rendering(message) => self.update_rendering(message),
         }
+        // The selection and the change in progress change only here.
+        self.state.removable.set(self.has_removable());
     }
 
     fn shutdown(&mut self, _widgets: &mut (), _output: relm4::Sender<WindowOutput>) {
@@ -1454,10 +1465,6 @@ mod tests {
             // GTK's tooltip window belongs to the display's one tooltip,
             // which moves from window to window: it is not the window's.
             .filter(|(path, _)| !path.contains("GtkTooltipWindow"))
-            // libadwaita keeps an `adw::Toggle`'s own child (the view
-            // switcher's icon and label) after its group has gone; a plain
-            // `adw::ToggleGroup` does it too, so it is not ours to fix.
-            .filter(|(path, _)| !path.contains("AdwToggleGroup/GtkToggleButton/"))
             .filter(|(_, widget)| widget.upgrade().is_some())
             .map(|(path, _)| path.as_str())
             .collect();
@@ -1470,5 +1477,58 @@ mod tests {
                 .is_err(),
             "the window's runtime, and with it its model, is gone"
         );
+    }
+
+    /// `--theme` and the style menu set libadwaita's colour scheme, and
+    /// with it the style manager's `dark` that the windows, editor and 3D
+    /// view follow.
+    #[test]
+    fn a_theme_sets_the_style_manager() {
+        on_gtk_thread(|| {
+            let manager = adw::StyleManager::default();
+            Theme::Dark.apply();
+            assert_eq!(manager.color_scheme(), adw::ColorScheme::ForceDark);
+            assert!(manager.is_dark());
+            Theme::Light.apply();
+            assert_eq!(manager.color_scheme(), adw::ColorScheme::ForceLight);
+            assert!(!manager.is_dark());
+            Theme::System.apply();
+            assert_eq!(manager.color_scheme(), adw::ColorScheme::Default);
+        });
+    }
+
+    /// Every word the style menu and `--theme` take names its theme.
+    #[test]
+    fn theme_words_round_trip() {
+        for theme in [Theme::System, Theme::Light, Theme::Dark] {
+            assert_eq!(Theme::from_word(theme.word()), Some(theme));
+        }
+        assert_eq!(Theme::from_word("sepia"), None);
+    }
+
+    /// Nothing writes or reads GtkSettings' old dark-theme switch: it is
+    /// deprecated (GTK warns on it) and libadwaita ignores it, so light
+    /// and dark come from the style manager alone.
+    #[test]
+    fn the_deprecated_dark_theme_switch_is_not_used() {
+        let needle = ["prefer", "_dark_theme"].concat();
+        let mut folders = vec![std::path::PathBuf::from(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src"
+        ))];
+        let mut uses = Vec::new();
+        while let Some(folder) = folders.pop() {
+            for entry in std::fs::read_dir(&folder).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    folders.push(path);
+                } else if path.extension().is_some_and(|extension| extension == "rs")
+                    && std::fs::read_to_string(&path).unwrap().contains(&needle)
+                {
+                    uses.push(path);
+                }
+            }
+        }
+        assert!(uses.is_empty(), "{needle} is used in {uses:?}");
     }
 }

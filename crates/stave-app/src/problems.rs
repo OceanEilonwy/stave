@@ -846,7 +846,7 @@ fn tenths(value: f64) -> String {
 /// What the inspector shows about a selected problem.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Details {
-    /// "ERROR · MOTION".
+    /// "Error · Motion".
     pub eyebrow: String,
     /// How serious it is.
     pub severity: Severity,
@@ -903,9 +903,9 @@ pub fn details(checked: &Checked, index: ProblemIndex) -> Option<Details> {
             &[
                 (
                     "severity",
-                    &severity_word(diagnostic.severity).to_uppercase(),
+                    &capitalised(&severity_word(diagnostic.severity)),
                 ),
-                ("category", &category.title().to_uppercase()),
+                ("category", &category.title()),
             ],
         ),
         severity: diagnostic.severity,

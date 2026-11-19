@@ -139,6 +139,24 @@ pub struct HeaderParts {
     build_stack: gtk::Stack,
 }
 
+/// Frees the children of `group`'s `toggles` when the group is destroyed.
+///
+/// libadwaita (1.10, and its main branch) leaks an `adw::Toggle`'s child:
+/// `adw_toggle_set_child` takes a reference to it and nothing drops that
+/// reference, as `AdwToggle` has no dispose and its finalize leaves the
+/// child alone. So the switcher's icons and labels outlived every closed
+/// window. Holding the toggles until the group's `destroy` (which comes
+/// after the group has let go of them) and unsetting their children then
+/// frees them; the toggles go with the handler. See
+/// `docs/reviews/upstream-adw-toggle-leak.md`.
+fn free_children_on_destroy(group: &adw::ToggleGroup, toggles: Vec<adw::Toggle>) {
+    group.connect_destroy(move |_| {
+        for toggle in &toggles {
+            toggle.set_child(None::<&gtk::Widget>);
+        }
+    });
+}
+
 /// The component's widgets: the parts, and the switcher's handler so a
 /// view the session shows doesn't come back as people's choice.
 #[derive(Debug)]
@@ -188,6 +206,7 @@ impl HeaderParts {
             .valign(gtk::Align::Center)
             .build();
         let mut switcher_labels = Vec::new();
+        let mut toggles = Vec::new();
         for view in View::ALL {
             let shape = match view {
                 View::Design => icons::PARTS,
@@ -206,8 +225,10 @@ impl HeaderParts {
                 .child(&content)
                 .tooltip(view.title())
                 .build();
-            switcher.add(toggle);
+            switcher.add(toggle.clone());
+            toggles.push(toggle);
         }
+        free_children_on_destroy(&switcher, toggles);
         switcher.set_active_name(Some(View::Design.word()));
         // The Cut list view isn't made yet, so the design is the only
         // view: the switcher stays hidden until there is a second one,
@@ -899,6 +920,98 @@ mod tests {
             assert!(header.title.is_visible());
             assert!(!header.switcher.is_visible());
             assert_eq!(header.title.subtitle(), "~/shelf");
+        });
+    }
+
+    /// A toggle group with one toggle whose own child is an icon and a
+    /// label, as the switcher's are, and weak references to the child's
+    /// three widgets.
+    fn group_with_a_toggle_child() -> (
+        adw::ToggleGroup,
+        adw::Toggle,
+        Vec<glib::WeakRef<gtk::Widget>>,
+    ) {
+        let group = adw::ToggleGroup::new();
+        let content = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        let icon = gtk::Image::from_icon_name("go-home-symbolic");
+        let label = gtk::Label::new(Some("Design"));
+        content.append(&icon);
+        content.append(&label);
+        let toggle = adw::Toggle::builder()
+            .name("design")
+            .child(&content)
+            .build();
+        group.add(toggle.clone());
+        let weak = vec![
+            content.upcast_ref::<gtk::Widget>().downgrade(),
+            icon.upcast_ref::<gtk::Widget>().downgrade(),
+            label.upcast_ref::<gtk::Widget>().downgrade(),
+        ];
+        (group, toggle, weak)
+    }
+
+    /// libadwaita's own leak, with nothing of Stave's in it: a plain
+    /// `adw::ToggleGroup`, dropped, leaves its toggle's child alive. If
+    /// this fails, libadwaita has fixed it, and `free_children_on_destroy`
+    /// can go.
+    #[test]
+    fn libadwaita_leaks_a_toggles_child() {
+        on_gtk_thread(|| {
+            let (group, toggle, weak) = group_with_a_toggle_child();
+            drop(toggle);
+            let freed = group.downgrade();
+            drop(group);
+            settle();
+            assert!(freed.upgrade().is_none(), "the group is freed");
+            assert!(
+                weak.iter().all(|widget| widget.upgrade().is_some()),
+                "libadwaita still keeps a toggle's child alive"
+            );
+        });
+    }
+
+    /// With `free_children_on_destroy`, the same group's toggle child is
+    /// freed with it.
+    #[test]
+    fn a_destroyed_groups_toggle_children_are_freed() {
+        on_gtk_thread(|| {
+            let (group, toggle, weak) = group_with_a_toggle_child();
+            free_children_on_destroy(&group, vec![toggle]);
+            let freed = group.downgrade();
+            drop(group);
+            settle();
+            assert!(freed.upgrade().is_none(), "the group is freed");
+            assert!(
+                weak.iter().all(|widget| widget.upgrade().is_none()),
+                "the toggle's child is freed with its group"
+            );
+        });
+    }
+
+    /// The bar's switcher, dropped with the header, leaves none of its
+    /// toggles' icons and labels behind.
+    #[test]
+    fn the_switchers_toggle_children_are_freed() {
+        on_gtk_thread(|| {
+            let header = header();
+            let mut children = Vec::new();
+            let mut button = header.switcher.first_child();
+            while let Some(current) = button {
+                if let Some(child) = current
+                    .downcast_ref::<gtk::ToggleButton>()
+                    .and_then(gtk::prelude::ButtonExt::child)
+                {
+                    children.push(child.downgrade());
+                }
+                button = current.next_sibling();
+            }
+            assert_eq!(children.len(), View::ALL.len(), "one child per view");
+            drop(header);
+            settle();
+            assert!(
+                children.iter().all(|child| child.upgrade().is_none()),
+                "the switcher's toggle children are freed"
+            );
         });
     }
 }

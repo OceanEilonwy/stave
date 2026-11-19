@@ -682,7 +682,7 @@ pub struct FailingCheck {
 /// What the inspector shows about the selection.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Inspection {
-    /// "PART · IN door_l": the words the inspection's kind and place are
+    /// "Part · in door_l": the words the inspection's kind and place are
     /// keyed by, in English.
     pub eyebrow: String,
     /// What kind of thing it is, as the window shows it: "Part", "Joint
@@ -752,17 +752,17 @@ fn moves_row(design: &SolvedDesign, moving: Option<AssemblyId>) -> Option<Row> {
     })
 }
 
-/// The window's words for an eyebrow's kind: "Part" for "PART".
+/// The window's words for an eyebrow's kind: "Part" for "Part".
 fn kind_title(kind: &str) -> String {
     match kind {
-        "PART" => tr("Part"),
-        "PIECE OF A SPLICED PART" => tr("Piece of a spliced part"),
-        "MIRROR IMAGE" => tr("Mirror image"),
-        "MADE PART" => tr("Made part"),
-        "HARDWARE" => tr("Hardware"),
-        "ASSEMBLY" => tr("Assembly"),
-        "JOINT MEMBER" => tr("Joint member"),
-        "JOINT" => tr("Joint"),
+        "Part" => tr("Part"),
+        "Piece of a spliced part" => tr("Piece of a spliced part"),
+        "Mirror image" => tr("Mirror image"),
+        "Made part" => tr("Made part"),
+        "Hardware" => tr("Hardware"),
+        "Assembly" => tr("Assembly"),
+        "Joint member" => tr("Joint member"),
+        "Joint" => tr("Joint"),
         other => other.to_owned(),
     }
 }
@@ -774,10 +774,10 @@ fn within(design: &SolvedDesign, assembly: Option<AssemblyId>) -> Option<String>
         .map(|found| found.name.clone())
 }
 
-/// "PART · IN door_l".
+/// "Part · in door_l".
 fn eyebrow(design: &SolvedDesign, kind: &str, assembly: Option<AssemblyId>) -> String {
     match assembly.and_then(|id| design.assembly(id)) {
-        Some(found) => format!("{kind} · IN {}", found.name),
+        Some(found) => format!("{kind} · in {}", found.name),
         None => kind.to_owned(),
     }
 }
@@ -1164,11 +1164,11 @@ fn failing_checks(checked: &Checked, item: Item) -> Vec<FailingCheck> {
 fn inspect_part(checked: &Checked, design: &SolvedDesign, id: PartId) -> Option<Inspection> {
     let part = design.part(id)?;
     let kind = match part.origin {
-        _ if part.pieces.is_some() => "PIECE OF A SPLICED PART",
-        PartOrigin::Piece { .. } => "PIECE OF A SPLICED PART",
-        PartOrigin::Declared => "PART",
-        PartOrigin::Mirror { .. } | PartOrigin::MirroredAssembly { .. } => "MIRROR IMAGE",
-        PartOrigin::Made { .. } | PartOrigin::Boards { .. } => "MADE PART",
+        _ if part.pieces.is_some() => "Piece of a spliced part",
+        PartOrigin::Piece { .. } => "Piece of a spliced part",
+        PartOrigin::Declared => "Part",
+        PartOrigin::Mirror { .. } | PartOrigin::MirroredAssembly { .. } => "Mirror image",
+        PartOrigin::Made { .. } | PartOrigin::Boards { .. } => "Made part",
     };
     let model = checked.opened.model.as_ref();
     // A piece of a spliced part is declared as its part.
@@ -1392,8 +1392,8 @@ fn inspect_hardware(
     }];
     let source = source_of(checked, |m| hardware_decl(m, id), hardware.assembly);
     Some(Inspection {
-        eyebrow: eyebrow(design, "HARDWARE", hardware.assembly),
-        kind: kind_title("HARDWARE"),
+        eyebrow: eyebrow(design, "Hardware", hardware.assembly),
+        kind: kind_title("Hardware"),
         within: within(design, hardware.assembly),
         title: relative(design, &hardware.name, hardware.assembly).to_owned(),
         description,
@@ -1464,8 +1464,8 @@ fn inspect_assembly(
         assembly.parent,
     );
     Some(Inspection {
-        eyebrow: eyebrow(design, "ASSEMBLY", assembly.parent),
-        kind: kind_title("ASSEMBLY"),
+        eyebrow: eyebrow(design, "Assembly", assembly.parent),
+        kind: kind_title("Assembly"),
         within: within(design, assembly.parent),
         title: relative(design, &assembly.name, assembly.parent).to_owned(),
         description,
@@ -1556,8 +1556,8 @@ fn inspect_member(
     rows.extend(moves_row(design, moves_with).map(Field::from));
     let source = source_of(checked, |m| joint_or_splice_decl(m, joint), joint.assembly);
     Some(Inspection {
-        eyebrow: eyebrow(design, "JOINT MEMBER", assembly),
-        kind: kind_title("JOINT MEMBER"),
+        eyebrow: eyebrow(design, "Joint member", assembly),
+        kind: kind_title("Joint member"),
         within: within(design, assembly),
         title: format!(
             "{}'s {}",
@@ -1611,8 +1611,8 @@ fn inspect_joint(
         joint.assembly,
     );
     Some(Inspection {
-        eyebrow: eyebrow(design, "JOINT", joint.assembly),
-        kind: kind_title("JOINT"),
+        eyebrow: eyebrow(design, "Joint", joint.assembly),
+        kind: kind_title("Joint"),
         within: within(design, joint.assembly),
         title: relative(design, &joint.name, joint.assembly).to_owned(),
         description,

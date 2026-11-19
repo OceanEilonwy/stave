@@ -277,9 +277,9 @@ impl OptionSearch {
                 .focusable(false)
                 .child(
                     &gtk::Label::builder()
-                        .label(group.title().to_uppercase())
+                        .label(group.title())
                         .xalign(0.0)
-                        .css_classes(["stave-option-search-group"])
+                        .css_classes(["stave-option-search-group", "stave-caps"])
                         .build(),
                 )
                 .build();
