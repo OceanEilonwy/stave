@@ -1,5 +1,6 @@
 //! The Parts panel ("joint chips"): a flat list grouped by assembly. Each
-//! group has a slim uppercase heading (CARCASS, DOOR_L) with a grey note
+//! group has a slim heading ("Carcass", `door_l`, drawn in capitals by
+//! the `.stave-caps` style so the words stay as written) with a grey note
 //! on the right ("12 parts · 6 joints", or how it moves: "110° on side_l"
 //! after a turn icon). Each part row (24 px) has its colour swatch, its
 //! name, small joint-kind chips (an icon per kind, with a count when there
@@ -75,23 +76,23 @@ use super::relm4_shim::Bridge;
 /// The panel's own look: sizes, the chips' colours (light, and dark under
 /// the window's `stave-dark`) and the partner links.
 const CSS: &str = r#"
-.stave-parts { background: transparent; font-size: 12.5px; }
+.stave-parts { background: transparent; font-size: 0.852rem; }
 .stave-parts > row { padding: 0; min-height: 0; margin: 0; border-radius: 0; }
 .stave-parts > row:hover { background: alpha(currentColor, 0.06); }
 .stave-parts > row:selected { background: @accent_bg_color; color: @accent_fg_color; }
 .stave-parts > row.partner { box-shadow: inset 2px 0 0 #1c71d8; background: alpha(#3584e4, 0.08); }
 .stave-dark .stave-parts > row.partner { box-shadow: inset 2px 0 0 #99c1f1; }
-.stave-parts-heading { min-height: 22px; padding: 0 8px; margin-top: 4px; border-spacing: 4px; font-size: 10.5px; font-weight: 700; letter-spacing: 0.04em; color: alpha(currentColor, 0.62); }
+.stave-parts-heading { min-height: 22px; padding: 0 8px; margin-top: 4px; border-spacing: 4px; font-size: 0.716rem; font-weight: 700; letter-spacing: 0.04em; color: alpha(currentColor, 0.62); }
 .stave-parts-heading .note { font-weight: 500; letter-spacing: 0; }
 .stave-parts-entry { min-height: 24px; padding: 0 8px; border-spacing: 7px; }
-.stave-parts-entry .detail { font-size: 11.5px; color: alpha(currentColor, 0.62); }
+.stave-parts-entry .detail { font-size: 0.784rem; color: alpha(currentColor, 0.62); }
 .stave-parts-folded { min-height: 24px; padding: 0 8px 0 4px; border-spacing: 5px; }
-.stave-parts-joined { min-height: 22px; padding: 0 8px 0 26px; border-spacing: 6px; font-size: 11.5px; background: alpha(#3584e4, 0.12); }
+.stave-parts-joined { min-height: 22px; padding: 0 8px 0 26px; border-spacing: 6px; font-size: 0.784rem; background: alpha(#3584e4, 0.12); }
 .stave-parts-joined .words { color: alpha(currentColor, 0.66); }
 .stave-parts.narrow .stave-parts-joined { padding-left: 14px; }
 .stave-chips { border-spacing: 3px; }
 .stave-chip { min-height: 18px; padding: 0 4px; border-radius: 4px; border-spacing: 2px; background: alpha(currentColor, 0.06); }
-.stave-chip label { font-size: 10.5px; color: alpha(currentColor, 0.72); }
+.stave-chip label { font-size: 0.716rem; color: alpha(currentColor, 0.72); }
 .stave-glyph-wood { color: #9c6e00; }
 .stave-glyph-cut { color: #1c71d8; }
 .stave-glyph-frame { color: #9141ac; }
@@ -106,11 +107,11 @@ const CSS: &str = r#"
 .stave-parts > row:selected staveicon { color: @accent_fg_color; }
 .stave-parts > row:selected .stave-chip { background: alpha(@accent_fg_color, 0.16); }
 .stave-parts > row:selected .stave-chip label, .stave-parts > row:selected .detail { color: alpha(@accent_fg_color, 0.9); }
-button.stave-partner { min-height: 18px; min-width: 0; padding: 0 5px; border-radius: 4px; font-family: monospace; font-size: 11.5px; font-weight: 400; color: #1c71d8; background: alpha(#3584e4, 0.10); }
+button.stave-partner { min-height: 18px; min-width: 0; padding: 0 5px; border-radius: 4px; font-family: var(--monospace-font-family, monospace); font-size: 0.784rem; font-weight: 400; color: #1c71d8; background: alpha(#3584e4, 0.10); }
 button.stave-partner:hover { background: alpha(#3584e4, 0.24); }
 .stave-dark button.stave-partner { color: #99c1f1; background: alpha(#3584e4, 0.16); }
 .stave-dark button.stave-partner:hover { background: alpha(#3584e4, 0.30); }
-.stave-partner-text { font-family: monospace; font-size: 11.5px; color: alpha(currentColor, 0.75); padding: 0 2px; }
+.stave-partner-text { font-family: var(--monospace-font-family, monospace); font-size: 0.784rem; color: alpha(currentColor, 0.75); padding: 0 2px; }
 "#;
 
 thread_local! {
@@ -1292,6 +1293,7 @@ fn heading_row(
     content.append(
         &gtk::Label::builder()
             .label(&heading.title)
+            .css_classes(["stave-caps"])
             .xalign(0.0)
             .hexpand(true)
             .ellipsize(gtk::pango::EllipsizeMode::End)

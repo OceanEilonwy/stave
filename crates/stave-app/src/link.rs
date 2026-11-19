@@ -2,8 +2,8 @@
 //! cursor on a part, an assembly or a piece of hardware selects it in the
 //! 3D view ([`selection_for`]), and selecting in the 3D view or the parts
 //! tree moves the editor to the line that places it ([`placed_at`]),
-//! which the view's chip names ([`chip`]: "Linked to the text · door_l,
-//! line 9").
+//! which the view's chip names ([`chip`]: "door_l is written on line
+//! 9").
 
 use crate::i18n::{fill_in, tr};
 use stave_ide::{Analysis, SymbolId, SymbolKind};
@@ -192,8 +192,8 @@ pub fn placed_at(checked: &Checked, selection: &Selection) -> Option<SourceLocat
     }
 }
 
-/// The chip on the 3D view in the Files view: "Linked to the text ·
-/// door_l, line 9".
+/// The chip on the 3D view in the Files view: "door_l is written on line
+/// 9", in plain words, saying where in the text the selection is.
 pub fn chip(
     design: &SolvedDesign,
     selection: &Selection,
@@ -211,7 +211,7 @@ pub fn chip(
         Selection::Location(_) | Selection::Problem(_) => None,
     }?;
     Some(fill_in(
-        &tr("Linked to the text · {name}, line {line}"),
+        &tr("{name} is written on line {line}"),
         &[("name", &name), ("line", &location.line)],
     ))
 }

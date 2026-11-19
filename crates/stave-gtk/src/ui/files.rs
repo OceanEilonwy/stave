@@ -613,21 +613,17 @@ impl<Then: fmt::Debug + 'static> Component for FilesComponent<Then> {
             .reveal_child(false)
             .build();
 
-        // The footer.
-        let hint = label(
-            &tr("Ctrl+click follows a name · Alt+F12 peeks · Alt+← goes back"),
-            &["stave-footer-hint"],
-        );
-        hint.set_hexpand(true);
-        hint.set_ellipsize(gtk::pango::EllipsizeMode::End);
-        hint.set_max_width_chars(10);
+        // The footer: the cursor's line, on the right. The editor's keys
+        // (Ctrl+click or F12 follows a name, Alt+F12 peeks, Alt+Left goes
+        // back) are in the shortcuts dialog, not spelt out here.
         let line = label("", &["stave-footer-line"]);
+        line.set_hexpand(true);
+        line.set_xalign(1.0);
         let footer = gtk::Box::builder()
             .orientation(gtk::Orientation::Horizontal)
             .spacing(14)
             .css_classes(["stave-editor-footer"])
             .build();
-        footer.append(&hint);
         footer.append(&line);
 
         let body = gtk::Box::builder()
@@ -1983,7 +1979,7 @@ impl<Then: fmt::Debug + 'static> FilesComponent<Then> {
         if anchor.is_none()
             && let Some(hover) = analysis.hover(FilePosition { file, offset })
         {
-            card.append(&label(&hover.kind.to_uppercase(), &["stave-hover-kind"]));
+            card.append(&label(&hover.kind, &["stave-hover-kind", "stave-caps"]));
             let signature = label(&hover.signature, &["stave-hover-signature"]);
             signature.set_wrap(true);
             signature.set_max_width_chars(48);
