@@ -203,7 +203,7 @@ and is tested headless (`crates/stave-app/tests/session.rs`).
   `Verdict` is `Checked(Summary)` (errors, warnings, files, elapsed) or
   `CantOpen(message)`. `pill()` gives the title bar's pill (`Tone`:
   `Unknown`, `Clean`, `Warnings`, `Errors`; `label`: "No problems",
-  "3 problems"; `Activity`: `Idle` or `Checking`, keeping the last tone and
+  "1 error", "2 warnings", "1 error, 2 warnings"; `Activity`: `Idle` or `Checking`, keeping the last tone and
   label while checking); `line()` the problems chip's tooltip.
 - `build() -> Build`: `Idle` or `Building`. `buildable() ->
   Result<(), empty::Reason>`: `Ok` only when the latest check has parts
@@ -435,7 +435,10 @@ menu puts board B back.
   error · 0 warnings · 26 ms"). The pill is red while the latest check
   has an error, amber for warnings only, green for none (`Pill::tone`;
   the class goes on the chip round the pill, `.stave-problems-chip.errors
-  button.stave-pill`, a test keeps the CSS keyed so). The hammer is `win.build` (Ctrl+B),
+  button.stave-pill`, a test keeps the CSS keyed so). Colour is never
+  the only sign: the pill's words count errors and warnings apart and
+  its icon is a circle for errors, a triangle for warnings only. Icon-only
+  buttons have accessible names, not only tooltips. The hammer is `win.build` (Ctrl+B),
   disabled while building or whenever there is nothing to build
   (`buildable()`), its tooltip saying why (`build_tooltip()`). Until the
   build plan is made, the hammer is hidden and `win.build` isn't
@@ -578,8 +581,9 @@ free of its warning.
   error · …"), which selects it. A posed problem shows only its own pin;
   focus mode and an older design show none.
 - **The dots**: the tree's rows and the rail's tabs carry their marks
-  (`problems::marks`); the Move chips are ringed for a moving assembly
-  with a problem.
+  (`problems::marks`), round for an error, square for a warning; the
+  Move chips are ringed for a moving assembly with a problem and carry
+  the same dot, and say the problem to a screen reader.
 - **Stepping**: the chip's pill and arrows, F8 and Shift+F8 select the
   next or previous problem (`Command::NextProblem`), wrapping round.
 - **Reading a problem**: in the Problems panel (see "Problems panel"
@@ -1384,10 +1388,11 @@ step and changes nothing in the interface.
   it out; a test checks the two agree on every example), Tab inserting
   spaces, smart Home/End, undo that groups typing, the
   name under the cursor and its uses marked (its declaration stronger),
-  wavy underlines from the fast tier and the last check (drawn by the
-  text view itself, 1.6 px thick, in libadwaita's error and warning
-  colours for the style, with a bar of the same colour in the gutter
-  beside each line that has one; every place a check's problem points
+  underlines from the fast tier and the last check (drawn by the
+  text view itself in libadwaita's error and warning colours for the
+  style, wavy and 1.6 px thick for an error, dotted for a warning, with
+  a bar of the same colour in the gutter beside each line that has one,
+  whole for an error and dashed for a warning; every place a check's problem points
   at is underlined, so a standard file open in a tab shows the kind's
   rule a requirement comes from; the check's underlines need only the
   text the check read, not the names worked out), a lens above each part, assembly, piece of hardware,

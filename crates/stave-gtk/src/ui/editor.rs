@@ -452,13 +452,16 @@ mod imp {
                 // Beside the text, below any lens or peek above it.
                 let text = view.iter_location(&start).height();
                 let bottom = y.saturating_add(height).saturating_sub(LINE_SPACING);
-                let bar = gtk::graphene::Rect::new(
-                    5.0,
-                    crate::convert::f32_of_int(bottom.saturating_sub(text)),
-                    3.0,
-                    crate::convert::f32_of_int(text),
-                );
-                snapshot.append_color(&problem_colour(severity, dark), &bar);
+                let colour = problem_colour(severity, dark);
+                for (top, length) in bar_pieces(severity, bottom.saturating_sub(text), text) {
+                    let piece = gtk::graphene::Rect::new(
+                        5.0,
+                        crate::convert::f32_of_int(top),
+                        3.0,
+                        crate::convert::f32_of_int(length),
+                    );
+                    snapshot.append_color(&colour, &piece);
+                }
             }
         }
     }
@@ -497,7 +500,7 @@ mod imp {
                     continue;
                 };
                 let colour = problem_colour(severity, dark);
-                draw_waves(view, &tag, &colour, &snapshot);
+                draw_waves(view, &tag, severity, &colour, &snapshot);
             }
         }
     }
@@ -636,6 +639,7 @@ fn problem_colour(severity: Severity, dark: bool) -> gtk::gdk::RGBA {
 fn draw_waves(
     view: &gtk::TextView,
     tag: &gtk::TextTag,
+    severity: Severity,
     colour: &gtk::gdk::RGBA,
     snapshot: &gtk::Snapshot,
 ) {
@@ -670,6 +674,7 @@ fn draw_waves(
             if stop.x() > start.x() {
                 wave(
                     snapshot,
+                    severity,
                     f64::from(start.x()),
                     f64::from(stop.x()),
                     f64::from(start.y().saturating_add(start.height())) + 1.0,
@@ -684,9 +689,36 @@ fn draw_waves(
     }
 }
 
-/// A wavy line from `x0` to `x1` around `y`: 1.6 px thick, 1.6 px either
-/// side of the line, a crest every 5 px.
-fn wave(snapshot: &gtk::Snapshot, x0: f64, x1: f64, y: f64, colour: &gtk::gdk::RGBA) {
+/// The pieces of a problem's bar in the gutter, from `top`, `length`
+/// pixels long, as (top, length): an error's is whole, a warning's is
+/// dashed (3 px on, 2 px off), so the two differ without their colour.
+fn bar_pieces(severity: Severity, top: i32, length: i32) -> Vec<(i32, i32)> {
+    match severity {
+        Severity::Error => vec![(top, length)],
+        Severity::Warning | Severity::Note => {
+            let end = top.saturating_add(length);
+            let mut pieces = Vec::new();
+            let mut at = top;
+            while at < end {
+                pieces.push((at, 3.min(end.saturating_sub(at))));
+                at = at.saturating_add(5);
+            }
+            pieces
+        }
+    }
+}
+
+/// A problem's line from `x0` to `x1` around `y`: for an error, wavy,
+/// 1.6 px thick, 1.6 px either side of the line, a crest every 5 px; for
+/// a warning, dotted, so the two differ without their colour.
+fn wave(
+    snapshot: &gtk::Snapshot,
+    severity: Severity,
+    x0: f64,
+    x1: f64,
+    y: f64,
+    colour: &gtk::gdk::RGBA,
+) {
     let width = (x1 - x0).max(4.0);
     let bounds = gtk::graphene::Rect::new(
         crate::convert::f32_of(x0 - 1.0),
@@ -701,6 +733,16 @@ fn wave(snapshot: &gtk::Snapshot, x0: f64, x1: f64, y: f64, colour: &gtk::gdk::R
         f64::from(colour.blue()),
         f64::from(colour.alpha()),
     );
+    if matches!(severity, Severity::Warning | Severity::Note) {
+        context.set_line_width(2.0);
+        context.set_line_cap(gtk::cairo::LineCap::Round);
+        context.set_dash(&[0.0, 4.0], 0.0);
+        context.move_to(x0 + 1.0, y);
+        context.line_to(x0 + width, y);
+        // A failed stroke only leaves the dots out.
+        let _ = context.stroke();
+        return;
+    }
     context.set_line_width(1.6);
     context.set_line_join(gtk::cairo::LineJoin::Round);
     context.move_to(x0, y);
@@ -1668,6 +1710,17 @@ impl Editor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_errors_gutter_bar_is_whole_and_a_warnings_dashed() {
+        assert_eq!(bar_pieces(Severity::Error, 10, 13), [(10, 13)]);
+        assert_eq!(
+            bar_pieces(Severity::Warning, 10, 13),
+            [(10, 3), (15, 3), (20, 3)]
+        );
+        assert_eq!(bar_pieces(Severity::Warning, 0, 4), [(0, 3)]);
+        assert_eq!(bar_pieces(Severity::Warning, 0, 6), [(0, 3), (5, 1)]);
+    }
 
     #[test]
     fn a_view_with_no_height_yet_is_not_scrolled() {

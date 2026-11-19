@@ -341,10 +341,17 @@ impl CheckStatus {
                 } else {
                     Tone::Clean
                 };
-                let label = match summary.problems() {
-                    0 => "No problems".to_owned(),
-                    1 => "1 problem".to_owned(),
-                    count => format!("{count} problems"),
+                // Errors and warnings counted apart, so the words say
+                // which there are without the pill's colour.
+                let label = match (summary.errors, summary.warnings) {
+                    (0, 0) => "No problems".to_owned(),
+                    (errors, 0) => plural(errors, "error", "errors"),
+                    (0, warnings) => plural(warnings, "warning", "warnings"),
+                    (errors, warnings) => format!(
+                        "{}, {}",
+                        plural(errors, "error", "errors"),
+                        plural(warnings, "warning", "warnings")
+                    ),
                 };
                 (tone, label)
             }
@@ -434,7 +441,7 @@ pub enum Activity {
 pub struct Pill {
     /// Its colour.
     pub tone: Tone,
-    /// "No problems", "3 problems".
+    /// "No problems", "1 error", "2 warnings", "1 error, 2 warnings".
     pub label: String,
     /// Whether a check is running.
     pub activity: Activity,
@@ -1729,6 +1736,27 @@ impl Carry<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_pill_counts_errors_and_warnings_apart() {
+        let words = |errors, warnings| {
+            let pill = CheckStatus::Done(Verdict::Checked(Summary {
+                errors,
+                warnings,
+                files: 1,
+                elapsed: Duration::ZERO,
+            }))
+            .pill();
+            (pill.tone, pill.label)
+        };
+        assert_eq!(words(0, 0), (Tone::Clean, "No problems".to_owned()));
+        assert_eq!(words(1, 0), (Tone::Errors, "1 error".to_owned()));
+        assert_eq!(words(0, 2), (Tone::Warnings, "2 warnings".to_owned()));
+        assert_eq!(
+            words(3, 1),
+            (Tone::Errors, "3 errors, 1 warning".to_owned())
+        );
+    }
 
     #[test]
     fn a_file_and_line_from_the_command_line_names_a_place() {

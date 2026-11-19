@@ -391,7 +391,7 @@ impl Header {
         }
         let (class, shape) = match pill.tone {
             Tone::Clean => ("clean", icons::CHECK),
-            Tone::Warnings => ("warnings", icons::ALERT),
+            Tone::Warnings => ("warnings", icons::WARNING),
             Tone::Errors => ("errors", icons::ALERT),
             Tone::Unknown => ("unknown", icons::PENDING),
         };
@@ -434,6 +434,8 @@ impl Header {
 
 #[cfg(test)]
 mod tests {
+    use gtk::subclass::prelude::ObjectSubclassIsExt;
+
     use super::*;
 
     #[test]
@@ -443,6 +445,29 @@ mod tests {
 
     /// Icon-only buttons (previous, next, the main menu, ...) have an
     /// accessible name, not only a tooltip.
+    #[test]
+    fn errors_and_warnings_have_different_icons() {
+        crate::ui::gtk_test::on_gtk_thread(pill_icons_differ);
+    }
+
+    /// The pill's icon tells errors (a circle) from warnings (a
+    /// triangle) without their colour.
+    fn pill_icons_differ() {
+        let header = Header::new("shelf", &gtk::gio::Menu::new());
+        let shape = |tone| {
+            let pill = Pill {
+                tone,
+                label: String::new(),
+                activity: Activity::Idle,
+            };
+            header.show_pill(&pill, 1, "");
+            header.pill_icon.imp().shape.get()
+        };
+        assert_eq!(shape(Tone::Errors), icons::ALERT);
+        assert_eq!(shape(Tone::Warnings), icons::WARNING);
+        assert_ne!(icons::ALERT, icons::WARNING);
+    }
+
     fn title_bar_buttons_are_named() {
         let header = Header::new("shelf", &gtk::gio::Menu::new());
         assert_eq!(
