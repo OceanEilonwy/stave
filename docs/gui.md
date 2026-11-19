@@ -152,13 +152,14 @@ forwards what people do.
 | `stave-ide` | (crate) | The navigation layer the editor uses and `stave-lsp` will (below): `Analysis`, `Buffers`, `Overlay`, `Document`. Depends on `stave-lang`, `stave-modules` and `stave-schema` only. |
 | `stave-app` | `check` | One check as a value that crosses threads (`check::run`, `check::run_with` for open buffers, `Checked`, `Outcome`), and the folder watcher with its debounce (`Watcher`, `RECHECK_DELAY` = 250 ms). |
 | `stave-app` | `link` | The text and the 3D view share one selection: `selection_for` (the part, assembly or hardware a name means), `placed_at` (the line that places a selection), `chip` ("Linked to the text · door_l, line 9"). |
+| `stave-app` | `part_joints` | The Parts panel's joint chips per part and per folded assembly, the selected part's joined-to rows, the headings' notes, which assemblies fold, and what a narrow panel shows (`Density`). |
 | `stave-app` | `inspect` | The parts tree (`parts_tree`, `PartsTree::filtered`) and the inspector's account of a selection (`inspect`), with the declaration it is written in, highlighted (`snippet`, `highlight`). |
 | `stave-app` | `problems` | The marks (`marks(checked)`: a `Mark` — error, warning or involved — per part or piece of hardware, per assembly and per file, for the dots), the problems grouped by part (`tree(checked, Filter)`), every problem in full as data (`reports(checked)`, `report(checked, index)`: a `Report` with severity, code, message, its `ReportPlace`s — `Role::Primary` or `Secondary`, `file:line:column`, the place to open, the line split before / underlined / after, the label's words — its notes and help, from the same diagnostic and the same `stave_lang::place_label` the `stave check` renderer uses, never by parsing its text), and a problem's `details` (eyebrow, plain title, the `stave check` text, `Fix`es, the `MotionCard`). |
 | `stave-app` | `finder` | The finder (`search(Sources, query)`): parts and assemblies, files and names (through `stave-ide`), lines of the project's own text and problems, grouped by `Kind`, each `Hit` with its `Goal` (select it, or open a place in the editor). |
 | `stave-app` | `focus`, `view` | Focus mode (its insert text with `steps`, `link` and `location`; `receives`), problems as rows, posing at a contact. |
 | `stave-app` | `spaces` | Which space an assembly fills, read from the model (`filled_spaces`: the region its component's first `Region` param is bound to), and the boundaries of a split with where a dragged one settles (`split_boundaries`, `SplitBoundary::settle`), for the window's How many, count handle and boundary handles. |
 | `stave-gtk` | `ui/mod.rs` | The window: owns the `Session`, dispatches commands, redraws on events, runs checks on a worker thread, hands the panels to the workbench, lays the problem pins over the 3D view and keeps what only the 3D view needs (camera, renderer, the looks, focus mode's scrub, the "Open it" slider). |
-| `stave-gtk` | `ui/header.rs`, `tree.rs`, `inspector.rs`, `chrome.rs` | The title bar (with the problems chip and the finder's field); the Parts panel's tree; the Details panel's pages (a part, focus mode); the motion bar and the Cut list's placeholder. |
+| `stave-gtk` | `ui/header.rs`, `tree.rs`, `inspector.rs`, `chrome.rs` | The title bar (with the problems chip and the finder's field); the Parts panel (joint chips); the Details panel's pages (a part, focus mode); the motion bar and the Cut list's placeholder. |
 | `stave-gtk` | `ui/workbench.rs`, `panels.rs` | The docked window (libpanel): the dock, its panels (Parts, Files, Details, Edit, Code, Problems), the status bar with a toggle per edge, and the remembered `Layout` (`~/.config/stave/layout`; `--layout FILE` reads another and writes nothing; screenshots use the default); the Problems and Files lists. |
 | `stave-gtk` | `ui/dock.rs`, `finder.rs` | The scene menu's floating box and the moving assemblies' chips on the 3D view; the finder dialog (Ctrl+K). |
 | `stave-gtk` | `ui/view_tools.rs`, `view_layout.rs`, `slider.rs` | The camera column (fit, front, turn, X-ray, Pull apart and Pull apart's pop-out slider), the shared-wood key and focus mode's From above / In 3D switch; where each floating control goes on the 3D view so none covers another (`view_layout::place`, tested without GTK); the design's slider (track, ring handle, a hatched blocked range). |
@@ -390,24 +391,55 @@ menu puts board B back.
   ("Export View as glTF…", `win.export-view`, with
   `stave_app::export_view::save_glb`, the same file `stave export`
   writes) and sets the style (follow system, light, dark).
-- **Model tree** (`TreeSidebar`, top left): the carcass, then assemblies
-  with their motion ("turns 110°", "slides out 500 mm", "mirror of
-  door_l"). Rows that are the same part (one stock and size under one
-  name, mirror pairs) share a row (`rail[bottom, top]`, `foot[4]`,
-  `side_l, side_r`) until one of them is selected, when the group shows
-  its members one by one. Each joint's members follow, one row for the
-  joint grouped over its pairs with how many copies it places
-  (`top_dowels's pin[2] · dowel_pin × 8`; shown one by one, each pair's
-  row counts its own, `dowel_pin × 4`), in the assembly of the part that
-  carries them; selecting one selects that pair's pins (the card's "JOINT
-  MEMBER": which joint placed it, its pair, what it is, how many, and the
-  joint's line in "Defined in the text"), drawn with the parts it sits in
-  see-through. The assembly holding the selection opens. Every
-  row carries its `Mark` (`problems::marks`): a red dot for an error, an
-  amber one for a warning, a red ring for a part a problem only involves;
-  an assembly carries the worst inside it. Under the chosen part, the
-  joints it is in (`focus::targets_of`), each opening focus mode. F9
-  shows the Parts panel.
+- **Parts panel, "joint chips"** (`TreeSidebar`, top left; rows from
+  `inspect::parts_tree`, joints from `part_joints::PartJoints`): a flat
+  list grouped by assembly instead of a deep tree. Each group has a slim
+  uppercase heading (CARCASS, DOOR_L) with a grey note on the right: how
+  it moves after a turn or slide icon ("110° on side_l": the parts or
+  spaces outside the assembly its moving hardware names) or else what it
+  holds ("12 parts · 6 joints"). Rows that are the same part (one stock
+  and size under one name, mirror pairs) share a row (`rail[bottom,
+  top]`, `foot[4]`, `side_l, side_r`) until one of them is selected, when
+  the group shows its members one by one. Each part row (24 px) has its
+  swatch, its name, small **joint-kind chips** (an icon per kind; the
+  count shows when there is more than one; the tooltip names the kind and
+  the count: "dowel: 8 pins", "dado: 2 joints", "euro hinge × 2") and its
+  problem dot. A count is of what the part has: the pieces a joint lays
+  out (side_l's two dowel joints of four pins: `dowel 8`), else the pairs
+  it is in (`dado 2`), else hardware fitted to it; a shared row adds its
+  parts up. The icon comes from what the joint does to the wood (pins,
+  a tenon, a tenon in a groove, a channel, a slot, a hole, dovetails, a
+  shape, a plain butt), never from the kind's name, and from the base for
+  hardware (hinge, slide, pull), so a project's own kinds get one too.
+  A mirror image or one of a set (`door_r`, "mirror of door_l";
+  `drawer[bottom, top]`) folds into one row with its chips (a set's
+  chips count each pair once); activating it opens it, and an assembly's
+  heading (with its small chevron) folds it again. Hardware and a
+  joint's pieces (pins) have no rows of their own. The **selected part
+  expands** into "joined to" rows: an icon, the kind in words ("cope and
+  stick", "groove, no glue", "euro hinge ×2, back face", "turns on") and
+  the partner names as links (monospace light blue on a faint blue tint)
+  that select the partner when clicked and outline it in the 3D view
+  while hovered (`TreeSidebar::connect_hover`, drawn with the selection's
+  outline). A part that hardware elsewhere names lists it too (side_l:
+  "euro hinge ×2 → door_l.hinges[lower, upper]"). The partners' own rows
+  get a 2 px light-blue left edge and a faint blue tint. Activating a
+  joined-to row opens focus mode on that joint (its first pair) or piece
+  of hardware; choosing a piece of hardware or pins elsewhere expands the
+  part it is on and marks its row. Narrow panels show less
+  (`part_joints::Density`, from a width watcher): below 220 px the counts
+  leave the chips (they stay in the tooltips), the heading notes drop
+  (the motion icon stays), folded rows drop their words and joined-to rows
+  keep their icon and partners; below 160 px each row's chips fold into
+  one badge (a joint glyph and how many kinds, the kinds in its tooltip)
+  and names ellipsize. Every row carries its `Mark`
+  (`problems::marks`): a red dot for an error, an amber one for a
+  warning, a red ring for a part a problem only involves; a folded row
+  carries the worst inside it. Arrow keys move through the rows and
+  follow parts like a click. F9 shows the Parts panel. The panel alone at
+  300, 200 and 150 px:
+  `STAVE_PARTS_SHOTS=dir cargo test -p stave-gtk parts_panel_pictures --
+  --ignored` on a display.
 - **Choosing in a list frames it**: a part, a piece of hardware or an
   assembly chosen in Parts, the finder or a lens's "show in 3D" is framed
   at once (no flying), with room round it (`FRAME_ROOM`), and the 3D View
