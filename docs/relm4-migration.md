@@ -469,7 +469,7 @@ them.
 
 ### Leaks found at the end, and fixed
 
-Both were on `main` before the move, not caused by it.
+All three were on `main` before the move, not caused by it.
 
 - The centre's dock frame (and with it the Model and Code panels, about
   260 widgets) outlived every closed window. A `create-frame` handler
@@ -481,9 +481,15 @@ Both were on `main` before the move, not caused by it.
 - A grip's options menu was held by its own switch's and button's
   handlers, which live in its popover: a cycle, so every menu that was
   replaced stayed alive. The handlers hold it weakly now.
-- Still alive after a window closes: the view switcher's two toggle
-  children (an icon and a label each), kept by libadwaita's
-  `adw::Toggle` itself, as a plain `adw::ToggleGroup` shows.
+- The view switcher's two toggle children (an icon and a label each)
+  outlived every closed window. libadwaita's `AdwToggle` takes a
+  reference to its child and never drops it (its finalize leaves `child`
+  alone; 1.10.0 and `main`), as a plain `adw::ToggleGroup` shows
+  (`libadwaita_leaks_a_toggles_child`). The header keeps its toggles and
+  unsets their children when the switcher is destroyed
+  (`free_children_on_destroy`), and `closed_window_is_freed` no longer
+  lets them off. A draft upstream report is in
+  `docs/reviews/upstream-adw-toggle-leak.md`.
 
 ### Still to do
 
