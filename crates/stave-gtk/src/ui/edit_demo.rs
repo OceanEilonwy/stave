@@ -21,8 +21,14 @@ use stave_lang::{Code, Diagnostic, Label, SourceMap};
 use stave_model::ids::AssemblyId;
 use stave_model::nonempty::NonEmpty;
 
-use super::edit_card::{CardModel, EditCard, Words};
-use super::edit_menu::{Checked, EditMenu, MenuItem};
+use relm4::{Component, ComponentController, Controller};
+
+use super::edit_card::{
+    CardModel, CardSlots, CardView, EditCardComponent, EditCardInput, EditCardOutput, Words,
+};
+use super::edit_menu::{
+    Checked, EditMenuComponent, EditMenuInput, EditMenuOutput, MenuEntry, MenuItem,
+};
 
 /// Which state of the editing widgets to show.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -119,13 +125,38 @@ fn greyed(candidate: &Candidate) -> Option<Candidate> {
     Some(candidate)
 }
 
+/// What a showcase shows, kept by the window while it is open: dropping
+/// it shuts the menu or the card down.
+pub(super) enum Shown {
+    /// The menu, over the design.
+    Menu(
+        #[expect(dead_code, reason = "only held: dropping it shuts the menu down")]
+        Controller<EditMenuComponent>,
+    ),
+    /// The card, in the Edit panel.
+    Card(
+        #[expect(dead_code, reason = "only held: dropping it shuts the card down")]
+        Controller<EditCardComponent>,
+    ),
+}
+
+impl Shown {
+    /// `true` when it is a card put in the Edit panel.
+    pub(super) fn in_panel(&self) -> bool {
+        match self {
+            Shown::Menu(_) => false,
+            Shown::Card(_) => true,
+        }
+    }
+}
+
 /// Shows the showcase: the menu over the design near the left door, or
 /// the card in the Edit panel (`panel`, the panel's content, whose own
-/// card it replaces). `true` when a card was put in the panel.
-pub fn show(design: &gtk::Overlay, panel: &gtk::Box, showcase: Showcase) -> bool {
+/// card it replaces). `None` when the fixture didn't build.
+pub(super) fn show(design: &gtk::Overlay, panel: &gtk::Box, showcase: Showcase) -> Option<Shown> {
     let Some(fixture) = clothing_cabinet_fixture() else {
         eprintln!("the editing fixture didn't build");
-        return false;
+        return None;
     };
     let heading = fixture.picked.heading();
     match showcase {
@@ -157,17 +188,25 @@ pub fn show(design: &gtk::Overlay, panel: &gtk::Box, showcase: Showcase) -> bool
                     checked: Checked::Done,
                 };
             }
-            let menu = EditMenu::new();
-            menu.show(heading, &items);
-            menu.connect_chosen(|declaration| eprintln!("edit menu: chose {declaration:?}"));
-            place(&menu.root, gtk::Align::Start, 470);
-            design.add_overlay(&menu.root);
-            false
+            let menu = EditMenuComponent::builder()
+                .launch(())
+                .connect_receiver(|_, output| match output {
+                    EditMenuOutput::Chosen(declaration) => {
+                        eprintln!("edit menu: chose {declaration:?}");
+                    }
+                    EditMenuOutput::Drawn => {}
+                });
+            // Only fails once the menu has shut down.
+            let _ = menu.sender().send(EditMenuInput::Show {
+                heading,
+                items: MenuEntry::list(&items),
+            });
+            place(menu.widget(), gtk::Align::Start, 470);
+            design.add_overlay(menu.widget());
+            Some(Shown::Menu(menu))
         }
         Showcase::Refused | Showcase::Fits | Showcase::Choose | Showcase::Point => {
-            let Some(drawer) = fixture.candidates.first() else {
-                return false;
-            };
+            let drawer = fixture.candidates.first()?;
             let name = added_name(&fixture);
             let fits = Fits::new(Vec::new()).map(Verdict::Fits).ok();
             let mut chosen = drawer.clone();
@@ -185,8 +224,14 @@ pub fn show(design: &gtk::Overlay, panel: &gtk::Box, showcase: Showcase) -> bool
                 Showcase::Point => (door, None, "frame_panel_door".to_owned()),
                 Showcase::Choose | Showcase::Menu | Showcase::Greyed => (&chosen, None, name),
             };
-            let card = EditCard::new();
-            card.show(
+            let card = EditCardComponent::builder()
+                .launch(CardSlots::new())
+                .connect_receiver(|_, output| {
+                    if let EditCardOutput::Action(action) = output {
+                        eprintln!("edit card: {action:?}");
+                    }
+                });
+            let view = CardView::new(
                 &CardModel {
                     applied: &[],
                     blame: None,
@@ -197,12 +242,13 @@ pub fn show(design: &gtk::Overlay, panel: &gtk::Box, showcase: Showcase) -> bool
                 },
                 &FixtureWords,
             );
-            card.connect_action(|action| eprintln!("edit card: {action:?}"));
+            // Only fails once the card has shut down.
+            let _ = card.sender().send(EditCardInput::Show(Box::new(view)));
             while let Some(child) = panel.first_child() {
                 panel.remove(&child);
             }
-            panel.append(&card.root);
-            true
+            panel.append(card.widget());
+            Some(Shown::Card(card))
         }
     }
 }

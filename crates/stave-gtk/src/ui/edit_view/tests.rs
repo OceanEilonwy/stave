@@ -11,7 +11,7 @@ use std::rc::Rc;
 
 use super::*;
 use crate::ui::edit_writer::apply_to_buffer;
-use crate::ui::gtk_test::on_gtk_thread;
+use crate::ui::gtk_test::{on_gtk_thread, settle};
 use crate::ui::new_project::{
     Answers, NewProjectDialog, create_project, importable_libraries, standard_tools,
 };
@@ -53,6 +53,76 @@ fn bay_and_side(folder: &Path) -> (RegionId, stave_model::solved::PartId) {
     let bay = model.regions.iter().find(|r| r.name == "bay").unwrap().id;
     let side = model.parts.iter().find(|p| p.name == "side_l").unwrap().id;
     (bay, side)
+}
+
+/// The menu and the card as the window launches them (`EditView::new`),
+/// with what they tell it recorded instead of sent to a window.
+struct Launched {
+    menu: Controller<EditMenuComponent>,
+    card: Controller<EditCardComponent>,
+    slots: CardSlots,
+    chosen: Rc<RefCell<Vec<Declaration>>>,
+    actions: Rc<RefCell<Vec<CardAction>>>,
+    /// Each [`EditCardOutput::OptionsOpen`], in order.
+    open: Rc<RefCell<Vec<Option<String>>>>,
+}
+
+impl Launched {
+    fn new() -> Launched {
+        let chosen: Rc<RefCell<Vec<Declaration>>> = Rc::default();
+        let menu = {
+            let chosen = chosen.clone();
+            EditMenuComponent::builder().launch(()).connect_receiver(
+                move |_, output| match output {
+                    EditMenuOutput::Chosen(declaration) => chosen.borrow_mut().push(declaration),
+                    EditMenuOutput::Drawn => {}
+                },
+            )
+        };
+        let actions: Rc<RefCell<Vec<CardAction>>> = Rc::default();
+        let open: Rc<RefCell<Vec<Option<String>>>> = Rc::default();
+        let slots = CardSlots::new();
+        let card = {
+            let actions = actions.clone();
+            let open = open.clone();
+            EditCardComponent::builder()
+                .launch(slots.clone())
+                .connect_receiver(move |_, output| match output {
+                    EditCardOutput::Action(action) => actions.borrow_mut().push(action),
+                    EditCardOutput::OptionsOpen(setting) => open.borrow_mut().push(setting),
+                    EditCardOutput::Link(_) | EditCardOutput::Hover(_) => {}
+                })
+        };
+        Launched {
+            menu,
+            card,
+            slots,
+            chosen,
+            actions,
+            open,
+        }
+    }
+
+    /// Draws the edit as the window does, then runs the main loop so the
+    /// menu and the card draw what they were sent.
+    fn draw(&self, session: &Session, checking: bool) -> Drawn {
+        let drawn = draw_edit(&self.menu, &self.card, session, checking);
+        settle();
+        drawn
+    }
+
+    /// What the card reported since this was last asked.
+    fn take_actions(&self) -> Vec<CardAction> {
+        self.actions.borrow_mut().drain(..).collect()
+    }
+
+    fn menu_shows(&self) -> bool {
+        self.menu.widget().is_visible()
+    }
+
+    fn card_shows(&self) -> bool {
+        self.card.widget().is_visible()
+    }
 }
 
 #[test]
@@ -183,40 +253,26 @@ fn menu_and_card_on_the_session() {
     let original = std::fs::read_to_string(folder.join("cabinet.stave")).unwrap();
     let (bay, side_l) = bay_and_side(&folder);
     let mut session = Session::new(folder.clone());
-    let menu = EditMenu::new();
-    let card = EditCard::new();
-    let chosen: Rc<RefCell<Vec<Declaration>>> = Rc::default();
-    {
-        let chosen = chosen.clone();
-        menu.connect_chosen(move |declaration| chosen.borrow_mut().push(declaration));
-    }
-    let actions: Rc<RefCell<Vec<CardAction>>> = Rc::default();
-    {
-        let actions = actions.clone();
-        card.connect_action(move |action| actions.borrow_mut().push(action));
-    }
-    let take = |actions: &Rc<RefCell<Vec<CardAction>>>| -> Vec<CardAction> {
-        actions.borrow_mut().drain(..).collect()
-    };
+    let editing = Launched::new();
 
     // Nothing in progress: neither shows.
-    assert!(!draw_edit(&menu, &card, &session, false));
-    assert!(!menu.root.is_visible() && !card.root.is_visible());
+    assert_eq!(editing.draw(&session, false), Drawn::Nothing);
+    assert!(!editing.menu_shows() && !editing.card_shows());
 
     // A click in the bay: the menu, every entry not checked yet, then
     // checked (a step at a time in the window).
     assert!(
         send(&mut session, EditCommand::Start(Picked::Region(bay))).contains(&EditEvent::Started)
     );
-    assert!(draw_edit(&menu, &card, &session, false));
-    assert!(menu.root.is_visible() && !card.root.is_visible());
+    assert_eq!(editing.draw(&session, false), Drawn::Menu);
+    assert!(editing.menu_shows() && !editing.card_shows());
     let edit = session.edit().unwrap();
     assert_eq!(unchecked(edit), edit.menu().len());
     let stop = AtomicBool::new(false);
     session.check_edit_menu(&stop);
     assert_eq!(unchecked(session.edit().unwrap()), 0);
-    draw_edit(&menu, &card, &session, false);
-    let rows = menu.rows();
+    editing.draw(&session, false);
+    let rows = editing.menu.model().rows().to_vec();
     let door = session
         .edit()
         .unwrap()
@@ -230,13 +286,22 @@ fn menu_and_card_on_the_session() {
         .find(|(declaration, _)| *declaration == door)
         .unwrap();
     button.emit_clicked();
-    let declaration = chosen.borrow_mut().pop().expect("the Door entry reports");
+    assert!(
+        editing.chosen.borrow().is_empty(),
+        "the press is only queued"
+    );
+    settle();
+    let declaration = editing
+        .chosen
+        .borrow_mut()
+        .pop()
+        .expect("the Door entry reports");
     let index = entry_index(session.edit().unwrap(), declaration).unwrap();
     assert!(send(&mut session, EditCommand::Choose(index)).contains(&EditEvent::Chosen));
 
     // The card: the hinge side still to point at, so no verdict yet.
-    draw_edit(&menu, &card, &session, true);
-    assert!(card.root.is_visible() && !menu.root.is_visible());
+    assert!(matches!(editing.draw(&session, true), Drawn::Card(_)));
+    assert!(editing.card_shows() && !editing.menu_shows());
     let chosen_door = session.edit().unwrap().chosen().unwrap();
     assert_eq!(card_verdict(chosen_door.progress(), false), None);
     // The next click on the model binds it.
@@ -247,9 +312,13 @@ fn menu_and_card_on_the_session() {
             face: Face::Right,
         })),
     );
-    draw_edit(&menu, &card, &session, false);
+    let Drawn::Card(offers) = editing.draw(&session, false) else {
+        panic!("the card shows");
+    };
     // The mount is chosen from its list of options, or typed.
-    let lists = card.option_lists();
+    assert!(offers.has_short_list("mount"));
+    assert!(!offers.put_back(), "nothing is blamed yet");
+    let lists = editing.card.model().option_lists();
     assert!(
         lists.iter().any(|(param, _, _)| param.as_str() == "mount"),
         "{:?}",
@@ -258,14 +327,18 @@ fn menu_and_card_on_the_session() {
             .map(|(param, _, _)| param.as_str())
             .collect::<Vec<_>>()
     );
-    let (_, mount) = card
+    let (_, mount) = editing
+        .card
+        .model()
         .entries()
         .into_iter()
         .find(|(param, _)| param.as_str() == "mount")
         .unwrap();
     mount.set_text("overlay(left: 17.8mm, right: 17.8mm)");
     mount.emit_activate();
-    for action in take(&actions) {
+    assert!(editing.actions.borrow().is_empty(), "only queued");
+    settle();
+    for action in editing.take_actions() {
         send(&mut session, command_for(action).unwrap());
     }
     // Refused: the door swings into the wall, with the checker's fix.
@@ -285,18 +358,19 @@ fn menu_and_card_on_the_session() {
             .and_then(|opened| opened.design.as_ref())
             .is_some()
     );
-    draw_edit(&menu, &card, &session, false);
-    let (add, cancel) = card.buttons();
+    editing.draw(&session, false);
+    let (add, cancel) = editing.card.widgets().buttons();
     assert!(!add.is_sensitive());
-    let fixes = card.fix_buttons();
+    let fixes = editing.card.model().fix_buttons();
     let ((problem, fix), button) = fixes.first().expect("a fix is offered");
     assert_eq!((*problem, *fix), (0, 0));
     button.emit_clicked();
-    for action in take(&actions) {
+    settle();
+    for action in editing.take_actions() {
         send(&mut session, command_for(action).unwrap());
     }
     // The fix makes it fit: Add is enabled.
-    draw_edit(&menu, &card, &session, false);
+    editing.draw(&session, false);
     let chosen_door = session.edit().unwrap().chosen().unwrap();
     assert_eq!(
         ghost_verdict(chosen_door.progress()),
@@ -307,12 +381,14 @@ fn menu_and_card_on_the_session() {
 
     // Add writes the door into the text, as one edit.
     add.emit_clicked();
-    let events: Vec<EditEvent> = take(&actions)
+    settle();
+    let events: Vec<EditEvent> = editing
+        .take_actions()
         .into_iter()
         .flat_map(|action| send(&mut session, command_for(action).unwrap()))
         .collect();
     assert!(events.contains(&EditEvent::Committed), "{events:?}");
-    assert!(!draw_edit(&menu, &card, &session, false));
+    assert_eq!(editing.draw(&session, false), Drawn::Nothing);
     let written = std::fs::read_to_string(folder.join("cabinet.stave")).unwrap();
     assert!(written.contains("assembly door : Door {"), "{written}");
     // The window selects the new item by its name.
@@ -354,13 +430,16 @@ fn menu_and_card_on_the_session() {
         .position(|candidate| candidate.entry.label.as_str() == "Door")
         .unwrap();
     send(&mut session, EditCommand::Choose(index));
-    draw_edit(&menu, &card, &session, false);
-    let (_, cancel) = card.buttons();
+    editing.draw(&session, false);
+    let (_, cancel) = editing.card.widgets().buttons();
     cancel.emit_clicked();
-    for action in take(&actions) {
+    settle();
+    let actions = editing.take_actions();
+    assert_eq!(actions, [CardAction::Cancel]);
+    for action in actions {
         assert!(send(&mut session, command_for(action).unwrap()).contains(&EditEvent::Cancelled));
     }
-    assert!(!draw_edit(&menu, &card, &session, false));
+    assert_eq!(editing.draw(&session, false), Drawn::Nothing);
     assert_eq!(
         std::fs::read_to_string(folder.join("cabinet.stave")).unwrap(),
         original
@@ -707,20 +786,18 @@ fn a_settings_short_list_and_its_search_choose_and_a_blamed_setting_can_be_put_b
 /// chigiri typed, blamed, and put back from the card.
 fn short_list_search_and_blame_on_the_card() {
     let mut session = case_session("short");
-    let menu = EditMenu::new();
-    let card = EditCard::new();
-    let actions: Rc<RefCell<Vec<CardAction>>> = Rc::default();
-    {
-        let actions = actions.clone();
-        card.connect_action(move |action| actions.borrow_mut().push(action));
-    }
-    draw_edit(&menu, &card, &session, false);
+    let editing = Launched::new();
+    let Drawn::Card(offers) = editing.draw(&session, false) else {
+        panic!("the card shows");
+    };
     // No caption line under a setting: its type and where its value
     // comes from are its tooltip and its accessible description.
-    let shown = words_in(card.root.upcast_ref());
+    let shown = words_in(editing.card.widget().upcast_ref());
     assert!(!shown.contains("your choice"), "{shown}");
     assert!(!shown.contains("JointKind"), "{shown}");
-    let (_, joinery) = card
+    let (_, joinery) = editing
+        .card
+        .model()
         .entries()
         .into_iter()
         .find(|(param, _)| param.as_str() == "joinery")
@@ -740,8 +817,21 @@ fn short_list_search_and_blame_on_the_card() {
         joinery.tooltip_text()
     );
 
-    assert!(card.open_options("joinery"));
-    let (_, toggle, rows) = card
+    // The window knows the card lists joinery's options because it drew
+    // the card; it opens the list by message, and the card says so.
+    assert!(offers.has_short_list("joinery"));
+    assert!(!offers.has_short_list("no_such_setting"));
+    editing
+        .card
+        .sender()
+        .send(EditCardInput::OpenOptions("joinery".to_owned()))
+        .unwrap();
+    assert!(editing.open.borrow().is_empty(), "only queued");
+    settle();
+    assert_eq!(*editing.open.borrow(), [Some("joinery".to_owned())]);
+    let (_, toggle, rows) = editing
+        .card
+        .model()
         .option_lists()
         .into_iter()
         .find(|(param, _, _)| param.as_str() == "joinery")
@@ -753,9 +843,12 @@ fn short_list_search_and_blame_on_the_card() {
     assert!(words_in(rows[1].1.upcast_ref()).contains("Search all 18…"));
     rows[0].1.emit_clicked();
     rows[1].1.emit_clicked();
+    settle();
+    // Picking the default closed the list, and the card said so.
+    assert_eq!(*editing.open.borrow(), [Some("joinery".to_owned()), None]);
     let joinery_name = parse_name("joinery").unwrap();
     assert_eq!(
-        actions.borrow_mut().drain(..).collect::<Vec<_>>(),
+        editing.take_actions(),
         [
             CardAction::UseDefault {
                 param: joinery_name.clone()
@@ -772,9 +865,15 @@ fn short_list_search_and_blame_on_the_card() {
         Ok(EditCommand::UseDefault(joinery_name.clone()))
     );
 
-    // The search, as the window wires it: the session's setting, searched
-    // by stave_app.
-    let search = OptionSearch::new();
+    // The search, as the window drives it: given the session's setting,
+    // which it searches with stave_app itself.
+    let heard: Rc<RefCell<Vec<OptionSearchOutput>>> = Rc::default();
+    let search = {
+        let heard = heard.clone();
+        OptionSearchComponent::builder()
+            .launch(())
+            .connect_receiver(move |_, output| heard.borrow_mut().push(output))
+    };
     let setting = session
         .edit()
         .unwrap()
@@ -786,33 +885,51 @@ fn short_list_search_and_blame_on_the_card() {
         .find(|setting| setting.name.as_str() == "joinery")
         .unwrap()
         .clone();
-    search.connect_search(move |query| stave_app::choices::search(&setting, query));
-    let chosen: Rc<RefCell<Vec<(String, String)>>> = Rc::default();
-    {
-        let chosen = chosen.clone();
-        search.connect_chosen(move |setting, text| chosen.borrow_mut().push((setting, text)));
-    }
+    let ask = |message: OptionSearchInput| {
+        search.sender().send(message).unwrap();
+        settle();
+    };
+    let type_query = |query: &str| {
+        search.widgets().entry().set_text(query);
+        ask(OptionSearchInput::QueryChanged);
+    };
+    let selected = || search.widgets().selected(&search.model().rows());
     // Over the window's panels, as the window puts it.
     let sheet = gtk::Overlay::builder()
         .child(&gtk::Label::new(Some("the panels")))
         .build();
-    sheet.add_overlay(&search.root);
+    sheet.add_overlay(search.widget());
     let window = shown_in_window(sheet.upcast_ref(), 900, 700);
-    assert!(!search.root.is_visible(), "closed until asked for");
-    search.present("joinery", "");
-    assert!(search.root.is_visible());
-    let all = search.rows();
+    assert!(!search.widget().is_visible(), "closed until asked for");
+    search
+        .sender()
+        .send(OptionSearchInput::Present {
+            name: "joinery".to_owned(),
+            setting: Some(Box::new(setting.clone())),
+            query: String::new(),
+        })
+        .unwrap();
+    assert!(!search.widget().is_visible(), "only queued");
+    settle();
+    assert!(search.widget().is_visible());
+    let all = search.model().rows();
     assert_eq!(all.len(), 18, "every option, with nothing typed");
     // The arrow keys move through them.
-    let first = search.selected().unwrap();
-    search.press_arrow(true);
-    assert_ne!(search.selected().unwrap(), first);
-    search.press_arrow(false);
-    assert_eq!(search.selected().unwrap(), first);
+    let first = selected().unwrap();
+    ask(OptionSearchInput::Step(1));
+    assert_ne!(selected().unwrap(), first);
+    ask(OptionSearchInput::Step(-1));
+    assert_eq!(selected().unwrap(), first);
+    // A copy of another setting doesn't change what it lists.
+    let mut other = setting.clone();
+    other.name = parse_name("mount").unwrap();
+    other.options.clear();
+    ask(OptionSearchInput::Update(Box::new(other)));
+    assert_eq!(search.model().rows().len(), 18);
 
     // "key": chigiri, by its description, refused; Enter chooses nothing.
-    search.type_query("key");
-    let found = search.rows();
+    type_query("key");
+    let found = search.model().rows();
     assert_eq!(
         found
             .iter()
@@ -825,22 +942,58 @@ fn short_list_search_and_blame_on_the_card() {
     let words = words_in(row.upcast_ref());
     assert!(words.contains("butterfly key"), "{words}");
     assert!(words.contains("Can't be used here"), "{words}");
-    search.choose_selected();
-    assert!(chosen.borrow().is_empty());
-    assert_eq!(search.setting().as_deref(), Some("joinery"), "still open");
+    ask(OptionSearchInput::ChooseSelected);
+    assert!(heard.borrow().is_empty());
+    assert_eq!(search.model().setting(), Some("joinery"), "still open");
 
-    // "dow": dowel by its name; it fits, and Enter chooses it.
-    search.type_query("dow");
-    assert_eq!(search.selected().as_deref(), Some("dowel"));
-    let words = words_in(search.rows()[0].0.upcast_ref());
+    // "dow": dowel by its name; it fits, and Enter chooses it: the search
+    // says it closed, then what was chosen.
+    type_query("dow");
+    assert_eq!(selected().as_deref(), Some("dowel"));
+    let words = words_in(search.model().rows()[0].0.upcast_ref());
     assert!(words.contains("Fits"), "{words}");
-    search.choose_selected();
+    ask(OptionSearchInput::ChooseSelected);
     assert_eq!(
-        chosen.borrow_mut().drain(..).collect::<Vec<_>>(),
-        [("joinery".to_owned(), "dowel".to_owned())]
+        heard.borrow_mut().drain(..).collect::<Vec<_>>(),
+        [
+            OptionSearchOutput::Closed,
+            OptionSearchOutput::Chosen {
+                setting: "joinery".to_owned(),
+                value: "dowel".to_owned()
+            }
+        ]
     );
-    assert!(!search.root.is_visible(), "choosing closes it");
-    assert_eq!(search.setting(), None);
+    assert!(!search.widget().is_visible(), "choosing closes it");
+    assert_eq!(search.model().setting(), None);
+
+    // Escape in the field closes it, choosing nothing.
+    ask(OptionSearchInput::Present {
+        name: "joinery".to_owned(),
+        setting: Some(Box::new(setting)),
+        query: "dow".to_owned(),
+    });
+    let entry = search.widgets().entry();
+    let controllers = entry.observe_controllers();
+    let keys = (0..controllers.n_items())
+        .filter_map(|index| controllers.item(index))
+        .filter_map(|item| item.downcast::<gtk::EventControllerKey>().ok())
+        .find(|keys| keys.propagation_phase() == gtk::PropagationPhase::Capture)
+        .expect("the field's own keys");
+    assert!(keys.emit_by_name::<bool>(
+        "key-pressed",
+        &[
+            &glib::translate::IntoGlib::into_glib(gtk::gdk::Key::Escape),
+            &0u32,
+            &gtk::gdk::ModifierType::empty(),
+        ],
+    ));
+    assert!(search.widget().is_visible(), "only queued");
+    settle();
+    assert!(!search.widget().is_visible());
+    assert_eq!(
+        heard.borrow_mut().drain(..).collect::<Vec<_>>(),
+        [OptionSearchOutput::Closed]
+    );
     window.destroy();
 
     // chigiri typed: the card puts the blame first, with the way back.
@@ -851,8 +1004,13 @@ fn short_list_search_and_blame_on_the_card() {
             value: parse_value("chigiri").unwrap(),
         },
     );
-    draw_edit(&menu, &card, &session, false);
-    let put_back = card
+    let Drawn::Card(offers) = editing.draw(&session, false) else {
+        panic!("the card shows");
+    };
+    assert!(offers.put_back(), "the window knows the card offers it");
+    let put_back = editing
+        .card
+        .model()
         .put_back_button()
         .expect("the card offers the way back");
     assert_eq!(
@@ -860,7 +1018,8 @@ fn short_list_search_and_blame_on_the_card() {
         Some("Put joinery back to dowel(count: 4), the default".to_owned())
     );
     put_back.emit_clicked();
-    for action in actions.borrow_mut().drain(..).collect::<Vec<_>>() {
+    settle();
+    for action in editing.take_actions() {
         send(&mut session, command_for(action).unwrap());
     }
     let chosen = session.edit().unwrap().chosen().unwrap();
@@ -868,8 +1027,11 @@ fn short_list_search_and_blame_on_the_card() {
         chosen.progress(),
         Progress::Tried(Verdict::Fits(_))
     ));
-    draw_edit(&menu, &card, &session, false);
-    assert!(card.put_back_button().is_none());
+    let Drawn::Card(offers) = editing.draw(&session, false) else {
+        panic!("the card shows");
+    };
+    assert!(!offers.put_back());
+    assert!(editing.card.model().put_back_button().is_none());
 }
 
 /// The room the Edit panel has in the docked layout's default arrangement
@@ -884,15 +1046,18 @@ fn the_case_card_shows_whole_in_the_edit_panel_at_the_default_size() {
 
 fn case_card_fits() {
     let session = case_session("fits");
-    let menu = EditMenu::new();
-    let card = EditCard::new();
-    let panel = crate::ui::edit_panel::EditPanel::new(&[card.root.upcast_ref()]);
-    card.root.set_visible(false);
+    let editing = Launched::new();
+    let card = editing.card.widget().clone();
+    let panel = crate::ui::edit_panel::EditPanel::new(&[card.upcast_ref()]);
+    card.set_visible(false);
     assert!(!panel.update());
     assert!(panel.is_empty(), "nothing in progress: how to start");
     // The repeat controls as the window puts them: folded.
     let fold = item_tools::RepeatFoldRow::new(1);
-    fold.place_apart(&card.repeat_button_slot, &card.repeat_slot);
+    fold.place_apart(
+        &editing.slots.repeat_button_slot,
+        &editing.slots.repeat_slot,
+    );
     {
         let chosen = session.edit().unwrap().chosen().unwrap();
         fold.show(stave_app::item_offer::candidate_repeat_fold(
@@ -901,22 +1066,23 @@ fn case_card_fits() {
             fold.asked(),
         ));
     }
-    draw_edit(&menu, &card, &session, false);
+    editing.draw(&session, false);
     assert!(panel.update());
     assert!(!panel.is_empty());
     let window = shown_in_window(panel.root.upcast_ref(), PANEL_ROOM.0, PANEL_ROOM.1);
     // Nothing asks for more width than the panel has.
-    let (least, _, _, _) = card.root.measure(gtk::Orientation::Horizontal, -1);
+    let (least, _, _, _) = card.measure(gtk::Orientation::Horizontal, -1);
     assert!(
         least <= PANEL_ROOM.0,
         "the card needs {least} pixels across"
     );
     // Its body needs no scrolling: everything shows at once, Add and
     // Cancel below it.
-    let adjustment = card.scrolled().vadjustment();
+    let scrolled = editing.card.widgets().scrolled();
+    let adjustment = scrolled.vadjustment();
     // What it needs: all of its body, and its foot (Repeat…, Cancel, Add).
-    let foot = card.root.height() - card.scrolled().height();
-    let body = card.scrolled().child().map_or(0, |body| {
+    let foot = card.height() - scrolled.height();
+    let body = scrolled.child().map_or(0, |body| {
         body.measure(gtk::Orientation::Vertical, PANEL_ROOM.0).1
     });
     eprintln!(
@@ -926,20 +1092,20 @@ fn case_card_fits() {
         PANEL_ROOM.0,
     );
     assert!(body + foot <= PANEL_ROOM.1);
-    assert_eq!(card.root.height(), PANEL_ROOM.1);
+    assert_eq!(card.height(), PANEL_ROOM.1);
     assert!(
         adjustment.upper() <= adjustment.page_size() + 0.5,
         "the body scrolls: {} of {}",
         adjustment.upper(),
         adjustment.page_size()
     );
-    let (add, cancel) = card.buttons();
+    let (add, cancel) = editing.card.widgets().buttons();
     assert!(add.is_mapped() && cancel.is_mapped());
     // "Repeat…" pressed: the count and the direction open above the
     // buttons, still within the panel's width.
     assert!(fold.press());
     fold.show(stave_app::item_offer::RepeatFold::Open);
-    let (least, _, _, _) = card.root.measure(gtk::Orientation::Horizontal, -1);
+    let (least, _, _, _) = card.measure(gtk::Orientation::Horizontal, -1);
     assert!(
         least <= PANEL_ROOM.0,
         "open, the card needs {least} pixels across"

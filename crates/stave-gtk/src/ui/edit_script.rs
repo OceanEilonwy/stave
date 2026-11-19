@@ -26,8 +26,6 @@
 //! `#` starts a comment. A step that can't be done is said on standard
 //! error with its line, and the steps after it are skipped.
 
-use gtk::prelude::ButtonExt;
-
 use stave_app::edit::{FacingPair, PartFace, Picked};
 use stave_app::editing::{EditCommand, entry_matches, parse_name, parse_value};
 use stave_lang::placement::Face;
@@ -35,6 +33,8 @@ use stave_model::solved::{PartId, RegionId};
 use stave_scene::{Aabb, Item};
 
 use super::Window;
+use super::edit_card::CardAction;
+use super::update::editing::EditingInput;
 
 impl Window {
     /// Runs the edit script the command line gave, once. `true` when it
@@ -158,12 +158,11 @@ impl Window {
                 self.send_edit(EditCommand::UseDefault(name));
             }
             "put" if rest == "back" => {
-                let button = self
-                    .editing
-                    .card
-                    .put_back_button()
-                    .ok_or("the card offers nothing to put back")?;
-                button.emit_clicked();
+                if !self.card_offers_put_back() {
+                    return Err("the card offers nothing to put back".to_owned());
+                }
+                // As the card's button does: its action, queued.
+                self.send(EditingInput::CardAction(CardAction::PutBack));
             }
             "name" => {
                 let name = parse_name(rest).map_err(|error| error.0)?;
@@ -186,11 +185,9 @@ impl Window {
             "cancel" => self.send_edit(EditCommand::Cancel),
             // An Add with the file open in the editor leaves the change
             // unsaved in its buffer, as typing would; Ctrl+S writes it.
-            "save" => {
-                if !self.widgets.files.save_all() {
-                    return Err("the open files couldn't be saved".to_owned());
-                }
-            }
+            // Saving is queued for the Code panel, after the steps so far;
+            // a failure says so in its dialog.
+            "save" => self.widgets.files.save_all(None),
             "turn" => {
                 // The orbit drag between two clicks, so a face out of
                 // sight can be brought round and pointed at.

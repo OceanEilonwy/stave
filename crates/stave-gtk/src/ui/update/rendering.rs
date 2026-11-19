@@ -310,7 +310,7 @@ pub(in crate::ui) fn wire(window: &mut Window) {
     keys.set_name(Some(DELETE_KEYS));
     let sender = input.clone();
     let removable = Rc::clone(&window.state.removable);
-    let files = Rc::downgrade(&widgets.files);
+    let analysis = widgets.files.latest_analysis();
     keys.connect_key_pressed(move |controller, key, _, modifiers| {
         let Some(root) = controller
             .widget()
@@ -327,9 +327,8 @@ pub(in crate::ui) fn wire(window: &mut Window) {
         match key {
             // Delete removes the selection, saying first what goes.
             gdk::Key::Delete | gdk::Key::KP_Delete => {
-                let blocked = files
-                    .upgrade()
-                    .and_then(|files| files.analysis())
+                let blocked = analysis
+                    .get()
                     .is_some_and(|analysis| edit_view::block_line(&analysis).is_some());
                 if removable.get() || blocked {
                     sender.emit(EditingInput::RemoveSelected.into());

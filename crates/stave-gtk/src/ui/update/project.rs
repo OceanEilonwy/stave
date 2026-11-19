@@ -2,7 +2,7 @@
 //! command line's wishes, closing, and the window's actions for them.
 
 use super::{Unprinted, add_action};
-use crate::ui::files::CursorName;
+use crate::ui::files::{CursorName, FilesOutput};
 // The window's own items and imports, as the handlers had them in mod.rs.
 use crate::ui::*;
 use stave_ide::{Analysis, SymbolId};
@@ -86,6 +86,33 @@ pub(in crate::ui) enum ProjectInput {
     /// The unsaved changes are dealt with: let go of what is left and
     /// close.
     CloseNow,
+    /// The Code panel answered how many files have unsaved changes:
+    /// `then` goes on at once when none has, else people are asked.
+    UnsavedCounted {
+        /// How many.
+        count: usize,
+        /// What waits on the answer.
+        then: Box<WindowInput>,
+    },
+    /// The Code panel answered whether every file was saved: `then` goes
+    /// on only when all were.
+    FilesSaved {
+        /// Every file was saved.
+        ok: bool,
+        /// What waited on the saving.
+        then: Option<Box<WindowInput>>,
+    },
+    /// The Code panel's open documents and their buffers.
+    FilesOpened(Vec<(stave_ide::Document, gtk::TextBuffer)>),
+    /// The files with unsaved changes, for the Details panel's ●.
+    Unsaved(std::collections::BTreeSet<PathBuf>),
+    /// The Code panel's open files as tabs, for the strip beside the
+    /// Model.
+    FileTabs(Vec<tab_strip::PageTab>),
+    /// People chose the open file at this place in the tab strip.
+    ShowFileTab(usize),
+    /// Ctrl+F with the keyboard outside the text: the finder.
+    SearchElsewhere,
     /// People answered the question about unsaved changes.
     UnsavedAnswered {
         /// What they chose.
@@ -214,44 +241,44 @@ pub(in crate::ui) fn wire(window: &Window) {
     }));
 
     // The editor tells the window where the cursor is, where to go, when
-    // typing has paused and when a tab on the rail was chosen.
-    let files = &widgets.files;
+    // typing has paused and when a tab was chosen, and answers what the
+    // window asked; it publishes its buffers, its unsaved files and its
+    // tabs.
     let sender = input.clone();
-    files.connect_link(move |found| {
-        sender.emit(ProjectInput::TextLinked(Unprinted(found)).into());
-    });
-    let sender = input.clone();
-    files.connect_go(move |from, to| sender.emit(ProjectInput::Go { from, to }.into()));
-    let sender = input.clone();
-    files.connect_check(move || sender.emit(ProjectInput::Dispatch(Command::Check).into()));
-    let sender = input.clone();
-    files.connect_show_in_3d(move |analysis, symbol| {
+    widgets.files.connect_outputs(move |output| {
         sender.emit(
-            ProjectInput::ShowIn3d {
-                analysis: Unprinted(analysis),
-                symbol,
+            match output {
+                FilesOutput::Link(found) => ProjectInput::TextLinked(Unprinted(found)),
+                FilesOutput::Go { from, to } => ProjectInput::Go { from, to },
+                FilesOutput::Check => ProjectInput::Dispatch(Command::Check),
+                FilesOutput::ShowIn3d { analysis, symbol } => ProjectInput::ShowIn3d {
+                    analysis: Unprinted(analysis),
+                    symbol,
+                },
+                FilesOutput::Open => ProjectInput::Dispatch(Command::ShowEditor(Editor::Open)),
+                FilesOutput::Notice(text) => ProjectInput::Notice { text, seconds: 4 },
+                FilesOutput::Saved { ok, then } => ProjectInput::FilesSaved { ok, then },
+                FilesOutput::UnsavedCounted { count, then } => {
+                    ProjectInput::UnsavedCounted { count, then }
+                }
+                FilesOutput::Documents(documents) => ProjectInput::FilesOpened(documents),
+                // Kept by the page itself as it arrives.
+                FilesOutput::Analysed(_) => return,
+                FilesOutput::Unsaved(unsaved) => ProjectInput::Unsaved(unsaved),
+                FilesOutput::Tabs(tabs) => ProjectInput::FileTabs(tabs),
+                FilesOutput::NotInText => ProjectInput::SearchElsewhere,
             }
             .into(),
         );
     });
-    let sender = input.clone();
-    files.connect_open(move || {
-        sender.emit(ProjectInput::Dispatch(Command::ShowEditor(Editor::Open)).into());
-    });
     // The open files as tabs beside the Model, wherever the Code panel is
-    // docked.
+    // docked: choosing one is a message.
     if let Some(code) = widgets.workbench.panel(workbench::PanelId::Code) {
-        let page = Rc::downgrade(files);
-        tab_strip::set_page_tabs(code, move || {
-            page.upgrade()
-                .map(|page| page.page_tabs())
-                .unwrap_or_default()
+        let sender = input.clone();
+        tab_strip::set_page_tabs(code, move |index| {
+            sender.emit(ProjectInput::ShowFileTab(index).into());
         });
     }
-    let sender = input.clone();
-    files.connect_notice(move |text| {
-        sender.emit(ProjectInput::Notice { text, seconds: 4 }.into());
-    });
     // The workbench says when the layout can't be saved, and where the
     // view's tool groups went (the floating controls follow).
     let sender = input.clone();
@@ -265,16 +292,6 @@ pub(in crate::ui) fn wire(window: &Window) {
             }
         });
     });
-    // The Details panel asks whether a file has unsaved changes. A query
-    // the inspector still asks synchronously: it holds the files page
-    // weakly, so it never keeps it alive.
-    let files = Rc::downgrade(&widgets.files);
-    widgets.inspector.connect_unsaved(move |path| {
-        files
-            .upgrade()
-            .is_some_and(|files| files.is_unsaved(Path::new(path)))
-    });
-
     // Closing the window is a message: the window remembers its size and
     // the layout and asks about unsaved changes in its own update, never
     // inside the signal. Once the window has shut down nobody can ask, so
@@ -323,12 +340,11 @@ impl Window {
                     self.dispatch(Command::ShowEditor(Editor::Open));
                 }
             }
-            ProjectInput::Search => {
-                // In the text, its own search bar; anywhere else, the
-                // finder.
-                if !self.widgets.files.focus_search() {
-                    self.widgets.finder.present(&self.widgets.window, "");
-                }
+            // In the text, its own search bar; anywhere else, the finder
+            // (the Code panel says which).
+            ProjectInput::Search => self.widgets.files.search(),
+            ProjectInput::SearchElsewhere => {
+                self.widgets.finder.present(&self.widgets.window, "");
             }
             ProjectInput::ShowPanel(workbench::PanelId::Code) => {
                 self.update_project(ProjectInput::ShowEditor);
@@ -379,17 +395,44 @@ impl Window {
             ProjectInput::CloseAsked => self.close_asked(),
             ProjectInput::CloseNow => {
                 self.widgets.files.forget_unsaved();
-                self.close_asked();
-            }
-            ProjectInput::UnsavedAnswered { answer, then } => {
-                let go_on = match answer {
-                    UnsavedAnswer::Save => self.widgets.files.save_all(),
-                    UnsavedAnswer::Discard => true,
-                    UnsavedAnswer::Stay => false,
-                };
-                if go_on {
-                    self.send(*then);
+                // Not `close`: that asks again (`close-request`), and the
+                // asking is done.
+                if self.widgets.window.is_realized() {
+                    self.widgets.window.destroy();
                 }
+            }
+            ProjectInput::UnsavedCounted { count, then } => {
+                if count == 0 {
+                    self.send(*then);
+                } else {
+                    self.ask_unsaved_question(count, then);
+                }
+            }
+            ProjectInput::UnsavedAnswered { answer, then } => match answer {
+                // Saving answers by message; `then` goes on if it worked.
+                UnsavedAnswer::Save => self.widgets.files.save_all(Some(then)),
+                UnsavedAnswer::Discard => self.send(*then),
+                UnsavedAnswer::Stay => self.state.closing = false,
+            },
+            ProjectInput::FilesSaved { ok, then } => {
+                if ok {
+                    if let Some(then) = then {
+                        self.send(*then);
+                    }
+                } else {
+                    // A dialog says what failed; nothing waiting goes on.
+                    self.state.closing = false;
+                }
+            }
+            ProjectInput::FilesOpened(documents) => self.widgets.files.set_documents(documents),
+            ProjectInput::Unsaved(unsaved) => self.widgets.inspector.show_unsaved(unsaved),
+            ProjectInput::FileTabs(tabs) => {
+                if let Some(code) = self.widgets.workbench.panel(workbench::PanelId::Code) {
+                    tab_strip::show_page_tabs(code, tabs);
+                }
+            }
+            ProjectInput::ShowFileTab(index) => {
+                self.widgets.files.send(files::FilesInput::ShowTab(index));
             }
             ProjectInput::CaptureTick(capture) => self.capture_tick(capture),
         }
@@ -397,13 +440,23 @@ impl Window {
 
     /// Closing was asked for: tells the application the window's size
     /// (holding it until that is saved), remembers the layout, and closes
-    /// the window, or first asks about unsaved changes. A window already
-    /// closed (asked twice before the first was handled) is left alone.
+    /// the window once the unsaved changes are dealt with (asking about
+    /// them if there are any; [`ProjectInput::CloseNow`]). A window
+    /// already closed, or already closing (asked twice before the first
+    /// was answered), is left alone.
     fn close_asked(&mut self) {
-        let root = &self.widgets.window;
-        if !root.is_realized() {
+        if !self.widgets.window.is_realized() || self.state.closing {
             return;
         }
+        self.state.closing = true;
+        self.tell_closing();
+        self.ask_about_unsaved(ProjectInput::CloseNow);
+    }
+
+    /// Tells the application the window is closing (its size, holding it
+    /// until that is saved) and remembers the layout.
+    fn tell_closing(&mut self) {
+        let root = &self.widgets.window;
         if let Some(application) = root.application() {
             // Nobody listening is not a mistake (a test's window).
             let _ = self.sender.output(WindowOutput::Closing {
@@ -413,13 +466,6 @@ impl Window {
             });
         }
         self.widgets.workbench.save();
-        if self.widgets.files.has_unsaved() {
-            self.ask_about_unsaved(ProjectInput::CloseNow);
-            return;
-        }
-        // Not `close`: that asks again (`close-request`), and the asking
-        // is done.
-        self.widgets.window.destroy();
     }
 
     /// Runs a check on a worker thread; its outcome comes back as
@@ -697,7 +743,7 @@ impl Window {
                 .and_then(|(shown, selection)| link::placed_at(shown, selection));
             (session.editor() == Editor::Open, selection, placed)
         };
-        let files = &self.widgets.files;
+        let files = &mut self.widgets.files;
         match (&selection, placed) {
             (Some(Selection::Location(location)), _) if open => files.show_location(location),
             // A part, assembly or piece of hardware chosen anywhere opens
@@ -808,9 +854,12 @@ impl Window {
         self.widgets.finder.dialog.force_close();
         // Stops the application; its `close` only queues a request
         // (`close-request` sends a message), so the window closes here,
-        // before the main loop stops.
+        // before the main loop stops, without asking about anything.
         close_for_good(&self.widgets.window);
-        self.close_asked();
+        if self.widgets.window.is_realized() {
+            self.tell_closing();
+            self.widgets.window.destroy();
+        }
     }
 
     pub(in crate::ui) fn check_status_changed(&self) {
@@ -881,14 +930,16 @@ impl Window {
 
     /// Asks what to do with unsaved changes (save, throw away or stay),
     /// then sends `then`, unless people chose to stay or saving failed.
-    /// The answer comes back as [`ProjectInput::UnsavedAnswered`].
+    /// The Code panel counts them by message, after whatever it was told
+    /// before ([`ProjectInput::UnsavedCounted`]); people's answer comes
+    /// back as [`ProjectInput::UnsavedAnswered`], and the saving's as
+    /// [`ProjectInput::FilesSaved`].
     pub(in crate::ui) fn ask_about_unsaved(&mut self, then: impl Into<WindowInput>) {
-        let then = then.into();
-        let count = self.widgets.files.unsaved_count();
-        if count == 0 {
-            self.send(then);
-            return;
-        }
+        self.widgets.files.count_unsaved(Box::new(then.into()));
+    }
+
+    /// Asks people about `count` files with unsaved changes.
+    fn ask_unsaved_question(&mut self, count: usize, then: Box<WindowInput>) {
         let dialog = adw::AlertDialog::builder()
             .heading(tr("Save Changes?"))
             .body(fill_in(
@@ -917,13 +968,7 @@ impl Window {
             let Some(then) = then.take() else { return };
             let answer = UnsavedAnswer::from_response(response);
             // The window may have gone; then nobody needs to know.
-            let _ = input.send(
-                ProjectInput::UnsavedAnswered {
-                    answer,
-                    then: Box::new(then),
-                }
-                .into(),
-            );
+            let _ = input.send(ProjectInput::UnsavedAnswered { answer, then }.into());
         });
         dialog.present(Some(&self.widgets.window));
     }
@@ -1021,16 +1066,39 @@ mod tests {
 
     impl Opened {
         fn open(id: &str) -> Opened {
-            let application = adw::Application::new(Some(id), gio::ApplicationFlags::NON_UNIQUE);
-            if let Err(error) = application.register(gio::Cancellable::NONE) {
-                panic!("the test's application registers: {error}");
-            }
             let folder = Path::new(concat!(
                 env!("CARGO_MANIFEST_DIR"),
                 "/../../examples/wall_shelf"
             ))
             .canonicalize()
             .unwrap();
+            Opened::open_in(id, folder)
+        }
+
+        /// A window on a copy of the wall shelf of its own, which may be
+        /// saved to.
+        fn open_copy(id: &str) -> Opened {
+            let from = Path::new(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../examples/wall_shelf"
+            ));
+            let to = std::env::temp_dir().join(format!("stave-project-test-{id}"));
+            let _ = std::fs::remove_dir_all(&to);
+            std::fs::create_dir_all(&to).unwrap();
+            for entry in std::fs::read_dir(from).unwrap() {
+                let entry = entry.unwrap();
+                if entry.file_type().unwrap().is_file() {
+                    std::fs::copy(entry.path(), to.join(entry.file_name())).unwrap();
+                }
+            }
+            Opened::open_in(id, to.canonicalize().unwrap())
+        }
+
+        fn open_in(id: &str, folder: PathBuf) -> Opened {
+            let application = adw::Application::new(Some(id), gio::ApplicationFlags::NON_UNIQUE);
+            if let Err(error) = application.register(gio::Cancellable::NONE) {
+                panic!("the test's application registers: {error}");
+            }
             // A layout of its own, which is never written.
             let options = Options {
                 layout: Some(std::env::temp_dir().join("stave-project-test-no-layout")),
@@ -1072,19 +1140,37 @@ mod tests {
             }
         }
 
-        /// Changes the shelf's file in the editor without saving it.
+        /// Changes the shelf's file in the editor without saving it: the
+        /// file is opened by message, and its buffer, which the Code panel
+        /// published to the window, is typed into.
         fn change_a_file(&self) {
             let path = self.folder.join("shelf.stave");
+            self.controller
+                .model()
+                .widgets
+                .files
+                .open_document(&stave_ide::Document::File(path.clone()));
+            settle();
             let buffer = self
                 .controller
                 .model()
                 .widgets
                 .files
-                .buffer_for(&path, true)
+                .open_buffer(&path)
                 .unwrap();
             buffer.insert(&mut buffer.end_iter(), "\n");
             settle();
-            assert!(self.controller.model().widgets.files.has_unsaved());
+            assert_eq!(self.unsaved(), 1);
+        }
+
+        /// How many files have unsaved changes, as the Code panel has it.
+        fn unsaved(&self) -> usize {
+            self.controller
+                .model()
+                .widgets
+                .files
+                .model()
+                .unsaved_count()
         }
 
         /// Answers the question about unsaved changes showing over the
@@ -1147,15 +1233,87 @@ mod tests {
         assert!(!opened.removed.get(), "the window waits for an answer");
         opened.answer("cancel");
         assert!(!opened.removed.get(), "Cancel keeps the window open");
-        assert!(opened.controller.model().widgets.files.has_unsaved());
+        assert_eq!(opened.unsaved(), 1, "Cancel keeps the changes");
         opened.root.close();
         settle();
         opened.answer("discard");
         assert!(opened.removed.get(), "Don't Save closes the window");
-        assert!(!opened.controller.model().widgets.files.has_unsaved());
-        // Each time closing was asked, and once more as it went on.
-        assert_eq!(*opened.said.borrow(), ["closing", "closing", "closing"]);
+        assert_eq!(opened.unsaved(), 0, "the changes are let go of");
+        // Each time closing was asked (closing after the answer no longer
+        // asks a second time: the count already came back by message).
+        assert_eq!(*opened.said.borrow(), ["closing", "closing"]);
         opened.finish();
+    }
+
+    #[test]
+    fn closing_with_unsaved_changes_and_saving_closes_once_saved() {
+        on_gtk_thread(save_then_close);
+    }
+
+    /// Close with a file changed, answer Save: the Code panel saves every
+    /// file by message and answers; only then does the window close, with
+    /// the change on disk.
+    fn save_then_close() {
+        let opened = Opened::open_copy("org.stave.ProjectTest.SaveThenClose");
+        let path = opened.folder.join("shelf.stave");
+        let before = std::fs::read_to_string(&path).unwrap();
+        opened.change_a_file();
+        opened.root.close();
+        settle();
+        assert!(!opened.removed.get(), "the window waits for an answer");
+        assert_eq!(*opened.said.borrow(), ["closing"]);
+        opened.answer("save");
+        assert!(opened.removed.get(), "saved, so the window closed");
+        assert_eq!(opened.unsaved(), 0);
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            format!("{before}\n"),
+            "the change was saved first"
+        );
+        let folder = opened.folder.clone();
+        opened.finish();
+        let _ = std::fs::remove_dir_all(folder);
+    }
+
+    #[test]
+    fn a_failed_save_keeps_the_window_open() {
+        on_gtk_thread(failed_save_keeps_window);
+    }
+
+    /// Close with a file changed whose folder has become read-only, and
+    /// answer Save: saving fails (a dialog says why), so the window stays
+    /// open with the change, and closing can be asked again.
+    fn failed_save_keeps_window() {
+        use std::os::unix::fs::PermissionsExt;
+        let opened = Opened::open_copy("org.stave.ProjectTest.FailedSave");
+        opened.change_a_file();
+        let folder = opened.folder.clone();
+        std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o555)).unwrap();
+        // Root can write anyway: then there is nothing to test.
+        let writable = std::fs::write(folder.join(".probe"), "").is_ok();
+        if !writable {
+            opened.root.close();
+            settle();
+            opened.answer("save");
+            assert!(!opened.removed.get(), "saving failed: the window stays");
+            assert_eq!(opened.unsaved(), 1, "with the change");
+            // The failure's own dialog, then closing is asked again.
+            if let Some(dialog) = opened.root.visible_dialog() {
+                dialog.force_close();
+            }
+            opened.root.close();
+            settle();
+            assert_eq!(
+                *opened.said.borrow(),
+                ["closing", "closing"],
+                "closing can be asked again"
+            );
+            opened.answer("discard");
+            assert!(opened.removed.get());
+        }
+        std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o755)).unwrap();
+        opened.finish();
+        let _ = std::fs::remove_dir_all(folder);
     }
 
     #[test]
