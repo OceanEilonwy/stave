@@ -437,6 +437,10 @@ pub(crate) fn build(solver: &mut Solver<'_>) -> Option<SolvedDesign> {
         if let Some(geom) = solver.settled(result, file, span) {
             let checked = solver.check_max_length(part, &geom);
             let _ = solver.settled(checked, file, span);
+            let checked = solver.check_cut_thickness(part, &geom);
+            let _ = solver.settled(checked, file, span);
+            let checked = solver.check_turned_blank(part);
+            let _ = solver.settled(checked, file, span);
             geoms.set(part, geom);
         }
     }

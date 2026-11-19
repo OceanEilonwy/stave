@@ -1095,36 +1095,7 @@ impl Solver<'_> {
                     return Ok(largest);
                 }
                 match &body.thickness {
-                    Some(expr) => {
-                        let thickness = self.eval_length(expr, &env)?;
-                        let stock = self.part_stock(part)?;
-                        if let Some(stock_thickness) =
-                            self.stock_length(stock, StockField::Thickness)?
-                            && thickness > stock_thickness
-                        {
-                            let name = self.part_name(part);
-                            let stock_name = self
-                                .model
-                                .defs
-                                .stock(stock)
-                                .map(|s| s.decl.name.clone())
-                                .unwrap_or_default();
-                            return Err(self.error(
-                                Code::TypeMismatch,
-                                format!(
-                                    "{name}: its thickness works out as {}, which is more than its stock's {}",
-                                    stave_model::value::format_length(thickness),
-                                    stave_model::value::format_length(stock_thickness)
-                                ),
-                                env.file,
-                                expr.span,
-                                format!(
-                                    "a part can be planed thinner than its stock '{stock_name}', never thicker; choose thicker stock"
-                                ),
-                            ).into());
-                        }
-                        Ok(thickness)
-                    }
+                    Some(expr) => self.written_thickness(part, expr, &env),
                     None => {
                         let stock = self.part_stock(part)?;
                         Ok(self
@@ -1134,6 +1105,156 @@ impl Solver<'_> {
                 }
             }
         }
+    }
+
+    /// A part's written `thickness:`, which may be planed thinner than its
+    /// stock but never thicker (grammar, "part").
+    fn written_thickness(
+        &mut self,
+        part: PartId,
+        expr: &RExpr,
+        env: &Env<'_>,
+    ) -> Solved<ExactLength> {
+        let thickness = self.eval_length(expr, env)?;
+        let stock = self.part_stock(part)?;
+        if let Some(stock_thickness) = self.stock_length(stock, StockField::Thickness)?
+            && thickness > stock_thickness
+        {
+            let name = self.part_name(part);
+            let stock_name = self
+                .model
+                .defs
+                .stock(stock)
+                .map(|s| s.decl.name.clone())
+                .unwrap_or_default();
+            return Err(self.error(
+                Code::TypeMismatch,
+                format!(
+                    "{name}: its thickness works out as {}, which is more than its stock's {}",
+                    stave_model::value::format_length(thickness),
+                    stave_model::value::format_length(stock_thickness)
+                ),
+                env.file,
+                expr.span,
+                format!(
+                    "a part can be planed thinner than its stock '{stock_name}', never thicker; choose thicker stock"
+                ),
+            ).into());
+        }
+        Ok(thickness)
+    }
+
+    /// One mistake, one error: when another part declared in the same
+    /// place (an element of an array, a part of a component used twice)
+    /// already has the error `<part>: <reason>` there, `name` becomes a
+    /// note on it and `true` is returned.
+    pub(crate) fn noted_with_earlier_part(
+        &mut self,
+        code: Code,
+        file: FileId,
+        span: Span,
+        reason: &str,
+        name: &str,
+    ) -> bool {
+        let tail = format!(": {reason}");
+        let earlier = self.diagnostics.iter_mut().find(|diagnostic| {
+            diagnostic.code == code
+                && diagnostic.message.ends_with(&tail)
+                && diagnostic
+                    .primary()
+                    .is_some_and(|label| label.file == file && label.span == span)
+        });
+        let Some(earlier) = earlier else {
+            return false;
+        };
+        let note = format!("the same for {name}");
+        if !earlier.notes.contains(&note) {
+            earlier.notes.push(note);
+        }
+        true
+    }
+
+    /// A turned part is turned from a blank: its `width:` and `thickness:`
+    /// (each defaulting to the stock's). Its profile must fit inside the
+    /// blank at its widest (grammar, "part"); the drawn box stays the
+    /// profile's largest diameter.
+    pub(crate) fn check_turned_blank(&mut self, part: PartId) -> Solved<()> {
+        if self.mirror_source(part)?.is_some()
+            || self
+                .model
+                .parts
+                .get(part.index())
+                .is_some_and(|p| p.mirror_of.is_some())
+        {
+            return Ok(());
+        }
+        let Some(profile) = self.part_profile(part)? else {
+            return Ok(());
+        };
+        let Some(body) = self.part_body(part).cloned() else {
+            return Err(Fault::Internal("a part's description").into());
+        };
+        let Some(env) = self.part_env(part) else {
+            return Err(Fault::Internal("where a part is declared").into());
+        };
+        let largest = self
+            .profile_stations(profile)?
+            .iter()
+            .map(|(_, d)| *d)
+            .max()
+            .ok_or(Fault::Earlier)?;
+        let stock = self.part_stock(part)?;
+        let thickness = match &body.thickness {
+            Some(expr) => Some(self.written_thickness(part, expr, &env)?),
+            None => self.stock_length(stock, StockField::Thickness)?,
+        };
+        let width = match &body.width {
+            Some(Size::Expr(expr)) => Some(self.eval_length(expr, &env)?),
+            // A blank's width can't be fitted between other parts; the
+            // turned part's box is its profile, so there is nothing to
+            // measure the profile against.
+            Some(Size::Fit(_)) => None,
+            None => self.stock_length(stock, StockField::Width)?,
+        };
+        let (smaller, word) = match (width, thickness) {
+            (Some(w), Some(t)) if w == t => (w, "square"),
+            (Some(w), Some(t)) if w < t => (w, "wide"),
+            (Some(_), Some(t)) | (None, Some(t)) => (t, "thick"),
+            (Some(w), None) => (w, "wide"),
+            (None, None) => return Ok(()),
+        };
+        if largest <= smaller {
+            return Ok(());
+        }
+        let name = self.part_name(part);
+        let stock_name = self
+            .model
+            .defs
+            .stock(stock)
+            .map(|s| s.decl.name.clone())
+            .unwrap_or_default();
+        let span = body.shape.as_ref().map_or(body.span, |shape| shape.span);
+        let (largest, smaller) = (
+            stave_model::value::format_length(largest),
+            stave_model::value::format_length(smaller),
+        );
+        let reason = format!(
+            "its profile is {largest} across at its widest, but its blank of {stock_name} is only {smaller} {word}"
+        );
+        if self.noted_with_earlier_part(Code::TypeMismatch, env.file, span, &reason, &name) {
+            return Err(self.skip().into());
+        }
+        Err(self
+            .error(
+                Code::TypeMismatch,
+                format!("{name}: {reason}"),
+                env.file,
+                span,
+                format!(
+                    "turn it from thicker stock, or make the profile no more than {smaller} across"
+                ),
+            )
+            .into())
     }
 
     /// A part's drawn size along a world axis.

@@ -691,6 +691,26 @@ impl Solver<'_> {
                         let toward_positive = a.max(axis) == b.min(axis);
                         let orientation = self.part_orientation(part)?;
                         let local = orientation.part_axis(axis);
+                        // `extend` lengthens an end or an edge, never a
+                        // face: a part laid face to face on its
+                        // counterpart would come out thicker than any
+                        // board of its stock (grammar, "adds:").
+                        if local == PartAxis::Thickness {
+                            let (pn, qn) = (self.part_name(part), self.part_name(other));
+                            return Err(self
+                                .error(
+                                    Code::TypeMismatch,
+                                    format!(
+                                        "'{name}' would make {pn} thicker: {pn} meets {qn} with its face, but extend lengthens an end or an edge"
+                                    ),
+                                    file,
+                                    span,
+                                    format!(
+                                        "place {pn} so its end or edge meets {qn}, or use a kind without adds:"
+                                    ),
+                                )
+                                .into());
+                        }
                         let along = orientation.direction(local).is_positive();
                         let end = if along == toward_positive {
                             End::End
@@ -874,6 +894,60 @@ impl Solver<'_> {
                 ),
             },
         ).into())
+    }
+
+    /// A part's cut thickness against its stock's: nothing may make a part
+    /// thicker than the board it is cut from (grammar, "part"). The
+    /// `thickness:` field is checked where it is written; this catches what
+    /// joints add. A turned part is checked against its blank at `shape:`.
+    pub(crate) fn check_cut_thickness(&mut self, part: PartId, geom: &PartGeom) -> Solved<()> {
+        if self.mirror_source(part)?.is_some()
+            || self
+                .model
+                .parts
+                .get(part.index())
+                .is_some_and(|p| p.mirror_of.is_some())
+            || self.part_profile(part)?.is_some()
+        {
+            return Ok(());
+        }
+        let stock = self.part_stock(part)?;
+        let Some(stock_thickness) =
+            self.stock_length(stock, stave_model::defs::StockField::Thickness)?
+        else {
+            return Ok(());
+        };
+        let cut_thickness = geom.cut_size(PartAxis::Thickness)?;
+        if cut_thickness <= stock_thickness {
+            return Ok(());
+        }
+        let name = self.part_name(part);
+        let stock_name = self
+            .model
+            .defs
+            .stock(stock)
+            .map(|s| s.decl.name.clone())
+            .unwrap_or_default();
+        let (file, span) = self.part_place(part);
+        let reason = format!(
+            "its cut thickness works out as {}, which is more than its stock's {}",
+            stave_model::value::format_length(cut_thickness),
+            stave_model::value::format_length(stock_thickness)
+        );
+        if self.noted_with_earlier_part(Code::TypeMismatch, file, span, &reason, &name) {
+            return Err(self.skip().into());
+        }
+        Err(self
+            .error(
+                Code::TypeMismatch,
+                format!("{name}: {reason}"),
+                file,
+                span,
+                format!(
+                    "a part can be planed thinner than its stock '{stock_name}', never thicker; choose thicker stock, or let the joint add to an end or an edge"
+                ),
+            )
+            .into())
     }
 
     /// The reference face and edge (grammar, "Faces to cut").

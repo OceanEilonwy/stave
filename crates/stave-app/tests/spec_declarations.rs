@@ -662,7 +662,7 @@ const LEG_PROFILE: &str =
 
 fn turned_leg(length: &str) -> String {
     format!(
-        "{LEG_PROFILE}\npart leg_part : pine_19 {{\n  length: {length}\n  width:  40mm\n  shape:  turned(leg)\n  place {{\n    orient(length: up)\n    against(base.top)\n    flush(base.left)\n    flush(base.front)\n  }}\n}}"
+        "{LEG_PROFILE}\nstock pine_45 {{ species: pine, form: solid, thickness: 45mm }}\npart leg_part : pine_45 {{\n  length: {length}\n  width:  40mm\n  shape:  turned(leg)\n  place {{\n    orient(length: up)\n    against(base.top)\n    flush(base.left)\n    flush(base.front)\n  }}\n}}"
     )
 }
 
@@ -700,6 +700,49 @@ fn a_turned_parts_box_is_as_wide_as_its_largest_diameter() {
     assert_eq!((leg.drawn.width, leg.drawn.thickness), (mm("40"), mm("40")));
 }
 
+/// A turned leg with its blank changed: `stock` and the fields after
+/// `length: fit`.
+fn turned_leg_from(stock: &str, fields: &str) -> String {
+    format!(
+        "{LEG_PROFILE}\nstock pine_45 {{ species: pine, form: solid, thickness: 45mm }}\npart leg_part : {stock} {{\n  length: fit\n{fields}\n  shape:  turned(leg)\n  place {{\n    orient(length: up)\n    against(base.top)\n    flush(base.left)\n    flush(base.front)\n  }}\n}}"
+    )
+}
+
+#[test]
+fn a_profile_wider_than_its_blanks_thickness_is_a_type_mismatch() {
+    let opened = open(&turned_leg_from("pine_19", "  width:  40mm"));
+    let diagnostic = the_diagnostic(
+        &opened,
+        "type-mismatch",
+        "leg_part: its profile is 40mm across at its widest, but its blank of pine_19 is only 19mm thick",
+    );
+    assert_eq!(
+        diagnostic.help.as_deref(),
+        Some("turn it from thicker stock, or make the profile no more than 19mm across")
+    );
+}
+
+#[test]
+fn a_turned_parts_width_is_its_blank_and_the_profile_must_fit_it() {
+    the_diagnostic(
+        &open(&turned_leg_from("pine_45", "  width:  30mm")),
+        "type-mismatch",
+        "leg_part: its profile is 40mm across at its widest, but its blank of pine_45 is only 30mm wide",
+    );
+}
+
+#[test]
+fn a_turned_parts_blank_is_never_thicker_than_its_stock() {
+    the_diagnostic(
+        &open(&turned_leg_from(
+            "pine_45",
+            "  width:  50mm\n  thickness: 50mm",
+        )),
+        "type-mismatch",
+        "leg_part: its thickness works out as 50mm, which is more than its stock's 45mm",
+    );
+}
+
 #[test]
 fn a_profile_needs_a_measure_and_two_stations() {
     the_diagnostic(
@@ -717,7 +760,7 @@ fn a_profile_needs_a_measure_and_two_stations() {
 #[test]
 fn radius_stations_are_doubled_to_diameters() {
     holds(
-        "profile peg {\n  measure: radius\n  at 0mm:  10mm\n  at 50mm: 10mm\n}\npart p : pine_19 {\n  length: fit\n  width:  20mm\n  shape:  turned(peg)\n  place {\n    orient(length: up)\n    against(base.top)\n    flush(base.left)\n    flush(base.front)\n  }\n}\nrequire r : p.width == 20mm && p.length == 50mm \"radius 10 is 20 across\"",
+        "profile peg {\n  measure: radius\n  at 0mm:  10mm\n  at 50mm: 10mm\n}\nstock pine_45 { species: pine, form: solid, thickness: 45mm }\npart p : pine_45 {\n  length: fit\n  width:  20mm\n  shape:  turned(peg)\n  place {\n    orient(length: up)\n    against(base.top)\n    flush(base.left)\n    flush(base.front)\n  }\n}\nrequire r : p.width == 20mm && p.length == 50mm \"radius 10 is 20 across\"",
     );
 }
 

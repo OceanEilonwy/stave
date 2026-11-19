@@ -777,9 +777,9 @@ limits. Round stock (`dowel`) is left out.
 |---|---|---|---|---|
 | `length` | `Length` or `fit` | yes | yes | along the grain, by default |
 | `width` | `Length` or `fit` | yes, unless the stock has `width:` or is a `dowel` | yes | |
-| `thickness` | `Length` | no (default: the stock's) | yes | thinner than the stock; the cut list notes the planing. Thicker than the stock is `error[type-mismatch]` |
+| `thickness` | `Length` | no (default: the stock's) | yes | thinner than the stock; the cut list notes the planing. Thicker than the stock is `error[type-mismatch]`, and so is a cut thickness (with what joints add) over the stock's |
 | `grain` | `length` \| `width` | no (default `length`) | no | which way the grain runs |
-| `shape` | `Shape` | no | no | `turned(profile)`; the part's length is then the profile's: write `length: fit` (any other length is `error[type-mismatch]`) |
+| `shape` | `Shape` | no | no | `turned(profile)`; the part's length is then the profile's: write `length: fit` (any other length is `error[type-mismatch]`). Its `width:` and `thickness:` are then the **blank** it is turned from (each the stock's unless written); the profile must fit inside the blank at its widest, or it is `error[type-mismatch]` at `shape:` (`leg: its profile is 60mm across at its widest, but its blank of ash_45_sq is only 45mm square`) |
 | `face_side` | face word | no | no | the reference face; see [Faces to cut](#faces-to-cut) |
 | `face_edge` | face word | no | no | the reference edge |
 | `note` | `Text` | no | no | printed on the part's work card |
@@ -967,7 +967,8 @@ holds one placement term per line. There is no syntax for coordinates.
 Each part has six faces named by the world direction they face once placed:
 `top`, `bottom`, `left`, `right`, `front`, `back`. They are the faces of the
 part's **drawn box**: its length, width and thickness as written, before joints
-add to it. A turned part's box is as wide as its largest diameter.
+add to it. A turned part's box is as wide as its largest diameter, whatever
+the size of the blank it is turned from.
 
 A part also has three axes of its own: `length`, `width` and `thickness`.
 Joint kinds use these, because a joint doesn't know how its parts are placed.
@@ -1681,7 +1682,12 @@ kind ari_tsugi : joint {
 **`adds:`** — `extend(role, by: d)` lengthens the role's part by `d` at each
 end or edge **where it butts against its counterpart in this pair**, toward
 the counterpart. The contact decides the direction, so the same kind extends a
-shelf in its length and a back panel in its width. `extend` on a pair that
+shelf in its length and a back panel in its width. It lengthens an end or an
+edge, never a face: a part that meets its counterpart with its face (a panel
+laid on a board, a back placed behind the sides instead of between them)
+would come out thicker than its stock, and is `error[type-mismatch]` at the
+joint (`'housed' would make board thicker: board meets base with its face,
+but extend lengthens an end or an edge`). `extend` on a pair that
 crosses is `error[type-mismatch]`. A list extends several roles:
 `adds: [extend(piece, by: d), extend(into, by: d)]`. A turned part is extended
 at its end diameter; the joint's cuts then shape the extension. When two
