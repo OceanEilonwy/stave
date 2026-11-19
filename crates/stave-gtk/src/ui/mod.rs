@@ -74,6 +74,7 @@ mod viewport;
 mod widgets;
 mod workbench;
 
+use stave_app::i18n::{fill_in, tr};
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -829,7 +830,7 @@ impl Window {
         let session = self.session.borrow();
         self.widgets
             .header
-            .show_build(session.build(), session.build_tooltip());
+            .show_build(session.build(), &session.build_tooltip());
         if let Some(action) = self.widgets.window.lookup_action("build")
             && let Ok(action) = action.downcast::<gio::SimpleAction>()
         {
@@ -863,8 +864,14 @@ fn shown_path(folder: &Path) -> String {
 /// what the last check found ("door_l selected. 1 error.").
 fn view_description(selected: Option<&str>, problems: &str) -> String {
     match selected {
-        Some(title) => format!("{title} selected. {problems}."),
-        None => format!("Nothing selected. {problems}."),
+        Some(title) => fill_in(
+            &tr("{title} selected. {problems}."),
+            &[("title", &title), ("problems", &problems)],
+        ),
+        None => fill_in(
+            &tr("Nothing selected. {problems}."),
+            &[("problems", &problems)],
+        ),
     }
 }
 

@@ -1,6 +1,7 @@
 //! Saving pictures: exporting the 3D model, and the window screenshot
 //! taken for the docs and tests.
 
+use stave_app::i18n::{fill_in, tr};
 use std::path::Path;
 use std::rc::Rc;
 use std::time::Duration;
@@ -19,7 +20,7 @@ impl Window {
             self.session.borrow().drawable().map(|(design, _)| design),
         );
         let dialog = gtk::FileDialog::builder()
-            .title("Export 3D Model (.glb, for other 3D programs)")
+            .title(tr("Export 3D Model (.glb, for other 3D programs)"))
             .initial_name(name)
             .modal(true)
             .build();
@@ -45,13 +46,13 @@ impl Window {
                 };
                 let Some((graph, posed)) = view else {
                     window.show_export_failure(&stave_app::save_failure::SaveFailure {
-                        heading: "Couldn't Export the View".to_owned(),
-                        body: "There is nothing in the 3D view to save yet. Wait for the design to show, then try again.".to_owned(),
+                        heading: tr("Couldn't Export the View"),
+                        body: tr("There is nothing in the 3D view to save yet. Wait for the design to show, then try again."),
                     });
                     return;
                 };
                 let exporting = adw::Toast::builder()
-                    .title("Exporting the view…")
+                    .title(tr("Exporting the view…"))
                     .timeout(0)
                     .build();
                 window.widgets.toasts.add_toast(exporting.clone());
@@ -66,8 +67,8 @@ impl Window {
                     .await
                     .unwrap_or_else(|_| {
                         Err(stave_app::save_failure::SaveFailure {
-                            heading: "Couldn't Export the View".to_owned(),
-                            body: "Stave stopped part way through making the file. Nothing was saved; try again.".to_owned(),
+                            heading: tr("Couldn't Export the View"),
+                            body: tr("Stave stopped part way through making the file. Nothing was saved; try again."),
                         })
                     });
                     exporting.dismiss();
@@ -75,7 +76,10 @@ impl Window {
                         return;
                     };
                     match saved {
-                        Ok(()) => window.toast(&format!("Saved the view as {}", path.display())),
+                        Ok(()) => window.toast(&fill_in(
+                            &tr("Saved the view as {file}"),
+                            &[("file", &path.display())],
+                        )),
                         Err(failure) => window.show_export_failure(&failure),
                     }
                 });
@@ -95,7 +99,10 @@ impl Window {
             .close_response("cancel")
             .default_response("again")
             .build();
-        alert.add_responses(&[("cancel", "_Cancel"), ("again", "Save _Elsewhere…")]);
+        alert.add_responses(&[
+            ("cancel", tr("_Cancel").as_str()),
+            ("again", tr("Save _Elsewhere…").as_str()),
+        ]);
         alert.set_response_appearance("again", adw::ResponseAppearance::Suggested);
         let again = Rc::clone(self);
         alert.connect_response(None, move |_, response| {

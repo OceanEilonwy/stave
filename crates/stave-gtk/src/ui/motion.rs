@@ -1,6 +1,7 @@
 //! Things that move on the 3D view: the "Open it" slider, a posed
 //! problem's swing, and Pull apart with its play button.
 
+use stave_app::i18n::{fill_in, tr};
 use std::rc::Rc;
 
 use adw::prelude::*;
@@ -57,7 +58,7 @@ impl Window {
                 };
                 self.widgets.motion.show(Some((
                     name,
-                    "closed",
+                    &tr("closed"),
                     &end,
                     f64::from(full),
                     f64::from(value),
@@ -115,10 +116,9 @@ impl Window {
 
     /// "Posed at contact · door at 0.6°" at the top of the view.
     pub(super) fn show_posed_status(&self, card: &MotionCard, amount: f32) {
-        self.show_hint(&format!(
-            "Posed at contact · {} at {}",
-            card.name,
-            card.amount_text(amount)
+        self.show_hint(&fill_in(
+            &tr("Posed at contact · {name} at {amount}"),
+            &[("name", &card.name), ("amount", &card.amount_text(amount))],
         ));
     }
 
@@ -189,7 +189,7 @@ impl Window {
                 self.widgets.contact_key.set_visible(shared);
                 self.widgets.offer_view_tools(false);
                 if shared {
-                    self.show_hint("Posed at contact");
+                    self.show_hint(&tr("Posed at contact"));
                 }
             }
         }
@@ -280,7 +280,10 @@ impl Window {
         };
         if quiet && self.session.borrow().selection().is_none() {
             self.show_hint(&if explode > 0.0 {
-                format!("Pulled apart · {}%", view_tools::percent(explode))
+                fill_in(
+                    &tr("Pulled apart · {percent}%"),
+                    &[("percent", &view_tools::percent(explode))],
+                )
             } else {
                 String::new()
             });

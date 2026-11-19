@@ -20,6 +20,7 @@
 //! name order. A greyed entry says the checker's reason and can't be
 //! chosen; an entry not checked yet says so.
 
+use stave_app::i18n::{fill_in, tr};
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -153,7 +154,10 @@ fn needs_choice_text(names: &NonEmpty<Name>) -> String {
         .iter()
         .map(|name| name.as_str().replace('_', " "))
         .collect();
-    format!("Then point at or choose: {}", names.join(", "))
+    fill_in(
+        &tr("Then point at or choose: {names}"),
+        &[("names", &names.join(", "))],
+    )
 }
 
 /// The menu for a selection.
@@ -229,7 +233,7 @@ impl EditMenu {
         if items.is_empty() {
             self.list.append(
                 &gtk::Label::builder()
-                    .label("Nothing in this project or its imports goes here.")
+                    .label(tr("Nothing in this project or its imports goes here."))
                     .xalign(0.0)
                     .wrap(true)
                     .css_classes(["stave-description"])
@@ -296,14 +300,17 @@ impl EditMenu {
                 description = format!("{description} {words}");
             }
             EntryState::Checking => {
-                let words = "Checking whether it fits here…";
-                content.append(&wrapped(words, &["stave-edit-checking"]));
+                let words = tr("Checking whether it fits here…");
+                content.append(&wrapped(&words, &["stave-edit-checking"]));
                 description = format!("{description} {words}");
             }
             EntryState::Greyed(reasons) => {
                 let reason = reason_text(reasons);
                 content.append(&wrapped(&reason, &["stave-edit-reason"]));
-                description = format!("{description} Doesn't fit here: {reason}");
+                description = format!(
+                    "{description} {}",
+                    fill_in(&tr("Doesn't fit here: {reason}"), &[("reason", &reason)])
+                );
             }
         }
         let button = gtk::Button::builder()
@@ -316,7 +323,7 @@ impl EditMenu {
         ]);
         let choosable = matches!(state, EntryState::Fits | EntryState::NeedsChoice(_));
         if choosable {
-            button.set_tooltip_text(Some("Try it here"));
+            button.set_tooltip_text(Some(&tr("Try it here")));
         } else {
             // Still focusable, so the reason can be read, but marked
             // unavailable and never reported.

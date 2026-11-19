@@ -11,6 +11,7 @@
 //!     Try it ─▶ EditCommand::Hold ─▶ the change's card ─▶ Add
 //! ```
 
+use stave_app::i18n::{fill_in, tr};
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -71,11 +72,17 @@ pub(in crate::ui) fn hold_request(
     value: &str,
     reason: &str,
 ) -> Result<HoldRequest, String> {
-    let value = parse_length(value.trim())
-        .map_err(|_| format!("'{}' isn't a length: write it as 412mm", value.trim()))?;
+    let value = parse_length(value.trim()).map_err(|_| {
+        fill_in(
+            &tr("'{text}' isn't a length: write it as 412mm"),
+            &[("text", &value.trim())],
+        )
+    })?;
     let reason = reason.trim();
     if reason.is_empty() {
-        return Err("Say why it must be held: the reason is the rule's message".to_owned());
+        return Err(tr(
+            "Say why it must be held: the reason is the rule's message",
+        ));
     }
     Ok(HoldRequest {
         first: first.clone(),
@@ -111,10 +118,10 @@ impl HoldCard {
         // The header: the two things, in a monospace field; what it is on
         // the right.
         let title = sections::name_field("");
-        let kind = label("hold a distance", &["stave-edit-origin"]);
+        let kind = label(&tr("hold a distance"), &["stave-edit-origin"]);
         kind.set_wrap(false);
         body.append(&sections::header(None, &title, Some(kind.upcast_ref())));
-        let (section, rows) = sections::section("Hold", "", true);
+        let (section, rows) = sections::section(&tr("Hold"), "", true);
         let now = label("", &["stave-row-note"]);
         rows.append(&now);
         let toggles = gtk::Box::builder()
@@ -122,37 +129,37 @@ impl HoldCard {
             .halign(gtk::Align::Start)
             .build();
         let at_least = gtk::ToggleButton::builder()
-            .label("At least")
+            .label(tr("At least"))
             .active(true)
             .build();
         let at_most = gtk::ToggleButton::builder()
-            .label("At most")
+            .label(tr("At most"))
             .group(&at_least)
             .build();
         toggles.append(&at_least);
         toggles.append(&at_most);
-        rows.append(&sections::row("Keep", &toggles));
+        rows.append(&sections::row(&tr("Keep"), &toggles));
         let value = gtk::Entry::builder().hexpand(true).build();
-        value.update_property(&[gtk::accessible::Property::Label("Distance")]);
-        rows.append(&sections::row("Distance", &value));
+        value.update_property(&[gtk::accessible::Property::Label(&tr("Distance"))]);
+        rows.append(&sections::row(&tr("Distance"), &value));
         let reason = gtk::Entry::builder()
             .hexpand(true)
-            .placeholder_text("room for a finger")
+            .placeholder_text(tr("room for a finger"))
             .build();
-        reason.update_property(&[gtk::accessible::Property::Label("Why")]);
-        rows.append(&sections::row("Why", &reason));
+        reason.update_property(&[gtk::accessible::Property::Label(&tr("Why"))]);
+        rows.append(&sections::row(&tr("Why"), &reason));
         rows.append(&label(
-            "It becomes a rule (a require) in the text: every later change must keep it.",
+            &tr("It becomes a rule (a require) in the text: every later change must keep it."),
             &["stave-footnote"],
         ));
         body.append(&section);
         let (buttons, cancel, try_it) = sections::footer_buttons();
         buttons.add_css_class("stave-edit-buttons");
-        cancel.set_tooltip_text(Some("Hold nothing (Esc)"));
+        cancel.set_tooltip_text(Some(&tr("Hold nothing (Esc)")));
         // Not yet the commit: it checks the rule, and the change's card
         // then offers Apply.
-        sections::set_button_words(&try_it, "Try it");
-        try_it.set_tooltip_text(Some("Check the rule on the design (Enter)"));
+        sections::set_button_words(&try_it, &tr("Try it"));
+        try_it.set_tooltip_text(Some(&tr("Check the rule on the design (Enter)")));
         let scrolled = gtk::ScrolledWindow::builder()
             .hscrollbar_policy(gtk::PolicyType::Never)
             .vexpand(true)
@@ -189,16 +196,21 @@ impl HoldCard {
     /// Fills the card for two things and the distance between them now
     /// (or why it can't be measured).
     fn show(&self, first: &Measured, second: &Measured, now: &Result<Length, String>) {
-        self.title
-            .set_label(&format!("{} to {}", first.path(), second.path()));
+        self.title.set_label(&fill_in(
+            &tr("{first} to {second}"),
+            &[("first", &first.path()), ("second", &second.path())],
+        ));
         match now {
             Ok(length) => {
-                self.now
-                    .set_label(&format!("It is {} now.", length_text(*length)));
+                self.now.set_label(&fill_in(
+                    &tr("It is {length} now."),
+                    &[("length", &length_text(*length))],
+                ));
                 self.value.set_text(&length_text(*length));
             }
             Err(why) => {
-                self.now.set_label(&format!("Can't measure it: {why}"));
+                self.now
+                    .set_label(&fill_in(&tr("Can't measure it: {why}"), &[("why", &why)]));
                 self.value.set_text("");
             }
         }
@@ -235,9 +247,11 @@ impl Hold {
             card: HoldCard::new(),
             step: RefCell::new(HoldStep::Idle),
             from_space: gtk::Button::builder()
-                .label("Hold a distance from this space…")
+                .label(tr("Hold a distance from this space…"))
                 .css_classes(["flat", "stave-hold-from-space"])
-                .tooltip_text("Pick a part or another space and keep the distance to it")
+                .tooltip_text(tr(
+                    "Pick a part or another space and keep the distance to it",
+                ))
                 .build(),
         }
     }
@@ -296,14 +310,17 @@ impl Window {
                 return;
             };
             let Some(selection) = session.selection() else {
-                self.edit_toast("Select a part first, then hold a distance from it");
+                self.edit_toast(&tr("Select a part first, then hold a distance from it"));
                 return;
             };
             super::item_tools::measured_of(design, selection)
         };
         match first {
             Ok(first) => self.start_hold(first),
-            Err(why) => self.edit_toast(&format!("Can't hold a distance from that: {why}")),
+            Err(why) => self.edit_toast(&fill_in(
+                &tr("Can't hold a distance from that: {why}"),
+                &[("why", &why)],
+            )),
         }
     }
 
@@ -338,9 +355,9 @@ impl Window {
         if self.edit_open() {
             self.cancel_edit();
         }
-        self.show_hint(&format!(
-            "Click the part or space to measure to from {} · Esc stops",
-            first.path()
+        self.show_hint(&fill_in(
+            &tr("Click the part or space to measure to from {first} · Esc stops"),
+            &[("first", &first.path())],
         ));
         self.editing.hold.step.replace(HoldStep::Picking { first });
         self.editing.hold.card.root.set_visible(false);
@@ -373,8 +390,8 @@ impl Window {
         };
         match second {
             Some(second) if second != first => self.ask_hold(first, second),
-            Some(_) => self.edit_toast("Pick something else: that is what it measures from"),
-            None => self.edit_toast("Click a part or a space to measure to"),
+            Some(_) => self.edit_toast(&tr("Pick something else: that is what it measures from")),
+            None => self.edit_toast(&tr("Click a part or a space to measure to")),
         }
         true
     }

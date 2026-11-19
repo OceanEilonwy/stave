@@ -14,6 +14,7 @@
 //! [Hold a distance…]  [Remove…]
 //! ```
 
+use stave_app::i18n::{fill_in, tr, tr_noop};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
@@ -34,9 +35,9 @@ use super::super::sections;
 /// The axes a repeat can split along, in the order the list shows them,
 /// with the word for how the pieces stand.
 pub(in crate::ui) const AXES: [(Axis, &str); 3] = [
-    (Axis::Up, "stacked up"),
-    (Axis::Across, "side by side"),
-    (Axis::Deep, "front to back"),
+    (Axis::Up, tr_noop("stacked up")),
+    (Axis::Across, tr_noop("side by side")),
+    (Axis::Deep, tr_noop("front to back")),
 ];
 
 /// The most pieces the stepper and the drag handle go to.
@@ -48,18 +49,18 @@ pub(in crate::ui) const MOST: usize = 12;
 pub(in crate::ui) fn measured_of(
     design: &SolvedDesign,
     selection: &Selection,
-) -> Result<Measured, &'static str> {
+) -> Result<Measured, String> {
     match selection {
         Selection::Part(part) => design
             .part(*part)
             .map(|part| Measured::Item(part.name.clone()))
-            .ok_or("that part is gone"),
-        Selection::Assembly(_) => Err("pick one of its parts to measure from"),
+            .ok_or_else(|| tr("that part is gone")),
+        Selection::Assembly(_) => Err(tr("pick one of its parts to measure from")),
         Selection::Hardware(_)
         | Selection::Joint { .. }
         | Selection::Member(_)
         | Selection::Location(_)
-        | Selection::Problem(_) => Err("a distance is measured from a part or a space"),
+        | Selection::Problem(_) => Err(tr("a distance is measured from a part or a space")),
     }
 }
 
@@ -93,7 +94,7 @@ impl RepeatRow {
             .css_classes(["stave-card-row", "stave-repeat-row"])
             .build();
         let label = gtk::Label::builder()
-            .label("How many")
+            .label(tr("How many"))
             .xalign(0.0)
             .css_classes(["stave-key"])
             .build();
@@ -111,14 +112,15 @@ impl RepeatRow {
             .digits(0)
             .width_chars(2)
             .numeric(true)
-            .tooltip_text("How many pieces fill the space, each the same size")
+            .tooltip_text(tr("How many pieces fill the space, each the same size"))
             .build();
-        count.update_property(&[gtk::accessible::Property::Label("How many")]);
+        count.update_property(&[gtk::accessible::Property::Label(&tr("How many"))]);
         root.append(&count);
-        let words: Vec<&str> = AXES.iter().map(|(_, words)| *words).collect();
-        let axis = gtk::DropDown::from_strings(&words);
-        axis.set_tooltip_text(Some("Which way the pieces are split"));
-        axis.update_property(&[gtk::accessible::Property::Label("Which way")]);
+        let words: Vec<String> = AXES.iter().map(|(_, words)| tr(words)).collect();
+        let axis =
+            gtk::DropDown::from_strings(&words.iter().map(String::as_str).collect::<Vec<_>>());
+        axis.set_tooltip_text(Some(&tr("Which way the pieces are split")));
+        axis.update_property(&[gtk::accessible::Property::Label(&tr("Which way"))]);
         root.append(&axis);
         RepeatRow {
             root,
@@ -135,8 +137,9 @@ impl RepeatRow {
     /// hold it.
     pub(in crate::ui) fn shorten(&self) {
         self.label.set_label("×");
-        self.label
-            .set_tooltip_text(Some("How many pieces fill the space, each the same size"));
+        self.label.set_tooltip_text(Some(&tr(
+            "How many pieces fill the space, each the same size",
+        )));
         self.root.add_css_class("stave-repeat-short");
     }
 
@@ -221,12 +224,14 @@ impl RepeatFoldRow {
             .css_classes(["stave-repeat-fold"])
             .build();
         let unfold = gtk::Button::builder()
-            .label("Repeat…")
+            .label(tr("Repeat…"))
             .halign(gtk::Align::Start)
             .css_classes(["flat", "stave-repeat-unfold"])
-            .tooltip_text("Make more than one, each the same size, filling the space")
+            .tooltip_text(tr(
+                "Make more than one, each the same size, filling the space",
+            ))
             .build();
-        unfold.update_property(&[gtk::accessible::Property::Label("Repeat")]);
+        unfold.update_property(&[gtk::accessible::Property::Label(&tr("Repeat"))]);
         let row = RepeatRow::new(least);
         root.append(&unfold);
         root.append(&row.root);
@@ -336,7 +341,7 @@ impl ItemTools {
     /// The panel, hidden.
     pub(in crate::ui) fn new() -> ItemTools {
         // A section of the Inspector, "Change" with the item as its note.
-        let (root, body, title) = sections::section_noted("Change", true);
+        let (root, body, title) = sections::section_noted(&tr("Change"), true);
         root.add_css_class("stave-item-tools");
         root.add_css_class("stave-edit-card");
         root.set_visible(false);
@@ -349,13 +354,15 @@ impl ItemTools {
             .spacing(6)
             .css_classes(["stave-card-row", "stave-edit-row"])
             .build();
-        name_row.append(&sections::row_label("Name"));
+        name_row.append(&sections::row_label(&tr("Name")));
         let name = gtk::EditableLabel::builder()
             .hexpand(true)
             .css_classes(["stave-edit-name", "stave-name-field"])
-            .tooltip_text("Click to retype the name: it changes everywhere it is used")
+            .tooltip_text(tr(
+                "Click to retype the name: it changes everywhere it is used",
+            ))
             .build();
-        name.update_property(&[gtk::accessible::Property::Label("Name")]);
+        name.update_property(&[gtk::accessible::Property::Label(&tr("Name"))]);
         name_row.append(&name);
         rows.append(&name_row);
         let repeat = RepeatFoldRow::new(1);
@@ -373,9 +380,9 @@ impl ItemTools {
             .build();
         let mirror = gtk::Switch::builder()
             .valign(gtk::Align::Center)
-            .tooltip_text("Add its mirror image on the other side")
+            .tooltip_text(tr("Add its mirror image on the other side"))
             .build();
-        mirror.update_property(&[gtk::accessible::Property::Label("And the other side")]);
+        mirror.update_property(&[gtk::accessible::Property::Label(&tr("And the other side"))]);
         mirror_row.append(&mirror_words);
         mirror_row.append(&mirror);
         rows.append(&mirror_row);
@@ -384,16 +391,18 @@ impl ItemTools {
             .css_classes(["stave-card-row", "stave-edit-row", "stave-item-buttons"])
             .build();
         let hold = gtk::Button::builder()
-            .label("Hold a distance…")
+            .label(tr("Hold a distance…"))
             .css_classes(["flat"])
             .hexpand(true)
-            .tooltip_text("Pick a second part or space and keep the distance to it")
+            .tooltip_text(tr(
+                "Pick a second part or space and keep the distance to it",
+            ))
             .build();
         let remove = gtk::Button::builder()
-            .label("Remove…")
+            .label(tr("Remove…"))
             .css_classes(["flat", "error"])
             .hexpand(true)
-            .tooltip_text("Take it out of the design (Delete)")
+            .tooltip_text(tr("Take it out of the design (Delete)"))
             .build();
         buttons.append(&hold);
         buttons.append(&remove);
@@ -553,19 +562,19 @@ impl Window {
         tools.mirror.set_active(false);
         tools.mirror_row.set_visible(offer.mirror.is_some());
         match &offer.mirror {
-            Some(MirrorGesture::Image(image)) => tools.mirror_words.set_label(&format!(
-                "And the other side · adds {}",
-                image.image.as_str()
+            Some(MirrorGesture::Image(image)) => tools.mirror_words.set_label(&fill_in(
+                &tr("And the other side · adds {image}"),
+                &[("image", &image.image.as_str())],
             )),
-            Some(MirrorGesture::Split(_)) => tools
-                .mirror_words
-                .set_label("And the other side · splits its space across into a mirrored pair"),
+            Some(MirrorGesture::Split(_)) => tools.mirror_words.set_label(&tr(
+                "And the other side · splits its space across into a mirrored pair",
+            )),
             None => {}
         }
         tools.hold.set_sensitive(unmeasurable.is_none());
-        tools.hold.set_tooltip_text(Some(match unmeasurable {
+        tools.hold.set_tooltip_text(Some(&match unmeasurable {
             Some(why) => why,
-            None => "Pick a second part or space and keep the distance to it",
+            None => tr("Pick a second part or space and keep the distance to it"),
         }));
         tools.filling.set(false);
         tools.root.set_visible(true);
@@ -577,7 +586,7 @@ impl Window {
         if tools.root.is_visible() {
             tools.name.start_editing();
         } else {
-            self.edit_toast("Select a part or an assembly first, then rename it");
+            self.edit_toast(&tr("Select a part or an assembly first, then rename it"));
         }
     }
 
@@ -594,8 +603,14 @@ impl Window {
         }
         match (parse_name(&item), parse_name(to)) {
             (Ok(item), Ok(to)) => self.start_change(EditCommand::RenameItem { item, to }),
-            (_, Err(error)) => self.edit_toast(&format!("'{to}' can't be a name: {}", error.0)),
-            (Err(_), Ok(_)) => self.edit_toast(&format!("'{item}' can't be renamed here")),
+            (_, Err(error)) => self.edit_toast(&fill_in(
+                &tr("'{text}' can't be a name: {reason}"),
+                &[("text", &to), ("reason", &error.0)],
+            )),
+            (Err(_), Ok(_)) => self.edit_toast(&fill_in(
+                &tr("'{item}' can't be renamed here"),
+                &[("item", &item)],
+            )),
         }
     }
 
@@ -618,7 +633,7 @@ impl Window {
             None => return,
         };
         let Some(count) = RepeatCount::new(count) else {
-            self.edit_toast("A repeat makes two or more; Remove takes it away");
+            self.edit_toast(&tr("A repeat makes two or more; Remove takes it away"));
             return;
         };
         match parse_name(&item) {
@@ -640,7 +655,10 @@ impl Window {
             .item_offer(&item)
             .and_then(|offer| offer.mirror)
         else {
-            self.edit_toast(&format!("{item} has no other side to add"));
+            self.edit_toast(&fill_in(
+                &tr("{item} has no other side to add"),
+                &[("item", &item)],
+            ));
             return;
         };
         match parse_name(&item) {

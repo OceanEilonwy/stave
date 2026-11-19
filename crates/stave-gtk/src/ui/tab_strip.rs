@@ -18,6 +18,7 @@
 //! tab each (name, and a yellow ● while unsaved), beside the Model's tab
 //! in the frame they share. Clicking one shows the panel on that file.
 
+use stave_app::i18n::{fill_in, tr};
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -178,9 +179,10 @@ mod imp {
             self.tabs.add_css_class("stave-tabs");
             self.end.add_css_class("stave-tab-end");
             self.menu.set_icon_name("pan-down-symbolic");
-            self.menu.set_tooltip_text(Some("Move or close this panel"));
             self.menu
-                .update_property(&[gtk::accessible::Property::Label("Panel menu")]);
+                .set_tooltip_text(Some(&tr("Move or close this panel")));
+            self.menu
+                .update_property(&[gtk::accessible::Property::Label(&tr("Panel menu"))]);
             self.menu.add_css_class("flat");
             self.menu.add_css_class("stave-tab-menu");
             self.end.append(&self.menu);
@@ -456,10 +458,13 @@ fn tab(frame: &panel::Frame, page: &panel::Widget) -> Tab {
     let close = gtk::Button::builder()
         .icon_name("window-close-symbolic")
         .css_classes(["flat", "stave-tab-close"])
-        .tooltip_text(format!("Close {title}"))
+        .tooltip_text(fill_in(&tr("Close {title}"), &[("title", &title)]))
         .focusable(false)
         .build();
-    close.update_property(&[gtk::accessible::Property::Label(&format!("Close {title}"))]);
+    close.update_property(&[gtk::accessible::Property::Label(&fill_in(
+        &tr("Close {title}"),
+        &[("title", &title)],
+    ))]);
     let page_weak = page.downgrade();
     close.connect_clicked(move |_| {
         if let Some(page) = page_weak.upgrade() {
@@ -493,9 +498,9 @@ fn own_tab(frame: &panel::Frame, page: &panel::Widget, own: PageTab) -> Tab {
         let unsaved = gtk::Box::builder()
             .css_classes(["stave-mark", "unsaved"])
             .valign(gtk::Align::Center)
-            .tooltip_text("Not saved (Ctrl+S saves)")
+            .tooltip_text(tr("Not saved (Ctrl+S saves)"))
             .build();
-        unsaved.update_property(&[gtk::accessible::Property::Label("not saved")]);
+        unsaved.update_property(&[gtk::accessible::Property::Label(&tr("not saved"))]);
         inner.append(&unsaved);
     }
     let show = gtk::Button::builder()

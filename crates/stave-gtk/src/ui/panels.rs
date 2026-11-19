@@ -6,6 +6,7 @@
 //! (the project's `.stave` files; choosing one opens it in the Code
 //! panel).
 
+use stave_app::i18n::{fill_in, tr};
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -89,7 +90,9 @@ impl ProblemsPanel {
     /// An empty list.
     pub fn new() -> Rc<ProblemsPanel> {
         let stale = gtk::Label::builder()
-            .label("The 3D view shows the last version without errors until these are fixed.")
+            .label(tr(
+                "The 3D view shows the last version without errors until these are fixed.",
+            ))
             .xalign(0.0)
             .wrap(true)
             .visible(false)
@@ -97,8 +100,8 @@ impl ProblemsPanel {
             .build();
         let (root, list) = scrolled_list(
             "object-select-symbolic",
-            "No problems",
-            "Every part fits, every joint closes and everything that moves moves clear.",
+            &tr("No problems"),
+            &tr("Every part fits, every joint closes and everything that moves moves clear."),
             Some(stale.upcast_ref()),
         );
         let panel = Rc::new(ProblemsPanel {
@@ -234,10 +237,10 @@ impl ProblemsPanel {
             text.append(&self.place_block(place, report.severity));
         }
         for note in &report.notes {
-            text.append(&fact("note", note, "stave-problem-note"));
+            text.append(&fact(&tr("note"), note, "stave-problem-note"));
         }
         if let Some(help) = &report.help {
-            text.append(&fact("help", help, "stave-problem-help"));
+            text.append(&fact(&tr("help"), help, "stave-problem-help"));
         }
         row.append(&text);
         row
@@ -259,7 +262,7 @@ impl ProblemsPanel {
             gtk::Button::builder()
                 .label(&place.shown)
                 .css_classes(["flat", "stave-link", "stave-problem-place"])
-                .tooltip_text("Show this place in the Code panel")
+                .tooltip_text(tr("Show this place in the Code panel"))
                 .build(),
         );
         let callbacks = self.callbacks.clone();
@@ -271,9 +274,10 @@ impl ProblemsPanel {
             }
         });
         line.append(&link);
+        let also_here = tr("also here");
         let what: &str = match place.role {
             Role::Primary => &place.message,
-            Role::Secondary if place.message.is_empty() => "also here",
+            Role::Secondary if place.message.is_empty() => &also_here,
             Role::Secondary => &place.message,
         };
         if !what.is_empty() {
@@ -295,9 +299,15 @@ impl ProblemsPanel {
             .wrap_mode(gtk::pango::WrapMode::WordChar)
             .css_classes(["stave-code", "stave-problem-snippet"])
             .build();
-        snippet.update_property(&[gtk::accessible::Property::Label(&format!(
-            "Line {}: {}{}{}",
-            place.location.line, place.before, place.marked, place.after
+        snippet.update_property(&[gtk::accessible::Property::Label(&fill_in(
+            &tr("Line {line}: {text}"),
+            &[
+                ("line", &place.location.line),
+                (
+                    "text",
+                    &format!("{}{}{}", place.before, place.marked, place.after),
+                ),
+            ],
         ))]);
         block.append(&snippet);
         block
@@ -441,8 +451,8 @@ impl FilesList {
     pub fn new() -> Rc<FilesList> {
         let (root, list) = scrolled_list(
             "folder-symbolic",
-            "No files",
-            "This folder has no .stave files.",
+            &tr("No files"),
+            &tr("This folder has no .stave files."),
             None,
         );
         list.set_selection_mode(gtk::SelectionMode::None);

@@ -4,6 +4,7 @@
 //! (its kind, its stock and size, how it moves, its joints and cuts, and
 //! where it is written in the text, with the snippet highlighted).
 
+use crate::i18n::tr;
 use stave_lang::Severity;
 use stave_lang::units::{Angle, Length};
 use stave_lang::{SourceMap, SyntaxKind};
@@ -709,8 +710,14 @@ pub struct FailingCheck {
 /// What the inspector shows about the selection.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Inspection {
-    /// "PART · IN door_l".
+    /// "PART · IN door_l": the words the inspection's kind and place are
+    /// keyed by, in English.
     pub eyebrow: String,
+    /// What kind of thing it is, as the window shows it: "Part", "Joint
+    /// member" (translated).
+    pub kind: String,
+    /// The assembly it sits in: "door_l".
+    pub within: Option<String>,
     /// "stile[hinge]".
     pub title: String,
     /// The doc comment: "The upright on the hinge side of a door".
@@ -765,6 +772,28 @@ fn moves_row(design: &SolvedDesign, moving: Option<AssemblyId>) -> Option<Row> {
         label: "Moves",
         value: format!("with {}, {}", assembly.name, motion_words(motion)),
     })
+}
+
+/// The window's words for an eyebrow's kind: "Part" for "PART".
+fn kind_title(kind: &str) -> String {
+    match kind {
+        "PART" => tr("Part"),
+        "PIECE OF A SPLICED PART" => tr("Piece of a spliced part"),
+        "MIRROR IMAGE" => tr("Mirror image"),
+        "MADE PART" => tr("Made part"),
+        "HARDWARE" => tr("Hardware"),
+        "ASSEMBLY" => tr("Assembly"),
+        "JOINT MEMBER" => tr("Joint member"),
+        "JOINT" => tr("Joint"),
+        other => other.to_owned(),
+    }
+}
+
+/// The name of the assembly something sits in.
+fn within(design: &SolvedDesign, assembly: Option<AssemblyId>) -> Option<String> {
+    assembly
+        .and_then(|id| design.assemblies.get(id.index()))
+        .map(|found| found.name.clone())
 }
 
 /// "PART · IN door_l".
@@ -1318,6 +1347,8 @@ fn inspect_part(checked: &Checked, design: &SolvedDesign, id: PartId) -> Option<
     let source = source_of(checked, |m| part_decl(m, declared), part.assembly);
     Some(Inspection {
         eyebrow: eyebrow(design, kind, part.assembly),
+        kind: kind_title(kind),
+        within: within(design, part.assembly),
         title: relative(design, &part.name, part.assembly).to_owned(),
         description,
         swatch: Some(part_swatch(part)),
@@ -1371,6 +1402,8 @@ fn inspect_hardware(
     let source = source_of(checked, |m| hardware_decl(m, id), hardware.assembly);
     Some(Inspection {
         eyebrow: eyebrow(design, "HARDWARE", hardware.assembly),
+        kind: kind_title("HARDWARE"),
+        within: within(design, hardware.assembly),
         title: relative(design, &hardware.name, hardware.assembly).to_owned(),
         description,
         swatch: Some(hardware_swatch()),
@@ -1443,6 +1476,8 @@ fn inspect_assembly(
     );
     Some(Inspection {
         eyebrow: eyebrow(design, "ASSEMBLY", assembly.parent),
+        kind: kind_title("ASSEMBLY"),
+        within: within(design, assembly.parent),
         title: relative(design, &assembly.name, assembly.parent).to_owned(),
         description,
         swatch: None,
@@ -1533,6 +1568,8 @@ fn inspect_member(
     let source = source_of(checked, |m| joint_or_splice_decl(m, joint), joint.assembly);
     Some(Inspection {
         eyebrow: eyebrow(design, "JOINT MEMBER", assembly),
+        kind: kind_title("JOINT MEMBER"),
+        within: within(design, assembly),
         title: format!(
             "{}'s {}",
             relative(design, &joint.name, joint.assembly),
@@ -1586,6 +1623,8 @@ fn inspect_joint(
     );
     Some(Inspection {
         eyebrow: eyebrow(design, "JOINT", joint.assembly),
+        kind: kind_title("JOINT"),
+        within: within(design, joint.assembly),
         title: relative(design, &joint.name, joint.assembly).to_owned(),
         description,
         swatch: None,

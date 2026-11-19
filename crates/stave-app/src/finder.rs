@@ -6,6 +6,7 @@
 //! an assembly or a problem (the 3D view frames it), or opening a file at
 //! a line in the editor.
 
+use crate::i18n::tr;
 use stave_ide::{Analysis, Location};
 use stave_lang::Severity;
 use stave_model::solved::SolvedDesign;
@@ -43,13 +44,13 @@ impl Kind {
 
     /// Its group's heading and filter: "Parts", "Files", "Names", "Lines",
     /// "Problems".
-    pub fn title(self) -> &'static str {
+    pub fn title(self) -> String {
         match self {
-            Kind::Part => "Parts",
-            Kind::File => "Files",
-            Kind::Name => "Names",
-            Kind::Line => "Lines",
-            Kind::Problem => "Problems",
+            Kind::Part => tr("Parts"),
+            Kind::File => tr("Files"),
+            Kind::Name => tr("Names"),
+            Kind::Line => tr("Lines"),
+            Kind::Problem => tr("Problems"),
         }
     }
 }

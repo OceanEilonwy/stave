@@ -2,6 +2,7 @@
 //! kept on the selection's line, the Details card, the 3D view's
 //! description and the hints over it.
 
+use stave_app::i18n::{fill_in, tr};
 use std::rc::Rc;
 
 use adw::prelude::*;
@@ -164,7 +165,10 @@ impl Window {
         }
         let explode = self.session.borrow().explode().get();
         self.show_hint(&if explode > 0.0 && selection.is_none() {
-            format!("Pulled apart · {}%", view_tools::percent(explode))
+            fill_in(
+                &tr("Pulled apart · {percent}%"),
+                &[("percent", &view_tools::percent(explode))],
+            )
         } else {
             String::new()
         });
@@ -197,16 +201,22 @@ impl Window {
         let (name, description) = {
             let session = self.session.borrow();
             let selected = session.selection().and_then(|selection| match selection {
-                Selection::Problem(_) => session
-                    .selected_problem()
-                    .map(|problem| format!("The problem “{}”", problem.message)),
+                Selection::Problem(_) => session.selected_problem().map(|problem| {
+                    fill_in(
+                        &tr("The problem “{message}”"),
+                        &[("message", &problem.message)],
+                    )
+                }),
                 _ => session
                     .shown()
                     .and_then(|shown| inspect::inspect(shown, selection))
                     .map(|inspection| inspection.title),
             });
             (
-                format!("3D view of {}", session.title()),
+                fill_in(
+                    &tr("3D view of {project}"),
+                    &[("project", &session.title())],
+                ),
                 view_description(selected.as_deref(), &session.check_status().pill().label),
             )
         };

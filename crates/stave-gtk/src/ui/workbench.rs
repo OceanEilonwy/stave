@@ -25,6 +25,7 @@
 //! The Code panel holds the open files, so a file always opens wherever
 //! the Code panel is.
 
+use stave_app::i18n::{fill_in, tr, tr_noop};
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -97,17 +98,17 @@ impl PanelId {
     }
 
     /// The panel's tab title.
-    pub fn title(self) -> &'static str {
-        match self {
-            PanelId::View => "Model",
-            PanelId::Parts => "Parts",
-            PanelId::Files => "Files",
-            PanelId::Details => "Details",
-            PanelId::Code => "Code",
-            PanelId::Problems => "Problems",
-            PanelId::Edit => "Edit",
-            PanelId::Output => "Output",
-        }
+    pub fn title(self) -> String {
+        tr(match self {
+            PanelId::View => tr_noop("Model"),
+            PanelId::Parts => tr_noop("Parts"),
+            PanelId::Files => tr_noop("Files"),
+            PanelId::Details => tr_noop("Details"),
+            PanelId::Code => tr_noop("Code"),
+            PanelId::Problems => tr_noop("Problems"),
+            PanelId::Edit => tr_noop("Edit"),
+            PanelId::Output => tr_noop("Output"),
+        })
     }
 
     /// The panel's tab icon (the Model's is the tab strip's own cube).
@@ -169,14 +170,14 @@ impl Side {
     }
 
     /// The side as a menu says where to move a panel.
-    fn menu_label(self) -> &'static str {
-        match self {
-            Side::Start => "Move to the Left",
-            Side::End => "Move to the Right",
-            Side::Top => "Move to the Top",
-            Side::Bottom => "Move to the Bottom",
-            Side::Centre => "Move to the Middle",
-        }
+    fn menu_label(self) -> String {
+        tr(match self {
+            Side::Start => tr_noop("Move to the Left"),
+            Side::End => tr_noop("Move to the Right"),
+            Side::Top => tr_noop("Move to the Top"),
+            Side::Bottom => tr_noop("Move to the Bottom"),
+            Side::Centre => tr_noop("Move to the Middle"),
+        })
     }
 
     fn area(self) -> panel::Area {
@@ -528,14 +529,17 @@ impl Workbench {
         // libpanel takes the dock's children the way a UI file gives them:
         // a pane of frames per edge, and the centre's grid.
         let builder = gtk::Builder::new();
-        builder
-            .add_from_string(DOCK_UI)
-            .map_err(|error| anyhow::anyhow!("can't lay out the window's panels: {error}"))?;
+        builder.add_from_string(DOCK_UI).map_err(|error| {
+            anyhow::anyhow!(fill_in(
+                &tr("can't lay out the window's panels: {error}"),
+                &[("error", &error)],
+            ))
+        })?;
         let (Some(dock), Some(grid)) = (
             builder.object::<panel::Dock>("dock"),
             builder.object::<panel::Grid>("grid"),
         ) else {
-            anyhow::bail!("can't lay out the window's panels: the dock is missing");
+            anyhow::bail!(tr("can't lay out the window's panels: the dock is missing"));
         };
         let paneds: BTreeMap<Side, panel::Paned> = Side::EDGES
             .into_iter()
@@ -561,7 +565,7 @@ impl Workbench {
                 let menu = gio::Menu::new();
                 for side in Side::ALL {
                     menu.append(
-                        Some(side.menu_label()),
+                        Some(&side.menu_label()),
                         Some(&format!("win.move-panel::{}:{}", id.word(), side.word())),
                     );
                 }
@@ -583,11 +587,11 @@ impl Workbench {
             .css_classes(["stave-status-count"])
             .build();
         let problems_content = gtk::Box::new(gtk::Orientation::Horizontal, 5);
-        problems_content.append(&gtk::Label::new(Some("Problems")));
+        problems_content.append(&gtk::Label::new(Some(&tr("Problems"))));
         problems_content.append(&problems_count);
-        let problems_button = status_tab("Problems", "Show the problems");
+        let problems_button = status_tab(&tr("Problems"), &tr("Show the problems"));
         problems_button.set_child(Some(&problems_content));
-        let output_button = status_tab("Output", "Show what the checks said");
+        let output_button = status_tab(&tr("Output"), &tr("Show what the checks said"));
         let statusbar = panel::Statusbar::new();
         statusbar.add_prefix(0, &problems_button);
         statusbar.add_prefix(1, &output_button);
@@ -597,19 +601,19 @@ impl Workbench {
         let shows = gio::Menu::new();
         for id in PanelId::ALL {
             shows.append(
-                Some(id.title()),
+                Some(&id.title()),
                 Some(&format!("win.show-panel::{}", id.word())),
             );
         }
-        panels_menu.append_section(Some("Show a panel"), &shows);
+        panels_menu.append_section(Some(&tr("Show a panel")), &shows);
         let reset = gio::Menu::new();
-        reset.append(Some("Reset Layout"), Some("win.reset-layout"));
+        reset.append(Some(&tr("Reset Layout")), Some("win.reset-layout"));
         panels_menu.append_section(None, &reset);
         let panels_button = gtk::MenuButton::builder()
-            .label("Panels")
+            .label(tr("Panels"))
             .menu_model(&panels_menu)
             .direction(gtk::ArrowType::Up)
-            .tooltip_text("Show a closed panel, or put them all back")
+            .tooltip_text(tr("Show a closed panel, or put them all back"))
             .css_classes(["flat", "stave-panels-button"])
             .build();
         statusbar.add_suffix(-1, &panels_button);
@@ -959,8 +963,9 @@ impl Workbench {
             if !self.save_failed.replace(true)
                 && let Some(told) = told
             {
-                told(&format!(
-                    "Stave couldn't save the panel layout for next time: {error}"
+                told(&fill_in(
+                    &tr("Stave couldn't save the panel layout for next time: {error}"),
+                    &[("error", &error)],
                 ));
             }
         }
@@ -1350,7 +1355,7 @@ show bottom true
             .map(|id| {
                 (
                     id,
-                    gtk::Label::new(Some(id.title())).upcast::<gtk::Widget>(),
+                    gtk::Label::new(Some(&id.title())).upcast::<gtk::Widget>(),
                 )
             })
             .collect();
@@ -1441,7 +1446,7 @@ show bottom true
             .map(|id| {
                 (
                     id,
-                    gtk::Label::new(Some(id.title())).upcast::<gtk::Widget>(),
+                    gtk::Label::new(Some(&id.title())).upcast::<gtk::Widget>(),
                 )
             })
             .collect();
@@ -1491,7 +1496,7 @@ show bottom true
             .map(|id| {
                 (
                     id,
-                    gtk::Label::new(Some(id.title())).upcast::<gtk::Widget>(),
+                    gtk::Label::new(Some(&id.title())).upcast::<gtk::Widget>(),
                 )
             })
             .collect();

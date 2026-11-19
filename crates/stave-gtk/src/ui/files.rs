@@ -14,6 +14,7 @@
 //! where to go ([`FilesPage::connect_go`]) and when typing has paused
 //! ([`FilesPage::connect_check`]), and it calls back with a place to show.
 
+use stave_app::i18n::{fill_in, ntr, tr, trc};
 use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -245,10 +246,10 @@ type EditorAction = fn(&Rc<FilesPage>);
 /// Cut, Copy and Paste. Each acts at the cursor.
 fn editor_menu() -> gio::Menu {
     let menu = gio::Menu::new();
-    menu.append(Some("Go to Where It Is Made"), Some("editor.follow"));
-    menu.append(Some("Peek at Where It Is Made"), Some("editor.peek"));
-    menu.append(Some("List Where It Is Used"), Some("editor.uses"));
-    menu.append(Some("Show Card"), Some("editor.show-info"));
+    menu.append(Some(&tr("Go to Where It Is Made")), Some("editor.follow"));
+    menu.append(Some(&tr("Peek at Where It Is Made")), Some("editor.peek"));
+    menu.append(Some(&tr("List Where It Is Used")), Some("editor.uses"));
+    menu.append(Some(&tr("Show Card")), Some("editor.show-info"));
     menu
 }
 
@@ -290,10 +291,12 @@ impl FilesPage {
         uses_title.set_hexpand(true);
         let uses_close = gtk::Button::builder()
             .icon_name("window-close-symbolic")
-            .tooltip_text("Close the list of uses (Escape)")
+            .tooltip_text(tr("Close the list of uses (Escape)"))
             .css_classes(["flat", "circular"])
             .build();
-        uses_close.update_property(&[gtk::accessible::Property::Label("Close the list of uses")]);
+        uses_close.update_property(&[gtk::accessible::Property::Label(&tr(
+            "Close the list of uses",
+        ))]);
         let uses_head = gtk::Box::builder()
             .orientation(gtk::Orientation::Horizontal)
             .css_classes(["stave-uses-head"])
@@ -325,7 +328,7 @@ impl FilesPage {
 
         // The footer.
         let hint = label(
-            "Ctrl+click follows a name · Alt+F12 peeks · Alt+← goes back",
+            &tr("Ctrl+click follows a name · Alt+F12 peeks · Alt+← goes back"),
             &["stave-footer-hint"],
         );
         hint.set_hexpand(true);
@@ -353,8 +356,8 @@ impl FilesPage {
         // open one.
         let placeholder = adw::StatusPage::builder()
             .icon_name("text-x-generic-symbolic")
-            .title("No file open")
-            .description("Open a file from Files, or find one with Ctrl+K. Files open in this panel, wherever you dock it.")
+            .title(tr("No file open"))
+            .description(tr("Open a file from Files, or find one with Ctrl+K. Files open in this panel, wherever you dock it."))
             .vexpand(true)
             .css_classes(["compact", "stave-code-placeholder"])
             .build()
@@ -536,9 +539,9 @@ impl FilesPage {
         let document = self.active_document();
         let Some(document) = document else { return };
         if document.is_read_only() {
-            self.notice(format!(
-                "{} is part of the standard library and can't be changed",
-                document.display(&self.state.borrow().folder)
+            self.notice(fill_in(
+                &tr("{file} is part of the standard library and can't be changed"),
+                &[("file", &document.display(&self.state.borrow().folder))],
             ));
             return;
         }
@@ -565,9 +568,12 @@ impl FilesPage {
             .body(&failure.body)
             .close_response("cancel")
             .build();
-        dialog.add_response("cancel", "_Cancel");
+        dialog.add_response("cancel", &tr("_Cancel"));
         if let Some(document) = document {
-            dialog.add_responses(&[("retry", "_Try Again"), ("copy", "Save a _Copy…")]);
+            dialog.add_responses(&[
+                ("retry", tr("_Try Again").as_str()),
+                ("copy", tr("Save a _Copy…").as_str()),
+            ]);
             dialog.set_response_appearance("copy", adw::ResponseAppearance::Suggested);
             dialog.set_default_response(Some("copy"));
             let page = Rc::downgrade(self);
@@ -588,7 +594,10 @@ impl FilesPage {
         let result = self.state.borrow_mut().buffers.save(document);
         self.refresh_markers();
         match result {
-            Ok(()) => self.notice(format!("Saved {}", document.file_name())),
+            Ok(()) => self.notice(fill_in(
+                &tr("Saved {file}"),
+                &[("file", &document.file_name())],
+            )),
             Err(error) => self.save_failed(&error),
         }
     }
@@ -606,7 +615,7 @@ impl FilesPage {
             return;
         };
         let dialog = gtk::FileDialog::builder()
-            .title("Save a Copy")
+            .title(tr("Save a Copy"))
             .initial_name(document.file_name())
             .modal(true)
             .build();
@@ -617,9 +626,9 @@ impl FilesPage {
             let Some(path) = file.path() else { return };
             let Some(page) = page.upgrade() else { return };
             match stave_app::save_failure::save_copy(&path, &text) {
-                Ok(()) => page.notice(format!(
-                    "Saved a copy as {}; the open file still has unsaved changes",
-                    path.display()
+                Ok(()) => page.notice(fill_in(
+                    &tr("Saved a copy as {file}; the open file still has unsaved changes"),
+                    &[("file", &path.display())],
                 )),
                 Err(failure) => {
                     let dialog = adw::AlertDialog::builder()
@@ -627,7 +636,7 @@ impl FilesPage {
                         .body(&failure.body)
                         .close_response("close")
                         .build();
-                    dialog.add_response("close", "_Close");
+                    dialog.add_response("close", &tr("_Close"));
                     dialog.present(Some(&page.root));
                 }
             }
@@ -660,7 +669,7 @@ impl FilesPage {
                     buffer.place_cursor(&iter);
                 }
             }
-            Ok(Formatted::Unchanged) => self.notice("The file is already laid out".to_owned()),
+            Ok(Formatted::Unchanged) => self.notice(tr("The file is already laid out")),
             Err(error) => self.notice(error.to_string()),
         }
     }
@@ -1321,8 +1330,10 @@ impl FilesPage {
             return;
         };
         let cursor_iter = buffer.iter_at_mark(&buffer.get_insert());
-        self.line
-            .set_label(&format!("Line {}", cursor_iter.line().saturating_add(1)));
+        self.line.set_label(&fill_in(
+            &tr("Line {line}"),
+            &[("line", &cursor_iter.line().saturating_add(1))],
+        ));
         let lines = self.active_lines();
         let offset = self.editor.cursor(&lines);
         let Some((analysis, file)) = self.fresh() else {
@@ -1424,9 +1435,9 @@ impl FilesPage {
             let mark = state.marks.file(&tab.document.source_path());
             super::style::show_mark(&tab.dot, mark);
             tab.button.set_tooltip_text(Some(&if dirty {
-                format!(
-                    "{} — not saved (Ctrl+S saves)",
-                    tab.document.display(&state.folder)
+                fill_in(
+                    &tr("{file} — not saved (Ctrl+S saves)"),
+                    &[("file", &tab.document.display(&state.folder))],
                 )
             } else {
                 tab.document.display(&state.folder)
@@ -1453,7 +1464,10 @@ impl FilesPage {
                 super::tab_strip::PageTab {
                     title: tab.document.file_name(),
                     tooltip: if dirty {
-                        format!("{shown} — not saved (Ctrl+S saves)")
+                        fill_in(
+                            &tr("{file} — not saved (Ctrl+S saves)"),
+                            &[("file", &shown)],
+                        )
                     } else {
                         shown
                     },
@@ -1508,8 +1522,9 @@ impl FilesPage {
         };
         match analysis.definition(FilePosition { file, offset }) {
             Some(location) => self.go(&location),
-            None => self
-                .notice("This word isn't declared anywhere: it is part of the language".to_owned()),
+            None => self.notice(tr(
+                "This word isn't declared anywhere: it is part of the language",
+            )),
         }
     }
 
@@ -1545,10 +1560,13 @@ impl FilesPage {
         self.uses_title.set_markup(&format!(
             "<b>{}</b> · {}",
             escape(&uses.name),
-            match count {
-                0 => "no uses".to_owned(),
-                1 => "1 use".to_owned(),
-                n => format!("{n} uses"),
+            if count == 0 {
+                tr("no uses")
+            } else {
+                fill_in(
+                    &ntr("{count} use", "{count} uses", count),
+                    &[("count", &count)],
+                )
             }
         ));
         for found in uses.uses {
@@ -1636,9 +1654,9 @@ impl FilesPage {
         head.append(&what);
         let open = super::style::as_link(
             gtk::Button::builder()
-                .label("Open")
+                .label(trc("verb", "Open"))
                 .css_classes(["flat", "stave-lens-link"])
-                .tooltip_text("Open the definition (F12)")
+                .tooltip_text(tr("Open the definition (F12)"))
                 .build(),
         );
         let page = Rc::downgrade(self);
@@ -1777,19 +1795,20 @@ impl FilesPage {
             .flat_map(|(checked, file)| check_labels(checked, *file));
         for problem in fast.chain(slow).filter(|p| p.covers(offset)) {
             let (word, class) = match problem.severity {
-                Severity::Error => ("Error", "error"),
-                Severity::Warning => ("Warning", "warning"),
-                Severity::Note => ("Note", "note"),
+                Severity::Error => (tr("Error"), "error"),
+                Severity::Warning => (tr("Warning"), "warning"),
+                Severity::Note => (tr("Note"), "note"),
             };
-            card.append(&label(word, &["stave-hover-kind", class]));
+            card.append(&label(&word, &["stave-hover-kind", class]));
             let message = label(problem.message, &["stave-hover-message"]);
             message.set_wrap(true);
             message.set_max_width_chars(48);
             card.append(&message);
             spoken.push(format!("{word}: {}", problem.message));
             if let Some(help) = problem.help {
-                spoken.push(format!("Help: {help}"));
-                let help = label(&format!("Help: {help}"), &["stave-hover-help"]);
+                let help = fill_in(&tr("Help: {help}"), &[("help", &help)]);
+                spoken.push(help.clone());
+                let help = label(&help, &["stave-hover-help"]);
                 help.set_wrap(true);
                 help.set_max_width_chars(48);
                 card.append(&help);
@@ -1814,7 +1833,10 @@ impl FilesPage {
             }
             if let Some(location) = &hover.location {
                 card.append(&label(
-                    &format!("Defined in {}", location.label(analysis.folder())),
+                    &fill_in(
+                        &tr("Defined in {place}"),
+                        &[("place", &location.label(analysis.folder()))],
+                    ),
                     &["stave-hover-where"],
                 ));
             }
@@ -1868,9 +1890,9 @@ impl FilesPage {
                     changed = true;
                 }
                 Ok(stave_ide::Reload::KeptChanges) => {
-                    self.notice(format!(
-                        "{} changed on disk; your unsaved changes are kept",
-                        document.file_name()
+                    self.notice(fill_in(
+                        &tr("{file} changed on disk; your unsaved changes are kept"),
+                        &[("file", &document.file_name())],
                     ));
                 }
                 Ok(stave_ide::Reload::Unchanged) | Err(_) => {}

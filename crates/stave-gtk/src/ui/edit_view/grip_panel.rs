@@ -19,6 +19,7 @@
 //!   Stops        stops at 1200mm, because …
 //! ```
 
+use stave_app::i18n::{fill_in, tr};
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -66,7 +67,7 @@ pub(super) struct GripPanel {
 impl GripPanel {
     /// The section, hidden.
     pub(super) fn new() -> GripPanel {
-        let (root, body) = sections::section("Size", "", true);
+        let (root, body) = sections::section(&tr("Size"), "", true);
         root.set_visible(false);
         // What is moved: the grip.
         let note = gtk::Label::builder()
@@ -74,14 +75,14 @@ impl GripPanel {
             .ellipsize(gtk::pango::EllipsizeMode::Start)
             .css_classes(["stave-field-value", "stave-grip-title"])
             .build();
-        body.append(&sections::row("Grip", &note));
+        body.append(&sections::row(&tr("Grip"), &note));
         let value = gtk::Entry::builder()
             .hexpand(true)
             .width_chars(6)
             .css_classes(["stave-grip-value"])
-            .tooltip_text("Type a value and press Enter")
+            .tooltip_text(tr("Type a value and press Enter"))
             .build();
-        value.update_property(&[gtk::accessible::Property::Label("Value")]);
+        value.update_property(&[gtk::accessible::Property::Label(&tr("Value"))]);
         let options = gtk::Box::builder().valign(gtk::Align::Center).build();
         let was = gtk::Label::builder()
             .css_classes(["stave-row-note"])
@@ -90,9 +91,9 @@ impl GripPanel {
         value_line.append(&value);
         value_line.append(&was);
         value_line.append(&options);
-        body.append(&sections::row("Value", &value_line));
+        body.append(&sections::row(&tr("Value"), &value_line));
         let about = sections::value("");
-        let about_label = sections::row_label("Follows");
+        let about_label = sections::row_label(&tr("Follows"));
         let about_row = gtk::Box::builder()
             .spacing(6)
             .css_classes(["stave-field-row"])
@@ -107,11 +108,11 @@ impl GripPanel {
             .orientation(gtk::Orientation::Vertical)
             .accessible_role(gtk::AccessibleRole::RadioGroup)
             .build();
-        choices.update_property(&[gtk::accessible::Property::Label("Which size changes?")]);
+        choices.update_property(&[gtk::accessible::Property::Label(&tr("Which size changes?"))]);
         body.append(&choices);
         let stop = sections::value("");
         stop.add_css_class("stave-grip-stop");
-        let stop_row = sections::row("Stops", &stop);
+        let stop_row = sections::row(&tr("Stops"), &stop);
         body.append(&stop_row);
         let waiting = sections::words("", &["stave-row-note"]);
         body.append(&waiting);
@@ -150,16 +151,12 @@ impl GripPanel {
     /// Draws `model`.
     pub(super) fn show(&self, model: &PanelModel) {
         self.note.set_label(&model.title);
-        // "1000mm (was 900mm)": the value in the field (so it can be typed
-        // over), what it was after it.
-        let shown = model.value.clone().unwrap_or_default();
-        let (value, was) = match shown.split_once(" (was ") {
-            Some((value, was)) => (
-                value.to_owned(),
-                format!("was {}", was.trim_end_matches(')')),
-            ),
-            None => (shown, String::new()),
-        };
+        // The value in the field (so it can be typed over), "was 900mm"
+        // after it.
+        let value = model.value.clone().unwrap_or_default();
+        let was = model.was.as_ref().map_or_else(String::new, |was| {
+            fill_in(&tr("was {value}"), &[("value", was)])
+        });
         // The field keeps what is being typed in it.
         if *self.shown_value.borrow() != value && !self.value.has_focus() {
             self.value.set_text(&value);
@@ -167,16 +164,12 @@ impl GripPanel {
         self.shown_value.replace(value);
         self.was.set_label(&was);
         self.was.set_visible(!was.is_empty());
-        // "follows overall_width" under "Follows"; anything else ("solved",
+        // "overall_width" under "Follows"; anything else ("solved",
         // "stuck: …") under "Note".
-        match model.about.as_deref() {
+        match &model.about {
             Some(about) => {
-                let (label, words) = match about.strip_prefix("follows ") {
-                    Some(rest) => ("Follows", rest),
-                    None => ("Note", about),
-                };
-                self.about_label.set_label(label);
-                self.about.set_label(words);
+                self.about_label.set_label(&about.label);
+                self.about.set_label(&about.words);
                 self.about_row.set_visible(true);
             }
             None => self.about_row.set_visible(false),
@@ -189,8 +182,10 @@ impl GripPanel {
         self.changes.set_visible(!model.changes.is_empty());
         clear(&self.choices);
         if !model.choices.is_empty() {
-            self.choices
-                .append(&sections::words("Which size changes?", &["stave-grip-ask"]));
+            self.choices.append(&sections::words(
+                &tr("Which size changes?"),
+                &["stave-grip-ask"],
+            ));
             let mut group: Option<gtk::CheckButton> = None;
             for choice in &model.choices {
                 let row = gtk::Box::builder()

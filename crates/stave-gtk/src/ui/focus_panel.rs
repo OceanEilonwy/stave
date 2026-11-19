@@ -7,6 +7,7 @@
 //! this module only lays it out. The step player, the swing slider and the
 //! small pictures are in the 3D view's area (`focus_stage`).
 
+use stave_app::i18n::{fill_in, tr};
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -118,11 +119,11 @@ impl FocusPanel {
         eyebrow.set_hexpand(true);
         let done = gtk::Button::builder()
             .child(&PathIcon::new(icons::CLOSE, 12))
-            .tooltip_text("Leave focus mode (Esc)")
+            .tooltip_text(tr("Leave focus mode (Esc)"))
             .css_classes(["flat", "circular", "stave-close"])
             .valign(gtk::Align::Center)
             .build();
-        done.update_property(&[gtk::accessible::Property::Label("Leave focus mode")]);
+        done.update_property(&[gtk::accessible::Property::Label(&tr("Leave focus mode"))]);
         let top = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         top.append(&eyebrow);
         top.append(&done);
@@ -134,7 +135,7 @@ impl FocusPanel {
         head.append(&description);
         let more_text = label(&["stave-description"]);
         let more = gtk::Expander::builder()
-            .label("More")
+            .label(tr("More"))
             .child(&more_text)
             .css_classes(["stave-more"])
             .visible(false)
@@ -144,15 +145,15 @@ impl FocusPanel {
         let members = card();
         let rows = card();
 
-        let (xray_row, xray, xray_label) = toggle_row("X-ray", "see into the part");
-        let (tint_row, tint, _) = toggle_row("Tint cut faces", "holes, mortises, dados");
-        let (fade_row, fade, _) = toggle_row("Fade other parts", "");
+        let (xray_row, xray, xray_label) = toggle_row(&tr("X-ray"), &tr("see into the part"));
+        let (tint_row, tint, _) = toggle_row(&tr("Tint cut faces"), &tr("holes, mortises, dados"));
+        let (fade_row, fade, _) = toggle_row(&tr("Fade other parts"), "");
         let toggles = card();
         toggles.append(&xray_row);
         toggles.append(&tint_row);
         toggles.append(&fade_row);
         let show_title = label(&["stave-section", "stave-caps"]);
-        show_title.set_label("Show");
+        show_title.set_label(&tr("Show"));
         let show_section = gtk::Box::new(gtk::Orientation::Vertical, 8);
         show_section.append(&show_title);
         show_section.append(&toggles);
@@ -160,13 +161,13 @@ impl FocusPanel {
         let insert_link = super::style::as_link(
             gtk::Button::builder()
                 .css_classes(["flat", "stave-link"])
-                .tooltip_text("Show the joint's kind in the text")
+                .tooltip_text(tr("Show the joint's kind in the text"))
                 .valign(gtk::Align::Center)
                 .build(),
         );
         let insert_head = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         let insert_title = label(&["stave-section", "stave-caps"]);
-        insert_title.set_label("How it goes together");
+        insert_title.set_label(&tr("How it goes together"));
         insert_title.set_hexpand(true);
         insert_title.set_wrap(false);
         insert_title.set_ellipsize(gtk::pango::EllipsizeMode::End);
@@ -180,7 +181,7 @@ impl FocusPanel {
             .css_classes(["stave-code"])
             .build();
         let insert_note = label(&["stave-footnote"]);
-        insert_note.set_label("The animation plays the joint’s own insert steps, the same ones the assembly check runs backwards. What you see is what was checked.");
+        insert_note.set_label(&tr("The animation plays the joint’s own insert steps, the same ones the assembly check runs backwards. What you see is what was checked."));
         let insert_section = gtk::Box::new(gtk::Orientation::Vertical, 8);
         insert_section.append(&insert_head);
         insert_section.append(&insert_code);
@@ -243,7 +244,7 @@ impl FocusPanel {
         self.root.set_visible(true);
         let joint = focus.assembles();
         self.eyebrow
-            .set_label(if joint { "Joint" } else { "Hardware" });
+            .set_label(&if joint { tr("Joint") } else { tr("Hardware") });
         self.heading.set_label(&focus.heading);
         // The first paragraph (two sentences at most), the rest under More.
         let full = focus.description.as_deref().unwrap_or(&focus.title);
@@ -329,8 +330,11 @@ impl FocusPanel {
         self.rows.set_visible(!focus.rows.is_empty());
 
         self.show_section.set_visible(joint);
-        let receives = focus.receives.as_deref().unwrap_or("the part");
-        set_toggle_text(&self.xray_label, "X-ray", &format!("see into {receives}"));
+        let see_into = match focus.receives.as_deref() {
+            Some(receives) => fill_in(&tr("see into {part}"), &[("part", &receives)]),
+            None => tr("see into the part"),
+        };
+        set_toggle_text(&self.xray_label, &tr("X-ray"), &see_into);
 
         match &focus.insert {
             Some(insert) => {

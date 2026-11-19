@@ -4,6 +4,7 @@
 //! "repeat 3 up", "mirror" and "hold" do what the card's buttons do. Each
 //! runs the same method of the window as the mouse: one path for both.
 
+use stave_app::i18n::{fill_in, tr};
 use std::rc::Rc;
 
 use stave_app::edit::{Declaration, Picked};
@@ -148,7 +149,10 @@ impl Window {
                         if label_matches(candidate.entry.label.as_str(), &group, words) {
                             found.push((
                                 Action {
-                                    label: format!("Add {}", candidate.entry.label.as_str()),
+                                    label: fill_in(
+                                        &tr("Add {name}"),
+                                        &[("name", &candidate.entry.label.as_str())],
+                                    ),
                                     detail: format!("{place} · {group}"),
                                 },
                                 Run::Choose(candidate.declaration),
@@ -156,17 +160,17 @@ impl Window {
                         }
                     }
                 } else if let Some(picked) = self.picked_for_verb(&session) {
-                    let what = if words.is_empty() {
-                        "something".to_owned()
+                    let label = if words.is_empty() {
+                        tr("Add something")
                     } else {
-                        format!("“{words}”")
+                        fill_in(&tr("Add “{words}”"), &[("words", &words)])
                     };
-                    let onto = item.clone().unwrap_or_else(|| "the selection".to_owned());
+                    let detail = match &item {
+                        Some(item) => fill_in(&tr("onto {item}"), &[("item", item)]),
+                        None => tr("onto the selection"),
+                    };
                     found.push((
-                        Action {
-                            label: format!("Add {what}"),
-                            detail: format!("onto {onto}"),
-                        },
+                        Action { label, detail },
                         Run::StartThenChoose(picked, words.clone()),
                     ));
                 }
@@ -175,8 +179,8 @@ impl Window {
                 if let Some(item) = &item {
                     found.push((
                         Action {
-                            label: format!("Remove {item}…"),
-                            detail: "lists what goes with it first".to_owned(),
+                            label: fill_in(&tr("Remove {item}…"), &[("item", item)]),
+                            detail: tr("lists what goes with it first"),
                         },
                         Run::Other(verb.clone()),
                     ));
@@ -187,10 +191,13 @@ impl Window {
                     found.push((
                         Action {
                             label: match to {
-                                Some(to) => format!("Rename {item} to {to}"),
-                                None => format!("Rename {item}…"),
+                                Some(to) => fill_in(
+                                    &tr("Rename {item} to {to}"),
+                                    &[("item", item), ("to", to)],
+                                ),
+                                None => fill_in(&tr("Rename {item}…"), &[("item", item)]),
                             },
-                            detail: "everywhere it is used".to_owned(),
+                            detail: tr("everywhere it is used"),
                         },
                         Run::Other(verb.clone()),
                     ));
@@ -204,11 +211,20 @@ impl Window {
                 let what = chosen.or_else(|| item.clone());
                 if let Some(what) = what {
                     let count = count.unwrap_or(2);
-                    let way = axis.map_or(String::new(), |axis| format!(" {}", axis.word()));
+                    let label = match axis {
+                        Some(axis) => fill_in(
+                            &tr("Make {count} of {what} {way}"),
+                            &[("count", &count), ("what", &what), ("way", &axis.word())],
+                        ),
+                        None => fill_in(
+                            &tr("Make {count} of {what}"),
+                            &[("count", &count), ("what", &what)],
+                        ),
+                    };
                     found.push((
                         Action {
-                            label: format!("Make {count} of {what}{way}"),
-                            detail: "filling its space".to_owned(),
+                            label,
+                            detail: tr("filling its space"),
                         },
                         Run::Other(verb.clone()),
                     ));
@@ -218,8 +234,8 @@ impl Window {
                 if let Some(item) = &item {
                     found.push((
                         Action {
-                            label: format!("And the other side of {item}"),
-                            detail: "adds its mirror image".to_owned(),
+                            label: fill_in(&tr("And the other side of {item}"), &[("item", item)]),
+                            detail: tr("adds its mirror image"),
                         },
                         Run::Other(verb.clone()),
                     ));
@@ -229,11 +245,11 @@ impl Window {
                 if matches!(session.selection(), Some(Selection::Part(_))) {
                     found.push((
                         Action {
-                            label: "Hold a distance…".to_owned(),
-                            detail: format!(
-                                "from {}",
-                                item.clone().unwrap_or_else(|| "the part".to_owned())
-                            ),
+                            label: tr("Hold a distance…"),
+                            detail: match &item {
+                                Some(item) => fill_in(&tr("from {item}"), &[("item", item)]),
+                                None => tr("from the part"),
+                            },
                         },
                         Run::Other(verb.clone()),
                     ));
@@ -243,8 +259,8 @@ impl Window {
         if found.is_empty() {
             found.push((
                 Action {
-                    label: "Select something first".to_owned(),
-                    detail: "a part, or click in a space, then type the verb".to_owned(),
+                    label: tr("Select something first"),
+                    detail: tr("a part, or click in a space, then type the verb"),
                 },
                 Run::Other(Verb::Hold),
             ));
@@ -301,8 +317,9 @@ impl Window {
                 match declaration {
                     Some(declaration) if !words.is_empty() => self.choose_later(declaration),
                     Some(_) => {}
-                    None => self.edit_toast(&format!(
-                        "Nothing called “{words}” can go there: the menu lists what can"
+                    None => self.edit_toast(&fill_in(
+                        &tr("Nothing called “{words}” can go there: the menu lists what can"),
+                        &[("words", &words)],
                     )),
                 }
             }
@@ -317,7 +334,10 @@ impl Window {
             Run::Other(Verb::Mirror) => self.mirror_selected(),
             Run::Other(Verb::Hold) => self.hold_from_selected(),
             Run::Other(Verb::Add(words)) => {
-                self.edit_toast(&format!("Select a space or a part to add “{words}” to"));
+                self.edit_toast(&fill_in(
+                    &tr("Select a space or a part to add “{words}” to"),
+                    &[("words", &words)],
+                ));
             }
         }
     }

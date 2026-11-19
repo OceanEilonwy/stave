@@ -1,6 +1,7 @@
 //! The problem pins on the 3D view: made once per check and selection,
 //! placed on their parts each frame.
 
+use stave_app::i18n::{fill_in, tr};
 use std::rc::Rc;
 
 use adw::prelude::*;
@@ -193,8 +194,9 @@ impl Window {
             })
             .tooltip_text(message)
             .build();
-        button.update_property(&[gtk::accessible::Property::Label(&format!(
-            "Show the problem: {message}"
+        button.update_property(&[gtk::accessible::Property::Label(&fill_in(
+            &tr("Show the problem: {message}"),
+            &[("message", &message)],
         ))]);
         let label = gtk::Label::builder()
             .label(message)

@@ -24,6 +24,7 @@
 //! ▸ Checks                                0 problems
 //! ```
 
+use stave_app::i18n::{fill_in, ntr, tr};
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -100,31 +101,12 @@ pub(super) fn swatch_mark(swatch: &Swatch, size: i32) -> gtk::DrawingArea {
     icons::swatch(colour, swatch.shape == SwatchShape::Round, size)
 }
 
-/// The section's title and note from the eyebrow: "Part" and "in door_l"
-/// for "PART · IN door_l".
-fn kind_and_place(eyebrow: &str) -> (String, String) {
-    let (kind, place) = eyebrow.split_once(" · ").unwrap_or((eyebrow, ""));
-    let mut chars = kind.chars();
-    let kind = match chars.next() {
-        Some(first) => first
-            .to_uppercase()
-            .chain(chars.as_str().to_lowercase().chars())
-            .collect(),
-        None => String::new(),
-    };
-    let place = match place.strip_prefix("IN ") {
-        Some(rest) => format!("in {rest}"),
-        None => place.to_owned(),
-    };
-    (kind, place)
-}
-
 /// "0 problems", "1 problem", "2 problems".
 fn problems_note(count: usize) -> String {
-    match count {
-        1 => "1 problem".to_owned(),
-        count => format!("{count} problems"),
-    }
+    fill_in(
+        &ntr("{count} problem", "{count} problems", count),
+        &[("count", &count)],
+    )
 }
 
 impl Inspector {
@@ -132,8 +114,8 @@ impl Inspector {
     pub fn new() -> Inspector {
         sections::install_style();
         let empty = adw::StatusPage::builder()
-            .title("Nothing selected")
-            .description("Click a part in the list or in the 3D view to see its stock, size, joints and where it is written.")
+            .title(tr("Nothing selected"))
+            .description(tr("Click a part in the list or in the 3D view to see its stock, size, joints and where it is written."))
             .css_classes(["compact"])
             .build();
         let details = gtk::Box::builder()
@@ -248,8 +230,13 @@ impl Inspector {
         self.details.append(&self.header(inspection));
 
         // What it is: its kind (and where it sits) and its rows.
-        let (kind, place) = kind_and_place(&inspection.eyebrow);
-        let (section_box, body) = sections::section(&kind, &place, true);
+        let place = inspection
+            .within
+            .as_ref()
+            .map_or_else(String::new, |assembly| {
+                fill_in(&tr("in {assembly}"), &[("assembly", assembly)])
+            });
+        let (section_box, body) = sections::section(&inspection.kind, &place, true);
         if let Some(description) = &inspection.description {
             body.append(&sections::words(description, &["stave-row-note"]));
         }
@@ -265,7 +252,7 @@ impl Inspector {
             .collect();
         if !joined.is_empty() {
             let (section_box, body) =
-                sections::section("Joined to", &joined.len().to_string(), true);
+                sections::section(&tr("Joined to"), &joined.len().to_string(), true);
             for connection in joined {
                 body.append(&self.connection_row(connection));
             }
@@ -277,7 +264,7 @@ impl Inspector {
             .filter(|c| c.section == ConnectionSection::Cuts)
             .collect();
         if !cuts.is_empty() {
-            let (section_box, body) = sections::section("Cuts", &cuts.len().to_string(), true);
+            let (section_box, body) = sections::section(&tr("Cuts"), &cuts.len().to_string(), true);
             for connection in cuts {
                 body.append(&self.connection_row(connection));
             }
@@ -318,7 +305,7 @@ impl Inspector {
                 holder.append(
                     &gtk::Label::builder()
                         .label("●")
-                        .tooltip_text("This file has changes that aren't saved")
+                        .tooltip_text(tr("This file has changes that aren't saved"))
                         .css_classes(["stave-unsaved-dot"])
                         .build(),
                 );
@@ -334,7 +321,7 @@ impl Inspector {
             gtk::Button::builder()
                 .label(&source.label)
                 .css_classes(["flat", "stave-link", "stave-source-link"])
-                .tooltip_text("Show it in the editor")
+                .tooltip_text(tr("Show it in the editor"))
                 .build(),
         );
         let location = source.location.clone();
@@ -384,9 +371,9 @@ impl Inspector {
                     .css_classes(["flat", "stave-row-lead-button"])
                     .tooltip_text(match connection.section {
                         ConnectionSection::Joined | ConnectionSection::HowItWorks => {
-                            "See how it goes together"
+                            tr("See how it goes together")
                         }
-                        ConnectionSection::Cuts => "See the hardware that makes it",
+                        ConnectionSection::Cuts => tr("See the hardware that makes it"),
                     })
                     .build();
                 let callbacks = self.callbacks.clone();
@@ -425,7 +412,8 @@ impl Inspector {
     /// problem), or a count of none.
     fn checks_section(&self, inspection: &Inspection) -> gtk::Box {
         let count = inspection.checks.len();
-        let (section_box, body) = sections::section("Checks", &problems_note(count), count > 0);
+        let (section_box, body) =
+            sections::section(&tr("Checks"), &problems_note(count), count > 0);
         if count == 0 {
             section_box.add_css_class("empty");
             return section_box;
@@ -443,7 +431,7 @@ impl Inspector {
             let button = gtk::Button::builder()
                 .child(&content)
                 .css_classes(["flat", "stave-check-row", class])
-                .tooltip_text("Show this problem")
+                .tooltip_text(tr("Show this problem"))
                 .build();
             let links = self.links.clone();
             let problem = check.problem;
@@ -456,7 +444,7 @@ impl Inspector {
     }
 
     fn source_section(&self, source: &Snippet) -> gtk::Box {
-        let (section_box, section) = sections::section("Defined in", &source.label, true);
+        let (section_box, section) = sections::section(&tr("Defined in"), &source.label, true);
         // One label per line, each ending in "…" where it doesn't fit, so
         // no letter is ever cut in half.
         let code = gtk::Box::builder()
@@ -484,7 +472,7 @@ impl Inspector {
         }
         section.append(&code);
         section.append(&sections::words(
-            "The text is the source of truth. Positions are worked out from these relationships; none are stored.",
+            &tr("The text is the source of truth. Positions are worked out from these relationships; none are stored."),
             &["stave-footnote"],
         ));
         section_box
@@ -525,15 +513,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_eyebrow_becomes_a_section_title_and_note() {
-        assert_eq!(
-            kind_and_place("PART · IN door_l"),
-            ("Part".to_owned(), "in door_l".to_owned())
-        );
-        assert_eq!(
-            kind_and_place("JOINT MEMBER"),
-            ("Joint member".to_owned(), String::new())
-        );
+    fn problems_are_counted_in_words() {
         assert_eq!(problems_note(0), "0 problems");
         assert_eq!(problems_note(1), "1 problem");
     }
