@@ -641,11 +641,18 @@ impl Component for Window {
     type Widgets = ();
 
     fn init_root() -> adw::ApplicationWindow {
-        adw::ApplicationWindow::builder()
+        let window = adw::ApplicationWindow::builder()
             .width_request(360)
             .height_request(400)
-            .css_classes(["stave-window"])
-            .build()
+            .build();
+        // Added, not set: setting `css-classes` would drop GtkWindow's own
+        // `background` class, which is what gives the window libadwaita's
+        // text colour. Without it, any text that doesn't set its own
+        // colour (the panels' status pages: "No problems", "No files")
+        // takes GTK's initial colour, white, and all but vanishes in the
+        // light style.
+        window.add_css_class("stave-window");
+        window
     }
 
     fn init(
@@ -1364,6 +1371,93 @@ mod tests {
             view_description(None, "No problems"),
             "Nothing selected. No problems."
         );
+    }
+
+    /// The relative luminance of `colour` laid over `under` (WCAG 2).
+    fn luminance(colour: gtk::gdk::RGBA, under: gtk::gdk::RGBA) -> f64 {
+        let alpha = f64::from(colour.alpha());
+        let channel = |over: f32, back: f32| {
+            let value = f64::from(over) * alpha + f64::from(back) * (1.0 - alpha);
+            if value <= 0.039_28 {
+                value / 12.92
+            } else {
+                ((value + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        0.2126 * channel(colour.red(), under.red())
+            + 0.7152 * channel(colour.green(), under.green())
+            + 0.0722 * channel(colour.blue(), under.blue())
+    }
+
+    #[test]
+    fn status_pages_read_on_the_window_in_light_and_dark() {
+        on_gtk_thread(status_pages_read_on_the_window);
+    }
+
+    /// A status page in the window ("No problems") takes libadwaita's
+    /// text colour, not GTK's initial white: the window keeps GtkWindow's
+    /// `background` class beside its own. Its title reads on the window's
+    /// background in both styles.
+    fn status_pages_read_on_the_window() {
+        let window = Window::init_root();
+        assert!(window.has_css_class("background"));
+        assert!(window.has_css_class("stave-window"));
+        let page = adw::StatusPage::builder()
+            .title("No problems")
+            .css_classes(["compact"])
+            .build();
+        // Shows the window's background colour as its text colour, so the
+        // test can read it.
+        let probe = gtk::Label::builder()
+            .css_classes(["stave-test-window-background"])
+            .build();
+        let column = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        column.append(&page);
+        column.append(&probe);
+        window.set_content(Some(&column));
+        let display = gtk::gdk::Display::default().expect("a display");
+        let provider = gtk::CssProvider::new();
+        provider.load_from_string(".stave-test-window-background { color: @window_bg_color; }");
+        gtk::style_context_add_provider_for_display(
+            &display,
+            &provider,
+            gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+        );
+        let title = {
+            let mut waiting = vec![page.clone().upcast::<gtk::Widget>()];
+            let mut found = None;
+            while let Some(widget) = waiting.pop() {
+                if widget.is::<gtk::Label>() && widget.has_css_class("title") {
+                    found = Some(widget);
+                    break;
+                }
+                let mut child = widget.first_child();
+                while let Some(current) = child {
+                    child = current.next_sibling();
+                    waiting.push(current);
+                }
+            }
+            found.expect("the status page has a title")
+        };
+        let manager = adw::StyleManager::default();
+        let before = manager.color_scheme();
+        for scheme in [adw::ColorScheme::ForceLight, adw::ColorScheme::ForceDark] {
+            manager.set_color_scheme(scheme);
+            settle();
+            let background = probe.color();
+            let opaque =
+                gtk::gdk::RGBA::new(background.red(), background.green(), background.blue(), 1.0);
+            let (text, back) = (luminance(title.color(), opaque), luminance(opaque, opaque));
+            let contrast = (text.max(back) + 0.05) / (text.min(back) + 0.05);
+            assert!(
+                contrast >= 4.5,
+                "{scheme:?}: the title {:?} on {background:?} has contrast {contrast:.2}",
+                title.color()
+            );
+        }
+        manager.set_color_scheme(before);
+        gtk::style_context_remove_provider_for_display(&display, &provider);
+        window.destroy();
     }
 
     #[test]
