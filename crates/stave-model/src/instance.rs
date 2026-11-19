@@ -17,6 +17,7 @@
 //! reflects the source's results instead of evaluating the copy.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use stave_lang::ast::{BinaryOp, Span};
 use stave_lang::units::Rational;
@@ -223,8 +224,10 @@ pub struct AssemblyInst {
 /// The concrete design: every item with an id.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Model {
-    /// The resolved definitions.
-    pub defs: Defs,
+    /// The resolved definitions, shared: they don't change once
+    /// resolved, so instantiation reads them while it fills the tables
+    /// below, and a copy of the model shares them.
+    pub defs: Arc<Defs>,
     /// The project module.
     pub root: ModuleId,
     /// Every instance; the first ones are the modules, in module order.
@@ -287,7 +290,7 @@ impl Model {
 pub fn instantiate(defs: Defs, root: ModuleId) -> (Model, Vec<Diagnostic>) {
     let mut builder = Builder {
         model: Model {
-            defs,
+            defs: Arc::new(defs),
             root,
             instances: Vec::new(),
             params: Vec::new(),
@@ -305,7 +308,9 @@ pub fn instantiate(defs: Defs, root: ModuleId) -> (Model, Vec<Diagnostic>) {
     };
     builder.run();
     if builder.diagnostics.iter().any(Diagnostic::is_error) {
-        builder.model.defs.earlier_errors = true;
+        // The builder's own handles are dropped by now, so this writes in
+        // place rather than copying.
+        Arc::make_mut(&mut builder.model.defs).earlier_errors = true;
     }
     (builder.model, builder.diagnostics)
 }
@@ -334,24 +339,22 @@ fn push<T>(arena: &mut Vec<T>, make: impl FnOnce(usize) -> T) -> usize {
 
 impl Builder {
     fn run(&mut self) {
-        let module_count = self.model.defs.modules.len();
-        for index in 0..module_count {
-            let Some(module) = self.model.defs.modules.get(index).map(|m| m.id) else {
-                continue;
-            };
-            self.new_instance(module, InstanceKind::Module(module), String::new(), None);
+        let defs = Arc::clone(&self.model.defs);
+        for module in &defs.modules {
+            self.new_instance(
+                module.id,
+                InstanceKind::Module(module.id),
+                String::new(),
+                None,
+            );
         }
-        for index in 0..module_count {
-            let Some(module_defs) = self.model.defs.modules.get(index) else {
-                continue;
-            };
+        for (index, module_defs) in defs.modules.iter().enumerate() {
             let module = module_defs.id;
-            let items = module_defs.items.clone();
             let Some(instance) = InstanceId::from_index(index) else {
                 continue;
             };
             let is_root = module == self.model.root;
-            for def in items {
+            for &def in &module_defs.items {
                 let design = matches!(def, DefId::Param(_) | DefId::Let(_) | DefId::Require(_));
                 if design || is_root {
                     self.instantiate_item(def, instance, None, "", None);
@@ -660,8 +663,10 @@ impl Builder {
                     ItemSlot::Assembly(slot) => Some(slot.all()),
                     _ => None,
                 });
-                match self.model.defs.assembly(id).map(|a| a.kind.clone()) {
+                let defs = Arc::clone(&self.model.defs);
+                match defs.assembly(id).map(|a| &a.kind) {
                     Some(AssemblyKind::Instance { component, .. }) => {
+                        let component = *component;
                         let labels = elements.clone().unwrap_or_else(|| vec![String::new()]);
                         let mut ids = Vec::new();
                         for (index, label) in labels.iter().enumerate() {
@@ -778,14 +783,12 @@ impl Builder {
             inner,
             mirror_of,
         });
-        let items = self
-            .model
-            .defs
+        let defs = Arc::clone(&self.model.defs);
+        let items = defs
             .component(component)
-            .map(|c| c.items.clone())
-            .unwrap_or_default();
+            .map_or(&[][..], |c| c.items.as_slice());
         // Params first, so arguments are attached before counts need them.
-        for item in &items {
+        for item in items {
             if let DefId::Param(_) = item {
                 self.instantiate_item(
                     *item,
@@ -799,7 +802,7 @@ impl Builder {
         if source_instance.is_none() {
             self.attach_arguments(def, ctx, inner);
         }
-        for item in items {
+        for &item in items {
             if !matches!(item, DefId::Param(_)) {
                 self.instantiate_item(
                     item,
@@ -867,9 +870,11 @@ impl Builder {
     }
 
     fn try_mirror(&mut self, mirror: PendingMirror) {
-        let Some(AssemblyKind::Mirror(def)) =
-            self.model.defs.assembly(mirror.def).map(|a| a.kind.clone())
-        else {
+        let defs = Arc::clone(&self.model.defs);
+        let Some(assembly_def) = defs.assembly(mirror.def) else {
+            return;
+        };
+        let AssemblyKind::Mirror(def) = &assembly_def.kind else {
             return;
         };
         let Some(source) = self.mirror_source(&def.source, mirror.ctx) else {
@@ -884,13 +889,7 @@ impl Builder {
         else {
             return;
         };
-        let name = self
-            .model
-            .defs
-            .assembly(mirror.def)
-            .map(|a| a.decl.name.clone())
-            .unwrap_or_default();
-        let full = element_name(&mirror.prefix, &name, None);
+        let full = element_name(&mirror.prefix, &assembly_def.decl.name, None);
         let id = self.new_assembly(
             mirror.def,
             mirror.ctx,
@@ -909,9 +908,8 @@ impl Builder {
     }
 
     fn report_unresolved_mirror(&mut self, mirror: &PendingMirror) {
-        let Some(AssemblyKind::Mirror(def)) =
-            self.model.defs.assembly(mirror.def).map(|a| a.kind.clone())
-        else {
+        let defs = Arc::clone(&self.model.defs);
+        let Some(AssemblyKind::Mirror(def)) = defs.assembly(mirror.def).map(|a| &a.kind) else {
             return;
         };
         if def.source.kind == RExprKind::Error {
