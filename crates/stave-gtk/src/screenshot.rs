@@ -207,6 +207,7 @@ impl<'a> View<'a> {
 /// Renders a posed scene to an image, framed on what is shown (or on the
 /// items `view.frame` names) and seen from the default direction turned
 /// `view.turn` degrees about the up axis and from `view.pitch` degrees up.
+/// `scene` must be the one last uploaded to `renderer`.
 pub fn render_posed(
     renderer: &mut Renderer,
     scene: &SceneGraph,
@@ -238,7 +239,8 @@ pub fn render_posed(
     )
 }
 
-/// Renders a scene of a design to an image.
+/// Renders a scene of a design to an image. `scene` must be the one last
+/// uploaded to `renderer`.
 pub fn render_scene(
     renderer: &mut Renderer,
     design: &SolvedDesign,
@@ -251,7 +253,8 @@ pub fn render_scene(
 }
 
 /// Renders focus mode on a joint or a piece of hardware, and returns the
-/// side panel's text with the image.
+/// side panel's text with the image. `scene` must be the one last
+/// uploaded to `renderer`.
 pub fn render_focus(
     renderer: &mut Renderer,
     opened: &stave_app::Opened,
@@ -366,7 +369,8 @@ pub fn render_focus(
     Ok((image, panel.join("\n")))
 }
 
-/// Renders framed on a box, from the view's direction.
+/// Renders framed on a box, from the view's direction. The scene is
+/// uploaded once by the caller, not here for every picture.
 fn render_bounds(
     renderer: &mut Renderer,
     scene: &SceneGraph,
@@ -377,7 +381,6 @@ fn render_bounds(
     bounds: Aabb,
 ) -> Result<Image> {
     let aspect = crate::render::aspect(width, height);
-    renderer.upload(scene);
     let orbit = match view.plan {
         Some((plan, yaw)) => Orbit::plan(plan, aspect, yaw + view.turn.to_radians()),
         None => {
@@ -446,6 +449,8 @@ pub fn run(
     };
     let scene = stave_app::view::scene(design);
     let mut renderer = Renderer::new()?;
+    // Once: every picture below is of this scene.
+    renderer.upload(&scene);
     let image = match (diagnostic, &shot.focus) {
         (None, Some(focus_shot)) => {
             let (image, panel) = render_focus(
@@ -521,6 +526,7 @@ mod tests {
         let opened = stave_app::open(&folder).unwrap();
         let design = opened.design.as_ref().unwrap();
         let scene = stave_app::view::scene(design);
+        renderer.upload(&scene);
         for scene_name in [None, Some("all_open")] {
             let shot = Shot {
                 scene: scene_name.map(str::to_owned),
@@ -581,6 +587,10 @@ mod tests {
         ));
         assert!(named("door_l.hinges[lower]", "door_l.hinges"));
         assert!(!named("door_l.hingesx", "door_l.hinges"));
+        // Pictures don't upload the scene themselves: the caller does,
+        // once, and a renderer that was given none says so.
+        let mut fresh = Renderer::new().unwrap();
+        assert!(render_scene(&mut fresh, design, &scene, &Shot::default(), (64, 64)).is_err());
     }
 
     /// Focus mode renders offscreen: a joint mid-way, X-ray on and off,
@@ -598,6 +608,7 @@ mod tests {
         let opened = stave_app::open(&folder).unwrap();
         let design = opened.design.as_ref().unwrap();
         let scene = stave_app::view::scene(design);
+        renderer.upload(&scene);
         let shot = |step: f32, xray: bool| Shot {
             focus: Some(FocusShot {
                 name: "rung_sockets".to_owned(),
@@ -638,6 +649,7 @@ mod tests {
         let opened = stave_app::open(&folder).unwrap();
         let design = opened.design.as_ref().unwrap();
         let scene = stave_app::view::scene(design);
+        renderer.upload(&scene);
         let hinge = |open: f32, plan: bool| Shot {
             open: vec![("door_l".to_owned(), open)],
             focus: Some(FocusShot {
@@ -675,6 +687,7 @@ mod tests {
         let samples = stave_app::open(&folder).unwrap();
         let samples_design = samples.design.as_ref().unwrap();
         let samples_scene = stave_app::view::scene(samples_design);
+        renderer.upload(&samples_scene);
         let chidori = |in_3d: bool| FocusShot {
             name: "node".to_owned(),
             step: Some(0.83),
@@ -706,6 +719,7 @@ mod tests {
             views.push(image.rgba);
         }
         assert_ne!(views[0], views[1]);
+        renderer.upload(&scene);
         // A joint that doesn't turn has no view from above.
         let mut joint = hinge(0.0, true);
         if let Some(focus) = joint.focus.as_mut() {
