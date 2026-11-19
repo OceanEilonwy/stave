@@ -16,7 +16,8 @@ use stave_model::value::Value;
 use stave_schema::kinds::RoleType;
 
 use crate::eval::Env;
-use crate::{Reported, Solved, Solver};
+use crate::failure::Accounted;
+use crate::{Solved, Solver};
 
 /// What a joint or hardware declaration hands its kind: the positional
 /// argument and the named ones, evaluated.
@@ -263,8 +264,7 @@ impl Solver<'_> {
         let diagnostic = self.kind_signature_diagnostic(
             &kind_def, kind, kind_name, &handed, &found, &choice, *param, env, owner,
         );
-        self.report_kind_signature(diagnostic, owner);
-        Err(Reported)
+        Err(self.report_kind_signature(diagnostic, owner).into())
     }
 
     /// Follows a param to the value written for it: through an assembly's
@@ -534,8 +534,10 @@ impl Solver<'_> {
     /// One mistake, one error: a declaration whose kind fails the same way
     /// at the same choice as an earlier one (another element of an array,
     /// or a second joint of the same component handed the same) is a note
-    /// and a place on the earlier error.
-    fn report_kind_signature(&mut self, diagnostic: Diagnostic, owner: DefId) {
+    /// and a place on the earlier error. Either way the failure is
+    /// accounted for: reported here, or folded into an error already
+    /// reported, which counts as skipped.
+    fn report_kind_signature(&mut self, diagnostic: Diagnostic, owner: DefId) -> Accounted {
         let declared = self
             .model
             .defs
@@ -550,19 +552,17 @@ impl Solver<'_> {
                 && earlier.primary() == diagnostic.primary()
         });
         let Some(earlier) = earlier else {
-            self.report(diagnostic);
-            return;
+            return self.report(diagnostic).into();
         };
-        let Some(place) = diagnostic.labels.get(1) else {
-            return;
-        };
-        if earlier.labels.contains(place) {
-            return;
+        if let Some(place) = diagnostic.labels.get(1)
+            && !earlier.labels.contains(place)
+        {
+            earlier.labels.push(place.clone());
+            let note = format!("the same for {declared}");
+            if !earlier.notes.contains(&note) {
+                earlier.notes.push(note);
+            }
         }
-        earlier.labels.push(place.clone());
-        let note = format!("the same for {declared}");
-        if !earlier.notes.contains(&note) {
-            earlier.notes.push(note);
-        }
+        self.skip().into()
     }
 }

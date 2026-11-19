@@ -1663,6 +1663,11 @@ pub struct Defs {
     /// (`Component.item` for items inside a component). Uses of them are
     /// skipped without an `unknown-name`.
     pub broken: std::collections::BTreeMap<ModuleId, std::collections::BTreeSet<String>>,
+    /// `true` when loading, parsing, resolving or instantiating reported an
+    /// error. A later stage that meets something an earlier check should
+    /// have caught then knows the user was told; when this is `false`, such
+    /// a failure is a bug, and is reported as one rather than dropped.
+    pub earlier_errors: bool,
     /// `param`s of modules and components.
     pub params: Vec<ParamDef>,
     /// `let`s.

@@ -193,6 +193,21 @@ fn a_component_argument_out_of_range_is_set_to_the_nearest_end() {
     );
 }
 
+/// One mistake, one error: a param outside its `within` is not also a
+/// placement cycle of the part that reads it, whether the value is a
+/// component argument or a module param's default.
+#[test]
+fn a_param_out_of_range_reports_nothing_else() {
+    for files in [
+        shelf("param width = 600mm", "250mm"),
+        shelf("param width = 1300mm within 400mm..1200mm", "100mm"),
+    ] {
+        let diagnostics = check(&files);
+        let codes: Vec<Code> = diagnostics.iter().map(|d| d.code).collect();
+        assert_eq!(codes, [Code::OutOfRange], "{diagnostics:#?}");
+    }
+}
+
 #[test]
 fn a_param_default_out_of_its_range_is_set_to_the_nearest_end() {
     let files = shelf("param width = 1300mm within 400mm..1200mm", "100mm");

@@ -1470,6 +1470,26 @@ impl<'a> Resolver<'a> {
     // Scenes
     // -----------------------------------------------------------------------
 
+    /// A scene's `show:` or `hide:`: parts, assemblies or hardware, one
+    /// or a list. Anything else would draw nothing, so it is a
+    /// `type-mismatch` here rather than an empty scene later.
+    fn scene_items(&mut self, cx: &Cx, expr: &ast::Expr, field: &str) -> RExpr {
+        let value = self.value(cx, expr, &Expect::any().named(field));
+        if !is_scene_items(&value.ty) {
+            self.error_help(
+                Code::TypeMismatch,
+                format!(
+                    "'{field}' needs parts, assemblies or hardware, found {}",
+                    value.ty
+                ),
+                cx.file,
+                value.span,
+                format!("name the parts, assemblies or hardware to {field}, or a list of them"),
+            );
+        }
+        value
+    }
+
     pub(super) fn lower_scene(
         &mut self,
         cx: &Cx,
@@ -1535,10 +1555,10 @@ impl<'a> Resolver<'a> {
         }
         let show = found
             .get("show")
-            .map(|f| self.value(cx, &f.value, &Expect::any().named("show")));
+            .map(|f| self.scene_items(cx, &f.value, "show"));
         let hide = found
             .get("hide")
-            .map(|f| self.value(cx, &f.value, &Expect::any().named("hide")));
+            .map(|f| self.scene_items(cx, &f.value, "hide"));
         let explode = found
             .get("explode")
             .map(|f| self.field_value(cx, f, fields::SCENE));
@@ -1554,6 +1574,40 @@ impl<'a> Resolver<'a> {
             explode,
             section,
         }
+    }
+}
+
+/// `true` if a value of this type names things a scene can show or hide:
+/// parts, assemblies, hardware, or a list of them.
+fn is_scene_items(ty: &Ty) -> bool {
+    match ty {
+        Ty::Part | Ty::Parts | Ty::Assembly(_) | Ty::Hardware | Ty::Unknown => true,
+        Ty::List(inner) | Ty::Array(inner) => is_scene_items(inner),
+        Ty::Length
+        | Ty::Angle
+        | Ty::Ratio
+        | Ty::Count
+        | Ty::Bool
+        | Ty::Text
+        | Ty::Stock
+        | Ty::Region
+        | Ty::Regions
+        | Ty::Profile
+        | Ty::Anchor
+        | Ty::Mount
+        | Ty::Shape
+        | Ty::Boards
+        | Ty::Splices
+        | Ty::Envelope
+        | Ty::Model
+        | Ty::Spacing
+        | Ty::Patch
+        | Ty::Word(_)
+        | Ty::Kind(_)
+        | Ty::Tool
+        | Ty::Recipe
+        | Ty::Joint
+        | Ty::Fit => false,
     }
 }
 

@@ -465,6 +465,8 @@ impl<'a> Resolver<'a> {
             files: std::mem::take(&mut self.files),
             poisoned: std::mem::take(&mut self.poisoned),
             broken: std::mem::take(&mut self.broken),
+            earlier_errors: self.modules.diagnostics.iter().any(Diagnostic::is_error)
+                || self.diagnostics.iter().any(Diagnostic::is_error),
             params: take(out.params),
             lets: take(out.lets),
             regions: take(out.regions),

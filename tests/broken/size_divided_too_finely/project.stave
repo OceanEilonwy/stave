@@ -1,0 +1,183 @@
+// expect: error[out-of-range] a size here is too large, or divided too finely, for Stave to work out exactly
+stave 1
+
+project "Gaps divided too finely" {
+  units: mm
+}
+
+stock pine_19 { species: pine, form: solid, thickness: 19mm, max_length: 2400mm }
+
+part base : pine_19 {
+  length: 600mm
+  width:  300mm
+  place {
+    ground
+  }
+}
+
+// Each board sits on the one below with a gap that is a different prime
+// fraction of a millimetre. Stave keeps every size exact, so the height of
+// each board is a fraction whose bottom number is the product of all the
+// primes below it; after a dozen boards it is too large to keep. That is
+// reported at the gap where it happens, rather than leaving the design
+// unbuilt without a word.
+
+part board_1 : pine_19 {
+  length: 600mm
+  width:  300mm
+  place {
+    against(base.top, gap: 1mm / 101)
+    flush(base.left)
+    flush(base.front)
+  }
+}
+
+part board_2 : pine_19 {
+  length: 600mm
+  width:  300mm
+  place {
+    against(board_1.top, gap: 1mm / 103)
+    flush(base.left)
+    flush(base.front)
+  }
+}
+
+part board_3 : pine_19 {
+  length: 600mm
+  width:  300mm
+  place {
+    against(board_2.top, gap: 1mm / 107)
+    flush(base.left)
+    flush(base.front)
+  }
+}
+
+part board_4 : pine_19 {
+  length: 600mm
+  width:  300mm
+  place {
+    against(board_3.top, gap: 1mm / 109)
+    flush(base.left)
+    flush(base.front)
+  }
+}
+
+part board_5 : pine_19 {
+  length: 600mm
+  width:  300mm
+  place {
+    against(board_4.top, gap: 1mm / 113)
+    flush(base.left)
+    flush(base.front)
+  }
+}
+
+part board_6 : pine_19 {
+  length: 600mm
+  width:  300mm
+  place {
+    against(board_5.top, gap: 1mm / 127)
+    flush(base.left)
+    flush(base.front)
+  }
+}
+
+part board_7 : pine_19 {
+  length: 600mm
+  width:  300mm
+  place {
+    against(board_6.top, gap: 1mm / 131)
+    flush(base.left)
+    flush(base.front)
+  }
+}
+
+part board_8 : pine_19 {
+  length: 600mm
+  width:  300mm
+  place {
+    against(board_7.top, gap: 1mm / 137)
+    flush(base.left)
+    flush(base.front)
+  }
+}
+
+part board_9 : pine_19 {
+  length: 600mm
+  width:  300mm
+  place {
+    against(board_8.top, gap: 1mm / 139)
+    flush(base.left)
+    flush(base.front)
+  }
+}
+
+part board_10 : pine_19 {
+  length: 600mm
+  width:  300mm
+  place {
+    against(board_9.top, gap: 1mm / 149)
+    flush(base.left)
+    flush(base.front)
+  }
+}
+
+part board_11 : pine_19 {
+  length: 600mm
+  width:  300mm
+  place {
+    against(board_10.top, gap: 1mm / 151)
+    flush(base.left)
+    flush(base.front)
+  }
+}
+
+part board_12 : pine_19 {
+  length: 600mm
+  width:  300mm
+  place {
+    against(board_11.top, gap: 1mm / 157)
+    flush(base.left)
+    flush(base.front)
+  }
+}
+
+part board_13 : pine_19 {
+  length: 600mm
+  width:  300mm
+  place {
+    against(board_12.top, gap: 1mm / 163)
+    flush(base.left)
+    flush(base.front)
+  }
+}
+
+part board_14 : pine_19 {
+  length: 600mm
+  width:  300mm
+  place {
+    against(board_13.top, gap: 1mm / 167)
+    flush(base.left)
+    flush(base.front)
+  }
+}
+
+part board_15 : pine_19 {
+  length: 600mm
+  width:  300mm
+  place {
+    against(board_14.top, gap: 1mm / 173)
+    flush(base.left)
+    flush(base.front)
+  }
+}
+
+part board_16 : pine_19 {
+  length: 600mm
+  width:  300mm
+  place {
+    against(board_15.top, gap: 1mm / 179)
+    flush(base.left)
+    flush(base.front)
+  }
+}

@@ -13,7 +13,7 @@ use stave_model::value::{AnchorValue, Value};
 
 use crate::eval::{Env, KindEnv};
 use crate::joints::Binding;
-use crate::{Reported, Solved, Solver};
+use crate::{Failure, Fault, Solved, Solver};
 
 /// One member's offset from its nominal place on one axis its own mount
 /// sets (grammar, "Hardware placement").
@@ -55,7 +55,7 @@ fn adjusted(adjusts: &[AdjustDef], offsets: &[Offset]) -> Solved<Adjusted> {
     for adjust in adjusts {
         let offset = offset_of(offsets, adjust.body, adjust.axis)
             .checked_sub(offset_of(offsets, adjust.on, adjust.axis))
-            .ok_or(Reported)?;
+            .ok_or(Fault::Overflow)?;
         settings.push(AdjustSetting {
             body: adjust.body,
             axis: adjust.axis,
@@ -81,7 +81,7 @@ fn adjusted(adjusts: &[AdjustDef], offsets: &[Offset]) -> Solved<Adjusted> {
 /// The absolute value of a length.
 fn magnitude(value: ExactLength) -> Solved<ExactLength> {
     if value < ExactLength::ZERO {
-        value.checked_neg().ok_or(Reported)
+        value.checked_neg().ok_or(Failure::Fault(Fault::Overflow))
     } else {
         Ok(value)
     }
@@ -301,7 +301,7 @@ impl Solver<'_> {
         );
         kind_env.mount = Some(mount);
         let Some(ctx) = self.module_ctx(DefId::Kind(binding.kind)) else {
-            return Err(Reported);
+            return Err(Fault::Internal("the file an item is declared in").into());
         };
         let env = Env {
             ctx,

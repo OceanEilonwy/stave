@@ -13,7 +13,7 @@ use stave_model::value::ModelRef;
 use crate::hardware::{FrameShapes, Outline};
 use crate::joints::Binding;
 use crate::mechanism::ExactPoint;
-use crate::{Reported, Solved, Solver};
+use crate::{Failure, Fault, Solved, Solver};
 
 impl Solver<'_> {
     /// A piece of hardware's model, with the nodes its kind's text
@@ -28,7 +28,10 @@ impl Solver<'_> {
     ) -> Solved<Model> {
         let mut nodes: Vec<DeclaredNode> = Vec::new();
         for (id, shapes) in bodies {
-            let body = kind.bodies.get(id.index()).ok_or(Reported)?;
+            let body = kind
+                .bodies
+                .get(id.index())
+                .ok_or(Fault::Internal("a member of a kind"))?;
             for (named, (frame_box, _, outline)) in body.shapes.iter().zip(shapes) {
                 let shape = match outline {
                     Some(Outline::Bar {
@@ -56,7 +59,7 @@ impl Solver<'_> {
                         value: DeclaredValue::Shapes(list),
                         ..
                     }) => list.push(shape),
-                    Some(_) => return Err(Reported),
+                    Some(_) => return Err(Fault::Earlier.into()),
                     None => nodes.push(DeclaredNode {
                         name,
                         value: DeclaredValue::Shapes(vec![shape]),
@@ -69,7 +72,7 @@ impl Solver<'_> {
                 kind.bodies
                     .get(id.index())
                     .map(|body| body.name.as_str())
-                    .ok_or(Reported)
+                    .ok_or(Failure::Fault(Fault::Internal("a member of a kind")))
             };
             for constraint in &mechanism.constraints {
                 let (bodies, points) = match constraint {
@@ -149,7 +152,9 @@ fn is_scheme(text: &str) -> bool {
 }
 
 fn near(value: ExactLength) -> Solved<Length> {
-    value.to_nearest_length().ok_or(Reported)
+    value
+        .to_nearest_length()
+        .ok_or(Failure::Fault(Fault::Overflow))
 }
 
 fn pair([a, b]: [ExactLength; 2]) -> Solved<[Length; 2]> {

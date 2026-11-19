@@ -21,7 +21,7 @@ use stave_schema::operations::Selector;
 use stave_schema::placement::AssemblyStepKind;
 
 use crate::eval::{Env, KindEnv, midpoint};
-use crate::{Frame, Memo, Reported, Solved, Solver};
+use crate::{Failure, Fault, Frame, Memo, Solved, Solver};
 
 /// A kind call with its kind, roles and settings worked out.
 #[derive(Debug, Clone, PartialEq)]
@@ -81,8 +81,8 @@ impl PartGeom {
             (Some(d), Some(s), Some(e)) => d
                 .checked_add(*s)
                 .and_then(|x| x.checked_add(*e))
-                .ok_or(Reported),
-            _ => Err(Reported),
+                .ok_or(Failure::Fault(Fault::Overflow)),
+            _ => Err(Fault::Internal("a part's size").into()),
         }
     }
 
@@ -104,7 +104,7 @@ impl PartGeom {
         } else {
             origin.checked_sub(world)
         };
-        value.ok_or(Reported)
+        value.ok_or(Failure::Fault(Fault::Overflow))
     }
 
     /// A world box in this part's frame.
@@ -208,13 +208,15 @@ impl Solver<'_> {
         let kind_value = match self.eval(&call.kind, env)? {
             Value::Kind(kind) => kind,
             other => {
-                return Err(self.error(
-                    Code::TypeMismatch,
-                    format!("{what} needs a kind, found {}", other.description()),
-                    env.file,
-                    call.kind.span,
-                    "name a joint or hardware kind",
-                ));
+                return Err(self
+                    .error(
+                        Code::TypeMismatch,
+                        format!("{what} needs a kind, found {}", other.description()),
+                        env.file,
+                        call.kind.span,
+                        "name a joint or hardware kind",
+                    )
+                    .into());
             }
         };
         let KindValue {
@@ -223,10 +225,10 @@ impl Solver<'_> {
             settings: given,
         } = kind_value;
         if self.model.defs.is_poisoned(DefId::Kind(kind)) {
-            return Err(self.skip());
+            return Err(self.skip().into());
         }
         let Some(kind_def) = self.model.defs.kind(kind).cloned() else {
-            return Err(Reported);
+            return Err(Fault::Internal("a kind's declaration").into());
         };
         // A kind chosen through a param that doesn't take what this call
         // hands it is one error, in the words of the choice.
@@ -241,13 +243,15 @@ impl Solver<'_> {
             match roles.first_mut() {
                 Some(slot) => *slot = Some(value),
                 None => {
-                    return Err(self.error(
-                        Code::TypeMismatch,
-                        format!("the kind '{}' has no roles", kind_name),
-                        env.file,
-                        positional.span,
-                        "a kind value takes its settings by name",
-                    ));
+                    return Err(self
+                        .error(
+                            Code::TypeMismatch,
+                            format!("the kind '{}' has no roles", kind_name),
+                            env.file,
+                            positional.span,
+                            "a kind value takes its settings by name",
+                        )
+                        .into());
                 }
             }
         }
@@ -284,30 +288,34 @@ impl Solver<'_> {
                 _ => {}
             }
             if kind_def.param(&setting.name).is_none() {
-                return Err(self.error(
-                    Code::UnknownField,
-                    format!("the kind '{}' has no field '{}'", kind_name, setting.name),
-                    env.file,
-                    setting.name_span,
-                    stave_model::suggest::did_you_mean(
-                        &setting.name,
-                        kind_def
-                            .params
-                            .iter()
-                            .map(|p| p.decl.name.as_str())
-                            .chain(kind_def.roles.iter().map(|r| r.name.as_str())),
+                return Err(self
+                    .error(
+                        Code::UnknownField,
+                        format!("the kind '{}' has no field '{}'", kind_name, setting.name),
+                        env.file,
+                        setting.name_span,
+                        stave_model::suggest::did_you_mean(
+                            &setting.name,
+                            kind_def
+                                .params
+                                .iter()
+                                .map(|p| p.decl.name.as_str())
+                                .chain(kind_def.roles.iter().map(|r| r.name.as_str())),
+                        )
+                        .unwrap_or_else(|| "name one of the kind's roles or params".to_owned()),
                     )
-                    .unwrap_or_else(|| "name one of the kind's roles or params".to_owned()),
-                ));
+                    .into());
             }
             if settings.iter().any(|(n, _)| *n == setting.name) {
-                return Err(self.error(
-                    Code::DuplicateName,
-                    format!("'{}' is declared twice", setting.name),
-                    env.file,
-                    setting.name_span,
-                    "the kind value already gives this setting",
-                ));
+                return Err(self
+                    .error(
+                        Code::DuplicateName,
+                        format!("'{}' is declared twice", setting.name),
+                        env.file,
+                        setting.name_span,
+                        "the kind value already gives this setting",
+                    )
+                    .into());
             }
             settings.push((setting.name.clone(), value));
         }
@@ -338,13 +346,15 @@ impl Solver<'_> {
                 continue;
             };
             let Some(value) = role else {
-                return Err(self.error(
-                    Code::MissingField,
-                    format!("{what} is missing '{}'", role_def.name),
-                    env.file,
-                    call.span,
-                    format!("name the part for '{}' in the call", role_def.name),
-                ));
+                return Err(self
+                    .error(
+                        Code::MissingField,
+                        format!("{what} is missing '{}'", role_def.name),
+                        env.file,
+                        call.span,
+                        format!("name the part for '{}' in the call", role_def.name),
+                    )
+                    .into());
             };
             let fits = match role_def.ty {
                 RoleType::Part => matches!(value, Value::Part(_)),
@@ -357,17 +367,19 @@ impl Solver<'_> {
                     RoleType::Parts => "parts",
                     RoleType::Region => "a region",
                 };
-                return Err(self.error(
-                    Code::TypeMismatch,
-                    format!(
-                        "'{}' needs {wanted}, found {}",
-                        role_def.name,
-                        value.description()
-                    ),
-                    env.file,
-                    call.span,
-                    "check the role's argument",
-                ));
+                return Err(self
+                    .error(
+                        Code::TypeMismatch,
+                        format!(
+                            "'{}' needs {wanted}, found {}",
+                            role_def.name,
+                            value.description()
+                        ),
+                        env.file,
+                        call.span,
+                        "check the role's argument",
+                    )
+                    .into());
             }
             bound.push(value);
         }
@@ -386,18 +398,18 @@ impl Solver<'_> {
     pub(crate) fn joint_binding(&mut self, joint: JointId) -> Solved<Binding> {
         match self.joints.get(joint.index()) {
             Some(Memo::Done(binding)) => return Ok(binding.clone()),
-            Some(Memo::Failed) => return Err(Reported),
-            Some(Memo::Busy) => return Err(self.cycle(Frame::Joint(joint))),
+            Some(Memo::Failed(accounted)) => return Err((*accounted).into()),
+            Some(Memo::Busy) => return Err(self.cycle(Frame::Joint(joint)).into()),
             _ => {}
         }
         let Some(inst) = self.model.joints.get(joint.index()).cloned() else {
-            return Err(Reported);
+            return Err(Fault::Internal("a joint").into());
         };
         let Some(def) = self.model.defs.joint(inst.def).cloned() else {
-            return Err(Reported);
+            return Err(Fault::Internal("a joint's declaration").into());
         };
         if self.poisoned(DefId::Joint(inst.def)) {
-            return Err(self.skip());
+            return Err(self.skip().into());
         }
         if let Some(slot) = self.joints.get_mut(joint.index()) {
             *slot = Memo::Busy;
@@ -423,21 +435,21 @@ impl Solver<'_> {
                 if base == Some(BaseKind::Joint) {
                     Ok(binding)
                 } else {
-                    Err(self.error(
-                        Code::TypeMismatch,
-                        format!("'{}' needs a joint kind", inst.name),
-                        def.decl.file,
-                        def.call.kind.span,
-                        "use a kind declared with kind name : joint",
-                    ))
+                    Err(self
+                        .error(
+                            Code::TypeMismatch,
+                            format!("'{}' needs a joint kind", inst.name),
+                            def.decl.file,
+                            def.call.kind.span,
+                            "use a kind declared with kind name : joint",
+                        )
+                        .into())
                 }
             });
         self.leave();
+        let (memo, result) = self.remember(result, def.decl.file, def.call.span);
         if let Some(slot) = self.joints.get_mut(joint.index()) {
-            *slot = match &result {
-                Ok(binding) => Memo::Done(binding.clone()),
-                Err(_) => Memo::Failed,
-            };
+            *slot = memo;
         }
         result
     }
@@ -485,7 +497,7 @@ impl Solver<'_> {
     pub(crate) fn work_joint(&mut self, joint: JointId) -> Solved<JointWork> {
         let binding = self.joint_binding(joint)?;
         let Some(kind) = self.model.defs.kind(binding.kind).cloned() else {
-            return Err(Reported);
+            return Err(Fault::Internal("a kind's declaration").into());
         };
         let (file, span) = self.joint_place(joint);
         let name = self
@@ -508,7 +520,7 @@ impl Solver<'_> {
             .collect();
         if pairwise {
             let (Some(first), Some(second)) = (role_parts.first(), role_parts.get(1)) else {
-                return Err(Reported);
+                return Err(Fault::Earlier.into());
             };
             let mut met: Vec<PartId> = Vec::new();
             for p in first {
@@ -586,7 +598,7 @@ impl Solver<'_> {
                 kind.params.len(),
             );
             let Some(ctx) = self.module_ctx(DefId::Kind(binding.kind)) else {
-                return Err(Reported);
+                return Err(Fault::Internal("the file an item is declared in").into());
             };
             let kind_env = Env {
                 ctx,
@@ -674,7 +686,7 @@ impl Solver<'_> {
                         }
                         let Some(axis) = a.touching_axis(&b) else {
                             let (pn, qn) = (self.part_name(part), self.part_name(other));
-                            return Err(self.error(Code::TypeMismatch, format!("'extend' needs parts that butt, but {pn} and {qn} cross"), file, span, "a joint whose parts cross can't lengthen them; draw them meeting face to face"));
+                            return Err(self.error(Code::TypeMismatch, format!("'extend' needs parts that butt, but {pn} and {qn} cross"), file, span, "a joint whose parts cross can't lengthen them; draw them meeting face to face").into());
                         };
                         let toward_positive = a.max(axis) == b.min(axis);
                         let orientation = self.part_orientation(part)?;
@@ -753,7 +765,7 @@ impl Solver<'_> {
                 end.get_mut(slot)
             };
             if let Some(target) = target {
-                *target = target.checked_add(extend.by).ok_or(Reported)?;
+                *target = target.checked_add(extend.by).ok_or(Fault::Overflow)?;
             }
         }
         let mut cut_box = drawn_box;
@@ -770,8 +782,14 @@ impl Solver<'_> {
             } else {
                 (e, s)
             };
-            let low = cut_box.min(world).checked_sub(low_add).ok_or(Reported)?;
-            let high = cut_box.max(world).checked_add(high_add).ok_or(Reported)?;
+            let low = cut_box
+                .min(world)
+                .checked_sub(low_add)
+                .ok_or(Fault::Overflow)?;
+            let high = cut_box
+                .max(world)
+                .checked_add(high_add)
+                .ok_or(Fault::Overflow)?;
             cut_box = cut_box.with(world, low, high);
         }
         let (reference_face, reference_edge) = self.reference_faces(part, &orientation)?;
@@ -816,7 +834,7 @@ impl Solver<'_> {
             .iter()
             .filter_map(|sizes| sizes.get(slot).copied())
             .try_fold(ExactLength::ZERO, |sum, size| sum.checked_add(size))
-            .ok_or(Reported)?;
+            .ok_or(Fault::Overflow)?;
         if cut_length <= max_length {
             return Ok(());
         }
@@ -855,7 +873,7 @@ impl Solver<'_> {
                     stave_model::value::format_length(max_length)
                 ),
             },
-        ))
+        ).into())
     }
 
     /// The reference face and edge (grammar, "Faces to cut").
@@ -887,17 +905,19 @@ impl Solver<'_> {
             match chosen {
                 Some((face, span)) => {
                     if face.axis() != direction.axis() {
-                        return Err(this.error(
-                            Code::TypeMismatch,
-                            format!(
-                                "'{field}' needs a face across the part's {}, found '{}'",
-                                axis.word(),
-                                face.word()
-                            ),
-                            file,
-                            span,
-                            format!("name one of the two faces across its {}", axis.word()),
-                        ));
+                        return Err(this
+                            .error(
+                                Code::TypeMismatch,
+                                format!(
+                                    "'{field}' needs a face across the part's {}, found '{}'",
+                                    axis.word(),
+                                    face.word()
+                                ),
+                                file,
+                                span,
+                                format!("name one of the two faces across its {}", axis.word()),
+                            )
+                            .into());
                     }
                     Ok(LocalFace {
                         axis,
@@ -953,13 +973,13 @@ impl Solver<'_> {
         member: JointMember,
         geoms: &GeomTable,
     ) -> Solved<(PartId, PartGeom)> {
-        let part = Self::member_part(pair, member).ok_or(Reported)?;
-        let mut geom = geoms.get(part).cloned().ok_or(Reported)?;
+        let part = Self::member_part(pair, member).ok_or(Fault::Earlier)?;
+        let mut geom = geoms.get(part).cloned().ok_or(Fault::Earlier)?;
         if !(pair.across && member == JointMember::Role(0)) {
             return Ok((part, geom));
         }
         for other in pair.parts.iter().skip(1) {
-            let other = geoms.get(*other).ok_or(Reported)?;
+            let other = geoms.get(*other).ok_or(Fault::Earlier)?;
             geom.drawn_box = hull(&geom.drawn_box, &other.drawn_box);
             geom.cut_box = hull(&geom.cut_box, &other.cut_box);
         }
@@ -970,19 +990,19 @@ impl Solver<'_> {
                 .drawn_box
                 .min(world)
                 .checked_sub(geom.cut_box.min(world))
-                .ok_or(Reported)?;
+                .ok_or(Fault::Overflow)?;
             let high = geom
                 .cut_box
                 .max(world)
                 .checked_sub(geom.drawn_box.max(world))
-                .ok_or(Reported)?;
+                .ok_or(Fault::Overflow)?;
             let (start, end) = if direction.is_positive() {
                 (low, high)
             } else {
                 (high, low)
             };
             let slot = local_slot(axis);
-            let size = geom.drawn_box.size(world).ok_or(Reported)?;
+            let size = geom.drawn_box.size(world).ok_or(Fault::Overflow)?;
             if let (Some(d), Some(s), Some(e)) = (
                 geom.drawn.get_mut(slot),
                 geom.start.get_mut(slot),
@@ -1011,10 +1031,10 @@ impl Solver<'_> {
             target.or_else(|| Self::member_part(pair, selector.part)),
             Self::member_part(pair, selector.other),
         ) else {
-            return Err(Reported);
+            return Err(Fault::Earlier.into());
         };
         let (Some(gp), Some(gq)) = (geoms.get(p), geoms.get(q)) else {
-            return Err(Reported);
+            return Err(Fault::Earlier.into());
         };
         let _ = file;
         selector_on(selector, p, gp, q, gq)
@@ -1024,16 +1044,18 @@ impl Solver<'_> {
         match value {
             Value::Length(length) => Ok(Depth::Length(round_length(length)?)),
             Value::Word(Word::Through) => Ok(Depth::Through),
-            other => Err(self.error(
-                Code::TypeMismatch,
-                format!(
-                    "a depth needs a length or 'through', found {}",
-                    other.description()
-                ),
-                env.file,
-                span,
-                "write a length or through",
-            )),
+            other => Err(self
+                .error(
+                    Code::TypeMismatch,
+                    format!(
+                        "a depth needs a length or 'through', found {}",
+                        other.description()
+                    ),
+                    env.file,
+                    span,
+                    "write a length or through",
+                )
+                .into()),
         }
     }
 
@@ -1057,38 +1079,44 @@ impl Solver<'_> {
         let length = |this: &mut Self, name: &str| -> Solved<stave_lang::units::Length> {
             match get(name) {
                 Some((Value::Length(l), _)) => round_length(l),
-                Some((other, span)) => Err(this.error(
-                    Code::UnitMismatch,
-                    format!("'{name}' needs a length, found {}", other.description()),
-                    env.file,
-                    span,
-                    "write a length",
-                )),
+                Some((other, span)) => Err(this
+                    .error(
+                        Code::UnitMismatch,
+                        format!("'{name}' needs a length, found {}", other.description()),
+                        env.file,
+                        span,
+                        "write a length",
+                    )
+                    .into()),
                 None => match spec.argument(name).map(|a| a.default) {
                     Some(stave_schema::operations::ArgumentDefault::Length(nm)) => {
                         Ok(stave_lang::units::Length::from_nm(nm))
                     }
-                    _ => Err(Reported),
+                    _ => Err(Fault::Earlier.into()),
                 },
             }
         };
         let angle = |this: &mut Self, name: &str| -> Solved<stave_lang::units::Angle> {
             match get(name) {
-                Some((Value::Angle(a), _)) => a.to_nearest_angle().ok_or(Reported),
-                Some((other, span)) => Err(this.error(
-                    Code::UnitMismatch,
-                    format!("'{name}' needs an angle, found {}", other.description()),
-                    env.file,
-                    span,
-                    "write an angle",
-                )),
+                Some((Value::Angle(a), _)) => {
+                    a.to_nearest_angle().ok_or(Failure::Fault(Fault::Overflow))
+                }
+                Some((other, span)) => Err(this
+                    .error(
+                        Code::UnitMismatch,
+                        format!("'{name}' needs an angle, found {}", other.description()),
+                        env.file,
+                        span,
+                        "write an angle",
+                    )
+                    .into()),
                 None => Ok(stave_lang::units::Angle::ZERO),
             }
         };
         let depth = |this: &mut Self, name: &str| -> Solved<Depth> {
             match get(name) {
                 Some((value, span)) => this.depth(value, env, span),
-                None => Err(Reported),
+                None => Err(Fault::Earlier.into()),
             }
         };
         let flag = |name: &str| matches!(get(name), Some((Value::Bool(true), _)));
@@ -1169,53 +1197,63 @@ impl Solver<'_> {
                 .map(|(_, v, s)| (v.clone(), *s))
         };
         match (get("angle"), get("slope")) {
-            (Some((Value::Angle(angle), _)), None) => {
-                Ok(Slope::Angle(angle.to_nearest_angle().ok_or(Reported)?))
-            }
-            (Some((other, span)), None) => Err(self.error(
-                Code::UnitMismatch,
-                format!("'angle' needs an angle, found {}", other.description()),
-                env.file,
-                span,
-                "write an angle",
+            (Some((Value::Angle(angle), _)), None) => Ok(Slope::Angle(
+                angle.to_nearest_angle().ok_or(Fault::Overflow)?,
             )),
+            (Some((other, span)), None) => Err(self
+                .error(
+                    Code::UnitMismatch,
+                    format!("'angle' needs an angle, found {}", other.description()),
+                    env.file,
+                    span,
+                    "write an angle",
+                )
+                .into()),
             (None, Some((value, span))) => match value.number() {
                 Some(ratio) if ratio > Rational::ZERO => Ok(Slope::Ratio(ratio)),
-                Some(_) => Err(self.error(
+                Some(_) => Err(self
+                    .error(
+                        Code::TypeMismatch,
+                        "a dovetail's slope must be more than 0",
+                        env.file,
+                        span,
+                        "write how far across for how far along: slope: 1 in 8",
+                    )
+                    .into()),
+                None => Err(self
+                    .error(
+                        Code::TypeMismatch,
+                        format!(
+                            "'slope' needs a slope such as 1 in 8, found {}",
+                            value.description()
+                        ),
+                        env.file,
+                        span,
+                        "write how far across for how far along: slope: 1 in 8",
+                    )
+                    .into()),
+            },
+            (Some(_), Some((_, span))) => Err(self
+                .error(
                     Code::TypeMismatch,
-                    "a dovetail's slope must be more than 0",
+                    "a dovetail takes 'angle' or 'slope', not both",
                     env.file,
                     span,
-                    "write how far across for how far along: slope: 1 in 8",
-                )),
-                None => Err(self.error(
-                    Code::TypeMismatch,
+                    "remove 'angle' or 'slope'",
+                )
+                .into()),
+            (None, None) => Err(self
+                .error(
+                    Code::MissingField,
                     format!(
-                        "'slope' needs a slope such as 1 in 8, found {}",
-                        value.description()
+                        "{} is missing 'angle' or 'slope'",
+                        operation.operation.word()
                     ),
                     env.file,
-                    span,
-                    "write how far across for how far along: slope: 1 in 8",
-                )),
-            },
-            (Some(_), Some((_, span))) => Err(self.error(
-                Code::TypeMismatch,
-                "a dovetail takes 'angle' or 'slope', not both",
-                env.file,
-                span,
-                "remove 'angle' or 'slope'",
-            )),
-            (None, None) => Err(self.error(
-                Code::MissingField,
-                format!(
-                    "{} is missing 'angle' or 'slope'",
-                    operation.operation.word()
-                ),
-                env.file,
-                operation.span,
-                "add angle: 10deg, or slope: 1 in 8",
-            )),
+                    operation.span,
+                    "add angle: 10deg, or slope: 1 in 8",
+                )
+                .into()),
         }
     }
 
@@ -1289,7 +1327,7 @@ impl Solver<'_> {
             env.file,
             operation.span,
             "use crossing only for parts that butt edge to edge, or cut the tenon on end(...)",
-        ))
+        ).into())
     }
 
     /// The assembly steps of a pair.
@@ -1310,8 +1348,10 @@ impl Solver<'_> {
             let by = match &step.by {
                 Some(expr) => Some(match self.eval(expr, env)? {
                     Value::Length(l) => StepAmount::Length(round_length(l)?),
-                    Value::Angle(a) => StepAmount::Angle(a.to_nearest_angle().ok_or(Reported)?),
-                    _ => return Err(Reported),
+                    Value::Angle(a) => {
+                        StepAmount::Angle(a.to_nearest_angle().ok_or(Fault::Overflow)?)
+                    }
+                    _ => return Err(Fault::Earlier.into()),
                 }),
                 None => None,
             };
@@ -1319,7 +1359,7 @@ impl Solver<'_> {
                 Some(expr) => Some(
                     self.eval_angle(expr, env)?
                         .to_nearest_angle()
-                        .ok_or(Reported)?,
+                        .ok_or(Fault::Overflow)?,
                 ),
                 None => None,
             };
@@ -1352,13 +1392,15 @@ impl Solver<'_> {
         let stock = match self.eval(&body.stock, env)? {
             Value::Stock(stock) => stock,
             other => {
-                return Err(self.error(
-                    Code::TypeMismatch,
-                    format!("this needs a stock, found {}", other.description()),
-                    env.file,
-                    body.stock.span,
-                    "name a stock",
-                ));
+                return Err(self
+                    .error(
+                        Code::TypeMismatch,
+                        format!("this needs a stock, found {}", other.description()),
+                        env.file,
+                        body.stock.span,
+                        "name a stock",
+                    )
+                    .into());
             }
         };
         let size_of = |this: &mut Self,
@@ -1368,13 +1410,15 @@ impl Solver<'_> {
          -> Solved<ExactLength> {
             match size {
                 Some(Size::Expr(expr)) => this.eval_length(expr, env),
-                Some(Size::Fit(span)) => Err(this.error(
-                    Code::FitUndecided,
-                    format!("{name}: nothing decides its {word}"),
-                    env.file,
-                    *span,
-                    "a made part's sizes must be written",
-                )),
+                Some(Size::Fit(span)) => Err(this
+                    .error(
+                        Code::FitUndecided,
+                        format!("{name}: nothing decides its {word}"),
+                        env.file,
+                        *span,
+                        "a made part's sizes must be written",
+                    )
+                    .into()),
                 None => this.stock_length(stock, field)?.ok_or_else(|| {
                     this.error(
                         Code::MissingField,
@@ -1383,6 +1427,7 @@ impl Solver<'_> {
                         body.span,
                         format!("add {word}: ..."),
                     )
+                    .into()
                 }),
             }
         };
@@ -1397,7 +1442,7 @@ impl Solver<'_> {
             Some(expr) => self.eval_length(expr, env)?,
             None => self
                 .stock_length(stock, StockField::Thickness)?
-                .ok_or(Reported)?,
+                .ok_or(Fault::Earlier)?,
         };
         let drawn = [length, width, thickness];
         // Orientation.
@@ -1406,10 +1451,10 @@ impl Solver<'_> {
         for term in &made.place {
             if let MadeTermKind::Orient { length, width, of } = &term.kind {
                 let Some(part) = pair.parts.get(*of).copied() else {
-                    return Err(Reported);
+                    return Err(Fault::Internal("a part").into());
                 };
                 let Some(geom) = geoms.get(part) else {
-                    return Err(Reported);
+                    return Err(Fault::Earlier.into());
                 };
                 let (l, w) = (
                     geom.orientation.direction(*length),
@@ -1428,7 +1473,7 @@ impl Solver<'_> {
             }
         }
         let Some(orientation) = orientation else {
-            return Err(Reported);
+            return Err(Fault::Earlier.into());
         };
         let size_along = |axis: Axis| {
             drawn
@@ -1443,15 +1488,19 @@ impl Solver<'_> {
             Axis::Deep => 2,
         };
         let mut set = |this: &mut Self, axis: Axis, low: ExactLength, span: Span| -> Solved<()> {
-            let slot = lows.get_mut(axis_index(axis)).ok_or(Reported)?;
+            let slot = lows
+                .get_mut(axis_index(axis))
+                .ok_or(Fault::Internal("an axis of a made part"))?;
             if slot.is_some() {
-                return Err(this.error(
-                    Code::AxisSetTwice,
-                    format!("{name}: position along '{}' is set twice", axis.word()),
-                    env.file,
-                    span,
-                    format!("keep one term for '{}'", axis.word()),
-                ));
+                return Err(this
+                    .error(
+                        Code::AxisSetTwice,
+                        format!("{name}: position along '{}' is set twice", axis.word()),
+                        env.file,
+                        span,
+                        format!("keep one term for '{}'", axis.word()),
+                    )
+                    .into());
             }
             *slot = Some(low);
             Ok(())
@@ -1482,7 +1531,7 @@ impl Solver<'_> {
                     _ => {
                         let low = gp.drawn_box.min(face_axis).max(gq.drawn_box.min(face_axis));
                         let high = gp.drawn_box.max(face_axis).min(gq.drawn_box.max(face_axis));
-                        midpoint(low, high).ok_or(Reported)?
+                        midpoint(low, high).ok_or(Fault::Overflow)?
                     }
                 },
             };
@@ -1491,12 +1540,12 @@ impl Solver<'_> {
                     gq.cut_box.min(axis).max(gp.cut_box.min(axis)),
                     gq.cut_box.max(axis).min(gp.cut_box.max(axis)),
                 )
-                .ok_or(Reported)
+                .ok_or(Fault::Overflow)
             };
             let half = |axis: Axis| {
                 size_along(axis)
                     .checked_div(Rational::from(2i64))
-                    .ok_or(Reported)
+                    .ok_or(Fault::Overflow)
             };
             match &term.kind {
                 MadeTermKind::Center { axis: None, .. } => {
@@ -1509,7 +1558,7 @@ impl Solver<'_> {
                         set(
                             self,
                             axis,
-                            centre.checked_sub(half(axis)?).ok_or(Reported)?,
+                            centre.checked_sub(half(axis)?).ok_or(Fault::Overflow)?,
                             term.span,
                         )?;
                     }
@@ -1519,7 +1568,7 @@ impl Solver<'_> {
                     ..
                 } => {
                     let Some(of) = of_part.and_then(|p| geoms.get(p)) else {
-                        return Err(Reported);
+                        return Err(Fault::Earlier.into());
                     };
                     let axis = of.orientation.direction(*part_axis).axis();
                     let centre = if axis == face_axis {
@@ -1530,7 +1579,7 @@ impl Solver<'_> {
                     set(
                         self,
                         axis,
-                        centre.checked_sub(half(axis)?).ok_or(Reported)?,
+                        centre.checked_sub(half(axis)?).ok_or(Fault::Overflow)?,
                         term.span,
                     )?;
                 }
@@ -1546,7 +1595,7 @@ impl Solver<'_> {
                             .checked_sub(gap)
                             .and_then(|x| x.checked_sub(size_along(face_axis)))
                     };
-                    set(self, face_axis, low.ok_or(Reported)?, term.span)?;
+                    set(self, face_axis, low.ok_or(Fault::Overflow)?, term.span)?;
                 }
                 MadeTermKind::Flush { inset, .. } => {
                     let inset = match inset {
@@ -1560,7 +1609,7 @@ impl Solver<'_> {
                     } else {
                         plane.checked_add(inset)
                     };
-                    set(self, face_axis, low.ok_or(Reported)?, term.span)?;
+                    set(self, face_axis, low.ok_or(Fault::Overflow)?, term.span)?;
                 }
                 MadeTermKind::Orient { .. } => {}
             }
@@ -1568,12 +1617,15 @@ impl Solver<'_> {
         let mut extents = Vec::new();
         for axis in [Axis::Across, Axis::Up, Axis::Deep] {
             let Some(Some(low)) = lows.get(axis_index(axis)).copied() else {
-                return Err(self.axis_not_set(name, axis, env.file, made.span));
+                return Err(self.axis_not_set(name, axis, env.file, made.span).into());
             };
-            extents.push((low, low.checked_add(size_along(axis)).ok_or(Reported)?));
+            extents.push((
+                low,
+                low.checked_add(size_along(axis)).ok_or(Fault::Overflow)?,
+            ));
         }
         let [across, up, deep] = extents.as_slice() else {
-            return Err(Reported);
+            return Err(Fault::Internal("a made part's box").into());
         };
         let drawn_box = ExactBox::new(*across, *up, *deep);
         let preferred = |axis: Axis| match axis {
@@ -1646,7 +1698,9 @@ impl GeomTable {
 
 /// Rounds an exact length to whole nanometres for storing.
 pub(crate) fn round_length(length: ExactLength) -> Solved<stave_lang::units::Length> {
-    length.to_nearest_length().ok_or(Reported)
+    length
+        .to_nearest_length()
+        .ok_or(Failure::Fault(Fault::Overflow))
 }
 
 fn local_box(local: &[(ExactLength, ExactLength); 3]) -> Solved<LocalBox> {
@@ -1688,12 +1742,12 @@ fn selector_on(
             gq.drawn_box.min(length_world),
             gq.drawn_box.max(length_world),
         )
-        .ok_or(Reported)?;
+        .ok_or(Fault::Overflow)?;
         let p_centre = midpoint(
             gp.drawn_box.min(length_world),
             gp.drawn_box.max(length_world),
         )
-        .ok_or(Reported)?;
+        .ok_or(Fault::Overflow)?;
         gp.face_toward(length_world, q_centre >= p_centre)
     };
     let along_from = if alone { End::Start } else { near_end.end };
