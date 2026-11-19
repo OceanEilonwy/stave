@@ -431,7 +431,11 @@ them.
   main loop next runs, after the signal has returned.
 - A frame ready on the GPU is shown from a message after the frame-clock
   tick that found it, so it reaches the screen one frame later than
-  before.
+  before. A frame asked for only by `on_next_frame` therefore draws
+  nothing; GTK 4.24's Broadway backend warns "Duplicate call to
+  gdk_frame_timings_submitted()" about such a frame, so on Broadway the
+  tick also redraws the view (`frames_must_draw` in
+  `update/rendering.rs`).
 - Delete outside a text field is always claimed by the window (it can't
   ask the model whether something was removed before answering GTK).
 - A grip's typed value, a pick from a grip's sizes and a drag's next
