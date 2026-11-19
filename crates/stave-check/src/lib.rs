@@ -33,7 +33,10 @@
 //!    (a fixed order, so the result is the same on every run); the narrow
 //!    phase measures the shared wood exactly ([`stave_geom::collide`]).
 //!    Touching within the 0.05mm contact tolerance is fine.
-//! 5. **Scene poses** (`error[motion]`): each scene's poses applied, every
+//! 5. **Joints across motions** (`error[motion]`, [`motion`]): a joint's
+//!    parts must move alike; a joint between a part an assembly's motion
+//!    moves and a part it doesn't would hold the assembly shut.
+//!    **Scene poses** (`error[motion]`): each scene's poses applied, every
 //!    moved body against everything that moved differently (a link its
 //!    hinge's mechanism turns moves differently from its door).
 //! 6. **Sweeps** (`error[motion]`, [`motion`]): every motion through its
@@ -219,7 +222,7 @@ fn run<'m, S: tiers::Stop + ?Sized>(
     stop.check()?;
     let mut checker = Checker::new(model, design, fast.and_then(|fast| fast.mechanisms.clone()));
     checker.given = fast.map(|fast| fast.made.clone().into_iter());
-    let steps: [fn(&mut Checker<'m>); 11] = [
+    let steps: [fn(&mut Checker<'m>); 12] = [
         Checker::misfits,
         Checker::misshapen,
         Checker::not_supported,
@@ -230,6 +233,7 @@ fn run<'m, S: tiers::Stop + ?Sized>(
         Checker::rest,
         Checker::walls,
         Checker::edge_contacts,
+        Checker::joint_motions,
         Checker::scenes,
     ];
     for step in steps {

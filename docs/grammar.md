@@ -2811,6 +2811,14 @@ scene drawer_bench "Top drawer on the bench" {
   mechanism moves them. Every item with a drive must move the assembly
   alike, and items without one follow (see [Mechanisms](#mechanisms),
   several items on one assembly).
+- **A joint's parts move alike.** A joint binds its parts rigidly, so a
+  joint between a part that moves with an assembly's motion and a part
+  that moves differently (outside it, or with another motion) would hold
+  the assembly shut: it is `error[motion]` at the joint (`stuck: lid.panel
+  moves with lid but end_l doesn't, so the joint would hold lid shut`),
+  with the help to take the joint out or join the part only to parts that
+  move with it. A joint's members (a dowel's pins) move with the part that
+  carries them and are swept with it.
 - `pose` names the assembly and sets `open` (as far as its mechanism
   reaches: a hinge's `opening_angle`, a slide's travel, or sooner where a
   `stop` says), `closed`, an angle (something that turns) or a length
@@ -3164,7 +3172,7 @@ shape of their messages are fixed, because tests and AI tools match on them.
 | 4 | `adjust` | `<hardware>: the <member> would sit <offset> off its place on the <member>; it adjusts <d>`, or for an axis no `adjust` covers `<hardware>: the <member> would sit <offset> off its place <across>; it doesn't adjust that way` |
 | 4 | `wall` | `<joint>: its <hole> in <part> breaks out of the <left end> of <part>`, `<joint>: its <bore> in <part> runs into the <bore> of <other>` (`meets` when they only touch), or `<joint>: its <dado> in <part> crosses the splice between <part>.piece[1] and <part>.piece[2]`; see [Cuts stay in their part](#cuts-stay-in-their-part) |
 | 4 | `cut-size` | `<joint>: its <tenon> on <part> is <25mm> <thick>, but <part> is only <19mm> <thick>`, `... is <80mm> across, but <part> is only <70mm> across at that end`, or `<joint>: its <groove> in <part> is <12mm> deep, but <part> is only <12mm> <thick> there` |
-| 5 | `motion` | `<a> hits <b> when <assembly> is <open>`; `<assembly>'s hardware doesn't move alike`; `<hardware>: <members> lock at <value>`; `<hardware>: <members> may come within 0.1mm of locking near <value>` |
+| 5 | `motion` | `<a> hits <b> when <assembly> is <open>`; `<assembly>'s hardware doesn't move alike`; `<joint>: <a> moves with <assembly> but <b> doesn't, so the joint would hold <assembly> shut`; `<hardware>: <members> lock at <value>`; `<hardware>: <members> may come within 0.1mm of locking near <value>` |
 | 6 | `require` | `'<name>' fails: <message>` |
 | 6 | `require-range` | `'<name>' does not hold for every allowed value: <message>` |
 | 6 | `range` | `<what> stops working when <param> <is below> <value>` |

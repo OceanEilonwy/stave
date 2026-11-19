@@ -1,0 +1,37 @@
+stave 1
+
+/// A flat lid on two butt hinges, with a small knob to lift it. One leaf of
+/// each hinge is housed in the underside of the lid, the other in the top
+/// edge of the box side it turns on; the knuckles show at the back.
+component Lid {
+  param outline     : Region           // the space the lid sits on top of
+  param hinge_on    : Part             // the side of the box the hinges are housed in
+  param lid_stock   : Stock
+  param hinge_kind  : HingeKind = butt_hinge(length: 40mm)
+  param hinge_inset = 40mm             // from each end of the lid to the end of a hinge
+
+  part panel : lid_stock {
+    length: outline.across
+    width:  outline.deep
+    place {
+      against(outline.top)
+      flush(outline.left)
+      flush(outline.front)
+    }
+  }
+
+  // face: bottom houses the leaves in the lid's underside; left out, a hinge
+  // mounts on the back face of its piece, as on a cabinet door.
+  hardware hinges[left, right] : hinge_kind(panel, on: hinge_on, face: bottom) {
+    place {
+      spaced(ends(inset: hinge_inset), from: panel.left, to: panel.right)
+    }
+  }
+
+  hardware lift_knob : knob(panel, face: top, diameter: 20mm, projection: 22mm) {
+    place {
+      center(panel, across)
+      flush(panel.front, inset: 25mm)
+    }
+  }
+}
