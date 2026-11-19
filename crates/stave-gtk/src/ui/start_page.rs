@@ -22,6 +22,7 @@
 //! [`StartPage`] keeps the older API the application uses and passes what
 //! they ask on to the application as [`ShellInput`]s.
 
+use stave_app::i18n::tr;
 use std::path::PathBuf;
 
 use adw::prelude::*;
@@ -86,7 +87,7 @@ fn recent_list(
     sender: &ComponentSender<StartPageComponent>,
 ) -> adw::PreferencesGroup {
     let group = adw::PreferencesGroup::builder()
-        .title("Recent Projects")
+        .title(tr("Recent Projects"))
         .build();
     for folder in recent {
         let row = adw::ActionRow::builder()
@@ -108,10 +109,10 @@ fn recent_list(
 fn main_menu() -> gio::Menu {
     let menu = gio::Menu::new();
     let project = gio::Menu::new();
-    project.append(Some("New Project…"), Some("win.new-project"));
-    project.append(Some("Open Project…"), Some("win.open"));
+    project.append(Some(&tr("New Project…")), Some("win.new-project"));
+    project.append(Some(&tr("Open Project…")), Some("win.open"));
     menu.append_section(None, &project);
-    menu.append_section(Some("Style"), &app::style_section());
+    menu.append_section(Some(&tr("Style")), &app::style_section());
     menu.append_section(None, &app::help_section());
     menu
 }
@@ -160,7 +161,8 @@ impl Component for StartPageComponent {
                         set_icon_name: "open-menu-symbolic",
                         set_menu_model: Some(&main_menu()),
                         set_primary: true,
-                        set_tooltip_text: Some("Main Menu"),
+                        set_tooltip_text: Some(&tr("Main Menu")),
+                        update_property: &[gtk::accessible::Property::Label(&tr("Main Menu"))],
                     },
                 },
 
@@ -174,10 +176,10 @@ impl Component for StartPageComponent {
                         adw::StatusPage {
                             set_icon_name: Some(icon),
                             set_title: "Stave",
-                            set_description: Some(
+                            set_description: Some(&tr(
                                 "Open a project folder to see its design, or start a new project. \
                                  You can also drop a folder here.",
-                            ),
+                            )),
                             set_vexpand: true,
 
                             #[wrap(Some)]
@@ -194,7 +196,7 @@ impl Component for StartPageComponent {
                                         set_halign: gtk::Align::Center,
 
                                         gtk::Button {
-                                            set_label: "_Open Folder…",
+                                            set_label: &tr("_Open Folder…"),
                                             set_use_underline: true,
                                             set_action_name: Some("win.open"),
                                             // After the label, which adds
@@ -203,7 +205,7 @@ impl Component for StartPageComponent {
                                             set_css_classes: &["pill", "suggested-action"],
                                         },
                                         gtk::Button {
-                                            set_label: "_New Project…",
+                                            set_label: &tr("_New Project…"),
                                             set_use_underline: true,
                                             set_action_name: Some("win.new-project"),
                                             set_css_classes: &["pill"],
@@ -323,7 +325,7 @@ impl StartPage {
 /// Asks for a project folder over `window` and opens it.
 fn choose_folder(window: &adw::ApplicationWindow, shell: relm4::Sender<ShellInput>) {
     let dialog = gtk::FileDialog::builder()
-        .title("Open a project folder")
+        .title(tr("Open a project folder"))
         .modal(true)
         .build();
     dialog.select_folder(Some(window), gio::Cancellable::NONE, move |result| {
