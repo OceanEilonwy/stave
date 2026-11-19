@@ -51,7 +51,7 @@ mod view_tools;
 mod viewport;
 mod workbench;
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::Duration;
@@ -2960,14 +2960,14 @@ impl Window {
         dialog.set_response_appearance("discard", adw::ResponseAppearance::Destructive);
         dialog.set_response_appearance("save", adw::ResponseAppearance::Suggested);
         let window = self.clone();
-        let then = RefCell::new(Some(then));
+        let then = Cell::new(Some(then));
         dialog.connect_response(None, move |_, response| {
             let go_on = match response {
                 "save" => window.widgets.files.save_all(),
                 "discard" => true,
                 _ => false,
             };
-            if go_on && let Some(then) = then.borrow_mut().take() {
+            if go_on && let Some(then) = then.take() {
                 then();
             }
         });

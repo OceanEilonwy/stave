@@ -15,7 +15,6 @@
 use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::sync::Arc;
 use std::time::Duration;
 
 use adw::prelude::*;
@@ -67,7 +66,7 @@ type LinkCallback = Rc<dyn Fn(CursorName)>;
 #[derive(Clone)]
 pub enum CursorName {
     /// A name that means this symbol.
-    Name(Arc<Analysis>, SymbolId),
+    Name(Rc<Analysis>, SymbolId),
     /// A name that means nothing (a typo): the link lets go.
     Unresolved,
     /// Anything else (a keyword, a field name, a number, a space, or text
@@ -75,7 +74,7 @@ pub enum CursorName {
     Other,
 }
 type GoCallback = Rc<dyn Fn(Option<SourceLocation>, SourceLocation)>;
-type SymbolCallback = Rc<dyn Fn(Arc<Analysis>, SymbolId)>;
+type SymbolCallback = Rc<dyn Fn(Rc<Analysis>, SymbolId)>;
 
 #[derive(Default)]
 struct Callbacks {
@@ -130,7 +129,7 @@ struct Problem {
 struct State {
     folder: PathBuf,
     buffers: Buffers,
-    analysis: Option<Arc<Analysis>>,
+    analysis: Option<Rc<Analysis>>,
     generation: u64,
     /// The generation of the analysis in `analysis`.
     analysis_generation: u64,
@@ -352,7 +351,7 @@ impl FilesPage {
     }
 
     /// A lens's "show in 3D" was clicked.
-    pub fn connect_show_in_3d(&self, callback: impl Fn(Arc<Analysis>, SymbolId) + 'static) {
+    pub fn connect_show_in_3d(&self, callback: impl Fn(Rc<Analysis>, SymbolId) + 'static) {
         self.callbacks.borrow_mut().on_show_in_3d = Some(Rc::new(callback));
     }
 
@@ -617,7 +616,7 @@ impl FilesPage {
     }
 
     /// The latest analysis of the project, for the finder.
-    pub fn analysis(&self) -> Option<Arc<Analysis>> {
+    pub fn analysis(&self) -> Option<Rc<Analysis>> {
         self.state.borrow().analysis.clone()
     }
 
@@ -869,7 +868,7 @@ impl FilesPage {
     /// The analysis, when it was built from the text showing, with the
     /// file it calls that text. The texts are compared once per analysis
     /// and edit, not on every cursor move.
-    fn fresh(&self) -> Option<(Arc<Analysis>, stave_lang::FileId)> {
+    fn fresh(&self) -> Option<(Rc<Analysis>, stave_lang::FileId)> {
         let state = self.state.borrow();
         let analysis = state.analysis.clone()?;
         let tab = state.tabs.get(state.active?)?;
@@ -1130,7 +1129,7 @@ impl FilesPage {
                     && folder == state.folder
                     && generation == state.generation
                 {
-                    state.analysis = Some(Arc::new(analysis));
+                    state.analysis = Some(Rc::new(analysis));
                     state.analysis_generation = generation;
                 }
                 std::mem::take(&mut state.analyse_again)
@@ -1220,7 +1219,7 @@ impl FilesPage {
             .collect()
     }
 
-    fn show_lenses(self: &Rc<Self>, analysis: &Arc<Analysis>, file: stave_lang::FileId) {
+    fn show_lenses(self: &Rc<Self>, analysis: &Rc<Analysis>, file: stave_lang::FileId) {
         let lenses: Vec<LensLine> = analysis
             .lenses(file)
             .into_iter()
@@ -1504,7 +1503,7 @@ impl FilesPage {
 
     fn peek_widget(
         self: &Rc<Self>,
-        analysis: &Arc<Analysis>,
+        analysis: &Rc<Analysis>,
         symbol: &stave_ide::Symbol,
         location: &Location,
     ) -> gtk::Box {

@@ -19,7 +19,7 @@
 //! from `stave_schema`, the libraries a project imports from
 //! `stave_modules`, the tools from the standard library's tool kinds.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
 use std::rc::Rc;
 
@@ -518,9 +518,9 @@ pub(super) fn ask(parent: &gtk::Window, created: impl Fn(PathBuf) + 'static) {
         });
     }
     // The dialog keeps its fields alive while it shows.
-    let keep = RefCell::new(Some(form.clone()));
+    let keep = Cell::new(Some(form.clone()));
     form.dialog.connect_closed(move |_| {
-        keep.borrow_mut().take();
+        keep.take();
     });
     form.dialog.present(Some(parent));
 }
