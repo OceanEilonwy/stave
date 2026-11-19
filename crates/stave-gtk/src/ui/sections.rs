@@ -17,8 +17,15 @@
 //!
 //! Only widgets and their look live here; what they say comes from
 //! `stave_app`.
+//!
+//! Nothing here is a relm4 component: these are widget builders used
+//! inside the Inspector's and the Edit panel's views
+//! (docs/relm4-migration.md, the leaf table). A section keeps whether it
+//! is open in its own revealer, and [`LinkHandlers`] holds only the two
+//! callbacks every link shares, each in a [`Cell`] and cloned out before
+//! it is called, so nothing is borrowed while a callback or GTK runs.
 
-use std::cell::RefCell;
+use std::cell::Cell;
 use std::rc::Rc;
 
 use adw::prelude::*;
@@ -35,33 +42,39 @@ pub(super) type HoverCallback = Rc<dyn Fn(Option<LinkTarget>)>;
 /// draws, set once by the window.
 #[derive(Default, Clone)]
 pub(super) struct LinkHandlers {
-    on_click: Rc<RefCell<Option<LinkCallback>>>,
-    on_hover: Rc<RefCell<Option<HoverCallback>>>,
+    on_click: Rc<Cell<Option<LinkCallback>>>,
+    on_hover: Rc<Cell<Option<HoverCallback>>>,
+}
+
+/// The callback in `slot`, cloned out and put back, so the callback is
+/// free to connect another while it runs.
+fn connected<T: ?Sized>(slot: &Cell<Option<Rc<T>>>) -> Option<Rc<T>> {
+    let callback = slot.take();
+    slot.set(callback.clone());
+    callback
 }
 
 impl LinkHandlers {
     /// Calls `callback` when a link is clicked.
     pub(super) fn connect_click(&self, callback: impl Fn(LinkTarget) + 'static) {
-        self.on_click.replace(Some(Rc::new(callback)));
+        self.on_click.set(Some(Rc::new(callback)));
     }
 
     /// Calls `callback` as the pointer enters (`Some`) and leaves (`None`)
     /// a link.
     pub(super) fn connect_hover(&self, callback: impl Fn(Option<LinkTarget>) + 'static) {
-        self.on_hover.replace(Some(Rc::new(callback)));
+        self.on_hover.set(Some(Rc::new(callback)));
     }
 
     /// Reports a click on `target`, as a link does.
     pub(super) fn click_target(&self, target: LinkTarget) {
-        let callback = self.on_click.borrow().clone();
-        if let Some(callback) = callback {
+        if let Some(callback) = connected(&self.on_click) {
             callback(target);
         }
     }
 
     fn hover(&self, target: Option<LinkTarget>) {
-        let callback = self.on_hover.borrow().clone();
-        if let Some(callback) = callback {
+        if let Some(callback) = connected(&self.on_hover) {
             callback(target);
         }
     }
@@ -393,23 +406,75 @@ button.stave-footer-button { font-size: 12px; font-weight: 600; min-height: 24px
 /// Puts the sections' stylesheet on the display, once.
 pub(super) fn install_style() {
     thread_local! {
-        static INSTALLED: RefCell<Vec<gdk::Display>> = const { RefCell::new(Vec::new()) };
+        /// The displays the stylesheet is on.
+        static INSTALLED: Cell<Vec<gdk::Display>> = const { Cell::new(Vec::new()) };
     }
     let Some(display) = gdk::Display::default() else {
         return;
     };
-    INSTALLED.with(|installed| {
-        let mut installed = installed.borrow_mut();
-        if installed.contains(&display) {
-            return;
+    let new = INSTALLED.with(|installed| {
+        let mut displays = installed.take();
+        let new = !displays.contains(&display);
+        if new {
+            displays.push(display.clone());
         }
-        let provider = gtk::CssProvider::new();
-        provider.load_from_string(STYLE);
-        gtk::style_context_add_provider_for_display(
-            &display,
-            &provider,
-            gtk::STYLE_PROVIDER_PRIORITY_APPLICATION + 3,
-        );
-        installed.push(display);
+        installed.set(displays);
+        new
     });
+    if !new {
+        return;
+    }
+    let provider = gtk::CssProvider::new();
+    provider.load_from_string(STYLE);
+    gtk::style_context_add_provider_for_display(
+        &display,
+        &provider,
+        gtk::STYLE_PROVIDER_PRIORITY_APPLICATION + 3,
+    );
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::RefCell;
+
+    use stave_app::session::{ProblemIndex, Selection};
+
+    use super::*;
+    use crate::ui::gtk_test::on_gtk_thread;
+
+    #[test]
+    fn a_link_callback_may_connect_another_from_inside() {
+        on_gtk_thread(links_reconnect_from_inside);
+    }
+
+    /// A link's click and hover reach the callbacks with nothing
+    /// borrowed: a click callback that connects another (as a panel being
+    /// rebuilt under the pointer may) and clicks again from inside does
+    /// not panic, and the second click reaches the new callback.
+    fn links_reconnect_from_inside() {
+        let handlers = LinkHandlers::default();
+        let target = LinkTarget::Select(Selection::Problem(ProblemIndex(0)));
+        let link = handlers.link(&NameLink {
+            name: "door_l".to_owned(),
+            target: target.clone(),
+        });
+        let heard: Rc<RefCell<Vec<&'static str>>> = Rc::default();
+        let log = Rc::clone(&heard);
+        let inner = handlers.clone();
+        handlers.connect_click(move |clicked| {
+            log.borrow_mut().push("first");
+            let later = Rc::clone(&log);
+            inner.connect_click(move |_| later.borrow_mut().push("second"));
+            inner.click_target(clicked);
+        });
+        let log = Rc::clone(&heard);
+        handlers.connect_hover(move |hovered| {
+            log.borrow_mut()
+                .push(if hovered.is_some() { "on" } else { "off" });
+        });
+        link.emit_clicked();
+        handlers.hover(Some(target));
+        handlers.hover(None);
+        assert_eq!(*heard.borrow(), vec!["first", "second", "on", "off"]);
+    }
 }
