@@ -1088,7 +1088,7 @@ the editor holds), as a small diff:
 
 ```text
 ▾ Pending
-  Apply writes this to small_chest.stave
+  Apply would write this to small_chest.stave
   @ line 39
   + assembly shelf : casework.Shelf {
   −   panel_stock: oak_19
@@ -1102,7 +1102,7 @@ changed is a "−" line and a "+" line with the word that changes in bold
 (the formatter lining up a run of declarations again) shows "≈" and says
 so. The lines are compared by a line diff (`stave_lang::changed_line_runs`,
 the one patches use), so a change in several places shows each under its
-own `@ line 13`, `@ line 31`, and the note says "This change changes
+own `@ line 13`, `@ line 31`, and the note says "This change would change
 small_chest.stave in 2 places"; the lines between the places are neither
 shown nor marked. Nothing is put into the Code panel any more; when the
 editor is open it goes to the first place, and in the text itself only

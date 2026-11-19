@@ -115,6 +115,15 @@ impl LinkHandlers {
 /// A collapsible section: its title (and a grey note on the right) on a
 /// faint band, and the box its rows go in. Open unless `open` is false.
 pub(super) fn section(title: &str, note: &str, open: bool) -> (gtk::Box, gtk::Box) {
+    let (section, body, note_label) = section_noted(title, open);
+    note_label.set_label(note);
+    note_label.set_visible(!note.is_empty());
+    (section, body)
+}
+
+/// A collapsible section whose note is set later: the section, its body
+/// and the note's label (hidden until it has words).
+pub(super) fn section_noted(title: &str, open: bool) -> (gtk::Box, gtk::Box, gtk::Label) {
     let head = gtk::Box::builder().spacing(6).build();
     let arrow = gtk::Image::builder()
         .icon_name(if open {
@@ -135,15 +144,12 @@ pub(super) fn section(title: &str, note: &str, open: bool) -> (gtk::Box, gtk::Bo
             .css_classes(["stave-section-title"])
             .build(),
     );
-    if !note.is_empty() {
-        head.append(
-            &gtk::Label::builder()
-                .label(note)
-                .xalign(1.0)
-                .css_classes(["stave-section-note"])
-                .build(),
-        );
-    }
+    let note = gtk::Label::builder()
+        .xalign(1.0)
+        .visible(false)
+        .css_classes(["stave-section-note"])
+        .build();
+    head.append(&note);
     let button = gtk::Button::builder()
         .child(&head)
         .css_classes(["flat", "stave-section-head"])
@@ -178,7 +184,7 @@ pub(super) fn section(title: &str, note: &str, open: bool) -> (gtk::Box, gtk::Bo
         .build();
     section.append(&button);
     section.append(&revealer);
-    (section, body)
+    (section, body, note)
 }
 
 /// A label | value row: the label in the grey column, then `value`.

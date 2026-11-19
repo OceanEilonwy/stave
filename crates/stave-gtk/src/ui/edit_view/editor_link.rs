@@ -278,8 +278,8 @@ impl PendingPanel {
             return;
         }
         self.note.set_label(&match changes.len() {
-            1 => format!("{verb} writes this to {file}"),
-            places => format!("{verb} changes {file} in {places} places"),
+            1 => format!("{verb} would write this to {file}"),
+            places => format!("{verb} would change {file} in {places} places"),
         });
         let mut shown = 0usize;
         let mut push = |panel: &PendingPanel, f: &dyn Fn(&PendingPanel)| {
