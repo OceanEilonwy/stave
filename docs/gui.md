@@ -259,25 +259,23 @@ PDF doesn't exist yet, and the button says so honestly.
 ## The window
 
 ```
-┌ title bar ── back · forward · open · title ── [Find a part, file, line or problem  Ctrl K] ── Design|Cut list · ‹ chip › · hammer · menu ┐
-├ Parts │ Files ─────┬ 3D View ─────────────────────────────────────────────────┬ (right edge: empty, hidden) ┤
-│ CARCASS            │                                                          │                             │
-│  base     oak_19   │ [As built ▾]       (a short line)           [fit]        │                             │
-│ ASSEMBLIES         │                                             [front]      │                             │
-├ Details ───────────┤                        3D view              [turn]       │                             │
-│ PART · IN door_l   │                     (problem pins)          [X-ray]      │                             │
-│ stile[hinge]       │                          [▶ together ──o── apart][Pull]  │                             │
-│                    │ [Move: door_l drawer[top] …]    [door_l closed ──o── 110°]│                             │
-│                    ├ Code │ Problems ─────────────────────────────────────────┤                             │
-│ Stock  oak_19 …    │ doors.stave │ carcass.stave                               │                             │
-│                    │  9 assembly door_l : casework.FramePanelDoor {           │                             │
-├────────────────────┴──────────────────────────────────────────────────────────┴─────────────────────────────┤
-│ Linked to the text · door_l.stile[hinge], line 9                                       [left][bottom][right] │
-└──────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+┌ Project Edit View Help  Clothing cabinet ──────────── [Design|Cut list] ──────────── 🔍 · ✓ 0 problems · [hammer] ┐
+├ Parts ─────────────┬ ▣ Model │ doors.stave ● ─────────────────────────────────┬ Details │ Edit ──────────────────┤
+│ CARCASS            │ [As built ▾]       (a short line)           [fit]        │ PART · IN door_l              │
+│  base     oak_19   │                                             [front]      │ stile[hinge]                  │
+│ ASSEMBLIES         │                        3D view              [turn]       │                               │
+│  door_l  turns 110°│                     (problem pins)          [X-ray]      │ Stock  oak_19 …               │
+├ Files ─────────────┤                          [▶ together ──o── apart][Pull]  │                               │
+│ cabinet.stave      │                                                          │                               │
+│ doors.stave        │ [Move: door_l drawer[top] …]    [door_l closed ──o── 110°]│                               │
+├────────────────────┴──────────────────────────────────────────────────────────┴───────────────────────────────┤
+│ Problems 0 │ Output │ Linked to the text · door_l.stile[hinge], line 9            [left][bottom][right] Panels ▴ │
+└───────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 Every part of the window is a panel, docked with libpanel (`Workbench`):
-the 3D View, Parts, Files, Details, Edit, Code and Problems.
+the 3D view (its tab reads "Model"), Parts, Files, Details, Edit, Code,
+Problems and Output.
 Nothing but the problem pins, the editing menu at a click and the small
 labels that belong on the model (the ghost's verdict, grips and their
 values, the repeat handles) sits over the model. Each panel is a
@@ -286,16 +284,30 @@ values, the repeat handles) sits over the model. Each panel is a
 `panel::Grid`, which splits into columns and rows, so Code can sit beside
 the 3D view) or into another frame, or pick "Move to the Right" (left,
 bottom, top, middle) from its tab's menu; close it with its ×; show an edge
-again from the status bar's toggles. The default layout is board B
-(`Layout::default`): Parts and Files above Details on the left (Edit a
-tab beside Details), the 3D View in the centre, Code and Problems at the
-bottom, the right edge empty and hidden. A layout file older than the
-Edit panel puts it beside Details wherever that file put Details. The layout is remembered per
-user in `~/.config/stave/layout` (saved on every drop and when the
-window closes; one line per panel, `code centre 1 0 0` for side, column,
-frame and tab, and one per edge, `show end true`; a broken file means
-the default) and never in a `.stave` file. "Reset Layout" in the main
-menu puts board B back.
+again from the status bar's toggles. The default layout is the compact
+board (H2, `Layout::default`): Parts in a frame above Files on the left;
+the Model in the centre with Code as the next tab of the same frame (so
+the open files sit beside the Model); Details with Edit as tabs on the
+right, which shows; Problems and Output at the bottom, whose edge starts
+hidden (the status bar opens it). The edges start 272 px (left), 340 px
+(right) and 220 px (bottom) wide; a window narrower than 1000 sp narrows
+the sides to 220 and 260. A layout file older than the Edit panel puts it
+beside Details wherever that file put Details, and a panel a file doesn't
+mention (Output, in a board B file) goes where the default puts it, so a
+saved board B still opens as board B. The layout is remembered per user
+in `~/.config/stave/layout` (saved on every drop and when the window
+closes; a broken file means the default) and never in a `.stave` file:
+
+```
+view centre 0 0 0        # panel, side, column, frame, tab
+code centre 0 0 1
+closed output            # a closed panel
+show bottom false        # an edge shown or hidden
+tool camera right        # where a tool group on the 3D view is docked
+```
+
+"Reset Layout" (View menu, and the status bar's Panels menu) puts the
+compact board back, the tool groups in their usual spots.
 
 - **3D View** is the view with its controls floating on it (part of the
   panel, so they go wherever the view is docked): the scene menu at the
@@ -316,18 +328,30 @@ menu puts board B back.
   pop-out goes under the column when there's no room beside it, and the
   line drops below the scene menu when it can't sit beside it. A control
   that is hidden takes no room and can't catch the pointer meant for the
-  view.
-- **Headers** are a slim strip of flush tabs (`TabStrip`, our own
-  `panel::FrameHeader`): a tab as wide as its title, the shown one with an
-  accent line and its ×, and the shown panel's menu (▾: "Move to the
-  Right", ...) at the end. Dragging a tab docks its panel elsewhere.
+  view. The four tool groups (scene menu, camera column, chips, motion
+  slider) can be docked elsewhere by pressing and holding one, then
+  dragging it; see [The 3D view's controls](#the-3d-views-controls).
+- **Headers** are a slim strip of flush tabs, 26 px tall (`TabStrip`, our
+  own `panel::FrameHeader`): a tab as wide as its title, the shown one
+  with an accent line and its ×, and the shown panel's menu (▾: "Move to
+  the Right", ...) at the end. Dragging a tab docks its panel elsewhere.
+  The 3D view's tab reads "Model" with a cube. A panel can show its own
+  tabs in place of its one (`tab_strip::set_page_tabs`): the Code panel
+  shows one tab per open file (its problem dot, its name in monospace and
+  a yellow ● while it has unsaved changes), so in the default layout the
+  strip reads "Model · doors.stave ● · carcass.stave". Clicking a file's
+  tab shows the Code panel on that file; clicking Model shows the 3D view.
+  With no file open the Code panel keeps its own "Code" tab.
 - **Panels** (the status bar's button, and the main menu) shows any closed
   panel again, back where it was, and resets the layout.
 
-- **Code panel** holds the open files as its own tabs, so a file always
-  opens wherever the Code panel is docked. Choosing a part, assembly or
-  piece of hardware anywhere opens the file that places it, at that line
-  (the panel comes forward unless it shares a frame with the 3D View; the
+- **Code panel** holds the open files (their tabs are in the strip of the
+  frame holding it, beside the Model by default), so a file always
+  opens wherever the Code panel is docked. Opening a file (from Files, the
+  finder, a link or Ctrl+click) shows that file's tab. Choosing a part,
+  assembly or piece of hardware anywhere opens the file that places it,
+  at that line, as a tab beside the Model without covering it (the panel
+  comes forward only when it doesn't share a frame with the 3D view; the
   keyboard stays where it is) (board B2: dragged to the right
   edge, files open on the right). The text scrolls that line into view
   only once the text has its size (`Editor::go_to` waits for it on the
@@ -367,13 +391,29 @@ menu puts board B back.
   and says how to start one ("Nothing being added"); when an edit is added
   or cancelled and the panel shares a frame with Details, Details comes
   back to the front, showing what was just added.
-- **Status bar**: "Linked to the text · door_l, line 9" for the
-  selection, and a toggle per edge.
+- **Output panel** lists what each check said, one line each ("Checked 5
+  files · 0 errors · 0 warnings · 26 ms"), the newest at the foot.
+- **Status bar**: the bottom panels folded into it. On its left,
+  "Problems N" (the count green at none, amber otherwise) and "Output"
+  are tab-like buttons: each opens the bottom edge on its panel
+  (`Workbench::present`) and, while that panel shows there, folds the
+  edge away again; the one showing carries an accent line. Then "Linked
+  to the text · door_l, line 9" for the selection; on the right a toggle
+  per edge and the Panels menu.
 
-- **Title bar** (`Header`): back and forward are `win.back`/`win.forward`
-  (Alt+←/→). The finder's field is a button that opens the finder
-  (`win.find`, Ctrl+K). The switcher is an `AdwToggleGroup` named by
-  `View::word` (Ctrl+1, Ctrl+2). The problems chip is the status pill
+- **Title bar** (`Header`, 34 px): a menu bar (`gtk::PopoverMenuBar`)
+  with Project (New Project…, Open Project…, Save, Check Again, Build
+  Plan, Export View as glTF…), Edit (Find…, Find in the Text, Format the
+  Text, Next / Previous Problem), View (Design, Cut List, Back, Forward,
+  Frame Everything, the panels, Reset Layout, the style) and Help (About
+  Stave), all from `main_menu`; then the project's name in small grey
+  words (`Session::title()`, its folder in the tooltip). The Design | Cut
+  list switcher sits in the middle. On the right: a find button (a
+  magnifier; "Find a part, file, line or problem (Ctrl K)", `win.find`),
+  the problems chip and the hammer. Back and forward are not in the bar:
+  they are `win.back`/`win.forward` (Alt+←/→, the View menu, the mouse's
+  side buttons), each offered only when it can go. The switcher is an
+  `AdwToggleGroup` named by `View::word` (Ctrl+1, Ctrl+2). The problems chip is the status pill
   between previous and next arrows (`win.next-problem`, F8;
   `win.previous-problem`, Shift+F8; the arrows show when there is more
   than one problem); its tooltip is the status line ("Checked 5 files · 1
@@ -382,14 +422,14 @@ menu puts board B back.
   the class goes on the chip round the pill, `.stave-problems-chip.errors
   button.stave-pill`, a test keeps the CSS keyed so). The hammer is `win.build` (Ctrl+B),
   disabled while building or whenever there is nothing to build
-  (`buildable()`), its tooltip saying why (`build_tooltip()`). The title
-  is `Session::title()`. The main menu starts a new project ("New
-  Project…", `win.new-project`, see [A new project](#a-new-project)),
-  opens a project folder (Ctrl+O),
-  checks again (Ctrl+R), frames everything, exports the view as glTF
-  ("Export View as glTF…", `win.export-view`, with
-  `stave_app::export_view::save_glb`, the same file `stave export`
-  writes) and sets the style (follow system, light, dark).
+  (`buildable()`), its tooltip saying why (`build_tooltip()`). The
+  Project menu starts a new project ("New Project…", `win.new-project`,
+  see [A new project](#a-new-project)), opens a project folder (Ctrl+O),
+  saves (Ctrl+S), checks again (Ctrl+R), builds the plan (Ctrl+B) and
+  exports the view as glTF ("Export View as glTF…", `win.export-view`,
+  with `stave_app::export_view::save_glb`, the same file `stave export`
+  writes); the View menu frames everything and sets the style (follow
+  system, light, dark).
 - **Model tree** (`TreeSidebar`, top left): the carcass, then assemblies
   with their motion ("turns 110°", "slides out 500 mm", "mirror of
   door_l"). Rows that are the same part (one stock and size under one
@@ -437,10 +477,10 @@ menu puts board B back.
   (#e8e5df light, #242428 dark, chosen when each frame is drawn and
   redrawn when the style changes). With something chosen the rest is
   drawn `Look::Dim` (still wood, half faded); with X-ray on, `Look::XRay`.
-- **Narrow windows**: below 1100 sp the subtitle goes and the editor
-  narrows; below 860 sp the finder's field (Ctrl+K still opens it), the
-  switcher's words and the open button go; below 600 sp the title and
-  forward too.
+- **Narrow windows**: below 1000 sp the side edges narrow (220 px left,
+  260 px right); below 860 sp the project's name goes; below 760 sp the
+  switcher's words; below 600 sp the menu bar folds into one menu button
+  (the same four menus) and the switcher compacts.
 
 ## Nothing to draw
 
@@ -507,6 +547,26 @@ free of its warning.
   and Pull apart under a line): fit is `win.frame` (the selection, or
   everything); front looks from the front, a little above, framing
   everything; turn swings the view half way round.
+- **Docking the tool groups** (`floating::Floats`, `view_layout::Spots`):
+  the scene menu, the camera column, the chips and the motion slider are
+  small rounded groups floating on the view. Press and hold one (a long
+  press, `gtk::GestureLongPress`), then drag it (`gtk::GestureDrag`): it
+  follows the pointer, and the spots it may land in show as dashed
+  outlines in the accent colour, the nearest one brighter. Let go and it
+  docks there. There are four spots, one group each: the top left, bottom
+  left and bottom right corners, where a group lies flat (a row), and the
+  right edge, where it stands upright (a column; the motion slider's
+  scale turns upright too). A spot is free while the group in it isn't
+  showing (the chips step aside while the motion slider shows, so the
+  chips' corner is free then); dropping a group there swaps the two, so
+  two groups never land on top of each other (`Spots::dock`,
+  `Spots::free_for`, `view_layout::nearest`, all unit-tested). Pull
+  apart's slider stays beside the camera group: out to the left of its
+  foot on the right edge, under it in the top corner, above it in a
+  bottom corner. There are no handle icons; the press and hold is the way
+  in, and each group's tooltip says "Press and hold to move it". Where
+  each group sits is kept with the panel layout (`tool camera
+  bottom-left`), never in a `.stave` file; Reset Layout puts them back.
 
 ## Problems
 
@@ -1209,6 +1269,27 @@ does; they decide nothing.
 - **The Edit panel** (`EditPanel`): the three cards (a candidate's, a
   change's, the hold card), one shown at a time by its owner, or "Nothing
   being added" and how to start one; `update()` says which.
+
+The window's shell around them (see [The window](#the-window)) is drawn
+by a few widgets that also decide nothing:
+
+- **The title bar** (`Header::new(name, &menus)`): the menu bar built
+  from `main_menu()` (four submenus), the project's name, the switcher,
+  the find button, the problems chip and the hammer; `show_title`,
+  `show_view`, `show_pill`, `show_build`.
+- **The tab strips** (`TabStrip`): `tab_strip::set_page_tabs(id, Fn() ->
+  Vec<PageTab>)` lets a panel show its own tabs (the Code panel's open
+  files, from `FilesPage::page_tabs`), and `page_tabs_changed()` makes
+  every strip again.
+- **The status bar** (in `Workbench`): `show_problem_count(n)`; its
+  Problems and Output buttons call `present` on their panel.
+- **The floating tool groups** (`floating::Floats::new(figure, controls,
+  spots, orient, on_dock)`): places every control with
+  `view_layout::place`, lets a group be held and dragged, calls `orient`
+  to lay a group flat or upright and `on_dock` when one lands
+  (`Workbench::dock_tool` remembers it); `refresh()` after a layout is
+  applied.
+- **The Output panel** (`OutputPanel`): `add_line(text)`.
 
 To see them, `--edit-fixture menu|greyed|refused|fits|choose|point`
 shows one from `clothing_cabinet_fixture()` (the menu over the design
