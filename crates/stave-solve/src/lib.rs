@@ -141,8 +141,10 @@ pub(crate) struct Solver<'m> {
     pub(crate) lets: Vec<Memo<Value>>,
     pub(crate) regions: Vec<Memo<RegionValue>>,
     pub(crate) parts: Vec<place::PartState<'m>>,
-    pub(crate) joints: Vec<Memo<joints::Binding>>,
-    pub(crate) hardware: Vec<Memo<hardware::Placed>>,
+    pub(crate) joints: Vec<Memo<std::rc::Rc<joints::Binding>>>,
+    /// Whether each piece of hardware is placed: the placing itself is
+    /// handed to the one caller, so only the state is kept.
+    pub(crate) hardware: Vec<Memo<()>>,
     pub(crate) stack: Vec<(Frame, Option<(FileId, Span)>)>,
     pub(crate) mirror_planes: HashMap<
         stave_model::ids::AssemblyId,

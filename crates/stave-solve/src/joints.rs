@@ -1,6 +1,8 @@
 //! Joints: binding kind calls, finding pairs, what joints add to their
 //! parts, the parts they make and the cuts they describe.
 
+use std::rc::Rc;
+
 use stave_lang::ast::{BaseKind, Span};
 use stave_lang::placement::{Axis, Face, PartAxis};
 use stave_lang::units::{ExactLength, Length, Rational};
@@ -173,7 +175,7 @@ impl PartGeom {
 
 /// A joint's pairs while it is worked out.
 pub(crate) struct JointWork {
-    pub binding: Binding,
+    pub binding: Rc<Binding>,
     pub pairs: Vec<PairWork>,
     pub unmatched: Vec<PartId>,
     pub requires: Vec<Vec<stave_model::solved::RequireResult>>,
@@ -417,10 +419,10 @@ impl Solver<'_> {
         })
     }
 
-    /// The binding of a joint, worked out once.
-    pub(crate) fn joint_binding(&mut self, joint: JointId) -> Solved<Binding> {
+    /// The binding of a joint, worked out once and shared.
+    pub(crate) fn joint_binding(&mut self, joint: JointId) -> Solved<Rc<Binding>> {
         match self.joints.get(joint.index()) {
-            Some(Memo::Done(binding)) => return Ok(binding.clone()),
+            Some(Memo::Done(binding)) => return Ok(Rc::clone(binding)),
             Some(Memo::Failed(accounted)) => return Err((*accounted).into()),
             Some(Memo::Busy) => return Err(self.cycle(Frame::Joint(joint)).into()),
             _ => {}
@@ -470,7 +472,7 @@ impl Solver<'_> {
                 }
             });
         self.leave();
-        let (memo, result) = self.remember(result, def.decl.file, def.call.span);
+        let (memo, result) = self.remember(result.map(Rc::new), def.decl.file, def.call.span);
         if let Some(slot) = self.joints.get_mut(joint.index()) {
             *slot = memo;
         }

@@ -384,7 +384,8 @@ struct Plane {
 }
 
 impl Solver<'_> {
-    /// Places a piece of hardware (once).
+    /// Places a piece of hardware. Each is placed once: the result is
+    /// handed back, not kept.
     pub(crate) fn place_hardware(&mut self, hardware: HardwareId) -> Solved<Placed> {
         let (file, span, name) = match self.model.hardware.get(hardware.index()) {
             Some(inst) => {
@@ -394,7 +395,9 @@ impl Solver<'_> {
             None => (self.project_file, self.project_span, String::new()),
         };
         match self.hardware.get(hardware.index()) {
-            Some(Memo::Done(placed)) => return Ok(placed.clone()),
+            Some(Memo::Done(())) => {
+                return Err(Fault::Internal("a piece of hardware placed a second time").into());
+            }
             Some(Memo::Failed(accounted)) => return Err((*accounted).into()),
             Some(Memo::Busy) => {
                 return Err(self
@@ -413,7 +416,13 @@ impl Solver<'_> {
             *slot = Memo::Busy;
         }
         let result = self.compute_hardware(hardware);
-        let (memo, result) = self.remember(result, file, span);
+        let (memo, result) = match result {
+            Ok(placed) => (Memo::Done(()), Ok(placed)),
+            Err(failure) => {
+                let accounted = self.settle(failure, file, span);
+                (Memo::Failed(accounted), Err(accounted.into()))
+            }
+        };
         if let Some(slot) = self.hardware.get_mut(hardware.index()) {
             *slot = memo;
         }
