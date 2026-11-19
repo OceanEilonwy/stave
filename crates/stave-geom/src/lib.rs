@@ -47,6 +47,7 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+mod axes;
 mod build;
 pub mod clearance;
 pub mod collide;

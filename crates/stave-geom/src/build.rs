@@ -3,8 +3,10 @@
 use std::f32::consts::TAU;
 
 use glam::{Vec2, Vec3};
+use stave_lang::placement::{PartAxis, PerPartAxis};
 use stave_model::solved::{Part, Pose};
 
+use crate::axes::{AlongPart, following, on_part};
 use crate::{Aabb, Edges, Geometry, Mesh, Vertex, render};
 
 /// How many facets a lathe mesh has around its axis.
@@ -92,8 +94,7 @@ impl Frame {
     /// The same frame with `axis` first and the two axes across it after,
     /// in [`crate::solid::across`] order. The handedness may change; every
     /// builder winds triangles by their normals, so that doesn't matter.
-    pub fn first(&self, axis: stave_lang::placement::PartAxis) -> Frame {
-        use stave_lang::placement::PartAxis;
+    pub fn first(&self, axis: PartAxis) -> Frame {
         let [l, w, t] = self.axes;
         let axes = match axis {
             PartAxis::Length => [l, w, t],
@@ -218,33 +219,36 @@ impl Builder {
 /// twelve edges.
 pub fn cuboid(frame: &Frame, offset: Vec3, size: Vec3, grain: GrainAxes) -> Geometry {
     let mut builder = Builder::default();
-    let corner = |bits: [bool; 3]| -> Vec3 {
-        let pick = |axis: usize, set: bool| if set { size[axis] } else { 0.0 };
-        offset + Vec3::new(pick(0, bits[0]), pick(1, bits[1]), pick(2, bits[2]))
+    let corner = |high: PerPartAxis<bool>| -> Vec3 {
+        let mut point = offset;
+        for axis in PartAxis::ALL {
+            if high[axis] {
+                point.set_along(axis, offset.along(axis) + size.along(axis));
+            }
+        }
+        point
     };
-    for axis in 0..3 {
-        let (u, v) = ((axis + 1) % 3, (axis + 2) % 3);
+    for axis in PartAxis::ALL {
+        let [u, v] = following(axis);
         for high in [false, true] {
-            let mut local_normal = Vec3::ZERO;
-            local_normal[axis] = if high { 1.0 } else { -1.0 };
-            let normal = frame.vector(local_normal);
-            let quad =
-                [(false, false), (true, false), (true, true), (false, true)].map(|(bu, bv)| {
-                    let mut bits = [false; 3];
+            let normal = frame.vector(on_part(axis, if high { 1.0 } else { -1.0 }));
+            let [q0, q1, q2, q3] = [(false, false), (true, false), (true, true), (false, true)]
+                .map(|(bu, bv)| {
+                    let mut bits = PerPartAxis::default();
                     bits[axis] = high;
                     bits[u] = bu;
                     bits[v] = bv;
                     let local = corner(bits);
                     builder.vertex(frame.point(local), normal, grain.apply(local))
                 });
-            builder.triangle(quad[0], quad[1], quad[2]);
-            builder.triangle(quad[0], quad[2], quad[3]);
+            builder.triangle(q0, q1, q2);
+            builder.triangle(q0, q2, q3);
         }
     }
-    for axis in 0..3 {
-        let (u, v) = ((axis + 1) % 3, (axis + 2) % 3);
+    for axis in PartAxis::ALL {
+        let [u, v] = following(axis);
         for (bu, bv) in [(false, false), (true, false), (true, true), (false, true)] {
-            let mut start = [false; 3];
+            let mut start = PerPartAxis::default();
             start[u] = bu;
             start[v] = bv;
             let mut end = start;
