@@ -16,8 +16,6 @@
 //! it while the window (`impl Window`) is old code. Where a hold stands
 //! ([`HoldStep`]) is the window's.
 
-use std::cell::RefCell;
-
 use adw::prelude::*;
 use gtk::{gdk, glib};
 use relm4::{Component, ComponentParts, ComponentSender};
@@ -378,7 +376,7 @@ pub(in crate::ui) struct Hold {
     /// The card.
     pub(in crate::ui) card: HoldCard,
     /// Where it stands.
-    pub(in crate::ui) step: RefCell<HoldStep>,
+    pub(in crate::ui) step: HoldStep,
     /// On a space's menu: hold a distance from that space.
     pub(in crate::ui) from_space: gtk::Button,
 }
@@ -388,7 +386,7 @@ impl Hold {
     pub(in crate::ui) fn new() -> Hold {
         Hold {
             card: HoldCard::new(),
-            step: RefCell::new(HoldStep::Idle),
+            step: HoldStep::Idle,
             from_space: gtk::Button::builder()
                 .label("Hold a distance from this space…")
                 .css_classes(["flat", "stave-hold-from-space"])
@@ -477,7 +475,7 @@ impl Window {
             "Click the part or space to measure to from {} · Esc stops",
             first.path()
         ));
-        self.editing.hold.step.replace(HoldStep::Picking { first });
+        self.editing.hold.step = HoldStep::Picking { first };
         self.editing.hold.card.root.set_visible(false);
         self.update_edit_panel();
     }
@@ -485,7 +483,7 @@ impl Window {
     /// A click while a hold waits for its second thing: a part or a space
     /// under the pointer is it. `true` when the click was used here.
     pub(in crate::ui) fn hold_click(&mut self, x: f64, y: f64) -> bool {
-        let first = match &*self.editing.hold.step.borrow() {
+        let first = match &self.editing.hold.step {
             HoldStep::Picking { first } => first.clone(),
             HoldStep::Idle | HoldStep::Asking { .. } => return false,
         };
@@ -528,17 +526,17 @@ impl Window {
                 .unwrap_or_default(),
             reason: String::new(),
         };
-        self.editing.hold.step.replace(HoldStep::Asking {
+        self.editing.hold.step = HoldStep::Asking {
             first,
             second,
             fields,
-        });
+        };
     }
 
     /// Fills the hold card's fields as the user would (scripts).
-    pub(in crate::ui) fn fill_hold(&self, at_most: bool, value: Option<&str>, reason: &str) {
+    pub(in crate::ui) fn fill_hold(&mut self, at_most: bool, value: Option<&str>, reason: &str) {
         let fields = {
-            let mut step = self.editing.hold.step.borrow_mut();
+            let step = &mut self.editing.hold.step;
             let HoldStep::Asking { fields, .. } = &mut *step else {
                 return;
             };
@@ -555,7 +553,7 @@ impl Window {
     /// "Try it", as a script presses it: the rule the window last filled
     /// the card with is tried as a change of the design.
     pub(in crate::ui) fn try_hold(&mut self) {
-        let fields = match &*self.editing.hold.step.borrow() {
+        let fields = match &self.editing.hold.step {
             HoldStep::Asking { fields, .. } => fields.clone(),
             HoldStep::Idle | HoldStep::Picking { .. } => return,
         };
@@ -565,7 +563,7 @@ impl Window {
     /// "Try it": the rule the card's fields make is tried as a change of
     /// the design.
     fn try_hold_with(&mut self, fields: HoldFields) {
-        let (first, second) = match &*self.editing.hold.step.borrow() {
+        let (first, second) = match &self.editing.hold.step {
             HoldStep::Asking { first, second, .. } => (first.clone(), second.clone()),
             HoldStep::Idle | HoldStep::Picking { .. } => return,
         };
@@ -577,7 +575,7 @@ impl Window {
             &fields.reason,
         ) {
             Ok(request) => {
-                self.editing.hold.step.replace(HoldStep::Idle);
+                self.editing.hold.step = HoldStep::Idle;
                 self.editing.hold.card.root.set_visible(false);
                 self.update_edit_panel();
                 self.start_change(EditCommand::Hold(request));
@@ -588,7 +586,7 @@ impl Window {
 
     /// Stops a hold being set up. `true` when there was one.
     pub(in crate::ui) fn cancel_hold(&mut self) -> bool {
-        let was = self.editing.hold.step.replace(HoldStep::Idle) != HoldStep::Idle;
+        let was = std::mem::replace(&mut self.editing.hold.step, HoldStep::Idle) != HoldStep::Idle;
         if was {
             self.editing.hold.card.root.set_visible(false);
             self.update_edit_panel();

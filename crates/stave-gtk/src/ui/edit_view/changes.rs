@@ -32,7 +32,6 @@
 //! └────────────────────────────────────────┘
 //! ```
 
-use std::cell::RefCell;
 use std::rc::Rc;
 
 use adw::prelude::*;
@@ -954,7 +953,7 @@ impl Window {
         let card = &self.editing.changes.card;
         let Some((words, item)) = words else {
             card.root.set_visible(false);
-            self.editing.changes.asked.replace(None);
+            self.editing.changes.asked = None;
             self.close_change_dialog();
             return false;
         };
@@ -970,10 +969,10 @@ impl Window {
 
     /// Asks, once a removal, whether what uses the item goes too.
     fn ask_about_dependants(&mut self, item: String, dependants: &[String]) {
-        if self.editing.changes.asked.borrow().as_deref() == Some(item.as_str()) {
+        if self.editing.changes.asked.as_deref() == Some(item.as_str()) {
             return;
         }
-        self.editing.changes.asked.replace(Some(item.clone()));
+        self.editing.changes.asked = Some(item.clone());
         self.editing.changes.dialog.show(&item, dependants);
     }
 
@@ -1010,7 +1009,7 @@ impl Window {
         if !matches!(change.request(), ChangeRequest::Remove { .. }) {
             return None;
         }
-        let mut edit_state = self.editing.state.borrow_mut();
+        let edit_state = &mut self.editing.state;
         let ghost = edit_state.ghost.as_mut()?;
         let removed: Vec<stave_scene::NodeId> = ghost.ghosts.removed().to_vec();
         if removed.is_empty() {
@@ -1123,7 +1122,7 @@ pub(in crate::ui) struct Changes {
     /// The card.
     pub(in crate::ui) card: ChangeCard,
     /// The item whose removal the dialog last asked about, so it asks once.
-    asked: RefCell<Option<String>>,
+    asked: Option<String>,
     /// The removal's dialog.
     pub(in crate::ui) dialog: DependantsDialog,
 }
@@ -1133,7 +1132,7 @@ impl Changes {
     pub(in crate::ui) fn new() -> Changes {
         Changes {
             card: ChangeCard::new(),
-            asked: RefCell::new(None),
+            asked: None,
             dialog: DependantsDialog::new(),
         }
     }

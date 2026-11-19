@@ -616,7 +616,7 @@ impl Window {
     }
 
     /// A project just made: the envelope lit as the first space to click.
-    pub(super) fn welcome_new_project(&self) {
+    pub(super) fn welcome_new_project(&mut self) {
         self.light_first_space(ENVELOPE_REGION);
         self.show_hint("Click inside the box to add the first piece");
     }

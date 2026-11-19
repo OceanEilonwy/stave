@@ -112,9 +112,9 @@ pub(in crate::ui) enum Run {
 impl Window {
     /// The verbs a query names, as the finder lists them; what each does
     /// is kept until one is chosen.
-    pub(in crate::ui) fn finder_actions(&self, query: &str) -> Vec<Action> {
+    pub(in crate::ui) fn finder_actions(&mut self, query: &str) -> Vec<Action> {
         let Some(verb) = parse_verb(query) else {
-            self.editing.verbs.replace(Vec::new());
+            self.editing.verbs = Vec::new();
             return Vec::new();
         };
         let session = &self.session;
@@ -229,11 +229,11 @@ impl Window {
                 },
                 Run::Other(Verb::Hold),
             ));
-            self.editing.verbs.replace(Vec::new());
+            self.editing.verbs = Vec::new();
             return found.into_iter().map(|(action, _)| action).collect();
         }
         let (actions, runs): (Vec<Action>, Vec<Run>) = found.into_iter().unzip();
-        self.editing.verbs.replace(runs);
+        self.editing.verbs = runs;
         actions
     }
 
@@ -243,7 +243,7 @@ impl Window {
         let Some(Selection::Part(part)) = session.selection() else {
             return None;
         };
-        let face = self.editing.state.borrow().face;
+        let face = self.editing.state.face;
         Some(match face {
             Some(face) if face.part == *part => Picked::Face(face),
             _ => Picked::Group(NonEmpty::new(vec![*part])?),
@@ -252,7 +252,7 @@ impl Window {
 
     /// Runs the verb the finder listed at `index`.
     pub(in crate::ui) fn run_finder_action(&mut self, index: usize) {
-        let run = self.editing.verbs.borrow().get(index).cloned();
+        let run = self.editing.verbs.get(index).cloned();
         if let Some(run) = run {
             self.run_verb(run);
         }

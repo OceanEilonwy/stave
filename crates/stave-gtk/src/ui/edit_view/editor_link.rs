@@ -476,7 +476,7 @@ impl Window {
                     buffer.apply_tag(&tag, &start, &end);
                 }
             }
-            self.editing.pending_marked.replace(Some(path));
+            self.editing.pending_marked = Some(path);
         }
     }
 
@@ -500,7 +500,7 @@ impl Window {
     }
 
     /// Takes the pending marks off the text.
-    fn clear_pending_marks(&self) {
+    fn clear_pending_marks(&mut self) {
         let Some(path) = self.editing.pending_marked.take() else {
             return;
         };

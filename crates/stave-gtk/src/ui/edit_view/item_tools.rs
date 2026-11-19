@@ -1037,7 +1037,7 @@ impl Window {
             let session = &mut self.session;
             session.set_edit_files(std::sync::Arc::new(self.widgets.files.edit_files()));
         }
-        self.editing.state.borrow_mut().select_after = None;
+        self.editing.state.select_after = None;
         self.send_edit_later(command);
     }
 

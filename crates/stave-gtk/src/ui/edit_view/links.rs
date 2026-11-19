@@ -35,7 +35,7 @@ impl Window {
     pub(in crate::ui) fn link_clicked(&mut self, target: LinkTarget) {
         match target {
             LinkTarget::Select(selection) => {
-                self.editing.state.borrow_mut().link_hover = None;
+                self.editing.state.link_hover = None;
                 self.dispatch(Command::Select(Some(selection)));
             }
             LinkTarget::Space(region) => self.hover_region(region),
@@ -45,7 +45,7 @@ impl Window {
     /// The pointer is on a link (or left one): what it names is lit.
     pub(in crate::ui) fn link_hovered(&mut self, target: Option<LinkTarget>) {
         {
-            let mut state = self.editing.state.borrow_mut();
+            let state = &mut self.editing.state;
             if state.link_hover == Some(Hovered::Space) {
                 state.hover = None;
             }
@@ -64,7 +64,7 @@ impl Window {
     /// The nodes the link under the pointer names, to outline with the
     /// selection.
     pub(in crate::ui) fn link_hover_nodes(&self) -> Vec<NodeId> {
-        let Some(Hovered::Item(selection)) = self.editing.state.borrow().link_hover.clone() else {
+        let Some(Hovered::Item(selection)) = self.editing.state.link_hover.clone() else {
             return Vec::new();
         };
         let session = &self.session;

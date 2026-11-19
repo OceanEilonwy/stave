@@ -79,7 +79,7 @@ pub(in crate::ui) struct GripView {
     readout: Readout,
     /// What the area draws, worked out after each frame.
     drawing: Rc<RefCell<Vec<Drawn>>>,
-    state: RefCell<GripState>,
+    state: GripState,
 }
 
 /// What the grips keep between events.
@@ -207,7 +207,7 @@ impl GripView {
             panel: GripPanel::new(),
             readout: Readout::new(),
             drawing,
-            state: RefCell::new(GripState::default()),
+            state: GripState::default(),
         }
     }
 }
@@ -634,7 +634,6 @@ impl Window {
                     .editing
                     .grips
                     .state
-                    .borrow()
                     .open);
                 if let Some(index) = open {
                     self.apply_typed(index, &text);
@@ -660,7 +659,7 @@ impl Window {
                     .and_then(|id| top_level(design, id)),
                 _ => None,
             };
-            match (assembly, self.editing.grips.state.borrow().shown_for) {
+            match (assembly, self.editing.grips.state.shown_for) {
                 (Some(id), _) => Some(GripSelection::Assembly(id)),
                 (None, Some(region @ (GripSelection::Envelope | GripSelection::Split(_)))) => {
                     session.selection().is_none().then_some(region)
@@ -674,7 +673,7 @@ impl Window {
     /// Lists the grips of `wanted` once the window has drawn what is
     /// already asked for (a listing prepares the project again).
     fn show_grips_soon(&mut self, wanted: Option<GripSelection>) {
-        if self.editing.grips.state.borrow().shown_for == wanted && self.grips_listed(wanted) {
+        if self.editing.grips.state.shown_for == wanted && self.grips_listed(wanted) {
             return;
         }
         if wanted.is_none() {
@@ -702,7 +701,7 @@ impl Window {
     /// quietly.
     pub(in crate::ui) fn show_grips(&mut self, wanted: Option<GripSelection>) {
         self.stop_stops_search();
-        self.editing.grips.state.borrow_mut().shown_for = wanted;
+        self.editing.grips.state.shown_for = wanted;
         let Some(selection) = wanted else {
             self.clear_grip_marks();
             self.show_card();
@@ -727,7 +726,7 @@ impl Window {
             .grips()
             .is_none_or(|grips| grips.selection() != selection)
         {
-            self.editing.grips.state.borrow_mut().shown_for = None;
+            self.editing.grips.state.shown_for = None;
             self.clear_grip_marks();
         }
         self.handle(events);
@@ -756,7 +755,7 @@ impl Window {
                 })
         };
         let keep = matches!(
-            self.editing.grips.state.borrow().shown_for,
+            self.editing.grips.state.shown_for,
             Some(GripSelection::Assembly(_))
         ) && region.is_none()
             && self.session.selection().is_some();
@@ -776,7 +775,7 @@ impl Window {
                     let session = &self.session;
                     (
                         session.grips().map(GripList::selection),
-                        self.editing.grips.state.borrow().shown_for,
+                        self.editing.grips.state.shown_for,
                     )
                 };
                 match (listed, shown_for) {
@@ -795,7 +794,7 @@ impl Window {
             }
             EditEvent::GripStopsFound(_) => {
                 let busy = {
-                    let state = self.editing.grips.state.borrow();
+                    let state = &self.editing.grips.state;
                     state.gesture.is_some() || state.typing.is_some() || state.open.is_some()
                 };
                 if !busy {
@@ -805,7 +804,7 @@ impl Window {
             }
             EditEvent::Started => self.grips_for_edit_start(),
             EditEvent::Committed => {
-                let mut state = self.editing.grips.state.borrow_mut();
+                let state = &mut self.editing.grips.state;
                 state.open = None;
                 state.typing = None;
                 state.gesture = None;
@@ -821,7 +820,7 @@ impl Window {
                     )
                 });
                 let (was_open, region) = {
-                    let mut state = self.editing.grips.state.borrow_mut();
+                    let state = &mut self.editing.grips.state;
                     let was_open = state.open.is_some();
                     if !still_open {
                         state.open = None;
@@ -872,7 +871,7 @@ impl Window {
     /// or typed (its change checks the text it began from when written).
     pub(in crate::ui) fn grips_result_changed(&mut self) {
         let busy = {
-            let state = self.editing.grips.state.borrow();
+            let state = &self.editing.grips.state;
             state.shown_for.is_none()
                 || state.gesture.is_some()
                 || state.typing.is_some()
@@ -885,10 +884,7 @@ impl Window {
 
     /// Lists the grips shown again once the events in hand are handled.
     pub(in crate::ui) fn relist_grips_soon(&mut self) {
-        if std::mem::replace(
-            &mut self.editing.grips.state.borrow_mut().relist_queued,
-            true,
-        ) {
+        if std::mem::replace(&mut self.editing.grips.state.relist_queued, true) {
             return;
         }
         let input = self.input();
@@ -900,7 +896,7 @@ impl Window {
     /// Lists the grips shown again, as asked by [`Window::relist_grips_soon`].
     pub(in crate::ui) fn relist_grips(&mut self) {
         let shown = {
-            let mut state = self.editing.grips.state.borrow_mut();
+            let state = &mut self.editing.grips.state;
             state.relist_queued = false;
             state.shown_for
         };
@@ -911,8 +907,8 @@ impl Window {
 
     // ---- the stops, off the main thread ----
 
-    fn stop_stops_search(&self) {
-        if let Some(cancel) = self.editing.grips.state.borrow_mut().cancel.take() {
+    fn stop_stops_search(&mut self) {
+        if let Some(cancel) = self.editing.grips.state.cancel.take() {
             cancel.store(true, Ordering::Relaxed);
         }
     }
@@ -928,7 +924,7 @@ impl Window {
             return;
         }
         let cancel = Arc::new(AtomicBool::new(false));
-        self.editing.grips.state.borrow_mut().cancel = Some(cancel.clone());
+        self.editing.grips.state.cancel = Some(cancel.clone());
         let (sender, receiver) = async_channel::unbounded::<FoundStops>();
         gio::spawn_blocking(move || {
             let _ = job.run(&cancel, &mut |found| {
@@ -950,13 +946,13 @@ impl Window {
 
     // ---- the widgets on the model ----
 
-    fn clear_grip_marks(&self) {
-        let marks = std::mem::take(&mut self.editing.grips.state.borrow_mut().marks);
+    fn clear_grip_marks(&mut self) {
+        let marks = std::mem::take(&mut self.editing.grips.state.marks);
         for marks in marks {
             self.editing.grips.layer.remove(&marks.handle);
             self.editing.grips.layer.remove(&marks.label);
         }
-        let mut state = self.editing.grips.state.borrow_mut();
+        let state = &mut self.editing.grips.state;
         state.places.clear();
         state.typing = None;
     }
@@ -992,7 +988,7 @@ impl Window {
             marks.push(built);
         }
         {
-            let mut state = self.editing.grips.state.borrow_mut();
+            let state = &mut self.editing.grips.state;
             state.places = places;
             state.marks = marks;
         }
@@ -1304,7 +1300,7 @@ impl Window {
             return;
         }
         {
-            let mut state = self.editing.grips.state.borrow_mut();
+            let state = &mut self.editing.grips.state;
             state.open = Some(index);
             state.held = None;
             state.last_sent = None;
@@ -1332,7 +1328,7 @@ impl Window {
             });
         if let Some(listed) = choices {
             let value = grip_value(&listed);
-            self.editing.grips.state.borrow_mut().last_sent = Some(value);
+            self.editing.grips.state.last_sent = Some(value);
             self.dispatch(Command::Edit(EditCommand::DragTo(value)));
         }
     }
@@ -1347,7 +1343,7 @@ impl Window {
         let (unit, scale) = self
             .screen_direction(index, from)
             .unwrap_or(((0.0, -1.0), 1.0));
-        self.editing.grips.state.borrow_mut().gesture = Some(Gesture {
+        self.editing.grips.state.gesture = Some(Gesture {
             index,
             from,
             unit,
@@ -1364,7 +1360,6 @@ impl Window {
             .editing
             .grips
             .state
-            .borrow()
             .places
             .iter()
             .find(|place| place.index == index)
@@ -1381,7 +1376,7 @@ impl Window {
 
     /// The pointer moved by `(dx, dy)` since it pressed the handle.
     pub(in crate::ui) fn grip_moved(&mut self, dx: f64, dy: f64, round: bool) {
-        let Some(gesture) = self.editing.grips.state.borrow().gesture else {
+        let Some(gesture) = self.editing.grips.state.gesture else {
             return;
         };
         let travel = (dx * gesture.unit.0 + dy * gesture.unit.1) / gesture.scale;
@@ -1416,7 +1411,7 @@ impl Window {
         };
         let (target, held) = stave_app::grip_values::drag_target(&listed, wanted, round);
         let send = {
-            let mut state = self.editing.grips.state.borrow_mut();
+            let state = &mut self.editing.grips.state;
             state.held = held;
             if state.last_sent == Some(target) && state.pending.is_none() {
                 false
@@ -1435,7 +1430,7 @@ impl Window {
     /// Sends the value waiting, if any.
     pub(in crate::ui) fn flush_drag(&mut self) {
         let pending = {
-            let mut state = self.editing.grips.state.borrow_mut();
+            let state = &mut self.editing.grips.state;
             state.sending = false;
             let pending = state.pending.take();
             if pending.is_some() {
@@ -1452,14 +1447,7 @@ impl Window {
     /// otherwise the panel says why and offers Cancel.
     pub(in crate::ui) fn grip_released(&mut self) {
         self.flush_drag();
-        let index = self
-            .editing
-            .grips
-            .state
-            .borrow_mut()
-            .gesture
-            .take()
-            .map(|g| g.index);
+        let index = self.editing.grips.state.gesture.take().map(|g| g.index);
         if let Some(index) = index {
             self.set_dragging_look(index, false);
         }
@@ -1474,7 +1462,7 @@ impl Window {
     }
 
     fn set_dragging_look(&self, index: usize, dragging: bool) {
-        let state = self.editing.grips.state.borrow();
+        let state = &self.editing.grips.state;
         if let Some(marks) = state.marks.iter().find(|marks| marks.index == index) {
             if dragging {
                 marks.handle.add_css_class("dragging");
@@ -1494,7 +1482,7 @@ impl Window {
 
     /// A grip's range switch turned off: the size is written plain again.
     pub(in crate::ui) fn grip_make_plain(&mut self, index: usize, param: Ident) {
-        self.editing.grips.state.borrow_mut().open = Some(index);
+        self.editing.grips.state.open = Some(index);
         self.send_edit_later(EditCommand::MakePlain(param));
     }
 
@@ -1509,7 +1497,7 @@ impl Window {
         match (parse_value(low), parse_value(high)) {
             (Ok(low), Ok(high)) => {
                 menu.popdown();
-                self.editing.grips.state.borrow_mut().open = Some(index);
+                self.editing.grips.state.open = Some(index);
                 self.send_edit_later(EditCommand::MakeSolved { param, low, high });
             }
             (Err(error), _) | (_, Err(error)) => {
@@ -1521,8 +1509,8 @@ impl Window {
     // ---- typing ----
 
     /// The number turns into an entry holding the value.
-    pub(in crate::ui) fn open_entry(&self, index: usize) {
-        let mut state = self.editing.grips.state.borrow_mut();
+    pub(in crate::ui) fn open_entry(&mut self, index: usize) {
+        let state = &mut self.editing.grips.state;
         if let Some(previous) = state.typing.replace(index)
             && previous != index
             && let Some(marks) = state.marks.iter().find(|m| m.index == previous)
@@ -1543,7 +1531,7 @@ impl Window {
     /// dropped.
     pub(in crate::ui) fn close_typing(&mut self, index: usize) {
         let typed = {
-            let mut state = self.editing.grips.state.borrow_mut();
+            let state = &mut self.editing.grips.state;
             if let Some(marks) = state.marks.iter().find(|m| m.index == index) {
                 close_entry(marks);
             }
@@ -1575,7 +1563,7 @@ impl Window {
             }
             Ok(value) => {
                 {
-                    let mut state = self.editing.grips.state.borrow_mut();
+                    let state = &mut self.editing.grips.state;
                     state.open = Some(index);
                     state.typing = Some(index);
                     state.held = None;
@@ -1624,7 +1612,7 @@ impl Window {
     /// under the entry, which stays open holding the text typed.
     fn show_typed_result(&mut self, index: usize, text: &str, refusal: Option<String>) {
         let refused = {
-            let mut state = self.editing.grips.state.borrow_mut();
+            let state = &mut self.editing.grips.state;
             let Some(marks) = state.marks.iter().find(|m| m.index == index) else {
                 return;
             };
@@ -1683,7 +1671,6 @@ impl Window {
             // its drag, and the drag's end borrows the grips' state.
             let marks: Vec<(gtk::Widget, gtk::Box)> = grips
                 .state
-                .borrow()
                 .marks
                 .iter()
                 .map(|marks| (marks.handle.clone(), marks.label.clone()))
@@ -1696,7 +1683,7 @@ impl Window {
         }
         let session = &self.session;
         let view = &self.state;
-        let state = grips.state.borrow();
+        let state = &grips.state;
         let open = session.change().and_then(drag_index).or(state.open);
         let mut drawing = Vec::new();
         let mut labels = Vec::new();
@@ -1850,16 +1837,17 @@ impl Window {
         for handle in to_hide {
             handle.set_visible(false);
         }
-        self.show_grip_section(&self.session);
+        self.show_grip_section();
     }
 
     /// Draws the size section of the change's card for a change the grips
     /// started (a drag, or a param made solved or plain), with the grip's
     /// options, and the readout at the top of the view.
-    fn show_grip_section(&self, session: &stave_app::session::Session) {
+    fn show_grip_section(&mut self) {
+        let session = &self.session;
         let grips = &self.editing.grips;
         let (stop, open) = {
-            let state = grips.state.borrow();
+            let state = &grips.state;
             let open = session.change().and_then(drag_index).or(state.open);
             let stop = state
                 .held
@@ -1899,9 +1887,9 @@ impl Window {
                     grip_look(listed) != GripLook::Locked && !solver_switches(listed).is_empty()
                 })
         });
-        let had = grips.state.borrow().options_for;
+        let had = std::mem::replace(&mut self.editing.grips.state.options_for, wanted);
+        let (session, grips) = (&self.session, &self.editing.grips);
         if wanted != had {
-            grips.state.borrow_mut().options_for = wanted;
             while let Some(child) = grips.panel.options.first_child() {
                 grips.panel.options.remove(&child);
             }
@@ -1930,14 +1918,7 @@ impl Window {
     /// Lets the held handle go.
     pub(in crate::ui) fn release_grip(&mut self) {
         self.flush_drag();
-        let index = self
-            .editing
-            .grips
-            .state
-            .borrow_mut()
-            .gesture
-            .take()
-            .map(|g| g.index);
+        let index = self.editing.grips.state.gesture.take().map(|g| g.index);
         if let Some(index) = index {
             self.set_dragging_look(index, false);
         }
@@ -1954,7 +1935,7 @@ impl Window {
     pub(in crate::ui) fn type_grip(&mut self, index: usize, text: &str) {
         self.open_entry(index);
         {
-            let state = self.editing.grips.state.borrow();
+            let state = &self.editing.grips.state;
             if let Some(entry) = state
                 .marks
                 .iter()
@@ -1969,7 +1950,7 @@ impl Window {
 
     /// Opens grip `index`'s menu with the solver's switch.
     pub(in crate::ui) fn open_grip_menu(&self, index: usize) -> bool {
-        let state = self.editing.grips.state.borrow();
+        let state = &self.editing.grips.state;
         let Some(menu) = state
             .marks
             .iter()
@@ -1983,8 +1964,8 @@ impl Window {
     }
 
     /// Marks a change of a param's kind as started from grip `index`.
-    pub(in crate::ui) fn grip_change_opened(&self, index: usize) {
-        self.editing.grips.state.borrow_mut().open = Some(index);
+    pub(in crate::ui) fn grip_change_opened(&mut self, index: usize) {
+        self.editing.grips.state.open = Some(index);
     }
 
     /// The listed grip numbered `index`, for a script.

@@ -21,7 +21,7 @@
 //! the session on every event, and its name field reports when it is taken
 //! away.
 
-use std::cell::{Cell, RefCell};
+use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -78,7 +78,7 @@ pub(super) struct EditView {
     /// The Edit panel: the card in progress, or how to start.
     pub(super) panel: EditPanel,
     /// Whether the panel showed a card when last drawn.
-    panel_shown: Cell<bool>,
+    panel_shown: bool,
     /// The search over a setting's options.
     pub(super) search: Rc<OptionSearch>,
     /// On the part's card: add onto the face that was clicked.
@@ -88,7 +88,7 @@ pub(super) struct EditView {
     editor_open: Rc<Cell<bool>>,
     /// The grips of the selection, on the model.
     grips: grips::GripView,
-    state: RefCell<EditState>,
+    state: EditState,
     // The changes of the design (lane W2b): their card, the item's tools,
     // hold, repeat handles, the editor's pending lines, the finder's verbs.
     changes: changes::Changes,
@@ -96,13 +96,13 @@ pub(super) struct EditView {
     hold: hold::Hold,
     repeats: repeat_handles::Repeats,
     pending: editor_link::PendingPanel,
-    pending_marked: RefCell<Option<std::path::PathBuf>>,
-    verbs: RefCell<Vec<verbs::Run>>,
+    pending_marked: Option<std::path::PathBuf>,
+    verbs: Vec<verbs::Run>,
     /// Scripts send each command at once, in order.
-    immediate: Cell<bool>,
+    immediate: bool,
     /// The check of the chosen candidate's options running on a worker
     /// thread: its cancel flag and the candidate it is for.
-    options: RefCell<Option<(Arc<AtomicBool>, OptionsTicket)>>,
+    options: Option<(Arc<AtomicBool>, OptionsTicket)>,
 }
 
 /// What the editing view keeps between events.
@@ -165,21 +165,21 @@ impl EditView {
             menu,
             card,
             panel,
-            panel_shown: Cell::new(false),
+            panel_shown: false,
             search: OptionSearch::new(),
             face_button,
             editor_open: Rc::new(Cell::new(false)),
             grips: grips::GripView::new(),
-            state: RefCell::new(EditState::default()),
+            state: EditState::default(),
             changes,
             tools: item_tools::ItemTools::new(),
             hold,
             repeats: repeat_handles::Repeats::new(),
             pending: editor_link::PendingPanel::new(),
-            pending_marked: RefCell::new(None),
-            verbs: RefCell::new(Vec::new()),
-            immediate: Cell::new(false),
-            options: RefCell::new(None),
+            pending_marked: None,
+            verbs: Vec::new(),
+            immediate: false,
+            options: None,
         }
     }
 }
@@ -471,7 +471,7 @@ impl Window {
     pub(super) fn editing_folder_changed(&mut self) {
         self.install_edit_writer();
         {
-            let mut state = self.editing.state.borrow_mut();
+            let state = &mut self.editing.state;
             let first_space = state.first_space.take();
             *state = EditState {
                 generation: state.generation.wrapping_add(1),
@@ -484,8 +484,8 @@ impl Window {
 
     /// Lights a space by name until an edit starts: a new project's
     /// envelope, the first space to click.
-    pub(super) fn light_first_space(&self, name: &str) {
-        self.editing.state.borrow_mut().first_space = Some(name.to_owned());
+    pub(super) fn light_first_space(&mut self, name: &str) {
+        self.editing.state.first_space = Some(name.to_owned());
     }
 
     /// `true` while an edit (or a change) is in progress.
@@ -579,7 +579,7 @@ impl Window {
             Some(_) | None => None,
         };
         let changed = {
-            let mut state = self.editing.state.borrow_mut();
+            let state = &mut self.editing.state;
             let changed = state.hover != hover;
             state.hover = hover;
             changed
@@ -626,7 +626,7 @@ impl Window {
                 true
             }
             (Some(Target::Node(_)), picked) => {
-                self.editing.state.borrow_mut().face = match picked {
+                self.editing.state.face = match picked {
                     Some(Picked::Face(face)) => Some(face),
                     Some(Picked::Region(_) | Picked::Between(_) | Picked::Group(_)) | None => None,
                 };
@@ -647,7 +647,7 @@ impl Window {
             let session = &mut self.session;
             session.set_edit_files(Arc::new(self.widgets.files.edit_files()));
         }
-        self.editing.state.borrow_mut().point = Some(point);
+        self.editing.state.point = Some(point);
         if !keeps_selection && self.session.selection().is_some() {
             self.dispatch(Command::Select(None));
         }
@@ -656,7 +656,7 @@ impl Window {
 
     /// The part's card's button: the menu for the face clicked on it.
     pub(in crate::ui) fn edit_face(&mut self) {
-        let Some(face) = self.editing.state.borrow().face else {
+        let Some(face) = self.editing.state.face else {
             return;
         };
         let point = self
@@ -668,7 +668,7 @@ impl Window {
     /// Shows the part's "Add onto" button when the selected part is the
     /// one whose face was clicked and nothing is being edited.
     pub(super) fn update_face_button(&self) {
-        let face = self.editing.state.borrow().face;
+        let face = self.editing.state.face;
         let selected = match self.session.selection() {
             Some(Selection::Part(part)) => Some(*part),
             _ => None,
@@ -687,7 +687,7 @@ impl Window {
         }
         button.set_visible(shown.is_some());
         // A new project's box is the first space to click.
-        let waiting = self.editing.state.borrow().first_space.is_some()
+        let waiting = self.editing.state.first_space.is_some()
             || self
                 .session
                 .drawable()
@@ -726,7 +726,7 @@ impl Window {
     /// own signal; a command that tries the candidate again first shows
     /// Checking (the card's spinner and the ghost's grey).
     pub(super) fn send_edit_later(&mut self, command: EditCommand) {
-        if self.editing.immediate.get() {
+        if self.editing.immediate {
             self.send_edit(command);
             return;
         }
@@ -744,7 +744,7 @@ impl Window {
     /// it was clicked: a step of the menu's check may sort the menu in
     /// between (greyed entries go last in their group), moving indexes.
     pub(super) fn choose_later(&mut self, declaration: Declaration) {
-        if self.editing.immediate.get() {
+        if self.editing.immediate {
             self.choose_now(declaration);
             return;
         }
@@ -765,7 +765,7 @@ impl Window {
         match index {
             Some(index) => self.send_edit(EditCommand::Choose(index)),
             None => {
-                self.editing.state.borrow_mut().checking = false;
+                self.editing.state.checking = false;
                 self.refresh_edit();
             }
         }
@@ -775,7 +775,7 @@ impl Window {
     /// tries the candidate again.
     fn show_checking(&mut self) {
         {
-            let mut state = self.editing.state.borrow_mut();
+            let state = &mut self.editing.state;
             state.checking = true;
             if let Some(ghost) = state.ghost.as_mut() {
                 ghost.ghosts.set_verdict(GhostVerdict::Checking);
@@ -793,7 +793,7 @@ impl Window {
                 .and_then(Edit::chosen)
                 .and_then(|chosen| chosen.item_name().map(|name| name.as_str().to_owned()));
             let name = name.or_else(|| self.change_selects_after());
-            let mut state = self.editing.state.borrow_mut();
+            let state = &mut self.editing.state;
             state.select_after = name;
             self.editing
                 .editor_open
@@ -801,7 +801,7 @@ impl Window {
         }
         // The events draw the card from the try that follows, so it no
         // longer shows Checking.
-        let was_checking = std::mem::take(&mut self.editing.state.borrow_mut().checking);
+        let was_checking = std::mem::take(&mut self.editing.state.checking);
         self.dispatch(Command::Edit(command));
         if was_checking {
             // A command that was rejected tried nothing: the ghost takes
@@ -811,9 +811,7 @@ impl Window {
                 .edit()
                 .and_then(Edit::chosen)
                 .and_then(|chosen| ghost_verdict(chosen.progress()));
-            if let (Some(verdict), Some(ghost)) =
-                (verdict, self.editing.state.borrow_mut().ghost.as_mut())
-            {
+            if let (Some(verdict), Some(ghost)) = (verdict, self.editing.state.ghost.as_mut()) {
                 ghost.ghosts.set_verdict(verdict);
             }
             self.refresh_edit();
@@ -828,7 +826,7 @@ impl Window {
                 self.stop_options_check();
                 self.editing.repeats.row.forget();
                 let generation = {
-                    let mut state = self.editing.state.borrow_mut();
+                    let state = &mut self.editing.state;
                     state.generation = state.generation.wrapping_add(1);
                     state.checking = false;
                     state.hover = None;
@@ -882,7 +880,7 @@ impl Window {
             EditEvent::Committed => {
                 self.stop_options_check();
                 let name = {
-                    let mut state = self.editing.state.borrow_mut();
+                    let state = &mut self.editing.state;
                     state.generation = state.generation.wrapping_add(1);
                     state.select_after.take()
                 };
@@ -903,7 +901,7 @@ impl Window {
             EditEvent::Cancelled => {
                 self.stop_options_check();
                 {
-                    let mut state = self.editing.state.borrow_mut();
+                    let state = &mut self.editing.state;
                     state.generation = state.generation.wrapping_add(1);
                     state.checking = false;
                 }
@@ -921,7 +919,7 @@ impl Window {
     /// Draws the menu or the card from the session, places them, and
     /// hides the part's card while an edit is open.
     pub(super) fn refresh_edit(&mut self) {
-        let checking = self.editing.state.borrow().checking;
+        let checking = self.editing.state.checking;
         let open = {
             let session = &self.session;
             draw_edit(&self.editing.menu, &self.editing.card, session, checking)
@@ -950,9 +948,9 @@ impl Window {
     /// card takes the keyboard as it is mapped. When the edit is added or
     /// cancelled the panel says how to start again, and if it shares a
     /// frame with Details, Details comes back to the front.
-    pub(super) fn update_edit_panel(&self) {
+    pub(super) fn update_edit_panel(&mut self) {
         let shows = self.editing.panel.update();
-        let was = self.editing.panel_shown.replace(shows);
+        let was = std::mem::replace(&mut self.editing.panel_shown, shows);
         let workbench = &self.widgets.workbench;
         if shows && !was {
             workbench.bring_forward_beside_view(super::workbench::PanelId::Edit);
@@ -975,12 +973,7 @@ impl Window {
             f64::from(self.widgets.design.width()),
             f64::from(self.widgets.design.height()),
         );
-        let (x, y) = self
-            .editing
-            .state
-            .borrow()
-            .point
-            .unwrap_or((width / 3.0, 80.0));
+        let (x, y) = self.editing.state.point.unwrap_or((width / 3.0, 80.0));
         let menu = &self.editing.menu.root;
         let menu_width = 340.0;
         let left = (x + 24.0).min(width - menu_width - f64::from(EDGE));
@@ -1012,7 +1005,7 @@ impl Window {
     }
 
     pub(in crate::ui) fn check_menu_step(&mut self, generation: u64, budget: Duration) {
-        if self.editing.state.borrow().generation != generation {
+        if self.editing.state.generation != generation {
             return;
         }
         let before = {
@@ -1053,8 +1046,8 @@ impl Window {
     // ---- the options' checks, off the main thread ----
 
     /// Stops the check of the chosen candidate's options, if one runs.
-    fn stop_options_check(&self) {
-        let running = self.editing.options.borrow_mut().take();
+    fn stop_options_check(&mut self) {
+        let running = self.editing.options.take();
         if let Some((cancel, _)) = running {
             cancel.store(true, Ordering::Relaxed);
         }
@@ -1067,19 +1060,14 @@ impl Window {
     /// options they open themselves, so a picture never depends on how
     /// far a worker got.
     fn start_options_check(&mut self) {
-        if self.editing.immediate.get() {
+        if self.editing.immediate {
             return;
         }
         let Some(job) = self.session.options_job() else {
             self.stop_options_check();
             return;
         };
-        let running = self
-            .editing
-            .options
-            .borrow()
-            .as_ref()
-            .map(|(_, ticket)| *ticket);
+        let running = self.editing.options.as_ref().map(|(_, ticket)| *ticket);
         if running == Some(job.ticket()) {
             return;
         }
@@ -1099,9 +1087,7 @@ impl Window {
             None => job,
         };
         let cancel = Arc::new(AtomicBool::new(false));
-        self.editing
-            .options
-            .replace(Some((cancel.clone(), job.ticket())));
+        self.editing.options = Some((cancel.clone(), job.ticket()));
         let (sender, receiver) = async_channel::unbounded::<FoundFit>();
         gio::spawn_blocking(move || {
             let _ = job.run(&cancel, &mut |found| {
@@ -1266,7 +1252,7 @@ impl Window {
         match ghosts {
             Some(ghosts) => {
                 let posed = ghosts.graph().rest();
-                self.editing.state.borrow_mut().ghost = Some(GhostView {
+                self.editing.state.ghost = Some(GhostView {
                     ghosts,
                     posed,
                     uploaded: false,
@@ -1280,7 +1266,7 @@ impl Window {
     /// Takes the ghost away; the next frame puts the design's own scene
     /// back in the renderer.
     fn clear_ghost(&mut self) {
-        if self.editing.state.borrow_mut().ghost.take().is_some() {
+        if self.editing.state.ghost.take().is_some() {
             self.request_render();
         }
     }
@@ -1303,7 +1289,7 @@ impl Window {
         posed: &Posed,
         orbit: &Orbit,
     ) -> EditMarks {
-        let state = self.editing.state.borrow();
+        let state = &self.editing.state;
         let first = || {
             let name = state.first_space.as_deref()?;
             graph
@@ -1343,8 +1329,7 @@ impl Window {
             return Some(image);
         }
         let session = &self.session;
-        let mut edit_state = self.editing.state.borrow_mut();
-        let shows_ghost = edit_state.ghost.is_some() && self.state.focus.is_none();
+        let shows_ghost = self.editing.state.ghost.is_some() && self.state.focus.is_none();
         if !shows_ghost {
             let state = &mut self.state;
             if state.uploaded.is_none()
@@ -1361,7 +1346,7 @@ impl Window {
             .drawable()
             .and_then(|(_, graph)| self.edit_region(session, graph));
         let state = &mut self.state;
-        let ghost = edit_state.ghost.as_mut()?;
+        let ghost = self.editing.state.ghost.as_mut()?;
         let orbit = state.orbit?;
         let (width, height) = state.size;
         let super::State {
@@ -1430,13 +1415,13 @@ impl Window {
 
     /// Lights a space as if the pointer rested in it.
     pub(super) fn hover_region(&mut self, region: RegionId) {
-        self.editing.state.borrow_mut().hover = Some(region);
+        self.editing.state.hover = Some(region);
         self.request_render();
     }
 
     /// Selects a part as a click on one of its faces does.
     pub(super) fn click_face(&mut self, face: PartFace) {
-        self.editing.state.borrow_mut().face = Some(face);
+        self.editing.state.face = Some(face);
         self.cancel_edit();
         self.dispatch(Command::Select(Some(Selection::Part(face.part))));
     }

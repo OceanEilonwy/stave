@@ -48,9 +48,9 @@ impl Window {
     /// word isn't a step.
     pub(in crate::ui) fn change_step(&mut self, word: &str, rest: &str) -> Result<(), String> {
         // Each command is sent at once, so the next step sees it done.
-        self.editing.immediate.set(true);
+        self.editing.immediate = true;
         let done = self.change_step_now(word, rest);
-        self.editing.immediate.set(false);
+        self.editing.immediate = false;
         done
     }
 
@@ -150,7 +150,7 @@ impl Window {
             "do" => {
                 let verb = parse_verb(rest).ok_or_else(|| format!("'{rest}' names no verb"))?;
                 let _ = self.finder_actions(rest);
-                let run = self.editing.verbs.borrow().first().cloned();
+                let run = self.editing.verbs.first().cloned();
                 match run {
                     Some(run) => self.run_verb(run),
                     None => self.run_verb(Run::Other(verb)),
