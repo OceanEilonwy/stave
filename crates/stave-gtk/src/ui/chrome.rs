@@ -37,8 +37,6 @@ pub struct MotionBarComponent {
     shown: Option<MotionShown>,
     /// A row (docked in a corner) or upright (docked on the right edge).
     orientation: gtk::Orientation,
-    /// The component's own input, for the orientation setter it hands out.
-    input: relm4::Sender<MotionBarInput>,
 }
 
 /// What the motion bar is told.
@@ -116,7 +114,6 @@ impl Component for MotionBarComponent {
         let model = MotionBarComponent {
             shown: None,
             orientation: gtk::Orientation::Horizontal,
-            input: sender.input_sender().clone(),
         };
         let widgets = view_output!();
         ComponentParts { model, widgets }
@@ -181,9 +178,9 @@ impl MotionBar {
 
     /// Lays the bar out in a row (docked in a corner) or standing upright
     /// (docked on the right edge), its slider turned to match.
-    pub fn orientation_setter(&self) -> impl Fn(gtk::Orientation) + 'static {
-        let input = self.bridge.model().input.clone();
-        move |orientation| input.emit(MotionBarInput::SetOrientation(orientation))
+    pub fn set_orientation(&self, orientation: gtk::Orientation) {
+        self.bridge
+            .send(MotionBarInput::SetOrientation(orientation));
     }
 
     /// Calls `callback` with each of people's moves from now on, instead
@@ -259,8 +256,7 @@ mod tests {
         assert!(heard.borrow().is_empty(), "a move is only queued");
         settle();
         assert_eq!(*heard.borrow(), vec![MotionBarOutput::Moved(30.0)]);
-        let orient = bar.orientation_setter();
-        orient(gtk::Orientation::Vertical);
+        bar.set_orientation(gtk::Orientation::Vertical);
         settle();
         assert_eq!(scale.orientation(), gtk::Orientation::Vertical);
         bar.show(None);

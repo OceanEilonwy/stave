@@ -406,9 +406,6 @@ pub struct CameraComponent {
     orientation: gtk::Orientation,
     /// Pull apart's slider pops out beside the column.
     joined: bool,
-    /// Where the column's messages go, for the window's orientation
-    /// setter.
-    input: relm4::Sender<CameraInput>,
     /// Pull apart's slider, which belongs to the view's tools, and the
     /// handler watching it come and go, let go when the column shuts
     /// down.
@@ -520,15 +517,13 @@ impl Component for CameraComponent {
             line,
             popout,
         } = init;
-        let input = sender.input_sender().clone();
-        let joined = input.clone();
+        let joined = sender.input_sender().clone();
         let joined_handler = popout.connect_visible_notify(move |popout| {
             joined.emit(CameraInput::Joined(popout.is_visible()));
         });
         let model = CameraComponent {
             orientation: gtk::Orientation::Vertical,
             joined: popout.is_visible(),
-            input,
             popout,
             joined_handler: Some(joined_handler),
         };
@@ -620,11 +615,9 @@ impl CameraToolbar {
     }
 
     /// Lays the buttons out in a column (docked on the right edge) or a
-    /// row (docked in a corner), X-ray and Pull apart with them. The
-    /// column already holds `tools`.
-    pub fn orientation_setter(&self, _tools: &ViewToolbar) -> impl Fn(gtk::Orientation) + 'static {
-        let input = self.bridge.model().input.clone();
-        move |orientation| input.emit(CameraInput::SetOrientation(orientation))
+    /// row (docked in a corner), X-ray and Pull apart with them.
+    pub fn set_orientation(&self, orientation: gtk::Orientation) {
+        self.bridge.send(CameraInput::SetOrientation(orientation));
     }
 }
 
@@ -1128,8 +1121,7 @@ mod tests {
     fn camera_column() {
         let tools = ViewToolbar::new();
         let camera = CameraToolbar::new(&tools);
-        let orient = camera.orientation_setter(&tools);
-        orient(gtk::Orientation::Horizontal);
+        camera.set_orientation(gtk::Orientation::Horizontal);
         assert_eq!(
             camera.root.orientation(),
             gtk::Orientation::Vertical,
@@ -1174,7 +1166,6 @@ mod tests {
         );
         let root = camera.root.downgrade();
         let input = camera.bridge.sender().clone();
-        let orient = camera.orientation_setter(&tools);
         drop(camera);
         settle();
         assert!(root.upgrade().is_none(), "the column is freed");
@@ -1184,8 +1175,6 @@ mod tests {
         assert!(tools.popout.is_visible());
         drop(tools);
         assert!(input.send(CameraInput::Joined(false)).is_err());
-        // A setter outliving the column does nothing.
-        orient(gtk::Orientation::Vertical);
     }
 
     #[test]

@@ -252,15 +252,18 @@ pub(in crate::ui) fn wire(window: &Window) {
     files.connect_notice(move |text| {
         sender.emit(ProjectInput::Notice { text, seconds: 4 }.into());
     });
+    // The workbench says when the layout can't be saved, and where the
+    // view's tool groups went (the floating controls follow).
     let sender = input.clone();
-    widgets.workbench.connect_save_failed(move |text| {
-        sender.emit(
-            ProjectInput::Notice {
-                text: text.to_owned(),
-                seconds: 5,
+    widgets.workbench.connect_outputs(move |output| {
+        sender.emit(match output {
+            workbench::WorkbenchOutput::SaveFailed(text) => {
+                ProjectInput::Notice { text, seconds: 5 }.into()
             }
-            .into(),
-        );
+            workbench::WorkbenchOutput::ToolsChanged(spots) => {
+                super::rendering::RenderingInput::ToolsMoved(spots).into()
+            }
+        });
     });
     // The Details panel asks whether a file has unsaved changes. A query
     // the inspector still asks synchronously: it holds the files page

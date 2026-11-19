@@ -512,7 +512,7 @@ pub(in crate::ui) struct Widgets {
     sheet: gtk::Overlay,
     dock: Rc<Dock>,
     /// The dock and its panels round the 3D view.
-    workbench: Rc<workbench::Workbench>,
+    workbench: workbench::Workbench,
     /// The Problems panel.
     problems: Rc<panels::ProblemsPanel>,
     /// The Files panel.
@@ -541,9 +541,8 @@ pub(in crate::ui) struct Widgets {
     files: Rc<FilesPage>,
     /// The Output panel: what the checks said.
     output: output::OutputPanel,
-    /// The controls floating on the 3D view, and their docking: held so
-    /// the placing and dragging (which only hold it weakly) live on.
-    _floats: Rc<floating::Floats>,
+    /// The controls floating on the 3D view, and their docking.
+    floats: floating::Floats,
 }
 
 impl Widgets {
@@ -1191,32 +1190,9 @@ pub(in crate::ui) fn build_widgets(
         ),
         (view_layout::Floating::EdgePin, edge_pin.clone().upcast()),
     ];
-    let orient_camera = camera.orientation_setter(&view_toolbar);
-    let orient_moves = dock.moves_orientation_setter();
-    let orient_motion = motion.orientation_setter();
-    let saver = Rc::downgrade(&workbench);
-    let floats = floating::Floats::new(
-        &figure,
-        floating,
-        workbench.tools(),
-        Box::new(move |group, orientation| match group {
-            view_layout::Group::Scene => {}
-            view_layout::Group::Camera => orient_camera(orientation),
-            view_layout::Group::Moves => orient_moves(orientation),
-            view_layout::Group::Motion => orient_motion(orientation),
-        }),
-        Box::new(move |group, spot| {
-            if let Some(workbench) = saver.upgrade() {
-                workbench.dock_tool(group, spot);
-            }
-        }),
-    );
-    let refresher = Rc::downgrade(&floats);
-    workbench.connect_tools(move || {
-        if let Some(floats) = refresher.upgrade() {
-            floats.refresh();
-        }
-    });
+    // The groups are laid out for their spots, and follow the workbench
+    // when it moves them, by the window's messages (`update/rendering.rs`).
+    let floats = floating::Floats::new(&figure, floating, workbench.tool_spots());
 
     let views = gtk::Stack::builder()
         .transition_type(gtk::StackTransitionType::Crossfade)
@@ -1315,7 +1291,7 @@ pub(in crate::ui) fn build_widgets(
         problem_card,
         files,
         output,
-        _floats: floats,
+        floats,
     })
 }
 

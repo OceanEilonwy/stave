@@ -46,9 +46,6 @@ pub struct DockComponent {
     orientation: gtk::Orientation,
     /// The chips' natural line length while they lie in a row.
     natural_line_length: i32,
-    /// The component's own input, for the orientation setter the old API
-    /// hands out (`Bridge` doesn't hand out its sender).
-    input: relm4::Sender<DockInput>,
 }
 
 /// What the chips are made with.
@@ -152,7 +149,7 @@ impl Component for DockComponent {
     fn init(
         init: DockInit,
         root: Self::Root,
-        sender: ComponentSender<Self>,
+        _sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
         let DockInit { scene } = init;
         let mut model = DockComponent {
@@ -160,7 +157,6 @@ impl Component for DockComponent {
             offered: true,
             orientation: gtk::Orientation::Horizontal,
             natural_line_length: 0,
-            input: sender.input_sender().clone(),
         };
         let widgets = view_output!();
         model.natural_line_length = widgets.chips.natural_line_length();
@@ -240,9 +236,9 @@ impl Dock {
 
     /// Lays the chips out in a row (docked in a corner) or a column
     /// (docked on the right edge), one chip per line.
-    pub fn moves_orientation_setter(&self) -> impl Fn(gtk::Orientation) + 'static {
-        let input = self.bridge.model().input.clone();
-        move |orientation| input.emit(DockInput::SetMovesOrientation(orientation))
+    pub fn set_moves_orientation(&self, orientation: gtk::Orientation) {
+        self.bridge
+            .send(DockInput::SetMovesOrientation(orientation));
     }
 
     /// Calls `callback` with each chip people choose from now on, instead
@@ -364,7 +360,7 @@ mod tests {
         assert!(shown[1].has_css_class("current"));
         assert!(dock.moves.is_visible() && dock.scene.is_visible());
         dock.offer(false);
-        (dock.moves_orientation_setter())(gtk::Orientation::Vertical);
+        dock.set_moves_orientation(gtk::Orientation::Vertical);
         settle();
         assert!(!dock.moves.is_visible() && !dock.scene.is_visible());
         assert_eq!(dock.moves.orientation(), gtk::Orientation::Vertical);

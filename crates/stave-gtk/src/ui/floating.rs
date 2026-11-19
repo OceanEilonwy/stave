@@ -17,15 +17,12 @@
 //! [`Floats`] keeps the older API in front of it until the window moves
 //! to relm4 too.
 
-use std::rc::Rc;
-
 use adw::prelude::*;
 use gtk::{gdk, glib};
 use relm4::{Component, ComponentParts, ComponentSender};
 
 use super::relm4_shim::Bridge;
 use super::view_layout::{self, Floating, Group, Rect, Spot, Spots};
-use super::workbench::ToolSpots;
 
 /// The floating controls, measured by GTK.
 #[derive(Clone)]
@@ -464,62 +461,44 @@ fn make_draggable(
     ]
 }
 
-/// Lays a group out flat or upright.
-pub type Orient = Box<dyn Fn(Group, gtk::Orientation)>;
-/// Told when a group is docked in a spot.
-pub type OnDock = Box<dyn Fn(Group, Spot)>;
-
-/// The controls floating on the view, behind the API the window still
-/// uses: it owns the [`FloatsComponent`] (dropping it shuts the component
-/// down and takes its handlers off the view) and passes its
-/// [`FloatsOutput`]s to the two callbacks it was made with.
+/// The controls floating on the view: it owns the [`FloatsComponent`]
+/// (dropping it shuts the component down and takes its handlers off the
+/// view) and passes its [`FloatsOutput`]s to the callback connected with
+/// [`Floats::connect_outputs`].
 pub struct Floats {
-    /// Where the workbench keeps the tool groups' spots, read when told
-    /// to refresh.
-    spots: ToolSpots,
     bridge: Bridge<FloatsComponent>,
 }
 
 impl Floats {
     /// Floats the controls on the 3D view, each where `view_layout` puts
     /// it for the view's size, what is showing and the groups' `spots`,
-    /// so none covers another. `orient` lays a group flat or upright,
-    /// and is called for every group before this returns, so the first
-    /// frame shows each the right way round; `on_dock` hears when one is
-    /// dragged to a new spot.
+    /// so none covers another. It tells its owner to lay every group out
+    /// for its spot ([`FloatsOutput::Orient`]) as soon as one listens.
     pub fn new(
         figure: &gtk::Overlay,
         floating: Vec<(Floating, gtk::Widget)>,
-        spots: ToolSpots,
-        orient: Orient,
-        on_dock: OnDock,
-    ) -> Rc<Floats> {
-        let start = spots.now().unwrap_or_default();
-        // As the old constructor did, before the window is first laid out;
-        // the component's own first refresh, queued, says the same again.
-        for group in Group::ALL {
-            orient(group, orientation(start.spot_of(group)));
-        }
+        spots: Spots,
+    ) -> Floats {
         let bridge = Bridge::<FloatsComponent>::launch(FloatsInit {
             figure: figure.clone(),
             floating,
-            spots: start,
+            spots,
         });
-        bridge.connect(move |output| match output {
-            FloatsOutput::Orient { group, orientation } => orient(group, orientation),
-            FloatsOutput::Docked { group, spot } => on_dock(group, spot),
-        });
-        Rc::new(Floats { spots, bridge })
+        Floats { bridge }
+    }
+
+    /// Calls `callback` with each output from now on (a group to lay flat
+    /// or upright, a group people docked), instead of the one connected
+    /// before.
+    pub fn connect_outputs(&self, callback: impl Fn(FloatsOutput) + 'static) {
+        self.bridge.connect(callback);
     }
 
     /// Lays every group out for its spot and places them again (after a
-    /// layout is applied or reset, or a group docked), reading the spots
-    /// from the workbench now. Once the workbench is gone there is
-    /// nothing to follow, and nothing changes.
-    pub fn refresh(&self) {
-        if let Some(spots) = self.spots.now() {
-            self.bridge.send(FloatsInput::Refresh(spots));
-        }
+    /// layout is applied or reset, or a group docked): the workbench keeps
+    /// the spots and says where they are.
+    pub fn refresh(&self, spots: Spots) {
+        self.bridge.send(FloatsInput::Refresh(spots));
     }
 }
 
@@ -594,15 +573,15 @@ fn rounded(cairo: &gtk::cairo::Context, rect: Rect, radius: f64) {
 #[cfg(test)]
 mod tests {
     use std::cell::{Cell, RefCell};
-    use std::rc::Weak;
+    use std::rc::{Rc, Weak};
 
     use super::*;
     use crate::ui::gtk_test::{on_gtk_thread, settle};
-    use crate::ui::workbench::{Layout, PanelId, Remember, Workbench};
+    use crate::ui::workbench::{Layout, PanelId, Remember, Workbench, WorkbenchOutput};
 
     /// A workbench keeping the tool groups' spots, as the window's does,
     /// every panel a label; nothing is written.
-    fn workbench() -> Rc<Workbench> {
+    fn workbench() -> Workbench {
         let contents = PanelId::ALL
             .into_iter()
             .map(|id| (id, gtk::Label::new(Some(id.title())).upcast()))
@@ -672,13 +651,13 @@ mod tests {
         let laid_by = laid.clone();
         let docked_by = docked.clone();
         let workbench = workbench();
-        let floats = Floats::new(
-            &figure,
-            controls(),
-            workbench.tools(),
-            Box::new(move |group, orientation| laid_by.borrow_mut().push((group, orientation))),
-            Box::new(move |group, spot| docked_by.set(Some((group, spot)))),
-        );
+        let floats = Floats::new(&figure, controls(), workbench.tool_spots());
+        floats.connect_outputs(move |output| match output {
+            FloatsOutput::Orient { group, orientation } => {
+                laid_by.borrow_mut().push((group, orientation));
+            }
+            FloatsOutput::Docked { group, spot } => docked_by.set(Some((group, spot))),
+        });
         lay_out(&window);
         floats.bridge.send(FloatsInput::Held {
             group: Group::Camera,
@@ -748,19 +727,12 @@ mod tests {
             .map(|(_, widget)| widget.clone())
             .expect("a camera column");
         let token = Rc::new(());
-        let (held_by_orient, held_by_dock) = (Rc::clone(&token), Rc::clone(&token));
+        let held = Rc::clone(&token);
         let workbench = workbench();
-        let floats = Floats::new(
-            &figure,
-            floating,
-            workbench.tools(),
-            Box::new(move |_, _| {
-                let _ = &held_by_orient;
-            }),
-            Box::new(move |_, _| {
-                let _ = &held_by_dock;
-            }),
-        );
+        let floats = Floats::new(&figure, floating, workbench.tool_spots());
+        floats.connect_outputs(move |_| {
+            let _ = &held;
+        });
         let callbacks = Rc::downgrade(&token);
         drop(token);
         lay_out(&window);
@@ -809,38 +781,38 @@ mod tests {
         let inner_drag: Rc<RefCell<Option<gtk::GestureDrag>>> = Rc::default();
         let fire = Rc::clone(&inner_drag);
         // The workbench keeps the groups' spots, as the window's does.
-        let workbench = workbench();
+        let workbench = Rc::new(workbench());
         let layout = Rc::downgrade(&workbench);
-        let floats = Floats::new(
-            &figure,
-            floating,
-            workbench.tools(),
-            Box::new(|_, _| {}),
-            Box::new(move |group, spot| {
-                let Some(floats) = find.borrow().upgrade() else {
-                    return;
-                };
-                let dragging = floats.bridge.model().drag.is_some();
-                // Docking in the workbench is queued; it tells the floats
-                // to refresh once it has handled it.
-                if let Some(workbench) = layout.upgrade() {
-                    workbench.dock_tool(group, spot);
-                }
-                // GTK ending the drag again from in here only queues a
-                // message.
-                if let Some(drag) = fire.borrow().as_ref() {
-                    drag.emit_by_name::<()>("drag-end", &[&0.0_f64, &0.0_f64]);
-                }
-                log.borrow_mut().push((group, dragging));
-            }),
-        );
+        let floats = Rc::new(Floats::new(&figure, floating, workbench.tool_spots()));
+        floats.connect_outputs(move |output| {
+            let FloatsOutput::Docked { group, spot } = output else {
+                return;
+            };
+            let Some(floats) = find.borrow().upgrade() else {
+                return;
+            };
+            let dragging = floats.bridge.model().drag.is_some();
+            // Docking in the workbench is queued; it tells the floats
+            // to refresh once it has handled it.
+            if let Some(workbench) = layout.upgrade() {
+                workbench.dock_tool(group, spot);
+            }
+            // GTK ending the drag again from in here only queues a
+            // message.
+            if let Some(drag) = fire.borrow().as_ref() {
+                drag.emit_by_name::<()>("drag-end", &[&0.0_f64, &0.0_f64]);
+            }
+            log.borrow_mut().push((group, dragging));
+        });
         me.replace(Rc::downgrade(&floats));
         // As the window wires them: a refresh asked for when the workbench
         // says the groups moved, itself queued.
         let refresher = Rc::downgrade(&floats);
-        workbench.connect_tools(move || {
-            if let Some(floats) = refresher.upgrade() {
-                floats.refresh();
+        workbench.connect_outputs(move |output| {
+            if let WorkbenchOutput::ToolsChanged(spots) = output
+                && let Some(floats) = refresher.upgrade()
+            {
+                floats.refresh(spots);
             }
         });
         lay_out(&window);
@@ -886,13 +858,13 @@ mod tests {
     }
 
     #[test]
-    fn the_groups_are_oriented_before_the_floats_are_made() {
+    fn every_group_is_oriented_for_its_spot_once_the_owner_listens() {
         on_gtk_thread(oriented_at_once);
     }
 
-    /// The old constructor laid each group out for its spot before it
-    /// returned, so the first frame shows each the right way round; the
-    /// shim still does, from the spots the workbench keeps.
+    /// The floats tell their owner to lay each group out for its spot, from
+    /// the spots the workbench keeps, as soon as the owner listens: before
+    /// the window's first frame.
     fn oriented_at_once() {
         let (figure, window) = figure_in_a_window();
         let workbench = workbench();
@@ -902,19 +874,15 @@ mod tests {
         settle();
         let laid: Rc<RefCell<Vec<(Group, gtk::Orientation)>>> = Rc::default();
         let laid_by = Rc::clone(&laid);
-        let floats = Floats::new(
-            &figure,
-            controls(),
-            workbench.tools(),
-            Box::new(move |group, orientation| laid_by.borrow_mut().push((group, orientation))),
-            Box::new(|_, _| {}),
-        );
+        let floats = Floats::new(&figure, controls(), workbench.tool_spots());
+        floats.connect_outputs(move |output| {
+            if let FloatsOutput::Orient { group, orientation } = output {
+                laid_by.borrow_mut().push((group, orientation));
+            }
+        });
+        settle();
         let groups: Vec<Group> = laid.borrow().iter().map(|(group, _)| *group).collect();
-        assert_eq!(
-            groups,
-            Group::ALL.to_vec(),
-            "every group, before new returns"
-        );
+        assert_eq!(groups, Group::ALL.to_vec(), "every group, once");
         assert!(
             laid.borrow()
                 .contains(&(Group::Scene, gtk::Orientation::Vertical)),
@@ -940,17 +908,13 @@ mod tests {
         layout.tools.dock(Group::Scene, Spot::Right);
         workbench.apply(layout);
         settle();
-        let floats = Floats::new(
-            &figure,
-            controls(),
-            workbench.tools(),
-            Box::new(|_, _| {}),
-            Box::new(|_, _| {}),
-        );
+        let floats = Rc::new(Floats::new(&figure, controls(), workbench.tool_spots()));
         let refresher = Rc::downgrade(&floats);
-        workbench.connect_tools(move || {
-            if let Some(floats) = refresher.upgrade() {
-                floats.refresh();
+        workbench.connect_outputs(move |output| {
+            if let WorkbenchOutput::ToolsChanged(spots) = output
+                && let Some(floats) = refresher.upgrade()
+            {
+                floats.refresh(spots);
             }
         });
         lay_out(&window);

@@ -870,12 +870,17 @@ impl Window {
             self.editing.tools.root.set_visible(false);
             return;
         };
-        let (stale, another_item) = self.editing.tools.shown.as_ref().map_or((true, true), |shown| {
-            (
-                shown.item != item || shown.design != address,
-                shown.item != item,
-            )
-        });
+        let (stale, another_item) =
+            self.editing
+                .tools
+                .shown
+                .as_ref()
+                .map_or((true, true), |shown| {
+                    (
+                        shown.item != item || shown.design != address,
+                        shown.item != item,
+                    )
+                });
         if stale {
             // Another item: "Repeat…" is asked for again.
             if another_item {

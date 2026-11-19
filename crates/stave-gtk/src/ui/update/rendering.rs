@@ -4,6 +4,7 @@
 
 use super::add_action;
 use crate::render::Ticket;
+use crate::ui::floating::FloatsOutput;
 use crate::ui::view_tools::{CameraOutput, ViewToolbarOutput};
 // The window's own items and imports, as the handlers had them in mod.rs.
 use crate::ui::*;
@@ -82,6 +83,23 @@ pub(in crate::ui) enum RenderingInput {
     },
     /// The scroll wheel turned this far.
     Zoomed(f64),
+    /// Lay one of the view's tool groups out flat or upright.
+    ToolOriented {
+        /// The group.
+        group: view_layout::Group,
+        /// Flat (horizontal) or upright (vertical).
+        orientation: gtk::Orientation,
+    },
+    /// People docked one of the view's tool groups in a new spot.
+    ToolDocked {
+        /// The group.
+        group: view_layout::Group,
+        /// Where it went.
+        spot: view_layout::Spot,
+    },
+    /// The workbench moved the view's tool groups: they are in these spots
+    /// now.
+    ToolsMoved(view_layout::Spots),
     /// Draws the view now.
     RenderNow,
     /// Shows the frame the GPU has ready.
@@ -125,6 +143,20 @@ pub(in crate::ui) fn wire(window: &mut Window) {
                 ViewToolbarOutput::Pull(on) => RenderingInput::PullApart(on),
                 ViewToolbarOutput::Play => RenderingInput::PlayExplode,
                 ViewToolbarOutput::Apart(value) => RenderingInput::ExplodeSlid(value),
+            }
+            .into(),
+        );
+    });
+    // The floating controls: a group laid out for its spot, a group
+    // people docked somewhere new.
+    let sender = input.clone();
+    widgets.floats.connect_outputs(move |output| {
+        sender.emit(
+            match output {
+                FloatsOutput::Orient { group, orientation } => {
+                    RenderingInput::ToolOriented { group, orientation }
+                }
+                FloatsOutput::Docked { group, spot } => RenderingInput::ToolDocked { group, spot },
             }
             .into(),
         );
@@ -337,6 +369,16 @@ impl Window {
             RenderingInput::Zoomed(dy) => {
                 self.update_orbit(|orbit| orbit.zoomed(crate::convert::f32_of(-dy)));
             }
+            RenderingInput::ToolOriented { group, orientation } => match group {
+                view_layout::Group::Scene => {}
+                view_layout::Group::Camera => self.widgets.camera.set_orientation(orientation),
+                view_layout::Group::Moves => self.widgets.dock.set_moves_orientation(orientation),
+                view_layout::Group::Motion => self.widgets.motion.set_orientation(orientation),
+            },
+            RenderingInput::ToolDocked { group, spot } => {
+                self.widgets.workbench.dock_tool(group, spot);
+            }
+            RenderingInput::ToolsMoved(spots) => self.widgets.floats.refresh(spots),
             RenderingInput::RenderNow => self.render_now(),
             RenderingInput::PollFrame(ticket) => self.poll_frame(ticket),
         }
