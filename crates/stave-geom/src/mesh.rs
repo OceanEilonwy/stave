@@ -53,23 +53,15 @@
 use std::f32::consts::TAU;
 
 use glam::Vec3;
-use stave_lang::placement::PartAxis;
+use stave_lang::placement::{PartAxis, PerPartAxis};
 use stave_lang::units::Length;
 use stave_model::solved::Part;
 
+use crate::axes::{AlongPart, following, on_part};
 use crate::build::{self, Builder, Frame, GrainAxes, ProfilePoint};
 use crate::mesh_cut::{self, Band};
 use crate::solid::{Rod, Solid, across};
 use crate::{Aabb, Edges, Geometry, Mesh, render};
-
-/// The slot of a part axis in a local vector.
-fn slot(axis: PartAxis) -> usize {
-    match axis {
-        PartAxis::Length => 0,
-        PartAxis::Width => 1,
-        PartAxis::Thickness => 2,
-    }
-}
 
 fn mm_nm(nm: i64) -> f32 {
     render::mm(Length::from_nm(nm))
@@ -79,7 +71,7 @@ fn mm_nm(nm: i64) -> f32 {
 /// frame in the render frame, or its own frame).
 pub fn cut_part(frame: &Frame, part: &Part, solid: &Solid, grain: GrainAxes) -> Geometry {
     let frame = *frame;
-    let size = [part.cut.length, part.cut.width, part.cut.thickness].map(Length::nm);
+    let size = PerPartAxis::from_fn(|axis| part.cut.get(axis).nm());
     let length = render::mm(part.cut.length);
     let mut pieces = Vec::new();
     if !solid.blocks().is_empty() {
@@ -196,11 +188,14 @@ impl HoleShape {
     /// face's edge, and the mesh would crack there.
     fn of(rod: &Rod) -> HoleShape {
         let radius = rod.diameter.nm() / 2;
-        let rest = rod.diameter.nm() - radius;
+        let rest = rod.diameter.nm().saturating_sub(radius);
         let margin = radius / 8;
-        let square = rod
-            .centre
-            .map(|c| (c.nm() - radius - margin, c.nm() + rest + margin));
+        let square = rod.centre.map(|c| {
+            (
+                c.nm().saturating_sub(radius).saturating_sub(margin),
+                c.nm().saturating_add(rest).saturating_add(margin),
+            )
+        });
         HoleShape { rod: *rod, square }
     }
 }
@@ -208,47 +203,68 @@ impl HoleShape {
 /// The grid of a board.
 struct Grid {
     /// Grid lines per local axis, nm, sorted and distinct.
-    lines: [Vec<i64>; 3],
-    /// Wood or air per cell, x fastest.
+    lines: PerPartAxis<Vec<i64>>,
+    /// Wood or air per cell, length fastest.
     wood: Vec<bool>,
 }
 
 impl Grid {
-    fn cells(&self, axis: usize) -> usize {
+    fn cells(&self, axis: PartAxis) -> usize {
         self.lines[axis].len().saturating_sub(1)
     }
 
-    fn index(&self, cell: [usize; 3]) -> usize {
-        cell[0] + self.cells(0) * (cell[1] + self.cells(1) * cell[2])
+    /// Cells in the whole grid.
+    fn count(&self) -> usize {
+        PartAxis::ALL.into_iter().fold(1, |count: usize, axis| {
+            count.saturating_mul(self.cells(axis))
+        })
+    }
+
+    /// A cell's place in [`Grid::wood`]; `None` outside the grid.
+    fn index(&self, cell: PerPartAxis<usize>) -> Option<usize> {
+        let [length, width, thickness] = cell.into_array();
+        let (cells_length, cells_width) =
+            (self.cells(PartAxis::Length), self.cells(PartAxis::Width));
+        let row = thickness.checked_mul(cells_width)?.checked_add(width)?;
+        row.checked_mul(cells_length)?.checked_add(length)
     }
 
     /// Whether a cell is wood; cells outside the grid are air.
-    fn is_wood(&self, cell: [isize; 3]) -> bool {
-        let mut at = [0usize; 3];
-        for axis in 0..3 {
-            match usize::try_from(cell[axis]) {
-                Ok(value) if value < self.cells(axis) => at[axis] = value,
-                _ => return false,
-            }
-        }
-        self.wood.get(self.index(at)).copied().unwrap_or(false)
+    fn is_wood(&self, cell: PerPartAxis<isize>) -> bool {
+        let Ok(at) = PerPartAxis::try_from_fn(|axis| {
+            usize::try_from(cell[axis])
+                .ok()
+                .filter(|value| *value < self.cells(axis))
+                .ok_or(())
+        }) else {
+            return false;
+        };
+        self.index(at)
+            .and_then(|index| self.wood.get(index))
+            .copied()
+            .unwrap_or(false)
     }
 
-    fn line(&self, axis: usize, index: usize) -> i64 {
+    fn line(&self, axis: PartAxis, index: usize) -> i64 {
         self.lines[axis].get(index).copied().unwrap_or(0)
     }
 
-    fn find(&self, axis: usize, value: i64) -> Option<usize> {
+    fn find(&self, axis: PartAxis, value: i64) -> Option<usize> {
         self.lines[axis].binary_search(&value).ok()
     }
 }
 
+/// A grid index as a signed cell coordinate, so a neighbour one below the
+/// first cell is outside rather than a wrapped number.
+fn signed(index: usize) -> isize {
+    isize::try_from(index).unwrap_or(isize::MAX)
+}
+
 /// The boundary of a board's blocks, with its holes and angled slots.
-/// `size` is the cut size in nanometres per local axis: faces on its box
+/// `size` is the cut size in nanometres per part axis: faces on its box
 /// are the stock's own surface, every other face was made by a cut.
-fn board(frame: &Frame, solid: &Solid, grain: GrainAxes, size: [i64; 3]) -> Geometry {
-    let stock_plane =
-        |axis: usize, at: i64| at == 0 || size.get(axis).is_some_and(|edge| *edge == at);
+fn board(frame: &Frame, solid: &Solid, grain: GrainAxes, size: PerPartAxis<i64>) -> Geometry {
+    let stock_plane = |axis: PartAxis, at: i64| at == 0 || size[axis] == at;
     let holes: Vec<HoleShape> = solid.holes().iter().map(HoleShape::of).collect();
     let bands: Vec<Band> = solid
         .prisms()
@@ -259,45 +275,50 @@ fn board(frame: &Frame, solid: &Solid, grain: GrainAxes, size: [i64; 3]) -> Geom
                 .map(move |piece| Band::of(prism, piece))
         })
         .collect();
-    let mut lines: [Vec<i64>; 3] = Default::default();
+    let mut lines: PerPartAxis<Vec<i64>> = PerPartAxis::default();
     for block in solid.blocks().iter() {
         for axis in PartAxis::ALL {
-            lines[slot(axis)].push(block.min().get(axis).nm());
-            lines[slot(axis)].push(block.max().get(axis).nm());
+            lines[axis].push(block.min().get(axis).nm());
+            lines[axis].push(block.max().get(axis).nm());
         }
     }
     for hole in &holes {
-        for (index, axis) in across(hole.rod.axis).into_iter().enumerate() {
-            let (low, high) = hole.square[index];
-            lines[slot(axis)].extend([low, high]);
+        for (axis, (low, high)) in across(hole.rod.axis).into_iter().zip(hole.square) {
+            lines[axis].extend([low, high]);
         }
     }
-    for axis_lines in &mut lines {
-        axis_lines.sort_unstable();
-        axis_lines.dedup();
+    for axis in PartAxis::ALL {
+        lines[axis].sort_unstable();
+        lines[axis].dedup();
     }
     let mut grid = Grid {
         wood: Vec::new(),
         lines,
     };
-    grid.wood = vec![false; grid.cells(0) * grid.cells(1) * grid.cells(2)];
+    grid.wood = vec![false; grid.count()];
     for block in solid.blocks().iter() {
-        let mut range = [(0usize, 0usize); 3];
+        let mut range: PerPartAxis<(usize, usize)> = PerPartAxis::default();
         for axis in PartAxis::ALL {
-            let s = slot(axis);
             let (Some(low), Some(high)) = (
-                grid.find(s, block.min().get(axis).nm()),
-                grid.find(s, block.max().get(axis).nm()),
+                grid.find(axis, block.min().get(axis).nm()),
+                grid.find(axis, block.max().get(axis).nm()),
             ) else {
                 continue;
             };
-            range[s] = (low, high);
+            range[axis] = (low, high);
         }
-        for z in range[2].0..range[2].1 {
-            for y in range[1].0..range[1].1 {
-                for x in range[0].0..range[0].1 {
-                    let index = grid.index([x, y, z]);
-                    if let Some(cell) = grid.wood.get_mut(index) {
+        let ((x0, x1), (y0, y1), (z0, z1)) = (
+            range[PartAxis::Length],
+            range[PartAxis::Width],
+            range[PartAxis::Thickness],
+        );
+        for z in z0..z1 {
+            for y in y0..y1 {
+                for x in x0..x1 {
+                    if let Some(cell) = grid
+                        .index(PerPartAxis::new(x, y, z))
+                        .and_then(|index| grid.wood.get_mut(index))
+                    {
                         *cell = true;
                     }
                 }
@@ -306,14 +327,17 @@ fn board(frame: &Frame, solid: &Solid, grain: GrainAxes, size: [i64; 3]) -> Geom
     }
 
     let mut builder = Builder::default();
-    let local = |x: i64, y: i64, z: i64| Vec3::new(mm_nm(x), mm_nm(y), mm_nm(z));
+    let local = |at: PerPartAxis<i64>| {
+        let [x, y, z] = at.into_array().map(mm_nm);
+        Vec3::new(x, y, z)
+    };
 
-    // Hole openings: (axis slot, plane index, cell u, cell v) -> hole index.
-    let mut openings: Vec<([usize; 4], usize, bool)> = Vec::new();
+    // Hole openings, with the hole each belongs to.
+    let mut openings: Vec<(Opening, usize)> = Vec::new();
     let mut drawn_holes = vec![false; holes.len()];
     for (index, hole) in holes.iter().enumerate() {
-        let a = slot(hole.rod.axis);
-        let [u_axis, v_axis] = across(hole.rod.axis).map(slot);
+        let a = hole.rod.axis;
+        let [u_axis, v_axis] = across(a);
         let (Some(u0), Some(u1), Some(v0), Some(v1)) = (
             grid.find(u_axis, hole.square[0].0),
             grid.find(u_axis, hole.square[0].1),
@@ -333,17 +357,14 @@ fn board(frame: &Frame, solid: &Solid, grain: GrainAxes, size: [i64; 3]) -> Geom
             if plane < start || plane > end {
                 continue;
             }
-            let pi = isize::try_from(p).unwrap_or(0);
+            let pi = signed(p);
             for high in [false, true] {
-                let mut inside = [0isize; 3];
-                let mut outside = [0isize; 3];
+                let mut inside: PerPartAxis<isize> = PerPartAxis::default();
+                inside[u_axis] = signed(u0);
+                inside[v_axis] = signed(v0);
+                let mut outside = inside;
                 inside[a] = if high { pi - 1 } else { pi };
                 outside[a] = if high { pi } else { pi - 1 };
-                for (axis, cell) in [(u_axis, u0), (v_axis, v0)] {
-                    let value = isize::try_from(cell).unwrap_or(0);
-                    inside[axis] = value;
-                    outside[axis] = value;
-                }
                 // The inside cell must lie within the hole's range.
                 let Ok(inside_index) = usize::try_from(inside[a]) else {
                     continue;
@@ -354,7 +375,11 @@ fn board(frame: &Frame, solid: &Solid, grain: GrainAxes, size: [i64; 3]) -> Geom
                     continue;
                 }
                 if grid.is_wood(inside) && !grid.is_wood(outside) {
-                    openings.push(([a, p, u0, v0], index, high));
+                    let mut at: PerPartAxis<usize> = PerPartAxis::default();
+                    at[a] = p;
+                    at[u_axis] = u0;
+                    at[v_axis] = v0;
+                    openings.push((Opening { axis: a, at, high }, index));
                 }
             }
         }
@@ -365,8 +390,8 @@ fn board(frame: &Frame, solid: &Solid, grain: GrainAxes, size: [i64; 3]) -> Geom
     }
 
     // Faces, merged per plane.
-    for a in 0..3 {
-        let (u, v) = ((a + 1) % 3, (a + 2) % 3);
+    for a in PartAxis::ALL {
+        let [u, v] = following(a);
         let (nu, nv) = (grid.cells(u), grid.cells(v));
         for p in 0..grid.lines[a].len() {
             for positive in [false, true] {
@@ -374,11 +399,11 @@ fn board(frame: &Frame, solid: &Solid, grain: GrainAxes, size: [i64; 3]) -> Geom
                 let mut mask = vec![false; nu * nv];
                 for j in 0..nv {
                     for i in 0..nu {
-                        let mut below = [0isize; 3];
-                        let pi = isize::try_from(p).unwrap_or(0);
+                        let mut below: PerPartAxis<isize> = PerPartAxis::default();
+                        let pi = signed(p);
                         below[a] = pi - 1;
-                        below[u] = isize::try_from(i).unwrap_or(0);
-                        below[v] = isize::try_from(j).unwrap_or(0);
+                        below[u] = signed(i);
+                        below[v] = signed(j);
                         let mut above = below;
                         above[a] = pi;
                         let (wood_below, wood_above) = (grid.is_wood(below), grid.is_wood(above));
@@ -387,11 +412,11 @@ fn board(frame: &Frame, solid: &Solid, grain: GrainAxes, size: [i64; 3]) -> Geom
                         } else {
                             wood_above && !wood_below
                         };
-                        let is_opening = openings.iter().any(|(key, _, _)| {
-                            key[0] == a && key[1] == p && {
-                                let [hu, hv] = cell_uv(key, a);
-                                hu == (u, i) && hv == (v, j)
-                            }
+                        let is_opening = openings.iter().any(|(opening, _)| {
+                            opening.axis == a
+                                && opening.at[a] == p
+                                && opening.at[u] == i
+                                && opening.at[v] == j
                         });
                         if face
                             && !is_opening
@@ -401,18 +426,17 @@ fn board(frame: &Frame, solid: &Solid, grain: GrainAxes, size: [i64; 3]) -> Geom
                         }
                     }
                 }
-                let mut normal = Vec3::ZERO;
-                normal[a] = if positive { 1.0 } else { -1.0 };
+                let normal = on_part(a, if positive { 1.0 } else { -1.0 });
                 let world_normal = frame.vector(normal);
                 let w = grid.line(a, p);
                 builder.set_cut(!stock_plane(a, w));
                 for (i0, j0, i1, j1) in greedy(&mut mask, nu, nv) {
                     let corner = |i: usize, j: usize| {
-                        let mut c = [0i64; 3];
+                        let mut c: PerPartAxis<i64> = PerPartAxis::default();
                         c[a] = w;
                         c[u] = grid.line(u, i);
                         c[v] = grid.line(v, j);
-                        local(c[0], c[1], c[2])
+                        local(c)
                     };
                     let polygon = vec![
                         corner(i0, j0),
@@ -425,15 +449,15 @@ fn board(frame: &Frame, solid: &Solid, grain: GrainAxes, size: [i64; 3]) -> Geom
                         continue;
                     }
                     if i1 == i0 + 1 && j1 == j0 + 1 {
-                        let quad = [
+                        let [q0, q1, q2, q3] = [
                             corner(i0, j0),
                             corner(i1, j0),
                             corner(i1, j1),
                             corner(i0, j1),
                         ]
                         .map(|l| builder.vertex(frame.point(l), world_normal, grain.apply(l)));
-                        builder.triangle(quad[0], quad[1], quad[2]);
-                        builder.triangle(quad[0], quad[2], quad[3]);
+                        builder.triangle(q0, q1, q2);
+                        builder.triangle(q0, q2, q3);
                         continue;
                     }
                     // A merged rectangle keeps every grid point on its
@@ -471,18 +495,18 @@ fn board(frame: &Frame, solid: &Solid, grain: GrainAxes, size: [i64; 3]) -> Geom
     }
 
     // Outline edges where the surface bends.
-    for a in 0..3 {
-        let (u, v) = ((a + 1) % 3, (a + 2) % 3);
+    for a in PartAxis::ALL {
+        let [u, v] = following(a);
         for i in 0..grid.lines[u].len() {
             for j in 0..grid.lines[v].len() {
                 let mut run: Option<usize> = None;
                 for k in 0..=grid.cells(a) {
                     let feature = k < grid.cells(a) && {
                         let around = |di: isize, dj: isize| {
-                            let mut cell = [0isize; 3];
-                            cell[a] = isize::try_from(k).unwrap_or(0);
-                            cell[u] = isize::try_from(i).unwrap_or(0) + di;
-                            cell[v] = isize::try_from(j).unwrap_or(0) + dj;
+                            let mut cell: PerPartAxis<isize> = PerPartAxis::default();
+                            cell[a] = signed(k);
+                            cell[u] = signed(i).saturating_add(di);
+                            cell[v] = signed(j).saturating_add(dj);
                             grid.is_wood(cell)
                         };
                         let cells = [around(-1, -1), around(0, -1), around(-1, 0), around(0, 0)];
@@ -493,11 +517,11 @@ fn board(frame: &Frame, solid: &Solid, grain: GrainAxes, size: [i64; 3]) -> Geom
                         (true, None) => run = Some(k),
                         (false, Some(start)) => {
                             let point = |at: usize| {
-                                let mut c = [0i64; 3];
+                                let mut c: PerPartAxis<i64> = PerPartAxis::default();
                                 c[a] = grid.line(a, at);
                                 c[u] = grid.line(u, i);
                                 c[v] = grid.line(v, j);
-                                frame.point(local(c[0], c[1], c[2]))
+                                frame.point(local(c))
                             };
                             builder.edge(point(start), point(k));
                             run = None;
@@ -510,24 +534,21 @@ fn board(frame: &Frame, solid: &Solid, grain: GrainAxes, size: [i64; 3]) -> Geom
     }
 
     // Openings, walls and bottoms of the holes.
-    for (key, index, high) in &openings {
+    for (place, index) in &openings {
         let Some(hole) = holes.get(*index) else {
             continue;
         };
-        let place = Opening {
-            key: *key,
-            high: *high,
-        };
-        builder.set_cut(!stock_plane(key[0], grid.line(key[0], key[1])));
-        opening(&mut builder, frame, grain, hole, place, &grid, &bands);
+        let axis = place.axis;
+        builder.set_cut(!stock_plane(axis, grid.line(axis, place.at[axis])));
+        opening(&mut builder, frame, grain, hole, *place, &grid, &bands);
     }
     builder.set_cut(true);
     for (index, hole) in holes.iter().enumerate() {
         if !drawn_holes.get(index).copied().unwrap_or(false) {
             continue;
         }
-        let a = slot(hole.rod.axis);
-        let [u_axis, v_axis] = across(hole.rod.axis).map(slot);
+        let a = hole.rod.axis;
+        let [u_axis, v_axis] = across(a);
         let (Some(u0), Some(v0)) = (
             grid.find(u_axis, hole.square[0].0),
             grid.find(v_axis, hole.square[1].0),
@@ -536,22 +557,23 @@ fn board(frame: &Frame, solid: &Solid, grain: GrainAxes, size: [i64; 3]) -> Geom
         };
         let (start, end) = (hole.rod.start.nm(), hole.rod.end.nm());
         let cell = |k: isize| {
-            let mut c = [0isize; 3];
+            let mut c: PerPartAxis<isize> = PerPartAxis::default();
             c[a] = k;
-            c[u_axis] = isize::try_from(u0).unwrap_or(0);
-            c[v_axis] = isize::try_from(v0).unwrap_or(0);
+            c[u_axis] = signed(u0);
+            c[v_axis] = signed(v0);
             c
         };
         for k in 0..grid.cells(a) {
             let (cell_low, cell_high) = (grid.line(a, k), grid.line(a, k + 1));
-            let ki = isize::try_from(k).unwrap_or(0);
+            let ki = signed(k);
             let (low, high) = (cell_low.max(start), cell_high.min(end));
             if low >= high || !grid.is_wood(cell(ki)) {
                 continue;
             }
             // The hole stops in wood here: a bottom facing into it.
             let stops_low = low == start && (start > cell_low || grid.is_wood(cell(ki - 1)));
-            let stops_high = high == end && (end < cell_high || grid.is_wood(cell(ki + 1)));
+            let stops_high =
+                high == end && (end < cell_high || grid.is_wood(cell(ki.saturating_add(1))));
             wall(
                 &mut builder,
                 frame,
@@ -567,7 +589,7 @@ fn board(frame: &Frame, solid: &Solid, grain: GrainAxes, size: [i64; 3]) -> Geom
     for band in &bands {
         let hole_discs: Vec<(Vec3, f32)> = holes
             .iter()
-            .filter(|h| slot(h.rod.axis) == band.face)
+            .filter(|h| h.rod.axis == band.face)
             .map(|h| {
                 (
                     mesh_cut::flat_centre(&h.rod),
@@ -575,19 +597,16 @@ fn board(frame: &Frame, solid: &Solid, grain: GrainAxes, size: [i64; 3]) -> Geom
                 )
             })
             .collect();
-        for z in 0..grid.cells(2) {
-            for y in 0..grid.cells(1) {
-                for x in 0..grid.cells(0) {
-                    let at = [x, y, z].map(|i| isize::try_from(i).unwrap_or(0));
+        for z in 0..grid.cells(PartAxis::Thickness) {
+            for y in 0..grid.cells(PartAxis::Width) {
+                for x in 0..grid.cells(PartAxis::Length) {
+                    let cell = PerPartAxis::new(x, y, z);
+                    let at = cell.map(signed);
                     if !grid.is_wood(at) {
                         continue;
                     }
-                    let low = local(grid.line(0, x), grid.line(1, y), grid.line(2, z));
-                    let high = local(
-                        grid.line(0, x + 1),
-                        grid.line(1, y + 1),
-                        grid.line(2, z + 1),
-                    );
+                    let low = local(PerPartAxis::from_fn(|axis| grid.line(axis, cell[axis])));
+                    let high = local(PerPartAxis::from_fn(|axis| grid.line(axis, cell[axis] + 1)));
                     let mut below = at;
                     below[band.face] -= 1;
                     let mut above = at;
@@ -606,22 +625,6 @@ fn board(frame: &Frame, solid: &Solid, grain: GrainAxes, size: [i64; 3]) -> Geom
         }
     }
     builder.finish()
-}
-
-/// The (axis, cell) pairs of an opening key on the face axes `u`, `v` of
-/// face axis `a`.
-fn cell_uv(key: &[usize; 4], a: usize) -> [(usize, usize); 2] {
-    // The key stores the cells on `across(axis)` in PartAxis order.
-    let axes = match a {
-        0 => [1, 2],
-        1 => [0, 2],
-        _ => [0, 1],
-    };
-    let (u, v) = ((a + 1) % 3, (a + 2) % 3);
-    let cell_of = |axis: usize| {
-        if axis == axes[0] { key[2] } else { key[3] }
-    };
-    [(u, cell_of(u)), (v, cell_of(v))]
 }
 
 /// Greedy merge of a mask into rectangles `(i0, j0, i1, j1)`, exclusive
@@ -660,11 +663,10 @@ fn greedy(mask: &mut [bool], nu: usize, nv: usize) -> Vec<(usize, usize, usize, 
 
 /// Local position of a point on a hole's circle at plane `along` (mm).
 fn circle_point(hole: &Rod, along: f32, angle: f32, radius: f32) -> Vec3 {
-    let [u, v] = across(hole.axis).map(slot);
-    let mut point = Vec3::ZERO;
-    point[slot(hole.axis)] = along;
-    point[u] = render::mm(hole.centre[0]) + radius * angle.cos();
-    point[v] = render::mm(hole.centre[1]) + radius * angle.sin();
+    let [u, v] = across(hole.axis);
+    let mut point = on_part(hole.axis, along);
+    point.set_along(u, render::mm(hole.centre[0]) + radius * angle.cos());
+    point.set_along(v, render::mm(hole.centre[1]) + radius * angle.sin());
     point
 }
 
@@ -678,11 +680,15 @@ fn angle_of(step: u16) -> f32 {
     TAU * f32::from(step % segments().max(1)) / f32::from(segments())
 }
 
-/// Where a hole opens: (face axis, plane index, cell u, cell v), and
-/// which way it faces.
+/// Where a hole opens, and which way it faces.
 #[derive(Debug, Clone, Copy)]
 struct Opening {
-    key: [usize; 4],
+    /// The face axis: the hole's own.
+    axis: PartAxis,
+    /// The grid plane it opens on (along `axis`) and the cell of the
+    /// hole's square (along the two axes across it).
+    at: PerPartAxis<usize>,
+    /// It faces toward the high end of `axis`.
     high: bool,
 }
 
@@ -698,25 +704,29 @@ fn opening(
     bands: &[Band],
 ) {
     let rod = &hole.rod;
-    let a = place.key[0];
-    let along = mm_nm(grid.line(a, place.key[1]));
+    let a = place.axis;
+    let along = mm_nm(grid.line(a, place.at[a]));
     let radius = render::mm(rod.diameter) * 0.5;
-    let [u, v] = across(rod.axis).map(slot);
-    let mut normal = Vec3::ZERO;
-    normal[a] = if place.high { 1.0 } else { -1.0 };
+    let [u, v] = across(rod.axis);
+    let normal = on_part(a, if place.high { 1.0 } else { -1.0 });
     let corner_local = |hi_u: bool, hi_v: bool| {
-        let mut point = Vec3::ZERO;
-        point[a] = along;
-        point[u] = mm_nm(if hi_u {
-            hole.square[0].1
-        } else {
-            hole.square[0].0
-        });
-        point[v] = mm_nm(if hi_v {
-            hole.square[1].1
-        } else {
-            hole.square[1].0
-        });
+        let mut point = on_part(a, along);
+        point.set_along(
+            u,
+            mm_nm(if hi_u {
+                hole.square[0].1
+            } else {
+                hole.square[0].0
+            }),
+        );
+        point.set_along(
+            v,
+            mm_nm(if hi_v {
+                hole.square[1].1
+            } else {
+                hole.square[1].0
+            }),
+        );
         point
     };
     let corners = [
@@ -776,12 +786,11 @@ fn wall(
     let rod = &hole.rod;
     let radius = render::mm(rod.diameter) * 0.5;
     let (start, end) = range;
-    let a = slot(rod.axis);
-    let [u, v] = across(rod.axis).map(slot);
+    let a = rod.axis;
+    let [u, v] = across(rod.axis);
     let inward = |angle: f32| {
-        let mut n = Vec3::ZERO;
-        n[u] = -angle.cos();
-        n[v] = -angle.sin();
+        let mut n = on_part(u, -angle.cos());
+        n.set_along(v, -angle.sin());
         n
     };
     for step in 0..segments() {
@@ -794,25 +803,24 @@ fn wall(
             let l = circle_point(rod, along, angle, radius);
             builder.vertex(frame.point(l), frame.vector(inward(angle)), grain.apply(l))
         };
-        let quad = [
+        let [q0, q1, q2, q3] = [
             corner(start, t0),
             corner(start, t1),
             corner(end, t1),
             corner(end, t0),
         ];
-        builder.triangle(quad[0], quad[1], quad[2]);
-        builder.triangle(quad[0], quad[2], quad[3]);
+        builder.triangle(q0, q1, q2);
+        builder.triangle(q0, q2, q3);
     }
     // A bottom where the hole stops: facing back toward the opening.
     for (along, stop, toward_high) in [(start, stops.0, true), (end, stops.1, false)] {
         if !stop {
             continue;
         }
-        let mut normal = Vec3::ZERO;
-        normal[a] = if toward_high { 1.0 } else { -1.0 };
+        let normal = on_part(a, if toward_high { 1.0 } else { -1.0 });
         let world_normal = frame.vector(normal);
         let mut centre = circle_point(rod, along, 0.0, 0.0);
-        centre[a] = along;
+        centre.set_along(a, along);
         let middle = builder.vertex(frame.point(centre), world_normal, grain.apply(centre));
         let rim: Vec<u32> = (0..=segments())
             .map(|step| {

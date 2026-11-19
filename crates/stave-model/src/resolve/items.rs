@@ -815,7 +815,7 @@ impl<'a> Resolver<'a> {
                 PartKind::FromStock(Box::new(lowered))
             }
             ast::PartDef::Mirror(mirror) => {
-                PartKind::Mirror(self.lower_mirror(cx, mirror, Ty::Part))
+                PartKind::Mirror(self.lower_mirror(cx, mirror, &Ty::Part))
             }
         };
         PartDef {
@@ -829,7 +829,7 @@ impl<'a> Resolver<'a> {
         &mut self,
         cx: &Cx,
         mirror: &ast::Mirror,
-        source_ty: Ty,
+        source_ty: &Ty,
     ) -> MirrorDef {
         #[expect(
             clippy::wildcard_enum_match_arm,
@@ -840,7 +840,7 @@ impl<'a> Resolver<'a> {
             _ => Expect::any().named("mirror"),
         };
         let source = self.value(cx, &mirror.source, &expect);
-        if source_ty != Ty::Part && !matches!(source.ty, Ty::Assembly(_) | Ty::Unknown) {
+        if *source_ty != Ty::Part && !matches!(source.ty, Ty::Assembly(_) | Ty::Unknown) {
             self.error(
                 Code::TypeMismatch,
                 format!("'mirror' needs an assembly, found {}", source.ty),
@@ -1443,7 +1443,7 @@ impl<'a> Resolver<'a> {
                 }
             }
             ast::AssemblyDef::Mirror(mirror) => {
-                AssemblyKind::Mirror(self.lower_mirror(cx, mirror, Ty::Unknown))
+                AssemblyKind::Mirror(self.lower_mirror(cx, mirror, &Ty::Unknown))
             }
         };
         AssemblyDef {

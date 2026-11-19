@@ -283,11 +283,11 @@ impl Resolver<'_> {
             ExprKind::Quantity(quantity) => match quantity.unit.dimension() {
                 ast::Dimension::Length => match quantity_to_length(*quantity) {
                     Ok(length) => make(RExprKind::Length(length), Ty::Length),
-                    Err(error) => self.too_large(cx, span, error),
+                    Err(error) => self.too_large(cx, span, &error),
                 },
                 ast::Dimension::Angle => match quantity_to_angle(*quantity) {
                     Ok(angle) => make(RExprKind::Angle(angle), Ty::Angle),
-                    Err(error) => self.too_large(cx, span, error),
+                    Err(error) => self.too_large(cx, span, &error),
                 },
             },
             ExprKind::Number(number) => match number_to_rational(*number) {
@@ -298,7 +298,7 @@ impl Resolver<'_> {
                     };
                     make(RExprKind::Number(value), ty)
                 }
-                Err(error) => self.too_large(cx, span, error),
+                Err(error) => self.too_large(cx, span, &error),
             },
             ExprKind::String(string) => {
                 let text = self.text(cx, string);
@@ -443,7 +443,7 @@ impl Resolver<'_> {
         }
     }
 
-    fn too_large(&mut self, cx: &Cx, span: Span, error: stave_lang::units::UnitError) -> RExpr {
+    fn too_large(&mut self, cx: &Cx, span: Span, error: &stave_lang::units::UnitError) -> RExpr {
         self.error(Code::UnitMismatch, error.to_string(), cx.file, span);
         RExpr::error(span)
     }

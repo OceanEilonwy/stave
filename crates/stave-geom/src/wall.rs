@@ -40,7 +40,7 @@
 //! Work is in half nanometres (`i128`), so the radius of a hole whose
 //! diameter is an odd number of nanometres is still exact.
 
-use stave_lang::placement::PartAxis;
+use stave_lang::placement::{PartAxis, PerPartAxis};
 use stave_lang::units::{Angle, Length};
 use stave_model::solved::{Cut, CutKind, Depth, End, LocalFace, Part, Shape, Size3, SolvedDesign};
 
@@ -99,11 +99,16 @@ pub struct Oversize {
 }
 
 /// A shape a cut removes, in half nanometres in the part's frame
-/// (coordinates indexed by [`slot`]).
+/// (coordinates by part axis).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Volume {
     /// A box.
-    Box { min: [i128; 3], max: [i128; 3] },
+    Box {
+        /// The low corner.
+        min: PerPartAxis<i128>,
+        /// The high corner.
+        max: PerPartAxis<i128>,
+    },
     /// A cylinder along a part axis: its centre on the two axes
     /// [`across`] it, its radius, and where it starts and ends.
     Cylinder {
@@ -136,10 +141,9 @@ impl CutShape {
                 Volume::Box {
                     min: outer_min,
                     max: outer_max,
-                } => PartAxis::ALL.iter().all(|axis| {
-                    get(outer_min, *axis) <= get(&min, *axis)
-                        && get(&max, *axis) <= get(outer_max, *axis)
-                }),
+                } => PartAxis::ALL
+                    .iter()
+                    .all(|axis| outer_min[*axis] <= min[*axis] && max[*axis] <= outer_max[*axis]),
                 Volume::Cylinder { .. } => outer == volume,
             })
         })
@@ -153,15 +157,6 @@ pub struct Walls<'a> {
     shapes: Vec<CutShape>,
     /// The lathe profile of a round or turned part.
     profile: Option<&'a crate::solid::Profile>,
-}
-
-/// A part axis's index in a coordinate array.
-fn slot(axis: PartAxis) -> usize {
-    match axis {
-        PartAxis::Length => 0,
-        PartAxis::Width => 1,
-        PartAxis::Thickness => 2,
-    }
 }
 
 /// A length in half nanometres.
@@ -218,7 +213,7 @@ fn disc_to_rectangle(centre: [i128; 2], radius: i128, low: [i128; 2], high: [i12
 
 impl Volume {
     /// Its bounds on every axis.
-    fn bounds(&self) -> ([i128; 3], [i128; 3]) {
+    fn bounds(&self) -> (PerPartAxis<i128>, PerPartAxis<i128>) {
         match *self {
             Volume::Box { min, max } => (min, max),
             Volume::Cylinder {
@@ -228,15 +223,14 @@ impl Volume {
                 start,
                 end,
             } => {
-                let mut min = [0; 3];
-                let mut max = [0; 3];
-                for (index, other) in across(axis).into_iter().enumerate() {
-                    let c = centre.get(index).copied().unwrap_or(0);
-                    set(&mut min, other, c - radius);
-                    set(&mut max, other, c + radius);
+                let mut min = PerPartAxis::default();
+                let mut max = PerPartAxis::default();
+                for (other, c) in across(axis).into_iter().zip(centre) {
+                    min[other] = c - radius;
+                    max[other] = c + radius;
                 }
-                set(&mut min, axis, start);
-                set(&mut max, axis, end);
+                min[axis] = start;
+                max[axis] = end;
                 (min, max)
             }
         }
@@ -248,12 +242,7 @@ impl Volume {
             (Volume::Box { .. }, Volume::Box { .. }) => {
                 let (a0, a1) = self.bounds();
                 let (b0, b1) = other.bounds();
-                combine(&PartAxis::ALL.map(|axis| {
-                    gap(
-                        (get(&a0, axis), get(&a1, axis)),
-                        (get(&b0, axis), get(&b1, axis)),
-                    )
-                }))
+                combine(&PartAxis::ALL.map(|axis| gap((a0[axis], a1[axis]), (b0[axis], b1[axis]))))
             }
             (Volume::Box { min, max }, cylinder @ Volume::Cylinder { .. })
             | (cylinder @ Volume::Cylinder { .. }, Volume::Box { min, max }) => {
@@ -286,20 +275,10 @@ impl Volume {
     }
 }
 
-fn get(point: &[i128; 3], axis: PartAxis) -> i128 {
-    point.get(slot(axis)).copied().unwrap_or(0)
-}
-
-fn set(point: &mut [i128; 3], axis: PartAxis, value: i128) {
-    if let Some(entry) = point.get_mut(slot(axis)) {
-        *entry = value;
-    }
-}
-
 /// The signed distance from a box to a cylinder: along the cylinder's
 /// axis and across it are independent, so the distance is the two
 /// combined.
-fn box_to_cylinder(min: [i128; 3], max: [i128; 3], cylinder: &Volume) -> i128 {
+fn box_to_cylinder(min: PerPartAxis<i128>, max: PerPartAxis<i128>, cylinder: &Volume) -> i128 {
     let Volume::Cylinder {
         axis,
         centre,
@@ -310,14 +289,9 @@ fn box_to_cylinder(min: [i128; 3], max: [i128; 3], cylinder: &Volume) -> i128 {
     else {
         return 0;
     };
-    let along = gap((start, end), (get(&min, axis), get(&max, axis)));
+    let along = gap((start, end), (min[axis], max[axis]));
     let [u, v] = across(axis);
-    let apart = disc_to_rectangle(
-        centre,
-        radius,
-        [get(&min, u), get(&min, v)],
-        [get(&max, u), get(&max, v)],
-    );
+    let apart = disc_to_rectangle(centre, radius, [min[u], min[v]], [max[u], max[v]]);
     combine(&[along, apart])
 }
 
@@ -332,7 +306,7 @@ fn square_cylinders(a: &Volume, b: &Volume) -> i128 {
             .map(|v| render::nm(Length::from_nm(v)))
             .unwrap_or(f64::MAX)
     };
-    let project = |shape: &Volume, point: [f64; 3]| -> [f64; 3] {
+    let project = |shape: &Volume, point: PerPartAxis<f64>| -> PerPartAxis<f64> {
         let Volume::Cylinder {
             axis,
             centre,
@@ -344,38 +318,25 @@ fn square_cylinders(a: &Volume, b: &Volume) -> i128 {
             return point;
         };
         let mut out = point;
-        let along = slot(axis);
-        if let Some(value) = out.get_mut(along) {
-            *value = value.clamp(as_f64(start), as_f64(end));
-        }
-        let [u, v] = across(axis).map(slot);
+        out[axis] = point[axis].clamp(as_f64(start), as_f64(end));
+        let [u, v] = across(axis);
         let (cu, cv) = (as_f64(centre[0]), as_f64(centre[1]));
-        let (pu, pv) = (
-            point.get(u).copied().unwrap_or(0.0),
-            point.get(v).copied().unwrap_or(0.0),
-        );
-        let (du, dv) = (pu - cu, pv - cv);
+        let (du, dv) = (point[u] - cu, point[v] - cv);
         let length = du.hypot(dv);
         let r = as_f64(radius);
         if length > r && length > 0.0 {
-            if let Some(value) = out.get_mut(u) {
-                *value = cu + du * r / length;
-            }
-            if let Some(value) = out.get_mut(v) {
-                *value = cv + dv * r / length;
-            }
+            out[u] = cu + du * r / length;
+            out[v] = cv + dv * r / length;
         }
         out
     };
     let (a0, a1) = a.bounds();
-    let mut p = [0.0; 3];
-    for axis in PartAxis::ALL {
-        if let Some(value) = p.get_mut(slot(axis)) {
-            *value = (as_f64(get(&a0, axis)) + as_f64(get(&a1, axis))) / 2.0;
-        }
-    }
-    let distance = |p: [f64; 3], q: [f64; 3]| {
-        let d: f64 = p.iter().zip(&q).map(|(x, y)| (x - y) * (x - y)).sum();
+    let mut p = PerPartAxis::from_fn(|axis| (as_f64(a0[axis]) + as_f64(a1[axis])) / 2.0);
+    let distance = |p: PerPartAxis<f64>, q: PerPartAxis<f64>| {
+        let d: f64 = PartAxis::ALL
+            .into_iter()
+            .map(|axis| (p[axis] - q[axis]) * (p[axis] - q[axis]))
+            .sum();
         d.sqrt()
     };
     let mut best = f64::MAX;
@@ -391,12 +352,8 @@ fn square_cylinders(a: &Volume, b: &Volume) -> i128 {
     }
     if best < 1.0 {
         let (b0, b1) = b.bounds();
-        let boxes = combine(&PartAxis::ALL.map(|axis| {
-            gap(
-                (get(&a0, axis), get(&a1, axis)),
-                (get(&b0, axis), get(&b1, axis)),
-            )
-        }));
+        let boxes =
+            combine(&PartAxis::ALL.map(|axis| gap((a0[axis], a1[axis]), (b0[axis], b1[axis]))));
         return boxes.min(0);
     }
     render::integer_from_f64(best.floor()).map_or(0, i128::from)
@@ -412,10 +369,15 @@ fn shape_of(part: &Part, cut: &Cut, design: &SolvedDesign, round: bool) -> CutSh
         entry: face,
         through: false,
     };
-    let full = |size: Size3| ([0; 3], PartAxis::ALL.map(|axis| half(size.get(axis))));
+    let full = |size: Size3| {
+        (
+            PerPartAxis::default(),
+            PerPartAxis::from_fn(|axis| half(size.get(axis))),
+        )
+    };
     let block = |min: Local, max: Local| Volume::Box {
-        min: PartAxis::ALL.map(|axis| half(min.get(axis))),
-        max: PartAxis::ALL.map(|axis| half(max.get(axis))),
+        min: PerPartAxis::from_fn(|axis| half(min.get(axis))),
+        max: PerPartAxis::from_fn(|axis| half(max.get(axis))),
     };
     let ranged = |depth: Depth| depth_range(size, face, depth);
     match &cut.kind {
@@ -435,8 +397,8 @@ fn shape_of(part: &Part, cut: &Cut, design: &SolvedDesign, round: bool) -> CutSh
         CutKind::Spigot { length, .. } => {
             let (start, end) = ranged(Depth::Length(*length));
             let (mut min, mut max) = full(size);
-            set(&mut min, PartAxis::Length, half(start));
-            set(&mut max, PartAxis::Length, half(end));
+            min[PartAxis::Length] = half(start);
+            max[PartAxis::Length] = half(end);
             shape.volumes.push(Volume::Box { min, max });
             return shape;
         }
@@ -534,8 +496,8 @@ fn shape_of(part: &Part, cut: &Cut, design: &SolvedDesign, round: bool) -> CutSh
         CutKind::Round { .. } => {
             let (start, end) = face_extent(part, &cut.place, PartAxis::Length);
             let (mut min, mut max) = full(size);
-            set(&mut min, PartAxis::Length, half(start));
-            set(&mut max, PartAxis::Length, half(end));
+            min[PartAxis::Length] = half(start);
+            max[PartAxis::Length] = half(end);
             shape.volumes.push(Volume::Box { min, max });
         }
         CutKind::Slot {
@@ -696,8 +658,8 @@ impl<'a> Walls<'a> {
             .map(|volume| {
                 let (min, max) = volume.bounds();
                 match face.end {
-                    End::Start => get(&min, face.axis),
-                    End::End => half(size.get(face.axis)) - get(&max, face.axis),
+                    End::Start => min[face.axis],
+                    End::End => half(size.get(face.axis)) - max[face.axis],
                 }
             })
             .min()
@@ -878,6 +840,12 @@ mod tests {
         2_000_000 * value
     }
 
+    /// A box corner from millimetres along the length, width and thickness.
+    fn corner(at: [i128; 3]) -> PerPartAxis<i128> {
+        let [length, width, thickness] = at.map(mm);
+        PerPartAxis::new(length, width, thickness)
+    }
+
     fn cylinder(axis: PartAxis, centre: [i128; 2], diameter: i128, range: (i128, i128)) -> Volume {
         Volume::Cylinder {
             axis,
@@ -891,22 +859,22 @@ mod tests {
     #[test]
     fn boxes_apart_along_one_axis_are_exactly_that_far_apart() {
         let a = Volume::Box {
-            min: [0, 0, 0].map(mm),
-            max: [10, 10, 10].map(mm),
+            min: corner([0, 0, 0]),
+            max: corner([10, 10, 10]),
         };
         let b = Volume::Box {
-            min: [13, 2, 2].map(mm),
-            max: [20, 5, 5].map(mm),
+            min: corner([13, 2, 2]),
+            max: corner([20, 5, 5]),
         };
         assert_eq!(a.distance(&b), mm(3));
         let touching = Volume::Box {
-            min: [10, 0, 0].map(mm),
-            max: [20, 10, 10].map(mm),
+            min: corner([10, 0, 0]),
+            max: corner([20, 10, 10]),
         };
         assert_eq!(a.distance(&touching), 0);
         let into = Volume::Box {
-            min: [8, 0, 0].map(mm),
-            max: [20, 10, 10].map(mm),
+            min: corner([8, 0, 0]),
+            max: corner([20, 10, 10]),
         };
         assert_eq!(a.distance(&into), -mm(2));
     }
@@ -915,8 +883,8 @@ mod tests {
     fn a_hole_beside_a_box_is_measured_from_its_side() {
         let hole = cylinder(PartAxis::Thickness, [20, 10], 8, (0, 15));
         let dado = Volume::Box {
-            min: [0, 15, 0].map(mm),
-            max: [100, 34, 9].map(mm),
+            min: corner([0, 15, 0]),
+            max: corner([100, 34, 9]),
         };
         // The hole's side is at 14mm across; the dado starts at 15mm.
         assert_eq!(hole.distance(&dado), mm(1));

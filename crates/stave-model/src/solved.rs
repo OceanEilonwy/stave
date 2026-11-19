@@ -1051,6 +1051,33 @@ impl Part {
     pub fn drawn_box(&self) -> WorldBox {
         self.pose.world_box_at(self.drawn_offset, self.drawn)
     }
+
+    /// A copy of the part with no cuts and no boards, room kept for
+    /// `cuts` cuts: a plain blank to make trial cuts on. Its own cuts and
+    /// boards are never copied.
+    pub fn blank(&self, cuts: usize) -> Part {
+        Part {
+            id: self.id,
+            name: self.name.clone(),
+            assembly: self.assembly,
+            origin: self.origin,
+            stock: self.stock.clone(),
+            drawn: self.drawn,
+            cut: self.cut,
+            drawn_offset: self.drawn_offset,
+            pose: self.pose,
+            shape: self.shape.clone(),
+            grain: self.grain,
+            reference_face: self.reference_face,
+            reference_edge: self.reference_edge,
+            cuts: Vec::with_capacity(cuts),
+            joints: self.joints.clone(),
+            note: self.note.clone(),
+            boards: None,
+            loose: self.loose,
+            pieces: self.pieces.clone(),
+        }
+    }
 }
 
 /// Where a cut comes from.

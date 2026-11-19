@@ -43,6 +43,7 @@
 //! `stave_check`'s two tiers address.
 
 #![forbid(unsafe_code)]
+#![warn(clippy::redundant_clone, clippy::needless_pass_by_value)]
 #![warn(missing_docs)]
 
 pub mod defs;

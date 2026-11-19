@@ -963,11 +963,7 @@ fn board_wood(part: &Part, boards: &Boards, design: &SolvedDesign) -> BoardWood 
     let mut numbered = part.cuts.len();
     // One copy of the part, without its boards or cuts, reused for every
     // board: only the size across the boards and the cuts change.
-    let mut alone = Part {
-        boards: None,
-        cuts: Vec::new(),
-        ..part.clone()
-    };
+    let mut alone = part.blank(0);
     for board in boards.boards.iter() {
         alone.cut = part.cut.with(boards.axis, board.width);
         alone.cuts.clone_from(&board.cuts);

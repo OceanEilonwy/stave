@@ -3,13 +3,15 @@
 //! here knows a base, a member or a param by name: a cup hinge's arm on
 //! its plate and a slide's gap beside the drawer are the kinds' own text.
 
+use std::borrow::Cow;
+
 use stave_lang::ast::Span;
 use stave_lang::units::ExactLength;
 use stave_lang::{Code, Diagnostic, FileId, Label};
 use stave_model::defs::{AdjustDef, BodyId, DefId, FrameAxis, KindDef};
 use stave_model::ids::HardwareId;
 use stave_model::solved::{CutSource, Rules};
-use stave_model::value::{AnchorValue, Value};
+use stave_model::value::{AnchorValue, ParamSettings, Value};
 
 use crate::eval::{Env, KindEnv};
 use crate::joints::Binding;
@@ -258,7 +260,7 @@ impl Solver<'_> {
         binding: &Binding,
         kind: &KindDef,
         adjusts: &[AdjustDef],
-        settings: &[(String, Value)],
+        settings: &ParamSettings,
     ) -> bool {
         // Its param values follow from the new settings, so its cache
         // starts empty.
@@ -266,7 +268,7 @@ impl Solver<'_> {
             kind: binding.kind,
             name: binding.name.clone(),
             roles: binding.roles.clone(),
-            settings: settings.to_vec(),
+            settings: settings.clone(),
             glue: binding.glue,
             methods: binding.methods.clone(),
             face: binding.face,
@@ -296,7 +298,11 @@ impl Solver<'_> {
             return Ok(true);
         }
         // Its own param values: `mount` is bound here and nowhere else.
-        let mut kind_env = KindEnv::new(binding.kind, &binding.roles, &binding.settings);
+        let mut kind_env = KindEnv::new(
+            binding.kind,
+            &binding.roles,
+            Cow::Borrowed(&binding.settings),
+        );
         kind_env.mount = Some(mount);
         let Some(ctx) = self.module_ctx(DefId::Kind(binding.kind)) else {
             return Err(Fault::Internal("the file an item is declared in").into());

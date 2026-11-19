@@ -6,7 +6,7 @@
 use std::collections::BTreeMap;
 
 use stave_lang::ast::{BaseKind, Span};
-use stave_lang::placement::{Axis, Direction, Face, PartAxis};
+use stave_lang::placement::{Axis, Direction, Face, PartAxis, PerAxis};
 use stave_lang::units::Length;
 use stave_lang::units::{ExactAngle, ExactLength, Rational};
 use stave_lang::{Code, Diagnostic, Label};
@@ -40,7 +40,7 @@ pub(crate) enum RoleBound {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct Frame {
     /// The origin, in world coordinates.
-    pub origin: [ExactLength; 3],
+    pub origin: PerAxis<ExactLength>,
     pub along: Direction,
     pub across: Direction,
     /// Into the piece.
@@ -62,10 +62,7 @@ impl Frame {
 
     /// The origin's coordinate along a world axis.
     pub fn origin_on(&self, axis: Axis) -> ExactLength {
-        self.origin
-            .get(world_index(axis))
-            .copied()
-            .unwrap_or(ExactLength::ZERO)
+        self.origin[axis]
     }
 
     /// A frame range on a frame axis, as a world extent.
@@ -108,8 +105,8 @@ impl Frame {
         along: ExactLength,
         across: ExactLength,
         depth: ExactLength,
-    ) -> Solved<[ExactLength; 3]> {
-        let mut out = [ExactLength::ZERO; 3];
+    ) -> Solved<PerAxis<ExactLength>> {
+        let mut out = ORIGIN;
         for (axis, value) in [
             (FrameAxis::Along, along),
             (FrameAxis::Across, across),
@@ -123,28 +120,23 @@ impl Frame {
                 origin.checked_sub(value)
             }
             .ok_or(Fault::Overflow)?;
-            if let Some(slot) = out.get_mut(world_index(direction.axis())) {
-                *slot = world;
-            }
+            out[direction.axis()] = world;
         }
         Ok(out)
     }
 
     /// A box in the frame, in the world.
     pub fn world_box(&self, frame_box: &FrameBox) -> Solved<ExactBox> {
-        let mut extents = [(ExactLength::ZERO, ExactLength::ZERO); 3];
+        let mut extents = PerAxis::from_fn(|_| (ExactLength::ZERO, ExactLength::ZERO));
         for (axis, range) in [
             (FrameAxis::Along, frame_box.along),
             (FrameAxis::Across, frame_box.across),
             (FrameAxis::Depth, frame_box.depth),
         ] {
             let extent = self.world_extent(axis, range)?;
-            if let Some(slot) = extents.get_mut(world_index(self.direction(axis).axis())) {
-                *slot = extent;
-            }
+            extents[self.direction(axis).axis()] = extent;
         }
-        let [x, y, z] = extents;
-        Ok(ExactBox::new(x, y, z))
+        Ok(ExactBox::new(extents.across, extents.up, extents.deep))
     }
 }
 
@@ -258,15 +250,15 @@ pub(crate) enum WorldShape {
     /// meaning).
     Prism {
         axis: Axis,
-        points: Vec<[ExactLength; 3]>,
+        points: Vec<PerAxis<ExactLength>>,
         bounds: ExactBox,
     },
     /// A bar across `axis` between two world points, over `bounds` along
     /// it.
     Bar {
         axis: Axis,
-        from: [ExactLength; 3],
-        to: [ExactLength; 3],
+        from: PerAxis<ExactLength>,
+        to: PerAxis<ExactLength>,
         thickness: ExactLength,
         bounds: ExactBox,
     },
@@ -355,13 +347,12 @@ pub(crate) struct Rest {
     pub offsets: Vec<Offset>,
 }
 
-pub(crate) fn world_index(axis: Axis) -> usize {
-    match axis {
-        Axis::Across => 0,
-        Axis::Up => 1,
-        Axis::Deep => 2,
-    }
-}
+/// The world origin: zero on every axis.
+pub(crate) const ORIGIN: PerAxis<ExactLength> = PerAxis {
+    across: ExactLength::ZERO,
+    up: ExactLength::ZERO,
+    deep: ExactLength::ZERO,
+};
 
 pub(crate) fn positive_direction(axis: Axis) -> Direction {
     match axis {
@@ -642,15 +633,13 @@ impl Solver<'_> {
             return Err(Fault::Internal("the axes a piece of hardware is laid out on").into());
         };
         let mut frame = Frame {
-            origin: [ExactLength::ZERO; 3],
+            origin: ORIGIN,
             along: length_direction,
             across: positive_direction(across_axis),
             depth: mount_face.direction().opposite(),
             across_edge: None,
         };
-        if let Some(slot) = frame.origin.get_mut(world_index(face_axis)) {
-            *slot = face_position;
-        }
+        frame.origin[face_axis] = face_position;
         // The kind's terms for `across` and `along`; the design's
         // `place { }` for the axes it leaves open.
         let mut open: Vec<FrameAxis> = Vec::new();
@@ -666,9 +655,7 @@ impl Solver<'_> {
                     let part_box = self.drawn_box(part)?;
                     let centre = midpoint(part_box.min(world), part_box.max(world))
                         .ok_or(Fault::Overflow)?;
-                    if let Some(slot) = frame.origin.get_mut(world_index(world)) {
-                        *slot = centre;
-                    }
+                    frame.origin[world] = centre;
                 }
                 AxisRule::Term(MountTerm::From(from)) => {
                     let (plane, at) = self.term_plane(binding, kind, mount_face, world, from)?;
@@ -685,9 +672,7 @@ impl Solver<'_> {
                         FrameAxis::Along => frame.along = inward,
                         FrameAxis::Depth => {}
                     }
-                    if let Some(slot) = frame.origin.get_mut(world_index(world)) {
-                        *slot = at;
-                    }
+                    frame.origin[world] = at;
                 }
             }
         }
@@ -768,9 +753,7 @@ impl Solver<'_> {
                         placed_low.checked_add(high)
                     }
                     .ok_or(Fault::Overflow)?;
-                    if let Some(slot) = frame.origin.get_mut(world_index(world)) {
-                        *slot = origin;
-                    }
+                    frame.origin[world] = origin;
                 }
                 (None, true) => {
                     let place_span = def.place_span.unwrap_or(def.decl.span);

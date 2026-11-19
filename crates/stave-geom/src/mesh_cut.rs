@@ -23,24 +23,16 @@ use std::f32::consts::{PI, TAU};
 use glam::Vec3;
 use stave_lang::placement::PartAxis;
 
+use crate::axes::{AlongPart, third};
 use crate::build::{Builder, Frame, GrainAxes};
 use crate::render;
 use crate::solid::{ConvexPolygon, Prism, Rod, across};
-
-/// The slot of a part axis in a local vector.
-pub(crate) fn slot_of(axis: PartAxis) -> usize {
-    match axis {
-        PartAxis::Length => 0,
-        PartAxis::Width => 1,
-        PartAxis::Thickness => 2,
-    }
-}
 
 /// A slanted piece of an angled cut, in local millimetres.
 #[derive(Debug, Clone)]
 pub(crate) struct Band {
     /// The face axis it runs through.
-    pub(crate) face: usize,
+    pub(crate) face: PartAxis,
     /// Its corners (the face coordinate is 0), counter-clockwise on the
     /// face's plane.
     corners: Vec<Vec3>,
@@ -57,15 +49,15 @@ pub(crate) struct Band {
 impl Band {
     /// The band of one convex piece of a prism.
     pub(crate) fn of(prism: &Prism, piece: &ConvexPolygon) -> Band {
-        let face = slot_of(prism.face_axis());
-        let [a, b] = across(prism.face_axis()).map(slot_of);
+        let face = prism.face_axis();
+        let [a, b] = across(face);
         let corners: Vec<Vec3> = piece
             .points()
             .iter()
             .map(|p| {
                 let mut v = Vec3::ZERO;
-                v[a] = render::mm(p.first);
-                v[b] = render::mm(p.second);
+                v.set_along(a, render::mm(p.first));
+                v.set_along(b, render::mm(p.second));
                 v
             })
             .collect();
@@ -80,8 +72,8 @@ impl Band {
             };
             let run = q - p;
             let mut normal = Vec3::ZERO;
-            normal[a] = run[b];
-            normal[b] = -run[a];
+            normal.set_along(a, run.along(b));
+            normal.set_along(b, -run.along(a));
             let normal = normal.normalize_or_zero();
             sides.push((normal, normal.dot(p)));
             let (from, to) = (points.get(i), points.get((i + 1) % count));
@@ -106,7 +98,7 @@ impl Band {
     /// Is a point strictly inside the band (ignoring depth)?
     pub(crate) fn holds(&self, p: Vec3) -> bool {
         let mut flat = p;
-        flat[self.face] = 0.0;
+        flat.set_along(self.face, 0.0);
         self.sides
             .iter()
             .all(|(normal, offset)| normal.dot(flat) < offset - 1e-4)
@@ -122,7 +114,7 @@ impl Band {
         let face = self.face;
         let flat = move |p: Vec3| {
             let mut q = p;
-            q[face] = 0.0;
+            q.set_along(face, 0.0);
             q
         };
         let mut pieces = Vec::new();
@@ -145,20 +137,20 @@ impl Band {
 
     /// Where the band crosses a plane along the face axis (normal axis
     /// `a`, at `plane`), as a range along the in-plane axis `t`.
-    fn crossing(&self, a: usize, plane: f32, t: usize) -> Option<(f32, f32)> {
+    fn crossing(&self, a: PartAxis, plane: f32, t: PartAxis) -> Option<(f32, f32)> {
         let mut low = f32::NEG_INFINITY;
         let mut high = f32::INFINITY;
         // n_a plane + n_t s < c, for every side.
         for (normal, offset) in &self.sides {
-            let rest = offset - normal[a] * plane;
-            if normal[t].abs() < 1e-6 {
+            let rest = offset - normal.along(a) * plane;
+            if normal.along(t).abs() < 1e-6 {
                 if rest <= 0.0 {
                     return None;
                 }
                 continue;
             }
-            let bound = rest / normal[t];
-            if normal[t] > 0.0 {
+            let bound = rest / normal.along(t);
+            if normal.along(t) > 0.0 {
                 high = high.min(bound);
             } else {
                 low = low.max(bound);
@@ -202,11 +194,11 @@ pub(crate) fn face(
     frame: &Frame,
     grain: GrainAxes,
     bands: &[Band],
-    a: usize,
+    a: PartAxis,
     polygon: Vec<Vec3>,
     normal: Vec3,
 ) {
-    let plane = polygon.first().map_or(0.0, |p| p[a]);
+    let plane = polygon.first().map_or(0.0, |p| p.along(a));
     let mut pieces = vec![polygon];
     for band in bands {
         if band.face == a {
@@ -216,7 +208,9 @@ pub(crate) fn face(
             pieces = pieces.iter().flat_map(|p| band.outside(p)).collect();
         } else {
             // The in-plane axis across the band's face axis.
-            let t = 3 - a - band.face;
+            let Some(t) = third(a, band.face) else {
+                continue;
+            };
             let Some((t0, t1)) = band.crossing(a, plane, t) else {
                 continue;
             };
@@ -249,16 +243,16 @@ pub(crate) fn face(
 /// (on local axes `t` and `d`): four convex pieces at most.
 fn cut_rectangle(
     polygon: &[Vec3],
-    t: usize,
+    t: PartAxis,
     (t0, t1): (f32, f32),
-    d: usize,
+    d: PartAxis,
     (d0, d1): (f32, f32),
 ) -> Vec<Vec<Vec3>> {
-    let low_t = clip(polygon, |p| p[t] - t0);
-    let high_t = clip(polygon, |p| t1 - p[t]);
-    let middle = clip(&clip(polygon, |p| t0 - p[t]), |p| p[t] - t1);
-    let low_d = clip(&middle, |p| p[d] - d0);
-    let high_d = clip(&middle, |p| d1 - p[d]);
+    let low_t = clip(polygon, |p| p.along(t) - t0);
+    let high_t = clip(polygon, |p| t1 - p.along(t));
+    let middle = clip(&clip(polygon, |p| t0 - p.along(t)), |p| p.along(t) - t1);
+    let low_d = clip(&middle, |p| p.along(d) - d0);
+    let high_d = clip(&middle, |p| d1 - p.along(d));
     [low_t, high_t, low_d, high_d]
         .into_iter()
         .filter(|p| p.len() >= 3 && area(p) > 1e-6)
@@ -266,13 +260,13 @@ fn cut_rectangle(
 }
 
 /// Does any band reach a face polygon (normal along local axis `a`)?
-pub(crate) fn cuts(bands: &[Band], a: usize, polygon: &[Vec3]) -> bool {
-    let plane = polygon.first().map_or(0.0, |p| p[a]);
+pub(crate) fn cuts(bands: &[Band], a: PartAxis, polygon: &[Vec3]) -> bool {
+    let plane = polygon.first().map_or(0.0, |p| p.along(a));
     bands.iter().any(|band| {
         if band.face == a {
             band.reaches(plane) && polygon_meets_band(band, polygon)
         } else {
-            band.crossing(a, plane, 3 - a - band.face).is_some()
+            third(a, band.face).is_some_and(|t| band.crossing(a, plane, t).is_some())
         }
     })
 }
@@ -283,18 +277,18 @@ fn polygon_meets_band(band: &Band, polygon: &[Vec3]) -> bool {
 }
 
 /// Is a point (on a plane across axis `a`) inside a band that reaches it?
-pub(crate) fn in_any(bands: &[Band], a: usize, p: Vec3) -> bool {
+pub(crate) fn in_any(bands: &[Band], a: PartAxis, p: Vec3) -> bool {
     bands
         .iter()
-        .any(|band| band.face == a && band.reaches(p[a]) && band.holds(p))
+        .any(|band| band.face == a && band.reaches(p.along(a)) && band.holds(p))
 }
 
 /// A rod's centre as a local point (its own axis left at 0).
 pub(crate) fn flat_centre(rod: &Rod) -> Vec3 {
-    let [ua, va] = across(rod.axis).map(slot_of);
+    let [ua, va] = across(rod.axis);
     let mut p = Vec3::ZERO;
-    p[ua] = render::mm(rod.centre[0]);
-    p[va] = render::mm(rod.centre[1]);
+    p.set_along(ua, render::mm(rod.centre[0]));
+    p.set_along(va, render::mm(rod.centre[1]));
     p
 }
 
@@ -313,15 +307,15 @@ pub(crate) fn walls(
     open: (bool, bool),
 ) {
     let (z0, z1) = (
-        low[band.face].max(band.depth.0),
-        high[band.face].min(band.depth.1),
+        low.along(band.face).max(band.depth.0),
+        high.along(band.face).min(band.depth.1),
     );
     if z1 - z0 < 1e-4 {
         return;
     }
     let flat = |p: Vec3| {
         let mut q = p;
-        q[band.face] = 0.0;
+        q.set_along(band.face, 0.0);
         q
     };
     let (lo, hi) = (flat(low), flat(high));
@@ -345,18 +339,18 @@ pub(crate) fn walls(
     }
     for (offset, direction, (mut s0, mut s1), facing) in lines {
         // Clipped to the cell.
-        for axis in 0..3 {
+        for axis in PartAxis::ALL {
             if axis == band.face {
                 continue;
             }
-            let (o, d) = (offset[axis], direction[axis]);
+            let (o, d) = (offset.along(axis), direction.along(axis));
             if d.abs() < 1e-6 {
-                if o < lo[axis] || o > hi[axis] {
+                if o < lo.along(axis) || o > hi.along(axis) {
                     s1 = s0 - 1.0;
                 }
                 continue;
             }
-            let (a, b) = ((lo[axis] - o) / d, (hi[axis] - o) / d);
+            let (a, b) = ((lo.along(axis) - o) / d, (hi.along(axis) - o) / d);
             s0 = s0.max(a.min(b));
             s1 = s1.min(a.max(b));
         }
@@ -383,7 +377,7 @@ pub(crate) fn walls(
         }
         let point = |s: f32, z: f32| {
             let mut p = offset + direction * s;
-            p[band.face] = z;
+            p.set_along(band.face, z);
             p
         };
         let normal = frame.vector(facing);
@@ -391,10 +385,10 @@ pub(crate) fn walls(
         let indices = quad.map(|l| builder.vertex(frame.point(l), normal, grain.apply(l)));
         builder.triangle(indices[0], indices[1], indices[2]);
         builder.triangle(indices[0], indices[2], indices[3]);
-        if open.0 || z0 > low[band.face] + 1e-4 {
+        if open.0 || z0 > low.along(band.face) + 1e-4 {
             builder.edge(frame.point(quad[0]), frame.point(quad[1]));
         }
-        if open.1 || z1 < high[band.face] - 1e-4 {
+        if open.1 || z1 < high.along(band.face) - 1e-4 {
             builder.edge(frame.point(quad[3]), frame.point(quad[2]));
         }
     }
@@ -415,8 +409,8 @@ pub(crate) fn flatted_rod(
     let radius = render::mm(rod.diameter) * 0.5;
     let half = render::mm(flats.across) * 0.5;
     let phi = render::radians(flats.angle);
-    let axis = slot_of(rod.axis);
-    let [ua, va] = across(rod.axis).map(slot_of);
+    let axis = rod.axis;
+    let [ua, va] = across(rod.axis);
     let centre = (render::mm(rod.centre[0]), render::mm(rod.centre[1]));
     // Ring angles: even steps, and the ends of each flat.
     let mut angles: Vec<f32> = (0..segments)
@@ -439,23 +433,23 @@ pub(crate) fn flatted_rod(
     let on_flat = |theta: f32| (theta - phi).cos().abs() * radius > half + 1e-4;
     let local = |theta: f32, along: f32| {
         let mut p = Vec3::ZERO;
-        p[axis] = along;
+        p.set_along(axis, along);
         let r = reach(theta);
-        p[ua] = centre.0 + r * theta.cos();
-        p[va] = centre.1 + r * theta.sin();
+        p.set_along(ua, centre.0 + r * theta.cos());
+        p.set_along(va, centre.1 + r * theta.sin());
         p
     };
     let radial = |theta: f32| {
         let mut n = Vec3::ZERO;
-        n[ua] = theta.cos();
-        n[va] = theta.sin();
+        n.set_along(ua, theta.cos());
+        n.set_along(va, theta.sin());
         n
     };
     let flat_normal = |theta: f32| {
         let sign = (theta - phi).cos().signum();
         let mut n = Vec3::ZERO;
-        n[ua] = phi.cos() * sign;
-        n[va] = phi.sin() * sign;
+        n.set_along(ua, phi.cos() * sign);
+        n.set_along(va, phi.sin() * sign);
         n
     };
     let (start, end) = (render::mm(rod.start), render::mm(rod.end));
@@ -484,12 +478,12 @@ pub(crate) fn flatted_rod(
     // End faces.
     for (along, sign) in [(start, -1.0_f32), (end, 1.0)] {
         let mut normal = Vec3::ZERO;
-        normal[axis] = sign;
+        normal.set_along(axis, sign);
         let world = frame.vector(normal);
         let mut middle = Vec3::ZERO;
-        middle[axis] = along;
-        middle[ua] = centre.0;
-        middle[va] = centre.1;
+        middle.set_along(axis, along);
+        middle.set_along(ua, centre.0);
+        middle.set_along(va, centre.1);
         let m = builder.vertex(frame.point(middle), world, grain.apply(middle));
         let rim: Vec<u32> = angles
             .iter()

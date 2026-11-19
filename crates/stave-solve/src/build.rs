@@ -4,7 +4,7 @@
 use std::collections::{BTreeMap, HashMap};
 
 use stave_lang::ast::Span;
-use stave_lang::placement::{Axis, PartAxis, PerPartAxis};
+use stave_lang::placement::{Axis, PartAxis, PerAxis, PerPartAxis};
 use stave_lang::units::{ExactLength, Length};
 use stave_lang::{Code, Diagnostic, FileId, Label};
 use stave_model::defs::{BodyId, DefId, StockField, StockSectionDef, Unusable, Word};
@@ -25,8 +25,8 @@ use stave_schema::words::{Grain, MotionWord, StockForm};
 
 use crate::eval::{Env, midpoint};
 use crate::hardware::{
-    HardwareCut, MemberCarrier, Placed, PlacedMember, RoleBound, WorldShape, crossing_face,
-    world_index, world_shape,
+    HardwareCut, MemberCarrier, ORIGIN, Placed, PlacedMember, RoleBound, WorldShape, crossing_face,
+    world_shape,
 };
 use crate::joints::{CutAt, GeomTable, JointWork, Making, PairWork, PartGeom, round_length};
 use crate::mechanism::AssemblyMechanism;
@@ -46,8 +46,8 @@ pub(crate) struct MadeInfo {
     pub note: Option<String>,
 }
 
-fn point(values: [ExactLength; 3]) -> Solved<Point> {
-    let [across, up, deep] = values;
+fn point(values: PerAxis<ExactLength>) -> Solved<Point> {
+    let PerAxis { across, up, deep } = values;
     Ok(Point {
         across: round_length(across)?,
         up: round_length(up)?,
@@ -56,30 +56,20 @@ fn point(values: [ExactLength; 3]) -> Solved<Point> {
 }
 
 fn world_box(bounds: &ExactBox) -> Solved<solved::WorldBox> {
-    let low = point([
-        bounds.min(Axis::Across),
-        bounds.min(Axis::Up),
-        bounds.min(Axis::Deep),
-    ])?;
-    let high = point([
-        bounds.max(Axis::Across),
-        bounds.max(Axis::Up),
-        bounds.max(Axis::Deep),
-    ])?;
+    let low = point(PerAxis::from_fn(|axis| bounds.min(axis)))?;
+    let high = point(PerAxis::from_fn(|axis| bounds.max(axis)))?;
     Ok(solved::WorldBox::new(low, high))
 }
 
 /// A world point reflected across the plane at `plane` on `axis`.
 fn reflect_point(
-    point: [ExactLength; 3],
+    point: PerAxis<ExactLength>,
     axis: Axis,
     plane: ExactLength,
-) -> Solved<[ExactLength; 3]> {
+) -> Solved<PerAxis<ExactLength>> {
     let mut out = point;
-    if let Some(slot) = out.get_mut(world_index(axis)) {
-        let twice = plane.checked_add(plane).ok_or(Fault::Overflow)?;
-        *slot = twice.checked_sub(*slot).ok_or(Fault::Overflow)?;
-    }
+    let twice = plane.checked_add(plane).ok_or(Fault::Overflow)?;
+    out[axis] = twice.checked_sub(point[axis]).ok_or(Fault::Overflow)?;
     Ok(out)
 }
 
@@ -164,15 +154,9 @@ fn reflect_members(
 
 /// A member's shape in the solved design, to the nearest nanometre.
 fn member_shape(shape: &WorldShape) -> Solved<solved::MemberShape> {
-    let pair = |axis: Axis, point: [ExactLength; 3]| -> Solved<[Length; 2]> {
+    let pair = |axis: Axis, point: PerAxis<ExactLength>| -> Solved<[Length; 2]> {
         let [first, second] = axis.others();
-        let at = |on: Axis| {
-            point
-                .get(world_index(on))
-                .copied()
-                .ok_or(Fault::Internal("a point of a member's shape"))
-        };
-        Ok([round_length(at(first)?)?, round_length(at(second)?)?])
+        Ok([round_length(point[first])?, round_length(point[second])?])
     };
     let ends = |axis: Axis, bounds: &ExactBox| -> Solved<(Length, Length)> {
         Ok((
@@ -1907,7 +1891,7 @@ impl Solver<'_> {
                 })
             };
             let cut_values = PerPartAxis::try_from_fn(|axis| geom.cut_size(axis))?;
-            let mut origin_values = [ExactLength::ZERO; 3];
+            let mut origin_values = ORIGIN;
             for axis in PartAxis::ALL {
                 let direction = geom.orientation.direction(axis);
                 let world = direction.axis();
@@ -1916,9 +1900,7 @@ impl Solver<'_> {
                 } else {
                     geom.cut_box.max(world)
                 };
-                if let Some(slot) = origin_values.get_mut(world_index(world)) {
-                    *slot = value;
-                }
+                origin_values[world] = value;
             }
             parts.push(solved::Part {
                 id,

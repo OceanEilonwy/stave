@@ -72,6 +72,7 @@
 //! overlaps mean.
 
 #![forbid(unsafe_code)]
+#![warn(clippy::redundant_clone, clippy::needless_pass_by_value)]
 #![warn(missing_docs)]
 
 mod explain;
@@ -1023,7 +1024,7 @@ impl<'a> Checker<'a> {
         }
         let (groups, rest) = self.group(clashes);
         for group in groups {
-            self.report_group(group);
+            self.report_group(&group);
         }
         for (a, b, found) in rest {
             self.overlap(a, b, &found);

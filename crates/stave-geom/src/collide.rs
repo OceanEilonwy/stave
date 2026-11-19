@@ -44,6 +44,7 @@ use stave_model::mechanism::MemberIndex;
 use stave_model::mechanism::TurnLine;
 use stave_model::solved::{Body, MemberShape, Part, Point, Pose, PoseValue, WorldBox};
 
+use crate::axes::AlongWorld;
 use crate::mechanism::MechanismPath;
 use stave_model::mechanism::MotionShape;
 
@@ -1249,17 +1250,9 @@ pub(crate) fn point_vector(point: Point) -> DVec3 {
     )
 }
 
-fn axis_index(axis: Axis) -> usize {
-    match axis {
-        Axis::Across => 0,
-        Axis::Up => 1,
-        Axis::Deep => 2,
-    }
-}
-
 pub(crate) fn axis_vector(axis: Axis) -> DVec3 {
     let mut v = DVec3::ZERO;
-    v[axis_index(axis)] = 1.0;
+    v.set_along_world(axis, 1.0);
     v
 }
 

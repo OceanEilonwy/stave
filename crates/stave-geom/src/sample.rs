@@ -24,6 +24,7 @@ use glam::{DMat4, DVec3};
 use stave_lang::placement::PartAxis;
 use stave_model::solved::Part;
 
+use crate::axes::{AlongPart, following};
 use crate::collide::direction_vector;
 use crate::render;
 use crate::solid::{Point2, Prism, Rod, Solid, across};
@@ -65,17 +66,9 @@ const OFFSETS: [DVec3; 26] = {
     out
 };
 
-fn index(axis: PartAxis) -> usize {
-    match axis {
-        PartAxis::Length => 0,
-        PartAxis::Width => 1,
-        PartAxis::Thickness => 2,
-    }
-}
-
 fn unit(axis: PartAxis) -> DVec3 {
     let mut v = DVec3::ZERO;
-    v[index(axis)] = 1.0;
+    v.set_along(axis, 1.0);
     v
 }
 
@@ -121,12 +114,12 @@ impl<'a> Shape<'a> {
     /// Is a local point in wood (no margin)?
     fn raw(&self, p: DVec3) -> bool {
         // Outside the cut box: no wood, without looking at the pieces.
-        if (0..3).any(|i| p[i] < 0.0 || p[i] > self.size[i]) {
+        if p.cmplt(DVec3::ZERO).any() || p.cmpgt(self.size).any() {
             return false;
         }
         let wood = self.solid.blocks().iter().any(|b| {
             PartAxis::ALL.into_iter().all(|axis| {
-                let v = p[index(axis)];
+                let v = p.along(axis);
                 v >= render::nm(b.min().get(axis)) && v <= render::nm(b.max().get(axis))
             })
         }) || self.rods.iter().any(|rod| in_rod(rod, p, true));
@@ -148,7 +141,7 @@ impl<'a> Shape<'a> {
     /// local box `low..high`.
     pub fn surface(&self, spacing: f64, low: DVec3, high: DVec3) -> Vec<DVec3> {
         let mut out = Vec::new();
-        let inside = |p: DVec3| (0..3).all(|i| p[i] >= low[i] && p[i] <= high[i]);
+        let inside = |p: DVec3| p.cmpge(low).all() && p.cmple(high).all();
         let keep = |p: DVec3, normal: DVec3, out: &mut Vec<DVec3>| {
             if inside(p) && self.on_boundary(p, normal) {
                 out.push(p);
@@ -166,23 +159,29 @@ impl<'a> Shape<'a> {
                 render::nm(block.max().width),
                 render::nm(block.max().thickness),
             );
-            for face in 0..3 {
-                let (u, v) = ((face + 1) % 3, (face + 2) % 3);
+            for face in PartAxis::ALL {
+                let [u, v] = following(face);
                 // Only the part of the face inside the region.
-                let (u0, u1) = (lo[u].max(low[u]), hi[u].min(high[u]));
-                let (v0, v1) = (lo[v].max(low[v]), hi[v].min(high[v]));
+                let (u0, u1) = (
+                    lo.along(u).max(low.along(u)),
+                    hi.along(u).min(high.along(u)),
+                );
+                let (v0, v1) = (
+                    lo.along(v).max(low.along(v)),
+                    hi.along(v).min(high.along(v)),
+                );
                 if u0 > u1 || v0 > v1 {
                     continue;
                 }
-                for (plane, sign) in [(lo[face], -1.0), (hi[face], 1.0)] {
+                for (plane, sign) in [(lo.along(face), -1.0), (hi.along(face), 1.0)] {
                     let mut normal = DVec3::ZERO;
-                    normal[face] = sign;
+                    normal.set_along(face, sign);
                     for a in steps(u0, u1, spacing) {
                         for b in steps(v0, v1, spacing) {
                             let mut p = DVec3::ZERO;
-                            p[face] = plane;
-                            p[u] = a;
-                            p[v] = b;
+                            p.set_along(face, plane);
+                            p.set_along(u, a);
+                            p.set_along(v, b);
                             keep(p, normal, &mut out);
                         }
                     }
@@ -196,8 +195,8 @@ impl<'a> Shape<'a> {
             .map(|r| (r, 1.0))
             .chain(self.solid.holes().iter().map(|r| (r, -1.0)))
         {
-            let axis = index(rod.axis);
-            let [a, b] = across(rod.axis).map(index);
+            let axis = rod.axis;
+            let [a, b] = across(rod.axis);
             let centre = (render::nm(rod.centre[0]), render::nm(rod.centre[1]));
             let radius = render::nm(rod.diameter) / 2.0;
             let around = ((TAU * radius / spacing).ceil()).max(8.0);
@@ -206,8 +205,8 @@ impl<'a> Shape<'a> {
                 .filter(|_| outward > 0.0)
                 .map(|f| (render::nm(f.across) / 2.0, render::radians_f64(f.angle)));
             let (s0, s1) = (
-                render::nm(rod.start).max(low[axis]),
-                render::nm(rod.end).min(high[axis]),
+                render::nm(rod.start).max(low.along(axis)),
+                render::nm(rod.end).min(high.along(axis)),
             );
             for along in steps(s0, s1, spacing) {
                 let mut k = 0.0;
@@ -227,12 +226,12 @@ impl<'a> Shape<'a> {
                         }
                     }
                     let mut p = DVec3::ZERO;
-                    p[axis] = along;
-                    p[a] = centre.0 + dx;
-                    p[b] = centre.1 + dy;
+                    p.set_along(axis, along);
+                    p.set_along(a, centre.0 + dx);
+                    p.set_along(b, centre.1 + dy);
                     let mut n = DVec3::ZERO;
-                    n[a] = normal.0 * outward;
-                    n[b] = normal.1 * outward;
+                    n.set_along(a, normal.0 * outward);
+                    n.set_along(b, normal.1 * outward);
                     keep(p, n, &mut out);
                 }
             }
@@ -245,9 +244,9 @@ impl<'a> Shape<'a> {
                                 continue;
                             }
                             let mut p = DVec3::ZERO;
-                            p[axis] = plane;
-                            p[a] = centre.0 + x;
-                            p[b] = centre.1 + y;
+                            p.set_along(axis, plane);
+                            p.set_along(a, centre.0 + x);
+                            p.set_along(b, centre.1 + y);
                             keep(p, unit(rod.axis) * sign, &mut out);
                         }
                     }
@@ -257,17 +256,17 @@ impl<'a> Shape<'a> {
         // Walls and floors of the angled cuts: every side of each outline
         // over its depth, and the slanted pieces at each end of the depth.
         for prism in self.solid.prisms() {
-            let face = index(prism.face_axis());
-            let [a, b] = across(prism.face_axis()).map(index);
+            let face = prism.face_axis();
+            let [a, b] = across(face);
             let (d0, d1) = (
                 render::nm(prism.depth().from()),
                 render::nm(prism.depth().to()),
             );
             let at = |point: Point2, depth: f64| {
                 let mut p = DVec3::ZERO;
-                p[a] = render::nm(point.first);
-                p[b] = render::nm(point.second);
-                p[face] = depth;
+                p.set_along(a, render::nm(point.first));
+                p.set_along(b, render::nm(point.second));
+                p.set_along(face, depth);
                 p
             };
             let points = prism.outline().points();
@@ -284,12 +283,12 @@ impl<'a> Shape<'a> {
                 // Outward from the wood is into the cut: to the left of a
                 // counter-clockwise side.
                 let mut normal = DVec3::ZERO;
-                normal[a] = -run[b] / length;
-                normal[b] = run[a] / length;
+                normal.set_along(a, -run.along(b) / length);
+                normal.set_along(b, run.along(a) / length);
                 for along in steps(0.0, length, spacing) {
                     for depth in steps(d0, d1, spacing) {
                         let mut p = start + run * (along / length);
-                        p[face] = depth;
+                        p.set_along(face, depth);
                         keep(p, normal, &mut out);
                     }
                 }
@@ -298,13 +297,13 @@ impl<'a> Shape<'a> {
                 let (low, high) = outline_bounds(points);
                 for (plane, sign) in [(d0, 1.0), (d1, -1.0)] {
                     let mut normal = DVec3::ZERO;
-                    normal[face] = sign;
+                    normal.set_along(face, sign);
                     for x in steps(render::nm(low.first), render::nm(high.first), spacing) {
                         for y in steps(render::nm(low.second), render::nm(high.second), spacing) {
                             let mut p = DVec3::ZERO;
-                            p[a] = x;
-                            p[b] = y;
-                            p[face] = plane;
+                            p.set_along(a, x);
+                            p.set_along(b, y);
+                            p.set_along(face, plane);
                             if outline_holds(points, x, y) {
                                 keep(p, normal, &mut out);
                             }
@@ -335,13 +334,13 @@ fn steps(a: f64, b: f64, spacing: f64) -> impl Iterator<Item = f64> {
 
 /// Is a local point in a rod (with its flats, for wood) or a hole?
 fn in_rod(rod: &Rod, p: DVec3, wood: bool) -> bool {
-    let along = p[index(rod.axis)];
+    let along = p.along(rod.axis);
     if along < render::nm(rod.start) || along > render::nm(rod.end) {
         return false;
     }
-    let [a, b] = across(rod.axis).map(index);
-    let dx = p[a] - render::nm(rod.centre[0]);
-    let dy = p[b] - render::nm(rod.centre[1]);
+    let [a, b] = across(rod.axis);
+    let dx = p.along(a) - render::nm(rod.centre[0]);
+    let dy = p.along(b) - render::nm(rod.centre[1]);
     let radius = render::nm(rod.diameter) / 2.0;
     if wood {
         let mut inside = dx * dx + dy * dy <= radius * radius;
@@ -406,12 +405,12 @@ fn outline_holds(points: &[Point2], x: f64, y: f64) -> bool {
 /// ends are open, so where it runs out through a face, the face is not
 /// wood there.
 fn in_prism(prism: &Prism, p: DVec3) -> bool {
-    let depth = p[index(prism.face_axis())];
+    let depth = p.along(prism.face_axis());
     if depth < render::nm(prism.depth().from()) || depth > render::nm(prism.depth().to()) {
         return false;
     }
-    let [a, b] = across(prism.face_axis()).map(index);
-    outline_holds(prism.outline().points(), p[a], p[b])
+    let [a, b] = across(prism.face_axis());
+    outline_holds(prism.outline().points(), p.along(a), p.along(b))
 }
 
 #[cfg(test)]

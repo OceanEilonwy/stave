@@ -623,7 +623,9 @@ impl Mechanism {
                 .iter()
                 .map(|member| MechanismMember {
                     hardware: rebind(member.hardware),
-                    ..member.clone()
+                    body: member.body,
+                    name: member.name.clone(),
+                    holding: member.holding,
                 })
                 .collect(),
             hardware: self.hardware.iter().map(|h| rebind(*h)).collect(),

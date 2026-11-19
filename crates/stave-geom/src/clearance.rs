@@ -27,6 +27,7 @@ use stave_lang::units::Length;
 use stave_model::mechanism::MotionShape;
 use stave_model::solved::WorldBox;
 
+use crate::axes::AlongWorld;
 use crate::collide::{CONTACT_TOLERANCE, WorldRod, WorldSolid, point_vector};
 use crate::mechanism::MechanismPath;
 use crate::render;
@@ -124,17 +125,17 @@ pub fn box_centre(region: &WorldBox) -> DVec3 {
 
 /// Slides two nearest points together along `axis` toward `prefer`,
 /// within the range both boxes cover there (`low..high`, nanometres).
-fn slide_points(points: &mut (DVec3, DVec3), slot: usize, low: f64, high: f64, prefer: f64) {
+fn slide_points(points: &mut (DVec3, DVec3), axis: Axis, low: f64, high: f64, prefer: f64) {
     if low > high {
         return;
     }
-    let (a, b) = (points.0[slot], points.1[slot]);
+    let (a, b) = (points.0.along_world(axis), points.1.along_world(axis));
     if (a - b).abs() > 1.0 {
         return;
     }
     let at = prefer.clamp(low, high);
-    points.0[slot] = at;
-    points.1[slot] = at;
+    points.0.set_along_world(axis, at);
+    points.1.set_along_world(axis, at);
 }
 
 // ---------------------------------------------------------------------------
@@ -222,7 +223,7 @@ fn slide(
     let shift = if toward.is_positive() { at } else { -at };
     let mut on_moving = DVec3::ZERO;
     let mut on_fixed = DVec3::ZERO;
-    for (slot, world_axis) in [Axis::Across, Axis::Up, Axis::Deep].into_iter().enumerate() {
+    for world_axis in Axis::ALL {
         let (mut m0, mut m1) = axis_range(&m, world_axis);
         if world_axis == axis {
             m0 = m0.saturating_add(shift);
@@ -238,12 +239,12 @@ fn slide(
             let middle = (nm(m0.max(f0)) + nm(m1.min(f1))) / 2.0;
             (middle, middle)
         };
-        on_moving[slot] = a;
-        on_fixed[slot] = b;
+        on_moving.set_along_world(world_axis, a);
+        on_fixed.set_along_world(world_axis, b);
     }
     let mut points = (on_moving, on_fixed);
     if let Some(prefer) = prefer {
-        for (slot, world_axis) in [Axis::Across, Axis::Up, Axis::Deep].into_iter().enumerate() {
+        for world_axis in Axis::ALL {
             if world_axis == axis {
                 continue;
             }
@@ -252,10 +253,10 @@ fn slide(
             let nm = |value: i64| render::nm(Length::from_nm(value));
             slide_points(
                 &mut points,
-                slot,
+                world_axis,
                 nm(m0.max(f0)),
                 nm(m1.min(f1)),
-                prefer[slot],
+                prefer.along_world(world_axis),
             );
         }
     }
@@ -561,7 +562,7 @@ fn swing(
     let margin = 50_000_000.0;
     let near = |b: &WorldBox| {
         let (low, high) = (point_vector(b.min()), point_vector(b.max()));
-        (0..3).all(|i| low[i] <= swept_high[i] + margin && high[i] >= swept_low[i] - margin)
+        low.cmple(swept_high + margin).all() && high.cmpge(swept_low - margin).all()
     };
     let fixed_placed: Vec<Vec<Placed>> = fixed
         .iter()
@@ -675,17 +676,12 @@ fn swing(
         // Along the axis it turns about the boxes keep their section, so
         // the nearest points may slide level with the hardware.
         if let (Some(axis), Some(prefer)) = (about, prefer) {
-            let slot = match axis {
-                Axis::Across => 0,
-                Axis::Up => 1,
-                Axis::Deep => 2,
-            };
             slide_points(
                 &mut points,
-                slot,
-                m.low[slot].max(f.low[slot]),
-                m.high[slot].min(f.high[slot]),
-                prefer[slot],
+                axis,
+                m.low.along_world(axis).max(f.low.along_world(axis)),
+                m.high.along_world(axis).min(f.high.along_world(axis)),
+                prefer.along_world(axis),
             );
         }
         Some(points)
