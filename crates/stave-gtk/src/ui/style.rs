@@ -457,6 +457,23 @@ button.stave-status-tab.shown { color: currentColor; background: alpha(currentCo
 .stave-status-text { font-size: 0.784rem; color: alpha(currentColor, 0.7); }
 textview.stave-output { font-size: 0.818rem; background: transparent; }
 
+/* A panel's empty state ("No problems", "No files", "No file open"): every
+   one is a compact status page, and libadwaita's compact page (a 96 px
+   icon, 24 px margins and gaps, about 230 px tall) is taller than the
+   bottom dock's Problems panel (about 190 px at 1440x900), so its
+   description was cut off at the panel's edge. A 48 px icon and 12 px
+   margins and gaps make it about 130 px, with room for a second line of
+   description and Large Text. A still shorter panel scrolls the page,
+   and a shadow at the edge where the words go on says so (GTK draws a
+   scrolled window's undershoot only on a side with more to scroll to). */
+statuspage.compact > scrolledwindow > viewport > box { margin: 12px; border-spacing: 12px; }
+statuspage.compact > scrolledwindow > viewport > box > clamp > box { border-spacing: 12px; }
+statuspage.compact > scrolledwindow > viewport > box > clamp > box > .icon { -gtk-icon-size: 48px; }
+statuspage.compact > scrolledwindow > viewport > box > clamp > box > box { border-spacing: 6px; }
+statuspage.compact > scrolledwindow > viewport > box > clamp > box > box > .title { font-size: 1.18rem; }
+statuspage.compact > scrolledwindow > undershoot.top { box-shadow: inset 0 1px color-mix(in srgb, var(--shade-color) 75%, transparent); background: linear-gradient(to bottom, color-mix(in srgb, var(--shade-color) 75%, transparent), transparent 8px); }
+statuspage.compact > scrolledwindow > undershoot.bottom { box-shadow: inset 0 -1px color-mix(in srgb, var(--shade-color) 75%, transparent); background: linear-gradient(to top, color-mix(in srgb, var(--shade-color) 75%, transparent), transparent 8px); }
+
 .stave-dock-targets { color: @accent_color; }
 .stave-dragging { opacity: 0.85; box-shadow: 0 6px 18px alpha(black, 0.35); }
 .stave-camera.flat-row, .stave-camera.flat-row.joined { border-radius: 10px; }
@@ -788,6 +805,61 @@ mod tests {
             settings.set_gtk_xft_dpi(dpi);
             gtk::style_context_remove_provider_for_display(&display, &provider);
             assert!(large > normal, "{normal} then {large}");
+        });
+    }
+
+    /// The Problems panel's empty state fits the room the bottom dock
+    /// gives it at the default 1440x900 window (about 194 px under its
+    /// tab strip), whole: icon, title and description, at the panel's
+    /// width there and in a 760 px window (where the description wraps),
+    /// with normal and Large Text. libadwaita's own compact page needs
+    /// about 230 px and lost its description at the panel's edge.
+    #[test]
+    fn the_empty_problems_panel_fits_the_bottom_dock() {
+        crate::ui::gtk_test::on_gtk_thread(|| {
+            use gtk::prelude::*;
+            let Some(display) = gtk::gdk::Display::default() else {
+                return;
+            };
+            const ROOM: i32 = 190;
+            let settings = gtk::Settings::for_display(&display);
+            let (dpi, font) = (settings.gtk_xft_dpi(), settings.gtk_font_name());
+            settings.set_gtk_font_name(Some("Adwaita Sans 11"));
+            let sheets = gtk::CssProvider::new();
+            sheets.load_from_string(&format!("{SHARED}{COLOURS}{SHELL}"));
+            gtk::style_context_add_provider_for_display(
+                &display,
+                &sheets,
+                gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+            );
+            let page = adw::StatusPage::builder()
+                .icon_name("object-select-symbolic")
+                .title("No problems")
+                .description(
+                    "Every part fits, every joint closes and everything that moves moves clear.",
+                )
+                .css_classes(["compact"])
+                .build();
+            let window = gtk::Window::builder().child(&page).build();
+            window.present();
+            let mut heights = Vec::new();
+            for scaled in [96 * 1024, 120 * 1024] {
+                settings.set_gtk_xft_dpi(scaled);
+                crate::ui::gtk_test::settle();
+                // The panel's width in a 1440 and a 760 px window.
+                for width in [1166, 540] {
+                    let (_, natural, _, _) = page.measure(gtk::Orientation::Vertical, width);
+                    heights.push((scaled / 1024, width, natural));
+                }
+            }
+            settings.set_gtk_xft_dpi(dpi);
+            settings.set_gtk_font_name(font.as_deref());
+            window.destroy();
+            gtk::style_context_remove_provider_for_display(&display, &sheets);
+            assert!(
+                heights.iter().all(|&(_, _, natural)| natural <= ROOM),
+                "(dpi, width, height): {heights:?}"
+            );
         });
     }
 }
