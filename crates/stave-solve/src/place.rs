@@ -22,7 +22,7 @@ use stave_schema::functions::Builtin;
 use stave_schema::words::StockForm;
 
 use crate::eval::{Env, midpoint};
-use crate::{Frame, Memo, Reported, Solved, Solver};
+use crate::{Accounted, Failure, Fault, Frame, Memo, Reported, Solved, Solver};
 
 /// What is remembered about a part while it is placed.
 #[derive(Debug, Clone, Default)]
@@ -136,21 +136,23 @@ pub(crate) struct Siblings {
 }
 
 pub(crate) fn add(a: ExactLength, b: ExactLength) -> Solved<ExactLength> {
-    a.checked_add(b).ok_or(Reported)
+    a.checked_add(b).ok_or(Failure::Fault(Fault::Overflow))
 }
 
 pub(crate) fn sub(a: ExactLength, b: ExactLength) -> Solved<ExactLength> {
-    a.checked_sub(b).ok_or(Reported)
+    a.checked_sub(b).ok_or(Failure::Fault(Fault::Overflow))
 }
 
 pub(crate) fn scale(a: ExactLength, n: usize) -> Solved<ExactLength> {
-    let n = i64::try_from(n).map_err(|_| Reported)?;
-    a.checked_mul(Rational::from(n)).ok_or(Reported)
+    let n = i64::try_from(n).map_err(|_| Fault::Overflow)?;
+    a.checked_mul(Rational::from(n))
+        .ok_or(Failure::Fault(Fault::Overflow))
 }
 
 pub(crate) fn divide(a: ExactLength, n: usize) -> Solved<ExactLength> {
-    let n = i64::try_from(n).map_err(|_| Reported)?;
-    a.checked_div(Rational::from(n)).ok_or(Reported)
+    let n = i64::try_from(n).map_err(|_| Fault::Overflow)?;
+    a.checked_div(Rational::from(n))
+        .ok_or(Failure::Fault(Fault::Overflow))
 }
 
 /// `true` for `box(across:, up:, deep:)`, the root region.
@@ -220,10 +222,10 @@ impl Solver<'_> {
                     .is_some_and(|names| !names.is_empty()) =>
             {
                 // The root may be an item with a syntax error.
-                Err(self.skip())
+                Err(self.skip().into())
             }
             ([], []) => {
-                self.report(
+                let reported = self.report(
                     Diagnostic::error(
                         Code::Ground,
                         "nothing is the root: no part is placed with 'ground' and no region is made with 'box'",
@@ -231,12 +233,12 @@ impl Solver<'_> {
                     )
                     .with_help("add a root box with the overall sizes, region envelope = box(across: ..., up: ..., deep: ...), or place the lowest part with place { ground }"),
                 );
-                Err(Reported)
+                Err(reported.into())
             }
             ([_], []) | ([], [_]) => Ok(()),
             ([(first, ..), (second, file, span), ..], _) => {
                 let (a, b) = (self.part_name(*first), self.part_name(*second));
-                self.report(
+                let reported = self.report(
                     Diagnostic::error(
                         Code::Ground,
                         format!("'{a}' and '{b}' are both placed with 'ground'"),
@@ -244,12 +246,12 @@ impl Solver<'_> {
                     )
                     .with_help(format!("place '{b}' against another part instead")),
                 );
-                Err(Reported)
+                Err(reported.into())
             }
             ([(part, file, span)], [(region, ..), ..]) => {
                 let part = self.part_name(*part);
                 let region = self.region_name(*region);
-                self.report(
+                let reported = self.report(
                     Diagnostic::error(
                         Code::Ground,
                         format!("'{part}' is placed with 'ground', but '{region}' is made with 'box'; only one can be the root"),
@@ -257,11 +259,11 @@ impl Solver<'_> {
                     )
                     .with_help(format!("place '{part}' against the box instead: in place of ground, flush({region}.bottom), flush({region}.left) and flush({region}.front)")),
                 );
-                Err(Reported)
+                Err(reported.into())
             }
             ([], [(first, ..), (second, file, span), ..]) => {
                 let (a, b) = (self.region_name(*first), self.region_name(*second));
-                self.report(
+                let reported = self.report(
                     Diagnostic::error(
                         Code::Ground,
                         format!("'{a}' and '{b}' are both made with 'box'"),
@@ -269,7 +271,7 @@ impl Solver<'_> {
                     )
                     .with_help(format!("make '{b}' from '{a}' instead, with split(...) or opening(...) and its faces")),
                 );
-                Err(Reported)
+                Err(reported.into())
             }
         }
     }
@@ -330,40 +332,42 @@ impl Solver<'_> {
         part: PartId,
     ) -> Solved<Option<(PartId, Axis, ExactLength)>> {
         let Some(inst) = self.model.parts.get(part.index()).cloned() else {
-            return Err(Reported);
+            return Err(Fault::Internal("a part").into());
         };
         if self.poisoned(DefId::Part(inst.def)) {
-            return Err(self.skip());
+            return Err(self.skip().into());
         }
         if let Some(source) = inst.mirror_of {
             let Some(assembly) = inst.assembly else {
-                return Err(Reported);
+                return Err(Fault::Internal("the component a mirrored item is in").into());
             };
             let (axis, plane) = self.assembly_mirror_plane(assembly)?;
             return Ok(Some((source, axis, plane)));
         }
         let Some(def) = self.model.defs.part(inst.def) else {
-            return Err(Reported);
+            return Err(Fault::Internal("a part's declaration").into());
         };
         let PartKind::Mirror(mirror) = &def.kind else {
             return Ok(None);
         };
         let mirror = mirror.clone();
         let Some(env) = self.part_env(part) else {
-            return Err(Reported);
+            return Err(Fault::Internal("where a part is declared").into());
         };
         let source = self.eval_part(&mirror.source, &env)?;
         if source == part {
-            return Err(self.error(
-                Code::Mirror,
-                format!(
-                    "{} has no counterpart on the other side of the mirror",
-                    inst.name
-                ),
-                def.decl.file,
-                mirror.source.span,
-                "mirror another part",
-            ));
+            return Err(self
+                .error(
+                    Code::Mirror,
+                    format!(
+                        "{} has no counterpart on the other side of the mirror",
+                        inst.name
+                    ),
+                    def.decl.file,
+                    mirror.source.span,
+                    "mirror another part",
+                )
+                .into());
         }
         let plane = self.eval_anchor(&mirror.about, &env)?;
         Ok(Some((source, plane.axis, plane.position)))
@@ -378,29 +382,40 @@ impl Solver<'_> {
         let mut current = assembly;
         loop {
             let Some(inst) = self.model.assemblies.get(current.index()).cloned() else {
-                return Err(Reported);
+                return Err(Fault::Internal("a component").into());
             };
             if inst.mirror_of.is_some() && self.is_mirror_declaration(current) {
                 break;
             }
             match inst.parent {
                 Some(parent) => current = parent,
-                None => return Err(Reported),
+                None => return Err(Fault::Internal("the mirror a component is inside").into()),
             }
         }
-        match self.mirror_planes.get(&current) {
-            Some(Memo::Done(plane)) => return Ok(*plane),
-            Some(Memo::Failed | Memo::Busy) => return Err(Reported),
-            _ => {}
-        }
         let Some(inst) = self.model.assemblies.get(current.index()).cloned() else {
-            return Err(Reported);
+            return Err(Fault::Internal("a component").into());
         };
         let Some(def) = self.model.defs.assembly(inst.def) else {
-            return Err(Reported);
+            return Err(Fault::Internal("a component's declaration").into());
         };
+        match self.mirror_planes.get(&current) {
+            Some(Memo::Done(plane)) => return Ok(*plane),
+            Some(Memo::Failed(accounted)) => return Err((*accounted).into()),
+            Some(Memo::Busy) => {
+                return Err(self
+                    .error(
+                        Code::PlacementCycle,
+                        format!("the mirror of {} is placed against itself", inst.name),
+                        def.decl.file,
+                        def.decl.span,
+                        "mirror about a face of something outside the mirrored component",
+                    )
+                    .into());
+            }
+            Some(Memo::Todo) | None => {}
+        }
         let stave_model::defs::AssemblyKind::Mirror(mirror) = &def.kind else {
-            return Err(Reported);
+            return Err(Fault::Internal("the plane of a mirror").into());
         };
         let about = mirror.about.clone();
         let env = Env {
@@ -411,13 +426,8 @@ impl Solver<'_> {
         };
         self.mirror_planes.insert(current, Memo::Busy);
         let result = self.eval_anchor(&about, &env).map(|a| (a.axis, a.position));
-        self.mirror_planes.insert(
-            current,
-            match result {
-                Ok(plane) => Memo::Done(plane),
-                Err(_) => Memo::Failed,
-            },
-        );
+        let (memo, result) = self.remember(result, def.decl.file, def.decl.span);
+        self.mirror_planes.insert(current, memo);
         result
     }
 
@@ -444,20 +454,22 @@ impl Solver<'_> {
             return self.part_stock(source);
         }
         let Some(body) = self.part_body(part).cloned() else {
-            return Err(Reported);
+            return Err(Fault::Internal("a part's description").into());
         };
         let Some(env) = self.part_env(part) else {
-            return Err(Reported);
+            return Err(Fault::Internal("where a part is declared").into());
         };
         match self.eval(&body.stock, &env)? {
             Value::Stock(stock) => Ok(stock),
-            other => Err(self.error(
-                Code::TypeMismatch,
-                format!("this needs a stock, found {}", other.description()),
-                env.file,
-                body.stock.span,
-                "name a stock item",
-            )),
+            other => Err(self
+                .error(
+                    Code::TypeMismatch,
+                    format!("this needs a stock, found {}", other.description()),
+                    env.file,
+                    body.stock.span,
+                    "name a stock item",
+                )
+                .into()),
         }
     }
 
@@ -470,23 +482,25 @@ impl Solver<'_> {
             return self.part_profile(source);
         }
         let Some(body) = self.part_body(part).cloned() else {
-            return Err(Reported);
+            return Err(Fault::Internal("a part's description").into());
         };
         let Some(shape) = &body.shape else {
             return Ok(None);
         };
         let Some(env) = self.part_env(part) else {
-            return Err(Reported);
+            return Err(Fault::Internal("where a part is declared").into());
         };
         match self.eval(shape, &env)? {
             Value::Turned(profile) => Ok(Some(profile)),
-            other => Err(self.error(
-                Code::TypeMismatch,
-                format!("'shape' needs a shape, found {}", other.description()),
-                env.file,
-                shape.span,
-                "write shape: turned(profile)",
-            )),
+            other => Err(self
+                .error(
+                    Code::TypeMismatch,
+                    format!("'shape' needs a shape, found {}", other.description()),
+                    env.file,
+                    shape.span,
+                    "write shape: turned(profile)",
+                )
+                .into()),
         }
     }
 
@@ -510,20 +524,28 @@ impl Solver<'_> {
     ) -> Solved<ExactLength> {
         if let Some(profile) = self.part_profile(part)? {
             let stations = self.profile_stations(profile)?;
-            return stations.iter().map(|(_, d)| *d).max().ok_or(Reported);
+            return Ok(stations
+                .iter()
+                .map(|(_, d)| *d)
+                .max()
+                .ok_or(Fault::Earlier)?);
         }
         let stock = self.part_stock(part)?;
         match self.stock_length(stock, StockField::Diameter)? {
             Some(diameter) => Ok(diameter),
             None => {
                 let name = self.part_name(part);
-                Err(self.error(
-                    Code::UnknownField,
-                    "a part has no field 'diameter'".to_string(),
-                    env.file,
-                    span,
-                    format!("{name} is not round; only dowels and turned parts have a diameter"),
-                ))
+                Err(self
+                    .error(
+                        Code::UnknownField,
+                        "a part has no field 'diameter'".to_string(),
+                        env.file,
+                        span,
+                        format!(
+                            "{name} is not round; only dowels and turned parts have a diameter"
+                        ),
+                    )
+                    .into())
             }
         }
     }
@@ -534,21 +556,17 @@ impl Solver<'_> {
         }
         match self.parts.get(part.index()).map(|s| &s.orientation) {
             Some(Memo::Done(o)) => return Ok(*o),
-            Some(Memo::Failed) => return Err(Reported),
-            Some(Memo::Busy) => return Err(self.cycle(Frame::Orientation(part))),
+            Some(Memo::Failed(accounted)) => return Err((*accounted).into()),
+            Some(Memo::Busy) => return Err(self.cycle(Frame::Orientation(part)).into()),
             _ => {}
         }
         self.set_orientation(part, Memo::Busy);
         self.enter(Frame::Orientation(part), None);
         let result = self.compute_orientation(part);
         self.leave();
-        self.set_orientation(
-            part,
-            match &result {
-                Ok(o) => Memo::Done(*o),
-                Err(_) => Memo::Failed,
-            },
-        );
+        let (file, span) = self.part_place(part);
+        let (memo, result) = self.remember(result, file, span);
+        self.set_orientation(part, memo);
         result
     }
 
@@ -564,22 +582,24 @@ impl Solver<'_> {
         }
         let terms = self.part_terms(part)?;
         let Some(env) = self.part_env(part) else {
-            return Err(Reported);
+            return Err(Fault::Internal("where a part is declared").into());
         };
         let Some((length, width, span)) = terms.orient else {
             return Orientation::from_length_and_width(Direction::Right, Direction::Back)
-                .map_err(|_| Reported);
+                .map_err(|_| Fault::Internal("a part's orientation").into());
         };
         let direction = |this: &mut Self, expr: &RExpr| -> Solved<Direction> {
             match this.eval(expr, &env)? {
                 Value::Word(Word::Direction(d)) => Ok(d),
-                other => Err(this.error(
-                    Code::TypeMismatch,
-                    format!("'orient' needs a direction, found {}", other.description()),
-                    env.file,
-                    expr.span,
-                    "write up, down, left, right, front or back",
-                )),
+                other => Err(this
+                    .error(
+                        Code::TypeMismatch,
+                        format!("'orient' needs a direction, found {}", other.description()),
+                        env.file,
+                        expr.span,
+                        "write up, down, left, right, front or back",
+                    )
+                    .into()),
             }
         };
         let length_direction = direction(self, &length)?;
@@ -588,7 +608,7 @@ impl Solver<'_> {
             None => {
                 if !self.is_round(part)? {
                     let name = self.part_name(part);
-                    return Err(self.error(Code::MissingField, "'orient' is missing 'width'".to_string(), env.file, span, format!("{name} is not round, so say where its width runs: orient(length: ..., width: ...)")));
+                    return Err(self.error(Code::MissingField, "'orient' is missing 'width'".to_string(), env.file, span, format!("{name} is not round, so say where its width runs: orient(length: ..., width: ...)")).into());
                 }
                 match length_direction.axis() {
                     Axis::Up | Axis::Deep => Direction::Right,
@@ -608,6 +628,7 @@ impl Solver<'_> {
                 span,
                 "give the width a direction across the length",
             )
+            .into()
         })
     }
 
@@ -618,15 +639,14 @@ impl Solver<'_> {
     pub(crate) fn part_terms(&mut self, part: PartId) -> Solved<Terms> {
         match self.parts.get(part.index()).map(|s| &s.terms) {
             Some(Memo::Done(terms)) => return Ok(terms.clone()),
-            Some(Memo::Failed) => return Err(Reported),
+            Some(Memo::Failed(accounted)) => return Err((*accounted).into()),
             _ => {}
         }
         let result = self.compute_part_terms(part);
+        let (file, span) = self.part_place(part);
+        let (memo, result) = self.remember(result, file, span);
         if let Some(state) = self.parts.get_mut(part.index()) {
-            state.terms = match &result {
-                Ok(terms) => Memo::Done(terms.clone()),
-                Err(_) => Memo::Failed,
-            };
+            state.terms = memo;
         }
         result
     }
@@ -635,13 +655,13 @@ impl Solver<'_> {
         if let Some(inst) = self.model.parts.get(part.index())
             && self.poisoned(DefId::Part(inst.def))
         {
-            return Err(self.skip());
+            return Err(self.skip().into());
         }
         let Some(body) = self.part_body(part).cloned() else {
-            return Err(Reported);
+            return Err(Fault::Internal("a part's description").into());
         };
         let Some(env) = self.part_env(part) else {
-            return Err(Reported);
+            return Err(Fault::Internal("where a part is declared").into());
         };
         let name = self.part_name(part);
         let place_span = body.place_span.unwrap_or(body.span);
@@ -650,7 +670,7 @@ impl Solver<'_> {
         if !terms.ground {
             for axis in Axis::ALL {
                 if terms.axis(axis).is_none() {
-                    return Err(self.axis_not_set(&name, axis, env.file, place_span));
+                    return Err(self.axis_not_set(&name, axis, env.file, place_span).into());
                 }
             }
         }
@@ -748,8 +768,8 @@ impl Solver<'_> {
                     } else {
                         format!("keep one term for '{}' and remove the other", axis.word())
                     };
-                    this.report(diagnostic.with_help(help));
-                    return Err(Reported);
+                    let reported = this.report(diagnostic.with_help(help));
+                    return Err(reported.into());
                 }
                 if let Some(span) = first_spans.get_mut(slot) {
                     *span = Some(term.span);
@@ -759,7 +779,7 @@ impl Solver<'_> {
                 }
                 Ok(())
             };
-        let mut failed = false;
+        let mut failed: Option<Accounted> = None;
         for term in place {
             let span = term.span;
             let result: Solved<()> = match &term.kind {
@@ -769,7 +789,7 @@ impl Solver<'_> {
                             .into_iter()
                             .find(|a| terms.axis(*a).is_some())
                             .unwrap_or(Axis::Up);
-                        self.report(
+                        let reported = self.report(
                             Diagnostic::error(
                                 Code::AxisSetTwice,
                                 format!("{name}: position along '{}' is set twice", axis.word()),
@@ -777,7 +797,7 @@ impl Solver<'_> {
                             )
                             .with_help("'ground' fixes every axis; remove the other terms"),
                         );
-                        Err(Reported)
+                        Err(reported.into())
                     } else {
                         terms.ground = true;
                         Ok(())
@@ -785,7 +805,7 @@ impl Solver<'_> {
                 }
                 PlaceTermKind::Orient { length, width } => {
                     if terms.orient.is_some() {
-                        self.report(
+                        let reported = self.report(
                             Diagnostic::error(
                                 Code::AxisSetTwice,
                                 format!("{name}: 'orient' is written twice"),
@@ -793,7 +813,7 @@ impl Solver<'_> {
                             )
                             .with_help("keep one orient term"),
                         );
-                        Err(Reported)
+                        Err(reported.into())
                     } else {
                         terms.orient = Some((length.clone(), width.clone(), span));
                         Ok(())
@@ -841,26 +861,29 @@ impl Solver<'_> {
                             span,
                         },
                     ),
-                    Ok(_) | Err(_) => Err(Reported),
+                    Ok(_) => Err(Fault::Earlier.into()),
+                    Err(failure) => Err(failure),
                 },
                 PlaceTermKind::CenterBetween { from, to } => {
                     let from_axis = self.anchor_axis(from, env);
                     let to_axis = self.anchor_axis(to, env);
                     match (from_axis, to_axis) {
                         (Ok(a), Ok(b)) if a == b => assign(self, &mut terms, a, AxisTerm { kind: AxisTermKind::CenterBetween { from: from.clone(), to: to.clone() }, span }),
-                        (Ok(a), Ok(b)) => Err(self.error(Code::TypeMismatch, format!("'center' needs two parallel planes, found one across '{}' and one across '{}'", a.word(), b.word()), env.file, span, "name two faces across the same axis")),
-                        _ => Err(Reported),
+                        (Ok(a), Ok(b)) => Err(self.error(Code::TypeMismatch, format!("'center' needs two parallel planes, found one across '{}' and one across '{}'", a.word(), b.word()), env.file, span, "name two faces across the same axis").into()),
+                        (Err(failure), _) | (_, Err(failure)) => Err(failure),
                     }
                 }
                 PlaceTermKind::Spaced { spacing, from, to } => {
                     if label.is_none() {
-                        Err(self.error(
-                            Code::TypeMismatch,
-                            format!("'spaced' needs an array, but '{name}' is a single item"),
-                            env.file,
-                            span,
-                            "declare an array: part name[a, b] or name[3]",
-                        ))
+                        Err(self
+                            .error(
+                                Code::TypeMismatch,
+                                format!("'spaced' needs an array, but '{name}' is a single item"),
+                                env.file,
+                                span,
+                                "declare an array: part name[a, b] or name[3]",
+                            )
+                            .into())
                     } else {
                         let from_axis = self.anchor_axis(from, env);
                         let to_axis = self.anchor_axis(to, env);
@@ -878,20 +901,22 @@ impl Solver<'_> {
                                     span,
                                 },
                             ),
-                            (Ok(_), Ok(_)) => Err(self.error(
-                                Code::TypeMismatch,
-                                "'spaced' needs two parallel planes".to_owned(),
-                                env.file,
-                                span,
-                                "name two faces across the same axis",
-                            )),
-                            _ => Err(Reported),
+                            (Ok(_), Ok(_)) => Err(self
+                                .error(
+                                    Code::TypeMismatch,
+                                    "'spaced' needs two parallel planes".to_owned(),
+                                    env.file,
+                                    span,
+                                    "name two faces across the same axis",
+                                )
+                                .into()),
+                            (Err(failure), _) | (_, Err(failure)) => Err(failure),
                         }
                     }
                 }
                 PlaceTermKind::Corners { part, inset } => {
                     if hardware {
-                        Err(Reported)
+                        Err(Fault::Earlier.into())
                     } else {
                         match label.and_then(Corner::from_word) {
                             Some(corner) => assign(self, &mut terms, Axis::Across, AxisTerm { kind: AxisTermKind::Corner { part: part.clone(), inset: inset.clone(), face: corner.across_face() }, span })
@@ -902,14 +927,20 @@ impl Solver<'_> {
                                 env.file,
                                 span,
                                 "declare the array with the four corner labels",
-                            )),
+                            ).into()),
                         }
                     }
                 }
             };
-            failed |= result.is_err();
+            if let Err(failure) = result {
+                let accounted = self.settle(failure, env.file, span);
+                failed.get_or_insert(accounted);
+            }
         }
-        if failed { Err(Reported) } else { Ok(terms) }
+        match failed {
+            Some(accounted) => Err(accounted.into()),
+            None => Ok(terms),
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -920,12 +951,16 @@ impl Solver<'_> {
     pub(crate) fn drawn_size(&mut self, part: PartId, axis: PartAxis) -> Solved<ExactLength> {
         let slot = part_axis_slot(axis);
         if let Some(board) = self.boards.get(&part) {
-            return board.drawn.get(slot).copied().ok_or(Reported);
+            return Ok(board
+                .drawn
+                .get(slot)
+                .copied()
+                .ok_or(Fault::Internal("a board's size"))?);
         }
         match self.parts.get(part.index()).and_then(|s| s.sizes.get(slot)) {
             Some(Memo::Done(size)) => return Ok(*size),
-            Some(Memo::Failed) => return Err(Reported),
-            Some(Memo::Busy) => return Err(self.cycle(Frame::Size(part, axis))),
+            Some(Memo::Failed(accounted)) => return Err((*accounted).into()),
+            Some(Memo::Busy) => return Err(self.cycle(Frame::Size(part, axis)).into()),
             _ => {}
         }
         self.set_size(part, slot, Memo::Busy);
@@ -940,29 +975,26 @@ impl Solver<'_> {
             if size <= ExactLength::ZERO {
                 let name = self.part_name(part);
                 let (file, span) = at.unwrap_or((self.project_file, self.project_span));
-                Err(self.error(
-                    Code::TypeMismatch,
-                    format!(
-                        "{name}: its {} works out as {}, which is not more than zero",
-                        axis.word(),
-                        stave_model::value::format_length(size)
-                    ),
-                    file,
-                    span,
-                    "check the sizes it is worked out from",
-                ))
+                Err(self
+                    .error(
+                        Code::TypeMismatch,
+                        format!(
+                            "{name}: its {} works out as {}, which is not more than zero",
+                            axis.word(),
+                            stave_model::value::format_length(size)
+                        ),
+                        file,
+                        span,
+                        "check the sizes it is worked out from",
+                    )
+                    .into())
             } else {
                 Ok(size)
             }
         });
-        self.set_size(
-            part,
-            slot,
-            match &result {
-                Ok(size) => Memo::Done(*size),
-                Err(_) => Memo::Failed,
-            },
-        );
+        let (file, span) = at.unwrap_or_else(|| self.part_place(part));
+        let (memo, result) = self.remember(result, file, span);
+        self.set_size(part, slot, memo);
         result
     }
 
@@ -981,10 +1013,10 @@ impl Solver<'_> {
             return self.drawn_size(source, axis);
         }
         let Some(body) = self.part_body(part).cloned() else {
-            return Err(Reported);
+            return Err(Fault::Internal("a part's description").into());
         };
         let Some(env) = self.part_env(part) else {
-            return Err(Reported);
+            return Err(Fault::Internal("where a part is declared").into());
         };
         let profile = self.part_profile(part)?;
         let largest = match profile {
@@ -993,7 +1025,7 @@ impl Solver<'_> {
                     .iter()
                     .map(|(_, d)| *d)
                     .max()
-                    .ok_or(Reported)?,
+                    .ok_or(Fault::Earlier)?,
             ),
             None => None,
         };
@@ -1021,7 +1053,7 @@ impl Solver<'_> {
                                 env.file,
                                 expr.span,
                                 "a turned part is as long as its profile: write length: fit",
-                            ));
+                            ).into());
                         }
                     }
                     Ok(length)
@@ -1044,13 +1076,15 @@ impl Solver<'_> {
                             Some(width) => Ok(width),
                             None => {
                                 let name = self.part_name(part);
-                                Err(self.error(
-                                    Code::MissingField,
-                                    format!("part '{name}' is missing 'width'"),
-                                    env.file,
-                                    body.span,
-                                    "add width: ..., or cut it from stock with a fixed width",
-                                ))
+                                Err(self
+                                    .error(
+                                        Code::MissingField,
+                                        format!("part '{name}' is missing 'width'"),
+                                        env.file,
+                                        body.span,
+                                        "add width: ..., or cut it from stock with a fixed width",
+                                    )
+                                    .into())
                             }
                         }
                     }
@@ -1087,14 +1121,15 @@ impl Solver<'_> {
                                 format!(
                                     "a part can be planed thinner than its stock '{stock_name}', never thicker; choose thicker stock"
                                 ),
-                            ));
+                            ).into());
                         }
                         Ok(thickness)
                     }
                     None => {
                         let stock = self.part_stock(part)?;
-                        self.stock_length(stock, StockField::Thickness)?
-                            .ok_or(Reported)
+                        Ok(self
+                            .stock_length(stock, StockField::Thickness)?
+                            .ok_or(Fault::Earlier)?)
                     }
                 }
             }
@@ -1120,7 +1155,9 @@ impl Solver<'_> {
             {
                 continue;
             }
-            let Ok(binding) = self.joint_binding(joint) else {
+            let binding = self.joint_binding(joint);
+            let (file, span) = self.joint_place(joint);
+            let Some(binding) = self.settled(binding, file, span) else {
                 continue;
             };
             let Some(first) = binding.roles.first() else {
@@ -1161,7 +1198,7 @@ impl Solver<'_> {
                     index += 1;
                 }
             }
-            return Err(self.skip());
+            return Err(self.skip().into());
         }
         result
     }
@@ -1184,39 +1221,46 @@ impl Solver<'_> {
                 .joints
                 .get(index)
                 .is_some_and(|j| j.mirror_of.is_some());
-            !mirrored
-                && self
-                    .joint_binding(stave_model::ids::JointId::from_usize(index))
-                    .is_err()
+            if mirrored {
+                return false;
+            }
+            let joint = stave_model::ids::JointId::from_usize(index);
+            let binding = self.joint_binding(joint);
+            let (file, span) = self.joint_place(joint);
+            self.settled(binding, file, span).is_none()
         })
     }
 
     fn decide_fit(&mut self, part: PartId, axis: PartAxis, span: Span) -> Solved<ExactLength> {
         let name = self.part_name(part);
         let Some(env) = self.part_env(part) else {
-            return Err(Reported);
+            return Err(Fault::Internal("where a part is declared").into());
         };
         let orientation = self.part_orientation(part)?;
         let world = orientation.direction(axis).axis();
         let terms = self.part_terms(part)?;
         let Some(term) = terms.axis(world).cloned() else {
-            return Err(self.fit_undecided(
-                &name,
-                axis,
-                env.file,
-                span,
-                "nothing places it along that axis",
-            ));
+            return Err(self
+                .fit_undecided(
+                    &name,
+                    axis,
+                    env.file,
+                    span,
+                    "nothing places it along that axis",
+                )
+                .into());
         };
         let partners = self.joined_into(part);
         if partners.is_empty() {
-            return Err(self.fit_undecided(
-                &name,
-                axis,
-                env.file,
-                span,
-                "it is not the first part of any joint",
-            ));
+            return Err(self
+                .fit_undecided(
+                    &name,
+                    axis,
+                    env.file,
+                    span,
+                    "it is not the first part of any joint",
+                )
+                .into());
         }
         let mut extents = Vec::new();
         for partner in partners {
@@ -1250,20 +1294,24 @@ impl Solver<'_> {
                 let above = nearest_above(centre);
                 match (below, above) {
                     (Some(below), Some(above)) => sub(above, below),
-                    (None, _) => Err(self.fit_undecided(
-                        &name,
-                        axis,
-                        env.file,
-                        span,
-                        &format!("no part it is joined into is wholly {low_side} its centre"),
-                    )),
-                    (_, None) => Err(self.fit_undecided(
-                        &name,
-                        axis,
-                        env.file,
-                        span,
-                        &format!("no part it is joined into is wholly {high_side} its centre"),
-                    )),
+                    (None, _) => Err(self
+                        .fit_undecided(
+                            &name,
+                            axis,
+                            env.file,
+                            span,
+                            &format!("no part it is joined into is wholly {low_side} its centre"),
+                        )
+                        .into()),
+                    (_, None) => Err(self
+                        .fit_undecided(
+                            &name,
+                            axis,
+                            env.file,
+                            span,
+                            &format!("no part it is joined into is wholly {high_side} its centre"),
+                        )
+                        .into()),
                 }
             }
             AxisTermKind::Against { .. }
@@ -1273,34 +1321,40 @@ impl Solver<'_> {
                 if is_low {
                     match nearest_above(known) {
                         Some(end) => sub(end, known),
-                        None => Err(self.fit_undecided(
-                            &name,
-                            axis,
-                            env.file,
-                            span,
-                            &format!("no part it is joined into is {high_side} it"),
-                        )),
+                        None => Err(self
+                            .fit_undecided(
+                                &name,
+                                axis,
+                                env.file,
+                                span,
+                                &format!("no part it is joined into is {high_side} it"),
+                            )
+                            .into()),
                     }
                 } else {
                     match nearest_below(known) {
                         Some(end) => sub(known, end),
-                        None => Err(self.fit_undecided(
-                            &name,
-                            axis,
-                            env.file,
-                            span,
-                            &format!("no part it is joined into is {low_side} it"),
-                        )),
+                        None => Err(self
+                            .fit_undecided(
+                                &name,
+                                axis,
+                                env.file,
+                                span,
+                                &format!("no part it is joined into is {low_side} it"),
+                            )
+                            .into()),
                     }
                 }
             }
-            AxisTermKind::Spaced { .. } => Err(self.fit_undecided(
-                &name,
-                axis,
-                env.file,
-                span,
-                "a spaced part's size must be written",
-            )),
+            AxisTermKind::Spaced { .. } => Err(self
+                .fit_undecided(
+                    &name,
+                    axis,
+                    env.file,
+                    span,
+                    "a spaced part's size must be written",
+                )
+                .into()),
         }
     }
 
@@ -1323,8 +1377,7 @@ impl Solver<'_> {
                 "measure it instead: {}: between(a, b)",
                 axis.word()
             )),
-        );
-        Reported
+        )
     }
 
     /// The centre a `center` term puts a part at.
@@ -1335,26 +1388,28 @@ impl Solver<'_> {
                     Value::Part(part) => self.drawn_box(part)?,
                     Value::Region(region) => self.region_value(region)?.bounds,
                     other => {
-                        return Err(self.error(
-                            Code::TypeMismatch,
-                            format!(
-                                "'center' needs a part or a region, found {}",
-                                other.description()
-                            ),
-                            env.file,
-                            item.span,
-                            "name a part or region",
-                        ));
+                        return Err(self
+                            .error(
+                                Code::TypeMismatch,
+                                format!(
+                                    "'center' needs a part or a region, found {}",
+                                    other.description()
+                                ),
+                                env.file,
+                                item.span,
+                                "name a part or region",
+                            )
+                            .into());
                     }
                 };
-                midpoint(bounds.min(axis), bounds.max(axis)).ok_or(Reported)
+                midpoint(bounds.min(axis), bounds.max(axis)).ok_or(Failure::Fault(Fault::Overflow))
             }
             AxisTermKind::CenterBetween { from, to } => {
                 let a = self.eval_anchor(from, env)?;
                 let b = self.eval_anchor(to, env)?;
-                midpoint(a.position, b.position).ok_or(Reported)
+                midpoint(a.position, b.position).ok_or(Failure::Fault(Fault::Overflow))
             }
-            _ => Err(Reported),
+            _ => Err(Fault::Internal("the centre a term puts a part at").into()),
         }
     }
 
@@ -1367,13 +1422,15 @@ impl Solver<'_> {
         let anchor = self.eval_anchor(expr, env)?;
         match anchor.face {
             Some(face) => Ok((anchor, face)),
-            None => Err(self.error(
-                Code::TypeMismatch,
-                format!("'{head}' needs a face, found a mid-plane"),
-                env.file,
-                expr.span,
-                "use center(...) for a mid-plane",
-            )),
+            None => Err(self
+                .error(
+                    Code::TypeMismatch,
+                    format!("'{head}' needs a face, found a mid-plane"),
+                    env.file,
+                    expr.span,
+                    "use center(...) for a mid-plane",
+                )
+                .into()),
         }
     }
 
@@ -1421,7 +1478,7 @@ impl Solver<'_> {
                     Ok((add(position, inset)?, true))
                 }
             }
-            _ => Err(Reported),
+            _ => Err(Fault::Internal("the face a term puts a part against").into()),
         }
     }
 
@@ -1518,20 +1575,22 @@ impl Solver<'_> {
             }
             AxisTermKind::Spaced { spacing, from, to } => {
                 let Some(siblings) = siblings else {
-                    return Err(Reported);
+                    return Err(Fault::Internal("the other parts of a spaced array").into());
                 };
                 let spacing = match self.eval(spacing, env)? {
                     Value::Spacing(spacing) => spacing,
                     Value::Word(Word::Evenly) => Spacing::Evenly,
                     Value::Word(Word::Ends) => Spacing::Ends(ExactLength::ZERO),
                     other => {
-                        return Err(self.error(
-                            Code::TypeMismatch,
-                            format!("'spaced' needs a spacing, found {}", other.description()),
-                            env.file,
-                            spacing.span,
-                            "write evenly, ends, ends(inset: d), pitch(d) or gap(d)",
-                        ));
+                        return Err(self
+                            .error(
+                                Code::TypeMismatch,
+                                format!("'spaced' needs a spacing, found {}", other.description()),
+                                env.file,
+                                spacing.span,
+                                "write evenly, ends, ends(inset: d), pitch(d) or gap(d)",
+                            )
+                            .into());
                     }
                 };
                 let a = self.eval_anchor(from, env)?.position;
@@ -1593,12 +1652,16 @@ impl Solver<'_> {
     pub(crate) fn part_min(&mut self, part: PartId, axis: Axis) -> Solved<ExactLength> {
         let slot = axis_slot(axis);
         if let Some(board) = self.boards.get(&part) {
-            return board.min.get(slot).copied().ok_or(Reported);
+            return Ok(board
+                .min
+                .get(slot)
+                .copied()
+                .ok_or(Fault::Internal("a board's position"))?);
         }
         match self.parts.get(part.index()).and_then(|s| s.mins.get(slot)) {
             Some(Memo::Done(v)) => return Ok(*v),
-            Some(Memo::Failed) => return Err(Reported),
-            Some(Memo::Busy) => return Err(self.cycle(Frame::Position(part, axis))),
+            Some(Memo::Failed(accounted)) => return Err((*accounted).into()),
+            Some(Memo::Busy) => return Err(self.cycle(Frame::Position(part, axis)).into()),
             _ => {}
         }
         self.set_min(part, slot, Memo::Busy);
@@ -1606,14 +1669,9 @@ impl Solver<'_> {
         self.enter(Frame::Position(part, axis), at);
         let result = self.compute_min(part, axis);
         self.leave();
-        self.set_min(
-            part,
-            slot,
-            match &result {
-                Ok(v) => Memo::Done(*v),
-                Err(_) => Memo::Failed,
-            },
-        );
+        let (file, span) = at.unwrap_or_else(|| self.part_place(part));
+        let (memo, result) = self.remember(result, file, span);
+        self.set_min(part, slot, memo);
         result
     }
 
@@ -1655,10 +1713,10 @@ impl Solver<'_> {
             return Ok(ExactLength::ZERO);
         }
         let Some(env) = self.part_env(part) else {
-            return Err(Reported);
+            return Err(Fault::Internal("where a part is declared").into());
         };
         let Some(term) = terms.axis(axis).cloned() else {
-            return Err(Reported);
+            return Err(Fault::Internal("the term that places a part").into());
         };
         let size = self.size_along(part, axis)?;
         let siblings = match &term.kind {
@@ -1670,7 +1728,7 @@ impl Solver<'_> {
 
     fn part_siblings(&mut self, part: PartId, axis: Axis) -> Solved<Siblings> {
         let Some(inst) = self.model.parts.get(part.index()).cloned() else {
-            return Err(Reported);
+            return Err(Fault::Internal("a part").into());
         };
         let index = inst.ctx.element.unwrap_or(0);
         let all = match self.model.item(DefId::Part(inst.def), inst.ctx) {
@@ -1697,7 +1755,7 @@ impl Solver<'_> {
             extents.push((low, add(low, size)?));
         }
         let [across, up, deep] = extents.as_slice() else {
-            return Err(Reported);
+            return Err(Fault::Internal("a part's box").into());
         };
         Ok(ExactBox::new(*across, *up, *deep))
     }
@@ -1727,27 +1785,25 @@ impl Solver<'_> {
     pub(crate) fn region_value(&mut self, region: RegionId) -> Solved<RegionValue> {
         match self.regions.get(region.index()) {
             Some(Memo::Done(v)) => return Ok(*v),
-            Some(Memo::Failed) => return Err(Reported),
-            Some(Memo::Busy) => return Err(self.cycle(Frame::Region(region))),
+            Some(Memo::Failed(accounted)) => return Err((*accounted).into()),
+            Some(Memo::Busy) => return Err(self.cycle(Frame::Region(region)).into()),
             _ => {}
         }
         if let Some(slot) = self.regions.get_mut(region.index()) {
             *slot = Memo::Busy;
         }
         let Some(inst) = self.model.regions.get(region.index()).cloned() else {
-            return Err(Reported);
+            return Err(Fault::Internal("a region").into());
         };
         let Some(def) = self.model.defs.region(inst.def).cloned() else {
-            return Err(Reported);
+            return Err(Fault::Internal("a region's declaration").into());
         };
         self.enter(Frame::Region(region), Some((def.decl.file, def.decl.span)));
         let result = self.compute_region(region, &inst, &def);
         self.leave();
+        let (memo, result) = self.remember(result, def.decl.file, def.decl.span);
         if let Some(slot) = self.regions.get_mut(region.index()) {
-            *slot = match &result {
-                Ok(v) => Memo::Done(*v),
-                Err(_) => Memo::Failed,
-            };
+            *slot = memo;
         }
         result
     }
@@ -1760,11 +1816,11 @@ impl Solver<'_> {
     ) -> Solved<RegionValue> {
         if self.poisoned(DefId::Region(inst.def)) {
             let _ = region;
-            return Err(self.skip());
+            return Err(self.skip().into());
         }
         if let Some(source) = inst.mirror_of {
             let Some(assembly) = inst.assembly else {
-                return Err(Reported);
+                return Err(Fault::Internal("the component a mirrored item is in").into());
             };
             let (axis, plane) = self.assembly_mirror_plane(assembly)?;
             let value = self.region_value(source)?;
@@ -1791,20 +1847,25 @@ impl Solver<'_> {
                 let index = inst.ctx.element.unwrap_or(0);
                 let expected = array.map_or(1, |(_, n)| n);
                 if list.len() != expected {
-                    return Err(self.error(
-                        Code::TypeMismatch,
-                        format!(
-                            "'{}' needs {} regions, found {}",
-                            def.decl.name,
-                            expected,
-                            list.len()
-                        ),
-                        def.decl.file,
-                        def.value.span,
-                        "give the array as many labels as the expression makes regions",
-                    ));
+                    return Err(self
+                        .error(
+                            Code::TypeMismatch,
+                            format!(
+                                "'{}' needs {} regions, found {}",
+                                def.decl.name,
+                                expected,
+                                list.len()
+                            ),
+                            def.decl.file,
+                            def.value.span,
+                            "give the array as many labels as the expression makes regions",
+                        )
+                        .into());
                 }
-                let value = list.get(index).copied().ok_or(Reported)?;
+                let value = list
+                    .get(index)
+                    .copied()
+                    .ok_or(Fault::Internal("a region of an array"))?;
                 // A piece of a split with nothing between keeps its place
                 // in the split; anything else is plain.
                 Ok(match value.origin {
@@ -1815,17 +1876,19 @@ impl Solver<'_> {
                     },
                 })
             }
-            other => Err(self.error(
-                Code::TypeMismatch,
-                format!(
-                    "'{}' needs a region, found {}",
-                    def.decl.name,
-                    other.description()
-                ),
-                def.decl.file,
-                def.value.span,
-                "write opening(...), split(...) or cover(...)",
-            )),
+            other => Err(self
+                .error(
+                    Code::TypeMismatch,
+                    format!(
+                        "'{}' needs a region, found {}",
+                        def.decl.name,
+                        other.description()
+                    ),
+                    def.decl.file,
+                    def.value.span,
+                    "write opening(...), split(...) or cover(...)",
+                )
+                .into()),
         }
     }
 }

@@ -17,7 +17,7 @@ use stave_model::value::{ExactBox, Patch, Value};
 use stave_schema::functions::{Builtin, PatchSize};
 
 use crate::eval::{Env, midpoint};
-use crate::{Reported, Solved, Solver};
+use crate::{Fault, Solved, Solver};
 
 /// Two touching parts' boxes, each narrowed to where it can touch, and the
 /// world axis square to where they meet.
@@ -148,13 +148,15 @@ impl Solver<'_> {
             Some([one]) => Ok(*one),
             _ => {
                 let word = function.word();
-                Err(self.error(
-                    Code::TypeMismatch,
-                    format!("'{word}' needs one part, found {}", value.description()),
-                    env.file,
-                    expr.span,
-                    format!("name one part on each side: {word}(piece, into)"),
-                ))
+                Err(self
+                    .error(
+                        Code::TypeMismatch,
+                        format!("'{word}' needs one part, found {}", value.description()),
+                        env.file,
+                        expr.span,
+                        format!("name one part on each side: {word}(piece, into)"),
+                    )
+                    .into())
             }
         }
     }
@@ -184,7 +186,9 @@ impl Solver<'_> {
                 ),
             )
         };
-        Err(self.error(Code::NoContact, message, env.file, span, help))
+        Err(self
+            .error(Code::NoContact, message, env.file, span, help)
+            .into())
     }
 
     /// The patch where two parts touch, or `None` when they don't touch
@@ -265,12 +269,14 @@ impl Solver<'_> {
         let Some((_, diameter)) = station else {
             return Ok(own);
         };
-        let half = diameter.checked_div(Rational::from(2i64)).ok_or(Reported)?;
+        let half = diameter
+            .checked_div(Rational::from(2i64))
+            .ok_or(Fault::Overflow)?;
         let mut narrowed = own;
         for axis in Axis::ALL.into_iter().filter(|axis| *axis != normal) {
-            let centre = midpoint(own.min(axis), own.max(axis)).ok_or(Reported)?;
-            let low = centre.checked_sub(half).ok_or(Reported)?;
-            let high = centre.checked_add(half).ok_or(Reported)?;
+            let centre = midpoint(own.min(axis), own.max(axis)).ok_or(Fault::Overflow)?;
+            let low = centre.checked_sub(half).ok_or(Fault::Overflow)?;
+            let high = centre.checked_add(half).ok_or(Fault::Overflow)?;
             narrowed = narrowed.with(axis, low, high);
         }
         Ok(narrowed)

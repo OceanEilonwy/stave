@@ -29,7 +29,7 @@ use crate::mechanism::AssemblyMechanism;
 use crate::members::{LaidOut, WorldMemberCut};
 use crate::mirror_cuts::MirroredJoint;
 use crate::place::reflect;
-use crate::{Reported, Solved, Solver};
+use crate::{Fault, Solved, Solver};
 
 /// A part a joint made.
 pub(crate) struct MadeInfo {
@@ -73,8 +73,8 @@ fn reflect_point(
 ) -> Solved<[ExactLength; 3]> {
     let mut out = point;
     if let Some(slot) = out.get_mut(world_index(axis)) {
-        let twice = plane.checked_add(plane).ok_or(Reported)?;
-        *slot = twice.checked_sub(*slot).ok_or(Reported)?;
+        let twice = plane.checked_add(plane).ok_or(Fault::Overflow)?;
+        *slot = twice.checked_sub(*slot).ok_or(Fault::Overflow)?;
     }
     Ok(out)
 }
@@ -97,11 +97,11 @@ fn reflect_members(
         let index = source_roles
             .iter()
             .position(|(_, bound)| *bound == was)
-            .ok_or(Reported)?;
+            .ok_or(Fault::Internal("the role a mirrored member is with"))?;
         match roles.get(index).map(|(_, bound)| *bound) {
             Some(RoleBound::Part(part)) => Ok(MemberCarrier::Part(part)),
             Some(RoleBound::Region(region)) => Ok(MemberCarrier::Region(region)),
-            None => Err(Reported),
+            None => Err(Fault::Internal("the role a mirrored member is with").into()),
         }
     };
     let shape = |shape: &WorldShape| -> Solved<WorldShape> {
@@ -161,7 +161,12 @@ fn reflect_members(
 fn member_shape(shape: &WorldShape) -> Solved<solved::MemberShape> {
     let pair = |axis: Axis, point: [ExactLength; 3]| -> Solved<[Length; 2]> {
         let [first, second] = axis.others();
-        let at = |on: Axis| point.get(world_index(on)).copied().ok_or(Reported);
+        let at = |on: Axis| {
+            point
+                .get(world_index(on))
+                .copied()
+                .ok_or(Fault::Internal("a point of a member's shape"))
+        };
         Ok([round_length(at(first)?)?, round_length(at(second)?)?])
     };
     let ends = |axis: Axis, bounds: &ExactBox| -> Solved<(Length, Length)> {
@@ -175,12 +180,12 @@ fn member_shape(shape: &WorldShape) -> Solved<solved::MemberShape> {
         WorldShape::Cylinder { axis, bounds } => {
             let [first, second] = axis.others();
             let centre = |on: Axis| -> Solved<Length> {
-                round_length(midpoint(bounds.min(on), bounds.max(on)).ok_or(Reported)?)
+                round_length(midpoint(bounds.min(on), bounds.max(on)).ok_or(Fault::Overflow)?)
             };
             let diameter = bounds
                 .max(first)
                 .checked_sub(bounds.min(first))
-                .ok_or(Reported)?;
+                .ok_or(Fault::Overflow)?;
             let (start, end) = ends(*axis, bounds)?;
             solved::MemberShape::Cylinder {
                 axis: *axis,
@@ -261,7 +266,7 @@ fn members(
                 carrier,
                 shapes,
             )
-            .ok_or(Reported)
+            .ok_or_else(|| Fault::Internal("a member's shapes").into())
         })
         .collect()
 }
@@ -367,18 +372,28 @@ pub(crate) fn build(solver: &mut Solver<'_>) -> Option<SolvedDesign> {
 
     // 1. Every param and let (so domains are checked even when unused),
     //    every part's orientation, sizes and position, every region.
-    for index in 0..solver.model.params.len() {
-        let _ = solver.param_value(stave_model::ids::ParamId::from_usize(index));
+    // Each is worked out for what it reports; a failure is settled (made
+    // sure to reach the user) where the item is declared.
+    for (index, inst) in solver.model.params.iter().enumerate() {
+        let result = solver.param_value(stave_model::ids::ParamId::from_usize(index));
+        let (file, span) = solver.place_of(DefId::Param(inst.def));
+        let _ = solver.settled(result, file, span);
     }
-    for index in 0..solver.model.lets.len() {
-        let _ = solver.let_value(stave_model::ids::LetId::from_usize(index));
+    for (index, inst) in solver.model.lets.iter().enumerate() {
+        let result = solver.let_value(stave_model::ids::LetId::from_usize(index));
+        let (file, span) = solver.place_of(DefId::Let(inst.def));
+        let _ = solver.settled(result, file, span);
     }
     for index in 0..part_count {
         let part = PartId::from_usize(index);
-        let _ = solver.drawn_box(part);
+        let result = solver.drawn_box(part);
+        let (file, span) = solver.part_place(part);
+        let _ = solver.settled(result, file, span);
     }
-    for index in 0..solver.model.regions.len() {
-        let _ = solver.region_value(RegionId::from_usize(index));
+    for (index, inst) in solver.model.regions.iter().enumerate() {
+        let result = solver.region_value(RegionId::from_usize(index));
+        let (file, span) = solver.place_of(DefId::Region(inst.def));
+        let _ = solver.settled(result, file, span);
     }
     // Every profile of the project, used or not, so stations that go
     // backwards are reported once, at the profile.
@@ -389,7 +404,9 @@ pub(crate) fn build(solver: &mut Solver<'_>) -> Option<SolvedDesign> {
                 && def.decl.scope == stave_model::defs::Scope::Module(solver.model.root)
         });
         if in_project {
-            let _ = solver.profile_stations(profile);
+            let result = solver.profile_stations(profile);
+            let (file, span) = solver.place_of(DefId::Profile(profile));
+            let _ = solver.settled(result, file, span);
         }
     }
 
@@ -405,15 +422,20 @@ pub(crate) fn build(solver: &mut Solver<'_>) -> Option<SolvedDesign> {
         work.push(if mirrored {
             None
         } else {
-            solver.work_joint(joint).ok()
+            let result = solver.work_joint(joint);
+            let (file, span) = solver.joint_place(joint);
+            solver.settled(result, file, span)
         });
     }
     // 3. Geometry of every declared part with what joints add.
     let mut geoms = GeomTable::default();
     for index in 0..part_count {
         let part = PartId::from_usize(index);
-        if let Ok(geom) = solver.part_geom(part) {
-            let _ = solver.check_max_length(part, &geom);
+        let result = solver.part_geom(part);
+        let (file, span) = solver.part_place(part);
+        if let Some(geom) = solver.settled(result, file, span) {
+            let checked = solver.check_max_length(part, &geom);
+            let _ = solver.settled(checked, file, span);
             geoms.set(part, geom);
         }
     }
@@ -431,7 +453,7 @@ pub(crate) fn build(solver: &mut Solver<'_>) -> Option<SolvedDesign> {
             continue;
         };
         let joint = JointId::from_usize(index);
-        if let Ok(solved) = solver.finish_joint(
+        let result = solver.finish_joint(
             joint,
             joint_work,
             &mut geoms,
@@ -439,7 +461,10 @@ pub(crate) fn build(solver: &mut Solver<'_>) -> Option<SolvedDesign> {
             &mut memberships,
             &mut made,
             &mut fasteners,
-        ) && let Some(entry) = joints.get_mut(index)
+        );
+        let (file, span) = solver.joint_place(joint);
+        if let Some(solved) = solver.settled(result, file, span)
+            && let Some(entry) = joints.get_mut(index)
         {
             *entry = Some(solved);
         }
@@ -457,14 +482,21 @@ pub(crate) fn build(solver: &mut Solver<'_>) -> Option<SolvedDesign> {
         {
             continue;
         }
-        if let Ok(hw) = solver.place_hardware(hardware) {
+        let result = solver.place_hardware(hardware);
+        let (file, span) = solver.hardware_place(hardware);
+        if let Some(hw) = solver.settled(result, file, span) {
+            // Every cut the hardware makes is in its part, or the failure
+            // is reported and the design withheld: a cut list never
+            // silently misses a bore.
             for cut in &hw.cuts {
-                if let (Some(geom), Some(list)) =
-                    (geoms.get(cut.part), cuts.get_mut(cut.part.index()))
-                    && let Ok(cut) = hardware_cut(geom, cut, hardware)
-                {
-                    list.push(cut);
-                }
+                let made = match (geoms.get(cut.part), cuts.get_mut(cut.part.index())) {
+                    (Some(geom), Some(list)) => {
+                        hardware_cut(geom, cut, hardware).map(|cut| list.push(cut))
+                    }
+                    // The part failed, and that was reported.
+                    _ => Err(Fault::Earlier.into()),
+                };
+                let _ = solver.settled(made, file, span);
             }
             if let Some(entry) = placed.get_mut(index) {
                 *entry = Some(hw);
@@ -572,17 +604,26 @@ pub(crate) fn build(solver: &mut Solver<'_>) -> Option<SolvedDesign> {
         return None;
     }
 
-    // 9. Write everything out.
-    let parts = solver
-        .write_parts(&geoms, cuts, memberships, &made, boards)
-        .ok()?;
-    let hardware = solver.write_hardware(&placed, &mechanisms).ok()?;
-    let regions = solver.write_regions().ok()?;
-    let assemblies = solver.write_assemblies(&mechanisms).ok()?;
-    let scenes = solver.write_scenes(&mechanisms).ok()?;
-    let project = solver.write_project().ok()?;
+    // 9. Write everything out. A failure here is settled at the project,
+    // so a design withheld is always explained.
+    let (file, span) = (solver.project_file, solver.project_span);
+    let parts = solver.write_parts(&geoms, cuts, memberships, &made, boards);
+    let parts = solver.settled(parts, file, span)?;
+    let hardware = solver.write_hardware(&placed, &mechanisms);
+    let hardware = solver.settled(hardware, file, span)?;
+    let regions = solver.write_regions();
+    let regions = solver.settled(regions, file, span)?;
+    let assemblies = solver.write_assemblies(&mechanisms);
+    let assemblies = solver.settled(assemblies, file, span)?;
+    let scenes = solver.write_scenes(&mechanisms);
+    let scenes = solver.settled(scenes, file, span)?;
+    let project = solver.write_project();
+    let project = solver.settled(project, file, span)?;
+    // A joint left out failed, and that failure was settled where it
+    // happened.
     let joints: Vec<Joint> = joints.into_iter().collect::<Option<Vec<_>>>()?;
-    if solver.diagnostics.iter().filter(|d| d.is_error()).count() > errors_before {
+    if solver.diagnostics.iter().filter(|d| d.is_error()).count() > errors_before || solver.skipped
+    {
         return None;
     }
     let mut design = SolvedDesign {
@@ -717,7 +758,7 @@ fn joint_body(
             shapes.push(member_shape(&world_shape(shape, &copy.frame)?)?);
         }
     }
-    let copies = u32::try_from(member.copies.len()).map_err(|_| Reported)?;
+    let copies = u32::try_from(member.copies.len()).map_err(|_| Fault::Overflow)?;
     solved::Body::new(
         solved::BodyRef {
             owner,
@@ -728,7 +769,7 @@ fn joint_body(
         shapes,
     )
     .and_then(|body| body.laid_out(copies, item))
-    .ok_or(Reported)
+    .ok_or_else(|| Fault::Internal("a member's shapes").into())
 }
 
 impl Solver<'_> {
@@ -744,14 +785,14 @@ impl Solver<'_> {
         fasteners: &mut Vec<FastenerUse>,
     ) -> Solved<Joint> {
         let Some(inst) = self.model.joints.get(joint.index()).cloned() else {
-            return Err(Reported);
+            return Err(Fault::Internal("a joint").into());
         };
         let kind_id = work.binding.kind;
         let Some(kind) = self.model.defs.kind(kind_id).cloned() else {
-            return Err(Reported);
+            return Err(Fault::Internal("a kind's declaration").into());
         };
         let Some(ctx) = self.module_ctx(DefId::Kind(kind_id)) else {
-            return Err(Reported);
+            return Err(Fault::Internal("the file an item is declared in").into());
         };
         let joint_def = kind.joint.clone().unwrap_or_default();
         let pair_count = work.pairs.len();
@@ -864,7 +905,7 @@ impl Solver<'_> {
                     pair.parts.get(cut.part.index()).copied(),
                     laid_out.iter().find(|member| member.body == cut.body),
                 ) else {
-                    return Err(Reported);
+                    return Err(Fault::Internal("a part").into());
                 };
                 let kinds = cut
                     .operations
@@ -872,7 +913,7 @@ impl Solver<'_> {
                     .map(|operation| self.cut_kind(operation, &env))
                     .collect::<Solved<Vec<_>>>()?;
                 let Some(geom) = geoms.get(part).cloned() else {
-                    return Err(Reported);
+                    return Err(Fault::Earlier.into());
                 };
                 for copy in &member.copies {
                     for shape in &copy.shapes {
@@ -892,7 +933,7 @@ impl Solver<'_> {
                                     "the kind cuts {part_name} for its {0}, so the {0} must go into {part_name}: check the {0}'s shape and where it is laid out",
                                     member.name
                                 ),
-                            ));
+                            ).into());
                         };
                         for cut_kind in &kinds {
                             work.member_cuts.push(WorldMemberCut {
@@ -926,7 +967,7 @@ impl Solver<'_> {
                     }
                 }
             }
-            let carrier = pair.parts.first().copied().ok_or(Reported)?;
+            let carrier = pair.parts.first().copied().ok_or(Fault::Earlier)?;
             // A member laid out no times (`count: 0`) is no body.
             let mut members = Vec::new();
             for member in laid_out.iter().filter(|member| !member.copies.is_empty()) {
@@ -977,18 +1018,18 @@ impl Solver<'_> {
                 if let (Some(item), Some(written)) = (&member.item, &body.item)
                     && !member.copies.is_empty()
                 {
-                    let count = u32::try_from(member.copies.len()).map_err(|_| Reported)?;
+                    let count = u32::try_from(member.copies.len()).map_err(|_| Fault::Overflow)?;
                     counted.push((item.clone(), count, written.span));
                 }
             }
             for (fastener, count, span) in counted {
                 let diameter = match self.kind_entry(&fastener, "diameter", kind.decl.file, span)? {
                     Value::Length(l) => round_length(l)?,
-                    _ => return Err(Reported),
+                    _ => return Err(Fault::Earlier.into()),
                 };
                 let length = match self.kind_entry(&fastener, "length", kind.decl.file, span)? {
                     Value::Length(l) => round_length(l)?,
-                    _ => return Err(Reported),
+                    _ => return Err(Fault::Earlier.into()),
                 };
                 let name = self
                     .model
@@ -1059,7 +1100,7 @@ impl Solver<'_> {
         span: stave_lang::ast::Span,
     ) -> Solved<solved::MemberItem> {
         let Some(def) = self.model.defs.kind(item.kind) else {
-            return Err(Reported);
+            return Err(Fault::Internal("a kind's declaration").into());
         };
         let kind = def.decl.name.clone();
         let says_wood = def.param("species").is_some() || def.field("species").is_some();
@@ -1228,7 +1269,11 @@ impl Solver<'_> {
             let Some(assembly) = inst.assembly else {
                 continue;
             };
-            let Ok((axis, plane)) = self.assembly_mirror_plane(assembly) else {
+            // Every failure from here is settled at the joint: a mirrored
+            // joint left out withholds the design, and says why.
+            let (file, span) = self.joint_place(joint);
+            let plane = self.assembly_mirror_plane(assembly);
+            let Some((axis, plane)) = self.settled(plane, file, span) else {
                 continue;
             };
             let mut copy = source_joint.clone();
@@ -1242,7 +1287,8 @@ impl Solver<'_> {
                 }
                 match this.rebind_part(part, axis, plane, assembly) {
                     Ok(found) => found,
-                    Err(_) => {
+                    Err(failure) => {
+                        let _ = this.settle(failure, file, span);
                         failed = true;
                         part
                     }
@@ -1264,7 +1310,7 @@ impl Solver<'_> {
                         .iter()
                         .map(|shape| reflect_member_shape(shape, axis, plane))
                         .collect::<Solved<Vec<_>>>();
-                    let body = shapes.ok().and_then(|shapes| {
+                    let body = shapes.and_then(|shapes| {
                         solved::Body::new(
                             solved::BodyRef {
                                 owner: BodyOwner::Joint {
@@ -1278,8 +1324,9 @@ impl Solver<'_> {
                             shapes,
                         )
                         .and_then(|body| body.laid_out(member.copies(), member.item.clone()))
+                        .ok_or_else(|| Fault::Internal("a mirrored member's shapes").into())
                     });
-                    match body {
+                    match self.settled(body, file, span) {
                         Some(body) => members.push(body),
                         None => unreflected = true,
                     }
@@ -1315,12 +1362,17 @@ impl Solver<'_> {
                 if part_map.contains_key(&cut.part) {
                     continue;
                 }
-                let Ok(part) = self.rebind_part(cut.part, axis, plane, assembly) else {
+                let rebound = self.rebind_part(cut.part, axis, plane, assembly);
+                let Some(part) = self.settled(rebound, file, span) else {
                     continue;
                 };
-                let (Ok(shape), Some(geom)) =
-                    (reflect_box(&cut.shape, axis, plane), geoms.get(part))
-                else {
+                let shape = reflect_box(&cut.shape, axis, plane);
+                let Some(shape) = self.settled(shape, file, span) else {
+                    continue;
+                };
+                let Some(geom) = geoms.get(part) else {
+                    // The part failed, and that was reported.
+                    let _ = self.settle(Fault::Earlier.into(), file, span);
                     continue;
                 };
                 let face = if cut.face.axis() == axis {
@@ -1346,9 +1398,14 @@ impl Solver<'_> {
                         kind: cut.kind,
                     },
                 );
-                if let (Ok(made), Some(list)) = (made, cuts.get_mut(part.index())) {
-                    list.push(made);
-                }
+                let made = made.and_then(|made| match cuts.get_mut(part.index()) {
+                    Some(list) => {
+                        list.push(made);
+                        Ok(())
+                    }
+                    None => Err(Fault::Internal("the cuts of a part").into()),
+                });
+                let _ = self.settled(made, file, span);
             }
             // Its kind's cuts in parts outside the assembly too.
             self.mirror_outside_cuts(
@@ -1386,7 +1443,11 @@ impl Solver<'_> {
             let Some(assembly) = inst.assembly else {
                 continue;
             };
-            let Ok((axis, plane)) = self.assembly_mirror_plane(assembly) else {
+            // Every failure from here is settled at the hardware: hardware
+            // left out withholds the design, and says why.
+            let (file, span) = self.hardware_place(hardware);
+            let plane = self.assembly_mirror_plane(assembly);
+            let Some((axis, plane)) = self.settled(plane, file, span) else {
                 continue;
             };
             // Every role re-bound, whatever its name.
@@ -1404,9 +1465,9 @@ impl Solver<'_> {
                         .rebind_region(region, axis, plane, assembly)
                         .map(RoleBound::Region),
                 };
-                match rebound {
-                    Ok(rebound) => roles.push((role.clone(), rebound)),
-                    Err(_) => {
+                match self.settled(rebound, file, span) {
+                    Some(rebound) => roles.push((role.clone(), rebound)),
+                    None => {
                         unbound = true;
                         break;
                     }
@@ -1416,6 +1477,7 @@ impl Solver<'_> {
                 continue;
             }
             let Some((_, RoleBound::Part(piece))) = roles.first().cloned() else {
+                let _ = self.settle(Fault::Earlier.into(), file, span);
                 continue;
             };
             let mount_face = if source_placed.mount_face.axis() == axis {
@@ -1427,16 +1489,20 @@ impl Solver<'_> {
             let mechanism = match &source_placed.mechanism {
                 Some(mechanism) => match mechanism.reflected(axis, plane) {
                     Some(reflected) => Some(reflected),
-                    None => continue,
+                    None => {
+                        let _ = self.settle(Fault::Overflow.into(), file, span);
+                        continue;
+                    }
                 },
                 None => None,
             };
             let own = match &mechanism {
                 Some(reflected) => {
                     let kind_name = source_placed.kind_name.clone();
-                    match self.check_mechanism(hardware, &roles, reflected, &kind_name) {
-                        Ok(own) => own,
-                        Err(_) => continue,
+                    let checked = self.check_mechanism(hardware, &roles, reflected, &kind_name);
+                    match self.settled(checked, file, span) {
+                        Some(own) => own,
+                        None => continue,
                     }
                 }
                 None => None,
@@ -1448,15 +1514,19 @@ impl Solver<'_> {
             for cut in &source_placed.cuts {
                 let (part, outside) = match part_map.get(&cut.part) {
                     Some(mapped) => (*mapped, false),
-                    None => match self.rebind_part(cut.part, axis, plane, assembly) {
-                        Ok(found) => (found, true),
-                        Err(_) => {
-                            unbound = true;
-                            break;
+                    None => {
+                        let rebound = self.rebind_part(cut.part, axis, plane, assembly);
+                        match self.settled(rebound, file, span) {
+                            Some(found) => (found, true),
+                            None => {
+                                unbound = true;
+                                break;
+                            }
                         }
-                    },
+                    }
                 };
-                let Ok(shape) = reflect_box(&cut.shape, axis, plane) else {
+                let shape = reflect_box(&cut.shape, axis, plane);
+                let Some(shape) = self.settled(shape, file, span) else {
                     unbound = true;
                     break;
                 };
@@ -1470,24 +1540,31 @@ impl Solver<'_> {
                     shape,
                     ..cut.clone()
                 };
-                if outside
-                    && let (Some(geom), Some(list)) = (geoms.get(part), cuts.get_mut(part.index()))
-                    && let Ok(cut) = hardware_cut(geom, &reflected_cut, hardware)
-                {
-                    list.push(cut);
+                if outside {
+                    // The cut is in its part, or the failure is reported
+                    // and the design withheld.
+                    let made = match (geoms.get(part), cuts.get_mut(part.index())) {
+                        (Some(geom), Some(list)) => {
+                            hardware_cut(geom, &reflected_cut, hardware).map(|cut| list.push(cut))
+                        }
+                        // The part failed, and that was reported.
+                        _ => Err(Fault::Earlier.into()),
+                    };
+                    let _ = self.settled(made, file, span);
                 }
                 reflected_cuts.push(reflected_cut);
             }
             if unbound {
                 continue;
             }
-            let Ok(members) = reflect_members(
+            let members = reflect_members(
                 &source_placed.members,
                 &source_placed.roles,
                 &roles,
                 axis,
                 plane,
-            ) else {
+            );
+            let Some(members) = self.settled(members, file, span) else {
                 continue;
             };
             let reflected = Placed {
@@ -1517,6 +1594,8 @@ impl Solver<'_> {
         let target = reflect_box(&source_box, axis, plane)?;
         for index in 0..self.model.parts.len() {
             let candidate = PartId::from_usize(index);
+            // A part whose box fails was settled when every part was
+            // placed (step 1 of `build`); it is no counterpart.
             if let Ok(candidate_box) = self.drawn_box(candidate)
                 && candidate_box == target
             {
@@ -1531,7 +1610,7 @@ impl Solver<'_> {
             file,
             span,
             format!("make the design symmetric about the mirror plane, or give the mirrored assembly its own {name}"),
-        ))
+        ).into())
     }
 
     fn rebind_region(
@@ -1558,13 +1637,15 @@ impl Solver<'_> {
             .map(|r| r.name.clone())
             .unwrap_or_default();
         let (file, span) = self.assembly_place(assembly);
-        Err(self.error(
-            Code::Mirror,
-            format!("{name} has no counterpart on the other side of the mirror"),
-            file,
-            span,
-            "make the design symmetric about the mirror plane",
-        ))
+        Err(self
+            .error(
+                Code::Mirror,
+                format!("{name} has no counterpart on the other side of the mirror"),
+                file,
+                span,
+                "make the design symmetric about the mirror plane",
+            )
+            .into())
     }
 
     pub(crate) fn assembly_place(
@@ -1590,7 +1671,7 @@ impl Solver<'_> {
 
     fn write_stock(&mut self, stock: StockId) -> Solved<Stock> {
         let Some(def) = self.model.defs.stock(stock).cloned() else {
-            return Err(Reported);
+            return Err(Fault::Internal("a stock's declaration").into());
         };
         let length = |this: &mut Self, field| -> Solved<Option<Length>> {
             this.stock_length(stock, field)?
@@ -1635,7 +1716,7 @@ impl Solver<'_> {
             let part_cuts = cuts.next().unwrap_or_default();
             let part_joints = memberships.next().unwrap_or_default();
             let Some(geom) = geoms.get(id).cloned() else {
-                return Err(Reported);
+                return Err(Fault::Earlier.into());
             };
             let (name, assembly, origin, stock, shape, grain, note, loose) =
                 if let Some(inst) = self.model.parts.get(index).cloned() {
@@ -1658,7 +1739,11 @@ impl Solver<'_> {
                                     })
                                 })
                                 .collect::<Solved<Vec<_>>>()?;
-                            let def = self.model.defs.profile(profile).ok_or(Reported)?;
+                            let def = self
+                                .model
+                                .defs
+                                .profile(profile)
+                                .ok_or(Fault::Internal("a profile's declaration"))?;
                             Shape::Turned {
                                 profile: def.decl.name.clone(),
                                 stations,
@@ -1694,14 +1779,18 @@ impl Solver<'_> {
                     let grain = body.as_ref().map_or(Grain::Length, |b| b.grain);
                     let note = match body.as_ref().and_then(|b| b.note.clone()) {
                         Some(text) => {
-                            let env = self.part_env(source_body).ok_or(Reported)?;
+                            let env = self
+                                .part_env(source_body)
+                                .ok_or(Fault::Internal("where a part is declared"))?;
                             Some(self.format_text(&text, &env)?)
                         }
                         None => None,
                     };
                     let loose = match body.as_ref().and_then(|b| b.loose.clone()) {
                         Some(expr) => {
-                            let env = self.part_env(source_body).ok_or(Reported)?;
+                            let env = self
+                                .part_env(source_body)
+                                .ok_or(Fault::Internal("where a part is declared"))?;
                             self.eval_bool(&expr, &env)?
                         }
                         None => false,
@@ -1717,7 +1806,9 @@ impl Solver<'_> {
                         loose,
                     )
                 } else {
-                    let info = made.get(index - self.model.parts.len()).ok_or(Reported)?;
+                    let info = made
+                        .get(index - self.model.parts.len())
+                        .ok_or(Fault::Internal("a made part"))?;
                     // A piece of a spliced part is cut as its part is.
                     let (grain, note, loose) = match info.origin {
                         PartOrigin::Piece { part, .. } => parts
@@ -1811,12 +1902,13 @@ impl Solver<'_> {
         let mut out = Vec::new();
         for (index, entry) in placed.iter().enumerate() {
             let Some(hw) = entry else {
-                return Err(Reported);
+                return Err(Fault::Earlier.into());
             };
             let Some(inst) = self.model.hardware.get(index).cloned() else {
-                return Err(Reported);
+                return Err(Fault::Internal("a piece of hardware").into());
             };
-            let base = HardwareBase::from_base(hw.base).ok_or(Reported)?;
+            let base = HardwareBase::from_base(hw.base)
+                .ok_or(Fault::Internal("a piece of hardware's base"))?;
             let members = members(inst.id, &hw.members, &placed_by, hw.piece)?;
             // Around every member; with none, the face it is mounted on.
             let bounds = match members
@@ -1904,7 +1996,7 @@ impl Solver<'_> {
             let id = RegionId::from_usize(index);
             let value = self.region_value(id)?;
             let Some(inst) = self.model.regions.get(index) else {
-                return Err(Reported);
+                return Err(Fault::Internal("a region").into());
             };
             let root = inst.assembly.is_none()
                 && inst.mirror_of.is_none()
@@ -2009,7 +2101,7 @@ impl Solver<'_> {
         let root = self
             .model
             .module_instance(self.model.root)
-            .ok_or(Reported)?;
+            .ok_or(Fault::Internal("the project's own items"))?;
         for scene in self.model.scenes.clone() {
             // A scene with a name or type error is already reported.
             if self.poisoned(DefId::Scene(scene)) {
@@ -2031,22 +2123,24 @@ impl Solver<'_> {
             let mut poses = Vec::new();
             for pose in &def.poses {
                 let Value::Assembly(assembly) = self.eval(&pose.target, &env)? else {
-                    return Err(self.error(
-                        Code::TypeMismatch,
-                        "'pose' needs an assembly",
-                        def.decl.file,
-                        pose.target.span,
-                        "name an assembly with hinges or slides",
-                    ));
+                    return Err(self
+                        .error(
+                            Code::TypeMismatch,
+                            "'pose' needs an assembly",
+                            def.decl.file,
+                            pose.target.span,
+                            "name an assembly with hinges or slides",
+                        )
+                        .into());
                 };
                 let value = match self.eval(&pose.value, &env)? {
                     Value::Word(Word::Motion(MotionWord::Open)) => PoseValue::Open,
                     Value::Word(Word::Motion(MotionWord::Closed)) => PoseValue::Closed,
                     Value::Angle(angle) => {
-                        PoseValue::Angle(angle.to_nearest_angle().ok_or(Reported)?)
+                        PoseValue::Angle(angle.to_nearest_angle().ok_or(Fault::Overflow)?)
                     }
                     Value::Length(length) => PoseValue::Travel(round_length(length)?),
-                    _ => return Err(Reported),
+                    _ => return Err(Fault::Earlier.into()),
                 };
                 let mechanism = mechanisms
                     .get(assembly.index())
@@ -2105,12 +2199,12 @@ impl Solver<'_> {
 
     fn write_project(&mut self) -> Solved<ProjectInfo> {
         let Some(project) = self.model.defs.project(self.model.root).cloned() else {
-            return Err(Reported);
+            return Err(Fault::Internal("the project's declaration").into());
         };
         let root = self
             .model
             .module_instance(self.model.root)
-            .ok_or(Reported)?;
+            .ok_or(Fault::Internal("the project's own items"))?;
         let env = Env {
             ctx: Ctx {
                 instance: root,
@@ -2124,13 +2218,15 @@ impl Solver<'_> {
             Some(expr) => {
                 let value = round_length(self.eval_length(expr, &env)?)?;
                 if value <= Length::ZERO {
-                    return Err(self.error(
-                        Code::OutOfRange,
-                        format!("'resolution' must be within more than 0mm, found {value}"),
-                        project.file,
-                        expr.span,
-                        "write a positive length, such as 0.5mm",
-                    ));
+                    return Err(self
+                        .error(
+                            Code::OutOfRange,
+                            format!("'resolution' must be within more than 0mm, found {value}"),
+                            project.file,
+                            expr.span,
+                            "write a positive length, such as 0.5mm",
+                        )
+                        .into());
                 }
                 value
             }

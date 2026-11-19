@@ -36,7 +36,7 @@ use stave_schema::words::{Grain, StockForm};
 use crate::build::MadeInfo;
 use crate::eval::{Env, KindEnv};
 use crate::joints::{GeomTable, PairWork, PartGeom, local_slot, round_length};
-use crate::{Reported, Solved, Solver};
+use crate::{Failure, Fault, Solved, Solver};
 
 /// The first id that stands for a board rather than a part. Parts, made
 /// parts included, come from source files and never number this many.
@@ -138,7 +138,9 @@ impl Solver<'_> {
                     }
                 }
                 Ok(None) => {}
-                Err(Reported) => {
+                Err(failure) => {
+                    let (file, span) = self.part_place(part);
+                    let _ = self.settle(failure, file, span);
                     // Nothing half-made is kept.
                     made.truncate(made_before);
                 }
@@ -173,7 +175,7 @@ impl Solver<'_> {
             .defs
             .stock(stock)
             .map(|s| s.form)
-            .ok_or(Reported)?;
+            .ok_or(Fault::Internal("a stock's declaration"))?;
         let source = self.body_source(part)?;
         let image = source != part;
         let body = self.part_body(source).cloned();
@@ -192,7 +194,8 @@ impl Solver<'_> {
             StockForm::Dowel => return Ok(None),
             StockForm::Plywood | StockForm::Mdf => {
                 if image {
-                    return Err(Reported);
+                    // A mirror image: its source reports.
+                    return Err(Fault::Earlier.into());
                 }
                 let name = self.part_name(part);
                 let stock_name = self
@@ -214,17 +217,17 @@ impl Solver<'_> {
                     format!(
                         "a sheet isn't glued up from boards: choose a sheet wider than '{stock_name}', or make the part from several parts"
                     ),
-                ));
+                ).into());
             }
         }
-        let ratio = total.checked_ratio(max_width).ok_or(Reported)?;
+        let ratio = total.checked_ratio(max_width).ok_or(Fault::Overflow)?;
         let whole = ratio.floor();
         let count = if ratio.is_integer() {
             whole
         } else {
-            whole.checked_add(1).ok_or(Reported)?
+            whole.checked_add(1).ok_or(Fault::Overflow)?
         };
-        let count = u32::try_from(count).map_err(|_| Reported)?;
+        let count = u32::try_from(count).map_err(|_| Fault::Overflow)?;
         let methods = self.board_methods(part, source, file, span)?;
         let layout = self.lay_out_boards(part, geom, axis, total, count, geoms)?;
 
@@ -265,7 +268,7 @@ impl Solver<'_> {
         // What the joints add widens the boards.
         for (board, [start, end]) in &extra {
             let Some(mut board_geom) = geoms.get(*board).cloned() else {
-                return Err(Reported);
+                return Err(Fault::Internal("a board").into());
             };
             let slot = local_slot(axis);
             if let (Some(s), Some(e)) =
@@ -285,12 +288,12 @@ impl Solver<'_> {
                 .cut_box
                 .min(world)
                 .checked_sub(low_add)
-                .ok_or(Reported)?;
+                .ok_or(Fault::Overflow)?;
             let high = board_geom
                 .cut_box
                 .max(world)
                 .checked_add(high_add)
-                .ok_or(Reported)?;
+                .ok_or(Fault::Overflow)?;
             board_geom.cut_box = board_geom.cut_box.with(world, low, high);
             geoms.set(*board, board_geom);
         }
@@ -299,7 +302,7 @@ impl Solver<'_> {
         let mut board_cuts: BTreeMap<PartId, Vec<Cut>> = BTreeMap::new();
         for application in &mut applications {
             let Some(method) = methods.get(application.method) else {
-                return Err(Reported);
+                return Err(Fault::Internal("the joint between two boards").into());
             };
             self.board_pass_b(
                 part,
@@ -322,21 +325,27 @@ impl Solver<'_> {
             if direction.is_positive() {
                 Ok(geom.cut_box.min(world))
             } else {
-                geom.cut_box.max(world).checked_neg().ok_or(Reported)
+                geom.cut_box
+                    .max(world)
+                    .checked_neg()
+                    .ok_or(Failure::Fault(Fault::Overflow))
             }
         };
         let part_origin = origin(geom)?;
         let mut written = Vec::new();
         for (number, board) in layout.ids.iter().enumerate() {
-            let board_geom = geoms.get(*board).cloned().ok_or(Reported)?;
+            let board_geom = geoms
+                .get(*board)
+                .cloned()
+                .ok_or(Fault::Internal("a board"))?;
             let index = u32::try_from(number)
                 .ok()
                 .and_then(|n| n.checked_add(1))
                 .and_then(BoardIndex::new)
-                .ok_or(Reported)?;
+                .ok_or(Fault::Overflow)?;
             let offset = origin(&board_geom)?
                 .checked_sub(part_origin)
-                .ok_or(Reported)?;
+                .ok_or(Fault::Overflow)?;
             written.push(solved::Board {
                 index,
                 width: round_length(board_geom.cut_size(axis)?)?,
@@ -344,7 +353,7 @@ impl Solver<'_> {
                 cuts: board_cuts.remove(board).unwrap_or_default(),
             });
         }
-        let boards = NonEmpty::new(written).ok_or(Reported)?;
+        let boards = NonEmpty::new(written).ok_or(Fault::Internal("the boards of a part"))?;
         let methods = NonEmpty::new(
             methods
                 .into_iter()
@@ -355,7 +364,7 @@ impl Solver<'_> {
                 })
                 .collect(),
         )
-        .ok_or(Reported)?;
+        .ok_or(Fault::Internal("the joints between boards"))?;
         Ok(Some(solved::Boards {
             axis,
             boards,
@@ -408,7 +417,10 @@ impl Solver<'_> {
         file: FileId,
         expr: &stave_model::defs::RExpr,
     ) -> Solved<Value> {
-        let instance = self.model.module_instance(module).ok_or(Reported)?;
+        let instance = self
+            .model
+            .module_instance(module)
+            .ok_or(Fault::Internal("the file an item is declared in"))?;
         let env = Env {
             ctx: Ctx {
                 instance,
@@ -466,35 +478,39 @@ impl Solver<'_> {
         let kinds: Vec<KindValue> = match value {
             Some(Value::Boards(joining)) => joining.by.iter().cloned().collect(),
             Some(other) => {
-                return Err(self.error(
-                    Code::TypeMismatch,
-                    format!(
-                        "'boards' needs joined(by: ...), found {}",
-                        other.description()
-                    ),
-                    file,
-                    span,
-                    "write boards: joined(by: kind_name)",
-                ));
+                return Err(self
+                    .error(
+                        Code::TypeMismatch,
+                        format!(
+                            "'boards' needs joined(by: ...), found {}",
+                            other.description()
+                        ),
+                        file,
+                        span,
+                        "write boards: joined(by: kind_name)",
+                    )
+                    .into());
             }
             None => {
                 let name = self.part_name(part);
-                return Err(self.error(
-                    Code::UnknownName,
-                    format!("{name} is made of boards, and nothing says how they are joined"),
-                    file,
-                    span,
-                    "say how its boards are joined with boards: joined(by: ...)",
-                ));
+                return Err(self
+                    .error(
+                        Code::UnknownName,
+                        format!("{name} is made of boards, and nothing says how they are joined"),
+                        file,
+                        span,
+                        "say how its boards are joined with boards: joined(by: ...)",
+                    )
+                    .into());
             }
         };
         let mut methods = Vec::new();
         for value in kinds {
             if self.model.defs.is_poisoned(DefId::Kind(value.kind)) {
-                return Err(self.skip());
+                return Err(self.skip().into());
             }
             let Some(kind) = self.model.defs.kind(value.kind).cloned() else {
-                return Err(Reported);
+                return Err(Fault::Internal("a kind's declaration").into());
             };
             if kind.base != BaseKind::Joint {
                 return Err(self.error(
@@ -503,7 +519,7 @@ impl Solver<'_> {
                     file,
                     span,
                     "boards are joined by joint kinds whose two roles are parts: joined(by: kind_name)",
-                ));
+                ).into());
             }
             let roles: Vec<RoleType> = kind.roles.iter().map(|r| r.ty).collect();
             let across = match roles.as_slice() {
@@ -522,7 +538,7 @@ impl Solver<'_> {
                         file,
                         span,
                         "a joint between boards has two roles (one board on each side of a seam), or one Parts role (across all of them)",
-                    ));
+                    ).into());
                 }
             };
             let mut glue = true;
@@ -558,7 +574,7 @@ impl Solver<'_> {
     ) -> Solved<Layout> {
         let share = total
             .checked_div(Rational::from(i64::from(count)))
-            .ok_or(Reported)?;
+            .ok_or(Fault::Overflow)?;
         let direction = geom.orientation.direction(axis);
         let world = direction.axis();
         // Board 1 is at the reference edge, which is at the start or the
@@ -569,14 +585,14 @@ impl Solver<'_> {
         };
         let local_low = |k: u32| -> Solved<ExactLength> {
             let k = Rational::from(i64::from(k));
-            let at = share.checked_mul(k).ok_or(Reported)?;
+            let at = share.checked_mul(k).ok_or(Fault::Overflow)?;
             if from_start {
                 Ok(at)
             } else {
                 total
                     .checked_sub(at)
                     .and_then(|x| x.checked_sub(share))
-                    .ok_or(Reported)
+                    .ok_or(Failure::Fault(Fault::Overflow))
             }
         };
         let to_world =
@@ -584,14 +600,14 @@ impl Solver<'_> {
                 if direction.is_positive() {
                     let base = geom.cut_box.min(world);
                     Ok((
-                        base.checked_add(low).ok_or(Reported)?,
-                        base.checked_add(high).ok_or(Reported)?,
+                        base.checked_add(low).ok_or(Fault::Overflow)?,
+                        base.checked_add(high).ok_or(Fault::Overflow)?,
                     ))
                 } else {
                     let base = geom.cut_box.max(world);
                     Ok((
-                        base.checked_sub(high).ok_or(Reported)?,
-                        base.checked_sub(low).ok_or(Reported)?,
+                        base.checked_sub(high).ok_or(Fault::Overflow)?,
+                        base.checked_sub(low).ok_or(Fault::Overflow)?,
                     ))
                 }
             };
@@ -614,12 +630,16 @@ impl Solver<'_> {
         let mut seams = Vec::new();
         for k in 0..count {
             let low = local_low(k)?;
-            let high = low.checked_add(share).ok_or(Reported)?;
+            let high = low.checked_add(share).ok_or(Fault::Overflow)?;
             let (world_low, world_high) = to_world(low, high)?;
             let bounds: ExactBox = geom.cut_box.with(world, world_low, world_high);
-            let id =
-                PartId::from_usize(usize::try_from(first.saturating_add(k)).map_err(|_| Reported)?);
-            let index = k.checked_add(1).and_then(BoardIndex::new).ok_or(Reported)?;
+            let id = PartId::from_usize(
+                usize::try_from(first.saturating_add(k)).map_err(|_| Fault::Overflow)?,
+            );
+            let index = k
+                .checked_add(1)
+                .and_then(BoardIndex::new)
+                .ok_or(Fault::Overflow)?;
             let mut min = [ExactLength::ZERO; 3];
             for each in Axis::ALL {
                 if let Some(slot) = min.get_mut(world_slot(each)) {
@@ -680,7 +700,7 @@ impl Solver<'_> {
         requires: &mut Vec<RequireResult>,
     ) -> Solved<PairWork> {
         let Some(kind) = self.model.defs.kind(method.kind).cloned() else {
-            return Err(Reported);
+            return Err(Fault::Internal("a kind's declaration").into());
         };
         let roles: Vec<Value> = if method.across {
             vec![Value::Parts(parts.clone())]
@@ -694,7 +714,7 @@ impl Solver<'_> {
             kind.params.len(),
         );
         let Some(ctx) = self.module_ctx(DefId::Kind(method.kind)) else {
-            return Err(Reported);
+            return Err(Fault::Internal("the file an item is declared in").into());
         };
         let kind_env = Env {
             ctx,
@@ -773,7 +793,7 @@ impl Solver<'_> {
                             End::Start => &mut entry[0],
                             End::End => &mut entry[1],
                         };
-                        *slot = slot.checked_add(by).ok_or(Reported)?;
+                        *slot = slot.checked_add(by).ok_or(Fault::Overflow)?;
                         extensions.push(solved::Extension {
                             part,
                             axis,
@@ -853,10 +873,10 @@ impl Solver<'_> {
         board_cuts: &mut BTreeMap<PartId, Vec<Cut>>,
     ) -> Solved<()> {
         let Some(kind) = self.model.defs.kind(method.kind).cloned() else {
-            return Err(Reported);
+            return Err(Fault::Internal("a kind's declaration").into());
         };
         let Some(ctx) = self.module_ctx(DefId::Kind(method.kind)) else {
-            return Err(Reported);
+            return Err(Fault::Internal("the file an item is declared in").into());
         };
         let joint_def = kind.joint.clone().unwrap_or_default();
         let part_name = self.part_name(part);

@@ -296,6 +296,9 @@ pub fn instantiate(defs: Defs, root: ModuleId) -> (Model, Vec<Diagnostic>) {
         pending_mirrors: Vec::new(),
     };
     builder.run();
+    if builder.diagnostics.iter().any(Diagnostic::is_error) {
+        builder.model.defs.earlier_errors = true;
+    }
     (builder.model, builder.diagnostics)
 }
 

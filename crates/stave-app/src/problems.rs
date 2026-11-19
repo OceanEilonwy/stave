@@ -61,7 +61,8 @@ pub enum Category {
     Cut,
     /// A hardware model doesn't match its envelope (`model-mismatch`).
     Hardware,
-    /// Something Stave can't do yet (`not-supported`).
+    /// Something Stave can't do yet (`not-supported`), or a failure inside
+    /// Stave itself (`internal`).
     NotSupported,
 }
 
@@ -102,7 +103,7 @@ impl Category {
             | Code::OutOfRange => Category::Value,
             Code::NoRecipe | Code::UnnamedCut | Code::Wall | Code::CutSize => Category::Cut,
             Code::ModelMismatch => Category::Hardware,
-            Code::NotSupported => Category::NotSupported,
+            Code::NotSupported | Code::Internal => Category::NotSupported,
         }
     }
 
