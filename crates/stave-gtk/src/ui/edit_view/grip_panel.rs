@@ -9,8 +9,9 @@
 //! what is clicked or typed; it decides nothing.
 //!
 //! ```text
-//! ▾ Size                                   case.base.length
-//!   Value        [1000mm            ] ⋮
+//! ▾ Size
+//!   Grip         case.base.length
+//!   Value        [1000mm    ] was 900mm  ⋮
 //!   Follows      overall_width
 //!   Which size changes?
 //!   (•) overall_width             940 → 1040 mm

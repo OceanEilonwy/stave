@@ -11,7 +11,7 @@
 //! pointer ──pick_target──▶ Region ─▶ lit (and what covers it see-through)
 //! click   ──pick_target──▶ Region / facing pair ─▶ EditCommand::Start ─▶ menu
 //! menu entry ─▶ Choose ─▶ card ─▶ Set / Bind (next click) / Rename / ApplyFix
-//!                              └▶ Add ─▶ Committed: the new design, the item selected
+//!                              └▶ Apply (EditCommand::Add) ─▶ Committed: the new design, the item selected
 //!                              └▶ Cancel or Escape ─▶ nothing written
 //! chosen candidate tried ─▶ its ghost (Ghosts over the base), tinted by verdict
 //! ```

@@ -1,32 +1,37 @@
 //! The card for a chosen candidate (`docs/editing.md`, "Verdicts and
-//! strict commit"), the content of the docked Edit panel: the name it
-//! would be written under, what is still to point at, the verdict with the
-//! checker's problems and fixes, and its settings, one compact row each.
+//! strict commit"), the content of the docked Edit panel, drawn as the
+//! Inspector is (`super::sections`): the name it would be written under
+//! in the header's monospace field, then sections — Placed in (what it
+//! fills, each space and part a link, or what is still to point at), the
+//! verdict with the checker's problems and fixes, its settings one compact
+//! label | value row each, and the lines Apply would write (Pending).
 //! It draws the contract's values (`stave_app::edit`, `stave_app::choices`)
 //! and reports what the user did as a [`CardAction`]; it decides nothing
 //! about the design.
 //!
 //! ```text
-//! ┌ Case ─────────────────────── casework ┐
+//! ┌───────────────────────────────────────┐
+//! │ [case                       ]    Case │  (the name, retyped in place)
 //! │ A cabinet case: a base, two sides an… │
-//! │ Name     case                         │
-//! │ space    envelope                     │
-//! │ ┌ ✓ It fits ────────────────────────┐ │  (scrolls in its own box)
-//! │ └───────────────────────────────────┘ │
-//! │ SETTINGS                              │
-//! │ panel_stock   [oak_19            ▾]   │
-//! │ joinery       [dowel(count: 4)   ▾]   │  (the default, dimmed)
-//! │   ✓ dowel(count: 4)        default    │  (its short list, opened)
-//! │     screw                  used       │
-//! │     Search all 18…                    │
+//! │ ▾ Placed in                           │
+//! │   space        (envelope)             │  (a link: lit on hover)
+//! │ ▾ Verdict                             │
+//! │   ✓ It fits                           │  (scrolls in its own box)
+//! │ ▾ Settings                         4  │
+//! │   panel_stock  [oak_19            ▾]  │
+//! │   joinery      [dowel(count: 4)   ▾]  │  (the default, dimmed)
+//! │     ✓ dowel(count: 4)      default    │  (its short list, opened)
+//! │       screw                used       │
+//! │       Search all 18…                  │
+//! │ ▾ Pending                             │  (the window's, `editor_link.rs`)
 //! │ (the body scrolls)                    │
 //! ├───────────────────────────────────────┤
 //! │ Repeat…                               │  (the window's repeat fold)
-//! │                     [Cancel]  [Add]   │  (always in sight)
+//! │       [Cancel  Esc]  [Apply  Enter]   │  (always in sight)
 //! └───────────────────────────────────────┘
 //! ```
 //!
-//! Keys: Enter adds when Add is enabled; Escape cancels. The keys reach the
+//! Keys: Enter applies when Apply is enabled; Escape cancels. The keys reach the
 //! card while the keyboard is in it, so the card takes the keyboard when it
 //! appears and each time it is shown again (unless the keyboard is already
 //! inside it, say in a setting being typed).
