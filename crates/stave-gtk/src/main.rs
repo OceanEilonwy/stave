@@ -18,7 +18,9 @@
 //! running. With it, it renders one frame offscreen with the default
 //! framing, writes a PNG and exits, without touching GTK or a display.
 
-#![forbid(unsafe_code)]
+// Denied, not forbidden, so `render::dmabuf` alone can allow it: see the
+// Rust standards in CLAUDE.md.
+#![deny(unsafe_code)]
 
 mod convert;
 mod render;

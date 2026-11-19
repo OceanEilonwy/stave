@@ -10,10 +10,11 @@ use gtk::{gdk, glib};
 use stave_app::session::{Command, Selection};
 use stave_app::{focus, view};
 use stave_model::solved::AssemblyId;
-use stave_scene::{Look, NodeId, Orbit};
+use stave_scene::{NodeId, Orbit};
 
 use crate::render::{Backdrop, Frame, Highlighted};
 
+use super::viewport::Shown;
 use super::{EDGE, State, Window, edit_view};
 
 impl Window {
@@ -149,48 +150,19 @@ impl Window {
         });
     }
 
-    /// How each node looks outside focus mode. Choosing something only
-    /// outlines it: the rest stays solid, so clicking around never switches
-    /// the view between solid and see-through. With X-ray on everything
-    /// but the selection is see-through; a posed problem fades what it
-    /// doesn't involve. `None` draws every node as usual.
-    pub(super) fn looks(&self, selection: &[NodeId]) -> Option<Vec<Look>> {
-        let session = self.session.borrow();
-        let state = self.state.borrow();
-        let (_, graph) = session.drawable()?;
-        let count = graph.node_ids().count();
-        let kept: &[NodeId] = match state.problem.as_ref() {
-            Some(problem) => &problem.highlight.nodes,
-            None if state.xray => selection,
-            None => return None,
-        };
-        let rest = if state.xray { Look::XRay } else { Look::Dim };
-        let mut looks = vec![rest; count];
-        for node in kept {
-            if let Some(look) = looks.get_mut(node.index()) {
-                *look = Look::Normal;
-            }
-        }
-        Some(looks)
-    }
-
+    /// Draws a frame. How each node looks outside focus mode: choosing
+    /// something only outlines it, so the rest stays solid and clicking
+    /// around never switches the view between solid and see-through; with
+    /// X-ray on everything but the selection is see-through; a posed
+    /// problem fades what it doesn't involve (`frame_lists.rs`).
     pub(super) fn render_now(self: &Rc<Self>) {
-        let mut selection = self.selected_nodes();
-        // What a partner link in the Parts panel points at is outlined
-        // too, while the pointer is over it.
-        selection.extend(self.hovered_nodes());
-        // And what a name link in the Inspector or the Edit panel points at.
-        selection.extend(self.link_hover_nodes());
         let backdrop = self.backdrop();
-        let looks = if self.state.borrow().focus.is_some() {
-            None
-        } else {
-            self.looks(&selection)
-        };
         let ghost = self.render_ghost(backdrop);
         let rendered = if let Some(rendered) = ghost {
             rendered
         } else {
+            self.refresh_frame_lists();
+            let mut lists = self.frame_lists.borrow_mut();
             let session = self.session.borrow();
             let mut state = self.state.borrow_mut();
             state.render_queued = false;
@@ -209,13 +181,6 @@ impl Window {
                 return;
             };
             let focus = focus.as_ref();
-            // Outside focus mode, a selected joint member shows through
-            // the parts it sits in.
-            let outside = if focus.is_none() {
-                session.looks()
-            } else {
-                None
-            };
             let plan = focus
                 .filter(|f| f.plan)
                 .and_then(|f| f.focus.plan().copied());
@@ -241,31 +206,20 @@ impl Window {
             } else {
                 edit_view::EditMarks::default()
             };
-            let looks = if marks.covering.is_empty() {
-                looks
-            } else {
-                let mut looks =
-                    looks.unwrap_or_else(|| vec![Look::Normal; graph.node_ids().count()]);
-                for node in &marks.covering {
-                    if let Some(look) = looks.get_mut(node.index()) {
-                        *look = Look::XRay;
-                    }
-                }
-                Some(looks)
-            };
+            let count = graph.node_ids().count();
+            // Outside focus mode, a selected joint member shows through
+            // the parts it sits in.
+            let (selection, outside, looks) = lists.for_frame(&marks.covering, count);
             renderer.submit(&Frame {
                 scene: graph,
                 posed,
                 orbit,
-                selection: if focus.is_some() { &[] } else { &selection },
+                selection: if focus.is_some() { &[] } else { selection },
                 highlight,
                 section: plan
                     .map(|p| p.section)
                     .or_else(|| session.scene_entry().and_then(|entry| entry.section)),
-                looks: focus
-                    .map(|f| f.looks.as_slice())
-                    .or(outside.as_deref())
-                    .or(looks.as_deref()),
+                looks: focus.map(|f| f.looks.as_slice()).or(outside).or(looks),
                 overlay: focus.map(|f| &f.overlay),
                 tint_cut_faces: focus.is_none_or(|f| f.options.tint_cut_faces),
                 lit: Some(&marks.lit),
@@ -300,8 +254,10 @@ impl Window {
                     let shown = crate::render::profile::time("gtk texture", || {
                         window.widgets.viewport.show_live(frame)
                     });
-                    if shown {
-                        crate::render::profile::frame_shown();
+                    match shown {
+                        Shown::Yes => crate::render::profile::frame_shown(),
+                        Shown::No => {}
+                        Shown::Refused => window.request_render(),
                     }
                     window.show_pins();
                     window.place_ghost_verdict();

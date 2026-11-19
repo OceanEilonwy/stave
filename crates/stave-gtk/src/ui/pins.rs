@@ -22,7 +22,27 @@ impl Window {
         }
         pins.made_for = None;
         pins.edge = None;
+        self.hide_edge_pin();
+    }
+
+    /// Hides the chip at the view's edge and takes its action away: the
+    /// action takes a problem's number, and a chip that names none must
+    /// not carry the action without one (GTK warns of the mismatch).
+    fn hide_edge_pin(&self) {
         self.widgets.edge_pin.set_visible(false);
+        self.widgets.edge_pin.set_action_name(None);
+    }
+
+    /// Shows the chip at the view's edge for a problem: its number is set
+    /// as the target before the action is named, so the button never holds
+    /// the action without the number it takes.
+    fn show_edge_pin(&self, index: ProblemIndex) {
+        let target = u64::try_from(index.0).unwrap_or(0).to_variant();
+        self.widgets.edge_pin.set_action_target_value(Some(&target));
+        self.widgets
+            .edge_pin
+            .set_action_name(Some("win.show-problem"));
+        self.widgets.edge_pin.set_visible(true);
     }
 
     /// Pins each problem where it happens (its shared wood, or the parts
@@ -170,15 +190,12 @@ impl Window {
         }
         pins.edge = edge;
         let Some(pin) = first_off.and_then(|place| pins.pins.get(place)) else {
-            self.widgets.edge_pin.set_visible(false);
+            self.hide_edge_pin();
             return;
         };
         let text = problems::off_screen_text(pin.mark, &pin.message, off_count.saturating_sub(1));
         self.widgets.edge_label.set_label(&text);
-        self.widgets.edge_pin.set_visible(true);
-        self.widgets
-            .edge_pin
-            .set_action_target_value(Some(&u64::try_from(pin.index.0).unwrap_or(0).to_variant()));
+        self.show_edge_pin(pin.index);
     }
 
     /// One pin: its mark's "!" and the problem's words, choosing it

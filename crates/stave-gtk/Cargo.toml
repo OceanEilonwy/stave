@@ -11,6 +11,9 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow = "1"
+# Only `render/dmabuf.rs` uses it, on wgpu's own Vulkan device: the same
+# version wgpu-hal uses.
+ash = "0.38"
 async-channel = "2"
 bytemuck = { version = "1", features = ["derive"] }
 clap = { version = "4", features = ["derive"] }
