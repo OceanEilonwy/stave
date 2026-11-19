@@ -442,7 +442,7 @@ struct State {
     /// X-ray: everything but the selection see-through.
     xray: bool,
     /// The latest check's marks, when its ids are the shown design's.
-    marks: Marks,
+    marks: Rc<Marks>,
     /// Editing steps to run once the design is drawn (`--edit-script`).
     edit_script: Option<PathBuf>,
 }
@@ -577,7 +577,7 @@ impl Window {
                 hold_checks: false,
                 linking: false,
                 xray: false,
-                marks: Marks::default(),
+                marks: Rc::default(),
                 edit_script: None,
             }),
             pins: RefCell::new(Pins::default()),
@@ -735,7 +735,7 @@ impl Window {
         };
         self.show_title();
         let widgets = &self.widgets;
-        widgets.files.show_result(latest.as_deref());
+        widgets.files.show_result(latest.clone());
         {
             let session = self.session.borrow();
             let selected = match session.selection() {
@@ -750,17 +750,16 @@ impl Window {
         }
         // The dots: by file always; by part only when the latest result is
         // the one shown (its ids are the tree's).
-        let marks = latest
-            .as_deref()
-            .map(stave_app::problems::marks)
-            .unwrap_or_default();
-        widgets.files.show_marks(marks.clone());
-        let tree_marks = if showing_older {
-            Marks::default()
-        } else {
-            marks
-        };
-        self.state.borrow_mut().marks = tree_marks.clone();
+        // Read-only from here on, so the three holders share one copy.
+        let marks = Rc::new(
+            latest
+                .as_deref()
+                .map(stave_app::problems::marks)
+                .unwrap_or_default(),
+        );
+        widgets.files.show_marks(Rc::clone(&marks));
+        let tree_marks = if showing_older { Rc::default() } else { marks };
+        self.state.borrow_mut().marks = Rc::clone(&tree_marks);
         widgets.tree.show_marks(tree_marks);
         let empty = edit_view::empty_state(&self.session.borrow());
         if let Some(empty) = empty {

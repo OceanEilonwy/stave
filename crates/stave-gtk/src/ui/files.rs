@@ -115,14 +115,49 @@ struct FreshMemo {
     file: Option<stave_lang::FileId>,
 }
 
-/// A problem the last check found, where it is.
-#[derive(Debug, Clone)]
-struct Problem {
-    document: Document,
+/// A problem in the open file, borrowed from the diagnostic it is part of.
+struct Problem<'a> {
     span: Span,
     severity: Severity,
-    message: String,
-    help: Option<String>,
+    message: &'a str,
+    help: Option<&'a str>,
+}
+
+impl<'a> Problem<'a> {
+    fn new(span: Span, diagnostic: &'a stave_lang::Diagnostic) -> Self {
+        Problem {
+            span,
+            severity: diagnostic.severity,
+            message: &diagnostic.message,
+            help: diagnostic.help.as_deref(),
+        }
+    }
+
+    /// Whether the text at an offset is part of it (an empty span covers
+    /// the character after it too, so it can be hovered).
+    fn covers(&self, offset: u32) -> bool {
+        self.span.start() <= offset
+            && (offset < self.span.end()
+                || (self.span.start() == self.span.end()
+                    && offset <= self.span.end().saturating_add(1)))
+    }
+}
+
+/// Every place the check's problems point at in one of its files: where
+/// each is, and the places that explain it (the kind's rule in a standard
+/// file).
+fn check_labels(checked: &Checked, file: stave_lang::FileId) -> impl Iterator<Item = Problem<'_>> {
+    checked
+        .opened
+        .diagnostics
+        .iter()
+        .flat_map(move |diagnostic| {
+            diagnostic
+                .labels
+                .iter()
+                .filter(move |label| label.file == file)
+                .map(move |label| Problem::new(label.span, diagnostic))
+        })
 }
 
 #[derive(Default)]
@@ -143,11 +178,12 @@ struct State {
     analyse_again: bool,
     tabs: Vec<Tab>,
     active: Option<usize>,
-    problems: Vec<Problem>,
-    /// The text the last check read for each document it has a problem
-    /// in: its problems are underlined only while the document still
-    /// reads so (their spans are offsets into that text).
-    checked_texts: std::collections::BTreeMap<Document, String>,
+    /// The last check, kept by the session too: shared, not copied.
+    checked: Option<Rc<Checked>>,
+    /// The check's file for each document it has a problem in. Its
+    /// problems are underlined only while the document still reads as the
+    /// check read it (their spans are offsets into that text).
+    checked_files: std::collections::BTreeMap<Document, stave_lang::FileId>,
     /// Changes made by the page itself: don't report them.
     quiet: bool,
     /// The exact place to put the cursor when the next place shown is
@@ -161,7 +197,7 @@ struct State {
     /// leaving it hides the card at once.
     hover_span: Option<Span>,
     /// The worst problem in each file, by its source path.
-    marks: stave_app::problems::Marks,
+    marks: Rc<stave_app::problems::Marks>,
     wish: Option<Wish>,
     /// The symbol whose uses the panel lists.
     listed: Option<SymbolId>,
@@ -391,7 +427,8 @@ impl FilesPage {
             state.fresh_memo.set(None);
             state.tabs.clear();
             state.active = None;
-            state.problems.clear();
+            state.checked = None;
+            state.checked_files.clear();
             state.listed = None;
         }
         while let Some(child) = self.tab_list.first_child() {
@@ -621,43 +658,33 @@ impl FilesPage {
     }
 
     /// Takes the latest check's marks for the dots on the tabs.
-    pub fn show_marks(&self, marks: stave_app::problems::Marks) {
+    pub fn show_marks(&self, marks: Rc<stave_app::problems::Marks>) {
         self.state.borrow_mut().marks = marks;
         self.refresh_markers();
     }
 
     /// Takes the last check's problems for the underlines and the cards,
     /// and reloads documents changed on disk by something else.
-    pub fn show_result(self: &Rc<Self>, checked: Option<&Checked>) {
+    pub fn show_result(self: &Rc<Self>, checked: Option<Rc<Checked>>) {
         let reloaded = self.reload_from_disk();
         {
             let mut state = self.state.borrow_mut();
-            state.problems.clear();
-            state.checked_texts.clear();
-            if let Some(checked) = checked {
-                // Every place a problem points at: where it is, and the
-                // places that explain it (the kind's rule in a standard
-                // file), each underlined when its file is open.
+            state.checked_files.clear();
+            if let Some(checked) = &checked {
+                // Every file a problem points at, each underlined when it
+                // is open (see `check_labels`).
                 for diagnostic in &checked.opened.diagnostics {
                     for label in &diagnostic.labels {
-                        let Some(source) = checked.opened.sources.get(label.file) else {
-                            continue;
-                        };
-                        let document = Document::from_source_path(source.path());
-                        state
-                            .checked_texts
-                            .entry(document.clone())
-                            .or_insert_with(|| source.text().to_owned());
-                        state.problems.push(Problem {
-                            document,
-                            span: label.span,
-                            severity: diagnostic.severity,
-                            message: diagnostic.message.clone(),
-                            help: diagnostic.help.clone(),
-                        });
+                        if let Some(source) = checked.opened.sources.get(label.file) {
+                            state
+                                .checked_files
+                                .entry(Document::from_source_path(source.path()))
+                                .or_insert(label.file);
+                        }
                     }
                 }
             }
+            state.checked = checked;
         }
         if reloaded {
             self.analyse_now();
@@ -1187,36 +1214,32 @@ impl FilesPage {
                     .collect::<Vec<_>>()
             })
             .collect();
-        problems.extend(self.check_problems(&document).into_iter().map(|p| {
-            (
-                Run {
-                    start: p.span.start(),
-                    end: p.span.end(),
-                },
-                p.severity,
-            )
-        }));
+        if let Some((checked, file)) = self.checked_file(&document) {
+            problems.extend(check_labels(&checked, file).map(|p| {
+                (
+                    Run {
+                        start: p.span.start(),
+                        end: p.span.end(),
+                    },
+                    p.severity,
+                )
+            }));
+        }
         self.editor.underline(&buffer, &lines, &problems);
         let relink = fresh.is_some() && std::mem::take(&mut self.state.borrow_mut().relink);
         self.cursor_moved_now(relink);
     }
 
-    /// The last check's problems in a document, while it still reads as
-    /// the check read it (after an edit their spans would point at the
-    /// wrong text; the next check brings them back).
-    fn check_problems(&self, document: &Document) -> Vec<Problem> {
+    /// The last check and its file for a document with problems, while
+    /// the document still reads as the check read it (after an edit the
+    /// problems' spans would point at the wrong text; the next check
+    /// brings them back).
+    fn checked_file(&self, document: &Document) -> Option<(Rc<Checked>, stave_lang::FileId)> {
         let state = self.state.borrow();
-        let current = state.buffers.text(document);
-        let checked = state.checked_texts.get(document).map(String::as_str);
-        if current.is_none() || current != checked {
-            return Vec::new();
-        }
-        state
-            .problems
-            .iter()
-            .filter(|p| p.document == *document)
-            .cloned()
-            .collect()
+        let checked = state.checked.as_ref()?;
+        let file = *state.checked_files.get(document)?;
+        let read = checked.opened.sources.get(file)?.text();
+        (state.buffers.text(document)? == read).then(|| (Rc::clone(checked), file))
     }
 
     fn show_lenses(self: &Rc<Self>, analysis: &Rc<Analysis>, file: stave_lang::FileId) {
@@ -1645,37 +1668,25 @@ impl FilesPage {
             .width_request(280)
             .build();
         let mut anchor: Option<Span> = None;
-        let fast: Vec<Problem> = analysis
+        let fast = analysis
             .diagnostics(file)
-            .filter_map(|d| {
-                Some(Problem {
-                    document: document.clone(),
-                    span: d.primary()?.span,
-                    severity: d.severity,
-                    message: d.message.clone(),
-                    help: d.help.clone(),
-                })
-            })
-            .collect();
-        for problem in fast.iter().chain(self.check_problems(&document).iter()) {
-            let covers = problem.span.start() <= offset
-                && (offset < problem.span.end()
-                    || (problem.span.start() == problem.span.end()
-                        && offset <= problem.span.end().saturating_add(1)));
-            if !covers {
-                continue;
-            }
+            .filter_map(|d| Some(Problem::new(d.primary()?.span, d)));
+        let checked = self.checked_file(&document);
+        let slow = checked
+            .iter()
+            .flat_map(|(checked, file)| check_labels(checked, *file));
+        for problem in fast.chain(slow).filter(|p| p.covers(offset)) {
             let (word, class) = match problem.severity {
                 Severity::Error => ("Error", "error"),
                 Severity::Warning => ("Warning", "warning"),
                 Severity::Note => ("Note", "note"),
             };
             card.append(&label(word, &["stave-hover-kind", class]));
-            let message = label(&problem.message, &["stave-hover-message"]);
+            let message = label(problem.message, &["stave-hover-message"]);
             message.set_wrap(true);
             message.set_max_width_chars(48);
             card.append(&message);
-            if let Some(help) = &problem.help {
+            if let Some(help) = problem.help {
                 let help = label(&format!("Help: {help}"), &["stave-hover-help"]);
                 help.set_wrap(true);
                 help.set_max_width_chars(48);

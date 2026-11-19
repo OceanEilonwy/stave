@@ -64,7 +64,7 @@ struct TreeState {
     toggled: BTreeMap<AssemblyId, bool>,
     selection: Option<Selection>,
     /// The latest check's marks, for the dots.
-    marks: Marks,
+    marks: Rc<Marks>,
     /// The part whose joints are listed under its row, and those joints.
     listing: Listing,
     /// The joint row being activated, while its callback runs: the
@@ -257,7 +257,7 @@ impl TreeSidebar {
     }
 
     /// Takes the latest check's marks for the dots.
-    pub fn show_marks(&self, marks: Marks) {
+    pub fn show_marks(&self, marks: Rc<Marks>) {
         self.state.borrow_mut().marks = marks;
         fill(&self.list, &self.state);
     }
