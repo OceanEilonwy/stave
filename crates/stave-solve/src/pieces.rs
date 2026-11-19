@@ -453,12 +453,12 @@ impl Solver<'_> {
     /// on; `None` when it says none.
     fn splicing(&mut self, source: PartId) -> Solved<Option<Splicing>> {
         let (Some(expr), Some(env)) = (
-            self.part_body(source).and_then(|b| b.lengths.clone()),
+            self.part_body(source).and_then(|b| b.lengths.as_ref()),
             self.part_env(source),
         ) else {
             return Ok(None);
         };
-        match self.eval(&expr, &env)? {
+        match self.eval(expr, &env)? {
             Value::Splices(splicing) => Ok(Some(splicing)),
             other => Err(self
                 .error(
@@ -837,7 +837,7 @@ impl Solver<'_> {
         if self.model.defs.is_poisoned(DefId::Kind(value.kind)) {
             return Err(self.skip().into());
         }
-        let Some(kind) = self.model.defs.kind(value.kind).cloned() else {
+        let Some(kind) = self.model.defs.kind(value.kind) else {
             return Err(Fault::Internal("a kind's declaration").into());
         };
         if kind.base != BaseKind::Joint {
@@ -988,7 +988,7 @@ impl Solver<'_> {
         extra: &mut BTreeMap<PartId, [ExactLength; 2]>,
     ) -> Solved<SpliceWork> {
         let kind_id = method.value.kind;
-        let Some(kind) = self.model.defs.kind(kind_id).cloned() else {
+        let Some(kind) = self.model.defs.kind(kind_id) else {
             return Err(Fault::Internal("a kind's declaration").into());
         };
         let roles: Vec<Value> = parts.iter().map(|p| Value::Part(*p)).collect();
@@ -1299,13 +1299,14 @@ impl Solver<'_> {
         piece_cuts: &mut BTreeMap<PartId, Vec<Cut>>,
     ) -> Solved<Joint> {
         let kind_id = method.value.kind;
-        let Some(kind) = self.model.defs.kind(kind_id).cloned() else {
+        let Some(kind) = self.model.defs.kind(kind_id) else {
             return Err(Fault::Internal("a kind's declaration").into());
         };
         let Some(ctx) = self.module_ctx(DefId::Kind(kind_id)) else {
             return Err(Fault::Internal("the file an item is declared in").into());
         };
-        let joint_def = kind.joint.clone().unwrap_or_default();
+        let no_joint = stave_model::defs::JointKindDef::default();
+        let joint_def = kind.joint.as_ref().unwrap_or(&no_joint);
         let joint_name = format!("{name}.splice[{}]", splice + 1);
         let assembly = self.model.parts.get(part.index()).and_then(|p| p.assembly);
         let pair = &mut work.pair;

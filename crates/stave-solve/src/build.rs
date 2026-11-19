@@ -581,13 +581,13 @@ pub(crate) fn build(solver: &mut Solver<'_>) -> Option<SolvedDesign> {
     // 8. Requires at the current values.
     let mut requires = Vec::new();
     for index in 0..solver.model.requires.len() {
-        let Some(inst) = solver.model.requires.get(index).cloned() else {
+        let Some(inst) = solver.model.requires.get(index) else {
             continue;
         };
         if inst.mirror_of.is_some() {
             continue;
         }
-        let Some(def) = solver.model.defs.require(inst.def).cloned() else {
+        let Some(def) = solver.model.defs.require(inst.def) else {
             continue;
         };
         if solver.poisoned(DefId::Require(inst.def)) {
@@ -815,17 +815,18 @@ impl Solver<'_> {
         made: &mut Vec<MadeInfo>,
         fasteners: &mut Vec<FastenerUse>,
     ) -> Solved<Joint> {
-        let Some(inst) = self.model.joints.get(joint.index()).cloned() else {
+        let Some(inst) = self.model.joints.get(joint.index()) else {
             return Err(Fault::Internal("a joint").into());
         };
         let kind_id = work.binding.kind;
-        let Some(kind) = self.model.defs.kind(kind_id).cloned() else {
+        let Some(kind) = self.model.defs.kind(kind_id) else {
             return Err(Fault::Internal("a kind's declaration").into());
         };
         let Some(ctx) = self.module_ctx(DefId::Kind(kind_id)) else {
             return Err(Fault::Internal("the file an item is declared in").into());
         };
-        let joint_def = kind.joint.clone().unwrap_or_default();
+        let no_joint = stave_model::defs::JointKindDef::default();
+        let joint_def = kind.joint.as_ref().unwrap_or(&no_joint);
         let pair_count = work.pairs.len();
         let mut pairs = Vec::new();
         let mut note = None;
@@ -842,7 +843,7 @@ impl Solver<'_> {
                     }
                 }
                 pairs.push(JointPair {
-                    roles: pair_roles(&kind, pair),
+                    roles: pair_roles(kind, pair),
                     contact: pair.contact,
                     extensions: Vec::new(),
                     cut_order: Vec::new(),
@@ -937,7 +938,7 @@ impl Solver<'_> {
                 pair: pair_index,
             };
             let place = self.joint_place(joint);
-            let laid_out = self.lay_out_members(&kind, &env, &inst.name, place)?;
+            let laid_out = self.lay_out_members(kind, &env, &inst.name, place)?;
             for cut in &joint_def.member_cuts {
                 let (Some(part), Some(member)) = (
                     pair.parts.get(cut.part.index()).copied(),
@@ -1095,7 +1096,7 @@ impl Solver<'_> {
                 note = Some(self.format_text(text, &env)?);
             }
             pairs.push(JointPair {
-                roles: pair_roles(&kind, pair),
+                roles: pair_roles(kind, pair),
                 contact: pair.contact,
                 extensions: pair.extensions.clone(),
                 cut_order,
@@ -1307,7 +1308,7 @@ impl Solver<'_> {
             let Some(Some(source_joint)) = joints.get(source.index()).cloned() else {
                 continue;
             };
-            let Some(inst) = self.model.joints.get(joint.index()).cloned() else {
+            let Some(inst) = self.model.joints.get(joint.index()) else {
                 continue;
             };
             let Some(assembly) = inst.assembly else {
@@ -1481,7 +1482,7 @@ impl Solver<'_> {
             let Some(Some(source_placed)) = placed.get(source.index()).cloned() else {
                 continue;
             };
-            let Some(inst) = self.model.hardware.get(hardware.index()).cloned() else {
+            let Some(inst) = self.model.hardware.get(hardware.index()) else {
                 continue;
             };
             let Some(assembly) = inst.assembly else {
@@ -1714,7 +1715,7 @@ impl Solver<'_> {
     // -----------------------------------------------------------------------
 
     fn write_stock(&mut self, stock: StockId) -> Solved<Stock> {
-        let Some(def) = self.model.defs.stock(stock).cloned() else {
+        let Some(def) = self.model.defs.stock(stock) else {
             return Err(Fault::Internal("a stock's declaration").into());
         };
         let length = |this: &mut Self, field| -> Solved<Option<Length>> {
@@ -1763,7 +1764,7 @@ impl Solver<'_> {
                 return Err(Fault::Earlier.into());
             };
             let (name, assembly, origin, stock, shape, grain, note, loose) =
-                if let Some(inst) = self.model.parts.get(index).cloned() {
+                if let Some(inst) = self.model.parts.get(index) {
                     let mirror = self.mirror_source(id)?;
                     let origin = match (inst.mirror_of, mirror) {
                         (Some(source), _) => PartOrigin::MirroredAssembly { source },
@@ -1819,23 +1820,23 @@ impl Solver<'_> {
                         }
                         current
                     };
-                    let body = self.part_body(source_body).cloned();
-                    let grain = body.as_ref().map_or(Grain::Length, |b| b.grain);
-                    let note = match body.as_ref().and_then(|b| b.note.clone()) {
+                    let body = self.part_body(source_body);
+                    let grain = body.map_or(Grain::Length, |b| b.grain);
+                    let note = match body.and_then(|b| b.note.as_ref()) {
                         Some(text) => {
                             let env = self
                                 .part_env(source_body)
                                 .ok_or(Fault::Internal("where a part is declared"))?;
-                            Some(self.format_text(&text, &env)?)
+                            Some(self.format_text(text, &env)?)
                         }
                         None => None,
                     };
-                    let loose = match body.as_ref().and_then(|b| b.loose.clone()) {
+                    let loose = match body.and_then(|b| b.loose.as_ref()) {
                         Some(expr) => {
                             let env = self
                                 .part_env(source_body)
                                 .ok_or(Fault::Internal("where a part is declared"))?;
-                            self.eval_bool(&expr, &env)?
+                            self.eval_bool(expr, &env)?
                         }
                         None => false,
                     };
@@ -1948,7 +1949,7 @@ impl Solver<'_> {
             let Some(hw) = entry else {
                 return Err(Fault::Earlier.into());
             };
-            let Some(inst) = self.model.hardware.get(index).cloned() else {
+            let Some(inst) = self.model.hardware.get(index) else {
                 return Err(Fault::Internal("a piece of hardware").into());
             };
             let base = HardwareBase::from_base(hw.base)
@@ -2196,13 +2197,14 @@ impl Solver<'_> {
             .model
             .module_instance(self.model.root)
             .ok_or(Fault::Internal("the project's own items"))?;
-        for scene in self.model.scenes.clone() {
+        let model = self.model;
+        for &scene in &model.scenes {
             // A scene with a name or type error is already reported.
             if self.poisoned(DefId::Scene(scene)) {
                 self.skipped = true;
                 continue;
             }
-            let Some(def) = self.model.defs.scene(scene).cloned() else {
+            let Some(def) = self.model.defs.scene(scene) else {
                 continue;
             };
             let env = Env {
@@ -2292,7 +2294,7 @@ impl Solver<'_> {
     }
 
     fn write_project(&mut self) -> Solved<ProjectInfo> {
-        let Some(project) = self.model.defs.project(self.model.root).cloned() else {
+        let Some(project) = self.model.defs.project(self.model.root) else {
             return Err(Fault::Internal("the project's declaration").into());
         };
         let root = self
@@ -2330,7 +2332,7 @@ impl Solver<'_> {
             Some(list) => {
                 let mut tools = Vec::new();
                 for tool in list {
-                    let Some(kind) = self.model.defs.kind(*tool).cloned() else {
+                    let Some(kind) = self.model.defs.kind(*tool) else {
                         continue;
                     };
                     let kind_value = stave_model::value::KindValue {

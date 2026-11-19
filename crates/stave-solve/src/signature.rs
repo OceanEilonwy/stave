@@ -253,7 +253,7 @@ impl Solver<'_> {
         else {
             return Ok(());
         };
-        let Some(kind_def) = self.model.defs.kind(kind).cloned() else {
+        let Some(kind_def) = self.model.defs.kind(kind) else {
             return Ok(());
         };
         let choice = self.kind_choice(*param, env.ctx).unwrap_or(Choice {
@@ -262,7 +262,7 @@ impl Solver<'_> {
             param: *param,
         });
         let diagnostic = self.kind_signature_diagnostic(
-            &kind_def, kind, kind_name, &handed, &found, &choice, *param, env, owner,
+            kind_def, kind, kind_name, &handed, &found, &choice, *param, env, owner,
         );
         Err(self.report_kind_signature(diagnostic, owner).into())
     }
@@ -271,14 +271,14 @@ impl Solver<'_> {
     /// argument or its default, and on through a param that only passes
     /// another one along.
     fn kind_choice(&self, param: ParamDefId, ctx: Ctx) -> Option<Choice> {
-        let ItemSlot::Param(mut id) = self.model.item(DefId::Param(param), ctx).cloned()? else {
+        let &ItemSlot::Param(mut id) = self.model.item(DefId::Param(param), ctx)? else {
             return None;
         };
         // A chain of params handing one value along ends where the value
         // is written; a cycle is its own error, so stop after a while.
         for _ in 0..64 {
-            let inst = self.model.params.get(id.index())?.clone();
-            let (expr, file, ctx): (RExpr, FileId, Ctx) = match inst.source {
+            let inst = self.model.params.get(id.index())?;
+            let (expr, file, ctx): (&RExpr, FileId, Ctx) = match inst.source {
                 ParamSource::SameAs(other) => {
                     id = other;
                     continue;
@@ -286,7 +286,7 @@ impl Solver<'_> {
                 ParamSource::Default => {
                     let def = self.model.defs.param(inst.def)?;
                     (
-                        def.default.clone()?,
+                        def.default.as_ref()?,
                         def.decl.file,
                         Ctx {
                             instance: inst.instance,
@@ -303,17 +303,15 @@ impl Solver<'_> {
                     let stave_model::defs::AssemblyKind::Instance { args, .. } = &def.kind else {
                         return None;
                     };
-                    (args.get(index)?.1.clone(), def.decl.file, ctx)
+                    (&args.get(index)?.1, def.decl.file, ctx)
                 }
             };
             match &expr.kind {
                 RExprKind::Symbol(Symbol::Def(DefId::Param(next))) => {
-                    let ItemSlot::Param(next) =
-                        self.model.item(DefId::Param(*next), ctx).cloned()?
-                    else {
+                    let ItemSlot::Param(next) = self.model.item(DefId::Param(*next), ctx)? else {
                         return None;
                     };
-                    id = next;
+                    id = *next;
                 }
                 _ => {
                     return Some(Choice {

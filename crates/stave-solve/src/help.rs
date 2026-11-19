@@ -162,12 +162,12 @@ impl Solver<'_> {
             return HelpSearch::NotSearched;
         };
         let file = kind.decl.file;
-        let lists: Vec<(String, Vec<RExpr>)> = kind
+        let lists: Vec<(&str, &[RExpr])> = kind
             .params
             .iter()
             .filter_map(|param| match &param.domain {
                 Some(Domain::OneOf { values, .. }) => {
-                    Some((param.decl.name.clone(), values.clone()))
+                    Some((param.decl.name.as_str(), values.as_slice()))
                 }
                 Some(Domain::Range { .. }) | None => None,
             })
@@ -187,14 +187,14 @@ impl Solver<'_> {
                     .model
                     .defs
                     .kind(given.kind)
-                    .and_then(|kind| kind.param(&param));
+                    .and_then(|kind| kind.param(param));
                 match index {
                     Some(index) => solver.kind_param(given, index, file, span).ok(),
                     None => None,
                 }
             });
             let mut texts = Vec::new();
-            for value_expr in &values {
+            for value_expr in values {
                 let Some(value) = self.quietly(|solver| solver.eval(value_expr, &module_env).ok())
                 else {
                     continue;
@@ -209,7 +209,7 @@ impl Solver<'_> {
                     .filter(|(name, _)| *name != param)
                     .cloned()
                     .collect();
-                settings.push((param.clone(), value.clone()));
+                settings.push((param.to_owned(), value.clone()));
                 let trial = KindEnv {
                     kind: given.kind,
                     roles: given.roles.clone(),
@@ -220,13 +220,13 @@ impl Solver<'_> {
                 };
                 if self.quietly(|solver| fits(solver, &trial)) {
                     found.push(Fitting {
-                        param: param.clone(),
+                        param: param.to_owned(),
                         value,
                     });
                 }
             }
             searched.push(SearchedList {
-                param,
+                param: param.to_owned(),
                 values: texts,
             });
         }

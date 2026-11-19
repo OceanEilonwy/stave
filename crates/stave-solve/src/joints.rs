@@ -246,7 +246,7 @@ impl Solver<'_> {
         if self.model.defs.is_poisoned(DefId::Kind(kind)) {
             return Err(self.skip().into());
         }
-        let Some(kind_def) = self.model.defs.kind(kind).cloned() else {
+        let Some(kind_def) = self.model.defs.kind(kind) else {
             return Err(Fault::Internal("a kind's declaration").into());
         };
         // A kind chosen through a param that doesn't take what this call
@@ -421,10 +421,10 @@ impl Solver<'_> {
             Some(Memo::Busy) => return Err(self.cycle(Frame::Joint(joint)).into()),
             _ => {}
         }
-        let Some(inst) = self.model.joints.get(joint.index()).cloned() else {
+        let Some(inst) = self.model.joints.get(joint.index()) else {
             return Err(Fault::Internal("a joint").into());
         };
-        let Some(def) = self.model.defs.joint(inst.def).cloned() else {
+        let Some(def) = self.model.defs.joint(inst.def) else {
             return Err(Fault::Internal("a joint's declaration").into());
         };
         if self.poisoned(DefId::Joint(inst.def)) {
@@ -515,7 +515,7 @@ impl Solver<'_> {
     /// Pass A of a joint: pairs, requires and what it adds to its parts.
     pub(crate) fn work_joint(&mut self, joint: JointId) -> Solved<JointWork> {
         let binding = self.joint_binding(joint)?;
-        let Some(kind) = self.model.defs.kind(binding.kind).cloned() else {
+        let Some(kind) = self.model.defs.kind(binding.kind) else {
             return Err(Fault::Internal("a kind's declaration").into());
         };
         let (file, span) = self.joint_place(joint);
@@ -1128,7 +1128,7 @@ impl Solver<'_> {
             Axis::Across => stave_lang::placement::Direction::Right,
             Axis::Deep => stave_lang::placement::Direction::Front,
         };
-        let body = self.part_body(part).cloned();
+        let body = self.part_body(part);
         let file = self
             .part_env(part)
             .map(|e| e.file)
@@ -1680,7 +1680,7 @@ impl Solver<'_> {
         pair: &PairWork,
         env: &Env<'_>,
     ) -> Solved<Vec<AssemblyStep>> {
-        let Some(joint) = self.model.defs.kind(kind).and_then(|k| k.joint.clone()) else {
+        let Some(joint) = self.model.defs.kind(kind).and_then(|k| k.joint.as_ref()) else {
             return Ok(Vec::new());
         };
         let mut steps = Vec::new();

@@ -31,6 +31,9 @@ pub(crate) struct PartState {
     pub sizes: [Memo<ExactLength>; 3],
     pub mins: [Memo<ExactLength>; 3],
     pub terms: Memo<Terms>,
+    /// For an image, its source and the mirror plane; `None` for a part
+    /// that is not one. Remembered once worked out: a failure is not.
+    pub mirror: Option<Option<(PartId, Axis, ExactLength)>>,
 }
 
 fn axis_slot(axis: Axis) -> usize {
@@ -177,7 +180,7 @@ pub(crate) fn reflect(
     Ok((sub(twice, high)?, sub(twice, low)?))
 }
 
-impl Solver<'_> {
+impl<'m> Solver<'m> {
     // -----------------------------------------------------------------------
     // Project checks
     // -----------------------------------------------------------------------
@@ -303,9 +306,10 @@ impl Solver<'_> {
     // Part definitions and environments
     // -----------------------------------------------------------------------
 
-    pub(crate) fn part_body(&self, part: PartId) -> Option<&PartBodyDef> {
-        let inst = self.model.parts.get(part.index())?;
-        match &self.model.defs.part(inst.def)?.kind {
+    pub(crate) fn part_body(&self, part: PartId) -> Option<&'m PartBodyDef> {
+        let model = self.model;
+        let inst = model.parts.get(part.index())?;
+        match &model.defs.part(inst.def)?.kind {
             PartKind::FromStock(body) => Some(body),
             PartKind::Mirror(_) => None,
         }
@@ -331,7 +335,21 @@ impl Solver<'_> {
         &mut self,
         part: PartId,
     ) -> Solved<Option<(PartId, Axis, ExactLength)>> {
-        let Some(inst) = self.model.parts.get(part.index()).cloned() else {
+        if let Some(Some(mirror)) = self.parts.get(part.index()).map(|s| s.mirror) {
+            return Ok(mirror);
+        }
+        let mirror = self.compute_mirror_source(part)?;
+        if let Some(state) = self.parts.get_mut(part.index()) {
+            state.mirror = Some(mirror);
+        }
+        Ok(mirror)
+    }
+
+    fn compute_mirror_source(
+        &mut self,
+        part: PartId,
+    ) -> Solved<Option<(PartId, Axis, ExactLength)>> {
+        let Some(inst) = self.model.parts.get(part.index()) else {
             return Err(Fault::Internal("a part").into());
         };
         if self.poisoned(DefId::Part(inst.def)) {
@@ -350,7 +368,6 @@ impl Solver<'_> {
         let PartKind::Mirror(mirror) = &def.kind else {
             return Ok(None);
         };
-        let mirror = mirror.clone();
         let Some(env) = self.part_env(part) else {
             return Err(Fault::Internal("where a part is declared").into());
         };
@@ -381,7 +398,7 @@ impl Solver<'_> {
     ) -> Solved<(Axis, ExactLength)> {
         let mut current = assembly;
         loop {
-            let Some(inst) = self.model.assemblies.get(current.index()).cloned() else {
+            let Some(inst) = self.model.assemblies.get(current.index()) else {
                 return Err(Fault::Internal("a component").into());
             };
             if inst.mirror_of.is_some() && self.is_mirror_declaration(current) {
@@ -392,7 +409,7 @@ impl Solver<'_> {
                 None => return Err(Fault::Internal("the mirror a component is inside").into()),
             }
         }
-        let Some(inst) = self.model.assemblies.get(current.index()).cloned() else {
+        let Some(inst) = self.model.assemblies.get(current.index()) else {
             return Err(Fault::Internal("a component").into());
         };
         let Some(def) = self.model.defs.assembly(inst.def) else {
@@ -417,7 +434,7 @@ impl Solver<'_> {
         let stave_model::defs::AssemblyKind::Mirror(mirror) = &def.kind else {
             return Err(Fault::Internal("the plane of a mirror").into());
         };
-        let about = mirror.about.clone();
+        let about = &mirror.about;
         let env = Env {
             ctx: inst.ctx,
             file: def.decl.file,
@@ -425,7 +442,7 @@ impl Solver<'_> {
             array: None,
         };
         self.mirror_planes.insert(current, Memo::Busy);
-        let result = self.eval_anchor(&about, &env).map(|a| (a.axis, a.position));
+        let result = self.eval_anchor(about, &env).map(|a| (a.axis, a.position));
         let (memo, result) = self.remember(result, def.decl.file, def.decl.span);
         self.mirror_planes.insert(current, memo);
         result
@@ -453,7 +470,7 @@ impl Solver<'_> {
         if let Some((source, _, _)) = self.mirror_source(part)? {
             return self.part_stock(source);
         }
-        let Some(body) = self.part_body(part).cloned() else {
+        let Some(body) = self.part_body(part) else {
             return Err(Fault::Internal("a part's description").into());
         };
         let Some(env) = self.part_env(part) else {
@@ -481,7 +498,7 @@ impl Solver<'_> {
         if let Some((source, _, _)) = self.mirror_source(part)? {
             return self.part_profile(source);
         }
-        let Some(body) = self.part_body(part).cloned() else {
+        let Some(body) = self.part_body(part) else {
             return Err(Fault::Internal("a part's description").into());
         };
         let Some(shape) = &body.shape else {
@@ -657,7 +674,7 @@ impl Solver<'_> {
         {
             return Err(self.skip().into());
         }
-        let Some(body) = self.part_body(part).cloned() else {
+        let Some(body) = self.part_body(part) else {
             return Err(Fault::Internal("a part's description").into());
         };
         let Some(env) = self.part_env(part) else {
@@ -1012,7 +1029,7 @@ impl Solver<'_> {
         if let Some((source, _, _)) = self.mirror_source(part)? {
             return self.drawn_size(source, axis);
         }
-        let Some(body) = self.part_body(part).cloned() else {
+        let Some(body) = self.part_body(part) else {
             return Err(Fault::Internal("a part's description").into());
         };
         let Some(env) = self.part_env(part) else {
@@ -1298,7 +1315,7 @@ impl Solver<'_> {
         let Some(profile) = self.part_profile(part)? else {
             return Ok(());
         };
-        let Some(body) = self.part_body(part).cloned() else {
+        let Some(body) = self.part_body(part) else {
             return Err(Fault::Internal("a part's description").into());
         };
         let Some(env) = self.part_env(part) else {
@@ -1959,7 +1976,7 @@ impl Solver<'_> {
     }
 
     fn part_siblings(&mut self, part: PartId, axis: Axis) -> Solved<Siblings> {
-        let Some(inst) = self.model.parts.get(part.index()).cloned() else {
+        let Some(inst) = self.model.parts.get(part.index()) else {
             return Err(Fault::Internal("a part").into());
         };
         let index = inst.ctx.element.unwrap_or(0);
@@ -2021,10 +2038,10 @@ impl Solver<'_> {
             Some(Memo::Busy) => return Err(self.cycle(Frame::Region(region)).into()),
             _ => {}
         }
-        let Some(inst) = self.model.regions.get(region.index()).cloned() else {
+        let Some(inst) = self.model.regions.get(region.index()) else {
             return Err(Fault::Internal("a region").into());
         };
-        let Some(def) = self.model.defs.region(inst.def).cloned() else {
+        let Some(def) = self.model.defs.region(inst.def) else {
             return Err(Fault::Internal("a region's declaration").into());
         };
         // Busy only once nothing below can return before the memo is set.
@@ -2032,7 +2049,7 @@ impl Solver<'_> {
             *slot = Memo::Busy;
         }
         self.enter(Frame::Region(region), Some((def.decl.file, def.decl.span)));
-        let result = self.compute_region(region, &inst, &def);
+        let result = self.compute_region(region, inst, def);
         self.leave();
         let (memo, result) = self.remember(result, def.decl.file, def.decl.span);
         if let Some(slot) = self.regions.get_mut(region.index()) {

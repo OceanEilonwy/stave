@@ -181,9 +181,9 @@ impl Solver<'_> {
             RExprKind::Word(word) => Ok(Value::Word(*word)),
             RExprKind::Symbol(symbol) => self.symbol(*symbol, env, span),
             RExprKind::SelfElement(def) => {
-                let slot = self.model.item(*def, env.ctx).cloned();
+                let slot = self.model.item(*def, env.ctx);
                 Ok(slot
-                    .and_then(|slot| slot_value(&slot, env.ctx.element))
+                    .and_then(|slot| slot_value(slot, env.ctx.element))
                     .ok_or(Fault::Earlier)?)
             }
             RExprKind::Member { base, member } => {
@@ -442,7 +442,7 @@ impl Solver<'_> {
             }
             _ => {}
         }
-        let Some(slot) = self.model.item(def, env.ctx).cloned() else {
+        let Some(slot) = self.model.item(def, env.ctx) else {
             return Err(self
                 .eval_error(
                     env,
@@ -453,10 +453,10 @@ impl Solver<'_> {
                 .into());
         };
         match slot {
-            ItemSlot::Param(param) => self.param_value(param),
-            ItemSlot::Let(binding) => self.let_value(binding),
+            ItemSlot::Param(param) => self.param_value(*param),
+            ItemSlot::Let(binding) => self.let_value(*binding),
             ItemSlot::Require(require) => {
-                let Some(inst) = self.model.requires.get(require.index()).cloned() else {
+                let Some(inst) = self.model.requires.get(require.index()) else {
                     return Err(Fault::Internal("a require").into());
                 };
                 let Some(def) = self.model.defs.require(inst.def) else {
@@ -470,7 +470,7 @@ impl Solver<'_> {
                 };
                 Ok(Value::Bool(self.eval_bool(&def.condition, &env)?))
             }
-            other => slot_value(&other, None).ok_or_else(|| {
+            other => slot_value(other, None).ok_or_else(|| {
                 self.eval_error(
                     env,
                     span,
@@ -490,7 +490,7 @@ impl Solver<'_> {
             Some(Memo::Todo) => {}
             None => return Err(Fault::Internal("a param").into()),
         }
-        let Some(inst) = self.model.params.get(param.index()).cloned() else {
+        let Some(inst) = self.model.params.get(param.index()) else {
             return Err(Fault::Internal("a param").into());
         };
         let Some(def) = self.model.defs.param(inst.def) else {
@@ -558,7 +558,7 @@ impl Solver<'_> {
                     .assembly(assembly)
                     .and_then(|a| match &a.kind {
                         stave_model::defs::AssemblyKind::Instance { args, .. } => {
-                            args.get(index).map(|(_, e)| e.clone())
+                            args.get(index).map(|(_, e)| e)
                         }
                         _ => None,
                     });
@@ -580,7 +580,7 @@ impl Solver<'_> {
                             kind: None,
                             array,
                         };
-                        let value = self.eval(&arg, &env);
+                        let value = self.eval(arg, &env);
                         // As for a default: no `?`, so the memo is settled.
                         value.and_then(|value| {
                             let domain_ctx = Ctx {
@@ -696,7 +696,7 @@ impl Solver<'_> {
             Some(Memo::Todo) => {}
             None => return Err(Fault::Internal("a let").into()),
         }
-        let Some(inst) = self.model.lets.get(binding.index()).cloned() else {
+        let Some(inst) = self.model.lets.get(binding.index()) else {
             return Err(Fault::Internal("a let").into());
         };
         let Some(def) = self.model.defs.let_def(inst.def) else {
@@ -817,7 +817,7 @@ impl Solver<'_> {
             return self.kind_param(&kind_env, index, file, span);
         }
         if let Some(field) = kind.field(name) {
-            let value_expr = field.value.clone();
+            let value_expr = &field.value;
             let Some(ctx) = self.module_ctx(DefId::Kind(kind_value.kind)) else {
                 return Err(Fault::Internal("the file an item is declared in").into());
             };
@@ -827,7 +827,7 @@ impl Solver<'_> {
                 kind: Some(&kind_env),
                 array: None,
             };
-            return self.eval(&value_expr, &env);
+            return self.eval(value_expr, &env);
         }
         let kind_name = self.model.defs.kind_display(kind_value.kind, Some(file));
         Err(self
@@ -1026,7 +1026,7 @@ impl Solver<'_> {
                     .into());
             }
         };
-        let Some(slot) = self.model.item(def, ctx).cloned() else {
+        let Some(slot) = self.model.item(def, ctx) else {
             return Err(Fault::Internal("an item").into());
         };
         let items = match slot {
@@ -1151,15 +1151,15 @@ impl Solver<'_> {
             StockField::Species => return Ok(Value::Word(Word::Species(def.species))),
             StockField::Form => return Ok(Value::Word(Word::StockForm(def.form))),
             StockField::Thickness => match (&def.thickness, def.form) {
-                (Some(t), _) => (t.clone(), "thickness"),
+                (Some(t), _) => (t, "thickness"),
                 (None, StockForm::Dowel) => match &def.diameter {
-                    Some(d) => (d.clone(), "diameter"),
+                    Some(d) => (d, "diameter"),
                     None => return Err(Fault::Earlier.into()),
                 },
                 (None, _) => return Err(Fault::Earlier.into()),
             },
             StockField::Diameter => (
-                def.diameter.clone().ok_or_else(|| {
+                def.diameter.as_ref().ok_or_else(|| {
                     self.error(
                         Code::UnknownField,
                         format!("stock '{}' has no field 'diameter'", def.decl.name),
@@ -1171,9 +1171,9 @@ impl Solver<'_> {
                 "diameter",
             ),
             StockField::Width => match (&def.width, def.form) {
-                (Some(w), _) => (w.clone(), "width"),
+                (Some(w), _) => (w, "width"),
                 (None, StockForm::Dowel) => {
-                    (def.diameter.clone().ok_or(Fault::Earlier)?, "diameter")
+                    (def.diameter.as_ref().ok_or(Fault::Earlier)?, "diameter")
                 }
                 (None, _) => {
                     return Err(self
@@ -1188,7 +1188,7 @@ impl Solver<'_> {
                 }
             },
             StockField::MaxWidth => (
-                def.max_width.clone().ok_or_else(|| {
+                def.max_width.as_ref().ok_or_else(|| {
                     self.error(
                         Code::UnknownField,
                         format!("stock '{}' has no field 'max_width'", def.decl.name),
@@ -1200,7 +1200,7 @@ impl Solver<'_> {
                 "max_width",
             ),
             StockField::MaxLength => (
-                def.max_length.clone().ok_or_else(|| {
+                def.max_length.as_ref().ok_or_else(|| {
                     self.error(
                         Code::UnknownField,
                         format!("stock '{}' has no field 'max_length'", def.decl.name),
@@ -1222,7 +1222,7 @@ impl Solver<'_> {
             kind: None,
             array: None,
         };
-        let value = self.eval(&expr, &env)?;
+        let value = self.eval(expr, &env)?;
         if let Value::Length(size) = &value
             && *size <= ExactLength::ZERO
         {
@@ -1306,7 +1306,7 @@ impl Solver<'_> {
         if self.poisoned(DefId::Profile(profile)) {
             return Err(self.skip().into());
         }
-        let Some(def) = self.model.defs.profile(profile).cloned() else {
+        let Some(def) = self.model.defs.profile(profile) else {
             return Err(Fault::Internal("a profile's declaration").into());
         };
         let Some(ctx) = self.module_ctx(DefId::Profile(profile)) else {

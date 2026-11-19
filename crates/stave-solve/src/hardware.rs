@@ -426,10 +426,10 @@ impl Solver<'_> {
         {
             return Err(self.skip().into());
         }
-        let Some(inst) = self.model.hardware.get(hardware.index()).cloned() else {
+        let Some(inst) = self.model.hardware.get(hardware.index()) else {
             return Err(Fault::Internal("a piece of hardware").into());
         };
-        let Some(def) = self.model.defs.hardware_def(inst.def).cloned() else {
+        let Some(def) = self.model.defs.hardware_def(inst.def) else {
             return Err(Fault::Internal("a piece of hardware's declaration").into());
         };
         let array = def.array.as_ref().map(|_| {
@@ -444,7 +444,7 @@ impl Solver<'_> {
             kind: None,
             array,
         };
-        let name = inst.name.clone();
+        let name = &inst.name;
         let span = def.call.span;
         let binding = self.bind_call(
             &def.call,
@@ -452,7 +452,7 @@ impl Solver<'_> {
             &format!("hardware '{name}'"),
             DefId::Hardware(inst.def),
         )?;
-        let Some(kind) = self.model.defs.kind(binding.kind).cloned() else {
+        let Some(kind) = self.model.defs.kind(binding.kind) else {
             return Err(Fault::Internal("a kind's declaration").into());
         };
         let kind_name = binding.name.clone();
@@ -471,16 +471,16 @@ impl Solver<'_> {
                 .into());
         }
         // Reported where the kind is resolved.
-        let Some(hardware_kind) = kind.hardware.clone() else {
+        let Some(hardware_kind) = &kind.hardware else {
             return Err(Fault::Earlier.into());
         };
-        let roles = self.hardware_roles(&kind, &binding)?;
-        let entries = self.hardware_entries(&binding, &kind, env.file, span)?;
-        let fasteners = self.hardware_fasteners(&binding, &kind, &hardware_kind.uses)?;
+        let roles = self.hardware_roles(kind, &binding)?;
+        let entries = self.hardware_entries(&binding, kind, env.file, span)?;
+        let fasteners = self.hardware_fasteners(&binding, kind, &hardware_kind.uses)?;
         let model = match entries.get("model") {
             Some(Value::Model(model)) => {
-                let declared = self.declared_shapes(&binding, &kind)?;
-                Some(self.hardware_model(&binding, &kind, model, &declared)?)
+                let declared = self.declared_shapes(&binding, kind)?;
+                Some(self.hardware_model(&binding, kind, model, &declared)?)
             }
             _ => None,
         };
@@ -492,38 +492,38 @@ impl Solver<'_> {
             bodies,
             offsets,
         } = self.rest(hardware, &binding)?;
-        self.check_contact(&name, &kind, &roles, &bodies, piece, env.file, span)?;
+        self.check_contact(name, kind, &roles, &bodies, piece, env.file, span)?;
         let cuts = self.hardware_cuts(
             &binding,
-            &kind,
+            kind,
             &hardware_kind.cuts,
             &roles,
             &bodies,
             &frame,
-            &name,
+            name,
             env.file,
             span,
         )?;
         // The kind's mechanism moves it, counted on its own first.
         let (mechanism, own) = match &kind.mechanism {
             Some(def) => {
-                let mechanism = self.kind_mechanism(&binding, &kind, &kind_name, def, &frame)?;
+                let mechanism = self.kind_mechanism(&binding, kind, &kind_name, def, &frame)?;
                 let own = self.check_mechanism(hardware, &roles, &mechanism, &kind_name)?;
                 (Some(mechanism), own)
             }
             None => (None, None),
         };
-        let members = self.placed_members(&kind, &roles, &bodies, &frame)?;
+        let members = self.placed_members(kind, &roles, &bodies, &frame)?;
         // The kind's rules where it is placed: its adjustments and requires.
         let (settings, rules) = self.hardware_rules(
             Call {
                 hardware,
-                name: &name,
+                name,
                 file: env.file,
                 span,
             },
             &binding,
-            &kind,
+            kind,
             &hardware_kind.adjusts,
             &offsets,
             mount_anchor,
@@ -574,10 +574,10 @@ impl Solver<'_> {
     /// offset from its nominal place (grammar, "Hardware placement"). The
     /// help search places it again with other settings.
     pub(crate) fn rest(&mut self, hardware: HardwareId, binding: &Binding) -> Solved<Rest> {
-        let Some(inst) = self.model.hardware.get(hardware.index()).cloned() else {
+        let Some(inst) = self.model.hardware.get(hardware.index()) else {
             return Err(Fault::Internal("a piece of hardware").into());
         };
-        let Some(def) = self.model.defs.hardware_def(inst.def).cloned() else {
+        let Some(def) = self.model.defs.hardware_def(inst.def) else {
             return Err(Fault::Internal("a piece of hardware's declaration").into());
         };
         let array = def.array.as_ref().map(|_| {
@@ -592,12 +592,12 @@ impl Solver<'_> {
             kind: None,
             array,
         };
-        let name = inst.name.clone();
-        let Some(kind) = self.model.defs.kind(binding.kind).cloned() else {
+        let name = &inst.name;
+        let Some(kind) = self.model.defs.kind(binding.kind) else {
             return Err(Fault::Internal("a kind's declaration").into());
         };
         let kind_name = binding.name.clone();
-        let Some(hardware_kind) = kind.hardware.clone() else {
+        let Some(hardware_kind) = &kind.hardware else {
             return Err(Fault::Earlier.into());
         };
         let Some(Value::Part(piece)) = binding.roles.first().cloned() else {
@@ -658,7 +658,7 @@ impl Solver<'_> {
                     }
                 }
                 AxisRule::Term(MountTerm::From(from)) => {
-                    let (plane, at) = self.term_plane(binding, &kind, mount_face, world, from)?;
+                    let (plane, at) = self.term_plane(binding, kind, mount_face, world, from)?;
                     let inward = if plane.inward_positive {
                         positive_direction(world)
                     } else {
@@ -680,7 +680,7 @@ impl Solver<'_> {
         }
         // Each member's shapes in the frame, before the frame is placed on
         // the open axes.
-        let frame_bodies = self.declared_shapes(binding, &kind)?;
+        let frame_bodies = self.declared_shapes(binding, kind)?;
         let label = inst.ctx.element.and_then(|element| {
             match self.model.defs.array(DefId::Hardware(inst.def)) {
                 Some(stave_model::defs::ArrayDef::Labels(labels)) => {
@@ -690,7 +690,7 @@ impl Solver<'_> {
                 None => None,
             }
         });
-        let terms = self.sort_terms(&def.place, &env, &name, label.as_deref(), true)?;
+        let terms = self.sort_terms(&def.place, &env, name, label.as_deref(), true)?;
         let piece_role = RoleIndex::new(0).ok_or(Fault::Internal("a role's number"))?;
         // `place { }` positions the box around the members on the piece.
         let carried: Option<FrameBox> = frame_bodies
@@ -761,7 +761,7 @@ impl Solver<'_> {
                 }
                 (None, true) => {
                     let place_span = def.place_span.unwrap_or(def.decl.span);
-                    return Err(self.axis_not_set(&name, world, env.file, place_span).into());
+                    return Err(self.axis_not_set(name, world, env.file, place_span).into());
                 }
                 (None, false) => {}
             }
@@ -776,8 +776,7 @@ impl Solver<'_> {
             let mut offsets: Vec<(FrameAxis, ExactLength)> = Vec::new();
             for placement in &body.mount {
                 let world = frame.direction(placement.axis).axis();
-                let (_, at) =
-                    self.term_plane(binding, &kind, mount_face, world, &placement.from)?;
+                let (_, at) = self.term_plane(binding, kind, mount_face, world, &placement.from)?;
                 let offset = frame.coordinate(placement.axis, at)?;
                 offsets.push((placement.axis, offset));
                 all_offsets.push((*id, placement.axis, offset));

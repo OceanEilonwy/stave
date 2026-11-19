@@ -1388,7 +1388,7 @@ impl<'s, 'm> Tracer<'s, 'm> {
         if let Some((source, _, _)) = self.solver.mirror_source(part).map_err(|_| Halt)? {
             return self.part_size(source, axis);
         }
-        let body = self.solver.part_body(part).cloned().ok_or(Halt)?;
+        let body = self.solver.part_body(part).ok_or(Halt)?;
         let env = self.solver.part_env(part).ok_or(Halt)?;
         if self.solver.part_profile(part).map_err(|_| Halt)?.is_some() {
             return Ok(Affine::other("a turned part's profile"));
