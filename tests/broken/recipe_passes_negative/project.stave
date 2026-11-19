@@ -1,0 +1,45 @@
+// expect: error[out-of-range] 'passes' must be a whole number of at least 1, found -1
+stave 1
+
+// A recipe step asks for a negative number of passes.
+
+project "A negative number of passes" {
+  units:   mm
+  tools:   [pencil, square, tenon_saw, chisel]
+  methods: [notch_in_halves]
+}
+
+recipe notch_in_halves : notch {
+  tools: [pencil, square, tenon_saw, chisel]
+  mark {
+    pencil(walls)
+  }
+  cut {
+    saw(walls, to: depth, passes: -1)
+    chop(waste, to: depth)
+  }
+  check: "the upright pushes in by hand"
+}
+
+stock pine_19 { species: pine, form: solid, thickness: 19mm, max_length: 2400mm }
+
+part board : pine_19 {
+  length: 600mm
+  width:  300mm
+  place {
+    ground
+  }
+}
+
+part upright : pine_19 {
+  length: 400mm
+  width:  300mm
+  place {
+    orient(length: up, width: back)
+    against(board.top)
+    center(board, across)
+    flush(board.front)
+  }
+}
+
+joint upright_dado : dado(upright, into: board, depth: 6mm)

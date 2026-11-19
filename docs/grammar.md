@@ -2728,7 +2728,7 @@ card, and `note: "..."`.
 | Argument | Type | Meaning |
 |---|---|---|
 | `to:` | a measurement or a feature | where to stop: `saw(walls, to: depth)`, `saw(cheeks, to: shoulders)` |
-| `passes:` | `Count` | how many passes to take |
+| `passes:` | `Count`, written out | how many passes to take: a whole number of at least 1 (`passes: 2`). 0 or less is `error[out-of-range]`; a param or other expression is `error[type-mismatch]` |
 | `guide:` | a feature | what the fence or guide follows |
 | `diameter:` | a measurement (`bore` only) | the bit to use |
 

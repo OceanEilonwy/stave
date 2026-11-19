@@ -2069,9 +2069,9 @@ pub struct MarkStepDef {
     /// The step.
     pub step: MarkingStep,
     /// Its positional argument: a feature or (for `gauge`) a measurement.
-    pub target: String,
+    pub target: stave_schema::operations::StepTarget,
     /// `on:` of `gauge`.
-    pub on: Option<String>,
+    pub on: Option<stave_schema::operations::Feature>,
     /// `with:`
     pub with: Option<KindId>,
     /// `note:`
@@ -2086,15 +2086,15 @@ pub struct CutStepDef {
     /// The step.
     pub step: CuttingStep,
     /// The feature it works on.
-    pub feature: String,
+    pub feature: stave_schema::operations::Feature,
     /// `to:`: a measurement or a feature.
-    pub to: Option<String>,
-    /// `passes:`
-    pub passes: Option<u32>,
+    pub to: Option<stave_schema::operations::StepTarget>,
+    /// `passes:`, a whole number of at least one.
+    pub passes: Option<std::num::NonZeroU32>,
     /// `guide:`
-    pub guide: Option<String>,
-    /// `diameter:` of `bore`.
-    pub diameter: Option<String>,
+    pub guide: Option<stave_schema::operations::Feature>,
+    /// `diameter:` of `bore`: the measurement that names the bit.
+    pub diameter: Option<stave_schema::operations::Measurement>,
     /// `with:`
     pub with: Option<KindId>,
     /// `note:`
