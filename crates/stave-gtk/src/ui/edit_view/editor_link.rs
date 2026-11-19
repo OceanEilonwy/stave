@@ -453,7 +453,7 @@ impl Window {
         if self.editing.changes.card.root.is_visible() {
             panel.move_into(&self.editing.changes.card.pending_slot);
         } else {
-            panel.move_into(&self.editing.card.pending_slot);
+            panel.move_into(&self.editing.card_slots.pending_slot);
         }
         panel.show(&file, writer, &changes);
         if !editor_open {

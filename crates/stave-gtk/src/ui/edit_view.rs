@@ -48,15 +48,21 @@ use stave_scene::{
     SceneGraph, Subject, Target,
 };
 
-use super::edit_card::{CardAction, CardModel, EditCard, Words};
-use super::edit_menu::{Checked, EditMenu, MenuItem};
+use super::edit_card::{
+    CardAction, CardModel, CardOffers, CardSlots, CardView, EditCardComponent, EditCardInput,
+    EditCardOutput, Words,
+};
+use super::edit_menu::{
+    Checked, EditMenuComponent, EditMenuInput, EditMenuOutput, MenuEntry, MenuItem,
+};
 use super::edit_panel::EditPanel;
 use super::edit_writer::BufferWriter;
 use super::option_search::OptionSearch;
 use super::update::editing::EditingInput;
-use super::{EDGE, Window};
+use super::{EDGE, Window, WindowInput};
 use crate::render::{Backdrop, Frame, Ticket};
 use crate::ui::update::Unprinted;
+use relm4::{Component, ComponentController, Controller};
 
 /// How long one step of the menu's check runs before the window draws
 /// what it found so far; a step that finds nothing new gets twice as long.
@@ -73,9 +79,19 @@ const GHOST_TINT: f32 = 0.62;
 /// panel, the labels on the model), and what only they need.
 pub(super) struct EditView {
     /// The menu for a selection, a pop-up at the click.
-    pub(super) menu: EditMenu,
+    pub(super) menu: Controller<EditMenuComponent>,
     /// The card for a chosen candidate, in the Edit panel.
-    pub(super) card: EditCard,
+    pub(super) card: Controller<EditCardComponent>,
+    /// The card's boxes the window fills (the repeat controls, the
+    /// Pending section).
+    pub(super) card_slots: CardSlots,
+    /// What the card shown last offers (its short lists, the put-back
+    /// button), from the view the window drew it with; none while it is
+    /// hidden.
+    card_offers: Option<CardOffers>,
+    /// The setting whose short list is open on the card, as the card last
+    /// said ([`EditCardOutput::OptionsOpen`]) or the window opened it.
+    pub(super) card_open_options: Option<String>,
     /// The Edit panel: the card in progress, or how to start.
     pub(super) panel: EditPanel,
     /// Whether the panel showed a card when last drawn.
@@ -104,6 +120,9 @@ pub(super) struct EditView {
     /// The check of the chosen candidate's options running on a worker
     /// thread: its cancel flag and the candidate it is for.
     options: Option<(Arc<AtomicBool>, OptionsTicket)>,
+    /// The fixture's menu or card (`--edit-fixture`), kept while the
+    /// window is open.
+    pub(super) showcase: Option<super::edit_demo::Shown>,
 }
 
 /// What the editing view keeps between events.
@@ -140,14 +159,21 @@ struct GhostView {
 }
 
 impl EditView {
-    /// The widgets, hidden until an edit starts.
-    pub(super) fn new() -> EditView {
-        let menu = EditMenu::new();
-        menu.root.set_halign(gtk::Align::Start);
-        menu.root.set_valign(gtk::Align::Start);
-        menu.root.set_visible(false);
-        let card = EditCard::new();
-        card.root.set_visible(false);
+    /// The widgets, hidden until an edit starts. The menu's and the
+    /// card's outputs go to the window's input as [`EditingInput`]s.
+    pub(super) fn new(input: &relm4::Sender<WindowInput>) -> EditView {
+        let menu = EditMenuComponent::builder()
+            .launch(())
+            .forward(input, menu_heard);
+        let root = menu.widget();
+        root.set_halign(gtk::Align::Start);
+        root.set_valign(gtk::Align::Start);
+        root.set_visible(false);
+        let card_slots = CardSlots::new();
+        let card = EditCardComponent::builder()
+            .launch(card_slots.clone())
+            .forward(input, card_heard);
+        card.widget().set_visible(false);
         let face_button = gtk::Button::builder()
             .css_classes(["stave-edit-face", "pill"])
             .margin_start(16)
@@ -158,13 +184,16 @@ impl EditView {
         let changes = changes::Changes::new();
         let hold = hold::Hold::new();
         let panel = EditPanel::new(&[
-            card.root.upcast_ref(),
+            card.widget().upcast_ref(),
             changes.card.root.upcast_ref(),
             hold.card.root.upcast_ref(),
         ]);
         EditView {
             menu,
             card,
+            card_slots,
+            card_offers: None,
+            card_open_options: None,
             panel,
             panel_shown: false,
             search: OptionSearch::new(),
@@ -181,8 +210,29 @@ impl EditView {
             verbs: Vec::new(),
             immediate: false,
             options: None,
+            showcase: None,
         }
     }
+}
+
+/// What the menu tells the window, as the window's input.
+fn menu_heard(output: EditMenuOutput) -> WindowInput {
+    match output {
+        EditMenuOutput::Chosen(declaration) => EditingInput::MenuChosen(declaration),
+        EditMenuOutput::Drawn => EditingInput::MenuDrawn,
+    }
+    .into()
+}
+
+/// What the card tells the window, as the window's input.
+fn card_heard(output: EditCardOutput) -> WindowInput {
+    match output {
+        EditCardOutput::Action(action) => EditingInput::CardAction(action),
+        EditCardOutput::OptionsOpen(setting) => EditingInput::CardOptionsOpen(setting),
+        EditCardOutput::Link(target) => EditingInput::LinkClicked(target),
+        EditCardOutput::Hover(target) => EditingInput::LinkHovered(target),
+    }
+    .into()
 }
 
 /// The words for the ids and expressions a candidate holds, from the
@@ -333,26 +383,54 @@ fn tries_again(command: &EditCommand) -> bool {
     )
 }
 
+/// What [`draw_edit`] showed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum Drawn {
+    /// No edit is in progress: neither shows.
+    Nothing,
+    /// The menu, nothing chosen yet.
+    Menu,
+    /// The card, offering this.
+    Card(CardOffers),
+}
+
+impl Drawn {
+    /// `true` while an edit is in progress.
+    pub(super) fn is_open(&self) -> bool {
+        match self {
+            Drawn::Nothing => false,
+            Drawn::Menu | Drawn::Card(_) => true,
+        }
+    }
+}
+
 /// Draws the edit in progress: the menu while nothing is chosen, the
-/// card once something is, neither without an edit. Returns whether an
-/// edit is in progress.
+/// card once something is, neither without an edit. Which shows changes
+/// at once; what they show is sent to them, drawn when the main loop next
+/// runs. Returns what it showed, with what the card offers.
 pub(super) fn draw_edit(
-    menu: &EditMenu,
-    card: &EditCard,
+    menu: &Controller<EditMenuComponent>,
+    card: &Controller<EditCardComponent>,
     session: &Session,
     checking: bool,
-) -> bool {
+) -> Drawn {
     let Some(edit) = session.edit() else {
-        menu.root.set_visible(false);
-        card.root.set_visible(false);
-        return false;
+        menu.widget().set_visible(false);
+        card.widget().set_visible(false);
+        return Drawn::Nothing;
     };
     let heading = edit.picked().heading();
     match edit.chosen() {
         None => {
-            menu.show(heading, &menu_items(edit));
-            menu.root.set_visible(true);
-            card.root.set_visible(false);
+            // Sending fails only once the menu has shut down, with the
+            // window: nothing is left to draw.
+            let _ = menu.sender().send(EditMenuInput::Show {
+                heading,
+                items: MenuEntry::list(&menu_items(edit)),
+            });
+            menu.widget().set_visible(true);
+            card.widget().set_visible(false);
+            Drawn::Menu
         }
         Some(chosen) => {
             let candidate = chosen.candidate();
@@ -367,7 +445,7 @@ pub(super) fn draw_edit(
                 .iter()
                 .map(|fix| fix.label().to_owned())
                 .collect();
-            card.show(
+            let view = CardView::new(
                 &CardModel {
                     applied: &applied,
                     blame: chosen.blame(),
@@ -378,11 +456,13 @@ pub(super) fn draw_edit(
                 },
                 &SessionWords::of(edit),
             );
-            menu.root.set_visible(false);
-            card.root.set_visible(true);
+            let offers = view.offers();
+            let _ = card.sender().send(EditCardInput::Show(Box::new(view)));
+            menu.widget().set_visible(false);
+            card.widget().set_visible(true);
+            Drawn::Card(offers)
         }
     }
-    true
 }
 
 /// The colour a ghost is tinted with, from its verdict.
@@ -428,7 +508,7 @@ impl Window {
     pub(super) fn connect_editing(&mut self) {
         let editing = &self.editing;
         let design = &self.widgets.design;
-        design.add_overlay(&editing.menu.root);
+        design.add_overlay(editing.menu.widget());
         self.widgets.edit_holder.append(&editing.panel.root);
         self.widgets.sheet.add_overlay(&editing.search.root);
         self.connect_option_search();
@@ -440,16 +520,8 @@ impl Window {
         self.connect_repeats();
         self.connect_editor_link();
 
-        let editing = &self.editing;
-        let input = self.input();
-        editing.menu.connect_chosen(move |declaration| {
-            input.emit(EditingInput::MenuChosen(declaration).into());
-        });
-        let input = self.input();
-        editing
-            .card
-            .connect_action(move |action| input.emit(EditingInput::CardAction(action).into()));
-        self.connect_links(&self.editing.card.links);
+        // The menu's and the card's outputs were forwarded to the window
+        // when they were launched (`EditView::new`).
         let input = self.input();
         self.editing
             .face_button
@@ -878,7 +950,15 @@ impl Window {
                 {
                     let session = &self.session;
                     if let Some(chosen) = session.edit().and_then(Edit::chosen) {
-                        self.editing.card.update_options(chosen.candidate());
+                        // Only fails once the card has shut down, with the
+                        // window.
+                        let _ = self
+                            .editing
+                            .card
+                            .sender()
+                            .send(EditCardInput::UpdateOptions(Box::new(
+                                chosen.candidate().clone(),
+                            )));
                     }
                 }
                 // An open search shows each answer as it comes.
@@ -930,9 +1010,14 @@ impl Window {
     /// hides the part's card while an edit is open.
     pub(super) fn refresh_edit(&mut self) {
         let checking = self.editing.state.checking;
-        let open = {
+        let drawn = {
             let session = &self.session;
             draw_edit(&self.editing.menu, &self.editing.card, session, checking)
+        };
+        let open = drawn.is_open();
+        self.editing.card_offers = match drawn {
+            Drawn::Card(offers) => Some(offers),
+            Drawn::Nothing | Drawn::Menu => None,
         };
         let open = self.draw_change(checking) || open;
         self.update_repeat_row();
@@ -976,6 +1061,19 @@ impl Window {
         }
     }
 
+    /// The menu has drawn what it was last shown: placed again, now that
+    /// its height is its new entries'.
+    pub(in crate::ui) fn menu_drawn(&self) {
+        if self.editing.menu.widget().is_visible() {
+            self.place_edit_widgets();
+        }
+    }
+
+    /// The card says which setting's short list is open now.
+    pub(in crate::ui) fn card_options_open(&mut self, setting: Option<String>) {
+        self.editing.card_open_options = setting;
+    }
+
     /// The menu near where it was asked for, inside the view (the cards
     /// are in the Edit panel).
     fn place_edit_widgets(&self) {
@@ -984,7 +1082,7 @@ impl Window {
             f64::from(self.widgets.design.height()),
         );
         let (x, y) = self.editing.state.point.unwrap_or((width / 3.0, 80.0));
-        let menu = &self.editing.menu.root;
+        let menu = self.editing.menu.widget();
         let menu_width = 340.0;
         let left = (x + 24.0).min(width - menu_width - f64::from(EDGE));
         // Clear of the dock at the bottom: as high as it must be to show
@@ -1091,7 +1189,7 @@ impl Window {
             .editing
             .search
             .setting()
-            .or_else(|| self.editing.card.open_setting())
+            .or_else(|| self.editing.card_open_options.clone())
         {
             Some(open) => job.prefer(&open),
             None => job,
@@ -1144,12 +1242,32 @@ impl Window {
             .session
             .check_setting_options(Some(setting), &AtomicBool::new(false));
         self.handle(events);
-        if self.editing.card.open_options(setting) {
-            self.editing.card.scroll_to_open_options_now();
-            Ok(())
-        } else {
-            Err(format!("the card has no short list for '{setting}'"))
+        // The window drew the card, so it knows what the card offers; the
+        // card opens the list and brings it into sight when the main loop
+        // next runs, after the redraws the events sent it.
+        let offered = self
+            .editing
+            .card_offers
+            .as_ref()
+            .is_some_and(|offers| offers.has_short_list(setting));
+        if !offered {
+            return Err(format!("the card has no short list for '{setting}'"));
         }
+        self.editing.card_open_options = Some(setting.to_owned());
+        let card = self.editing.card.sender();
+        // Only fails once the card has shut down, with the window.
+        let _ = card.send(EditCardInput::OpenOptions(setting.to_owned()));
+        let _ = card.send(EditCardInput::ScrollToOpenOptions);
+        Ok(())
+    }
+
+    /// `true` while the card shows the button that puts back the setting
+    /// a refusal blames (an edit script's `put back` step).
+    pub(super) fn card_offers_put_back(&self) -> bool {
+        self.editing
+            .card_offers
+            .as_ref()
+            .is_some_and(CardOffers::put_back)
     }
 
     /// `true` when the chosen candidate's setting has options to search.
@@ -1216,8 +1334,9 @@ impl Window {
     /// The search dialog closed: the keyboard goes back to the card, so
     /// Enter and Escape work there again.
     pub(in crate::ui) fn option_search_closed(&self) {
-        if self.editing.card.root.is_visible() {
-            self.editing.card.root.grab_focus();
+        let card = self.editing.card.widget();
+        if card.is_visible() {
+            card.grab_focus();
         }
     }
 

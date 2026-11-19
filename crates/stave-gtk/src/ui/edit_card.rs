@@ -36,16 +36,15 @@
 //! appears and each time it is shown again (unless the keyboard is already
 //! inside it, say in a setting being typed).
 //!
-//! Two drivers draw it with the same code ([`CardView`], drawn by
-//! `build_body`): [`EditCard`], the API the window uses today, which draws
-//! at once and reports what people do from the widget's own signal; and
-//! [`EditCardComponent`], the relm4 component the window will own once it
-//! is one (docs/relm4-migration.md), whose widgets only send it messages
-//! and whose model alone holds the card's state.
+//! It is a relm4 component, [`EditCardComponent`], owned by the window
+//! (docs/relm4-migration.md): its widgets only send it messages and its
+//! model alone holds the card's state. The window never asks it anything:
+//! what the card offers follows from the [`CardView`] the window built
+//! ([`CardView::offers`]), and the one thing people change on it that the
+//! window wants to know, which short list is open, the card tells it
+//! ([`EditCardOutput::OptionsOpen`]).
 
 use stave_app::i18n::{fill_in, ntr, tr};
-use std::cell::{Cell, RefCell};
-use std::rc::Rc;
 
 use adw::prelude::*;
 use gtk::{gdk, glib};
@@ -304,41 +303,6 @@ pub fn fit_icon(fit: &OptionFit) -> &'static str {
     }
 }
 
-/// A slot for a callback: the one connected last. It is cloned out before
-/// it is called, so the callback may connect another, or call back in,
-/// with nothing borrowed.
-pub(super) struct Callback<T> {
-    callback: Cell<Option<CallbackFn<T>>>,
-}
-
-/// A callback, shared so it can be cloned out of its slot.
-type CallbackFn<T> = Rc<dyn Fn(T)>;
-
-impl<T> Default for Callback<T> {
-    fn default() -> Self {
-        Callback {
-            callback: Cell::new(None),
-        }
-    }
-}
-
-impl<T> Callback<T> {
-    /// Calls `callback` from now on, instead of the one connected before.
-    pub(super) fn connect(&self, callback: impl Fn(T) + 'static) {
-        self.callback.set(Some(Rc::new(callback)));
-    }
-
-    /// Calls the callback with `value`, or drops it when none is
-    /// connected.
-    pub(super) fn call(&self, value: T) {
-        let callback = self.callback.take();
-        self.callback.set(callback.clone());
-        if let Some(callback) = callback {
-            callback(value);
-        }
-    }
-}
-
 /// What the card says about one place param: what fills it, as written,
 /// with the names in it as links; no value while it is still to point
 /// at.
@@ -415,6 +379,59 @@ impl CardView {
     fn can_add(&self) -> bool {
         can_add(&self.candidate, self.verdict.as_ref())
     }
+
+    /// The setting change a refusal is blamed on, while the card says so
+    /// (with the button that puts it back).
+    fn blamed(&self) -> Option<&Blame> {
+        match (&self.blame, &self.verdict) {
+            (Some(blame), Some(Verdict::Refused(_))) => Some(blame),
+            (Some(_) | None, _) => None,
+        }
+    }
+
+    /// What a card drawn from this view offers, worked out the way the
+    /// card draws it, so the owner knows without asking the card.
+    pub fn offers(&self) -> CardOffers {
+        CardOffers {
+            short_lists: self
+                .candidate
+                .settings
+                .iter()
+                .filter(|setting| shows_short_list(setting, &short_list(setting)))
+                .map(|setting| setting.name.as_str().to_owned())
+                .collect(),
+            put_back: self.blamed().is_some(),
+        }
+    }
+}
+
+/// What a card drawn from a [`CardView`] offers: what its owner would
+/// otherwise have to ask the card.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CardOffers {
+    /// The settings with a short list, by name.
+    short_lists: Vec<String>,
+    /// Whether it shows the button that puts back a blamed setting.
+    put_back: bool,
+}
+
+impl CardOffers {
+    /// `true` when the card shows a short list for this setting.
+    pub fn has_short_list(&self, setting: &str) -> bool {
+        self.short_lists.iter().any(|name| name == setting)
+    }
+
+    /// `true` when the card shows the button that puts back the setting a
+    /// refusal blames.
+    pub fn put_back(&self) -> bool {
+        self.put_back
+    }
+}
+
+/// `true` when a setting's row has a short list: values to choose from,
+/// or options to search.
+fn shows_short_list(setting: &SettingParam, choices: &[ShortChoice]) -> bool {
+    !choices.is_empty() || !setting.options.is_empty()
 }
 
 /// What people did in the card's body, as its widgets report it.
@@ -479,10 +496,6 @@ struct CardFrame {
     name: gtk::EditableLabel,
     add: gtk::Button,
     cancel: gtk::Button,
-    /// Where the window puts the repeat controls' count and direction.
-    repeat_slot: gtk::Box,
-    /// Where the window puts "Repeat…", on the buttons' line.
-    repeat_button_slot: gtk::Box,
     /// Where the window puts the "Pending" section, last in the body.
     pending_slot: gtk::Box,
 }
@@ -503,9 +516,49 @@ fn card_root() -> gtk::Box {
         .build()
 }
 
+/// The boxes on the card that its owner fills: made by the owner, which
+/// keeps a clone of each, and given to the card when it is launched, as
+/// they stay from one show to the next.
+#[derive(Debug, Clone)]
+pub struct CardSlots {
+    /// Where the owner puts the repeat controls' count and direction,
+    /// above the buttons.
+    pub repeat_slot: gtk::Box,
+    /// Where the owner puts "Repeat…", on the buttons' line.
+    pub repeat_button_slot: gtk::Box,
+    /// Where the owner puts the "Pending" section (the lines Apply would
+    /// write), last in the body.
+    pub pending_slot: gtk::Box,
+}
+
+impl CardSlots {
+    /// Three empty slots.
+    pub fn new() -> CardSlots {
+        CardSlots {
+            repeat_slot: gtk::Box::builder()
+                .orientation(gtk::Orientation::Vertical)
+                .css_classes(["stave-edit-repeat-slot"])
+                .build(),
+            repeat_button_slot: gtk::Box::builder()
+                .hexpand(true)
+                .halign(gtk::Align::Start)
+                .valign(gtk::Align::Center)
+                .build(),
+            pending_slot: gtk::Box::builder()
+                .orientation(gtk::Orientation::Vertical)
+                .build(),
+        }
+    }
+}
+
 /// Puts the card's frame in its root: the scrolled body, then the foot
 /// with the repeat slots and Cancel and Apply. No handlers are connected.
-fn fill_card(root: &gtk::Box) -> CardFrame {
+fn fill_card(root: &gtk::Box, slots: CardSlots) -> CardFrame {
+    let CardSlots {
+        repeat_slot,
+        repeat_button_slot,
+        pending_slot,
+    } = slots;
     let body = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
         .spacing(0)
@@ -523,30 +576,18 @@ fn fill_card(root: &gtk::Box) -> CardFrame {
         .build();
     name.update_property(&[gtk::accessible::Property::Label(&tr("Name"))]);
     let (apply_buttons, cancel, add) = sections::footer_buttons();
-    let repeat_button_slot = gtk::Box::builder()
-        .hexpand(true)
-        .halign(gtk::Align::Start)
-        .valign(gtk::Align::Center)
-        .build();
     let buttons = gtk::Box::builder()
         .spacing(8)
         .css_classes(["stave-edit-buttons"])
         .build();
     buttons.append(&repeat_button_slot);
     buttons.append(&apply_buttons);
-    let repeat_slot = gtk::Box::builder()
-        .orientation(gtk::Orientation::Vertical)
-        .css_classes(["stave-edit-repeat-slot"])
-        .build();
     let foot = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
         .css_classes(["stave-edit-foot"])
         .build();
     foot.append(&repeat_slot);
     foot.append(&buttons);
-    let pending_slot = gtk::Box::builder()
-        .orientation(gtk::Orientation::Vertical)
-        .build();
     root.append(&scrolled);
     root.append(&foot);
     CardFrame {
@@ -555,8 +596,6 @@ fn fill_card(root: &gtk::Box) -> CardFrame {
         name,
         add,
         cancel,
-        repeat_slot,
-        repeat_button_slot,
         pending_slot,
     }
 }
@@ -777,7 +816,7 @@ fn setting_row(
         .build();
     control.append(&entry);
     let choices = short_list(setting);
-    let list = (!choices.is_empty() || !setting.options.is_empty())
+    let list = shows_short_list(setting, &choices)
         .then(|| choice_list(setting, &choices, open == Some(name), report));
     if let Some(list) = &list {
         control.append(&list.toggle);
@@ -1038,7 +1077,7 @@ fn verdict_section(
         .build();
     // What the user just did comes first, with the way back; the checker's
     // own words stay below.
-    if let (Some(blame), Some(Verdict::Refused(_))) = (&view.blame, verdict) {
+    if let Some(blame) = view.blamed() {
         let (block, button) = blame_block(blame, report);
         section.append(&block);
         built.put_back = Some(button);
@@ -1256,356 +1295,12 @@ fn scroll_now(root: &gtk::Box, frame: &CardFrame, target: &gtk::Widget) -> bool 
     done
 }
 
-/// The card for a chosen candidate, behind the API the window uses today:
-/// a show draws at once and what people do is reported at once, from the
-/// widget's own signal, because the window's code and its tests read the
-/// card straight after showing it. [`EditCardComponent`] is the same card
-/// as a relm4 component, for the window to own once it is one
-/// (docs/relm4-migration.md).
-pub struct EditCard {
-    /// The card: its body scrolls; the repeat fold and Add and Cancel stay
-    /// at its foot.
-    pub root: gtk::Box,
-    frame: CardFrame,
-    /// Where the window puts the repeat controls' count and direction,
-    /// above the buttons.
-    pub repeat_slot: gtk::Box,
-    /// Where the window puts "Repeat…", on the buttons' line.
-    pub repeat_button_slot: gtk::Box,
-    /// Where the window puts the "Pending" section (the lines Apply
-    /// would write), last in the body.
-    pub pending_slot: gtk::Box,
-    /// Where the links in "Placed in" report clicks and hovers.
-    pub links: LinkHandlers,
-    /// A row to bring into sight once the layout has room for it (an open
-    /// short list).
-    scroll_target: Rc<RefCell<Option<gtk::Widget>>>,
-    /// The name as last shown, so only a retyped one is reported.
-    shown_name: Rc<RefCell<String>>,
-    add_enabled: Rc<Cell<bool>>,
-    /// What the last show drew that the card keeps.
-    built: RefCell<Built>,
-    /// The setting whose short list is open, kept across redraws.
-    open_options: Rc<RefCell<Option<String>>>,
-    on_action: Rc<Callback<CardAction>>,
-}
-
-impl EditCard {
-    /// An empty card.
-    pub fn new() -> EditCard {
-        let root = card_root();
-        let frame = fill_card(&root);
-        let on_action: Rc<Callback<CardAction>> = Rc::default();
-        let add_enabled = Rc::new(Cell::new(false));
-        let shown_name = Rc::new(RefCell::new(String::new()));
-        {
-            let on_action = on_action.clone();
-            frame
-                .add
-                .connect_clicked(move |_| on_action.call(CardAction::Add));
-        }
-        {
-            let on_action = on_action.clone();
-            frame
-                .cancel
-                .connect_clicked(move |_| on_action.call(CardAction::Cancel));
-        }
-        {
-            let on_action = on_action.clone();
-            let shown = shown_name.clone();
-            frame.name.connect_editing_notify(move |label| {
-                if label.is_editing() {
-                    return;
-                }
-                let text = label.text().trim().to_owned();
-                if text.is_empty() {
-                    let before = shown.borrow().clone();
-                    label.set_text(&before);
-                    return;
-                }
-                if text != *shown.borrow() {
-                    shown.replace(text.clone());
-                    on_action.call(CardAction::Rename(text));
-                }
-            });
-        }
-        {
-            let on_action = on_action.clone();
-            let enabled = add_enabled.clone();
-            listen_for_keys(&root, move |key| match key {
-                CardKey::Escape => on_action.call(CardAction::Cancel),
-                CardKey::Enter => {
-                    if enabled.get() {
-                        on_action.call(CardAction::Add);
-                    }
-                }
-            });
-        }
-        root.connect_map(take_focus);
-
-        let scroll_target: Rc<RefCell<Option<gtk::Widget>>> = Rc::new(RefCell::new(None));
-        {
-            let target = scroll_target.clone();
-            let body = frame.body.clone();
-            frame
-                .scrolled
-                .vadjustment()
-                .connect_changed(move |adjustment| {
-                    scroll_to_held(adjustment, &body, &target);
-                });
-        }
-        EditCard {
-            root,
-            repeat_slot: frame.repeat_slot.clone(),
-            repeat_button_slot: frame.repeat_button_slot.clone(),
-            pending_slot: frame.pending_slot.clone(),
-            frame,
-            links: LinkHandlers::default(),
-            scroll_target,
-            shown_name,
-            add_enabled,
-            built: RefCell::default(),
-            open_options: Rc::new(RefCell::new(None)),
-            on_action,
-        }
-    }
-
-    /// Calls `callback` with each thing the user does on the card.
-    pub fn connect_action(&self, callback: impl Fn(CardAction) + 'static) {
-        self.on_action.connect(callback);
-    }
-
-    /// Where the body's widgets report: the callback, at once.
-    fn report(&self) -> impl Report {
-        let on_action = Rc::clone(&self.on_action);
-        let open_options = Rc::clone(&self.open_options);
-        move |event| match event {
-            BodyEvent::Action(action) => on_action.call(action),
-            BodyEvent::Picked(action) => {
-                open_options.replace(None);
-                on_action.call(action);
-            }
-            BodyEvent::Toggled { param, open } => {
-                let mut open_now = open_options.borrow_mut();
-                if open {
-                    *open_now = Some(param);
-                } else if open_now.as_deref() == Some(param.as_str()) {
-                    *open_now = None;
-                }
-            }
-        }
-    }
-
-    /// Shows a candidate, its name and its verdict.
-    pub fn show(&self, model: &CardModel<'_>, words: &dyn Words) {
-        let view = CardView::new(model, words);
-        self.shown_name.replace(view.name.clone());
-        let open = self.open_options.borrow().clone();
-        let built = build_body(
-            &self.root,
-            &self.frame,
-            &view,
-            open.as_deref(),
-            &self.links,
-            &self.report(),
-        );
-        self.built.replace(built);
-        self.add_enabled.set(show_add(&self.frame.add, &view));
-        take_focus(&self.root);
-        self.scroll_to_open_options();
-    }
-
-    /// Redraws the settings' short lists from `candidate` (the same
-    /// candidate the card shows) without rebuilding the card, so an open
-    /// list stays open and the keyboard stays on the entry it was on.
-    pub fn update_options(&self, candidate: &Candidate) {
-        // Copied out, so the redraw (whose focus changes may call back)
-        // runs with nothing borrowed.
-        let lists = self.built.borrow().options.clone();
-        let report = self.report();
-        for mut list in lists {
-            let row = refill_choices(&mut list, candidate, &report);
-            // Kept only while the card still shows the same list.
-            if let Some(kept) = self
-                .built
-                .borrow_mut()
-                .options
-                .iter_mut()
-                .find(|kept| kept.toggle == list.toggle)
-            {
-                kept.rows = list.rows;
-            }
-            if let Some(row) = row {
-                row.grab_focus();
-            }
-        }
-    }
-
-    /// The card's own key controller (for tests).
-    #[cfg(test)]
-    pub fn key_controller(&self) -> gtk::EventControllerKey {
-        let controllers = self.root.observe_controllers();
-        (0..controllers.n_items())
-            .filter_map(|index| controllers.item(index))
-            .find_map(|item| item.downcast::<gtk::EventControllerKey>().ok())
-            .expect("the card listens for keys")
-    }
-
-    /// The Add and Cancel buttons (for tests).
-    #[cfg(test)]
-    pub fn buttons(&self) -> (gtk::Button, gtk::Button) {
-        (self.frame.add.clone(), self.frame.cancel.clone())
-    }
-
-    /// The name field (for tests).
-    #[cfg(test)]
-    pub fn name_field(&self) -> gtk::EditableLabel {
-        self.frame.name.clone()
-    }
-
-    /// Each setting's entry (for tests).
-    #[cfg(test)]
-    pub fn entries(&self) -> Vec<(Ident, gtk::Entry)> {
-        self.built.borrow().entries.clone()
-    }
-
-    /// Each setting's short list, with the button that shows it and its
-    /// rows by text (the search row by "") (for tests).
-    #[cfg(test)]
-    pub fn option_lists(&self) -> Vec<(Ident, gtk::ToggleButton, ChoiceRows)> {
-        self.built
-            .borrow()
-            .options
-            .iter()
-            .map(|list| (list.param.clone(), list.toggle.clone(), list.rows.clone()))
-            .collect()
-    }
-
-    /// The scrolled body (for tests).
-    #[cfg(test)]
-    pub fn scrolled(&self) -> gtk::ScrolledWindow {
-        self.frame.scrolled.clone()
-    }
-
-    /// Opens the short list of a setting, as pressing its button does;
-    /// `false` when the card shows no list for it.
-    pub fn open_options(&self, param: &str) -> bool {
-        let found = self
-            .built
-            .borrow()
-            .options
-            .iter()
-            .find(|list| list.param.as_str() == param)
-            .map(|list| list.toggle.clone());
-        let Some(toggle) = found else {
-            return false;
-        };
-        toggle.set_active(true);
-        self.scroll_to_open_options();
-        true
-    }
-
-    /// Scrolls the card so the open short list is in sight, once it is
-    /// laid out.
-    fn scroll_to_open_options(&self) {
-        let open = self.open_options.borrow().clone();
-        let Some(open) = open else {
-            return;
-        };
-        let row = self
-            .built
-            .borrow()
-            .options
-            .iter()
-            .find(|list| list.param.as_str() == open)
-            .and_then(options_row);
-        let Some(row) = row else {
-            return;
-        };
-        self.scroll_target.replace(Some(row));
-        // Tried until it is laid out and in sight (a few frames at most);
-        // the adjustment's own changes try too.
-        let target = self.scroll_target.clone();
-        let body = self.frame.body.clone();
-        let scrolled = self.frame.scrolled.downgrade();
-        let tries = Cell::new(0_u32);
-        glib::timeout_add_local(SCROLL_TRY, move || {
-            tries.set(tries.get().saturating_add(1));
-            let Some(scrolled) = scrolled.upgrade() else {
-                return glib::ControlFlow::Break;
-            };
-            let done = scroll_to_held(&scrolled.vadjustment(), &body, &target);
-            if done || tries.get() > SCROLL_TRIES {
-                glib::ControlFlow::Break
-            } else {
-                glib::ControlFlow::Continue
-            }
-        });
-    }
-
-    /// Brings the open short list into sight at once, laying the window
-    /// out to find where it is and again to show it scrolled: for an edit
-    /// script, whose picture is taken from the last layout (the window's
-    /// own frames do this a frame later otherwise).
-    pub fn scroll_to_open_options_now(&self) {
-        let target = self.scroll_target.borrow().clone();
-        if let Some(target) = target
-            && scroll_now(&self.root, &self.frame, &target)
-        {
-            self.scroll_target.replace(None);
-        }
-    }
-
-    /// The setting whose short list is open, if any.
-    pub fn open_setting(&self) -> Option<String> {
-        self.open_options.borrow().clone()
-    }
-
-    /// The button that puts back the setting a refusal blames, while the
-    /// card shows one.
-    pub fn put_back_button(&self) -> Option<gtk::Button> {
-        self.built.borrow().put_back.clone()
-    }
-
-    /// Each fix's button with its problem and fix index (for tests).
-    #[cfg(test)]
-    pub fn fix_buttons(&self) -> Vec<((usize, usize), gtk::Button)> {
-        self.built.borrow().fixes.clone()
-    }
-}
-
-/// [`scroll_to_target`] for the row held in `target`, letting it go once
-/// it is in sight. Returns whether there is nothing left to bring into
-/// sight.
-fn scroll_to_held(
-    adjustment: &gtk::Adjustment,
-    body: &gtk::Box,
-    target: &RefCell<Option<gtk::Widget>>,
-) -> bool {
-    // Copied out: scrolling emits the adjustment's signals.
-    let Some(row) = target.borrow().clone() else {
-        return true;
-    };
-    let done = scroll_to_target(adjustment, body, &row);
-    if done {
-        target.replace(None);
-    }
-    done
-}
-
 /// The card for a chosen candidate as a relm4 component. Its model is the
 /// card's state: what the last show drew, the open short list, the name
 /// as shown and whether Add is enabled. Only
 /// [`EditCardComponent::update_with_view`] changes it; the card's widgets
 /// only send [`EditCardInput`] messages, so nothing they do runs while an
 /// update does.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the relm4 card the window will own once it is a component; until then only tests launch it (docs/relm4-migration.md)"
-    )
-)]
 pub struct EditCardComponent {
     /// The setting whose short list is open, kept across redraws.
     open_options: Option<String>,
@@ -1622,21 +1317,15 @@ pub struct EditCardComponent {
 
 /// What the card is told: what to show, and what people did on it.
 #[derive(Debug)]
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the relm4 card the window will own once it is a component; until then only tests launch it (docs/relm4-migration.md)"
-    )
-)]
 pub enum EditCardInput {
     /// Show this candidate, its name and its verdict.
     Show(Box<CardView>),
     /// Redraw the settings' short lists from this candidate (the one the
     /// card shows) without rebuilding the card.
     UpdateOptions(Box<Candidate>),
-    /// Open the short list of this setting, as pressing its button does;
-    /// answered by [`EditCardOutput::OptionsOpened`].
+    /// Open the short list of this setting, as pressing its button does
+    /// (nothing, when the card shows no list for it: the owner knows
+    /// which it shows from [`CardView::offers`]).
     OpenOptions(String),
     /// Bring the open short list into sight at once, laying the window
     /// out (for an edit script's picture).
@@ -1661,32 +1350,20 @@ pub enum EditCardInput {
 
 /// What the card tells its owner.
 #[derive(Debug, Clone, PartialEq)]
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the relm4 card the window will own once it is a component; until then only tests launch it (docs/relm4-migration.md)"
-    )
-)]
 pub enum EditCardOutput {
     /// People did this on the card.
     Action(CardAction),
-    /// The answer to [`EditCardInput::OpenOptions`]: `false` when the card
-    /// shows no short list for that setting.
-    OptionsOpened(bool),
+    /// The setting whose short list is open changed: this one, or none.
+    /// Sent whatever opened or closed it (people, a pick from the list,
+    /// [`EditCardInput::OpenOptions`]), so the owner's copy follows the
+    /// card's.
+    OptionsOpen(Option<String>),
     /// A link in "Placed in" was clicked.
     Link(LinkTarget),
     /// The pointer entered a link (`Some`) or left it.
     Hover(Option<LinkTarget>),
 }
 
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the relm4 card the window will own once it is a component; until then only tests launch it (docs/relm4-migration.md)"
-    )
-)]
 impl EditCardComponent {
     /// Where the body's widgets report: the card's own input.
     fn report(sender: &ComponentSender<Self>) -> impl Report {
@@ -1725,6 +1402,16 @@ impl EditCardComponent {
         });
     }
 
+    /// Keeps the setting whose short list is open, telling the owner when
+    /// it changes.
+    fn set_open_options(&mut self, open: Option<String>, sender: &ComponentSender<Self>) {
+        if self.open_options != open {
+            self.open_options.clone_from(&open);
+            // Nobody listening is not a mistake.
+            let _ = sender.output(EditCardOutput::OptionsOpen(open));
+        }
+    }
+
     /// Passes on what people did.
     fn act(sender: &ComponentSender<Self>, action: CardAction) {
         // Nobody listening is not a mistake.
@@ -1732,21 +1419,63 @@ impl EditCardComponent {
     }
 }
 
+/// What tests read of the card's model.
+#[cfg(test)]
+impl EditCardComponent {
+    /// Each setting's entry.
+    pub fn entries(&self) -> Vec<(Ident, gtk::Entry)> {
+        self.built.entries.clone()
+    }
+
+    /// Each setting's short list, with the button that shows it and its
+    /// rows by text (the search row by "").
+    pub fn option_lists(&self) -> Vec<(Ident, gtk::ToggleButton, ChoiceRows)> {
+        self.built
+            .options
+            .iter()
+            .map(|list| (list.param.clone(), list.toggle.clone(), list.rows.clone()))
+            .collect()
+    }
+
+    /// Each fix's button with its problem and fix index.
+    pub fn fix_buttons(&self) -> Vec<((usize, usize), gtk::Button)> {
+        self.built.fixes.clone()
+    }
+
+    /// The button that puts back the setting a refusal blames, while the
+    /// card shows one.
+    pub fn put_back_button(&self) -> Option<gtk::Button> {
+        self.built.put_back.clone()
+    }
+}
+
 /// The card component's widgets: its frame.
 #[derive(Debug)]
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the relm4 card the window will own once it is a component; until then only tests launch it (docs/relm4-migration.md)"
-    )
-)]
 pub struct EditCardWidgets {
     frame: CardFrame,
 }
 
+/// What tests read of the card's widgets.
+#[cfg(test)]
+impl EditCardWidgets {
+    /// The Add (Apply) and Cancel buttons.
+    pub fn buttons(&self) -> (gtk::Button, gtk::Button) {
+        (self.frame.add.clone(), self.frame.cancel.clone())
+    }
+
+    /// The name field.
+    pub fn name_field(&self) -> gtk::EditableLabel {
+        self.frame.name.clone()
+    }
+
+    /// The scrolled body.
+    pub fn scrolled(&self) -> gtk::ScrolledWindow {
+        self.frame.scrolled.clone()
+    }
+}
+
 impl Component for EditCardComponent {
-    type Init = ();
+    type Init = CardSlots;
     type Input = EditCardInput;
     type Output = EditCardOutput;
     type CommandOutput = ();
@@ -1757,8 +1486,12 @@ impl Component for EditCardComponent {
         card_root()
     }
 
-    fn init(_: (), root: gtk::Box, sender: ComponentSender<Self>) -> ComponentParts<Self> {
-        let frame = fill_card(&root);
+    fn init(
+        slots: CardSlots,
+        root: gtk::Box,
+        sender: ComponentSender<Self>,
+    ) -> ComponentParts<Self> {
+        let frame = fill_card(&root, slots);
         let input = sender.input_sender();
         {
             let input = input.clone();
@@ -1861,15 +1594,13 @@ impl Component for EditCardComponent {
                     .iter()
                     .find(|list| list.param.as_str() == param)
                     .map(|list| list.toggle.clone());
-                let opened = toggle.is_some();
                 if let Some(toggle) = toggle {
-                    self.open_options = Some(param);
+                    self.set_open_options(Some(param), &sender);
                     // Its handler only reports the toggle, which the
                     // model already holds.
                     toggle.set_active(true);
                     self.scroll_to_open_options(&sender);
                 }
-                let _ = sender.output(EditCardOutput::OptionsOpened(opened));
             }
             EditCardInput::ScrollToOpenOptions => {
                 if let Some(target) = &self.scroll_target
@@ -1880,14 +1611,14 @@ impl Component for EditCardComponent {
             }
             EditCardInput::Body(BodyEvent::Action(action)) => Self::act(&sender, action),
             EditCardInput::Body(BodyEvent::Picked(action)) => {
-                self.open_options = None;
+                self.set_open_options(None, &sender);
                 Self::act(&sender, action);
             }
             EditCardInput::Body(BodyEvent::Toggled { param, open }) => {
                 if open {
-                    self.open_options = Some(param);
+                    self.set_open_options(Some(param), &sender);
                 } else if self.open_options.as_deref() == Some(param.as_str()) {
-                    self.open_options = None;
+                    self.set_open_options(None, &sender);
                 }
             }
             EditCardInput::Add => Self::act(&sender, CardAction::Add),
@@ -2250,7 +1981,7 @@ row.stave-option-search-hit.refused .stave-option-search-hint { opacity: 0.55; }
 /// Puts the menu's and the card's stylesheet on the display, once.
 pub(super) fn install_style(display: &gdk::Display) {
     thread_local! {
-        static INSTALLED: RefCell<Vec<gdk::Display>> = const { RefCell::new(Vec::new()) };
+        static INSTALLED: std::cell::RefCell<Vec<gdk::Display>> = const { std::cell::RefCell::new(Vec::new()) };
     }
     INSTALLED.with(|installed| {
         let mut installed = installed.borrow_mut();
@@ -2270,14 +2001,17 @@ pub(super) fn install_style(display: &gdk::Display) {
 
 #[cfg(test)]
 mod tests {
-    use std::cell::RefCell;
+    use std::cell::{Cell, RefCell};
     use std::rc::Rc;
 
     use super::*;
     use crate::ui::edit_demo::FixtureWords;
     use crate::ui::edit_menu::tests::greyed;
-    use crate::ui::edit_menu::{Checked, EditMenu, MenuItem};
+    use crate::ui::edit_menu::{
+        Checked, EditMenuComponent, EditMenuInput, EditMenuOutput, MenuEntry, MenuItem,
+    };
     use crate::ui::relm4_shim::Bridge;
+    use relm4::ComponentController;
     use stave_app::edit::{Declaration, Fits, clothing_cabinet_fixture};
 
     #[test]
@@ -2342,6 +2076,7 @@ mod tests {
     }
 
     fn menu_and_card_report() {
+        use crate::ui::gtk_test::settle;
         let fixture = clothing_cabinet_fixture().unwrap();
         let [drawer, door] = fixture.candidates.as_slice() else {
             panic!("two candidates");
@@ -2349,12 +2084,16 @@ mod tests {
 
         // The menu: Drawer can be chosen; a door still being checked, or
         // greyed, can't.
-        let menu = EditMenu::new();
         let chosen: Rc<RefCell<Vec<Declaration>>> = Rc::default();
-        {
+        let menu = {
             let chosen = chosen.clone();
-            menu.connect_chosen(move |declaration| chosen.borrow_mut().push(declaration));
-        }
+            EditMenuComponent::builder().launch(()).connect_receiver(
+                move |_, output| match output {
+                    EditMenuOutput::Chosen(declaration) => chosen.borrow_mut().push(declaration),
+                    EditMenuOutput::Drawn => {}
+                },
+            )
+        };
         let shut = greyed(door, "door_bay[left] already holds door_l");
         for door_item in [
             MenuItem {
@@ -2373,25 +2112,38 @@ mod tests {
                     checked: Checked::Done,
                 },
             ];
-            menu.show(fixture.picked.heading(), &items);
-            let rows = menu.rows();
+            menu.sender()
+                .send(EditMenuInput::Show {
+                    heading: fixture.picked.heading(),
+                    items: MenuEntry::list(&items),
+                })
+                .unwrap();
+            settle();
+            let rows = menu.model().rows().to_vec();
             let order: Vec<Declaration> =
                 rows.iter().map(|(declaration, _)| *declaration).collect();
             assert_eq!(order, [drawer.declaration, door.declaration]);
             for (_, button) in &rows {
                 button.emit_clicked();
             }
+            settle();
         }
         assert_eq!(*chosen.borrow(), [drawer.declaration, drawer.declaration]);
 
         // The card, on screen in a window that, like Stave's, takes
         // Escape for itself when nothing inside does.
-        let card = EditCard::new();
         let actions: Rc<RefCell<Vec<CardAction>>> = Rc::default();
-        {
+        let card = {
             let actions = actions.clone();
-            card.connect_action(move |action| actions.borrow_mut().push(action));
-        }
+            EditCardComponent::builder()
+                .launch(CardSlots::new())
+                .connect_receiver(move |_, output| {
+                    if let EditCardOutput::Action(action) = output {
+                        actions.borrow_mut().push(action);
+                    }
+                })
+        };
+        let root = card.widget().clone();
         let window = gtk::Window::builder()
             .default_width(420)
             .default_height(720)
@@ -2413,44 +2165,47 @@ mod tests {
         let other = gtk::Button::with_label("Elsewhere");
         let layout = gtk::Box::new(gtk::Orientation::Vertical, 0);
         layout.append(&other);
-        layout.append(&card.root);
+        layout.append(&root);
         window.set_child(Some(&layout));
         // The keyboard starts elsewhere, as it starts in the 3D view.
         gtk::prelude::GtkWindowExt::set_focus(&window, Some(&other));
         window.present();
         let context = glib::MainContext::default();
         let started = std::time::Instant::now();
-        while !card.root.is_mapped() && started.elapsed() < std::time::Duration::from_secs(10) {
+        while !root.is_mapped() && started.elapsed() < std::time::Duration::from_secs(10) {
             context.iteration(false);
         }
-        assert!(card.root.is_mapped(), "the window never came up");
+        assert!(root.is_mapped(), "the window never came up");
         // Appearing, the card takes the keyboard.
         assert_eq!(
             gtk::prelude::GtkWindowExt::focus(&window).as_ref(),
-            Some(card.root.upcast_ref::<gtk::Widget>())
+            Some(root.upcast_ref::<gtk::Widget>())
         );
         assert_eq!(
-            card.key_controller().widget().as_ref(),
-            Some(card.root.upcast_ref::<gtk::Widget>())
+            key_controller(&root).widget().as_ref(),
+            Some(root.upcast_ref::<gtk::Widget>())
         );
 
         // Refused: Add is disabled, Enter does nothing, the fix and
         // Escape are reported, and Escape never reaches the window.
         let show = |candidate, verdict| {
-            card.show(
-                &CardModel {
-                    applied: &[],
-                    blame: None,
-                    heading: fixture.picked.heading(),
-                    candidate,
-                    name: "drawer_2",
-                    verdict,
-                },
-                &FixtureWords,
-            );
+            card.sender()
+                .send(EditCardInput::Show(Box::new(CardView::new(
+                    &CardModel {
+                        applied: &[],
+                        blame: None,
+                        heading: fixture.picked.heading(),
+                        candidate,
+                        name: "drawer_2",
+                        verdict,
+                    },
+                    &FixtureWords,
+                ))))
+                .unwrap();
+            settle();
         };
         show(drawer, Some(&fixture.verdict));
-        let (add, cancel) = card.buttons();
+        let (add, cancel) = card.widgets().buttons();
         assert!(!add.is_sensitive());
         // The commit button reads Apply, whatever is added.
         assert_eq!(
@@ -2463,21 +2218,25 @@ mod tests {
         );
         assert_eq!(
             press(&window, gdk::Key::Return),
-            Some(card.root.clone().upcast())
+            Some(root.clone().upcast())
         );
-        let fixes = card.fix_buttons();
+        settle();
+        let fixes = card.model().fix_buttons();
         assert_eq!(fixes.len(), 1);
         assert_eq!(
             fixes[0].1.label().as_deref(),
             Some("Remove door_l and door_r")
         );
         fixes[0].1.emit_clicked();
+        settle();
         assert_eq!(
             press(&window, gdk::Key::Escape),
-            Some(card.root.clone().upcast())
+            Some(root.clone().upcast())
         );
+        settle();
         assert_eq!(window_escapes.get(), 0);
         cancel.emit_clicked();
+        settle();
         assert_eq!(
             actions.borrow_mut().drain(..).collect::<Vec<_>>(),
             [
@@ -2488,7 +2247,7 @@ mod tests {
         );
 
         // A setting typed and the name retyped are reported.
-        let entries = card.entries();
+        let entries = card.model().entries();
         let (param, entry) = entries
             .iter()
             .find(|(param, _)| param.as_str() == "front_stock")
@@ -2496,11 +2255,13 @@ mod tests {
         assert_eq!(entry.text(), "oak_19");
         entry.set_text("walnut_19");
         entry.emit_activate();
-        let name = card.name_field();
+        settle();
+        let name = card.widgets().name_field();
         assert_eq!(name.text(), "drawer_2");
         name.start_editing();
         name.set_text("tall_drawer");
         name.stop_editing(true);
+        settle();
         assert_eq!(
             actions.borrow_mut().drain(..).collect::<Vec<_>>(),
             [
@@ -2520,13 +2281,15 @@ mod tests {
         show(drawer, Some(&fits));
         assert_eq!(
             gtk::prelude::GtkWindowExt::focus(&window).as_ref(),
-            Some(card.root.upcast_ref::<gtk::Widget>())
+            Some(root.upcast_ref::<gtk::Widget>())
         );
         assert_eq!(
             press(&window, gdk::Key::KP_Enter),
-            Some(card.root.clone().upcast())
+            Some(root.clone().upcast())
         );
+        settle();
         add.emit_clicked();
+        settle();
         assert_eq!(
             actions.borrow_mut().drain(..).collect::<Vec<_>>(),
             [CardAction::Add, CardAction::Add]
@@ -2537,20 +2300,35 @@ mod tests {
         unset.settings[1].value = SettingValue::Unset;
         show(&unset, Some(&fits));
         assert!(!add.is_sensitive());
-        assert_eq!(card.entries()[0].0.as_str(), "front_stock");
-        assert_eq!(card.entries()[0].1.text(), "");
+        let entries = card.model().entries();
+        assert_eq!(entries[0].0.as_str(), "front_stock");
+        assert_eq!(entries[0].1.text(), "");
         // Unbound place param: no verdict, Add disabled.
         show(door, None);
         assert!(!add.is_sensitive());
-        assert!(card.fix_buttons().is_empty());
+        assert!(card.model().fix_buttons().is_empty());
         // Without the card's controller, Escape would fall to the window.
-        card.root.remove_controller(&card.key_controller());
+        root.remove_controller(&key_controller(&root));
         assert_eq!(
             press(&window, gdk::Key::Escape),
             Some(window.clone().upcast())
         );
         assert_eq!(window_escapes.get(), 1);
+        settle();
+        assert!(actions.borrow().is_empty(), "nothing reached the card");
         window.destroy();
+        drop(card);
+        drop(menu);
+        settle();
+    }
+
+    /// The card's own key controller.
+    fn key_controller(root: &gtk::Box) -> gtk::EventControllerKey {
+        let controllers = root.observe_controllers();
+        (0..controllers.n_items())
+            .filter_map(|index| controllers.item(index))
+            .find_map(|item| item.downcast::<gtk::EventControllerKey>().ok())
+            .expect("the card listens for keys")
     }
 
     /// Delivers a key press as GTK does: from the window down to the
@@ -2653,12 +2431,7 @@ mod tests {
 
     /// Fires the card's key controller as a key press would.
     fn press_key(root: &gtk::Box, key: gdk::Key) -> bool {
-        let controllers = root.observe_controllers();
-        let keys = (0..controllers.n_items())
-            .filter_map(|index| controllers.item(index))
-            .find_map(|item| item.downcast::<gtk::EventControllerKey>().ok())
-            .expect("the card listens for keys");
-        keys.emit_by_name::<bool>(
+        key_controller(root).emit_by_name::<bool>(
             "key-pressed",
             &[
                 &glib::translate::IntoGlib::into_glib(key),
@@ -2678,7 +2451,7 @@ mod tests {
     /// links' handlers and the callback are all freed.
     fn card_component_is_freed() {
         use crate::ui::gtk_test::settle;
-        let card = Bridge::<EditCardComponent>::launch(());
+        let card = Bridge::<EditCardComponent>::launch(CardSlots::new());
         card.send(EditCardInput::Show(Box::new(drawer_view(false, None))));
         let token = Rc::new(());
         let held = Rc::clone(&token);
@@ -2714,10 +2487,11 @@ mod tests {
 
     /// Show, UpdateOptions and OpenOptions change the model and the
     /// widgets, are only queued until the main loop runs, and never
-    /// report an action; OpenOptions answers whether it opened a list.
+    /// report an action; opening a list says which is open now, and
+    /// asking for a list the card doesn't show does nothing.
     fn card_component_setters() {
         use crate::ui::gtk_test::settle;
-        let card = Bridge::<EditCardComponent>::launch(());
+        let card = Bridge::<EditCardComponent>::launch(CardSlots::new());
         let heard: Rc<RefCell<Vec<EditCardOutput>>> = Rc::default();
         let log = Rc::clone(&heard);
         card.connect(move |output| log.borrow_mut().push(output));
@@ -2755,7 +2529,7 @@ mod tests {
         settle();
         assert_eq!(front_stock_rows(&card), Some(rows + 1));
 
-        // Opening a list answers, and keeps it open across a redraw.
+        // Opening a list says so, and keeps it open across a redraw.
         card.send(EditCardInput::OpenOptions("front_stock".to_owned()));
         card.send(EditCardInput::OpenOptions("no_such_setting".to_owned()));
         // Off screen there is no window to lay out: it waits, quietly.
@@ -2778,11 +2552,8 @@ mod tests {
         }
         assert_eq!(
             *heard.borrow(),
-            [
-                EditCardOutput::OptionsOpened(true),
-                EditCardOutput::OptionsOpened(false)
-            ],
-            "only the answers; no action"
+            [EditCardOutput::OptionsOpen(Some("front_stock".to_owned()))],
+            "only which list is open; no action"
         );
     }
 
@@ -2801,7 +2572,7 @@ mod tests {
     /// redraw sent before it.
     fn card_input_is_queued() {
         use crate::ui::gtk_test::settle;
-        let card = Rc::new(Bridge::<EditCardComponent>::launch(()));
+        let card = Rc::new(Bridge::<EditCardComponent>::launch(CardSlots::new()));
         card.send(EditCardInput::Show(Box::new(drawer_view(true, None))));
         settle();
         let (add, cancel) = footer_of(card.widget());
@@ -2810,14 +2581,17 @@ mod tests {
         let log = Rc::clone(&heard);
         let weak = Rc::downgrade(&card);
         let inner_cancel = cancel.clone();
+        // Only the first action heard sends more (a panic in here would be
+        // lost in the main loop, not fail the test, so it must not run
+        // again once the redraw has disabled Add).
+        let redrawn = Rc::new(Cell::new(false));
         card.connect(move |output| {
             let Some(card) = weak.upgrade() else {
                 return;
             };
             let enabled = card.model().add_enabled;
-            let first = log.borrow().is_empty();
             log.borrow_mut().push((output, enabled));
-            if first {
+            if !redrawn.replace(true) {
                 card.send(EditCardInput::Show(Box::new(drawer_view(false, None))));
                 assert!(press_key(card.widget(), gdk::Key::Return), "the card's key");
                 inner_cancel.emit_clicked();
