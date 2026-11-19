@@ -2,11 +2,17 @@
 //! texture, resolved, and read back as RGBA bytes. The window shows those
 //! bytes as a GDK texture; `--screenshot` writes them to a PNG.
 //!
-//! Reading back costs a copy per frame, but it works on every adapter and
-//! every GDK backend without sharing GPU memory between wgpu and GTK, and
-//! frames are only drawn when something changes.
+//! Reading back works on every adapter and every GDK backend without
+//! sharing GPU memory between wgpu and GTK, and frames are only drawn when
+//! something changes. The live view doesn't wait for the GPU: it submits a
+//! frame ([`Renderer::submit`]) and a later tick takes it
+//! ([`Renderer::take_ready`]) and hands GTK the mapped buffer as it is (see
+//! [`readback`]). Screenshots wait ([`Renderer::render`]).
 
 pub mod profile;
+mod readback;
+
+pub use readback::{LiveFrame, Ticket};
 
 use std::num::NonZeroU64;
 use std::sync::{Arc, Mutex};
@@ -131,7 +137,8 @@ struct OverlayVertex {
     colour: [f32; 4],
 }
 
-/// A finished frame: tightly packed sRGB RGBA, rows top to bottom.
+/// A finished frame: tightly packed sRGB RGBA, rows top to bottom, alpha
+/// 1 everywhere.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Image {
     /// Pixels across.
@@ -190,7 +197,6 @@ struct GpuMesh {
 struct Target {
     width: u32,
     height: u32,
-    padded_row: u32,
     msaa: wgpu::TextureView,
     depth: wgpu::TextureView,
     /// The selection mask, multisampled; its resolved copy is bound for
@@ -200,7 +206,6 @@ struct Target {
     mask_group: wgpu::BindGroup,
     resolved: wgpu::Texture,
     resolved_view: wgpu::TextureView,
-    readback: wgpu::Buffer,
 }
 
 /// What the GPU reported outside any call's result: wgpu's callbacks
@@ -294,6 +299,8 @@ pub struct Renderer {
     /// What the shadow map holds; `None` before the first frame.
     shadow_key: Option<ShadowKey>,
     target: Option<Target>,
+    /// The readback buffers and the frames in them.
+    ring: readback::Ring,
 }
 
 fn vertex_layout() -> wgpu::VertexBufferLayout<'static> {
@@ -518,15 +525,18 @@ impl Renderer {
             mask: !0,
             alpha_to_coverage_enabled: false,
         };
+        // Nothing writes the frame's alpha: it stays at the backdrop's 1,
+        // so every frame is opaque and its bytes are the same straight or
+        // premultiplied, and GTK takes them without converting.
         let blended = [Some(wgpu::ColorTargetState {
             format: COLOUR_FORMAT,
             blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-            write_mask: wgpu::ColorWrites::ALL,
+            write_mask: wgpu::ColorWrites::COLOR,
         })];
         let opaque = [Some(wgpu::ColorTargetState {
             format: COLOUR_FORMAT,
             blend: None,
-            write_mask: wgpu::ColorWrites::ALL,
+            write_mask: wgpu::ColorWrites::COLOR,
         })];
         let mesh_buffers = [Some(vertex_layout())];
         let edge_buffers = [Some(edge_layout())];
@@ -901,6 +911,7 @@ impl Renderer {
             meshes_generation: 0,
             shadow_key: None,
             target: None,
+            ring: readback::Ring::default(),
         })
     }
 
@@ -1032,17 +1043,9 @@ impl Renderer {
                     resource: wgpu::BindingResource::TextureView(&mask_resolved),
                 }],
             });
-            let padded_row = (width * 4).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
-            let readback = self.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("readback"),
-                size: u64::from(padded_row) * u64::from(height),
-                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-                mapped_at_creation: false,
-            });
             self.target = Some(Target {
                 width,
                 height,
-                padded_row,
                 msaa,
                 depth,
                 mask,
@@ -1050,22 +1053,63 @@ impl Renderer {
                 mask_group,
                 resolved,
                 resolved_view,
-                readback,
             });
         }
     }
 
-    /// Draws a frame and reads it back.
+    /// Draws a frame and waits for it (at most [`readback::PATIENCE`]):
+    /// for screenshots and still pictures. The live view uses
+    /// [`Renderer::submit`] instead.
     ///
     /// When the device has been lost it is opened again, the frame's scene
     /// uploaded to it, and the frame drawn there; an error the GPU reports
     /// while drawing fails the frame instead of the application.
     pub fn render(&mut self, frame: &Frame<'_>) -> Result<Image> {
+        let drawn = self.draw_checked(frame)?;
+        self.read_back(drawn)
+    }
+
+    /// Draws a frame and returns at once, without waiting for the GPU
+    /// (unless it is already [`readback`]'s limit of frames behind).
+    /// [`Renderer::take_ready`] takes it once it has arrived.
+    ///
+    /// A lost device and errors are dealt with as by [`Renderer::render`].
+    pub fn submit(&mut self, frame: &Frame<'_>) -> Result<Ticket> {
+        if let Err(error) = self.ring.make_room(&self.device)
+            && !self.is_lost()
+        {
+            return Err(error);
+        }
+        let drawn = self.draw_checked(frame)?;
+        Ok(self.ring.push(drawn))
+    }
+
+    /// The newest submitted frame that has arrived, if one has since the
+    /// last call; older ones are passed over. Never waits. An error says
+    /// why the newest frame to finish failed (an error mapping it, or the
+    /// GPU taking longer than [`readback::PATIENCE`]).
+    pub fn take_ready(&mut self) -> Result<Option<LiveFrame>> {
+        self.ring.take(&self.device)
+    }
+
+    /// Whether nothing more will come of `ticket`'s frame: it was taken,
+    /// passed over for a newer one, or failed.
+    pub fn settled(&self, ticket: Ticket) -> bool {
+        self.ring.settled(ticket)
+    }
+
+    /// Draws a frame into a readback buffer, opening the device again
+    /// when it has been lost and turning an error the GPU reports into a
+    /// failed frame.
+    fn draw_checked(&mut self, frame: &Frame<'_>) -> Result<readback::Drawn> {
         self.recover_if_lost(frame.scene)?;
         let drawn = self.draw(frame);
-        // A device lost while drawing: once more, on a new one.
+        // A device lost while drawing, or before (it may only say so when
+        // polled): once more, on a new one. Frames still on the old one
+        // count as done.
+        let _ = self.device.poll(wgpu::PollType::Poll);
         let drawn = match drawn {
-            Err(_) if self.is_lost() => {
+            _ if self.is_lost() => {
                 self.recover_if_lost(frame.scene)?;
                 self.draw(frame)
             }
@@ -1099,14 +1143,16 @@ impl Renderer {
             .and_then(|mut trouble| trouble.lost.take());
         if let Some(reason) = lost {
             eprintln!("stave: the graphics device was lost ({reason}); opening it again");
+            let ring = readback::Ring::after(&self.ring);
             *self = Renderer::new()
                 .context("the graphics device was lost and couldn't be opened again")?;
+            self.ring = ring;
             self.upload(scene);
         }
         Ok(())
     }
 
-    fn draw(&mut self, frame: &Frame<'_>) -> Result<Image> {
+    fn draw(&mut self, frame: &Frame<'_>) -> Result<readback::Drawn> {
         let (width, height) = (frame.width.max(1), frame.height.max(1));
         let limit = self.device.limits().max_texture_dimension_2d;
         if width > limit || height > limit {
@@ -1118,6 +1164,8 @@ impl Renderer {
         let started = profile::start();
         let light = self.write_uniforms(frame, width, height);
         self.ensure_target(width, height);
+        let layout = readback::Layout::new(width, height);
+        let buffer = self.ring.buffer(&self.device, layout);
         let target = self.target.as_ref().context("no render target")?;
         let mut encoder = self
             .device
@@ -1430,10 +1478,10 @@ impl Renderer {
                 aspect: wgpu::TextureAspect::All,
             },
             wgpu::TexelCopyBufferInfo {
-                buffer: &target.readback,
+                buffer: &buffer,
                 layout: wgpu::TexelCopyBufferLayout {
                     offset: 0,
-                    bytes_per_row: Some(target.padded_row),
+                    bytes_per_row: Some(layout.padded_row),
                     rows_per_image: Some(height),
                 },
             },
@@ -1444,74 +1492,78 @@ impl Renderer {
             },
         );
         let encoded = started.map(|_| Instant::now());
-        self.queue.submit([encoder.finish()]);
+        let submission = self.queue.submit([encoder.finish()]);
         self.shadow_key = Some(shadow_key);
-        let submitted = started.map(|_| Instant::now());
-        let (image, gpu_wait, readback) = self.read_back(width, height)?;
-        if let (Some(started), Some(encoded), Some(submitted)) = (started, encoded, submitted) {
-            profile::FrameTimings {
+        let submitted = Instant::now();
+        let timings = match (started, encoded) {
+            (Some(started), Some(encoded)) => Some(profile::FrameTimings {
                 width,
                 height,
                 encode: encoded.duration_since(started),
                 submit: submitted.duration_since(encoded),
-                gpu_wait,
-                readback,
+                gpu_wait: Duration::ZERO,
+                readback: Duration::ZERO,
                 shadow_drawn,
-            }
-            .print();
-        }
-        Ok(image)
+            }),
+            _ => None,
+        };
+        Ok(readback::Drawn {
+            buffer,
+            layout,
+            submission,
+            submitted,
+            timings,
+        })
     }
 
-    /// Waits for the frame and copies it out; also says how long the wait
-    /// and the copy took (zero unless `STAVE_PROFILE` is set).
-    fn read_back(&self, width: u32, height: u32) -> Result<(Image, Duration, Duration)> {
-        let target = self
-            .target
-            .as_ref()
-            .ok_or_else(|| anyhow!("no render target"))?;
-        let waiting = profile::start();
-        let slice = target.readback.slice(..);
+    /// Waits for a drawn frame, at most [`readback::PATIENCE`], and copies
+    /// it out without the rows' padding.
+    fn read_back(&mut self, drawn: readback::Drawn) -> Result<Image> {
+        let readback::Drawn {
+            buffer,
+            layout,
+            submission,
+            submitted,
+            timings,
+        } = drawn;
+        let slice = buffer.slice(..);
         let (sender, receiver) = std::sync::mpsc::channel();
         slice.map_async(wgpu::MapMode::Read, move |result| {
             // The receiver waits below; if it is gone there is no one to tell.
             let _ = sender.send(result);
         });
         self.device
-            .poll(wgpu::PollType::wait_indefinitely())
+            .poll(wgpu::PollType::Wait {
+                submission_index: Some(submission),
+                timeout: Some(readback::PATIENCE),
+            })
             .context("waiting for the GPU")?;
         receiver
-            .recv()
+            .try_recv()
             .context("the GPU didn't finish the frame")?
             .context("couldn't read the frame back")?;
-        let mapped_at = profile::start();
-        let row = usize::try_from(width)? * 4;
-        let padded = usize::try_from(target.padded_row)?;
-        let mut rgba = Vec::with_capacity(row * usize::try_from(height)?);
+        let mapped_at = Instant::now();
+        let row = usize::try_from(layout.width)? * 4;
+        let padded = usize::try_from(layout.padded_row)?;
+        let mut rgba = Vec::with_capacity(row * usize::try_from(layout.height)?);
         {
             let mapped = slice.get_mapped_range().context("mapping the frame")?;
             for line in mapped.chunks(padded) {
                 rgba.extend_from_slice(line.get(..row).unwrap_or(line));
             }
         }
-        target.readback.unmap();
-        let copied_at = mapped_at.map(|_| Instant::now());
-        let (gpu_wait, readback) = match (waiting, mapped_at, copied_at) {
-            (Some(waiting), Some(mapped_at), Some(copied_at)) => (
-                mapped_at.duration_since(waiting),
-                copied_at.duration_since(mapped_at),
-            ),
-            _ => (Duration::ZERO, Duration::ZERO),
-        };
-        Ok((
-            Image {
-                width,
-                height,
-                rgba,
-            },
-            gpu_wait,
-            readback,
-        ))
+        buffer.unmap();
+        self.ring.give_back(buffer);
+        if let Some(mut timings) = timings {
+            timings.gpu_wait = mapped_at.duration_since(submitted);
+            timings.readback = mapped_at.elapsed();
+            timings.print();
+        }
+        Ok(Image {
+            width: layout.width,
+            height: layout.height,
+            rgba,
+        })
     }
 
     /// Vertex buffers of boxes: their faces (triangles) and edges (lines).
@@ -2100,6 +2152,116 @@ mod tests {
             width: 96,
             height: 64,
         }
+    }
+
+    /// Waits for the GPU, then takes the newest frame that has arrived.
+    fn wait_and_take(renderer: &mut Renderer) -> Option<LiveFrame> {
+        renderer
+            .device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .unwrap();
+        renderer.take_ready().unwrap()
+    }
+
+    /// A live frame's rows without their padding.
+    fn unpadded(frame: &LiveFrame) -> Vec<u8> {
+        let row = usize::try_from(frame.width()).unwrap() * 4;
+        let stride = usize::try_from(frame.stride()).unwrap();
+        frame
+            .as_ref()
+            .chunks(stride)
+            .flat_map(|line| &line[..row])
+            .copied()
+            .collect()
+    }
+
+    #[test]
+    fn the_live_view_shows_the_frame_a_screenshot_does_and_it_is_opaque() {
+        let Some(mut renderer) = renderer() else {
+            return;
+        };
+        let (scene, posed) = stool();
+        renderer.upload(&scene);
+        let still = renderer.render(&frame(&scene, &posed, 0.0)).unwrap();
+        assert!(still.rgba.chunks(4).all(|pixel| pixel[3] == 255));
+        let ticket = renderer.submit(&frame(&scene, &posed, 0.0)).unwrap();
+        let live = wait_and_take(&mut renderer).unwrap();
+        assert!(renderer.settled(ticket));
+        assert_eq!((live.width(), live.height()), (96, 64));
+        // 96 * 4 bytes, padded to wgpu's 256-byte alignment: GTK is given
+        // the padded rows, not a copy without them.
+        assert_eq!(live.stride(), 512);
+        assert_eq!(unpadded(&live), still.rgba);
+    }
+
+    #[test]
+    fn a_newer_frame_is_shown_instead_of_an_older_one_not_yet_taken() {
+        let Some(mut renderer) = renderer() else {
+            return;
+        };
+        let (scene, posed) = stool();
+        renderer.upload(&scene);
+        let first = renderer.submit(&frame(&scene, &posed, 0.0)).unwrap();
+        let second = renderer.submit(&frame(&scene, &posed, 0.7)).unwrap();
+        assert!(first < second);
+        let shown = wait_and_take(&mut renderer).unwrap();
+        assert!(renderer.settled(first) && renderer.settled(second));
+        let turned = renderer.render(&frame(&scene, &posed, 0.7)).unwrap();
+        assert_eq!(unpadded(&shown), turned.rgba);
+        // Nothing more to take.
+        assert!(renderer.take_ready().unwrap().is_none());
+    }
+
+    #[test]
+    fn a_frame_s_buffer_is_used_again_once_gtk_lets_it_go() {
+        let Some(mut renderer) = renderer() else {
+            return;
+        };
+        let (scene, posed) = stool();
+        renderer.upload(&scene);
+        for _ in 0..2 {
+            renderer.submit(&frame(&scene, &posed, 0.0)).unwrap();
+            let shown = wait_and_take(&mut renderer).unwrap();
+            drop(shown);
+        }
+        renderer.render(&frame(&scene, &posed, 0.0)).unwrap();
+        assert_eq!(renderer.ring.made(), 1);
+        // Held, the frame's buffer isn't reused: another is made.
+        renderer.submit(&frame(&scene, &posed, 0.0)).unwrap();
+        let held = wait_and_take(&mut renderer).unwrap();
+        renderer.submit(&frame(&scene, &posed, 0.0)).unwrap();
+        assert_eq!(renderer.ring.made(), 2);
+        drop(held);
+    }
+
+    #[test]
+    fn frames_in_flight_when_the_device_is_lost_count_as_done() {
+        let Some(mut renderer) = renderer() else {
+            return;
+        };
+        let (scene, posed) = stool();
+        renderer.upload(&scene);
+        let before = renderer.submit(&frame(&scene, &posed, 0.0)).unwrap();
+        renderer.device.destroy();
+        // wgpu may say the device is lost at once or only after a frame on
+        // it fails; either way a frame soon arrives from a new one, and
+        // nothing is left waiting on the old.
+        let mut shown = None;
+        for _ in 0..3 {
+            let Ok(after) = renderer.submit(&frame(&scene, &posed, 0.0)) else {
+                continue;
+            };
+            assert!(before < after);
+            let _ = renderer.device.poll(wgpu::PollType::wait_indefinitely());
+            if let Ok(Some(frame)) = renderer.take_ready() {
+                assert!(renderer.settled(after));
+                shown = Some(frame);
+                break;
+            }
+        }
+        assert!(shown.is_some());
+        assert!(renderer.settled(before));
+        assert!(!renderer.is_lost());
     }
 
     #[test]

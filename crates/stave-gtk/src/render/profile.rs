@@ -58,9 +58,12 @@ pub struct FrameTimings {
     pub encode: Duration,
     /// Handing the commands to the GPU.
     pub submit: Duration,
-    /// Waiting for the GPU to finish the frame and map it.
+    /// From handing the commands over until the frame was mapped (for
+    /// the live view, until a tick found it mapped; the main loop runs
+    /// meanwhile).
     pub gpu_wait: Duration,
-    /// Copying the rows out of the mapped buffer without their padding.
+    /// Copying the rows out of the mapped buffer without their padding;
+    /// zero for the live view, which hands GTK the mapped buffer.
     pub readback: Duration,
     /// Whether the shadow map was drawn again (false: kept from before).
     pub shadow_drawn: bool,
