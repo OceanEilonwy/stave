@@ -7,12 +7,23 @@
 //!
 //! Each control group is a relm4 component (docs/relm4-migration.md): its
 //! model is the only state, only its `update` changes it, and its
-//! widgets' handlers only send it messages. Programmatic changes that
-//! would fire a toggle's handler are made with the handler blocked
-//! (`#[block_signal]`), so they never read as people's input. The structs
-//! named after them ([`ViewToolbar`], [`CameraToolbar`], [`PlanSwitch`],
-//! [`EmptyView`]) keep the older API in front of the components until the
-//! window moves to relm4 too.
+//! widgets' handlers only send it messages. The structs named after them
+//! ([`ViewToolbar`], [`CameraToolbar`], [`PlanSwitch`], [`EmptyView`])
+//! keep the older API in front of the components until the window moves
+//! to relm4 too.
+//!
+//! The Pull apart toggle and the plan switch's buttons are the one
+//! exception to "the view follows the model". The window still connects
+//! its own handlers on those public toggles and guards them with
+//! `updating_controls` around `show`, so `show` must set them at once,
+//! inside that guard, as it always did. A `#[watch] #[block_signal]` set
+//! would come later from the main loop, with the guard down, and would
+//! replay every queued `show` onto the toggle, each heard by the window's
+//! handler (blocking only stops the component's own). So the shims set
+//! the toggles and queue `Show` first; the component's handler then
+//! reports a change the model already holds, and it sends nothing. When
+//! the window hears the components' outputs instead, the toggles go back
+//! to `#[watch] #[block_signal]` sets from the model.
 
 use adw::prelude::*;
 use relm4::{Component, ComponentParts, ComponentSender, RelmWidgetExt};
@@ -200,16 +211,15 @@ impl Component for ViewToolbarComponent {
             },
         },
 
+        // Set by [`ViewToolbar::show`] at once, not from the model: see
+        // the module's notes.
         #[local_ref]
         pull -> gtk::ToggleButton {
-            #[watch]
-            #[block_signal(pull_toggled)]
-            set_active: model.on,
             connect_toggled[sender] => move |button| {
                 sender
                     .input_sender()
                     .emit(ViewToolbarInput::PullToggled(button.is_active()));
-            } @pull_toggled,
+            },
         },
     }
 
@@ -279,7 +289,8 @@ impl Component for ViewToolbarComponent {
 /// while Pull apart is on its play button and "together … apart" slider,
 /// popping out to the left of its button. It keeps the API the window
 /// still uses and owns the component: dropping it shuts the component
-/// down. Setters are queued.
+/// down. Setters are queued, except that [`ViewToolbar::show`] sets the
+/// Pull apart toggle at once, as the window's handler on it expects.
 pub struct ViewToolbar {
     /// See through everything but the selection.
     pub xray: gtk::ToggleButton,
@@ -358,12 +369,20 @@ impl ViewToolbar {
     }
 
     /// Shows Pull apart on (with its slider at `amount`) or off.
+    ///
+    /// The toggle is set at once, as it always was, so a handler the
+    /// window connected on [`ViewToolbar::pull`] hears it while the
+    /// window's own guard is still up, never later from the main loop.
+    /// `Show` is queued first, so when the component's handler's
+    /// `PullToggled` arrives the model already agrees and it sends
+    /// nothing.
     pub fn show(&self, on: bool, amount: f32, playing: bool) {
         self.bridge.send(ViewToolbarInput::Show {
             on,
             amount,
             playing,
         });
+        self.pull.set_active(on);
     }
 
     /// Offers the tools, or takes them away while a problem is posed or
@@ -678,22 +697,20 @@ impl Component for PlanSwitchComponent {
             set_visible: false,
             update_property: &[gtk::accessible::Property::Label("Hinge view")],
 
+            // Both buttons are set by [`PlanSwitch::show`] at once, not
+            // from the model: see the module's notes.
             #[local_ref]
             from_above -> gtk::ToggleButton {
-                #[watch]
-                #[block_signal(from_above_toggled)]
-                set_active: model.plan,
                 connect_toggled[sender] => move |button| {
                     sender
                         .input_sender()
                         .emit(PlanSwitchInput::Toggled(button.is_active()));
-                } @from_above_toggled,
+                },
             },
             #[local_ref]
             in_3d -> gtk::ToggleButton {
-                // Turning it on turns "From above" off, which only says
-                // what the model says already.
-                #[watch]
+                // It opens in 3D. "From above" was off already, so its
+                // handler does not run.
                 set_active: !model.plan,
             },
         }
@@ -725,21 +742,15 @@ impl Component for PlanSwitchComponent {
 }
 
 /// Focus mode's switch between the view from above and the view in 3D. It
-/// keeps the API the window still uses and owns the component. Setters
-/// are queued.
+/// keeps the API the window still uses and owns the component.
+/// [`PlanSwitch::show`] sets the buttons at once, as the window's handler
+/// on [`PlanSwitch::from_above`] expects.
 pub struct PlanSwitch {
     /// The switch, to overlay on the view.
     pub root: gtk::Box,
     /// From above (plan).
     pub from_above: gtk::ToggleButton,
     /// In 3D.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "kept for the switch's API; only tests press it now"
-        )
-    )]
     pub in_3d: gtk::ToggleButton,
     bridge: Bridge<PlanSwitchComponent>,
 }
@@ -772,8 +783,19 @@ impl PlanSwitch {
     }
 
     /// Shows which view is on.
+    ///
+    /// The buttons are set at once, as they always were, so a handler the
+    /// window connected on [`PlanSwitch::from_above`] hears it while the
+    /// window's own guard is still up, never later from the main loop.
+    /// `Show` is queued first, so when the component's handler's `Toggled`
+    /// arrives the model already agrees and it sends nothing.
     pub fn show(&self, plan: bool) {
         self.bridge.send(PlanSwitchInput::Show { plan });
+        if plan {
+            self.from_above.set_active(true);
+        } else {
+            self.in_3d.set_active(true);
+        }
     }
 }
 
@@ -929,7 +951,7 @@ impl EmptyView {
 
 #[cfg(test)]
 mod tests {
-    use std::cell::RefCell;
+    use std::cell::{Cell, RefCell};
     use std::rc::Rc;
 
     use super::*;
@@ -971,9 +993,9 @@ mod tests {
         on_gtk_thread(show_does_not_call_back);
     }
 
-    /// The window used to raise `updating_controls` around `show` so the
-    /// toggle's handler would ignore it; now the handler is blocked while
-    /// the view sets it, so `show` and `offer` never send an output.
+    /// `show` sets the toggle after telling the model, so the component's
+    /// own handler reports a change of nothing: `show` and `offer` never
+    /// send an output.
     fn show_does_not_call_back() {
         let tools = ViewToolbar::new();
         let heard: Rc<RefCell<Vec<ViewToolbarOutput>>> = Rc::default();
@@ -982,7 +1004,7 @@ mod tests {
             .bridge
             .connect(move |output| log.borrow_mut().push(output));
         tools.show(true, 0.4, true);
-        assert!(!tools.pull.is_active(), "show is queued");
+        assert!(tools.pull.is_active(), "the toggle is set at once");
         settle();
         assert!(tools.pull.is_active());
         assert!(tools.popout.is_visible(), "the slider pops out");
@@ -1001,6 +1023,52 @@ mod tests {
         assert!(!tools.pull.is_active());
         assert!(!tools.popout.is_visible());
         assert!(heard.borrow().is_empty(), "setters never call back");
+    }
+
+    #[test]
+    fn showing_pull_apart_reaches_the_windows_handler_only_under_its_guard() {
+        on_gtk_thread(show_stays_under_the_windows_guard);
+    }
+
+    /// The window connects its own handler on `pull` and raises
+    /// `updating_controls` around `show`, so the handler returns early.
+    /// `show` must change the toggle while that guard is up, never later
+    /// from the main loop; two shows in one turn of it must not reach the
+    /// handler either, or the first would read as people pressing it.
+    fn show_stays_under_the_windows_guard() {
+        let tools = ViewToolbar::new();
+        let updating_controls = Rc::new(Cell::new(false));
+        let pressed: Rc<RefCell<Vec<bool>>> = Rc::default();
+        let (guard, log) = (Rc::clone(&updating_controls), Rc::clone(&pressed));
+        tools.pull.connect_toggled(move |button| {
+            if !guard.get() {
+                log.borrow_mut().push(button.is_active());
+            }
+        });
+        let heard: Rc<RefCell<Vec<ViewToolbarOutput>>> = Rc::default();
+        let outputs = Rc::clone(&heard);
+        tools
+            .bridge
+            .connect(move |output| outputs.borrow_mut().push(output));
+        let show = |on: bool| {
+            updating_controls.set(true);
+            tools.show(on, 0.0, false);
+            updating_controls.set(false);
+        };
+        show(true);
+        show(false);
+        show(true);
+        settle();
+        assert!(tools.pull.is_active());
+        assert!(tools.bridge.model().on, "the model agrees");
+        show(false);
+        settle();
+        assert!(!tools.pull.is_active());
+        assert!(
+            pressed.borrow().is_empty(),
+            "the window's handler never ran"
+        );
+        assert!(heard.borrow().is_empty(), "nor did the component call back");
     }
 
     #[test]
@@ -1119,9 +1187,9 @@ mod tests {
         on_gtk_thread(plan_switch);
     }
 
-    /// Showing the view from above sets the toggles with the handler
-    /// blocked (or says what the model already says), so only people's
-    /// presses are heard, each after its update.
+    /// Showing the view from above sets the buttons after telling the
+    /// model, so the component's own handler reports a change of nothing:
+    /// only people's presses are heard, each after its update.
     fn plan_switch() {
         let switch = Rc::new(PlanSwitch::new());
         settle();
@@ -1161,6 +1229,55 @@ mod tests {
         drop(switch);
         settle();
         assert!(root.upgrade().is_none(), "the switch is freed");
+    }
+
+    #[test]
+    fn showing_the_plan_reaches_the_windows_handler_only_under_its_guard() {
+        on_gtk_thread(plan_show_stays_under_the_windows_guard);
+    }
+
+    /// The window connects its own handler on `from_above` and raises
+    /// `updating_controls` around `show`, so `update_focus` returns early.
+    /// `show` must change the buttons while that guard is up, never later
+    /// from the main loop: leaving focus on one joint and entering another
+    /// shows twice in one turn, and the first must not write a stale plan.
+    fn plan_show_stays_under_the_windows_guard() {
+        let switch = PlanSwitch::new();
+        settle();
+        let updating_controls = Rc::new(Cell::new(false));
+        let pressed: Rc<RefCell<Vec<bool>>> = Rc::default();
+        let (guard, log) = (Rc::clone(&updating_controls), Rc::clone(&pressed));
+        switch.from_above.connect_toggled(move |button| {
+            if !guard.get() {
+                log.borrow_mut().push(button.is_active());
+            }
+        });
+        let heard: Rc<RefCell<Vec<PlanSwitchOutput>>> = Rc::default();
+        let outputs = Rc::clone(&heard);
+        switch
+            .bridge
+            .connect(move |output| outputs.borrow_mut().push(output));
+        let show = |plan: bool| {
+            updating_controls.set(true);
+            switch.show(plan);
+            updating_controls.set(false);
+        };
+        show(true);
+        assert!(switch.from_above.is_active(), "set at once");
+        show(false);
+        show(true);
+        settle();
+        assert!(switch.from_above.is_active());
+        assert!(switch.bridge.model().plan, "the model agrees");
+        show(false);
+        settle();
+        assert!(switch.in_3d.is_active());
+        assert!(!switch.bridge.model().plan);
+        assert!(
+            pressed.borrow().is_empty(),
+            "the window's handler never ran"
+        );
+        assert!(heard.borrow().is_empty(), "nor did the component call back");
     }
 
     #[test]
