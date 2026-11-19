@@ -28,6 +28,7 @@
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
+#![warn(clippy::redundant_clone, clippy::needless_pass_by_value)]
 
 mod boards;
 mod build;
