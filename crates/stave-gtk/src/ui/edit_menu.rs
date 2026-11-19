@@ -240,9 +240,9 @@ impl EditMenu {
             let section = gtk::Box::new(gtk::Orientation::Vertical, 8);
             section.append(
                 &gtk::Label::builder()
-                    .label(group_title(group).to_uppercase())
+                    .label(group_title(group))
                     .xalign(0.0)
-                    .css_classes(["stave-section"])
+                    .css_classes(["stave-section", "stave-caps"])
                     .build(),
             );
             let card = gtk::Box::builder()
