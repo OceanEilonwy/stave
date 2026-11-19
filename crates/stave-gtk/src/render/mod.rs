@@ -138,6 +138,25 @@ pub struct Image {
     pub rgba: Vec<u8>,
 }
 
+/// A problem as a frame draws it, borrowed: its nodes tinted red and its
+/// shared volumes drawn as red boxes on top of everything.
+#[derive(Debug, Clone, Copy)]
+pub struct Highlighted<'a> {
+    /// The nodes involved.
+    pub nodes: &'a [NodeId],
+    /// The shared volumes, posed; empty to draw only the nodes.
+    pub volumes: &'a [Aabb],
+}
+
+impl<'a> From<&'a Highlight> for Highlighted<'a> {
+    fn from(highlight: &'a Highlight) -> Self {
+        Self {
+            nodes: &highlight.nodes,
+            volumes: &highlight.volumes,
+        }
+    }
+}
+
 /// What to draw.
 pub struct Frame<'a> {
     /// The scene.
@@ -151,7 +170,7 @@ pub struct Frame<'a> {
     pub selection: &'a [NodeId],
     /// A problem to show: its nodes tinted red and its shared volumes drawn
     /// as red boxes on top of everything.
-    pub highlight: Option<&'a Highlight>,
+    pub highlight: Option<Highlighted<'a>>,
     /// A plane cutting the view: what lies beyond it isn't drawn, and the
     /// wood it cuts through is drawn flat.
     pub section: Option<Section>,
@@ -1009,7 +1028,7 @@ impl Renderer {
         let volumes = frame
             .highlight
             .filter(|h| !h.volumes.is_empty())
-            .map(|h| self.volume_buffers(&h.volumes));
+            .map(|h| self.volume_buffers(h.volumes));
         let lit = frame
             .lit
             .filter(|boxes| !boxes.is_empty())
