@@ -667,7 +667,7 @@ impl Window {
 
     /// Shows the part's "Add onto" button when the selected part is the
     /// one whose face was clicked and nothing is being edited.
-    pub(super) fn update_face_button(&self) {
+    pub(super) fn update_face_button(&mut self) {
         let face = self.editing.state.face;
         let selected = match self.session.selection() {
             Some(Selection::Part(part)) => Some(*part),

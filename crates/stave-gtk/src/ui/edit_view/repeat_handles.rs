@@ -15,7 +15,7 @@
 //!   piece a ══ ⇕ 180 mm ══ piece b   (a boundary handle)
 //! ```
 
-use std::cell::{Cell, RefCell};
+use std::cell::Cell;
 
 use adw::prelude::*;
 use glam::Vec3;
@@ -250,7 +250,7 @@ pub(in crate::ui) struct Repeats {
     /// On the chosen candidate's card, folded until asked for.
     pub(in crate::ui) row: RepeatFoldRow,
     count: Handle,
-    boundaries: RefCell<Vec<(Handle, Option<Boundary>)>>,
+    boundaries: Vec<(Handle, Option<Boundary>)>,
     /// What the count handle is on: the space's box and the axis, while
     /// it shows.
     count_on: Cell<Option<(Aabb, Axis, usize)>>,
@@ -269,7 +269,7 @@ impl Repeats {
             count: Handle::new(
                 "Drag toward the start of the space for more pieces, back for fewer",
             ),
-            boundaries: RefCell::new(Vec::new()),
+            boundaries: Vec::new(),
             count_on: Cell::new(None),
             drag: Cell::new(None),
             dragged_count: Cell::new(None),
@@ -627,12 +627,12 @@ impl Window {
         } else {
             self.shown_boundaries()
         };
-        let repeats = &self.editing.repeats;
-        let dragging = repeats.dragged_boundary.get();
-        // Handles to hide once the borrow is let go: hiding the dragged
-        // handle ends its drag, and the drag's end reads the boundaries.
+        let dragging = self.editing.repeats.dragged_boundary.get();
+        // Handles to hide once they are placed: hiding the dragged handle
+        // ends its drag (a queued message).
         let mut to_hide: Vec<gtk::Box> = Vec::new();
-        let mut handles = repeats.boundaries.borrow_mut();
+        // Taken out while the window places them, and put back after.
+        let mut handles = std::mem::take(&mut self.editing.repeats.boundaries);
         while handles.len() < shown.len() {
             let handle =
                 Handle::new("Drag to move the boundary: only these two pieces change size");
@@ -673,7 +673,7 @@ impl Window {
                 None => to_hide.push(handle.root.clone()),
             }
         }
-        drop(handles);
+        self.editing.repeats.boundaries = handles;
         for root in to_hide {
             root.set_visible(false);
         }
@@ -684,7 +684,6 @@ impl Window {
         self.editing
             .repeats
             .boundaries
-            .borrow()
             .get(index)
             .and_then(|(_, boundary)| boundary.clone())
     }
@@ -718,7 +717,6 @@ impl Window {
         let repeats = &self.editing.repeats;
         let origin = repeats
             .boundaries
-            .borrow()
             .get(index)
             .map(|(handle, _)| handle.origin((x, y)));
         if let Some(origin) = origin {

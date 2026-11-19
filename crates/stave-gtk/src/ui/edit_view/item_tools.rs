@@ -21,7 +21,7 @@
 //! [Hold a distance…]  [Remove…]
 //! ```
 
-use std::cell::{Cell, RefCell};
+use std::cell::Cell;
 use std::rc::Rc;
 
 use crate::ui::update::editing::EditingInput;
@@ -759,10 +759,9 @@ pub(in crate::ui) struct ItemTools {
     pub(in crate::ui) root: gtk::Box,
     repeat: RepeatFoldRow,
     bridge: Bridge<ItemToolsComponent>,
-    /// The owner's cache of the offer for the item shown: read and
-    /// replaced at once by `Window::update_item_tools`, never borrowed
-    /// across a call to GTK.
-    shown: RefCell<Option<Shown>>,
+    /// The owner's cache of the offer for the item shown, kept by
+    /// `Window::update_item_tools`.
+    shown: Option<Shown>,
 }
 
 impl ItemTools {
@@ -785,7 +784,7 @@ impl ItemTools {
             root,
             repeat,
             bridge,
-            shown: RefCell::new(None),
+            shown: None,
         }
     }
 
@@ -854,8 +853,7 @@ impl Window {
 
     /// Shows the item's changes on its card when the selection is a part,
     /// a piece of hardware or an assembly and nothing is being edited.
-    pub(in crate::ui) fn update_item_tools(&self) {
-        let tools = &self.editing.tools;
+    pub(in crate::ui) fn update_item_tools(&mut self) {
         let found = {
             let session = &self.session;
             session.drawable().and_then(|(design, _)| {
@@ -869,10 +867,10 @@ impl Window {
         let Some((item, unmeasurable, address)) =
             found.filter(|_| !self.edit_open() && self.gestures_allowed())
         else {
-            tools.root.set_visible(false);
+            self.editing.tools.root.set_visible(false);
             return;
         };
-        let (stale, another_item) = tools.shown.borrow().as_ref().map_or((true, true), |shown| {
+        let (stale, another_item) = self.editing.tools.shown.as_ref().map_or((true, true), |shown| {
             (
                 shown.item != item || shown.design != address,
                 shown.item != item,
@@ -881,22 +879,19 @@ impl Window {
         if stale {
             // Another item: "Repeat…" is asked for again.
             if another_item {
-                tools.repeat.forget();
+                self.editing.tools.repeat.forget();
             }
             // The offer reads the project, so it is worked out once per
             // item and result.
             let offer = self.session.item_offer(&item);
-            tools.shown.replace(Some(Shown {
+            self.editing.tools.shown = Some(Shown {
                 item: item.clone(),
                 design: address,
                 offer,
-            }));
+            });
         }
-        let offer = tools
-            .shown
-            .borrow()
-            .as_ref()
-            .and_then(|shown| shown.offer.clone());
+        let tools = &self.editing.tools;
+        let offer = tools.shown.as_ref().and_then(|shown| shown.offer.clone());
         let Some(offer) = offer else {
             tools.root.set_visible(false);
             return;
