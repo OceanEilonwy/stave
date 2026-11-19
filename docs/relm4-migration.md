@@ -288,8 +288,8 @@ Files with no widgets need nothing: `view_layout.rs` (layout arithmetic),
 | `slider.rs` | `Slider` | `connect_changed(f64)` → `SliderOutput::Changed(f64)` | `set_value` → `SetValue(f64)`; `set_range` → `SetRange { lower, upper }`; `set_blocked_from` → `SetBlockedFrom(Option<f64>)`; `set_value_text` → `SetValueText(String)` | **Done** (Phase 0). People's input: `PointedAt { x, width }`, `Stepped(Step)`. `value()` reads the model. |
 | `chrome.rs` | `MotionBar` | (mod.rs) `scale.connect_value_changed` → `MotionBarOutput::Moved(f64)` | `show(Option<(&str, &str, &str, f64, f64)>)` → `Show(Option<MotionShown>)`; `orientation_setter()` → `SetOrientation(gtk::Orientation)` | `#[block_signal]` on the scale's value when `Show` moves it. |
 | `dock.rs` | `Dock` | `connect_move(AssemblyId)` → `DockOutput::Move(AssemblyId)` | `offer(bool)` → `Offer(bool)`; `moves_orientation_setter()` → `SetMovesOrientation(gtk::Orientation)` | Built from the header's scene button and the `MotionBar`: launch after them, or own both. |
-| `edit_card.rs` | `EditCard` | `connect_action(CardAction)` → `EditCardOutput::Action(CardAction)` | `show(&CardModel, &dyn Words)` → `Show(CardView)` (owned); `update_options(&Candidate)` → `UpdateOptions(Candidate)`; `open_options(&str) -> bool` → `OpenOptions(String)`, the bool becomes `EditCardOutput::OptionsOpened(bool)`; `scroll_to_open_options_now()` → `ScrollToOpenOptions` | Its `links: LinkHandlers` fold into `Action` (see `sections.rs`). Test getters: `key_controller`, `buttons`, `name_field`, `entries`, `option_lists`, `scrolled`, `put_back_button`, `fix_buttons`; *query* `open_setting()`. |
-| `edit_menu.rs` | `EditMenu` | `connect_chosen(Declaration)` → `EditMenuOutput::Chosen(Declaration)` | `show(Heading, &[MenuItem])` → `Show { heading, items: Vec<MenuEntry> }` (owned) | Test getter `rows()`. |
+| `edit_card.rs` | `EditCardComponent` | `connect_action(CardAction)` → `EditCardOutput::Action(CardAction)`; its links → `Link(LinkTarget)`, `Hover(Option<LinkTarget>)`; the open short list → `OptionsOpen(Option<String>)` | `show(&CardModel, &dyn Words)` → `Show(Box<CardView>)` (owned); `update_options(&Candidate)` → `UpdateOptions(Box<Candidate>)`; `open_options(&str) -> bool` → `OpenOptions(String)` (the bool is the window's own `CardOffers`); `scroll_to_open_options_now()` → `ScrollToOpenOptions` | **Done**: the shim is gone; the window owns the `Controller` (see "Edit card and menu: answers by message"). `Init` is `CardSlots` (the repeat and Pending boxes the window fills). Test getters on the model (`entries`, `option_lists`, `fix_buttons`, `put_back_button`) and the widgets (`buttons`, `name_field`, `scrolled`). |
+| `edit_menu.rs` | `EditMenuComponent` | `connect_chosen(Declaration)` → `EditMenuOutput::Chosen(Declaration)`; `EditMenuOutput::Drawn` after each `Show` | `show(Heading, &[MenuItem])` → `Show { heading, items: Vec<MenuEntry> }` (owned) | **Done**: the shim is gone; the window owns the `Controller`. Test getter `rows()` on the model. |
 | `edit_panel.rs` | `EditPanel` | — | `update() -> bool` → `Update`, the bool becomes `EditPanelOutput::Shown(bool)` | *query* `is_empty()`. Built from other cards' widgets: becomes part of its owner's view. |
 | `editor.rs` | `Editor` | `connect_lens_uses(SymbolId)` → `EditorOutput::LensUses(SymbolId)`; `connect_lens_show(SymbolId)` → `EditorOutput::LensShow(SymbolId)` | `set_lenses(&[LensLine])` → `SetLenses(Vec<LensLine>)`; `set_peek(Option<(gtk::Widget, i32)>)` → `SetPeek(Option<(gtk::Widget, i32)>)`; `show_buffer(&TextBuffer, bool)` → `ShowBuffer { buffer, editable }`; `colour(bool)` → `Colour { dark }`; `paint(&TextBuffer, &LineStarts, &[(Run, TokenClass)])` → `Paint { buffer, lines, runs }`; `start_search()` → `StartSearch`; `find(&str)` → `Find(String)` (it opens the bar on the text and highlights its matches but does not select: `Editor::find` selects the first match from the cursor before it sends it, so code that sends `Find` itself must select first); `close_search()` → `CloseSearch`; `show_card(&Widget, i32, i32)` → `ShowCard { card, x, y }`; `hide_card()` → `HideCard`; `place_overlays()` → `PlaceOverlays`; `go_to(&LineStarts, u32)` → `GoTo { lines, offset }` | GObject subclasses `Marks`, `CodeView`, `BlockIndenter` stay widgets. *queries*: `new_buffer`, `vadjustment`, `has_focus`, `has_search`, `has_peek`, `has_card`, `cursor`, `offset_at`; `LineStarts` is plain data. Owned by `FilesPage`. |
 | `files.rs` | `FilesPage` | `connect_link(CursorName)` → `FilesOutput::Link(CursorName)`; `connect_go(Option<SourceLocation>, SourceLocation)` → `Go { from, to }`; `connect_check()` → `Check`; `connect_show_in_3d(Rc<Analysis>, SymbolId)` → `ShowIn3d { analysis, symbol }`; `connect_open()` → `Open`; `connect_notice(String)` → `Notice(String)` | `focus_text()` → `FocusText`; `set_folder(&Path)` → `SetFolder(PathBuf)`; `save_all() -> bool` → `SaveAll`, answered by `FilesOutput::Saved(bool)`; `save()` → `Save`; `format()` → `Format`; `forget_unsaved()` → `ForgetUnsaved`; `focus_search() -> bool` → `FocusSearch`; `show_marks(Rc<Marks>)` → `ShowMarks(Rc<Marks>)`; `show_result(Option<Rc<Checked>>)` → `ShowResult(Option<Rc<Checked>>)`; `show_location(&SourceLocation)` → `ShowLocation(SourceLocation)`; `reveal(&SourceLocation)` → `Reveal(SourceLocation)`; `wish(Wish)` → `Wish(Wish)`; `restyle(bool)` → `Restyle { dark }`; `open_document(&Document)` → `OpenDocument(Document)` | The biggest leaf (own `RefCell` state, `Rc<Self>` methods); owns `Editor`. *queries*: `buffer_for`, `has_unsaved`, `is_unsaved`, `unsaved_count`, `analysis`, `overlay_for_check`, `edit_files`, `page_tabs`. `BufferWriter` (`edit_writer.rs`) writes through it with an `Rc<Cell<bool>>`: rule 11. |
@@ -305,7 +305,7 @@ Files with no widgets need nothing: `view_layout.rs` (layout arithmetic),
 | `icons.rs` | `PathIcon` | — | `set_shape(Shape)` (widget method) | A GObject subclass: stays a widget, used inside components' views. |
 | `inspector.rs` | `Inspector` | `connect_focus(Target)` → `InspectorOutput::Focus(Target)`; `connect_source(SourceLocation)` → `Source(SourceLocation)`; `connect_unsaved(&str) -> bool` → *query*: becomes `InspectorInput::Unsaved(BTreeSet<PathBuf>)`, sent when it changes | `show_focus()` → `ShowFocus`; `show_idle(Option<Note>)` → `ShowIdle(Option<Note>)`; `show(Option<&Inspection>)` → `Show(Option<Inspection>)` | Owns `FocusPanel` and `LinkHandlers` (their outputs forwarded). |
 | `new_project.rs` | `NewProjectDialog` | `cancel`, `form.folder_button`, `form.create` `connect_clicked` and `form.dialog.connect_closed` → `NewProjectOutput::Cancel`, `ChooseFolder`, `Create(NewProject)`, `Closed` | — | *queries* `answers()`, `ToolChoice::project()`. `ask_new_project` / `welcome_new_project` are `impl Shell` (coordinator). |
-| `option_search.rs` | `OptionSearch` | `connect_closed()` → `OptionSearchOutput::Closed`; `connect_search(&str) -> Vec<SearchGroup>` → request `Search(String)` / reply `OptionSearchInput::Results(Vec<SearchGroup>)`; `connect_chosen(String, String)` → `Chosen { setting, value }` | `present(&str, &str)` → `Present { setting, query }`; `close()` → `Close`; `refresh()` → `Refresh`; `type_query(&str)` → `TypeQuery(String)`; `choose_selected()` → `ChooseSelected`; `press_arrow(bool)` → `PressArrow { down }` | Rule 9. *queries* `setting()`, `selected()`; test getter `rows()`. |
+| `option_search.rs` | `OptionSearchComponent` | `connect_closed()` → `OptionSearchOutput::Closed`; `connect_chosen(String, String)` → `Chosen { setting, value }`; `connect_search(&str) -> Vec<SearchGroup>` is gone: the search holds the window's copy of the setting and searches it itself | `present(&str, &str)` → `Present { name, setting: Option<Box<SettingParam>>, query }`; `refresh()` → `Update(Box<SettingParam>)` (a fresh copy); `close()` → `Close`; typing → `QueryChanged`; `choose_selected()` → `ChooseSelected`; a row's click → `Activated(i32)`; the arrows → `Step(i32)` | **Done**: owned by the window, forwarded at launch. *query* `setting()` is the window's own `EditView::search_open` (set when it presents, cleared on `Closed`). Test getters `setting()`, `rows()` on the model, `entry()`, `selected(..)` on the widgets. |
 | `output.rs` | `OutputPanel` | — | `add_line(&str)` → `OutputPanelInput::AddLine(String)` | |
 | `panels.rs` | `ProblemsPanel` | `connect_choose(usize)` → `ProblemsOutput::Choose(usize)`; `connect_source(SourceLocation)` → `Source(SourceLocation)` | `show(&[Report], Option<usize>, bool)` → `Show { reports: Vec<Report>, selected, stale }`; `show_selected(Option<usize>)` → `ShowSelected(Option<usize>)` | `#[block_signal]` on row selection in `ShowSelected`. |
 | `panels.rs` | `FilesList` | `connect_open(PathBuf)` → `FilesListOutput::Open(PathBuf)` | `set_folder(&Path)` → `SetFolder(PathBuf)` | |
@@ -380,7 +380,7 @@ file (for editing, in the `edit_view` files).
 |---|---|---|---|---|
 | Selection and focus | `update/selection.rs` | `SelectionInput` | `select_and_frame`, `selection_changed`, `show_card`, `show_hint`, `show_moves`, focus mode (`focus_changed`, `open_focus`, `leave_focus`, `update_focus`, `toggle_play_focus`, `focus_tick`, the progress, caption and pictures), posed problems and openings (`pose_problem`, `update_opening`, `motion_moved`, `problem_moved`), `finder_search`, `finder_hit` | actions `back`, `forward`, `next-problem`, `previous-problem`, `find`, `escape`, `show-problem`; `ProblemsPanel` choose/source; `FilesList` open; `TreeSidebar` select/source/focus/hover; `Dock` move; `Inspector` focus/source; `Finder` search request and hit; `FocusPanel` done/source/X-ray/tint/fade; the step and swing cards' scrubs and play; `ProblemCard`'s scrub; `Pictures` resized and chosen; `PlanSwitch`; `MotionBar`'s scale |
 | Project | `update/project.rs` | `ProjectInput` | `run_check` (and `Checked`), `show_folder`, `show_title`, `result_changed`, `apply_wanted`, `editor_changed`, `sync_files`, `text_linked`, `capture_if_asked`, `check_status_changed`, `build_changed`, `choose_folder`, `go_to_folder`, `ask_about_unsaved`, `open_folder`, `watch`, closing | actions `new-project`, `check`, `search`, `editor`, `show-panel`, `move-panel`, `reset-layout`, `model`, `save`, `format`, `open`, `open-recent`; the folder drop; `FilesPage` link/go/check/show-in-3D/open/notice and its tabs; `Workbench` save failed; `Inspector` unsaved; the root's `close-request` |
-| Editing | `update/editing.rs` | `EditingInput` | in `edit_view.rs` and `edit_view/*.rs`: the menu, the card, the option search, links, grips, changes, holds, item tools, repeats, verbs | `EditMenu` chosen; `EditCard` action and links; the face button; the pointer over the view; `OptionSearch` chosen/closed; `Inspector`'s links; `DependantsDialog`; `ChangeCard`; `Hold`/`HoldCard`; `ItemTools`; `RepeatFoldRow`s; the repeat count and boundary drags; `Finder` actions request and action; `GripPanel`; the grips' handles, entries and range menus; the edit menu's, options' and stops' timers and worker threads; the Delete key |
+| Editing | `update/editing.rs` | `EditingInput` | in `edit_view.rs` and `edit_view/*.rs`: the menu, the card, the option search, links, grips, changes, holds, item tools, repeats, verbs | `EditMenuComponent` chosen and drawn, `EditCardComponent` action, open short list and links (forwarded at launch, `EditView::new`); the face button; the pointer over the view; `OptionSearchComponent` chosen/closed (forwarded at launch); `Inspector`'s links; `DependantsDialog`; `ChangeCard`; `Hold`/`HoldCard`; `ItemTools`; `RepeatFoldRow`s; the repeat count and boundary drags; `Finder` actions request and action; `GripPanel`; the grips' handles, entries and range menus; the edit menu's, options' and stops' timers and worker threads; the Delete key |
 | Rendering | `update/rendering.rs` | `RenderingInput` | `view_changed`, framing and the camera (`frame`, `frame_selection`, `look_from`, `update_orbit`, `pick`, `resized`), drawing (`request_render`, `render_now`, `poll_frame`, `looks`), pins, `pull_apart`, `toggle_play_explode`, `explode_tick`, `export_view`, `scene_changed`, `explode_changed`, `repose`, the backdrop | actions `frame`, `export-view`, `view-*`; `Header` outputs (view, scene); `ViewToolbar` X-ray, Pull apart, play and slider; `CameraToolbar` front and turn; the style manager's dark (disconnected in `shutdown`); `Viewport` resized; the view's drags, scroll and keys; the mouse's back and forward buttons |
 
 `dispatch`, `handle` and `toast` stay in `mod.rs`: every group uses
@@ -418,10 +418,9 @@ them.
 - Request and reply (rule 9): the finder's searches go out as
   `SelectionInput::FinderSearch` / `EditingInput::FinderActions` and are
   answered with `Finder::show_hits` / `show_actions`. The option search
-  is still synchronous (`option_search.rs` explains why), so the window
-  hands it a copy of the setting it searches (`give_option_search`)
-  before it opens or refreshes it, and the dialog lists matches from
-  that copy with no call back into the window.
+  needs no request: the window sends it a copy of the setting it searches
+  when it opens it (`Present`) and again as each option's fit is found
+  (`Update`), and the dialog lists matches from that copy itself.
 - A key handler that must answer GTK at once (take the key or pass it
   on) decides from a copy the window keeps, never by asking the model.
   Delete outside a text field is taken only when there is something to
@@ -435,6 +434,51 @@ them.
   is not the shared state rule 11 warns about.
 - `update::Unprinted<T>` gives `Debug` to a payload that has none
   (`files::CursorName`, the analysis, a found fit or stop).
+
+### Edit card and menu: answers by message
+
+The window owns `Controller<EditMenuComponent>` and
+`Controller<EditCardComponent>` as fields of `EditView`, launched in
+`EditView::new` with `.forward(window_input, ..)` (rule 6), so their
+outputs arrive as `EditingInput`s; `edit_demo.rs` keeps its showcase's
+controller in `EditView::showcase` the same way. Nothing reads a card or
+a menu back after showing it. Every question the old synchronous
+`EditCard` answered became one of two things:
+
+- **State the window already decides.** `draw_edit` builds the
+  `CardView` it sends, and `CardView::offers()` works out from it, with
+  the same functions the card draws with, what that card offers: which
+  settings have a short list and whether the put-back button shows
+  (`CardOffers`). `draw_edit` returns it (`Drawn::Card(offers)`) and the
+  window keeps it in `EditView::card_offers`. So `open_options(..) ->
+  bool` (an edit script's `choices`) is answered by the window from
+  `card_offers` before it sends `OpenOptions` and
+  `ScrollToOpenOptions`, and `put_back_button()` (the script's `put
+  back`) by `card_offers.put_back()`, after which the window queues the
+  same `CardAction::PutBack` the button sends. Which card or menu shows
+  is the window's too: it sets the roots' visibility itself, at once,
+  because `EditPanel::update` and the option search read it straight
+  away.
+- **A message from the card when people change it.** Which short list is
+  open is people's to change, so the card says so whenever it changes
+  (`EditCardOutput::OptionsOpen(Option<String>)`, also when the window
+  opened it) and the window keeps the copy in
+  `EditView::card_open_options`, read when it starts the options' check
+  (the open setting's options are checked first). The menu says when it
+  has drawn what it was shown (`EditMenuOutput::Drawn`): the window places
+  the menu by its height then, which it can't measure before the menu has
+  drawn.
+
+The option search went the same way: the window remembers which setting
+it opened it on (`EditView::search_open`, cleared on
+`OptionSearchOutput::Closed`) instead of asking it, and gives it a copy
+of the setting to search instead of answering its queries.
+
+`EditCardOutput::OptionsOpened(bool)` is gone: nobody needed the answer
+once the window knew it. Tests launch the components with
+`Component::builder().launch(..).connect_receiver(..)`, call the same
+`draw_edit`, `settle()` and then read the components' models and widgets
+(`edit_view/tests.rs`, `Launched`).
 
 ### Behaviour that changed on purpose
 
@@ -457,6 +501,20 @@ them.
   frame's page count, whether to take the key (fewer than two pages
   pass it on, so the editor keeps its own); the step itself is a
   `Step` message.
+- The option search opens, lists, moves its selection and chooses from
+  queued messages; an edit script's `options` and `search` steps open it
+  before the picture is taken. Its arrow keys and Escape are still taken
+  at once. Opened by a script, its field now keeps the keyboard in the
+  picture (the field shows focused, as when people open it); on `main` it
+  had lost the keyboard again by the time the picture was taken. Now the
+  search opens after the card's redraws the same step queued.
+- The edit menu and card draw what they are shown when the main loop
+  next runs, after the window has already shown or hidden them; the menu
+  is placed by its new height once it has drawn (`EditMenuOutput::Drawn`),
+  a turn of the main loop after it appears where it will be placed. An
+  edit script's `choices` opens the short list, and its `put back`
+  presses the button, from queued messages, both before the picture is
+  taken.
 - A narrow window's side edges fold and unfold from `Fold`/`Unfold`
   messages that the breakpoint's `apply`/`unapply` send, so they move
   when the main loop next runs rather than inside the breakpoint's
@@ -513,14 +571,8 @@ All three were on `main` before the move, not caused by it.
   Moving it is the L3 list: `save_all`, `forget_unsaved`, `buffer_for`,
   `overlay_for_check`, `set_folder`; `connect_unsaved` becomes
   `InspectorInput::Unsaved`, `set_page_tabs` becomes `TabStripInput`.
-- The window still uses the synchronous `EditCard` and `EditMenu`;
-  `EditCardComponent` and `EditMenuComponent` are only launched by tests.
-  The edit flow (and `edit_view/tests.rs`) reads the card straight after
-  showing it, so moving to the components means answering
-  `open_options` and the card's queries by message.
-- `OptionSearch` is still synchronous (see `option_search.rs`), and the
-  editing leaves (`EditCard`, `EditMenu`, `ChangeCard`, `GripPanel`,
-  `RepeatRow`, `ItemTools`, `HoldCard`) still take per-output callbacks.
+- The editing leaves `ChangeCard`, `GripPanel`, `RepeatRow`, `ItemTools`
+  and `HoldCard` still take per-output callbacks.
 - `Repeats` keeps its drag in `Cell`s, and the grips' drawing is an
   `Rc<RefCell<..>>` shared with their draw function: give the draw
   function a copy, as the slider does.

@@ -26,8 +26,6 @@
 //! `#` starts a comment. A step that can't be done is said on standard
 //! error with its line, and the steps after it are skipped.
 
-use gtk::prelude::ButtonExt;
-
 use stave_app::edit::{FacingPair, PartFace, Picked};
 use stave_app::editing::{EditCommand, entry_matches, parse_name, parse_value};
 use stave_lang::placement::Face;
@@ -35,6 +33,8 @@ use stave_model::solved::{PartId, RegionId};
 use stave_scene::{Aabb, Item};
 
 use super::Window;
+use super::edit_card::CardAction;
+use super::update::editing::EditingInput;
 
 impl Window {
     /// Runs the edit script the command line gave, once. `true` when it
@@ -158,12 +158,11 @@ impl Window {
                 self.send_edit(EditCommand::UseDefault(name));
             }
             "put" if rest == "back" => {
-                let button = self
-                    .editing
-                    .card
-                    .put_back_button()
-                    .ok_or("the card offers nothing to put back")?;
-                button.emit_clicked();
+                if !self.card_offers_put_back() {
+                    return Err("the card offers nothing to put back".to_owned());
+                }
+                // As the card's button does: its action, queued.
+                self.send(EditingInput::CardAction(CardAction::PutBack));
             }
             "name" => {
                 let name = parse_name(rest).map_err(|error| error.0)?;

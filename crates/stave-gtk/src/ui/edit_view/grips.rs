@@ -24,6 +24,7 @@
 //! along the handle's direction on screen becomes a value to send, and
 //! what the session holds is drawn.
 
+use relm4::ComponentController;
 use stave_app::i18n::{fill_in, tr};
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -612,8 +613,8 @@ impl Window {
         for floating in [
             widgets.hint_box.upcast_ref::<gtk::Widget>(),
             widgets.edge_pin.upcast_ref(),
-            editing.menu.root.upcast_ref(),
-            editing.card.root.upcast_ref(),
+            editing.menu.widget().upcast_ref(),
+            editing.card.widget().upcast_ref(),
         ] {
             if floating.parent().as_ref() == Some(design.upcast_ref()) {
                 design.remove_overlay(floating);
@@ -1795,8 +1796,8 @@ impl Window {
         // clicked), inside the view and clear of the rail.
         let handles: Vec<(f64, f64)> = drawing.iter().map(|drawn| drawn.end).collect();
         let cards: Vec<Rect> = [
-            self.editing.menu.root.upcast_ref::<gtk::Widget>(),
-            self.editing.card.root.upcast_ref(),
+            self.editing.menu.widget().upcast_ref::<gtk::Widget>(),
+            self.editing.card.widget().upcast_ref(),
         ]
         .into_iter()
         .filter(|card| card.is_visible())

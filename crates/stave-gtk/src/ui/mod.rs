@@ -734,7 +734,7 @@ impl Component for Window {
             },
             pins: Pins::default(),
             watcher: None,
-            editing: edit_view::EditView::new(),
+            editing: edit_view::EditView::new(sender.input_sender()),
             frame_lists: frame_lists::FrameLists::default(),
             sender,
             style_handler: None,
@@ -745,14 +745,16 @@ impl Component for Window {
         update::editing::wire(&mut window);
         if let Some(showcase) = options.edit_fixture {
             // The fixture's card takes the Edit panel's place of the
-            // session's own.
-            if edit_demo::show(
+            // session's own; the window keeps what it shows.
+            let shown = edit_demo::show(
                 &window.widgets.design,
                 &window.widgets.edit_holder,
                 showcase,
-            ) {
+            );
+            if shown.as_ref().is_some_and(edit_demo::Shown::in_panel) {
                 window.widgets.workbench.present(workbench::PanelId::Edit);
             }
+            window.editing.showcase = shown;
         }
         if options.new_project {
             window.ask_new_project();
