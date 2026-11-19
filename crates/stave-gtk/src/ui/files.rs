@@ -12,7 +12,7 @@
 //! where to go ([`FilesPage::connect_go`]) and when typing has paused
 //! ([`FilesPage::connect_check`]), and it calls back with a place to show.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -90,11 +90,29 @@ struct Callbacks {
 struct Tab {
     document: Document,
     buffer: gtk::TextBuffer,
-    lines: LineStarts,
+    /// Where each line starts, shared (not copied) with whatever reads it
+    /// on a pointer motion or a cursor move.
+    lines: Rc<LineStarts>,
+    /// Which edit of the page last changed this document's text (see
+    /// [`State::edits`]): the text is unchanged while it stays the same.
+    revision: u64,
     button: gtk::Button,
     label: gtk::Label,
     /// The dot for the file's worst problem.
     dot: gtk::Box,
+}
+
+/// Whether the analysis was built from a document's text, worked out once
+/// per analysis and edit rather than by comparing the texts on every
+/// cursor move.
+#[derive(Debug, Clone, Copy)]
+struct FreshMemo {
+    /// [`State::analysis_generation`] when it was worked out.
+    analysis: u64,
+    /// [`Tab::revision`] when it was worked out.
+    revision: u64,
+    /// The analysis's file for the text, when it read the same text.
+    file: Option<stave_lang::FileId>,
 }
 
 /// A problem the last check found, where it is.
@@ -113,6 +131,14 @@ struct State {
     buffers: Buffers,
     analysis: Option<Arc<Analysis>>,
     generation: u64,
+    /// The generation of the analysis in `analysis`.
+    analysis_generation: u64,
+    /// Counts the page's text changes and opened tabs: each gives its tab
+    /// a new [`Tab::revision`].
+    edits: u64,
+    /// Whether the analysis read the text showing, for the last
+    /// (analysis, revision) asked about.
+    fresh_memo: Cell<Option<FreshMemo>>,
     analysing: bool,
     analyse_again: bool,
     tabs: Vec<Tab>,
@@ -334,7 +360,8 @@ impl FilesPage {
         self.callbacks.borrow_mut().on_open = Some(Rc::new(callback));
     }
 
-    /// Something to tell people (a failed save).
+    /// Something brief to tell people (a file changed on disk, a copy
+    /// saved). Failed saves get a dialog instead.
     pub fn connect_notice(&self, callback: impl Fn(String) + 'static) {
         self.callbacks.borrow_mut().on_notice = Some(Rc::new(callback));
     }
@@ -361,6 +388,7 @@ impl FilesPage {
             state.folder = folder.to_path_buf();
             state.buffers = Buffers::new();
             state.analysis = None;
+            state.fresh_memo.set(None);
             state.tabs.clear();
             state.active = None;
             state.problems.clear();
@@ -419,14 +447,17 @@ impl FilesPage {
         self.state.borrow().buffers.dirty().count()
     }
 
-    /// Saves every document with unsaved changes.
+    /// Saves every document with unsaved changes. `false` when one
+    /// couldn't be saved: a dialog has said which and what to do, and
+    /// whatever was waiting on the save (closing the window, opening
+    /// another folder) must not go on.
     pub fn save_all(self: &Rc<Self>) -> bool {
         let result = self.state.borrow_mut().buffers.save_all();
         self.refresh_markers();
         match result {
             Ok(()) => true,
             Err(error) => {
-                self.notice(error.to_string());
+                self.save_failed(&error);
                 false
             }
         }
@@ -444,10 +475,95 @@ impl FilesPage {
             return;
         }
         let result = self.state.borrow_mut().buffers.save(&document);
-        if let Err(error) = result {
-            self.notice(error.to_string());
-        }
         self.refresh_markers();
+        if let Err(error) = result {
+            self.save_failed(&error);
+        }
+    }
+
+    /// A save failed: says so in a dialog that stays until it is
+    /// answered, naming the file and what to do, with a way to try again
+    /// or to save a copy somewhere else. The changes stay in the editor.
+    fn save_failed(self: &Rc<Self>, error: &stave_ide::SaveError) {
+        let folder = self.state.borrow().folder.clone();
+        let failure = stave_app::save_failure::describe(error, &folder);
+        // The document whose save failed, to try again or copy.
+        let document = match error {
+            stave_ide::SaveError::Unwritable { path, .. } => Some(Document::File(path.clone())),
+            stave_ide::SaveError::ReadOnly(_) | stave_ide::SaveError::NotOpen(_) => None,
+        };
+        let dialog = adw::AlertDialog::builder()
+            .heading(&failure.heading)
+            .body(&failure.body)
+            .close_response("cancel")
+            .build();
+        dialog.add_response("cancel", "_Cancel");
+        if let Some(document) = document {
+            dialog.add_responses(&[("retry", "_Try Again"), ("copy", "Save a _Copy…")]);
+            dialog.set_response_appearance("copy", adw::ResponseAppearance::Suggested);
+            dialog.set_default_response(Some("copy"));
+            let page = Rc::downgrade(self);
+            dialog.connect_response(None, move |_, response| {
+                let Some(page) = page.upgrade() else { return };
+                match response {
+                    "retry" => page.save_again(&document),
+                    "copy" => page.save_copy(&document),
+                    _ => {}
+                }
+            });
+        }
+        dialog.present(Some(&self.root));
+    }
+
+    /// Tries a failed save again; a second failure says so again.
+    fn save_again(self: &Rc<Self>, document: &Document) {
+        let result = self.state.borrow_mut().buffers.save(document);
+        self.refresh_markers();
+        match result {
+            Ok(()) => self.notice(format!("Saved {}", document.file_name())),
+            Err(error) => self.save_failed(&error),
+        }
+    }
+
+    /// Asks where, then writes a copy of a document's text there. The
+    /// document itself stays open, unsaved, where it was.
+    fn save_copy(self: &Rc<Self>, document: &Document) {
+        let Some(text) = self
+            .state
+            .borrow()
+            .buffers
+            .text(document)
+            .map(str::to_owned)
+        else {
+            return;
+        };
+        let dialog = gtk::FileDialog::builder()
+            .title("Save a Copy")
+            .initial_name(document.file_name())
+            .modal(true)
+            .build();
+        let parent = self.root.root().and_downcast::<gtk::Window>();
+        let page = Rc::downgrade(self);
+        dialog.save(parent.as_ref(), gio::Cancellable::NONE, move |result| {
+            let Ok(file) = result else { return };
+            let Some(path) = file.path() else { return };
+            let Some(page) = page.upgrade() else { return };
+            match stave_app::save_failure::save_copy(&path, &text) {
+                Ok(()) => page.notice(format!(
+                    "Saved a copy as {}; the open file still has unsaved changes",
+                    path.display()
+                )),
+                Err(failure) => {
+                    let dialog = adw::AlertDialog::builder()
+                        .heading(&failure.heading)
+                        .body(&failure.body)
+                        .close_response("close")
+                        .build();
+                    dialog.add_response("close", "_Close");
+                    dialog.present(Some(&page.root));
+                }
+            }
+        });
     }
 
     /// Lays the document showing out with `stave fmt`, as one step that
@@ -488,7 +604,9 @@ impl FilesPage {
     /// Lets go of unsaved changes (the window is closing and people chose
     /// not to save them).
     pub fn forget_unsaved(&self) {
-        self.state.borrow_mut().buffers = Buffers::new();
+        let mut state = self.state.borrow_mut();
+        state.buffers = Buffers::new();
+        state.fresh_memo.set(None);
     }
 
     /// Ctrl+F in the text: opens its search bar. `false` when the
@@ -722,16 +840,24 @@ impl FilesPage {
         Some((tab.document.clone(), tab.buffer.clone()))
     }
 
-    fn active_document(&self) -> Option<Document> {
-        self.active_tab().map(|(document, _)| document)
+    /// The text buffer showing, for callers that don't need its document.
+    fn active_buffer(&self) -> Option<gtk::TextBuffer> {
+        let state = self.state.borrow();
+        Some(state.tabs.get(state.active?)?.buffer.clone())
     }
 
-    fn active_lines(&self) -> LineStarts {
+    fn active_document(&self) -> Option<Document> {
+        let state = self.state.borrow();
+        Some(state.tabs.get(state.active?)?.document.clone())
+    }
+
+    /// Where the lines of the text showing start: shared, not copied.
+    fn active_lines(&self) -> Rc<LineStarts> {
         let state = self.state.borrow();
         state
             .active
             .and_then(|i| state.tabs.get(i))
-            .map(|t| t.lines.clone())
+            .map(|t| Rc::clone(&t.lines))
             .unwrap_or_default()
     }
 
@@ -744,13 +870,30 @@ impl FilesPage {
     }
 
     /// The analysis, when it was built from the text showing, with the
-    /// file it calls that text.
+    /// file it calls that text. The texts are compared once per analysis
+    /// and edit, not on every cursor move.
     fn fresh(&self) -> Option<(Arc<Analysis>, stave_lang::FileId)> {
         let state = self.state.borrow();
         let analysis = state.analysis.clone()?;
         let tab = state.tabs.get(state.active?)?;
-        let text = state.buffers.text(&tab.document)?;
-        let file = same_text(&analysis, &tab.document, text)?;
+        let memo = state.fresh_memo.get().filter(|memo| {
+            memo.analysis == state.analysis_generation && memo.revision == tab.revision
+        });
+        let file = match memo {
+            Some(memo) => memo.file,
+            None => {
+                let file = state
+                    .buffers
+                    .text(&tab.document)
+                    .and_then(|text| same_text(&analysis, &tab.document, text));
+                state.fresh_memo.set(Some(FreshMemo {
+                    analysis: state.analysis_generation,
+                    revision: tab.revision,
+                    file,
+                }));
+                file
+            }
+        }?;
         Some((analysis, file))
     }
 
@@ -827,9 +970,12 @@ impl FilesPage {
             }
         });
         let mut state = self.state.borrow_mut();
+        state.edits = state.edits.wrapping_add(1);
+        let revision = state.edits;
         state.tabs.push(Tab {
             document: document.clone(),
-            lines: LineStarts::new(&text),
+            lines: Rc::new(LineStarts::new(&text)),
+            revision,
             buffer,
             button,
             label: tab_label,
@@ -881,9 +1027,10 @@ impl FilesPage {
             Some((wanted, offset)) if wanted == *location => offset,
             _ => {
                 // Already on that line: leave the cursor where it is.
-                let (current, _) = lines.position(self.cursor());
+                let cursor = self.editor.cursor(&lines);
+                let (current, _) = lines.position(cursor);
                 if current == line {
-                    self.cursor()
+                    cursor
                 } else {
                     lines.offset(line, 0)
                 }
@@ -901,8 +1048,11 @@ impl FilesPage {
         let text = buffer.text(&buffer.start_iter(), &buffer.end_iter(), true);
         let (was_dirty, dirty) = {
             let mut state = self.state.borrow_mut();
+            state.edits = state.edits.wrapping_add(1);
+            let revision = state.edits;
             if let Some(tab) = state.tabs.iter_mut().find(|t| t.document == *document) {
-                tab.lines = LineStarts::new(&text);
+                tab.lines = Rc::new(LineStarts::new(&text));
+                tab.revision = revision;
             }
             let was_dirty = state.buffers.is_dirty(document);
             if state.buffers.edit(document, &text).is_err() {
@@ -984,6 +1134,7 @@ impl FilesPage {
                     && generation == state.generation
                 {
                     state.analysis = Some(Arc::new(analysis));
+                    state.analysis_generation = generation;
                 }
                 std::mem::take(&mut state.analyse_again)
             };
@@ -1097,14 +1248,14 @@ impl FilesPage {
     /// The breadcrumbs, the line, the marked uses, and (after a rest) the
     /// link to the 3D view follow the cursor.
     fn cursor_moved_now(self: &Rc<Self>, report: bool) {
-        let Some((_, buffer)) = self.active_tab() else {
+        let Some(buffer) = self.active_buffer() else {
             return;
         };
         let cursor_iter = buffer.iter_at_mark(&buffer.get_insert());
         self.line
             .set_label(&format!("Line {}", cursor_iter.line().saturating_add(1)));
         let lines = self.active_lines();
-        let offset = self.cursor();
+        let offset = self.editor.cursor(&lines);
         let Some((analysis, file)) = self.fresh() else {
             return;
         };
@@ -1229,7 +1380,8 @@ impl FilesPage {
             line,
         };
         let from = self.active_document().and_then(|document| {
-            let (line, _) = self.active_lines().position(self.cursor());
+            let lines = self.active_lines();
+            let (line, _) = lines.position(self.editor.cursor(&lines));
             Some(SourceLocation {
                 path: document.source_path(),
                 line: LineNumber::from_usize(usize::try_from(line).ok()?.saturating_add(1))?,
@@ -1624,7 +1776,7 @@ impl FilesPage {
         };
         if let Some(word) = &wish.cursor {
             let lines = self.active_lines();
-            let (line, _) = lines.position(self.cursor());
+            let (line, _) = lines.position(self.editor.cursor(&lines));
             let start = lines.offset(line, 0);
             if let Some(found) = analysis
                 .text(file)
@@ -1641,18 +1793,17 @@ impl FilesPage {
         let page = self.clone();
         // Once the text is laid out.
         glib::timeout_add_local_once(Duration::from_millis(150), move || {
-            if let Some(text) = &wish.typing {
-                let (_, buffer) = page.active_tab().unzip();
-                if let Some(buffer) = buffer {
-                    // A key at a time, so undo groups it as it groups typing.
-                    let mut key = [0; 4];
-                    for character in text.chars() {
-                        buffer.insert_interactive_at_cursor(character.encode_utf8(&mut key), true);
-                    }
+            if let Some(text) = &wish.typing
+                && let Some(buffer) = page.active_buffer()
+            {
+                // A key at a time, so undo groups it as it groups typing.
+                let mut key = [0; 4];
+                for character in text.chars() {
+                    buffer.insert_interactive_at_cursor(character.encode_utf8(&mut key), true);
                 }
             }
             if wish.undo
-                && let Some((_, buffer)) = page.active_tab()
+                && let Some(buffer) = page.active_buffer()
             {
                 buffer.undo();
             }

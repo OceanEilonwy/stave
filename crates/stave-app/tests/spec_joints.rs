@@ -209,6 +209,153 @@ fn a_setting_outside_the_kinds_within_is_out_of_range() {
 }
 
 // ---------------------------------------------------------------------------
+// A kind chosen through a param that doesn't take what the call hands it
+// ---------------------------------------------------------------------------
+
+/// A component that houses a board in a part a set depth, taking its joint
+/// kind as a setting, as std's Shelf does; then `rest`.
+const HOUSED: &str = "component Housed {
+  param support     : Part
+  param board_stock : Stock
+  param joinery     : JointKind = dado
+  part board : board_stock {
+    length: 200mm
+    width:  300mm
+    place {
+      against(support.top, gap: 100mm)
+      flush(support.left)
+      flush(support.front)
+    }
+  }
+  joint housing : joinery(board, into: support, depth: 9mm)
+}
+";
+
+#[test]
+fn a_kind_written_in_the_joint_with_a_setting_it_lacks_keeps_its_message() {
+    // The user wrote `depth:` for this kind: that is the thing to say.
+    let opened = with_parts("joint housing : glued_edge(shelf, into: side, depth: 9mm)");
+    let diagnostic = the_diagnostic(
+        &opened,
+        "unknown-field",
+        "the kind 'glued_edge' has no field 'depth'",
+    );
+    assert!(diagnostic.cause.is_none());
+    // And a role it lacks.
+    let opened = with_parts(
+        "kind battens : joint {\n  roles {\n    boards: Parts\n  }\n}\njoint j : battens(shelf, into: side)",
+    );
+    only_error(
+        &opened,
+        "unknown-field",
+        "the kind 'battens' has no field 'into'",
+    );
+    // And several parts where it takes one.
+    let opened = with_parts("joint j : half_lap([shelf, base], into: side)");
+    only_error(
+        &opened,
+        "type-mismatch",
+        "'piece' needs a part, found parts",
+    );
+}
+
+#[test]
+fn a_kind_chosen_for_a_component_that_lacks_a_setting_it_hands_is_one_error_at_the_choice() {
+    let opened = open(&format!(
+        "{HOUSED}assembly housed : Housed {{\n  support:     base\n  board_stock: pine_19\n  joinery:     glued_edge\n}}\n"
+    ));
+    let diagnostic = the_diagnostic(
+        &opened,
+        "type-mismatch",
+        "'glued_edge' can't be the joinery of Housed",
+    );
+    // At the choice, with the component's line as the second place.
+    assert_eq!(body_line(&opened, diagnostic), 19);
+    let second = diagnostic.labels.get(1).expect("the component's line");
+    assert_eq!(second.message, "Housed uses joinery here");
+    assert_eq!(
+        diagnostic.reason(),
+        Some("Housed gives its joint a depth, and glued_edge has no depth")
+    );
+    assert_eq!(
+        diagnostic.notes,
+        ["Housed gives its joint a depth, and glued_edge has no depth"]
+    );
+    let help = diagnostic.help.as_deref().unwrap();
+    assert!(
+        help.starts_with("choose a kind that takes what Housed hands its joint: "),
+        "{help}"
+    );
+    assert!(
+        help.contains("dado") && !help.contains("glued_edge"),
+        "{help}"
+    );
+}
+
+#[test]
+fn a_default_that_cant_be_used_is_reported_at_the_default() {
+    let housed = HOUSED.replace("JointKind = dado", "JointKind = screw");
+    let opened = open(&format!(
+        "{housed}assembly housed : Housed {{\n  support:     base\n  board_stock: pine_19\n}}\n"
+    ));
+    let diagnostic = the_diagnostic(
+        &opened,
+        "type-mismatch",
+        "'screw' can't be the joinery of Housed",
+    );
+    assert_eq!(body_line(&opened, diagnostic), 4);
+}
+
+#[test]
+fn a_projects_own_param_names_the_project_and_its_joint() {
+    let opened = with_parts(
+        "param joinery : JointKind = glued_edge\njoint housing : joinery(shelf, into: side, depth: 9mm)",
+    );
+    let diagnostic = the_diagnostic(
+        &opened,
+        "type-mismatch",
+        "'glued_edge' can't be the project's joinery",
+    );
+    assert_eq!(
+        diagnostic.reason(),
+        Some("the project gives housing a depth, and glued_edge has no depth")
+    );
+}
+
+#[test]
+fn a_kind_that_needs_a_role_the_component_does_not_hand_it_is_one_error() {
+    let opened = open(&format!(
+        "kind three_way : joint {{\n  roles {{\n    piece: Part\n    into:  Part\n    brace: Part\n  }}\n  param depth = 5mm\n}}\n{HOUSED}assembly housed : Housed {{\n  support:     base\n  board_stock: pine_19\n  joinery:     three_way\n}}\n"
+    ));
+    let diagnostic = the_diagnostic(
+        &opened,
+        "type-mismatch",
+        "'three_way' can't be the joinery of Housed",
+    );
+    assert_eq!(
+        diagnostic.reason(),
+        Some("Housed hands its joint nothing as brace, and three_way needs one part there")
+    );
+}
+
+#[test]
+fn a_component_passing_its_kind_on_is_reported_where_the_kind_was_chosen() {
+    let opened = open(&format!(
+        "{HOUSED}component Outer {{\n  param base_part : Part\n  param wood      : Stock\n  param housing   : JointKind = dado\n  assembly inner : Housed {{\n    support:     base_part\n    board_stock: wood\n    joinery:     housing\n  }}\n}}\nassembly outer : Outer {{\n  base_part: base\n  wood:      pine_19\n  housing:   glued_edge\n}}\n"
+    ));
+    let diagnostic = the_diagnostic(
+        &opened,
+        "type-mismatch",
+        "'glued_edge' can't be the housing of Outer",
+    );
+    assert_eq!(body_line(&opened, diagnostic), 29);
+    assert_eq!(
+        diagnostic.reason(),
+        Some("Housed gives its joint a depth, and glued_edge has no depth")
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Roles and pairs
 // ---------------------------------------------------------------------------
 
@@ -769,14 +916,18 @@ fn through_cuts_all_the_way() {
     let opened = with_parts(
         "kind k : joint {\n  cut housing: crossing(into, piece) {\n    notch(depth: through)\n  }\n}\njoint j : k(shelf, into: side)",
     );
-    // A housing cut right through the side leaves the shelf, which only
-    // butts against it, touching the side along the housing's edges: a
-    // fit error, which doesn't stop the cut from being recorded.
+    // The notch goes right across the side, so the side is in two: the
+    // design still solves, and the cut is recorded.
     let side = part(solved(&opened), "side");
     assert!(side.cuts.iter().any(|c| c.kind
         == CutKind::Notch {
             depth: Depth::Through
         }));
+    the_diagnostic(
+        &opened,
+        "wall",
+        "j: its housing for shelf goes right across side and cuts it in two",
+    );
 }
 
 #[test]

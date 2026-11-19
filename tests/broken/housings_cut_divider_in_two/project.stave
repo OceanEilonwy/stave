@@ -1,0 +1,58 @@
+// expect: error[wall] shelves: its housing for shelf_r meets the housing for shelf_l and cuts divider in two
+stave 1
+
+// Shelves at the same height either side of a divider, each housed half
+// way into it. Each housing keeps to its own depth, but the two meet
+// across the divider and cut it in two: the top half would hang on the
+// shelves, yet the cut list would still list one divider.
+
+project "Housings that meet" {
+  units: mm
+}
+
+stock pine { species: pine, form: solid, thickness: 19mm, max_width: 300mm, max_length: 2400mm }
+
+/// A housing across a board, as a beginner might write one, with no rule
+/// about how much wood it leaves.
+kind housing : joint {
+  param depth = into.thickness / 2
+
+  insert:    [push(piece, along: width)]
+  cut_first: into
+  adds:      extend(piece, by: depth)
+
+  cut housing: crossing(into, piece) {
+    notch(depth: depth)
+  }
+}
+
+part divider : pine {
+  length: 600mm
+  width:  300mm
+  place {
+    ground
+    orient(length: up, width: back)
+  }
+}
+
+part shelf_l : pine {
+  length: 300mm
+  width:  300mm
+  place {
+    against(divider.left)
+    flush(divider.bottom, inset: 300mm)
+    flush(divider.front)
+  }
+}
+
+part shelf_r : pine {
+  length: 300mm
+  width:  300mm
+  place {
+    against(divider.right)
+    flush(divider.bottom, inset: 300mm)
+    flush(divider.front)
+  }
+}
+
+joint shelves : housing([shelf_l, shelf_r], into: divider)
