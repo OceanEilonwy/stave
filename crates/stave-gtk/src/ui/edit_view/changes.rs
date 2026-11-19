@@ -32,6 +32,7 @@
 //! └────────────────────────────────────────┘
 //! ```
 
+use stave_app::i18n::{fill_in, ntr, tr, tr_noop};
 use std::rc::Rc;
 
 use adw::prelude::*;
@@ -92,8 +93,10 @@ pub(in crate::ui) enum Commit {
 /// tested without a window).
 #[derive(Debug, Clone, PartialEq)]
 pub(in crate::ui) struct ChangeWords {
-    /// "CHANGE · REPEAT".
+    /// "CHANGE · REPEAT": the change's kind, in English.
     pub(in crate::ui) eyebrow: String,
+    /// The change's kind as the card shows it: "repeat" (translated).
+    pub(in crate::ui) kind: String,
     /// The change's summary: "Make 3 of drawer".
     pub(in crate::ui) title: String,
     /// The item it changes, for the header: "back".
@@ -114,7 +117,7 @@ pub(in crate::ui) struct ChangeWords {
     pub(in crate::ui) can_add: bool,
     /// For a mirror: the switch that started it, shown on (turning it off
     /// cancels).
-    pub(in crate::ui) switch: Option<&'static str>,
+    pub(in crate::ui) switch: Option<String>,
 }
 
 /// The item a change acts on, as named in its request.
@@ -133,17 +136,20 @@ pub(in crate::ui) fn change_item(request: &ChangeRequest) -> Option<String> {
     }
 }
 
-/// The eyebrow's word for a change.
+/// The eyebrow's word for a change, in English; the card shows its
+/// translation.
 fn kind_word(request: &ChangeRequest) -> &'static str {
     match request {
-        ChangeRequest::Repeat { .. } | ChangeRequest::RepeatPart { .. } => "repeat",
-        ChangeRequest::MoveShares { .. } => "sizes of the pieces",
-        ChangeRequest::Mirror { .. } | ChangeRequest::MirrorSplit { .. } => "the other side",
-        ChangeRequest::SetParam { .. } | ChangeRequest::Grip { .. } => "a size",
-        ChangeRequest::ParamKind { .. } => "a param",
-        ChangeRequest::Hold(_) => "hold a distance",
-        ChangeRequest::Remove { .. } => "remove",
-        ChangeRequest::Rename { .. } => "rename",
+        ChangeRequest::Repeat { .. } | ChangeRequest::RepeatPart { .. } => tr_noop("repeat"),
+        ChangeRequest::MoveShares { .. } => tr_noop("sizes of the pieces"),
+        ChangeRequest::Mirror { .. } | ChangeRequest::MirrorSplit { .. } => {
+            tr_noop("the other side")
+        }
+        ChangeRequest::SetParam { .. } | ChangeRequest::Grip { .. } => tr_noop("a size"),
+        ChangeRequest::ParamKind { .. } => tr_noop("a param"),
+        ChangeRequest::Hold(_) => tr_noop("hold a distance"),
+        ChangeRequest::Remove { .. } => tr_noop("remove"),
+        ChangeRequest::Rename { .. } => tr_noop("rename"),
     }
 }
 
@@ -162,16 +168,17 @@ pub(in crate::ui) fn change_words(change: &Change, checking: bool) -> ChangeWord
                 boundary,
             } = request
             {
-                lines.push(format!(
-                    "Piece {} of {} becomes {}; the piece after it takes the rest.",
-                    lower.saturating_add(1),
-                    region.as_str(),
-                    super::hold::length_text(*boundary)
+                lines.push(fill_in(
+                    &tr("Piece {number} of {space} becomes {length}; the piece after it takes the rest."),
+                    &[
+                        ("number", &lower.saturating_add(1)),
+                        ("space", &region.as_str()),
+                        ("length", &super::hold::length_text(*boundary)),
+                    ],
                 ));
-                lines.push(
-                    "Only these two pieces change size; the shares written are small whole numbers."
-                        .to_owned(),
-                );
+                lines.push(tr(
+                    "Only these two pieces change size; the shares written are small whole numbers.",
+                ));
             }
         }
         ChangeDetail::Mirror {
@@ -182,18 +189,27 @@ pub(in crate::ui) fn change_words(change: &Change, checking: bool) -> ChangeWord
             if let Some(item) = change_item(request)
                 && item != renamed.as_str()
             {
-                lines.push(format!("{item} is renamed {}", renamed.as_str()));
+                lines.push(fill_in(
+                    &tr("{item} is renamed {name}"),
+                    &[("item", &item), ("name", &renamed.as_str())],
+                ));
             }
-            lines.push(format!(
-                "Adds {}, its mirror image about {about}",
-                image.as_str()
+            lines.push(fill_in(
+                &tr("Adds {image}, its mirror image about {about}"),
+                &[("image", &image.as_str()), ("about", &about)],
             ));
         }
         ChangeDetail::Hold { name, condition } => {
-            lines.push(format!("Writes the rule {}:", name.as_str()));
+            lines.push(fill_in(
+                &tr("Writes the rule {name}:"),
+                &[("name", &name.as_str())],
+            ));
             lines.push(condition.clone());
             if let ChangeRequest::Hold(request) = request {
-                lines.push(format!("Its message, the reason: “{}”", request.reason));
+                lines.push(fill_in(
+                    &tr("Its message, the reason: “{reason}”"),
+                    &[("reason", &request.reason)],
+                ));
             }
         }
         ChangeDetail::Remove {
@@ -209,22 +225,27 @@ pub(in crate::ui) fn change_words(change: &Change, checking: bool) -> ChangeWord
             match taken {
                 Dependants::Refuse if !dependants.is_empty() => {
                     waiting_on_dependants = true;
-                    lines.push(format!(
-                        "{} is used by {}. It can only go if they go too.",
-                        removal.item.name,
-                        dependants.join(", ")
+                    lines.push(fill_in(
+                        &tr("{item} is used by {users}. It can only go if they go too."),
+                        &[
+                            ("item", &removal.item.name),
+                            ("users", &dependants.join(", ")),
+                        ],
                     ));
                 }
                 Dependants::Refuse => {}
                 Dependants::Included => {
-                    lines.push(format!("Also removes: {}", dependants.join(", ")));
+                    lines.push(fill_in(
+                        &tr("Also removes: {items}"),
+                        &[("items", &dependants.join(", "))],
+                    ));
                 }
             }
         }
         ChangeDetail::Rename { from, to } => {
-            lines.push(format!(
-                "{from} becomes {} everywhere it is used",
-                to.as_str()
+            lines.push(fill_in(
+                &tr("{from} becomes {to} everywhere it is used"),
+                &[("from", &from), ("to", &to.as_str())],
             ));
             let files: Vec<String> = change
                 .renamed_files()
@@ -232,7 +253,10 @@ pub(in crate::ui) fn change_words(change: &Change, checking: bool) -> ChangeWord
                 .map(|name| name.to_string_lossy().into_owned())
                 .collect();
             if !files.is_empty() {
-                lines.push(format!("Rewrites {}", files.join(", ")));
+                lines.push(fill_in(
+                    &tr("Rewrites {files}"),
+                    &[("files", &files.join(", "))],
+                ));
             }
         }
         // The size it moves, what else changes and where it stops are the
@@ -242,27 +266,34 @@ pub(in crate::ui) fn change_words(change: &Change, checking: bool) -> ChangeWord
     let progress = change.progress();
     let verdict = card_verdict(progress, checking);
     let needs = match progress {
-        Progress::NeedsChoice(names) if waiting_on_dependants => Some(format!(
-            "Choose whether {} go too",
-            names
-                .iter()
-                .map(|name| name.as_str())
-                .collect::<Vec<_>>()
-                .join(", ")
+        Progress::NeedsChoice(names) if waiting_on_dependants => Some(fill_in(
+            &tr("Choose whether {names} go too"),
+            &[(
+                "names",
+                &names
+                    .iter()
+                    .map(|name| name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            )],
         )),
-        Progress::NeedsChoice(names) => Some(format!(
-            "Still to choose: {}",
-            names
-                .iter()
-                .map(|name| name.as_str())
-                .collect::<Vec<_>>()
-                .join(", ")
+        Progress::NeedsChoice(names) => Some(fill_in(
+            &tr("Still to choose: {names}"),
+            &[(
+                "names",
+                &names
+                    .iter()
+                    .map(|name| name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            )],
         )),
         Progress::Tried(_) | Progress::Unwritable(_) => None,
     };
     let can_add = !checking && matches!(progress, Progress::Tried(Verdict::Fits(_)));
     ChangeWords {
         eyebrow: format!("CHANGE · {}", kind_word(request).to_uppercase()),
+        kind: tr(kind_word(request)),
         title: change.summary().to_owned(),
         item: change_item(request),
         lines,
@@ -272,7 +303,7 @@ pub(in crate::ui) fn change_words(change: &Change, checking: bool) -> ChangeWord
         needs,
         commit,
         can_add,
-        switch: matches!(request, ChangeRequest::Mirror { .. }).then_some("And the other side"),
+        switch: matches!(request, ChangeRequest::Mirror { .. }).then(|| tr("And the other side")),
     }
 }
 
@@ -445,19 +476,14 @@ fn draw_change_card(
         body.remove(&child);
     }
     root.update_property(&[gtk::accessible::Property::Label(&words.title)]);
-    let kind = words
-        .eyebrow
-        .strip_prefix("CHANGE · ")
-        .unwrap_or(&words.eyebrow)
-        .to_lowercase();
-    let note = text(&kind, &["stave-edit-origin"]);
+    let note = text(&words.kind, &["stave-edit-origin"]);
     note.set_wrap(false);
     body.append(&sections::header(
         None,
         &sections::name_field(words.item.as_deref().unwrap_or(&words.title)),
         Some(note.upcast_ref()),
     ));
-    let (section, change_body) = sections::section("Change", "", true);
+    let (section, change_body) = sections::section(&tr("Change"), "", true);
     // The summary, unless the header already says it (a change of no one
     // item, such as a size a grip moves).
     if words.item.is_some() {
@@ -466,7 +492,7 @@ fn draw_change_card(
     for line in &words.lines {
         change_body.append(&text(line, &["stave-change-line"]));
     }
-    if let Some(switch_words) = words.switch {
+    if let Some(switch_words) = words.switch.as_deref() {
         let row = gtk::Box::builder()
             .spacing(10)
             .css_classes(["stave-card", "stave-card-row"])
@@ -481,7 +507,7 @@ fn draw_change_card(
         let switch = gtk::Switch::builder()
             .active(true)
             .valign(gtk::Align::Center)
-            .tooltip_text("Turn it off to leave only the one side")
+            .tooltip_text(tr("Turn it off to leave only the one side"))
             .build();
         switch.update_property(&[gtk::accessible::Property::Label(switch_words)]);
         // Connected once it is on, so only people turning it off cancel.
@@ -505,7 +531,14 @@ fn draw_change_card(
         }
         change_body.append(&list);
         let include = gtk::Button::builder()
-            .label(format!("Remove these {} too…", words.dependants.len()))
+            .label(fill_in(
+                &ntr(
+                    "Remove this {count} too…",
+                    "Remove these {count} too…",
+                    words.dependants.len(),
+                ),
+                &[("count", &words.dependants.len())],
+            ))
             .css_classes(["pill", "destructive-action"])
             .halign(gtk::Align::Start)
             .build();
@@ -519,7 +552,7 @@ fn draw_change_card(
         body.append(&section);
     }
     body.append(&widgets.grip_slot);
-    let (section, verdict_body) = sections::section("Verdict", "", true);
+    let (section, verdict_body) = sections::section(&tr("Verdict"), "", true);
     verdict_body.append(&verdict_section(words, sender));
     body.append(&section);
     body.append(&widgets.pending_slot);
@@ -535,12 +568,12 @@ fn draw_change_card(
             add.add_css_class("suggested-action");
         }
     }
-    add.set_tooltip_text(Some(if words.can_add {
-        "Write it into the design (Enter)"
+    add.set_tooltip_text(Some(&if words.can_add {
+        tr("Write it into the design (Enter)")
     } else if words.waiting_on_dependants {
-        "Say whether what uses it goes too first"
+        tr("Say whether what uses it goes too first")
     } else {
-        "It can be written once it fits"
+        tr("It can be written once it fits")
     }));
     if root.is_mapped()
         && let Some(window) = root.root()
@@ -564,18 +597,21 @@ fn verdict_section(words: &ChangeWords, sender: &ComponentSender<ChangeCardCompo
         None => {
             status.append(&gtk::Image::from_icon_name("dialog-information-symbolic"));
             status.append(&text(
-                words.needs.as_deref().unwrap_or("Not checked yet"),
+                &words.needs.clone().unwrap_or_else(|| tr("Not checked yet")),
                 &["stave-description"],
             ));
         }
         Some(Verdict::Checking) => {
             status.append(&gtk::Spinner::builder().spinning(true).build());
-            status.append(&text("Checking whether it fits…", &["stave-edit-status"]));
+            status.append(&text(
+                &tr("Checking whether it fits…"),
+                &["stave-edit-status"],
+            ));
         }
         Some(Verdict::Fits(fits)) => {
             section.add_css_class("fits");
             status.append(&gtk::Image::from_icon_name("object-select-symbolic"));
-            status.append(&text("It fits", &["stave-edit-status"]));
+            status.append(&text(&tr("It fits"), &["stave-edit-status"]));
             for warning in fits.warnings() {
                 section.append(&text(
                     &diagnostic_head(warning),
@@ -588,11 +624,14 @@ fn verdict_section(words: &ChangeWords, sender: &ComponentSender<ChangeCardCompo
             status.append(&gtk::Image::from_icon_name("dialog-error-symbolic"));
             let count = refusal.problems().iter().count();
             status.append(&text(
-                &if count == 1 {
-                    "It doesn't fit: 1 problem".to_owned()
-                } else {
-                    format!("It doesn't fit: {count} problems")
-                },
+                &fill_in(
+                    &ntr(
+                        "It doesn't fit: {count} problem",
+                        "It doesn't fit: {count} problems",
+                        count,
+                    ),
+                    &[("count", &count)],
+                ),
                 &["stave-edit-status"],
             ));
             for (problem_index, problem) in refusal.problems().iter().enumerate() {
@@ -604,14 +643,17 @@ fn verdict_section(words: &ChangeWords, sender: &ComponentSender<ChangeCardCompo
                 head.set_selectable(true);
                 section.append(&head);
                 if let Some(help) = &diagnostic.help {
-                    section.append(&text(&format!("help: {help}"), &["stave-edit-help"]));
+                    section.append(&text(
+                        &fill_in(&tr("help: {help}"), &[("help", &help)]),
+                        &["stave-edit-help"],
+                    ));
                 }
                 for (fix_index, fix) in problem.fixes().iter().enumerate() {
                     let button = gtk::Button::builder()
                         .label(fix.label())
                         .css_classes(["pill", "stave-edit-fix"])
                         .halign(gtk::Align::Start)
-                        .tooltip_text("Add this change to what is tried")
+                        .tooltip_text(tr("Add this change to what is tried"))
                         .build();
                     let input = sender.input_sender().clone();
                     button.connect_clicked(move |_| {
@@ -694,23 +736,23 @@ pub(in crate::ui) fn dependants_words(
     dependants: &[String],
 ) -> (String, String, Vec<String>, String) {
     (
-        format!("Remove {item}?"),
-        format!(
-            "{} {item}, and can't stay without it:",
-            if dependants.len() == 1 {
-                "This uses"
-            } else {
-                "These use"
-            }
+        fill_in(&tr("Remove {item}?"), &[("item", &item)]),
+        fill_in(
+            &ntr(
+                "This uses {item}, and can't stay without it:",
+                "These use {item}, and can't stay without it:",
+                dependants.len(),
+            ),
+            &[("item", &item)],
         ),
         dependants.iter().map(|name| format!("• {name}")).collect(),
-        format!(
-            "Remove {item} and {}",
-            if dependants.len() == 1 {
-                "it".to_owned()
-            } else {
-                format!("all {}", dependants.len())
-            }
+        fill_in(
+            &ntr(
+                "Remove {item} and it",
+                "Remove {item} and all {count}",
+                dependants.len(),
+            ),
+            &[("item", &item), ("count", &dependants.len())],
         ),
     )
 }
@@ -788,7 +830,7 @@ impl Component for DependantsComponent {
             .css_classes(["stave-card", "stave-change-dependants"])
             .build();
         let cancel = gtk::Button::builder()
-            .label("Cancel")
+            .label(tr("Cancel"))
             .hexpand(true)
             .css_classes(["pill"])
             .build();
@@ -818,7 +860,7 @@ impl Component for DependantsComponent {
         content.append(&before);
         content.append(&names);
         content.append(&text(
-            "Nothing is removed until you press Apply in the Edit panel, after seeing it in red.",
+            &tr("Nothing is removed until you press Apply in the Edit panel, after seeing it in red."),
             &["dim-label"],
         ));
         content.append(&buttons);
@@ -1177,6 +1219,7 @@ mod tests {
     fn rename_words() -> ChangeWords {
         ChangeWords {
             eyebrow: "CHANGE · RENAME".to_owned(),
+            kind: "rename".to_owned(),
             title: "Rename wall to back_wall".to_owned(),
             item: Some("wall".to_owned()),
             lines: vec!["wall becomes back_wall everywhere it is used".to_owned()],
@@ -1258,7 +1301,7 @@ mod tests {
         let log = Rc::clone(&heard);
         card.connect_action(move |action| log.borrow_mut().push(action));
         let mut words = rename_words();
-        words.switch = Some("And the other side");
+        words.switch = Some("And the other side".to_owned());
         card.show(&words);
         card.show(&rename_words());
         settle();

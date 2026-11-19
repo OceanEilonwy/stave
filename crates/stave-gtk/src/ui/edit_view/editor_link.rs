@@ -16,6 +16,7 @@
 //!   + panel_stock: maple_12
 //! ```
 
+use stave_app::i18n::{fill_in, ntr, tr};
 use std::path::{Path, PathBuf};
 
 use adw::prelude::*;
@@ -189,10 +190,19 @@ pub(in crate::ui) struct PendingPanel {
     lines: gtk::Box,
 }
 
+/// What would write the pending lines, for the note above them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Writer {
+    /// The edit in progress, written by Apply.
+    Apply,
+    /// The change in progress.
+    Change,
+}
+
 impl PendingPanel {
     /// The section, hidden.
     pub(in crate::ui) fn new() -> PendingPanel {
-        let (root, body) = sections::section("Pending", "", true);
+        let (root, body) = sections::section(&tr("Pending"), "", true);
         root.set_visible(false);
         let note = gtk::Label::builder()
             .xalign(0.0)
@@ -268,7 +278,7 @@ impl PendingPanel {
 
     /// Shows one file's pending lines: each place it changes, in order,
     /// each after its `@ line N`.
-    fn show(&self, file: &str, verb: &str, changes: &[LineChange]) {
+    fn show(&self, file: &str, writer: Writer, changes: &[LineChange]) {
         while let Some(child) = self.lines.first_child() {
             self.lines.remove(&child);
         }
@@ -276,10 +286,16 @@ impl PendingPanel {
             self.root.set_visible(false);
             return;
         }
-        self.note.set_label(&match changes.len() {
-            1 => format!("{verb} would write this to {file}"),
-            places => format!("{verb} would change {file} in {places} places"),
-        });
+        let template = match (writer, changes.len()) {
+            (Writer::Apply, 1) => tr("Apply would write this to {file}"),
+            (Writer::Change, 1) => tr("This change would write this to {file}"),
+            (Writer::Apply, _) => tr("Apply would change {file} in {places} places"),
+            (Writer::Change, _) => tr("This change would change {file} in {places} places"),
+        };
+        self.note.set_label(&fill_in(
+            &template,
+            &[("file", &file), ("places", &changes.len())],
+        ));
         let mut shown = 0usize;
         let mut push = |panel: &PendingPanel, f: &dyn Fn(&PendingPanel)| {
             if shown < SHOWN_LINES {
@@ -288,12 +304,15 @@ impl PendingPanel {
             shown += 1;
         };
         for change in changes {
-            let place = format!("line {}", change.first);
+            let place = fill_in(&tr("line {line}"), &[("line", &change.first)]);
             push(self, &|panel| panel.line("@", &place, "stave-diff-place"));
             let pairs = change.removed.len().min(change.added.len());
             for (old, new) in change.removed.iter().zip(&change.added) {
                 if spacing_only(old, new) {
-                    let line = format!("{}   (spaces only: lined up again)", new.trim_end());
+                    let line = fill_in(
+                        &tr("{text}   (spaces only: lined up again)"),
+                        &[("text", &new.trim_end())],
+                    );
                     push(self, &|panel| panel.line("≈", &line, "stave-diff-place"));
                     continue;
                 }
@@ -315,7 +334,14 @@ impl PendingPanel {
         if shown > SHOWN_LINES {
             self.line(
                 "…",
-                &format!("and {} more lines", shown - SHOWN_LINES),
+                &fill_in(
+                    &ntr(
+                        "and {count} more line",
+                        "and {count} more lines",
+                        shown - SHOWN_LINES,
+                    ),
+                    &[("count", &(shown - SHOWN_LINES))],
+                ),
                 "stave-diff-place",
             );
         }
@@ -391,16 +417,16 @@ impl Window {
     /// editor open, its text goes to the first place and the old lines are
     /// marked.
     pub(in crate::ui) fn update_pending(&mut self) {
-        let (texts, verb, editor_open) = {
+        let (texts, writer, editor_open) = {
             let session = &self.session;
-            let verb = if session.change().is_some() {
-                "this change"
+            let writer = if session.change().is_some() {
+                Writer::Change
             } else {
-                "Add"
+                Writer::Apply
             };
             (
                 pending_texts(session),
-                verb,
+                writer,
                 session.editor() == Editor::Open,
             )
         };
@@ -429,12 +455,7 @@ impl Window {
         } else {
             panel.move_into(&self.editing.card.pending_slot);
         }
-        let verb = if verb == "Add" {
-            "Apply"
-        } else {
-            "This change"
-        };
-        panel.show(&file, verb, &changes);
+        panel.show(&file, writer, &changes);
         if !editor_open {
             return;
         }
@@ -529,9 +550,11 @@ impl Window {
                         .map_or_else(String::new, |name| name.to_string_lossy().into_owned()),
                     Document::Std { file, .. } => (*file).to_owned(),
                 };
-                return Some(format!(
-                    "Editing in 3D is off while {name} doesn't read: {}. Fix the text first.",
-                    diagnostic.message
+                return Some(fill_in(
+                    &tr(
+                        "Editing in 3D is off while {file} doesn't read: {problem}. Fix the text first.",
+                    ),
+                    &[("file", &name), ("problem", &diagnostic.message)],
                 ));
             }
         }
@@ -579,7 +602,7 @@ mod tests {
             let before =
                 "assembly case : Case {\n  panel_stock: oak_19\n}\n\npart top : oak_19 {\n}\n";
             let after = "assembly case : Case {\n  panel_stock: maple_12\n}\n\npart top : oak_19 {\n}\npart shelf : oak_19 {\n}\n";
-            panel.show("cabinet.stave", "Apply", &line_changes(before, after));
+            panel.show("cabinet.stave", Writer::Apply, &line_changes(before, after));
             assert!(panel.root.is_visible());
             let words = panel.words();
             assert_eq!(
@@ -599,7 +622,7 @@ mod tests {
                     && words.contains(&"+ part shelf : oak_19 {".to_owned()),
                 "{words:?}"
             );
-            panel.show("cabinet.stave", "Apply", &[]);
+            panel.show("cabinet.stave", Writer::Apply, &[]);
             assert!(!panel.root.is_visible());
         });
     }

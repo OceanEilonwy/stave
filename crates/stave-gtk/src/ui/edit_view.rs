@@ -21,6 +21,7 @@
 //! the session on every event, and its name field reports when it is taken
 //! away.
 
+use stave_app::i18n::{fill_in, tr};
 use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -209,8 +210,7 @@ impl Words for SessionWords<'_> {
     fn assembly(&self, assembly: AssemblyId) -> String {
         self.names
             .and_then(|names| names.assembly(assembly))
-            .unwrap_or("another assembly")
-            .to_owned()
+            .map_or_else(|| tr("another assembly"), str::to_owned)
     }
 
     fn place(&self, slot: &PlaceSlot) -> Option<String> {
@@ -283,12 +283,20 @@ pub(super) fn card_verdict(progress: &Progress, checking: bool) -> Option<Verdic
 /// typed, in words.
 pub(super) fn command_for(action: CardAction) -> Result<EditCommand, String> {
     match action {
-        CardAction::Rename(text) => parse_name(&text)
-            .map(EditCommand::Rename)
-            .map_err(|error| format!("'{text}' can't be a name: {}", error.0)),
+        CardAction::Rename(text) => parse_name(&text).map(EditCommand::Rename).map_err(|error| {
+            fill_in(
+                &tr("'{text}' can't be a name: {reason}"),
+                &[("text", &text), ("reason", &error.0)],
+            )
+        }),
         CardAction::Choose { param, text } => parse_value(&text)
             .map(|value| EditCommand::Set { name: param, value })
-            .map_err(|error| format!("'{text}' isn't a value Stave can read: {}", error.0)),
+            .map_err(|error| {
+                fill_in(
+                    &tr("'{text}' isn't a value Stave can read: {reason}"),
+                    &[("text", &text), ("reason", &error.0)],
+                )
+            }),
         CardAction::Fix { problem, fix } => Ok(EditCommand::ApplyFix { problem, fix }),
         CardAction::UseDefault { param } => Ok(EditCommand::UseDefault(param)),
         CardAction::Search { param } => Err(format!(
@@ -679,11 +687,11 @@ impl Window {
         };
         let button = &self.editing.face_button;
         if let Some(face) = shown {
-            button.set_label(&format!(
-                "Add something onto its {} face…",
-                face.face.word()
+            button.set_label(&fill_in(
+                &tr("Add something onto its {face} face…"),
+                &[("face", &face.face.word())],
             ));
-            button.set_tooltip_text(Some("List what can go on the face you clicked"));
+            button.set_tooltip_text(Some(&tr("List what can go on the face you clicked")));
         }
         button.set_visible(shown.is_some());
         // A new project's box is the first space to click.
@@ -693,11 +701,13 @@ impl Window {
                 .drawable()
                 .is_some_and(|(_, graph)| pointing::only_spaces(graph));
         if waiting && !self.edit_open() && self.session.selection().is_none() {
-            self.show_hint("Click inside the box to add the first piece");
+            self.show_hint(&tr("Click inside the box to add the first piece"));
         }
         self.update_item_tools();
         self.widgets.tree.set_placeholder(
-            waiting.then_some("No parts yet. Click inside the box to add the first piece."),
+            waiting
+                .then(|| tr("No parts yet. Click inside the box to add the first piece."))
+                .as_deref(),
         );
         self.show_parse_block_line();
     }

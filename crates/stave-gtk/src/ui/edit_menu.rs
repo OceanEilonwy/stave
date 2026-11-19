@@ -26,6 +26,7 @@
 //! the window will own once it is one (docs/relm4-migration.md), whose
 //! entries only send it messages.
 
+use stave_app::i18n::{fill_in, tr};
 use std::rc::Rc;
 
 use adw::prelude::*;
@@ -157,7 +158,10 @@ fn needs_choice_text(names: &NonEmpty<Name>) -> String {
         .iter()
         .map(|name| name.as_str().replace('_', " "))
         .collect();
-    format!("Then point at or choose: {}", names.join(", "))
+    fill_in(
+        &tr("Then point at or choose: {names}"),
+        &[("names", &names.join(", "))],
+    )
 }
 
 /// How an entry is drawn, in words the menu owns.
@@ -255,7 +259,7 @@ fn fill_menu(
     if entries.is_empty() {
         list.append(
             &gtk::Label::builder()
-                .label("Nothing in this project or its imports goes here.")
+                .label(tr("Nothing in this project or its imports goes here."))
                 .xalign(0.0)
                 .wrap(true)
                 .css_classes(["stave-description"])
@@ -274,9 +278,9 @@ fn fill_menu(
         let section = gtk::Box::new(gtk::Orientation::Vertical, 8);
         section.append(
             &gtk::Label::builder()
-                .label(first.group.to_uppercase())
+                .label(first.group.as_str())
                 .xalign(0.0)
-                .css_classes(["stave-section"])
+                .css_classes(["stave-section", "stave-caps"])
                 .build(),
         );
         let card = gtk::Box::builder()
@@ -330,13 +334,16 @@ fn entry_button(
             description = format!("{description} {words}");
         }
         EntryLook::Checking => {
-            let words = "Checking whether it fits here…";
-            content.append(&wrapped(words, &["stave-edit-checking"]));
+            let words = tr("Checking whether it fits here…");
+            content.append(&wrapped(&words, &["stave-edit-checking"]));
             description = format!("{description} {words}");
         }
         EntryLook::Greyed(reason) => {
             content.append(&wrapped(reason, &["stave-edit-reason"]));
-            description = format!("{description} Doesn't fit here: {reason}");
+            description = format!(
+                "{description} {}",
+                fill_in(&tr("Doesn't fit here: {reason}"), &[("reason", reason)])
+            );
         }
     }
     let button = gtk::Button::builder()
@@ -348,7 +355,7 @@ fn entry_button(
         gtk::accessible::Property::Description(description.trim()),
     ]);
     if entry.look.choosable() {
-        button.set_tooltip_text(Some("Try it here"));
+        button.set_tooltip_text(Some(&tr("Try it here")));
         let declaration = entry.declaration;
         let chosen = chosen.clone();
         button.connect_clicked(move |_| chosen(declaration));
