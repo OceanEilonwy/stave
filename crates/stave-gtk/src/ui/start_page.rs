@@ -197,14 +197,16 @@ impl Component for StartPageComponent {
                                             set_label: "_Open Folder…",
                                             set_use_underline: true,
                                             set_action_name: Some("win.open"),
-                                            add_css_class: "pill",
-                                            add_css_class: "suggested-action",
+                                            // After the label, which adds
+                                            // GTK's `text-button`: these
+                                            // replace it.
+                                            set_css_classes: &["pill", "suggested-action"],
                                         },
                                         gtk::Button {
                                             set_label: "_New Project…",
                                             set_use_underline: true,
                                             set_action_name: Some("win.new-project"),
-                                            add_css_class: "pill",
+                                            set_css_classes: &["pill"],
                                         },
                                     },
                                 },

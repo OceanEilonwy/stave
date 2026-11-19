@@ -447,7 +447,9 @@ impl Component for NewProjectComponent {
                     },
                     pack_end = &gtk::Button {
                         set_label: "Create",
-                        add_css_class: "suggested-action",
+                        // After the label, which adds GTK's `text-button`:
+                        // this replaces it, as before.
+                        set_css_classes: &["suggested-action"],
                         connect_clicked[sender] => move |_| {
                             sender.input_sender().emit(NewProjectInput::Create);
                         },

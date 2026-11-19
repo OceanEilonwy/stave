@@ -1194,11 +1194,16 @@ impl Window {
             let param = switch.param.clone();
             let input = self.input();
             let shown = range.clone();
-            let menu_ref = menu.clone();
+            // The switch and the button live inside the menu's popover, so
+            // their handlers hold the menu weakly: a strong hold would be a
+            // cycle that keeps every menu alive after it is replaced.
+            let weak_menu = menu.downgrade();
             toggle.connect_state_set(move |_, on| {
                 shown.set_visible(on && !solved);
                 if !on && solved {
-                    menu_ref.popdown();
+                    if let Some(menu) = weak_menu.upgrade() {
+                        menu.popdown();
+                    }
                     input.emit(
                         EditingInput::GripMakePlain {
                             index,
@@ -1211,15 +1216,18 @@ impl Window {
             });
             let param = switch.param.clone();
             let input = self.input();
-            let menu_ref = menu.clone();
+            let weak_menu = menu.downgrade();
             make.connect_clicked(move |_| {
+                let Some(menu) = weak_menu.upgrade() else {
+                    return;
+                };
                 input.emit(
                     EditingInput::GripMakeSolved {
                         index,
                         param: param.clone(),
                         low: low.text().trim().to_owned(),
                         high: high.text().trim().to_owned(),
-                        menu: menu_ref.clone(),
+                        menu,
                     }
                     .into(),
                 );
@@ -2330,6 +2338,58 @@ mod tests {
             );
             readout.show(None);
             assert_eq!(readout.words(), None);
+        });
+    }
+
+    #[test]
+    fn a_grips_options_menu_is_freed_once_it_is_let_go() {
+        on_gtk_thread(|| {
+            use relm4::{Component, ComponentController};
+
+            let application = adw::Application::new(
+                Some("org.stave.GripsTest.MenuFreed"),
+                gio::ApplicationFlags::NON_UNIQUE,
+            );
+            if let Err(error) = application.register(gio::Cancellable::NONE) {
+                panic!("the test's application registers: {error}");
+            }
+            let folder = table("menu-freed");
+            let options = crate::ui::Options {
+                layout: Some(std::env::temp_dir().join("stave-grips-test-no-layout")),
+                ..crate::ui::Options::default()
+            };
+            let builder = Window::builder();
+            let root = builder.widget().clone();
+            let widgets =
+                crate::ui::build_widgets(&root, &application, &folder, &gio::Menu::new(), &options)
+                    .unwrap();
+            let controller = builder
+                .launch(crate::ui::WindowInit {
+                    widgets,
+                    folder,
+                    options,
+                })
+                .detach();
+            crate::ui::gtk_test::settle();
+            let width = Ident::new("width", stave_lang::ast::Span::default()).unwrap();
+            let switches = [SolverSwitch {
+                param: width,
+                value: super::super::grip_text::mm_amount(100.0).unwrap(),
+                solved: false,
+            }];
+            let menu = controller.model().switch_menu(0, &switches);
+            let holder = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+            holder.append(&menu);
+            let weak = menu.downgrade();
+            holder.remove(&menu);
+            drop(menu);
+            crate::ui::gtk_test::settle();
+            // Its switch and button sit in its own popover: holding the
+            // menu from their handlers would keep it alive for good.
+            assert!(weak.upgrade().is_none(), "the menu is freed");
+            controller.widget().close();
+            drop(controller);
+            crate::ui::gtk_test::settle();
         });
     }
 }

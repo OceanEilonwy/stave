@@ -456,6 +456,24 @@ them.
   changes' asked item, the item tools' offer and the boundary handles are
   plain fields of the model.
 
+### Leaks found at the end, and fixed
+
+Both were on `main` before the move, not caused by it.
+
+- The centre's dock frame (and with it the Model and Code panels, about
+  260 widgets) outlived every closed window. A `create-frame` handler
+  returned a frame made in Rust, which is already sunk; libpanel sinks
+  it again when it places it, so one reference was never dropped. The
+  dock now lets libpanel make its own frames and gives them their tabs
+  afterwards (`Dockyard::give_tabs`). `closed_window_is_freed` now
+  checks that every widget in the window is freed.
+- A grip's options menu was held by its own switch's and button's
+  handlers, which live in its popover: a cycle, so every menu that was
+  replaced stayed alive. The handlers hold it weakly now.
+- Still alive after a window closes: the view switcher's two toggle
+  children (an icon and a label each), kept by libadwaita's
+  `adw::Toggle` itself, as a plain `adw::ToggleGroup` shows.
+
 ### Still to do
 
 - `FilesPage` (`files.rs`) is not a component: it keeps its state in

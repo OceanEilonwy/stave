@@ -665,7 +665,9 @@ impl Component for ItemToolsComponent {
 
                 gtk::Button {
                     set_label: "Hold a distance…",
-                    add_css_class: "flat",
+                    // After the label, which adds GTK's `text-button`:
+                    // these replace it, so the row keeps its width.
+                    set_css_classes: &["flat"],
                     set_hexpand: true,
                     #[watch]
                     set_sensitive: model.shown.unmeasurable.is_none(),
@@ -679,8 +681,7 @@ impl Component for ItemToolsComponent {
                 },
                 gtk::Button {
                     set_label: "Remove…",
-                    add_css_class: "flat",
-                    add_css_class: "error",
+                    set_css_classes: &["flat", "error"],
                     set_hexpand: true,
                     set_tooltip_text: Some("Take it out of the design (Delete)"),
                     connect_clicked[sender] => move |_| {

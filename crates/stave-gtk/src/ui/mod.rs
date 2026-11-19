@@ -1319,6 +1319,25 @@ mod tests {
         on_gtk_thread(closed_window_is_freed);
     }
 
+    /// Every widget under `root` (popovers included), each with its path of
+    /// type names, held weakly.
+    fn every_widget(root: &gtk::Widget) -> Vec<(String, glib::WeakRef<gtk::Widget>)> {
+        let mut found = Vec::new();
+        let mut waiting = vec![(root.type_().name().to_owned(), root.clone())];
+        while let Some((path, widget)) = waiting.pop() {
+            let mut child = widget.first_child();
+            while let Some(current) = child {
+                waiting.push((
+                    format!("{path}/{}", current.type_().name()),
+                    current.clone(),
+                ));
+                child = current.next_sibling();
+            }
+            found.push((path, widget.downgrade()));
+        }
+        found
+    }
+
     /// The application owns a window's controller while it is open: it
     /// lives while held, closing takes it out of the application (which
     /// is when the application drops its controller), and dropping the
@@ -1366,6 +1385,10 @@ mod tests {
         let input = controller.sender().clone();
         settle();
         assert!(window.upgrade().is_some(), "the window lives while open");
+        // Every widget in it, to see that none outlives it (the centre's
+        // dock frame once did, with the Model and Code panels in it).
+        let every = every_widget(controller.widget().upcast_ref());
+        assert!(every.len() > 100, "the walk finds the window's widgets");
         assert!(!closed.get());
         controller.widget().close();
         settle();
@@ -1374,6 +1397,19 @@ mod tests {
         drop(controller);
         settle();
         assert!(window.upgrade().is_none(), "the window is freed");
+        let alive: Vec<&str> = every
+            .iter()
+            // GTK's tooltip window belongs to the display's one tooltip,
+            // which moves from window to window: it is not the window's.
+            .filter(|(path, _)| !path.contains("GtkTooltipWindow"))
+            // libadwaita keeps an `adw::Toggle`'s own child (the view
+            // switcher's icon and label) after its group has gone; a plain
+            // `adw::ToggleGroup` does it too, so it is not ours to fix.
+            .filter(|(path, _)| !path.contains("AdwToggleGroup/GtkToggleButton/"))
+            .filter(|(_, widget)| widget.upgrade().is_some())
+            .map(|(path, _)| path.as_str())
+            .collect();
+        assert!(alive.is_empty(), "widgets outlive their window: {alive:#?}");
         assert!(
             input
                 .send(WindowInput::Rendering(

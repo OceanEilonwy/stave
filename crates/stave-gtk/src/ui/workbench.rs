@@ -489,10 +489,12 @@ impl Dockyard {
             .filter_map(|side| Some((side, builder.object::<panel::Paned>(side.word())?)))
             .collect();
 
-        // Frames libpanel makes itself (a panel dropped somewhere empty)
-        // get tabs too.
-        dock.connect_create_frame(|_, _| new_frame());
-        grid.connect_create_frame(|_| new_frame());
+        // Frames libpanel makes itself (the grid's, and one for a panel
+        // dropped somewhere empty) are given their tabs by `give_tabs`
+        // afterwards, not by a `create-frame` handler: a frame made in Rust
+        // is already sunk, libpanel sinks it again when it places it, and
+        // that extra reference keeps the frame and every panel in it alive
+        // after the window has closed.
 
         let panels = contents
             .into_iter()
@@ -551,6 +553,20 @@ impl Dockyard {
                 && !layout.frames(side).is_empty();
             self.dock.set_reveal_area(side.area(), shown);
         }
+        self.give_tabs();
+    }
+
+    /// Gives every frame libpanel made itself the slim strip of tabs the
+    /// window's own frames have.
+    fn give_tabs(&self) {
+        self.dock.foreach_frame(|frame| {
+            let has_tabs = frame
+                .header()
+                .is_some_and(|header| header.is::<super::tab_strip::TabStrip>());
+            if !has_tabs {
+                give_tabs(frame);
+            }
+        });
     }
 
     /// Adds these panels to a frame, in order.
@@ -746,10 +762,15 @@ impl Dockyard {
 /// An empty frame, its tabs along the top wherever it is.
 fn new_frame() -> panel::Frame {
     let frame = panel::Frame::new();
-    frame.set_orientation(gtk::Orientation::Vertical);
-    // A slim strip of flush tabs, as in an IDE.
-    frame.set_header(Some(&super::tab_strip::TabStrip::new()));
+    give_tabs(&frame);
     frame
+}
+
+/// Puts a frame's tabs along its top as a slim strip of flush tabs, as in
+/// an IDE.
+fn give_tabs(frame: &panel::Frame) {
+    frame.set_orientation(gtk::Orientation::Vertical);
+    frame.set_header(Some(&super::tab_strip::TabStrip::new()));
 }
 
 /// The frame holding a panel, if it is open.
@@ -1087,6 +1108,9 @@ impl Component for WorkbenchComponent {
             WorkbenchInput::Toggle(id) => yard.toggle(id, &self.last),
             WorkbenchInput::EdgesChanged => {}
         }
+        // A message may have made a frame (a panel moved or brought back,
+        // or dropped somewhere new, which sends `Save`).
+        yard.give_tabs();
         widgets.show_status_tabs();
     }
 }
