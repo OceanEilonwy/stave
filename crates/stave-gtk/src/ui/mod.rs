@@ -39,6 +39,7 @@ mod inspector;
 mod new_project;
 mod option_search;
 mod panels;
+mod sections;
 mod slider;
 mod style;
 mod tab_strip;
@@ -2176,7 +2177,8 @@ impl Window {
     }
 
     fn render_now(self: &Rc<Self>) {
-        let selection = self.selected_nodes();
+        let mut selection = self.selected_nodes();
+        selection.extend(self.link_hover_nodes());
         let backdrop = self.backdrop();
         let looks = if self.state.borrow().focus.is_some() {
             None
@@ -2933,6 +2935,12 @@ impl Window {
                 window.dispatch(Command::GoToSource(location));
             }
         });
+        // Inspector links select and light what they name (`edit_view/links.rs`).
+        self.connect_links(&widgets.inspector.links);
+        let files = widgets.files.clone();
+        widgets
+            .inspector
+            .connect_unsaved(move |path| files.is_unsaved(Path::new(path)));
         let window = self.clone();
         widgets
             .motion

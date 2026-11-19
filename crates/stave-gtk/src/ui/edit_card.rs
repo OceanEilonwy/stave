@@ -45,6 +45,9 @@ use stave_lang::Diagnostic;
 use stave_lang::ast::{Expr, Ident};
 use stave_model::ids::AssemblyId;
 
+use super::sections::{self, LinkHandlers};
+use stave_app::inspect::NameLink;
+
 type ActionCallback = Rc<dyn Fn(CardAction)>;
 /// A short list's rows, each by its entry's text (the search row by "").
 #[cfg(test)]
@@ -102,6 +105,13 @@ pub trait Words {
     /// What a bound place param holds, as written: `door_bay[left]`,
     /// `side_l`; `None` while unbound.
     fn place(&self, slot: &PlaceSlot) -> Option<String>;
+    /// The names in a place's value (`bay[doors]`, `[side_l, side_r]`)
+    /// as links to what they name (`stave_app::inspect::place_links`);
+    /// none when the design isn't known.
+    fn links(&self, text: &str) -> Vec<NameLink> {
+        let _ = text;
+        Vec::new()
+    }
 }
 
 /// What the card shows.
@@ -278,6 +288,11 @@ pub struct EditCard {
     pub repeat_slot: gtk::Box,
     /// Where the window puts "Repeat…", on the buttons' line.
     pub repeat_button_slot: gtk::Box,
+    /// Where the window puts the "Pending" section (the lines Apply
+    /// would write), last in the body.
+    pub pending_slot: gtk::Box,
+    /// Where the links in "Placed in" report clicks and hovers.
+    pub links: LinkHandlers,
     /// A row to bring into sight once the layout has room for it (an open
     /// short list).
     scroll_target: Rc<RefCell<Option<gtk::Widget>>>,
@@ -326,7 +341,7 @@ impl EditCard {
         let on_action: Rc<RefCell<Option<ActionCallback>>> = Rc::new(RefCell::new(None));
         let body = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
-            .spacing(8)
+            .spacing(0)
             .css_classes(["stave-edit-body"])
             .build();
         let scrolled = gtk::ScrolledWindow::builder()
@@ -336,18 +351,11 @@ impl EditCard {
             .build();
         let name = gtk::EditableLabel::builder()
             .hexpand(true)
-            .css_classes(["stave-edit-name"])
+            .css_classes(["stave-edit-name", "stave-name-field"])
             .tooltip_text("The name it is written under. Click to retype it.")
             .build();
         name.update_property(&[gtk::accessible::Property::Label("Name")]);
-        let cancel = gtk::Button::builder()
-            .label("Cancel")
-            .tooltip_text("Leave the design as it is (Escape)")
-            .build();
-        let add = gtk::Button::builder()
-            .label("Add")
-            .css_classes(["suggested-action"])
-            .build();
+        let (apply_buttons, cancel, add) = sections::footer_buttons();
         let repeat_button_slot = gtk::Box::builder()
             .hexpand(true)
             .halign(gtk::Align::Start)
@@ -358,8 +366,7 @@ impl EditCard {
             .css_classes(["stave-edit-buttons"])
             .build();
         buttons.append(&repeat_button_slot);
-        buttons.append(&cancel);
-        buttons.append(&add);
+        buttons.append(&apply_buttons);
         let repeat_slot = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
             .css_classes(["stave-edit-repeat-slot"])
@@ -370,6 +377,9 @@ impl EditCard {
             .build();
         foot.append(&repeat_slot);
         foot.append(&buttons);
+        let pending_slot = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .build();
         let root = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
             .css_classes(["stave-edit-card"])
@@ -443,6 +453,8 @@ impl EditCard {
             scrolled,
             repeat_slot,
             repeat_button_slot,
+            pending_slot,
+            links: LinkHandlers::default(),
             scroll_target,
             add,
             name,
@@ -472,23 +484,28 @@ impl EditCard {
         self.root
             .update_property(&[gtk::accessible::Property::Label(&format!("Add {label}"))]);
 
-        // The title and where it comes from on one line; the hint under
-        // it on one line, in full in its tooltip.
-        let title_line = gtk::Box::builder().spacing(8).build();
-        let title = text(label, &["stave-edit-title"]);
-        title.set_wrap(false);
-        title.set_ellipsize(gtk::pango::EllipsizeMode::End);
-        title_line.append(&title);
-        let from = text(
-            &origin(model.heading, &candidate.entry.group),
-            &["stave-edit-origin"],
-        );
+        // The header: the name it is written under, retyped in place, in
+        // a monospace field, and what it is and where it comes from on
+        // the right; the hint under it on one line, in full in its
+        // tooltip.
+        self.shown_name.replace(model.name.to_owned());
+        self.name.set_text(model.name);
+        if let Some(parent) = self.name.parent()
+            && let Ok(parent) = parent.downcast::<gtk::Box>()
+        {
+            parent.remove(&self.name);
+        }
+        let from = text(label, &["stave-edit-origin"]);
         from.set_wrap(false);
-        from.set_hexpand(true);
         from.set_xalign(1.0);
-        from.set_ellipsize(gtk::pango::EllipsizeMode::Start);
-        title_line.append(&from);
-        self.body.append(&title_line);
+        from.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        from.set_max_width_chars(18);
+        from.set_tooltip_text(Some(&format!(
+            "{label} · {}",
+            origin(model.heading, &candidate.entry.group)
+        )));
+        self.body
+            .append(&sections::header(None, &self.name, Some(from.upcast_ref())));
         if let Some(hint) = &candidate.entry.hint {
             let hint_label = text(hint, &["stave-edit-hint-line"]);
             hint_label.set_wrap(false);
@@ -497,31 +514,28 @@ impl EditCard {
             self.body.append(&hint_label);
         }
 
-        // The generated name, retyped in place, and the places it fills.
-        let rows = rows_card();
-        let name_row = row_box();
-        name_row.append(&key_label("Name", "The name it is written under"));
-        self.shown_name.replace(model.name.to_owned());
-        self.name.set_text(model.name);
-        if let Some(parent) = self.name.parent()
-            && let Ok(parent) = parent.downcast::<gtk::Box>()
-        {
-            parent.remove(&self.name);
+        // Where it goes: each place it fills, its names as links.
+        if !candidate.place.is_empty() {
+            let (section, rows) = sections::section("Placed in", "", true);
+            for param in &candidate.place {
+                rows.append(&place_row(param, words, &self.links));
+            }
+            self.body.append(&section);
         }
-        name_row.append(&self.name);
-        rows.append(&name_row);
-        for param in &candidate.place {
-            rows.append(&place_row(param, words));
-        }
-        self.body.append(&rows);
 
         if !model.applied.is_empty() {
             self.body.append(&applied_section(model.applied));
         }
         let mut fixes = Vec::new();
         self.put_back.replace(None);
-        self.body
-            .append(&self.verdict_section(model.verdict, model.blame, candidate, &mut fixes));
+        let (section, verdict_body) = sections::section("Verdict", "", true);
+        verdict_body.append(&self.verdict_section(
+            model.verdict,
+            model.blame,
+            candidate,
+            &mut fixes,
+        ));
+        self.body.append(&section);
         self.fixes.replace(fixes);
         let mut entries = Vec::new();
         self.options.borrow_mut().clear();
@@ -530,6 +544,7 @@ impl EditCard {
                 .append(&self.settings_section(&candidate.settings, words, &mut entries));
         }
         self.entries.replace(entries);
+        self.body.append(&self.pending_slot);
 
         let enabled = can_add(candidate, model.verdict);
         self.add_enabled.set(enabled);
@@ -552,8 +567,7 @@ impl EditCard {
         words: &dyn Words,
         entries: &mut Vec<(Ident, gtk::Entry)>,
     ) -> gtk::Box {
-        let section = gtk::Box::new(gtk::Orientation::Vertical, 3);
-        section.append(&text("SETTINGS", &["stave-edit-caption"]));
+        let (section, body) = sections::section("Settings", &settings.len().to_string(), true);
         let order = |setting: &&SettingParam| match setting.value {
             SettingValue::Unset => 0,
             SettingValue::Copied { .. } | SettingValue::Chosen(_) => 1,
@@ -571,7 +585,7 @@ impl EditCard {
             }
             entries.push((setting.name.clone(), entry));
         }
-        section.append(&rows);
+        body.append(&rows);
         section
     }
 
@@ -1300,15 +1314,23 @@ fn focused_choice(list: &ChoiceList) -> Option<String> {
         .map(|(text, _)| text.clone())
 }
 
-/// A place param's row: what fills it, or the prompt to point at it.
-fn place_row(param: &PlaceParam, words: &dyn Words) -> gtk::Box {
+/// A place param's row: what fills it (each name a link to what it
+/// names), or the prompt to point at it.
+fn place_row(param: &PlaceParam, words: &dyn Words, handlers: &LinkHandlers) -> gtk::Box {
     let row = row_box();
     row.append(&key_label(param.name.as_str(), &param.prompt));
     match param.text.clone().or_else(|| words.place(&param.slot)) {
         Some(value) => {
-            let label = value_label(&value);
-            label.set_tooltip_text(Some(&value));
-            row.append(&label);
+            let links = words.links(&value);
+            if links.is_empty() {
+                let label = value_label(&value);
+                label.set_tooltip_text(Some(&value));
+                row.append(&label);
+            } else {
+                let shown = handlers.links(&links);
+                shown.set_tooltip_text(Some(&value));
+                row.append(&shown);
+            }
         }
         None => {
             let prompt = gtk::Box::builder()
@@ -1337,8 +1359,7 @@ fn place_row(param: &PlaceParam, words: &dyn Words) -> gtk::Box {
 
 /// The fixes added to what is tried, each by its label.
 fn applied_section(labels: &[String]) -> gtk::Box {
-    let section = gtk::Box::new(gtk::Orientation::Vertical, 3);
-    section.append(&text("FIXES ADDED", &["stave-edit-caption"]));
+    let (section, body) = sections::section("Fixes added", &labels.len().to_string(), true);
     let rows = rows_card();
     for label in labels {
         let row = row_box();
@@ -1350,7 +1371,7 @@ fn applied_section(labels: &[String]) -> gtk::Box {
         row.append(&words);
         rows.append(&row);
     }
-    section.append(&rows);
+    body.append(&rows);
     section
 }
 
@@ -1527,11 +1548,6 @@ button.stave-edit-fix, button.stave-edit-put-back { padding: 2px 12px; min-heigh
 .stave-edit-foot { border-top: 1px solid alpha(currentColor, 0.1); }
 .stave-edit-buttons { padding: 8px 12px 10px 12px; }
 .stave-edit-option { font-family: monospace; font-size: 13px; }
-.stave-ghost-verdict { padding: 4px 12px; border-radius: 999px; font-weight: 700; font-size: 13px;
-  background: @window_bg_color; color: @window_fg_color; box-shadow: 0 1px 3px alpha(black, 0.25); }
-.stave-ghost-verdict.fits { color: @success_color; }
-.stave-ghost-verdict.refused { color: @error_color; }
-.stave-ghost-verdict.checking { color: alpha(currentColor, 0.75); }
 button.stave-edit-face { margin-top: 4px; }
 button.stave-edit-unavailable .stave-edit-option,
 button.stave-edit-unavailable .stave-edit-option-mark,
@@ -1561,6 +1577,23 @@ row.stave-option-search-hit { padding: 4px 12px; }
 row.stave-option-search-hit.refused .stave-option-search-name,
 row.stave-option-search-hit.refused .stave-option-search-hint { opacity: 0.55; }
 .stave-option-search-foot { font-size: 12px; color: alpha(currentColor, 0.65); padding: 6px 12px 10px 12px; border-spacing: 16px; }
+/* ---- lane: Inspector and editing — the cards as Inspector sections ---- */
+.stave-edit-card .stave-edit-body { padding: 0 0 8px 0; border-spacing: 0; }
+.stave-edit-card .stave-edit-hint-line { margin: -2px 8px 4px 8px; font-size: 11.5px; }
+.stave-edit-card .stave-card.stave-edit-rows { background: none; box-shadow: none; border-radius: 0; font-size: 12px; }
+.stave-edit-card .stave-card.stave-edit-rows > .stave-card-row.stave-edit-row { padding: 1px 0; min-height: 22px;
+  border-bottom: none; border-radius: 0; border-spacing: 6px; }
+.stave-edit-card .stave-edit-key { min-width: 104px; font-size: 12px; color: alpha(currentColor, 0.6); }
+.stave-edit-card .stave-edit-value { font-size: 12px; font-weight: normal; padding: 2px 6px; border-radius: 4px;
+  background: alpha(black, 0.18); }
+.stave-edit-card entry.stave-edit-entry { min-height: 22px; font-size: 12px; }
+.stave-edit-card button.stave-edit-options-toggle { min-height: 22px; min-width: 22px; }
+.stave-edit-card .stave-edit-verdict { padding: 4px 8px; border-radius: 4px; }
+.stave-edit-card .stave-edit-status { font-size: 12px; }
+.stave-edit-card .stave-edit-foot { border-top: 1px solid alpha(currentColor, 0.1); }
+.stave-edit-card .stave-edit-buttons { padding: 6px 8px 8px 8px; }
+.stave-edit-card .stave-edit-name { font-family: monospace; font-weight: normal; }
+.stave-edit-card .stave-edit-origin { font-size: 11.5px; }
 "#;
 
 /// Puts the menu's and the card's stylesheet on the display, once.
@@ -1767,6 +1800,15 @@ mod tests {
         show(drawer, Some(&fixture.verdict));
         let (add, cancel) = card.buttons();
         assert!(!add.is_sensitive());
+        // The commit button reads Apply, whatever is added.
+        assert_eq!(
+            crate::ui::sections::button_words(&add).as_deref(),
+            Some("Apply")
+        );
+        assert_eq!(
+            crate::ui::sections::button_words(&cancel).as_deref(),
+            Some("Cancel")
+        );
         assert_eq!(
             press(&window, gdk::Key::Return),
             Some(card.root.clone().upcast())

@@ -23,6 +23,7 @@ use stave_lang::units::Length;
 use stave_scene::Target;
 
 use super::super::Window;
+use super::super::sections;
 
 /// Where a hold stands.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -104,27 +105,22 @@ impl HoldCard {
     pub(in crate::ui) fn new() -> HoldCard {
         let body = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
-            .spacing(10)
+            .spacing(0)
             .css_classes(["stave-edit-body"])
             .build();
-        let head = gtk::Box::new(gtk::Orientation::Vertical, 2);
-        head.append(&label("HOLD A DISTANCE", &["stave-edit-caption"]));
-        let title = label("", &["stave-edit-title"]);
-        head.append(&title);
-        let now = label("", &["stave-description"]);
-        head.append(&now);
-        body.append(&head);
-        let rows = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
-            .css_classes(["stave-card"])
-            .overflow(gtk::Overflow::Hidden)
+        // The header: the two things, in a monospace field; what it is on
+        // the right.
+        let title = sections::name_field("");
+        let kind = label("hold a distance", &["stave-edit-origin"]);
+        kind.set_wrap(false);
+        body.append(&sections::header(None, &title, Some(kind.upcast_ref())));
+        let (section, rows) = sections::section("Hold", "", true);
+        let now = label("", &["stave-row-note"]);
+        rows.append(&now);
+        let toggles = gtk::Box::builder()
+            .css_classes(["linked"])
+            .halign(gtk::Align::Start)
             .build();
-        let bound_row = gtk::Box::builder()
-            .spacing(10)
-            .css_classes(["stave-card-row"])
-            .build();
-        bound_row.append(&label("Keep", &["stave-key"]));
-        let toggles = gtk::Box::builder().css_classes(["linked"]).build();
         let at_least = gtk::ToggleButton::builder()
             .label("At least")
             .active(true)
@@ -135,50 +131,28 @@ impl HoldCard {
             .build();
         toggles.append(&at_least);
         toggles.append(&at_most);
-        bound_row.append(&toggles);
-        rows.append(&bound_row);
-        let value_row = gtk::Box::builder()
-            .spacing(10)
-            .css_classes(["stave-card-row"])
-            .build();
-        value_row.append(&label("Distance", &["stave-key"]));
+        rows.append(&sections::row("Keep", &toggles));
         let value = gtk::Entry::builder().hexpand(true).build();
         value.update_property(&[gtk::accessible::Property::Label("Distance")]);
-        value_row.append(&value);
-        rows.append(&value_row);
-        let reason_row = gtk::Box::builder()
-            .spacing(10)
-            .css_classes(["stave-card-row"])
-            .build();
-        reason_row.append(&label("Why", &["stave-key"]));
+        rows.append(&sections::row("Distance", &value));
         let reason = gtk::Entry::builder()
             .hexpand(true)
             .placeholder_text("room for a finger")
             .build();
         reason.update_property(&[gtk::accessible::Property::Label("Why")]);
-        reason_row.append(&reason);
-        rows.append(&reason_row);
-        body.append(&rows);
-        body.append(&label(
+        rows.append(&sections::row("Why", &reason));
+        rows.append(&label(
             "It becomes a rule (a require) in the text: every later change must keep it.",
             &["stave-footnote"],
         ));
-        let cancel = gtk::Button::builder()
-            .label("Cancel")
-            .tooltip_text("Hold nothing (Escape)")
-            .build();
-        let try_it = gtk::Button::builder()
-            .label("Try it")
-            .css_classes(["suggested-action"])
-            .tooltip_text("Check the rule on the design (Enter)")
-            .build();
-        let buttons = gtk::Box::builder()
-            .spacing(8)
-            .halign(gtk::Align::End)
-            .css_classes(["stave-edit-buttons"])
-            .build();
-        buttons.append(&cancel);
-        buttons.append(&try_it);
+        body.append(&section);
+        let (buttons, cancel, try_it) = sections::footer_buttons();
+        buttons.add_css_class("stave-edit-buttons");
+        cancel.set_tooltip_text(Some("Hold nothing (Esc)"));
+        // Not yet the commit: it checks the rule, and the change's card
+        // then offers Apply.
+        sections::set_button_words(&try_it, "Try it");
+        try_it.set_tooltip_text(Some("Check the rule on the design (Enter)"));
         let scrolled = gtk::ScrolledWindow::builder()
             .hscrollbar_policy(gtk::PolicyType::Never)
             .vexpand(true)

@@ -79,9 +79,6 @@ pub(super) struct EditView {
     panel_shown: Cell<bool>,
     /// The search over a setting's options.
     pub(super) search: Rc<OptionSearch>,
-    /// The verdict in words beside the ghost, so it never rests on colour
-    /// alone.
-    verdict: gtk::Label,
     /// On the part's card: add onto the face that was clicked.
     face_button: gtk::Button,
     /// Whether the editor shows, for the writer (a commit opens the file
@@ -126,6 +123,9 @@ struct EditState {
     /// A space lit by name until an edit starts (a new project's
     /// envelope).
     first_space: Option<String>,
+    /// What a link in the Inspector or the Edit panel names, lit while
+    /// the pointer is on it (`links.rs`).
+    link_hover: Option<links::Hovered>,
 }
 
 /// A candidate's ghost: its scene, posed at rest.
@@ -145,13 +145,6 @@ impl EditView {
         menu.root.set_visible(false);
         let card = EditCard::new();
         card.root.set_visible(false);
-        let verdict = gtk::Label::builder()
-            .halign(gtk::Align::Start)
-            .valign(gtk::Align::Start)
-            .css_classes(["stave-ghost-verdict"])
-            .can_target(false)
-            .visible(false)
-            .build();
         let face_button = gtk::Button::builder()
             .css_classes(["stave-edit-face", "pill"])
             .margin_start(16)
@@ -172,7 +165,6 @@ impl EditView {
             panel,
             panel_shown: Cell::new(false),
             search: OptionSearch::new(),
-            verdict,
             face_button,
             editor_open: Rc::new(Cell::new(false)),
             grips: grips::GripView::new(),
@@ -194,6 +186,7 @@ impl EditView {
 /// model of the design the edit is tried on.
 pub(super) struct SessionWords<'m> {
     names: Option<Names<'m>>,
+    design: Option<&'m stave_model::solved::SolvedDesign>,
 }
 
 impl<'m> SessionWords<'m> {
@@ -201,6 +194,7 @@ impl<'m> SessionWords<'m> {
     pub(super) fn of(edit: &'m Edit) -> SessionWords<'m> {
         SessionWords {
             names: edit.base().model.as_ref().map(Names::new),
+            design: edit.base().design.as_ref(),
         }
     }
 }
@@ -219,6 +213,12 @@ impl Words for SessionWords<'_> {
 
     fn place(&self, slot: &PlaceSlot) -> Option<String> {
         self.names?.slot(slot)
+    }
+
+    fn links(&self, text: &str) -> Vec<stave_app::inspect::NameLink> {
+        self.design
+            .map(|design| stave_app::inspect::place_links(design, text))
+            .unwrap_or_default()
     }
 }
 
@@ -380,24 +380,6 @@ fn ghost_tint(verdict: GhostVerdict) -> [f32; 4] {
     [r, g, b, GHOST_TINT]
 }
 
-/// The verdict beside a ghost, in words.
-fn verdict_words(verdict: GhostVerdict) -> &'static str {
-    match verdict {
-        GhostVerdict::Checking => "Checking…",
-        GhostVerdict::Fits => "✓ It fits",
-        GhostVerdict::Refused => "✕ It doesn't fit",
-    }
-}
-
-/// The CSS class of a verdict's words.
-fn verdict_class(verdict: GhostVerdict) -> &'static str {
-    match verdict {
-        GhostVerdict::Checking => "checking",
-        GhostVerdict::Fits => "fits",
-        GhostVerdict::Refused => "refused",
-    }
-}
-
 /// The ghost's verdict for where a chosen candidate stands; `None` when
 /// it has not been tried.
 fn ghost_verdict(progress: &Progress) -> Option<GhostVerdict> {
@@ -436,7 +418,6 @@ impl Window {
         let editing = &self.editing;
         let design = &self.widgets.design;
         design.add_overlay(&editing.menu.root);
-        design.add_overlay(&editing.verdict);
         self.widgets.edit_holder.append(&editing.panel.root);
         self.widgets.sheet.add_overlay(&editing.search.root);
         self.connect_option_search();
@@ -462,6 +443,7 @@ impl Window {
                 window.card_action(action);
             }
         });
+        self.connect_links(&editing.card.links);
         let window = Rc::downgrade(self);
         editing.face_button.connect_clicked(move |_| {
             if let Some(window) = window.upgrade() {
@@ -509,7 +491,6 @@ impl Window {
             };
             state.first_space = first_space;
         }
-        self.editing.verdict.set_visible(false);
         self.refresh_edit();
     }
 
@@ -971,8 +952,6 @@ impl Window {
             }));
         if open {
             self.place_edit_widgets();
-        } else {
-            self.editing.verdict.set_visible(false);
         }
         self.update_edit_panel();
         self.update_face_button();
@@ -1315,7 +1294,6 @@ impl Window {
     /// back in the renderer.
     fn clear_ghost(self: &Rc<Self>) {
         if self.editing.state.borrow_mut().ghost.take().is_some() {
-            self.editing.verdict.set_visible(false);
             self.request_render();
         }
     }
@@ -1453,42 +1431,11 @@ impl Window {
         }))
     }
 
-    /// Puts the verdict's words beside the ghost, after a frame is drawn.
+    /// Places the repeat handles after a frame is drawn. The ghost's
+    /// verdict is not said on the model: its tint says it (red when it
+    /// doesn't fit), and the Edit panel says it in words.
     pub(super) fn place_ghost_verdict(self: &Rc<Self>) {
         self.place_repeat_handles();
-        let label = &self.editing.verdict;
-        let place = {
-            let edit_state = self.editing.state.borrow();
-            let state = self.state.borrow();
-            edit_state.ghost.as_ref().and_then(|ghost| {
-                let nodes: Vec<NodeId> =
-                    ghost.ghosts.ghosts().iter().map(|item| item.node).collect();
-                let bounds = ghost.ghosts.graph().bounds_of(&ghost.posed, &nodes)?;
-                let point = self.project(&state, bounds.centre())?;
-                Some((point, ghost.ghosts.verdict()))
-            })
-        };
-        let Some(((x, y), verdict)) = place.filter(|_| self.state.borrow().focus.is_none()) else {
-            label.set_visible(false);
-            return;
-        };
-        for class in ["checking", "fits", "refused"] {
-            label.remove_css_class(class);
-        }
-        label.add_css_class(verdict_class(verdict));
-        label.set_label(verdict_words(verdict));
-        // Beside the ghost, clear of the card (which says the verdict too):
-        // hidden when there is no room.
-        let wanted = ((x - 50.0).max(0.0), (y - 14.0).max(0.0));
-        label.set_visible(true);
-        let size = repeat_handles::natural_size(label.upcast_ref());
-        let Some((dx, dy)) = self.clear_spot(wanted, size) else {
-            label.set_visible(false);
-            return;
-        };
-        label.set_margin_start(crate::convert::int_of_f32((wanted.0 + dx).round()));
-        label.set_margin_top(crate::convert::int_of_f32((wanted.1 + dy).round()));
-        label.set_visible(true);
     }
 
     // ---- driving it without a pointer (screenshots) ----
@@ -1535,6 +1482,7 @@ mod grip_text;
 mod grips;
 mod hold;
 mod item_tools;
+mod links;
 mod pointing;
 mod repeat_handles;
 pub(super) use repeat_handles::natural_size;
