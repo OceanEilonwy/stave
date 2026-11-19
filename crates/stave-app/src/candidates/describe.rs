@@ -104,6 +104,9 @@ impl EditScope<'_> {
                 SettingValue::Default | SettingValue::Chosen(_) | SettingValue::Unset => None,
             };
             setting.options = self.options(sources, setting, def);
+            for (position, option) in setting.options.iter_mut().enumerate() {
+                option.position = position;
+            }
             setting.range = def.and_then(|def| match def.domain.as_ref()? {
                 Domain::Range { low, high, .. } => Some(ValueRange {
                     low: slice(sources, def.decl.file, low.span)?,
@@ -135,10 +138,7 @@ impl EditScope<'_> {
             TypeName::Bool => {
                 return ["true", "false"]
                     .into_iter()
-                    .map(|text| SettingOption {
-                        text: text.to_owned(),
-                        hint: None,
-                    })
+                    .map(|text| SettingOption::new(text.to_owned(), None))
                     .collect();
             }
             TypeName::Length
@@ -167,7 +167,7 @@ impl EditScope<'_> {
                             values
                                 .iter()
                                 .filter_map(|value| slice(sources, def.decl.file, value.span))
-                                .map(|text| SettingOption { text, hint: None })
+                                .map(|text| SettingOption::new(text, None))
                                 .collect(),
                         ),
                         Domain::Range { .. } => None,
@@ -215,10 +215,7 @@ impl EditScope<'_> {
                 if out.iter().any(|option: &SettingOption| option.text == text) {
                     continue;
                 }
-                out.push(SettingOption {
-                    text,
-                    hint: first_sentence(&decl.docs),
-                });
+                out.push(SettingOption::new(text, first_sentence(&decl.docs)));
             }
         }
         out
@@ -256,7 +253,7 @@ impl EditScope<'_> {
         }
         texts
             .into_iter()
-            .map(|text| SettingOption { text, hint: None })
+            .map(|text| SettingOption::new(text, None))
             .collect()
     }
 }

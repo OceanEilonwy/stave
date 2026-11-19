@@ -1,0 +1,7 @@
+# The owner's case by hand: a new project, 940 x 1780 x 580mm, with one
+# oak board and the standard casework library, and no parts yet.
+new "Case test" 940mm 1780mm 580mm
+import std:casework
+stock oak_19 white_oak solid 19mm max_width 200mm max_length 2700mm
+tools pencil marking_knife square tape marking_gauge awl calipers tenon_saw chisel mallet router_plane clamps screwdriver router straight_bit drill depth_stop
+create

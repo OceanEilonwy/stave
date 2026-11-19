@@ -322,13 +322,20 @@ the checker's fixes on the card).
   something onto its … face" in Details opens a menu drawn from the
   components and kinds in scope, each tried (greyed with the reason when
   it doesn't fit); the card asks for what is still to point at and the
-  settings, with a ghost and "It fits" / "It doesn't fit"; Add, Cancel,
-  fixes; a selected item's changes (rename, how many, "And the other
+  settings, with a ghost and "It fits" / "It doesn't fit"; each
+  setting's options checked the same way on a worker thread, the ones
+  that fit first and the refused ones greyed with the checker's reason
+  and not choosable; a refusal caused by the setting just changed says
+  so first ("It stopped fitting when joinery became chigiri.") with a
+  button that puts it back; Add, Cancel, fixes; a selected item's changes (rename, how many, "And the other
   side", hold a distance, remove with what depends on it); count and
   boundary handles; grips on the model (drag, type, stops, sizes that
   follow, "Let the solver move this"); the finder's verbs.
 - **Command line**: `stave edit <folder> --patch <file> [--commit]` and
-  `stave edit <folder> --script <file>` (a whole build as steps).
+  `stave edit <folder> --script <file>` (a whole build as steps, with
+  `options <setting>` listing a setting's options and whether each fits,
+  the blame printed when a `set` makes it stop fitting, and `put
+  back`).
 
 **Accepted in the window**: the clothing cabinet and the side table were
 built from empty projects by the window's scripted input (the same
@@ -405,6 +412,29 @@ open in the editor the change stays unsaved there.
   "CHANGE …" heading overlaps the row above it.
 - Library place params prompt "Point at the under." (they have `//`
   comments, not `///`); the card shows raw param names.
+- **Some standard joint kinds don't yet say where they apply** (for the
+  owner to decide; nothing under `std/` or in the checker's rules was
+  changed). The card now checks a setting's options and greys the ones
+  that can't work, but the reason a beginner reads is whatever the
+  checker happens to hit first, not a woodworking one. As the Case's
+  corner joint (940 x 1780 x 580mm, `oak_19`) these are refused with
+  errors about order, types, fields or a failing require rather than
+  "this joint isn't for a corner": `rabbet` (error[order]); `half_lap`,
+  `lap_splice` and `kanawa_tsugi` (error[type-mismatch]: "'piece' needs a
+  part, found parts"); `socket` and `suitsuki_zan` (error[unknown-field]);
+  `round_tenon` and `mortise_tenon` (a `require` of the kind fails). The
+  edge joints (`chigiri`, `splined_edge`, `tongue_and_groove`,
+  `glued_edge`) are being given a predicate of their own, `edge_to_edge`,
+  on another branch.
+- **Some kinds check clean as a case's corner joint though a woodworker
+  wouldn't use them there**: `glued_face`, `groove` and `cope_and_stick`
+  are listed as fitting the Case's joinery, so the card offers them
+  among the options that fit.
+- **The card's list of options is drawn in the card, not as a popover**,
+  so the card grows by the list's height while it is open; on a short
+  view (the docked layout at 1440x900 leaves the card about 360 pixels)
+  only a few options show at once and the list scrolls with the card.
+  Each option's hint is in its tooltip, not on the row.
 - A mirrored pair split up or deep has no gesture.
 - The full list, with what was decided and left out, is in
   `docs/workpacks/2026-11-18-graphical-editing.md`.

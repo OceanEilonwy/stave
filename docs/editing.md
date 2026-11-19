@@ -269,6 +269,7 @@ returned `Event::Edit(EditEvent)`s name, as for every other command.
 | `Choose(index)` | chooses a menu entry |
 | `Bind(Picked)` | binds the next place param still to point at with a further pick |
 | `Set { name, value }` | sets a setting to a value typed in the card (an `Expr`; `editing::parse_value` reads one) |
+| `PutBack` | puts the setting a refusal blames back to the value it had before (see [Blame and the way back](#blame-and-the-way-back)) |
 | `Rename(name)` | names the new item, in place of the generated name |
 | `Repeat(Option<Repeat>)` | makes the chosen entry `count` pieces filling its region, split along `axis` (`candidates::Repeat { count: RepeatCount, axis: Axis }`), or one again (`None`) |
 | `RepeatItem { item, count, axis }` | starts a change: repeats an assembly of the project that fills a region `count` times, or changes the count of one already repeated (`axis: Option<Axis>`, needed for a first repeat only) |
@@ -313,6 +314,7 @@ would be written as typed.
 |---|---|
 | `Started` | an edit began; the menu is listed |
 | `MenuChanged` | entries' applicability, or their order, changed |
+| `OptionsChanged` | an option of the chosen candidate's settings was found to fit or not, or the options' order changed (see [Options are checked](#options-are-checked)) |
 | `Chosen`, `PlaceBound`, `SettingChanged`, `Renamed`, `RepeatChanged`, `FixApplied` | the candidate changed in that way |
 | `ChangeStarted` | a change began and has been tried; `VerdictChanged` follows |
 | `DependantsIncluded` | a removal now takes what depends on the item too |
@@ -322,7 +324,7 @@ would be written as typed.
 | `DragMoved`, `ParamPicked` | the grip being dragged moved, or a param was picked for it; `VerdictChanged` follows when the verdict did |
 | `Committed` | the candidate or change was written; the committed design is the session's result (with `ResultChanged`); `Session::last_commit` lists the files written |
 | `Cancelled` | the edit or change was dropped |
-| `Rejected(why)` | the command couldn't be done (a name already used, a pick that fills nothing the card asks for, Add on something that doesn't fit, a design that doesn't place, a change that can't be written for this design, `IncludeDependants` with no removal waiting: `NothingToInclude`; a grip command with no grips listed: `NoGrips`; a grip index the listing doesn't have: `NoSuchGrip`; a drag command with no drag: `NotDragging`; a pick that is not one of the choices: `NotAChoice`); nothing changed |
+| `Rejected(why)` | the command couldn't be done (a name already used, a pick that fills nothing the card asks for, Add on something that doesn't fit, a design that doesn't place, a change that can't be written for this design, `IncludeDependants` with no removal waiting: `NothingToInclude`; `PutBack` with nothing blamed: `NothingToPutBack`; a grip command with no grips listed: `NoGrips`; a grip index the listing doesn't have: `NoSuchGrip`; a drag command with no drag: `NotDragging`; a pick that is not one of the choices: `NotAChoice`); nothing changed |
 
 Each change to the candidate writes its patch again (the candidate's
 `add`, then each fix applied) and re-runs the scratch check, so the
@@ -386,7 +388,9 @@ by `candidates::describe::fill_default_values`):
 | `SettingParam::default_value` | the value the default stands for, while the setting is left at its default: worked out by the solver in the scratch copy the chosen candidate was tried in (`opening.up - bottom_gap - top_gap` gives `220mm` for a 250mm drawer bay), or, for a default that names a value (`ply_18`, `butt_hinge(length: 40mm)`), that text. `None` on a menu entry not yet chosen, before the candidate is tried (a place param still to point at), when the copy could not be solved, and for a chosen or copied value |
 | `SettingParam::copied_from` | the assembly a copied value was read from (`drawer[top]`) |
 | `SettingParam::options` | what it can be set to, by its type, each a `SettingOption { text, hint }`: the stocks in scope for a `Stock`; the mounts the project's assemblies write, then `overlay()` and `inset(reveal: 2mm)`, for a `Mount`; the kinds of that class in scope for a kind type (`side_mount_slide`, `hw.brass_knob_26`); the values of a `within [..]` list for a quantity; `true` and `false` for a `Bool` |
+| `SettingOption::fit` | on the chosen candidate, whether it fits with the setting set to that option (`OptionFit`: `NotChecked`, `NeedsChoice(names)`, `Fits`, or `Refused(OptionRefusal { first, more })`, the checker's first error and how many more); the refused options come after the rest (see [Options are checked](#options-are-checked)) |
 | `SettingParam::range` | the two ends of a `within low..high`, as written (`ValueRange { low, high }`) |
+| `Chosen::blame` | the setting change that made the candidate stop fitting (`Blame { setting, from, from_text, to_text }`, with `Blame::text` and `Blame::put_back_label`; see [Blame and the way back](#blame-and-the-way-back)) |
 | `Problem::rendered` | the error as `stave check` prints it: message, place, source excerpt, notes, help and fixes |
 | `Problem::fixes` | the fixes the diagnostic holds, as patches (`Fix::patch`, labelled by `Fix::label`) |
 
@@ -396,6 +400,86 @@ for an imported module's (`casework.oak_19`). `edit::value_text` prints
 any value expression as exact `.stave` text, and `edit::Names` gives the
 names of the regions, parts and assemblies the contract's ids refer to
 (`region`, `part`, `assembly`, `face`, `slot`, `grip_target`).
+
+### Options are checked
+
+A setting's options are checked the way menu entries are
+(`stave_app::option_fits`). For the chosen candidate, every option of
+every setting that has a list (`SettingParam::options`: kinds of any
+class, stocks, mounts, a `within` list, `true`/`false`) carries an
+`OptionFit`:
+
+| Fit | Means | The card shows |
+|---|---|---|
+| `NotChecked` | its check hasn't run, or was thrown away | a spinner and "Checking whether it fits…"; it can be chosen |
+| `NeedsChoice(names)` | the candidate would still wait on something else (a place to point at, another setting with no value), so it can't be tried | "Checked once you choose …"; it can be chosen |
+| `Fits` | the candidate checks with no error with this option | a tick and "Fits" |
+| `Refused(OptionRefusal)` | it would cause errors: `first`, the checker's first error, and `more`, how many after it | greyed, a "can't" sign and "Can't be used here: error[overlap]: …"; it can't be chosen from the list |
+
+An option is tried by building the candidate in a scratch copy with that
+setting set to that option and every other setting, the place params,
+the repeat, the name typed and the fixes added as they stand now: the
+same patch the candidate would write if that option were chosen, judged
+as the candidate is (an error the design already had doesn't count). The
+option the setting holds now takes the candidate's own verdict without a
+second check. Options that fit (and those not checked yet, or waiting)
+come first, in the order their type lists them; the refused ones after,
+in the same order. None is hidden: what can't be chosen is shown greyed
+with the reason.
+
+**Without waiting.** The checks are tens of scratch checks for a setting
+like a case's joinery (18 kinds), so no command runs them.
+`Session::options_job()` gives an `OptionsJob` (it can be sent to another
+thread: it prepares the project itself); `OptionsJob::run(cancel, found)`
+tries each option in turn, setting by setting in card order, and hands
+each answer (`FoundFit { ticket, setting, option, fit }`) to `found` as
+soon as it is known; `OptionsJob::only(setting)` and `prefer(setting)`
+narrow it or put one setting first (the one whose list is open). The
+window hands each answer to `Session::option_fit_found`, which records it
+and says `OptionsChanged`. Setting the cancel flag stops the job between
+checks (and inside a slow one). `Session::check_setting_options(only,
+cancel)` runs the job in place, for a script.
+
+**Thrown away when the candidate changes.** Every change to the chosen
+candidate (a setting, a place pointed at, a rename, a fix, a repeat)
+takes a new ticket (`Chosen::options_ticket`) and sets every option back
+to `NotChecked`, because whether an option fits can depend on the other
+settings; an answer for an older ticket is dropped, and the job is run
+again. The options of the setting just set keep their answers: they were
+tried with the other settings, which did not change.
+
+On the Case in a 940 x 1780 x 580mm envelope with `oak_19`, 7 of the
+joinery's 18 options fit (cope_and_stick, dado, dowel, glued_edge,
+glued_face, groove, screw) and 11 are refused; checking all 18 takes
+about 0.2 seconds in a debug build on the machine it was written on.
+
+### Blame and the way back
+
+When a `Set` turns a candidate that fitted, or that was waiting for that
+very setting, into one that is refused, the refusal is blamed on it:
+`Chosen::blame` is a `Blame` with the setting, where its value came from
+before (`from`: `Default`, `Copied`, `Chosen` or `Unset`), that value as
+text (`from_text`, `None` for `Unset`) and the value it became
+(`to_text`). The card puts it first, in plain words (`Blame::text`: "It
+stopped fitting when joinery became chigiri.", or for a setting that had
+no value yet "It doesn't fit now that panel_stock is oak_19."), keeps the
+checker's own messages below, and offers one action
+(`Blame::put_back_label`: "Put joinery back to dowel(count: 4), the
+default", "Clear panel_stock again") that sends `PutBack`, which restores
+exactly the old `SettingValue` (a default stays a default, so nothing is
+written for it) and tries the candidate again.
+
+- A candidate already refused before the change gets no blame: the
+  setting changed is not why it doesn't fit.
+- Setting the blamed setting again while it is still refused keeps the
+  blame's `from` (it still stopped fitting when that setting left its
+  first value) and updates `to_text`.
+- The blame goes when the candidate fits again, when another setting is
+  set, and on `PutBack`; a rename, a fix or a repeat that leaves the
+  candidate refused keeps it.
+
+A value can always be typed in the setting's entry, a refused one
+included; a typed value that is refused is blamed as above.
 
 ## The command line
 
@@ -444,6 +528,8 @@ before what it prints.
 | `choose <entry>` | chooses an entry by its label or `group.label` |
 | `bind <selection>` | points at what the card asks for |
 | `set <name> = <value>` | sets a setting |
+| `options <setting>` | checks the chosen entry's setting's options and lists each with whether it fits |
+| `put back` | puts back the setting a refusal blames to its value before |
 | `name <name>` | names the new item |
 | `repeat <count> <axis>` | makes the chosen entry `count` pieces split along `across`, `up` or `deep`; `repeat 1` makes it one again |
 | `repeat <assembly> <count> [<axis>]` | change: repeats an assembly, or changes its count |
@@ -522,10 +608,24 @@ What each step prints:
   prints them.
 - `select`: `<heading>: <selection>` and `<n> menu entries`; `list`: one
   entry a line, `  1. casework.Shelf  applies`.
-- `choose`, `bind`, `set`, `name`, `repeat <count>`, `fix`, `include
-  dependants`: where the candidate (or change) stands, in one line:
-  `fits`, `fits, with 1 warning`, `refused: 2 errors`, `needs a choice:
-  sides`.
+- `choose`, `bind`, `set`, `put back`, `name`, `repeat <count>`, `fix`,
+  `include dependants`: where the candidate (or change) stands, in one
+  line: `fits`, `fits, with 1 warning`, `refused: 2 errors`, `needs a
+  choice: sides`. A `set` that turns the candidate refused adds, indented,
+  the blame and what `put back` does:
+
+  ```
+  > set joinery = chigiri
+  refused: 2 errors
+    It stopped fitting when joinery became chigiri.
+    'put back': Put joinery back to dowel(count: 4), the default
+  ```
+- `options <setting>`: `<setting>: <n> options, <k> fit`, then one option
+  a line in the card's order (those that fit first, the refused after),
+  numbered from 1: `  3. dowel  fits`, `  8. chigiri  refused:
+  error[overlap]: case.base and case.base_joints.key[0] overlap (and 1
+  more)`, `not tried: choose <names> first`. A setting that isn't the
+  chosen entry's is an error.
 - A change step: `<summary>: <where it stands>` (`Make 3 of drawer:
   fits`); a removal waiting on what uses the item: `Remove back: used by
   drawer_bay, drawer; 'include dependants' removes them too`.
@@ -545,7 +645,9 @@ What each step prints:
   -> <to>` for each choice still to pick from.
 - `measure`: `<a> to <b>: <distance>`; `hold` without a length says
   `the distance is <distance> now` first.
-- `show`: the card. For a change: its summary, what it found (indented),
+- `show`: the card. For an edit, the blame lines (as after `set`) come
+  right under `verdict:`, before the checker's words. For a change: its
+  summary, what it found (indented),
   `verdict: ...`, each error as `stave check` prints it and `fix <p> <f>:
   <label>` for each fix, then `patch:` and the patch.
 - `commit`/`add`: `wrote <path>` (or `created`) per file, then

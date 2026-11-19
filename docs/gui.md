@@ -79,6 +79,8 @@ line and the rest are skipped:
 | `bind region\|face\|between ...` | stands for the next click, filling the place the card asks for: found by name, without the scene's pick |
 | `point face <part>.<face>` | the next click made on the model at the middle of that face and picked as the pointer's is (so a wall of a space is reached through the space); it fails if the click would pick something else |
 | `set <name> = <value>` | a setting typed on the card (or chosen from its list) |
+| `options <name>` | the setting's list of options opened on the card (its button pressed), each option checked first, the card scrolled to it |
+| `put back` | the card's button that puts back the setting a refusal blames |
 | `name <name>` | the name retyped on the card |
 | `fix <problem> <fix>` | a fix's button, both counted from 1 |
 | `add`, `cancel` | the card's buttons (a change's card too) |
@@ -588,12 +590,13 @@ the session's.
   the index looked up by the entry's declaration when the command is
   sent, not when it was clicked: a step of the check can sort the menu in
   between (greyed entries go last in their group).
-- **The card** replaces the menu at the top right. Its name, its
-  settings (typed, or picked from the button listing
-  `SettingParam::options`; one at its default shows what the default
-  stands for, `default_value`, and a `within` range), its fix buttons,
-  Add and Cancel all send the session's commands (`Rename`, `Set`,
-  `ApplyFix`, `Add`, `Cancel`); what is typed is read with
+- **The card** replaces the menu at the top right, kept within the 3D
+  view's height (its body scrolls). Its name, its
+  settings (typed, or picked from the list its button opens under the
+  setting, `SettingParam::options`; one at its default shows what the
+  default stands for, `default_value`, and a `within` range), its fix
+  buttons, the put-back button, Add and Cancel all send the session's
+  commands (`Rename`, `Set`, `ApplyFix`, `PutBack`, `Add`, `Cancel`); what is typed is read with
   `editing::parse_value` and `parse_name`, and what can't be read is
   said in a toast. A value too long for its entry is also said in full
   under it. A place param still unbound shows the contract's
@@ -608,6 +611,30 @@ the session's.
   A command that tries the candidate again first shows Checking (the
   spinner, the ghost grey) for a moment so it is drawn, then runs. What
   a widget reports is always sent after its own signal has finished.
+- **The options, checked.** Once a candidate is chosen, and after each
+  change to it, its settings' options are checked on a worker thread
+  (`Session::options_job`, the open list's setting first; cancelled and
+  started again when the candidate changes), each answer handed to
+  `Session::option_fit_found` as it comes and drawn into the lists in
+  place (`EditCard::update_options`), so an open list stays open and the
+  keyboard stays on its option. A setting's list (opened by the ▾ button
+  beside its entry, in the card itself rather than a popover, so it is
+  not closed by each answer and can be drawn into a screenshot) says how
+  many fit, then each option with its state in an icon and words, never
+  by colour alone: a spinner and "Checking whether it fits…"; a tick and
+  "Fits"; an information sign and "Checked once you choose …"; or, greyed
+  with a "can't" sign, "Can't be used here: error[overlap]: …" (the
+  checker's first error, with "(and 1 more)"). The ones that fit come
+  first. A refused option stays focusable, so its reason can be read with
+  the keyboard and is its accessible description, is marked disabled for
+  assistive technology and never reports; the others send `Set`. Each
+  option's hint (its declaration's first sentence) is its tooltip and
+  accessible description. A value can still be typed in the entry.
+- **Blame and the way back.** When a refusal is blamed on a setting
+  (`Chosen::blame`), the verdict box starts with it, in bold ("It stopped
+  fitting when joinery became chigiri."), and the button "Put joinery
+  back to dowel(count: 4), the default" (`PutBack`), above "It doesn't
+  fit: 2 problems" and the checker's own words.
 - **The ghost.** Once the chosen candidate has been tried and its
   scratch copy solved, the 3D view draws the candidate's scene
   (`stave_scene::Ghosts` over the base design, at rest): what it adds
@@ -974,7 +1001,16 @@ the door selected), `edit_door_added_editor.png` (the same with the
 editor open: the change unsaved in the text), `new_project.png` (the
 dialog), `new_project_opened.png` (a project it made, opened: the
 envelope drawn and lit, waiting for the first click) and
-`new_project_menu.png` (the menu a click in the envelope opens). The door
+`new_project_menu.png` (the menu a click in the envelope opens).
+`edit_setting_options.png` and `edit_setting_options_dark.png` (the
+owner's case, `case_test.script`: Case chosen for a new project's
+envelope, `setting_options.edit` opening its joinery's list: the seven
+kinds that fit, then the refused ones greyed with the checker's reason),
+and `edit_setting_blame.png` and `edit_setting_blame_dark.png`
+(`setting_blame.edit`: chigiri typed, the card saying first that it
+stopped fitting when the joinery changed, the put-back button, the
+checker's words below), each 1440x1200 so the list shows both kinds of
+option. The door
 scripts point at the hinge side with `point`, as the pointer would. The
 door is `crates/stave-gtk/fixtures/door_hits_wall`; the small chest is
 made by `stave edit --script tools/window-edits/small_chest.script`.
@@ -1065,17 +1101,22 @@ does; they decide nothing.
   button per fix labelled `Fix::label`); then the settings, those that
   need a choice first (marked in the warning colour), then those with a
   value (each an entry with its type and "copied from drawer[top]" or
-  "your choice", and a button listing its `options`, each sending
-  `Choose`), and the ones at their defaults (the entry's placeholder the
+  "your choice", and a ▾ toggle that shows its `options` in place under
+  it, each with its fit, a refused one greyed and never reporting, the
+  others sending `Choose`), and the ones at their defaults (the entry's placeholder the
   value the default stands for, "220mm (the default)", the line under it
   the default as written and its range) folded under "5 more
   settings, at their defaults". Cancel and Add sit at the bottom; Add is
   enabled only on Fits with nothing to point at or choose
   (`can_add`), and its tooltip says why not (`add_blocked_reason`).
+  `CardModel::blame` puts the blame and the put-back button first in the
+  verdict. `update_options(&Candidate)` redraws only the lists of
+  options; `open_options(param)` opens one (unfolding the defaults when
+  it is among them) and `fit_height(px)` keeps the card within the view.
   `connect_action(Fn(CardAction))` reports `Rename(text)`,
   `Choose { param, text }` (Enter in a setting's entry, the text as
-  typed), `Fix { problem, fix }` (indexes in the refusal), `Add` and
-  `Cancel`. Enter adds when Add is enabled; Escape cancels. The card
+  typed, or an option chosen), `Fix { problem, fix }` (indexes in the
+  refusal), `PutBack`, `Add` and `Cancel`. Enter adds when Add is enabled; Escape cancels. The card
   is focusable and takes the keyboard when it appears and on each
   `show` (unless the keyboard is already inside it), so these keys
   reach it before the window's own Escape.

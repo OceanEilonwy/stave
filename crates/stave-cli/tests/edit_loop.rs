@@ -240,6 +240,8 @@ needs a choice: sides
 fits
 > set headroom = 1200mm
 refused: 1 error
+  It stopped fitting when headroom became 1200mm.
+  'put back': Put headroom back to 300mm, the default
 > cancel
 cancelled: nothing was written
 "

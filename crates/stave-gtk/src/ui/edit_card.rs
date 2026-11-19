@@ -33,8 +33,8 @@ use std::rc::Rc;
 use adw::prelude::*;
 use gtk::{gdk, glib};
 use stave_app::edit::{
-    Candidate, Heading, MenuGroup, PlaceParam, PlaceSlot, Problem, SettingParam, SettingValue,
-    Verdict,
+    Blame, Candidate, Heading, MenuGroup, OptionFit, PlaceParam, PlaceSlot, Problem, SettingOption,
+    SettingParam, SettingValue, Verdict,
 };
 use stave_lang::Diagnostic;
 use stave_lang::ast::{Expr, Ident};
@@ -63,6 +63,8 @@ pub enum CardAction {
         /// Which of its fixes.
         fix: usize,
     },
+    /// Pressed the button that puts back the setting a refusal blames.
+    PutBack,
     /// Pressed Add (or Enter while Add is enabled).
     Add,
     /// Pressed Cancel (or Escape).
@@ -96,6 +98,9 @@ pub struct CardModel<'a> {
     /// The labels of the fixes added to what is tried, in order ("Use
     /// left: 17mm"): they change the text after the settings shown.
     pub applied: &'a [String],
+    /// The setting change a refusal is blamed on, put first on the card
+    /// with the button that puts it back.
+    pub blame: Option<&'a Blame>,
 }
 
 /// `true` when Add may be pressed: the verdict is Fits and nothing is
@@ -216,6 +221,10 @@ pub struct EditCard {
     /// The panel, ready to float over the 3D view.
     pub root: gtk::Box,
     body: gtk::Box,
+    scrolled: gtk::ScrolledWindow,
+    /// A row to bring to the top of what shows once the layout has room
+    /// for it (an open list of options).
+    scroll_target: Rc<RefCell<Option<gtk::Widget>>>,
     add: gtk::Button,
     name: gtk::EditableLabel,
     /// The name as last shown, so only a retyped one is reported.
@@ -225,9 +234,35 @@ pub struct EditCard {
     entries: RefCell<Vec<(Ident, gtk::Entry)>>,
     /// Each fix's button, with its problem and fix index (for tests).
     fixes: RefCell<Vec<((usize, usize), gtk::Button)>>,
-    /// Each setting's list of options, by param (for tests).
-    options: RefCell<Vec<(Ident, gtk::Popover)>>,
+    /// Each setting's list of options, by param, and the button that
+    /// shows it.
+    options: RefCell<Vec<OptionList>>,
+    /// The setting whose list of options is open, kept across redraws.
+    open_options: Rc<RefCell<Option<String>>>,
+    /// The put-back button, while a refusal is blamed on a setting (for
+    /// tests).
+    put_back: RefCell<Option<gtk::Button>>,
     on_action: Rc<RefCell<Option<ActionCallback>>>,
+}
+
+/// One setting's list of options in the card: shown in place under the
+/// setting when its button is pressed (a popover would close each time a
+/// check's answer redraws it, and can't be drawn into a screenshot).
+#[derive(Clone)]
+struct OptionList {
+    /// The setting.
+    param: Ident,
+    /// The button that shows and hides it.
+    toggle: gtk::ToggleButton,
+    /// What shows and hides.
+    revealer: gtk::Revealer,
+    /// The rows.
+    list: gtk::Box,
+    /// Each option's row, by its text.
+    rows: Rc<RefCell<Vec<(String, gtk::Button)>>>,
+    /// The fold it is in, for a setting left at its default ("5 more
+    /// settings, at their defaults"); it is unfolded to show the list.
+    fold: Rc<RefCell<Option<gtk::Expander>>>,
 }
 
 impl EditCard {
@@ -329,9 +364,19 @@ impl EditCard {
         root.add_controller(keys);
         root.connect_map(take_focus);
 
+        let scroll_target: Rc<RefCell<Option<gtk::Widget>>> = Rc::new(RefCell::new(None));
+        {
+            let target = scroll_target.clone();
+            let body = body.clone();
+            scrolled.vadjustment().connect_changed(move |adjustment| {
+                scroll_to_target(adjustment, &body, &target);
+            });
+        }
         EditCard {
             root,
             body,
+            scrolled,
+            scroll_target,
             add,
             name,
             shown_name,
@@ -339,6 +384,8 @@ impl EditCard {
             entries: RefCell::new(Vec::new()),
             fixes: RefCell::new(Vec::new()),
             options: RefCell::new(Vec::new()),
+            open_options: Rc::new(RefCell::new(None)),
+            put_back: RefCell::new(None),
             on_action,
         }
     }
@@ -392,8 +439,9 @@ impl EditCard {
             self.body.append(&applied_section(model.applied));
         }
         let mut fixes = Vec::new();
+        self.put_back.replace(None);
         self.body
-            .append(&self.verdict_section(model.verdict, candidate, &mut fixes));
+            .append(&self.verdict_section(model.verdict, model.blame, candidate, &mut fixes));
         self.fixes.replace(fixes);
         let mut entries = Vec::new();
         self.options.borrow_mut().clear();
@@ -411,6 +459,7 @@ impl EditCard {
                 .unwrap_or("Write it into the design (Enter)"),
         ));
         take_focus(&self.root);
+        self.scroll_to_open_options();
     }
 
     /// The place params: each bound one with what holds it, each unbound
@@ -501,7 +550,13 @@ impl EditCard {
                 entries.push((setting.name.clone(), entry));
             }
             let count = defaults.len();
+            // A list of options left open stays in sight.
+            let open = self.open_options.borrow().clone();
+            let expanded = defaults
+                .iter()
+                .any(|setting| open.as_deref() == Some(setting.name.as_str()));
             let expander = gtk::Expander::builder()
+                .expanded(expanded)
                 .label(if count == 1 {
                     "1 more setting, at its default".to_owned()
                 } else {
@@ -510,6 +565,14 @@ impl EditCard {
                 .child(&more)
                 .css_classes(["stave-edit-more"])
                 .build();
+            for options in self.options.borrow().iter() {
+                if defaults
+                    .iter()
+                    .any(|setting| setting.name.as_str() == options.param.as_str())
+                {
+                    options.fold.replace(Some(expander.clone()));
+                }
+            }
             section.append(&expander);
         }
         section
@@ -565,8 +628,9 @@ impl EditCard {
             });
         }
         line.append(&entry);
-        if !setting.options.is_empty() {
-            line.append(&self.options_button(setting));
+        let options = (!setting.options.is_empty()).then(|| self.options_list(setting));
+        if let Some(options) = &options {
+            line.append(&options.toggle);
         }
         row.append(&line);
         let source = setting_source(setting, words);
@@ -596,62 +660,221 @@ impl EditCard {
         }
         entry.update_property(&[gtk::accessible::Property::Description(&source)]);
         row.append(&caption);
+        if let Some(options) = options {
+            row.append(&options.revealer);
+            self.options.borrow_mut().push(options);
+        }
         (row, entry)
     }
 
-    /// A button listing what a setting can be set to (the stocks, mounts
-    /// or kinds in scope, a `within` list); choosing one sets it.
-    fn options_button(&self, setting: &SettingParam) -> gtk::MenuButton {
+    /// The list of what a setting can be set to (the stocks, mounts or
+    /// kinds in scope, a `within` list), each with whether the candidate
+    /// fits with it, and the button that shows it in place under the
+    /// setting. Choosing an option that fits, or whose check hasn't
+    /// finished, sets it; a refused one can't be chosen, and says why.
+    fn options_list(&self, setting: &SettingParam) -> OptionList {
+        let name = setting.name.as_str();
         let list = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
             .spacing(2)
             .css_classes(["stave-edit-options"])
+            .accessible_role(gtk::AccessibleRole::List)
             .build();
-        let popover = gtk::Popover::builder().child(&list).build();
-        for option in &setting.options {
-            let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
-            content.append(&text(&option.text, &["stave-edit-option"]));
-            if let Some(hint) = &option.hint {
-                content.append(&text(hint, &["stave-edit-hint"]));
-            }
-            let button = gtk::Button::builder()
-                .child(&content)
-                .css_classes(["flat"])
-                .build();
-            button.update_property(&[gtk::accessible::Property::Label(&option.text)]);
-            let on_action = self.on_action.clone();
-            let param = setting.name.clone();
-            let chosen = option.text.clone();
-            let popover = popover.downgrade();
-            button.connect_clicked(move |_| {
-                if let Some(popover) = popover.upgrade() {
-                    popover.popdown();
+        list.update_property(&[gtk::accessible::Property::Label(&format!(
+            "What {} can be",
+            spaced(name)
+        ))]);
+        let open = self.open_options.borrow().as_deref() == Some(name);
+        let revealer = gtk::Revealer::builder()
+            .child(&list)
+            .reveal_child(open)
+            .transition_type(gtk::RevealerTransitionType::None)
+            .build();
+        let toggle = gtk::ToggleButton::builder()
+            .icon_name("pan-down-symbolic")
+            .active(open)
+            .valign(gtk::Align::Center)
+            .css_classes(["flat", "stave-edit-options-toggle"])
+            .tooltip_text(format!("Show what {} can be", spaced(name)))
+            .build();
+        toggle.update_property(&[gtk::accessible::Property::Label(&format!(
+            "Choose {}",
+            spaced(name)
+        ))]);
+        toggle.update_state(&[gtk::accessible::State::Expanded(Some(open))]);
+        {
+            let revealer = revealer.downgrade();
+            let open_options = self.open_options.clone();
+            let param = name.to_owned();
+            toggle.connect_toggled(move |toggle| {
+                let active = toggle.is_active();
+                toggle.update_state(&[gtk::accessible::State::Expanded(Some(active))]);
+                if let Some(revealer) = revealer.upgrade() {
+                    revealer.set_reveal_child(active);
                 }
-                let callback = on_action.borrow().clone();
-                if let Some(callback) = callback {
-                    callback(CardAction::Choose {
-                        param: param.clone(),
-                        text: chosen.clone(),
-                    });
+                let mut open = open_options.borrow_mut();
+                if active {
+                    *open = Some(param.clone());
+                } else if open.as_deref() == Some(param.as_str()) {
+                    *open = None;
                 }
             });
-            list.append(&button);
         }
-        let button = gtk::MenuButton::builder()
-            .icon_name("pan-down-symbolic")
-            .popover(&popover)
-            .valign(gtk::Align::Center)
-            .css_classes(["flat"])
-            .tooltip_text(format!("Choose {}", spaced(setting.name.as_str())))
+        let options = OptionList {
+            param: setting.name.clone(),
+            toggle,
+            revealer,
+            list,
+            rows: Rc::new(RefCell::new(Vec::new())),
+            fold: Rc::new(RefCell::new(None)),
+        };
+        self.fill_options(&options, &setting.options);
+        options
+    }
+
+    /// The rows of a setting's list, from its options as the session has
+    /// them.
+    fn fill_options(&self, options: &OptionList, values: &[SettingOption]) {
+        while let Some(child) = options.list.first_child() {
+            options.list.remove(&child);
+        }
+        let refused = values.iter().filter(|o| o.fit.is_refused()).count();
+        let checking = values
+            .iter()
+            .filter(|o| o.fit == OptionFit::NotChecked)
+            .count();
+        let summary = match (checking, refused) {
+            (0, 0) => "Each of these fits.".to_owned(),
+            (0, refused) => format!(
+                "{} of {} fit. The others can't be used here, and say why.",
+                values.len() - refused,
+                values.len()
+            ),
+            (checking, _) => format!("Checking whether each fits… ({checking} to go)"),
+        };
+        options
+            .list
+            .append(&text(&summary, &["stave-edit-options-summary"]));
+        let mut rows = Vec::new();
+        for option in values {
+            let row = self.option_row(&options.param, option);
+            options.list.append(&row);
+            rows.push((option.text.clone(), row));
+        }
+        options.rows.replace(rows);
+    }
+
+    /// One option: its state (never shown by colour alone: an icon and
+    /// words), its text, its hint and, when refused, why.
+    fn option_row(&self, param: &Ident, option: &SettingOption) -> gtk::Button {
+        let content = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        let mark: gtk::Widget = match &option.fit {
+            OptionFit::NotChecked => gtk::Spinner::builder()
+                .spinning(true)
+                .valign(gtk::Align::Start)
+                .build()
+                .upcast(),
+            OptionFit::Fits => gtk::Image::from_icon_name("object-select-symbolic").upcast(),
+            OptionFit::NeedsChoice(_) => {
+                gtk::Image::from_icon_name("dialog-information-symbolic").upcast()
+            }
+            OptionFit::Refused(_) => {
+                gtk::Image::from_icon_name("action-unavailable-symbolic").upcast()
+            }
+        };
+        mark.set_valign(gtk::Align::Start);
+        mark.add_css_class("stave-edit-option-mark");
+        content.append(&mark);
+        let words = gtk::Box::new(gtk::Orientation::Vertical, 1);
+        words.set_hexpand(true);
+        words.append(&text(&option.text, &["stave-edit-option"]));
+        let state = match &option.fit {
+            OptionFit::NotChecked => "Checking whether it fits…".to_owned(),
+            OptionFit::Fits => "Fits".to_owned(),
+            OptionFit::NeedsChoice(names) => {
+                let names: Vec<String> = names.iter().map(|n| spaced(n.as_str())).collect();
+                format!("Checked once you choose {}", names.join(", "))
+            }
+            OptionFit::Refused(refusal) => format!("Can't be used here: {}", refusal.line()),
+        };
+        let class = match &option.fit {
+            OptionFit::NotChecked => "stave-edit-checking",
+            OptionFit::Fits => "stave-edit-option-fits",
+            OptionFit::NeedsChoice(_) => "stave-edit-needs",
+            OptionFit::Refused(_) => "stave-edit-reason",
+        };
+        let state_label = text(&state, &[class]);
+        words.append(&state_label);
+        content.append(&words);
+        let button = gtk::Button::builder()
+            .child(&content)
+            .css_classes(["flat", "stave-edit-option-row"])
             .build();
-        button.update_property(&[gtk::accessible::Property::Label(&format!(
-            "Choose {}",
-            spaced(setting.name.as_str())
-        ))]);
-        self.options
-            .borrow_mut()
-            .push((setting.name.clone(), popover));
+        let description = match &option.hint {
+            Some(hint) => format!("{state}. {hint}"),
+            None => state.clone(),
+        };
+        button.update_property(&[
+            gtk::accessible::Property::Label(&option.text),
+            gtk::accessible::Property::Description(&description),
+        ]);
+        let choosable = !option.fit.is_refused();
+        // The hint (the declaration's first sentence) is said on hover and
+        // to assistive technology, keeping the list short enough to see
+        // the options that fit and those that don't together.
+        match (&option.hint, choosable) {
+            (Some(hint), true) => button.set_tooltip_text(Some(&format!("Use this. {hint}"))),
+            (None, true) => button.set_tooltip_text(Some("Use this")),
+            (Some(hint), false) => button.set_tooltip_text(Some(hint)),
+            (None, false) => {}
+        }
+        if !choosable {
+            // Still focusable, so the reason can be read, but marked
+            // unavailable and never reported.
+            button.add_css_class("stave-edit-unavailable");
+            button.update_state(&[gtk::accessible::State::Disabled(true)]);
+        }
+        let on_action = self.on_action.clone();
+        let param = param.clone();
+        let chosen = option.text.clone();
+        let open_options = self.open_options.clone();
+        button.connect_clicked(move |_| {
+            if !choosable {
+                return;
+            }
+            open_options.replace(None);
+            let callback = on_action.borrow().clone();
+            if let Some(callback) = callback {
+                callback(CardAction::Choose {
+                    param: param.clone(),
+                    text: chosen.clone(),
+                });
+            }
+        });
         button
+    }
+
+    /// Redraws the settings' lists of options from `candidate` (the same
+    /// candidate the card shows) without rebuilding the card, so an open
+    /// list stays open and the keyboard stays on the option it was on.
+    pub fn update_options(&self, candidate: &Candidate) {
+        let lists = self.options.borrow().clone();
+        for options in lists {
+            let Some(setting) = candidate
+                .settings
+                .iter()
+                .find(|setting| setting.name.as_str() == options.param.as_str())
+            else {
+                continue;
+            };
+            let focused = focused_option(&options);
+            self.fill_options(&options, &setting.options);
+            if let Some(text) = focused
+                && let Some((_, row)) = options.rows.borrow().iter().find(|(t, _)| *t == text)
+            {
+                row.grab_focus();
+            }
+        }
     }
 
     /// The verdict: checking, fits (with its warnings), or refused with
@@ -659,6 +882,7 @@ impl EditCard {
     fn verdict_section(
         &self,
         verdict: Option<&Verdict>,
+        blame: Option<&Blame>,
         candidate: &Candidate,
         fixes: &mut Vec<((usize, usize), gtk::Button)>,
     ) -> gtk::Box {
@@ -667,6 +891,11 @@ impl EditCard {
             .spacing(8)
             .css_classes(["stave-edit-verdict"])
             .build();
+        // What the user just did comes first, with the way back; the
+        // checker's own words stay below.
+        if let (Some(blame), Some(Verdict::Refused(_))) = (blame, verdict) {
+            section.append(&self.blame_block(blame));
+        }
         let status = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         section.append(&status);
         match verdict {
@@ -709,6 +938,52 @@ impl EditCard {
             }
         }
         section
+    }
+
+    /// The setting change a refusal is blamed on, in plain words, and the
+    /// button that puts it back.
+    fn blame_block(&self, blame: &Blame) -> gtk::Box {
+        let block = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .spacing(8)
+            .css_classes(["stave-edit-blame"])
+            .build();
+        let line = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        let icon = gtk::Image::from_icon_name("edit-undo-symbolic");
+        icon.set_valign(gtk::Align::Start);
+        line.append(&icon);
+        let words = text(&blame.text(), &["stave-edit-blame-text"]);
+        words.set_hexpand(true);
+        line.append(&words);
+        block.append(&line);
+        let label = blame.put_back_label();
+        let button = gtk::Button::builder()
+            .label(&label)
+            .halign(gtk::Align::Start)
+            .css_classes(["pill", "stave-edit-put-back"])
+            .tooltip_text("Put the setting back as it was, when it still fitted")
+            .build();
+        if let Some(child) = button.child()
+            && let Ok(label) = child.downcast::<gtk::Label>()
+        {
+            label.set_wrap(true);
+            label.set_wrap_mode(gtk::pango::WrapMode::WordChar);
+            label.set_justify(gtk::Justification::Left);
+        }
+        button.update_property(&[
+            gtk::accessible::Property::Label(&label),
+            gtk::accessible::Property::Description(&blame.text()),
+        ]);
+        let on_action = self.on_action.clone();
+        button.connect_clicked(move |_| {
+            let callback = on_action.borrow().clone();
+            if let Some(callback) = callback {
+                callback(CardAction::PutBack);
+            }
+        });
+        block.append(&button);
+        self.put_back.replace(Some(button));
+        block
     }
 
     /// One problem: its message and help as the checker words them, and a
@@ -790,10 +1065,135 @@ impl EditCard {
         self.entries.borrow().clone()
     }
 
-    /// Each setting's list of options (for tests).
+    /// Each setting's list of options, with the button that shows it
+    /// (for tests).
     #[cfg(test)]
-    pub fn option_lists(&self) -> Vec<(Ident, gtk::Popover)> {
-        self.options.borrow().clone()
+    pub fn option_lists(&self) -> Vec<(Ident, gtk::ToggleButton, gtk::Box)> {
+        self.options
+            .borrow()
+            .iter()
+            .map(|options| {
+                (
+                    options.param.clone(),
+                    options.toggle.clone(),
+                    options.list.clone(),
+                )
+            })
+            .collect()
+    }
+
+    /// Opens the list of options of a setting, as pressing its button
+    /// does; `false` when the card shows no list for it.
+    pub fn open_options(&self, param: &str) -> bool {
+        let found = self
+            .options
+            .borrow()
+            .iter()
+            .find(|options| options.param.as_str() == param)
+            .cloned();
+        let Some(options) = found else {
+            return false;
+        };
+        // Unfolded when it is folded away, then scrolled into sight.
+        if let Some(fold) = options.fold.borrow().as_ref() {
+            fold.set_expanded(true);
+        }
+        options.toggle.set_active(true);
+        self.scroll_to_open_options();
+        true
+    }
+
+    /// Scrolls the card so the open list of options is in sight, once it
+    /// is laid out.
+    fn scroll_to_open_options(&self) {
+        let open = self.open_options.borrow().clone();
+        let Some(open) = open else {
+            return;
+        };
+        // The fold's title when the setting is folded with the defaults,
+        // so it reads which fold it is in; else the setting itself.
+        let row = self
+            .options
+            .borrow()
+            .iter()
+            .find(|options| options.param.as_str() == open)
+            .and_then(|options| {
+                let fold: Option<gtk::Widget> = options
+                    .fold
+                    .borrow()
+                    .as_ref()
+                    .map(|fold| fold.clone().upcast());
+                fold.or_else(|| options.toggle.parent().and_then(|line| line.parent()))
+            });
+        let Some(row) = row else {
+            return;
+        };
+        self.scroll_target.replace(Some(row));
+        // Tried until it is laid out and in sight (a few frames at most);
+        // the adjustment's own changes try too.
+        let target = self.scroll_target.clone();
+        let body = self.body.clone();
+        let scrolled = self.scrolled.downgrade();
+        let tries = Cell::new(0_u32);
+        glib::timeout_add_local(std::time::Duration::from_millis(40), move || {
+            tries.set(tries.get().saturating_add(1));
+            let Some(scrolled) = scrolled.upgrade() else {
+                return glib::ControlFlow::Break;
+            };
+            let done = scroll_to_target(&scrolled.vadjustment(), &body, &target);
+            if done || tries.get() > 50 {
+                glib::ControlFlow::Break
+            } else {
+                glib::ControlFlow::Continue
+            }
+        });
+    }
+
+    /// Brings the open list of options into sight at once, laying the
+    /// window out to find where it is and again to show it scrolled: for
+    /// an edit script, whose picture is taken from the last layout (the
+    /// window's own frames do this a frame later otherwise).
+    pub fn scroll_to_open_options_now(&self) {
+        let Some(window) = self
+            .root
+            .root()
+            .and_then(|root| root.downcast::<gtk::Window>().ok())
+        else {
+            return;
+        };
+        let (width, height) = (window.width(), window.height());
+        if width <= 0 || height <= 0 {
+            return;
+        }
+        window.allocate(width, height, -1, None);
+        let adjustment = self.scrolled.vadjustment();
+        scroll_to_target(&adjustment, &self.body, &self.scroll_target);
+        window.allocate(width, height, -1, None);
+    }
+
+    /// Keeps the card within `height` logical pixels (the room the 3D view
+    /// leaves it): its body scrolls rather than running off the bottom,
+    /// so an open list of options can be scrolled into sight.
+    pub fn fit_height(&self, height: i32) {
+        let width = self.root.width().max(340);
+        let (_, whole, _, _) = self.root.measure(gtk::Orientation::Vertical, width);
+        let (_, body, _, _) = self.scrolled.measure(gtk::Orientation::Vertical, width);
+        let others = whole.saturating_sub(body);
+        let room = height.saturating_sub(others).clamp(160, 640);
+        if self.scrolled.max_content_height() != room {
+            self.scrolled.set_max_content_height(room);
+        }
+    }
+
+    /// The setting whose list of options is open, if any.
+    pub fn open_setting(&self) -> Option<String> {
+        self.open_options.borrow().clone()
+    }
+
+    /// The button that puts back the setting a refusal blames, while the
+    /// card shows one.
+    pub fn put_back_button(&self) -> Option<gtk::Button> {
+        self.put_back.borrow().clone()
     }
 
     /// Each fix's button with its problem and fix index (for tests).
@@ -801,6 +1201,45 @@ impl EditCard {
     pub fn fix_buttons(&self) -> Vec<((usize, usize), gtk::Button)> {
         self.fixes.borrow().clone()
     }
+}
+
+/// Brings the target row to the top of what the card shows, once the
+/// layout has room to: then the target is let go, so the user's own
+/// scrolling isn't undone.
+fn scroll_to_target(
+    adjustment: &gtk::Adjustment,
+    body: &gtk::Box,
+    target: &Rc<RefCell<Option<gtk::Widget>>>,
+) -> bool {
+    let Some(row) = target.borrow().clone() else {
+        return true;
+    };
+    if !row.is_mapped() {
+        return false;
+    }
+    let Some(bounds) = row.compute_bounds(body) else {
+        return false;
+    };
+    // A few pixels in, so nothing of the row above peeks over the edge.
+    let wanted = (f64::from(bounds.y()) + 3.0).max(0.0);
+    let reach = adjustment.upper() - adjustment.page_size();
+    adjustment.set_value(wanted.min(reach));
+    if reach >= wanted {
+        target.replace(None);
+        return true;
+    }
+    false
+}
+
+/// The text of the option whose row holds the keyboard, if any.
+fn focused_option(options: &OptionList) -> Option<String> {
+    let focus = options.list.root()?.focus()?;
+    options
+        .rows
+        .borrow()
+        .iter()
+        .find(|(_, row)| focus == *row.upcast_ref::<gtk::Widget>() || focus.is_ancestor(row))
+        .map(|(text, _)| text.clone())
 }
 
 /// The fixes added to what is tried, each by its label.
@@ -960,7 +1399,16 @@ button.stave-edit-unavailable .stave-edit-hint { opacity: 0.5; }
 .stave-ghost-verdict.refused { color: @error_color; }
 .stave-ghost-verdict.checking { color: alpha(currentColor, 0.75); }
 button.stave-edit-face { margin-top: 4px; }
-.stave-edit-options { padding: 4px; }
+.stave-edit-options { padding: 4px 0 2px 0; }
+.stave-edit-options-summary { font-size: 12px; opacity: 0.75; margin: 2px 6px 4px 6px; }
+button.stave-edit-option-row { padding: 6px 8px; }
+.stave-edit-option-fits { font-size: 12px; color: @success_color; }
+button.stave-edit-option-row .stave-edit-option-mark { margin-top: 2px; }
+button.stave-edit-option-row:not(.stave-edit-unavailable) .stave-edit-option-mark { color: @success_color; }
+button.stave-edit-unavailable .stave-edit-option,
+button.stave-edit-unavailable .stave-edit-option-mark { opacity: 0.55; }
+.stave-edit-blame { padding: 2px 0 6px 0; border-bottom: 1px solid alpha(@error_color, 0.3); }
+.stave-edit-blame-text { font-weight: 700; }
 "#;
 
 /// Puts the menu's and the card's stylesheet on the display, once.
@@ -1155,6 +1603,7 @@ mod tests {
             card.show(
                 &CardModel {
                     applied: &[],
+                    blame: None,
                     heading: fixture.picked.heading(),
                     candidate,
                     name: "drawer_2",

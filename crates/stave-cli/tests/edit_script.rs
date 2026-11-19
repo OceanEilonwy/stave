@@ -342,3 +342,93 @@ fn script_lines_that_are_not_steps_are_errors_before_anything_runs() {
         assert!(stderr.contains(says), "{line}: {stderr}");
     }
 }
+
+/// The owner's case by hand: the joinery's options listed with whether
+/// each fits, chigiri typed and blamed, and the joinery put back.
+const CASE_JOINERY: &str = r#"new "Case test" 940mm 1780mm 580mm
+import std:casework
+stock oak_19 white_oak solid 19mm max_width 200mm max_length 2700mm
+tools pencil marking_knife square tape marking_gauge awl calipers tenon_saw chisel mallet router_plane clamps screwdriver router straight_bit drill depth_stop
+create
+select region envelope
+choose casework.Case
+set panel_stock = oak_19
+options joinery
+set joinery = chigiri
+show
+put back
+put back
+"#;
+
+#[test]
+fn a_script_lists_a_settings_options_blames_a_refusal_and_puts_it_back() {
+    let folder = scratch_folder("case-joinery");
+    std::fs::write(folder.join("case.txt"), CASE_JOINERY).unwrap();
+    let output = stave(&folder, &["edit", "project", "--script", "case.txt"]);
+    let text = stdout(&output);
+    // The second 'put back' has nothing to put back: the run stops there.
+    assert_eq!(output.status.code(), Some(1), "{text}");
+
+    let listing = text
+        .split("> options joinery\n")
+        .nth(1)
+        .and_then(|rest| rest.split("> set joinery").next())
+        .unwrap();
+    let mut lines = listing.lines();
+    assert_eq!(lines.next(), Some("joinery: 18 options, 7 fit"));
+    let rows: Vec<&str> = lines.collect();
+    assert_eq!(rows.len(), 18, "{listing}");
+    let row = |name: &str| -> &str {
+        rows.iter()
+            .find(|row| row.split_whitespace().nth(1) == Some(name))
+            .unwrap_or_else(|| panic!("no row for {name}: {listing}"))
+    };
+    for fits in ["dowel", "dado", "screw"] {
+        assert!(row(fits).ends_with("  fits"), "{}", row(fits));
+    }
+    for edge in ["chigiri", "splined_edge"] {
+        assert!(row(edge).contains("  refused: error["), "{}", row(edge));
+    }
+    assert!(
+        row("half_lap")
+            .contains("refused: error[type-mismatch]: 'piece' needs a part, found parts"),
+        "{}",
+        row("half_lap")
+    );
+    assert!(row("mortise_tenon").contains("refused: error[require]:"));
+    // The seven that fit first, then the eleven refused.
+    assert!(
+        rows[..7].iter().all(|row| row.ends_with("  fits")),
+        "{listing}"
+    );
+    assert!(
+        rows[7..].iter().all(|row| row.contains("  refused: ")),
+        "{listing}"
+    );
+    assert!(rows[0].starts_with("  1. "), "{listing}");
+
+    let blamed = "> set joinery = chigiri\nrefused: 2 errors\n  It stopped fitting when joinery became chigiri.\n  'put back': Put joinery back to dowel(count: 4), the default\n";
+    assert!(text.contains(blamed), "{text}");
+    // The card puts the blame right under the verdict, the checker's own
+    // words below it.
+    let card = text.split("> show\n").nth(1).unwrap();
+    assert!(
+        card.contains("verdict: refused: 2 errors\n  It stopped fitting when joinery became chigiri.\n  'put back': Put joinery back to dowel(count: 4), the default\nerror["),
+        "{card}"
+    );
+    assert!(text.contains("> put back\nfits\n> put back\nrejected: nothing to put back: no setting change made it stop fitting\n"), "{text}");
+}
+
+#[test]
+fn options_of_a_setting_that_is_not_there_is_an_error() {
+    let folder = scratch_folder("no-setting");
+    let script = CASE_JOINERY.replace("options joinery", "options nothing");
+    std::fs::write(folder.join("case.txt"), script).unwrap();
+    let output = stave(&folder, &["edit", "project", "--script", "case.txt"]);
+    let text = stdout(&output);
+    assert_eq!(output.status.code(), Some(1), "{text}");
+    assert!(
+        text.contains("> options nothing\nerror: there is no setting called 'nothing'\n"),
+        "{text}"
+    );
+}

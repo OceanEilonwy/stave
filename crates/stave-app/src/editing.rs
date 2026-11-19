@@ -61,13 +61,14 @@ use crate::Opened;
 use crate::candidates::applicability::{self, PATCH_NAME, still_to_choose};
 use crate::candidates::{EditScope, Repeat, ScopeError, sort_menu};
 use crate::edit::{
-    Applicability, Candidate, Declaration, FacingPair, PartFace, Picked, PlaceSlot, SettingValue,
-    Verdict,
+    Applicability, Blame, Candidate, Declaration, FacingPair, PartFace, Picked, PlaceSlot,
+    SettingOption, SettingValue, Verdict,
 };
 use crate::grips::GripSelection;
 use crate::hold::HoldRequest;
 use crate::naming::RepeatCount;
 use crate::naming::TakenNames;
+use crate::option_fits::{FoundFit, OptionsJob, OptionsTicket};
 use crate::scratch::{DiskWriter, EditBase, Tried, TryError};
 
 // ---------------------------------------------------------------------------
@@ -132,6 +133,9 @@ pub enum EditCommand {
         /// Its value.
         value: Expr,
     },
+    /// Put the setting a refusal blames back to the value it had before
+    /// the change that made the candidate stop fitting ([`Chosen::blame`]).
+    PutBack,
     /// Name the new item, in place of the generated name.
     Rename(Ident),
     /// Apply one of the refusal's fixes: the fix at `fix` of the problem at
@@ -283,6 +287,9 @@ pub enum EditEvent {
     PlaceBound,
     /// A setting's value changed.
     SettingChanged,
+    /// Options of the chosen candidate's settings were found to fit or
+    /// not ([`crate::edit::SettingOption::fit`]), or their order changed.
+    OptionsChanged,
     /// The new item's name changed.
     Renamed,
     /// A fix was added to the candidate.
@@ -336,6 +343,8 @@ pub enum Rejection {
     NameUnavailable(String),
     /// The verdict has no such fix.
     NoSuchFix,
+    /// [`EditCommand::PutBack`] with no refusal that blames a setting.
+    NothingToPutBack,
     /// Add was asked for a candidate that doesn't fit.
     DoesNotFit,
     /// The edit couldn't start (see [`StartError`]), in words.
@@ -370,6 +379,9 @@ impl Rejection {
                 "'{name}' can't be used: it is already used in this project, is a word of the language, or is not a name"
             ),
             Rejection::NoSuchFix => "there is no such fix".to_owned(),
+            Rejection::NothingToPutBack => {
+                "nothing to put back: no setting change made it stop fitting".to_owned()
+            }
             Rejection::DoesNotFit => "the edit doesn't fit, so nothing was written".to_owned(),
             Rejection::CantStart(message) | Rejection::CantWrite(message) => message.clone(),
             Rejection::NothingToInclude => {
@@ -442,6 +454,11 @@ pub struct Chosen {
     progress: Progress,
     /// The last try, kept for the ghost and the commit.
     tried: Option<Tried>,
+    /// The candidate as it stands now, for its options' checks.
+    ticket: OptionsTicket,
+    /// The setting change that made it stop fitting, while it is refused
+    /// because of it.
+    blame: Option<Blame>,
 }
 
 impl Chosen {
@@ -486,12 +503,28 @@ impl Chosen {
     pub fn tried(&self) -> Option<&Tried> {
         self.tried.as_ref()
     }
+
+    /// The change to one setting that turned the candidate from fitting
+    /// (or still needing that choice) into refused: which setting, from
+    /// what, to what. `None` when it fits, when it was refused before
+    /// the change, and after any other change but a rename, a fix or a
+    /// repeat that leaves it refused.
+    pub fn blame(&self) -> Option<&Blame> {
+        self.blame.as_ref()
+    }
+
+    /// The candidate as it stands now: a [`FoundFit`] for another ticket
+    /// is dropped.
+    pub fn options_ticket(&self) -> OptionsTicket {
+        self.ticket
+    }
 }
 
 /// One edit in progress: the base it is tried on, the selection, its
 /// menu and the candidate chosen.
 pub struct Edit {
     folder: PathBuf,
+    files: Arc<dyn FileSource + Send + Sync>,
     base: EditBase<'static>,
     picked: Picked,
     menu: Vec<Candidate>,
@@ -566,7 +599,7 @@ impl Edit {
         files: Arc<dyn FileSource + Send + Sync>,
         picked: Picked,
     ) -> Result<Edit, StartError> {
-        let base = EditBase::shared(folder, files)?;
+        let base = EditBase::shared(folder, files.clone())?;
         if base.opened().design.is_none() {
             return Err(StartError::NotSolved);
         }
@@ -574,6 +607,7 @@ impl Edit {
             EditScope::new(base.opened())?.described_candidates(&base.opened().sources, &picked);
         Ok(Edit {
             folder: folder.to_path_buf(),
+            files,
             base,
             picked,
             menu,
@@ -678,6 +712,8 @@ impl Edit {
                         item_name: None,
                         progress: Progress::Unwritable(String::new()),
                         tried: None,
+                        ticket: OptionsTicket::next(),
+                        blame: None,
                     });
                     events.push(EditEvent::Chosen);
                     self.retry(&mut events);
@@ -708,14 +744,44 @@ impl Edit {
                     .find(|setting| setting.name.as_str() == name.as_str());
                 match setting {
                     Some(setting) => {
-                        setting.value = SettingValue::Chosen(value);
+                        let from = std::mem::replace(
+                            &mut setting.value,
+                            SettingValue::Chosen(value.clone()),
+                        );
+                        let change = SettingChange {
+                            setting: setting.name.clone(),
+                            from,
+                            from_text: setting.text.clone(),
+                            to_text: crate::candidates::print::expr_text(&value),
+                            options: setting.options.clone(),
+                        };
                         events.push(EditEvent::SettingChanged);
-                        self.retry(&mut events);
+                        self.retry_after_set(change, &mut events);
                     }
                     None => events.push(EditEvent::Rejected(Rejection::NoSuchSetting(
                         name.as_str().to_owned(),
                     ))),
                 }
+            }
+            EditCommand::PutBack => {
+                let Some(chosen) = self.chosen.as_mut() else {
+                    events.push(EditEvent::Rejected(Rejection::NothingChosen));
+                    return events;
+                };
+                let Some(blame) = chosen.blame.take() else {
+                    events.push(EditEvent::Rejected(Rejection::NothingToPutBack));
+                    return events;
+                };
+                if let Some(setting) = chosen
+                    .candidate
+                    .settings
+                    .iter_mut()
+                    .find(|setting| setting.name.as_str() == blame.setting.as_str())
+                {
+                    setting.value = blame.from;
+                }
+                events.push(EditEvent::SettingChanged);
+                self.retry(&mut events);
             }
             EditCommand::Rename(name) => {
                 let Some(chosen) = self.chosen.as_mut() else {
@@ -842,12 +908,62 @@ impl Edit {
         Ok(Commit { files, opened })
     }
 
-    /// Writes the chosen candidate's patch again and re-runs the scratch
-    /// check, recording where it stands.
-    fn retry(&mut self, events: &mut Vec<EditEvent>) {
+    /// [`Edit::retry`] after a setting was set: the options of that
+    /// setting keep the answers they had (they were tried with the other
+    /// settings, which did not change), and the blame is worked out
+    /// again.
+    fn retry_after_set(&mut self, change: SettingChange, events: &mut Vec<EditEvent>) {
+        let was_refused = self
+            .chosen
+            .as_ref()
+            .is_some_and(|chosen| is_refused(&chosen.progress));
+        let blamed_before = self
+            .chosen
+            .as_ref()
+            .and_then(|chosen| chosen.blame.clone())
+            .filter(|blame| blame.setting.as_str() == change.setting.as_str());
+        self.retry_keeping(Some((&change.setting, &change.options)), events);
         let Some(chosen) = self.chosen.as_mut() else {
             return;
         };
+        chosen.blame = if !is_refused(&chosen.progress) {
+            None
+        } else if let Some(blame) = blamed_before {
+            // The same setting changed again while it is to blame: it still
+            // stopped fitting when that setting left its first value.
+            Some(Blame {
+                to_text: change.to_text,
+                ..blame
+            })
+        } else if was_refused {
+            None
+        } else {
+            Some(Blame {
+                setting: change.setting,
+                from: change.from,
+                from_text: change.from_text,
+                to_text: change.to_text,
+            })
+        };
+    }
+
+    /// Writes the chosen candidate's patch again and re-runs the scratch
+    /// check, recording where it stands.
+    fn retry(&mut self, events: &mut Vec<EditEvent>) {
+        self.retry_keeping(None, events);
+    }
+
+    /// [`Edit::retry`], keeping the options' answers of the setting named
+    /// in `kept` (the setting's options as they were before).
+    fn retry_keeping(
+        &mut self,
+        kept: Option<(&Ident, &[SettingOption])>,
+        events: &mut Vec<EditEvent>,
+    ) {
+        let Some(chosen) = self.chosen.as_mut() else {
+            return;
+        };
+        chosen.ticket = OptionsTicket::next();
         let before = chosen.progress.clone();
         chosen.tried = None;
         if let Ok(scope) = EditScope::new(self.base.opened()) {
@@ -863,32 +979,116 @@ impl Edit {
             chosen.item_name.as_ref(),
             chosen.tried.as_ref().and_then(Tried::opened),
         );
+        crate::option_fits::prepare(&mut chosen.candidate, &chosen.progress, kept);
+        if !is_refused(&chosen.progress) {
+            chosen.blame = None;
+        }
         if chosen.progress != before {
             events.push(EditEvent::VerdictChanged);
         }
     }
+
+    /// The checks of the chosen candidate's options not checked yet, to
+    /// run off the main thread ([`OptionsJob::run`]); hand each answer to
+    /// [`Edit::option_found`]. `None` with nothing chosen.
+    pub fn options_job(&self) -> Option<OptionsJob> {
+        let chosen = self.chosen.as_ref()?;
+        Some(OptionsJob::new(
+            &self.folder,
+            self.files.clone(),
+            chosen.ticket,
+            &chosen.candidate,
+            chosen.repeat,
+            chosen.name.as_ref(),
+            &chosen.fixes,
+        ))
+    }
+
+    /// Takes one option's fit from an [`OptionsJob`]; `false` when it is
+    /// for the candidate as it was (another ticket), for an option it
+    /// doesn't have, or changes nothing.
+    pub fn option_found(&mut self, found: FoundFit) -> bool {
+        match self.chosen.as_mut() {
+            Some(chosen) if chosen.ticket == found.ticket => {
+                crate::option_fits::record(&mut chosen.candidate, found)
+            }
+            Some(_) | None => false,
+        }
+    }
+}
+
+/// A setting just set, as it was before.
+struct SettingChange {
+    setting: Ident,
+    from: SettingValue,
+    from_text: Option<String>,
+    to_text: String,
+    options: Vec<SettingOption>,
+}
+
+/// `true` when the candidate was tried and refused.
+fn is_refused(progress: &Progress) -> bool {
+    matches!(progress, Progress::Tried(Verdict::Refused(_)))
 }
 
 /// Writes the patch for `chosen` and tries it on `base`: where it stands,
 /// the patch text, the new item's name and the try.
-fn attempt(
+fn attempt(base: &EditBase<'_>, chosen: &Chosen) -> Attempt {
+    let never = AtomicBool::new(false);
+    let attempted = try_candidate(
+        base,
+        &chosen.candidate,
+        chosen.repeat,
+        chosen.name.as_ref(),
+        &chosen.fixes,
+        &never,
+    );
+    match attempted {
+        Ok(attempted) => attempted,
+        // Never set, so never cancelled.
+        Err(Cancelled) => (
+            Progress::Unwritable("the check was stopped".to_owned()),
+            None,
+            None,
+            None,
+        ),
+    }
+}
+
+/// Where a try leaves a candidate: its progress, the patch text, the new
+/// item's name and the try itself.
+pub(crate) type Attempt = (Progress, Option<String>, Option<Ident>, Option<Tried>);
+
+/// Writes the patch for a candidate (with its repeat, the name typed for
+/// it and the fixes added) and tries it on `base`: where it stands, the
+/// patch text, the new item's name and the try. Used for the chosen
+/// candidate and for each option of its settings
+/// ([`crate::option_fits::OptionsJob`]).
+///
+/// # Errors
+///
+/// [`Cancelled`] when `cancel` is set before the check finishes.
+pub(crate) fn try_candidate(
     base: &EditBase<'_>,
-    chosen: &Chosen,
-) -> (Progress, Option<String>, Option<Ident>, Option<Tried>) {
-    if let Some(names) = still_to_choose(&chosen.candidate) {
-        return (Progress::NeedsChoice(names), None, None, None);
+    candidate: &Candidate,
+    repeat: Option<Repeat>,
+    name: Option<&Ident>,
+    fixes: &[LangFix],
+    cancel: &AtomicBool,
+) -> Result<Attempt, Cancelled> {
+    if let Some(names) = still_to_choose(candidate) {
+        return Ok((Progress::NeedsChoice(names), None, None, None));
     }
     let scope = match EditScope::new(base.opened()) {
         Ok(scope) => scope,
-        Err(error) => return (Progress::Unwritable(error.to_string()), None, None, None),
+        Err(error) => return Ok((Progress::Unwritable(error.to_string()), None, None, None)),
     };
-    let written =
-        match scope.write_patch_named(&chosen.candidate, chosen.repeat, chosen.name.as_ref()) {
-            Ok(written) => written,
-            Err(error) => return (Progress::Unwritable(error.to_string()), None, None, None),
-        };
+    let written = match scope.write_patch_named(candidate, repeat, name) {
+        Ok(written) => written,
+        Err(error) => return Ok((Progress::Unwritable(error.to_string()), None, None, None)),
+    };
     let mut text = written.text.clone();
-    for fix in &chosen.fixes {
+    for fix in fixes {
         text.push('\n');
         text.push_str(&fix.to_string());
         text.push('\n');
@@ -896,35 +1096,28 @@ fn attempt(
     let parse = match SourceMap::new().add(PATCH_NAME, text.as_str()) {
         Ok(file) => parse_patch_file(file, &text),
         Err(error) => {
-            return (
+            return Ok((
                 Progress::Unwritable(error.to_string()),
                 Some(text),
                 Some(written.name),
                 None,
-            );
+            ));
         }
     };
-    let never = AtomicBool::new(false);
-    match base.try_patch(PATCH_NAME, &parse, &never) {
-        Ok(tried) => (
+    match base.try_patch(PATCH_NAME, &parse, cancel) {
+        Ok(tried) => Ok((
             Progress::Tried(tried.verdict().clone()),
             Some(text),
             Some(written.name),
             Some(tried),
-        ),
-        Err(TryError::Load(error)) => (
+        )),
+        Err(TryError::Load(error)) => Ok((
             Progress::Unwritable(error.to_string()),
             Some(text),
             Some(written.name),
             None,
-        ),
-        // Never set, so never cancelled.
-        Err(TryError::Cancelled(_)) => (
-            Progress::Unwritable("the check was stopped".to_owned()),
-            Some(text),
-            Some(written.name),
-            None,
-        ),
+        )),
+        Err(TryError::Cancelled(cancelled)) => Err(cancelled),
     }
 }
 

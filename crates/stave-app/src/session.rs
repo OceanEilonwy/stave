@@ -746,6 +746,58 @@ impl Session {
         crate::hold::measured_distance(design, first, second).map_err(|e| e.to_string())
     }
 
+    /// The checks of the options of the chosen candidate's settings not
+    /// checked yet, to run off the main thread
+    /// ([`crate::option_fits::OptionsJob::run`]); hand each answer to
+    /// [`Session::option_fit_found`]. Set its cancel flag when the
+    /// candidate changes (any [`EditEvent::VerdictChanged`],
+    /// [`EditEvent::SettingChanged`] and the like): its answers would be
+    /// dropped. `None` with no candidate chosen.
+    pub fn options_job(&self) -> Option<crate::option_fits::OptionsJob> {
+        self.edit.as_ref().and_then(Edit::options_job)
+    }
+
+    /// Takes one option's fit from an options job; says
+    /// [`EditEvent::OptionsChanged`] when it changed the card. An answer
+    /// for the candidate as it was before a change is dropped.
+    pub fn option_fit_found(&mut self, found: crate::option_fits::FoundFit) -> Vec<Event> {
+        if self
+            .edit
+            .as_mut()
+            .is_some_and(|edit| edit.option_found(found))
+        {
+            vec![Event::Edit(EditEvent::OptionsChanged)]
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// Checks the options of the chosen candidate's settings here and now
+    /// (of the setting named `only`, or of every one), stopping when
+    /// `cancel` is set: what a script does, where nothing else waits. A
+    /// window runs [`Session::options_job`] off the main thread instead.
+    pub fn check_setting_options(&mut self, only: Option<&str>, cancel: &AtomicBool) -> Vec<Event> {
+        let Some(job) = self.options_job() else {
+            return vec![Event::Edit(EditEvent::Rejected(Rejection::NothingChosen))];
+        };
+        let job = match only {
+            Some(setting) => job.only(setting),
+            None => job,
+        };
+        let mut found = Vec::new();
+        let result = job.run(cancel, &mut |fit| found.push(fit));
+        let mut events = Vec::new();
+        for fit in found {
+            events.extend(self.option_fit_found(fit));
+        }
+        if let Err(message) = result {
+            events.push(Event::Edit(EditEvent::Rejected(Rejection::CantStart(
+                message,
+            ))));
+        }
+        finish(events)
+    }
+
     /// Works out whether each entry of the edit's menu applies, as
     /// [`EditCommand::CheckMenu`] does, but stops when `cancel` is set
     /// (the entries reached keep their answer).
@@ -1257,6 +1309,7 @@ impl Session {
             | EditCommand::Bind(_)
             | EditCommand::Set { .. }
             | EditCommand::Rename(_)
+            | EditCommand::PutBack
             | EditCommand::Repeat(_)
             | EditCommand::ApplyFix { .. }) => match self.edit.as_mut() {
                 Some(edit) => events.extend(edit.apply(command).into_iter().map(Event::Edit)),

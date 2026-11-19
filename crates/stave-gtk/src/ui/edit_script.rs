@@ -13,6 +13,8 @@
 //! point face <part>.<face>             the next click, made on the model at that face's
 //!                                      middle and picked as the pointer's click is
 //! set <name> = <value>                 a setting typed on the card
+//! options <name>                       the setting's list of options opened, each checked
+//! put back                             the button that puts back a setting a refusal blames
 //! name <name>                          the name retyped on the card
 //! fix <problem> <fix>                  a fix's button, both counted from 1
 //! add | cancel                         the card's buttons
@@ -25,6 +27,8 @@
 //! error with its line, and the steps after it are skipped.
 
 use std::rc::Rc;
+
+use gtk::prelude::ButtonExt;
 
 use stave_app::edit::{FacingPair, PartFace, Picked};
 use stave_app::editing::{EditCommand, entry_matches, parse_name, parse_value};
@@ -139,6 +143,17 @@ impl Window {
                 let name = parse_name(name.trim()).map_err(|error| error.0)?;
                 let value = parse_value(value.trim()).map_err(|error| error.0)?;
                 self.send_edit(EditCommand::Set { name, value });
+            }
+            "options" => {
+                self.open_setting_options(rest)?;
+            }
+            "put" if rest == "back" => {
+                let button = self
+                    .editing
+                    .card
+                    .put_back_button()
+                    .ok_or("the card offers nothing to put back")?;
+                button.emit_clicked();
             }
             "name" => {
                 let name = parse_name(rest).map_err(|error| error.0)?;

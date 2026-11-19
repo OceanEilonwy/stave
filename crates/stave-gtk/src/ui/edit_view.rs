@@ -28,7 +28,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use adw::prelude::*;
-use gtk::glib;
+use gtk::{gio, glib};
 use stave_app::edit::{
     Applicability, Declaration, Names, PartFace, Picked, PlaceSlot, Problem, Refusal, Verdict,
 };
@@ -36,6 +36,7 @@ use stave_app::editing::{
     Edit, EditCommand, EditEvent, Progress, parse_name, parse_value, picked_from_facing,
     picked_from_part_face,
 };
+use stave_app::option_fits::{FoundFit, OptionsTicket};
 use stave_app::session::{Command, Editor, Selection, Session};
 use stave_lang::ast::Expr;
 use stave_lang::{Code, Diagnostic, Severity};
@@ -92,6 +93,9 @@ pub(super) struct EditView {
     verbs: RefCell<Vec<verbs::Run>>,
     /// Scripts send each command at once, in order.
     immediate: Cell<bool>,
+    /// The check of the chosen candidate's options running on a worker
+    /// thread: its cancel flag and the candidate it is for.
+    options: RefCell<Option<(Arc<AtomicBool>, OptionsTicket)>>,
 }
 
 /// What the editing view keeps between events.
@@ -166,6 +170,7 @@ impl EditView {
             pending_marked: RefCell::new(None),
             verbs: RefCell::new(Vec::new()),
             immediate: Cell::new(false),
+            options: RefCell::new(None),
         }
     }
 }
@@ -267,6 +272,7 @@ pub(super) fn command_for(action: CardAction) -> Result<EditCommand, String> {
             .map(|value| EditCommand::Set { name: param, value })
             .map_err(|error| format!("'{text}' isn't a value Stave can read: {}", error.0)),
         CardAction::Fix { problem, fix } => Ok(EditCommand::ApplyFix { problem, fix }),
+        CardAction::PutBack => Ok(EditCommand::PutBack),
         CardAction::Add => Ok(EditCommand::Add),
         CardAction::Cancel => Ok(EditCommand::Cancel),
     }
@@ -280,6 +286,7 @@ fn tries_again(command: &EditCommand) -> bool {
         EditCommand::Choose(_)
             | EditCommand::Bind(_)
             | EditCommand::Set { .. }
+            | EditCommand::PutBack
             | EditCommand::Rename(_)
             | EditCommand::Repeat(_)
             | EditCommand::ApplyFix { .. }
@@ -331,6 +338,7 @@ pub(super) fn draw_edit(
             card.show(
                 &CardModel {
                     applied: &applied,
+                    blame: chosen.blame(),
                     heading,
                     candidate,
                     name: &name,
@@ -825,6 +833,7 @@ impl Window {
         self.grip_event(&event);
         match event {
             EditEvent::Started => {
+                self.stop_options_check();
                 let generation = {
                     let mut state = self.editing.state.borrow_mut();
                     state.generation = state.generation.wrapping_add(1);
@@ -845,15 +854,27 @@ impl Window {
             | EditEvent::Renamed
             | EditEvent::FixApplied
             | EditEvent::RepeatChanged
-            | EditEvent::ChangeStarted
-            | EditEvent::DependantsIncluded
-            | EditEvent::DragMoved
-            | EditEvent::ParamPicked
             | EditEvent::VerdictChanged => {
                 self.update_ghost();
                 self.refresh_edit();
+                self.start_options_check();
+            }
+            EditEvent::ChangeStarted
+            | EditEvent::DependantsIncluded
+            | EditEvent::DragMoved
+            | EditEvent::ParamPicked => {
+                self.stop_options_check();
+                self.update_ghost();
+                self.refresh_edit();
+            }
+            EditEvent::OptionsChanged => {
+                let session = self.session.borrow();
+                if let Some(chosen) = session.edit().and_then(Edit::chosen) {
+                    self.editing.card.update_options(chosen.candidate());
+                }
             }
             EditEvent::Committed => {
+                self.stop_options_check();
                 let name = {
                     let mut state = self.editing.state.borrow_mut();
                     state.generation = state.generation.wrapping_add(1);
@@ -874,6 +895,7 @@ impl Window {
                 self.show_card();
             }
             EditEvent::Cancelled => {
+                self.stop_options_check();
                 {
                     let mut state = self.editing.state.borrow_mut();
                     state.generation = state.generation.wrapping_add(1);
@@ -943,6 +965,9 @@ impl Window {
             .card
             .root
             .set_margin_end(EDGE.saturating_add(rail).saturating_add(EDGE));
+        // Clear of the view's foot, as the menu is.
+        let room = crate::convert::int_of(height).saturating_sub(EDGE.saturating_mul(3));
+        self.editing.card.fit_height(room);
     }
 
     /// Works the menu's applicability out a step at a time, drawing what
@@ -993,6 +1018,86 @@ impl Window {
                 budget.saturating_mul(2).min(MENU_STEP_LIMIT)
             };
             self.check_menu_soon(generation, next);
+        }
+    }
+
+    // ---- the options' checks, off the main thread ----
+
+    /// Stops the check of the chosen candidate's options, if one runs.
+    fn stop_options_check(&self) {
+        let running = self.editing.options.borrow_mut().take();
+        if let Some((cancel, _)) = running {
+            cancel.store(true, Ordering::Relaxed);
+        }
+    }
+
+    /// Checks the chosen candidate's options on a worker thread, handing
+    /// each answer to the session as it comes. A check already running for
+    /// the candidate as it now stands goes on; one for the candidate as it
+    /// was is stopped (its answers would be dropped). Scripts check the
+    /// options they open themselves, so a picture never depends on how
+    /// far a worker got.
+    fn start_options_check(self: &Rc<Self>) {
+        if self.editing.immediate.get() {
+            return;
+        }
+        let Some(job) = self.session.borrow().options_job() else {
+            self.stop_options_check();
+            return;
+        };
+        let running = self
+            .editing
+            .options
+            .borrow()
+            .as_ref()
+            .map(|(_, ticket)| *ticket);
+        if running == Some(job.ticket()) {
+            return;
+        }
+        self.stop_options_check();
+        if job.tries().is_empty() {
+            return;
+        }
+        let job = match self.editing.card.open_setting() {
+            Some(open) => job.prefer(&open),
+            None => job,
+        };
+        let cancel = Arc::new(AtomicBool::new(false));
+        self.editing
+            .options
+            .replace(Some((cancel.clone(), job.ticket())));
+        let (sender, receiver) = async_channel::unbounded::<FoundFit>();
+        gio::spawn_blocking(move || {
+            let _ = job.run(&cancel, &mut |found| {
+                let _ = sender.send_blocking(found);
+            });
+        });
+        let window = Rc::downgrade(self);
+        glib::spawn_future_local(async move {
+            while let Ok(found) = receiver.recv().await {
+                let Some(window) = window.upgrade() else {
+                    return;
+                };
+                let events = window.session.borrow_mut().option_fit_found(found);
+                window.handle(events);
+            }
+        });
+    }
+
+    /// Opens the list of a setting's options on the card, checking them
+    /// first (an edit script's `options` step).
+    pub(super) fn open_setting_options(self: &Rc<Self>, setting: &str) -> Result<(), String> {
+        let events = self
+            .session
+            .borrow_mut()
+            .check_setting_options(Some(setting), &AtomicBool::new(false));
+        self.handle(events);
+        if self.editing.card.open_options(setting) {
+            self.place_edit_widgets();
+            self.editing.card.scroll_to_open_options_now();
+            Ok(())
+        } else {
+            Err(format!("the card has no list of options for '{setting}'"))
         }
     }
 
