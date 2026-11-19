@@ -1370,10 +1370,9 @@ impl Window {
     /// The scrub moved, or a toggle changed: poses again.
     fn update_focus(self: &Rc<Self>, change: impl FnOnce(&mut FocusState)) {
         {
-            // Busy: the window itself is setting the controls.
-            let Ok(mut state) = self.state.try_borrow_mut() else {
-                return;
-            };
+            // The window sets the controls with nothing borrowed and with
+            // `updating_controls` up; a borrow held here would be a bug.
+            let mut state = self.state.borrow_mut();
             if state.updating_controls {
                 return;
             }
@@ -1393,9 +1392,7 @@ impl Window {
     /// at the end), or pauses.
     fn toggle_play_focus(self: &Rc<Self>) {
         let playing = {
-            let Ok(mut state) = self.state.try_borrow_mut() else {
-                return;
-            };
+            let mut state = self.state.borrow_mut();
             let Some(focus) = state.focus.as_mut() else {
                 return;
             };
@@ -1756,9 +1753,7 @@ impl Window {
     /// The motion bar moved: the selection opening.
     fn motion_moved(self: &Rc<Self>, value: f64) {
         {
-            let Ok(mut state) = self.state.try_borrow_mut() else {
-                return;
-            };
+            let mut state = self.state.borrow_mut();
             if state.updating_controls {
                 return;
             }
@@ -1778,9 +1773,7 @@ impl Window {
     /// The problem card's slider moved: swings the problem's motion.
     fn problem_moved(self: &Rc<Self>, value: f64) {
         let shown = {
-            let Ok(mut state) = self.state.try_borrow_mut() else {
-                return;
-            };
+            let mut state = self.state.borrow_mut();
             let Some(problem) = state.problem.as_mut() else {
                 return;
             };
@@ -1927,9 +1920,7 @@ impl Window {
     /// "Pull apart" switched on (all the way apart) or off (together).
     fn pull_apart(self: &Rc<Self>, on: bool) {
         {
-            let Ok(mut state) = self.state.try_borrow_mut() else {
-                return;
-            };
+            let mut state = self.state.borrow_mut();
             if state.updating_controls || state.pull_apart == on {
                 return;
             }
