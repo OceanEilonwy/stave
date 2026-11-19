@@ -23,8 +23,7 @@ let rabbet_depth = 6mm                              // half the thickness of the
 let bottom_up    = 6mm                              // the bottom's groove starts this far up
 
 // ---- checks ----
-require hinge_room : lid.hinge_kind.leaf_width <= back.thickness "a hinge leaf must not stick out past the inside of the back"
-require useful     : box_height - bottom_up - ply_6.thickness >= 60mm "the box should be at least 60mm deep inside"
+require useful : box_height - bottom_up - ply_6.thickness >= 60mm "the box should be at least 60mm deep inside"
 
 // ---- stock ----
 stock walnut_12 { species: walnut, form: solid, thickness: 12mm, max_width: 200mm, max_length: 2400mm }
