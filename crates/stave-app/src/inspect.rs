@@ -4,21 +4,22 @@
 //! (its kind, its stock and size, how it moves, its joints and cuts, and
 //! where it is written in the text, with the snippet highlighted).
 
+use stave_lang::Severity;
 use stave_lang::units::{Angle, Length};
 use stave_lang::{SourceMap, SyntaxKind};
 use stave_model::Model;
 use stave_model::defs::Decl;
 use stave_model::mechanism::{DriveValue, Mechanism};
 use stave_model::solved::{
-    AssemblyId, Body, CutSource, HardwareBase, PairMember, Part, PartId, PartOrigin, Shape,
-    SolvedDesign,
+    AssemblyId, Body, CutSource, HardwareBase, HardwareId, PairMember, Part, PartId, PartOrigin,
+    RegionId, RoleValue, Shape, SolvedDesign,
 };
 use stave_scene::Item;
 use stave_schema::species::Srgb;
 
 use crate::check::Checked;
 use crate::focus::{self, Target};
-use crate::session::{LineNumber, Selection, SourceLocation};
+use crate::session::{LineNumber, ProblemIndex, Selection, SourceLocation};
 use crate::view::Row;
 
 /// The grey of hardware swatches (#a8adb4).
@@ -600,6 +601,37 @@ pub struct Snippet {
     pub cut_short: bool,
 }
 
+/// What a link in the inspector stands for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LinkTarget {
+    /// Something that can be selected: a part, hardware, an assembly.
+    Select(Selection),
+    /// A space (a region): it can be lit, not selected.
+    Space(RegionId),
+}
+
+/// A name in a value that stands for another thing of the design: the
+/// inspector draws it as a link that selects it, and lights it in the 3D
+/// view while the pointer is on it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NameLink {
+    /// The name as shown: `rail[top]`, `side_l`, `bay[doors]`.
+    pub name: String,
+    /// What it stands for.
+    pub target: LinkTarget,
+}
+
+/// Which section of the inspector a [`Connection`] goes in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ConnectionSection {
+    /// "Joined to": its joints, the hardware on it, what it turns on.
+    Joined,
+    /// "Cuts": the cuts hardware makes in it.
+    Cuts,
+    /// The way into focus mode for a joint, a member or hardware.
+    HowItWorks,
+}
+
 /// A row of the inspector's joints and cuts list.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Connection {
@@ -607,10 +639,51 @@ pub struct Connection {
     pub swatch: Swatch,
     /// The bold start: `cope_and_stick`, `2 bores`.
     pub lead: String,
-    /// The rest: "with rail[top], rail[bottom]".
+    /// The rest in words: "with rail[top], rail[bottom]".
     pub rest: String,
+    /// The things it joins this to, each a link (empty for a cut or a
+    /// way into focus mode).
+    pub partners: Vec<NameLink>,
+    /// A few words beside the partners: "back face" for hardware on a
+    /// face; empty otherwise.
+    pub note: String,
+    /// The section it goes in.
+    pub section: ConnectionSection,
     /// Focus mode on it, when it can be shown.
     pub target: Option<Target>,
+}
+
+/// A label and value row of the inspector, whose value may name other
+/// things of the design.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Field {
+    /// What it is: "Stock".
+    pub label: &'static str,
+    /// Its value in words.
+    pub value: String,
+    /// The things its value names, each a link; empty for a plain value.
+    pub links: Vec<NameLink>,
+}
+
+impl From<Row> for Field {
+    fn from(row: Row) -> Field {
+        Field {
+            label: row.label,
+            value: row.value,
+            links: Vec::new(),
+        }
+    }
+}
+
+/// A check that fails about the selection.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FailingCheck {
+    /// Error or warning.
+    pub severity: Severity,
+    /// The problem's message.
+    pub message: String,
+    /// The problem, to select it.
+    pub problem: ProblemIndex,
 }
 
 /// What the inspector shows about the selection.
@@ -622,8 +695,10 @@ pub struct Inspection {
     pub title: String,
     /// The doc comment: "The upright on the hinge side of a door".
     pub description: Option<String>,
+    /// Its mark: the wood's colour, or steel.
+    pub swatch: Option<Swatch>,
     /// Stock, finished size, grain, how it moves.
-    pub rows: Vec<Row>,
+    pub rows: Vec<Field>,
     /// The heading of [`Inspection::connections`]: "Joints and cuts".
     pub connections_title: &'static str,
     /// Its joints and cuts, or what it can be focused on.
@@ -631,6 +706,9 @@ pub struct Inspection {
     /// The innermost assembly that moves around it, for the "Open it"
     /// slider.
     pub moves_with: Option<AssemblyId>,
+    /// The checks that fail about it, in `stave check` order (empty when
+    /// every check about it holds).
+    pub checks: Vec<FailingCheck>,
     /// Where it is written.
     pub source: Option<Snippet>,
 }
@@ -872,6 +950,183 @@ fn hardware_decl(model: &Model, id: stave_model::solved::HardwareId) -> Option<&
     model.defs.hardware_def(instance.def).map(|d| &d.decl)
 }
 
+/// A link to a part, named relative to `assembly`.
+fn part_link(design: &SolvedDesign, id: PartId, assembly: Option<AssemblyId>) -> NameLink {
+    let name = design.part(id).map_or_else(String::new, |p| {
+        relative(design, &p.name, assembly).to_owned()
+    });
+    NameLink {
+        name,
+        target: LinkTarget::Select(Selection::Part(id)),
+    }
+}
+
+/// A link to a piece of hardware, named relative to `assembly`.
+fn hardware_link(design: &SolvedDesign, id: HardwareId, assembly: Option<AssemblyId>) -> NameLink {
+    let name = design
+        .hardware
+        .get(id.index())
+        .map_or_else(String::new, |h| {
+            relative(design, &h.name, assembly).to_owned()
+        });
+    NameLink {
+        name,
+        target: LinkTarget::Select(Selection::Hardware(id)),
+    }
+}
+
+/// A link to a space of the design, by its name; `None` when the design
+/// has no space of that name.
+pub fn space_link(design: &SolvedDesign, name: &str) -> Option<NameLink> {
+    let region = design.regions.iter().find(|r| r.name == name)?;
+    Some(NameLink {
+        name: name.to_owned(),
+        target: LinkTarget::Space(region.id),
+    })
+}
+
+/// A link to whatever of the design is called `name`: a part, hardware,
+/// an assembly or a space; `None` for a name the design doesn't have.
+pub fn name_link(design: &SolvedDesign, name: &str) -> Option<NameLink> {
+    match crate::link::selection_named(design, name) {
+        Some(selection) => Some(NameLink {
+            name: name.to_owned(),
+            target: LinkTarget::Select(selection),
+        }),
+        None => space_link(design, name),
+    }
+}
+
+/// The links in a place param's value as written (`bay[doors]`,
+/// `[side_l, side_r]`, `side_l.right`): each name the design has, once,
+/// in order. A face (`side_l.right`) links to its part.
+pub fn place_links(design: &SolvedDesign, text: &str) -> Vec<NameLink> {
+    let inner = text
+        .trim()
+        .strip_prefix('[')
+        .and_then(|rest| rest.strip_suffix(']'))
+        .unwrap_or(text.trim());
+    let mut links: Vec<NameLink> = Vec::new();
+    for name in inner.split(',').map(str::trim).filter(|n| !n.is_empty()) {
+        let found = name_link(design, name).or_else(|| {
+            // A face: the part before its last `.`.
+            let (part, _) = name.rsplit_once('.')?;
+            let mut link = name_link(design, part)?;
+            link.name = name.to_owned();
+            Some(link)
+        });
+        if let Some(link) = found
+            && !links.contains(&link)
+        {
+            links.push(link);
+        }
+    }
+    links
+}
+
+/// "with rail[top], rail[bottom]"; empty for none.
+fn with_names(links: &[NameLink]) -> String {
+    if links.is_empty() {
+        return String::new();
+    }
+    let names: Vec<&str> = links.iter().map(|link| link.name.as_str()).collect();
+    format!("with {}", names.join(", "))
+}
+
+/// The hardware mounted on a part, one row per kind and face
+/// ("euro_hinge ×2, back face → hinges[lower], hinges[upper]"), then for
+/// hinges the parts they hang it on ("hinged on → side_l").
+fn hardware_on(design: &SolvedDesign, part: &Part) -> Vec<Connection> {
+    let mut groups: Vec<(String, String, Vec<HardwareId>)> = Vec::new();
+    let mut hinged_on: Vec<NameLink> = Vec::new();
+    let mut first_hinge = None;
+    for hardware in design.hardware.iter().filter(|h| h.piece == part.id) {
+        let kind = hardware
+            .kind
+            .rsplit('.')
+            .next()
+            .unwrap_or(&hardware.kind)
+            .to_owned();
+        let face = format!("{} face", hardware.mount_face.word());
+        match groups.iter_mut().find(|(k, f, _)| *k == kind && *f == face) {
+            Some((_, _, ids)) => ids.push(hardware.id),
+            None => groups.push((kind, face, vec![hardware.id])),
+        }
+        if hardware.base == HardwareBase::Hinge {
+            first_hinge.get_or_insert(hardware.id);
+            for (_, value) in &hardware.roles {
+                if let RoleValue::Part(other) = value
+                    && *other != part.id
+                    && design.part(*other).is_some()
+                {
+                    let link = part_link(design, *other, part.assembly);
+                    if !hinged_on.contains(&link) {
+                        hinged_on.push(link);
+                    }
+                }
+            }
+        }
+    }
+    let mut rows: Vec<Connection> = groups
+        .into_iter()
+        .map(|(kind, face, ids)| {
+            let partners: Vec<NameLink> = ids
+                .iter()
+                .map(|id| hardware_link(design, *id, part.assembly))
+                .collect();
+            Connection {
+                swatch: hardware_swatch(),
+                lead: if ids.len() == 1 {
+                    kind
+                } else {
+                    format!("{kind} ×{}", ids.len())
+                },
+                rest: format!("on its {face}: {}", with_names(&partners)),
+                partners,
+                note: face,
+                section: ConnectionSection::Joined,
+                target: ids.first().map(|id| Target::Hardware(*id)),
+            }
+        })
+        .collect();
+    if !hinged_on.is_empty() {
+        rows.push(Connection {
+            swatch: hardware_swatch(),
+            lead: "hinged on".to_owned(),
+            rest: with_names(&hinged_on),
+            partners: hinged_on,
+            note: String::new(),
+            section: ConnectionSection::Joined,
+            target: first_hinge.map(Target::Hardware),
+        });
+    }
+    rows
+}
+
+/// The checks that fail about an item (errors and warnings), in `stave
+/// check` order.
+fn failing_checks(checked: &Checked, item: Item) -> Vec<FailingCheck> {
+    checked
+        .problems
+        .iter()
+        .enumerate()
+        .filter(|(_, problem)| matches!(problem.severity, Severity::Error | Severity::Warning))
+        .filter(|(_, problem)| {
+            problem.contact.as_ref().is_some_and(|contact| {
+                contact
+                    .items
+                    .iter()
+                    .any(|found| crate::view::contact_item(*found) == item)
+            })
+        })
+        .map(|(index, problem)| FailingCheck {
+            severity: problem.severity,
+            message: problem.message.clone(),
+            problem: ProblemIndex(index),
+        })
+        .collect()
+}
+
 fn inspect_part(checked: &Checked, design: &SolvedDesign, id: PartId) -> Option<Inspection> {
     let part = design.part(id)?;
     let kind = match part.origin {
@@ -928,20 +1183,23 @@ fn inspect_part(checked: &Checked, design: &SolvedDesign, id: PartId) -> Option<
             value: format!("turned to {profile}"),
         });
     }
+    let mut rows: Vec<Field> = rows.into_iter().map(Field::from).collect();
     if let PartOrigin::Mirror { source } | PartOrigin::MirroredAssembly { source } = part.origin
         && let Some(source) = design.part(source)
     {
-        rows.push(Row {
+        rows.push(Field {
             label: "Mirror of",
             value: source.name.clone(),
+            links: vec![part_link(design, source.id, part.assembly)],
         });
     }
     let moves_with = moving(design, part.assembly);
-    rows.extend(moves_row(design, moves_with));
+    rows.extend(moves_row(design, moves_with).map(Field::from));
     if let Some(note) = &part.note {
-        rows.push(Row {
+        rows.push(Field {
             label: "Note",
             value: note.clone(),
+            links: Vec::new(),
         });
     }
     let mut connections = Vec::new();
@@ -951,7 +1209,7 @@ fn inspect_part(checked: &Checked, design: &SolvedDesign, id: PartId) -> Option<
             .iter()
             .any(|p| p.roles.iter().any(|r| r.part == id) || p.made_parts.contains(&id))
     }) {
-        let mut others: Vec<&str> = Vec::new();
+        let mut others: Vec<NameLink> = Vec::new();
         let mut first_pair = None;
         for (index, pair) in joint.pairs.iter().enumerate() {
             if !(pair.roles.iter().any(|r| r.part == id) || pair.made_parts.contains(&id)) {
@@ -959,12 +1217,10 @@ fn inspect_part(checked: &Checked, design: &SolvedDesign, id: PartId) -> Option<
             }
             first_pair.get_or_insert(index);
             for role in &pair.roles {
-                if role.part != id
-                    && let Some(other) = design.part(role.part)
-                {
-                    let name = relative(design, &other.name, part.assembly);
-                    if !others.contains(&name) {
-                        others.push(name);
+                if role.part != id && design.part(role.part).is_some() {
+                    let link = part_link(design, role.part, part.assembly);
+                    if !others.contains(&link) {
+                        others.push(link);
                     }
                 }
             }
@@ -977,17 +1233,17 @@ fn inspect_part(checked: &Checked, design: &SolvedDesign, id: PartId) -> Option<
                 .next()
                 .unwrap_or(&joint.kind)
                 .to_owned(),
-            rest: if others.is_empty() {
-                String::new()
-            } else {
-                format!("with {}", others.join(", "))
-            },
+            rest: with_names(&others),
+            partners: others,
+            note: String::new(),
+            section: ConnectionSection::Joined,
             target: first_pair.map(|pair| Target::Joint {
                 joint: joint.id,
                 pair,
             }),
         });
     }
+    connections.extend(hardware_on(design, part));
     // The hardware's cuts, grouped by hardware kind and cut.
     let mut cuts: Vec<HardwareCut> = Vec::new();
     for cut in &part.cuts {
@@ -1033,6 +1289,9 @@ fn inspect_part(checked: &Checked, design: &SolvedDesign, id: PartId) -> Option<
             swatch: hardware_swatch(),
             lead,
             rest: format!("· {}", cut.value),
+            partners: Vec::new(),
+            note: cut.value,
+            section: ConnectionSection::Cuts,
             target: cut.hardware.first().map(|h| Target::Hardware(*h)),
         });
     }
@@ -1041,6 +1300,8 @@ fn inspect_part(checked: &Checked, design: &SolvedDesign, id: PartId) -> Option<
         eyebrow: eyebrow(design, kind, part.assembly),
         title: relative(design, &part.name, part.assembly).to_owned(),
         description,
+        swatch: Some(part_swatch(part)),
+        checks: failing_checks(checked, Item::Part(id)),
         rows,
         connections_title: "Joints and cuts",
         connections,
@@ -1068,21 +1329,25 @@ fn inspect_hardware(
         HardwareBase::Pull => "pull",
     };
     let mut rows = vec![
-        Row {
+        Field::from(Row {
             label: "Kind",
             value: format!("{} ({what})", hardware.kind),
-        },
-        Row {
+        }),
+        Field {
             label: "Mounted on",
             value: format!("{piece}, {} face", hardware.mount_face.word()),
+            links: vec![part_link(design, hardware.piece, None)],
         },
     ];
     let moves_with = moving(design, hardware.assembly);
-    rows.extend(moves_row(design, moves_with));
+    rows.extend(moves_row(design, moves_with).map(Field::from));
     let connections = vec![Connection {
         swatch: hardware_swatch(),
         lead: "See how it works".to_owned(),
         rest: String::new(),
+        partners: Vec::new(),
+        note: String::new(),
+        section: ConnectionSection::HowItWorks,
         target: Some(Target::Hardware(id)),
     }];
     let source = source_of(checked, |m| hardware_decl(m, id), hardware.assembly);
@@ -1090,6 +1355,8 @@ fn inspect_hardware(
         eyebrow: eyebrow(design, "HARDWARE", hardware.assembly),
         title: relative(design, &hardware.name, hardware.assembly).to_owned(),
         description,
+        swatch: Some(hardware_swatch()),
+        checks: failing_checks(checked, Item::Hardware(id)),
         rows,
         connections_title: "How it works",
         connections,
@@ -1120,16 +1387,21 @@ fn inspect_assembly(
             value: motion_words(motion),
         });
     }
+    let mut rows: Vec<Field> = rows.into_iter().map(Field::from).collect();
     if let Some(source) = assembly
         .mirror_of
         .and_then(|s| design.assemblies.get(s.index()))
     {
-        rows.push(Row {
+        rows.push(Field {
             label: "Mirror of",
             value: source.name.clone(),
+            links: vec![NameLink {
+                name: source.name.clone(),
+                target: LinkTarget::Select(Selection::Assembly(source.id)),
+            }],
         });
     }
-    rows.push(Row {
+    rows.push(Field::from(Row {
         label: "Inside",
         value: format!(
             "{} {}, {} of hardware",
@@ -1141,7 +1413,7 @@ fn inspect_assembly(
             },
             assembly.hardware.len()
         ),
-    });
+    }));
     let moves_with = moving(design, Some(id));
     let source = source_of(
         checked,
@@ -1155,6 +1427,8 @@ fn inspect_assembly(
         eyebrow: eyebrow(design, "ASSEMBLY", assembly.parent),
         title: relative(design, &assembly.name, assembly.parent).to_owned(),
         description,
+        swatch: None,
+        checks: Vec::new(),
         rows,
         connections_title: "Joints and cuts",
         connections: Vec::new(),
@@ -1226,16 +1500,18 @@ fn inspect_member(
         label: "Each",
         value: crate::view::copy_text(body),
     });
+    let mut rows: Vec<Field> = rows.into_iter().map(Field::from).collect();
     let carrier = body.carried_by().and_then(|part| design.part(part));
     if let Some(part) = carrier {
-        rows.push(Row {
+        rows.push(Field {
             label: "Goes in with",
             value: part.name.clone(),
+            links: vec![part_link(design, part.id, None)],
         });
     }
     let assembly = carrier.and_then(|part| part.assembly);
     let moves_with = moving(design, assembly);
-    rows.extend(moves_row(design, moves_with));
+    rows.extend(moves_row(design, moves_with).map(Field::from));
     let source = source_of(checked, |m| joint_or_splice_decl(m, joint), joint.assembly);
     Some(Inspection {
         eyebrow: eyebrow(design, "JOINT MEMBER", assembly),
@@ -1245,12 +1521,17 @@ fn inspect_member(
             body.name
         ),
         description,
+        swatch: Some(member_swatch(body)),
+        checks: failing_checks(checked, Item::Member(member)),
         rows,
         connections_title: "How it goes together",
         connections: vec![Connection {
             swatch: member_swatch(body),
             lead: "See how it goes together".to_owned(),
             rest: String::new(),
+            partners: Vec::new(),
+            note: String::new(),
+            section: ConnectionSection::HowItWorks,
             target: Some(target),
         }],
         moves_with,
@@ -1289,12 +1570,17 @@ fn inspect_joint(
         eyebrow: eyebrow(design, "JOINT", joint.assembly),
         title: relative(design, &joint.name, joint.assembly).to_owned(),
         description,
-        rows,
+        swatch: None,
+        checks: Vec::new(),
+        rows: rows.into_iter().map(Field::from).collect(),
         connections_title: "How it goes together",
         connections: vec![Connection {
             swatch: hardware_swatch(),
             lead: "See how it goes together".to_owned(),
             rest: String::new(),
+            partners: Vec::new(),
+            note: String::new(),
+            section: ConnectionSection::HowItWorks,
             target: Some(target),
         }],
         moves_with: None,

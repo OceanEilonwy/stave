@@ -6,12 +6,22 @@
 //! buttons. A removal that something still uses asks first, in a dialog
 //! that names each thing that would go with it.
 //!
+//! It is drawn as the Inspector is (`super::super::sections`): a header
+//! row with the item's name, then collapsible sections (the change, the
+//! size a grip moves, the verdict, the lines Apply would write) and a
+//! footer whose commit button always reads Apply; for a removal it keeps
+//! a destructive look, and the change's own line says what goes.
+//!
 //! ```text
-//! ┌ CHANGE · REMOVE ───────────────────────┐
-//! │ Remove back                            │
-//! │  Also removes: drawer_bay, drawer      │
-//! │ ✓ It fits                              │
-//! │                     [Cancel] [Remove]  │
+//! ┌────────────────────────────────────────┐
+//! │ [back                 ]         remove │
+//! │ ▾ Change                               │
+//! │   Remove back                          │
+//! │   Also removes: drawer_bay, drawer     │
+//! │ ▾ Verdict                              │
+//! │   ✓ It fits                            │
+//! │ ▾ Pending                  @ line 88   │
+//! │        [Cancel  Esc] [Apply  Enter]    │
 //! └────────────────────────────────────────┘
 //! ```
 
@@ -27,6 +37,7 @@ use stave_app::remove::Dependants;
 
 use super::super::Window;
 use super::super::edit_card::diagnostic_head;
+use super::super::sections;
 use super::card_verdict;
 
 type ActionCallback = Rc<dyn Fn(ChangeAction)>;
@@ -34,7 +45,7 @@ type ActionCallback = Rc<dyn Fn(ChangeAction)>;
 /// What the user did on a change's card.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::ui) enum ChangeAction {
-    /// Pressed the card's commit button (Add, Remove, Rename).
+    /// Pressed the card's commit button (Apply).
     Add,
     /// Pressed Cancel (or Escape).
     Cancel,
@@ -61,6 +72,15 @@ impl ChangeAction {
     }
 }
 
+/// How the commit button (always "Apply") looks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::ui) enum Commit {
+    /// It writes something in: the suggested look.
+    Write,
+    /// It takes something out: the destructive look.
+    Remove,
+}
+
 /// What a change's card says, worked out from the change alone (so it is
 /// tested without a window).
 #[derive(Debug, Clone, PartialEq)]
@@ -69,6 +89,8 @@ pub(in crate::ui) struct ChangeWords {
     pub(in crate::ui) eyebrow: String,
     /// The change's summary: "Make 3 of drawer".
     pub(in crate::ui) title: String,
+    /// The item it changes, for the header: "back".
+    pub(in crate::ui) item: Option<String>,
     /// What it found, a line each.
     pub(in crate::ui) lines: Vec<String>,
     /// The things a removal would take with it, by name, nearest first.
@@ -79,8 +101,8 @@ pub(in crate::ui) struct ChangeWords {
     pub(in crate::ui) verdict: Option<Verdict>,
     /// What is still to choose, in words, while the verdict is `None`.
     pub(in crate::ui) needs: Option<String>,
-    /// The commit button's label.
-    pub(in crate::ui) add_label: &'static str,
+    /// The commit button's look (it always reads "Apply").
+    pub(in crate::ui) commit: Commit,
     /// Whether the commit button can be pressed.
     pub(in crate::ui) can_add: bool,
     /// For a mirror: the switch that started it, shown on (turning it off
@@ -124,7 +146,7 @@ pub(in crate::ui) fn change_words(change: &Change, checking: bool) -> ChangeWord
     let mut lines = Vec::new();
     let mut dependants = Vec::new();
     let mut waiting_on_dependants = false;
-    let mut add_label = "Add";
+    let mut commit = Commit::Write;
     match change.detail() {
         ChangeDetail::Repeat => {
             if let ChangeRequest::MoveShares {
@@ -161,7 +183,6 @@ pub(in crate::ui) fn change_words(change: &Change, checking: bool) -> ChangeWord
             ));
         }
         ChangeDetail::Hold { name, condition } => {
-            add_label = "Hold";
             lines.push(format!("Writes the rule {}:", name.as_str()));
             lines.push(condition.clone());
             if let ChangeRequest::Hold(request) = request {
@@ -172,7 +193,7 @@ pub(in crate::ui) fn change_words(change: &Change, checking: bool) -> ChangeWord
             removal,
             dependants: taken,
         } => {
-            add_label = "Remove";
+            commit = Commit::Remove;
             dependants = removal
                 .dependants
                 .iter()
@@ -194,7 +215,6 @@ pub(in crate::ui) fn change_words(change: &Change, checking: bool) -> ChangeWord
             }
         }
         ChangeDetail::Rename { from, to } => {
-            add_label = "Rename";
             lines.push(format!(
                 "{from} becomes {} everywhere it is used",
                 to.as_str()
@@ -208,15 +228,9 @@ pub(in crate::ui) fn change_words(change: &Change, checking: bool) -> ChangeWord
                 lines.push(format!("Rewrites {}", files.join(", ")));
             }
         }
-        ChangeDetail::Grip(detail) => {
-            add_label = "Set";
-            for change in &detail.changes {
-                lines.push(format!("{} changes", change.path));
-            }
-            if let Some(stopped) = &detail.stopped {
-                lines.push(stopped.clone());
-            }
-        }
+        // The size it moves, what else changes and where it stops are the
+        // grip's own section (`grip_panel.rs`).
+        ChangeDetail::Grip(_) => {}
     }
     let progress = change.progress();
     let verdict = card_verdict(progress, checking);
@@ -243,12 +257,13 @@ pub(in crate::ui) fn change_words(change: &Change, checking: bool) -> ChangeWord
     ChangeWords {
         eyebrow: format!("CHANGE · {}", kind_word(request).to_uppercase()),
         title: change.summary().to_owned(),
+        item: change_item(request),
         lines,
         dependants,
         waiting_on_dependants,
         verdict,
         needs,
-        add_label,
+        commit,
         can_add,
         switch: matches!(request, ChangeRequest::Mirror { .. }).then_some("And the other side"),
     }
@@ -260,6 +275,10 @@ pub(in crate::ui) struct ChangeCard {
     pub(in crate::ui) root: gtk::Box,
     body: gtk::Box,
     add: gtk::Button,
+    /// Where the grips put the size a drag moves (`grip_panel.rs`).
+    pub(in crate::ui) grip_slot: gtk::Box,
+    /// Where the window puts the "Pending" section.
+    pub(in crate::ui) pending_slot: gtk::Box,
     on_action: Rc<RefCell<Option<ActionCallback>>>,
     /// Each fix's button, with its problem and fix index (for tests).
     fixes: RefCell<Vec<((usize, usize), gtk::Button)>>,
@@ -271,7 +290,7 @@ impl ChangeCard {
         let on_action: Rc<RefCell<Option<ActionCallback>>> = Rc::new(RefCell::new(None));
         let body = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
-            .spacing(10)
+            .spacing(0)
             .css_classes(["stave-edit-body"])
             .build();
         let scrolled = gtk::ScrolledWindow::builder()
@@ -279,21 +298,8 @@ impl ChangeCard {
             .vexpand(true)
             .child(&body)
             .build();
-        let cancel = gtk::Button::builder()
-            .label("Cancel")
-            .tooltip_text("Leave the design as it is (Escape)")
-            .build();
-        let add = gtk::Button::builder()
-            .label("Add")
-            .css_classes(["suggested-action"])
-            .build();
-        let buttons = gtk::Box::builder()
-            .spacing(8)
-            .halign(gtk::Align::End)
-            .css_classes(["stave-edit-buttons"])
-            .build();
-        buttons.append(&cancel);
-        buttons.append(&add);
+        let (buttons, cancel, add) = sections::footer_buttons();
+        buttons.add_css_class("stave-edit-buttons");
         let foot = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
             .css_classes(["stave-edit-foot"])
@@ -358,6 +364,12 @@ impl ChangeCard {
             root,
             body,
             add,
+            grip_slot: gtk::Box::builder()
+                .orientation(gtk::Orientation::Vertical)
+                .build(),
+            pending_slot: gtk::Box::builder()
+                .orientation(gtk::Orientation::Vertical)
+                .build(),
             on_action,
             fixes: RefCell::new(Vec::new()),
         }
@@ -375,20 +387,26 @@ impl ChangeCard {
         }
         self.root
             .update_property(&[gtk::accessible::Property::Label(&words.title)]);
-        let head = gtk::Box::new(gtk::Orientation::Vertical, 2);
-        head.append(&text(&words.eyebrow, &["stave-edit-caption"]));
-        head.append(&text(&words.title, &["stave-edit-title"]));
-        self.body.append(&head);
-        if !words.lines.is_empty() {
-            let lines = gtk::Box::builder()
-                .orientation(gtk::Orientation::Vertical)
-                .spacing(4)
-                .css_classes(["stave-change-lines"])
-                .build();
-            for line in &words.lines {
-                lines.append(&text(line, &["stave-change-line"]));
-            }
-            self.body.append(&lines);
+        let kind = words
+            .eyebrow
+            .strip_prefix("CHANGE · ")
+            .unwrap_or(&words.eyebrow)
+            .to_lowercase();
+        let note = text(&kind, &["stave-edit-origin"]);
+        note.set_wrap(false);
+        self.body.append(&sections::header(
+            None,
+            &sections::name_field(words.item.as_deref().unwrap_or(&words.title)),
+            Some(note.upcast_ref()),
+        ));
+        let (section, change_body) = sections::section("Change", "", true);
+        // The summary, unless the header already says it (a change of no
+        // one item, such as a size a grip moves).
+        if words.item.is_some() {
+            change_body.append(&text(&words.title, &["stave-change-title"]));
+        }
+        for line in &words.lines {
+            change_body.append(&text(line, &["stave-change-line"]));
         }
         if let Some(switch_words) = words.switch {
             let row = gtk::Box::builder()
@@ -419,7 +437,7 @@ impl ChangeCard {
                 }
             });
             row.append(&switch);
-            self.body.append(&row);
+            change_body.append(&row);
         }
         if words.waiting_on_dependants {
             let list = gtk::Box::builder()
@@ -430,7 +448,7 @@ impl ChangeCard {
             for name in &words.dependants {
                 list.append(&text(&format!("• {name}"), &["stave-change-dependant"]));
             }
-            self.body.append(&list);
+            change_body.append(&list);
             let include = gtk::Button::builder()
                 .label(format!("Remove these {} too…", words.dependants.len()))
                 .css_classes(["pill", "destructive-action"])
@@ -443,19 +461,28 @@ impl ChangeCard {
                     callback(ChangeAction::IncludeDependants);
                 }
             });
-            self.body.append(&include);
+            change_body.append(&include);
         }
+        if change_body.first_child().is_some() {
+            self.body.append(&section);
+        }
+        self.body.append(&self.grip_slot);
         let mut fixes = Vec::new();
-        self.body.append(&self.verdict_section(words, &mut fixes));
+        let (section, verdict_body) = sections::section("Verdict", "", true);
+        verdict_body.append(&self.verdict_section(words, &mut fixes));
+        self.body.append(&section);
+        self.body.append(&self.pending_slot);
         self.fixes.replace(fixes);
-        self.add.set_label(words.add_label);
         self.add.set_sensitive(words.can_add);
-        if words.add_label == "Remove" {
-            self.add.remove_css_class("suggested-action");
-            self.add.add_css_class("destructive-action");
-        } else {
-            self.add.remove_css_class("destructive-action");
-            self.add.add_css_class("suggested-action");
+        match words.commit {
+            Commit::Remove => {
+                self.add.remove_css_class("suggested-action");
+                self.add.add_css_class("destructive-action");
+            }
+            Commit::Write => {
+                self.add.remove_css_class("destructive-action");
+                self.add.add_css_class("suggested-action");
+            }
         }
         self.add.set_tooltip_text(Some(if words.can_add {
             "Write it into the design (Enter)"
@@ -652,7 +679,7 @@ impl DependantsDialog {
         content.append(&before);
         content.append(&names);
         content.append(&text(
-            "Nothing is removed until you press Remove on the card, after seeing it in red.",
+            "Nothing is removed until you press Apply in the Edit panel, after seeing it in red.",
             &["dim-label"],
         ));
         content.append(&buttons);
@@ -874,25 +901,17 @@ const STYLE: &str = r#"
   border: 2px solid @accent_bg_color; }
 .stave-item-tools > .stave-section { margin-top: 4px; }
 .stave-card > .stave-card-row.stave-item-buttons { padding-top: 2px; padding-bottom: 2px; }
-.stave-change-line { font-size: 13px; }
+.stave-change-line { font-size: 12px; color: alpha(currentColor, 0.8); }
+.stave-change-title { font-size: 12px; font-weight: 700; }
 .stave-change-dependants { padding: 8px 12px; }
 .stave-change-dependant { font-family: monospace; font-size: 13px; }
 .stave-dependants-backdrop { background: alpha(black, 0.32); }
 .stave-dependants-dialog { padding: 24px; }
 .stave-hold-from-space { margin: 0 12px 10px 12px; }
 .stave-repeat-on-card { padding: 4px 16px 0 16px; }
-.stave-pending { padding: 8px 12px; margin: 6px 10px 2px 10px; border-radius: 8px;
-  background: alpha(@accent_bg_color, 0.08); border: 1px dashed alpha(@accent_bg_color, 0.6); }
-.stave-pending-head { font-size: 11px; font-weight: 700; letter-spacing: 0.04em; color: @accent_color; }
-.stave-pending-lines { font-family: monospace; font-size: 12.5px; }
-.stave-pending-mark { font-weight: 700; min-width: 1em; }
-.stave-pending-added { color: @success_color; }
-.stave-pending-removed { color: @error_color; }
-.stave-pending-removed .stave-pending-text { text-decoration-line: line-through; }
-.stave-pending-old-value { color: @error_color; text-decoration-line: line-through; }
-.stave-pending-new-value { color: @success_color; font-weight: 700; }
-.stave-pending-more { opacity: 0.7; }
-.stave-pending-place { opacity: 0.6; font-size: 11px; margin-top: 2px; }
+.stave-pending-mark { font-weight: 700; }
+.stave-pending-old-value { font-weight: 700; text-decoration-line: line-through; }
+.stave-pending-new-value { font-weight: 700; }
 "#;
 
 /// Puts the changes' stylesheet on the display, once.

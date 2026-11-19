@@ -1,7 +1,8 @@
 # The divider's height dragged from 500mm to 700mm and still held: the
-# ghost of the result (the divider and the drawers below it taller), the
-# verdict beside it, the range the height may move in with its stops as
-# hard ends, and the panel saying what it is moved to.
+# ghost of the result (the divider and the drawers below it taller, its
+# tint the verdict), the range the height may move in with its stops as
+# hard ends, the readout at the top of the view, and the Edit panel's
+# size section saying what it is moved to.
 grips assembly divider
 stops
 drag 1 700mm

@@ -421,6 +421,15 @@ impl FilesPage {
         self.state.borrow().buffers.dirty().next().is_some()
     }
 
+    /// `true` if the file at `path` has changes that aren't saved.
+    pub fn is_unsaved(&self, path: &std::path::Path) -> bool {
+        self.state
+            .borrow()
+            .buffers
+            .dirty()
+            .any(|document| matches!(document, Document::File(file) if file == path))
+    }
+
     /// How many documents have unsaved changes.
     pub fn unsaved_count(&self) -> usize {
         self.state.borrow().buffers.dirty().count()
