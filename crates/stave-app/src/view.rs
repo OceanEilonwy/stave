@@ -58,7 +58,10 @@ pub struct Description {
 /// A length in millimetres without the unit: `1149.5`.
 fn millimetres(length: Length) -> String {
     let text = length.to_string();
-    text.strip_suffix("mm").map_or(text.clone(), str::to_owned)
+    match text.strip_suffix("mm") {
+        Some(number) => number.to_owned(),
+        None => text,
+    }
 }
 
 fn size_text(length: Length, width: Length, thickness: Length) -> String {
@@ -201,9 +204,7 @@ pub fn describe(design: &SolvedDesign, item: Item) -> Option<Description> {
                 HardwareBase::Hinge => "Hinge",
                 HardwareBase::Pull => "Pull",
             };
-            let piece = design
-                .part(hardware.piece)
-                .map_or_else(|| "?".to_owned(), |p| p.name.clone());
+            let piece = design.part(hardware.piece).map_or("?", |p| p.name.as_str());
             let members = hardware.members.iter().map(|member| Row {
                 label: "Member",
                 value: member_text(design, hardware, member),
@@ -374,9 +375,7 @@ fn member_text(design: &SolvedDesign, hardware: &Hardware, member: &Body) -> Str
     let held = match member.carrier {
         BodyCarrier::Part(part) if part == hardware.piece => String::new(),
         BodyCarrier::Part(part) => {
-            let name = design
-                .part(part)
-                .map_or_else(|| "?".to_owned(), |p| p.name.clone());
+            let name = design.part(part).map_or("?", |p| p.name.as_str());
             if sunk {
                 format!(", housed in {name}")
             } else {
@@ -387,7 +386,7 @@ fn member_text(design: &SolvedDesign, hardware: &Hardware, member: &Body) -> Str
             let name = design
                 .regions
                 .get(region.index())
-                .map_or_else(|| "?".to_owned(), |r| r.name.clone());
+                .map_or("?", |r| r.name.as_str());
             format!(", fixed in {name}")
         }
         BodyCarrier::Link(_) => ", moved by the mechanism".to_owned(),

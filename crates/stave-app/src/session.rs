@@ -1051,9 +1051,10 @@ impl Session {
             Command::Select(selection) => {
                 if selection != self.place.selection || self.place.focus.is_some() {
                     let place = Place {
+                        view: self.place.view,
                         selection,
                         focus: None,
-                        ..self.place.clone()
+                        editor: self.place.editor,
                     };
                     self.go(place, &mut events);
                 }
@@ -1111,13 +1112,11 @@ impl Session {
             }
             Command::Link(selection) => {
                 if selection != self.place.selection {
-                    let before = self.place.clone();
+                    let had_focus = self.place.focus.is_some();
                     self.place.selection = selection;
                     self.place.focus = None;
-                    if before.selection != self.place.selection {
-                        events.push(Event::SelectionChanged);
-                    }
-                    if before.focus.is_some() {
+                    events.push(Event::SelectionChanged);
+                    if had_focus {
                         events.push(Event::FocusChanged);
                     }
                 }
@@ -1525,16 +1524,16 @@ impl Session {
                 .map_or(&[], |c| c.problems.as_slice()),
             new_problems: &checked.problems,
         };
-        let before = self.place.clone();
-        self.place = carry.place(&self.place);
-        for place in self.back.iter_mut().chain(self.forward.iter_mut()) {
-            *place = carry.place(place);
-        }
-        if self.place.selection != before.selection {
+        let place = carry.place(&self.place);
+        if place.selection != self.place.selection {
             events.push(Event::SelectionChanged);
         }
-        if self.place.focus != before.focus {
+        if place.focus != self.place.focus {
             events.push(Event::FocusChanged);
+        }
+        self.place = place;
+        for place in self.back.iter_mut().chain(self.forward.iter_mut()) {
+            *place = carry.place(place);
         }
         // A scene that is gone falls back to the first.
         let scene_exists = self.scene.as_deref().is_none_or(|name| {
@@ -1564,10 +1563,9 @@ impl Session {
     /// Moves to a new place, remembering the current one for Back.
     fn go(&mut self, place: Place, events: &mut Vec<Event>) {
         let current = std::mem::replace(&mut self.place, place);
-        let changed_from = current.clone();
+        self.place_events(&current, events);
         push_limited(&mut self.back, current);
         self.forward.clear();
-        self.place_events(&changed_from, events);
     }
 
     fn changed_place_events(&self, events: &mut Vec<Event>) {
@@ -1648,7 +1646,9 @@ impl Carry<'_> {
     fn selection(&self, selection: &Selection) -> Option<Selection> {
         if let Selection::Problem(ProblemIndex(index)) = selection {
             let old = self.old_problems.get(*index)?;
-            let key = |p: &Problem| (p.code.clone(), p.message.clone(), p.location.clone());
+            fn key(p: &Problem) -> (&str, &str, Option<&str>) {
+                (&p.code, &p.message, p.location.as_deref())
+            }
             let wanted = key(old);
             return self
                 .new_problems

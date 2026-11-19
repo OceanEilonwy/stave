@@ -407,7 +407,7 @@ fn about_and_involved(
                 .partition(|item| inside(design, **item, motion.assembly)),
             None => first_only(&items),
         },
-        Category::Overlap => (items.clone(), Vec::new()),
+        Category::Overlap => (items, Vec::new()),
         Category::NoContact
         | Category::Adjust
         | Category::Mechanism
