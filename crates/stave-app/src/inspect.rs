@@ -392,6 +392,23 @@ fn group_label(labels: &[String]) -> String {
     }
 }
 
+/// The parts and pieces of hardware a selection stands for in the 3D
+/// view: the selected item, or everything inside a selected assembly (at
+/// any depth), parts first, in design order. Nothing for a selection that
+/// is not an item (a joint, a place in the text, a problem).
+pub fn items_in(design: &SolvedDesign, selection: &Selection) -> Vec<Item> {
+    match selection {
+        Selection::Assembly(id) => design
+            .parts
+            .iter()
+            .map(|part| Item::Part(part.id))
+            .chain(design.hardware.iter().map(|piece| Item::Hardware(piece.id)))
+            .filter(|item| crate::problems::inside(design, *item, *id))
+            .collect(),
+        other => other.item().into_iter().collect(),
+    }
+}
+
 /// The parts tree of a design.
 pub fn parts_tree(design: &SolvedDesign) -> PartsTree {
     let singles_in = |assembly: Option<AssemblyId>| -> Vec<Single> {

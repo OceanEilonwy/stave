@@ -34,6 +34,7 @@ pub mod empty;
 pub mod export_view;
 pub mod finder;
 pub mod focus;
+pub mod format;
 pub mod grip_values;
 pub mod gripping;
 pub mod grips;

@@ -65,7 +65,7 @@ use stave_app::finder::{self as finding, Goal};
 use stave_app::focus::{self, Focus, Target};
 use stave_app::inspect;
 use stave_app::link;
-use stave_app::problems::{Mark, Marks};
+use stave_app::problems::{self, Mark, Marks};
 use stave_app::session::{
     Build, Command, Editor, Event, Explode, LineNumber, ProblemIndex, Selection, Session,
     SourceLocation, View,
@@ -111,9 +111,6 @@ const FRONT_PITCH: f32 = 0.12;
 /// How long hardware focus's small views wait for their size to settle
 /// before rendering again at it.
 const PICTURES_DELAY: Duration = Duration::from_millis(150);
-
-/// The most problems pinned on the model at once.
-const PIN_LIMIT: usize = 12;
 
 /// How much room a chosen part is framed with: the camera stands this many
 /// times farther back than the tightest fit, so what is round it shows.
@@ -890,21 +887,9 @@ impl Window {
             self.dispatch(Command::ShowEditor(Editor::Open));
         }
         if let Some(file) = &wanted.file {
-            let folder = self.session.borrow().folder().to_path_buf();
-            let (path, line) = match file.rsplit_once(':') {
-                Some((path, line)) => match line.parse::<u32>() {
-                    Ok(line) => (path, line),
-                    Err(_) => (file.as_str(), 1),
-                },
-                None => (file.as_str(), 1),
-            };
-            let path = if path.starts_with("std/") {
-                path.to_owned()
-            } else {
-                folder.join(path).display().to_string()
-            };
-            if let Some(line) = LineNumber::new(line) {
-                self.dispatch(Command::GoToSource(SourceLocation { path, line }));
+            let location = SourceLocation::parse(self.session.borrow().folder(), file);
+            if let Some(location) = location {
+                self.dispatch(Command::GoToSource(location));
             }
         }
         if wanted.wish != Wish::default() {
@@ -1612,38 +1597,9 @@ impl Window {
         let Some((design, graph)) = session.drawable() else {
             return Vec::new();
         };
-        let items: Vec<stave_scene::Item> = match session.selection() {
-            Some(Selection::Assembly(id)) => {
-                let inside = |mut assembly: Option<AssemblyId>| {
-                    for _ in 0..=design.assemblies.len() {
-                        match assembly {
-                            Some(found) if found == *id => return true,
-                            Some(found) => {
-                                assembly =
-                                    design.assemblies.get(found.index()).and_then(|a| a.parent);
-                            }
-                            None => return false,
-                        }
-                    }
-                    false
-                };
-                design
-                    .parts
-                    .iter()
-                    .filter(|p| inside(p.assembly))
-                    .map(|p| stave_scene::Item::Part(p.id))
-                    .chain(
-                        design
-                            .hardware
-                            .iter()
-                            .filter(|h| inside(h.assembly))
-                            .map(|h| stave_scene::Item::Hardware(h.id)),
-                    )
-                    .collect()
-            }
-            Some(selection) => selection.item().into_iter().collect(),
-            None => Vec::new(),
-        };
+        let items = session
+            .selection()
+            .map_or_else(Vec::new, |selection| inspect::items_in(design, selection));
         items
             .into_iter()
             .flat_map(|item| graph.nodes_of(item).into_iter().take(1))
@@ -2045,18 +2001,9 @@ impl Window {
 
     /// Saves the view as posed as a glTF file, asking where.
     fn export_view(self: &Rc<Self>) {
-        let name = {
-            let session = self.session.borrow();
-            let title = session
-                .drawable()
-                .map_or_else(|| "design".to_owned(), |(d, _)| d.project.title.clone());
-            let slug: String = title
-                .to_lowercase()
-                .chars()
-                .map(|c| if c.is_alphanumeric() { c } else { '_' })
-                .collect();
-            format!("{slug}_view.glb")
-        };
+        let name = stave_app::export_view::default_file_name(
+            self.session.borrow().drawable().map(|(design, _)| design),
+        );
         let dialog = gtk::FileDialog::builder()
             .title("Export View as glTF")
             .initial_name(name)
@@ -2563,22 +2510,18 @@ impl Window {
             let Some((_, graph)) = session.drawable() else {
                 return;
             };
-            session
-                .problems()
-                .iter()
-                .enumerate()
-                .filter(|(index, _)| key.posed_problem.is_none_or(|p| p.0 == *index))
-                .filter_map(|(index, problem)| {
-                    let contact = problem.contact.as_ref()?;
-                    let mark = Mark::of(problem.severity)?;
-                    let highlight = view::highlight(graph, contact);
+            let problems = session.problems();
+            problems::pins(problems, key.posed_problem, problems::PIN_LIMIT)
+                .into_iter()
+                .filter_map(|pinned| {
+                    let problem = problems.get(pinned.index.0)?;
+                    let highlight = view::highlight(graph, problem.contact.as_ref()?);
                     let anchor = match highlight.volumes.first() {
                         Some(volume) => PinAnchor::Volume(volume.centre()),
                         None => PinAnchor::Nodes(highlight.nodes),
                     };
-                    Some((ProblemIndex(index), mark, problem.message.clone(), anchor))
+                    Some((pinned.index, pinned.mark, problem.message.clone(), anchor))
                 })
-                .take(PIN_LIMIT)
                 .collect()
         };
         let pins: Vec<Pin> = found
@@ -2660,17 +2603,7 @@ impl Window {
             self.widgets.edge_pin.set_visible(false);
             return;
         };
-        let more = off_count.saturating_sub(1);
-        let words = match pin.mark {
-            Mark::Warning => "warning",
-            Mark::Error | Mark::Involved => "error",
-        };
-        let message = &pin.message;
-        let text = if more == 0 {
-            format!("Off screen: {words} · {message}")
-        } else {
-            format!("Off screen: {words} · {message} · {more} more")
-        };
+        let text = problems::off_screen_text(pin.mark, &pin.message, off_count.saturating_sub(1));
         self.widgets.edge_label.set_label(&text);
         self.widgets.edge_pin.set_visible(true);
         self.widgets

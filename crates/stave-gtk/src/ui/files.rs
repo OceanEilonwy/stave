@@ -21,6 +21,7 @@ use std::time::Duration;
 use adw::prelude::*;
 use gtk::{gio, glib};
 use stave_app::check::Checked;
+use stave_app::format::Formatted;
 use stave_app::session::{LineNumber, SourceLocation};
 use stave_ide::{
     Analysis, Buffers, Document, FilePosition, Location, Overlay, SymbolId, TokenClass,
@@ -576,12 +577,8 @@ impl FilesPage {
             return;
         }
         let text = buffer.text(&buffer.start_iter(), &buffer.end_iter(), true);
-        let mut sources = stave_lang::SourceMap::new();
-        let Ok(file) = sources.add(document.source_path(), text.as_str()) else {
-            return;
-        };
-        match stave_lang::format_file(file, &text) {
-            Ok(formatted) if formatted != text.as_str() => {
+        match stave_app::format::format_text(&document.source_path(), &text) {
+            Ok(Formatted::Changed(formatted)) => {
                 let cursor = buffer.iter_at_mark(&buffer.get_insert());
                 let (line, column) = (cursor.line(), cursor.line_offset());
                 buffer.begin_user_action();
@@ -596,7 +593,7 @@ impl FilesPage {
                     buffer.place_cursor(&iter);
                 }
             }
-            Ok(_) => self.notice("The file is already laid out".to_owned()),
+            Ok(Formatted::Unchanged) => self.notice("The file is already laid out".to_owned()),
             Err(error) => self.notice(error.to_string()),
         }
     }

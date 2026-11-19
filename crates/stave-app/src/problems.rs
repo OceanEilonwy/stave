@@ -361,7 +361,7 @@ fn item_of(contact_item: ContactItem) -> Item {
 }
 
 /// Whether an item is inside an assembly (at any depth).
-fn inside(design: &SolvedDesign, item: Item, assembly: AssemblyId) -> bool {
+pub(crate) fn inside(design: &SolvedDesign, item: Item, assembly: AssemblyId) -> bool {
     let mut current = match item {
         Item::Part(id) => design.part(id).and_then(|p| p.assembly),
         Item::Hardware(id) => design.hardware.get(id.index()).and_then(|h| h.assembly),
@@ -1092,6 +1092,61 @@ fn motion_card(checked: &Checked, contact: &Contact) -> Option<MotionCard> {
         card.amount_text(card.full)
     );
     Some(card)
+}
+
+// ---------------------------------------------------------------------------
+// Pins: the problems marked where they happen in the 3D view
+// ---------------------------------------------------------------------------
+
+/// The most problems pinned in the 3D view at once.
+pub const PIN_LIMIT: usize = 12;
+
+/// A problem pinned where it happens in the 3D view.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Pinned {
+    /// Which problem.
+    pub index: ProblemIndex,
+    /// Its mark: an error's or a warning's.
+    pub mark: Mark,
+}
+
+/// The problems that get a pin in the 3D view, in `stave check` order:
+/// those the design knows the place of, errors and warnings (notes get
+/// none), the first `limit` of them. While a problem is posed only its own
+/// pin shows.
+pub fn pins(
+    problems: &[crate::view::Problem],
+    posed: Option<ProblemIndex>,
+    limit: usize,
+) -> Vec<Pinned> {
+    problems
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| posed.is_none_or(|posed| posed.0 == *index))
+        .filter(|(_, problem)| problem.contact.is_some())
+        .filter_map(|(index, problem)| {
+            Some(Pinned {
+                index: ProblemIndex(index),
+                mark: Mark::of(problem.severity)?,
+            })
+        })
+        .take(limit)
+        .collect()
+}
+
+/// The words on the chip at the view's edge that names the first pinned
+/// problem whose place is off screen, and how many more are:
+/// "Off screen: error · The door hits the side · 2 more".
+pub fn off_screen_text(mark: Mark, message: &str, more: usize) -> String {
+    let words = match mark {
+        Mark::Warning => "warning",
+        Mark::Error | Mark::Involved => "error",
+    };
+    if more == 0 {
+        format!("Off screen: {words} · {message}")
+    } else {
+        format!("Off screen: {words} · {message} · {more} more")
+    }
 }
 
 #[cfg(test)]

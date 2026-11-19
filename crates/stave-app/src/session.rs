@@ -133,6 +133,30 @@ impl SourceLocation {
         let shown = path.strip_prefix(folder).unwrap_or(path);
         format!("{}:{}", shown.display(), self.line)
     }
+
+    /// The place a `FILE[:LINE]` written on the command line names, the
+    /// inverse of [`SourceLocation::display`]: a path relative to `folder`
+    /// (or `std/...` for the standard library) with an optional line, the
+    /// first line when none is given or it is not a number. `None` for
+    /// line 0.
+    pub fn parse(folder: &Path, text: &str) -> Option<SourceLocation> {
+        let (path, line) = match text.rsplit_once(':') {
+            Some((path, line)) => match line.parse::<u32>() {
+                Ok(line) => (path, line),
+                Err(_) => (text, 1),
+            },
+            None => (text, 1),
+        };
+        let path = if path.starts_with("std/") {
+            path.to_owned()
+        } else {
+            folder.join(path).display().to_string()
+        };
+        Some(SourceLocation {
+            path,
+            line: LineNumber::new(line)?,
+        })
+    }
 }
 
 /// One of the current result's problems, by its place in `stave check`
@@ -1705,6 +1729,29 @@ impl Carry<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_file_and_line_from_the_command_line_names_a_place() {
+        let folder = Path::new("/work/bench");
+        let place = |text| SourceLocation::parse(folder, text);
+        let line = |number| LineNumber::new(number).expect("not 0");
+        assert_eq!(
+            place("doors.stave:9"),
+            Some(SourceLocation {
+                path: "/work/bench/doors.stave".to_owned(),
+                line: line(9),
+            })
+        );
+        assert_eq!(
+            place("std/hinges.stave"),
+            Some(SourceLocation {
+                path: "std/hinges.stave".to_owned(),
+                line: line(1),
+            })
+        );
+        assert_eq!(place("doors.stave:top").map(|p| p.line), Some(line(1)));
+        assert_eq!(place("doors.stave:0"), None);
+    }
 
     #[test]
     fn explode_amounts_stay_between_0_and_1() {
