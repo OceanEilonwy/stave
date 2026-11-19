@@ -8,6 +8,7 @@
 //! (Quit, About, the keyboard shortcuts, the style, recent projects) and
 //! what it remembers between runs (`remember`).
 
+use stave_app::i18n::{fill_in, tr, tr_noop};
 use std::path::{Path, PathBuf};
 
 use adw::prelude::*;
@@ -56,15 +57,32 @@ impl KeySection {
 
     fn title(self) -> &'static str {
         match self {
-            KeySection::General => "General",
-            KeySection::View => "3D View",
-            KeySection::Editor => "Editor",
+            KeySection::General => tr_noop("General"),
+            KeySection::View => tr_noop("3D View"),
+            KeySection::Editor => tr_noop("Editor"),
         }
     }
 }
 
-/// An action with keys: what `set_accels_for_action` binds, and what the
-/// shortcuts dialog lists.
+/// Where an action's keys are bound.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum KeyScope {
+    /// By the application (`set_accels_for_action`): anywhere in a
+    /// window, before the focused widget sees the key.
+    Application,
+    /// By the window, after the focused widget had its turn, and never
+    /// while the keyboard is in a text field: plain letters and Escape,
+    /// which typing needs.
+    Window,
+    /// By the text editor, while the keyboard is in the text.
+    Editor,
+    /// By the 3D view, while the keyboard is in it: the arrow keys and
+    /// plus and minus, which other widgets use for themselves.
+    View,
+}
+
+/// An action with keys: what binds them (`scope`), and what the shortcuts
+/// dialog lists.
 pub(super) struct Accelerator {
     /// The action, `win.check`.
     pub(super) action: &'static str,
@@ -74,6 +92,8 @@ pub(super) struct Accelerator {
     pub(super) title: &'static str,
     /// Where it lists it.
     pub(super) section: KeySection,
+    /// What binds the keys.
+    pub(super) scope: KeyScope,
 }
 
 /// Every action that has keys.
@@ -81,133 +101,221 @@ pub(super) const ACCELERATORS: &[Accelerator] = &[
     Accelerator {
         action: "win.new-project",
         keys: &["<Control>n"],
-        title: "New project",
+        title: tr_noop("New project"),
         section: KeySection::General,
+        scope: KeyScope::Application,
     },
     Accelerator {
         action: "win.open",
         keys: &["<Control>o"],
-        title: "Open a project folder",
+        title: tr_noop("Open a project folder"),
         section: KeySection::General,
+        scope: KeyScope::Application,
     },
     Accelerator {
         action: "win.check",
         keys: &["<Control>r"],
-        title: "Check the project again",
+        title: tr_noop("Check the project again"),
         section: KeySection::General,
+        scope: KeyScope::Application,
     },
     Accelerator {
         action: "win.find",
         keys: &["<Control>k"],
-        title: "Find a part, a problem or a name",
+        title: tr_noop("Find a part, a problem or a name"),
         section: KeySection::General,
+        scope: KeyScope::Application,
     },
     Accelerator {
         action: "win.next-problem",
         keys: &["F8"],
-        title: "Next problem",
+        title: tr_noop("Next problem"),
         section: KeySection::General,
+        scope: KeyScope::Application,
     },
     Accelerator {
         action: "win.previous-problem",
         keys: &["<Shift>F8"],
-        title: "Previous problem",
+        title: tr_noop("Previous problem"),
         section: KeySection::General,
+        scope: KeyScope::Application,
     },
     Accelerator {
         action: "win.back",
         keys: &["<Alt>Left"],
-        title: "Go back",
+        title: tr_noop("Go back"),
         section: KeySection::General,
+        scope: KeyScope::Application,
     },
     Accelerator {
         action: "win.forward",
         keys: &["<Alt>Right"],
-        title: "Go forward",
+        title: tr_noop("Go forward"),
         section: KeySection::General,
+        scope: KeyScope::Application,
     },
     Accelerator {
         action: "win.model",
         keys: &["F9"],
-        title: "Show the parts",
+        title: tr_noop("Show the parts"),
         section: KeySection::General,
+        scope: KeyScope::Application,
     },
     Accelerator {
         action: "app.shortcuts",
         keys: &["<Control>question"],
-        title: "Keyboard shortcuts",
+        title: tr_noop("Keyboard shortcuts"),
         section: KeySection::General,
+        scope: KeyScope::Application,
     },
     Accelerator {
         action: "window.close",
         keys: &["<Control>w"],
-        title: "Close the window",
+        title: tr_noop("Close the window"),
         section: KeySection::General,
+        scope: KeyScope::Application,
     },
     Accelerator {
         action: "app.quit",
         keys: &["<Control>q"],
-        title: "Quit",
+        title: tr_noop("Quit"),
         section: KeySection::General,
+        scope: KeyScope::Application,
     },
     Accelerator {
         action: "win.view-design",
         keys: &["<Control>1"],
-        title: "Show the design",
+        title: tr_noop("Show the design"),
         section: KeySection::View,
+        scope: KeyScope::Application,
+    },
+    Accelerator {
+        action: "win.frame",
+        keys: &["f"],
+        title: tr_noop("Frame the selection"),
+        section: KeySection::View,
+        scope: KeyScope::Window,
+    },
+    Accelerator {
+        action: "win.escape",
+        keys: &["Escape"],
+        title: tr_noop("Leave focus, or clear the selection"),
+        section: KeySection::View,
+        scope: KeyScope::Window,
+    },
+    Accelerator {
+        action: "view.turn-left",
+        keys: &["Left"],
+        title: tr_noop("Turn the view left"),
+        section: KeySection::View,
+        scope: KeyScope::View,
+    },
+    Accelerator {
+        action: "view.turn-right",
+        keys: &["Right"],
+        title: tr_noop("Turn the view right"),
+        section: KeySection::View,
+        scope: KeyScope::View,
+    },
+    Accelerator {
+        action: "view.look-higher",
+        keys: &["Up"],
+        title: tr_noop("Look from higher up"),
+        section: KeySection::View,
+        scope: KeyScope::View,
+    },
+    Accelerator {
+        action: "view.look-lower",
+        keys: &["Down"],
+        title: tr_noop("Look from lower down"),
+        section: KeySection::View,
+        scope: KeyScope::View,
+    },
+    Accelerator {
+        action: "view.zoom-in",
+        keys: &["plus", "equal", "KP_Add"],
+        title: tr_noop("Zoom in"),
+        section: KeySection::View,
+        scope: KeyScope::View,
+    },
+    Accelerator {
+        action: "view.zoom-out",
+        keys: &["minus", "KP_Subtract"],
+        title: tr_noop("Zoom out"),
+        section: KeySection::View,
+        scope: KeyScope::View,
     },
     Accelerator {
         action: "win.editor",
         keys: &["<Control>e"],
-        title: "Open the editor",
+        title: tr_noop("Open the editor"),
         section: KeySection::Editor,
+        scope: KeyScope::Application,
     },
     Accelerator {
         action: "win.save",
         keys: &["<Control>s"],
-        title: "Save the file",
+        title: tr_noop("Save the file"),
         section: KeySection::Editor,
+        scope: KeyScope::Application,
     },
     Accelerator {
         action: "win.format",
         keys: &["<Control><Shift>i"],
-        title: "Tidy the file's layout",
+        title: tr_noop("Tidy the file's layout"),
         section: KeySection::Editor,
+        scope: KeyScope::Application,
     },
     Accelerator {
         action: "win.search",
         keys: &["<Control>f"],
-        title: "Search in the file",
+        title: tr_noop("Search in the file"),
         section: KeySection::Editor,
+        scope: KeyScope::Application,
+    },
+    Accelerator {
+        action: "editor.follow",
+        keys: &["F12"],
+        title: tr_noop("Go to where a name is made"),
+        section: KeySection::Editor,
+        scope: KeyScope::Editor,
+    },
+    Accelerator {
+        action: "editor.peek",
+        keys: &["<Alt>F12"],
+        title: tr_noop("Peek at where a name is made"),
+        section: KeySection::Editor,
+        scope: KeyScope::Editor,
+    },
+    Accelerator {
+        action: "editor.uses",
+        keys: &["<Shift>F12"],
+        title: tr_noop("List where a name is used"),
+        section: KeySection::Editor,
+        scope: KeyScope::Editor,
+    },
+    Accelerator {
+        action: "editor.show-info",
+        keys: &["<Control>i"],
+        title: tr_noop("Show the card for the word at the cursor"),
+        section: KeySection::Editor,
+        scope: KeyScope::Editor,
     },
 ];
 
 /// Keys that a widget handles itself, not through an action: the
 /// shortcuts dialog lists them too.
 pub(super) const OTHER_KEYS: &[(KeySection, &str, &str)] = &[
-    (KeySection::View, "Frame the selection", "f"),
     (
         KeySection::View,
-        "Leave focus, or clear the selection",
-        "Escape",
+        tr_noop("Remove the selected piece"),
+        "Delete",
     ),
-    (KeySection::View, "Remove the selected piece", "Delete"),
-    (KeySection::Editor, "Go to where a name is made", "F12"),
+    (KeySection::Editor, tr_noop("Undo"), "<Control>z"),
+    (KeySection::Editor, tr_noop("Redo"), "<Control><Shift>z"),
     (
         KeySection::Editor,
-        "Peek at where a name is made",
-        "<Alt>F12",
-    ),
-    (
-        KeySection::Editor,
-        "List where a name is used",
-        "<Shift>F12",
-    ),
-    (KeySection::Editor, "Undo", "<Control>z"),
-    (KeySection::Editor, "Redo", "<Control><Shift>z"),
-    (
-        KeySection::Editor,
-        "Close the card, peek or search",
+        tr_noop("Close the card, peek or search"),
         "Escape",
     ),
 ];
@@ -414,7 +522,10 @@ impl Shell {
             input.emit(ShellInput::SetTheme(theme));
         });
         application.add_action(&style);
-        for accelerator in ACCELERATORS {
+        for accelerator in ACCELERATORS
+            .iter()
+            .filter(|accelerator| accelerator.scope == KeyScope::Application)
+        {
             application.set_accels_for_action(accelerator.action, accelerator.keys);
         }
         self.refresh_recent();
@@ -575,9 +686,13 @@ impl Shell {
         let dialog = adw::AboutDialog::builder()
             .application_name("Stave")
             .application_icon(APP_ID)
-            .developer_name("The Stave contributors")
+            .developer_name(tr("The Stave contributors"))
             .version(env!("CARGO_PKG_VERSION"))
-            .comments("Woodworking design for beginners: describe a project in words, see it in 3D, and let Stave check that it can be built.")
+            .comments(tr("Woodworking design for beginners: describe a project in words, see it in 3D, and let Stave check that it can be built."))
+            .translator_credits(tr(
+                // TRANSLATORS: your name, and others who translated, one per line.
+                "translator-credits",
+            ))
             .license_type(gtk::License::Agpl30)
             .website(WEBSITE)
             .issue_url(ISSUES)
@@ -589,9 +704,9 @@ impl Shell {
     fn shortcuts(&self) {
         let dialog = adw::ShortcutsDialog::new();
         for section in KeySection::ALL {
-            let group = adw::ShortcutsSection::new(Some(section.title()));
+            let group = adw::ShortcutsSection::new(Some(&tr(section.title())));
             for (title, keys) in keys_in(section) {
-                group.add(adw::ShortcutsItem::new(title, &keys));
+                group.add(adw::ShortcutsItem::new(&tr(title), &keys));
             }
             dialog.add(group);
         }
@@ -628,8 +743,9 @@ impl Shell {
         if let Err(error) = remembered.save() {
             eprintln!("warning: {error:#}");
             if !std::mem::replace(&mut self.reported, true) {
-                self.notice(&format!(
-                    "Stave couldn't save its settings for next time: {error:#}"
+                self.notice(&fill_in(
+                    &tr("Stave couldn't save its settings for next time: {error}"),
+                    &[("error", &format!("{error:#}"))],
                 ));
             }
         }
@@ -684,6 +800,48 @@ impl Shell {
     }
 }
 
+/// The shortcuts for the actions bound in a scope (other than the
+/// application's): added to the window, or to the text editor, by whoever
+/// owns that scope. A shortcut does nothing, and lets the key go on, while
+/// the keyboard is in a text field (for the window's) or while its action
+/// is disabled.
+pub(super) fn shortcut_controller(scope: KeyScope) -> gtk::ShortcutController {
+    let controller = gtk::ShortcutController::new();
+    for accelerator in ACCELERATORS
+        .iter()
+        .filter(|accelerator| accelerator.scope == scope)
+    {
+        for key in accelerator.keys {
+            let Some(trigger) = gtk::ShortcutTrigger::parse_string(key) else {
+                continue;
+            };
+            let action: gtk::ShortcutAction = match scope {
+                KeyScope::Window => window_action(accelerator.action).upcast(),
+                KeyScope::Application | KeyScope::Editor | KeyScope::View => {
+                    gtk::NamedAction::new(accelerator.action).upcast()
+                }
+            };
+            controller.add_shortcut(gtk::Shortcut::new(Some(trigger), Some(action)));
+        }
+    }
+    controller
+}
+
+/// A window shortcut's action: the named action, unless the keyboard is
+/// in a text field, which keeps its plain letters and Escape.
+fn window_action(name: &'static str) -> gtk::CallbackAction {
+    gtk::CallbackAction::new(move |widget, _| {
+        let typing = widget
+            .root()
+            .and_then(|root| gtk::prelude::RootExt::focus(&root))
+            .is_some_and(|focus| focus.is::<gtk::Text>() || focus.is::<gtk::TextView>());
+        if typing || widget.activate_action(name, None).is_err() {
+            return glib::Propagation::Proceed;
+        }
+        glib::Propagation::Stop
+    })
+}
+
 /// The keys the shortcuts dialog lists in a section, in order.
 pub(super) fn keys_in(section: KeySection) -> Vec<(&'static str, String)> {
     ACCELERATORS
@@ -702,9 +860,12 @@ pub(super) fn keys_in(section: KeySection) -> Vec<(&'static str, String)> {
 /// The folder a path opens: the folder itself, or a `.stave` file's
 /// folder.
 pub(super) fn project_folder(path: &Path) -> Result<PathBuf> {
-    let path = path
-        .canonicalize()
-        .with_context(|| format!("can't find the folder '{}'", path.display()))?;
+    let path = path.canonicalize().with_context(|| {
+        fill_in(
+            &tr("can't find the folder '{folder}'"),
+            &[("folder", &path.display())],
+        )
+    })?;
     if path.is_dir() {
         return Ok(path);
     }
@@ -715,10 +876,10 @@ pub(super) fn project_folder(path: &Path) -> Result<PathBuf> {
     {
         return Ok(folder.to_path_buf());
     }
-    bail!(
-        "'{}' is not a project folder: open the folder that holds its .stave files",
-        path.display()
-    )
+    bail!(fill_in(
+        &tr("'{folder}' is not a project folder: open the folder that holds its .stave files"),
+        &[("folder", &path.display())],
+    ))
 }
 
 /// The newest of these folders first, each once, those still there, no
@@ -774,17 +935,17 @@ pub(super) fn folder_drop(dropped: impl Fn(PathBuf) + 'static) -> gtk::DropTarge
 /// The menu's style section, shared by every window.
 pub(super) fn style_section() -> gio::Menu {
     let style = gio::Menu::new();
-    style.append(Some("Follow System Style"), Some("app.style::system"));
-    style.append(Some("Light"), Some("app.style::light"));
-    style.append(Some("Dark"), Some("app.style::dark"));
+    style.append(Some(&tr("Follow System Style")), Some("app.style::system"));
+    style.append(Some(&tr("Light")), Some("app.style::light"));
+    style.append(Some(&tr("Dark")), Some("app.style::dark"));
     style
 }
 
 /// The menu's last section: the keyboard shortcuts and About.
 pub(super) fn help_section() -> gio::Menu {
     let help = gio::Menu::new();
-    help.append(Some("Keyboard Shortcuts"), Some("app.shortcuts"));
-    help.append(Some("About Stave"), Some("app.about"));
+    help.append(Some(&tr("Keyboard Shortcuts")), Some("app.shortcuts"));
+    help.append(Some(&tr("About Stave")), Some("app.about"));
     help
 }
 
@@ -841,6 +1002,102 @@ mod tests {
                 );
             }
         });
+    }
+
+    #[test]
+    fn keys_a_widget_handled_itself_are_now_actions() {
+        // Frame, Escape in the 3D view and the editor's F12 family run
+        // actions, which the shortcuts dialog lists from the same table.
+        for (action, key) in [
+            ("win.frame", "f"),
+            ("win.escape", "Escape"),
+            ("editor.follow", "F12"),
+            ("editor.peek", "<Alt>F12"),
+            ("editor.uses", "<Shift>F12"),
+            ("editor.show-info", "<Control>i"),
+        ] {
+            assert!(
+                ACCELERATORS
+                    .iter()
+                    .any(|a| a.action == action && a.keys.contains(&key)),
+                "{action} has no {key}"
+            );
+            let listed_twice = OTHER_KEYS.iter().any(|(section, _, keys)| {
+                *keys == key && (*section == KeySection::View) == action.starts_with("win.")
+            });
+            assert!(!listed_twice, "{key} is listed twice");
+        }
+        // A plain letter can't be an application key: it would take the
+        // letter from every text field.
+        for accelerator in ACCELERATORS {
+            if accelerator.scope == KeyScope::Application {
+                assert!(
+                    accelerator
+                        .keys
+                        .iter()
+                        .all(|key| key.contains('<') || key.starts_with('F')),
+                    "{} would take typing",
+                    accelerator.action
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn shortcuts_run_their_actions_but_leave_typing_alone() {
+        crate::ui::gtk_test::on_gtk_thread(shortcuts_run_actions);
+    }
+
+    fn shortcuts_run_actions() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+        let ran: Rc<RefCell<Vec<String>>> = Rc::default();
+        let group = gio::SimpleActionGroup::new();
+        for name in ["follow", "peek", "uses", "show-info", "frame", "escape"] {
+            let action = gio::SimpleAction::new(name, None);
+            let ran = Rc::clone(&ran);
+            action.connect_activate(move |action, _| ran.borrow_mut().push(action.name().into()));
+            group.add_action(&action);
+        }
+        let text = gtk::TextView::new();
+        let button = gtk::Button::with_label("a button");
+        let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        content.append(&text);
+        content.append(&button);
+        let window = gtk::Window::builder().child(&content).build();
+        text.insert_action_group("editor", Some(&group));
+        window.insert_action_group("win", Some(&group));
+        window.present();
+        let activate = |controller: &gtk::ShortcutController, widget: &gtk::Widget, key: &str| {
+            let shortcut = (0..controller.n_items())
+                .filter_map(|index| controller.item(index).and_downcast::<gtk::Shortcut>())
+                .find(|shortcut| {
+                    shortcut.trigger().is_some_and(|t| {
+                        t.to_str() == gtk::ShortcutTrigger::parse_string(key).unwrap().to_str()
+                    })
+                })
+                .unwrap_or_else(|| panic!("no shortcut for {key}"));
+            shortcut
+                .action()
+                .unwrap()
+                .activate(gtk::ShortcutActionFlags::empty(), widget, None)
+        };
+        let editor = shortcut_controller(KeyScope::Editor);
+        for key in ["F12", "<Alt>F12", "<Shift>F12", "<Control>i"] {
+            assert!(activate(&editor, text.upcast_ref(), key));
+        }
+        assert_eq!(*ran.borrow(), ["follow", "peek", "uses", "show-info"]);
+        ran.borrow_mut().clear();
+        // The window's keys: not while typing, but from a button.
+        let shortcuts = shortcut_controller(KeyScope::Window);
+        text.grab_focus();
+        assert!(!activate(&shortcuts, window.upcast_ref(), "f"));
+        assert!(ran.borrow().is_empty());
+        button.grab_focus();
+        assert!(activate(&shortcuts, window.upcast_ref(), "f"));
+        assert!(activate(&shortcuts, window.upcast_ref(), "Escape"));
+        assert_eq!(*ran.borrow(), ["frame", "escape"]);
+        window.destroy();
     }
 
     #[test]
