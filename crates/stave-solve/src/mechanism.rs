@@ -845,7 +845,7 @@ impl Solver<'_> {
         let Some(mut drive) = declared.drive else {
             return Err(Fault::Internal("the drive of a mechanism").into());
         };
-        let mut stop = declared.stop.clone();
+        let mut stop = declared.stop.take();
         let mut bodies: BTreeMap<(HardwareId, BodyId), MemberIndex> = declared
             .bodies
             .iter()
@@ -860,14 +860,12 @@ impl Solver<'_> {
             let Ok(other) = declare(id, mechanism, &is_moving, &base.plane, None, 0) else {
                 return Err(Fault::Earlier.into());
             };
-            let shape = |d: &Declared| -> Vec<(String, Holding)> {
-                d.members
-                    .iter()
-                    .map(|m| (m.name.clone(), m.holding))
-                    .collect()
-            };
             let start = |d: Option<MechanismDrive>| d.map(|d| (d.member(), d.from(), d.turns()));
-            let alike = shape(&other) == shape(&declared)
+            let alike = other
+                .members
+                .iter()
+                .map(|m| (&m.name, m.holding))
+                .eq(declared.members.iter().map(|m| (&m.name, m.holding)))
                 && other.entries == declared.entries
                 && start(other.drive) == start(Some(drive));
             if !alike {
@@ -1200,7 +1198,7 @@ impl Solver<'_> {
                         )
                         .into());
                 }
-                Some((at, stop.message.literal().to_owned()))
+                Some((at, stop.message.literal()))
             }
         };
         let members = kind

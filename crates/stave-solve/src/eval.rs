@@ -172,13 +172,13 @@ impl ArrayItems {
         })
     }
 
-    fn all(&self) -> Value {
+    fn all(self) -> Value {
         match self {
-            ArrayItems::Parts(v) => Value::Parts(v.clone()),
-            ArrayItems::Regions(v) => Value::List(v.iter().map(|r| Value::Region(*r)).collect()),
-            ArrayItems::Assemblies(v) => Value::Assemblies(v.clone()),
-            ArrayItems::Joints(v) => Value::List(v.iter().map(|j| Value::Joint(*j)).collect()),
-            ArrayItems::Hardware(v) => Value::List(v.iter().map(|h| Value::Hardware(*h)).collect()),
+            ArrayItems::Parts(v) => Value::Parts(v),
+            ArrayItems::Regions(v) => Value::List(v.into_iter().map(Value::Region).collect()),
+            ArrayItems::Assemblies(v) => Value::Assemblies(v),
+            ArrayItems::Joints(v) => Value::List(v.into_iter().map(Value::Joint).collect()),
+            ArrayItems::Hardware(v) => Value::List(v.into_iter().map(Value::Hardware).collect()),
         }
     }
 }
@@ -1125,9 +1125,9 @@ impl Solver<'_> {
         }
     }
 
-    fn labels(&self, def: DefId) -> Option<Vec<String>> {
+    fn labels(&self, def: DefId) -> Option<&[(String, Span)]> {
         match self.model.defs.array(def)? {
-            ArrayDef::Labels(labels) => Some(labels.iter().map(|(l, _)| l.clone()).collect()),
+            ArrayDef::Labels(labels) => Some(labels),
             ArrayDef::Count(_) => None,
         }
     }
@@ -1165,7 +1165,7 @@ impl Solver<'_> {
                         .into());
                 };
                 let same_shape = match (self.labels(declared), self.labels(def)) {
-                    (Some(a), Some(b)) => a == b,
+                    (Some(a), Some(b)) => a.iter().map(|(l, _)| l).eq(b.iter().map(|(l, _)| l)),
                     (None, None) => count == items.len(),
                     _ => false,
                 };

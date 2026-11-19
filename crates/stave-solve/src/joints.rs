@@ -689,10 +689,10 @@ impl Solver<'_> {
             if let (Some(joint_def), Making::Made) = (&kind.joint, making) {
                 for extend in &joint_def.adds {
                     let by = self.eval_length(&extend.by, &kind_env)?;
-                    let members: Vec<PartId> = if across {
-                        parts.clone()
+                    let members: &[PartId] = if across {
+                        &parts
                     } else {
-                        parts.get(extend.role).copied().into_iter().collect()
+                        parts.get(extend.role).map_or(&[], std::slice::from_ref)
                     };
                     for (part, other) in members.iter().flat_map(|part| {
                         parts
@@ -1278,9 +1278,9 @@ impl Solver<'_> {
         selector_on(selector, p, gp, q, gq)
     }
 
-    fn depth(&mut self, value: Value, env: &Env<'_>, span: Span) -> Solved<Depth> {
+    fn depth(&mut self, value: &Value, env: &Env<'_>, span: Span) -> Solved<Depth> {
         match value {
-            Value::Length(length) => Ok(Depth::Length(round_length(length)?)),
+            Value::Length(length) => Ok(Depth::Length(round_length(*length)?)),
             Value::Word(Word::Through) => Ok(Depth::Through),
             other => Err(self
                 .error(
@@ -1300,10 +1300,10 @@ impl Solver<'_> {
     /// Evaluates a cut operation's arguments.
     pub(crate) fn cut_kind(&mut self, operation: &OperationDef, env: &Env<'_>) -> Solved<CutKind> {
         let spec = stave_schema::operations::cut_operation(operation.operation);
-        let mut values: Vec<(String, Value, Span)> = Vec::new();
+        let mut values: Vec<(&str, Value, Span)> = Vec::new();
         for arg in &operation.args {
             values.push((
-                arg.name.clone(),
+                arg.name.as_str(),
                 self.eval(&arg.value, env)?,
                 arg.value.span,
             ));
@@ -1311,12 +1311,12 @@ impl Solver<'_> {
         let get = |name: &str| {
             values
                 .iter()
-                .find(|(n, _, _)| n == name)
-                .map(|(_, v, s)| (v.clone(), *s))
+                .find(|(n, _, _)| *n == name)
+                .map(|(_, v, s)| (v, *s))
         };
         let length = |this: &mut Self, name: &str| -> Solved<stave_lang::units::Length> {
             match get(name) {
-                Some((Value::Length(l), _)) => round_length(l),
+                Some((Value::Length(l), _)) => round_length(*l),
                 Some((other, span)) => Err(this
                     .error(
                         Code::UnitMismatch,
@@ -1425,14 +1425,14 @@ impl Solver<'_> {
     fn dovetail_slope(
         &mut self,
         operation: &OperationDef,
-        values: &[(String, Value, Span)],
+        values: &[(&str, Value, Span)],
         env: &Env<'_>,
     ) -> Solved<Slope> {
         let get = |name: &str| {
             values
                 .iter()
-                .find(|(n, _, _)| n == name)
-                .map(|(_, v, s)| (v.clone(), *s))
+                .find(|(n, _, _)| *n == name)
+                .map(|(_, v, s)| (v, *s))
         };
         match (get("angle"), get("slope")) {
             (Some((Value::Angle(angle), _)), None) => Ok(Slope::Angle(
@@ -1749,7 +1749,7 @@ impl Solver<'_> {
             }
         };
         let size_of = |this: &mut Self,
-                       size: &Option<Size>,
+                       size: Option<&Size>,
                        field: StockField,
                        word: &str|
          -> Solved<ExactLength> {
@@ -1776,13 +1776,8 @@ impl Solver<'_> {
                 }),
             }
         };
-        let length = size_of(
-            self,
-            &Some(body.length.clone()),
-            StockField::Thickness,
-            "length",
-        )?;
-        let width = size_of(self, &body.width, StockField::Width, "width")?;
+        let length = size_of(self, Some(&body.length), StockField::Thickness, "length")?;
+        let width = size_of(self, body.width.as_ref(), StockField::Width, "width")?;
         let thickness = match &body.thickness {
             Some(expr) => self.eval_length(expr, env)?,
             None => self

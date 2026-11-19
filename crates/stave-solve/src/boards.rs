@@ -768,12 +768,12 @@ impl Solver<'_> {
         if let Some(joint_def) = &kind.joint {
             for extend in &joint_def.adds {
                 let by = self.eval_length(&extend.by, &kind_env)?;
-                let members: Vec<PartId> = if method.across {
-                    parts.clone()
+                let members: &[PartId] = if method.across {
+                    &parts
                 } else {
-                    parts.get(extend.role).copied().into_iter().collect()
+                    parts.get(extend.role).map_or(&[], std::slice::from_ref)
                 };
-                for board in members {
+                for board in members.iter().copied() {
                     for other in parts.iter().copied().filter(|o| *o != board) {
                         let (a, b) = (self.drawn_box(board)?, self.drawn_box(other)?);
                         let Some(world) = a.touching_axis(&b) else {

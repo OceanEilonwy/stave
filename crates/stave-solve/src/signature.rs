@@ -395,7 +395,7 @@ impl Solver<'_> {
         // it, or the project for a declaration of its own.
         let (who, its) = match self.component_of(owner) {
             Some(component) => (component, format!("its {thing}")),
-            None => ("the project".to_owned(), declared.clone()),
+            None => ("the project".to_owned(), declared),
         };
         let roles: Vec<String> = kind_def.roles.iter().map(|r| r.name.clone()).collect();
         let (reason, at) = match found {
