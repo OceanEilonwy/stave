@@ -373,7 +373,9 @@ menu puts board B back.
 - **Title bar** (`Header`): back and forward are `win.back`/`win.forward`
   (Alt+←/→). The finder's field is a button that opens the finder
   (`win.find`, Ctrl+K). The switcher is an `AdwToggleGroup` named by
-  `View::word` (Ctrl+1, Ctrl+2). The problems chip is the status pill
+  `View::word` (Ctrl+1, Ctrl+2). Until the Cut list is made
+  (`header::ready`), the switcher is hidden and only `win.view-design`
+  (Ctrl+1) exists. The problems chip is the status pill
   between previous and next arrows (`win.next-problem`, F8;
   `win.previous-problem`, Shift+F8; the arrows show when there is more
   than one problem); its tooltip is the status line ("Checked 5 files · 1
@@ -382,7 +384,10 @@ menu puts board B back.
   the class goes on the chip round the pill, `.stave-problems-chip.errors
   button.stave-pill`, a test keeps the CSS keyed so). The hammer is `win.build` (Ctrl+B),
   disabled while building or whenever there is nothing to build
-  (`buildable()`), its tooltip saying why (`build_tooltip()`). The title
+  (`buildable()`), its tooltip saying why (`build_tooltip()`). Until the
+  build plan is made, the hammer is hidden and `win.build` isn't
+  registered: a button that only says it does nothing teaches a beginner
+  not to trust the window. The title
   is `Session::title()`. The main menu starts a new project ("New
   Project…", `win.new-project`, see [A new project](#a-new-project)),
   opens a project folder (Ctrl+O),
@@ -1234,7 +1239,9 @@ colours) are a stylesheet in `edit_card.rs`, installed once per display.
   problem's details and the joint kind's link in focus mode send
   `GoToSource` (the kind's link may name a `std/...` file, opened read
   only).
-- **Cut list**: the `cut-list` page is a "Cut list is coming" status page.
+- **Cut list**: the `cut-list` page is a "Cut list is coming" status page,
+  out of reach (switcher hidden, no Ctrl+2) until it is made. No page of
+  the window sends the reader to a command.
 
 ## The editor
 

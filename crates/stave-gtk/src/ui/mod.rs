@@ -2695,8 +2695,6 @@ impl Window {
         let this = self.clone();
         add("forward", Box::new(move || this.dispatch(Command::Forward)));
         let this = self.clone();
-        add("build", Box::new(move || this.dispatch(Command::Build)));
-        let this = self.clone();
         add("check", Box::new(move || this.dispatch(Command::Check)));
         let this = self.clone();
         add("frame", Box::new(move || this.frame()));
@@ -2791,7 +2789,7 @@ impl Window {
         add("format", Box::new(move || this.widgets.files.format()));
         let this = self.clone();
         add("open", Box::new(move || this.choose_folder()));
-        for view in View::ALL {
+        for view in View::ALL.into_iter().filter(|view| header::ready(*view)) {
             let this = self.clone();
             add(
                 &format!("view-{}", view.word()),
@@ -2847,7 +2845,6 @@ impl Window {
             for (action, accels) in [
                 ("win.back", &["<Alt>Left"][..]),
                 ("win.forward", &["<Alt>Right"]),
-                ("win.build", &["<Control>b"]),
                 ("win.check", &["<Control>r"]),
                 ("win.search", &["<Control>f"]),
                 ("win.find", &["<Control>k"]),
@@ -2857,7 +2854,6 @@ impl Window {
                 ("win.next-problem", &["F8"]),
                 ("win.previous-problem", &["<Shift>F8"]),
                 ("win.view-design", &["<Control>1"]),
-                ("win.view-cut-list", &["<Control>2"]),
                 ("win.save", &["<Control>s"]),
                 ("win.format", &["<Control><Shift>i"]),
             ] {

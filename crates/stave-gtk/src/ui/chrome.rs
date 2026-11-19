@@ -67,7 +67,7 @@ impl MotionBar {
 pub fn cut_list_page() -> adw::StatusPage {
     adw::StatusPage::builder()
         .title("Cut list is coming")
-        .description("Every board to cut, sized and rounded once, will be listed here. It has its own design and isn't part of this version yet. Meanwhile, “stave dump” lists every part and its size.")
+        .description("Every board to cut, sized and rounded once, will be listed here. It isn't part of this version yet.")
         .css_classes(["stave-placeholder"])
         .build()
 }
