@@ -1,0 +1,23 @@
+// expect: error[no-contact] lap: once cut, b and a touch only along an edge
+stave 1
+
+// b crosses a by only 2mm, but the half lap cuts each 10mm deep: the laps
+// do not meet, and the parts touch only along the corners of the notches.
+project "S" { }
+stock oak { species: white_oak, form: solid, thickness: 20mm, max_width: 300mm, max_length: 2400mm }
+part a : oak {
+  length: 600mm
+  width:  60mm
+  place { ground }
+}
+part b : oak {
+  length: 600mm
+  width:  60mm
+  place {
+    orient(length: back, width: right)
+    flush(a.bottom, inset: 18mm)
+    center(a, across)
+    center(a, deep)
+  }
+}
+joint lap : half_lap(b, into: a)

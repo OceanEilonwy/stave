@@ -769,7 +769,10 @@ fn through_cuts_all_the_way() {
     let opened = with_parts(
         "kind k : joint {\n  cut housing: crossing(into, piece) {\n    notch(depth: through)\n  }\n}\njoint j : k(shelf, into: side)",
     );
-    let side = part(design(&opened), "side");
+    // A housing cut right through the side leaves the shelf, which only
+    // butts against it, touching the side along the housing's edges: a
+    // fit error, which doesn't stop the cut from being recorded.
+    let side = part(solved(&opened), "side");
     assert!(side.cuts.iter().any(|c| c.kind
         == CutKind::Notch {
             depth: Depth::Through
