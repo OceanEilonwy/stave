@@ -1241,7 +1241,12 @@ impl Solver<'_> {
                 kind: Some(&pair.env),
                 array: None,
             };
-            let placed = self.place_made_part(made_def, pair, tables.geoms, &env, &made_name)?;
+            let source = self.body_source(part)?;
+            let at = self
+                .lengths_place(source)
+                .unwrap_or_else(|| self.part_place(part));
+            let placed =
+                self.place_made_part(made_def, pair, tables.geoms, &env, &made_name, at)?;
             let note = match &made_def.body.note {
                 Some(text) => Some(self.format_text(text, &env)?),
                 None => None,

@@ -1720,7 +1720,14 @@ cuts.
 
 **`makes part`** — a part the joint creates (a key, a wedge, a pin), once per
 pair. It is declared like any part, appears in the cut list as
-`<joint>.<name>`, and is placed **relative to the joint's own parts**:
+`<joint>.<name>`, and is placed **relative to the joint's own parts**.
+It is cut from its stock like any part: each size more than 0mm
+(`error[out-of-range]`), no thicker than the stock, no wider than stock
+sold at a fixed `width:`, and no longer along its grain than the stock's
+`max_length` (`error[type-mismatch]`), each reported at the joint's call
+(for a board joint, at `boards:`; for a splice, at `lengths:`):
+`top.spline[1]: its thickness works out as about 6.333333mm, but ply_6 is
+only 6mm thick`.
 
 | Term in a made part's `place` | Meaning |
 |---|---|

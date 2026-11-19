@@ -868,7 +868,8 @@ impl Solver<'_> {
                     kind: Some(&pair.env),
                     array: None,
                 };
-                let placed = self.place_made_part(made_def, pair, geoms, &env, &name)?;
+                let at = self.joint_place(joint);
+                let placed = self.place_made_part(made_def, pair, geoms, &env, &name, at)?;
                 let note_text = match &made_def.body.note {
                     Some(text) => Some(self.format_text(text, &env)?),
                     None => None,

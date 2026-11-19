@@ -976,6 +976,110 @@ impl Solver<'_> {
             .into())
     }
 
+    /// A part a joint makes is cut from its stock like any other part
+    /// (grammar, "Joint definitions"): each size more than 0mm, never
+    /// thicker than the stock, never wider than stock sold at a fixed
+    /// width, and no longer along its grain than the stock's `max_length`.
+    /// Reported at `at`, the joint's call, once for every made part with
+    /// the same fault there.
+    fn check_made_part_stock(
+        &mut self,
+        stock: StockId,
+        name: &str,
+        [length, width, thickness]: [ExactLength; 3],
+        grain: Grain,
+        at: (FileId, Span),
+    ) -> Solved<()> {
+        let (file, span) = at;
+        let stock_name = self.stock_name(stock);
+        let size = stave_model::value::format_length;
+        let mut fault: Option<(Code, String, String)> = None;
+        for (word, value) in [
+            ("length", length),
+            ("width", width),
+            ("thickness", thickness),
+        ] {
+            if fault.is_none() && value <= ExactLength::ZERO {
+                fault = Some((
+                    Code::OutOfRange,
+                    format!("its {word} works out as {}", size(value)),
+                    format!("give the joint settings that make the part's {word} more than 0mm"),
+                ));
+            }
+        }
+        if fault.is_none()
+            && let Some(stock_thickness) = self.stock_length(stock, StockField::Thickness)?
+            && thickness > stock_thickness
+        {
+            fault = Some((
+                Code::TypeMismatch,
+                format!(
+                    "its thickness works out as {}, but {stock_name} is only {} thick",
+                    size(thickness),
+                    size(stock_thickness)
+                ),
+                format!(
+                    "choose thicker stock for the part with the joint's settings, or make the part at most {} thick",
+                    size(stock_thickness)
+                ),
+            ));
+        }
+        let fixed_width = self
+            .model
+            .defs
+            .stock(stock)
+            .is_some_and(|def| def.width.is_some());
+        if fault.is_none()
+            && fixed_width
+            && let Some(stock_width) = self.stock_length(stock, StockField::Width)?
+            && width > stock_width
+        {
+            fault = Some((
+                Code::TypeMismatch,
+                format!(
+                    "its width is {}, but {stock_name} is sold {} wide",
+                    size(width),
+                    size(stock_width)
+                ),
+                format!(
+                    "choose wider stock for the part with the joint's settings, or make the part at most {} wide",
+                    size(stock_width)
+                ),
+            ));
+        }
+        if fault.is_none()
+            && let Some(max_length) = self.stock_length(stock, StockField::MaxLength)?
+        {
+            let along = match grain {
+                Grain::Length => length,
+                Grain::Width => width,
+            };
+            if along > max_length {
+                fault = Some((
+                    Code::TypeMismatch,
+                    format!(
+                        "its length along the grain works out as {}, which is more than its stock's max_length of {}",
+                        size(along),
+                        size(max_length)
+                    ),
+                    format!(
+                        "stock '{stock_name}' comes no longer than {}: choose longer stock for the part with the joint's settings, or make the part shorter",
+                        size(max_length)
+                    ),
+                ));
+            }
+        }
+        let Some((code, reason, help)) = fault else {
+            return Ok(());
+        };
+        if self.noted_with_earlier_part(code, file, span, &reason, name) {
+            return Err(self.skip().into());
+        }
+        Err(self
+            .error(code, format!("{name}: {reason}"), file, span, help)
+            .into())
+    }
+
     /// The reference face and edge (grammar, "Faces to cut").
     fn reference_faces(
         &mut self,
@@ -1593,6 +1697,7 @@ impl Solver<'_> {
         geoms: &GeomTable,
         env: &Env<'_>,
         name: &str,
+        at: (FileId, Span),
     ) -> Solved<MadeGeom> {
         let body = &made.body;
         let stock = match self.eval(&body.stock, env)? {
@@ -1651,6 +1756,7 @@ impl Solver<'_> {
                 .ok_or(Fault::Earlier)?,
         };
         let drawn = [length, width, thickness];
+        self.check_made_part_stock(stock, name, drawn, body.grain, at)?;
         // Orientation.
         let mut orientation = None;
         let mut of_part = None;
