@@ -871,7 +871,13 @@ joint keys : keyed(rail[*], into: post)",
         "{made:?}"
     );
     let key = design.made_parts().next().unwrap();
-    assert!(matches!(key.origin, PartOrigin::Made { pair: 0, .. }));
+    assert!(matches!(
+        key.origin,
+        PartOrigin::Made {
+            pair: stave_model::solved::PairIndex::FIRST,
+            ..
+        }
+    ));
     assert_eq!(key.cut.thickness, mm("6"));
 }
 

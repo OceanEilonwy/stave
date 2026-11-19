@@ -395,8 +395,7 @@ impl PartJoints {
                 design
                     .joints
                     .get(member.joint.index())?
-                    .pairs
-                    .get(member.pair)?
+                    .pair(member.pair)?
                     .roles
                     .first()
                     .map(|role| role.part)
@@ -628,7 +627,7 @@ fn joined_to(design: &SolvedDesign, glyphs: &[Glyph], id: PartId) -> Vec<JoinedT
         let mut partners = Vec::new();
         let mut stands_for = Vec::new();
         let mut focus = None;
-        for (index, pair) in joint.pairs.iter().enumerate() {
+        for (index, pair) in joint.indexed_pairs() {
             let in_pair = pair.roles.iter().any(|r| r.part == id) || pair.made_parts.contains(&id);
             if !in_pair {
                 continue;
@@ -1133,7 +1132,10 @@ mod tests {
         // A frame joint opens focus mode on its first pair.
         assert!(matches!(
             rows.first().and_then(|r| r.focus),
-            Some(Target::Joint { pair: 0, .. })
+            Some(Target::Joint {
+                pair: stave_model::solved::PairIndex::FIRST,
+                ..
+            })
         ));
     }
 

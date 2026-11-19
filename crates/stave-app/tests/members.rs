@@ -59,7 +59,13 @@ fn a_dowel_lays_its_pins_out_evenly_on_the_patch() {
         panic!("one member: {:?}", pair.members);
     };
     assert_eq!(pin.name, "pin");
-    assert!(matches!(pin.id.owner, BodyOwner::Joint { pair: 0, .. }));
+    assert!(matches!(
+        pin.id.owner,
+        BodyOwner::Joint {
+            pair: stave_model::solved::PairIndex::FIRST,
+            ..
+        }
+    ));
     // Three 8mm pins on the side's 19 x 300 end: equal gaps of
     // (300 - 24) / 4 = 69mm before, between and after them, centred across
     // the 19mm, half in each part (15mm either side of the base's top).

@@ -70,7 +70,10 @@ use std::collections::BTreeMap;
 
 pub use crate::defs::{BodyId, CutName};
 
-pub use crate::ids::{AssemblyId, HardwareId, JointId, KindId, PartId, RegionId, SceneId};
+pub use crate::ids::{
+    AssemblyId, HardwareId, JointId, KindId, PairIndex, PartId, RegionId, RequireIndex, SceneId,
+    SeamIndex,
+};
 pub use crate::mechanism::{Mechanism, MemberIndex};
 pub use crate::nonempty::NonEmpty;
 
@@ -479,8 +482,7 @@ impl SolvedDesign {
     pub fn pair_member(&self, member: PairMember) -> Option<&Body> {
         self.joints
             .get(member.joint.index())?
-            .pairs
-            .get(member.pair)?
+            .pair(member.pair)?
             .members
             .iter()
             .find(|body| body.id.body == member.body)
@@ -495,8 +497,7 @@ impl SolvedDesign {
         let between = match joint.pairs.as_slice() {
             [_, _, ..] => {
                 let parts: Vec<&str> = joint
-                    .pairs
-                    .get(member.pair)?
+                    .pair(member.pair)?
                     .roles
                     .iter()
                     .filter_map(|role| self.part(role.part).map(|p| p.name.as_str()))
@@ -522,22 +523,18 @@ impl SolvedDesign {
     /// Every joint pair's members, in joint, pair and member order.
     pub fn pair_members(&self) -> impl Iterator<Item = (PairMember, &Body)> {
         self.joints.iter().flat_map(|joint| {
-            joint
-                .pairs
-                .iter()
-                .enumerate()
-                .flat_map(move |(pair, found)| {
-                    found.members.iter().map(move |body| {
-                        (
-                            PairMember {
-                                joint: joint.id,
-                                pair,
-                                body: body.id.body,
-                            },
-                            body,
-                        )
-                    })
+            joint.indexed_pairs().flat_map(move |(pair, found)| {
+                found.members.iter().map(move |body| {
+                    (
+                        PairMember {
+                            joint: joint.id,
+                            pair,
+                            body: body.id.body,
+                        },
+                        body,
+                    )
                 })
+            })
         })
     }
 }
@@ -616,8 +613,8 @@ pub enum PartOrigin {
     Made {
         /// The joint.
         joint: JointId,
-        /// The pair (index into [`Joint::pairs`]).
-        pair: usize,
+        /// The pair.
+        pair: PairIndex,
     },
     /// A piece of a spliced part after its first (grammar, "Splices"):
     /// the first piece keeps the part's own id and origin, and its
@@ -633,9 +630,8 @@ pub enum PartOrigin {
     Boards {
         /// The part made of boards.
         part: PartId,
-        /// The seam (index into [`Boards::seams`]); `None` for a kind
-        /// across all of the part's boards.
-        seam: Option<usize>,
+        /// The seam; `None` for a kind across all of the part's boards.
+        seam: Option<SeamIndex>,
     },
 }
 
@@ -795,6 +791,13 @@ pub struct Boards {
     pub requires: Vec<RequireResult>,
 }
 
+impl Boards {
+    /// The seam at `index`.
+    pub fn seam(&self, index: SeamIndex) -> Option<&Seam> {
+        self.seams.get(index.index())
+    }
+}
+
 /// One board of a part.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Board {
@@ -852,7 +855,7 @@ pub enum CutSource {
         /// The joint.
         joint: JointId,
         /// The pair.
-        pair: usize,
+        pair: PairIndex,
     },
     /// A `cut` of a hardware kind, for one piece of hardware.
     Hardware {
@@ -863,9 +866,8 @@ pub enum CutSource {
     Boards {
         /// The part made of boards.
         part: PartId,
-        /// The seam (index into [`Boards::seams`]); `None` for a kind
-        /// across all of the part's boards.
-        seam: Option<usize>,
+        /// The seam; `None` for a kind across all of the part's boards.
+        seam: Option<SeamIndex>,
     },
 }
 
@@ -1297,7 +1299,7 @@ pub struct WallRule {
     #[serde(skip)]
     pub kind: KindId,
     /// The rule, in the kind's list of requires.
-    pub require: usize,
+    pub require: RequireIndex,
     /// The rule's name.
     pub name: String,
     /// Its message, with values filled in.
@@ -1377,6 +1379,21 @@ pub struct Joint {
     pub note: Option<String>,
     /// Where it comes from: a `joint` declaration, or a part's `lengths:`.
     pub origin: JointOrigin,
+}
+
+impl Joint {
+    /// The pair at `index`.
+    pub fn pair(&self, index: PairIndex) -> Option<&JointPair> {
+        self.pairs.get(index.index())
+    }
+
+    /// Each pair with its index, in order.
+    pub fn indexed_pairs(&self) -> impl Iterator<Item = (PairIndex, &JointPair)> {
+        self.pairs
+            .iter()
+            .enumerate()
+            .map(|(index, pair)| (PairIndex::from_usize(index), pair))
+    }
 }
 
 /// Where a joint comes from.
@@ -1596,8 +1613,8 @@ pub enum BodyOwner {
     Joint {
         /// The joint.
         joint: JointId,
-        /// The pair (index into [`Joint::pairs`]).
-        pair: usize,
+        /// The pair.
+        pair: PairIndex,
     },
 }
 
@@ -1619,8 +1636,8 @@ impl BodyOwner {
 pub struct PairMember {
     /// The joint.
     pub joint: JointId,
-    /// The pair (index into [`Joint::pairs`]).
-    pub pair: usize,
+    /// The pair.
+    pub pair: PairIndex,
     /// The member, among its kind's members with a body.
     pub body: BodyId,
 }

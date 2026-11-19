@@ -8,7 +8,9 @@ use stave_lang::placement::{Axis, PartAxis};
 use stave_lang::units::{ExactLength, Length};
 use stave_lang::{Code, Diagnostic, FileId, Label};
 use stave_model::defs::{BodyId, DefId, StockField, Word};
-use stave_model::ids::{AssemblyId, HardwareId, JointId, PartId, RegionId, SceneId, StockId};
+use stave_model::ids::{
+    AssemblyId, HardwareId, JointId, PairIndex, PartId, RegionId, SceneId, StockId,
+};
 use stave_model::instance::Ctx;
 use stave_model::mechanism::MemberIndex;
 use stave_model::solved::{
@@ -832,6 +834,7 @@ impl Solver<'_> {
         let mut note = None;
         let mut fastener_totals: Vec<(stave_model::ids::KindId, Length, Length, u32)> = Vec::new();
         for (pair_index, pair) in work.pairs.iter_mut().enumerate() {
+            let pair_index = PairIndex::from_usize(pair_index);
             if pair.making == Making::Withheld {
                 // The parts don't meet as the kind needs: its rule has
                 // said so, and nothing is cut, made or placed here.
@@ -849,7 +852,11 @@ impl Solver<'_> {
                     cut_order: Vec::new(),
                     insert: Vec::new(),
                     made_parts: Vec::new(),
-                    requires: work.requires.get(pair_index).cloned().unwrap_or_default(),
+                    requires: work
+                        .requires
+                        .get(pair_index.index())
+                        .cloned()
+                        .unwrap_or_default(),
                     members: Vec::new(),
                 });
                 continue;
@@ -1029,7 +1036,7 @@ impl Solver<'_> {
             let mut cut_order = Vec::new();
             if !joint_def.cut_first.is_empty() {
                 for role in &joint_def.cut_first {
-                    if let Some(part) = pair.parts.get(*role)
+                    if let Some(part) = pair.parts.get(role.index())
                         && !cut_order.contains(part)
                     {
                         cut_order.push(*part);
@@ -1096,7 +1103,11 @@ impl Solver<'_> {
                 cut_order,
                 insert,
                 made_parts: made_ids,
-                requires: work.requires.get(pair_index).cloned().unwrap_or_default(),
+                requires: work
+                    .requires
+                    .get(pair_index.index())
+                    .cloned()
+                    .unwrap_or_default(),
                 members,
             });
         }
@@ -1339,6 +1350,7 @@ impl Solver<'_> {
             };
             let mut unreflected = false;
             for (pair_index, pair) in copy.pairs.iter_mut().enumerate() {
+                let pair_index = PairIndex::from_usize(pair_index);
                 // The members are reflected and belong to the copy.
                 let mut members = Vec::with_capacity(pair.members.len());
                 for member in &pair.members {

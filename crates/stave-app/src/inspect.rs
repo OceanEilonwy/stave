@@ -13,8 +13,8 @@ use stave_model::defs::Decl;
 use stave_model::mechanism::{DriveValue, Mechanism};
 use stave_model::nonempty::NonEmpty;
 use stave_model::solved::{
-    AssemblyId, Body, CutSource, HardwareBase, HardwareId, PairMember, Part, PartId, PartOrigin,
-    RegionId, RoleValue, Shape, SolvedDesign,
+    AssemblyId, Body, CutSource, HardwareBase, HardwareId, PairIndex, PairMember, Part, PartId,
+    PartOrigin, RegionId, RoleValue, Shape, SolvedDesign,
 };
 use stave_scene::Item;
 use stave_schema::species::Srgb;
@@ -1234,7 +1234,7 @@ fn inspect_part(checked: &Checked, design: &SolvedDesign, id: PartId) -> Option<
     }) {
         let mut others: Vec<NameLink> = Vec::new();
         let mut first_pair = None;
-        for (index, pair) in joint.pairs.iter().enumerate() {
+        for (index, pair) in joint.indexed_pairs() {
             if !(pair.roles.iter().any(|r| r.part == id) || pair.made_parts.contains(&id)) {
                 continue;
             }
@@ -1576,7 +1576,7 @@ fn inspect_joint(
     checked: &Checked,
     design: &SolvedDesign,
     id: stave_model::solved::JointId,
-    pair: usize,
+    pair: PairIndex,
 ) -> Option<Inspection> {
     let joint = design.joints.get(id.index())?;
     let model = checked.opened.model.as_ref();

@@ -498,7 +498,7 @@ fn a_spline_is_a_made_part_per_seam() {
             spline.origin,
             PartOrigin::Boards {
                 part: p.id,
-                seam: Some(n)
+                seam: Some(stave_model::solved::SeamIndex::from_usize(n))
             }
         );
         // As long as the seam, reaching 9.5mm into each board, a third of

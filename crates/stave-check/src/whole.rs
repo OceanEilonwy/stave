@@ -36,7 +36,7 @@ impl Checker<'_> {
             .design
             .joints
             .get(joint.index())
-            .and_then(|j| j.pairs.get(pair))
+            .and_then(|j| j.pair(pair))
             .map(|p| {
                 p.roles
                     .iter()

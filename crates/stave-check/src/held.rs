@@ -18,7 +18,9 @@ use std::collections::BTreeSet;
 use stave_lang::placement::Axis;
 use stave_lang::{Code, Severity};
 use stave_model::defs::{PartKind, PlaceTermKind};
-use stave_model::solved::{BodyCarrier, CutSource, PartId, PartOrigin, RoleValue, WorldBox};
+use stave_model::solved::{
+    BodyCarrier, CutSource, JointId, PairIndex, PartId, PartOrigin, RoleValue, WorldBox,
+};
 
 use crate::names::list;
 use crate::{Checker, Contact, Item};
@@ -137,12 +139,12 @@ impl Checker<'_> {
         // A pair holds when it is glued, places a member or a fastener,
         // makes a part, or cuts its parts; one that does none of these (a
         // count of 0 screws with no glue) only says the parts are joined.
-        let cut_pairs: BTreeSet<(usize, usize)> = design
+        let cut_pairs: BTreeSet<(JointId, PairIndex)> = design
             .parts
             .iter()
             .flat_map(|part| &part.cuts)
             .filter_map(|cut| match cut.source {
-                CutSource::Joint { joint, pair } => Some((joint.index(), pair)),
+                CutSource::Joint { joint, pair } => Some((joint, pair)),
                 CutSource::Hardware { .. } | CutSource::Boards { .. } => None,
             })
             .collect();
@@ -153,13 +155,13 @@ impl Checker<'_> {
                 .fasteners
                 .iter()
                 .any(|use_| use_.joint == joint.id && use_.count > 0);
-            for (index, pair) in joint.pairs.iter().enumerate() {
+            for (index, pair) in joint.indexed_pairs() {
                 let mut parts: Vec<PartId> = pair.roles.iter().map(|r| r.part).collect();
                 let holds = joint.glue
                     || fastened
                     || !pair.members.is_empty()
                     || !pair.made_parts.is_empty()
-                    || cut_pairs.contains(&(joint.id.index(), index));
+                    || cut_pairs.contains(&(joint.id, index));
                 if !holds {
                     idle.push((parts, &joint.name));
                     continue;

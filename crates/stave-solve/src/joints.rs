@@ -9,9 +9,9 @@ use stave_lang::units::{Angle, ExactLength, Length, Rational};
 use stave_lang::{Code, Diagnostic, FileId, Label};
 use stave_model::defs::{
     CutDef, DefId, JointMember, KindCallDef, MadePartDef, MadeTermKind, OperationDef, RExpr,
-    RExprKind, SelectorDef, Size, StepMotionDef, StockField, Symbol, Word,
+    RExprKind, RoleIndex, SelectorDef, Size, StepMotionDef, StockField, Symbol, Word,
 };
-use stave_model::ids::{JointId, KindId, PartId, RecipeId, StockId};
+use stave_model::ids::{JointId, KindId, PairIndex, PartId, RecipeId, RequireIndex, StockId};
 use stave_model::solved::{
     AssemblyStep, Contact, CutKind, CutPlace, Depth, End, LocalBox, LocalFace, LocalPoint, Mark,
     Orientation, Slope, StepMotion,
@@ -280,8 +280,8 @@ impl Solver<'_> {
         }
         for setting in &call.named {
             let value = self.eval(&setting.value, env)?;
-            if let Some(index) = kind_def.role(&setting.name) {
-                if let Some(slot) = roles.get_mut(index) {
+            if let Some(index) = kind_def.role_named(&setting.name) {
+                if let Some(slot) = roles.get_mut(index.index()) {
                     *slot = Some(value);
                 }
                 continue;
@@ -629,13 +629,13 @@ impl Solver<'_> {
             let mut results = Vec::new();
             let source = stave_model::solved::CutSource::Joint {
                 joint,
-                pair: pairs.len(),
+                pair: PairIndex::from_usize(pairs.len()),
             };
             // A rule that asks how the parts meet comes first; when one
             // fails, the joint is not for this pair and nothing else of
             // it is checked or made here.
-            let mut order: Vec<(usize, &stave_model::defs::RequireDef)> =
-                kind.requires.iter().enumerate().collect();
+            let mut order: Vec<(RequireIndex, &stave_model::defs::RequireDef)> =
+                kind.indexed_requires().collect();
             order.sort_by_key(|(_, require)| {
                 !crate::meeting::asks_how_parts_meet(&require.condition)
             });
@@ -691,7 +691,9 @@ impl Solver<'_> {
                     let members: &[PartId] = if across {
                         &parts
                     } else {
-                        parts.get(extend.role).map_or(&[], std::slice::from_ref)
+                        parts
+                            .get(extend.role.index())
+                            .map_or(&[], std::slice::from_ref)
                     };
                     for (part, other) in members.iter().flat_map(|part| {
                         parts
@@ -1197,8 +1199,8 @@ impl Solver<'_> {
     /// Resolves who a selector or step names in a pair.
     fn member_part(pair: &PairWork, member: JointMember) -> Option<PartId> {
         match member {
-            JointMember::Role(index) => pair.parts.get(index).copied(),
-            JointMember::Made(index) => pair.env.made.get(index).copied(),
+            JointMember::Role(index) => pair.parts.get(index.index()).copied(),
+            JointMember::Made(index) => pair.env.made.get(index.index()).copied(),
         }
     }
 
@@ -1212,7 +1214,7 @@ impl Solver<'_> {
     ) -> Solved<(PartId, PartGeom)> {
         let part = Self::member_part(pair, member).ok_or(Fault::Earlier)?;
         let mut geom = geoms.get(part).cloned().ok_or(Fault::Earlier)?;
-        if !(pair.across && member == JointMember::Role(0)) {
+        if !(pair.across && member == JointMember::Role(RoleIndex::FIRST)) {
             return Ok((part, geom));
         }
         for other in pair.parts.iter().skip(1) {
@@ -1610,7 +1612,7 @@ impl Solver<'_> {
         // A cut on a kind's only `Parts` role is made on each of its parts
         // that meets the other part of the selector.
         let targets: Vec<Option<PartId>> = if pair.across
-            && cut.selector.part == JointMember::Role(0)
+            && cut.selector.part == JointMember::Role(RoleIndex::FIRST)
         {
             let other = Self::member_part(pair, cut.selector.other);
             pair.parts
@@ -1789,7 +1791,7 @@ impl Solver<'_> {
         let mut of_part = None;
         for term in &made.place {
             if let MadeTermKind::Orient { length, width, of } = &term.kind {
-                let Some(part) = pair.parts.get(*of).copied() else {
+                let Some(part) = pair.parts.get(of.index()).copied() else {
                     return Err(Fault::Internal("a part").into());
                 };
                 let Some(geom) = geoms.get(part) else {

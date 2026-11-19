@@ -21,7 +21,9 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
-use stave_model::solved::{AssemblyId, HardwareId, JointId, PairMember, PartId, SolvedDesign};
+use stave_model::solved::{
+    AssemblyId, HardwareId, JointId, PairIndex, PairMember, PartId, SolvedDesign,
+};
 use stave_modules::{DiskFiles, FileSource};
 use stave_scene::{Item, SceneEntry, SceneGraph};
 
@@ -176,8 +178,8 @@ pub enum Selection {
     Joint {
         /// The joint.
         joint: JointId,
-        /// The pair's index in the joint.
-        pair: usize,
+        /// The pair.
+        pair: PairIndex,
     },
     /// The member a joint lays out on one pair (a dowel's pins).
     Member(PairMember),
@@ -1738,7 +1740,7 @@ impl Carry<'_> {
                 let name = &old.joints.get(joint.index())?.name;
                 new.joints
                     .iter()
-                    .find(|j| &j.name == name && *pair < j.pairs.len())
+                    .find(|j| &j.name == name && j.pair(*pair).is_some())
                     .map(|j| Selection::Joint {
                         joint: j.id,
                         pair: *pair,

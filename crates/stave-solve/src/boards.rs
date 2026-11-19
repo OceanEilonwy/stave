@@ -21,7 +21,7 @@ use stave_lang::placement::{Axis, PartAxis};
 use stave_lang::units::{ExactLength, Rational};
 use stave_lang::{Code, Diagnostic, FileId, Label};
 use stave_model::defs::{DefId, StockField};
-use stave_model::ids::{JointId, KindId, PartId};
+use stave_model::ids::{JointId, KindId, PartId, SeamIndex};
 use stave_model::instance::Ctx;
 use stave_model::nonempty::NonEmpty;
 use stave_model::solved::{
@@ -96,7 +96,7 @@ struct Layout {
 /// One application of a board joint: a seam, or all the boards.
 struct Application {
     method: usize,
-    seam: Option<usize>,
+    seam: Option<SeamIndex>,
     pair: PairWork,
 }
 
@@ -243,14 +243,14 @@ impl Solver<'_> {
         let mut applications = Vec::new();
         let mut extra: BTreeMap<PartId, [ExactLength; 2]> = BTreeMap::new();
         for (method_index, method) in methods.iter().enumerate() {
-            let plans: Vec<(Option<usize>, Vec<PartId>)> = if method.across {
+            let plans: Vec<(Option<SeamIndex>, Vec<PartId>)> = if method.across {
                 vec![(None, layout.ids.clone())]
             } else {
                 layout
                     .ids
                     .windows(2)
                     .enumerate()
-                    .map(|(seam, pair)| (Some(seam), pair.to_vec()))
+                    .map(|(seam, pair)| (Some(SeamIndex::from_usize(seam)), pair.to_vec()))
                     .collect()
             };
             for (seam, parts) in plans {
@@ -698,7 +698,7 @@ impl Solver<'_> {
         &mut self,
         part: PartId,
         method: &Method,
-        seam: Option<usize>,
+        seam: Option<SeamIndex>,
         parts: Vec<PartId>,
         axis: PartAxis,
         (file, span): (FileId, Span),
@@ -726,7 +726,7 @@ impl Solver<'_> {
         };
         let part_name = self.part_name(part);
         let prefix = match seam {
-            Some(seam) => format!("{part_name}.seam[{}]", seam.saturating_add(1)),
+            Some(seam) => format!("{part_name}.seam[{}]", seam.number()),
             None => format!("{part_name}.boards"),
         };
         for require in &kind.requires {
@@ -771,7 +771,9 @@ impl Solver<'_> {
                 let members: &[PartId] = if method.across {
                     &parts
                 } else {
-                    parts.get(extend.role).map_or(&[], std::slice::from_ref)
+                    parts
+                        .get(extend.role.index())
+                        .map_or(&[], std::slice::from_ref)
                 };
                 for board in members.iter().copied() {
                     for other in parts.iter().copied().filter(|o| *o != board) {
@@ -805,7 +807,7 @@ impl Solver<'_> {
                     }
                 }
             }
-            if !joint_def.uses.is_empty() && report && seam.is_none_or(|s| s == 0) {
+            if !joint_def.uses.is_empty() && report && seam.is_none_or(|s| s == SeamIndex::FIRST) {
                 self.report(
                     Diagnostic::warning(
                         Code::NotSupported,
@@ -825,7 +827,7 @@ impl Solver<'_> {
                 .bodies
                 .iter()
                 .any(|body| matches!(body.with, stave_model::defs::Carrier::Contact(_)));
-            if has_members && report && seam.is_none_or(|s| s == 0) {
+            if has_members && report && seam.is_none_or(|s| s == SeamIndex::FIRST) {
                 self.report(
                     Diagnostic::warning(
                         Code::NotSupported,
@@ -893,7 +895,7 @@ impl Solver<'_> {
         for made_def in &joint_def.makes {
             let id = PartId::from_usize(self.model.parts.len() + made.len());
             let name = match application.seam {
-                Some(seam) => format!("{part_name}.{}[{}]", made_def.name, seam.saturating_add(1)),
+                Some(seam) => format!("{part_name}.{}[{}]", made_def.name, seam.number()),
                 None => format!("{part_name}.{}", made_def.name),
             };
             let env = Env {

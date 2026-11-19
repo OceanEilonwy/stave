@@ -309,11 +309,7 @@ pub fn see_into(design: &SolvedDesign, graph: &SceneGraph, shown: &[Item]) -> Op
     let parts: Vec<stave_model::solved::PartId> = shown
         .iter()
         .filter_map(|item| match item {
-            Item::Member(member) => design
-                .joints
-                .get(member.joint.index())?
-                .pairs
-                .get(member.pair),
+            Item::Member(member) => design.joints.get(member.joint.index())?.pair(member.pair),
             Item::Part(_) | Item::Hardware(_) => None,
         })
         .flat_map(|pair| pair.roles.iter().map(|role| role.part))

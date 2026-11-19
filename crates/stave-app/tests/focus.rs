@@ -288,7 +288,7 @@ fn focus_finds_joints_pairs_and_hardware_by_name() {
     let design = opened.design.as_ref().unwrap();
     assert!(matches!(
         focus::find(design, "shelf_dados", Some(2)),
-        Ok(Target::Joint { pair: 2, .. })
+        Ok(Target::Joint { pair, .. }) if pair.index() == 2
     ));
     assert_eq!(
         focus::find(design, "shelf_dados", Some(9)),

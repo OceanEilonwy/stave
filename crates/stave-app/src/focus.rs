@@ -33,7 +33,7 @@ use stave_model::defs::KindDef;
 use stave_model::mechanism::{Holding, Mechanism, MechanismEntry, MemberIndex, MotionShape};
 use stave_model::solved::{
     AssemblyId, Body, BodyCarrier, CutKind, CutPlace, CutSource, Depth, Hardware, HardwareBase,
-    HardwareId, JointId, Part, PartId, RoleValue, SolvedDesign, StepMotion, WorldBox,
+    HardwareId, JointId, PairIndex, Part, PartId, RoleValue, SolvedDesign, StepMotion, WorldBox,
 };
 use stave_scene::focus::{
     Anchor, GapMark, MotionPlay, Plan, Play, StepPlay, amount_text, around, edge_point, hinge_view,
@@ -52,8 +52,8 @@ pub enum Target {
     Joint {
         /// The joint.
         joint: JointId,
-        /// The pair's index in the joint.
-        pair: usize,
+        /// The pair.
+        pair: PairIndex,
     },
     /// A piece of hardware.
     Hardware(HardwareId),
@@ -112,7 +112,7 @@ pub fn find(design: &SolvedDesign, name: &str, pair: Option<usize>) -> Result<Ta
         }
         return Ok(Target::Joint {
             joint: joint.id,
-            pair: index,
+            pair: PairIndex::from_usize(index),
         });
     }
     if let Some(hardware) = design.hardware.iter().find(|h| h.name == name) {
@@ -141,9 +141,7 @@ pub fn targets_of(design: &SolvedDesign, item: Item) -> Vec<(Target, String)> {
             .iter()
             .flat_map(|joint| {
                 joint
-                    .pairs
-                    .iter()
-                    .enumerate()
+                    .indexed_pairs()
                     .filter(move |(_, pair)| {
                         pair.roles.iter().any(|r| r.part == part) || pair.made_parts.contains(&part)
                     })
@@ -178,7 +176,7 @@ pub fn title(design: &SolvedDesign, target: Target) -> String {
             let Some(joint) = design.joints.get(joint.index()) else {
                 return String::new();
             };
-            let Some(pair) = joint.pairs.get(pair) else {
+            let Some(pair) = joint.pair(pair) else {
                 return joint.name.clone();
             };
             let parts: Vec<&str> = pair.roles.iter().map(|r| name(r.part)).collect();
@@ -478,7 +476,7 @@ fn part_nodes(graph: &SceneGraph, parts: &[PartId]) -> Vec<NodeId> {
 }
 
 /// Every node of a joint pair's members (a dowel's pins).
-fn pair_member_nodes(graph: &SceneGraph, joint: JointId, pair: usize) -> Vec<NodeId> {
+fn pair_member_nodes(graph: &SceneGraph, joint: JointId, pair: PairIndex) -> Vec<NodeId> {
     graph
         .node_ids()
         .filter(|id| {
@@ -515,10 +513,10 @@ fn joint_focus(
     design: &SolvedDesign,
     graph: &SceneGraph,
     joint_id: JointId,
-    pair_index: usize,
+    pair_index: PairIndex,
 ) -> Option<Focus> {
     let joint = design.joints.get(joint_id.index())?;
-    let pair = joint.pairs.get(pair_index)?;
+    let pair = joint.pair(pair_index)?;
     let target = Target::Joint {
         joint: joint_id,
         pair: pair_index,

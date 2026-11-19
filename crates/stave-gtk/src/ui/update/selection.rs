@@ -1239,7 +1239,7 @@ mod tests {
                     .filter(|joint| !joint.pairs.is_empty())
                     .map(|joint| Target::Joint {
                         joint: joint.id,
-                        pair: 0,
+                        pair: stave_model::solved::PairIndex::FIRST,
                     })
                     .collect()
             })

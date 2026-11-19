@@ -248,7 +248,7 @@ impl Explained {
             .joints
             .iter()
             .flat_map(|joint| {
-                joint.pairs.iter().enumerate().map(|(index, pair)| {
+                joint.indexed_pairs().map(|(index, pair)| {
                     let parts = pair
                         .roles
                         .iter()

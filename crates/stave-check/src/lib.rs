@@ -156,7 +156,7 @@ impl Contact {
                     let parts = design
                         .joints
                         .get(joint.index())
-                        .and_then(|joint| joint.pairs.get(pair))
+                        .and_then(|joint| joint.pair(pair))
                         .map(|pair| pair.roles.iter().map(|role| ContactItem::Part(role.part)));
                     member
                         .pair_member()
@@ -592,13 +592,7 @@ impl<'a> Checker<'a> {
                 &self.design.hardware.get(hardware.index())?.members
             }
             BodyOwner::Joint { joint, pair } => {
-                &self
-                    .design
-                    .joints
-                    .get(joint.index())?
-                    .pairs
-                    .get(pair)?
-                    .members
+                &self.design.joints.get(joint.index())?.pair(pair)?.members
             }
         };
         members.iter().find(|m| m.id == member)
@@ -623,7 +617,7 @@ impl<'a> Checker<'a> {
                         let found = self.design.joints.get(joint.index());
                         let between = found
                             .filter(|joint| joint.pairs.len() > 1)
-                            .and_then(|joint| joint.pairs.get(pair))
+                            .and_then(|joint| joint.pair(pair))
                             .map(|pair| {
                                 let parts: Vec<String> =
                                     pair.roles.iter().map(|r| self.part_name(r.part)).collect();

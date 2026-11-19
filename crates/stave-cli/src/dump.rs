@@ -156,7 +156,7 @@ fn member_name(design: &SolvedDesign, member: BodyRef) -> String {
             match design
                 .joints
                 .get(joint.index())
-                .and_then(|j| Some((j.name.as_str(), &j.pairs.get(pair)?.members)))
+                .and_then(|j| Some((j.name.as_str(), &j.pair(pair)?.members)))
             {
                 Some(found) => found,
                 None => return String::new(),

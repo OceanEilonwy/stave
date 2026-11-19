@@ -99,8 +99,8 @@ fn mismatch(kind: &KindDef, handed: &Handed) -> Option<Mismatch> {
         *slot = Some((value, *span));
     }
     for (name, value, name_span, value_span) in &handed.named {
-        if let Some(index) = kind.role(name) {
-            if let Some(slot) = given.get_mut(index) {
+        if let Some(index) = kind.role_named(name) {
+            if let Some(slot) = given.get_mut(index.index()) {
                 *slot = Some((value, *value_span));
             }
             continue;

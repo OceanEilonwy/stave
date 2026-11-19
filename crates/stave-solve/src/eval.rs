@@ -466,7 +466,7 @@ impl Solver<'_> {
             Symbol::Def(def) => self.def_value(def, env, span),
             Symbol::Role(_, index) => env
                 .kind
-                .and_then(|k| k.roles.get(index).cloned())
+                .and_then(|k| k.roles.get(index.index()).cloned())
                 .ok_or_else(|| self.eval_error(env, span, "a role has no part here", "roles are only bound where the kind is used in a joint or hardware declaration").into()),
             Symbol::KindParam(_, index) => match env.kind {
                 Some(kind_env) => self.kind_param(kind_env, index, env.file, span),
@@ -474,7 +474,7 @@ impl Solver<'_> {
             },
             Symbol::MadePart(_, index) => env
                 .kind
-                .and_then(|k| k.made.get(index).copied())
+                .and_then(|k| k.made.get(index.index()).copied())
                 .map(Value::Part)
                 .ok_or_else(|| self.eval_error(env, span, "the made part doesn't exist yet here", "refer to made parts only in cuts and assembly steps").into()),
             Symbol::Mount(_) => env

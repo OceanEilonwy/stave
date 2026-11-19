@@ -28,7 +28,7 @@ use stave_lang::placement::{Axis, Face, PartAxis};
 use stave_lang::units::{ExactLength, Length};
 use stave_lang::{Code, Diagnostic, FileId, Label};
 use stave_model::defs::{DefId, StockField};
-use stave_model::ids::{JointId, PartId, StockId};
+use stave_model::ids::{JointId, PairIndex, PartId, StockId};
 use stave_model::nonempty::NonEmpty;
 use stave_model::solved::{
     self, BoardIndex, BodyCarrier, Contact, Cut, CutKind, CutPlace, CutSource, Depth, End, Joint,
@@ -1003,10 +1003,13 @@ impl Solver<'_> {
             array: None,
         };
         let joint_name = format!("{name}.splice[{}]", splice + 1);
-        let source = CutSource::Joint { joint, pair: 0 };
+        let source = CutSource::Joint {
+            joint,
+            pair: PairIndex::FIRST,
+        };
         let mut requires = Vec::new();
         let mut failure: Option<Failure> = None;
-        for (index, require) in kind.requires.iter().enumerate() {
+        for (index, require) in kind.indexed_requires() {
             if self.defer_wall_rule(source, kind_id, index, require, &kind_env)? {
                 continue;
             }
@@ -1048,7 +1051,7 @@ impl Solver<'_> {
         if let Some(joint_def) = &kind.joint {
             for extend in &joint_def.adds {
                 let by = self.eval_length(&extend.by, &kind_env)?;
-                let Some(piece) = parts.get(extend.role).copied() else {
+                let Some(piece) = parts.get(extend.role.index()).copied() else {
                     continue;
                 };
                 for other in parts.iter().copied().filter(|o| *o != piece) {
@@ -1339,7 +1342,10 @@ impl Solver<'_> {
                 list.push(joint);
             }
             tables.made.push(MadeInfo {
-                origin: PartOrigin::Made { joint, pair: 0 },
+                origin: PartOrigin::Made {
+                    joint,
+                    pair: PairIndex::FIRST,
+                },
                 assembly,
                 name: made_name,
                 stock: placed.stock,
@@ -1354,7 +1360,10 @@ impl Solver<'_> {
             kind: Some(&pair.env),
             array: None,
         };
-        let source = CutSource::Joint { joint, pair: 0 };
+        let source = CutSource::Joint {
+            joint,
+            pair: PairIndex::FIRST,
+        };
         for cut_def in &joint_def.cuts {
             let (file, span) = self.part_place(part);
             let at = CutAt {
@@ -1378,7 +1387,7 @@ impl Solver<'_> {
         let mut cut_order = Vec::new();
         if !joint_def.cut_first.is_empty() {
             for role in &joint_def.cut_first {
-                if let Some(part) = pair.parts.get(*role)
+                if let Some(part) = pair.parts.get(role.index())
                     && !cut_order.contains(part)
                 {
                     cut_order.push(*part);
@@ -1623,7 +1632,7 @@ fn rebind_split(design: &mut SolvedDesign, split: Split) {
             lows.iter().max().map_or(whole, |(_, id)| *id),
         )
     };
-    let mut chosen: BTreeMap<(JointId, usize), PartId> = BTreeMap::new();
+    let mut chosen: BTreeMap<(JointId, PairIndex), PartId> = BTreeMap::new();
     for joint_index in 0..design.joints.len() {
         let Some(joint) = design.joints.get(joint_index) else {
             continue;
@@ -1632,11 +1641,11 @@ fn rebind_split(design: &mut SolvedDesign, split: Split) {
             continue;
         }
         let id = joint.id;
-        for pair_index in 0..joint.pairs.len() {
+        for pair_index in (0..joint.pairs.len()).map(PairIndex::from_usize) {
             let Some(pair) = design
                 .joints
                 .get(joint_index)
-                .and_then(|j| j.pairs.get(pair_index))
+                .and_then(|j| j.pair(pair_index))
             else {
                 continue;
             };
@@ -1661,7 +1670,7 @@ fn rebind_split(design: &mut SolvedDesign, split: Split) {
             let Some(pair) = design
                 .joints
                 .get_mut(joint_index)
-                .and_then(|j| j.pairs.get_mut(pair_index))
+                .and_then(|j| j.pairs.get_mut(pair_index.index()))
             else {
                 continue;
             };

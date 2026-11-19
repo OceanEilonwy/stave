@@ -117,7 +117,7 @@ impl Checker<'_> {
                     .design
                     .joints
                     .get(joint.index())
-                    .and_then(|j| j.pairs.get(pair))
+                    .and_then(|j| j.pair(pair))
                     .map(|p| p.roles.iter().map(|r| self.part_name(r.part)).collect())
                     .unwrap_or_default();
                 format!("{} in {}", and_list(&parts), self.joint_name(joint))
@@ -344,7 +344,7 @@ impl Checker<'_> {
             .model
             .defs
             .kind(rule.kind)
-            .and_then(|kind| kind.requires.get(rule.require))
+            .and_then(|kind| kind.require(rule.require))
             .map(|require| (require.decl.file, require.decl.span));
         let Some((part_id, wall, index)) = least else {
             if copies > 0

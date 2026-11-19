@@ -22,8 +22,8 @@ use super::{Body, Cx, Origin, Resolver};
 use crate::defs::{
     CutDef, CutName, CutStepDef, DefId, ExtendDef, HardwareKindDef, JointKindDef, JointMember,
     KindDef, MadePartDef, MadeTerm, MadeTermKind, MarkStepDef, Need, OperationDef, ParamDef, RExpr,
-    RExprKind, RecipeDef, RequireDef, RoleDef, SelectorDef, Setting, StepDef, StepMotionDef,
-    Symbol, UseDef, Word,
+    RExprKind, RecipeDef, RequireDef, RoleDef, RoleIndex, SelectorDef, Setting, StepDef,
+    StepMotionDef, Symbol, UseDef, Word,
 };
 use crate::ids::KindId;
 use crate::types::Ty;
@@ -781,7 +781,7 @@ impl Resolver<'_> {
         }
     }
 
-    fn role_index(&mut self, cx: &Cx, expr: &ast::Expr, what: &str) -> Option<usize> {
+    fn role_index(&mut self, cx: &Cx, expr: &ast::Expr, what: &str) -> Option<RoleIndex> {
         match self.joint_member(cx, expr, what)? {
             JointMember::Role(index) => Some(index),
             JointMember::Made(_) => {
