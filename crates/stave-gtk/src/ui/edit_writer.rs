@@ -3,64 +3,113 @@
 //! (or the editor is open, which opens one), so the text shows the change
 //! unsaved and one undo takes it back; otherwise to disk, as the command
 //! line does. The session decides what to write; this only writes it.
+//!
+//! The window builds a writer for each Add ([`super::files::FilesPage::writer`])
+//! from its own copies of the open buffers (GObjects the Files component
+//! published) and whether the editor shows, so the writer shares no state.
+//! A file it writes while the editor is open but that has no tab gets a
+//! buffer made here, which the writer reports through a channel the window
+//! drains straight after the commit ([`super::files::FilesPage::take_written`]):
+//! the window reads its unsaved text at once and the component adopts it
+//! as the file's tab.
 
 use stave_app::i18n::{fill_in, tr};
-use std::cell::Cell;
+use std::collections::BTreeMap;
 use std::io;
-use std::rc::{Rc, Weak};
+use std::sync::mpsc;
 
 use gtk::prelude::*;
 use stave_app::editing::{FileEdit, WriteEdits};
 use stave_app::scratch::DiskWriter;
 use stave_ide::Document;
 
-use super::files::FilesPage;
+use super::files::Written;
 
 /// Writes an edit's files through the open buffers, else to disk.
 pub(super) struct BufferWriter {
-    files: Weak<FilesPage>,
+    /// The open documents' buffers, and any made for this commit.
+    buffers: BTreeMap<Document, gtk::TextBuffer>,
     /// The editor is open: a file the commit writes is opened in a tab, so
     /// the text shows the change.
-    editor_open: Rc<Cell<bool>>,
+    editor_open: bool,
+    /// The tag table a buffer made here shares with the editor's.
+    table: gtk::TextTagTable,
+    /// Where it says what it wrote through a buffer.
+    written: mpsc::Sender<Written>,
 }
 
 impl BufferWriter {
+    /// A writer through the Files page's buffers as they are now, opening
+    /// tabs while `editor_open` says the editor shows. Read once, here:
+    /// the window installs a fresh writer before every Add
+    /// (`Window::dispatch`), so the cell (still kept by `edit_view.rs`)
+    /// needs no sharing.
+    pub(super) fn new<Then: std::fmt::Debug + 'static>(
+        files: &super::files::FilesPage<Then>,
+        editor_open: std::rc::Rc<std::cell::Cell<bool>>,
+    ) -> BufferWriter {
+        files.writer(editor_open.get())
+    }
+
     /// A writer through these buffers; `editor_open` says, when Add is
     /// pressed, whether the editor shows.
-    pub(super) fn new(files: &Rc<FilesPage>, editor_open: Rc<Cell<bool>>) -> BufferWriter {
+    pub(super) fn through(
+        buffers: BTreeMap<Document, gtk::TextBuffer>,
+        editor_open: bool,
+        table: gtk::TextTagTable,
+        written: mpsc::Sender<Written>,
+    ) -> BufferWriter {
         BufferWriter {
-            files: Rc::downgrade(files),
+            buffers,
             editor_open,
+            table,
+            written,
         }
     }
 
-    /// The buffer a file is written through, if any. A file the commit
-    /// creates always goes to disk.
+    /// The buffer a file is written through, if it has a tab. A file the
+    /// commit creates always goes to disk.
     fn buffer(&self, file: &FileEdit) -> Option<gtk::TextBuffer> {
         if file.created {
             return None;
         }
-        self.files
-            .upgrade()?
-            .buffer_for(&file.path, self.editor_open.get())
+        self.buffers
+            .get(&Document::File(file.path.clone()))
+            .cloned()
+    }
+
+    /// With the editor open, a file with no tab is written through a new
+    /// buffer holding its text on disk, so one undo takes the change back.
+    fn wants_buffer(&self, file: &FileEdit) -> bool {
+        self.editor_open && !file.created
     }
 }
 
 impl WriteEdits for BufferWriter {
     fn write_edits(&mut self, file: &FileEdit) -> io::Result<()> {
-        match self.buffer(file) {
-            Some(buffer) => {
-                apply_to_buffer(&buffer, file)?;
-                // The editor shows the file the change went into.
-                if self.editor_open.get()
-                    && let Some(files) = self.files.upgrade()
-                {
-                    files.open_document(&Document::File(file.path.clone()));
-                }
-                Ok(())
+        let document = Document::File(file.path.clone());
+        let (buffer, created) = match self.buffer(file) {
+            Some(buffer) => (buffer, false),
+            None if self.wants_buffer(file) => {
+                let text = std::fs::read_to_string(&file.path)?;
+                (super::editor::new_buffer(&self.table, &text), true)
             }
-            None => DiskWriter.write_edits(file),
+            None => return DiskWriter.write_edits(file),
+        };
+        apply_to_buffer(&buffer, file)?;
+        if created {
+            self.buffers.insert(document.clone(), buffer.clone());
         }
+        if created || self.editor_open {
+            // The window may have gone; then nobody needs to know.
+            let _ = self.written.send(Written {
+                document,
+                created: created.then_some(buffer),
+                // The editor shows the file the change went into.
+                show: self.editor_open,
+            });
+        }
+        Ok(())
     }
 
     fn can_write(&mut self, file: &FileEdit) -> io::Result<()> {
@@ -72,6 +121,7 @@ impl WriteEdits for BufferWriter {
                     Err(changed(file))
                 }
             }
+            // A buffer made for it would hold the file's text on disk.
             None => DiskWriter.can_write(file),
         }
     }

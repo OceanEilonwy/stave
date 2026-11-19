@@ -186,11 +186,9 @@ impl Window {
             "cancel" => self.send_edit(EditCommand::Cancel),
             // An Add with the file open in the editor leaves the change
             // unsaved in its buffer, as typing would; Ctrl+S writes it.
-            "save" => {
-                if !self.widgets.files.save_all() {
-                    return Err("the open files couldn't be saved".to_owned());
-                }
-            }
+            // Saving is queued for the Code panel, after the steps so far;
+            // a failure says so in its dialog.
+            "save" => self.widgets.files.save_all(None),
             "turn" => {
                 // The orbit drag between two clicks, so a face out of
                 // sight can be brought round and pointed at.
