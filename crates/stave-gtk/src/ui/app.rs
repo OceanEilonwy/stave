@@ -222,8 +222,10 @@ pub(super) struct Shell {
     /// owner: without it a window is dropped as soon as it opens and its
     /// background check's result has nowhere to land.
     windows: RefCell<Vec<Rc<Window>>>,
-    /// The start page, while it shows.
-    start: RefCell<Option<Rc<StartPage>>>,
+    /// The start page, while it shows. A `Cell`, not a `RefCell`: it is
+    /// only taken and set, so no borrow can be held while closing the page
+    /// re-enters `start_closed` through GTK's `close-request` signal.
+    start: Cell<Option<Rc<StartPage>>>,
     /// The command line's options, taken by the first project window.
     first: Cell<Option<Options>>,
     /// The style the window starts with: the command line's, or the one
@@ -251,7 +253,7 @@ impl Shell {
         Rc::new(Shell {
             application: application.clone(),
             windows: RefCell::new(Vec::new()),
-            start: RefCell::new(None),
+            start: Cell::new(None),
             theme: options.theme.unwrap_or(remembered.theme),
             first: Cell::new(Some(options)),
             remembered: Cell::new(remembered),
@@ -332,7 +334,7 @@ impl Shell {
         if new_project {
             page.ask_new_project();
         }
-        *self.start.borrow_mut() = Some(page);
+        self.start.set(Some(page));
     }
 
     /// Opens a project folder in a window of its own, or brings forward
@@ -367,7 +369,7 @@ impl Shell {
             Ok(window) => {
                 self.own(&window);
                 self.record_recent(&folder);
-                if let Some(page) = self.start.borrow_mut().take() {
+                if let Some(page) = self.start.take() {
                     page.window.close();
                 }
                 Some(window)
@@ -387,7 +389,7 @@ impl Shell {
 
     /// The start page has closed.
     pub(super) fn start_closed(&self) {
-        self.start.borrow_mut().take();
+        self.start.take();
     }
 
     /// Keeps a project window alive until its GTK window is destroyed.
@@ -396,12 +398,20 @@ impl Shell {
         let shell = Rc::downgrade(self);
         let closing = Rc::downgrade(window);
         window.widgets.window.connect_destroy(move |_| {
-            if let Some(shell) = shell.upgrade() {
-                shell
-                    .windows
-                    .borrow_mut()
-                    .retain(|window| !std::ptr::eq(Rc::as_ptr(window), closing.as_ptr()));
-            }
+            let Some(shell) = shell.upgrade() else {
+                return;
+            };
+            // Taken out under the borrow, dropped after it: dropping the
+            // window drops its widgets, whose own handlers may look at the
+            // windows again.
+            let gone = {
+                let mut windows = shell.windows.borrow_mut();
+                let at = windows
+                    .iter()
+                    .position(|window| std::ptr::eq(Rc::as_ptr(window), closing.as_ptr()));
+                at.map(|at| windows.remove(at))
+            };
+            drop(gone);
         });
     }
 
@@ -441,8 +451,9 @@ impl Shell {
             .or(windows.first());
         if let Some(window) = in_front {
             window.widgets.toasts.add_toast(toast());
-        } else if let Some(page) = self.start.borrow().as_ref() {
+        } else if let Some(page) = self.start.take() {
             page.toasts.add_toast(toast());
+            self.start.set(Some(page));
         }
     }
 
