@@ -412,6 +412,8 @@ impl FilesList {
         );
         list.set_selection_mode(gtk::SelectionMode::None);
         list.set_activate_on_single_click(true);
+        // Compact rows, like the Parts panel's (style.rs, SHELL).
+        list.add_css_class("stave-files-list");
         let files = Rc::new(FilesList {
             root,
             list,

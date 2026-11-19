@@ -404,6 +404,9 @@ pub fn as_link(button: gtk::Button) -> gtk::Button {
 /// with Problems and Output folded into it, and the tool groups' drop
 /// outlines. Loaded after `SHARED` and `COLOURS`, so these win.
 const SHELL: &str = r#"
+/* The Files panel: 24 px rows, like the Parts panel's. */
+.stave-panel-list.stave-files-list > row { min-height: 24px; padding: 2px 10px; margin: 0 4px; font-size: 12.5px; }
+.stave-panel-list.stave-files-list > row image { -gtk-icon-size: 14px; }
 headerbar.stave-header { min-height: 34px; }
 .stave-header > windowhandle > box { padding: 0 4px; min-height: 34px; }
 .stave-header > windowhandle > box > box { border-spacing: 4px; }
