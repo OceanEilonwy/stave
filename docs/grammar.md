@@ -602,9 +602,9 @@ without an import or a prefix:
 
 | Module | Folder | Provides |
 |---|---|---|
-| `std:joinery` | `std/joinery` | joint kinds (`dado`, `rabbet`, `groove`, `dowel`, `round_tenon`, `socket`, `screw`, `cope_and_stick`, `mortise_tenon`, `half_lap`) and the standard recipes |
-| `std:hardware` | `std/hardware` | hardware kinds (`side_mount_slide`, `euro_hinge`, `butt_hinge`, `knob`, `bar_pull`) and fasteners (`dowel_pin`, `wood_screw`) |
-| `std:tools` | `std/tools` | tool kinds (`square`, `chisel`, `router`, `drill`, `lathe`, ...) |
+| `std:joinery` | `std/joinery` | joint kinds (`dado`, `rabbet`, `groove`, `dowel`, `round_tenon`, `socket`, `screw`, `cope_and_stick`, `mortise_tenon`, `half_lap`, `glued_face`), edge joints for parts made of boards (`glued_edge`, `tongue_and_groove`, `splined_edge`, `chigiri`, `suitsuki_zan`; see [Boards](#boards)), splices (`lap_splice`, `kanawa_tsugi`; see [Splices](#splices)) and the standard recipes |
+| `std:hardware` | `std/hardware` | hardware kinds (`side_mount_slide`, `euro_hinge`, `wide_hinge_165`, `butt_hinge`, `knob`, `bar_pull`) and fasteners (`dowel_pin`, `wood_screw`) |
+| `std:tools` | `std/tools` | tool kinds: marking and measuring (`pencil`, `marking_knife`, `square`, `tape`, `marking_gauge`, `mortise_gauge`, `sliding_bevel`, `dividers`, `calipers`, `awl`), hand tools (`tenon_saw`, `dovetail_saw`, `chisel`, `mortise_chisel`, `mallet`, `router_plane`, `shoulder_plane`, `block_plane`, `spokeshave`, `rasp`, `brace`, `auger_bit`, `screwdriver`, `clamps`), power tools (`drill`, `depth_stop`, `router`, `straight_bit`, `dovetail_bit`, `table_saw`, `dado_stack`, `bandsaw`) and turning (`lathe`, `roughing_gouge`, `spindle_gouge`, `parting_tool`) |
 
 Beginners write `dado(...)`, not `joinery.dado(...)`. Anything from outside
 `std` is always qualified (`japanese.ari_tsugi`), so a joint from someone else
@@ -905,7 +905,7 @@ hardware list and the work plan read them:
 
 | Base | Required | Optional |
 |---|---|---|
-| `fastener` | `diameter`, `length`: `Length` | `envelope`, `model`, `license`, `species` |
+| `fastener` | `diameter`, `length`: `Length` | `envelope` (read by nothing; see [Hardware](#hardware)), `model`, `license`, `species` |
 | `tool` | | `title`: `Text`; `powered`: `Bool` (default `false`) |
 
 A fastener's `species` is a species word, as a stock's is: what it is
@@ -1696,6 +1696,16 @@ geometry can't make yet are cuts other than `drill` and `spigot` on round
 stock or a turned part: those are `warning[not-supported]`, and the part is
 drawn and checked without them.
 
+**Joints with nothing cut.** A kind need not cut anything: with no
+`cut`, `insert:` or `adds:`, it only says the parts are held together.
+std's `glued_face` is one: two parts glued face to face, as a cleat glued
+inside an apron, a lining, or a leg doubled up from two boards
+(`joint cleat_glue : glued_face(cleat, into: apron)`). Its parts must
+meet like any joint's, and the joint holds them (see [Held](#held)); its
+`note:` goes on the work plan. Two boards glued edge to edge to make a
+wide part are not a joint between parts but the part's
+[boards](#boards), joined by `glued_edge`.
+
 #### Joint members
 
 A joint kind may place pieces where its parts touch: a dowel's pins, the
@@ -2108,7 +2118,12 @@ dowel_pin(...)`), and `tool` kinds are listed in a
 project's `tools:` and a recipe's `tools:`.
 
 **Envelopes.** Outside a member, `box(length:, width:, thickness:)` and
-`cylinder(diameter:, length:)` are envelopes: a fastener's size.
+`cylinder(diameter:, length:)` are envelopes, the only values a fastener's
+optional `envelope` entry takes. Nothing reads an envelope: no check and no
+drawing. A fastener placed as a [joint member](#joint-members) is drawn
+and checked by the member's shape, and one in a `uses:` is only counted.
+The entry is still accepted, so an older library checks, but the standard
+fasteners don't write it.
 
 #### Adjustment
 
@@ -2690,8 +2705,8 @@ These are looked up when a bare name is called (see [Names](#names), rule 3).
 | `turned(profile)` | `Shape` | turned on a lathe to a profile |
 | `joined(by:)` | `Boards` | how the boards of a part are joined: `by:` is a joint kind value or a list of them; see [Boards](#boards) |
 | `spliced(by:, at:, from:)` | `Splices` | where a part is spliced end to end into pieces: `by:` a joint kind value, `at:` a length or a list of them, measured from the end `from:` names; see [Splices](#splices) |
-| `box(length:, width:, thickness:)` | `Envelope` | a hardware envelope. Written `box(across:, up:, deep:)`, with those three argument names, it is instead the `Region` that is the project's root; see [Regions](#regions) |
-| `cylinder(diameter:, length:)` | `Envelope` | a hardware envelope; its axis stands off the mount face |
+| `box(length:, width:, thickness:)` | `Envelope` | a fastener's `envelope`, which nothing reads (see [Hardware](#hardware)). Written `box(across:, up:, deep:)`, with those three argument names, it is instead the `Region` that is the project's root; see [Regions](#regions) |
+| `cylinder(diameter:, length:)` | `Envelope` | a fastener's `envelope`, which nothing reads (see [Hardware](#hardware)) |
 | `model(source, align:, sha256:)` | `Model` | a `.glb` model; optional `align: node("name")` and `sha256: "<hex>"` (see [Hardware](#hardware)) |
 | `ends(inset:)`, `pitch(d)`, `gap(d)` | `Spacing` | used by `spaced`, with the bare words `evenly` and `ends` |
 | `contact(a, b)` | `Patch` | the patch where two parts touch, read as `.length` (its longer side) and `.width` (its shorter side); see below |
