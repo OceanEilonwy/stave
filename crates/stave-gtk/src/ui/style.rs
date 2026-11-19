@@ -221,6 +221,7 @@ stavetabstrip .stave-tab:hover { background: alpha(currentColor, 0.05); color: c
 stavetabstrip .stave-tab.shown { color: currentColor; background: alpha(currentColor, 0.06); box-shadow: inset 0 -2px @accent_bg_color; }
 stavetabstrip button.stave-tab-show { min-height: 28px; padding: 0 4px 0 10px; border-radius: 0; background: transparent; color: inherit; font-size: 0.818rem; font-weight: 600; }
 stavetabstrip button.stave-tab-show image { -gtk-icon-size: 14px; }
+stavetabstrip .stave-tab-fixed button.stave-tab-show { padding: 0 10px; }
 stavetabstrip button.stave-tab-close { min-height: 18px; min-width: 18px; margin: 0 6px 0 0; padding: 0; border-radius: 4px; opacity: 0; }
 stavetabstrip .stave-tab.shown button.stave-tab-close, stavetabstrip .stave-tab:hover button.stave-tab-close { opacity: 0.7; }
 stavetabstrip button.stave-tab-close:hover { opacity: 1; background: alpha(currentColor, 0.1); }

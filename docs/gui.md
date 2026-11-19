@@ -341,17 +341,22 @@ values, the repeat handles) sits over the model. Each panel is a
 `panel::FrameTabBar`); drag a tab to an edge, into the centre (a
 `panel::Grid`, which splits into columns and rows, so Code can sit beside
 the 3D view) or into another frame, or pick "Move to the Right" (left,
-bottom, top, middle) from its tab's menu; close it with its ×; show an edge
-again from the status bar's toggles. The default layout is the compact
-board (H2, `Layout::default`): Parts in a frame above Files on the left;
-the Model in the centre with Code as the next tab of the same frame (so
-the open files sit beside the Model); Details with Edit as tabs on the
-right, which shows; Problems and Output at the bottom, whose edge starts
-hidden (the status bar opens it). The edges start 272 px (left), 340 px
+bottom, top, middle) from its tab's menu; close it with its × (every
+panel but the 3D view, whose tab has no ×); show an edge again from the
+status bar's toggles. A first launch shows only the 3D view, Parts on the
+left and Problems along the bottom (`Layout::default`), so a beginner
+meets their project rather than a dock. Every other panel opens from the
+status bar's Panels menu (Code also from "Edit the Text" and Ctrl+E; Edit
+when an edit starts), into its home on the compact board (H2,
+`Layout::board`): Parts in a frame above Files on the left; the Model in
+the centre with Code as the next tab of the same frame (so the open files
+sit beside the Model); Details with Edit as tabs on the right; Problems
+and Output at the bottom. Choosing a part reveals its line in the Code
+panel only while that panel is open. The edges start 272 px (left), 340 px
 (right) and 220 px (bottom) wide; a window narrower than 1000 sp narrows
 the sides to 220 and 260. A layout file older than the Edit panel puts it
 beside Details wherever that file put Details, and a panel a file doesn't
-mention (Output, in a board B file) goes where the default puts it, so a
+mention (Output, in a board B file) goes where the compact board puts it, so a
 saved board B still opens as board B. The layout is remembered per user
 in `~/.config/stave/layout` (saved on every drop and when the window
 closes; a broken file means the default) and never in a `.stave` file:
@@ -365,7 +370,7 @@ tool camera right        # where a tool group on the 3D view is docked
 ```
 
 "Reset Layout" (View menu, and the status bar's Panels menu) puts the
-compact board back, the tool groups in their usual spots.
+first launch's three panels back, the tool groups in their usual spots.
 
 - **3D View** is the view with its controls floating on it (part of the
   panel, so they go wherever the view is docked): the scene menu at the
@@ -396,7 +401,7 @@ compact board back, the tool groups in their usual spots.
   The 3D view's tab reads "Model" with a cube. A panel can show its own
   tabs in place of its one (`tab_strip::set_page_tabs`): the Code panel
   shows one tab per open file (its problem dot, its name in monospace and
-  a yellow ● while it has unsaved changes), so in the default layout the
+  a yellow ● while it has unsaved changes), so on the compact board the
   strip reads "Model · doors.stave ● · carcass.stave". Clicking a file's
   tab shows the Code panel on that file; clicking Model shows the 3D view.
   With no file open the Code panel keeps its own "Code" tab.

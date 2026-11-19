@@ -991,12 +991,14 @@ impl Window {
             // A part, assembly or piece of hardware chosen anywhere opens
             // the file that places it, at that line, in the Code panel
             // (forward unless it would cover the 3D view; the keyboard
-            // stays where it is).
+            // stays where it is). A closed Code panel stays closed: a
+            // first launch doesn't show code until it is asked for.
             (Some(_), Some(placed)) if !self.state.borrow().linking => {
                 files.reveal(&placed);
-                self.widgets
-                    .workbench
-                    .bring_forward_beside_view(workbench::PanelId::Code);
+                let workbench = &self.widgets.workbench;
+                if workbench.is_open(workbench::PanelId::Code) {
+                    workbench.bring_forward_beside_view(workbench::PanelId::Code);
+                }
             }
             _ => {}
         }
@@ -3930,7 +3932,9 @@ fn main_menu(recent: &gio::Menu) -> gio::Menu {
             ("Frame Everything", "win.frame"),
         ]),
     );
-    // Any panel can be closed; these bring it back where it was.
+    // Any panel but the 3D view can be closed, and a first launch shows
+    // only the 3D view, Parts and Problems; these open the others, a
+    // closed one where it was.
     let panels = gio::Menu::new();
     for id in workbench::PanelId::ALL {
         panels.append(

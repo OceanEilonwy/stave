@@ -1,7 +1,7 @@
 //! The panels' headers: a slim strip of flush tabs, as in an IDE, each as
 //! wide as its title (libadwaita's tab bar, which libpanel offers, draws
 //! rounded tabs a fixed 220 px wide). A tab shows its panel, its × closes
-//! it, dragging it docks the panel elsewhere (libpanel's drop targets take
+//! it (the Model's tab has none: the 3D view can't be closed), dragging it docks the panel elsewhere (libpanel's drop targets take
 //! a dragged `panel::Widget`), and the menu at the end holds the shown
 //! panel's own menu ("Move to the Right", ...).
 //!
@@ -406,8 +406,9 @@ fn show_step(frame: &panel::Frame, step: i32) -> bool {
     true
 }
 
-/// One tab: the panel's icon and title, a × to close it; clicking shows
-/// it, dragging docks it elsewhere.
+/// One tab: the panel's icon and title, a × to close it (not the 3D
+/// view's, which can't be closed); clicking shows it, dragging docks it
+/// elsewhere.
 fn tab(frame: &panel::Frame, page: &panel::Widget) -> Tab {
     let title = page.title().map(|t| t.to_string()).unwrap_or_default();
     let label = gtk::Label::builder()
@@ -438,6 +439,20 @@ fn tab(frame: &panel::Frame, page: &panel::Widget) -> Tab {
             frame.set_visible_child(&page);
         }
     });
+    let root = gtk::Box::builder().css_classes(["stave-tab"]).build();
+    root.append(&show);
+    // Read as a property: `id()` asserts on a panel that has none.
+    let id = page.property::<Option<String>>("id");
+    if id.as_deref() == Some(super::workbench::PanelId::View.word()) {
+        root.add_css_class("stave-tab-fixed");
+        carry_on_drag(&root, page);
+        return Tab {
+            page: page.downgrade(),
+            root,
+            show,
+            active: true,
+        };
+    }
     let close = gtk::Button::builder()
         .icon_name("window-close-symbolic")
         .css_classes(["flat", "stave-tab-close"])
@@ -451,8 +466,6 @@ fn tab(frame: &panel::Frame, page: &panel::Widget) -> Tab {
             page.close();
         }
     });
-    let root = gtk::Box::builder().css_classes(["stave-tab"]).build();
-    root.append(&show);
     root.append(&close);
     carry_on_drag(&root, page);
     Tab {
@@ -536,6 +549,29 @@ mod tests {
     use super::*;
 
     #[test]
+    fn the_models_tab_has_no_close_button() {
+        crate::ui::gtk_test::on_gtk_thread(|| {
+            panel::init();
+            let frame = panel::Frame::new();
+            let model = panel::Widget::builder().title("Model").build();
+            model.set_id(super::super::workbench::PanelId::View.word());
+            let parts = panel::Widget::builder().title("Parts").build();
+            assert!(
+                tab(&frame, &model)
+                    .root
+                    .last_child()
+                    .is_some_and(|child| { !child.has_css_class("stave-tab-close") })
+            );
+            assert!(
+                tab(&frame, &parts)
+                    .root
+                    .last_child()
+                    .is_some_and(|child| { child.has_css_class("stave-tab-close") })
+            );
+        });
+    }
+
+    #[test]
     fn tabs_stay_put_when_another_page_shows() {
         crate::ui::gtk_test::on_gtk_thread(tabs_stay_put);
     }
@@ -605,6 +641,7 @@ mod tests {
         // The × is not a Tab stop.
         let close = before[0].last_child().unwrap();
         assert!(!close.is_focusable());
+        assert!(close.has_css_class("stave-tab-close"));
         // Every icon button (the ×s, the ▾ menu) has a name.
         assert_eq!(
             crate::ui::gtk_test::unnamed_buttons(&strip),
