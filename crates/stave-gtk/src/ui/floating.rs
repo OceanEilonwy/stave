@@ -7,16 +7,28 @@
 //! upright on the right edge. There is no handle to grab: the press and
 //! hold is the way in. Which spot each group is in belongs to the panel
 //! layout (`workbench`), never to a `.stave` file.
+//!
+//! The docking is a relm4 component, [`FloatsComponent`]: the groups'
+//! spots and the drag in progress are its model, only its update changes
+//! them, and the gestures only send [`FloatsInput`] messages. The overlay
+//! asks where each control goes while GTK lays it out, which no message
+//! can answer, so after every update the overlay's handler is given a
+//! copy of what it needs ([`Placer`]), as the outlines' draw function is.
+//! [`Floats`] keeps the older API in front of it until the window moves
+//! to relm4 too.
 
 use std::cell::RefCell;
 use std::rc::Rc;
 
 use adw::prelude::*;
-use gtk::gdk;
+use gtk::{gdk, glib};
+use relm4::{Component, ComponentParts, ComponentSender};
 
+use super::relm4_shim::Bridge;
 use super::view_layout::{self, Floating, Group, Rect, Spot, Spots};
 
 /// The floating controls, measured by GTK.
+#[derive(Clone)]
 struct Measured(Vec<(Floating, gtk::Widget)>);
 
 impl Measured {
@@ -51,6 +63,7 @@ impl view_layout::Measure for Measured {
 }
 
 /// A group being dragged.
+#[derive(Clone, Debug, PartialEq)]
 struct Drag {
     group: Group,
     /// Where it was when the drag started.
@@ -84,20 +97,387 @@ impl Drag {
     }
 }
 
+/// Where the controls go, as of the last update: the overlay's
+/// `get-child-position` handler keeps this copy until the next update
+/// hands it a new one, so it shares nothing with the model.
+#[derive(Clone)]
+struct Placer {
+    measured: Measured,
+    spots: Spots,
+    /// The group being dragged and where it is drawn as it follows the
+    /// pointer.
+    dragged: Option<(Group, Rect)>,
+}
+
+impl Placer {
+    /// Where a control goes now.
+    fn rect_of(&self, figure: &gtk::Overlay, item: Floating) -> gdk::Rectangle {
+        let placement =
+            view_layout::place(figure.width(), figure.height(), &self.measured, &self.spots);
+        // A control left out (hidden, or no room) takes no room either,
+        // so it can't catch the pointer meant for the view.
+        let mut rect = placement.get(item).unwrap_or(Rect {
+            x: 0,
+            y: 0,
+            width: 0,
+            height: 0,
+        });
+        if let Some((group, shown_at)) = self.dragged
+            && Some(group) == Group::of(item)
+        {
+            rect = Rect {
+                width: rect.width,
+                height: rect.height,
+                ..shown_at
+            };
+        }
+        gdk::Rectangle::new(rect.x, rect.y, rect.width, rect.height)
+    }
+}
+
+/// The docking's state: the spot each tool group is in, and the drag in
+/// progress.
+#[derive(Debug)]
+pub struct FloatsComponent {
+    spots: Spots,
+    drag: Option<Drag>,
+}
+
+/// What the floating controls are made with.
+pub struct FloatsInit {
+    /// The 3D view's overlay, which the controls float on.
+    pub figure: gtk::Overlay,
+    /// The controls, each with what it is.
+    pub floating: Vec<(Floating, gtk::Widget)>,
+    /// The spot each tool group starts in.
+    pub spots: Spots,
+}
+
+/// What the floating controls are told.
+#[derive(Debug)]
+pub enum FloatsInput {
+    /// The tool groups are in these spots now (a layout applied or
+    /// reset): lay each out for its spot and place them again.
+    Refresh(Spots),
+    /// People held a group long enough to drag it, pressing here inside
+    /// it.
+    Held {
+        /// The group.
+        group: Group,
+        /// Where the press was, from the group's left edge.
+        x: f64,
+        /// Where the press was, from the group's top edge.
+        y: f64,
+    },
+    /// People moved the pointer while dragging, this far from the press.
+    Moved {
+        /// Across.
+        x: f64,
+        /// Down.
+        y: f64,
+    },
+    /// People let go of the group (or the drag was cancelled).
+    LetGo,
+}
+
+/// What the floating controls tell their owner.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FloatsOutput {
+    /// Lay this group out flat or upright.
+    Orient {
+        /// The group.
+        group: Group,
+        /// Flat (horizontal) or upright (vertical).
+        orientation: gtk::Orientation,
+    },
+    /// People docked a group in a new spot.
+    Docked {
+        /// The group.
+        group: Group,
+        /// Where it went.
+        spot: Spot,
+    },
+}
+
+/// The docking's widgets.
+pub struct FloatsWidgets {
+    figure: gtk::Overlay,
+    /// The dashed outlines (the component's root), under the controls.
+    outlines: gtk::DrawingArea,
+    measured: Measured,
+    /// The overlay's `get-child-position` handler, holding the [`Placer`]
+    /// copied at the last update.
+    placing: Option<glib::SignalHandlerId>,
+    /// The press-and-hold and drag controllers put on each group.
+    gestures: Vec<(gtk::Widget, gtk::EventController)>,
+}
+
+impl FloatsComponent {
+    /// Hands the overlay and the outlines a copy of where things are now.
+    fn show(&self, widgets: &mut FloatsWidgets) {
+        if let Some(handler) = widgets.placing.take() {
+            widgets.figure.disconnect(handler);
+        }
+        let placer = Placer {
+            measured: widgets.measured.clone(),
+            spots: self.spots.clone(),
+            dragged: self.drag.as_ref().map(|drag| (drag.group, drag.shown_at())),
+        };
+        widgets.placing = Some(
+            widgets
+                .figure
+                .connect_get_child_position(move |figure, widget| {
+                    let item = placer.measured.item_of(widget)?;
+                    Some(placer.rect_of(figure, item))
+                }),
+        );
+        let outlines = self
+            .drag
+            .as_ref()
+            .map(|drag| (drag.targets.clone(), drag.nearest));
+        widgets.outlines.set_draw_func(move |area, cairo, _, _| {
+            if let Some((targets, nearest)) = &outlines {
+                draw_outlines(area, cairo, targets, *nearest);
+            }
+        });
+    }
+
+    /// Lays every group out for its spot and places them again.
+    fn refresh(&self, figure: &gtk::Overlay, sender: &ComponentSender<Self>) {
+        for group in Group::ALL {
+            // Nobody listening is not a mistake.
+            let _ = sender.output(FloatsOutput::Orient {
+                group,
+                orientation: orientation(self.spots.spot_of(group)),
+            });
+        }
+        figure.queue_allocate();
+    }
+
+    /// A group was held long enough: it follows the pointer, and the
+    /// spots it may land in show.
+    fn start(&mut self, widgets: &FloatsWidgets, group: Group, press: (f64, f64)) {
+        let figure = &widgets.figure;
+        let measured = &widgets.measured;
+        let (width, height) = (figure.width(), figure.height());
+        let placement = view_layout::place(width, height, measured, &self.spots);
+        let Some(from) = placement.get(group.floating()) else {
+            return;
+        };
+        let upright_now = self.spots.spot_of(group).is_upright();
+        let targets = self
+            .spots
+            .free_for(group, |other| measured.shows(other))
+            .into_iter()
+            .map(|spot| {
+                // Its size as it would lie in that spot.
+                let size = if spot.is_upright() == upright_now {
+                    (from.width, from.height)
+                } else {
+                    (from.height, from.width)
+                };
+                (spot, view_layout::target(width, height, spot, size))
+            })
+            .collect();
+        self.drag = Some(Drag {
+            group,
+            from,
+            press,
+            moved: (0.0, 0.0),
+            targets,
+            nearest: None,
+        });
+        if let Some(widget) = measured.widget(group.floating()) {
+            widget.add_css_class("stave-dragging");
+        }
+        figure.set_cursor_from_name(Some("grabbing"));
+        figure.queue_allocate();
+        widgets.outlines.queue_draw();
+    }
+
+    /// The pointer moved during a drag.
+    fn follow(&mut self, widgets: &FloatsWidgets, moved: (f64, f64)) {
+        let Some(drag) = self.drag.as_mut() else {
+            return;
+        };
+        drag.moved = moved;
+        drag.nearest = view_layout::nearest(drag.pointer(), &drag.targets);
+        widgets.figure.queue_allocate();
+        widgets.outlines.queue_draw();
+    }
+
+    /// The group was let go: it docks in the nearest free spot (or goes
+    /// back where it was if there is none).
+    fn finish(&mut self, widgets: &FloatsWidgets, sender: &ComponentSender<Self>) {
+        let Some(drag) = self.drag.take() else {
+            return;
+        };
+        if let Some(widget) = widgets.measured.widget(drag.group.floating()) {
+            widget.remove_css_class("stave-dragging");
+        }
+        widgets.figure.set_cursor(None);
+        if let Some(spot) = view_layout::nearest(drag.pointer(), &drag.targets) {
+            self.spots.dock(drag.group, spot);
+            let _ = sender.output(FloatsOutput::Docked {
+                group: drag.group,
+                spot,
+            });
+        }
+        self.refresh(&widgets.figure, sender);
+        widgets.outlines.queue_draw();
+    }
+}
+
+impl Component for FloatsComponent {
+    type Init = FloatsInit;
+    type Input = FloatsInput;
+    type Output = FloatsOutput;
+    type CommandOutput = ();
+    type Root = gtk::DrawingArea;
+    type Widgets = FloatsWidgets;
+
+    fn init_root() -> gtk::DrawingArea {
+        // The dashed outlines, under the controls; they never catch the
+        // pointer.
+        gtk::DrawingArea::builder()
+            .can_target(false)
+            .hexpand(true)
+            .vexpand(true)
+            .css_classes(["stave-dock-targets"])
+            .build()
+    }
+
+    fn init(
+        init: FloatsInit,
+        root: gtk::DrawingArea,
+        sender: ComponentSender<Self>,
+    ) -> ComponentParts<Self> {
+        let FloatsInit {
+            figure,
+            floating,
+            spots,
+        } = init;
+        figure.add_overlay(&root);
+        for (_, widget) in &floating {
+            // The layout gives each its exact place: no margins of its own.
+            widget.set_halign(gtk::Align::Fill);
+            widget.set_valign(gtk::Align::Fill);
+            widget.set_margin_top(0);
+            widget.set_margin_bottom(0);
+            widget.set_margin_start(0);
+            widget.set_margin_end(0);
+            figure.add_overlay(widget);
+        }
+        let measured = Measured(floating);
+        let gestures = Group::ALL
+            .into_iter()
+            .filter_map(|group| {
+                let widget = measured.widget(group.floating())?;
+                Some(make_draggable(group, widget, sender.input_sender()))
+            })
+            .flatten()
+            .collect();
+        // Each group laid out for its spot, once the owner listens.
+        sender
+            .input_sender()
+            .emit(FloatsInput::Refresh(spots.clone()));
+        let model = FloatsComponent { spots, drag: None };
+        let mut widgets = FloatsWidgets {
+            figure,
+            outlines: root,
+            measured,
+            placing: None,
+            gestures,
+        };
+        model.show(&mut widgets);
+        ComponentParts { model, widgets }
+    }
+
+    fn update_with_view(
+        &mut self,
+        widgets: &mut FloatsWidgets,
+        message: FloatsInput,
+        sender: ComponentSender<Self>,
+        _root: &gtk::DrawingArea,
+    ) {
+        match message {
+            FloatsInput::Refresh(spots) => {
+                self.spots = spots;
+                self.refresh(&widgets.figure, &sender);
+            }
+            FloatsInput::Held { group, x, y } => self.start(widgets, group, (x, y)),
+            FloatsInput::Moved { x, y } => self.follow(widgets, (x, y)),
+            FloatsInput::LetGo => self.finish(widgets, &sender),
+        }
+        self.show(widgets);
+    }
+
+    /// Takes the component's handlers and outlines off the widgets it
+    /// was given, which may outlive it.
+    fn shutdown(&mut self, widgets: &mut FloatsWidgets, _output: relm4::Sender<FloatsOutput>) {
+        if let Some(handler) = widgets.placing.take() {
+            widgets.figure.disconnect(handler);
+        }
+        for (widget, controller) in widgets.gestures.drain(..) {
+            widget.remove_controller(&controller);
+        }
+        widgets.figure.remove_overlay(&widgets.outlines);
+    }
+}
+
+/// Press and hold a group, then drag it: the gestures put on its widget.
+fn make_draggable(
+    group: Group,
+    widget: &gtk::Widget,
+    input: &relm4::Sender<FloatsInput>,
+) -> [(gtk::Widget, gtk::EventController); 2] {
+    let hold = gtk::GestureLongPress::builder()
+        .propagation_phase(gtk::PropagationPhase::Capture)
+        .build();
+    let drag = gtk::GestureDrag::builder()
+        .propagation_phase(gtk::PropagationPhase::Capture)
+        .build();
+    hold.group_with(&drag);
+    let sent = input.clone();
+    hold.connect_pressed(move |hold, x, y| {
+        // The buttons under the press let go of it: this is a drag.
+        hold.set_state(gtk::EventSequenceState::Claimed);
+        sent.emit(FloatsInput::Held { group, x, y });
+    });
+    let sent = input.clone();
+    drag.connect_drag_update(move |_, x, y| sent.emit(FloatsInput::Moved { x, y }));
+    let sent = input.clone();
+    drag.connect_drag_end(move |_, _, _| sent.emit(FloatsInput::LetGo));
+    let sent = input.clone();
+    drag.connect_cancel(move |_, _| sent.emit(FloatsInput::LetGo));
+    widget.add_controller(hold.clone());
+    widget.add_controller(drag.clone());
+    widget.set_tooltip_text(Some(
+        &widget
+            .tooltip_text()
+            .map(|tip| format!("{tip}\nPress and hold to move it"))
+            .unwrap_or_else(|| "Press and hold to move it".to_owned()),
+    ));
+    [
+        (widget.clone(), hold.upcast()),
+        (widget.clone(), drag.upcast()),
+    ]
+}
+
 /// Lays a group out flat or upright.
 pub type Orient = Box<dyn Fn(Group, gtk::Orientation)>;
 /// Told when a group is docked in a spot.
 pub type OnDock = Box<dyn Fn(Group, Spot)>;
 
-/// The controls floating on the view.
+/// The controls floating on the view, behind the API the window still
+/// uses: it owns the [`FloatsComponent`] (dropping it shuts the component
+/// down and takes its handlers off the view) and passes its
+/// [`FloatsOutput`]s to the two callbacks it was made with.
 pub struct Floats {
-    figure: gtk::Overlay,
-    measured: Measured,
+    /// Where the workbench says the tool groups are, read when told to
+    /// refresh (the old API's hand-over; the component keeps its own).
     spots: Rc<RefCell<Spots>>,
-    drag: RefCell<Option<Drag>>,
-    outlines: gtk::DrawingArea,
-    orient: Orient,
-    on_dock: OnDock,
+    bridge: Bridge<FloatsComponent>,
 }
 
 impl Floats {
@@ -112,234 +492,55 @@ impl Floats {
         orient: Orient,
         on_dock: OnDock,
     ) -> Rc<Floats> {
-        // The dashed outlines, under the controls; they never catch the
-        // pointer.
-        let outlines = gtk::DrawingArea::builder()
-            .can_target(false)
-            .hexpand(true)
-            .vexpand(true)
-            .css_classes(["stave-dock-targets"])
-            .build();
-        figure.add_overlay(&outlines);
-        for (_, widget) in &floating {
-            // The layout gives each its exact place: no margins of its own.
-            widget.set_halign(gtk::Align::Fill);
-            widget.set_valign(gtk::Align::Fill);
-            widget.set_margin_top(0);
-            widget.set_margin_bottom(0);
-            widget.set_margin_start(0);
-            widget.set_margin_end(0);
-            figure.add_overlay(widget);
-        }
-        let floats = Rc::new(Floats {
+        let start = spots.borrow().clone();
+        let bridge = Bridge::<FloatsComponent>::launch(FloatsInit {
             figure: figure.clone(),
-            measured: Measured(floating),
-            spots,
-            drag: RefCell::new(None),
-            outlines,
-            orient,
-            on_dock,
+            floating,
+            spots: start,
         });
-        let weak = Rc::downgrade(&floats);
-        figure.connect_get_child_position(move |figure, widget| {
-            let floats = weak.upgrade()?;
-            let item = floats.measured.item_of(widget)?;
-            Some(floats.rect_of(figure, item))
+        bridge.connect(move |output| match output {
+            FloatsOutput::Orient { group, orientation } => orient(group, orientation),
+            FloatsOutput::Docked { group, spot } => on_dock(group, spot),
         });
-        let weak = Rc::downgrade(&floats);
-        floats.outlines.set_draw_func(move |area, cairo, _, _| {
-            if let Some(floats) = weak.upgrade() {
-                floats.draw_outlines(area, cairo);
-            }
-        });
-        for group in Group::ALL {
-            if let Some(widget) = floats.measured.widget(group.floating()).cloned() {
-                floats.make_draggable(group, &widget);
-            }
-        }
-        floats.refresh();
-        floats
+        Rc::new(Floats { spots, bridge })
     }
 
     /// Lays every group out for its spot and places them again (after a
     /// layout is applied or reset).
     pub fn refresh(&self) {
         let spots = self.spots.borrow().clone();
-        for group in Group::ALL {
-            (self.orient)(group, orientation(spots.spot_of(group)));
-        }
-        self.figure.queue_allocate();
+        self.bridge.send(FloatsInput::Refresh(spots));
     }
+}
 
-    /// Where a control goes now.
-    fn rect_of(&self, figure: &gtk::Overlay, item: Floating) -> gdk::Rectangle {
-        let placement = view_layout::place(
-            figure.width(),
-            figure.height(),
-            &self.measured,
-            &self.spots.borrow(),
+/// The dashed outlines of the spots a dragged group may land in, the
+/// nearest brighter.
+fn draw_outlines(
+    area: &gtk::DrawingArea,
+    cairo: &gtk::cairo::Context,
+    targets: &[(Spot, Rect)],
+    nearest: Option<Spot>,
+) {
+    let colour = area.color();
+    for (spot, rect) in targets {
+        let near = nearest == Some(*spot);
+        rounded(cairo, *rect, 10.0);
+        cairo.set_source_rgba(
+            f64::from(colour.red()),
+            f64::from(colour.green()),
+            f64::from(colour.blue()),
+            if near { 0.16 } else { 0.06 },
         );
-        // A control left out (hidden, or no room) takes no room either,
-        // so it can't catch the pointer meant for the view.
-        let mut rect = placement.get(item).unwrap_or(Rect {
-            x: 0,
-            y: 0,
-            width: 0,
-            height: 0,
-        });
-        if let Some(drag) = self.drag.borrow().as_ref()
-            && Some(drag.group) == Group::of(item)
-        {
-            rect = Rect {
-                width: rect.width,
-                height: rect.height,
-                ..drag.shown_at()
-            };
-        }
-        gdk::Rectangle::new(rect.x, rect.y, rect.width, rect.height)
-    }
-
-    /// Press and hold a group, then drag it.
-    fn make_draggable(self: &Rc<Self>, group: Group, widget: &gtk::Widget) {
-        let hold = gtk::GestureLongPress::builder()
-            .propagation_phase(gtk::PropagationPhase::Capture)
-            .build();
-        let drag = gtk::GestureDrag::builder()
-            .propagation_phase(gtk::PropagationPhase::Capture)
-            .build();
-        hold.group_with(&drag);
-        let weak = Rc::downgrade(self);
-        hold.connect_pressed(move |hold, x, y| {
-            let Some(floats) = weak.upgrade() else { return };
-            // The buttons under the press let go of it: this is a drag.
-            hold.set_state(gtk::EventSequenceState::Claimed);
-            floats.start(group, (x, y));
-        });
-        let weak = Rc::downgrade(self);
-        drag.connect_drag_update(move |_, x, y| {
-            if let Some(floats) = weak.upgrade() {
-                floats.follow((x, y));
-            }
-        });
-        let weak = Rc::downgrade(self);
-        drag.connect_drag_end(move |_, _, _| {
-            if let Some(floats) = weak.upgrade() {
-                floats.finish();
-            }
-        });
-        let weak = Rc::downgrade(self);
-        drag.connect_cancel(move |_, _| {
-            if let Some(floats) = weak.upgrade() {
-                floats.finish();
-            }
-        });
-        widget.add_controller(hold);
-        widget.add_controller(drag);
-        widget.set_tooltip_text(Some(
-            &widget
-                .tooltip_text()
-                .map(|tip| format!("{tip}\nPress and hold to move it"))
-                .unwrap_or_else(|| "Press and hold to move it".to_owned()),
-        ));
-    }
-
-    /// A group was held long enough: it follows the pointer, and the
-    /// spots it may land in show.
-    fn start(&self, group: Group, press: (f64, f64)) {
-        let figure = &self.figure;
-        let (width, height) = (figure.width(), figure.height());
-        let placement = view_layout::place(width, height, &self.measured, &self.spots.borrow());
-        let Some(from) = placement.get(group.floating()) else {
-            return;
-        };
-        let spots = self.spots.borrow();
-        let upright_now = spots.spot_of(group).is_upright();
-        let targets = spots
-            .free_for(group, |other| self.measured.shows(other))
-            .into_iter()
-            .map(|spot| {
-                // Its size as it would lie in that spot.
-                let size = if spot.is_upright() == upright_now {
-                    (from.width, from.height)
-                } else {
-                    (from.height, from.width)
-                };
-                (spot, view_layout::target(width, height, spot, size))
-            })
-            .collect();
-        drop(spots);
-        self.drag.replace(Some(Drag {
-            group,
-            from,
-            press,
-            moved: (0.0, 0.0),
-            targets,
-            nearest: None,
-        }));
-        if let Some(widget) = self.measured.widget(group.floating()) {
-            widget.add_css_class("stave-dragging");
-        }
-        figure.set_cursor_from_name(Some("grabbing"));
-        self.outlines.queue_draw();
-    }
-
-    /// The pointer moved during a drag.
-    fn follow(&self, moved: (f64, f64)) {
-        let mut drag = self.drag.borrow_mut();
-        let Some(drag) = drag.as_mut() else {
-            return;
-        };
-        drag.moved = moved;
-        drag.nearest = view_layout::nearest(drag.pointer(), &drag.targets);
-        self.figure.queue_allocate();
-        self.outlines.queue_draw();
-    }
-
-    /// The group was let go: it docks in the nearest free spot (or goes
-    /// back where it was if there is none).
-    fn finish(&self) {
-        let Some(drag) = self.drag.take() else {
-            return;
-        };
-        if let Some(widget) = self.measured.widget(drag.group.floating()) {
-            widget.remove_css_class("stave-dragging");
-        }
-        self.figure.set_cursor(None);
-        if let Some(spot) = view_layout::nearest(drag.pointer(), &drag.targets) {
-            self.spots.borrow_mut().dock(drag.group, spot);
-            (self.on_dock)(drag.group, spot);
-        }
-        self.refresh();
-        self.outlines.queue_draw();
-    }
-
-    /// The dashed outlines of the spots a dragged group may land in.
-    fn draw_outlines(&self, area: &gtk::DrawingArea, cairo: &gtk::cairo::Context) {
-        let drag = self.drag.borrow();
-        let Some(drag) = drag.as_ref() else {
-            return;
-        };
-        let colour = area.color();
-        for (spot, rect) in &drag.targets {
-            let near = drag.nearest == Some(*spot);
-            rounded(cairo, *rect, 10.0);
-            cairo.set_source_rgba(
-                f64::from(colour.red()),
-                f64::from(colour.green()),
-                f64::from(colour.blue()),
-                if near { 0.16 } else { 0.06 },
-            );
-            let _ = cairo.fill_preserve();
-            cairo.set_source_rgba(
-                f64::from(colour.red()),
-                f64::from(colour.green()),
-                f64::from(colour.blue()),
-                if near { 0.9 } else { 0.5 },
-            );
-            cairo.set_line_width(1.5);
-            cairo.set_dash(&[6.0, 4.0], 0.0);
-            let _ = cairo.stroke();
-        }
+        let _ = cairo.fill_preserve();
+        cairo.set_source_rgba(
+            f64::from(colour.red()),
+            f64::from(colour.green()),
+            f64::from(colour.blue()),
+            if near { 0.9 } else { 0.5 },
+        );
+        cairo.set_line_width(1.5);
+        cairo.set_dash(&[6.0, 4.0], 0.0);
+        let _ = cairo.stroke();
     }
 }
 
@@ -383,60 +584,86 @@ fn rounded(cairo: &gtk::cairo::Context, rect: Rect, radius: f64) {
 #[cfg(test)]
 mod tests {
     use std::cell::Cell;
+    use std::rc::Weak;
 
     use super::*;
+    use crate::ui::gtk_test::{on_gtk_thread, settle};
+
+    /// A blank control of this size.
+    fn block(width: i32, height: i32) -> gtk::Widget {
+        gtk::Box::builder()
+            .width_request(width)
+            .height_request(height)
+            .build()
+            .upcast::<gtk::Widget>()
+    }
+
+    /// The four groups' controls, the chips hidden.
+    fn controls() -> Vec<(Floating, gtk::Widget)> {
+        let moves = block(300, 36);
+        moves.set_visible(false);
+        vec![
+            (Floating::Scene, block(120, 40)),
+            (Floating::Camera, block(40, 200)),
+            (Floating::Moves, moves),
+            (Floating::Motion, block(300, 40)),
+        ]
+    }
+
+    /// The view's overlay, in a window big enough to lay the controls out.
+    fn figure_in_a_window() -> (gtk::Overlay, gtk::Window) {
+        let figure = gtk::Overlay::builder()
+            .child(&gtk::DrawingArea::new())
+            .build();
+        let window = gtk::Window::builder()
+            .default_width(1000)
+            .default_height(700)
+            .child(&figure)
+            .build();
+        (figure, window)
+    }
+
+    /// Lets GTK lay the window out.
+    fn lay_out(window: &gtk::Window) {
+        window.present();
+        let context = gtk::glib::MainContext::default();
+        for _ in 0..50 {
+            context.iteration(false);
+        }
+        settle();
+    }
 
     #[test]
     fn a_held_group_dragged_to_a_free_corner_docks_there() {
-        crate::ui::gtk_test::on_gtk_thread(drag_to_a_corner);
+        on_gtk_thread(drag_to_a_corner);
     }
 
     /// The camera column held and dragged to the bottom left corner, where
     /// no group shows: it docks there, lying flat, the chips (hidden)
     /// taking the right edge; the layout hears of it.
     fn drag_to_a_corner() {
-        let block = |width, height| {
-            gtk::Box::builder()
-                .width_request(width)
-                .height_request(height)
-                .build()
-                .upcast::<gtk::Widget>()
-        };
-        let moves = block(300, 36);
-        moves.set_visible(false);
-        let figure = gtk::Overlay::builder()
-            .child(&gtk::DrawingArea::new())
-            .build();
+        let (figure, window) = figure_in_a_window();
         let laid: Rc<RefCell<Vec<(Group, gtk::Orientation)>>> = Rc::default();
         let docked = Rc::new(Cell::new(None));
         let laid_by = laid.clone();
         let docked_by = docked.clone();
         let floats = Floats::new(
             &figure,
-            vec![
-                (Floating::Scene, block(120, 40)),
-                (Floating::Camera, block(40, 200)),
-                (Floating::Moves, moves),
-                (Floating::Motion, block(300, 40)),
-            ],
+            controls(),
             Rc::new(RefCell::new(Spots::default())),
             Box::new(move |group, orientation| laid_by.borrow_mut().push((group, orientation))),
             Box::new(move |group, spot| docked_by.set(Some((group, spot)))),
         );
-        let window = gtk::Window::builder()
-            .default_width(1000)
-            .default_height(700)
-            .child(&figure)
-            .build();
-        window.present();
-        let context = gtk::glib::MainContext::default();
-        for _ in 0..50 {
-            context.iteration(false);
-        }
-        floats.start(Group::Camera, (20.0, 20.0));
+        lay_out(&window);
+        floats.bridge.send(FloatsInput::Held {
+            group: Group::Camera,
+            x: 20.0,
+            y: 20.0,
+        });
+        settle();
         let (targets, from) = {
-            let drag = floats.drag.borrow();
-            let drag = drag.as_ref().expect("the drag started");
+            let model = floats.bridge.model();
+            let drag = model.drag.as_ref().expect("the drag started");
             let targets: Vec<Spot> = drag.targets.iter().map(|(spot, _)| *spot).collect();
             (targets, drag.from)
         };
@@ -447,20 +674,171 @@ mod tests {
         );
         // Down to the bottom left corner.
         let pointer = (60, figure.height() - 60);
-        floats.follow((
-            f64::from(pointer.0 - from.x - 20),
-            f64::from(pointer.1 - from.y - 20),
-        ));
-        floats.finish();
+        floats.bridge.send(FloatsInput::Moved {
+            x: f64::from(pointer.0 - from.x - 20),
+            y: f64::from(pointer.1 - from.y - 20),
+        });
+        floats.bridge.send(FloatsInput::LetGo);
+        settle();
         assert_eq!(docked.get(), Some((Group::Camera, Spot::BottomLeft)));
-        let spots = floats.spots.borrow().clone();
+        let spots = floats.bridge.model().spots.clone();
         assert_eq!(spots.spot_of(Group::Camera), Spot::BottomLeft);
         assert_eq!(spots.spot_of(Group::Moves), Spot::Right);
         assert!(
             laid.borrow()
                 .contains(&(Group::Camera, gtk::Orientation::Horizontal))
         );
-        assert!(floats.drag.borrow().is_none());
+        assert!(floats.bridge.model().drag.is_none());
+        window.destroy();
+    }
+
+    /// The press-and-hold and drag gestures on a control.
+    fn gestures_of(
+        widget: &gtk::Widget,
+    ) -> (Option<gtk::GestureLongPress>, Option<gtk::GestureDrag>) {
+        let controllers = widget.observe_controllers();
+        let all: Vec<_> = (0..controllers.n_items())
+            .filter_map(|index| controllers.item(index))
+            .collect();
+        let hold = all.iter().find_map(|item| item.clone().downcast().ok());
+        let drag = all.iter().find_map(|item| item.clone().downcast().ok());
+        (hold, drag)
+    }
+
+    #[test]
+    fn dropped_floats_are_freed() {
+        on_gtk_thread(floats_are_freed);
+    }
+
+    /// Dropping the floats shuts the component down when the main loop
+    /// next runs: its outlines leave the view, its gestures leave the
+    /// controls (which live on with the view), and the model and the
+    /// callbacks are freed.
+    fn floats_are_freed() {
+        let (figure, window) = figure_in_a_window();
+        let floating = controls();
+        let camera = floating
+            .iter()
+            .find(|(item, _)| *item == Floating::Camera)
+            .map(|(_, widget)| widget.clone())
+            .expect("a camera column");
+        let token = Rc::new(());
+        let (held_by_orient, held_by_dock) = (Rc::clone(&token), Rc::clone(&token));
+        let floats = Floats::new(
+            &figure,
+            floating,
+            Rc::new(RefCell::new(Spots::default())),
+            Box::new(move |_, _| {
+                let _ = &held_by_orient;
+            }),
+            Box::new(move |_, _| {
+                let _ = &held_by_dock;
+            }),
+        );
+        let callbacks = Rc::downgrade(&token);
+        drop(token);
+        lay_out(&window);
+        let outlines = floats.bridge.widget().downgrade();
+        let input = floats.bridge.sender().clone();
+        assert!(matches!(gestures_of(&camera), (Some(_), Some(_))));
+        drop(floats);
+        settle();
+        assert!(outlines.upgrade().is_none(), "the outlines are freed");
+        assert!(
+            matches!(gestures_of(&camera), (None, None)),
+            "the gestures are taken off the control"
+        );
+        assert!(
+            input.send(FloatsInput::LetGo).is_err(),
+            "the component's runtime, and with it the model, is gone"
+        );
+        assert!(callbacks.upgrade().is_none(), "the callbacks are freed");
+        window.destroy();
+    }
+
+    #[test]
+    fn a_signal_fired_while_handling_an_output_is_queued_not_re_entered() {
+        on_gtk_thread(signals_are_queued);
+    }
+
+    /// The old floats ran a drag's steps inside GTK's signals, borrowing
+    /// the drag as they went. Now the gestures only queue messages: the
+    /// drag moves only when the main loop runs. The dock callback runs
+    /// after the update that docked the group (reading the model there
+    /// would panic if it had not), and a gesture's signal fired from
+    /// inside it, or a refresh asked for there, is queued too.
+    fn signals_are_queued() {
+        let (figure, window) = figure_in_a_window();
+        let floating = controls();
+        let camera = floating
+            .iter()
+            .find(|(item, _)| *item == Floating::Camera)
+            .map(|(_, widget)| widget.clone())
+            .expect("a camera column");
+        let me: Rc<RefCell<Weak<Floats>>> = Rc::default();
+        // (the group docked, whether a drag was still on when told)
+        let heard: Rc<RefCell<Vec<(Group, bool)>>> = Rc::default();
+        let (log, find) = (Rc::clone(&heard), Rc::clone(&me));
+        let inner_drag: Rc<RefCell<Option<gtk::GestureDrag>>> = Rc::default();
+        let fire = Rc::clone(&inner_drag);
+        // Where the layout keeps the groups, as the workbench does.
+        let spots = Rc::new(RefCell::new(Spots::default()));
+        let layout = Rc::clone(&spots);
+        let floats = Floats::new(
+            &figure,
+            floating,
+            spots,
+            Box::new(|_, _| {}),
+            Box::new(move |group, spot| {
+                let Some(floats) = find.borrow().upgrade() else {
+                    return;
+                };
+                let dragging = floats.bridge.model().drag.is_some();
+                layout.borrow_mut().dock(group, spot);
+                // GTK ending the drag again from in here only queues a
+                // message, and asking for a refresh is queued too.
+                if let Some(drag) = fire.borrow().as_ref() {
+                    drag.emit_by_name::<()>("drag-end", &[&0.0_f64, &0.0_f64]);
+                }
+                floats.refresh();
+                log.borrow_mut().push((group, dragging));
+            }),
+        );
+        me.replace(Rc::downgrade(&floats));
+        lay_out(&window);
+        let (Some(hold), Some(drag)) = gestures_of(&camera) else {
+            panic!("the camera column can be held and dragged");
+        };
+        inner_drag.replace(Some(drag.clone()));
+
+        // Held, then dragged far down and to the left, then let go: all
+        // only queued.
+        hold.emit_by_name::<()>("pressed", &[&20.0_f64, &20.0_f64]);
+        assert!(
+            floats.bridge.model().drag.is_none(),
+            "the hold is only queued"
+        );
+        settle();
+        assert!(floats.bridge.model().drag.is_some(), "then the drag starts");
+        let far = (-2000.0_f64, 2000.0_f64);
+        drag.emit_by_name::<()>("drag-update", &[&far.0, &far.1]);
+        drag.emit_by_name::<()>("drag-end", &[&far.0, &far.1]);
+        assert_eq!(
+            floats.bridge.model().drag.as_ref().map(|drag| drag.moved),
+            Some((0.0, 0.0)),
+            "the move is only queued"
+        );
+        assert!(heard.borrow().is_empty());
+        settle();
+        assert_eq!(
+            *heard.borrow(),
+            vec![(Group::Camera, false)],
+            "docked once, told after the update, the inner drag-end a no-op"
+        );
+        assert_eq!(
+            floats.bridge.model().spots.spot_of(Group::Camera),
+            Spot::BottomLeft
+        );
         window.destroy();
     }
 }

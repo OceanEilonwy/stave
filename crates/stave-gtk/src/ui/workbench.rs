@@ -19,6 +19,14 @@
 //!
 //! The Code panel holds the open files, so a file always opens wherever
 //! the Code panel is.
+//!
+//! The dock is a relm4 component, [`WorkbenchComponent`]: what it
+//! remembers (the last layout, the tool groups' spots, a failure to save)
+//! is its model, only its update changes that, and the status bar's
+//! buttons and the dock's own signals only send [`WorkbenchInput`]
+//! messages. Where each panel is stays in libpanel's widgets, which people
+//! drag about; the queries read them there. [`Workbench`] keeps the older
+//! API in front of it until the window moves to relm4 too.
 
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
@@ -29,7 +37,9 @@ use std::rc::Rc;
 use adw::prelude::*;
 use gtk::{gio, glib};
 use panel::prelude::*;
+use relm4::{Component, ComponentParts, ComponentSender};
 
+use super::relm4_shim::Bridge;
 use super::view_layout::{Group, Spot, Spots};
 
 /// One of the window's panels.
@@ -423,6 +433,20 @@ fn layout_path() -> PathBuf {
     glib::user_config_dir().join("stave").join("layout")
 }
 
+/// Writes the layout for next time; the error, said in plain words, when
+/// it can't be written.
+fn write_layout(layout: &Layout) -> Result<(), String> {
+    let path = layout_path();
+    let written = path
+        .parent()
+        .map_or(Ok(()), std::fs::create_dir_all)
+        .and_then(|()| std::fs::write(&path, layout.to_text()));
+    written.map_err(|error| {
+        eprintln!("warning: can't write '{}': {error}", path.display());
+        format!("Stave couldn't save the panel layout for next time: {error}")
+    })
+}
+
 /// Where the layout comes from and goes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Remember {
@@ -434,58 +458,52 @@ pub enum Remember {
     From(PathBuf),
 }
 
-/// What is told a short line (a failure to save).
-type Told = Rc<dyn Fn(&str)>;
+/// One callback a shim calls with one kind of output: the one set last,
+/// if any. It sits in a [`Cell`] and is cloned out before it is called,
+/// so a callback may set another (or call back into its shim) without a
+/// borrow held across the call.
+pub(super) struct Slot<Callback: ?Sized> {
+    callback: Cell<Option<Rc<Callback>>>,
+}
 
-/// The dock and its panels.
-pub struct Workbench {
-    /// The dock above the status bar, for the window's content.
-    pub root: gtk::Box,
+impl<Callback: ?Sized> Default for Slot<Callback> {
+    fn default() -> Self {
+        Slot {
+            callback: Cell::new(None),
+        }
+    }
+}
+
+impl<Callback: ?Sized> Slot<Callback> {
+    /// Calls `callback` from now on, instead of the one set before.
+    pub(super) fn set(&self, callback: Rc<Callback>) {
+        self.callback.set(Some(callback));
+    }
+
+    /// The callback set last, cloned out so that calling it may set
+    /// another.
+    pub(super) fn get(&self) -> Option<Rc<Callback>> {
+        let callback = self.callback.take();
+        self.callback.set(callback.clone());
+        callback
+    }
+}
+
+/// The dock's widgets: the libpanel dock, the centre's grid, the pane at
+/// each edge and each panel. Where each panel is lives in these widgets
+/// (people drag panels about without telling anyone), so the layout is
+/// always read from them, never kept beside them.
+#[derive(Clone)]
+struct Dockyard {
     dock: panel::Dock,
     grid: panel::Grid,
     paneds: BTreeMap<Side, panel::Paned>,
     panels: BTreeMap<PanelId, panel::Widget>,
-    /// The status bar's start, for a line about the selection.
-    pub status: gtk::Label,
-    /// The status bar's "Problems N" button: opens the bottom edge on
-    /// the Problems panel.
-    problems_button: gtk::Button,
-    problems_count: gtk::Label,
-    /// The status bar's "Output" button.
-    output_button: gtk::Button,
-    /// Whether the layout is written to the user's file.
-    remembers: bool,
-    /// The layout last applied or saved, to bring a closed panel back
-    /// where it was.
-    last: RefCell<Layout>,
-    /// Told, once, when the layout can't be written.
-    on_save_failed: RefCell<Option<Told>>,
-    /// A failure to write the layout has been told.
-    save_failed: Cell<bool>,
-    /// The spot each of the 3D view's tool groups is docked in, shared
-    /// with the view, which places them.
-    tools: Rc<RefCell<Spots>>,
-    /// Told when the tool groups move (a reset, a layout applied).
-    on_tools: RefCell<Option<Box<dyn Fn()>>>,
 }
 
-/// A tab-like button on the status bar that opens a panel on the bottom
-/// edge.
-fn status_tab(title: &str, tooltip: &str) -> gtk::Button {
-    gtk::Button::builder()
-        .label(title)
-        .tooltip_text(tooltip)
-        .css_classes(["flat", "stave-status-tab"])
-        .build()
-}
-
-impl Workbench {
-    /// A dock with each panel's content in its panel, laid out as last
-    /// time (or as the compact board).
-    pub fn new(
-        contents: Vec<(PanelId, gtk::Widget)>,
-        remember: Remember,
-    ) -> anyhow::Result<Rc<Workbench>> {
+impl Dockyard {
+    /// The dock, with each panel's content in its panel (none placed yet).
+    fn build(contents: Vec<(PanelId, gtk::Widget)>) -> anyhow::Result<Dockyard> {
         panel::init();
         // libpanel takes the dock's children the way a UI file gives them:
         // a pane of frames per edge, and the centre's grid.
@@ -531,124 +549,17 @@ impl Workbench {
                 (id, widget)
             })
             .collect();
-
-        let status = gtk::Label::builder()
-            .xalign(0.0)
-            .ellipsize(gtk::pango::EllipsizeMode::End)
-            .css_classes(["stave-status-text"])
-            .build();
-        // The bottom panels folded into the status bar: "Problems N" and
-        // "Output" open the bottom edge on their panel (and fold it away
-        // again while it shows).
-        let problems_count = gtk::Label::builder()
-            .label("0")
-            .css_classes(["stave-status-count"])
-            .build();
-        let problems_content = gtk::Box::new(gtk::Orientation::Horizontal, 5);
-        problems_content.append(&gtk::Label::new(Some("Problems")));
-        problems_content.append(&problems_count);
-        let problems_button = status_tab("Problems", "Show the problems");
-        problems_button.set_child(Some(&problems_content));
-        let output_button = status_tab("Output", "Show what the checks said");
-        let statusbar = panel::Statusbar::new();
-        statusbar.add_prefix(0, &problems_button);
-        statusbar.add_prefix(1, &output_button);
-        statusbar.add_prefix(2, &status);
-        // Brings back any panel that was closed, and resets the layout.
-        let panels_menu = gio::Menu::new();
-        let shows = gio::Menu::new();
-        for id in PanelId::ALL {
-            shows.append(
-                Some(id.title()),
-                Some(&format!("win.show-panel::{}", id.word())),
-            );
-        }
-        panels_menu.append_section(Some("Show a panel"), &shows);
-        let reset = gio::Menu::new();
-        reset.append(Some("Reset Layout"), Some("win.reset-layout"));
-        panels_menu.append_section(None, &reset);
-        let panels_button = gtk::MenuButton::builder()
-            .label("Panels")
-            .menu_model(&panels_menu)
-            .direction(gtk::ArrowType::Up)
-            .tooltip_text("Show a closed panel, or put them all back")
-            .css_classes(["flat", "stave-panels-button"])
-            .build();
-        statusbar.add_suffix(-1, &panels_button);
-        for (priority, area) in [panel::Area::Start, panel::Area::Bottom, panel::Area::End]
-            .into_iter()
-            .enumerate()
-        {
-            let toggle = panel::ToggleButton::new(&dock, area);
-            statusbar.add_suffix(i32::try_from(priority).unwrap_or(0), &toggle);
-        }
-
-        let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        root.append(&dock);
-        root.append(&statusbar);
-
-        let read = |path: PathBuf| {
-            std::fs::read_to_string(path)
-                .map(|text| Layout::from_text(&text))
-                .unwrap_or_default()
-        };
-        let (layout, remembers) = match remember {
-            Remember::Yours => (read(layout_path()), true),
-            Remember::Nothing => (Layout::default(), false),
-            Remember::From(path) => (read(path), false),
-        };
-        let workbench = Rc::new(Workbench {
-            root,
+        Ok(Dockyard {
             dock,
             grid,
             paneds,
             panels,
-            status,
-            problems_button,
-            problems_count,
-            output_button,
-            remembers,
-            // `apply` below puts the real one here.
-            last: RefCell::new(Layout::default()),
-            tools: Rc::new(RefCell::new(layout.tools.clone())),
-            on_tools: RefCell::new(None),
-            on_save_failed: RefCell::new(None),
-            save_failed: Cell::new(false),
-        });
-        workbench.apply(layout);
-        for (button, id) in [
-            (&workbench.problems_button, PanelId::Problems),
-            (&workbench.output_button, PanelId::Output),
-        ] {
-            let weak = Rc::downgrade(&workbench);
-            button.connect_clicked(move |_| {
-                if let Some(workbench) = weak.upgrade() {
-                    workbench.toggle(id);
-                }
-            });
-        }
-        let weak = Rc::downgrade(&workbench);
-        workbench
-            .dock
-            .connect_notify_local(Some("reveal-bottom"), move |_, _| {
-                if let Some(workbench) = weak.upgrade() {
-                    workbench.show_status_tabs();
-                }
-            });
-        // A panel dropped somewhere new is remembered at once, so closing
-        // it later brings it back there.
-        let weak = Rc::downgrade(&workbench);
-        workbench.dock.connect_panel_drag_end(move |_, _| {
-            if let Some(workbench) = weak.upgrade() {
-                workbench.save();
-            }
-        });
-        Ok(workbench)
+        })
     }
 
     /// Puts every panel where `layout` says, closing the ones it leaves
     /// out, and shows the edges it shows.
-    pub fn apply(&self, layout: Layout) {
+    fn apply(&self, layout: &Layout) {
         for widget in self.panels.values() {
             detach(widget);
         }
@@ -673,93 +584,6 @@ impl Workbench {
                 && !layout.frames(side).is_empty();
             self.dock.set_reveal_area(side.area(), shown);
         }
-        self.tools.replace(layout.tools.clone());
-        self.last.replace(layout);
-        if let Some(callback) = self.on_tools.borrow().as_ref() {
-            callback();
-        }
-        self.show_status_tabs();
-    }
-
-    /// Narrows the left and right edges while `breakpoint` applies, so the
-    /// Model keeps room in a narrow window.
-    pub fn narrow_edges(&self, breakpoint: &adw::Breakpoint) {
-        breakpoint.add_setter(&self.dock, "start-width", Some(&220.to_value()));
-        breakpoint.add_setter(&self.dock, "end-width", Some(&260.to_value()));
-    }
-
-    /// The spots the 3D view's tool groups are docked in, shared with
-    /// the view that places them.
-    pub fn tools(&self) -> Rc<RefCell<Spots>> {
-        self.tools.clone()
-    }
-
-    /// Calls `callback` when the tool groups move with the layout.
-    pub fn connect_tools(&self, callback: impl Fn() + 'static) {
-        self.on_tools.replace(Some(Box::new(callback)));
-    }
-
-    /// Docks a tool group in a spot (the group there takes its old spot)
-    /// and remembers it.
-    pub fn dock_tool(&self, group: Group, spot: Spot) {
-        self.tools.borrow_mut().dock(group, spot);
-        self.save();
-    }
-
-    /// How many problems the status bar's Problems button counts.
-    pub fn show_problem_count(&self, count: usize) {
-        self.problems_count.set_label(&count.to_string());
-        if count == 0 {
-            self.problems_count.remove_css_class("some");
-        } else {
-            self.problems_count.add_css_class("some");
-        }
-    }
-
-    /// Opens the bottom edge on a panel, or folds it away when that panel
-    /// already shows there.
-    fn toggle(&self, id: PanelId) {
-        let showing = self.is_shown(id)
-            && self
-                .panels
-                .get(&id)
-                .and_then(|widget| widget.position())
-                .and_then(|position| Side::of_area(position.area()))
-                .is_some_and(|side| side != Side::Centre && self.dock.reveals_area(side.area()));
-        if showing {
-            if let Some(side) = self
-                .panels
-                .get(&id)
-                .and_then(|widget| widget.position())
-                .and_then(|position| Side::of_area(position.area()))
-            {
-                self.dock.set_reveal_area(side.area(), false);
-            }
-        } else {
-            self.present(id);
-        }
-        self.show_status_tabs();
-    }
-
-    /// Marks the status bar's Problems or Output button while its panel
-    /// shows at the bottom.
-    fn show_status_tabs(&self) {
-        let bottom = self.dock.reveals_area(panel::Area::Bottom);
-        for (button, id) in [
-            (&self.problems_button, PanelId::Problems),
-            (&self.output_button, PanelId::Output),
-        ] {
-            let at_bottom = self
-                .panels
-                .get(&id)
-                .and_then(|widget| widget.position())
-                .is_some_and(|position| position.area() == panel::Area::Bottom);
-            if bottom && at_bottom && self.is_shown(id) {
-                button.add_css_class("shown");
-            } else {
-                button.remove_css_class("shown");
-            }
-        }
     }
 
     /// Adds these panels to a frame, in order.
@@ -779,27 +603,30 @@ impl Workbench {
         }
     }
 
-    /// A panel's widget.
-    pub fn panel(&self, id: PanelId) -> Option<&panel::Widget> {
-        self.panels.get(&id)
+    /// The side a panel is docked at, if it is open.
+    fn side_of(&self, id: PanelId) -> Option<Side> {
+        self.panels
+            .get(&id)
+            .and_then(|widget| widget.position())
+            .and_then(|position| Side::of_area(position.area()))
     }
 
     /// `true` when two panels are tabs of the same frame.
-    pub fn share_a_frame(&self, first: PanelId, second: PanelId) -> bool {
+    fn share_a_frame(&self, first: PanelId, second: PanelId) -> bool {
         let frame = |id| self.panels.get(&id).and_then(frame_of);
         matches!((frame(first), frame(second)), (Some(a), Some(b)) if a == b)
     }
 
     /// `true` while a panel is its frame's shown tab.
-    pub fn is_shown(&self, id: PanelId) -> bool {
+    fn is_shown(&self, id: PanelId) -> bool {
         self.panels.get(&id).is_some_and(|widget| {
             frame_of(widget)
                 .is_some_and(|frame| frame.visible_child().is_some_and(|shown| shown == *widget))
         })
     }
 
-    /// Where the panels are now.
-    pub fn layout(&self) -> Layout {
+    /// Where the panels are now, with the tool groups in `tools`.
+    fn layout(&self, tools: &Spots) -> Layout {
         let mut places = BTreeMap::new();
         let mut counts: BTreeMap<Side, u32> = BTreeMap::new();
         let mut record = |frame: &panel::Frame, side: Side, column: u32, index: u32| {
@@ -840,58 +667,18 @@ impl Workbench {
         Layout {
             places,
             revealed,
-            tools: self.tools.borrow().clone(),
+            tools: tools.clone(),
         }
     }
 
-    /// Remembers the layout for next time (not while taking screenshots).
-    pub fn save(&self) {
-        let layout = self.layout();
-        let text = self.remembers.then(|| layout.to_text());
-        self.last.replace(layout);
-        let Some(text) = text else {
-            return;
-        };
-        let path = layout_path();
-        let written = path
-            .parent()
-            .map_or(Ok(()), std::fs::create_dir_all)
-            .and_then(|()| std::fs::write(&path, text));
-        if let Err(error) = written {
-            eprintln!("warning: can't write '{}': {error}", path.display());
-            // Cloned out so that `told` may set a new handler.
-            let told = self.on_save_failed.borrow().clone();
-            if !self.save_failed.replace(true)
-                && let Some(told) = told
-            {
-                told(&format!(
-                    "Stave couldn't save the panel layout for next time: {error}"
-                ));
-            }
-        }
-    }
-
-    /// Tells `told` when the layout can't be written (once).
-    pub fn connect_save_failed(&self, told: impl Fn(&str) + 'static) {
-        self.on_save_failed.replace(Some(Rc::new(told)));
-    }
-
-    /// The compact board again, the tool groups back in their spots.
-    pub fn reset(&self) {
-        self.apply(Layout::default());
-        self.save();
-    }
-
-    /// Shows a panel: brings it back where it last was if it was closed,
-    /// shows its edge and makes it the frame's current tab.
-    pub fn present(&self, id: PanelId) {
+    /// Shows a panel: brings it back where it was in `last` if it was
+    /// closed, shows its edge and makes it the frame's current tab.
+    fn present(&self, id: PanelId, last: &Layout) {
         let Some(widget) = self.panels.get(&id) else {
             return;
         };
         if widget.parent().is_none() {
-            let place = self
-                .last
-                .borrow()
+            let place = last
                 .places
                 .get(&id)
                 .copied()
@@ -901,7 +688,7 @@ impl Workbench {
                 self.fill(&frame, &[id]);
             }
         }
-        if let Some(side) = widget.position().and_then(|p| Side::of_area(p.area()))
+        if let Some(side) = self.side_of(id)
             && side != Side::Centre
         {
             self.dock.set_reveal_area(side.area(), true);
@@ -910,14 +697,13 @@ impl Workbench {
     }
 
     /// Brings a panel to the front of its frame, unless that frame also
-    /// holds the 3D View (it would hide the model); a closed panel opens
-    /// where it last was. Its edge isn't shown if people hid it.
-    pub fn bring_forward_beside_view(&self, id: PanelId) {
+    /// holds the 3D View; a closed panel opens where it was in `last`.
+    fn bring_forward_beside_view(&self, id: PanelId, last: &Layout) {
         let Some(widget) = self.panels.get(&id) else {
             return;
         };
         let Some(frame) = frame_of(widget) else {
-            self.present(id);
+            self.present(id, last);
             return;
         };
         let holds_view = self
@@ -932,7 +718,7 @@ impl Workbench {
 
     /// Moves a panel to a side: at an edge into its first frame (as a new
     /// tab), in the middle into a new column beside what is there.
-    pub fn move_to(&self, id: PanelId, side: Side) {
+    fn move_to(&self, id: PanelId, side: Side) {
         let Some(widget) = self.panels.get(&id) else {
             return;
         };
@@ -947,7 +733,18 @@ impl Workbench {
             self.dock.set_reveal_area(side.area(), true);
         }
         widget.raise();
-        self.save();
+    }
+
+    /// Opens the bottom edge on a panel, or folds it away when that panel
+    /// already shows at an edge.
+    fn toggle(&self, id: PanelId, last: &Layout) {
+        let edge = self
+            .side_of(id)
+            .filter(|side| *side != Side::Centre && self.dock.reveals_area(side.area()));
+        match edge {
+            Some(side) if self.is_shown(id) => self.dock.set_reveal_area(side.area(), false),
+            Some(_) | None => self.present(id, last),
+        }
     }
 
     /// The frame at a place, made (with any before it) if there aren't
@@ -1007,9 +804,528 @@ fn detach(widget: &panel::Widget) {
     }
 }
 
+/// A tab-like button on the status bar that opens a panel on the bottom
+/// edge.
+fn status_tab(title: &str, tooltip: &str) -> gtk::Button {
+    gtk::Button::builder()
+        .label(title)
+        .tooltip_text(tooltip)
+        .css_classes(["flat", "stave-status-tab"])
+        .build()
+}
+
+/// The dock's own state: whether the layout is written, the layout last
+/// applied or saved, whether a failure to save has been told, and the
+/// spot each of the 3D view's tool groups is docked in. Where each panel
+/// is lives in the dock's widgets ([`Dockyard`]).
+#[derive(Debug)]
+pub struct WorkbenchComponent {
+    /// Whether the layout is written to the user's file.
+    remembers: bool,
+    /// The layout last applied or saved, to bring a closed panel back
+    /// where it was.
+    last: Layout,
+    /// A failure to write the layout has been told.
+    save_failed: bool,
+    /// The spot each of the 3D view's tool groups is docked in.
+    tools: Spots,
+}
+
+/// What a workbench is made with.
+pub struct WorkbenchInit {
+    yard: Dockyard,
+    /// The status bar's start, for a line about the selection.
+    status: gtk::Label,
+    /// The layout to start with.
+    layout: Layout,
+    /// Whether the layout is written to the user's file.
+    remembers: bool,
+}
+
+/// What a workbench is told.
+#[derive(Debug)]
+pub enum WorkbenchInput {
+    /// Put every panel where this layout says, closing the ones it leaves
+    /// out, and show the edges it shows.
+    Apply(Layout),
+    /// Narrow the left and right edges while this breakpoint applies.
+    NarrowEdges(adw::Breakpoint),
+    /// Dock a tool group in a spot (the group there takes its old spot)
+    /// and remember it.
+    DockTool {
+        /// The group.
+        group: Group,
+        /// Where it goes.
+        spot: Spot,
+    },
+    /// How many problems the status bar's Problems button counts.
+    ShowProblemCount(usize),
+    /// Remember the layout for next time (not while taking screenshots).
+    Save,
+    /// The layout was just saved, by the shim as the window closes: keep
+    /// it as the last one, and tell of the failure, once.
+    Saved {
+        /// The layout saved.
+        layout: Layout,
+        /// Why it couldn't be written, if it couldn't.
+        failure: Option<String>,
+    },
+    /// The compact board again, the tool groups back in their spots.
+    Reset,
+    /// Show a panel: back where it last was if it was closed, its edge
+    /// shown, the frame's current tab.
+    Present(PanelId),
+    /// Bring a panel to the front of its frame, unless that frame holds
+    /// the 3D View.
+    BringForwardBesideView(PanelId),
+    /// Move a panel to a side.
+    MoveTo {
+        /// The panel.
+        panel: PanelId,
+        /// Where it goes.
+        side: Side,
+    },
+    /// People pressed the status bar's button for a bottom panel: open
+    /// the bottom edge on it, or fold it away.
+    Toggle(PanelId),
+    /// The bottom edge was shown or hidden (by people or by the dock).
+    EdgesChanged,
+}
+
+/// What a workbench tells its owner.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WorkbenchOutput {
+    /// The tool groups moved with the layout (applied or reset): where
+    /// they are now.
+    ToolsChanged(Spots),
+    /// The layout couldn't be saved: a line saying why (told once).
+    SaveFailed(String),
+}
+
+/// The workbench's widgets.
+pub struct WorkbenchWidgets {
+    yard: Dockyard,
+    /// The status bar's "Problems N" button: opens the bottom edge on
+    /// the Problems panel.
+    problems_button: gtk::Button,
+    problems_count: gtk::Label,
+    /// The status bar's "Output" button.
+    output_button: gtk::Button,
+}
+
+impl WorkbenchWidgets {
+    /// Marks the status bar's Problems or Output button while its panel
+    /// shows at the bottom.
+    fn show_status_tabs(&self) {
+        let yard = &self.yard;
+        let bottom = yard.dock.reveals_area(panel::Area::Bottom);
+        for (button, id) in [
+            (&self.problems_button, PanelId::Problems),
+            (&self.output_button, PanelId::Output),
+        ] {
+            let at_bottom = yard.side_of(id) == Some(Side::Bottom);
+            if bottom && at_bottom && yard.is_shown(id) {
+                button.add_css_class("shown");
+            } else {
+                button.remove_css_class("shown");
+            }
+        }
+    }
+}
+
+impl WorkbenchComponent {
+    /// Saves the layout as the dock shows it now, if it is remembered.
+    fn save(&mut self, yard: &Dockyard, sender: &ComponentSender<Self>) {
+        let layout = yard.layout(&self.tools);
+        let failure = if self.remembers {
+            write_layout(&layout).err()
+        } else {
+            None
+        };
+        self.saved(layout, failure, sender);
+    }
+
+    /// Keeps the layout just saved as the last one, and tells of a
+    /// failure to write it, once.
+    fn saved(&mut self, layout: Layout, failure: Option<String>, sender: &ComponentSender<Self>) {
+        self.last = layout;
+        if let Some(failure) = failure
+            && !self.save_failed
+        {
+            self.save_failed = true;
+            // Nobody listening is not a mistake.
+            let _ = sender.output(WorkbenchOutput::SaveFailed(failure));
+        }
+    }
+
+    /// Puts the panels and tool groups where `layout` says.
+    fn apply(&mut self, yard: &Dockyard, layout: Layout, sender: &ComponentSender<Self>) {
+        yard.apply(&layout);
+        self.tools = layout.tools.clone();
+        self.last = layout;
+        let _ = sender.output(WorkbenchOutput::ToolsChanged(self.tools.clone()));
+    }
+}
+
+impl Component for WorkbenchComponent {
+    type Init = WorkbenchInit;
+    type Input = WorkbenchInput;
+    type Output = WorkbenchOutput;
+    type CommandOutput = ();
+    type Root = gtk::Box;
+    type Widgets = WorkbenchWidgets;
+
+    fn init_root() -> gtk::Box {
+        gtk::Box::new(gtk::Orientation::Vertical, 0)
+    }
+
+    fn init(
+        init: WorkbenchInit,
+        root: gtk::Box,
+        sender: ComponentSender<Self>,
+    ) -> ComponentParts<Self> {
+        let WorkbenchInit {
+            yard,
+            status,
+            layout,
+            remembers,
+        } = init;
+        // The bottom panels folded into the status bar: "Problems N" and
+        // "Output" open the bottom edge on their panel (and fold it away
+        // again while it shows).
+        let problems_count = gtk::Label::builder()
+            .label("0")
+            .css_classes(["stave-status-count"])
+            .build();
+        let problems_content = gtk::Box::new(gtk::Orientation::Horizontal, 5);
+        problems_content.append(&gtk::Label::new(Some("Problems")));
+        problems_content.append(&problems_count);
+        let problems_button = status_tab("Problems", "Show the problems");
+        problems_button.set_child(Some(&problems_content));
+        let output_button = status_tab("Output", "Show what the checks said");
+        for (button, id) in [
+            (&problems_button, PanelId::Problems),
+            (&output_button, PanelId::Output),
+        ] {
+            let input = sender.input_sender().clone();
+            button.connect_clicked(move |_| input.emit(WorkbenchInput::Toggle(id)));
+        }
+        let statusbar = panel::Statusbar::new();
+        statusbar.add_prefix(0, &problems_button);
+        statusbar.add_prefix(1, &output_button);
+        statusbar.add_prefix(2, &status);
+        // Brings back any panel that was closed, and resets the layout.
+        let panels_menu = gio::Menu::new();
+        let shows = gio::Menu::new();
+        for id in PanelId::ALL {
+            shows.append(
+                Some(id.title()),
+                Some(&format!("win.show-panel::{}", id.word())),
+            );
+        }
+        panels_menu.append_section(Some("Show a panel"), &shows);
+        let reset = gio::Menu::new();
+        reset.append(Some("Reset Layout"), Some("win.reset-layout"));
+        panels_menu.append_section(None, &reset);
+        let panels_button = gtk::MenuButton::builder()
+            .label("Panels")
+            .menu_model(&panels_menu)
+            .direction(gtk::ArrowType::Up)
+            .tooltip_text("Show a closed panel, or put them all back")
+            .css_classes(["flat", "stave-panels-button"])
+            .build();
+        statusbar.add_suffix(-1, &panels_button);
+        for (priority, area) in [panel::Area::Start, panel::Area::Bottom, panel::Area::End]
+            .into_iter()
+            .enumerate()
+        {
+            let toggle = panel::ToggleButton::new(&yard.dock, area);
+            statusbar.add_suffix(i32::try_from(priority).unwrap_or(0), &toggle);
+        }
+        root.append(&yard.dock);
+        root.append(&statusbar);
+
+        yard.apply(&layout);
+        let input = sender.input_sender().clone();
+        yard.dock
+            .connect_notify_local(Some("reveal-bottom"), move |_, _| {
+                input.emit(WorkbenchInput::EdgesChanged);
+            });
+        // A panel dropped somewhere new is remembered at once, so closing
+        // it later brings it back there.
+        let input = sender.input_sender().clone();
+        yard.dock
+            .connect_panel_drag_end(move |_, _| input.emit(WorkbenchInput::Save));
+
+        let model = WorkbenchComponent {
+            remembers,
+            tools: layout.tools.clone(),
+            last: layout,
+            save_failed: false,
+        };
+        let widgets = WorkbenchWidgets {
+            yard,
+            problems_button,
+            problems_count,
+            output_button,
+        };
+        widgets.show_status_tabs();
+        ComponentParts { model, widgets }
+    }
+
+    fn update_with_view(
+        &mut self,
+        widgets: &mut WorkbenchWidgets,
+        message: WorkbenchInput,
+        sender: ComponentSender<Self>,
+        _root: &gtk::Box,
+    ) {
+        let yard = &widgets.yard;
+        match message {
+            WorkbenchInput::Apply(layout) => self.apply(yard, layout, &sender),
+            WorkbenchInput::NarrowEdges(breakpoint) => {
+                breakpoint.add_setter(&yard.dock, "start-width", Some(&220.to_value()));
+                breakpoint.add_setter(&yard.dock, "end-width", Some(&260.to_value()));
+            }
+            WorkbenchInput::DockTool { group, spot } => {
+                self.tools.dock(group, spot);
+                self.save(yard, &sender);
+            }
+            WorkbenchInput::ShowProblemCount(count) => {
+                let label = &widgets.problems_count;
+                label.set_label(&count.to_string());
+                if count == 0 {
+                    label.remove_css_class("some");
+                } else {
+                    label.add_css_class("some");
+                }
+            }
+            WorkbenchInput::Save => self.save(yard, &sender),
+            WorkbenchInput::Saved { layout, failure } => self.saved(layout, failure, &sender),
+            WorkbenchInput::Reset => {
+                self.apply(yard, Layout::default(), &sender);
+                self.save(yard, &sender);
+            }
+            WorkbenchInput::Present(id) => yard.present(id, &self.last),
+            WorkbenchInput::BringForwardBesideView(id) => {
+                yard.bring_forward_beside_view(id, &self.last);
+            }
+            WorkbenchInput::MoveTo { panel, side } => {
+                yard.move_to(panel, side);
+                self.save(yard, &sender);
+            }
+            WorkbenchInput::Toggle(id) => yard.toggle(id, &self.last),
+            WorkbenchInput::EdgesChanged => {}
+        }
+        widgets.show_status_tabs();
+    }
+}
+
+/// What the workbench's shim passes its outputs on to.
+struct WorkbenchCallbacks {
+    /// Where the tool groups are, for the view's floating controls to
+    /// read when they are told to refresh (the old API's hand-over; see
+    /// [`Workbench::tools`]).
+    tools: Rc<RefCell<Spots>>,
+    on_tools: Slot<dyn Fn()>,
+    on_save_failed: Slot<dyn Fn(&str)>,
+}
+
+/// The dock and its panels, behind the API the window still uses: it owns
+/// the [`WorkbenchComponent`] (dropping it shuts the component down),
+/// passes its setters on as [`WorkbenchInput`] messages and its
+/// [`WorkbenchOutput`]s to the callbacks.
+///
+/// Setters are queued: they take effect when the main loop next runs,
+/// after whatever called them has returned. The queries (`layout`,
+/// `is_shown`, `share_a_frame`, `panel`) read the dock's widgets as they
+/// are now.
+pub struct Workbench {
+    /// The dock above the status bar, for the window's content.
+    pub root: gtk::Box,
+    /// The status bar's start, for a line about the selection.
+    pub status: gtk::Label,
+    /// The dock's widgets, for the queries.
+    yard: Dockyard,
+    /// Whether the layout is written to the user's file.
+    remembers: bool,
+    callbacks: Rc<WorkbenchCallbacks>,
+    bridge: Bridge<WorkbenchComponent>,
+}
+
+impl Workbench {
+    /// A dock with each panel's content in its panel, laid out as last
+    /// time (or as the compact board).
+    pub fn new(
+        contents: Vec<(PanelId, gtk::Widget)>,
+        remember: Remember,
+    ) -> anyhow::Result<Rc<Workbench>> {
+        let yard = Dockyard::build(contents)?;
+        let read = |path: PathBuf| {
+            std::fs::read_to_string(path)
+                .map(|text| Layout::from_text(&text))
+                .unwrap_or_default()
+        };
+        let (layout, remembers) = match remember {
+            Remember::Yours => (read(layout_path()), true),
+            Remember::Nothing => (Layout::default(), false),
+            Remember::From(path) => (read(path), false),
+        };
+        let status = gtk::Label::builder()
+            .xalign(0.0)
+            .ellipsize(gtk::pango::EllipsizeMode::End)
+            .css_classes(["stave-status-text"])
+            .build();
+        let callbacks = Rc::new(WorkbenchCallbacks {
+            tools: Rc::new(RefCell::new(layout.tools.clone())),
+            on_tools: Slot::default(),
+            on_save_failed: Slot::default(),
+        });
+        let bridge = Bridge::<WorkbenchComponent>::launch(WorkbenchInit {
+            yard: yard.clone(),
+            status: status.clone(),
+            layout,
+            remembers,
+        });
+        let told = Rc::clone(&callbacks);
+        bridge.connect(move |output| match output {
+            WorkbenchOutput::ToolsChanged(spots) => {
+                told.tools.replace(spots);
+                if let Some(callback) = told.on_tools.get() {
+                    callback();
+                }
+            }
+            WorkbenchOutput::SaveFailed(text) => {
+                if let Some(callback) = told.on_save_failed.get() {
+                    callback(&text);
+                }
+            }
+        });
+        Ok(Rc::new(Workbench {
+            root: bridge.widget().clone(),
+            status,
+            yard,
+            remembers,
+            callbacks,
+            bridge,
+        }))
+    }
+
+    /// Puts every panel where `layout` says, closing the ones it leaves
+    /// out, and shows the edges it shows.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "kept for the workbench's API; only tests apply a layout now"
+        )
+    )]
+    pub fn apply(&self, layout: Layout) {
+        self.bridge.send(WorkbenchInput::Apply(layout));
+    }
+
+    /// Narrows the left and right edges while `breakpoint` applies, so the
+    /// Model keeps room in a narrow window.
+    pub fn narrow_edges(&self, breakpoint: &adw::Breakpoint) {
+        self.bridge
+            .send(WorkbenchInput::NarrowEdges(breakpoint.clone()));
+    }
+
+    /// Where the 3D view's tool groups are docked, as the workbench last
+    /// told: the view's floating controls read it when they refresh. It
+    /// is a hand-over from the old API, not shared state: the workbench's
+    /// own record is in its component, and only this shim writes here.
+    pub fn tools(&self) -> Rc<RefCell<Spots>> {
+        Rc::clone(&self.callbacks.tools)
+    }
+
+    /// Calls `callback` when the tool groups move with the layout.
+    pub fn connect_tools(&self, callback: impl Fn() + 'static) {
+        self.callbacks.on_tools.set(Rc::new(callback));
+    }
+
+    /// Docks a tool group in a spot (the group there takes its old spot)
+    /// and remembers it.
+    pub fn dock_tool(&self, group: Group, spot: Spot) {
+        self.callbacks.tools.borrow_mut().dock(group, spot);
+        self.bridge.send(WorkbenchInput::DockTool { group, spot });
+    }
+
+    /// How many problems the status bar's Problems button counts.
+    pub fn show_problem_count(&self, count: usize) {
+        self.bridge.send(WorkbenchInput::ShowProblemCount(count));
+    }
+
+    /// A panel's widget.
+    pub fn panel(&self, id: PanelId) -> Option<&panel::Widget> {
+        self.yard.panels.get(&id)
+    }
+
+    /// `true` when two panels are tabs of the same frame.
+    pub fn share_a_frame(&self, first: PanelId, second: PanelId) -> bool {
+        self.yard.share_a_frame(first, second)
+    }
+
+    /// `true` while a panel is its frame's shown tab.
+    pub fn is_shown(&self, id: PanelId) -> bool {
+        self.yard.is_shown(id)
+    }
+
+    /// Where the panels are now.
+    pub fn layout(&self) -> Layout {
+        let tools = self.bridge.model().tools.clone();
+        self.yard.layout(&tools)
+    }
+
+    /// Remembers the layout for next time (not while taking screenshots).
+    ///
+    /// Written at once, not queued: the window saves as it closes, and
+    /// the main loop may not run again after that. The component hears
+    /// what was saved by message.
+    pub fn save(&self) {
+        let layout = self.layout();
+        let failure = if self.remembers {
+            write_layout(&layout).err()
+        } else {
+            None
+        };
+        self.bridge.send(WorkbenchInput::Saved { layout, failure });
+    }
+
+    /// Tells `told` when the layout can't be written (once).
+    pub fn connect_save_failed(&self, told: impl Fn(&str) + 'static) {
+        self.callbacks.on_save_failed.set(Rc::new(told));
+    }
+
+    /// The compact board again, the tool groups back in their spots.
+    pub fn reset(&self) {
+        self.bridge.send(WorkbenchInput::Reset);
+    }
+
+    /// Shows a panel: brings it back where it last was if it was closed,
+    /// shows its edge and makes it the frame's current tab.
+    pub fn present(&self, id: PanelId) {
+        self.bridge.send(WorkbenchInput::Present(id));
+    }
+
+    /// Brings a panel to the front of its frame, unless that frame also
+    /// holds the 3D View (it would hide the model); a closed panel opens
+    /// where it last was. Its edge isn't shown if people hid it.
+    pub fn bring_forward_beside_view(&self, id: PanelId) {
+        self.bridge.send(WorkbenchInput::BringForwardBesideView(id));
+    }
+
+    /// Moves a panel to a side: at an edge into its first frame (as a new
+    /// tab), in the middle into a new column beside what is there.
+    pub fn move_to(&self, id: PanelId, side: Side) {
+        self.bridge.send(WorkbenchInput::MoveTo { panel: id, side });
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ui::gtk_test::{on_gtk_thread, settle};
 
     #[test]
     fn the_default_is_the_compact_board() {
@@ -1193,7 +1509,7 @@ show bottom true
 
     #[test]
     fn the_edit_panel_is_docked_like_any_other() {
-        crate::ui::gtk_test::on_gtk_thread(edit_panel_docks);
+        on_gtk_thread(edit_panel_docks);
     }
 
     /// The Edit panel through the same dock as the others: a tab beside
@@ -1222,6 +1538,7 @@ show bottom true
         for _ in 0..50 {
             context.iteration(false);
         }
+        settle();
         let layout = workbench.layout();
         assert_eq!(layout, Layout::default());
         assert_eq!(
@@ -1236,25 +1553,35 @@ show bottom true
         assert!(workbench.share_a_frame(PanelId::View, PanelId::Code));
         assert!(workbench.is_shown(PanelId::View));
         workbench.bring_forward_beside_view(PanelId::Code);
+        settle();
         assert!(workbench.is_shown(PanelId::View));
         workbench.present(PanelId::Code);
+        settle();
         assert!(workbench.is_shown(PanelId::Code));
         workbench.present(PanelId::View);
+        settle();
         // The status bar's Problems button opens the hidden bottom edge
         // on Problems, and folds it away again.
-        assert!(!workbench.dock.reveals_area(panel::Area::Bottom));
-        workbench.toggle(PanelId::Problems);
-        assert!(workbench.dock.reveals_area(panel::Area::Bottom));
+        let dock = workbench.yard.dock.clone();
+        let toggle = |id| {
+            workbench.bridge.send(WorkbenchInput::Toggle(id));
+            settle();
+        };
+        assert!(!dock.reveals_area(panel::Area::Bottom));
+        toggle(PanelId::Problems);
+        assert!(dock.reveals_area(panel::Area::Bottom));
         assert!(workbench.is_shown(PanelId::Problems));
-        workbench.toggle(PanelId::Output);
+        toggle(PanelId::Output);
         assert!(workbench.is_shown(PanelId::Output));
-        workbench.toggle(PanelId::Output);
-        assert!(!workbench.dock.reveals_area(panel::Area::Bottom));
+        toggle(PanelId::Output);
+        assert!(!dock.reveals_area(panel::Area::Bottom));
         // An edit starts: its tab comes to the front.
         workbench.bring_forward_beside_view(PanelId::Edit);
+        settle();
         assert!(workbench.is_shown(PanelId::Edit));
         // Dragged to the left edge (as its tab's menu moves it).
         workbench.move_to(PanelId::Edit, Side::Start);
+        settle();
         let layout = workbench.layout();
         assert_eq!(
             layout.places.get(&PanelId::Edit),
@@ -1266,19 +1593,168 @@ show bottom true
         assert_eq!(Layout::from_text(&layout.to_text()), layout);
         // A tool group docked elsewhere is part of the layout.
         workbench.dock_tool(Group::Motion, Spot::TopLeft);
+        settle();
         assert_eq!(
             workbench.layout().tools.spot_of(Group::Motion),
             Spot::TopLeft
         );
         workbench.reset();
+        settle();
         assert_eq!(workbench.layout().tools, Spots::default());
         workbench.move_to(PanelId::Edit, Side::Start);
         // Beside the 3D View, it isn't brought over the model.
         workbench.move_to(PanelId::View, Side::Start);
         workbench.present(PanelId::View);
         workbench.bring_forward_beside_view(PanelId::Edit);
+        settle();
         assert!(workbench.is_shown(PanelId::View));
         window.destroy();
+    }
+
+    /// Every panel's content a label with its title.
+    fn labels() -> Vec<(PanelId, gtk::Widget)> {
+        PanelId::ALL
+            .into_iter()
+            .map(|id| (id, gtk::Label::new(Some(id.title())).upcast()))
+            .collect()
+    }
+
+    #[test]
+    fn a_dropped_workbench_is_freed() {
+        on_gtk_thread(workbench_is_freed);
+    }
+
+    /// Dropping the workbench shuts its component down when the main loop
+    /// next runs: the dock, the model and the callbacks are all freed.
+    fn workbench_is_freed() {
+        let Ok(workbench) = Workbench::new(labels(), Remember::Nothing) else {
+            panic!("the dock is built");
+        };
+        let token = Rc::new(());
+        let held = Rc::clone(&token);
+        workbench.connect_tools(move || {
+            let _ = &held;
+        });
+        let callback = Rc::downgrade(&token);
+        drop(token);
+        let root = workbench.root.downgrade();
+        let dock = workbench.yard.dock.downgrade();
+        let input = workbench.bridge.sender().clone();
+        settle();
+        assert!(root.upgrade().is_some(), "the dock lives while held");
+        drop(workbench);
+        settle();
+        assert!(root.upgrade().is_none(), "the root is freed");
+        assert!(dock.upgrade().is_none(), "the dock is freed");
+        assert!(
+            input.send(WorkbenchInput::Save).is_err(),
+            "the component's runtime, and with it the model, is gone"
+        );
+        assert!(callback.upgrade().is_none(), "the callback is freed");
+    }
+
+    #[test]
+    fn setters_change_the_dock_without_calling_back() {
+        on_gtk_thread(setters_do_not_call_back);
+    }
+
+    /// Presenting, moving and counting change the dock and the model but
+    /// tell nobody; only a layout applied says the tool groups moved.
+    fn setters_do_not_call_back() {
+        let Ok(workbench) = Workbench::new(labels(), Remember::Nothing) else {
+            panic!("the dock is built");
+        };
+        let heard: Rc<RefCell<Vec<Spots>>> = Rc::default();
+        let log = Rc::clone(&heard);
+        let tools = workbench.tools();
+        workbench.connect_tools(move || log.borrow_mut().push(tools.borrow().clone()));
+        workbench.show_problem_count(3);
+        workbench.present(PanelId::Code);
+        workbench.move_to(PanelId::Files, Side::End);
+        workbench.dock_tool(Group::Camera, Spot::BottomLeft);
+        settle();
+        assert!(workbench.is_shown(PanelId::Code));
+        assert_eq!(
+            workbench
+                .layout()
+                .places
+                .get(&PanelId::Files)
+                .map(|p| p.side),
+            Some(Side::End)
+        );
+        assert_eq!(
+            workbench
+                .bridge
+                .model()
+                .last
+                .places
+                .get(&PanelId::Files)
+                .map(|p| p.side),
+            Some(Side::End),
+            "a move is saved as the last layout"
+        );
+        assert!(heard.borrow().is_empty(), "setters never call back");
+        let mut moved = Layout::default();
+        moved.tools.dock(Group::Scene, Spot::Right);
+        workbench.apply(moved.clone());
+        settle();
+        assert_eq!(*heard.borrow(), vec![moved.tools.clone()]);
+        assert_eq!(*workbench.tools().borrow(), moved.tools);
+    }
+
+    #[test]
+    fn a_setter_called_while_handling_an_output_is_queued_not_re_entered() {
+        on_gtk_thread(outputs_are_queued);
+    }
+
+    /// The old workbench called its tools callback from inside `apply`,
+    /// with the callback's own `RefCell` borrowed: a callback that
+    /// connected another, or applied a layout, panicked. Now a reset is
+    /// only queued; the callback runs after the update has returned, and a
+    /// panel presented from inside it is queued too, as is the dock's own
+    /// `notify::reveal-bottom`, fired while the update reveals the edge.
+    fn outputs_are_queued() {
+        let Ok(workbench) = Workbench::new(labels(), Remember::Nothing) else {
+            panic!("the dock is built");
+        };
+        let workbench = Rc::new(workbench);
+        // (whether Output showed when the callback was called, and
+        // straight after it asked for it)
+        let heard: Rc<RefCell<Vec<(bool, bool)>>> = Rc::default();
+        let log = Rc::clone(&heard);
+        let weak = Rc::downgrade(&workbench);
+        workbench.connect_tools(move || {
+            let Some(workbench) = weak.upgrade() else {
+                return;
+            };
+            let before = workbench.is_shown(PanelId::Output);
+            // Connecting from here is fine: nothing is borrowed.
+            let inner = Rc::clone(&log);
+            let again = weak.clone();
+            workbench.connect_tools(move || {
+                if let Some(workbench) = again.upgrade() {
+                    inner
+                        .borrow_mut()
+                        .push((workbench.is_shown(PanelId::Output), true));
+                }
+            });
+            workbench.present(PanelId::Output);
+            log.borrow_mut()
+                .push((before, workbench.is_shown(PanelId::Output)));
+        });
+        workbench.reset();
+        assert!(heard.borrow().is_empty(), "nothing has run yet");
+        settle();
+        assert_eq!(
+            *heard.borrow(),
+            vec![(false, false)],
+            "the callback ran after the reset, and its present was queued"
+        );
+        assert!(workbench.is_shown(PanelId::Output), "then shown");
+        assert!(workbench.yard.dock.reveals_area(panel::Area::Bottom));
+        workbench.reset();
+        settle();
+        assert_eq!(heard.borrow().len(), 2, "the callback connected inside");
     }
 
     #[test]
