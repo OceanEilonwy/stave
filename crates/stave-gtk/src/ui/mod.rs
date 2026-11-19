@@ -3531,7 +3531,13 @@ impl Window {
         });
         viewport.add_controller(scroll);
 
-        // Escape and F anywhere in the window but a text field.
+        // F (frame) and Escape anywhere in the window but a text field,
+        // after the focused widget had its turn.
+        let shortcuts = app::shortcut_controller(app::KeyScope::Window);
+        shortcuts.set_scope(gtk::ShortcutScope::Local);
+        self.widgets.window.add_controller(shortcuts);
+
+        // Delete anywhere in the window but a text field.
         let keys = gtk::EventControllerKey::new();
         let window = Rc::downgrade(self);
         keys.connect_key_pressed(move |_, key, _, modifiers| {
@@ -3545,14 +3551,6 @@ impl Window {
                 return glib::Propagation::Proceed;
             }
             match key {
-                gdk::Key::Escape => {
-                    let _ = WidgetExt::activate_action(&window.widgets.window, "win.escape", None);
-                    glib::Propagation::Stop
-                }
-                gdk::Key::f | gdk::Key::F => {
-                    window.frame();
-                    glib::Propagation::Stop
-                }
                 // Delete removes the selection, saying first what goes.
                 gdk::Key::Delete | gdk::Key::KP_Delete if window.remove_selected() => {
                     glib::Propagation::Stop

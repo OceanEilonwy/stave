@@ -280,9 +280,15 @@ project there, after asking about unsaved changes, as Open Project… does.
 Ctrl+W closes the window (`window.close`, asking about unsaved changes)
 and Ctrl+Q closes every window (`app.quit`), each asking. The shortcuts
 dialog (`adw::ShortcutsDialog`) lists every key: the actions' keys come
-from the one table `app::ACCELERATORS` that also binds them, and the keys
-widgets handle themselves (F, Esc, Delete in the 3D view; F12, Alt+F12,
-Shift+F12 in the editor) from `app::OTHER_KEYS`.
+from the one table `app::ACCELERATORS` that also binds them, and the few
+keys widgets handle themselves (Delete in the 3D view, Undo, Redo and
+Escape in the editor) from `app::OTHER_KEYS`. Each action's `KeyScope`
+says what binds its keys: the application (`set_accels_for_action`), the
+window after the focused widget and never while typing in a text field
+(F frames, Escape leaves focus or clears the selection), or the text
+editor (`editor.follow` F12, `editor.peek` Alt+F12, `editor.uses`
+Shift+F12, `editor.show-info` Ctrl+I, also in the text's right-click
+menu).
 
 Stave remembers the window's size, whether it was maximised and the
 style chosen in the menu, in `~/.config/stave/window` (a GLib key file,
@@ -1388,7 +1394,9 @@ step and changes nothing in the interface.
   Enter / Shift+Enter or the arrows step, Escape closes; Ctrl+F anywhere
   else opens the finder); Ctrl+S saves; Ctrl+Shift+I lays the
   file out with `stave fmt` (never done unasked; Undo takes it back).
-  Resting the pointer on a word shows its card: the problem there with
+  Resting the pointer on a word, or Ctrl+I at the cursor, shows its
+  card (and gives the text its words as an accessible description while
+  it shows): the problem there with
   its help line, or what the name is, its doc comment and where it is
   declared.
 - **History**: following a name or a use first records where the cursor
