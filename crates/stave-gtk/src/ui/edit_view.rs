@@ -527,7 +527,6 @@ impl Window {
         self.connect_item_tools();
         self.connect_hold();
         self.connect_repeats();
-        self.connect_editor_link();
 
         // The menu's and the card's outputs were forwarded to the window
         // when they were launched (`EditView::new`).
