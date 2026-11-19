@@ -1588,9 +1588,18 @@ mod tests {
             "{}",
             diagnostic.message
         );
-        // No `within`: the search went as far as the reach above.
-        assert_eq!(above.last_good, mm(1940));
-        assert_eq!(above.end, SideEnd::Limit);
+        // No `within`: above, the back panel stops it once it is wider
+        // than a 1220mm sheet of its plywood.
+        assert_eq!(above.last_good, mm(1280));
+        let SideEnd::Stopped { diagnostic, .. } = &above.end else {
+            panic!("the width has an upper stop");
+        };
+        assert_eq!(diagnostic.code, Code::TypeMismatch);
+        assert!(
+            diagnostic.message.contains("back.panel"),
+            "{}",
+            diagnostic.message
+        );
         assert!(matches!(
             grip(&grips, "overall_width").place,
             Some(PlaceInput::Envelope {

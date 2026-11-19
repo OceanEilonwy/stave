@@ -1145,29 +1145,36 @@ impl Solver<'_> {
         let Some(def) = self.model.defs.stock(stock) else {
             return Err(Fault::Internal("a stock's declaration").into());
         };
-        let expr = match field {
+        // The expression, and the field it is written in (a dowel's
+        // thickness and width are its diameter).
+        let (expr, written) = match field {
             StockField::Species => return Ok(Value::Word(Word::Species(def.species))),
             StockField::Form => return Ok(Value::Word(Word::StockForm(def.form))),
             StockField::Thickness => match (&def.thickness, def.form) {
-                (Some(t), _) => t.clone(),
+                (Some(t), _) => (t.clone(), "thickness"),
                 (None, StockForm::Dowel) => match &def.diameter {
-                    Some(d) => d.clone(),
+                    Some(d) => (d.clone(), "diameter"),
                     None => return Err(Fault::Earlier.into()),
                 },
                 (None, _) => return Err(Fault::Earlier.into()),
             },
-            StockField::Diameter => def.diameter.clone().ok_or_else(|| {
-                self.error(
-                    Code::UnknownField,
-                    format!("stock '{}' has no field 'diameter'", def.decl.name),
-                    def.decl.file,
-                    span,
-                    "only dowel stock has a diameter",
-                )
-            })?,
+            StockField::Diameter => (
+                def.diameter.clone().ok_or_else(|| {
+                    self.error(
+                        Code::UnknownField,
+                        format!("stock '{}' has no field 'diameter'", def.decl.name),
+                        def.decl.file,
+                        span,
+                        "only dowel stock has a diameter",
+                    )
+                })?,
+                "diameter",
+            ),
             StockField::Width => match (&def.width, def.form) {
-                (Some(w), _) => w.clone(),
-                (None, StockForm::Dowel) => def.diameter.clone().ok_or(Fault::Earlier)?,
+                (Some(w), _) => (w.clone(), "width"),
+                (None, StockForm::Dowel) => {
+                    (def.diameter.clone().ok_or(Fault::Earlier)?, "diameter")
+                }
                 (None, _) => {
                     return Err(self
                         .error(
@@ -1180,24 +1187,30 @@ impl Solver<'_> {
                         .into());
                 }
             },
-            StockField::MaxWidth => def.max_width.clone().ok_or_else(|| {
-                self.error(
-                    Code::UnknownField,
-                    format!("stock '{}' has no field 'max_width'", def.decl.name),
-                    def.decl.file,
-                    span,
-                    "the stock sets no max_width",
-                )
-            })?,
-            StockField::MaxLength => def.max_length.clone().ok_or_else(|| {
-                self.error(
-                    Code::UnknownField,
-                    format!("stock '{}' has no field 'max_length'", def.decl.name),
-                    def.decl.file,
-                    span,
-                    "the stock sets no max_length",
-                )
-            })?,
+            StockField::MaxWidth => (
+                def.max_width.clone().ok_or_else(|| {
+                    self.error(
+                        Code::UnknownField,
+                        format!("stock '{}' has no field 'max_width'", def.decl.name),
+                        def.decl.file,
+                        span,
+                        "the stock sets no max_width",
+                    )
+                })?,
+                "max_width",
+            ),
+            StockField::MaxLength => (
+                def.max_length.clone().ok_or_else(|| {
+                    self.error(
+                        Code::UnknownField,
+                        format!("stock '{}' has no field 'max_length'", def.decl.name),
+                        def.decl.file,
+                        span,
+                        "the stock sets no max_length",
+                    )
+                })?,
+                "max_length",
+            ),
         };
         let file = def.decl.file;
         let Some(ctx) = self.module_ctx(DefId::Stock(stock)) else {
@@ -1209,7 +1222,47 @@ impl Solver<'_> {
             kind: None,
             array: None,
         };
-        self.eval(&expr, &env)
+        let value = self.eval(&expr, &env)?;
+        if let Value::Length(size) = &value
+            && *size <= ExactLength::ZERO
+        {
+            return Err(self.stock_size_not_positive(file, expr.span, written, *size));
+        }
+        Ok(value)
+    }
+
+    /// Every size of a stock is more than zero (grammar, "stock"): a stock
+    /// field of 0mm or less is reported once, at the field, however often
+    /// it is read.
+    fn stock_size_not_positive(
+        &mut self,
+        file: FileId,
+        span: Span,
+        field: &str,
+        size: ExactLength,
+    ) -> crate::Failure {
+        let message = format!(
+            "'{field}' must be more than 0mm, found {}",
+            Value::Length(size)
+        );
+        let reported = self.diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == Code::OutOfRange
+                && diagnostic.message == message
+                && diagnostic
+                    .primary()
+                    .is_some_and(|label| label.file == file && label.span == span)
+        });
+        if reported {
+            return self.skip().into();
+        }
+        self.error(
+            Code::OutOfRange,
+            message,
+            file,
+            span,
+            format!("write the stock's {field} as you would measure it, more than 0mm"),
+        )
+        .into()
     }
 
     pub(crate) fn stock_length(

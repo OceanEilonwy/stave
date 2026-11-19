@@ -611,6 +611,17 @@ fn case_session(name: &str) -> Session {
         std::env::temp_dir().join(format!("stave-gtk-options-{}-{name}", std::process::id()));
     let _ = std::fs::remove_dir_all(&folder);
     create_project(&folder, &answers.project().unwrap()).unwrap();
+    // The dialog doesn't ask how wide the boards come; without it the
+    // 580mm deep case would be warned about (grammar, "stock"), and the
+    // card would show the warning. Wide enough that no part is glued up.
+    for entry in std::fs::read_dir(&folder).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().is_some_and(|e| e == "stave") {
+            let text = std::fs::read_to_string(&path).unwrap();
+            let text = text.replace("max_length: 2700mm", "max_width: 600mm, max_length: 2700mm");
+            std::fs::write(&path, text).unwrap();
+        }
+    }
     let mut session = Session::new(folder.clone());
     let envelope = {
         let opened = stave_app::open(&folder).unwrap();

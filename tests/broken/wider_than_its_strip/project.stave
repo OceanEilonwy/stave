@@ -1,0 +1,16 @@
+// expect: error[type-mismatch] base: its width is 150mm, but strip is sold 40mm wide
+stave 1
+
+// Strip stock is sold 40mm wide: a part may be ripped narrower, never wider.
+
+project "A part wider than its strip" {
+  units: mm
+}
+
+stock strip { species: pine, form: solid, thickness: 19mm, width: 40mm, max_length: 2400mm }
+
+part base : strip {
+  length: 600mm
+  width:  150mm
+  place { ground }
+}

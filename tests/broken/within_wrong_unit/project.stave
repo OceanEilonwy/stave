@@ -1,0 +1,19 @@
+// expect: error[unit-mismatch] 'within' needs a length, found an angle
+stave 1
+
+// A width kept within a range of angles: both ends are wrong, and that is
+// one mistake, reported once.
+
+project "Within the wrong unit" {
+  units: mm
+}
+
+param shelf_width = 300mm within 0deg..100deg
+
+stock oak { species: white_oak, form: solid, thickness: 19mm, max_width: 300mm, max_length: 2400mm }
+
+part shelf : oak {
+  length: 600mm
+  width:  shelf_width
+  place { ground }
+}

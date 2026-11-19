@@ -10,7 +10,7 @@ project "Dowels that cross" {
   units: mm
 }
 
-stock oak_19 { species: white_oak, form: solid, thickness: 19mm, max_length: 2700mm }
+stock oak_19 { species: white_oak, form: solid, thickness: 19mm, max_width: 600mm, max_length: 2700mm }
 
 part base : oak_19 {
   length: 900mm

@@ -520,7 +520,9 @@ Rules:
 - `assembly drawer[bottom, top] : Drawer { ... }` declares a labelled array:
   `drawer[bottom]`, `drawer[top]`. Two or more names in a declaration are
   labels; anything else is a count. A single label isn't allowed (just name
-  the part).
+  the part): one bracketed name that names nothing is `error[type-mismatch]`,
+  `one label isn't an array: 'only' is the only label of 'shelf'`, with the
+  help to name it `shelf_only` or give two or more labels.
 - **A labelled array is indexed by label only.** In `drawer[top]` the word in
   brackets is looked up among the array's labels and nowhere else, so labels
   never clash with items. `drawer[0]` on a labelled array is
@@ -679,7 +681,7 @@ member (`oak_19.thickness`). Types are listed under [Types](#types-units-and-ari
 |---|---|---|---|
 | `goal` | `Text` | no | one sentence about what is being built; shown on the cover |
 | `units` | `mm` \| `cm` \| `m` \| `in` \| `ft` | no (default `mm`) | units used in output |
-| `resolution` | `Length` | no (default `0.5mm`) | the cut list rounds to this, and says where it rounded |
+| `resolution` | `Length` | no (default `0.5mm`) | the cut list rounds to this, and says where it rounded. More than 0mm, or `error[out-of-range]` (`'resolution' must be more than 0mm, found 0mm`) |
 | `style` | `Text` | no | a hint for suggestions |
 | `tools` | list of `Tool` | no | the tools you have. Left out: every tool is assumed |
 | `methods` | list of `Recipe` | no | recipes to prefer, most preferred first |
@@ -757,19 +759,38 @@ A named value. Not a knob: it has no range and can't be passed in.
 | `form` | `solid` \| `plywood` \| `mdf` \| `dowel` | yes | yes | what you buy |
 | `thickness` | `Length` | yes, except `dowel` | yes | finished thickness |
 | `diameter` | `Length` | `dowel` only, required | yes | diameter of round stock |
-| `width` | `Length` | no | yes | stock sold at a fixed width (a square blank, a strip). Parts cut from it take this width |
+| `width` | `Length` | no | yes | stock sold at a fixed width (a square blank, a strip). Parts cut from it take this width unless they write their own: narrower is ripped from it, wider is `error[type-mismatch]` at the part's `width:` (`base: its width is 150mm, but strip is sold 40mm wide`) |
 | `max_width` | `Length` | no | yes | the widest board you can get. A `solid` part wider than this is made of boards (see [Boards](#boards)); a `plywood` or `mdf` part wider than this is `error[type-mismatch]` |
-| `max_length` | `Length` | no, but see the warning below | yes | the longest board (or sheet) you can get; a part whose cut length is longer is `error[type-mismatch]`, unless its `lengths:` splices it into pieces that each fit (see [Splices](#splices)) |
+| `max_length` | `Length` | no, but see the warning below | yes | the longest board (or sheet) you can get; a part whose cut length along its grain (its length, or its width for `grain: width`) is longer is `error[type-mismatch]`, unless its `lengths:` splices it into pieces that each fit (see [Splices](#splices)) |
+
+Every size of a stock (`thickness`, `diameter`, `width`, `max_width`,
+`max_length`) must be more than 0mm, whether or not a part is cut from it:
+`error[out-of-range]` at the field, `'max_width' must be more than 0mm, found
+-100mm`.
 
 A `solid`, `plywood` or `mdf` stock that a part is cut from and that has no
 `max_length` is `warning[missing-field]` at the stock, once: `oak_19 doesn't
 say how long its boards are, so Stave can't check part lengths` (`sheets`
 for plywood and MDF), with the help `add the longest board you can buy to
 oak_19, for example max_length: 2400mm` (`sheet` and `2440mm` for sheets).
-Without it no part's length can be checked. Sheets get no default size: a
-part may lie either way on a sheet, and `max_width` and `max_length` are
-measured along the part's grain, so a standard sheet isn't one clean pair of
-limits. Round stock (`dowel`) is left out.
+Without it no part's length can be checked. Sheets get no default size.
+`max_width` and `max_length` are measured along the part's grain, but a part
+may lie either way on a sheet: a `plywood` or `mdf` part fits when its size
+along the grain is within `max_length` and across it within `max_width`, or
+turned a quarter turn, along the grain within `max_width` and across it
+within `max_length`. Round stock (`dowel`) is left out.
+
+A stock that gives `max_length` but neither `max_width` nor `width` is
+`warning[missing-field]` at the stock, once, when a part cut from it is
+wider than most boards (more than 300mm across the grain, for `solid`) or
+fits a 1220mm by 2440mm sheet neither way (for `plywood` and `mdf`):
+`pine_19 doesn't say how wide its boards are, and shelf is 600mm wide,
+wider than most boards`, with the help `add the widest board you can buy
+to pine_19, for example max_width: 200mm, so Stave can tell when a part
+needs gluing up` (`add the widest sheet ... max_width: 1220mm` for sheets).
+Without it Stave can't tell that the part must be glued up from boards, or
+needs a larger sheet. The warning about `max_length` comes first: a stock
+missing both is warned about its length only.
 
 ### `part name : stock { }` and `makes part name : stock { }`
 
@@ -777,9 +798,9 @@ limits. Round stock (`dowel`) is left out.
 |---|---|---|---|---|
 | `length` | `Length` or `fit` | yes | yes | along the grain, by default |
 | `width` | `Length` or `fit` | yes, unless the stock has `width:` or is a `dowel` | yes | |
-| `thickness` | `Length` | no (default: the stock's) | yes | thinner than the stock; the cut list notes the planing. Thicker than the stock is `error[type-mismatch]` |
+| `thickness` | `Length` | no (default: the stock's) | yes | thinner than the stock; the cut list notes the planing. Thicker than the stock is `error[type-mismatch]`, and so is a cut thickness (with what joints add) over the stock's. A sheet (`plywood`, `mdf`) can't be planed: a part cut from one that writes any other thickness is `error[type-mismatch]` (`panel: its thickness is 10mm, but plywood can't be planed; ply_18 is 18mm thick`) |
 | `grain` | `length` \| `width` | no (default `length`) | no | which way the grain runs |
-| `shape` | `Shape` | no | no | `turned(profile)`; the part's length is then the profile's: write `length: fit` (any other length is `error[type-mismatch]`) |
+| `shape` | `Shape` | no | no | `turned(profile)`; the part's length is then the profile's: write `length: fit` (any other length is `error[type-mismatch]`). Its `width:` and `thickness:` are then the **blank** it is turned from (each the stock's unless written); the profile must fit inside the blank at its widest, or it is `error[type-mismatch]` at `shape:` (`leg: its profile is 60mm across at its widest, but its blank of ash_45_sq is only 45mm square`) |
 | `face_side` | face word | no | no | the reference face; see [Faces to cut](#faces-to-cut) |
 | `face_edge` | face word | no | no | the reference edge |
 | `note` | `Text` | no | no | printed on the part's work card |
@@ -967,7 +988,8 @@ holds one placement term per line. There is no syntax for coordinates.
 Each part has six faces named by the world direction they face once placed:
 `top`, `bottom`, `left`, `right`, `front`, `back`. They are the faces of the
 part's **drawn box**: its length, width and thickness as written, before joints
-add to it. A turned part's box is as wide as its largest diameter.
+add to it. A turned part's box is as wide as its largest diameter, whatever
+the size of the blank it is turned from.
 
 A part also has three axes of its own: `length`, `width` and `thickness`.
 Joint kinds use these, because a joint doesn't know how its parts are placed.
@@ -1431,7 +1453,10 @@ bottom), choosing the end joint and leaving each piece room for what its
 splices add, or buy longer stock`. A part shorter than its stock may
 still be spliced (to use up short boards). Only `solid` board parts are
 spliced: a turned part, a sheet (`plywood`, `mdf`) or round stock with
-`lengths:` is `error[type-mismatch]`. A part a joint makes is never
+`lengths:` is `error[type-mismatch]`, and so is a part with `grain: width`
+(a splice joins boards end to end along the grain, and its grain runs
+across the part's length). A `grain: width` part longer along its grain
+than its stock's `max_length` is `error[type-mismatch]` at its `width:`. A part a joint makes is never
 spliced. Not yet supported, each `warning[not-supported]` at `lengths:`:
 a splice kind's members and `uses:` fasteners (not placed or listed), and
 a spliced part wider than its stock's `max_width` (its pieces are drawn
@@ -1681,7 +1706,12 @@ kind ari_tsugi : joint {
 **`adds:`** — `extend(role, by: d)` lengthens the role's part by `d` at each
 end or edge **where it butts against its counterpart in this pair**, toward
 the counterpart. The contact decides the direction, so the same kind extends a
-shelf in its length and a back panel in its width. `extend` on a pair that
+shelf in its length and a back panel in its width. It lengthens an end or an
+edge, never a face: a part that meets its counterpart with its face (a panel
+laid on a board, a back placed behind the sides instead of between them)
+would come out thicker than its stock, and is `error[type-mismatch]` at the
+joint (`'housed' would make board thicker: board meets base with its face,
+but extend lengthens an end or an edge`). `extend` on a pair that
 crosses is `error[type-mismatch]`. A list extends several roles:
 `adds: [extend(piece, by: d), extend(into, by: d)]`. A turned part is extended
 at its end diameter; the joint's cuts then shape the extension. When two
@@ -1706,7 +1736,14 @@ cuts.
 
 **`makes part`** — a part the joint creates (a key, a wedge, a pin), once per
 pair. It is declared like any part, appears in the cut list as
-`<joint>.<name>`, and is placed **relative to the joint's own parts**:
+`<joint>.<name>`, and is placed **relative to the joint's own parts**.
+It is cut from its stock like any part: each size more than 0mm
+(`error[out-of-range]`), no thicker than the stock, no wider than stock
+sold at a fixed `width:`, and no longer along its grain than the stock's
+`max_length` (`error[type-mismatch]`), each reported at the joint's call
+(for a board joint, at `boards:`; for a splice, at `lengths:`):
+`top.spline[1]: its thickness works out as about 6.333333mm, but ply_6 is
+only 6mm thick`.
 
 | Term in a made part's `place` | Meaning |
 |---|---|
@@ -1752,7 +1789,11 @@ There is no way to switch this check off. Every cut operation is made and
 checked, angled ones included (see "Angled cuts" below). The only cuts the
 geometry can't make yet are cuts other than `drill` and `spigot` on round
 stock or a turned part: those are `warning[not-supported]`, and the part is
-drawn and checked without them.
+drawn and checked without them. An overlap where such a cut would have made
+room doesn't blame the cut's size: its help says Stave couldn't cut it
+(`Stave can't cut a mortise in a round or turned part yet, so the tenon on
+rail is checked against the solid wood of post; check this fit by hand on a
+test piece, or join them with a joint whose cut in post is a drilled hole`).
 
 **Joints with nothing cut.** A kind need not cut anything: with no
 `cut`, `insert:` or `adds:`, it only says the parts are held together.
@@ -1787,7 +1828,7 @@ like a hardware member (see [One collision model](#one-collision-model)):
 |---|---|---|---|
 | `: fastener` | a fastener kind value | no | what it is: the hardware list counts it once for every copy placed |
 | `on:` | `Patch` | yes | where it goes: `contact(a, b)`, the patch where two of the joint's parts touch |
-| `count:` | `Count` | no (default `1`) | how many copies, for each pair |
+| `count:` | `Count` | no (default `1`) | how many copies, for each pair: at least 1; `0` is `error[out-of-range]` at the joint's call (`j: it places no screws, so nothing joins its parts`) |
 | `spaced:` | `Spacing` | no (default `evenly`) | how the copies are spread along the patch's length |
 | `shape [name]:` | a shape | yes | what it is made of (see [Shapes](#shapes)) |
 
@@ -1988,6 +2029,15 @@ hardware kind's `member` and `mechanism`: `point(...)` anywhere else is
 #### Cut operations
 
 `through` as a depth means all the way through the part.
+
+Every length an operation takes (a depth, width, thickness, length,
+diameter, neck or flats; not `from_depth`) must come out more than 0mm,
+however it is worked out: a tenon 0mm thick cuts away all that the joint
+adds and joins nothing, and one 0mm long is a butt joint by another name.
+Anything else is `error[cut-size]` at the joint's call (`j: its tenon on
+apron is 0mm thick`), its help naming the kind's setting the size comes
+from when the operation reads one straight (`give j a thickness: of more
+than 0mm`).
 
 | Operation | On | Removes |
 |---|---|---|
@@ -3187,8 +3237,13 @@ or a size gets no error for being in pieces.
 
 Every part must be held: joined to the part placed with `ground`, through
 joints and hardware, or be meant to lift out. The parts a joint pair binds
-(and the parts it makes) hold each other, as do a part made of boards and
-the parts its board joints make; a piece of hardware holds the part it is
+(and the parts it makes) hold each other when the pair holds anything: it
+is glued, places a member or a `uses:` fastener, makes a part, or cuts its
+parts. A pair that does none of these (a `glued_face` with `glue: false`)
+only says the parts meet; a group it leaves loose is reported naming it:
+`<part> is loose: <joint> is not glued and cuts or places nothing to hold
+it`. A part made of boards and the parts its board joints make hold each
+other; a piece of hardware holds the part it is
 mounted on, the parts its roles name, the parts that carry its members and
 the parts its members touch. A part that nothing joins to the ground part
 this way is `warning[loose-part]` (layer 4), once for each group of parts
@@ -3240,7 +3295,7 @@ shape of their messages are fixed, because tests and AI tools match on them.
 | 2, 4 | `type-mismatch` | `'<field>' needs <a part>, found <a region>` (for a param kind `'<locked>' needs a length, an angle, a ratio or a count, found <a stock>`; for shares `'shares' needs <3> numbers, one for each piece of <drawer_bay>, found <2>` or `'shares' needs a fixed number of pieces, found a count that can change`), `split takes 'at:' or 'shares:', not both`, for a cut's shape `<joint>: the outline crosses itself between mark <n> and mark <n + 1>`, or for a kind chosen through a param that doesn't take what its declaration hands it `'<kind>' can't be the <joinery> of <Shelf>` (`'<kind>' can't be the project's <joinery>`), its reason the first note (see [Kind values](#kind-values)) |
 | 2 | `unknown-field` | `<a part> has no field '<name>'` |
 | 2 | `missing-field` | `<what> is missing '<name>'` (`solved param 'overall_width' is missing 'within'`); a warning for a stock with no `max_length`: `<stock> doesn't say how long its <boards> are, so Stave can't check part lengths` |
-| 2 | `out-of-range` | `'<param>' must be within <domain>, found <value>`, or for a size that must be positive `'<up>' must be more than <0mm>, found <value>` (`'shares' must each be more than 0, found <value>`), or for an exact value too large to keep `a size here is too large, or divided too finely, for Stave to work out exactly` |
+| 2 | `out-of-range` | `'<param>' must be within <domain>, found <value>`, or for a size that must be positive `'<up>' must be more than <0mm>, found <value>` (`'shares' must each be more than 0, found <value>`), or for an exact value too large to keep `a size here is too large, or divided too finely, for Stave to work out exactly`, or for a joint member's `count:` of 0 `<joint>: it places no <screw>s, so nothing joins its parts` |
 | 2 | `not-in-library` | `a library can't contain a <part> at the top level` |
 | 2 | `import-cycle` | `modules import each other: <a> -> <b> -> <a>` |
 | 2 | `unknown-module` | `can't find module '<source>'` |
@@ -3258,7 +3313,7 @@ shape of their messages are fixed, because tests and AI tools match on them.
 | 4 | `overlap` | `<a> and <b> overlap` |
 | 4 | `adjust` | `<hardware>: the <member> would sit <offset> off its place on the <member>; it adjusts <d>`, or for an axis no `adjust` covers `<hardware>: the <member> would sit <offset> off its place <across>; it doesn't adjust that way` |
 | 4 | `wall` | `<joint>: its <hole> in <part> breaks out of the <left end> of <part>`, `<joint>: its <bore> in <part> runs into the <bore> of <other>` (`meets` when they only touch), `<joint>: its <dado> in <part> crosses the splice between <part>.piece[1] and <part>.piece[2]`, or `<joint>: its <housing> for <other> meets the <housing> for <other> and cuts <part> in two` (`goes right across <part> and cuts it in two` for one cut); see [Cuts stay in their part](#cuts-stay-in-their-part) |
-| 4 | `cut-size` | `<joint>: its <tenon> on <part> is <25mm> <thick>, but <part> is only <19mm> <thick>`, `... is <80mm> across, but <part> is only <70mm> across at that end`, or `<joint>: its <groove> in <part> is <12mm> deep, but <part> is only <12mm> <thick> there` |
+| 4 | `cut-size` | `<joint>: its <tenon> on <part> is <0mm> <thick>` (a size not more than 0mm), `<joint>: its <tenon> on <part> is <25mm> <thick>, but <part> is only <19mm> <thick>`, `... is <80mm> across, but <part> is only <70mm> across at that end`, or `<joint>: its <groove> in <part> is <12mm> deep, but <part> is only <12mm> <thick> there` |
 | 5 | `motion` | `<a> hits <b> when <assembly> is <open>`; `<assembly>'s hardware doesn't move alike`; `<joint>: <a> moves with <assembly> but <b> doesn't, so the joint would hold <assembly> shut`; `<hardware>: <members> lock at <value>`; `<hardware>: <members> may come within 0.1mm of locking near <value>` |
 | 6 | `require` | `'<name>' fails: <message>` |
 | 6 | `require-range` | `'<name>' does not hold for every allowed value: <message>` |

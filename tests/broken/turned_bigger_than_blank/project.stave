@@ -1,0 +1,40 @@
+// expect: error[type-mismatch] leg: its profile is 60mm across at its widest, but its blank of ash_45_sq is only 45mm square
+stave 1
+
+// A stool leg whose diameter was raised to 60mm without changing the
+// blank: no lathe can turn 60mm out of a 45mm square.
+
+project "A leg wider than its blank" {
+  units: mm
+}
+
+stock ash_30    { species: ash, form: solid, thickness: 30mm, max_width: 200mm, max_length: 2400mm }
+stock ash_45_sq { species: ash, form: solid, thickness: 45mm, width: 45mm, max_length: 2400mm }
+
+part seat : ash_30 {
+  length: 320mm
+  width:  320mm
+  place {
+    ground
+  }
+}
+
+profile leg_shape {
+  measure:  diameter
+  smooth:   true
+  at 0mm:   34mm
+  at 190mm: 60mm
+  at 300mm: 60mm
+  at 420mm: 30mm
+}
+
+part leg : ash_45_sq {
+  length: fit
+  shape:  turned(leg_shape)
+  place {
+    orient(length: down)
+    against(seat.bottom)
+    flush(seat.left, inset: 30mm)
+    flush(seat.front, inset: 30mm)
+  }
+}

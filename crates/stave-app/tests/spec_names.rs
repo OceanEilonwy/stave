@@ -262,12 +262,14 @@ fn the_same_label_twice_is_a_duplicate_name() {
 
 #[test]
 fn a_single_name_in_brackets_is_a_count_not_a_label() {
-    // `part post[left]` is a count expression; `left` is no count.
+    // `part post[left]` is a count expression; `left` names nothing, so it
+    // is a single label, which isn't an array.
     let opened = open(&POSTS.replace("[left, right]", "[left]"));
     let found = diagnostics(&opened);
     assert_eq!(found.len(), 1, "{found:?}");
     assert!(
-        found[0].starts_with("unknown-name: unknown name 'left'"),
+        found[0]
+            .starts_with("type-mismatch: one label isn't an array: 'left' is the only label of"),
         "{found:?}"
     );
 }
