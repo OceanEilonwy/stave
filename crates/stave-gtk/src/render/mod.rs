@@ -9,9 +9,11 @@
 //! ([`Renderer::take_ready`]) and hands GTK the mapped buffer as it is (see
 //! [`readback`]). Screenshots wait ([`Renderer::render`]).
 
+mod meshes;
 pub mod profile;
 mod readback;
 
+use meshes::MeshRange;
 pub use readback::{LiveFrame, Ticket};
 
 use std::num::NonZeroU64;
@@ -206,13 +208,6 @@ pub struct Frame<'a> {
     pub height: u32,
 }
 
-struct GpuMesh {
-    vertices: wgpu::Buffer,
-    indices: wgpu::Buffer,
-    index_count: u32,
-    edges: Option<(wgpu::Buffer, u32)>,
-}
-
 struct Target {
     width: u32,
     height: u32,
@@ -312,8 +307,10 @@ pub struct Renderer {
     mask_layout: wgpu::BindGroupLayout,
     /// The selection outline: a full-screen pass over the mask.
     outline_pipeline: wgpu::RenderPipeline,
-    meshes: Vec<GpuMesh>,
-    /// Counts uploads, so a shadow map of older meshes is never kept.
+    /// Every node's mesh, in shared buffers.
+    meshes: meshes::MeshStore,
+    /// Counts uploads that changed a mesh, so a shadow map of older meshes
+    /// is never kept.
     meshes_generation: u64,
     /// What the shadow map holds; `None` before the first frame.
     shadow_key: Option<ShadowKey>,
@@ -397,7 +394,13 @@ impl Renderer {
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("stave"),
             required_features: wgpu::Features::empty(),
-            required_limits: wgpu::Limits::downlevel_defaults().using_resolution(adapter.limits()),
+            // The meshes share a few buffers, which a large design can
+            // make bigger than the downlevel 256 MB: ask for what the
+            // adapter has.
+            required_limits: wgpu::Limits {
+                max_buffer_size: adapter.limits().max_buffer_size,
+                ..wgpu::Limits::downlevel_defaults().using_resolution(adapter.limits())
+            },
             experimental_features: wgpu::ExperimentalFeatures::disabled(),
             memory_hints: wgpu::MemoryHints::Performance,
             trace: wgpu::Trace::Off,
@@ -897,6 +900,7 @@ impl Renderer {
             multiview_mask: None,
             cache: None,
         });
+        let meshes = meshes::MeshStore::new(&device);
         Ok(Renderer {
             mask_covered_pipeline,
             mask_seen_pipeline,
@@ -926,7 +930,7 @@ impl Renderer {
             volume_edge_pipeline,
             lit_pipeline,
             lit_edge_pipeline,
-            meshes: Vec::new(),
+            meshes,
             meshes_generation: 0,
             shadow_key: None,
             target: None,
@@ -939,7 +943,9 @@ impl Renderer {
         &self.adapter_name
     }
 
-    /// Uploads a scene's meshes, replacing the previous scene's.
+    /// Uploads a scene's meshes, replacing the previous scene's. Only
+    /// meshes the GPU doesn't hold already are written, and nothing is
+    /// when every node's mesh is one it holds.
     pub fn upload(&mut self, scene: &SceneGraph) {
         let started = profile::start();
         self.upload_meshes(scene);
@@ -947,46 +953,9 @@ impl Renderer {
     }
 
     fn upload_meshes(&mut self, scene: &SceneGraph) {
-        self.meshes_generation = self.meshes_generation.wrapping_add(1);
-        self.meshes = scene
-            .nodes
-            .iter()
-            .map(|node| {
-                let mesh = &node.geometry.mesh;
-                let vertices = self
-                    .device
-                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                        label: Some("vertices"),
-                        contents: bytemuck::cast_slice(&mesh.vertices),
-                        usage: wgpu::BufferUsages::VERTEX,
-                    });
-                let indices = self
-                    .device
-                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                        label: Some("indices"),
-                        contents: bytemuck::cast_slice(&mesh.indices),
-                        usage: wgpu::BufferUsages::INDEX,
-                    });
-                let segments = &node.geometry.edges.segments;
-                let edges = (!segments.is_empty()).then(|| {
-                    (
-                        self.device
-                            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                                label: Some("edges"),
-                                contents: bytemuck::cast_slice(segments),
-                                usage: wgpu::BufferUsages::VERTEX,
-                            }),
-                        u32::try_from(segments.len() * 2).unwrap_or(u32::MAX),
-                    )
-                });
-                GpuMesh {
-                    vertices,
-                    indices,
-                    index_count: u32::try_from(mesh.indices.len()).unwrap_or(u32::MAX),
-                    edges,
-                }
-            })
-            .collect();
+        if self.meshes.upload(&self.device, &self.queue, &scene.nodes) {
+            self.meshes_generation = self.meshes_generation.wrapping_add(1);
+        }
         let needed = u64::try_from(scene.nodes.len()).unwrap_or(u64::MAX);
         if needed > self.node_capacity {
             self.node_capacity = needed.next_power_of_two();
@@ -1177,7 +1146,10 @@ impl Renderer {
         if width > limit || height > limit {
             bail!("a {width}x{height} view is larger than the GPU allows ({limit})");
         }
-        if self.meshes.len() != frame.scene.nodes.len() {
+        if let Some(failed) = self.meshes.failed() {
+            bail!("couldn't upload the design's meshes: {failed}");
+        }
+        if self.meshes.ranges().len() != frame.scene.nodes.len() {
             bail!("the scene changed without being uploaded");
         }
         let started = profile::start();
@@ -1205,20 +1177,21 @@ impl Renderer {
                 .and_then(|looks| looks.get(id.index()).copied())
                 .unwrap_or(Look::Normal)
         };
-        let visible: Vec<(u32, &GpuMesh)> = frame
+        let ranges = self.meshes.ranges();
+        let visible: Vec<(u32, MeshRange)> = frame
             .scene
             .node_ids()
-            .zip(&self.meshes)
+            .zip(ranges.iter().copied())
             .filter(|(id, _)| frame.posed.shown(*id).is_some() && look(*id) == Look::Normal)
             .filter_map(|(id, mesh)| Some((u32::try_from(id.index()).ok()?, mesh)))
             .collect();
         // Ghosts and see-through parts, farthest first so they blend in
         // order.
         let eye = frame.orbit.eye();
-        let mut translucent: Vec<(f32, Look, u32, &GpuMesh)> = frame
+        let mut translucent: Vec<(f32, Look, u32, MeshRange)> = frame
             .scene
             .node_ids()
-            .zip(&self.meshes)
+            .zip(ranges.iter().copied())
             .filter_map(|(id, mesh)| {
                 let transform = frame.posed.shown(id)?;
                 let look = look(id);
@@ -1249,10 +1222,10 @@ impl Renderer {
             .filter_map(|id| frame.scene.node(*id))
             .map(|node| node.item)
             .collect();
-        let outlined: Vec<(u32, &GpuMesh)> = frame
+        let outlined: Vec<(u32, MeshRange)> = frame
             .scene
             .node_ids()
-            .zip(&self.meshes)
+            .zip(ranges.iter().copied())
             .filter(|(id, _)| {
                 frame.posed.shown(*id).is_some()
                     && frame
@@ -1322,10 +1295,9 @@ impl Renderer {
             });
             pass.set_pipeline(&self.shadow_pipeline);
             pass.set_bind_group(0, &self.scene_group, &[]);
+            self.bind_meshes(&mut pass);
             for (index, mesh) in casting {
-                pass.set_vertex_buffer(0, mesh.vertices.slice(..));
-                pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
-                pass.draw_indexed(0..mesh.index_count, 0, index..index + 1);
+                draw_mesh(&mut pass, index, mesh);
             }
         }
         {
@@ -1361,22 +1333,19 @@ impl Renderer {
             } else {
                 &[&self.mesh_pipeline]
             };
+            self.bind_meshes(&mut pass);
             for pipeline in pipelines {
                 pass.set_pipeline(pipeline);
                 for (index, mesh) in &visible {
-                    pass.set_vertex_buffer(0, mesh.vertices.slice(..));
-                    pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
-                    pass.draw_indexed(0..mesh.index_count, 0, *index..*index + 1);
+                    draw_mesh(&mut pass, *index, *mesh);
                 }
             }
             pass.set_pipeline(&self.floor_pipeline);
             pass.draw(0..6, 0..1);
             pass.set_pipeline(&self.edge_pipeline);
+            pass.set_vertex_buffer(0, self.meshes.edge_buffer().slice(..));
             for (index, mesh) in &visible {
-                if let Some((buffer, count)) = &mesh.edges {
-                    pass.set_vertex_buffer(0, buffer.slice(..));
-                    pass.draw(0..*count, *index..*index + 1);
-                }
+                draw_edges(&mut pass, *index, *mesh);
             }
             if !translucent.is_empty() {
                 pass.set_pipeline(if frame.section.is_some() {
@@ -1384,17 +1353,14 @@ impl Renderer {
                 } else {
                     &self.translucent_pipeline
                 });
+                self.bind_meshes(&mut pass);
                 for (_, _, index, mesh) in &translucent {
-                    pass.set_vertex_buffer(0, mesh.vertices.slice(..));
-                    pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
-                    pass.draw_indexed(0..mesh.index_count, 0, *index..*index + 1);
+                    draw_mesh(&mut pass, *index, *mesh);
                 }
                 pass.set_pipeline(&self.edge_pipeline);
+                pass.set_vertex_buffer(0, self.meshes.edge_buffer().slice(..));
                 for (_, _, index, mesh) in &translucent {
-                    if let Some((buffer, count)) = &mesh.edges {
-                        pass.set_vertex_buffer(0, buffer.slice(..));
-                        pass.draw(0..*count, *index..*index + 1);
-                    }
+                    draw_edges(&mut pass, *index, *mesh);
                 }
             }
         }
@@ -1425,12 +1391,11 @@ impl Renderer {
             });
             pass.set_bind_group(0, &self.scene_group, &[]);
             pass.set_bind_group(1, &self.shadow_group, &[]);
+            self.bind_meshes(&mut pass);
             for pipeline in [&self.mask_covered_pipeline, &self.mask_seen_pipeline] {
                 pass.set_pipeline(pipeline);
                 for (index, mesh) in &outlined {
-                    pass.set_vertex_buffer(0, mesh.vertices.slice(..));
-                    pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
-                    pass.draw_indexed(0..mesh.index_count, 0, *index..*index + 1);
+                    draw_mesh(&mut pass, *index, *mesh);
                 }
             }
         }
@@ -1583,6 +1548,15 @@ impl Renderer {
             height: layout.height,
             rgba,
         })
+    }
+
+    /// Binds the shared vertex and index buffers, for [`draw_mesh`].
+    fn bind_meshes(&self, pass: &mut wgpu::RenderPass<'_>) {
+        pass.set_vertex_buffer(0, self.meshes.vertex_buffer().slice(..));
+        pass.set_index_buffer(
+            self.meshes.index_buffer().slice(..),
+            wgpu::IndexFormat::Uint32,
+        );
     }
 
     /// Vertex buffers of boxes: their faces (triangles) and edges (lines).
@@ -1745,6 +1719,24 @@ impl Renderer {
         self.queue
             .write_buffer(&self.nodes, 0, bytemuck::cast_slice(&nodes));
         light_view_projection
+    }
+}
+
+/// Draws node `index`'s mesh from the shared buffers bound by
+/// [`Renderer::bind_meshes`].
+fn draw_mesh(pass: &mut wgpu::RenderPass<'_>, index: u32, mesh: MeshRange) {
+    let indices = mesh.indices();
+    if !indices.is_empty() {
+        pass.draw_indexed(indices, 0, index..index + 1);
+    }
+}
+
+/// Draws node `index`'s outline from the shared outline buffer, bound as
+/// vertex buffer 0.
+fn draw_edges(pass: &mut wgpu::RenderPass<'_>, index: u32, mesh: MeshRange) {
+    let edges = mesh.edges();
+    if !edges.is_empty() {
+        pass.draw(edges, index..index + 1);
     }
 }
 
@@ -2330,11 +2322,106 @@ mod tests {
         let before = renderer.shadow_key.take();
         renderer.render(&frame(&scene, &moved, 0.7)).unwrap();
         assert_ne!(renderer.shadow_key, before);
-        // A new upload draws it again too, even with nothing moved.
+        // An upload of the same meshes keeps it; one with a mesh changed
+        // draws it again, even with nothing moved.
+        let generation = renderer.meshes_generation;
         renderer.upload(&scene);
+        assert_eq!(renderer.meshes_generation, generation);
+        let mut changed = scene.clone();
+        raise(&mut changed.nodes[caster], 5.0);
+        renderer.upload(&changed);
         assert_ne!(
             renderer.shadow_key.as_ref().map(|key| key.meshes),
             Some(renderer.meshes_generation)
+        );
+    }
+
+    /// Moves a node's mesh and outline up by `millimetres`, as an edit
+    /// to one part would change it.
+    fn raise(node: &mut stave_scene::Node, millimetres: f32) {
+        for vertex in &mut node.geometry.mesh.vertices {
+            vertex.position[1] += millimetres;
+        }
+        for segment in &mut node.geometry.edges.segments {
+            for point in segment {
+                point[1] += millimetres;
+            }
+        }
+    }
+
+    #[test]
+    fn an_upload_writes_only_the_meshes_the_gpu_does_not_hold() {
+        let Some(mut renderer) = renderer() else {
+            return;
+        };
+        let (scene, posed) = stool();
+        renderer.upload(&scene);
+        let held = renderer.meshes.held();
+        assert!(held > 0);
+        let first = renderer.meshes.ranges().to_vec();
+        let picture = renderer.render(&frame(&scene, &posed, 0.0)).unwrap();
+        // The same scene again (a renamed part, a comment): nothing new.
+        let generation = renderer.meshes_generation;
+        renderer.upload(&scene);
+        assert_eq!(renderer.meshes_generation, generation);
+        assert_eq!(renderer.meshes.held(), held);
+        // One part changed: only its mesh is written; the rest keep their
+        // place.
+        let mut changed = scene.clone();
+        raise(&mut changed.nodes[0], 5.0);
+        renderer.upload(&changed);
+        assert_ne!(renderer.meshes_generation, generation);
+        assert_eq!(renderer.meshes.held(), held + 1);
+        let second = renderer.meshes.ranges().to_vec();
+        assert_ne!(first[0], second[0]);
+        assert_eq!(first[1..], second[1..]);
+        // Drawn from the shared buffers, it looks as a renderer with
+        // nothing else uploaded draws it.
+        let reused = renderer.render(&frame(&changed, &posed, 0.0)).unwrap();
+        let mut fresh = Renderer::new().unwrap();
+        fresh.upload(&changed);
+        assert_eq!(reused, fresh.render(&frame(&changed, &posed, 0.0)).unwrap());
+        assert_ne!(reused, picture);
+        // Back to the first: every mesh is still held.
+        renderer.upload(&scene);
+        assert_eq!(renderer.meshes.ranges(), first.as_slice());
+        assert_eq!(
+            renderer.render(&frame(&scene, &posed, 0.0)).unwrap(),
+            picture
+        );
+    }
+
+    #[test]
+    fn the_shared_buffers_grow_and_start_afresh_when_meshes_no_longer_fit() {
+        let Some(mut renderer) = renderer() else {
+            return;
+        };
+        let (scene, posed) = stool();
+        renderer.upload(&scene);
+        let picture = renderer.render(&frame(&scene, &posed, 0.0)).unwrap();
+        // Far more meshes than the buffers were made for, none of them the
+        // stool's: the buffers grow and are written from the start.
+        let many: Vec<stave_scene::Node> = (1..=60)
+            .flat_map(|step| {
+                scene.nodes.iter().map(move |node| {
+                    let mut node = node.clone();
+                    raise(&mut node, f32::from(u8::try_from(step).unwrap()));
+                    node
+                })
+            })
+            .collect();
+        assert!(
+            renderer
+                .meshes
+                .upload(&renderer.device, &renderer.queue, &many)
+        );
+        assert!(renderer.meshes.failed().is_none());
+        assert_eq!(renderer.meshes.held(), many.len());
+        // The stool again, written into the grown buffers, looks the same.
+        renderer.upload(&scene);
+        assert_eq!(
+            renderer.render(&frame(&scene, &posed, 0.0)).unwrap(),
+            picture
         );
     }
 }
