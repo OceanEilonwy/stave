@@ -49,18 +49,38 @@
 //! scene checks. When one line causes several problems (a component used
 //! twice, a joint applied to four pairs), they are reported once, at that
 //! line, with the others as notes.
+//!
+//! **Two tiers.** An editor that checks a candidate on every pointer move
+//! runs [`check_fast`]: the layer 1 to 3 diagnostics this crate makes
+//! (the cuts of step 1 and `error[mechanism]`, which runs each mechanism
+//! through its range) and box-level overlap at rest. Once the pointer
+//! rests it runs [`check_slow`], everything else above, which finishes
+//! the fast tier's list (reusing its mechanisms and taking its
+//! diagnostics where the single check makes them) and which a flag
+//! cancels between checks and between motions. On
+//! `examples/clothing_cabinet` (release build) the fast tier takes about
+//! 4 ms (the box overlaps about 21 µs of it, the mechanisms the rest), the
+//! slow tier about 19 ms, the single check about 23 ms. Run to completion,
+//! [`check_slow`] gives exactly what [`check_with_contacts`] gives, in the
+//! same order, and [`Fast::diagnostics`] are its layer 1 to 3 diagnostics
+//! (`tests/tiers.rs`). See the `tiers` module for what the fast tier's box
+//! overlaps mean.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
 mod explain;
+mod fixes;
 mod held;
 mod instance;
 mod models;
 mod motion;
 mod names;
 mod sequence;
+mod tiers;
 mod walls;
+
+pub use tiers::{BoxOverlap, Cancelled, Fast, check_fast, check_slow};
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -173,30 +193,96 @@ pub fn check_with_contacts(
     model: &Model,
     design: &SolvedDesign,
 ) -> Vec<(Diagnostic, Option<Contact>)> {
-    let mut checker = Checker::new(model, design);
-    checker.misfits();
-    checker.misshapen();
-    checker.not_supported();
-    checker.cut_sizes();
-    checker.mechanisms();
-    checker.contact();
-    checker.overruns();
-    checker.rest();
-    checker.walls();
-    checker.scenes();
-    checker.sweeps();
+    match run(model, design, None, &tiers::Never) {
+        Ok(found) => found,
+        Err(never) => match never {},
+    }
+}
+
+/// Every check in order, reading `stop` between checks and inside the
+/// sweep check: the single check never stops, the slow tier
+/// ([`check_slow`]) stops when cancelled.
+///
+/// `fast` is what the fast tier found for this model and design, which
+/// the checks finish: its mechanisms are not run through their range
+/// again, and each layer 1 to 3 diagnostic is taken from it, in turn,
+/// where the checks would make it ([`Checker::report`]). `None` makes
+/// everything here.
+fn run<'m, S: tiers::Stop + ?Sized>(
+    model: &'m Model,
+    design: &'m SolvedDesign,
+    fast: Option<&tiers::Fast>,
+    stop: &S,
+) -> Result<Vec<(Diagnostic, Option<Contact>)>, S::Stopped> {
+    stop.check()?;
+    let mut checker = Checker::new(model, design, fast.and_then(|fast| fast.mechanisms.clone()));
+    checker.given = fast.map(|fast| fast.made.clone().into_iter());
+    let steps: [fn(&mut Checker<'m>); 10] = [
+        Checker::misfits,
+        Checker::misshapen,
+        Checker::not_supported,
+        Checker::cut_sizes,
+        Checker::mechanisms,
+        Checker::contact,
+        Checker::overruns,
+        Checker::rest,
+        Checker::walls,
+        Checker::scenes,
+    ];
+    for step in steps {
+        stop.check()?;
+        step(&mut checker);
+    }
+    stop.check()?;
+    checker.sweeps(&|| stop.stopped());
+    // The sweeps may have stopped part way: then this is the end.
+    stop.check()?;
     checker.sequences();
     // Held is a question about the whole project, asked once nothing
     // else is wrong: a part with an error may be the one that would join
     // the rest.
     if !checker.diagnostics.iter().any(|(d, _)| d.is_error()) {
+        stop.check()?;
         checker.held();
     }
+    stop.check()?;
     // Models are read from disk; one that can't be read is not checked.
     for diagnostic in models::models(design, &|path| std::fs::read(path)) {
         checker.diagnostics.push((diagnostic, None));
     }
-    checker.finish()
+    Ok(checker.finish())
+}
+
+/// The fast tier's checks: the layer 1 to 3 diagnostics of the steps
+/// that make them, in the single check's order, and the mechanisms run
+/// through their range.
+fn fast_steps(
+    model: &Model,
+    design: &SolvedDesign,
+) -> (Vec<(Diagnostic, Option<Contact>)>, Mechanisms) {
+    let mut checker = Checker::new(model, design, None);
+    // The steps that report layers 1 to 3, in the order `run` runs them;
+    // none of them reads what an earlier step found.
+    checker.misshapen();
+    checker.not_supported();
+    checker.mechanisms();
+    let made = std::mem::take(&mut checker.diagnostics)
+        .into_iter()
+        .filter(|(diagnostic, _)| diagnostic.code.layer() <= 3)
+        .collect();
+    let mechanisms = Mechanisms {
+        paths: std::mem::take(&mut checker.paths),
+        broken: std::mem::take(&mut checker.broken),
+    };
+    (made, mechanisms)
+}
+
+/// A design's mechanisms run through their range, by assembly, and the
+/// ones that can't be.
+#[derive(Debug, Clone, PartialEq)]
+struct Mechanisms {
+    paths: Vec<Option<Path>>,
+    broken: Vec<(AssemblyId, MechanismError)>,
 }
 
 /// Something that takes up room: a part, or a member of a piece of
@@ -269,13 +355,18 @@ struct Checker<'a> {
     /// Cuts too big or too deep that a wall rule of their own kind
     /// measures: reported after the wall rules, only if those didn't.
     held_back: Vec<walls::SizeProblem>,
+    /// The layer 1 to 3 diagnostics the fast tier already made, in
+    /// order: [`Checker::report`] takes them instead of its own.
+    given: Option<std::vec::IntoIter<(Diagnostic, Option<Contact>)>>,
     diagnostics: Vec<(Diagnostic, Option<Contact>)>,
     /// What the next reported diagnostic is about.
     next_contact: Option<Contact>,
 }
 
 impl<'a> Checker<'a> {
-    fn new(model: &'a Model, design: &'a SolvedDesign) -> Self {
+    /// `mechanisms`: the design's mechanisms already run through their
+    /// range, when the fast tier has done it.
+    fn new(model: &'a Model, design: &'a SolvedDesign, mechanisms: Option<Mechanisms>) -> Self {
         let solids: Vec<Solid> = design
             .parts
             .iter()
@@ -353,20 +444,8 @@ impl<'a> Checker<'a> {
                 }
             }
         }
-        let mut paths = Vec::with_capacity(design.assemblies.len());
-        let mut broken = Vec::new();
-        for assembly in &design.assemblies {
-            paths.push(match &assembly.mechanism {
-                Some(mechanism) => match Path::new(mechanism) {
-                    Ok(path) => Some(path),
-                    Err(error) => {
-                        broken.push((assembly.id, error));
-                        None
-                    }
-                },
-                None => None,
-            });
-        }
+        let Mechanisms { paths, broken } =
+            mechanisms.unwrap_or_else(|| motion::mechanism_paths(design));
         Checker {
             model,
             design,
@@ -388,6 +467,7 @@ impl<'a> Checker<'a> {
                 .collect(),
             wall_failed: Vec::new(),
             held_back: Vec::new(),
+            given: None,
             diagnostics: Vec::new(),
             next_contact: None,
         }
@@ -471,7 +551,13 @@ impl<'a> Checker<'a> {
         diagnostic.notes = notes;
         diagnostic.help = help;
         let contact = self.next_contact.take();
-        self.diagnostics.push((diagnostic, contact));
+        // The fast tier's layers come from the fast tier when it ran.
+        let given = match &mut self.given {
+            Some(given) if code.layer() <= 3 => given.next(),
+            _ => None,
+        };
+        self.diagnostics
+            .push(given.unwrap_or((diagnostic, contact)));
     }
 
     /// A member's body, wherever it is.
@@ -789,7 +875,9 @@ impl<'a> Checker<'a> {
                         length_text(value),
                         length_text(overrun.past)
                     )],
+                    merged: Vec::new(),
                     help: Some(help),
+                    fixes: Vec::new(),
                 },
                 Some(contact),
             ));
@@ -1108,54 +1196,62 @@ impl<'a> Checker<'a> {
     /// One diagnostic per mistake: diagnostics with the same code at the
     /// same place are merged into the first, the others becoming notes.
     fn finish(self) -> Vec<(Diagnostic, Option<Contact>)> {
-        let mut merged: Vec<(Diagnostic, Option<Contact>)> = Vec::new();
-        let mut extra: BTreeMap<usize, Vec<String>> = BTreeMap::new();
-        let key = |d: &Diagnostic| {
-            (
-                d.severity,
-                d.code,
-                d.primary().map(|l| (l.file, l.span.start(), l.span.end())),
-            )
-        };
-        for (diagnostic, contact) in self.diagnostics {
-            if let Some(index) = merged.iter().position(|(d, _)| key(d) == key(&diagnostic)) {
-                if let Some((first, first_contact)) = merged.get_mut(index) {
-                    if first.message != diagnostic.message {
-                        let list = extra.entry(index).or_default();
-                        if !list.contains(&diagnostic.message) {
-                            list.push(diagnostic.message);
-                        }
-                    }
-                    // Show everything the line causes.
-                    if let (Some(first), Some(other)) = (first_contact.as_mut(), contact)
-                        && first.scene == other.scene
-                        && first.motion == other.motion
-                    {
-                        for item in other.items {
-                            if !first.items.contains(&item) {
-                                first.items.push(item);
-                            }
-                        }
-                        first.regions.extend(other.regions);
-                    }
-                }
-            } else {
-                merged.push((diagnostic, contact));
-            }
-        }
-        for (index, messages) in extra {
-            if let Some((diagnostic, _)) = merged.get_mut(index) {
-                let shown: Vec<String> = messages.iter().take(3).cloned().collect();
-                let more = messages.len().saturating_sub(shown.len());
-                let mut note = format!("the same line also causes: {}", shown.join("; "));
-                if more > 0 {
-                    note.push_str(&format!("; and {more} more"));
-                }
-                diagnostic.notes.push(note);
-            }
-        }
-        merged
+        merge(self.diagnostics)
     }
+}
+
+/// One diagnostic per mistake: diagnostics with the same code at the same
+/// place are merged into the first, the others becoming a note and, in
+/// full, [`Diagnostic::merged`].
+fn merge(diagnostics: Vec<(Diagnostic, Option<Contact>)>) -> Vec<(Diagnostic, Option<Contact>)> {
+    let mut merged: Vec<(Diagnostic, Option<Contact>)> = Vec::new();
+    let mut extra: BTreeMap<usize, Vec<String>> = BTreeMap::new();
+    let key = |d: &Diagnostic| {
+        (
+            d.severity,
+            d.code,
+            d.primary().map(|l| (l.file, l.span.start(), l.span.end())),
+        )
+    };
+    for (diagnostic, contact) in diagnostics {
+        if let Some(index) = merged.iter().position(|(d, _)| key(d) == key(&diagnostic)) {
+            if let Some((first, first_contact)) = merged.get_mut(index) {
+                if first.message != diagnostic.message {
+                    let list = extra.entry(index).or_default();
+                    if !list.contains(&diagnostic.message) {
+                        list.push(diagnostic.message);
+                    }
+                }
+                // Show everything the line causes.
+                if let (Some(first), Some(other)) = (first_contact.as_mut(), contact)
+                    && first.scene == other.scene
+                    && first.motion == other.motion
+                {
+                    for item in other.items {
+                        if !first.items.contains(&item) {
+                            first.items.push(item);
+                        }
+                    }
+                    first.regions.extend(other.regions);
+                }
+            }
+        } else {
+            merged.push((diagnostic, contact));
+        }
+    }
+    for (index, messages) in extra {
+        if let Some((diagnostic, _)) = merged.get_mut(index) {
+            diagnostic.merged.extend(messages.iter().cloned());
+            let shown: Vec<String> = messages.iter().take(3).cloned().collect();
+            let more = messages.len().saturating_sub(shown.len());
+            let mut note = format!("the same line also causes: {}", shown.join("; "));
+            if more > 0 {
+                note.push_str(&format!("; and {more} more"));
+            }
+            diagnostic.notes.push(note);
+        }
+    }
+    merged
 }
 
 /// The poses that move a body in a scene, outermost assembly first, and

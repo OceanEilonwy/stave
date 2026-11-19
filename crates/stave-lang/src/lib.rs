@@ -5,6 +5,8 @@
 //!   [`Parse`]: the lossless concrete syntax tree ([`syntax`]), the typed
 //!   tree ([`ast`]) of every well-formed item, and the diagnostics.
 //! - [`format_file`] lays a file out canonically ([`format`]).
+//! - [`apply_patch`] applies a patch to a module's files, keeping every
+//!   comment and line it doesn't touch ([`patch`]).
 //! - [`diagnostics`] holds what every later stage reports with: [`FileId`],
 //!   [`SourceMap`], [`Diagnostic`] and the compiler-style
 //!   [`render_diagnostics`].
@@ -52,6 +54,7 @@ pub mod format;
 mod lexer;
 mod lower;
 mod parser;
+pub mod patch;
 pub mod placement;
 pub mod syntax;
 pub mod units;
@@ -60,8 +63,13 @@ pub use diagnostics::{
     Code, Diagnostic, FileId, Label, Placement, Severity, SourceMap, place_label,
     render_diagnostic, render_diagnostics,
 };
+pub use diagnostics::{Fix, FixError};
 pub use format::{FormatError, format_file};
 pub use lower::BrokenItem;
+pub use patch::{
+    ModuleFile, ModuleKey, PatchError, PatchErrorKind, PatchTarget, PatchedFile, apply_patch,
+};
+pub use patch::{Scope, TermAddress, TermFixes, TextEdit, apply_text_edits, changed_line_runs};
 pub use syntax::{GreenNode, SyntaxKind, SyntaxNode, SyntaxToken};
 
 /// The result of parsing one file.
@@ -203,6 +211,7 @@ pub const KEYWORDS: &[&str] = &[
     "at",
     "within",
     "locked",
+    "solved",
     "fit",
     "true",
     "false",
@@ -257,8 +266,26 @@ pub const LINE_CONTINUATION_TOKENS: &[&str] = &[
 /// Built-in functions (grammar, "Built-in functions"): looked up when a bare
 /// name is called.
 pub const BUILTIN_FUNCTIONS: &[&str] = &[
-    "between", "extent", "mid", "opening", "split", "cover", "overlay", "inset", "turned",
-    "joined", "spliced", "box", "cylinder", "model", "ends", "pitch", "gap", "contact", "wall",
+    "between",
+    "extent",
+    "mid",
+    "opening",
+    "split",
+    "cover",
+    "overlay",
+    "inset",
+    "turned",
+    "joined",
+    "spliced",
+    "box",
+    "cylinder",
+    "model",
+    "ends",
+    "pitch",
+    "gap",
+    "contact",
+    "edge_to_edge",
+    "wall",
 ];
 
 /// Current version written in the `stave <version>` header.

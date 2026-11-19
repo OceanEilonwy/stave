@@ -1,0 +1,4 @@
+# The envelope's height switched to "Let the solver move this" with the
+# range 1500mm to 2000mm typed: the change is tried and waits for Apply.
+grips envelope
+solver 2 1500mm 2000mm

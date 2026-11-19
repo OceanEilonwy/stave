@@ -1,0 +1,4 @@
+# The case's base selected, "Add something onto its bottom face": Feet.
+select face case.base.bottom
+choose casework.Feet
+set foot_stock = oak_75_sq

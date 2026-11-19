@@ -48,7 +48,13 @@ a line and a concrete help line for every problem:
    kind gives it (`cut groove: ...`), whatever its operation; an unnamed
    cut in a kind is the warning `unnamed-cut`, two cuts of one kind with
    one name are `duplicate-name`, and every cut in `std/` and `examples/`
-   is named. A joint's parts that don't touch are `no-contact`; a spacing
+   is named. A joint's parts that don't touch are `no-contact`. A kind's
+   rule can ask how its parts meet with `edge_to_edge(a, b)` (side by
+   side in one plane, an edge of each together; exact, from the parts'
+   poses): `glued_edge`, `tongue_and_groove`, `splined_edge` and `chigiri`
+   ask it, so used at a corner (a case's side on its base) each is refused
+   by that rule alone, with a note saying how the parts do meet and
+   nothing cut, while every part made of boards still checks. A spacing
    that runs past `to` is `overlap`; a kind's catalogue rules are its own
    `require`s and `adjust`s (a slide's gap, how far a cup hinge's arm can
    be set on its plate). Every shape of every hardware member is a
@@ -297,8 +303,151 @@ the system or the main menu, the 3D backdrop with them.
   `docs/screenshots/window/`.
 
 What the window shows is worked out in `stave-app` (the session, the
-tree, the inspector, focus mode, problems) and tested headless; clicking
-through the window itself is not automated.
+tree, the inspector, focus mode, problems, editing) and tested headless;
+the window's editing is driven by `--edit-script` steps (`gui.md`).
+
+## Graphical editing
+
+A design can be built and changed in the 3D view ([editing.md](editing.md)
+is the specification, [gui.md](gui.md) "Editing in the 3D view" the
+window). Every gesture makes an ordinary patch in the `.stave` grammar,
+tries it on a scratch copy, shows a ghost with a verdict and writes the
+text only when it checks (an error the edit would cause refuses it, with
+the checker's fixes on the card).
+
+- **Language**: `locked param` / `solved param` as a prefix; a project's
+  root may be `region envelope = box(across:, up:, deep:)`; `split(...,
+  shares: [...])`; component params of type `Part`, `Parts`, `Anchor`;
+  patches `add`, `set`, `unset`, `remove`, `replace`, `rename`; fixes as
+  patches on diagnostics.
+- **Libraries**: `std:casework` (Case, Back, Divider, Shelf, HangingRail,
+  Feet, Drawer, FramePanelDoor) and `std:frames` (Top, Legs, Apron,
+  Stretcher, Cleat, Slats), imported, not in the prelude.
+- **Window**: New Project dialog (name, sizes, one wood, libraries,
+  tools); a click in a space, in the gap between two parts, or "Add
+  something onto its … face" in Details opens a menu drawn from the
+  components and kinds in scope, each tried (greyed with the reason when
+  it doesn't fit); the card asks for what is still to point at and the
+  settings, with a ghost and "It fits" / "It doesn't fit"; each
+  setting's options checked the same way on a worker thread, the ones
+  that fit first and the refused ones greyed with the checker's reason
+  and not choosable; a refusal caused by the setting just changed says
+  so first ("It stopped fitting when joinery became chigiri.") with a
+  button that puts it back; Add, Cancel, fixes; a selected item's changes (rename, how many, "And the other
+  side", hold a distance, remove with what depends on it); count and
+  boundary handles; grips on the model (drag, type, stops, sizes that
+  follow, "Let the solver move this"); the finder's verbs.
+- **Command line**: `stave edit <folder> --patch <file> [--commit]` and
+  `stave edit <folder> --script <file>` (a whole build as steps, with
+  `options <setting>` listing a setting's options and whether each fits,
+  the blame printed when a `set` makes it stop fitting, and `put
+  back`).
+
+**Accepted in the window**: the clothing cabinet and the side table were
+built from empty projects by the window's scripted input (the same
+commands the pointer, the card and the keys send to the real window); the
+text each run wrote is byte-identical to the pinned
+`tests/edit-scripts/clothing_cabinet.stave` and `side_table.stave`. A
+picture before and after each Add is in
+`docs/screenshots/window/accept_*.png`. The faces were clicked through
+the scene's real pick; the steps that open a menu in a space or between
+two parts, and that fill a place between two parts, find it by name
+instead, so those two clicks were not exercised in the window (see
+below).
+
+### How to try it
+
+```
+cargo build -p stave-cli -p stave-gtk
+mkdir -p ~/stave-try
+target/debug/stave-gtk ~/stave-try --new-project      # an empty folder, the New Project dialog open
+target/debug/stave view examples/side_table_from_box  # a finished piece: click a part, its card has its changes
+
+# The two pieces by script, from nothing (the session, no window):
+target/debug/stave edit /tmp/cabinet --script tests/edit-scripts/clothing_cabinet.txt
+target/debug/stave edit /tmp/table   --script tests/edit-scripts/side_table.txt
+
+# The same two in the real window, a picture a stage (about six minutes):
+tools/window-edits/acceptance/run
+```
+
+In the window: Create writes the project and lights the box; click
+inside it, choose Case (or Top), pick the wood on the card, Add. Then
+click in the spaces and gaps the parts leave. The dialog takes one wood:
+type the other stock lines into the text (Ctrl+E opens the editor), as
+`tests/edit-scripts/clothing_cabinet.stave` has them. After a change made
+from a selected item (mirror, a grip, hold) press Ctrl+S: with its file
+open in the editor the change stays unsaved there.
+
+### What is not right yet
+
+- The New Project dialog takes one wood; the cabinet needs six stocks,
+  the table two. Its fields have no script step, so the acceptance made
+  the projects with `stave edit --script` (the same writer).
+- The front apron's end (the cleat's `start`) is inside the leg and
+  cannot be clicked from any side.
+- Changes made from a selected item go into the open editor buffer
+  unsaved; menu Adds with no file open are written at once.
+- **No undo of a commit.** A menu Add with no file open in the editor
+  is written straight to disk and nothing in the window takes it back:
+  there is no Ctrl+Z for it. The ways back are Remove, or editing the
+  text. (A change written into an open file's buffer can be undone in
+  the Code panel with the editor's own undo.)
+- **The first build is slow because of z3.** `crates/stave-smt` builds
+  z3 from source, about five minutes the first time. z3 is part of the
+  feature by the owner's decision (19 November 2026): `stave-app` uses
+  it to solve for `solved param`s, and the window's "Let the solver move
+  this" depends on it. This is a cost, not a defect.
+- **Two clicks not exercised in the window.** The acceptance run's
+  steps that open a menu in a space (`select region`) or between two
+  parts (`select between`), and that fill a place between two parts
+  (`bind between`), find it by name and send the command; only the 21
+  `point face` steps went through the scene's real pick. Clicking a
+  space or a gap in the real window was not tested by the run.
+- **A drawer about 330mm wide with a 160mm pull.** The standard Drawer
+  keeps its front screws 20mm from each end of the box front, clear of a
+  centred pull in cabinets of any common width; but with the default
+  160mm bar pull, a cabinet about 325mm to 335mm wide overall with a
+  drawer up to about 250mm tall puts the front screws where the pull's
+  screws go, and the drawer is refused (`pilot_wall`, "the screw comes
+  too close to … another cut"). Its help names the pull's screw hole
+  but not the setting to change: `front_screw_inset: 30mm` on the
+  drawer, or `pull_kind: bar_pull(centres: 128mm)`, makes it fit.
+- Grip labels overlap each other and are drawn over the cards; the typed
+  grip's panel covers the change card's title; the Details panel's
+  "CHANGE …" heading overlaps the row above it.
+- Library place params prompt "Point at the under." (they have `//`
+  comments, not `///`); the card shows raw param names.
+- **Only the four edge joints say where they apply.** `chigiri`,
+  `splined_edge`, `tongue_and_groove` and `glued_edge` ask
+  `edge_to_edge` and refuse a corner in woodworking words. For the
+  other kinds the card checks a setting's options and greys the ones
+  that can't work, but the reason a beginner reads is whatever the
+  checker happens to hit first. As the Case's
+  corner joint (940 x 1780 x 580mm, `oak_19`) these are refused with
+  errors about order, types, fields or a failing require rather than
+  "this joint isn't for a corner": `rabbet` (error[order]); `half_lap`,
+  `lap_splice` and `kanawa_tsugi` (error[type-mismatch]: "'piece' needs a
+  part, found parts"); `socket` and `suitsuki_zan` (error[unknown-field]);
+  `round_tenon` and `mortise_tenon` (a `require` of the kind fails).
+  They need siblings of `edge_to_edge` that are not written yet (end to
+  end for `lap_splice` and `kanawa_tsugi`, an edge meeting a face for
+  `rabbet`, parts that cross for `half_lap`); `socket`, `round_tenon`
+  and `mortise_tenon` lack a rule about roundness or sizes, not about
+  how the parts meet.
+- **Some kinds check clean as a case's corner joint though a woodworker
+  wouldn't use them there**: `glued_face`, `groove` and `cope_and_stick`
+  are listed as fitting the Case's joinery, so the card offers them
+  among the options that fit. `glued_face` needs a face-to-face
+  question and `cope_and_stick` an end meeting an edge in one plane.
+- **The card's list of options is drawn in the card, not as a popover**,
+  so the card grows by the list's height while it is open; on a short
+  view (the docked layout at 1440x900 leaves the card about 360 pixels)
+  only a few options show at once and the list scrolls with the card.
+  Each option's hint is in its tooltip, not on the row.
+- A mirrored pair split up or deep has no gesture.
+- The full list, with what was decided and left out, is in
+  `docs/workpacks/2026-11-18-graphical-editing.md`.
 
 ## Not done yet
 
@@ -350,6 +499,7 @@ through the window itself is not automated.
   of its parts turns about the up axis.
 - **Modules**: remote sources (`github:`, `https:`) and the lockfile.
 - **Editors and AI**: the language server (`stave-lsp`, on `stave-ide`),
-  completion, signature help, rename, quick fixes, inlay hints, smart
-  edits and patches. The navigation layer rebuilds its
+  completion, signature help, quick fixes in the text editor and inlay
+  hints. (Patches, rename and smart edits exist for the 3D editor and
+  `stave edit`; see "Graphical editing".) The navigation layer rebuilds its
   index on each pause in typing rather than per file (a few milliseconds).

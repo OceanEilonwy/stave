@@ -158,7 +158,7 @@ pub struct Found {
 /// loaded with ([`crate::Overlay`]).
 #[derive(Debug, Clone)]
 pub struct Analysis {
-    index: Index,
+    pub(crate) index: Index,
 }
 
 impl Analysis {

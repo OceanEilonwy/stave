@@ -6,8 +6,8 @@ use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// The standard modules, in prelude order. Kept equal to `STD_MODULES`.
-const STD_MODULES: [&str; 3] = ["joinery", "hardware", "tools"];
+/// The standard modules, the prelude's first. Kept equal to `STD_MODULES`.
+const STD_MODULES: [&str; 5] = ["joinery", "hardware", "tools", "casework", "frames"];
 
 fn main() -> Result<(), Box<dyn Error>> {
     let manifest = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR")?);

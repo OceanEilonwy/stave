@@ -1,0 +1,17 @@
+stave 1
+
+import "std:casework"
+import "./hardware" as hw
+
+// Two drawers on side-mount slides, one per bay. The box follows the opening,
+// so a wider cabinet gives wider drawers and a taller drawer zone taller ones.
+
+assembly drawer[bottom, top] : casework.Drawer {
+  opening:      drawer_bay[same]         // drawer[bottom] gets drawer_bay[bottom], and so on
+  mount:        overlay(left: 18mm, right: 18mm, top: 8mm, bottom: 8mm, meeting: -reveal / 2)
+  front_stock:  oak_19
+  box_stock:    maple_12
+  bottom_stock: ply_6
+  slide:        side_mount_slide(length: slide_length)
+  pull_kind:    hw.bar_pull_160
+}

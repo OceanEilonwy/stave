@@ -29,7 +29,10 @@
 //!    with no blank, comment or doc line between them, pad their names
 //!    (array labels included) so the token after the name lines up: the `=`
 //!    of params and regions, the `:` of joints and kinds, the `{` of
-//!    stocks. Nothing further along the line is aligned.
+//!    stocks. Nothing further along the line is aligned. In a run of params
+//!    the word `param` lines up too, across the prefixes `private`,
+//!    `locked` and `solved`: a line is padded before its first word so its
+//!    `param` starts in the column of the longest prefix's.
 //! 4. **Comments**: a comment at the end of a line keeps its column when
 //!    the code before it leaves room, so aligned comments stay aligned;
 //!    otherwise it moves to one space after the code.
@@ -90,7 +93,7 @@ fn parse_root(file: FileId, text: &str) -> Result<SyntaxNode, FormatError> {
 
 /// The meaning-carrying content of a tree: its tokens and comments, with
 /// runs of newlines counted once.
-fn signature(root: &SyntaxNode) -> Vec<(SyntaxKind, String)> {
+pub(crate) fn signature(root: &SyntaxNode) -> Vec<(SyntaxKind, String)> {
     let mut out: Vec<(SyntaxKind, String)> = Vec::new();
     for token in root
         .descendants_with_tokens()
@@ -331,7 +334,7 @@ fn declaration(line: &Line) -> Option<(usize, u32, SyntaxKind)> {
         let parent = atom.token.parent();
         let is_item = |node: &SyntaxNode| *node == item;
         if parent.as_ref().is_some_and(is_item) {
-            return atom.kind == SyntaxKind::KW_PRIVATE || atom.kind.is_item_keyword();
+            return atom.kind.is_item_keyword();
         }
         if atom.parent == SyntaxKind::NAME
             && parent
@@ -395,10 +398,45 @@ fn atoms_width(atoms: &[Atom]) -> usize {
     total
 }
 
-/// For every line that starts an aligned run member: the width its key is
-/// padded to (the longest key in its run).
-fn alignment(lines: &[Line]) -> Vec<Option<(usize, usize)>> {
-    let mut result: Vec<Option<(usize, usize)>> = vec![None; lines.len()];
+/// How one line of an aligned run is laid out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Aligned {
+    /// Spaces before the line's first atom, after its indentation: a param
+    /// with a shorter prefix than the longest in its run is moved right so
+    /// that the words `param` line up.
+    lead: usize,
+    /// The number of leading atoms that form the key.
+    count: usize,
+    /// The width the key, lead included, is padded to: the longest in its run.
+    key_width: usize,
+    /// Which run the line is in, numbered in the order runs are found: a
+    /// line added to a run changes how the rest of it is padded.
+    run: usize,
+}
+
+/// The width of a param line's prefix (`private`, `locked`, `solved`), with
+/// the space after it, if the line is a one-line param.
+fn param_prefix_width(line: &Line) -> Option<usize> {
+    let (_, _, kind) = declaration(line)?;
+    if kind != SyntaxKind::PARAM {
+        return None;
+    }
+    let prefix = line
+        .atoms
+        .iter()
+        .take_while(|atom| atom.kind.is_item_prefix())
+        .count();
+    let atoms = line.atoms.get(..prefix)?;
+    Some(if prefix == 0 {
+        0
+    } else {
+        atoms_width(atoms) + 1
+    })
+}
+
+/// For every line that starts an aligned run member: how it is padded.
+fn alignment(lines: &[Line]) -> Vec<Option<Aligned>> {
+    let mut result: Vec<Option<Aligned>> = vec![None; lines.len()];
     // Open runs by container: the line indexes in the run.
     let mut open: BTreeMap<u32, Vec<usize>> = BTreeMap::new();
     let mut runs: Vec<Vec<usize>> = Vec::new();
@@ -442,23 +480,41 @@ fn alignment(lines: &[Line]) -> Vec<Option<(usize, usize)>> {
     let run_key = |line: &Line| {
         key(line).or_else(|| declaration(line).map(|(count, scope, _)| (count, scope)))
     };
-    for run in runs {
-        let keys: Vec<(usize, usize)> = run
+    for (run_number, run) in runs.into_iter().enumerate() {
+        let longest_prefix = run
+            .iter()
+            .filter_map(|&index| param_prefix_width(lines.get(index)?))
+            .max()
+            .unwrap_or(0);
+        // (line index, atoms in the key, lead, key width with its lead)
+        let keys: Vec<(usize, usize, usize, usize)> = run
             .iter()
             .filter_map(|&index| {
                 let line = lines.get(index)?;
                 let (count, _) = run_key(line)?;
-                Some((index, atoms_width(line.atoms.get(..count)?)))
+                let lead = param_prefix_width(line)
+                    .map_or(0, |prefix| longest_prefix.saturating_sub(prefix));
+                Some((
+                    index,
+                    count,
+                    lead,
+                    lead + atoms_width(line.atoms.get(..count)?),
+                ))
             })
             .collect();
         let longest = keys
             .iter()
-            .map(|(_, key_width)| *key_width)
+            .map(|&(_, _, _, key_width)| key_width)
             .max()
             .unwrap_or(0);
-        for (index, _) in keys {
-            if let (Some(slot), Some(line)) = (result.get_mut(index), lines.get(index)) {
-                *slot = run_key(line).map(|(count, _)| (count, longest));
+        for (index, count, lead, _) in keys {
+            if let Some(slot) = result.get_mut(index) {
+                *slot = Some(Aligned {
+                    lead,
+                    count,
+                    key_width: longest,
+                    run: run_number,
+                });
             }
         }
     }
@@ -475,13 +531,10 @@ struct Frame {
 
 fn layout(root: &SyntaxNode, text: &str) -> String {
     let lines = lines(root, text);
-    let aligned = alignment(&lines);
     let mut out = String::with_capacity(text.len());
-    let mut depth: usize = 0;
-    let mut frames: Vec<Frame> = Vec::new();
-    let mut anchor: usize = 0;
     let mut pending_blank = false;
     let mut previous_opens_block = true; // the start of the file
+    let mut rendered = render(&lines).into_iter().peekable();
 
     for (index, line) in lines.iter().enumerate() {
         if line.is_blank() {
@@ -493,6 +546,77 @@ fn layout(root: &SyntaxNode, text: &str) -> String {
             out.push('\n');
         }
         pending_blank = false;
+        if let Some((_, text)) = rendered.next_if(|(rendered, _)| *rendered == index) {
+            out.push_str(&text);
+        }
+        out.push('\n');
+        previous_opens_block = line
+            .last_code()
+            .is_some_and(|atom| atom.kind == SyntaxKind::L_BRACE);
+    }
+    out
+}
+
+/// One non-blank line of the input and its canonical layout.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct LaidOutLine {
+    /// Byte offset of the start of the line in the input (its indentation
+    /// included).
+    pub start: usize,
+    /// Byte offset just past the line's last token or comment.
+    pub end: usize,
+    /// The line laid out canonically, indentation included, without a
+    /// newline.
+    pub text: String,
+    /// The aligned run the line is in, if any: lines with the same number
+    /// are padded together, so laying out one means laying out them all.
+    pub run: Option<usize>,
+}
+
+/// Every non-blank line of a file that parses, with the layout the
+/// formatter gives it. The patcher uses it to lay out the lines it writes
+/// exactly as `stave fmt` would, leaving every other line alone.
+pub(crate) fn laid_out_lines(root: &SyntaxNode, text: &str) -> Vec<LaidOutLine> {
+    let lines = lines(root, text);
+    let aligned = alignment(&lines);
+    render(&lines)
+        .into_iter()
+        .filter_map(|(index, rendered)| {
+            let line = lines.get(index)?;
+            let first = usize::from(line.atoms.first()?.token.text_range().start());
+            let end = usize::try_from(line.atoms.last()?.end).ok()?;
+            let start = text
+                .get(..first)?
+                .rfind('\n')
+                .map_or(0, |newline| newline + 1);
+            Some(LaidOutLine {
+                start,
+                end,
+                text: rendered,
+                run: aligned
+                    .get(index)
+                    .copied()
+                    .flatten()
+                    .map(|aligned| aligned.run),
+            })
+        })
+        .collect()
+}
+
+/// Lays out every non-blank line: its index and its text, indentation
+/// included, without trailing spaces or the newline.
+fn render(lines: &[Line]) -> Vec<(usize, String)> {
+    let aligned = alignment(lines);
+    let mut out = Vec::with_capacity(lines.len());
+    let mut depth: usize = 0;
+    let mut frames: Vec<Frame> = Vec::new();
+    let mut anchor: usize = 0;
+
+    for (index, line) in lines.iter().enumerate() {
+        if line.is_blank() {
+            continue;
+        }
+        let closes_block = line.first_kind() == Some(SyntaxKind::R_BRACE);
 
         let indent = if line.continuation {
             match frames.last() {
@@ -513,19 +637,20 @@ fn layout(root: &SyntaxNode, text: &str) -> String {
         };
 
         let original_indent = line.atoms.first().map_or(0, |atom| atom.column);
-        let mut rendered = " ".repeat(indent);
-        let mut column = indent;
         let alignment = aligned.get(index).copied().flatten();
+        let lead = alignment.map_or(0, |aligned| aligned.lead);
+        let mut rendered = " ".repeat(indent + lead);
+        let mut column = indent + lead;
         let mut statement_anchor: Option<usize> = None;
         let last_code_index = line.atoms.iter().rposition(|atom| !atom.is_comment());
 
         for (position, atom) in line.atoms.iter().enumerate() {
             if let Some(previous) = position.checked_sub(1).and_then(|p| line.atoms.get(p)) {
                 let target = match alignment {
-                    Some((count, key_width)) if position == count => indent + key_width + 1,
-                    // Keep the comment's column, moved with the line's
-                    // indentation.
-                    _ if atom.kind == SyntaxKind::LINE_COMMENT => (atom.column + indent)
+                    Some(aligned) if position == aligned.count => indent + aligned.key_width + 1,
+                    // Keep the comment's column, moved with the start of
+                    // the line.
+                    _ if atom.kind == SyntaxKind::LINE_COMMENT => (atom.column + indent + lead)
                         .saturating_sub(original_indent)
                         .max(column + 1),
                     _ if space_between(previous, atom) => column + 1,
@@ -573,11 +698,7 @@ fn layout(root: &SyntaxNode, text: &str) -> String {
         if !line.continuation && !line.is_comment_only() {
             anchor = statement_anchor.unwrap_or(indent + 4);
         }
-        out.push_str(rendered.trim_end());
-        out.push('\n');
-        previous_opens_block = line
-            .last_code()
-            .is_some_and(|atom| atom.kind == SyntaxKind::L_BRACE);
+        out.push((index, rendered.trim_end().to_owned()));
     }
     out
 }
@@ -646,9 +767,9 @@ mod tests {
     fn aligns_consecutive_one_line_declarations() {
         assert_eq!(
             format(
-                "stave 1\nparam cabinet_width = 900mm  within 600mm..1200mm\nparam reveal = 1.5mm locked\nparam opening : Region\nlet a = 1\nregion bay[drawers, doors] = split(o, up)\nregion door_bay[left, right] = split(bay[doors], across)\n\nstock oak_19 { species: white_oak }\n// breaks the run\nstock ply_6 { species: birch }\nstock maple_12 { species: hard_maple }\n/// doc\njoint a : dado(x)\njoint bbb : dado(y)\npart p : s {\n  length: 1mm\n}\npart quite_long : s { length: 1mm }\n"
+                "stave 1\nparam cabinet_width = 900mm  within 600mm..1200mm\nlocked param reveal = 1.5mm\nparam opening : Region\nlet a = 1\nregion bay[drawers, doors] = split(o, up)\nregion door_bay[left, right] = split(bay[doors], across)\n\nstock oak_19 { species: white_oak }\n// breaks the run\nstock ply_6 { species: birch }\nstock maple_12 { species: hard_maple }\n/// doc\njoint a : dado(x)\njoint bbb : dado(y)\npart p : s {\n  length: 1mm\n}\npart quite_long : s { length: 1mm }\n"
             ),
-            "stave 1\nparam cabinet_width = 900mm within 600mm..1200mm\nparam reveal        = 1.5mm locked\nparam opening       : Region\nlet a = 1\nregion bay[drawers, doors]   = split(o, up)\nregion door_bay[left, right] = split(bay[doors], across)\n\nstock oak_19 { species: white_oak }\n// breaks the run\nstock ply_6    { species: birch }\nstock maple_12 { species: hard_maple }\n/// doc\njoint a   : dado(x)\njoint bbb : dado(y)\npart p : s {\n  length: 1mm\n}\npart quite_long : s { length: 1mm }\n"
+            "stave 1\n       param cabinet_width = 900mm within 600mm..1200mm\nlocked param reveal        = 1.5mm\n       param opening       : Region\nlet a = 1\nregion bay[drawers, doors]   = split(o, up)\nregion door_bay[left, right] = split(bay[doors], across)\n\nstock oak_19 { species: white_oak }\n// breaks the run\nstock ply_6    { species: birch }\nstock maple_12 { species: hard_maple }\n/// doc\njoint a   : dado(x)\njoint bbb : dado(y)\npart p : s {\n  length: 1mm\n}\npart quite_long : s { length: 1mm }\n"
         );
     }
 

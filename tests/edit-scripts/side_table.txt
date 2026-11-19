@@ -1,0 +1,101 @@
+# The side table, built from an empty project by the steps a person takes
+# with the mouse: the envelope, then each piece picked from the menu.
+new "Side table" 500mm 600mm 500mm
+import std:frames
+stock oak_19 white_oak solid 19mm max_width 200mm max_length 2700mm
+stock oak_45_sq white_oak solid 45mm width 45mm max_length 2700mm
+create
+
+select region envelope
+list
+choose frames.Top
+set top_stock = oak_19
+add
+
+select face top.board.bottom
+list
+choose frames.Legs
+set leg_stock = oak_45_sq
+show
+set length = overall_height - top.board.thickness
+add
+
+select between legs.leg[front_left] legs.leg[front_right]
+list
+choose frames.Apron
+show
+bind parts top.board
+bind face legs.leg[front_left].front
+bind face legs.leg[front_left].right
+set apron_stock = oak_19
+set run = right
+show
+add
+offer mirror apron
+mirror apron
+show
+add
+
+select between legs.leg[front_left] legs.leg[back_left]
+choose frames.Apron
+bind parts top.board
+bind face legs.leg[front_left].left
+bind face legs.leg[front_left].back         # expect: refused
+set run = back
+show
+add
+offer mirror apron
+mirror apron
+add
+
+grips assembly apron_front                 # the setback, as a grip: typed
+grip 2 = 3mm
+add
+set apron_left.setback = 3mm
+add
+
+select face apron_front.apron.back
+list
+choose frames.Cleat
+bind parts top.board
+bind face apron_front.apron.left
+set cleat_stock = oak_19
+set run = right
+set inward = back
+show
+add
+mirror cleat
+add
+
+select between legs.leg[front_left] legs.leg[front_right]
+choose frames.Stretcher
+bind face legs.leg[front_left].front
+bind face legs.leg[front_left].right
+bind face legs.leg[front_left].bottom
+set stretcher_stock = oak_19
+set run = right
+show
+add
+mirror stretcher
+add
+
+select between stretcher_front.rail stretcher_back.rail
+list
+choose frames.Slats
+bind face stretcher_front.rail.top
+bind face legs.leg[front_left].right
+bind face legs.leg[front_right].left
+bind face stretcher_front.rail.front
+bind face stretcher_back.rail.back
+set slat_stock = oak_19
+set run = back
+set spread = right
+set count = 5
+set gap = 15mm
+show
+add
+
+measure slats.slat[0] apron_front.apron
+hold slats.slat[0] apron_front.apron min 200mm "leave room above the shelf for a stack of books"
+show
+add

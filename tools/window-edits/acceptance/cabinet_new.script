@@ -1,0 +1,12 @@
+# The clothing cabinet, built from an empty project by the steps a person
+# takes with the mouse: the envelope, then each piece picked from the menu.
+new "Clothing cabinet" 940mm 1780mm 580mm
+import std:casework
+stock oak_19 white_oak solid 19mm max_width 200mm max_length 2700mm
+stock oak_6 white_oak solid 6mm max_width 200mm max_length 2700mm
+stock maple_12 hard_maple solid 12mm max_width 150mm max_length 2400mm
+stock ply_6 birch plywood 6mm max_length 2440mm
+stock oak_dowel_28 white_oak dowel 28mm
+stock oak_75_sq white_oak solid 75mm width 75mm max_length 2700mm
+tools pencil marking_knife square tape marking_gauge awl calipers tenon_saw chisel mallet router_plane clamps screwdriver router straight_bit drill depth_stop lathe roughing_gouge spindle_gouge parting_tool
+create

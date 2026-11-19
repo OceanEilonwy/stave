@@ -1,0 +1,4 @@
+# The finder's verb "add shelf" with the space above the divider
+# clicked: the same card a click on the menu's Shelf opens.
+select region divider.above
+do add shelf

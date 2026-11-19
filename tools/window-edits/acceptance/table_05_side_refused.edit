@@ -1,0 +1,8 @@
+# A click in the gap between the left legs: Apron; the top, the leg's
+# left face, then its back face as where it starts: refused while it
+# still runs to the right.
+select between legs.leg[front_left] legs.leg[back_left]
+choose frames.Apron
+point face top.board.top
+point face legs.leg[front_left].left
+point face legs.leg[front_left].back

@@ -161,6 +161,13 @@ pub struct Frame<'a> {
     pub overlay: Option<&'a Overlay>,
     /// Draw the faces cuts made darker, so the joinery reads.
     pub tint_cut_faces: bool,
+    /// Spaces lit for the editor (a region under the pointer, or the one
+    /// an edit is for): drawn as accent boxes on top of everything.
+    pub lit: Option<&'a [Aabb]>,
+    /// A tint per node, by node index (rgb linear, a: how much): an edit's
+    /// ghosts in the colour of their verdict. A zero `a` leaves the node's
+    /// own tint.
+    pub tints: Option<&'a [[f32; 4]]>,
     /// The stage behind the design.
     pub backdrop: Backdrop,
     /// Pixels across.
@@ -231,6 +238,9 @@ pub struct Renderer {
     /// last without a depth test so wood never hides them.
     volume_pipeline: wgpu::RenderPipeline,
     volume_edge_pipeline: wgpu::RenderPipeline,
+    /// A lit space (the editor's): accent faces and outlines, on top.
+    lit_pipeline: wgpu::RenderPipeline,
+    lit_edge_pipeline: wgpu::RenderPipeline,
     /// Ghosts and see-through parts: blended over what is drawn, without
     /// writing depth, pushed back a little so a surface they share with a
     /// solid part (a socket's wall around its rung) never shows through.
@@ -624,6 +634,16 @@ impl Renderer {
             wgpu::PrimitiveTopology::LineList,
             "volume_edge_fragment",
         );
+        let lit_pipeline = overlay(
+            "lit spaces",
+            wgpu::PrimitiveTopology::TriangleList,
+            "lit_fragment",
+        );
+        let lit_edge_pipeline = overlay(
+            "lit space outlines",
+            wgpu::PrimitiveTopology::LineList,
+            "lit_edge_fragment",
+        );
         let translucent_with = |label: &'static str, cull_mode: Option<wgpu::Face>| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(label),
@@ -817,6 +837,8 @@ impl Renderer {
             shadow_pipeline,
             volume_pipeline,
             volume_edge_pipeline,
+            lit_pipeline,
+            lit_edge_pipeline,
             meshes: Vec::new(),
             target: None,
         })
@@ -988,6 +1010,10 @@ impl Renderer {
             .highlight
             .filter(|h| !h.volumes.is_empty())
             .map(|h| self.volume_buffers(&h.volumes));
+        let lit = frame
+            .lit
+            .filter(|boxes| !boxes.is_empty())
+            .map(|boxes| self.volume_buffers(boxes));
         let look = |id: NodeId| {
             frame
                 .looks
@@ -1236,6 +1262,14 @@ impl Renderer {
                 pass.draw(0..3, 0..1);
             }
             pass.set_bind_group(1, &self.shadow_group, &[]);
+            if let Some((faces, face_count, lines, line_count)) = &lit {
+                pass.set_pipeline(&self.lit_pipeline);
+                pass.set_vertex_buffer(0, faces.slice(..));
+                pass.draw(0..*face_count, 0..1);
+                pass.set_pipeline(&self.lit_edge_pipeline);
+                pass.set_vertex_buffer(0, lines.slice(..));
+                pass.draw(0..*line_count, 0..1);
+            }
             if let Some((faces, face_count, lines, line_count)) = &volumes {
                 pass.set_pipeline(&self.volume_pipeline);
                 pass.set_vertex_buffer(0, faces.slice(..));
@@ -1442,6 +1476,13 @@ impl Renderer {
                 } else {
                     [0.0; 4]
                 };
+                // An edit's ghost takes its verdict's colour.
+                let tint = frame
+                    .tints
+                    .and_then(|tints| tints.get(id.index()))
+                    .filter(|tint| tint[3] > 0.0)
+                    .copied()
+                    .unwrap_or(tint);
                 let selected = if is_selected {
                     [SELECTED_WASH[0], SELECTED_WASH[1], SELECTED_WASH[2], 1.0]
                 } else {

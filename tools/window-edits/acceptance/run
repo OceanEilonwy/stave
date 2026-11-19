@@ -1,0 +1,76 @@
+#!/bin/sh
+# The acceptance run of graphical editing: the clothing cabinet and the
+# side table built from an empty project in the real window, one stage a
+# run of tools/window-shot (each stage twice: its card, then with Add),
+# every picture into docs/screenshots/window/accept_*.png.
+#
+#   tools/window-edits/acceptance/run [cabinet|table]
+#
+# Run from the repository root after `cargo build -p stave-gtk -p stave-cli`.
+# The projects are made in target/acceptance/ (the folder is emptied
+# first) and are left there to compare with tests/edit-scripts/*.stave.
+set -u
+here=tools/window-edits/acceptance
+shots=docs/screenshots/window
+work=target/acceptance
+stave=${STAVE:-${CARGO_TARGET_DIR:-target}/debug/stave}
+mkdir -p "$work" "$shots"
+
+# shot NAME PROJECT SCRIPT [add]: one run of the window.
+shot() {
+    name=$1 project=$2 script=$3
+    steps=$work/steps.edit
+    cat "$script" > "$steps"
+    if [ "${4:-}" = add ]; then printf 'add\nsave\n' >> "$steps"; fi
+    echo "== $name"
+    tools/window-shot "$shots/accept_$name.png" "$project" --theme light \
+        --edit-script "$steps" ${EXTRA:-} 2>&1 | grep -v 'WARNING\|^$\|Use GtkSettings'
+}
+
+# stage NAME PROJECT: the card, then Add (and Ctrl+S: an Add with the
+# file open in the editor leaves it unsaved there).
+stage() {
+    shot "$1" "$2" "$here/$1.edit"
+    shot "$1_added" "$2" "$here/$1.edit" add
+}
+piece=${1:-all}
+if [ "$piece" = all ] || [ "$piece" = cabinet ]; then
+    rm -rf "$work/cabinet"
+    "$stave" edit "$work/cabinet" --script "$here/cabinet_new.script" >/dev/null
+    shot cabinet_00_empty "$work/cabinet" /dev/null
+    printf 'select region envelope\n' > "$work/menu.edit"
+    shot cabinet_00_menu "$work/cabinet" "$work/menu.edit"
+    for s in 01_case 02_back 03_divider 04_drawers 05_door; do
+        stage "cabinet_$s" "$work/cabinet"
+    done
+    printf 'pick door\n' > "$work/pick.edit"
+    shot cabinet_06_mirror_offer "$work/cabinet" "$work/pick.edit"
+    for s in 06_mirror 07_shelf 08_rail 09_feet 10_hold; do
+        stage "cabinet_$s" "$work/cabinet"
+    done
+    diff tests/edit-scripts/clothing_cabinet.stave "$work/cabinet/clothing_cabinet.stave" \
+        && echo "cabinet: the same text as tests/edit-scripts/clothing_cabinet.stave"
+fi
+if [ "$piece" = all ] || [ "$piece" = table ]; then
+    rm -rf "$work/table"
+    "$stave" edit "$work/table" --script "$here/table_new.script" >/dev/null
+    shot table_00_empty "$work/table" /dev/null
+    for s in 01_top 02_legs 03_apron 04_mirror; do stage "table_$s" "$work/table"; done
+    # The left legs' outer and back faces are out of sight from the front:
+    # the view is turned to the back left, as a person would orbit it.
+    EXTRA=--turn=-120
+    shot table_05_side_refused "$work/table" "$here/table_05_side_refused.edit"
+    stage table_05_side "$work/table"
+    EXTRA=
+    for s in 06_mirror 07_setback 08_setback_left 09_cleat 10_cleat_mirror; do
+        stage "table_$s" "$work/table"
+    done
+    EXTRA=--pitch=-15
+    stage table_11_stretcher "$work/table"
+    EXTRA=
+    for s in 12_stretcher_mirror 13_slats 14_hold; do
+        stage "table_$s" "$work/table"
+    done
+    diff tests/edit-scripts/side_table.stave "$work/table/side_table.stave" \
+        && echo "table: the same text as tests/edit-scripts/side_table.stave"
+fi

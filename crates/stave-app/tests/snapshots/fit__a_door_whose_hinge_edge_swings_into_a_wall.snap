@@ -3,9 +3,10 @@ source: crates/stave-app/tests/fit.rs
 expression: "rendered(\"tests/broken/door_hits_side\")"
 ---
 error[motion]: door.panel hits wall when door is opened past 0.6deg
-  --> tests/broken/door_hits_side/project.stave:82:10
+  --> tests/broken/door_hits_side/project.stave:83:10
    |
-82 | assembly door : Door {
+83 | assembly door : Door {
    |          ^^^^
    = note: the hinges open to 110deg
    = help: leave at least 1mm between door and wall
+   = fix: patch "Use left: 17mm" { set Door.face = cover(opening, overlay(left: 17mm, right: 17.8mm), thickness: ply_18.thickness) }

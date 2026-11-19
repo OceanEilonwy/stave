@@ -1,0 +1,30 @@
+stave 1
+
+/// A top that fills the top face of a space, as wide and as deep as the space.
+/// Its upper face lies in the space's top face; it is as thick as its stock.
+/// A top wider than its stock's max_width is made of boards glued edge to
+/// edge, as the project's boards say.
+component Top {
+  param space     : Region  // the space it covers: the top is as wide and deep as this
+  param top_stock : Stock
+
+  part board : top_stock {
+    length: space.across
+    width:  space.deep
+    place {
+      flush(space.top)
+      center(space, across)
+      center(space, deep)
+    }
+  }
+
+  /// The space under the top, down to the bottom of the space it covers.
+  region below = opening(
+    left:   space.left,
+    right:  space.right,
+    bottom: space.bottom,
+    top:    board.bottom,
+    front:  space.front,
+    back:   space.back,
+  )
+}

@@ -20,7 +20,8 @@ pub enum Builtin {
     Mid,
     /// `opening(left:, right:, bottom:, top:, front:, back:)`: a region.
     Opening,
-    /// `split(region, axis)` or `split(region, axis, at: part)`: regions.
+    /// `split(region, axis)`, `split(region, axis, at: part)` or
+    /// `split(region, axis, shares: [n, ...])`: regions.
     Split,
     /// `cover(region, mount, thickness: d)`: a region.
     Cover,
@@ -37,6 +38,11 @@ pub enum Builtin {
     Spliced,
     /// `box(length:, width:, thickness:)`: an envelope.
     Box,
+    /// `box(across:, up:, deep:)`: a region made from three lengths, the
+    /// project's root. It shares the name `box` with [`Builtin::Box`]; the
+    /// two are told apart by their argument names (see
+    /// [`Builtin::for_arguments`]), so it is not in [`Builtin::ALL`].
+    RegionBox,
     /// `cylinder(diameter:, length:)`: an envelope.
     Cylinder,
     /// `model(source, align:)`: a model.
@@ -49,6 +55,11 @@ pub enum Builtin {
     Gap,
     /// `contact(a, b)`: the patch where two parts touch, a [`TypeName::Patch`].
     Contact,
+    /// `edge_to_edge(a, b)`: `true` when two parts lie side by side in one
+    /// plane and meet along an edge of each, a [`TypeName::Bool`]. The
+    /// first question asked of how two parts meet; see
+    /// [`Builtin::asks_how_parts_meet`].
+    EdgeToEdge,
     /// `wall(cut)`: the least wood left between one of a kind's named cuts
     /// and any face or other cut of the same part, a length; read only in
     /// a joint or hardware kind's `require`.
@@ -94,7 +105,7 @@ const ITEM: ValueType = ValueType::Items;
 
 impl Builtin {
     /// Every built-in, in the order the grammar lists them.
-    pub const ALL: [Builtin; 19] = [
+    pub const ALL: [Builtin; 20] = [
         Builtin::Between,
         Builtin::Extent,
         Builtin::Mid,
@@ -113,6 +124,7 @@ impl Builtin {
         Builtin::Pitch,
         Builtin::Gap,
         Builtin::Contact,
+        Builtin::EdgeToEdge,
         Builtin::Wall,
     ];
 
@@ -130,20 +142,71 @@ impl Builtin {
             Builtin::Turned => "turned",
             Builtin::Joined => "joined",
             Builtin::Spliced => "spliced",
-            Builtin::Box => "box",
+            Builtin::Box | Builtin::RegionBox => "box",
             Builtin::Cylinder => "cylinder",
             Builtin::Model => "model",
             Builtin::Ends => "ends",
             Builtin::Pitch => "pitch",
             Builtin::Gap => "gap",
             Builtin::Contact => "contact",
+            Builtin::EdgeToEdge => "edge_to_edge",
             Builtin::Wall => "wall",
         }
     }
 
-    /// The built-in for a name, if it is one.
+    /// The built-in for a name, if it is one. For `box` this is the
+    /// hardware envelope; [`Builtin::for_arguments`] picks the region.
     pub fn from_word(word: &str) -> Option<Builtin> {
         Builtin::ALL.into_iter().find(|b| b.word() == word)
+    }
+
+    /// The argument names of `box(across:, up:, deep:)`, the region.
+    pub const REGION_BOX_ARGUMENTS: [&'static str; 3] = ["across", "up", "deep"];
+
+    /// The built-in a call means once its argument names are known: `box`
+    /// with any of `across:`, `up:` or `deep:` is the region
+    /// [`Builtin::RegionBox`]; every other built-in is itself.
+    pub fn for_arguments<'a>(self, mut names: impl Iterator<Item = &'a str>) -> Builtin {
+        match self {
+            Builtin::Box | Builtin::RegionBox => {
+                if names.any(|name| Builtin::REGION_BOX_ARGUMENTS.contains(&name)) {
+                    Builtin::RegionBox
+                } else {
+                    Builtin::Box
+                }
+            }
+            other => other,
+        }
+    }
+
+    /// `true` for a question about how two parts meet (`edge_to_edge`).
+    /// A kind's rule that asks one is checked before its other rules, and
+    /// when it fails the joint makes nothing for that pair (grammar,
+    /// "Checks and `require`").
+    pub fn asks_how_parts_meet(self) -> bool {
+        match self {
+            Builtin::EdgeToEdge => true,
+            Builtin::Between
+            | Builtin::Extent
+            | Builtin::Mid
+            | Builtin::Opening
+            | Builtin::Split
+            | Builtin::Cover
+            | Builtin::Overlay
+            | Builtin::Inset
+            | Builtin::Turned
+            | Builtin::Joined
+            | Builtin::Spliced
+            | Builtin::Box
+            | Builtin::RegionBox
+            | Builtin::Cylinder
+            | Builtin::Model
+            | Builtin::Ends
+            | Builtin::Pitch
+            | Builtin::Gap
+            | Builtin::Contact
+            | Builtin::Wall => false,
+        }
     }
 
     /// What it returns. `split` returns a list of regions, which only an
@@ -152,7 +215,9 @@ impl Builtin {
         match self {
             Builtin::Between | Builtin::Extent | Builtin::Wall => TypeName::Length,
             Builtin::Mid => TypeName::Anchor,
-            Builtin::Opening | Builtin::Split | Builtin::Cover => TypeName::Region,
+            Builtin::Opening | Builtin::Split | Builtin::Cover | Builtin::RegionBox => {
+                TypeName::Region
+            }
             Builtin::Overlay | Builtin::Inset => TypeName::Mount,
             Builtin::Turned => TypeName::Shape,
             Builtin::Joined => TypeName::Boards,
@@ -161,6 +226,7 @@ impl Builtin {
             Builtin::Model => TypeName::Model,
             Builtin::Ends | Builtin::Pitch | Builtin::Gap => TypeName::Spacing,
             Builtin::Contact => TypeName::Patch,
+            Builtin::EdgeToEdge => TypeName::Bool,
         }
     }
 
@@ -200,6 +266,8 @@ impl Builtin {
                     positional("region", Type(TypeName::Region)),
                     positional("axis", AXIS),
                     named("at", Type(TypeName::Part), false),
+                    // A Count or a Ratio each: checked by the resolver.
+                    named("shares", ValueType::ListOf(&ITEM), false),
                 ];
                 LIST
             }
@@ -250,6 +318,14 @@ impl Builtin {
                 ];
                 LIST
             }
+            Builtin::RegionBox => {
+                const LIST: &[Parameter] = &[
+                    named("across", LENGTH, true),
+                    named("up", LENGTH, true),
+                    named("deep", LENGTH, true),
+                ];
+                LIST
+            }
             Builtin::Cylinder => {
                 const LIST: &[Parameter] = &[
                     named("diameter", LENGTH, true),
@@ -273,7 +349,7 @@ impl Builtin {
                 const LIST: &[Parameter] = &[positional("distance", LENGTH)];
                 LIST
             }
-            Builtin::Contact => {
+            Builtin::Contact | Builtin::EdgeToEdge => {
                 const LIST: &[Parameter] = &[positional("a", ITEM), positional("b", ITEM)];
                 LIST
             }

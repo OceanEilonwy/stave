@@ -1,0 +1,60 @@
+stave 1
+
+import "std:casework"
+
+// A chest of four drawers, started from a box the way the editor starts a
+// project: the root is the envelope, and every piece is an assembly of a
+// std:casework component. The drawers get taller toward the bottom: the
+// space in front of the back is split up by shares, 5 : 4 : 3 : 2 from the
+// bottom drawer to the top one.
+
+project "Chest of drawers" {
+  goal:       "A chest of four graduated drawers on bun feet"
+  units:      mm
+  resolution: 0.5mm        // the cut list rounds to this and says where it rounded
+  tools:      [pencil, marking_knife, square, tape, marking_gauge, awl, calipers,
+               tenon_saw, chisel, mallet, router_plane, clamps, screwdriver,
+               router, straight_bit, drill, depth_stop,
+               lathe, roughing_gouge, spindle_gouge, parting_tool]
+}
+
+param overall_width  = 800mm
+param overall_height = 1000mm
+param overall_depth  = 480mm
+
+region envelope = box(across: overall_width, up: overall_height, deep: overall_depth)
+
+// What you buy. A part wider than max_width is made of boards glued edge to edge.
+stock oak_19    { species: white_oak, form: solid, thickness: 19mm, max_width: 200mm, max_length: 2700mm }
+stock maple_12  { species: hard_maple, form: solid, thickness: 12mm, max_width: 150mm, max_length: 2400mm }
+stock ply_6     { species: birch, form: plywood, thickness: 6mm, max_length: 2440mm }
+stock oak_75_sq { species: white_oak, form: solid, thickness: 75mm, width: 75mm, max_length: 2700mm }
+
+assembly case : casework.Case {
+  space:       envelope
+  panel_stock: oak_19
+  raise:       80mm
+}
+
+assembly back : casework.Back {
+  sides:       case.side[*]
+  stands_on:   case.base
+  under:       case.top
+  panel_stock: ply_6
+}
+
+region drawer_bay[4] = split(back.in_front, up, shares: [5, 4, 3, 2])
+
+assembly drawer[4] : casework.Drawer {
+  opening:      drawer_bay[same]
+  mount:        overlay(left: 18mm, right: 18mm, top: -1.5mm, bottom: 8mm, meeting: -0.75mm)
+  front_stock:  oak_19
+  box_stock:    maple_12
+  bottom_stock: ply_6
+  slide:        side_mount_slide(length: 400mm)
+}
+
+assembly feet : casework.Feet {
+  under:      case.base
+  foot_stock: oak_75_sq
+}

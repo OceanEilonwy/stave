@@ -460,8 +460,18 @@ impl SolvedDesign {
         })
     }
 
-    /// The lowest point of any part: where the floor is.
+    /// The region made with `box(across:, up:, deep:)` that is the root,
+    /// when the root is a box rather than a part placed with `ground`.
+    pub fn root_box(&self) -> Option<&Region> {
+        self.regions.iter().find(|region| region.root)
+    }
+
+    /// Where the floor is: the bottom face of the root box, or, when the
+    /// root is a part placed with `ground`, the lowest point of any part.
     pub fn floor(&self) -> Option<Length> {
+        if let Some(root) = self.root_box() {
+            return Some(root.bounds.min().up);
+        }
         self.parts.iter().map(|p| p.cut_box().min().up).min()
     }
 
@@ -2050,6 +2060,9 @@ pub struct Region {
     pub assembly: Option<AssemblyId>,
     /// Its box.
     pub bounds: WorldBox,
+    /// `true` for the project's root, made with `box(across:, up:, deep:)`:
+    /// its bottom face is the floor.
+    pub root: bool,
 }
 
 /// A motion setting in a scene.

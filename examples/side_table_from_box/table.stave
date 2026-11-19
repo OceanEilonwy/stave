@@ -1,0 +1,113 @@
+stave 1
+
+import "std:frames"
+
+// The side table of examples/side_table again, started from a box and built
+// from std:frames assemblies, the way the editor writes it: the box is the
+// root, and every piece is an assembly. The back and right aprons, the back
+// cleat and the back stretcher are mirror images of the front and left ones.
+//
+// The box's bottom face is the floor: the legs reach down to it.
+
+project "Side table (from a box)" {
+  goal:       "A small oak side table with a lower shelf"
+  units:      mm
+  resolution: 0.5mm
+  style:      "shaker"
+}
+
+// ---- the box ----
+param overall_width  = 500mm within 400mm..600mm
+param overall_height = 600mm within 550mm..700mm
+param overall_depth  = 500mm within 400mm..600mm
+
+region envelope = box(across: overall_width, up: overall_height, deep: overall_depth)
+
+// ---- checks ----
+require knee_room    : overall_height - apron_front.apron.width - top.board.thickness >= 380mm "leave room under the aprons for your knees"
+require shelf_clear  : between(slats.slat[0], apron_front.apron) >= 200mm "leave room above the shelf for a stack of books"
+require slats_strong : slats.slat_width >= 40mm "narrow slats bend; make the top bigger or the gaps smaller"
+
+// ---- stock ----
+stock oak_19    { species: white_oak, form: solid, thickness: 19mm, max_width: 200mm, max_length: 2700mm }
+stock oak_45_sq { species: white_oak, form: solid, thickness: 45mm, width: 45mm, max_length: 2700mm }
+
+// ---- the top and legs ----
+
+assembly top : frames.Top {
+  space:     envelope
+  top_stock: oak_19
+}
+
+assembly legs : frames.Legs {
+  under:     top.board
+  leg_stock: oak_45_sq
+  length:    overall_height - top.board.thickness
+}
+
+// ---- aprons: the frame under the top ----
+
+assembly apron_front : frames.Apron {
+  legs:        [legs.leg[front_left], legs.leg[front_right]]
+  under:       top.board
+  outside:     legs.leg[front_left].front
+  start:       legs.leg[front_left].right
+  apron_stock: oak_19
+  run:         right
+}
+
+assembly apron_back = mirror(apron_front, about: mid(top.board, deep))
+
+assembly apron_left : frames.Apron {
+  legs:        [legs.leg[front_left], legs.leg[back_left]]
+  under:       top.board
+  outside:     legs.leg[front_left].left
+  start:       legs.leg[front_left].back
+  apron_stock: oak_19
+  run:         back
+}
+
+assembly apron_right = mirror(apron_left, about: mid(top.board, across))
+
+// The top is screwed on from below through the cleats.
+assembly cleat_front : frames.Cleat {
+  apron:       apron_front.apron
+  inside:      apron_front.apron.back
+  under:       top.board
+  start:       apron_front.apron.left
+  cleat_stock: oak_19
+  run:         right
+  inward:      back
+}
+
+assembly cleat_back = mirror(cleat_front, about: mid(top.board, deep))
+
+// ---- the slatted lower shelf ----
+
+assembly stretcher_front : frames.Stretcher {
+  legs:            [legs.leg[front_left], legs.leg[front_right]]
+  outside:         legs.leg[front_left].front
+  start:           legs.leg[front_left].right
+  lower_end:       legs.leg[front_left].bottom
+  stretcher_stock: oak_19
+  run:             right
+}
+
+assembly stretcher_back = mirror(stretcher_front, about: mid(top.board, deep))
+
+assembly slats : frames.Slats {
+  rails:      [stretcher_front.rail, stretcher_back.rail]
+  on:         stretcher_front.rail.top
+  fill_from:  legs.leg[front_left].right
+  fill_to:    legs.leg[front_right].left
+  ends_from:  stretcher_front.rail.front
+  ends_to:    stretcher_back.rail.back
+  slat_stock: oak_19
+  run:        back
+  spread:     right
+}
+
+// ---- scenes ----
+scene frame "Without the top" {
+  hide: top
+}

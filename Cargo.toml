@@ -2,6 +2,7 @@
 resolver = "3"
 members = [
   "crates/stave-lang",
+  "crates/stave-smt",
   "crates/stave-schema",
   "crates/stave-modules",
   "crates/stave-model",
@@ -19,3 +20,16 @@ members = [
 edition = "2024"
 version = "0.1.0"
 license = "AGPL-3.0-or-later"
+
+# z3 is compiled from C++ by the build script of `z3-sys` (through the
+# `z3-src` crate and CMake), and CMake follows that package's opt-level: at
+# the dev profile's 0 it builds z3 as Debug, with z3's own assertions, and a
+# small smart-edit solve takes about 90ms. Built as Release here (the test
+# profile inherits these), it takes a few milliseconds. See the crate docs
+# of `stave-smt`, "Building z3", for the measurements.
+[profile.dev.package.z3-sys]
+opt-level = 3
+debug = false
+
+[profile.dev.package.z3]
+opt-level = 3

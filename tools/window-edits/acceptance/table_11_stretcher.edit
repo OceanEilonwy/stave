@@ -1,0 +1,10 @@
+# A click between the front legs again: Stretcher; the front leg's
+# front, right and bottom faces (the view tipped to look a little from
+# below, so the leg's bottom shows).
+select between legs.leg[front_left] legs.leg[front_right]
+choose frames.Stretcher
+point face legs.leg[front_left].front
+point face legs.leg[front_left].right
+point face legs.leg[front_left].bottom
+set stretcher_stock = oak_19
+set run = right

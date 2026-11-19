@@ -1,0 +1,27 @@
+# The project the changes' shots start from: the small chest with a
+# divider across its case and two drawers stacked under it, made by
+# `stave edit --script` as a user would.
+new "Small chest" 700mm 1000mm 480mm
+import std:casework
+stock oak_19 white_oak solid 19mm max_width 200mm max_length 2700mm
+stock maple_12 hard_maple solid 12mm max_width 150mm max_length 2400mm
+stock ply_6 birch plywood 6mm max_length 2440mm
+create
+select region envelope
+choose casework.Case
+set panel_stock = oak_19
+add
+select region case.inside
+choose casework.Divider
+bind parts case.side[left] case.side[right]
+set panel_stock = oak_19
+add
+select region divider.below
+choose casework.Drawer
+set mount = overlay(left: 18mm, right: 18mm, top: -1.5mm, bottom: 8mm, meeting: -0.75mm)
+set front_stock = oak_19
+set box_stock = maple_12
+set bottom_stock = ply_6
+set slide = side_mount_slide(length: 400mm)
+repeat 2 up
+add

@@ -15,10 +15,10 @@ project "Bookshelf" {
 }
 
 // ---- parameters ----
-param case_height = 1200mm within 1000mm..1800mm
-param case_width  = 800mm within 600mm..880mm      // longer shelves sag under books
-param case_depth  = 280mm within 240mm..350mm
-param kick_height = 70mm locked                    // matches the room's skirting board
+       param case_height = 1200mm within 1000mm..1800mm
+       param case_width  = 800mm within 600mm..880mm      // longer shelves sag under books
+       param case_depth  = 280mm within 240mm..350mm
+locked param kick_height = 70mm                           // matches the room's skirting board
 let dado_depth = 9mm
 
 // ---- checks ----

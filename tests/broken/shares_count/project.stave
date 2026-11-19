@@ -1,0 +1,36 @@
+// expect: error[type-mismatch] 'shares' needs 3 numbers, one for each piece of bay, found 2
+stave 1
+
+project "Too few shares" {
+  units: mm
+}
+
+param overall_width  = 600mm
+param overall_height = 400mm
+param overall_depth  = 300mm
+
+region envelope                  = box(across: overall_width, up: overall_height, deep: overall_depth)
+region bay[lower, middle, upper] = split(envelope, up, shares: [1, 2])
+
+stock pine_19 { species: pine, form: solid, thickness: 19mm, max_length: 2400mm }
+
+part base : pine_19 {
+  length: overall_width
+  width:  overall_depth
+  place {
+    flush(envelope.bottom)
+    flush(envelope.left)
+    flush(envelope.front)
+  }
+}
+
+part shelf : pine_19 {
+  length: overall_width
+  width:  overall_depth
+  loose:  true
+  place {
+    flush(bay[lower].top)
+    flush(envelope.left)
+    flush(envelope.front)
+  }
+}

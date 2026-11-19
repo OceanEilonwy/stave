@@ -4,7 +4,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use stave_lang::render_diagnostics;
-use stave_modules::{ModuleSet, ModuleSource, STD_MODULES};
+use stave_modules::{ModuleSet, ModuleSource, PRELUDE_MODULES, STD_MODULES};
 
 /// The repository root, relative to this crate.
 fn repository() -> PathBuf {
@@ -58,15 +58,24 @@ fn clothing_cabinet() {
             "tools"
         ]
     );
-    // Imported folders are normalised lexically (the `..` in `repository()`
-    // is resolved); the root keeps the folder as given.
-    let normalized = stave_modules::normalize(&folder).display().to_string();
+    // `std:casework` is the embedded standard module, shown under `std/`.
     let casework = &set.modules[1];
+    assert_eq!(casework.source, ModuleSource::Std { name: "casework" });
     assert!(
         casework
             .files
             .iter()
-            .any(|file| file.path == format!("{normalized}/casework/drawer.stave"))
+            .any(|file| file.path == "std/casework/drawer.stave")
+    );
+    // Imported folders are normalised lexically (the `..` in `repository()`
+    // is resolved); the root keeps the folder as given.
+    let normalized = stave_modules::normalize(&folder).display().to_string();
+    let shop_hardware = &set.modules[2];
+    assert!(
+        shop_hardware
+            .files
+            .iter()
+            .any(|file| file.path == format!("{normalized}/hardware/handles.stave"))
     );
     let imports: Vec<(&str, &str)> = root
         .files
@@ -98,12 +107,12 @@ fn clothing_cabinet_display_paths_follow_the_given_folder() {
     let relative = Path::new("../../examples/clothing_cabinet");
     let set = ModuleSet::load(&manifest.join(relative)).unwrap();
     let base = manifest.join(relative).display().to_string();
-    let casework = &set.modules[1];
+    let shop_hardware = &set.modules[2];
     assert_eq!(
-        casework.files[0].path,
+        shop_hardware.files[0].path,
         // `normalize` resolves the `..`s lexically.
         stave_modules::normalize(Path::new(&base))
-            .join("casework/drawer.stave")
+            .join("hardware/handles.stave")
             .display()
             .to_string()
     );
@@ -147,7 +156,9 @@ fn every_example_and_std_folder_loads_without_errors() {
 fn std_folders_are_the_embedded_modules() {
     for module in STD_MODULES {
         let set = ModuleSet::load(&repository().join("std").join(module)).unwrap();
-        assert_eq!(set.modules.len(), 3);
+        // The prelude, plus the module itself when it is not one of them.
+        let outside_prelude = usize::from(!PRELUDE_MODULES.contains(&module));
+        assert_eq!(set.modules.len(), PRELUDE_MODULES.len() + outside_prelude);
         assert_eq!(
             set.module(set.root).unwrap().source,
             ModuleSource::Std { name: module }

@@ -1,4 +1,5 @@
 // expect: error[motion] door.panel hits wall when door is opened past 0.6deg
+// fix: patch "Use left: 17mm" { set Door.face = cover(opening, overlay(left: 17mm, right: 17.8mm), thickness: ply_18.thickness) }
 stave 1
 
 // The cabinet stands against a wall that reaches as far forward as the

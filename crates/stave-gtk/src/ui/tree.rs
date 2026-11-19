@@ -72,6 +72,9 @@ struct TreeState {
     clicked: Option<Target>,
     /// Why there are no parts, when there are none.
     empty: Option<EmptyState>,
+    /// What an empty tree says instead of "Nothing to show yet" (a new
+    /// project's envelope: where to click).
+    placeholder: Option<String>,
     on_select: Option<SelectCallback>,
     on_source: Option<SourceCallback>,
     on_focus: Option<FocusCallback>,
@@ -239,6 +242,20 @@ impl TreeSidebar {
         fill(&self.list, &self.state);
     }
 
+    /// What the tree says while it has no rows: `None` for "Nothing to
+    /// show yet".
+    pub fn set_placeholder(&self, placeholder: Option<&str>) {
+        let changed = {
+            let mut state = self.state.borrow_mut();
+            let changed = state.placeholder.as_deref() != placeholder;
+            state.placeholder = placeholder.map(str::to_owned);
+            changed
+        };
+        if changed {
+            fill(&self.list, &self.state);
+        }
+    }
+
     /// Takes the latest check's marks for the dots.
     pub fn show_marks(&self, marks: Marks) {
         self.state.borrow_mut().marks = marks;
@@ -352,9 +369,18 @@ fn fill(list: &gtk::ListBox, state: &Rc<RefCell<TreeState>>) {
     }
     if rows.is_empty() {
         let label = gtk::Label::builder()
-            .label("Nothing to show yet")
+            .label(
+                state_ref
+                    .placeholder
+                    .as_deref()
+                    .unwrap_or("Nothing to show yet"),
+            )
             .css_classes(["dim-label"])
+            .wrap(true)
+            .justify(gtk::Justification::Center)
             .margin_top(12)
+            .margin_start(12)
+            .margin_end(12)
             .build();
         let row = gtk::ListBoxRow::builder()
             .child(&label)

@@ -1,0 +1,7 @@
+# A click in the space above the divider again: Shelf, the sides
+# pointed at, its headroom typed.
+select region divider.above
+choose casework.Shelf
+bind between case.side[left] case.side[right]
+set panel_stock = oak_19
+set headroom = 160mm

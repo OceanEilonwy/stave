@@ -28,4 +28,5 @@ stave-lang = { path = "../stave-lang" }
 stave-model = { path = "../stave-model" }
 stave-modules = { path = "../stave-modules" }
 stave-scene = { path = "../stave-scene" }
+stave-schema = { path = "../stave-schema" }
 wgpu = "30"

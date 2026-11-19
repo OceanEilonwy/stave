@@ -1,0 +1,33 @@
+// expect: error[require] 'side_by_side' fails: an edge joint glues two boards lying side by side, edge to edge; these meet another way
+stave 1
+
+// A case's side standing on its base, glued edge to edge. Gluing the end
+// grain of the side to the face of the base is not an edge joint, and
+// would not hold: the kind's rule says so.
+
+project "Edge joint at a corner" {
+  units: mm
+}
+
+stock oak_19 { species: white_oak, form: solid, thickness: 19mm, max_length: 2700mm }
+
+part base : oak_19 {
+  length: 600mm
+  width:  180mm
+  place {
+    ground
+  }
+}
+
+part side : oak_19 {
+  length: 400mm
+  width:  180mm
+  place {
+    orient(length: up, width: back)
+    against(base.top)
+    flush(base.left)
+    flush(base.back)
+  }
+}
+
+joint corner : glued_edge(side, into: base)

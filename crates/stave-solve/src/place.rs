@@ -153,6 +153,17 @@ pub(crate) fn divide(a: ExactLength, n: usize) -> Solved<ExactLength> {
     a.checked_div(Rational::from(n)).ok_or(Reported)
 }
 
+/// `true` for `box(across:, up:, deep:)`, the root region.
+pub(crate) fn is_region_box(value: &RExpr) -> bool {
+    matches!(
+        value.kind,
+        RExprKind::Builtin {
+            function: Builtin::RegionBox,
+            ..
+        }
+    )
+}
+
 /// Reflects an extent through a plane: `low..high` becomes
 /// `2p - high .. 2p - low`.
 pub(crate) fn reflect(
@@ -169,7 +180,10 @@ impl Solver<'_> {
     // Project checks
     // -----------------------------------------------------------------------
 
-    /// Exactly one part of the project is placed with `ground`.
+    /// Exactly one root: one part of the project placed with `ground`, or
+    /// one region made with `box(across:, up:, deep:)` (grammar,
+    /// "Placement rules", rule 1). A box inside a component, or anywhere
+    /// but as the whole value of a region, is reported by the resolver.
     pub(crate) fn check_ground(&mut self) -> Solved<()> {
         let mut grounded: Vec<(PartId, FileId, Span)> = Vec::new();
         for part in &self.model.parts {
@@ -187,7 +201,7 @@ impl Solver<'_> {
                     if part.assembly.is_some() {
                         self.report(
                             Diagnostic::error(Code::Ground, format!("'{}' is placed with 'ground' inside a component", part.name), Label::new(def.decl.file, term.span))
-                                .with_help("parts inside components are placed against what the component is handed; only one part of the project is ground"),
+                                .with_help("parts inside components are placed against what the component is handed, a Region or a Part param; only the project has a root"),
                         );
                         continue;
                     }
@@ -195,30 +209,32 @@ impl Solver<'_> {
                 }
             }
         }
-        match grounded.as_slice() {
-            [] if self
-                .model
-                .defs
-                .broken
-                .get(&self.model.root)
-                .is_some_and(|names| !names.is_empty()) =>
+        let boxes = self.root_boxes();
+        match (grounded.as_slice(), boxes.as_slice()) {
+            ([], [])
+                if self
+                    .model
+                    .defs
+                    .broken
+                    .get(&self.model.root)
+                    .is_some_and(|names| !names.is_empty()) =>
             {
-                // The ground part may be one with a syntax error.
+                // The root may be an item with a syntax error.
                 Err(self.skip())
             }
-            [] => {
+            ([], []) => {
                 self.report(
                     Diagnostic::error(
                         Code::Ground,
-                        "no part is placed with 'ground'",
+                        "nothing is the root: no part is placed with 'ground' and no region is made with 'box'",
                         Label::new(self.project_file, self.project_span),
                     )
-                    .with_help("place the part everything stands on with place { ground }"),
+                    .with_help("add a root box with the overall sizes, region envelope = box(across: ..., up: ..., deep: ...), or place the lowest part with place { ground }"),
                 );
                 Err(Reported)
             }
-            [_] => Ok(()),
-            [(first, ..), (second, file, span), ..] => {
+            ([_], []) | ([], [_]) => Ok(()),
+            ([(first, ..), (second, file, span), ..], _) => {
                 let (a, b) = (self.part_name(*first), self.part_name(*second));
                 self.report(
                     Diagnostic::error(
@@ -230,7 +246,55 @@ impl Solver<'_> {
                 );
                 Err(Reported)
             }
+            ([(part, file, span)], [(region, ..), ..]) => {
+                let part = self.part_name(*part);
+                let region = self.region_name(*region);
+                self.report(
+                    Diagnostic::error(
+                        Code::Ground,
+                        format!("'{part}' is placed with 'ground', but '{region}' is made with 'box'; only one can be the root"),
+                        Label::new(*file, *span),
+                    )
+                    .with_help(format!("place '{part}' against the box instead: in place of ground, flush({region}.bottom), flush({region}.left) and flush({region}.front)")),
+                );
+                Err(Reported)
+            }
+            ([], [(first, ..), (second, file, span), ..]) => {
+                let (a, b) = (self.region_name(*first), self.region_name(*second));
+                self.report(
+                    Diagnostic::error(
+                        Code::Ground,
+                        format!("'{a}' and '{b}' are both made with 'box'"),
+                        Label::new(*file, *span),
+                    )
+                    .with_help(format!("make '{b}' from '{a}' instead, with split(...) or opening(...) and its faces")),
+                );
+                Err(Reported)
+            }
         }
+    }
+
+    /// The project's regions made with `box(across:, up:, deep:)`, in
+    /// declaration order, with where each box is written. Regions in
+    /// components are never the root.
+    pub(crate) fn root_boxes(&self) -> Vec<(RegionId, FileId, Span)> {
+        self.model
+            .regions
+            .iter()
+            .filter(|region| region.assembly.is_none() && region.mirror_of.is_none())
+            .filter_map(|region| {
+                let def = self.model.defs.region(region.def)?;
+                is_region_box(&def.value).then_some((region.id, def.decl.file, def.value.span))
+            })
+            .collect()
+    }
+
+    fn region_name(&self, region: RegionId) -> String {
+        self.model
+            .regions
+            .get(region.index())
+            .map(|r| r.name.clone())
+            .unwrap_or_default()
     }
 
     // -----------------------------------------------------------------------

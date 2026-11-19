@@ -20,6 +20,9 @@ mod hardware;
 mod items;
 mod kinds;
 mod mechanism;
+mod reuse;
+
+pub use reuse::ResolvedLibraries;
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -43,10 +46,80 @@ use crate::types::{KindTy, Ty};
 /// Resolves and type-checks every module of `modules`. Returns the
 /// definitions and the diagnostics of this stage (not the module set's).
 pub fn resolve(modules: &ModuleSet) -> (Defs, Vec<Diagnostic>) {
+    let (defs, diagnostics, _) = run(modules, false);
+    (defs, diagnostics)
+}
+
+/// [`resolve`], also keeping what resolving the libraries (the standard
+/// modules and every imported module) produced, so that a changed copy of
+/// the project can be resolved again with [`resolve_reusing`]. `None` when
+/// the libraries can't be kept apart from the project: when the folder is
+/// itself a standard module.
+pub fn resolve_keeping(modules: &ModuleSet) -> (Defs, Vec<Diagnostic>, Option<ResolvedLibraries>) {
+    run(modules, true)
+}
+
+/// Resolves `modules` reusing the libraries resolved for an earlier
+/// version of the same project: only the project's own module is resolved
+/// and type-checked. The result equals [`resolve`]'s. `None` when
+/// `libraries` doesn't match `modules` (a library's text changed, the
+/// project imports a different set of modules, or the project has a
+/// different number of files, which renumbers the files after it); then
+/// call [`resolve`].
+pub fn resolve_reusing(
+    modules: &ModuleSet,
+    libraries: &ResolvedLibraries,
+) -> Option<(Defs, Vec<Diagnostic>)> {
+    if !separable(modules) || !libraries.matches(modules) {
+        return None;
+    }
     let mut resolver = Resolver::new(modules);
-    resolver.collect();
-    resolver.lower_all();
-    resolver.finish()
+    // Collecting again is a cheap walk; it gives the libraries'
+    // declarations back their syntax. Everything else collecting and
+    // lowering them produced is the kept state.
+    resolver.collect_modules(libraries_of(modules));
+    resolver.restore(libraries.state());
+    resolver.resolve_root();
+    Some(resolver.finish())
+}
+
+/// `true` when the project's module is not a standard module, so the
+/// libraries can be resolved first and on their own: nothing in a library
+/// can name the project.
+fn separable(modules: &ModuleSet) -> bool {
+    !modules.prelude.contains(&modules.root)
+}
+
+/// Every module but the project's, in module order.
+fn libraries_of(modules: &ModuleSet) -> impl Iterator<Item = &stave_modules::Module> {
+    let root = modules.root;
+    modules
+        .modules
+        .iter()
+        .filter(move |module| module.id != root)
+}
+
+/// Resolves in two phases when the libraries are separable: first every
+/// library (ids, names, bodies), then the project. Library declarations so
+/// get the lowest ids, and their results don't depend on the project.
+fn run(modules: &ModuleSet, keep: bool) -> (Defs, Vec<Diagnostic>, Option<ResolvedLibraries>) {
+    let mut resolver = Resolver::new(modules);
+    if !separable(modules) {
+        resolver.collect_modules(libraries_of(modules));
+        resolver.collect_modules(modules.module(modules.root));
+        resolver.collect_prelude();
+        resolver.check_prelude_shadowing();
+        let all: Vec<ModuleId> = modules.modules.iter().map(|module| module.id).collect();
+        resolver.lower_modules(&all);
+        resolver.finish_components();
+        let (defs, diagnostics) = resolver.finish();
+        return (defs, diagnostics, None);
+    }
+    resolver.resolve_libraries();
+    let kept = keep.then(|| ResolvedLibraries::new(modules, resolver.snapshot()));
+    resolver.resolve_root();
+    let (defs, diagnostics) = resolver.finish();
+    (defs, diagnostics, kept)
 }
 
 /// A reference from a declaration id back to its syntax.
@@ -153,9 +226,11 @@ pub(crate) struct Resolver<'a> {
     poisoned: std::collections::BTreeSet<DefId>,
     early_kind_params: HashMap<(KindId, usize), (Ty, Option<RExpr>)>,
     assembly_components: HashMap<AssemblyDefId, Lazy<Option<ComponentId>>>,
+    /// Each module's resolved header and item list, by module.
+    headers: BTreeMap<ModuleId, ModuleDefs>,
 }
 
-#[derive(Default)]
+#[derive(Debug, Clone, Default)]
 struct Counters {
     params: usize,
     lets: usize,
@@ -173,7 +248,7 @@ struct Counters {
     scenes: usize,
 }
 
-#[derive(Default)]
+#[derive(Debug, Clone, Default)]
 struct Arenas {
     params: Vec<Option<ParamDef>>,
     lets: Vec<Option<LetDef>>,
@@ -189,7 +264,6 @@ struct Arenas {
     recipes: Vec<Option<RecipeDef>>,
     components: Vec<Option<ComponentDef>>,
     scenes: Vec<Option<SceneDef>>,
-    modules: Vec<ModuleDefs>,
 }
 
 fn store<T>(arena: &mut Vec<Option<T>>, index: usize, value: T) {
@@ -254,7 +328,26 @@ impl<'a> Resolver<'a> {
             poisoned: std::collections::BTreeSet::new(),
             early_kind_params: HashMap::new(),
             assembly_components: HashMap::new(),
+            headers: BTreeMap::new(),
         }
+    }
+
+    /// Phase one: collects and lowers every library.
+    fn resolve_libraries(&mut self) {
+        let modules = self.modules;
+        self.collect_modules(libraries_of(modules));
+        self.collect_prelude();
+        let libraries: Vec<ModuleId> = libraries_of(modules).map(|module| module.id).collect();
+        self.lower_modules(&libraries);
+    }
+
+    /// Phase two: collects and lowers the project's module.
+    fn resolve_root(&mut self) {
+        let modules = self.modules;
+        self.collect_modules(modules.module(modules.root));
+        self.check_prelude_shadowing();
+        self.lower_modules(&[modules.root]);
+        self.finish_components();
     }
 
     // -----------------------------------------------------------------------
@@ -299,13 +392,75 @@ impl<'a> Resolver<'a> {
         self.report(Diagnostic::error(code, message, Label::new(file, span)).with_help(help));
     }
 
+    /// The checks on a param's kind (grammar, "Param kinds"): `locked` and
+    /// `solved` need a default and a quantity type, and `solved` needs a
+    /// `within`. One error at most, the missing default first. `reported`
+    /// is `true` when a missing default is reported elsewhere (a module
+    /// param must have one), so it isn't reported twice.
+    pub(crate) fn check_param_kind(
+        &mut self,
+        file: FileId,
+        param: &ast::Param,
+        ty: &Ty,
+        has_default: bool,
+        reported: bool,
+    ) {
+        let Some(mark) = &param.mark else {
+            return;
+        };
+        let word = mark.value.word();
+        let name = param.name.as_str();
+        if !has_default {
+            if !reported {
+                self.report(
+                    Diagnostic::error(
+                        Code::MissingValue,
+                        format!("'{name}' has no value"),
+                        Label::new(file, param.name.span()),
+                    )
+                    .with_note(format!("a {word} param needs a default"))
+                    .with_help(format!(
+                        "give it a default ({word} param {name} = ...), or remove '{word}'"
+                    )),
+                );
+            }
+            return;
+        }
+        if !ty.is_quantity() {
+            if *ty != Ty::Unknown {
+                self.error_help(
+                    Code::TypeMismatch,
+                    format!(
+                        "'{word}' needs a length, an angle, a ratio or a count, found {}",
+                        ty.description()
+                    ),
+                    file,
+                    mark.span,
+                    format!("only a size or a number can be {word}; remove '{word}'"),
+                );
+            }
+            return;
+        }
+        if mark.value == ast::ParamMark::Solved && param.within.is_none() {
+            self.error_help(
+                Code::MissingField,
+                format!("solved param '{name}' is missing 'within'"),
+                file,
+                param.name.span(),
+                format!(
+                    "give it the values the solver may choose from (solved param {name} = ... within <lowest>..<highest>), or remove 'solved'"
+                ),
+            );
+        }
+    }
+
     fn finish(mut self) -> (Defs, Vec<Diagnostic>) {
         fn take<T>(arena: Vec<Option<T>>) -> Vec<T> {
             arena.into_iter().flatten().collect()
         }
         let out = std::mem::take(&mut self.out);
         let defs = Defs {
-            modules: out.modules,
+            modules: std::mem::take(&mut self.headers).into_values().collect(),
             prelude: self.modules.prelude.clone(),
             files: std::mem::take(&mut self.files),
             poisoned: std::mem::take(&mut self.poisoned),
@@ -324,6 +479,7 @@ impl<'a> Resolver<'a> {
             recipes: take(out.recipes),
             components: take(out.components),
             scenes: take(out.scenes),
+            sources: reuse::root_sources(self.modules),
         };
         let mut diagnostics = self.diagnostics;
         diagnostics.sort_by_key(|d| {
@@ -398,9 +554,9 @@ impl<'a> Resolver<'a> {
         names.insert(name.as_str().to_owned(), entry);
     }
 
-    fn collect(&mut self) {
-        let modules = self.modules;
-        for module in &modules.modules {
+    /// Collects the declarations of `modules`, in that order.
+    fn collect_modules(&mut self, modules: impl IntoIterator<Item = &'a stave_modules::Module>) {
+        for module in modules {
             let is_library = matches!(module.header, Some(ModuleHeader::Library { .. }));
             for file in &module.files {
                 let mut file_imports = BTreeMap::new();
@@ -429,8 +585,6 @@ impl<'a> Resolver<'a> {
                 }
             }
         }
-        self.collect_prelude();
-        self.check_prelude_shadowing();
     }
 
     fn collect_item(
@@ -1044,11 +1198,13 @@ impl<'a> Resolver<'a> {
     // Pass 2: lower everything
     // -----------------------------------------------------------------------
 
-    fn lower_all(&mut self) {
+    /// Lowers the headers and declarations of `which` (collected already),
+    /// declarations in id order.
+    fn lower_modules(&mut self, which: &[ModuleId]) {
         let modules = self.modules;
-        for module in &modules.modules {
+        for module in which.iter().filter_map(|id| modules.module(*id)) {
             let (project, library) = self.lower_header(module);
-            self.out.modules.push(ModuleDefs {
+            let defs = ModuleDefs {
                 id: module.id,
                 name: module.name.clone(),
                 folder: match &module.source {
@@ -1062,14 +1218,23 @@ impl<'a> Resolver<'a> {
                     .unwrap_or_default(),
                 project,
                 library,
-            });
+            };
+            self.headers.insert(module.id, defs);
         }
-        let mut order: Vec<DefId> = self.origins.keys().copied().collect();
+        let mut order: Vec<DefId> = self
+            .origins
+            .iter()
+            .filter(|(_, origin)| which.contains(&origin.module))
+            .map(|(def, _)| *def)
+            .collect();
         order.sort();
         for def in order {
             self.lower_def(def);
         }
-        // Components need their item lists.
+    }
+
+    /// Stores every component with its item list.
+    fn finish_components(&mut self) {
         for (index, items) in self.component_items.clone().into_iter().enumerate() {
             let Some(id) = ComponentId::from_index(index) else {
                 continue;
@@ -1245,7 +1410,9 @@ impl<'a> Resolver<'a> {
                         (ty, default)
                     }
                 };
-                if default.is_none() && matches!(origin.scope, Scope::Module(_)) {
+                let module_param = matches!(origin.scope, Scope::Module(_));
+                self.check_param_kind(origin.file, syntax, &ty, default.is_some(), module_param);
+                if default.is_none() && module_param {
                     self.error_help(
                         Code::MissingField,
                         format!("param '{}' is missing a default", syntax.name.as_str()),
@@ -1267,7 +1434,7 @@ impl<'a> Resolver<'a> {
                         ty,
                         default,
                         domain,
-                        locked: syntax.locked.is_some(),
+                        kind: syntax.kind(),
                     },
                 );
             }

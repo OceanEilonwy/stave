@@ -5,7 +5,7 @@ use std::cell::RefCell;
 use stave_lang::ast::Span;
 use stave_lang::placement::{Axis, Face};
 use stave_lang::units::{ExactLength, Rational};
-use stave_lang::{Code, FileId};
+use stave_lang::{Code, Diagnostic, FileId, Label};
 use stave_model::defs::{
     ArrayDef, DefId, Index, Member, RExpr, RExprKind, StockField, Symbol, Text, TextPart, Word,
 };
@@ -18,6 +18,7 @@ use stave_model::value::{
 use stave_schema::functions::Builtin;
 use stave_schema::words::StockForm;
 
+use crate::fixes::Written;
 use crate::{Frame, Memo, Reported, Solved, Solver};
 
 /// The roles and settings of one application of a kind.
@@ -498,8 +499,14 @@ impl Solver<'_> {
                         self.check_domain(
                             def,
                             value,
-                            def.decl.file,
-                            default.span,
+                            Written {
+                                file: def.decl.file,
+                                span: default.span,
+                                path: self
+                                    .model
+                                    .defs
+                                    .patch_path(DefId::Param(inst.def), self.model.root),
+                            },
                             &inst.name,
                             domain_ctx,
                         )?;
@@ -547,7 +554,22 @@ impl Solver<'_> {
                                 instance: inst.instance,
                                 element: None,
                             };
-                            self.check_domain(def, value, file, arg.span, &inst.name, domain_ctx)?;
+                            let target = self
+                                .model
+                                .defs
+                                .patch_path(DefId::Assembly(assembly), self.model.root)
+                                .map(|path| format!("{path}.{}", def.decl.name));
+                            self.check_domain(
+                                def,
+                                value,
+                                Written {
+                                    file,
+                                    span: arg.span,
+                                    path: target,
+                                },
+                                &inst.name,
+                                domain_ctx,
+                            )?;
                         }
                         value
                     }
@@ -571,8 +593,7 @@ impl Solver<'_> {
         &mut self,
         def: &stave_model::defs::ParamDef,
         value: &Value,
-        file: FileId,
-        span: Span,
+        written: Written,
         name: &str,
         domain_ctx: Ctx,
     ) -> Solved<()> {
@@ -585,7 +606,9 @@ impl Solver<'_> {
             kind: None,
             array: None,
         };
-        let (inside, text) = match domain {
+        // Whether the value is inside, the domain as messages write it, and
+        // the allowed value nearest to it.
+        let (inside, text, nearest) = match domain {
             stave_model::defs::Domain::Range { low, high, .. } => {
                 let low = self.eval(low, &module_env)?;
                 let high = self.eval(high, &module_env)?;
@@ -593,30 +616,45 @@ impl Solver<'_> {
                     == Some(Value::Bool(true));
                 let below = value::binary(stave_lang::ast::BinaryOp::Le, value, &high).ok()
                     == Some(Value::Bool(true));
-                (above && below, format!("{low}..{high}"))
+                let text = format!("{low}..{high}");
+                (above && below, text, if above { high } else { low })
             }
             stave_model::defs::Domain::OneOf { values, .. } => {
                 let mut list = Vec::new();
-                let mut inside = false;
                 for v in values {
-                    let v = self.eval(v, &module_env)?;
-                    inside |= &v == value;
-                    list.push(v.to_string());
+                    list.push(self.eval(v, &module_env)?);
                 }
-                (inside, format!("[{}]", list.join(", ")))
+                let inside = list.contains(value);
+                let nearest = crate::fixes::nearest(value, &list).cloned();
+                let text = list.iter().map(Value::to_string).collect::<Vec<_>>();
+                let text = format!("[{}]", text.join(", "));
+                match nearest {
+                    Some(nearest) => (inside, text, nearest),
+                    None => (inside, text, value.clone()),
+                }
             }
         };
         if inside {
             return Ok(());
         }
         let short = name.rsplit('.').next().unwrap_or(name);
-        Err(self.error(
+        let mut diagnostic = Diagnostic::error(
             Code::OutOfRange,
             format!("'{short}' must be within {text}, found {value}"),
-            file,
-            span,
-            format!("give a value within {text}"),
-        ))
+            Label::new(written.file, written.span),
+        )
+        .with_help(format!("give a value within {text}"));
+        // The fix sets the value to the nearest allowed one, where a patch
+        // can reach the value (grammar, "Fixes").
+        if &nearest != value
+            && let Some(fix) = written
+                .path
+                .and_then(|path| crate::fixes::set_to(&path, &nearest))
+        {
+            diagnostic = diagnostic.with_fix(fix);
+        }
+        self.report(diagnostic);
+        Err(Reported)
     }
 
     pub(crate) fn let_value(&mut self, binding: stave_model::ids::LetId) -> Solved<Value> {
@@ -1366,10 +1404,11 @@ impl Solver<'_> {
                 let (Some(a), Some(b)) = (Self::arg(args, "a"), Self::arg(args, "b")) else {
                     return Err(Reported);
                 };
-                let a = self.contact_part(a, env)?;
-                let b = self.contact_part(b, env)?;
+                let a = self.one_part(Builtin::Contact, a, env)?;
+                let b = self.one_part(Builtin::Contact, b, env)?;
                 self.contact(a, b, env, span).map(Value::Patch)
             }
+            Builtin::EdgeToEdge => self.eval_meeting(Builtin::EdgeToEdge, args, env),
             Builtin::Split => self.split(args, env, span),
             Builtin::Cover => self.cover(args, env, span),
             Builtin::Overlay => {
@@ -1525,6 +1564,7 @@ impl Solver<'_> {
                 width: length(self, "width")?.ok_or(Reported)?,
                 thickness: length(self, "thickness")?.ok_or(Reported)?,
             })),
+            Builtin::RegionBox => self.region_box(args, env),
             Builtin::Cylinder => Ok(Value::Envelope(Envelope::Cylinder {
                 diameter: length(self, "diameter")?.ok_or(Reported)?,
                 length: length(self, "length")?.ok_or(Reported)?,
@@ -1694,6 +1734,37 @@ impl Solver<'_> {
         }
     }
 
+    /// `box(across:, up:, deep:)`: the root region, from its low corner at
+    /// the origin. Each size is more than zero.
+    fn region_box(&mut self, args: &[stave_model::defs::Setting], env: &Env<'_>) -> Solved<Value> {
+        let mut sizes = [ExactLength::ZERO; 3];
+        for (slot, name) in sizes.iter_mut().zip(Builtin::REGION_BOX_ARGUMENTS) {
+            let Some(expr) = Self::arg(args, name) else {
+                return Err(Reported);
+            };
+            let size = self.eval_length(expr, env)?;
+            if size <= ExactLength::ZERO {
+                return Err(self.error(
+                    Code::OutOfRange,
+                    format!(
+                        "'{name}' must be more than 0mm, found {}",
+                        Value::Length(size)
+                    ),
+                    env.file,
+                    expr.span,
+                    format!("make '{name}' more than 0mm: the box needs a size in each direction"),
+                ));
+            }
+            *slot = size;
+        }
+        let [across, up, deep] = sizes;
+        let zero = ExactLength::ZERO;
+        Ok(Value::Regions(vec![RegionValue {
+            bounds: ExactBox::new((zero, across), (zero, up), (zero, deep)),
+            origin: RegionOrigin::Plain,
+        }]))
+    }
+
     fn split(
         &mut self,
         args: &[stave_model::defs::Setting],
@@ -1745,25 +1816,117 @@ impl Solver<'_> {
             ));
         };
         let size = high.checked_sub(low).ok_or(Reported)?;
-        let n = i64::try_from(count).map_err(|_| Reported)?;
-        let piece = size.checked_div(Rational::from(n)).ok_or(Reported)?;
+        let shares = match Self::arg(args, "shares") {
+            Some(expr) => self.shares(expr, env, count)?,
+            None => vec![Rational::from(1_i64); count],
+        };
+        let total = shares
+            .iter()
+            .try_fold(Rational::from(0_i64), |sum, share| sum.checked_add(*share))
+            .ok_or(Reported)?;
         let mut pieces = Vec::new();
-        for index in 0..count {
-            let i = i64::try_from(index).map_err(|_| Reported)?;
-            let start = low
-                .checked_add(piece.checked_mul(Rational::from(i)).ok_or(Reported)?)
-                .ok_or(Reported)?;
+        let mut start = low;
+        let mut before = Rational::from(0_i64);
+        for (index, share) in shares.iter().enumerate() {
+            before = before.checked_add(*share).ok_or(Reported)?;
+            // Each end is worked out from the whole, so the last piece ends
+            // exactly at the region's end.
             let end = if index + 1 == count {
                 high
             } else {
-                start.checked_add(piece).ok_or(Reported)?
+                let fraction = before.checked_div(total).ok_or(Reported)?;
+                low.checked_add(size.checked_mul(fraction).ok_or(Reported)?)
+                    .ok_or(Reported)?
             };
             pieces.push(RegionValue {
                 bounds: bounds.with(axis, start, end),
                 origin: RegionOrigin::Split { axis, index, count },
             });
+            start = end;
         }
         Ok(Value::Regions(pieces))
+    }
+
+    /// `shares: [n, ...]` of a split into `count` pieces: one share for
+    /// each piece, each more than zero, for an array whose count can't
+    /// change (grammar, "Regions").
+    fn shares(&mut self, expr: &RExpr, env: &Env<'_>, count: usize) -> Solved<Vec<Rational>> {
+        if let Some((def, _)) = env.array
+            && let Some(ArrayDef::Count(counted)) = self.model.defs.array(def)
+            && self.reads_ranged_param(counted)
+        {
+            return Err(self.error(
+                Code::TypeMismatch,
+                "'shares' needs a fixed number of pieces, found a count that can change",
+                env.file,
+                expr.span,
+                "give the array a fixed count or labels, or leave out shares: to split into equal pieces",
+            ));
+        }
+        let items = match self.eval(expr, env)? {
+            Value::List(items) => items,
+            _ => return Err(Reported),
+        };
+        if items.len() != count {
+            let name = env
+                .array
+                .and_then(|(def, _)| self.model.defs.decl(def))
+                .map(|decl| decl.name.clone())
+                .unwrap_or_default();
+            return Err(self.error(
+                Code::TypeMismatch,
+                format!(
+                    "'shares' needs {count} numbers, one for each piece of {name}, found {}",
+                    items.len()
+                ),
+                env.file,
+                expr.span,
+                format!("give {count} shares, one for each piece in label order"),
+            ));
+        }
+        let mut shares = Vec::with_capacity(count);
+        for (index, item) in items.into_iter().enumerate() {
+            // The share as written, when the list is written out.
+            let span = match &expr.kind {
+                RExprKind::List(written) => written.get(index).map_or(expr.span, |e| e.span),
+                _ => expr.span,
+            };
+            let share = match item {
+                Value::Count(n) | Value::Ratio(n) => n,
+                _ => return Err(Reported),
+            };
+            if share <= Rational::from(0_i64) {
+                return Err(self.error(
+                    Code::OutOfRange,
+                    format!(
+                        "'shares' must each be more than 0, found {}",
+                        Value::Count(share)
+                    ),
+                    env.file,
+                    span,
+                    "every piece needs some room: give each share a number more than 0",
+                ));
+            }
+            shares.push(share);
+        }
+        Ok(shares)
+    }
+
+    /// `true` when an array's count reads a param with a `within` domain,
+    /// so the count can change from one checked value to another.
+    fn reads_ranged_param(&self, expr: &RExpr) -> bool {
+        match &expr.kind {
+            RExprKind::Symbol(Symbol::Def(DefId::Param(param))) => self
+                .model
+                .defs
+                .param(*param)
+                .is_some_and(|def| def.domain.is_some()),
+            RExprKind::Unary { operand, .. } => self.reads_ranged_param(operand),
+            RExprKind::Binary { lhs, rhs, .. } => {
+                self.reads_ranged_param(lhs) || self.reads_ranged_param(rhs)
+            }
+            _ => false,
+        }
     }
 
     fn cover(

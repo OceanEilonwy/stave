@@ -16,14 +16,21 @@
 use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
 use stave_model::solved::{AssemblyId, HardwareId, JointId, PairMember, PartId, SolvedDesign};
+use stave_modules::{DiskFiles, FileSource};
 use stave_scene::{Item, SceneEntry, SceneGraph};
 
+use crate::change::{Change, ChangeError, ChangeRequest, MirrorOffer};
 use crate::check::{Checked, Outcome, Summary};
+use crate::editing::{Commit, Edit, EditCommand, EditEvent, FileEdit, Rejection, WriteEdits};
 use crate::empty::Reason;
 use crate::focus::Target;
+use crate::gripping::{FoundStops, GripList, GripsTicket, StopsJob};
+use crate::scratch::DiskWriter;
 use crate::view::Problem;
 
 /// The most places the back and forward lists keep.
@@ -482,6 +489,9 @@ pub enum Command {
     Check,
     /// Build the plan (Ctrl+B): checks first.
     Build,
+    /// Drive the edit in progress (`docs/editing.md`): start one from a
+    /// selection, choose and fill in a candidate, add it or cancel it.
+    Edit(EditCommand),
 }
 
 /// What changed, for the views to redraw.
@@ -514,6 +524,8 @@ pub enum Event {
     CheckStarted(CheckTicket),
     /// Show this message.
     Notice(Notice),
+    /// [`Session::edit`] changed in this way.
+    Edit(EditEvent),
 }
 
 /// Which way [`Command::NextProblem`] and [`Command::PreviousProblem`]
@@ -529,6 +541,29 @@ enum Step {
 enum Queued {
     Nothing,
     Again,
+}
+
+/// Where the edit in progress reads the project and writes its commits.
+struct EditPorts {
+    /// What an edit is started from: the disk, or the editor's buffers.
+    files: Arc<dyn FileSource + Send + Sync>,
+    /// Where Add writes.
+    writer: Box<dyn WriteEdits>,
+}
+
+impl std::fmt::Debug for EditPorts {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EditPorts").finish_non_exhaustive()
+    }
+}
+
+impl Default for EditPorts {
+    fn default() -> Self {
+        EditPorts {
+            files: Arc::new(DiskFiles),
+            writer: Box::new(DiskWriter),
+        }
+    }
 }
 
 /// One open project.
@@ -549,6 +584,19 @@ pub struct Session {
     latest: Option<Rc<Checked>>,
     /// The last result that solved: what the 3D view shows.
     shown: Option<Rc<Checked>>,
+    /// The edit in progress.
+    edit: Option<Edit>,
+    /// The change of the design in progress (never at the same time as
+    /// an edit).
+    change: Option<Change>,
+    /// What the last commit wrote.
+    last_commit: Vec<FileEdit>,
+    /// The grips listed for the selection, if any.
+    grips: Option<GripList>,
+    /// The ticket of the next listing of grips.
+    next_grips: u64,
+    /// Where it reads and writes.
+    ports: EditPorts,
 }
 
 impl Session {
@@ -568,7 +616,199 @@ impl Session {
             queued: Queued::Nothing,
             latest: None,
             shown: None,
+            edit: None,
+            change: None,
+            last_commit: Vec::new(),
+            grips: None,
+            next_grips: 0,
+            ports: EditPorts::default(),
         }
+    }
+
+    /// Where an edit started from now on reads the project: the disk by
+    /// default; a window passes its buffers' overlay
+    /// ([`stave_ide::Buffers::overlay`]) so unsaved text is what is edited.
+    pub fn set_edit_files(&mut self, files: Arc<dyn FileSource + Send + Sync>) {
+        self.ports.files = files;
+    }
+
+    /// Where Add writes: the disk by default; a window passes its open
+    /// buffers, so the editor and its undo see the change.
+    pub fn set_edit_writer(&mut self, writer: Box<dyn WriteEdits>) {
+        self.ports.writer = writer;
+    }
+
+    /// The edit in progress, if any.
+    pub fn edit(&self) -> Option<&Edit> {
+        self.edit.as_ref()
+    }
+
+    /// The change of the design in progress (a repeat, a shares grip, a
+    /// mirror, a held rule, a removal, a rename), if any.
+    pub fn change(&self) -> Option<&Change> {
+        self.change.as_ref()
+    }
+
+    /// The files the last commit (an edit's or a change's Add) wrote, in
+    /// path order; empty before the first.
+    pub fn last_commit(&self) -> &[FileEdit] {
+        &self.last_commit
+    }
+
+    /// What adding the mirror image of the assembly `item` would do, when
+    /// it has one: the offer the card makes, read from the project as the
+    /// edit files give it. `None` when it has none or the project doesn't
+    /// place.
+    pub fn mirror_offer(&self, item: &str) -> Option<MirrorOffer> {
+        let opened = crate::open_with(&self.folder, self.ports.files.as_ref()).ok()?;
+        crate::change::mirror_offer(&self.folder, self.ports.files.as_ref(), &opened, item)
+    }
+
+    /// What the card of the item of the project by this name offers: how
+    /// many pieces it is, whether the repeat controls apply, and what "And
+    /// the other side" does ([`crate::item_offer::item_offer`]), read from
+    /// the project as the edit files give it. `None` when it has no design.
+    pub fn item_offer(&self, item: &str) -> Option<crate::item_offer::ItemOffer> {
+        let opened = crate::open_with(&self.folder, self.ports.files.as_ref()).ok()?;
+        crate::item_offer::item_offer(&self.folder, self.ports.files.as_ref(), &opened, item)
+    }
+
+    /// The grips listed by the last [`EditCommand::ListGrips`], with their
+    /// stops as far as found; `None` before a listing and after a commit.
+    pub fn grips(&self) -> Option<&GripList> {
+        self.grips.as_ref()
+    }
+
+    /// The search for the stops of the listed grips not searched yet, to
+    /// run off the main thread ([`StopsJob::run`]); hand each answer to
+    /// [`Session::grip_stops_found`]. Set its cancel flag when the
+    /// selection changes. `None` with no grips listed.
+    pub fn grip_stops_job(&self) -> Option<StopsJob> {
+        self.grips.as_ref().map(GripList::stops_job)
+    }
+
+    /// Takes one grip's stops from a [`StopsJob`]: the grip's range
+    /// becomes the two last good values. An answer for an older listing is
+    /// dropped.
+    pub fn grip_stops_found(&mut self, found: FoundStops) -> Vec<Event> {
+        let index = found.index;
+        if self.grips.as_mut().is_some_and(|grips| grips.found(found)) {
+            vec![Event::Edit(EditEvent::GripStopsFound(index))]
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// Searches the stops of the listed grips here and now (of the grip at
+    /// `only`, or of every one not searched yet), stopping when `cancel`
+    /// is set: what a script does, where nothing else waits. A window runs
+    /// [`Session::grip_stops_job`] off the main thread instead.
+    pub fn find_grip_stops(&mut self, only: Option<usize>, cancel: &AtomicBool) -> Vec<Event> {
+        let Some(job) = self.grip_stops_job() else {
+            return vec![Event::Edit(EditEvent::Rejected(Rejection::NoGrips))];
+        };
+        let job = match only {
+            Some(index) => job.only(index),
+            None => job,
+        };
+        let mut found = Vec::new();
+        let result = job.run(cancel, &mut |stops| found.push(stops));
+        let mut events = Vec::new();
+        for stops in found {
+            events.extend(self.grip_stops_found(stops));
+        }
+        if let Err(message) = result {
+            events.push(Event::Edit(EditEvent::Rejected(Rejection::CantStart(
+                message,
+            ))));
+        }
+        finish(events)
+    }
+
+    /// The distance between two things as the design on disk (or in the
+    /// editor's buffers) has it now: the value Hold offers before the user
+    /// types another ([`crate::hold::measured_distance`]).
+    ///
+    /// # Errors
+    ///
+    /// The project doesn't place, or the two can't be measured, in words.
+    pub fn measure(
+        &self,
+        first: &crate::hold::Measured,
+        second: &crate::hold::Measured,
+    ) -> Result<stave_lang::units::Length, String> {
+        let opened =
+            crate::open_with(&self.folder, self.ports.files.as_ref()).map_err(|e| e.to_string())?;
+        let design = opened
+            .design
+            .as_ref()
+            .ok_or_else(|| crate::editing::StartError::NotSolved.to_string())?;
+        crate::hold::measured_distance(design, first, second).map_err(|e| e.to_string())
+    }
+
+    /// The checks of the options of the chosen candidate's settings not
+    /// checked yet, to run off the main thread
+    /// ([`crate::option_fits::OptionsJob::run`]); hand each answer to
+    /// [`Session::option_fit_found`]. Set its cancel flag when the
+    /// candidate changes (any [`EditEvent::VerdictChanged`],
+    /// [`EditEvent::SettingChanged`] and the like): its answers would be
+    /// dropped. `None` with no candidate chosen.
+    pub fn options_job(&self) -> Option<crate::option_fits::OptionsJob> {
+        self.edit.as_ref().and_then(Edit::options_job)
+    }
+
+    /// Takes one option's fit from an options job; says
+    /// [`EditEvent::OptionsChanged`] when it changed the card. An answer
+    /// for the candidate as it was before a change is dropped.
+    pub fn option_fit_found(&mut self, found: crate::option_fits::FoundFit) -> Vec<Event> {
+        if self
+            .edit
+            .as_mut()
+            .is_some_and(|edit| edit.option_found(found))
+        {
+            vec![Event::Edit(EditEvent::OptionsChanged)]
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// Checks the options of the chosen candidate's settings here and now
+    /// (of the setting named `only`, or of every one), stopping when
+    /// `cancel` is set: what a script does, where nothing else waits. A
+    /// window runs [`Session::options_job`] off the main thread instead.
+    pub fn check_setting_options(&mut self, only: Option<&str>, cancel: &AtomicBool) -> Vec<Event> {
+        let Some(job) = self.options_job() else {
+            return vec![Event::Edit(EditEvent::Rejected(Rejection::NothingChosen))];
+        };
+        let job = match only {
+            Some(setting) => job.only(setting),
+            None => job,
+        };
+        let mut found = Vec::new();
+        let result = job.run(cancel, &mut |fit| found.push(fit));
+        let mut events = Vec::new();
+        for fit in found {
+            events.extend(self.option_fit_found(fit));
+        }
+        if let Err(message) = result {
+            events.push(Event::Edit(EditEvent::Rejected(Rejection::CantStart(
+                message,
+            ))));
+        }
+        finish(events)
+    }
+
+    /// Works out whether each entry of the edit's menu applies, as
+    /// [`EditCommand::CheckMenu`] does, but stops when `cancel` is set
+    /// (the entries reached keep their answer).
+    pub fn check_edit_menu(&mut self, cancel: &AtomicBool) -> Vec<Event> {
+        let mut events = Vec::new();
+        if let Some(edit) = self.edit.as_mut()
+            && let Ok(true) = edit.check_menu(cancel)
+        {
+            events.push(Event::Edit(EditEvent::MenuChanged));
+        }
+        finish(events)
     }
 
     // ---- reading ----
@@ -892,8 +1132,260 @@ impl Session {
                     self.request_check(&mut events);
                 }
             }
+            Command::Edit(command) => self.edit_command(command, &mut events),
         }
         finish(events)
+    }
+
+    /// Does an edit command: starting, adding and cancelling here, and the
+    /// changes of the design; the rest in the edit itself.
+    fn edit_command(&mut self, command: EditCommand, events: &mut Vec<Event>) {
+        match command {
+            EditCommand::Start(picked) => {
+                self.drop_edit(events);
+                match Edit::start(&self.folder, self.ports.files.clone(), picked) {
+                    Ok(edit) => {
+                        self.edit = Some(edit);
+                        events.push(Event::Edit(EditEvent::Started));
+                    }
+                    Err(error) => events.push(Event::Edit(EditEvent::Rejected(
+                        Rejection::CantStart(error.to_string()),
+                    ))),
+                }
+            }
+            EditCommand::Cancel => {
+                if !self.drop_edit(events) {
+                    events.push(Event::Edit(EditEvent::Rejected(Rejection::NoEdit)));
+                }
+            }
+            EditCommand::Add => {
+                let started = std::time::Instant::now();
+                let result = if let Some(change) = self.change.as_mut() {
+                    change.commit(self.ports.writer.as_mut())
+                } else if let Some(edit) = self.edit.as_mut() {
+                    edit.commit(self.ports.writer.as_mut())
+                } else {
+                    events.push(Event::Edit(EditEvent::Rejected(Rejection::NoEdit)));
+                    return;
+                };
+                match result {
+                    Ok(commit) => self.committed(commit, started, events),
+                    Err(crate::editing::CommitError::NothingChosen) => {
+                        events.push(Event::Edit(EditEvent::Rejected(Rejection::NothingChosen)));
+                    }
+                    Err(crate::editing::CommitError::DoesNotFit) => {
+                        events.push(Event::Edit(EditEvent::Rejected(Rejection::DoesNotFit)));
+                    }
+                    Err(error @ crate::editing::CommitError::Write { .. }) => events.push(
+                        Event::Edit(EditEvent::Rejected(Rejection::CantWrite(error.to_string()))),
+                    ),
+                }
+            }
+            EditCommand::RepeatItem { item, count, axis } => self.start_change(
+                ChangeRequest::Repeat {
+                    item,
+                    count,
+                    axis,
+                    shares: None,
+                },
+                events,
+            ),
+            EditCommand::MoveShares {
+                region,
+                lower,
+                boundary,
+            } => self.start_change(
+                ChangeRequest::MoveShares {
+                    region,
+                    lower,
+                    boundary,
+                },
+                events,
+            ),
+            EditCommand::Mirror(item) => self.start_change(ChangeRequest::Mirror { item }, events),
+            EditCommand::MirrorSplit { item, axis } => {
+                self.start_change(ChangeRequest::MirrorSplit { item, axis }, events);
+            }
+            EditCommand::SetParam { item, param, value } => self.start_change(
+                ChangeRequest::SetParam {
+                    item,
+                    param,
+                    value: crate::candidates::print::expr_text(&value),
+                },
+                events,
+            ),
+            EditCommand::Hold(request) => self.start_change(ChangeRequest::Hold(request), events),
+            EditCommand::RepeatPart {
+                part,
+                count,
+                axis,
+                from,
+                to,
+            } => self.start_change(
+                ChangeRequest::RepeatPart {
+                    part,
+                    count,
+                    axis,
+                    from,
+                    to,
+                },
+                events,
+            ),
+            EditCommand::MakeSolved { param, low, high } => self.start_change(
+                ChangeRequest::ParamKind {
+                    param,
+                    kind: crate::param_kind::NewParamKind::Solved {
+                        low: crate::candidates::print::expr_text(&low),
+                        high: crate::candidates::print::expr_text(&high),
+                    },
+                },
+                events,
+            ),
+            EditCommand::MakePlain(param) => self.start_change(
+                ChangeRequest::ParamKind {
+                    param,
+                    kind: crate::param_kind::NewParamKind::Plain,
+                },
+                events,
+            ),
+            EditCommand::ListGrips(selection) => {
+                let ticket = GripsTicket(self.next_grips);
+                self.next_grips = self.next_grips.saturating_add(1);
+                match GripList::list(&self.folder, self.ports.files.clone(), selection, ticket) {
+                    Ok(grips) => {
+                        self.grips = Some(grips);
+                        events.push(Event::Edit(EditEvent::GripsChanged));
+                    }
+                    Err(message) => events.push(Event::Edit(EditEvent::Rejected(
+                        Rejection::CantStart(message),
+                    ))),
+                }
+            }
+            EditCommand::BeginDrag(index) => {
+                self.begin_drag(index, events);
+            }
+            EditCommand::DragTo(target) => match self.change.as_mut() {
+                Some(change) if change.is_drag() => {
+                    events.extend(change.grip_move(target).into_iter().map(Event::Edit));
+                }
+                Some(_) | None => {
+                    events.push(Event::Edit(EditEvent::Rejected(Rejection::NotDragging)));
+                }
+            },
+            EditCommand::PickParam(param) => match self.change.as_mut() {
+                Some(change) if change.is_drag() => {
+                    events.extend(change.grip_pick(param).into_iter().map(Event::Edit));
+                }
+                Some(_) | None => {
+                    events.push(Event::Edit(EditEvent::Rejected(Rejection::NotDragging)));
+                }
+            },
+            EditCommand::TypeGripValue { grip, value } => {
+                if self.begin_drag(grip, events)
+                    && let Some(change) = self.change.as_mut()
+                {
+                    events.extend(change.grip_move(value).into_iter().map(Event::Edit));
+                }
+            }
+            EditCommand::Remove(item) => self.start_change(ChangeRequest::Remove { item }, events),
+            EditCommand::RenameItem { item, to } => {
+                self.start_change(ChangeRequest::Rename { item, to }, events);
+            }
+            EditCommand::IncludeDependants => match self.change.as_mut() {
+                Some(change) => {
+                    events.extend(change.include_dependants().into_iter().map(Event::Edit));
+                }
+                None => events.push(Event::Edit(EditEvent::Rejected(
+                    Rejection::NothingToInclude,
+                ))),
+            },
+            EditCommand::ApplyFix { problem, fix } if self.change.is_some() => {
+                if let Some(change) = self.change.as_mut() {
+                    events.extend(change.apply_fix(problem, fix).into_iter().map(Event::Edit));
+                }
+            }
+            command @ (EditCommand::CheckMenu
+            | EditCommand::Choose(_)
+            | EditCommand::Bind(_)
+            | EditCommand::Set { .. }
+            | EditCommand::Rename(_)
+            | EditCommand::PutBack
+            | EditCommand::Repeat(_)
+            | EditCommand::ApplyFix { .. }) => match self.edit.as_mut() {
+                Some(edit) => events.extend(edit.apply(command).into_iter().map(Event::Edit)),
+                None => events.push(Event::Edit(EditEvent::Rejected(Rejection::NoEdit))),
+            },
+        }
+    }
+
+    /// Starts a drag on the listed grip at `index`, dropping what was in
+    /// progress; `false`, with a rejection, when there is no such grip.
+    fn begin_drag(&mut self, index: usize, events: &mut Vec<Event>) -> bool {
+        let Some(grips) = self.grips.as_ref() else {
+            events.push(Event::Edit(EditEvent::Rejected(Rejection::NoGrips)));
+            return false;
+        };
+        let Some(listed) = grips.grips().get(index) else {
+            events.push(Event::Edit(EditEvent::Rejected(Rejection::NoSuchGrip(
+                index,
+            ))));
+            return false;
+        };
+        let change = Change::for_grip(
+            &self.folder,
+            self.ports.files.clone(),
+            grips.shared_base(),
+            index,
+            listed.grip.clone(),
+        );
+        self.drop_edit(events);
+        self.change = Some(change);
+        events.push(Event::Edit(EditEvent::ChangeStarted));
+        true
+    }
+
+    /// Drops the edit or change in progress, saying so; `false` when there
+    /// was none.
+    fn drop_edit(&mut self, events: &mut Vec<Event>) -> bool {
+        let dropped = self.edit.take().is_some() | self.change.take().is_some();
+        if dropped {
+            events.push(Event::Edit(EditEvent::Cancelled));
+        }
+        dropped
+    }
+
+    /// Starts a change of the design, dropping what was in progress.
+    fn start_change(&mut self, request: ChangeRequest, events: &mut Vec<Event>) {
+        self.drop_edit(events);
+        match Change::start(&self.folder, self.ports.files.clone(), request) {
+            Ok(change) => {
+                self.change = Some(change);
+                events.push(Event::Edit(EditEvent::ChangeStarted));
+                events.push(Event::Edit(EditEvent::VerdictChanged));
+            }
+            Err(error @ (ChangeError::Start(_) | ChangeError::Unwritable(_))) => events.push(
+                Event::Edit(EditEvent::Rejected(Rejection::CantStart(error.to_string()))),
+            ),
+        }
+    }
+
+    /// Shows the design a commit made, as after a check.
+    fn committed(&mut self, commit: Commit, started: std::time::Instant, events: &mut Vec<Event>) {
+        self.edit = None;
+        self.change = None;
+        // The grips were listed from the design as it was.
+        if self.grips.take().is_some() {
+            events.push(Event::Edit(EditEvent::GripsChanged));
+        }
+        self.last_commit = commit.files;
+        events.push(Event::Edit(EditEvent::Committed));
+        let checked = crate::check::checked(&self.folder, commit.opened, started);
+        let verdict = Verdict::Checked(checked.summary);
+        self.adopt(Rc::new(checked), events);
+        if self.running.is_none() {
+            self.status = CheckStatus::Done(verdict);
+            events.push(Event::CheckStatusChanged);
+        }
     }
 
     /// Hands back a check's outcome. A stale run's outcome (an older ticket
@@ -915,8 +1407,15 @@ impl Session {
             }
             Outcome::CantOpen { message, .. } => Verdict::CantOpen(message),
         };
+        let cant_open_first = matches!(verdict, Verdict::CantOpen(_)) && self.latest().is_none();
         self.status = CheckStatus::Done(verdict);
         events.push(Event::CheckStatusChanged);
+        // With no design in yet, what the view shows changes from
+        // "Checking…" to why the folder can't be opened (an empty folder
+        // included): said as a changed result so the window redraws it.
+        if cant_open_first {
+            events.push(Event::ResultChanged);
+        }
         if self.queued == Queued::Again {
             self.queued = Queued::Nothing;
             self.request_check(&mut events);

@@ -237,9 +237,12 @@ fn a_folder_that_cant_be_read_says_so() {
     let ticket = started(&session.apply(Command::Check)).unwrap();
     let outcome = check::run(&folder);
     assert!(matches!(outcome, Outcome::CantOpen { .. }));
-    session.finish_check(ticket, outcome);
+    let events = session.finish_check(ticket, outcome);
     assert_eq!(session.check_status().pill().label, "Can't open");
     assert!(session.drawable().is_none());
+    // The view leaves "Checking…" for why: the window redraws on a
+    // changed result, so one is said.
+    assert!(events.contains(&Event::ResultChanged));
 }
 
 #[test]

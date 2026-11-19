@@ -1,0 +1,7 @@
+# The Case chosen for the envelope, its wood picked, and its joinery's
+# list opened: each option checked, the ones that fit first, the refused
+# ones greyed after them with the checker's reason.
+select region envelope
+choose casework.Case
+set panel_stock = oak_19
+options joinery

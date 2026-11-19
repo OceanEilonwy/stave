@@ -1,0 +1,9 @@
+# A click in the space above the divider: FramePanelDoor, hinged on the
+# left side (a click on its inside face through the space), the overlay
+# and the wood typed.
+select region divider.above
+choose casework.FramePanelDoor
+point face case.side[left].right
+set mount = overlay(left: 18mm, right: 18mm, top: -1.5mm, bottom: 8mm, meeting: -0.75mm)
+set frame = oak_19
+set panel_stock = oak_6

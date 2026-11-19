@@ -1,4 +1,5 @@
 // expect: error[motion] lid.panel hits back when lid is opened past 109.9deg
+// fix: patch "Open no further than 109.9deg" { set Lid.hinges.opening_angle = 109.9deg }
 stave 1
 
 // The lid is set 10mm in from the back of the box, so its hinge pins sit

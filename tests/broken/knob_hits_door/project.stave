@@ -1,4 +1,5 @@
 // expect: error[motion] door_r.panel hits door_l.handle's knob when door_r is opened past 106.8deg
+// fix: patch "Open no further than 106.8deg" { set Door.hinges.opening_angle = 106.8deg }
 stave 1
 
 // Two bays side by side, each door hinged on its left. The left door's knob

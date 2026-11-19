@@ -9,26 +9,45 @@
 //! stave view examples/clothing_cabinet      # the 3D viewer (stave-gtk)
 //! stave export examples/clothing_cabinet --gltf cabinet.glb
 //! stave export examples/clothing_cabinet --gltf apart.glb --scene drawer_bench
+//! stave edit examples/clothing_cabinet --patch shelf.stave   # try a patch
+//! stave edit examples/clothing_cabinet --patch shelf.stave --commit
+//! stave edit examples/clothing_cabinet_assemblies --region divider.above   # the menu
+//! stave edit examples/clothing_cabinet_assemblies --region divider.above \
+//!     --choose Shelf --bind "parts side_l side_r" --set headroom=400mm --commit
+//! stave edit examples/clothing_cabinet_assemblies --script steps.txt
+//! stave edit new_chest --script build.txt   # a script can start a new project
 //! ```
 //!
 //! `check` runs the whole pipeline (through `stave-app`) on a module
 //! folder: a folder that holds `.stave` files directly. Given a folder
 //! without any, it checks every module folder below it, in sorted order so
 //! output is the same on every run. `fmt` searches a directory recursively
-//! for `.stave` files. Exit codes: 0 when everything is fine, 1
-//! when `check` finds errors or `fmt --check` finds a file to reformat (`fmt`
+//! for `.stave` files. `edit` tries each patch of a patch file on a
+//! scratch copy of the project, in order, and stops at the first one that
+//! is refused (see [`edit`] for its output). Exit codes: 0 when
+//! everything is fine, 1 when `check` finds errors, `edit` refuses a
+//! patch or `fmt --check` finds a file to reformat (`fmt`
 //! skips files with syntax errors, which are `check`'s business), 2 when
 //! the command itself fails (a missing path, an unreadable file).
 
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::sync::atomic::AtomicBool;
 
 use anyhow::{Context as _, Result, bail};
 use clap::{Parser, Subcommand};
-use stave_lang::{FormatError, Severity, SourceMap, format_file, render_diagnostics};
+use stave_app::edit::Verdict;
+use stave_app::editing::commit_tried;
+use stave_app::scratch::{DiskWriter, EditBase, one_patch_each};
+use stave_lang::ast;
+use stave_lang::{
+    FormatError, Parse, Severity, SourceMap, format_file, parse_patch_file, render_diagnostics,
+};
+use stave_modules::DiskFiles;
 
 mod dump;
+mod script;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -85,6 +104,55 @@ enum Command {
         #[arg(long, value_name = "AMOUNT")]
         explode: Option<f32>,
     },
+    /// Edit a project without a window. With --patch, try the patches of
+    /// a patch file in order: each is applied to a scratch copy, which is
+    /// checked; prints whether each fits or is refused, and why, and stops
+    /// at the first refusal. With a selection (--region, --face,
+    /// --between), list what can go there, or --choose one, fill it in and
+    /// --commit it. With --script, run a file of such steps.
+    #[command(group(
+        clap::ArgGroup::new("what")
+            .required(true)
+            .args(["patch", "script", "region", "face", "between"])
+    ))]
+    Edit {
+        /// The project folder.
+        path: PathBuf,
+        /// The patch file: one or more `patch "..." { ... }` blocks.
+        #[arg(long, value_name = "FILE")]
+        patch: Option<PathBuf>,
+        /// A script of edit steps, one a line: new/import/stock/tools/create
+        /// to start a project, select/choose/bind/set/name/repeat to add,
+        /// repeat/shares/mirror/hold/remove/rename to change, fix, show,
+        /// add, cancel (see docs/editing.md, "Scripts").
+        #[arg(long, value_name = "FILE")]
+        script: Option<PathBuf>,
+        /// Select a space by its region's name: `divider.above`.
+        #[arg(long, value_name = "NAME")]
+        region: Option<String>,
+        /// Select a face of a part: `door_l.stile[hinge].front`.
+        #[arg(long, value_name = "PART.FACE")]
+        face: Option<String>,
+        /// Select the gap between two facing parts.
+        #[arg(long, num_args = 2, value_names = ["PART", "PART"])]
+        between: Option<Vec<String>>,
+        /// Choose a menu entry: `Shelf`, or `casework.Shelf`.
+        #[arg(long, value_name = "ENTRY", conflicts_with_all = ["patch", "script"])]
+        choose: Option<String>,
+        /// Point at what the card asks for: `parts side_l side_r`,
+        /// `region <name>`, `face <part>.<face>`, `between <part> <part>`.
+        #[arg(long, value_name = "SELECTION", requires = "choose")]
+        bind: Vec<String>,
+        /// Set a setting: `headroom=400mm`.
+        #[arg(long, value_name = "NAME=VALUE", requires = "choose")]
+        set: Vec<String>,
+        /// Name the new item, in place of the generated name.
+        #[arg(long, value_name = "NAME", requires = "choose")]
+        name: Option<String>,
+        /// Write the files: each patch that fits, or the chosen entry.
+        #[arg(long, conflicts_with = "script")]
+        commit: bool,
+    },
     /// Lay out .stave files canonically, in place. Files with syntax errors
     /// are skipped.
     Fmt {
@@ -102,6 +170,35 @@ fn main() -> ExitCode {
         Command::Check { path } => check(&path),
         Command::Dump { path, json } => dump(&path, json),
         Command::Fmt { path, check } => fmt(&path, check),
+        Command::Edit {
+            path,
+            patch,
+            script,
+            region,
+            face,
+            between,
+            choose,
+            bind,
+            set,
+            name,
+            commit,
+        } => match (patch, script) {
+            (Some(patch), _) => edit(&path, &patch, commit),
+            (None, Some(script)) => edit_script(&path, &script),
+            (None, None) => edit_steps(
+                &path,
+                Steps {
+                    region,
+                    face,
+                    between,
+                    choose,
+                    bind,
+                    set,
+                    name,
+                    commit,
+                },
+            ),
+        },
         Command::View { path, scene } => view(&path, scene.as_deref()),
         Command::Export {
             path,
@@ -317,6 +414,172 @@ fn export(path: &Path, output: &Path, scene: Option<&str>, explode: Option<f32>)
         graph.nodes.len()
     )?;
     Ok(true)
+}
+
+/// Tries each patch of the patch file at `patch_path` on the project in
+/// `folder`, in order, each on top of the ones before it, and stops at the
+/// first refusal. With `commit`, writes the files of each patch that fits
+/// before trying the next. Prints to standard output, for each patch tried:
+///
+/// ```text
+/// patch "Add a shelf": fits
+///   changes cabinet/carcass.stave        (wrote, with --commit; creates/created for a new file)
+/// <each warning the patch causes, as `stave check` prints it>
+/// patch "Through the divider": refused
+/// <each error the patch causes, as `stave check` prints it>
+/// checked 2 of 3 patches: 1 fits, 1 refused
+/// ```
+///
+/// A patch is named by its string; a patch file with syntax errors is
+/// tried whole and named by its path. `Ok(false)` on a refusal.
+fn edit(folder: &Path, patch_path: &Path, commit: bool) -> Result<bool> {
+    let text = read(patch_path)?;
+    let name = patch_path.display().to_string();
+    let mut sources = SourceMap::new();
+    let file = sources.add(name.as_str(), text.as_str())?;
+    let patches = one_patch_each(file, &parse_patch_file(file, &text));
+    let mut base = EditBase::new(folder, &DiskFiles)
+        .with_context(|| format!("can't open '{}'", folder.display()))?;
+    let cancel = AtomicBool::new(false);
+    let mut stdout = std::io::stdout().lock();
+    let (mut fit, mut refused) = (0_usize, 0_usize);
+    let mut written = std::collections::BTreeSet::new();
+    for patch in &patches {
+        let tried = base
+            .try_patch(&name, patch, &cancel)
+            .with_context(|| format!("can't open '{}'", folder.display()))?;
+        let title = title(patch, &name);
+        match tried.verdict() {
+            Verdict::Fits(_) => {
+                writeln!(stdout, "{title}: fits")?;
+                fit += 1;
+                if commit {
+                    // The editor's one writer: it refuses a file that
+                    // changed on disk since the project was read.
+                    let files = commit_tried(base.opened(), &tried, patch, &mut DiskWriter)?;
+                    written.extend(files.into_iter().map(|file| file.path));
+                }
+                if tried.changed().is_empty() {
+                    writeln!(stdout, "  changes nothing")?;
+                }
+                for file in tried.changed() {
+                    let verb = match (commit, file.created) {
+                        (false, false) => "changes",
+                        (false, true) => "creates",
+                        (true, false) => "wrote",
+                        (true, true) => "created",
+                    };
+                    writeln!(stdout, "  {verb} {}", file.path.display())?;
+                }
+            }
+            Verdict::Refused(_) | Verdict::Checking => {
+                writeln!(stdout, "{title}: refused")?;
+                refused += 1;
+            }
+        }
+        write!(
+            stdout,
+            "{}",
+            render_diagnostics(tried.sources(), &tried.shown())
+        )?;
+        if refused > 0 {
+            break;
+        }
+        base.advance(tried)?;
+    }
+    let mut summary = format!(
+        "checked {} of {} {}: {fit} {}, {refused} refused",
+        fit + refused,
+        patches.len(),
+        plural(patches.len(), "patch", "patches"),
+        plural(fit, "fits", "fit"),
+    );
+    if commit {
+        summary.push_str(&format!(
+            ", wrote {} {}",
+            written.len(),
+            plural(written.len(), "file", "files")
+        ));
+    }
+    writeln!(stdout, "{summary}")?;
+    Ok(refused == 0)
+}
+
+/// `stave edit --script FILE`: runs the steps of a script file, echoing
+/// each before what it prints (see [`script`]). `Ok(false)` when a step
+/// fails.
+fn edit_script(folder: &Path, script_path: &Path) -> Result<bool> {
+    let steps = script::parse_script(&read(script_path)?)
+        .with_context(|| format!("in '{}'", script_path.display()))?;
+    script::run(folder, &steps, true, &mut std::io::stdout().lock())
+}
+
+/// The steps the flags of `stave edit` ask for.
+struct Steps {
+    region: Option<String>,
+    face: Option<String>,
+    between: Option<Vec<String>>,
+    choose: Option<String>,
+    bind: Vec<String>,
+    set: Vec<String>,
+    name: Option<String>,
+    commit: bool,
+}
+
+/// `stave edit` with a selection: lists the menu, or chooses an entry,
+/// fills it in, shows its card and with `--commit` writes it.
+fn edit_steps(folder: &Path, flags: Steps) -> Result<bool> {
+    let selection = match (flags.region, flags.face, flags.between) {
+        (Some(region), _, _) => script::Selection::Region(region),
+        (None, Some(face), _) => script::face(&face)?,
+        (None, None, Some(between)) => match between.as_slice() {
+            [first, second] => script::Selection::Between(first.clone(), second.clone()),
+            _ => bail!("--between takes two parts"),
+        },
+        (None, None, None) => bail!("name a selection: --region, --face or --between"),
+    };
+    let mut steps = vec![("select".to_owned(), script::Step::Select(selection))];
+    let Some(choose) = flags.choose else {
+        steps.push(("list".to_owned(), script::Step::List));
+        return script::run(folder, &steps, false, &mut std::io::stdout().lock());
+    };
+    steps.push(("choose".to_owned(), script::Step::Choose(choose)));
+    for bind in &flags.bind {
+        let words: Vec<&str> = bind.split_whitespace().collect();
+        steps.push((
+            "bind".to_owned(),
+            script::Step::Bind(script::parse_selection(&words)?),
+        ));
+    }
+    for set in &flags.set {
+        steps.push(("set".to_owned(), script::setting(set)?));
+    }
+    if let Some(name) = flags.name {
+        steps.push(("name".to_owned(), script::Step::Name(name)));
+    }
+    steps.push(("show".to_owned(), script::Step::Show));
+    if flags.commit {
+        steps.push(("commit".to_owned(), script::Step::Commit));
+    }
+    script::run(folder, &steps, false, &mut std::io::stdout().lock())
+}
+
+/// How `stave edit` names a patch: `patch "Add a shelf"`, or the patch
+/// file's path when it isn't one readable patch.
+fn title(patch: &Parse<ast::PatchFile>, file: &str) -> String {
+    let only = match patch.ast.as_ref().map(|ast| ast.patches.as_slice()) {
+        Some([only]) if !patch.has_errors() => only,
+        _ => return file.to_owned(),
+    };
+    // The string as written, quotes included.
+    let text = patch.syntax().to_string();
+    let span = only.summary.span;
+    let written = usize::try_from(span.start())
+        .ok()
+        .zip(usize::try_from(span.end()).ok())
+        .and_then(|(start, end)| text.get(start..end))
+        .unwrap_or("\"\"");
+    format!("patch {written}")
 }
 
 /// Formats every file, or with `check_only` reports the ones that would

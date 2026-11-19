@@ -373,8 +373,9 @@ pub struct ParamDef {
     pub default: Option<RExpr>,
     /// The allowed values.
     pub domain: Option<Domain>,
-    /// `true` when `locked`: smart edits must not change it.
-    pub locked: bool,
+    /// Its kind: plain, `locked` (smart edits must not change it) or
+    /// `solved` (the solver may solve for it).
+    pub kind: stave_lang::ast::ParamKind,
 }
 
 /// The values a param may take.
@@ -1690,6 +1691,19 @@ pub struct Defs {
     pub components: Vec<ComponentDef>,
     /// `scene`s.
     pub scenes: Vec<SceneDef>,
+    /// The text of each file of the project's own module, for the fixes
+    /// that rewrite part of an expression as written (grammar, "Fixes").
+    pub sources: std::collections::BTreeMap<FileId, String>,
+}
+
+impl Defs {
+    /// The text of the project's module at `span` of `file`; `None` for a
+    /// file of another module.
+    pub fn source_text(&self, file: FileId, span: Span) -> Option<&str> {
+        let start = usize::try_from(span.start()).ok()?;
+        let end = usize::try_from(span.end()).ok()?;
+        self.sources.get(&file)?.get(start..end)
+    }
 }
 
 macro_rules! getters {
@@ -1723,6 +1737,23 @@ getters! {
 }
 
 impl Defs {
+    /// How a patch names a declaration of the project's own module
+    /// (`module`): its name at the top level (`runner`), or the
+    /// component's name and its own inside a component (`Door.hinges`).
+    /// `None` for a declaration of another module, which a fix doesn't
+    /// edit (grammar, "Fixes").
+    pub fn patch_path(&self, id: DefId, module: ModuleId) -> Option<String> {
+        let decl = self.decl(id)?;
+        match decl.scope {
+            Scope::Module(found) => (found == module).then(|| decl.name.clone()),
+            Scope::Component(component) => {
+                let outer = &self.component(component)?.decl;
+                (outer.scope == Scope::Module(module))
+                    .then(|| format!("{}.{}", outer.name, decl.name))
+            }
+        }
+    }
+
     /// Where any declaration is.
     pub fn decl(&self, id: DefId) -> Option<&Decl> {
         match id {

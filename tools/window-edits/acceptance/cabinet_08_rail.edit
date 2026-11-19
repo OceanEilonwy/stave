@@ -1,0 +1,6 @@
+# The shelf's board selected, "Add something onto its bottom face":
+# HangingRail between the sides, the dowel stock.
+select face shelf.board.bottom
+choose casework.HangingRail
+bind between case.side[left] case.side[right]
+set rail_stock = oak_dowel_28

@@ -19,14 +19,23 @@
 
 mod chrome;
 mod dock;
+mod edit_card;
+mod edit_demo;
+mod edit_menu;
+mod edit_script;
+mod edit_view;
+mod edit_writer;
 mod editor;
 mod files;
 mod finder;
 mod focus_panel;
 mod focus_stage;
+#[cfg(test)]
+mod gtk_test;
 mod header;
 mod icons;
 mod inspector;
+mod new_project;
 mod panels;
 mod slider;
 mod style;
@@ -63,6 +72,7 @@ use stave_scene::{Look, NodeId, Orbit, Overlay, Posed};
 use crate::render::{Backdrop, Frame, Renderer};
 use chrome::MotionBar;
 use dock::Dock;
+pub use edit_demo::Showcase;
 use files::FilesPage;
 pub use files::Wish;
 use finder::{Choice, Finder};
@@ -103,6 +113,10 @@ const PIN_LIMIT: usize = 12;
 /// How much room a chosen part is framed with: the camera stands this many
 /// times farther back than the tightest fit, so what is round it shows.
 const FRAME_ROOM: f32 = 1.6;
+
+/// The space kept clear round what the editing puts on the 3D view (its
+/// menu, cards, handles and labels), in logical pixels.
+const EDGE: i32 = 14;
 
 /// The light or dark style.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -193,6 +207,12 @@ pub struct Options {
     pub wish: Wish,
     /// Where the camera starts (screenshots of a close view).
     pub camera: StartCamera,
+    /// Show the editing menu or card from the contract's fixture.
+    pub edit_fixture: Option<edit_demo::Showcase>,
+    /// Editing steps to run once the design is drawn (screenshots).
+    pub edit_script: Option<PathBuf>,
+    /// Open the new project dialog.
+    pub new_project: bool,
 }
 
 /// Where the 3D view's camera starts, from the command line.
@@ -357,6 +377,8 @@ struct State {
     xray: bool,
     /// The latest check's marks, when its ids are the shown design's.
     marks: Marks,
+    /// Editing steps to run once the design is drawn (`--edit-script`).
+    edit_script: Option<PathBuf>,
 }
 
 /// The window's widgets.
@@ -369,6 +391,10 @@ struct Widgets {
     design: gtk::Overlay,
     tree: TreeSidebar,
     inspector: Inspector,
+    /// The Details panel's content: the selection's account (the
+    /// inspector), then its editing controls (the "Add onto" button and
+    /// the item's changes).
+    details: gtk::Box,
     dock: Rc<Dock>,
     /// The dock and its panels round the 3D view.
     workbench: Rc<workbench::Workbench>,
@@ -419,6 +445,8 @@ struct Window {
     pins: RefCell<Vec<gtk::Widget>>,
     /// Kept alive for as long as the window: dropping it stops watching.
     watcher: RefCell<Option<Watcher>>,
+    /// Editing in the 3D view: the menu, the card and the ghost.
+    editing: edit_view::EditView,
 }
 
 impl Window {
@@ -475,12 +503,22 @@ impl Window {
                 linking: false,
                 xray: false,
                 marks: Marks::default(),
+                edit_script: None,
             }),
             pins: RefCell::new(Vec::new()),
             watcher: RefCell::new(None),
+            editing: edit_view::EditView::new(),
         });
+        if let Some(showcase) = options.edit_fixture {
+            edit_demo::show(&window.widgets.design, showcase);
+        }
         window.install_actions(options.theme);
         window.connect_events();
+        window.connect_editing();
+        window.state.borrow_mut().edit_script = options.edit_script;
+        if options.new_project {
+            window.ask_new_project();
+        }
         window.watch();
         // The keyboard starts in the 3D view, not in the first focusable
         // widget GTK finds, which can be a problem's selectable `stave
@@ -528,6 +566,7 @@ impl Window {
                 Event::CheckStatusChanged => self.check_status_changed(),
                 Event::BuildChanged => self.build_changed(),
                 Event::CheckStarted(ticket) => self.run_check(ticket),
+                Event::Edit(event) => self.edit_event(event),
                 Event::Notice(notice) => {
                     self.widgets.toasts.add_toast(
                         adw::Toast::builder()
@@ -596,6 +635,7 @@ impl Window {
     }
 
     fn result_changed(self: &Rc<Self>) {
+        self.grips_result_changed();
         let (shown, latest, showing_older) = {
             let session = self.session.borrow();
             (
@@ -633,7 +673,7 @@ impl Window {
         };
         self.state.borrow_mut().marks = tree_marks.clone();
         widgets.tree.show_marks(tree_marks);
-        let empty = stave_app::empty::of(&self.session.borrow());
+        let empty = edit_view::empty_state(&self.session.borrow());
         if let Some(empty) = empty {
             // The sidebar and the inspector say why too (for a library,
             // what it defines and how to use it), not "Nothing selected".
@@ -976,6 +1016,7 @@ impl Window {
         }
         self.show_card();
         self.show_moves();
+        self.grips_follow_selection();
         self.request_render();
     }
 
@@ -985,6 +1026,7 @@ impl Window {
         if self.session.borrow().focus().is_some() {
             self.widgets.workbench.present(workbench::PanelId::Details);
         }
+        self.update_face_button();
     }
 
     /// A short line at the top of the 3D view ("Focused on one joint · Esc
@@ -1431,6 +1473,8 @@ impl Window {
                     section,
                     looks: Some(&frame.looks),
                     overlay: None,
+                    lit: None,
+                    tints: None,
                     tint_cut_faces: focus.options.tint_cut_faces,
                     backdrop,
                     width,
@@ -1456,7 +1500,7 @@ impl Window {
     /// A camera that shows everything shown.
     fn frame_all(state: &State, shown: &Checked) -> Option<Orbit> {
         let (_, graph) = shown.drawable()?;
-        let bounds = graph.bounds(state.posed.as_ref()?)?;
+        let bounds = edit_view::drawn_bounds(graph, state.posed.as_ref()?)?;
         let aspect = Self::aspect(state);
         Some(match state.orbit {
             Some(orbit) => orbit.framed(bounds, aspect),
@@ -1596,7 +1640,7 @@ impl Window {
                 let posed = posed?;
                 match node.filter(|_| camera.frame_selection) {
                     Some(id) => graph.bounds_of(posed, &[id]),
-                    None => graph.bounds(posed),
+                    None => edit_view::drawn_bounds(graph, posed),
                 }
             });
             let framed = bounds.map_or(turned, |bounds| turned.framed(bounds, aspect));
@@ -1822,7 +1866,7 @@ impl Window {
             let aspect = Self::aspect(&state);
             let bounds = session
                 .drawable()
-                .and_then(|(_, graph)| graph.bounds(state.posed.as_ref()?));
+                .and_then(|(_, graph)| edit_view::drawn_bounds(graph, state.posed.as_ref()?));
             state.orbit = state.orbit.map(|orbit| {
                 let turned = Orbit {
                     yaw: yaw.rem_euclid(std::f32::consts::TAU),
@@ -2034,6 +2078,9 @@ impl Window {
     }
 
     fn pick(self: &Rc<Self>, x: f64, y: f64) {
+        if self.edit_click(x, y) {
+            return;
+        }
         let hit = {
             let session = self.session.borrow();
             let state = self.state.borrow();
@@ -2122,7 +2169,10 @@ impl Window {
         } else {
             self.looks(&selection)
         };
-        let rendered = {
+        let ghost = self.render_ghost(backdrop);
+        let rendered = if let Some(rendered) = ghost {
+            rendered
+        } else {
             let session = self.session.borrow();
             let mut state = self.state.borrow_mut();
             state.render_queued = false;
@@ -2166,6 +2216,25 @@ impl Window {
                     volumes: Vec::new(),
                 },
             });
+            // The space the pointer or an edit is on, lit, and what covers
+            // it see-through.
+            let marks = if focus.is_none() {
+                self.edit_marks(&session, graph, posed, &orbit)
+            } else {
+                edit_view::EditMarks::default()
+            };
+            let looks = if marks.covering.is_empty() {
+                looks
+            } else {
+                let mut looks =
+                    looks.unwrap_or_else(|| vec![Look::Normal; graph.node_ids().count()]);
+                for node in &marks.covering {
+                    if let Some(look) = looks.get_mut(node.index()) {
+                        *look = Look::XRay;
+                    }
+                }
+                Some(looks)
+            };
             renderer.render(&Frame {
                 scene: graph,
                 posed,
@@ -2181,6 +2250,8 @@ impl Window {
                     .or(looks.as_deref()),
                 overlay: focus.map(|f| &f.overlay),
                 tint_cut_faces: focus.is_none_or(|f| f.options.tint_cut_faces),
+                lit: Some(&marks.lit),
+                tints: None,
                 backdrop,
                 width,
                 height,
@@ -2192,19 +2263,50 @@ impl Window {
                     self.widgets.viewport.show_frame(texture);
                 }
                 self.show_pins();
+                self.place_ghost_verdict();
+                self.place_grips();
                 // Save the window once a frame of the view's real size is up.
                 let settled = {
                     let state = self.state.borrow();
                     state.size.0 > 1 && state.size == self.widgets.viewport.device_size()
                 };
                 if settled {
-                    self.capture_if_asked();
+                    // An edit script runs first; the frame it asks for is
+                    // the one saved.
+                    if self.run_edit_script() {
+                        self.request_render();
+                    } else {
+                        self.capture_if_asked();
+                    }
                 }
             }
             Err(error) => {
                 let message = format!("{error:#}");
                 self.show_status("Can't draw in 3D", &message);
             }
+        }
+    }
+
+    /// Where a set of nodes shows in the 3D view, in logical pixels from
+    /// its top left (the middle of their bounds as posed); `None` when it
+    /// can't be worked out (nothing drawn yet, behind the camera).
+    fn screen_point(&self, nodes: &[NodeId]) -> Option<(f32, f32)> {
+        let session = self.session.borrow();
+        let state = self.state.borrow();
+        let (_, graph) = session.drawable()?;
+        let bounds = graph.bounds_of(state.posed.as_ref()?, nodes)?;
+        self.project(&state, bounds.centre())
+    }
+
+    /// How much of the 3D view's right side the camera column takes (with
+    /// the space beside it), in logical pixels: what the editing's cards
+    /// and labels keep clear of at the right.
+    fn right_column(&self) -> i32 {
+        let camera = &self.widgets.camera.root;
+        if camera.is_visible() {
+            camera.width().saturating_add(EDGE)
+        } else {
+            0
         }
     }
 
@@ -2235,7 +2337,13 @@ impl Window {
         let found: Vec<Pin> = {
             let session = self.session.borrow();
             let state = self.state.borrow();
-            if state.focus.is_some() || session.showing_older() || session.view() != View::Design {
+            // An edit's menu, card and ghost take the view.
+            let editing = session.edit().is_some() || session.change().is_some();
+            if state.focus.is_some()
+                || editing
+                || session.showing_older()
+                || session.view() != View::Design
+            {
                 return;
             }
             let Some((_, graph)) = session.drawable() else {
@@ -2290,8 +2398,15 @@ impl Window {
                 continue;
             };
             let pin = self.pin(index, mark, &message);
-            pin.set_margin_start(crate::convert::int_of_f32((x - 12.0).round()).max(0));
-            pin.set_margin_top(crate::convert::int_of_f32((y - 24.0).round()).max(0));
+            // Clear of the cards and the parts list (edit_view).
+            let wanted = ((x - 12.0).max(0.0), (y - 24.0).max(0.0));
+            let size = edit_view::natural_size(pin.upcast_ref());
+            let Some((dx, dy)) = self.clear_spot(wanted, size) else {
+                off_screen.push((index, mark, message));
+                continue;
+            };
+            pin.set_margin_start(crate::convert::int_of_f32((wanted.0 + dx).round()).max(0));
+            pin.set_margin_top(crate::convert::int_of_f32((wanted.1 + dy).round()).max(0));
             self.widgets.design.add_overlay(&pin);
             self.pins.borrow_mut().push(pin.upcast());
         }
@@ -2449,6 +2564,8 @@ impl Window {
             window.add_action(&action);
         };
         let this = self.clone();
+        add("new-project", Box::new(move || this.ask_new_project()));
+        let this = self.clone();
         add("back", Box::new(move || this.dispatch(Command::Back)));
         let this = self.clone();
         add("forward", Box::new(move || this.dispatch(Command::Forward)));
@@ -2560,6 +2677,9 @@ impl Window {
         add(
             "escape",
             Box::new(move || {
+                if this.cancel_edit() {
+                    return;
+                }
                 let focused = this.session.borrow().focus().is_some();
                 if focused {
                     this.dispatch(Command::LeaveFocus);
@@ -2683,6 +2803,7 @@ impl Window {
 
     fn open_folder(self: &Rc<Self>, folder: PathBuf) {
         *self.session.borrow_mut() = Session::new(folder);
+        self.editing_folder_changed();
         {
             let mut state = self.state.borrow_mut();
             state.uploaded = None;
@@ -3170,6 +3291,10 @@ impl Window {
                     window.frame();
                     glib::Propagation::Stop
                 }
+                // Delete removes the selection, saying first what goes.
+                gdk::Key::Delete | gdk::Key::KP_Delete if window.remove_selected() => {
+                    glib::Propagation::Stop
+                }
                 _ => glib::Propagation::Proceed,
             }
         });
@@ -3342,6 +3467,7 @@ fn settle_for_screenshot() {
 fn main_menu() -> gio::Menu {
     let menu = gio::Menu::new();
     let project = gio::Menu::new();
+    project.append(Some("New Project…"), Some("win.new-project"));
     project.append(Some("Open Project…"), Some("win.open"));
     project.append(Some("Check Again"), Some("win.check"));
     project.append(Some("Frame Everything"), Some("win.frame"));
@@ -3471,10 +3597,12 @@ fn build_widgets(application: &adw::Application, options: &Options) -> Result<Wi
     // selection's account, the open files and the problems.
     let tree = TreeSidebar::new();
     let inspector = Inspector::new();
+    let details_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    details_box.append(&inspector.root);
     let details = gtk::ScrolledWindow::builder()
         .hscrollbar_policy(gtk::PolicyType::Never)
         .vexpand(true)
-        .child(&inspector.root)
+        .child(&details_box)
         .css_classes(["stave-details"])
         .build();
     let files = FilesPage::new();
@@ -3577,6 +3705,7 @@ fn build_widgets(application: &adw::Application, options: &Options) -> Result<Wi
         design,
         tree,
         inspector,
+        details: details_box,
         dock,
         workbench,
         problems,

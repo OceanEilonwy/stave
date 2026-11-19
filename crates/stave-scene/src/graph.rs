@@ -11,7 +11,7 @@ use stave_model::mechanism::MotionShape;
 use stave_model::mechanism::{DriveValue, MemberIndex};
 use stave_model::solved::{
     AssemblyId, Body, BodyCarrier, BodyRef, HardwareId, PairMember, Part, PartId, PoseValue,
-    SceneId, SceneItem, SolvedDesign, StepKind,
+    RegionId, SceneId, SceneItem, SolvedDesign, StepKind, WorldBox,
 };
 use stave_schema::species::{Species, Srgb};
 use stave_schema::words::StockForm;
@@ -330,6 +330,37 @@ pub struct SceneGraph {
     /// Per node: how far it then moves out within its assembly, the second
     /// stage.
     explode_part: Vec<Vec3>,
+    /// Per node: a part's drawn box at rest (the box its six faces are
+    /// the faces of); `None` for hardware and joint members.
+    drawn: Vec<Option<WorldBox>>,
+    /// Every region of the design, in [`RegionId`] order.
+    regions: Vec<RegionNode>,
+    /// Per region: how far its assembly moves out in an exploded view, the
+    /// first stage (millimetres, render frame).
+    explode_regions: Vec<Vec3>,
+}
+
+/// A region of the design (a declared region, or one a component
+/// exposes) as a volume: what a ray picks when it passes through empty
+/// space inside it, and what a view lights when it is picked. A region a
+/// component exposes moves with its assembly in a scene (a door's space
+/// swings with the door; [`Posed::regions`]); a declared region stays
+/// where the design puts it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RegionNode {
+    /// The region.
+    pub id: RegionId,
+    /// Its name as written: `door_bay[left]`, `door_l.door`.
+    pub name: String,
+    /// The assembly it belongs to.
+    pub assembly: Option<AssemblyId>,
+    /// The assemblies it is inside, outermost first: the ones whose
+    /// motions move it.
+    pub assemblies: Vec<AssemblyId>,
+    /// Its box, exact, at rest.
+    pub bounds: WorldBox,
+    /// Its box in the render frame, at rest.
+    pub volume: Aabb,
 }
 
 /// What a viewer shows for a problem: nodes to tint and the shared
@@ -358,9 +389,20 @@ pub struct Posed {
     pub transforms: Vec<Mat4>,
     /// Per node: shown in this scene.
     pub visible: Vec<bool>,
+    /// Per region, in [`RegionId`] order: rest to posed. A region a
+    /// component exposes moves with its assembly; the others stay put.
+    pub regions: Vec<Mat4>,
 }
 
 impl Posed {
+    /// The pose of a region (identity for one this pose doesn't know).
+    pub fn region(&self, region: RegionId) -> Mat4 {
+        self.regions
+            .get(region.index())
+            .copied()
+            .unwrap_or(Mat4::IDENTITY)
+    }
+
     /// The pose of one node, if it is shown.
     pub fn shown(&self, node: NodeId) -> Option<Mat4> {
         match self.visible.get(node.0) {
@@ -580,6 +622,34 @@ impl SceneGraph {
             .iter()
             .map(|node| exploded.of_node(design, node))
             .unzip();
+        let drawn = nodes
+            .iter()
+            .map(|node| match node.item {
+                Item::Part(id) => design.part(id).map(Part::drawn_box),
+                Item::Hardware(_) | Item::Member(_) => None,
+            })
+            .collect();
+        let regions: Vec<RegionNode> = design
+            .regions
+            .iter()
+            .map(|region| RegionNode {
+                id: region.id,
+                name: region.name.clone(),
+                assembly: region.assembly,
+                assemblies: assemblies_of(region.assembly),
+                bounds: region.bounds,
+                volume: render::world_box(region.bounds),
+            })
+            .collect();
+        let explode_regions = regions
+            .iter()
+            .map(|region| {
+                region
+                    .assembly
+                    .and_then(|id| exploded.assemblies.get(id.index()).copied())
+                    .unwrap_or(Vec3::ZERO)
+            })
+            .collect();
         SceneGraph {
             title: design.project.title.clone(),
             nodes,
@@ -587,6 +657,9 @@ impl SceneGraph {
             motions,
             explode_assembly,
             explode_part,
+            drawn,
+            regions,
+            explode_regions,
         }
     }
 
@@ -661,6 +734,48 @@ impl SceneGraph {
             .map(NodeId)
     }
 
+    /// A part node's drawn box at rest; `None` for any other node.
+    pub fn drawn_box(&self, id: NodeId) -> Option<WorldBox> {
+        self.drawn.get(id.0).copied().flatten()
+    }
+
+    /// Every region of the design, in [`RegionId`] order.
+    pub fn regions(&self) -> &[RegionNode] {
+        &self.regions
+    }
+
+    /// A region.
+    pub fn region(&self, id: RegionId) -> Option<&RegionNode> {
+        self.regions
+            .get(id.index())
+            .filter(|region| region.id == id)
+            .or_else(|| self.regions.iter().find(|region| region.id == id))
+    }
+
+    /// What a view draws to light a region: its volume at rest, with no
+    /// nodes.
+    pub fn region_highlight(&self, id: RegionId) -> Option<Highlight> {
+        Some(Highlight {
+            nodes: Vec::new(),
+            volumes: vec![self.region(id)?.volume],
+        })
+    }
+
+    /// What a view draws to light a region in a pose: its volume where
+    /// the pose puts it (a door's space swung open with the door).
+    pub fn region_highlight_posed(&self, posed: &Posed, id: RegionId) -> Option<Highlight> {
+        Some(Highlight {
+            nodes: Vec::new(),
+            volumes: vec![self.region_volume(posed, id)?],
+        })
+    }
+
+    /// A region's volume where a pose puts it: the box around it moved
+    /// with its assembly.
+    pub fn region_volume(&self, posed: &Posed, id: RegionId) -> Option<Aabb> {
+        Some(self.region(id)?.volume.transformed(posed.region(id)))
+    }
+
     /// A scene by name.
     pub fn scene_named(&self, name: &str) -> Option<&SceneEntry> {
         self.scenes.iter().find(|scene| scene.name == name)
@@ -671,6 +786,7 @@ impl SceneGraph {
         Posed {
             transforms: vec![Mat4::IDENTITY; self.nodes.len()],
             visible: vec![true; self.nodes.len()],
+            regions: vec![Mat4::IDENTITY; self.regions.len()],
         }
     }
 
@@ -734,6 +850,28 @@ impl SceneGraph {
             }
             if let Some(slot) = posed.visible.get_mut(index) {
                 *slot = shown;
+            }
+        }
+        // A region a component exposes goes with its assembly: its
+        // motions, and the assembly's move in an exploded view (the first
+        // stage; the second pulls parts apart, not spaces).
+        let first = (explode.clamp(0.0, 1.0) * 2.0).min(1.0);
+        for (index, region) in self.regions.iter().enumerate() {
+            let mut transform = Mat4::IDENTITY;
+            for assembly in &region.assemblies {
+                let motion = self.motions.get(assembly.index()).and_then(Option::as_ref);
+                if let (Some(motion), Some(amount)) = (motion, amount(*assembly)) {
+                    transform *= motion.transform(amount);
+                }
+            }
+            let offset = self
+                .explode_regions
+                .get(index)
+                .copied()
+                .unwrap_or(Vec3::ZERO)
+                * first;
+            if let Some(slot) = posed.regions.get_mut(index) {
+                *slot = Mat4::from_translation(offset) * transform;
             }
         }
         posed

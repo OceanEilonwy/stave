@@ -40,6 +40,10 @@ impl Expect {
     pub fn ty(ty: Ty) -> Self {
         let words = match &ty {
             Ty::Word(set) => vec![*set],
+            // A spacing is a call (`ends(inset: 5mm)`) or a bare word
+            // (`evenly`), wherever one is expected: a member's `spaced:`,
+            // and a param or argument of type `Spacing`.
+            Ty::Spacing => vec![WordSet::Spacing],
             _ => Vec::new(),
         };
         Expect {
@@ -982,7 +986,7 @@ impl Resolver<'_> {
                     return self.wall(cx, args, span);
                 }
                 if let Some(builtin) = Builtin::from_word(ident.as_str()) {
-                    return self.builtin(cx, builtin, args, span, expect);
+                    return self.builtin(cx, builtin, args, span, expect, false);
                 }
                 if ident.as_str() == MODEL_NODE {
                     // node("mount") is only meaningful as model(align:).
@@ -1254,7 +1258,24 @@ impl Resolver<'_> {
         args: &[ast::Arg],
         span: Span,
         _expect: &Expect,
+        whole_region: bool,
     ) -> RExpr {
+        let builtin = builtin.for_arguments(
+            args.iter()
+                .filter_map(|a| a.name.as_ref().map(|n| n.as_str())),
+        );
+        if builtin == Builtin::RegionBox && !whole_region {
+            // The root is placed by nothing, so it is only ever a region
+            // of its own (grammar, "Placement rules", rule 1).
+            self.error_help(
+                Code::Ground,
+                "box(across:, up:, deep:) can only be the whole value of a region",
+                cx.file,
+                span,
+                "make the box a region of its own, region envelope = box(across: ..., up: ..., deep: ...), and use that region here",
+            );
+            return RExpr::error(span);
+        }
         let parameters = builtin.parameters();
         let mut settings: Vec<Setting> = Vec::new();
         let mut misspelt: Vec<String> = Vec::new();
@@ -1322,6 +1343,11 @@ impl Resolver<'_> {
                 expect = Expect::ty(Ty::Word(WordSet::PartAxis)).named("axis");
             }
             let value = match parameter.ty {
+                _ if builtin == Builtin::Split && parameter.name == "shares" => {
+                    let value = self.value(cx, &arg.value, &Expect::any().named("shares"));
+                    self.check_shares(cx, &value);
+                    value
+                }
                 ValueType::Items => {
                     let value = self.value(cx, &arg.value, &Expect::any().named(parameter.name));
                     self.check_item_argument(cx, builtin, parameter.name, &value);
@@ -1334,6 +1360,18 @@ impl Resolver<'_> {
                 name_span: arg.span,
                 value,
             });
+        }
+        if builtin == Builtin::Split
+            && settings.iter().any(|s| s.name == "at")
+            && let Some(shares) = settings.iter().find(|s| s.name == "shares")
+        {
+            self.error_help(
+                Code::TypeMismatch,
+                "split takes 'at:' or 'shares:', not both",
+                cx.file,
+                shares.name_span,
+                "split at a part with at:, or size the pieces with shares:, but not both",
+            );
         }
         for parameter in parameters.iter().filter(|p| p.required) {
             let misspelling = misspelt
@@ -1363,6 +1401,55 @@ impl Resolver<'_> {
         }
     }
 
+    /// `split(..., shares: [n, ...])`: a list of unitless numbers (grammar,
+    /// "Regions"). How many there are and that each is more than zero are
+    /// checked once they are worked out.
+    fn check_shares(&mut self, cx: &Cx, value: &RExpr) {
+        let wrong = match (&value.kind, &value.ty) {
+            (RExprKind::List(items), _) => items
+                .iter()
+                .find(|item| !matches!(item.ty, Ty::Count | Ty::Ratio | Ty::Unknown))
+                .map(|item| (item.ty.clone(), item.span)),
+            (_, Ty::List(inner)) if matches!(**inner, Ty::Count | Ty::Ratio | Ty::Unknown) => None,
+            (_, Ty::Unknown) => None,
+            (_, other) => {
+                self.error_help(
+                    Code::TypeMismatch,
+                    format!("'shares' needs a list of numbers, found {other}"),
+                    cx.file,
+                    value.span,
+                    "give one relative size for each piece: shares: [1, 2, 1]",
+                );
+                None
+            }
+        };
+        let Some((ty, span)) = wrong else {
+            return;
+        };
+        match ty {
+            Ty::Length | Ty::Angle => self.error_help(
+                Code::UnitMismatch,
+                format!("'shares' needs a number, found {ty}"),
+                cx.file,
+                span,
+                "shares are relative sizes: write 140, not 140mm",
+            ),
+            other => self.error_help(
+                Code::TypeMismatch,
+                format!("'shares' needs a number, found {other}"),
+                cx.file,
+                span,
+                "shares are relative sizes, plain numbers: shares: [1, 2, 1]",
+            ),
+        }
+    }
+
+    /// `region name = box(across:, up:, deep:)`: the box as the whole value
+    /// of a single region, the one place it may be written.
+    pub(super) fn region_box(&mut self, cx: &Cx, args: &[ast::Arg], span: Span) -> RExpr {
+        self.builtin(cx, Builtin::RegionBox, args, span, &Expect::any(), true)
+    }
+
     fn check_item_argument(&mut self, cx: &Cx, builtin: Builtin, parameter: &str, value: &RExpr) {
         let (fits, wanted) = match (builtin, parameter) {
             (Builtin::Mid, _) => (
@@ -1380,7 +1467,7 @@ impl Resolver<'_> {
             ),
             (Builtin::Extent, _) => (value.ty.fits(&Ty::Parts), "parts"),
             // One part each; a role of type `Parts` is one part per pair.
-            (Builtin::Contact, _) => (value.ty.fits(&Ty::Parts), "a part"),
+            (Builtin::Contact | Builtin::EdgeToEdge, _) => (value.ty.fits(&Ty::Parts), "a part"),
             (
                 Builtin::Opening
                 | Builtin::Split
@@ -1391,6 +1478,7 @@ impl Resolver<'_> {
                 | Builtin::Joined
                 | Builtin::Spliced
                 | Builtin::Box
+                | Builtin::RegionBox
                 | Builtin::Cylinder
                 | Builtin::Model
                 | Builtin::Ends

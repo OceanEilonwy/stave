@@ -1,0 +1,19 @@
+// expect: error[missing-field] solved param 'overall_width' is missing 'within'
+stave 1
+
+project "Solved without a range" {
+  units: mm
+}
+
+// The solver may only move a solved param inside its 'within' range.
+solved param overall_width = 600mm
+
+stock pine_19 { species: pine, form: solid, thickness: 19mm, max_length: 2400mm }
+
+part base : pine_19 {
+  length: overall_width
+  width:  300mm
+  place {
+    ground
+  }
+}

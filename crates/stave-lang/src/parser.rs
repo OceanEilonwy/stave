@@ -164,7 +164,7 @@ impl Body {
     fn allows_item(self, keyword: SyntaxKind) -> bool {
         match self {
             Body::Component => keyword.is_design_item_keyword(),
-            Body::Kind => matches!(keyword, KW_PARAM | KW_REQUIRE),
+            Body::Kind => matches!(keyword, KW_PARAM | KW_LOCKED | KW_SOLVED | KW_REQUIRE),
             Body::Fields
             | Body::Part
             | Body::Hardware
@@ -793,7 +793,7 @@ impl<'t> Parser<'t> {
             KW_PROFILE => PROFILE,
             KW_COMPONENT => COMPONENT,
             KW_SCENE => SCENE,
-            KW_PARAM => PARAM,
+            KW_PARAM | KW_LOCKED | KW_SOLVED => PARAM,
             KW_LET => LET,
             KW_REGION => REGION,
             KW_PART => PART,
@@ -945,8 +945,32 @@ impl<'t> Parser<'t> {
         self.block(Body::Scene, &owner)
     }
 
-    /// `param name [: Type] [= default] [within domain] [locked]`
+    /// `[locked | solved] param name [: Type] [= default] [within domain]`
     fn param(&mut self) -> PResult {
+        let prefixed = self.current().is_param_kind();
+        if prefixed {
+            let word = self.nth_text(0);
+            self.bump();
+            if !self.at(KW_PARAM) {
+                let help = match self.current() {
+                    KW_LOCKED | KW_SOLVED if self.nth_text(0) == word => {
+                        format!("write '{word}' once: {word} param")
+                    }
+                    KW_LOCKED | KW_SOLVED => "a param is locked or solved, not both".to_owned(),
+                    KW_PRIVATE => format!("write 'private' first: private {word} param"),
+                    _ => format!("only a param can be {word}: {word} param reveal = 1.5mm"),
+                };
+                let reported = self.expected_with_help(&["'param'"], Some(&help));
+                // `locked solved param x` and `locked private param x`: one
+                // word too many. Skip it and read the param, so its name is
+                // known and uses of it are not reported as well.
+                if !(self.current().is_item_prefix() && self.nth(1) == KW_PARAM) {
+                    return Err(reported);
+                }
+                self.bump_error_token();
+            }
+        }
+        let start = self.span(0);
         self.bump();
         let name_span = self.span(0);
         self.declared_name()?;
@@ -968,7 +992,17 @@ impl<'t> Parser<'t> {
         if self.eat(KW_WITHIN) {
             self.domain()?;
         }
-        self.eat(KW_LOCKED);
+        if self.at(KW_LOCKED) {
+            // Draft 3 wrote `locked` after the value.
+            let help = if prefixed {
+                "a param's kind is written once, before 'param'".to_owned()
+            } else {
+                let written = self.previous_path_text(start);
+                let written: Vec<&str> = written.split_whitespace().collect();
+                format!("write 'locked' first: locked {}", written.join(" "))
+            };
+            return Err(self.expected_with_help(&["end of line"], Some(&help)));
+        }
         Ok(())
     }
 
@@ -1635,7 +1669,7 @@ impl<'t> Parser<'t> {
             n += 1;
         }
         let documented = self.nth(n);
-        if matches!(documented, KW_PARAM | KW_REQUIRE) {
+        if matches!(documented, KW_PARAM | KW_LOCKED | KW_SOLVED | KW_REQUIRE) {
             return self.item(Scope::Kind);
         }
         if documented == IDENT && self.nth_text(n) == "makes" && self.nth(n + 1) != COLON {

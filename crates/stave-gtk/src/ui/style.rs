@@ -147,6 +147,8 @@ expander.stave-more title { font-size: 13px; font-weight: 600; }
 expander.stave-more title > arrow { min-width: 12px; min-height: 12px; }
 
 .stave-panel { border-radius: 14px; }
+.stave-model-head { padding: 8px 10px 0 14px; }
+.stave-model-note { padding: 6px 14px 12px 14px; font-size: 12px; }
 .stave-tree .stave-joint { padding: 4px 8px 4px 34px; border-spacing: 8px; font-size: 12.5px; }
 .stave-joint-word { font-size: 10px; font-weight: 700; padding: 1px 4px; border-radius: 3px; }
 .stave-mark { min-width: 8px; min-height: 8px; border-radius: 4px; }

@@ -1,0 +1,4 @@
+# A click inside the empty envelope: Top, its wood chosen.
+select region envelope
+choose frames.Top
+set top_stock = oak_19

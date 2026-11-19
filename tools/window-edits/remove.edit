@@ -1,0 +1,5 @@
+# The dialog answered "remove them too": what goes is drawn red, and
+# Remove on the card writes it.
+pick divider.panel
+remove
+include dependants

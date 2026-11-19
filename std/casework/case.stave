@@ -1,0 +1,61 @@
+stave 1
+
+/// A cabinet case: a base, two sides and a top, joined, filling the space it is given.
+/// The top covers the whole space and overhangs the sides at the front and at
+/// both ends. The sides stand on the base, flush with it at the front and the
+/// back, and the base stands `raise` above the bottom of the space, which
+/// leaves room for feet. Each side is joined to the base and to the top.
+component Case {
+  param space       : Region           // the space it fills: usually the project's envelope
+  param panel_stock : Stock            // the base, the sides and the top
+  param joinery     : JointKind = dowel(count: 4)
+  param overhang    = 20mm             // how far the top reaches past the sides, at the front and at each end
+  param raise       = 0mm              // from the bottom of the space to the underside of the base: room for feet
+
+  require top_overhangs : 2 * overhang < space.across "the overhang is wider than the case; make it smaller"
+  require sides_stand   : raise + 2 * panel_stock.thickness < space.up "the case is too low for its base, top and raise"
+
+  part base : panel_stock {
+    length: space.across - 2 * overhang
+    width:  space.deep - overhang    // wider than a board: made of boards, glued edge to edge
+    place {
+      flush(space.bottom, inset: raise)
+      center(space, across)
+      flush(space.back)
+    }
+  }
+
+  part side[left, right] : panel_stock {
+    length: space.up - raise - base.thickness - top.thickness
+    width:  space.deep - overhang
+    place {
+      orient(length: up, width: back)
+      spaced(ends, from: base.left, to: base.right)
+      against(base.top)              // stands on the base
+      flush(base.back)
+    }
+  }
+
+  part top : panel_stock {
+    length: space.across
+    width:  space.deep
+    place {
+      against(side[left].top)        // sits on the sides
+      center(space, across)
+      flush(space.back)              // so it overhangs the front and both ends
+    }
+  }
+
+  joint base_joints : joinery(side[*], into: base)
+  joint top_joints  : joinery(side[*], into: top)
+
+  /// The clear space between the base, the sides and the top: a back, a divider, shelves, drawers and doors.
+  region inside = opening(
+    left:   side[left].right,
+    right:  side[right].left,
+    bottom: base.top,
+    top:    top.bottom,
+    front:  base.front,
+    back:   base.back,
+  )
+}

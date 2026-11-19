@@ -15,6 +15,7 @@ kind chigiri : joint {
   param key_thickness = piece.thickness / 2
   /// What the key is cut from.
   param key_stock : Stock = piece.stock
+  require side_by_side   : edge_to_edge(piece, into) "a butterfly key joins two boards lying side by side, edge to edge; these meet another way"
   require same_thickness : piece.thickness == into.thickness "boards joined by a butterfly key need the same thickness"
   require waisted        : waist < key_width "the key's waist must be narrower than its ends, or it won't hold the boards together"
   require shallow        : key_thickness < piece.thickness "the key is as thick as the boards: its socket would go right through"

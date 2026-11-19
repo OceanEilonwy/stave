@@ -1,0 +1,63 @@
+stave 1
+
+// Exact products from the shop's catalog. A kind may also carry a 3D model
+// for the viewport, for example
+//   model: model("./models/brass_knob_26.glb", align: node("mount"))
+// Checks never use the model, only the members' shapes.
+
+/// A 26mm turned brass knob.
+kind brass_knob_26 : pull {
+  roles {
+    piece: Part                      // the door or drawer front
+  }
+  diameter:       26mm
+  screw_diameter: 4mm
+
+  mount {
+    face:   front
+    across: open
+    along:  open
+  }
+
+  /// The knob you hold.
+  member knob {
+    with:  piece
+    shape: cylinder(diameter: 26mm, depth: -30mm..0mm)
+  }
+  /// The screw from behind that holds it on.
+  member screw {
+    with:  piece
+    shape: cylinder(diameter: 4mm, depth: 0mm..piece.thickness)
+  }
+
+  cut screw_hole: crossing(piece, screw) { drill(diameter: 4mm, depth: through) }
+}
+
+/// A bar pull with its screws 160mm apart.
+kind bar_pull_160 : pull {
+  roles {
+    piece: Part                      // the door or drawer front
+  }
+  centres:        160mm
+  screw_diameter: 4mm
+
+  mount {
+    face:   front
+    across: open
+    along:  open
+  }
+
+  /// The bar you hold.
+  member bar {
+    with:  piece
+    shape: box(along: 192mm, across: 12mm, depth: -35mm..0mm)
+  }
+  /// The two screws from behind, 160mm apart.
+  member screws {
+    with:        piece
+    shape left:  cylinder(diameter: 4mm, depth: 0mm..piece.thickness, at: point(along: -80mm))
+    shape right: cylinder(diameter: 4mm, depth: 0mm..piece.thickness, at: point(along: 80mm))
+  }
+
+  cut screw_hole: crossing(piece, screws) { drill(diameter: 4mm, depth: through) }
+}

@@ -1,0 +1,21 @@
+# A click in the gap between the two stretchers: Slats; the faces they
+# sit on and run between, five of them 15mm apart. The two leg faces
+# the slats fill between face each other, and the back stretcher's back
+# face looks away: the view is orbited round between clicks to reach
+# each, as a person would.
+select between stretcher_front.rail stretcher_back.rail
+choose frames.Slats
+point face stretcher_front.rail.top
+point face legs.leg[front_left].right
+turn -90
+point face legs.leg[front_right].left
+turn 90
+point face stretcher_front.rail.front
+turn 180
+point face stretcher_back.rail.back
+turn 180
+set slat_stock = oak_19
+set run = back
+set spread = right
+set count = 5
+set gap = 15mm

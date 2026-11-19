@@ -14,6 +14,10 @@
 //!   above declarations ([`Analysis::lenses`]: "2 uses · show in 3D"),
 //!   "Go to file or name" ([`Analysis::search`]) and the fast tier of
 //!   diagnostics ([`Analysis::diagnostics`]).
+//! - [`Analysis::rename`] gives the text edits that rename an item and
+//!   every reference to it, refusing a name that would clash, and
+//!   [`Analysis::dependants`] lists the items that name an item, directly
+//!   or through others.
 //! - [`Buffers`] holds the open documents' text, knows which have unsaved
 //!   changes, saves them, and hands their text to the loader and the
 //!   checker as an [`Overlay`], so checking reads what the editor shows.
@@ -42,7 +46,7 @@
 //! let text = analysis.text(doors).unwrap();
 //! let offset = u32::try_from(text.find("FramePanelDoor").unwrap()).unwrap();
 //! let definition = analysis.definition(FilePosition { file: doors, offset }).unwrap();
-//! assert_eq!(definition.label(&folder), "casework/frame_panel_door.stave:4");
+//! assert_eq!(definition.label(&folder), "std/casework/frame_panel_door.stave:4");
 //! ```
 
 #![forbid(unsafe_code)]
@@ -52,6 +56,7 @@ mod analysis;
 mod buffers;
 mod document;
 mod index;
+mod rename;
 mod tokens;
 pub mod words;
 
@@ -61,6 +66,7 @@ pub use analysis::{Analysis, Crumb, FilePosition, Found, Hover, Lens, Location, 
 pub use buffers::{Buffers, OpenError, Overlay, Reload, SaveError};
 pub use document::{Document, STD_SCHEME};
 pub use index::{Symbol, SymbolId, SymbolKind, UseKind};
+pub use rename::{RenameEdit, RenameError};
 pub use tokens::{SemanticToken, TokenClass};
 
 /// How deep [`project_files`] looks into subfolders.

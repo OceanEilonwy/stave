@@ -3,9 +3,10 @@ source: crates/stave-app/tests/fit.rs
 expression: "rendered(\"tests/broken/lid_hits_back\")"
 ---
 error[motion]: lid.panel hits back when lid is opened past 109.9deg
-  --> tests/broken/lid_hits_back/project.stave:64:10
+  --> tests/broken/lid_hits_back/project.stave:65:10
    |
-64 | assembly lid : Lid {
+65 | assembly lid : Lid {
    |          ^^^
    = note: the hinges open to 180deg
    = help: open lid no further than 109.9deg (give its hardware's kind a smaller range), or move back out of its way
+   = fix: patch "Open no further than 109.9deg" { set Lid.hinges.opening_angle = 109.9deg }

@@ -22,8 +22,9 @@ use stave_lang::placement::Direction;
 use stave_lang::units::{Angle, Length};
 use stave_lang::{Code, Severity};
 use stave_model::mechanism::DriveValue;
-use stave_model::solved::{AssemblyId, PoseValue, WorldBox};
+use stave_model::solved::{AssemblyId, PoseValue, SolvedDesign, WorldBox};
 
+use crate::fixes::OverlayChange;
 use crate::names::length_text;
 use crate::{Checker, Contact, ContactMotion, Item};
 
@@ -138,9 +139,14 @@ impl Checker<'_> {
         Some((kind.decl.file, kind.mechanism.as_ref()?.span))
     }
 
-    pub(crate) fn sweeps(&mut self) {
+    /// Stops early, leaving the result partial, once `stopped` says so; it
+    /// is read before each motion and each scene of it.
+    pub(crate) fn sweeps(&mut self, stopped: &dyn Fn() -> bool) {
         let mut found = Vec::new();
         for assembly in &self.design.assemblies {
+            if stopped() {
+                return;
+            }
             let Some(path) = self.path(assembly.id) else {
                 continue;
             };
@@ -174,6 +180,9 @@ impl Checker<'_> {
                 continue;
             }
             for scene_index in 0..self.design.scenes.len() {
+                if stopped() {
+                    return;
+                }
                 let (moves, placements) = self.scene_moves(scene_index);
                 if scene_index > 0 && moves.iter().all(crate::Moves::is_empty) {
                     continue;
@@ -278,12 +287,21 @@ impl Checker<'_> {
     /// gap that clears it, found by moving the other item away along the
     /// door's free side in steps of 0.5mm, said in the instance's own
     /// terms when it has a mount.
-    fn clearance_help(&self, assembly: AssemblyId, scene_index: usize, a: Item, b: Item) -> String {
+    fn clearance_help(
+        &self,
+        assembly: AssemblyId,
+        scene_index: usize,
+        a: Item,
+        b: Item,
+    ) -> (String, Option<OverlayChange>) {
         let name = self.assembly_name(assembly);
         let b_name = self.item_name(b);
         self.clearance(assembly, scene_index, a, b).unwrap_or_else(|| {
-            format!(
-                "{name} turns into {b_name} as soon as it opens; leave a gap between them, or move {b_name} out of its way"
+            (
+                format!(
+                    "{name} turns into {b_name} as soon as it opens; leave a gap between them, or move {b_name} out of its way"
+                ),
+                None,
             )
         })
     }
@@ -292,14 +310,15 @@ impl Checker<'_> {
     /// the other item away from it across the door (toward the free side,
     /// or, for something beside the hinge edge, away from it) in steps of
     /// 0.5mm; said in the instance's own terms when it has a mount. `None`
-    /// when 20mm doesn't clear it.
+    /// when 20mm doesn't clear it. With the help, the change to the
+    /// front's overlay that clears it, when that is the edge between them.
     fn clearance(
         &self,
         assembly: AssemblyId,
         scene_index: usize,
         a: Item,
         b: Item,
-    ) -> Option<String> {
+    ) -> Option<(String, Option<OverlayChange>)> {
         let name = self.assembly_name(assembly);
         let b_name = self.item_name(b);
         let path = self.path(assembly)?;
@@ -363,44 +382,71 @@ impl Checker<'_> {
         let root = self.mirror_root(assembly);
         let mount = self.instance_place(root).is_some_and(|p| p.mount);
         let other = self.outer(b);
-        let field = match free {
+        let edge_of = |direction: Direction| match direction {
             Direction::Right => Some("right"),
             Direction::Left => Some("left"),
             Direction::Up => Some("top"),
             Direction::Down => Some("bottom"),
             Direction::Front | Direction::Back => None,
         };
+        let field = edge_of(free);
+        // The overlay is written at the source of a mirrored front, where
+        // the edge that hits may be the other one: a mirror across the
+        // cabinet swaps left and right.
+        let source_field = edge_of(self.at_mirror_root(assembly, free));
+        let smaller = |by: i64| {
+            source_field.map(|edge| OverlayChange::Smaller {
+                edge,
+                by: Length::from_nm(by),
+            })
+        };
         Some(match other {
             // Two mirrored doors that meet at their free edges.
-            Some(other) if mount && self.mirror_root(other) == root && !at_hinge_edge => format!(
-                "leave at least {total_text} between {name} and {}: use meeting: -{} (each door)",
-                self.assembly_name(other),
-                length_text(Length::from_nm(total / 2))
+            Some(other) if mount && self.mirror_root(other) == root && !at_hinge_edge => (
+                format!(
+                    "leave at least {total_text} between {name} and {}: use meeting: -{} (each door)",
+                    self.assembly_name(other),
+                    length_text(Length::from_nm(total / 2))
+                ),
+                Some(OverlayChange::Meeting(Length::from_nm(-(total / 2)))),
             ),
             // Two mirrored doors hinged back to back: each gives half.
-            Some(other) if mount && self.mirror_root(other) == root && field.is_some() => format!(
-                "leave at least {total_text} between {name} and {}: make its {} overlay {} smaller (the mirrored door follows)",
-                self.assembly_name(other),
-                field.unwrap_or_default(),
-                length_text(Length::from_nm((total - gap) / 2))
-            ),
-            _ if mount => {
-                let field = match free {
-                    Direction::Right => "right",
-                    Direction::Left => "left",
-                    Direction::Up => "top",
-                    Direction::Down => "bottom",
-                    Direction::Front | Direction::Back => {
-                        return Some(format!(
-                            "leave at least {total_text} between {name} and {b_name}"
-                        ));
-                    }
-                };
+            Some(other) if mount && self.mirror_root(other) == root && field.is_some() => (
                 format!(
-                    "leave at least {total_text} between {name} and {b_name}: make its {field} overlay {more} smaller"
-                )
-            }
-            _ => format!("leave at least {total_text} between {name} and {b_name}"),
+                    "leave at least {total_text} between {name} and {}: make its {} overlay {} smaller (the mirrored door follows)",
+                    self.assembly_name(other),
+                    field.unwrap_or_default(),
+                    length_text(Length::from_nm((total - gap) / 2))
+                ),
+                smaller((total - gap) / 2),
+            ),
+            _ if mount => match (field, source_field) {
+                // A mirrored front's overlay is its source's, and the
+                // edge may be the other one there.
+                (Some(_), Some(source_field)) if root != assembly => (
+                    format!(
+                        "leave at least {total_text} between {name} and {b_name}: make {}'s {source_field} overlay {more} smaller ({name} follows)",
+                        self.assembly_name(root)
+                    ),
+                    smaller(total - gap),
+                ),
+                (Some(field), _) => (
+                    format!(
+                        "leave at least {total_text} between {name} and {b_name}: make its {field} overlay {more} smaller"
+                    ),
+                    smaller(total - gap),
+                ),
+                (None, _) => (
+                    format!("leave at least {total_text} between {name} and {b_name}"),
+                    None,
+                ),
+            },
+            // Without a mount the overlay may still be written in the
+            // component; the fix finds it there, or there is none.
+            _ => (
+                format!("leave at least {total_text} between {name} and {b_name}"),
+                smaller(total - gap),
+            ),
         })
     }
 
@@ -502,23 +548,30 @@ impl Checker<'_> {
         // swings its edges out as it starts to open: an early hit is
         // cleared by a gap.
         let swings_out = !matches!(path.mechanism().shape(), MotionShape::Turn { .. });
+        let mut fixes = Vec::new();
         let (message, mut notes, help) = match (reach, extent) {
             (Reach::Angle(angle), DriveValue::Turn(limit)) => {
                 let at = angle_text(angle);
+                let (help, overlay) = if angle.microdeg() < 1_000_000 {
+                    self.clearance_help(assembly, scene_index, a, b)
+                } else {
+                    let early = swings_out && angle < Angle::from_deg(30);
+                    early
+                        .then(|| self.clearance(assembly, scene_index, a, b))
+                        .flatten()
+                        .unwrap_or_else(|| (format!(
+                            "open {name} no further than {at} (give its hardware's kind a smaller range), or move {b_name} out of its way"
+                        ), None))
+                };
+                // The overlay that clears it first, as the help says,
+                // then the narrower opening the hardware's kind allows.
+                let root = self.mirror_root(assembly);
+                fixes.extend(overlay.and_then(|change| self.overlay_fix(root, change)));
+                fixes.extend(self.opening_fix(assembly, angle));
                 (
                     format!("{a_name} hits {b_name} when {name} is opened past {at}"),
                     vec![format!("the hinges open to {limit}")],
-                    if angle.microdeg() < 1_000_000 {
-                        self.clearance_help(assembly, scene_index, a, b)
-                    } else {
-                        let early = swings_out && angle < Angle::from_deg(30);
-                        early
-                            .then(|| self.clearance(assembly, scene_index, a, b))
-                            .flatten()
-                            .unwrap_or_else(|| format!(
-                                "open {name} no further than {at} (give its hardware's kind a smaller range), or move {b_name} out of its way"
-                            ))
-                    },
+                    help,
                 )
             }
             (Reach::Distance(hit), DriveValue::Travel(travel)) => {
@@ -568,5 +621,29 @@ impl Checker<'_> {
             notes,
             Some(help),
         );
+        if let Some((diagnostic, _)) = self.diagnostics.last_mut() {
+            diagnostic.fixes = fixes;
+        }
     }
+}
+
+/// Each assembly's mechanism run through its range, by assembly (`None`
+/// for one nothing moves, or whose mechanism can't move), and the
+/// mechanisms that can't.
+pub(crate) fn mechanism_paths(design: &SolvedDesign) -> crate::Mechanisms {
+    let mut paths = Vec::with_capacity(design.assemblies.len());
+    let mut broken = Vec::new();
+    for assembly in &design.assemblies {
+        paths.push(match &assembly.mechanism {
+            Some(mechanism) => match Path::new(mechanism) {
+                Ok(path) => Some(path),
+                Err(error) => {
+                    broken.push((assembly.id, error));
+                    None
+                }
+            },
+            None => None,
+        });
+    }
+    crate::Mechanisms { paths, broken }
 }

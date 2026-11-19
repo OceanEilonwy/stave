@@ -32,8 +32,8 @@ divider                      cherry_19      428 x 394 x 19             19..431  
 back                         ply_6          521 x 430 x 6              19..431              60..581              394..400             up/right/back
     drawn 521 x 412 x 6, starting 0 x 9 x 0 into the cut size
 drawer.front                 cherry_19      408 x 146 x 19             21..429              433..579             0..19                right/up/back
-    cut drill diameter 3 depth 13 on thickness end: where drawer.front_screws's screw meets it, local 141.566667..144.566667 x 73..76 x 6..19
-    cut drill diameter 3 depth 13 on thickness end: where drawer.front_screws's screw meets it, local 263.433333..266.433333 x 73..76 x 6..19
+    cut drill diameter 3 depth 13 on thickness end: where drawer.front_screws's screw meets it, local 42.7..45.7 x 73..76 x 6..19
+    cut drill diameter 3 depth 13 on thickness end: where drawer.front_screws's screw meets it, local 362.3..365.3 x 73..76 x 6..19
     cut drill diameter 4 depth through on thickness start: where drawer.pull's screw meets it, local 202..206 x 71..75 x 0..19
 drawer.side[left]            maple_12       350 x 123 x 12             31.7..43.7           446..569             19..369              back/up/right
     cut notch depth 6 on thickness end: where drawer.sub_front meets it, local 0..12 x 0..123 x 6..12
@@ -46,8 +46,8 @@ drawer.side[right]           maple_12       350 x 123 x 12             406.3..41
 drawer.sub_front             maple_12       374.6 x 123 x 12           43.7..406.3          446..569             19..31               right/up/back
     drawn 362.6 x 123 x 12, starting 6 x 0 x 0 into the cut size
     cut notch depth 6 on thickness end: where drawer.bottom meets it, local 0..374.6 x 10..16 x 6..12
-    cut drill diameter 4.5 depth through on thickness start: where drawer.front_screws's screw meets it, local 124.866667..127.866667 x 60..63 x 0..12
-    cut drill diameter 4.5 depth through on thickness start: where drawer.front_screws's screw meets it, local 246.733333..249.733333 x 60..63 x 0..12
+    cut drill diameter 4.5 depth through on thickness start: where drawer.front_screws's screw meets it, local 26..29 x 60..63 x 0..12
+    cut drill diameter 4.5 depth through on thickness start: where drawer.front_screws's screw meets it, local 345.6..348.6 x 60..63 x 0..12
 drawer.back                  maple_12       374.6 x 123 x 12           43.7..406.3          446..569             357..369             right/up/back
     drawn 362.6 x 123 x 12, starting 6 x 0 x 0 into the cut size
     cut notch depth 6 on thickness start: where drawer.bottom meets it, local 0..374.6 x 10..16 x 0..6
@@ -115,8 +115,8 @@ drawer.bottom_groove         groove
 drawer.front_screws          screw, no glue
     piece: drawer.sub_front, into: drawer.front (butt across deep)
         screw: 2 x wood_screw (steel), moves with drawer.sub_front
-            1 cylinder deep diameter 3, deep 6..31, centre up 507.5 x across 164.066667
-            2 cylinder deep diameter 3, deep 6..31, centre up 507.5 x across 285.933333
+            1 cylinder deep diameter 3, deep 6..31, centre up 507.5 x across 65.2
+            2 cylinder deep diameter 3, deep 6..31, centre up 507.5 x across 384.8
 
 FASTENERS
 top_dowels                   6 x dowel_pin (8 x 30)

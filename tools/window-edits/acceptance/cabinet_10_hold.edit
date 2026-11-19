@@ -1,0 +1,6 @@
+# Hold a distance: from the rail, then a click on the divider's panel;
+# at least 800mm, the reason typed, tried.
+pick rail.rail
+hold rail.rail to divider.panel
+hold min 800mm "room for a coat on a hanger"
+hold try

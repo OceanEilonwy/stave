@@ -135,19 +135,27 @@ fn params_read(expr: &RExpr, out: &mut Vec<usize>) {
 }
 
 impl Solver<'_> {
-    /// One part, for an argument of `contact`: a `Parts` role is one part
-    /// in each pair.
-    pub(crate) fn contact_part(&mut self, expr: &RExpr, env: &Env<'_>) -> Solved<PartId> {
+    /// One part, for an argument of `contact` or `edge_to_edge`: a
+    /// `Parts` role is one part in each pair.
+    pub(crate) fn one_part(
+        &mut self,
+        function: Builtin,
+        expr: &RExpr,
+        env: &Env<'_>,
+    ) -> Solved<PartId> {
         let value = self.eval(expr, env)?;
         match value.parts().as_deref() {
             Some([one]) => Ok(*one),
-            _ => Err(self.error(
-                Code::TypeMismatch,
-                format!("'contact' needs one part, found {}", value.description()),
-                env.file,
-                expr.span,
-                "name one part on each side: contact(piece, into)",
-            )),
+            _ => {
+                let word = function.word();
+                Err(self.error(
+                    Code::TypeMismatch,
+                    format!("'{word}' needs one part, found {}", value.description()),
+                    env.file,
+                    expr.span,
+                    format!("name one part on each side: {word}(piece, into)"),
+                ))
+            }
         }
     }
 
@@ -359,12 +367,18 @@ impl Solver<'_> {
         ))
     }
 
-    /// The help for a kind's failed `require`: the list search's, then
+    /// The help for a kind's failed `require`: for a rule that asks how
+    /// the parts meet, to choose another kind; else the list search's, then
     /// what a contact patch says, then the general help, naming the kind's
     /// params the failing comparison reads (`change the joint's count,
     /// diameter or wall, or the parts' sizes, so the rule holds`). `owner`
     /// is `joint` or `hardware`.
     pub(crate) fn require_help(&mut self, condition: &RExpr, env: &Env<'_>, owner: &str) -> String {
+        if crate::meeting::asks_how_parts_meet(condition) {
+            return format!(
+                "choose another {owner} kind, one made for parts that meet the way these do, or place the parts as the rule says"
+            );
+        }
         if let Some(kind) = env.kind {
             let search = self.help_search(condition, kind);
             if let Some(help) = self.search_help(&search) {

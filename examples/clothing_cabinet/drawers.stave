@@ -1,6 +1,6 @@
 stave 1
 
-import "./casework"
+import "std:casework"
 import "./hardware" as hw
 
 // Two drawers on side-mount slides, one per bay. The box follows the opening,

@@ -17,7 +17,8 @@ pub enum Document {
     File(PathBuf),
     /// A file of the standard library, embedded in Stave. Read only.
     Std {
-        /// One of `stave_modules::STD_MODULES`: `"joinery"`, `"hardware"`, `"tools"`.
+        /// One of `stave_modules::STD_MODULES`: `"joinery"`, `"hardware"`,
+        /// `"tools"`, `"casework"`.
         module: &'static str,
         /// The file name: `"dado.stave"`.
         file: &'static str,

@@ -1,0 +1,9 @@
+# A click in the gap between the case's two sides: the menu "Between
+# these parts"; Back chosen, the base and the top pointed at, plywood.
+select between case.side[left] case.side[right]
+choose casework.Back
+point face case.base.top
+# The top's underside is out of sight from this camera: its top face
+# is clicked instead (any face of a part gives the part).
+point face case.top.top
+set panel_stock = ply_6

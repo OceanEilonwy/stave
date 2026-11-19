@@ -835,6 +835,7 @@ impl Solver<'_> {
             contact,
             env,
             extensions,
+            making: crate::joints::Making::Made,
         })
     }
 
