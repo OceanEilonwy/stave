@@ -102,6 +102,9 @@ const MOUSE_FORWARD: u32 = 9;
 /// How fast focus mode plays: the whole way in 2.5 seconds.
 const PLAY_PER_SECOND: f64 = 0.4;
 
+/// What one of the window's own actions does, given the window.
+type ActionHandler = Box<dyn Fn(&Rc<Window>)>;
+
 /// How fast pulling apart plays: the whole way in 3 seconds.
 const EXPLODE_PER_SECOND: f64 = 1.0 / 3.0;
 
@@ -1406,9 +1409,12 @@ impl Window {
         if !playing {
             return;
         }
-        let window = self.clone();
+        let window = Rc::downgrade(self);
         let last: std::cell::Cell<Option<i64>> = std::cell::Cell::new(None);
         self.widgets.viewport.add_tick_callback(move |_, clock| {
+            let Some(window) = window.upgrade() else {
+                return glib::ControlFlow::Break;
+            };
             let now = clock.frame_time();
             let seconds = last.get().map_or(0.0, |before| {
                 f64::from(i32::try_from(now - before).unwrap_or(0)) / 1e6
@@ -1963,9 +1969,12 @@ impl Window {
         if !playing {
             return;
         }
-        let window = self.clone();
+        let window = Rc::downgrade(self);
         let last: std::cell::Cell<Option<i64>> = std::cell::Cell::new(None);
         self.widgets.viewport.add_tick_callback(move |_, clock| {
+            let Some(window) = window.upgrade() else {
+                return glib::ControlFlow::Break;
+            };
             if !window.state.borrow().exploding {
                 return glib::ControlFlow::Break;
             }
@@ -2730,42 +2739,41 @@ impl Window {
 
     fn install_actions(self: &Rc<Self>) {
         let window = &self.widgets.window;
-        let add = |name: &str, handler: Box<dyn Fn()>| {
+        // The window's own action holds it weakly: a closed window is freed.
+        let add = |name: &str, handler: ActionHandler| {
             let action = gio::SimpleAction::new(name, None);
-            action.connect_activate(move |_, _| handler());
+            let this = Rc::downgrade(self);
+            action.connect_activate(move |_, _| {
+                if let Some(this) = this.upgrade() {
+                    handler(&this);
+                }
+            });
             window.add_action(&action);
         };
-        let this = self.clone();
-        add("new-project", Box::new(move || this.ask_new_project()));
-        let this = self.clone();
-        add("back", Box::new(move || this.dispatch(Command::Back)));
-        let this = self.clone();
-        add("forward", Box::new(move || this.dispatch(Command::Forward)));
-        let this = self.clone();
-        add("check", Box::new(move || this.dispatch(Command::Check)));
-        let this = self.clone();
-        add("frame", Box::new(move || this.frame()));
-        let this = self.clone();
-        add("export-view", Box::new(move || this.export_view()));
-        let this = self.clone();
+        add("new-project", Box::new(move |this| this.ask_new_project()));
+        add("back", Box::new(move |this| this.dispatch(Command::Back)));
+        add(
+            "forward",
+            Box::new(move |this| this.dispatch(Command::Forward)),
+        );
+        add("check", Box::new(move |this| this.dispatch(Command::Check)));
+        add("frame", Box::new(move |this| this.frame()));
+        add("export-view", Box::new(move |this| this.export_view()));
         add(
             "next-problem",
-            Box::new(move || this.dispatch(Command::NextProblem)),
+            Box::new(move |this| this.dispatch(Command::NextProblem)),
         );
-        let this = self.clone();
         add(
             "previous-problem",
-            Box::new(move || this.dispatch(Command::PreviousProblem)),
+            Box::new(move |this| this.dispatch(Command::PreviousProblem)),
         );
-        let this = self.clone();
         add(
             "find",
-            Box::new(move || this.widgets.finder.present(&this.widgets.window, "")),
+            Box::new(move |this| this.widgets.finder.present(&this.widgets.window, "")),
         );
-        let this = self.clone();
         add(
             "search",
-            Box::new(move || {
+            Box::new(move |this| {
                 // In the text, its own search bar; anywhere else, the
                 // finder.
                 if !this.widgets.files.focus_search() {
@@ -2773,12 +2781,11 @@ impl Window {
                 }
             }),
         );
-        let this = self.clone();
         add(
             "editor",
             // Shows the Code panel wherever it is docked, with the keyboard
             // in the text.
-            Box::new(move || {
+            Box::new(move |this| {
                 if this.session.borrow().editor() == Editor::Open {
                     this.widgets.workbench.present(workbench::PanelId::Code);
                     this.widgets.files.focus_text();
@@ -2788,8 +2795,11 @@ impl Window {
             }),
         );
         let show_panel = gio::SimpleAction::new("show-panel", Some(glib::VariantTy::STRING));
-        let this = self.clone();
+        let this = Rc::downgrade(self);
         show_panel.connect_activate(move |_, word| {
+            let Some(this) = this.upgrade() else {
+                return;
+            };
             let id = word
                 .and_then(glib::Variant::str)
                 .and_then(workbench::PanelId::from_word);
@@ -2804,8 +2814,11 @@ impl Window {
         self.widgets.window.add_action(&show_panel);
         // "code:end": move the Code panel to the right edge.
         let move_panel = gio::SimpleAction::new("move-panel", Some(glib::VariantTy::STRING));
-        let this = self.clone();
+        let this = Rc::downgrade(self);
         move_panel.connect_activate(move |_, target| {
+            let Some(this) = this.upgrade() else {
+                return;
+            };
             let Some((id, side)) = target
                 .and_then(glib::Variant::str)
                 .and_then(|t| t.split_once(':'))
@@ -2820,33 +2833,26 @@ impl Window {
             }
         });
         self.widgets.window.add_action(&move_panel);
-        let this = self.clone();
         add(
             "reset-layout",
-            Box::new(move || this.widgets.workbench.reset()),
+            Box::new(move |this| this.widgets.workbench.reset()),
         );
-        let this = self.clone();
         add(
             "model",
-            Box::new(move || this.widgets.workbench.present(workbench::PanelId::Parts)),
+            Box::new(move |this| this.widgets.workbench.present(workbench::PanelId::Parts)),
         );
-        let this = self.clone();
-        add("save", Box::new(move || this.widgets.files.save()));
-        let this = self.clone();
-        add("format", Box::new(move || this.widgets.files.format()));
-        let this = self.clone();
-        add("open", Box::new(move || this.choose_folder()));
+        add("save", Box::new(move |this| this.widgets.files.save()));
+        add("format", Box::new(move |this| this.widgets.files.format()));
+        add("open", Box::new(move |this| this.choose_folder()));
         for view in View::ALL.into_iter().filter(|view| header::ready(*view)) {
-            let this = self.clone();
             add(
                 &format!("view-{}", view.word()),
-                Box::new(move || this.dispatch(Command::ShowView(view))),
+                Box::new(move |this| this.dispatch(Command::ShowView(view))),
             );
         }
-        let this = self.clone();
         add(
             "escape",
-            Box::new(move || {
+            Box::new(move |this| {
                 if this.cancel_edit() {
                     return;
                 }
@@ -2860,8 +2866,11 @@ impl Window {
         );
         // The chip at the view's edge names a problem off screen.
         let off_screen = gio::SimpleAction::new("show-problem", Some(glib::VariantTy::UINT64));
-        let this = self.clone();
+        let this = Rc::downgrade(self);
         off_screen.connect_activate(move |_, parameter| {
+            let Some(this) = this.upgrade() else {
+                return;
+            };
             let Some(index) = parameter
                 .and_then(|p| p.get::<u64>())
                 .and_then(|index| usize::try_from(index).ok())
@@ -2875,8 +2884,11 @@ impl Window {
         window.add_action(&off_screen);
         // Open Recent: a folder named in the menu.
         let recent = gio::SimpleAction::new("open-recent", Some(glib::VariantTy::STRING));
-        let this = self.clone();
+        let this = Rc::downgrade(self);
         recent.connect_activate(move |_, parameter| {
+            let Some(this) = this.upgrade() else {
+                return;
+            };
             if let Some(path) = parameter.and_then(glib::Variant::str) {
                 this.go_to_folder(PathBuf::from(path));
             }
@@ -3027,8 +3039,11 @@ impl Window {
         header.forward.set_action_name(Some("win.forward"));
         header.open.set_action_name(Some("win.open"));
 
-        let window = self.clone();
+        let window = Rc::downgrade(self);
         header.switcher.connect_active_name_notify(move |group| {
+            let Some(window) = window.upgrade() else {
+                return;
+            };
             let Some(view) = group.active_name().and_then(|name| View::from_word(&name)) else {
                 return;
             };
@@ -3037,8 +3052,11 @@ impl Window {
             }
         });
 
-        let window = self.clone();
+        let window = Rc::downgrade(self);
         header.scenes.connect_row_activated(move |_, row| {
+            let Some(window) = window.upgrade() else {
+                return;
+            };
             let name = {
                 let session = window.session.borrow();
                 usize::try_from(row.index())
@@ -3075,8 +3093,11 @@ impl Window {
                 window.dispatch(Command::Select(Some(Selection::Assembly(assembly))));
             }
         });
-        let window = self.clone();
+        let window = Rc::downgrade(self);
         widgets.view_toolbar.xray.connect_toggled(move |button| {
+            let Some(window) = window.upgrade() else {
+                return;
+            };
             window.state.borrow_mut().xray = button.is_active();
             window.request_render();
         });
@@ -3093,18 +3114,23 @@ impl Window {
                 window.dispatch(Command::GoToSource(location));
             }
         });
-        let window = self.clone();
-        widgets
-            .motion
-            .scale
-            .connect_value_changed(move |scale| window.motion_moved(scale.value()));
+        let window = Rc::downgrade(self);
+        widgets.motion.scale.connect_value_changed(move |scale| {
+            let Some(window) = window.upgrade() else {
+                return;
+            };
+            window.motion_moved(scale.value())
+        });
 
         // Focus mode's panel and its controls in the 3D view's area.
         let focus_panel = &widgets.inspector.focus;
-        let window = self.clone();
-        focus_panel
-            .done
-            .connect_clicked(move |_| window.dispatch(Command::LeaveFocus));
+        let window = Rc::downgrade(self);
+        focus_panel.done.connect_clicked(move |_| {
+            let Some(window) = window.upgrade() else {
+                return;
+            };
+            window.dispatch(Command::LeaveFocus)
+        });
         let window = Rc::downgrade(self);
         focus_panel.connect_source(move |location| {
             if let Some(window) = window.upgrade() {
@@ -3125,29 +3151,46 @@ impl Window {
             });
         }
         for play in [&widgets.step_card.play, &widgets.swing_card.play] {
-            let window = self.clone();
-            play.connect_clicked(move |_| window.toggle_play_focus());
+            let window = Rc::downgrade(self);
+            play.connect_clicked(move |_| {
+                let Some(window) = window.upgrade() else {
+                    return;
+                };
+                window.toggle_play_focus()
+            });
         }
-        let window = self.clone();
+        let window = Rc::downgrade(self);
         focus_panel.xray.connect_active_notify(move |check| {
+            let Some(window) = window.upgrade() else {
+                return;
+            };
             let on = check.is_active();
             window.update_focus(|focus| focus.options.xray = on);
         });
-        let window = self.clone();
+        let window = Rc::downgrade(self);
         focus_panel.tint.connect_active_notify(move |check| {
+            let Some(window) = window.upgrade() else {
+                return;
+            };
             let on = check.is_active();
             window.update_focus(|focus| focus.options.tint_cut_faces = on);
         });
-        let window = self.clone();
+        let window = Rc::downgrade(self);
         focus_panel.fade.connect_active_notify(move |check| {
+            let Some(window) = window.upgrade() else {
+                return;
+            };
             let on = check.is_active();
             window.update_focus(|focus| focus.options.fade_others = on);
         });
-        let window = self.clone();
+        let window = Rc::downgrade(self);
         widgets
             .plan_switch
             .from_above
             .connect_toggled(move |button| {
+                let Some(window) = window.upgrade() else {
+                    return;
+                };
                 let on = button.is_active();
                 window.update_focus(|focus| focus.plan = on);
             });
@@ -3162,15 +3205,21 @@ impl Window {
 
         // The view toolbar: Pull apart, its play button and its slider.
         let toolbar = &widgets.view_toolbar;
-        let window = self.clone();
+        let window = Rc::downgrade(self);
         toolbar.pull.connect_toggled(move |button| {
+            let Some(window) = window.upgrade() else {
+                return;
+            };
             let on = button.is_active();
             window.pull_apart(on);
         });
-        let window = self.clone();
-        toolbar
-            .play
-            .connect_clicked(move |_| window.toggle_play_explode());
+        let window = Rc::downgrade(self);
+        toolbar.play.connect_clicked(move |_| {
+            let Some(window) = window.upgrade() else {
+                return;
+            };
+            window.toggle_play_explode()
+        });
         let window = Rc::downgrade(self);
         toolbar.slider.connect_changed(move |value| {
             if let Some(window) = window.upgrade() {
@@ -3182,12 +3231,18 @@ impl Window {
         // The camera buttons.
         let camera = &widgets.camera;
         camera.fit.set_action_name(Some("win.frame"));
-        let window = self.clone();
-        camera
-            .front
-            .connect_clicked(move |_| window.look_from(0.0, FRONT_PITCH));
-        let window = self.clone();
+        let window = Rc::downgrade(self);
+        camera.front.connect_clicked(move |_| {
+            let Some(window) = window.upgrade() else {
+                return;
+            };
+            window.look_from(0.0, FRONT_PITCH)
+        });
+        let window = Rc::downgrade(self);
         camera.turn.connect_clicked(move |_| {
+            let Some(window) = window.upgrade() else {
+                return;
+            };
             let (yaw, pitch) = window
                 .state
                 .borrow()
@@ -3378,8 +3433,11 @@ impl Window {
             }
         });
         let viewport = &self.widgets.viewport;
-        let window = self.clone();
+        let window = Rc::downgrade(self);
         viewport.connect_resized(move |width, height| {
+            let Some(window) = window.upgrade() else {
+                return;
+            };
             let changed = {
                 let mut state = window.state.borrow_mut();
                 let changed = state.size != (width, height);
@@ -3412,18 +3470,27 @@ impl Window {
         let orbit_drag = gtk::GestureDrag::builder()
             .button(gdk::BUTTON_PRIMARY)
             .build();
-        let window = self.clone();
+        let window = Rc::downgrade(self);
         orbit_drag.connect_drag_begin(move |_, _, _| {
+            let Some(window) = window.upgrade() else {
+                return;
+            };
             window.state.borrow_mut().drag_applied = (0.0, 0.0);
             window.widgets.viewport.grab_focus();
         });
-        let window = self.clone();
+        let window = Rc::downgrade(self);
         orbit_drag.connect_drag_update(move |_, x, y| {
+            let Some(window) = window.upgrade() else {
+                return;
+            };
             let (dx, dy) = window.drag_step(x, y);
             window.update_orbit(|orbit| orbit.orbited(dx, dy));
         });
-        let window = self.clone();
+        let window = Rc::downgrade(self);
         orbit_drag.connect_drag_end(move |gesture, x, y| {
+            let Some(window) = window.upgrade() else {
+                return;
+            };
             if x.hypot(y) < CLICK_SLOP
                 && let Some((start_x, start_y)) = gesture.start_point()
             {
@@ -3435,12 +3502,18 @@ impl Window {
         // Right or middle drag moves the view sideways.
         for button in [gdk::BUTTON_SECONDARY, gdk::BUTTON_MIDDLE] {
             let pan_drag = gtk::GestureDrag::builder().button(button).build();
-            let window = self.clone();
+            let window = Rc::downgrade(self);
             pan_drag.connect_drag_begin(move |_, _, _| {
+                let Some(window) = window.upgrade() else {
+                    return;
+                };
                 window.state.borrow_mut().drag_applied = (0.0, 0.0);
             });
-            let window = self.clone();
+            let window = Rc::downgrade(self);
             pan_drag.connect_drag_update(move |_, x, y| {
+                let Some(window) = window.upgrade() else {
+                    return;
+                };
                 let (dx, dy) = window.drag_step(x, y);
                 let height = crate::convert::f32_of_int(window.widgets.viewport.height());
                 window.update_orbit(|orbit| orbit.panned(dx, dy, height));
@@ -3449,8 +3522,11 @@ impl Window {
         }
 
         let scroll = gtk::EventControllerScroll::new(gtk::EventControllerScrollFlags::VERTICAL);
-        let window = self.clone();
+        let window = Rc::downgrade(self);
         scroll.connect_scroll(move |_, _, dy| {
+            let Some(window) = window.upgrade() else {
+                return glib::Propagation::Proceed;
+            };
             window.update_orbit(|orbit| orbit.zoomed(crate::convert::f32_of(-dy)));
             glib::Propagation::Stop
         });
@@ -3458,8 +3534,11 @@ impl Window {
 
         // Escape and F anywhere in the window but a text field.
         let keys = gtk::EventControllerKey::new();
-        let window = self.clone();
+        let window = Rc::downgrade(self);
         keys.connect_key_pressed(move |_, key, _, modifiers| {
+            let Some(window) = window.upgrade() else {
+                return glib::Propagation::Proceed;
+            };
             if !modifiers.is_empty()
                 || gtk::prelude::GtkWindowExt::focus(&window.widgets.window)
                     .is_some_and(|w| w.is::<gtk::Text>() || w.is::<gtk::TextView>())
@@ -3490,8 +3569,11 @@ impl Window {
             .button(0)
             .propagation_phase(gtk::PropagationPhase::Capture)
             .build();
-        let window = self.clone();
+        let window = Rc::downgrade(self);
         history.connect_pressed(move |gesture, _, _, _| {
+            let Some(window) = window.upgrade() else {
+                return;
+            };
             let action = match gesture.current_button() {
                 MOUSE_BACK => "win.back",
                 MOUSE_FORWARD => "win.forward",

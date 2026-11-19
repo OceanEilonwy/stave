@@ -120,8 +120,9 @@ impl TreeSidebar {
 
     fn connect(&self) {
         let state = self.state.clone();
-        let list = self.list.clone();
-        self.list.connect_row_activated(move |_, row| {
+        // The list the signal passes, not a captured one: the list keeps
+        // its handlers, so a capture would keep it forever.
+        self.list.connect_row_activated(move |list, row| {
             let kind = {
                 let state = state.borrow();
                 state
@@ -155,7 +156,7 @@ impl TreeSidebar {
                             });
                         state.toggled.insert(id, !open);
                     }
-                    fill(&list, &state);
+                    fill(list, &state);
                     let callback = state.borrow().on_select.clone();
                     if let Some(callback) = callback {
                         callback(Selection::Assembly(id));
