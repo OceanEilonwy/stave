@@ -34,6 +34,10 @@ const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 const MASK_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rg8Unorm;
 const SAMPLES: u32 = 4;
 const SHADOW_SIZE: u32 = 2048;
+/// Render targets are made in steps of this many pixels each way, and a
+/// frame is drawn in their top-left corner, so a window resized a pixel at
+/// a time doesn't make new ones at every step.
+const TARGET_STEP: u32 = 256;
 
 /// The stage behind the design, light or dark.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -114,6 +118,8 @@ struct Globals {
     /// rgb: the selection outline's colour, linear; a: its strength where
     /// the selection is hidden.
     outline: [f32; 4],
+    /// xy: the frame's size in pixels, the corner of the target drawn in.
+    screen: [f32; 4],
 }
 
 #[repr(C)]
@@ -208,8 +214,12 @@ pub struct Frame<'a> {
     pub height: u32,
 }
 
+/// The textures a frame is drawn in. They may be larger than the frame,
+/// which is drawn in their top-left corner.
 struct Target {
+    /// Pixels across it has room for.
     width: u32,
+    /// Pixels down it has room for.
     height: u32,
     msaa: wgpu::TextureView,
     depth: wgpu::TextureView,
@@ -220,6 +230,15 @@ struct Target {
     mask_group: wgpu::BindGroup,
     resolved: wgpu::Texture,
     resolved_view: wgpu::TextureView,
+}
+
+/// Which target a frame is drawn in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Slot {
+    /// The live view's.
+    Live,
+    /// Still pictures'.
+    Still,
 }
 
 /// What the GPU reported outside any call's result: wgpu's callbacks
@@ -314,7 +333,14 @@ pub struct Renderer {
     meshes_generation: u64,
     /// What the shadow map holds; `None` before the first frame.
     shadow_key: Option<ShadowKey>,
-    target: Option<Target>,
+    /// Where the live view is drawn ([`Renderer::submit`]).
+    live_target: Option<Target>,
+    /// Where still pictures are drawn ([`Renderer::render`]): the small
+    /// pictures beside the view and screenshots, so they never make the
+    /// live view's targets anew.
+    still_target: Option<Target>,
+    /// How many targets were made, for tests.
+    targets_made: u64,
     /// The readback buffers and the frames in them.
     ring: readback::Ring,
 }
@@ -933,7 +959,9 @@ impl Renderer {
             meshes,
             meshes_generation: 0,
             shadow_key: None,
-            target: None,
+            live_target: None,
+            still_target: None,
+            targets_made: 0,
             ring: readback::Ring::default(),
         })
     }
@@ -965,12 +993,30 @@ impl Renderer {
         }
     }
 
-    fn ensure_target(&mut self, width: u32, height: u32) {
-        let matches = self
-            .target
-            .as_ref()
-            .is_some_and(|t| t.width == width && t.height == height);
-        if !matches {
+    /// Makes sure `slot`'s target has room for a `width` by `height`
+    /// frame: one is made only when the frame doesn't fit, or is much
+    /// smaller than the target, and then in steps of [`TARGET_STEP`].
+    fn ensure_target(&mut self, slot: Slot, width: u32, height: u32) {
+        let limit = self.device.limits().max_texture_dimension_2d;
+        let step = |pixels: u32| {
+            pixels
+                .checked_next_multiple_of(TARGET_STEP)
+                .unwrap_or(limit)
+                .min(limit)
+                .max(pixels)
+        };
+        let (width, height) = (step(width), step(height));
+        let area = |w: u32, h: u32| u64::from(w) * u64::from(h);
+        let current = match slot {
+            Slot::Live => &self.live_target,
+            Slot::Still => &self.still_target,
+        };
+        let fits = current.as_ref().is_some_and(|t| {
+            t.width >= width
+                && t.height >= height
+                && area(width, height).saturating_mul(4) >= area(t.width, t.height)
+        });
+        if !fits {
             let size = wgpu::Extent3d {
                 width,
                 height,
@@ -1031,7 +1077,7 @@ impl Renderer {
                     resource: wgpu::BindingResource::TextureView(&mask_resolved),
                 }],
             });
-            self.target = Some(Target {
+            let target = Some(Target {
                 width,
                 height,
                 msaa,
@@ -1042,6 +1088,11 @@ impl Renderer {
                 resolved,
                 resolved_view,
             });
+            match slot {
+                Slot::Live => self.live_target = target,
+                Slot::Still => self.still_target = target,
+            }
+            self.targets_made += 1;
         }
     }
 
@@ -1053,7 +1104,7 @@ impl Renderer {
     /// uploaded to it, and the frame drawn there; an error the GPU reports
     /// while drawing fails the frame instead of the application.
     pub fn render(&mut self, frame: &Frame<'_>) -> Result<Image> {
-        let drawn = self.draw_checked(frame)?;
+        let drawn = self.draw_checked(frame, Slot::Still)?;
         self.read_back(drawn)
     }
 
@@ -1068,7 +1119,7 @@ impl Renderer {
         {
             return Err(error);
         }
-        let drawn = self.draw_checked(frame)?;
+        let drawn = self.draw_checked(frame, Slot::Live)?;
         Ok(self.ring.push(drawn))
     }
 
@@ -1089,9 +1140,9 @@ impl Renderer {
     /// Draws a frame into a readback buffer, opening the device again
     /// when it has been lost and turning an error the GPU reports into a
     /// failed frame.
-    fn draw_checked(&mut self, frame: &Frame<'_>) -> Result<readback::Drawn> {
+    fn draw_checked(&mut self, frame: &Frame<'_>, slot: Slot) -> Result<readback::Drawn> {
         self.recover_if_lost(frame.scene)?;
-        let drawn = self.draw(frame);
+        let drawn = self.draw(frame, slot);
         // A device lost while drawing, or before (it may only say so when
         // polled): once more, on a new one. Frames still on the old one
         // count as done.
@@ -1099,7 +1150,7 @@ impl Renderer {
         let drawn = match drawn {
             _ if self.is_lost() => {
                 self.recover_if_lost(frame.scene)?;
-                self.draw(frame)
+                self.draw(frame, slot)
             }
             drawn => drawn,
         };
@@ -1140,7 +1191,7 @@ impl Renderer {
         Ok(())
     }
 
-    fn draw(&mut self, frame: &Frame<'_>) -> Result<readback::Drawn> {
+    fn draw(&mut self, frame: &Frame<'_>, slot: Slot) -> Result<readback::Drawn> {
         let (width, height) = (frame.width.max(1), frame.height.max(1));
         let limit = self.device.limits().max_texture_dimension_2d;
         if width > limit || height > limit {
@@ -1154,10 +1205,27 @@ impl Renderer {
         }
         let started = profile::start();
         let light = self.write_uniforms(frame, width, height);
-        self.ensure_target(width, height);
+        self.ensure_target(slot, width, height);
         let layout = readback::Layout::new(width, height);
         let buffer = self.ring.buffer(&self.device, layout);
-        let target = self.target.as_ref().context("no render target")?;
+        let target = match slot {
+            Slot::Live => &self.live_target,
+            Slot::Still => &self.still_target,
+        }
+        .as_ref()
+        .context("no render target")?;
+        // Every pass draws in the target's top-left corner.
+        let corner = |pass: &mut wgpu::RenderPass<'_>| {
+            pass.set_viewport(
+                0.0,
+                0.0,
+                crate::convert::f32_of_u32(width),
+                crate::convert::f32_of_u32(height),
+                0.0,
+                1.0,
+            );
+            pass.set_scissor_rect(0, 0, width, height);
+        };
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -1324,6 +1392,7 @@ impl Renderer {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
+            corner(&mut pass);
             pass.set_bind_group(0, &self.scene_group, &[]);
             pass.set_bind_group(1, &self.shadow_group, &[]);
             // In a section, every mesh twice: its cut faces, then its
@@ -1389,6 +1458,7 @@ impl Renderer {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
+            corner(&mut pass);
             pass.set_bind_group(0, &self.scene_group, &[]);
             pass.set_bind_group(1, &self.shadow_group, &[]);
             self.bind_meshes(&mut pass);
@@ -1425,6 +1495,7 @@ impl Renderer {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
+            corner(&mut pass);
             pass.set_bind_group(0, &self.scene_group, &[]);
             if !outlined.is_empty() {
                 pass.set_pipeline(&self.outline_pipeline);
@@ -1643,6 +1714,12 @@ impl Renderer {
             }),
             shadow: frame.backdrop.shadow(),
             outline: frame.backdrop.outline(),
+            screen: [
+                crate::convert::f32_of_u32(width),
+                crate::convert::f32_of_u32(height),
+                0.0,
+                0.0,
+            ],
         };
         self.queue
             .write_buffer(&self.globals, 0, bytemuck::bytes_of(&globals));
@@ -2334,6 +2411,74 @@ mod tests {
             renderer.shadow_key.as_ref().map(|key| key.meshes),
             Some(renderer.meshes_generation)
         );
+    }
+
+    /// The stool's frame at another size.
+    fn sized<'a>(scene: &'a SceneGraph, posed: &'a Posed, width: u32, height: u32) -> Frame<'a> {
+        Frame {
+            width,
+            height,
+            ..frame(scene, posed, 0.0)
+        }
+    }
+
+    #[test]
+    fn targets_have_room_to_grow_and_still_pictures_keep_their_own() {
+        let Some(mut renderer) = renderer() else {
+            return;
+        };
+        let (scene, posed) = stool();
+        renderer.upload(&scene);
+        // A window dragged larger a few pixels at a time: one target.
+        for (width, height) in [(1030, 600), (1031, 600), (1100, 700), (1280, 768)] {
+            renderer
+                .submit(&sized(&scene, &posed, width, height))
+                .unwrap();
+        }
+        assert_eq!(renderer.targets_made, 1);
+        // Small pictures between frames get their own, and leave the
+        // view's alone.
+        for _ in 0..3 {
+            renderer.render(&sized(&scene, &posed, 160, 90)).unwrap();
+            renderer.submit(&sized(&scene, &posed, 1280, 768)).unwrap();
+        }
+        assert_eq!(renderer.targets_made, 2);
+        // Much smaller: a smaller target is made.
+        renderer.submit(&sized(&scene, &posed, 64, 48)).unwrap();
+        assert_eq!(renderer.targets_made, 3);
+        assert_eq!(
+            renderer.live_target.as_ref().map(|t| (t.width, t.height)),
+            Some((256, 256))
+        );
+        let _ = wait_and_take(&mut renderer);
+    }
+
+    #[test]
+    fn a_frame_drawn_in_a_larger_target_is_the_same_frame() {
+        let Some(mut renderer) = renderer() else {
+            return;
+        };
+        let (scene, posed) = stool();
+        let selection = [scene.node_ids().next().unwrap()];
+        let selected = |width, height| Frame {
+            selection: &selection,
+            ..sized(&scene, &posed, width, height)
+        };
+        renderer.upload(&scene);
+        renderer.render(&selected(500, 300)).unwrap();
+        let small = renderer.render(&selected(200, 120)).unwrap();
+        assert_eq!(
+            renderer.still_target.as_ref().map(|t| (t.width, t.height)),
+            Some((512, 512))
+        );
+        let mut fresh = Renderer::new().unwrap();
+        fresh.upload(&scene);
+        fresh.render(&selected(200, 120)).unwrap();
+        assert_eq!(
+            fresh.still_target.as_ref().map(|t| (t.width, t.height)),
+            Some((256, 256))
+        );
+        assert_eq!(small, fresh.render(&selected(200, 120)).unwrap());
     }
 
     /// Moves a node's mesh and outline up by `millimetres`, as an edit

@@ -20,6 +20,9 @@ struct Globals {
     // rgb: the selection outline's colour; a: how strongly the outline
     // shows where the selection is hidden behind other parts.
     outline: vec4<f32>,
+    // xy: the frame's size in pixels; it is drawn in the top-left corner
+    // of a target that may be larger.
+    screen: vec4<f32>,
 };
 
 // Is a point cut away by the section?
@@ -313,7 +316,8 @@ const OUTLINE_INSIDE: f32 = 1.0;
 
 @fragment
 fn outline_fragment(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
-    let size = vec2<i32>(textureDimensions(selection_mask)) - vec2<i32>(1);
+    // The frame's corner of the mask, not the whole of it.
+    let size = vec2<i32>(globals.screen.xy) - vec2<i32>(1);
     let centre = vec2<i32>(floor(position.xy));
     // Is there selection near (within the outside width), and a gap near
     // (within the inside width)? Both: the pixel is on the band. Weights
