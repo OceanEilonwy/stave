@@ -193,9 +193,13 @@ pub(in crate::ui) fn wire(window: &mut Window) {
         .pictures
         .connect_resized(move || sender.emit(SelectionInput::PicturesResized.into()));
 
-    // The controls the window also sets itself: their handlers are
-    // blocked while it does (`Window::block_controls`).
-    let mut controls: Vec<(glib::Object, glib::SignalHandlerId)> = Vec::new();
+    // Focus mode's checks, which the window turns on when it opens focus
+    // mode. Each says what the check now shows. The window only ever
+    // turns them on, to what the model already has, so its own change
+    // comes back queued as a value the model has and changes nothing
+    // (`Window::switch_focus`): no handler is blocked. Messages are
+    // handled in the order the checks changed, so the model ends as the
+    // checks show.
     for (check, message) in [
         (
             &focus_panel.xray,
@@ -205,24 +209,30 @@ pub(in crate::ui) fn wire(window: &mut Window) {
         (&focus_panel.fade, SelectionInput::FocusFade),
     ] {
         let sender = input.clone();
-        let handler = check.connect_active_notify(move |check| {
+        check.connect_active_notify(move |check| {
             sender.emit(message(check.is_active()).into());
         });
-        controls.push((check.clone().upcast(), handler));
     }
+
+    // The controls the window sets to values that can differ from one
+    // setting to the next: their handlers are blocked while it does
+    // (`Window::block_controls`), as `#[block_signal]` would. From above
+    // can be shown twice in one turn (leaving one joint's focus and
+    // opening another's), and an echo of the first would write a stale
+    // plan; moving the motion slider's range can move its value on the
+    // way.
     let sender = input.clone();
     let from_above = &widgets.plan_switch.from_above;
     let handler = from_above.connect_toggled(move |button| {
         sender.emit(SelectionInput::FocusPlan(button.is_active()).into());
     });
-    controls.push((from_above.clone().upcast(), handler));
+    window.controls.push((from_above.clone().upcast(), handler));
     let sender = input;
     let scale = &widgets.motion.scale;
     let handler = scale.connect_value_changed(move |scale| {
         sender.emit(SelectionInput::MotionMoved(scale.value()).into());
     });
-    controls.push((scale.clone().upcast(), handler));
-    window.controls.extend(controls);
+    window.controls.push((scale.clone().upcast(), handler));
 }
 
 impl Window {
@@ -273,14 +283,14 @@ impl Window {
             }
             SelectionInput::PlayFocus => self.toggle_play_focus(),
             SelectionInput::FocusTick(now) => self.focus_tick(now),
-            SelectionInput::FocusXray(on) => self.update_focus(|focus| focus.options.xray = on),
+            SelectionInput::FocusXray(on) => self.switch_focus(on, |focus| &mut focus.options.xray),
             SelectionInput::FocusTint(on) => {
-                self.update_focus(|focus| focus.options.tint_cut_faces = on);
+                self.switch_focus(on, |focus| &mut focus.options.tint_cut_faces);
             }
             SelectionInput::FocusFade(on) => {
-                self.update_focus(|focus| focus.options.fade_others = on);
+                self.switch_focus(on, |focus| &mut focus.options.fade_others);
             }
-            SelectionInput::FocusPlan(on) => self.update_focus(|focus| focus.plan = on),
+            SelectionInput::FocusPlan(on) => self.switch_focus(on, |focus| &mut focus.plan),
             SelectionInput::PicturesResized => self.schedule_pictures(),
             SelectionInput::PicturesDue(asked) => {
                 // Only the last ask renders.
@@ -354,7 +364,15 @@ impl Window {
         self.widgets.tree.show_selection(selection.as_ref());
         self.widgets.problems.show_selected(match &selection {
             Some(Selection::Problem(index)) => Some(index.0),
-            _ => None,
+            Some(
+                Selection::Part(_)
+                | Selection::Hardware(_)
+                | Selection::Joint { .. }
+                | Selection::Member(_)
+                | Selection::Assembly(_)
+                | Selection::Location(_),
+            )
+            | None => None,
         });
         self.sync_files();
         if focused {
@@ -378,7 +396,15 @@ impl Window {
                 self.show_problem_controls(None);
                 let moves_with = match &selection {
                     Some(Selection::Assembly(id)) => Some(*id),
-                    _ => inspection.and_then(|i| i.moves_with),
+                    Some(
+                        Selection::Part(_)
+                        | Selection::Hardware(_)
+                        | Selection::Joint { .. }
+                        | Selection::Member(_)
+                        | Selection::Location(_)
+                        | Selection::Problem(_),
+                    )
+                    | None => inspection.and_then(|i| i.moves_with),
                 };
                 self.update_opening(moves_with);
             }
@@ -496,13 +522,15 @@ impl Window {
                 .focus
                 .show(state.focus.as_ref().map(|f| &f.focus));
         }
-        // Setting the check boxes would call their handlers: blocked, so
-        // the window does not hear its own changes.
-        self.block_controls();
+        // The checks show what the model now has (every option on); their
+        // handlers hear it, queued, as values the model already has.
         let panel = &self.widgets.inspector.focus;
         panel.xray.set_active(true);
         panel.tint.set_active(true);
         panel.fade.set_active(true);
+        // The switch's handler is blocked, so the window does not hear
+        // its own change.
+        self.block_controls();
         self.widgets.plan_switch.show(plan);
         self.unblock_controls();
         self.widgets.inspector.show_focus();
@@ -658,16 +686,33 @@ impl Window {
         widgets.pictures.show_current(nearest);
     }
 
-    /// The scrub moved, or a toggle changed: poses again.
+    /// The scrub moved, or a picture was chosen: poses again.
     pub(in crate::ui) fn update_focus(&mut self, change: impl FnOnce(&mut FocusState)) {
-        {
-            // The window's own changes to the controls are blocked, so
-            // only people's reach here.
-            let Some(focus) = self.state.focus.as_mut() else {
-                return;
-            };
-            change(focus);
+        let Some(focus) = self.state.focus.as_mut() else {
+            return;
+        };
+        change(focus);
+        self.show_focus_change();
+    }
+
+    /// One of focus mode's checks or its From above switch now shows
+    /// `on`: the option `switch` picks out follows it and focus poses
+    /// again. A value the option already has is the window's own setting
+    /// coming back (or nothing new) and changes nothing.
+    fn switch_focus(&mut self, on: bool, switch: impl FnOnce(&mut FocusState) -> &mut bool) {
+        let Some(focus) = self.state.focus.as_mut() else {
+            return;
+        };
+        let option = switch(focus);
+        if *option == on {
+            return;
         }
+        *option = on;
+        self.show_focus_change();
+    }
+
+    /// Focus changed: poses again and shows it.
+    fn show_focus_change(&mut self) {
         let texts = self.repose();
         self.show_focus_texts(texts);
         self.show_progress();
@@ -1061,5 +1106,201 @@ impl Window {
                 self.dispatch(Command::GoToSource(location));
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+    use std::time::Duration;
+
+    use relm4::{Component, ComponentController, Controller};
+
+    use super::*;
+    use crate::ui::gtk_test::{on_gtk_thread, settle};
+
+    /// A project window on `example`, launched as the application
+    /// launches one, once its first check has a result. The application
+    /// is kept for as long as the window.
+    fn open_window(example: &str, id: &str) -> (adw::Application, Controller<Window>) {
+        let application = adw::Application::new(Some(id), gio::ApplicationFlags::NON_UNIQUE);
+        // A window joins only an application that has started.
+        if let Err(error) = application.register(gio::Cancellable::NONE) {
+            panic!("the test's application registers: {error}");
+        }
+        let folder = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../examples")
+            .join(example)
+            .canonicalize()
+            .unwrap();
+        // A layout of its own, which is never written: the people's own
+        // layout is left alone.
+        let options = Options {
+            layout: Some(std::env::temp_dir().join("stave-selection-test-no-layout")),
+            ..Options::default()
+        };
+        let builder = Window::builder();
+        let root = builder.widget().clone();
+        let widgets =
+            build_widgets(&root, &application, &folder, &gio::Menu::new(), &options).unwrap();
+        let controller = builder
+            .launch(WindowInit {
+                widgets,
+                folder,
+                options,
+            })
+            .detach();
+        // The check runs on a thread of its own and answers by message.
+        for _ in 0..12_000 {
+            settle();
+            if controller.model().session.shown().is_some() {
+                return (application, controller);
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        panic!("{example} was not checked in two minutes");
+    }
+
+    /// Closes the window and lets it go.
+    fn close(controller: Controller<Window>) {
+        controller.widget().close();
+        settle();
+        drop(controller);
+        settle();
+    }
+
+    /// The first joint in the design that focus mode opens on.
+    fn a_joint(controller: &Controller<Window>) -> Target {
+        let targets: Vec<Target> = controller
+            .model()
+            .session
+            .drawable()
+            .map(|(design, _)| {
+                design
+                    .joints
+                    .iter()
+                    .filter(|joint| !joint.pairs.is_empty())
+                    .map(|joint| Target::Joint {
+                        joint: joint.id,
+                        pair: 0,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        for target in targets {
+            controller
+                .sender()
+                .send(SelectionInput::Focus(target).into())
+                .unwrap();
+            settle();
+            if controller.model().state.focus.is_some() {
+                return target;
+            }
+        }
+        panic!("no joint in the design opens in focus mode");
+    }
+
+    /// What focus mode's options are, or `None` outside it.
+    fn options(controller: &Controller<Window>) -> Option<(bool, bool, bool)> {
+        controller.model().state.focus.as_ref().map(|focus| {
+            (
+                focus.options.xray,
+                focus.options.tint_cut_faces,
+                focus.options.fade_others,
+            )
+        })
+    }
+
+    #[test]
+    fn focus_modes_checks_follow_people_and_not_the_windows_own_setting() {
+        on_gtk_thread(checks_follow_people);
+    }
+
+    /// People's changes to focus mode's checks reach the model once the
+    /// main loop runs; the window turning them on again when it opens
+    /// focus mode comes back as what the model already has, with no
+    /// guard round it, and leaves the model as the checks show.
+    fn checks_follow_people() {
+        let (_application, controller) =
+            open_window("clothing_cabinet", "org.stave.SelectionTest.Checks");
+        let target = a_joint(&controller);
+        assert_eq!(options(&controller), Some((true, true, true)));
+        let (xray, tint, fade) = {
+            let panel = &controller.model().widgets.inspector.focus;
+            (panel.xray.clone(), panel.tint.clone(), panel.fade.clone())
+        };
+        assert!(xray.is_active() && tint.is_active() && fade.is_active());
+
+        // People turn X-ray and Fade off: queued, then heard.
+        xray.set_active(false);
+        fade.set_active(false);
+        assert_eq!(
+            options(&controller),
+            Some((true, true, true)),
+            "only queued until the main loop runs"
+        );
+        settle();
+        assert_eq!(options(&controller), Some((false, true, false)));
+
+        // Leaving and opening focus mode again turns every option on; the
+        // checks' handlers hear that and change nothing.
+        let input = controller.sender().clone();
+        input.send(SelectionInput::LeaveFocus.into()).unwrap();
+        input.send(SelectionInput::Focus(target).into()).unwrap();
+        settle();
+        assert_eq!(options(&controller), Some((true, true, true)));
+        assert!(xray.is_active() && tint.is_active() && fade.is_active());
+
+        // People turn Tint off while focus mode opens again in the same
+        // turn: every message is handled in order, so the model ends as
+        // the checks show.
+        input.send(SelectionInput::LeaveFocus.into()).unwrap();
+        input.send(SelectionInput::Focus(target).into()).unwrap();
+        tint.set_active(false);
+        settle();
+        assert_eq!(tint.is_active(), options(&controller).is_some_and(|o| o.1));
+        close(controller);
+    }
+
+    #[test]
+    fn escape_leaves_focus_then_clears_the_selection() {
+        on_gtk_thread(problem_then_escape);
+    }
+
+    /// Escape and the history are messages: nothing changes until the
+    /// main loop runs. Escape leaves focus mode first, then clears the
+    /// selection, and Back brings the selection back.
+    fn problem_then_escape() {
+        let (_application, controller) =
+            open_window("clothing_cabinet", "org.stave.SelectionTest.Escape");
+        let input = controller.sender().clone();
+        let selected =
+            |controller: &Controller<Window>| controller.model().session.selection().cloned();
+        let target = a_joint(&controller);
+        assert_eq!(controller.model().session.focus(), Some(target));
+        input.send(SelectionInput::Escape.into()).unwrap();
+        assert!(controller.model().session.focus().is_some(), "queued");
+        settle();
+        assert_eq!(
+            controller.model().session.focus(),
+            None,
+            "Escape leaves focus"
+        );
+        assert!(controller.model().state.focus.is_none());
+
+        input
+            .send(SelectionInput::Select(Some(Selection::Problem(ProblemIndex(0)))).into())
+            .unwrap();
+        settle();
+        let problem = selected(&controller);
+        input.send(SelectionInput::Escape.into()).unwrap();
+        settle();
+        assert_eq!(selected(&controller), None, "Escape clears the selection");
+        if problem.is_some() {
+            input.send(SelectionInput::Back.into()).unwrap();
+            settle();
+            assert_eq!(selected(&controller), problem, "Back goes to it again");
+        }
+        close(controller);
     }
 }
