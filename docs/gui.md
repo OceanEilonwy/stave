@@ -367,6 +367,13 @@ menu puts board B back.
   `panel::FrameHeader`): a tab as wide as its title, the shown one with an
   accent line and its ×, and the shown panel's menu (▾: "Move to the
   Right", ...) at the end. Dragging a tab docks its panel elsewhere.
+  For the keyboard and screen readers the strip is a tab list of tabs
+  (the shown one selected); showing another panel restyles the tabs in
+  place, so the focused tab keeps the keyboard; each tab is one Tab stop
+  (the × is for the pointer, labelled "Close <panel>"; the ▾ menu closes
+  a panel); Ctrl+Page Up / Ctrl+Page Down show the previous or next tab
+  while the keyboard is in the frame (after the focused widget, so the
+  editor keeps its own).
 - **Panels** (the status bar's button, and the main menu) shows any closed
   panel again, back where it was, and resets the layout.
 
