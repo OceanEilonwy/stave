@@ -394,7 +394,13 @@ impl Lister<'_, '_, '_> {
                     .values()
                     .filter_map(|slot| match slot {
                         ItemSlot::Param(param) => Some(*param),
-                        _ => None,
+                        ItemSlot::Let(_)
+                        | ItemSlot::Part(_)
+                        | ItemSlot::Region(_)
+                        | ItemSlot::Joint(_)
+                        | ItemSlot::Hardware(_)
+                        | ItemSlot::Assembly(_)
+                        | ItemSlot::Require(_) => None,
                     })
                     .collect()
             })
@@ -575,7 +581,12 @@ impl Lister<'_, '_, '_> {
             let (expr, flush) = match &term.kind {
                 PlaceTermKind::Flush { face, .. } => (face, true),
                 PlaceTermKind::Against { face, .. } => (face, false),
-                _ => return None,
+                PlaceTermKind::Ground
+                | PlaceTermKind::CenterOn { .. }
+                | PlaceTermKind::CenterBetween { .. }
+                | PlaceTermKind::Spaced { .. }
+                | PlaceTermKind::Corners { .. }
+                | PlaceTermKind::Orient { .. } => return None,
             };
             let face = face_of(expr)?;
             (face.axis() == axis).then_some((face, if flush { face } else { face.opposite() }))
@@ -723,7 +734,7 @@ impl Lister<'_, '_, '_> {
                         .first()
                         .filter(|t| t.coefficient == Rational::ONE)
                 }
-                _ => None,
+                Form::Linear(_) | Form::NotLinear(_) => None,
             };
             let param = single.and_then(|term| match term.dependence.source {
                 Source::Param(param)
@@ -732,7 +743,7 @@ impl Lister<'_, '_, '_> {
                 {
                     Some((param, term))
                 }
-                _ => None,
+                Source::Param(_) | Source::StockField { .. } | Source::KindSize { .. } => None,
             });
             let path = param.and_then(|(param, _)| path_of_param(self.model, param));
             match (param, path) {
@@ -784,6 +795,10 @@ pub fn split_grips(
         .get(region.index())
         .ok_or(GripsError::NotInDesign)?;
     let def = model.defs.region(inst.def).ok_or(GripsError::NotInDesign)?;
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "picks out only the variants it names: any other, a new one included, is not one of them"
+    )]
     let is_split = match &def.value.kind {
         RExprKind::Builtin(call) => call.function() == Builtin::Split,
         _ => false,
@@ -860,6 +875,10 @@ pub fn split_grips(
 }
 
 /// The face a `flush` or `against` term names: `space.bottom`.
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "picks out only the variants it names: any other, a new one included, is not one of them"
+)]
 fn face_of(expr: &RExpr) -> Option<Face> {
     match &expr.kind {
         RExprKind::Member {
@@ -1052,7 +1071,7 @@ impl MovableGrip {
             Amount::Length(_) => {
                 let convert = |a: Amount| match a {
                     Amount::Length(l) => l.to_length(),
-                    _ => None,
+                    Amount::Angle(_) | Amount::Count(_) | Amount::Ratio(_) => None,
                 };
                 Some(Movable::Length(
                     GripRange::new(
@@ -1067,7 +1086,7 @@ impl MovableGrip {
             Amount::Angle(_) => {
                 let convert = |a: Amount| match a {
                     Amount::Angle(angle) => angle.to_angle(),
-                    _ => None,
+                    Amount::Length(_) | Amount::Count(_) | Amount::Ratio(_) => None,
                 };
                 let range: GripRange<Angle> = GripRange::new(
                     convert(self.value)?,
@@ -1329,7 +1348,9 @@ fn set_patch(path: &str, before: Amount, after: Amount) -> Result<GripPatch, Mov
                 denominator: n.denominator(),
             }
         }
-        _ => MoveError::Overflow,
+        Amount::Length(_) | Amount::Angle(_) | Amount::Count(_) | Amount::Ratio(_) => {
+            MoveError::Overflow
+        }
     })?;
     let patch = GeneratedPatch::new(
         &fill_in(

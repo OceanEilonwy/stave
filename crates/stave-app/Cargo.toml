@@ -26,3 +26,6 @@ stave-geom = { path = "../stave-geom" }
 insta = "1"
 stave-lang = { path = "../stave-lang" }
 stave-schema = { path = "../stave-schema" }
+
+[lints]
+workspace = true

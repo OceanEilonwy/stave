@@ -17,6 +17,10 @@ pub struct SaveFailure {
 }
 
 /// What a failed write means, by why the system refused it.
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "io::ErrorKind belongs to the standard library and is non-exhaustive: every kind without advice of its own gets the general advice"
+)]
 pub fn advice(error: &io::Error) -> String {
     match error.kind() {
         io::ErrorKind::PermissionDenied | io::ErrorKind::ReadOnlyFilesystem => tr(

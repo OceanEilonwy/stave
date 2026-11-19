@@ -7,3 +7,6 @@ license.workspace = true
 
 [dependencies]
 stave-lang = { path = "../stave-lang" }
+
+[lints]
+workspace = true

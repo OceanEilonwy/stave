@@ -130,6 +130,10 @@ impl SymbolKind {
     }
 
     /// The kind an item or entry node declares.
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "SyntaxKind is a flat set of about 140 token and node tags: this tests the few it needs and treats the rest alike"
+    )]
     pub(crate) fn of_node(kind: SyntaxKind) -> Option<SymbolKind> {
         Some(match kind {
             SyntaxKind::COMPONENT => SymbolKind::Component,
@@ -519,6 +523,10 @@ impl Index {
         }
     }
 
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "SyntaxKind is a flat set of about 140 token and node tags: this tests the few it needs and treats the rest alike"
+    )]
     fn declare_item(
         &mut self,
         node: &SyntaxNode,
@@ -691,7 +699,23 @@ impl Index {
                     .get(&(*component, name.to_owned()))
                     .copied()
             }
-            _ => None,
+            SymbolKind::Component
+            | SymbolKind::Kind
+            | SymbolKind::Recipe
+            | SymbolKind::Stock
+            | SymbolKind::Profile
+            | SymbolKind::Scene
+            | SymbolKind::Param
+            | SymbolKind::Let
+            | SymbolKind::Region
+            | SymbolKind::Part
+            | SymbolKind::Joint
+            | SymbolKind::Hardware
+            | SymbolKind::Require
+            | SymbolKind::Role
+            | SymbolKind::MadePart
+            | SymbolKind::Member
+            | SymbolKind::Label => None,
         }
     }
 
@@ -704,6 +728,10 @@ impl Index {
     }
 
     /// What an expression names, when it names an item.
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "SyntaxKind is a flat set of about 140 token and node tags: this tests the few it needs and treats the rest alike"
+    )]
     fn resolve_expr(&self, file: FileId, node: &SyntaxNode) -> Option<SymbolId> {
         match node.kind() {
             SyntaxKind::NAME_REF => {
@@ -739,6 +767,10 @@ impl Index {
         let mut out = Vec::new();
         let mut current: Option<SymbolId> = None;
         let mut first = true;
+        #[expect(
+            clippy::wildcard_enum_match_arm,
+            reason = "SyntaxKind is a flat set of about 140 token and node tags: this tests the few it needs and treats the rest alike"
+        )]
         for child in node.children() {
             if until.is_some_and(|until| *until == child) {
                 break;
@@ -766,6 +798,10 @@ impl Index {
     }
 
     /// What an index's base is: the array being indexed.
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "SyntaxKind is a flat set of about 140 token and node tags: this tests the few it needs and treats the rest alike"
+    )]
     fn index_base(&self, file: FileId, index: &SyntaxNode) -> Option<SymbolId> {
         let parent = index.parent()?;
         match parent.kind() {
@@ -835,6 +871,10 @@ impl Index {
             return;
         };
         let mut found: Vec<(Span, SymbolId, SyntaxNode)> = Vec::new();
+        #[expect(
+            clippy::wildcard_enum_match_arm,
+            reason = "SyntaxKind is a flat set of about 140 token and node tags: this tests the few it needs and treats the rest alike"
+        )]
         for node in root.descendants() {
             match node.kind() {
                 SyntaxKind::NAME_REF => {
@@ -938,6 +978,10 @@ impl Index {
                     else {
                         continue;
                     };
+                    #[expect(
+                        clippy::wildcard_enum_match_arm,
+                        reason = "SyntaxKind is a flat set of about 140 token and node tags: this tests the few it needs and treats the rest alike"
+                    )]
                     let callee = list.parent().and_then(|call| match call.kind() {
                         SyntaxKind::KIND_CALL => call
                             .children()
@@ -981,6 +1025,10 @@ impl Index {
             return UseKind::Other;
         };
         let item_kind = self.symbol(item).map(|s| s.kind);
+        #[expect(
+            clippy::wildcard_enum_match_arm,
+            reason = "SyntaxKind is a flat set of about 140 token and node tags: this tests the few it needs and treats the rest alike"
+        )]
         for ancestor in node.ancestors() {
             match ancestor.kind() {
                 SyntaxKind::MIRROR => return UseKind::Mirrored(item),
@@ -1036,6 +1084,10 @@ impl Index {
 /// `true` where a bare word reads as an enum word rather than an item: a
 /// word of a closed list given as an argument that is not the first one,
 /// or as a named argument, or as the value of a field that takes words.
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "SyntaxKind is a flat set of about 140 token and node tags: this tests the few it needs and treats the rest alike"
+)]
 fn is_enum_word_position(node: &SyntaxNode, name: &str) -> bool {
     if !crate::words::is_enum_word(name) {
         return false;

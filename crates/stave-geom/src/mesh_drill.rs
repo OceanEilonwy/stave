@@ -497,7 +497,7 @@ fn cut_facet(hole: &Hole, facet: &Facet, shared: &mut Shared) -> Option<Vec<Vec<
                                 } if !*enter && *side == current && *along < limit => {
                                     Some((n, *along))
                                 }
-                                _ => None,
+                                Boundary::Corner(..) | Boundary::Crossing { .. } => None,
                             })
                             .max_by(|x, y| x.1.total_cmp(&y.1));
                         if let Some((n, _)) = exit {

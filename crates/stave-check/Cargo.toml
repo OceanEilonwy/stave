@@ -15,3 +15,6 @@ thiserror = "2"
 [dev-dependencies]
 stave-modules = { path = "../stave-modules" }
 stave-solve = { path = "../stave-solve" }
+
+[lints]
+workspace = true

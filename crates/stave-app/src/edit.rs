@@ -1069,7 +1069,13 @@ pub fn clothing_cabinet_fixture() -> Option<Fixture> {
     let word = |text: &str| Name::new(text, Span::default()).ok();
     let set_value = |patch: &Patch, index: usize| match &patch.ops.get(index)?.kind {
         PatchOpKind::Set { value, .. } => Some(value.clone()),
-        _ => None,
+        PatchOpKind::Add { .. }
+        | PatchOpKind::AddImport { .. }
+        | PatchOpKind::Replace { .. }
+        | PatchOpKind::Unset { .. }
+        | PatchOpKind::Remove { .. }
+        | PatchOpKind::RemoveImport { .. }
+        | PatchOpKind::Rename { .. } => None,
     };
     let assembly_value = |field: &str| -> Option<Expr> {
         let PatchOpKind::Add { item, .. } = &add_drawer.ops.first()?.kind else {

@@ -1221,7 +1221,7 @@ impl<'s, 'm> Tracer<'s, 'm> {
     /// param or field, or a member of a value from a param.
     #[expect(
         clippy::wildcard_enum_match_arm,
-        reason = "the variants it does not name all take the general path in the last arm"
+        reason = "the variants it does not name take the general path written last"
     )]
     fn kind_entry(&mut self, base: &RExpr, name: &str, env: &Env<'static>) -> Step<Affine> {
         let value = self.value(base, env)?;

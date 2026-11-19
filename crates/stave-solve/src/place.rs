@@ -741,7 +741,7 @@ impl<'m> Solver<'m> {
     /// placing anything when it can be read from the expression.
     #[expect(
         clippy::wildcard_enum_match_arm,
-        reason = "the variants it does not name all take the general path in the last arm"
+        reason = "the variants it does not name take the general path written last"
     )]
     fn anchor_axis(&mut self, expr: &RExpr, env: &Env<'_>) -> Solved<Axis> {
         match &expr.kind {

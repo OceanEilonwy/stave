@@ -929,6 +929,10 @@ fn same_value_ops(text: &str) -> Vec<String> {
     let root = module.syntax();
     let slice = |node: &stave_lang::SyntaxNode| node.text().to_string();
     let mut ops = Vec::new();
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "a test picks out the variant it checks, and any other is a failure or not what it counts"
+    )]
     let visit = |prefix: &str, item: &stave_lang::SyntaxNode, ops: &mut Vec<String>| {
         use stave_lang::SyntaxKind as K;
         let Some(name) = item
@@ -938,6 +942,10 @@ fn same_value_ops(text: &str) -> Vec<String> {
         else {
             return;
         };
+        #[expect(
+            clippy::wildcard_enum_match_arm,
+            reason = "a test picks out the variant it checks, and any other is a failure or not what it counts"
+        )]
         let value_after = |node: &stave_lang::SyntaxNode, kind: K| {
             let mut seen = false;
             node.children_with_tokens()
@@ -1104,6 +1112,10 @@ fn patched_corpus_files_parse_and_format_stably() {
 }
 
 /// The tag a patch writes for a top-level item node.
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a test picks out the variant it checks, and any other is a failure or not what it counts"
+)]
 fn tag_word(kind: stave_lang::SyntaxKind) -> Option<&'static str> {
     use stave_lang::SyntaxKind as K;
     Some(match kind {

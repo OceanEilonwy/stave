@@ -1741,7 +1741,9 @@ mod tests {
     fn drag_values(drag: &mut Drag, target: Amount) -> Vec<(ParamId, Amount)> {
         match drag.values_at(target).unwrap() {
             DragStep::Values(values) => values.values,
-            other => panic!("{target:?}: {other:?}"),
+            other @ (DragStep::Unreachable(_) | DragStep::TimedOut) => {
+                panic!("{target:?}: {other:?}")
+            }
         }
     }
 

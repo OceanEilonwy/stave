@@ -1059,7 +1059,12 @@ impl Session {
     pub fn selected_problem(&self) -> Option<&Problem> {
         match self.selection()? {
             Selection::Problem(ProblemIndex(index)) => self.problems().get(*index),
-            _ => None,
+            Selection::Part(_)
+            | Selection::Hardware(_)
+            | Selection::Joint { .. }
+            | Selection::Member(_)
+            | Selection::Assembly(_)
+            | Selection::Location(_) => None,
         }
     }
 

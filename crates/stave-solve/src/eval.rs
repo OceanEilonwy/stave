@@ -333,7 +333,7 @@ impl<'m> Solver<'m> {
                 let mut values = Vec::new();
                 #[expect(
                     clippy::wildcard_enum_match_arm,
-                    reason = "the variants it does not name all take the general path in the last arm"
+                    reason = "the variants it does not name take the general path written last"
                 )]
                 for item in items {
                     match self.eval(item, env)? {
@@ -2210,7 +2210,7 @@ impl<'m> Solver<'m> {
             // The share as written, when the list is written out.
             #[expect(
                 clippy::wildcard_enum_match_arm,
-                reason = "the variants it does not name all take the general path in the last arm"
+                reason = "the variants it does not name take the general path written last"
             )]
             let span = match &expr.kind {
                 RExprKind::List(written) => written.get(index).map_or(expr.span, |e| e.span),
@@ -2369,7 +2369,7 @@ impl<'m> Solver<'m> {
     /// A value as written in a message.
     #[expect(
         clippy::wildcard_enum_match_arm,
-        reason = "the variants it does not name all take the general path in the last arm"
+        reason = "the variants it does not name take the general path written last"
     )]
     pub(crate) fn describe(&self, value: &Value) -> String {
         match value {

@@ -129,6 +129,10 @@ impl Index {
 }
 
 /// The class of a token that names no symbol.
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "SyntaxKind is a flat set of about 140 token and node tags: this tests the few it needs and treats the rest alike"
+)]
 fn classify(token: &SyntaxToken) -> TokenClass {
     let kind = token.kind();
     match kind {

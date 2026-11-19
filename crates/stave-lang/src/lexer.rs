@@ -18,6 +18,11 @@
 //! The parser therefore never sees an unbalanced `(` or `[`, and a forgotten
 //! `)` costs one error instead of the rest of the file.
 
+#![expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "SyntaxKind is a flat set of about 140 token and node tags: the lexer tests the few each step needs and treats the rest alike"
+)]
+
 use crate::ast::{Decimal, Fraction, Magnitude, Number, Quantity, Span, Unit};
 use crate::diagnostics::{Code, Diagnostic, FileId, Label};
 use crate::syntax::SyntaxKind;

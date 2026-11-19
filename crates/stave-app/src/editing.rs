@@ -1216,7 +1216,10 @@ pub fn bind_further(place: &mut [crate::edit::PlaceParam], picked: &Picked) -> b
                 *slot = Some(*region);
                 true
             }
-            _ => false,
+            PlaceSlot::Region(_)
+            | PlaceSlot::Anchor(_)
+            | PlaceSlot::Part(_)
+            | PlaceSlot::Parts(_) => false,
         }),
         Picked::Face(face) => {
             first(place, &mut |slot| match slot {
@@ -1228,13 +1231,19 @@ pub fn bind_further(place: &mut [crate::edit::PlaceParam], picked: &Picked) -> b
                     *slot = Some(face.part);
                     true
                 }
-                _ => false,
+                PlaceSlot::Region(_)
+                | PlaceSlot::Anchor(_)
+                | PlaceSlot::Part(_)
+                | PlaceSlot::Parts(_) => false,
             }) || first(place, &mut |slot| match slot {
                 PlaceSlot::Parts(slot @ None) => {
                     *slot = Some(NonEmpty::one(face.part));
                     true
                 }
-                _ => false,
+                PlaceSlot::Region(_)
+                | PlaceSlot::Anchor(_)
+                | PlaceSlot::Part(_)
+                | PlaceSlot::Parts(_) => false,
             })
         }
         Picked::Between(_) | Picked::Group(_) => {
@@ -1251,7 +1260,10 @@ pub fn bind_further(place: &mut [crate::edit::PlaceParam], picked: &Picked) -> b
                     *slot = Some(all.clone());
                     true
                 }
-                _ => false,
+                PlaceSlot::Region(_)
+                | PlaceSlot::Anchor(_)
+                | PlaceSlot::Part(_)
+                | PlaceSlot::Parts(_) => false,
             }) {
                 return true;
             }
@@ -1583,7 +1595,13 @@ pub fn parse_value(text: &str) -> Result<Expr, NotAValue> {
     match ops {
         [only] => match &only.kind {
             ast::PatchOpKind::Set { value, .. } => Ok(value.clone()),
-            _ => Err(not()),
+            ast::PatchOpKind::Add { .. }
+            | ast::PatchOpKind::AddImport { .. }
+            | ast::PatchOpKind::Replace { .. }
+            | ast::PatchOpKind::Unset { .. }
+            | ast::PatchOpKind::Remove { .. }
+            | ast::PatchOpKind::RemoveImport { .. }
+            | ast::PatchOpKind::Rename { .. } => Err(not()),
         },
         _ => Err(not()),
     }

@@ -14,6 +14,10 @@ fn workspace() -> PathBuf {
 fn session_for(folder: PathBuf) -> Session {
     let mut session = Session::new(folder.clone());
     let events = session.apply(Command::Check);
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "a test picks out the variant it checks, and any other is a failure or not what it counts"
+    )]
     let ticket = events
         .iter()
         .find_map(|event| match event {

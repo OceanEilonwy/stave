@@ -197,7 +197,7 @@ fn compare_fractions(a: i128, b: i128, c: i128, d: i128) -> Ordering {
                     continue;
                 }
             },
-            unequal => unequal,
+            unequal @ (Ordering::Less | Ordering::Greater) => unequal,
         };
         return if flipped {
             ordering.reverse()

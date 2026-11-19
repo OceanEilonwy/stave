@@ -302,6 +302,10 @@ fn split_of(expr: &Expr) -> Option<Split<'_>> {
     }
     let mut positional = args.iter().filter(|arg| arg.name.is_none());
     let source = &positional.next()?.value;
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "a syntax-shape check: only the forms it names mean anything here, and every other expression is the error case"
+    )]
     let axis = match &positional.next()?.value.kind {
         ExprKind::Name(word) => Axis::from_word(word.as_str())?,
         _ => return None,
@@ -320,6 +324,10 @@ fn split_of(expr: &Expr) -> Option<Split<'_>> {
 }
 
 /// The shares of a split as exact numbers, when each is a plain number.
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a syntax-shape check: only the forms it names mean anything here, and every other expression is the error case"
+)]
 fn share_values(shares: &Expr) -> Option<Vec<Rational>> {
     let ExprKind::List(items) = &shares.kind else {
         return None;
@@ -335,6 +343,10 @@ fn share_values(shares: &Expr) -> Option<Vec<Rational>> {
 
 /// How many elements an array declaration has, when it is written as
 /// labels or a whole number.
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a syntax-shape check: only the forms it names mean anything here, and every other expression is the error case"
+)]
 fn array_count(spec: &ast::ArraySpec) -> Option<usize> {
     match spec {
         ast::ArraySpec::Labels(labels) => Some(labels.as_slice().len()),
@@ -368,6 +380,10 @@ fn region_param(scope: &EditScope<'_>, assembly: &str) -> Option<String> {
     let model = scope.model();
     let defs = &model.defs;
     let module = defs.modules.get(model.root.index())?;
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "picks out only the variants it names: any other, a new one included, is not one of them"
+    )]
     let component = module.items.iter().find_map(|item| match item {
         DefId::Assembly(id) => {
             let def = defs.assembly(*id)?;
@@ -1034,7 +1050,15 @@ pub(crate) fn mirror_image_of(scope: &EditScope<'_>, name: &str) -> Option<Strin
                     PartDef::Mirror(mirror) => &mirror.source,
                     PartDef::FromStock { .. } => return None,
                 },
-                _ => return None,
+                ItemKind::Project(_)
+                | ItemKind::Library(_)
+                | ItemKind::Kind(_)
+                | ItemKind::Recipe(_)
+                | ItemKind::Stock(_)
+                | ItemKind::Profile(_)
+                | ItemKind::Component(_)
+                | ItemKind::Scene(_)
+                | ItemKind::Design(_) => return None,
             };
             let path = source.as_path()?;
             if path.root.as_str() != name || !path.segments.is_empty() {
@@ -1093,6 +1117,10 @@ fn single_place_params(scope: &EditScope<'_>, assembly: &str) -> Vec<String> {
     let Some(module) = defs.modules.get(model.root.index()) else {
         return Vec::new();
     };
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "picks out only the variants it names: any other, a new one included, is not one of them"
+    )]
     let component = module.items.iter().find_map(|item| match item {
         DefId::Assembly(id) => {
             let def = defs.assembly(*id)?;

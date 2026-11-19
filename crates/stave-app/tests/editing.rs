@@ -455,6 +455,10 @@ fn a_design_that_does_not_solve_cannot_be_edited_by_pointing() {
     std::fs::write(&cabinet, text).unwrap();
     let mut session = Session::new(folder.clone());
     let events = session.apply(Command::Edit(EditCommand::Start(Picked::Region(above))));
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "a test picks out the variant it checks, and any other is a failure or not what it counts"
+    )]
     let rejected = events.iter().find_map(|event| match event {
         Event::Edit(EditEvent::Rejected(Rejection::CantStart(message))) => Some(message.clone()),
         _ => None,

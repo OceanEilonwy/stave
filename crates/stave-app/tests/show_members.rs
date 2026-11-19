@@ -277,6 +277,10 @@ fn the_parts_tree_counts_the_pins_each_joint_places() {
     );
 }
 
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a test picks out the variant it checks, and any other is a failure or not what it counts"
+)]
 fn started(events: &[Event]) -> Option<stave_app::session::CheckTicket> {
     events.iter().find_map(|event| match event {
         Event::CheckStarted(ticket) => Some(*ticket),

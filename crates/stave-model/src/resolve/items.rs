@@ -831,7 +831,7 @@ impl<'a> Resolver<'a> {
     ) -> MirrorDef {
         #[expect(
             clippy::wildcard_enum_match_arm,
-            reason = "the variants it does not name all take the general path in the last arm"
+            reason = "the variants it does not name take the general path written last"
         )]
         let expect = match source_ty {
             Ty::Part => Expect::ty(Ty::Part).named("mirror"),
@@ -866,7 +866,7 @@ impl<'a> Resolver<'a> {
         let found = self.field_table(cx, body.fields(), fields::PART, what, body.span);
         #[expect(
             clippy::wildcard_enum_match_arm,
-            reason = "the variants it does not name all take the general path in the last arm"
+            reason = "the variants it does not name take the general path written last"
         )]
         let size = |this: &mut Self, field: &ast::Field| -> Size {
             let value = this.field_value(cx, field, fields::PART);

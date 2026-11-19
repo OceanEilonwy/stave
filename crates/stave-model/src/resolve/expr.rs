@@ -222,7 +222,7 @@ impl Resolver<'_> {
 
     #[expect(
         clippy::wildcard_enum_match_arm,
-        reason = "the variants it does not name all take the general path in the last arm"
+        reason = "the variants it does not name take the general path written last"
     )]
     fn expr_name(&self, expr: &RExpr) -> String {
         match &expr.kind {
@@ -405,7 +405,7 @@ impl Resolver<'_> {
                     // A list inside a list flattens; `x[*]` is a list.
                     #[expect(
                         clippy::wildcard_enum_match_arm,
-                        reason = "the variants it does not name all take the general path in the last arm"
+                        reason = "the variants it does not name take the general path written last"
                     )]
                     let ty = match &value.ty {
                         Ty::List(inner) => (**inner).clone(),
@@ -551,7 +551,7 @@ impl Resolver<'_> {
                 // An unindexed array name inside its own declaration.
                 #[expect(
                     clippy::wildcard_enum_match_arm,
-                    reason = "the variants it does not name all take the general path in the last arm"
+                    reason = "the variants it does not name take the general path written last"
                 )]
                 let ty = match self.symbol_ty(Symbol::Def(def)) {
                     Ty::Array(inner) => *inner,
@@ -786,7 +786,7 @@ impl Resolver<'_> {
             None => {
                 #[expect(
                     clippy::wildcard_enum_match_arm,
-                    reason = "the variants it does not name all take the general path in the last arm"
+                    reason = "the variants it does not name take the general path written last"
                 )]
                 let what = match &base.ty {
                     Ty::Assembly(component) => {
@@ -1515,7 +1515,7 @@ impl Resolver<'_> {
         }
         #[expect(
             clippy::wildcard_enum_match_arm,
-            reason = "the variants it does not name all take the general path in the last arm"
+            reason = "the variants it does not name take the general path written last"
         )]
         let ty = match builtin.returns() {
             _ if builtin == Builtin::Split => Ty::Regions,

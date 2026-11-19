@@ -1190,6 +1190,10 @@ assembly flap_l : Flap {
 assembly flap_r = mirror(flap_l, about: mid(base, across))",
     );
     let design = design(&opened);
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "a test picks out the variant it checks, and any other is a failure or not what it counts"
+    )]
     let recess = |name: &str| {
         part(design, name)
             .cuts

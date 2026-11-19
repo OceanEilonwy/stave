@@ -39,8 +39,11 @@ opt-level = 3
 # `wildcard_enum_match_arm`: a `_ =>` arm on one of our enums swallows the
 # variants added later, so a new `Value`, `RExprKind` or `Ty` variant falls
 # silently into "ignore" or "None" instead of failing to compile. List the
-# variants; where a wildcard is right (a foreign or non-exhaustive enum, a
-# deliberate "everything else"), write `#[expect(clippy::wildcard_enum_match_arm,
-# reason = "...")]` on the match.
+# variants; where a wildcard is right (a projection that picks out one
+# variant, a foreign or non-exhaustive enum, a deliberate "everything else"),
+# write `#[expect(clippy::wildcard_enum_match_arm, reason = "...")]` on the
+# narrowest enclosing statement or function (lint attributes on a match arm
+# are not honoured), or use `if let` / `let ... else`. stave-gtk does not
+# take these lints yet.
 [workspace.lints.clippy]
 wildcard_enum_match_arm = "warn"

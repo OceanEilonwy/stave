@@ -73,6 +73,10 @@ fn errors(folder: &Path) -> String {
     stave_lang::render_diagnostics(&opened.sources, &errors)
 }
 
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a test picks out the variant it checks, and any other is a failure or not what it counts"
+)]
 fn send(session: &mut Session, command: EditCommand) -> Vec<EditEvent> {
     session
         .apply(Command::Edit(command))

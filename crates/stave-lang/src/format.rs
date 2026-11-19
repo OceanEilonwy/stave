@@ -93,6 +93,10 @@ fn parse_root(file: FileId, text: &str) -> Result<SyntaxNode, FormatError> {
 
 /// The meaning-carrying content of a tree: its tokens and comments, with
 /// runs of newlines counted once.
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "SyntaxKind is a flat set of about 140 token and node tags: this tests the few it needs and treats the rest alike"
+)]
 pub(crate) fn signature(root: &SyntaxNode) -> Vec<(SyntaxKind, String)> {
     let mut out: Vec<(SyntaxKind, String)> = Vec::new();
     for token in root
@@ -195,6 +199,10 @@ fn lines(root: &SyntaxNode, text: &str) -> Vec<Line> {
             continue;
         };
         let end: u32;
+        #[expect(
+            clippy::wildcard_enum_match_arm,
+            reason = "SyntaxKind is a flat set of about 140 token and node tags: this tests the few it needs and treats the rest alike"
+        )]
         let (kind, atom_text, parent, token, start) = match element {
             rowan::NodeOrToken::Node(node) => {
                 if node.kind() != SyntaxKind::STRING {
@@ -258,6 +266,10 @@ fn lines(root: &SyntaxNode, text: &str) -> Vec<Line> {
 }
 
 /// `true` if there is a space between two atoms on one line.
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "SyntaxKind is a flat set of about 140 token and node tags: this tests the few it needs and treats the rest alike"
+)]
 fn space_between(previous: &Atom, next: &Atom) -> bool {
     use SyntaxKind::*;
     if next.is_comment() || previous.kind == BLOCK_COMMENT {
@@ -644,6 +656,10 @@ fn render(lines: &[Line]) -> Vec<(usize, String)> {
         let mut statement_anchor: Option<usize> = None;
         let last_code_index = line.atoms.iter().rposition(|atom| !atom.is_comment());
 
+        #[expect(
+            clippy::wildcard_enum_match_arm,
+            reason = "SyntaxKind is a flat set of about 140 token and node tags: this tests the few it needs and treats the rest alike"
+        )]
         for (position, atom) in line.atoms.iter().enumerate() {
             if let Some(previous) = position.checked_sub(1).and_then(|p| line.atoms.get(p)) {
                 let target = match alignment {

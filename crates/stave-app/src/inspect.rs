@@ -381,7 +381,12 @@ pub fn items_in(design: &SolvedDesign, selection: &Selection) -> Vec<Item> {
             )
             .filter(|item| crate::problems::inside(design, *item, *id))
             .collect(),
-        other => other.item().into_iter().collect(),
+        other @ (Selection::Part(_)
+        | Selection::Hardware(_)
+        | Selection::Joint { .. }
+        | Selection::Member(_)
+        | Selection::Location(_)
+        | Selection::Problem(_)) => other.item().into_iter().collect(),
     }
 }
 
@@ -879,6 +884,10 @@ pub fn highlight(text: &str) -> Vec<Token> {
             .skip(index.saturating_add(1))
             .find(|(k, _)| !k.is_trivia())
             .map(|(k, _)| *k);
+        #[expect(
+            clippy::wildcard_enum_match_arm,
+            reason = "SyntaxKind is a flat set of about 140 token and node tags: this tests the few it needs and treats the rest alike"
+        )]
         let class = match kind {
             SyntaxKind::LINE_COMMENT | SyntaxKind::BLOCK_COMMENT | SyntaxKind::DOC => {
                 TokenClass::Comment

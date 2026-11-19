@@ -14,3 +14,6 @@ stave-lang = { path = "../stave-lang" }
 stave-model = { path = "../stave-model" }
 stave-schema = { path = "../stave-schema" }
 
+
+[lints]
+workspace = true

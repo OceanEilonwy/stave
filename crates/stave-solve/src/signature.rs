@@ -196,7 +196,7 @@ fn count_words(count: usize) -> String {
 /// `a space`.
 #[expect(
     clippy::wildcard_enum_match_arm,
-    reason = "the variants it does not name all take the general path in the last arm"
+    reason = "the variants it does not name take the general path written last"
 )]
 fn sort_words(value: &Value) -> &'static str {
     match value {
@@ -339,7 +339,7 @@ impl Solver<'_> {
     /// Parts or a space as a message names them.
     #[expect(
         clippy::wildcard_enum_match_arm,
-        reason = "the variants it does not name all take the general path in the last arm"
+        reason = "the variants it does not name take the general path written last"
     )]
     fn handed_words(&self, value: &Value) -> String {
         match value {

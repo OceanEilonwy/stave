@@ -17,6 +17,11 @@
 //! - an error inside `( )` or `[ ]` skips to the matching closer, which the
 //!   lexer guarantees exists.
 
+#![expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "SyntaxKind is a flat set of about 140 token and node tags: the parser tests the few each step needs and treats the rest alike"
+)]
+
 use rowan::{Checkpoint, GreenNode, GreenNodeBuilder};
 
 use crate::ast::Span;
@@ -1475,7 +1480,17 @@ impl<'t> Parser<'t> {
             Body::Calls(CallKind::Step | CallKind::Selector) => {
                 format!("a step block of {owner}")
             }
-            _ => format!("the body of {owner}"),
+            Body::Fields
+            | Body::Part
+            | Body::Hardware
+            | Body::Kind
+            | Body::Recipe
+            | Body::Profile
+            | Body::Component
+            | Body::Scene
+            | Body::Member
+            | Body::Mechanism
+            | Body::Patch => format!("the body of {owner}"),
         };
         self.node(BLOCK, |p| {
             let open = p.span(0);
@@ -1515,7 +1530,18 @@ impl<'t> Parser<'t> {
                         if result.is_ok() {
                             let context = match body {
                                 Body::Calls(call) => Some(call),
-                                _ => None,
+                                Body::Fields
+                                | Body::Part
+                                | Body::Hardware
+                                | Body::Kind
+                                | Body::Recipe
+                                | Body::Profile
+                                | Body::Component
+                                | Body::Scene
+                                | Body::Roles
+                                | Body::Member
+                                | Body::Mechanism
+                                | Body::Patch => None,
                             };
                             let help = p.missing_parentheses_help(context);
                             p.expected_with_help(&["end of line"], help.as_deref());
