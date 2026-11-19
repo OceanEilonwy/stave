@@ -18,7 +18,7 @@
 
 use adw::prelude::*;
 use gtk::{gdk, glib};
-use relm4::{Component, ComponentParts, ComponentSender};
+use relm4::{Component, ComponentController, ComponentParts, ComponentSender};
 use stave_app::editing::{EditCommand, parse_length};
 use stave_app::hold::{HoldRequest, Measured};
 use stave_app::i18n::{fill_in, tr};
@@ -416,7 +416,7 @@ impl Window {
     /// button.
     pub(in crate::ui) fn connect_hold(&self) {
         let hold = &self.editing.hold;
-        self.editing.menu.root.append(&hold.from_space);
+        self.editing.menu.widget().append(&hold.from_space);
         let input = self.input();
         hold.from_space
             .connect_clicked(move |_| input.emit(EditingInput::HoldFromSpace.into()));
