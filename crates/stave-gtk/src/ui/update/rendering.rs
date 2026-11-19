@@ -213,7 +213,7 @@ pub(in crate::ui) fn wire(window: &mut Window) {
 
     // Escape, F and Delete anywhere in the window but a text field.
     let keys = gtk::EventControllerKey::new();
-    let sender = input;
+    let sender = input.clone();
     keys.connect_key_pressed(move |controller, key, _, modifiers| {
         let Some(root) = controller
             .widget()
@@ -229,7 +229,7 @@ pub(in crate::ui) fn wire(window: &mut Window) {
         }
         match key {
             gdk::Key::Escape => {
-                let _ = WidgetExt::activate_action(&root, "win.escape", None);
+                sender.emit(SelectionInput::Escape.into());
                 glib::Propagation::Stop
             }
             gdk::Key::f | gdk::Key::F => {
@@ -252,16 +252,17 @@ pub(in crate::ui) fn wire(window: &mut Window) {
         .button(0)
         .propagation_phase(gtk::PropagationPhase::Capture)
         .build();
+    // Going back or forward with nowhere to go does nothing (the session
+    // says so), as the disabled actions did.
+    let sender = input;
     history.connect_pressed(move |gesture, _, _, _| {
-        let action = match gesture.current_button() {
-            MOUSE_BACK => "win.back",
-            MOUSE_FORWARD => "win.forward",
+        let message = match gesture.current_button() {
+            MOUSE_BACK => SelectionInput::Back,
+            MOUSE_FORWARD => SelectionInput::Forward,
             _ => return,
         };
         gesture.set_state(gtk::EventSequenceState::Claimed);
-        if let Some(widget) = gesture.widget() {
-            let _ = WidgetExt::activate_action(&widget, action, None);
-        }
+        sender.emit(message.into());
     });
     root.add_controller(history);
 
@@ -429,26 +430,23 @@ impl Window {
     /// everything.
     pub(in crate::ui) fn frame(&mut self) {
         let nodes = self.selected_nodes();
-        {
-            let session = &self.session;
-            let Some(shown) = session.shown() else {
-                return;
-            };
-            let state = &mut self.state;
-            let aspect = Self::aspect(state);
-            let selected = (!nodes.is_empty())
-                .then(|| {
-                    let (_, graph) = shown.drawable()?;
-                    let bounds = graph.bounds_of(state.posed.as_ref()?, &nodes)?;
-                    let framed = state.orbit?.framed(bounds, aspect);
-                    Some(Orbit {
-                        distance: framed.distance * FRAME_ROOM,
-                        ..framed
-                    })
+        let Some(shown) = self.session.shown() else {
+            return;
+        };
+        let state = &mut self.state;
+        let aspect = Self::aspect(state);
+        let selected = (!nodes.is_empty())
+            .then(|| {
+                let (_, graph) = shown.drawable()?;
+                let bounds = graph.bounds_of(state.posed.as_ref()?, &nodes)?;
+                let framed = state.orbit?.framed(bounds, aspect);
+                Some(Orbit {
+                    distance: framed.distance * FRAME_ROOM,
+                    ..framed
                 })
-                .flatten();
-            state.orbit = selected.or_else(|| Self::frame_all(state, shown));
-        }
+            })
+            .flatten();
+        state.orbit = selected.or_else(|| Self::frame_all(state, shown));
         self.request_render();
     }
 
@@ -457,16 +455,12 @@ impl Window {
     /// problem frames itself where it is posed; focus mode frames its
     /// joint; a place in the text leaves the camera alone.
     pub(in crate::ui) fn frame_selection(&mut self) {
-        let reframes = {
-            let session = &self.session;
-            session.focus().is_none()
-                && matches!(
-                    session.selection(),
-                    None | Some(
-                        Selection::Part(_) | Selection::Hardware(_) | Selection::Assembly(_)
-                    )
-                )
-        };
+        let session = &self.session;
+        let reframes = session.focus().is_none()
+            && matches!(
+                session.selection(),
+                None | Some(Selection::Part(_) | Selection::Hardware(_) | Selection::Assembly(_))
+            );
         if reframes {
             self.frame();
         }
@@ -475,45 +469,37 @@ impl Window {
     /// Moves the camera where the command line asked, once the view has a
     /// size and the asked-for selection is made.
     pub(in crate::ui) fn apply_start_camera(&mut self) {
-        let ready = {
-            let state = &self.state;
-            state.size.0 > 1 && state.wanted.is_none() && state.start_camera.is_some()
-        };
-        if !ready {
+        let state = &self.state;
+        if state.size.0 <= 1 || state.wanted.is_some() || state.start_camera.is_none() {
             return;
         }
         let node = self.selected_node();
-        {
-            let session = &self.session;
-            let state = &mut self.state;
-            let Some(camera) = state.start_camera.take() else {
-                return;
-            };
-            let aspect = Self::aspect(state);
-            let Some(orbit) = state.orbit else {
-                return;
-            };
-            let turned = Orbit {
-                yaw: (orbit.yaw + camera.turn.to_radians()).rem_euclid(std::f32::consts::TAU),
-                pitch: camera.pitch.map_or(orbit.pitch, f32::to_radians),
-                ..orbit
-            };
-            let posed = state.posed.as_ref();
-            let drawable = session.drawable();
-            let bounds = drawable.and_then(|(_, graph)| {
-                let posed = posed?;
-                match node.filter(|_| camera.frame_selection) {
-                    Some(id) => graph.bounds_of(posed, &[id]),
-                    None => edit_view::drawn_bounds(graph, posed),
-                }
-            });
-            let framed = bounds.map_or(turned, |bounds| turned.framed(bounds, aspect));
-            let zoomed = Orbit {
-                distance: framed.distance / camera.zoom.unwrap_or(1.0),
-                ..framed
-            };
-            state.orbit = Some(zoomed);
-        }
+        let state = &mut self.state;
+        let Some(camera) = state.start_camera.take() else {
+            return;
+        };
+        let aspect = Self::aspect(state);
+        let Some(orbit) = state.orbit else {
+            return;
+        };
+        let turned = Orbit {
+            yaw: (orbit.yaw + camera.turn.to_radians()).rem_euclid(std::f32::consts::TAU),
+            pitch: camera.pitch.map_or(orbit.pitch, f32::to_radians),
+            ..orbit
+        };
+        let posed = state.posed.as_ref();
+        let bounds = self.session.drawable().and_then(|(_, graph)| {
+            let posed = posed?;
+            match node.filter(|_| camera.frame_selection) {
+                Some(id) => graph.bounds_of(posed, &[id]),
+                None => edit_view::drawn_bounds(graph, posed),
+            }
+        });
+        let framed = bounds.map_or(turned, |bounds| turned.framed(bounds, aspect));
+        state.orbit = Some(Orbit {
+            distance: framed.distance / camera.zoom.unwrap_or(1.0),
+            ..framed
+        });
         self.request_render();
     }
 
@@ -539,51 +525,43 @@ impl Window {
 
     /// Turns the camera to look from a direction, framing everything.
     pub(in crate::ui) fn look_from(&mut self, yaw: f32, pitch: f32) {
-        {
-            let session = &self.session;
-            let state = &mut self.state;
-            let aspect = Self::aspect(state);
-            let bounds = session
-                .drawable()
-                .and_then(|(_, graph)| edit_view::drawn_bounds(graph, state.posed.as_ref()?));
-            state.orbit = state.orbit.map(|orbit| {
-                let turned = Orbit {
-                    yaw: yaw.rem_euclid(std::f32::consts::TAU),
-                    pitch,
-                    ..orbit
-                };
-                bounds.map_or(turned, |bounds| turned.framed(bounds, aspect))
-            });
-        }
+        let state = &mut self.state;
+        let aspect = Self::aspect(state);
+        let bounds = self
+            .session
+            .drawable()
+            .and_then(|(_, graph)| edit_view::drawn_bounds(graph, state.posed.as_ref()?));
+        state.orbit = state.orbit.map(|orbit| {
+            let turned = Orbit {
+                yaw: yaw.rem_euclid(std::f32::consts::TAU),
+                pitch,
+                ..orbit
+            };
+            bounds.map_or(turned, |bounds| turned.framed(bounds, aspect))
+        });
         self.request_render();
     }
 
     /// "Pull apart" switched on (all the way apart) or off (together).
     pub(in crate::ui) fn pull_apart(&mut self, on: bool) {
-        {
-            let state = &mut self.state;
-            if state.pull_apart == on {
-                return;
-            }
-            state.pull_apart = on;
-            state.exploding = false;
+        // The window's own setting of the toggle is blocked, and arrives
+        // as no change if it was queued before: only people's change acts.
+        if self.state.pull_apart == on {
+            return;
         }
-        self.dispatch(Command::SetExplode(Explode::clamped(if on {
-            1.0
-        } else {
-            0.0
-        })));
+        self.state.pull_apart = on;
+        self.state.exploding = false;
+        let apart = if on { 1.0 } else { 0.0 };
+        self.dispatch(Command::SetExplode(Explode::clamped(apart)));
         self.show_view_toolbar();
     }
 
     /// Shows the view toolbar as the session and the window have it.
     pub(in crate::ui) fn show_view_toolbar(&mut self) {
         let explode = self.session.explode().get();
-        let (on, playing) = {
-            let state = &mut self.state;
-            state.pull_apart |= explode > 0.0;
-            (state.pull_apart, state.exploding)
-        };
+        let state = &mut self.state;
+        state.pull_apart |= explode > 0.0;
+        let (on, playing) = (state.pull_apart, state.exploding);
         // Pull apart's toggle is set at once: its handler is blocked, so
         // the window does not hear its own change.
         self.block_controls();
@@ -594,11 +572,8 @@ impl Window {
     /// The pull apart play button: plays from together to apart (from the
     /// start when it is apart already), or pauses.
     pub(in crate::ui) fn toggle_play_explode(&mut self) {
-        let playing = {
-            let state = &mut self.state;
-            state.exploding = !state.exploding;
-            state.exploding
-        };
+        self.state.exploding = !self.state.exploding;
+        let playing = self.state.exploding;
         if playing && self.session.explode().get() >= 1.0 {
             self.dispatch(Command::SetExplode(Explode::clamped(0.0)));
         }
@@ -725,11 +700,10 @@ impl Window {
     pub(in crate::ui) fn explode_changed(&mut self) {
         self.show_view_toolbar();
         let explode = self.session.explode().get();
-        let quiet = {
-            let state = &self.state;
-            state.focus.is_none() && state.problem.is_none()
-        };
-        if quiet && self.session.selection().is_none() {
+        let quiet = self.state.focus.is_none()
+            && self.state.problem.is_none()
+            && self.session.selection().is_none();
+        if quiet {
             self.show_hint(&if explode > 0.0 {
                 format!("Pulled apart · {}%", view_tools::percent(explode))
             } else {
@@ -741,15 +715,20 @@ impl Window {
     }
 
     pub(in crate::ui) fn scene_changed(&mut self) {
-        let (titles, index) = {
-            let session = &self.session;
-            let titles: Vec<String> = session
-                .drawable()
-                .map(|(_, g)| g.scenes.iter().map(|s| s.title.clone()).collect())
-                .unwrap_or_default();
-            (titles, session.scene_index())
-        };
-        self.widgets.header.show_scenes(&titles, index);
+        let titles: Vec<String> = self
+            .session
+            .drawable()
+            .map(|(_, graph)| {
+                graph
+                    .scenes
+                    .iter()
+                    .map(|scene| scene.title.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+        self.widgets
+            .header
+            .show_scenes(&titles, self.session.scene_index());
         self.state.problem = None;
         self.show_problem_controls(None);
         self.repose();
@@ -800,33 +779,27 @@ impl Window {
         if self.edit_click(x, y) {
             return;
         }
-        let hit = {
-            let session = &self.session;
-            let state = &self.state;
-            let viewport = &self.widgets.viewport;
-            session
-                .drawable()
-                .zip(state.orbit)
-                .zip(state.posed.as_ref())
-                .and_then(|(((_, graph), orbit), posed)| {
-                    let ray = orbit.ray(
-                        crate::convert::f32_of(x),
-                        crate::convert::f32_of(y),
-                        crate::convert::f32_of_int(viewport.width()),
-                        crate::convert::f32_of_int(viewport.height()),
-                    );
-                    graph.pick(posed, ray)
-                })
-        };
+        let viewport = &self.widgets.viewport;
+        let hit = self
+            .session
+            .drawable()
+            .zip(self.state.orbit)
+            .zip(self.state.posed.as_ref())
+            .and_then(|(((_, graph), orbit), posed)| {
+                let ray = orbit.ray(
+                    crate::convert::f32_of(x),
+                    crate::convert::f32_of(y),
+                    crate::convert::f32_of_int(viewport.width()),
+                    crate::convert::f32_of_int(viewport.height()),
+                );
+                graph.pick(posed, ray)
+            });
         let selection = hit.map(|hit| Selection::of_item(hit.item));
         self.dispatch(Command::Select(selection));
     }
 
     pub(in crate::ui) fn update_orbit(&mut self, change: impl FnOnce(Orbit) -> Orbit) {
-        {
-            let state = &mut self.state;
-            state.orbit = state.orbit.map(change);
-        }
+        self.state.orbit = self.state.orbit.map(change);
         self.request_render();
     }
 
@@ -846,13 +819,10 @@ impl Window {
         if self.widgets.window.is_mapped() && !self.widgets.viewport.is_mapped() {
             self.capture_if_asked();
         }
-        {
-            let state = &mut self.state;
-            if state.render_queued {
-                return;
-            }
-            state.render_queued = true;
+        if self.state.render_queued {
+            return;
         }
+        self.state.render_queued = true;
         // Drawn on the view's next frame, so several requests draw once.
         self.on_next_frame(|_| RenderingInput::RenderNow.into());
     }
@@ -1000,12 +970,10 @@ impl Window {
     /// first is shown instead; until `ticket`'s frame has settled the
     /// next frame asks again.
     pub(in crate::ui) fn poll_frame(&mut self, ticket: Ticket) {
-        let (ready, settled) = {
-            let Ok(renderer) = &mut self.state.renderer else {
-                return;
-            };
-            (renderer.take_ready(), renderer.settled(ticket))
+        let Ok(renderer) = &mut self.state.renderer else {
+            return;
         };
+        let (ready, settled) = (renderer.take_ready(), renderer.settled(ticket));
         match ready {
             Ok(Some(frame)) => {
                 let shown = crate::render::profile::time("gtk texture", || {
@@ -1019,10 +987,8 @@ impl Window {
                 self.place_grips();
                 // Save the window once a frame of the view's real size is
                 // up.
-                let state = &self.state;
-                let real_size =
-                    state.size.0 > 1 && state.size == self.widgets.viewport.device_size();
-                if real_size {
+                let size = self.state.size;
+                if size.0 > 1 && size == self.widgets.viewport.device_size() {
                     // An edit script runs first; the frame it asks for is
                     // the one saved.
                     if self.run_edit_script() {
@@ -1078,12 +1044,11 @@ impl Window {
 
     /// Takes every pin off the model.
     pub(in crate::ui) fn hide_pins(&mut self) {
-        let pins = &mut self.pins;
-        for pin in pins.pins.drain(..) {
+        for pin in self.pins.pins.drain(..) {
             self.widgets.design.remove_overlay(&pin.widget);
         }
-        pins.made_for = None;
-        pins.edge = None;
+        self.pins.made_for = None;
+        self.pins.edge = None;
         self.widgets.edge_pin.set_visible(false);
     }
 
@@ -1155,10 +1120,11 @@ impl Window {
                 })
                 .collect()
         };
+        let input = self.input();
         let pins: Vec<Pin> = found
             .into_iter()
             .map(|(index, mark, message, anchor)| {
-                let widget = self.pin(index, mark, &message);
+                let widget = Self::pin(&input, index, mark, &message);
                 widget.set_visible(false);
                 self.widgets.design.add_overlay(&widget);
                 Pin {
@@ -1170,9 +1136,8 @@ impl Window {
                 }
             })
             .collect();
-        let state = &mut self.pins;
-        state.pins = pins;
-        state.made_for = Some(key);
+        self.pins.pins = pins;
+        self.pins.made_for = Some(key);
     }
 
     /// Moves each pin to where its place shows now, hiding those whose
@@ -1243,9 +1208,10 @@ impl Window {
     }
 
     /// One pin: its mark's "!" and the problem's words, choosing it
-    /// selects the problem (posed where it happens).
+    /// selects the problem (posed where it happens). Its button holds only
+    /// the window's input sender.
     pub(in crate::ui) fn pin(
-        &mut self,
+        input: &relm4::Sender<WindowInput>,
         index: ProblemIndex,
         mark: Mark,
         message: &str,
@@ -1273,7 +1239,7 @@ impl Window {
                 vec!["stave-pin-label"]
             })
             .build();
-        let input = self.input();
+        let input = input.clone();
         button.connect_clicked(move |_| {
             input.emit(SelectionInput::ShowProblem(index.0).into());
         });
@@ -1301,17 +1267,14 @@ impl Window {
 
     /// The view has a new size, in device pixels.
     pub(in crate::ui) fn resized(&mut self, width: u32, height: u32) {
-        let (changed, first) = {
-            let state = &mut self.state;
-            let changed = state.size != (width, height);
-            let first = state.size.0 <= 1 && width > 1;
-            state.size = (width, height);
-            // The first camera was framed before the view had a size.
-            if first && let Some(shown) = self.session.shown() {
-                state.orbit = Self::frame_all(state, shown);
-            }
-            (changed, first)
-        };
+        let state = &mut self.state;
+        let changed = state.size != (width, height);
+        let first = state.size.0 <= 1 && width > 1;
+        state.size = (width, height);
+        // The first camera was framed before the view had a size.
+        if first && let Some(shown) = self.session.shown() {
+            state.orbit = Self::frame_all(state, shown);
+        }
         // ...and anything chosen by then is framed again at the real size.
         if first && self.state.focus.is_none() {
             self.frame_selection();
