@@ -1,0 +1,44 @@
+// expect: error[unknown-field] the kind 'dado' has no field 'deepness'
+stave 1
+
+project "Unknown setting of a chosen kind" {
+  units: mm
+}
+
+param joinery : JointKind = dado
+// `chosen` is a kind value of a kind chosen through a param, so its
+// setting's name is checked once the kind is known.
+param chosen : JointKind = joinery(deepness: 3mm)
+
+stock pine_19 { species: pine, form: solid, thickness: 19mm, max_length: 2400mm }
+
+part base : pine_19 {
+  length: 600mm
+  width:  300mm
+  place {
+    ground
+  }
+}
+
+part side : pine_19 {
+  length: 400mm
+  width:  300mm
+  place {
+    orient(length: up, width: back)
+    against(base.top)
+    flush(base.left)
+    flush(base.front)
+  }
+}
+
+part shelf : pine_19 {
+  length: 300mm
+  width:  300mm
+  place {
+    against(base.top, gap: 100mm)
+    against(side.right)
+    flush(base.front)
+  }
+}
+
+joint housing : chosen(shelf, into: side)

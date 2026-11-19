@@ -14,8 +14,8 @@ use stave_model::defs::{
 use stave_model::ids::{InstanceId, KindId, PartId, StockId};
 use stave_model::instance::{Ctx, ItemSlot, ParamSource, Slot};
 use stave_model::value::{
-    self, AnchorOwner, AnchorValue, Envelope, ExactBox, KindValue, ModelRef, Mount, RegionOrigin,
-    RegionValue, Spacing, Value,
+    self, AnchorOwner, AnchorValue, Envelope, ExactBox, KindValue, ModelRef, Mount, ParamSettings,
+    RegionOrigin, RegionValue, Spacing, Value,
 };
 use stave_schema::functions::Builtin;
 use stave_schema::kinds::{BaseField, JointSetting};
@@ -83,7 +83,7 @@ pub(crate) struct KindEnv<'e> {
     /// Per role: a part or a region; empty for a kind value.
     pub roles: Cow<'e, [Value]>,
     /// Settings from the kind value and the call.
-    pub settings: Cow<'e, [(String, Value)]>,
+    pub settings: Cow<'e, ParamSettings>,
     /// Param values, worked out on demand.
     params: Params<'e>,
     /// Parts the kind made for this pair.
@@ -98,12 +98,12 @@ impl<'e> KindEnv<'e> {
     pub fn new(
         kind: KindId,
         roles: impl Into<Cow<'e, [Value]>>,
-        settings: impl Into<Cow<'e, [(String, Value)]>>,
+        settings: Cow<'e, ParamSettings>,
     ) -> Self {
         KindEnv {
             kind,
             roles: roles.into(),
-            settings: settings.into(),
+            settings,
             params: Params::Own(ParamCache::default()),
             made: Cow::Borrowed(&[]),
             mount: None,
@@ -293,12 +293,18 @@ impl<'m> Solver<'m> {
                         )
                         .into());
                 };
+                let kind_def = self.sound(
+                    self.model.defs.sound_kind(value.kind),
+                    "a kind's declaration",
+                )?;
                 for setting in settings {
                     let joint_setting = JointSetting::from_word(&setting.name);
-                    let given = match joint_setting {
-                        Some(JointSetting::Glue) => value.glue.is_some(),
-                        Some(JointSetting::Methods) => !value.methods.is_empty(),
-                        None => value.setting(&setting.name).is_some(),
+                    let param = kind_def.param(&setting.name);
+                    let given = match (joint_setting, param) {
+                        (Some(JointSetting::Glue), _) => value.glue.is_some(),
+                        (Some(JointSetting::Methods), _) => !value.methods.is_empty(),
+                        (None, Some(param)) => value.settings.is_set(param),
+                        (None, None) => false,
                     };
                     if given {
                         return Err(self
@@ -312,10 +318,44 @@ impl<'m> Solver<'m> {
                             .into());
                     }
                     let v = self.eval(&setting.value, env)?;
-                    match joint_setting {
-                        Some(JointSetting::Glue) => value.glue = Some(v == Value::Bool(true)),
-                        Some(JointSetting::Methods) => value.methods = recipes(&v),
-                        None => value.settings.push((setting.name.clone(), v)),
+                    match (joint_setting, param) {
+                        (Some(JointSetting::Glue), _) => value.glue = Some(v == Value::Bool(true)),
+                        (Some(JointSetting::Methods), _) => value.methods = recipes(&v),
+                        (None, Some(param)) => value.settings.set(param, v),
+                        // A mounted kind's `face:` belongs to the
+                        // declaration that places it; a kind value does not
+                        // carry one.
+                        (None, None)
+                            if kind_def.base().is_mounted_hardware()
+                                && setting.name == stave_schema::kinds::FACE_SETTING => {}
+                        // The resolver reports an unknown setting of a kind
+                        // it knows; this is one of a kind chosen through a
+                        // param.
+                        (None, None) => {
+                            return Err(self
+                                .error(
+                                    Code::UnknownField,
+                                    format!(
+                                        "the kind '{}' has no field '{}'",
+                                        value.name, setting.name
+                                    ),
+                                    env.file,
+                                    setting.name_span,
+                                    stave_model::suggest::did_you_mean(
+                                        &setting.name,
+                                        kind_def.params.iter().map(|p| p.decl.name.as_str()),
+                                    )
+                                    .unwrap_or_else(|| {
+                                        let names: Vec<&str> = kind_def
+                                            .params
+                                            .iter()
+                                            .map(|p| p.decl.name.as_str())
+                                            .collect();
+                                        format!("its settings are: {}", names.join(", "))
+                                    }),
+                                )
+                                .into());
+                        }
                     }
                 }
                 Ok(Value::Kind(value))
@@ -872,12 +912,8 @@ impl<'m> Solver<'m> {
         let Some(param) = kind.params.get(index) else {
             return Err(Fault::Internal("a kind's setting").into());
         };
-        let value = match kind_env
-            .settings
-            .iter()
-            .find(|(n, _)| *n == param.decl.name)
-        {
-            Some((_, value)) => value.clone(),
+        let value = match kind_env.settings.get(index) {
+            Some(value) => value.clone(),
             None => match &param.default {
                 Some(default) => {
                     let Some(ctx) = self.module_ctx(DefId::Kind(kind_env.kind)) else {
@@ -921,7 +957,11 @@ impl<'m> Solver<'m> {
         file: FileId,
         span: Span,
     ) -> Solved<Option<Value>> {
-        let kind_env = KindEnv::new(kind_value.kind, Vec::new(), &kind_value.settings);
+        let kind_env = KindEnv::new(
+            kind_value.kind,
+            Vec::new(),
+            Cow::Borrowed(&kind_value.settings),
+        );
         self.base_field_in(&kind_env, field, file, span)
     }
 
@@ -980,10 +1020,11 @@ impl<'m> Solver<'m> {
             self.model.defs.sound_kind(kind_value.kind),
             "a kind's declaration",
         )?;
-        if let Some(value) = kind_value.setting(name) {
-            return Ok(value.clone());
-        }
-        let kind_env = KindEnv::new(kind_value.kind, Vec::new(), &kind_value.settings);
+        let kind_env = KindEnv::new(
+            kind_value.kind,
+            Vec::new(),
+            Cow::Borrowed(&kind_value.settings),
+        );
         if let Some(index) = kind.param(name) {
             return self.kind_param(&kind_env, index, file, span);
         }
