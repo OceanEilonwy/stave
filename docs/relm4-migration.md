@@ -422,6 +422,17 @@ them.
   hands it a copy of the setting it searches (`give_option_search`)
   before it opens or refreshes it, and the dialog lists matches from
   that copy with no call back into the window.
+- A key handler that must answer GTK at once (take the key or pass it
+  on) decides from a copy the window keeps, never by asking the model.
+  Delete outside a text field is taken only when there is something to
+  remove, as on main: the window sets `State::removable` (an
+  `Rc<Cell<bool>>`) at the end of every `update`, and the handler reads
+  it, together with whether the editor's analysis reads (while it
+  doesn't, Delete says so; a new analysis arrives with no message, so it
+  is read at the press); the removal itself is a `RemoveSelected`
+  message. With nothing to remove the key goes on to other widgets. The
+  copy is written only by `update` and read only by that handler, so it
+  is not the shared state rule 11 warns about.
 - `update::Unprinted<T>` gives `Debug` to a payload that has none
   (`files::CursorName`, the analysis, a found fit or stop).
 
@@ -431,9 +442,11 @@ them.
   main loop next runs, after the signal has returned.
 - A frame ready on the GPU is shown from a message after the frame-clock
   tick that found it, so it reaches the screen one frame later than
-  before.
-- Delete outside a text field is always claimed by the window (it can't
-  ask the model whether something was removed before answering GTK).
+  before. A frame asked for only by `on_next_frame` therefore draws
+  nothing; GTK 4.24's Broadway backend warns "Duplicate call to
+  gdk_frame_timings_submitted()" about such a frame, so on Broadway the
+  tick also redraws the view (`frames_must_draw` in
+  `update/rendering.rs`).
 - A grip's typed value, a pick from a grip's sizes and a drag's next
   value were sent after a short timeout or an idle; they are queued
   messages now.
@@ -469,7 +482,7 @@ them.
 
 ### Leaks found at the end, and fixed
 
-Both were on `main` before the move, not caused by it.
+All three were on `main` before the move, not caused by it.
 
 - The centre's dock frame (and with it the Model and Code panels, about
   260 widgets) outlived every closed window. A `create-frame` handler
@@ -481,9 +494,15 @@ Both were on `main` before the move, not caused by it.
 - A grip's options menu was held by its own switch's and button's
   handlers, which live in its popover: a cycle, so every menu that was
   replaced stayed alive. The handlers hold it weakly now.
-- Still alive after a window closes: the view switcher's two toggle
-  children (an icon and a label each), kept by libadwaita's
-  `adw::Toggle` itself, as a plain `adw::ToggleGroup` shows.
+- The view switcher's two toggle children (an icon and a label each)
+  outlived every closed window. libadwaita's `AdwToggle` takes a
+  reference to its child and never drops it (its finalize leaves `child`
+  alone; 1.10.0 and `main`), as a plain `adw::ToggleGroup` shows
+  (`libadwaita_leaks_a_toggles_child`). The header keeps its toggles and
+  unsets their children when the switcher is destroyed
+  (`free_children_on_destroy`), and `closed_window_is_freed` no longer
+  lets them off. A draft upstream report is in
+  `docs/reviews/upstream-adw-toggle-leak.md`.
 
 ### Still to do
 

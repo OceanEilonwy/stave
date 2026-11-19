@@ -2150,37 +2150,37 @@ fn rows_card() -> gtk::Box {
 /// display, on top of the window's stylesheet.
 const STYLE: &str = r#"
 .stave-edit-entry-label { font-weight: 600; }
-.stave-edit-hint { font-size: 12px; opacity: 0.75; }
-.stave-edit-checking { font-size: 12px; color: @accent_color; }
-.stave-edit-reason { font-size: 12px; color: @error_color; }
-.stave-edit-needs { font-size: 12px; color: @warning_color; }
+.stave-edit-hint { font-size: 0.818rem; opacity: 0.75; }
+.stave-edit-checking { font-size: 0.818rem; color: @accent_color; }
+.stave-edit-reason { font-size: 0.818rem; color: @error_color; }
+.stave-edit-needs { font-size: 0.818rem; color: @warning_color; }
 button.stave-edit-unavailable .stave-edit-entry-label,
 button.stave-edit-unavailable .stave-edit-hint { opacity: 0.5; }
 .stave-edit-card { background: @window_bg_color; color: @window_fg_color; }
 .stave-edit-body { padding: 10px 12px 8px 12px; }
-.stave-edit-title { font-size: 15px; font-weight: 700; }
-.stave-edit-origin { font-size: 11px; color: alpha(currentColor, 0.65); }
-.stave-edit-hint-line { font-size: 12px; color: alpha(currentColor, 0.7); margin-top: -6px; }
-.stave-edit-caption { font-size: 11px; font-weight: 700; letter-spacing: 0.03em; color: alpha(currentColor, 0.6); margin-top: 2px; }
-.stave-card.stave-edit-rows { border-radius: 8px; font-size: 13px; }
+.stave-edit-title { font-size: 1.023rem; font-weight: 700; }
+.stave-edit-origin { font-size: 0.75rem; color: alpha(currentColor, 0.65); }
+.stave-edit-hint-line { font-size: 0.818rem; color: alpha(currentColor, 0.7); margin-top: -6px; }
+.stave-edit-caption { font-size: 0.75rem; font-weight: 700; letter-spacing: 0.03em; color: alpha(currentColor, 0.6); margin-top: 2px; }
+.stave-card.stave-edit-rows { border-radius: 8px; font-size: 0.886rem; }
 .stave-card.stave-edit-rows > :first-child { border-top-left-radius: 8px; border-top-right-radius: 8px; }
 .stave-card.stave-edit-rows > :last-child { border-bottom-left-radius: 8px; border-bottom-right-radius: 8px; }
 .stave-card > .stave-card-row.stave-edit-row { padding: 3px 4px 3px 10px; min-height: 28px; border-spacing: 8px; }
-.stave-edit-key { font-size: 13px; }
+.stave-edit-key { font-size: 0.886rem; }
 .stave-edit-card .stave-card.stave-card-row { padding: 3px 4px 3px 10px; border-radius: 8px; }
-.stave-edit-long-value { font-family: monospace; font-size: 12px; color: alpha(currentColor, 0.7); margin: 2px 0 2px 2px; }
+.stave-edit-long-value { font-family: var(--monospace-font-family, monospace); font-size: 0.818rem; color: alpha(currentColor, 0.7); margin: 2px 0 2px 2px; }
 .stave-edit-long > .stave-edit-setting { border-spacing: 8px; }
 .stave-edit-value { font-weight: 600; }
 .stave-edit-name { font-weight: 600; }
 .stave-edit-name > stack > label { min-height: 26px; }
-entry.stave-edit-entry { min-height: 26px; padding-top: 0; padding-bottom: 0; font-size: 13px; }
+entry.stave-edit-entry { min-height: 26px; padding-top: 0; padding-bottom: 0; font-size: 0.886rem; }
 entry.stave-edit-entry > text > placeholder { opacity: 0.55; }
 button.stave-edit-options-toggle { min-height: 26px; min-width: 26px; padding: 0 4px; }
-.stave-edit-prompt { color: @accent_color; font-weight: 600; font-size: 12px; }
+.stave-edit-prompt { color: @accent_color; font-weight: 600; font-size: 0.818rem; }
 .stave-card > .stave-edit-row.stave-edit-needs-choice .stave-edit-key { color: @warning_color; opacity: 1; font-weight: 600; }
 .stave-edit-choices { padding: 2px 4px 4px 18px; border-bottom: 1px solid alpha(currentColor, 0.08); }
 button.stave-edit-choice { padding: 2px 6px; min-height: 24px; font-weight: normal; }
-.stave-edit-choice-tag { font-size: 11px; color: alpha(currentColor, 0.6); }
+.stave-edit-choice-tag { font-size: 0.75rem; color: alpha(currentColor, 0.6); }
 button.stave-edit-choice:not(.stave-edit-unavailable) .stave-edit-choice-mark { color: @accent_color; }
 button.stave-edit-search { color: @accent_color; }
 .stave-edit-verdict-box { border-radius: 8px; }
@@ -2191,14 +2191,14 @@ button.stave-edit-search { color: @accent_color; }
 .stave-edit-verdict.refused > box > image, .stave-edit-verdict.refused .stave-edit-status { color: @error_color; }
 .stave-edit-status { font-weight: 700; }
 .stave-edit-problem { margin-top: 2px; }
-.stave-edit-problem-head { font-family: monospace; font-size: 12px; }
+.stave-edit-problem-head { font-family: var(--monospace-font-family, monospace); font-size: 0.818rem; }
 .stave-edit-problem-head.error { color: @error_color; }
 .stave-edit-problem-head.warning { color: @warning_color; }
-.stave-edit-help, .stave-edit-note { font-family: monospace; font-size: 12px; }
+.stave-edit-help, .stave-edit-note { font-family: var(--monospace-font-family, monospace); font-size: 0.818rem; }
 button.stave-edit-fix, button.stave-edit-put-back { padding: 2px 12px; min-height: 26px; }
 .stave-edit-foot { border-top: 1px solid alpha(currentColor, 0.1); }
 .stave-edit-buttons { padding: 8px 12px 10px 12px; }
-.stave-edit-option { font-family: monospace; font-size: 13px; }
+.stave-edit-option { font-family: var(--monospace-font-family, monospace); font-size: 0.886rem; }
 button.stave-edit-face { margin-top: 4px; }
 button.stave-edit-unavailable .stave-edit-option,
 button.stave-edit-unavailable .stave-edit-option-mark,
@@ -2207,7 +2207,7 @@ button.stave-edit-unavailable .stave-edit-choice-mark { opacity: 0.55; }
 .stave-edit-blame-text { font-weight: 700; }
 .stave-repeat-fold { padding: 4px 12px 0 12px; }
 .stave-edit-repeat-slot > .stave-repeat-row { padding: 6px 12px 0 12px; }
-.stave-repeat-short > label { font-size: 15px; font-weight: 700; }
+.stave-repeat-short > label { font-size: 1.023rem; font-weight: 700; }
 .stave-repeat-short spinbutton > button { min-width: 22px; padding-left: 2px; padding-right: 2px; }
 button.stave-repeat-unfold { padding: 2px 8px; min-height: 24px; font-weight: normal; }
 .stave-repeat-fold > .stave-repeat-row { padding: 2px 0; }
@@ -2215,36 +2215,36 @@ button.stave-repeat-unfold { padding: 2px 8px; min-height: 24px; font-weight: no
 .stave-option-search { padding: 0; }
 .stave-option-search-backdrop { background: alpha(black, 0.32); }
 .stave-option-search-head { padding: 10px 8px 0 16px; }
-.stave-option-search-title { font-size: 15px; font-weight: 700; }
-.stave-option-search-group { font-size: 11px; font-weight: 700; letter-spacing: 0.03em; color: alpha(currentColor, 0.6); padding: 8px 12px 2px 12px; }
+.stave-option-search-title { font-size: 1.023rem; font-weight: 700; }
+.stave-option-search-group { font-size: 0.75rem; font-weight: 700; letter-spacing: 0.03em; color: alpha(currentColor, 0.6); padding: 8px 12px 2px 12px; }
 row.stave-option-search-hit { padding: 4px 12px; }
-.stave-option-search-name { font-family: monospace; font-size: 13px; font-weight: 600; }
-.stave-option-search-hint { font-size: 12px; color: alpha(currentColor, 0.75); }
-.stave-option-search-fit { font-size: 12px; }
+.stave-option-search-name { font-family: var(--monospace-font-family, monospace); font-size: 0.886rem; font-weight: 600; }
+.stave-option-search-hint { font-size: 0.818rem; color: alpha(currentColor, 0.75); }
+.stave-option-search-fit { font-size: 0.818rem; }
 .stave-option-search-fit.fits { color: @success_color; }
 .stave-option-search-fit.refused { color: @error_color; }
 .stave-option-search-fit.needs { color: @warning_color; }
 .stave-option-search-fit.checking { color: @accent_color; }
 row.stave-option-search-hit.refused .stave-option-search-name,
 row.stave-option-search-hit.refused .stave-option-search-hint { opacity: 0.55; }
-.stave-option-search-foot { font-size: 12px; color: alpha(currentColor, 0.65); padding: 6px 12px 10px 12px; border-spacing: 16px; }
+.stave-option-search-foot { font-size: 0.818rem; color: alpha(currentColor, 0.65); padding: 6px 12px 10px 12px; border-spacing: 16px; }
 /* ---- lane: Inspector and editing — the cards as Inspector sections ---- */
 .stave-edit-card .stave-edit-body { padding: 0 0 8px 0; border-spacing: 0; }
-.stave-edit-card .stave-edit-hint-line { margin: -2px 8px 4px 8px; font-size: 11.5px; }
-.stave-edit-card .stave-card.stave-edit-rows { background: none; box-shadow: none; border-radius: 0; font-size: 12px; }
+.stave-edit-card .stave-edit-hint-line { margin: -2px 8px 4px 8px; font-size: 0.784rem; }
+.stave-edit-card .stave-card.stave-edit-rows { background: none; box-shadow: none; border-radius: 0; font-size: 0.818rem; }
 .stave-edit-card .stave-card.stave-edit-rows > .stave-card-row.stave-edit-row { padding: 1px 0; min-height: 22px;
   border-bottom: none; border-radius: 0; border-spacing: 6px; }
-.stave-edit-card .stave-edit-key { min-width: 104px; font-size: 12px; color: alpha(currentColor, 0.6); }
-.stave-edit-card .stave-edit-value { font-size: 12px; font-weight: normal; padding: 2px 6px; border-radius: 4px;
+.stave-edit-card .stave-edit-key { min-width: 104px; font-size: 0.818rem; color: alpha(currentColor, 0.6); }
+.stave-edit-card .stave-edit-value { font-size: 0.818rem; font-weight: normal; padding: 2px 6px; border-radius: 4px;
   background: alpha(black, 0.18); }
-.stave-edit-card entry.stave-edit-entry { min-height: 22px; font-size: 12px; }
+.stave-edit-card entry.stave-edit-entry { min-height: 22px; font-size: 0.818rem; }
 .stave-edit-card button.stave-edit-options-toggle { min-height: 22px; min-width: 22px; }
 .stave-edit-card .stave-edit-verdict { padding: 4px 8px; border-radius: 4px; }
-.stave-edit-card .stave-edit-status { font-size: 12px; }
+.stave-edit-card .stave-edit-status { font-size: 0.818rem; }
 .stave-edit-card .stave-edit-foot { border-top: 1px solid alpha(currentColor, 0.1); }
 .stave-edit-card .stave-edit-buttons { padding: 6px 8px 8px 8px; }
-.stave-edit-card .stave-edit-name { font-family: monospace; font-weight: normal; }
-.stave-edit-card .stave-edit-origin { font-size: 11.5px; }
+.stave-edit-card .stave-edit-name { font-family: var(--monospace-font-family, monospace); font-weight: normal; }
+.stave-edit-card .stave-edit-origin { font-size: 0.784rem; }
 "#;
 
 /// Puts the menu's and the card's stylesheet on the display, once.

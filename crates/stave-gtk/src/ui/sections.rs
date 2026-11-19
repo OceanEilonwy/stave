@@ -352,55 +352,55 @@ pub(super) fn button_words(button: &gtk::Button) -> Option<String> {
 const STYLE: &str = r#"
 /* ---- lane: Inspector and editing (sections.rs) ---- */
 .stave-inspector-compact { padding: 0 0 8px 0; }
-.stave-inspector-compact .stave-code { margin: 2px 0 4px 0; font-size: 11.5px; }
+.stave-inspector-compact .stave-code { margin: 2px 0 4px 0; font-size: 0.784rem; }
 .stave-inspector-header { padding: 6px 8px 6px 8px; min-height: 26px; }
 .stave-section.empty .stave-section-arrow { opacity: 0; }
 button.stave-row-lead-button { padding: 0; min-height: 20px; }
 button.stave-row-lead-button:hover .stave-field-label { color: currentColor; }
 button.stave-check-row { padding: 2px 4px; font-weight: normal; }
-.stave-name-field { font-family: monospace; font-size: 12.5px; padding: 2px 8px; min-height: 20px;
+.stave-name-field { font-family: var(--monospace-font-family, monospace); font-size: 0.852rem; padding: 2px 8px; min-height: 20px;
   border-radius: 4px; background: alpha(black, 0.22); }
-.stave-source-link { font-family: monospace; font-size: 11.5px; padding: 0 4px; min-height: 20px; }
-.stave-unsaved-dot { color: #f6d32d; font-size: 11px; }
+.stave-source-link { font-family: var(--monospace-font-family, monospace); font-size: 0.784rem; padding: 0 4px; min-height: 20px; }
+.stave-unsaved-dot { color: #f6d32d; font-size: 0.75rem; }
 .stave-section { margin-top: 1px; }
 button.stave-section-head { padding: 2px 8px 2px 4px; min-height: 22px; border-radius: 0;
   background: alpha(currentColor, 0.06); font-weight: normal; }
 button.stave-section-head:hover { background: alpha(currentColor, 0.09); }
 .stave-section-arrow { opacity: 0.7; }
-.stave-section-title { font-weight: 700; font-size: 12px; }
-.stave-section-note { font-size: 11.5px; color: alpha(currentColor, 0.55); }
+.stave-section-title { font-weight: 700; font-size: 0.818rem; }
+.stave-section-note { font-size: 0.784rem; color: alpha(currentColor, 0.55); }
 .stave-section-body { padding: 3px 8px 6px 8px; }
 .stave-field-row { min-height: 22px; padding: 1px 0; }
-.stave-field-label { min-width: 104px; font-size: 12px; color: alpha(currentColor, 0.6); }
-.stave-field-value { font-size: 12px; padding: 2px 6px; border-radius: 4px; background: alpha(black, 0.18); }
-.stave-field-row entry { min-height: 22px; font-size: 12px; padding-top: 0; padding-bottom: 0; }
-button.stave-name-link { font-family: monospace; font-size: 11.5px; color: #99c1f1; padding: 0 6px;
+.stave-field-label { min-width: 104px; font-size: 0.818rem; color: alpha(currentColor, 0.6); }
+.stave-field-value { font-size: 0.818rem; padding: 2px 6px; border-radius: 4px; background: alpha(black, 0.18); }
+.stave-field-row entry { min-height: 22px; font-size: 0.818rem; padding-top: 0; padding-bottom: 0; }
+button.stave-name-link { font-family: var(--monospace-font-family, monospace); font-size: 0.784rem; color: #99c1f1; padding: 0 6px;
   min-height: 18px; border-radius: 4px; background: alpha(#99c1f1, 0.12); box-shadow: none; }
 button.stave-name-link:hover { background: alpha(#99c1f1, 0.24); }
 .stave-name-links > flowboxchild { padding: 0; min-height: 0; }
-.stave-row-lead { font-size: 12px; }
-.stave-row-lead.joint { font-family: monospace; }
-.stave-row-note { font-size: 11.5px; color: alpha(currentColor, 0.55); }
-.stave-check-row { font-size: 12px; }
+.stave-row-lead { font-size: 0.818rem; }
+.stave-row-lead.joint { font-family: var(--monospace-font-family, monospace); }
+.stave-row-note { font-size: 0.784rem; color: alpha(currentColor, 0.55); }
+.stave-check-row { font-size: 0.818rem; }
 .stave-check-row.error { color: @error_color; }
 .stave-check-row.warning { color: @warning_color; }
-.stave-verdict-row { font-size: 12px; font-weight: 700; }
+.stave-verdict-row { font-size: 0.818rem; font-weight: 700; }
 .stave-verdict-row.fits { color: @success_color; }
 .stave-verdict-row.refused { color: @error_color; }
-.stave-diff { font-family: monospace; font-size: 11.5px; padding: 4px 6px; border-radius: 4px;
+.stave-diff { font-family: var(--monospace-font-family, monospace); font-size: 0.784rem; padding: 4px 6px; border-radius: 4px;
   background: alpha(black, 0.18); }
 .stave-diff-place { color: alpha(currentColor, 0.55); }
 .stave-diff-added { color: #8ff0a4; }
 .stave-diff-removed { color: #ffa348; }
-.stave-key-hint { font-size: 11px; font-weight: normal; opacity: 0.6; }
-button.stave-footer-button { font-size: 12px; font-weight: 600; min-height: 24px; padding: 0 10px; }
+.stave-key-hint { font-size: 0.75rem; font-weight: normal; opacity: 0.6; }
+button.stave-footer-button { font-size: 0.818rem; font-weight: 600; min-height: 24px; padding: 0 10px; }
 .stave-edit-footer { padding: 6px 8px 8px 8px; border-top: 1px solid alpha(currentColor, 0.1); }
-.stave-radio-row { min-height: 22px; font-size: 12px; }
-.stave-radio-row .stave-radio-name { font-family: monospace; color: #99c1f1; }
+.stave-radio-row { min-height: 22px; font-size: 0.818rem; }
+.stave-radio-row .stave-radio-name { font-family: var(--monospace-font-family, monospace); color: #99c1f1; }
 .stave-radio-row .stave-radio-value { color: alpha(currentColor, 0.75); }
 .stave-grip-readout { padding: 3px 10px; border-radius: 6px; background: alpha(@window_bg_color, 0.92);
-  font-size: 12px; box-shadow: 0 1px 3px alpha(black, 0.3); }
-.stave-grip-readout .stave-readout-name { font-family: monospace; color: #99c1f1; }
+  font-size: 0.818rem; box-shadow: 0 1px 3px alpha(black, 0.3); }
+.stave-grip-readout .stave-readout-name { font-family: var(--monospace-font-family, monospace); color: #99c1f1; }
 .stave-grip-readout .stave-readout-value { font-weight: 600; }
 "#;
 

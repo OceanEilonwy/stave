@@ -541,10 +541,10 @@ fn clear(container: &gtk::Box) {
 /// once per display. The handles are small round dots (white, a blue
 /// ring), the same for every grip: what a size follows is said in words.
 const STYLE: &str = r#"
-.stave-grip-title { font-family: monospace; }
-entry.stave-grip-value { font-family: monospace; }
-.stave-grip-change { font-size: 12px; font-family: monospace; color: #99c1f1; }
-.stave-grip-ask { font-size: 12px; font-weight: 700; margin-top: 4px; }
+.stave-grip-title { font-family: var(--monospace-font-family, monospace); }
+entry.stave-grip-value { font-family: var(--monospace-font-family, monospace); }
+.stave-grip-change { font-size: 0.818rem; font-family: var(--monospace-font-family, monospace); color: #99c1f1; }
+.stave-grip-ask { font-size: 0.818rem; font-weight: 700; margin-top: 4px; }
 .stave-grip-stop { color: @error_color; }
 .stave-grip-handle { min-width: 8px; min-height: 8px; border-radius: 999px; background: white;
   border: 2px solid @accent_color; box-shadow: 0 1px 2px alpha(black, 0.35); }
@@ -556,14 +556,14 @@ entry.stave-grip-value { font-family: monospace; }
 .stave-grip-label { padding: 0; border-radius: 6px; background: alpha(@window_bg_color, 0.92);
   color: @window_fg_color; box-shadow: 0 1px 3px alpha(black, 0.25); }
 .stave-grip-label button.stave-grip-number { color: @window_fg_color; padding: 0 6px; min-height: 20px;
-  font-weight: 600; font-size: 11.5px; font-family: monospace; }
-.stave-grip-label.locked { padding: 2px 6px; font-size: 11.5px; opacity: 0.85; }
-.stave-grip-label entry { min-height: 22px; font-size: 12px; }
-.stave-grip-label .stave-grip-error { color: @error_color; font-size: 12px; font-weight: 600;
+  font-weight: 600; font-size: 0.784rem; font-family: var(--monospace-font-family, monospace); }
+.stave-grip-label.locked { padding: 2px 6px; font-size: 0.784rem; opacity: 0.85; }
+.stave-grip-label entry { min-height: 22px; font-size: 0.818rem; }
+.stave-grip-label .stave-grip-error { color: @error_color; font-size: 0.818rem; font-weight: 600;
   padding: 2px 6px 4px 6px; }
 .stave-grip-label menubutton > button { min-height: 20px; min-width: 20px; padding: 0 2px; }
 .stave-grip-switches { padding: 8px; }
-.stave-grip-switches .stave-grip-note { font-size: 12px; opacity: 0.75; }
+.stave-grip-switches .stave-grip-note { font-size: 0.818rem; opacity: 0.75; }
 "#;
 
 /// Puts the grips' stylesheet on the display, once.

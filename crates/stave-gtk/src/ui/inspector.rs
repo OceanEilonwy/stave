@@ -736,7 +736,7 @@ mod tests {
     fn inspection() -> Option<Inspection> {
         let line = LineNumber::new(9)?;
         Some(Inspection {
-            eyebrow: "PART · IN door_l".to_owned(),
+            eyebrow: "Part · in door_l".to_owned(),
             kind: "Part".to_owned(),
             within: Some("door_l".to_owned()),
             title: "stile".to_owned(),
