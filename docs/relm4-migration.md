@@ -291,8 +291,8 @@ Files with no widgets need nothing: `view_layout.rs` (layout arithmetic),
 | `edit_card.rs` | `EditCard` | `connect_action(CardAction)` → `EditCardOutput::Action(CardAction)` | `show(&CardModel, &dyn Words)` → `Show(CardView)` (owned); `update_options(&Candidate)` → `UpdateOptions(Candidate)`; `open_options(&str) -> bool` → `OpenOptions(String)`, the bool becomes `EditCardOutput::OptionsOpened(bool)`; `scroll_to_open_options_now()` → `ScrollToOpenOptions` | Its `links: LinkHandlers` fold into `Action` (see `sections.rs`). Test getters: `key_controller`, `buttons`, `name_field`, `entries`, `option_lists`, `scrolled`, `put_back_button`, `fix_buttons`; *query* `open_setting()`. |
 | `edit_menu.rs` | `EditMenu` | `connect_chosen(Declaration)` → `EditMenuOutput::Chosen(Declaration)` | `show(Heading, &[MenuItem])` → `Show { heading, items: Vec<MenuEntry> }` (owned) | Test getter `rows()`. |
 | `edit_panel.rs` | `EditPanel` | — | `update() -> bool` → `Update`, the bool becomes `EditPanelOutput::Shown(bool)` | *query* `is_empty()`. Built from other cards' widgets: becomes part of its owner's view. |
-| `editor.rs` | `Editor` | `connect_lens_uses(SymbolId)` → `EditorOutput::LensUses(SymbolId)`; `connect_lens_show(SymbolId)` → `EditorOutput::LensShow(SymbolId)` | `set_lenses(&[LensLine])` → `SetLenses(Vec<LensLine>)`; `set_peek(Option<(gtk::Widget, i32)>)` → `SetPeek(Option<(gtk::Widget, i32)>)`; `show_buffer(&TextBuffer, bool)` → `ShowBuffer { buffer, editable }`; `colour(bool)` → `Colour { dark }`; `paint(&TextBuffer, &LineStarts, &[(Run, TokenClass)])` → `Paint { buffer, lines, runs }`; `start_search()` → `StartSearch`; `find(&str)` → `Find(String)` (it opens the bar on the text and highlights its matches but does not select: `Editor::find` selects the first match from the cursor before it sends it, so code that sends `Find` itself must select first); `close_search()` → `CloseSearch`; `show_card(&Widget, i32, i32)` → `ShowCard { card, x, y }`; `hide_card()` → `HideCard`; `place_overlays()` → `PlaceOverlays`; `go_to(&LineStarts, u32)` → `GoTo { lines, offset }` | GObject subclasses `Marks`, `CodeView`, `BlockIndenter` stay widgets. *queries*: `new_buffer`, `vadjustment`, `has_focus`, `has_search`, `has_peek`, `has_card`, `cursor`, `offset_at`; `LineStarts` is plain data. Owned by `FilesPage`. |
-| `files.rs` | `FilesPage` | `connect_link(CursorName)` → `FilesOutput::Link(CursorName)`; `connect_go(Option<SourceLocation>, SourceLocation)` → `Go { from, to }`; `connect_check()` → `Check`; `connect_show_in_3d(Rc<Analysis>, SymbolId)` → `ShowIn3d { analysis, symbol }`; `connect_open()` → `Open`; `connect_notice(String)` → `Notice(String)` | `focus_text()` → `FocusText`; `set_folder(&Path)` → `SetFolder(PathBuf)`; `save_all() -> bool` → `SaveAll`, answered by `FilesOutput::Saved(bool)`; `save()` → `Save`; `format()` → `Format`; `forget_unsaved()` → `ForgetUnsaved`; `focus_search() -> bool` → `FocusSearch`; `show_marks(Rc<Marks>)` → `ShowMarks(Rc<Marks>)`; `show_result(Option<Rc<Checked>>)` → `ShowResult(Option<Rc<Checked>>)`; `show_location(&SourceLocation)` → `ShowLocation(SourceLocation)`; `reveal(&SourceLocation)` → `Reveal(SourceLocation)`; `wish(Wish)` → `Wish(Wish)`; `restyle(bool)` → `Restyle { dark }`; `open_document(&Document)` → `OpenDocument(Document)` | The biggest leaf (own `RefCell` state, `Rc<Self>` methods); owns `Editor`. *queries*: `buffer_for`, `has_unsaved`, `is_unsaved`, `unsaved_count`, `analysis`, `overlay_for_check`, `edit_files`, `page_tabs`. `BufferWriter` (`edit_writer.rs`) writes through it with an `Rc<Cell<bool>>`: rule 11. |
+| `editor.rs` | `Editor` | a lens's links → the one `Fn(LensClick)` given to `Editor::new`, which sends `FilesInput::ListUses` / `ShowIn3d` | — (called by its owner's `update`) | **Done** (with `files.rs`): the view of `FilesComponent`, owned by its model and called only from its `update`, so `show_buffer`, `go_to` and the cursor queries take effect at once inside that update; its search bar is the component `EditorSearch`. GObject subclasses `Marks`, `CodeView`, `BlockIndenter` stay widgets. `EscapeProbe` answers "is anything open over the text?" from the widgets alone, for the Escape key handler. `new_buffer(table, text)` makes a buffer sharing the tags. |
+| `files.rs` | `FilesPage` (shim) / `FilesComponent<Then>` | `FilesOutput::Link(CursorName)`, `Go { from, to }`, `Check`, `ShowIn3d { analysis, symbol }`, `Open`, `Notice(String)`; replies `Saved { ok, then }`, `UnsavedCounted { count, then }`; publications `Documents(Vec<(Document, TextBuffer)>)`, `Analysed(Rc<Analysis>)`, `Unsaved(BTreeSet<PathBuf>)`, `Tabs(Vec<PageTab>)`; `NotInText` | `FocusText`, `SetFolder(PathBuf)`, `Save`, `Format`, `SaveAll { then }`, `CountUnsaved { then }`, `ForgetUnsaved`, `Search`, `ShowMarks`, `ShowResult`, `ShowLocation`, `Reveal`, `Wish`, `Restyle { dark }`, `OpenDocument`, `ShowTab(usize)`, `Adopt { document, buffer }` | **Done**. No `RefCell`, no `Rc<Self>`, no `Weak`: timers and the worker thread send messages with tickets (a stale timer's message is ignored, so no fired timer is ever removed), programmatic cursor moves block the buffer's cursor handler. The window's synchronous reads (`edit_files`, `overlay_for_check`, `buffer_for`, `analysis`) are answered by the shim from what the component published; see "Request and reply". |
 | `finder.rs` | `Finder` | `connect_search(&str) -> Vec<Hit>` → request `FinderOutput::Search(String)` / reply `FinderInput::Hits(Vec<Hit>)`; `connect_actions(&str) -> Vec<Action>` → `FinderOutput::SearchActions(String)` / `FinderInput::Actions(Vec<Action>)`; `connect_hit(Hit, Choice)` → `FinderOutput::Hit { hit, choice }`; `connect_action(usize)` → `FinderOutput::Action(usize)` | `present(&impl IsA<Widget>, &str)` → `Present { parent: gtk::Widget, query: String }` | Rule 9 for the two searches: the shim's `connect_search_request` / `show_hits` and `connect_actions_request` / `show_actions` are that request and reply, and the window uses them. `FinderInput::ListenForHits`: until it arrives, choosing a hit does nothing (`connect_hit` sends it); a parent that forwards `FinderOutput::Hit` itself sends it once at launch. Root is an `adw::Dialog`. |
 | `floating.rs` | `Floats` | constructor `orient: Orient` → `FloatsOutput::Orient { group, orientation }`; constructor `on_dock: OnDock` → `FloatsOutput::Docked { group, spot }` | `refresh()` → `Refresh` | Shares `Rc<RefCell<Spots>>` with `Workbench`: rule 11. Takes the view's overlay and the floating widgets at launch (`Init`). |
 | `focus_panel.rs` | `FocusPanel` | `connect_source(SourceLocation)` → `FocusPanelOutput::Source(SourceLocation)`; (mod.rs) `done.connect_clicked` → `Done`; `xray`, `tint`, `fade` `connect_active_notify` → `Xray(bool)`, `Tint(bool)`, `Fade(bool)` | `show(Option<&Focus>)` → `Show(Option<Focus>)` | `#[block_signal]` on the three checks when `Show` sets them. Owned by `Inspector`. |
@@ -303,7 +303,7 @@ Files with no widgets need nothing: `view_layout.rs` (layout arithmetic),
 | `focus_stage.rs` | `ProblemCard` | `scrub` `Changed` (mod.rs) → `ProblemCardOutput::Moved(f64)` | `show(Option<&MotionCard>, f32)` → `Show { card: Option<MotionCard>, amount: f32 }`; `show_value(&MotionCard, f32)` → `ShowValue { card, amount }` | Owns a slider. |
 | `header.rs` | `Header` | (mod.rs) `switcher.connect_active_name_notify` → `HeaderOutput::View(View)`; `scenes.connect_row_activated` → `HeaderOutput::Scene(usize)` | `show_title(&str, &str)` → `ShowTitle { title, folder }`; `show_view(View)` → `ShowView(View)`; `show_scenes(&[String], usize)` → `ShowScenes { titles, current }`; `show_pill(&Pill, usize, &str)` → `ShowPill { pill, problems, line }`; `show_build(Build, &str)` → `ShowBuild { build, tooltip }` | `#[block_signal]` on the switcher in `ShowView`. Pill, back, forward and build use window actions: keep them. Test getter `switcher_labels()`. |
 | `icons.rs` | `PathIcon` | — | `set_shape(Shape)` (widget method) | A GObject subclass: stays a widget, used inside components' views. |
-| `inspector.rs` | `Inspector` | `connect_focus(Target)` → `InspectorOutput::Focus(Target)`; `connect_source(SourceLocation)` → `Source(SourceLocation)`; `connect_unsaved(&str) -> bool` → *query*: becomes `InspectorInput::Unsaved(BTreeSet<PathBuf>)`, sent when it changes | `show_focus()` → `ShowFocus`; `show_idle(Option<Note>)` → `ShowIdle(Option<Note>)`; `show(Option<&Inspection>)` → `Show(Option<Inspection>)` | Owns `FocusPanel` and `LinkHandlers` (their outputs forwarded). |
+| `inspector.rs` | `Inspector` | `connect_focus(Target)` → `InspectorOutput::Focus(Target)`; `connect_source(SourceLocation)` → `Source(SourceLocation)`; `connect_unsaved` is gone: the window sends `show_unsaved(set)` → `InspectorInput::Unsaved(BTreeSet<PathBuf>)` when `FilesOutput::Unsaved` says the set changed | `show_focus()` → `ShowFocus`; `show_idle(Option<Note>)` → `ShowIdle(Option<Note>)`; `show(Option<&Inspection>)` → `Show(Option<Inspection>)` | Owns `FocusPanel` and `LinkHandlers` (their outputs forwarded). |
 | `new_project.rs` | `NewProjectDialog` | `cancel`, `form.folder_button`, `form.create` `connect_clicked` and `form.dialog.connect_closed` → `NewProjectOutput::Cancel`, `ChooseFolder`, `Create(NewProject)`, `Closed` | — | *queries* `answers()`, `ToolChoice::project()`. `ask_new_project` / `welcome_new_project` are `impl Shell` (coordinator). |
 | `option_search.rs` | `OptionSearch` | `connect_closed()` → `OptionSearchOutput::Closed`; `connect_search(&str) -> Vec<SearchGroup>` → request `Search(String)` / reply `OptionSearchInput::Results(Vec<SearchGroup>)`; `connect_chosen(String, String)` → `Chosen { setting, value }` | `present(&str, &str)` → `Present { setting, query }`; `close()` → `Close`; `refresh()` → `Refresh`; `type_query(&str)` → `TypeQuery(String)`; `choose_selected()` → `ChooseSelected`; `press_arrow(bool)` → `PressArrow { down }` | Rule 9. *queries* `setting()`, `selected()`; test getter `rows()`. |
 | `output.rs` | `OutputPanel` | — | `add_line(&str)` → `OutputPanelInput::AddLine(String)` | |
@@ -311,7 +311,7 @@ Files with no widgets need nothing: `view_layout.rs` (layout arithmetic),
 | `panels.rs` | `FilesList` | `connect_open(PathBuf)` → `FilesListOutput::Open(PathBuf)` | `set_folder(&Path)` → `SetFolder(PathBuf)` | |
 | `sections.rs` | `LinkHandlers` | `connect_click(LinkTarget)` → `<Owner>Output::Link(LinkTarget)`; `connect_hover(Option<LinkTarget>)` → `<Owner>Output::Hover(Option<LinkTarget>)` | `click_target(LinkTarget)` → `<Owner>Input::Click(LinkTarget)` | Not a component: its widget builders (`link`, `links`, `set_button_words`) are used inside `Inspector`'s and `EditCard`'s views, and the two slots become their owner's outputs. |
 | `start_page.rs` | `StartPage` | `open` / `create` actions, recent `row.connect_activated`, `window.connect_close_request` → `StartPageOutput::Open`, `Create`, `OpenRecent(PathBuf)`, `CloseRequest` | `ask_new_project()` → `AskNewProject` | Owned by `Shell`; a window component of its own. |
-| `tab_strip.rs` | `TabStrip`, `set_page_tabs` | `set_page_tabs(panel, Fn() -> Vec<PageTab>)` and `PageTab::show: Rc<dyn Fn()>` → `TabStripOutput::Show { page: glib::WeakRef<panel::Widget>, index }` (a frame can hold several panels with tabs of their own) | the tabs closure (a *query*) → `TabStripInput::SetTabs(Vec<PageTabLabel>)`, sent when the tabs change; the frame's `page_changed` → `PageChanged` (restyle in place); Ctrl+Page Up/Down on the frame → `Step(Step)` | A GObject subclass holding closures: rules 2 and 9. |
+| `tab_strip.rs` | `TabStrip`, `set_page_tabs`, `show_page_tabs` | `TabStripOutput::Show { page: glib::WeakRef<panel::Widget>, index }` (a frame can hold several panels with tabs of their own) goes to the route the panel's owner registered once with `set_page_tabs(panel, Fn(usize))` (it only sends a message) | the owner hands its tabs over as data (`show_page_tabs(panel, Vec<PageTab>)`, from `FilesOutput::Tabs`); every strip gathers them into `TabStripInput::SetTabs(Vec<PageTabLabel>)` when the main loop next runs; the frame's `page_changed` → `PageChanged` (restyle in place); Ctrl+Page Up/Down on the frame → `Step(Step)` | A GObject subclass holding closures: rules 2 and 9. |
 | `tree.rs` | `TreeSidebar` | `connect_select(Selection)` → `TreeOutput::Select(Selection)`; `connect_source(SourceLocation)` → `Source(SourceLocation)`; `connect_focus(Target)` → `Focus(Target)`; `connect_hover(Vec<Item>)` → `Hover(Vec<Item>)` | `show_tree(PartsTree, PartJoints)` → `ShowTree { tree, joints }`; `show_empty(EmptyState)` → `ShowEmpty(EmptyState)`; `set_placeholder(Option<&str>)` → `SetPlaceholder(Option<String>)`; `show_marks(Rc<Marks>)` → `ShowMarks(Rc<Marks>)`; `show_selection(Option<&Selection>)` → `ShowSelection(Option<Selection>)` | Its `syncing` flag and `try_borrow_mut` go: `#[block_signal]` on row selection while filling and syncing. |
 | `viewport.rs` | `Viewport` | `connect_resized(u32, u32)` → `ViewportOutput::Resized { width, height }` | `show_frame(gdk::Texture)` → `ShowFrame(gdk::Texture)`; `show_live(LiveFrame) -> bool` → `ShowLive(LiveFrame)` | A GObject subclass (the wgpu surface): stays a widget, wrapped by the view's component. *queries* `scale()`, `device_size()`. Frame timing is sensitive: measure before and after. |
 | `view_tools.rs` | `ViewToolbar` | (mod.rs) `xray.connect_toggled` → `ViewToolbarOutput::Xray(bool)`; `pull.connect_toggled` → `Pull(bool)`; `play.connect_clicked` → `Play`; `slider` `Changed` → `Apart(f64)` | `show(bool, f32, bool)` → `Show { on, amount, playing }`; `offer(bool)` → `Offer(bool)` | `#[block_signal]` on Pull apart and X-ray (replaces `updating_controls`). Owns a slider. |
@@ -425,6 +425,86 @@ them.
 - `update::Unprinted<T>` gives `Debug` to a payload that has none
   (`files::CursorName`, the analysis, a found fit or stop).
 
+### Request and reply
+
+`FilesPage` was the window's biggest synchronous partner: it asked it
+questions whose answers changed what it did next (`save_all`'s success,
+`has_unsaved`), read its open buffers straight after writing to them (a
+check reads `overlay_for_check`; an edit's commit opened tabs through
+`buffer_for`), and the inspector and the tab strip asked it from inside
+their own drawing. Each kind of question has its own answer; reuse them
+for later conversions, in this order of preference.
+
+1. **The answer comes back as a later message, carrying the asker's
+   continuation.** When the answer depends on the order of what came
+   before (a change typed just before Save; Don't Save just before
+   closing), ask the component by message and let it hand back what was
+   waiting. The component is generic over the owner's continuation,
+   `FilesComponent<Then>`, so it never names the window's types; the
+   window uses `Then = Box<WindowInput>`:
+
+   ```text
+   close-request ─▶ CloseAsked ─▶ FilesInput::CountUnsaved { then: CloseNow }
+       ◀─ FilesOutput::UnsavedCounted { count, then } ─▶ ProjectInput::UnsavedCounted
+          count == 0 ─▶ send(then)                         (CloseNow: destroy)
+          else the question ─▶ UnsavedAnswered { answer, then }
+             Save    ─▶ FilesInput::SaveAll { then: Some(then) }
+                 ◀─ FilesOutput::Saved { ok, then } ─▶ ProjectInput::FilesSaved
+                    ok ─▶ send(then); not ok ─▶ a dialog says why, nothing goes on
+             Discard ─▶ send(then)                         (CloseNow: forget, destroy)
+             Stay    ─▶ nothing
+   ```
+
+   Requests go through the component's own input queue, which is FIFO, so
+   the answer reflects every message sent before it, including a
+   `TextChanged` a buffer's `changed` signal queued during the window's
+   own update. The window keeps a `closing` flag so a close asked again
+   while the first waits for its answer does nothing (the old code closed
+   synchronously, so the second request found the window gone).
+
+2. **Immutable, reference-counted objects the component publishes and
+   the owner keeps.** What the window must read inside one of its own
+   updates (synchronously, in the middle of `session.apply`) comes from
+   its own copies, never from the component's model:
+   - `FilesOutput::Documents(Vec<(Document, gtk::TextBuffer)>)` when a tab
+     opens or they all close; GObjects are reference-counted, so the shim
+     keeps clones. The component keeps each buffer's own `modified` flag
+     equal to "has unsaved changes" (it clears it on open, save, reload
+     and forget, and sets it to the dirty state after each change; GTK
+     sets it the instant text changes). So `FilesPage::edit_files` (the
+     overlay a check or an edit reads) is built from the live text of the
+     modified buffers, exactly what `Buffers::overlay` would give, with
+     no lag.
+   - `FilesOutput::Analysed(Rc<Analysis>)`: the shim keeps it in a
+     `LatestAnalysis` handle as the output is delivered (before the
+     window's own message), which the window reads (`analysis()`) and can
+     give a copy of to a handler that must answer GTK at once.
+   - The tag table is given to the component at launch (`FilesInit`), so
+     the owner can make a buffer itself.
+
+   When the owner needs a buffer that doesn't exist yet (an edit's commit
+   writing a file with no tab while the editor shows; `reveal` followed
+   at once by marking the revealed file's lines), the owner makes it
+   (`editor::new_buffer`), keeps it, and hands it over with
+   `FilesInput::Adopt`. The edit writer (`edit_writer.rs`) is rebuilt by
+   `Window::dispatch` before every Add from the shim's buffers and
+   whether the editor shows (no shared cell), and reports buffers it made
+   through an `mpsc` channel that `dispatch` drains straight after
+   `session.apply` (`FilesPage::take_written`), before the events are
+   handled.
+
+3. **Changes pushed, not asked for.** A query another leaf made from
+   inside its own drawing becomes a message sent when the answer changes:
+   `FilesOutput::Unsaved(set)` → `Inspector::show_unsaved` →
+   `InspectorInput::Unsaved`; `FilesOutput::Tabs(tabs)` →
+   `tab_strip::show_page_tabs`, the strips gathering them when the main
+   loop next runs. The strip's "show this tab" goes to a route registered
+   once (`set_page_tabs(panel, Fn(usize))`), which only sends
+   `ProjectInput::ShowFileTab`.
+
+Never call `bridge.model()` from the owner's handlers to answer one of
+these (rule 8), and never put a `RefCell` round the shared answer.
+
 ### Behaviour that changed on purpose
 
 - Everything the window does in answer to a widget now happens when the
@@ -444,6 +524,14 @@ them.
   frame's page count, whether to take the key (fewer than two pages
   pass it on, so the editor keeps its own); the step itself is a
   `Step` message.
+- The Code panel's setters are queued. The window's close, open-folder
+  and new-project flows ask how many files are unsaved and save them by
+  message ("Request and reply"); closing after Don't Save tells the
+  application the size once per close asked, not once more as it goes
+  on. `--edit-script`'s `save` step queues the saving and goes on; a
+  failure says so in its dialog rather than stopping the script. The
+  hidden row of tab buttons inside the Code panel (never shown since the
+  tabs moved to the strip) is gone.
 - A narrow window's side edges fold and unfold from `Fold`/`Unfold`
   messages that the breakpoint's `apply`/`unapply` send, so they move
   when the main loop next runs rather than inside the breakpoint's
@@ -487,13 +575,18 @@ Both were on `main` before the move, not caused by it.
 
 ### Still to do
 
-- `FilesPage` (`files.rs`) is not a component: it keeps its state in
-  `RefCell`s behind `Rc<FilesPage>`, its own handlers hold it weakly, and
-  the window, `BufferWriter` (`edit_writer.rs`), the tab strip and the
-  inspector's unsaved query reach it synchronously or through a `Weak`.
-  Moving it is the L3 list: `save_all`, `forget_unsaved`, `buffer_for`,
-  `overlay_for_check`, `set_folder`; `connect_unsaved` becomes
-  `InspectorInput::Unsaved`, `set_page_tabs` becomes `TabStripInput`.
+- `edit_view.rs` still keeps `EditView::editor_open: Rc<Cell<bool>>`
+  and sets it before an Add; `BufferWriter::new` only reads it once, and
+  `Window::dispatch` installs a fresh writer before every Add anyway.
+  Drop the field and `install_edit_writer`'s argument when that file is
+  next changed (it was left alone while the edit card moved). Its
+  `update_pending` marks the struck-out lines straight in the buffer the
+  shim hands it (`buffer_for`), which `reveal` makes and has adopted when
+  the file had no tab.
+- The tab strip still keeps its registry of panels' own tabs and its
+  strips in thread-local `RefCell`s (borrowed only to copy in or out,
+  never across a call); they hold data and a message-sending route now,
+  not closures that read the Code panel.
 - The window still uses the synchronous `EditCard` and `EditMenu`;
   `EditCardComponent` and `EditMenuComponent` are only launched by tests.
   The edit flow (and `edit_view/tests.rs`) reads the card straight after
