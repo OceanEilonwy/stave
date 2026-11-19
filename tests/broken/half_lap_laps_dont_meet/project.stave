@@ -1,10 +1,26 @@
 // expect: error[no-contact] lap: once cut, b and a touch only along an edge
 stave 1
 
-// b crosses a by only 2mm, but the half lap cuts each 10mm deep: the laps
-// do not meet, and the parts touch only along the corners of the notches.
+// b crosses a by only 2mm, but the lap cuts each 10mm deep: the laps do
+// not meet, and the parts touch only along the corners of the notches.
+// std's half_lap refuses this by its own rule (see half_lap_offset); this
+// home-made lap has no such rule, so the engine's contact check must.
 project "S" { }
 stock oak { species: white_oak, form: solid, thickness: 20mm, max_width: 300mm, max_length: 2400mm }
+/// A half lap without std's rule that the parts cross by their whole thickness.
+kind lap_joint : joint {
+  roles {
+    piece: Part
+    into:  Part
+  }
+  insert: [push(piece, along: thickness)]
+  cut lap: crossing(into, piece) {
+    notch(depth: into.thickness / 2)
+  }
+  cut mating_lap: crossing(piece, into, opposite: true) {
+    notch(depth: piece.thickness / 2)
+  }
+}
 part a : oak {
   length: 600mm
   width:  60mm
@@ -20,4 +36,4 @@ part b : oak {
     center(a, deep)
   }
 }
-joint lap : half_lap(b, into: a)
+joint lap : lap_joint(b, into: a)
