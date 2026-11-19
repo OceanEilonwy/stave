@@ -72,13 +72,13 @@ impl Header {
         let menu_button = gtk::MenuButton::builder()
             .child(&PathIcon::new(icons::MENU, 16))
             .menu_model(menus)
-            .tooltip_text("Main menu")
+            .tooltip_text("Main Menu")
             .css_classes(["flat", "stave-icon-button"])
             .valign(gtk::Align::Center)
             .primary(true)
             .visible(false)
             .build();
-        menu_button.update_property(&[gtk::accessible::Property::Label("Main menu")]);
+        menu_button.update_property(&[gtk::accessible::Property::Label("Main Menu")]);
 
         let title = gtk::Label::builder()
             .label(folder_label)
@@ -91,7 +91,7 @@ impl Header {
 
         let find = gtk::Button::builder()
             .icon_name("system-search-symbolic")
-            .tooltip_text("Find a part, file, line or problem (Ctrl K)")
+            .tooltip_text("Find a part, file, line or problem (Ctrl+K)")
             .action_name("win.find")
             .css_classes(["flat", "stave-icon-button", "stave-find"])
             .valign(gtk::Align::Center)

@@ -49,9 +49,9 @@ impl StartPage {
             .icon_name("open-menu-symbolic")
             .menu_model(&menu)
             .primary(true)
-            .tooltip_text("Main menu")
+            .tooltip_text("Main Menu")
             .build();
-        menu_button.update_property(&[gtk::accessible::Property::Label("Main menu")]);
+        menu_button.update_property(&[gtk::accessible::Property::Label("Main Menu")]);
         header.pack_end(&menu_button);
 
         let open = gtk::Button::builder()

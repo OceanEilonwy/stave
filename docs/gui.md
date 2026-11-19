@@ -472,13 +472,13 @@ compact board back, the tool groups in their usual spots.
 
 - **Title bar** (`Header`, 34 px): a menu bar (`gtk::PopoverMenuBar`)
   with Project (New Project…, Open Project…, Save, Check Again, Build
-  Plan, Export View as glTF…), Edit (Find…, Find in the Text, Format the
+  Plan, Export 3D Model…), Edit (Find…, Find in the Text, Format the
   Text, Next / Previous Problem), View (Design, Cut List, Back, Forward,
   Frame Everything, the panels, Reset Layout, the style) and Help (About
   Stave), all from `main_menu`; then the project's name in small grey
   words (`Session::title()`, its folder in the tooltip). The Design | Cut
   list switcher sits in the middle. On the right: a find button (a
-  magnifier; "Find a part, file, line or problem (Ctrl K)", `win.find`),
+  magnifier; "Find a part, file, line or problem (Ctrl+K)", `win.find`),
   the problems chip and the hammer. Back and forward are not in the bar:
   they are `win.back`/`win.forward` (Alt+←/→, the View menu, the mouse's
   side buttons), each offered only when it can go. The switcher is an
@@ -503,7 +503,7 @@ compact board back, the tool groups in their usual spots.
   Project…", `win.new-project`, see [A new project](#a-new-project)),
   opens a project folder (Ctrl+O) or a recent one ("Open Recent",
   `win.open-recent`), saves (Ctrl+S), checks again (Ctrl+R) and exports
-  the view as glTF ("Export View as glTF…", `win.export-view`, with
+  the view as glTF ("Export 3D Model…", `win.export-view`, with
   `stave_app::export_view::save_glb`, the same file `stave export`
   writes); the View menu frames everything, brings back closed panels and
   sets the style (follow system, light, dark: `app.style`, remembered);

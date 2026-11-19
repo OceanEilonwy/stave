@@ -1,4 +1,4 @@
-//! "Export View as glTF…": the view as posed, saved as binary glTF.
+//! "Export 3D Model…": the view as posed, saved as binary glTF.
 
 use std::path::Path;
 

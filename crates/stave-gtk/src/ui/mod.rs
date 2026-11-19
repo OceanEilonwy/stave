@@ -2057,7 +2057,7 @@ impl Window {
             self.session.borrow().drawable().map(|(design, _)| design),
         );
         let dialog = gtk::FileDialog::builder()
-            .title("Export View as glTF")
+            .title("Export 3D Model (.glb, for other 3D programs)")
             .initial_name(name)
             .modal(true)
             .build();
@@ -3022,7 +3022,7 @@ impl Window {
             return;
         }
         let dialog = adw::AlertDialog::builder()
-            .heading("Save your changes?")
+            .heading("Save Changes?")
             .body(if count == 1 {
                 "One file has changes that aren't saved. If you don't save them, they are lost.".to_owned()
             } else {
@@ -3400,12 +3400,21 @@ impl Window {
             };
             match selection {
                 Some(selection) => window.select_and_frame(Some(selection)),
-                None => window.widgets.toasts.add_toast(
-                    adw::Toast::builder()
-                        .title("It isn't in the design the 3D view shows")
-                        .timeout(4)
-                        .build(),
-                ),
+                None => {
+                    // Name the thing, and say why: the view shows the last
+                    // version of the design that had no errors.
+                    let name = analysis
+                        .symbol(symbol)
+                        .map_or_else(|| "That".to_owned(), |found| found.name.clone());
+                    window.widgets.toasts.add_toast(
+                        adw::Toast::builder()
+                            .title(format!(
+                                "{name} isn't in the 3D view, which shows the last version without errors"
+                            ))
+                            .timeout(4)
+                            .build(),
+                    );
+                }
             }
         });
         let window = Rc::downgrade(self);
@@ -3888,10 +3897,7 @@ fn main_menu(recent: &gio::Menu) -> gio::Menu {
             ("Build Plan", "win.build"),
         ]),
     );
-    project.append_section(
-        None,
-        &section(&[("Export View as glTF…", "win.export-view")]),
-    );
+    project.append_section(None, &section(&[("Export 3D Model…", "win.export-view")]));
     let edit = gio::Menu::new();
     edit.append_section(
         None,

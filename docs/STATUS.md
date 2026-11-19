@@ -202,7 +202,7 @@ the system or the main menu, the 3D backdrop with them.
   their ends. The 3D
   view's dock has "Pull apart": on, it grows a play button and a
   "together … apart" slider. The
-  main menu's "Export View as glTF…" saves the view as posed. The camera
+  main menu's "Export 3D Model…" saves the view as posed (a .glb file). The camera
   buttons fit the view, look at the front and turn to the back. A library folder, or a design that doesn't solve, says so in
   the view instead of leaving it blank, and so do the tree and the card:
   a library's tree lists the kinds, recipes and components it defines

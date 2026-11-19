@@ -54,7 +54,7 @@ pub fn describe(error: &stave_ide::SaveError, folder: &Path) -> SaveFailure {
     }
 }
 
-/// Puts a failed "Export View as glTF…" into words.
+/// Puts a failed "Export 3D Model…" into words.
 pub fn describe_export(error: &crate::export_view::SaveError, path: &Path) -> SaveFailure {
     let heading = format!("Couldn't Save {}", file_name(path));
     match error {
