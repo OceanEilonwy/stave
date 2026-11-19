@@ -257,6 +257,34 @@ pub(crate) struct ModuleData {
     pub(crate) standard: bool,
 }
 
+/// Names declared in each scope, keyed first by the scope's id so a
+/// lookup by `&str` needs no allocation.
+#[derive(Debug, Clone)]
+pub(crate) struct Scopes<K>(BTreeMap<K, BTreeMap<String, SymbolId>>);
+
+impl<K: Ord> Scopes<K> {
+    fn new() -> Self {
+        Self(BTreeMap::new())
+    }
+
+    /// The symbol `name` means in `scope`, if it declares it.
+    pub(crate) fn get(&self, scope: K, name: &str) -> Option<SymbolId> {
+        self.0
+            .get(&scope)
+            .and_then(|names| names.get(name))
+            .copied()
+    }
+
+    /// Records `name` in `scope` unless it already means something there:
+    /// the first declaration wins. The name is copied only when it is new.
+    fn declare(&mut self, scope: K, name: &str, symbol: SymbolId) {
+        let names = self.0.entry(scope).or_default();
+        if !names.contains_key(name) {
+            names.insert(name.to_owned(), symbol);
+        }
+    }
+}
+
 /// Everything the queries read: built once per change of the files.
 #[derive(Debug, Clone)]
 pub(crate) struct Index {
@@ -267,10 +295,10 @@ pub(crate) struct Index {
     pub(crate) root: ModuleId,
     pub(crate) prelude: Vec<ModuleId>,
     pub(crate) symbols: Vec<Symbol>,
-    pub(crate) module_scope: BTreeMap<(ModuleId, String), SymbolId>,
-    pub(crate) inner_scope: BTreeMap<(SymbolId, String), SymbolId>,
+    pub(crate) module_scope: Scopes<ModuleId>,
+    pub(crate) inner_scope: Scopes<SymbolId>,
     /// Each file's import names.
-    pub(crate) imports: BTreeMap<(FileId, String), SymbolId>,
+    pub(crate) imports: Scopes<FileId>,
     /// The symbol an item node declares, by file and node start.
     item_at: BTreeMap<(FileId, u32), SymbolId>,
     /// The component each assembly is an instance of.
@@ -369,9 +397,9 @@ impl Index {
             root: set.root,
             prelude: set.prelude,
             symbols: Vec::new(),
-            module_scope: BTreeMap::new(),
-            inner_scope: BTreeMap::new(),
-            imports: BTreeMap::new(),
+            module_scope: Scopes::new(),
+            inner_scope: Scopes::new(),
+            imports: Scopes::new(),
             item_at: BTreeMap::new(),
             instance_of: BTreeMap::new(),
             references: Vec::new(),
@@ -425,7 +453,10 @@ impl Index {
                     };
                     index
                         .imports
-                        .insert((file.file, import.name.clone()), symbol);
+                        .0
+                        .entry(file.file)
+                        .or_default()
+                        .insert(import.name.clone(), symbol);
                     index.references.push(Reference {
                         file: file.file,
                         span: import.name_span,
@@ -559,16 +590,8 @@ impl Index {
         // The first declaration of a name wins; a second is the checker's
         // `duplicate-name`.
         match container {
-            Some(container) => {
-                self.inner_scope
-                    .entry((container, name.clone()))
-                    .or_insert(id);
-            }
-            None => {
-                self.module_scope
-                    .entry((module, name.clone()))
-                    .or_insert(id);
-            }
+            Some(container) => self.inner_scope.declare(container, &name, id),
+            None => self.module_scope.declare(module, &name, id),
         }
         self.item_at.insert((file, start(node)), id);
         self.references.push(Reference {
@@ -599,7 +622,7 @@ impl Index {
                     private: false,
                     signature: format!("label {text} of {name}"),
                 });
-                self.inner_scope.entry((id, text)).or_insert(label_id);
+                self.inner_scope.declare(id, &text, label_id);
                 self.references.push(Reference {
                     file,
                     span,
@@ -662,22 +685,21 @@ impl Index {
         let module = self.files.get(&file).and_then(|f| f.module);
         // The enclosing body first, then further out.
         if let Some(container) = self.container_at(file, node)
-            && let Some(found) = self.inner_scope.get(&(container, name.to_owned()))
+            && let Some(found) = self.inner_scope.get(container, name)
         {
-            return Some(*found);
+            return Some(found);
         }
         if let Some(module) = module
-            && let Some(found) = self.module_scope.get(&(module, name.to_owned()))
+            && let Some(found) = self.module_scope.get(module, name)
         {
-            return Some(*found);
+            return Some(found);
         }
-        if let Some(found) = self.imports.get(&(file, name.to_owned())) {
-            return Some(*found);
+        if let Some(found) = self.imports.get(file, name) {
+            return Some(found);
         }
         self.prelude.iter().find_map(|prelude| {
             self.module_scope
-                .get(&(*prelude, name.to_owned()))
-                .copied()
+                .get(*prelude, name)
                 .filter(|found| self.visible(*found, module))
         })
     }
@@ -689,15 +711,12 @@ impl Index {
             SymbolKind::Module => {
                 let from = self.files.get(&file).and_then(|f| f.module);
                 self.module_scope
-                    .get(&(symbol.module, name.to_owned()))
-                    .copied()
+                    .get(symbol.module, name)
                     .filter(|found| self.visible(*found, from))
             }
             SymbolKind::Assembly => {
                 let component = self.instance_of.get(&base)?;
-                self.inner_scope
-                    .get(&(*component, name.to_owned()))
-                    .copied()
+                self.inner_scope.get(*component, name)
             }
             SymbolKind::Component
             | SymbolKind::Kind
@@ -721,8 +740,8 @@ impl Index {
 
     /// A label of an array.
     fn label(&self, base: SymbolId, name: &str) -> Option<SymbolId> {
-        let found = self.inner_scope.get(&(base, name.to_owned()))?;
-        self.symbol(*found)
+        let found = self.inner_scope.get(base, name)?;
+        self.symbol(found)
             .filter(|s| s.kind == SymbolKind::Label)
             .map(|s| s.id)
     }
@@ -957,9 +976,9 @@ impl Index {
                         .item_at
                         .get(&(file, start(&assembly)))
                         .and_then(|a| self.instance_of.get(a))
-                        .and_then(|c| self.inner_scope.get(&(*c, name)))
+                        .and_then(|c| self.inner_scope.get(*c, &name))
                     {
-                        found.push((span, *symbol, node.clone()));
+                        found.push((span, symbol, node.clone()));
                     }
                 }
                 SyntaxKind::ARG => {
@@ -999,9 +1018,9 @@ impl Index {
                     });
                     if let Some(symbol) = callee
                         .filter(|c| self.symbol(*c).is_some_and(|s| s.kind == SymbolKind::Kind))
-                        .and_then(|kind| self.inner_scope.get(&(kind, name)))
+                        .and_then(|kind| self.inner_scope.get(kind, &name))
                     {
-                        found.push((span, *symbol, node.clone()));
+                        found.push((span, symbol, node.clone()));
                     }
                 }
                 _ => {}
