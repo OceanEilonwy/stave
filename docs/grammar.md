@@ -840,8 +840,8 @@ of equal value stays straight, so a cylinder stays a cylinder. Readable:
 | Entry | Type | Meaning |
 |---|---|---|
 | `pose <target> = <value>` | `open` \| `closed` \| `Angle` \| `Length` | sets a motion; see [Scenes](#scenes) |
-| `show` | an item or a list | show only these |
-| `hide` | an item or a list | hide these |
+| `show` | a part, assembly or piece of hardware, or a list of them | show only these; anything else (a region, a joint, a length) is `error[type-mismatch]` |
+| `hide` | a part, assembly or piece of hardware, or a list of them | hide these; anything else is `error[type-mismatch]` |
 | `explode` | `Bool` | pull the parts apart along their joints' insert directions |
 | `section` | `Anchor` | cut the view at a plane: what lies above it (`up`), to its right (`across`) or in front of it (`deep`) isn't drawn, and the wood it cuts is drawn flat |
 

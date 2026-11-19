@@ -1,0 +1,36 @@
+// expect: error[type-mismatch] 'show' needs parts, assemblies or hardware, found a region
+stave 1
+
+project "Scene shows a region" {
+  units: mm
+}
+
+stock pine_19 { species: pine, form: solid, thickness: 19mm, max_length: 2400mm }
+
+part base : pine_19 {
+  length: 600mm
+  width:  300mm
+  place {
+    ground
+  }
+}
+
+part side : pine_19 {
+  length: 200mm
+  width:  300mm
+  place {
+    orient(length: up, width: back)
+    against(base.top)
+    flush(base.left)
+    flush(base.front)
+  }
+}
+
+joint side_fixing : glued_face(side, into: base)
+
+region space = opening(left: side.right, right: base.right, bottom: base.top, top: side.top, front: base.front, back: base.back)
+
+// A region is a space, not something drawn: the scene would show nothing.
+scene empty "Nothing to see" {
+  show: space
+}

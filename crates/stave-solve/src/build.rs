@@ -3,9 +3,10 @@
 
 use std::collections::{BTreeMap, HashMap};
 
+use stave_lang::ast::Span;
 use stave_lang::placement::{Axis, PartAxis};
 use stave_lang::units::{ExactLength, Length};
-use stave_lang::{Code, Diagnostic, Label};
+use stave_lang::{Code, Diagnostic, FileId, Label};
 use stave_model::defs::{BodyId, DefId, Word};
 use stave_model::ids::{AssemblyId, HardwareId, JointId, PartId, RegionId, SceneId, StockId};
 use stave_model::instance::Ctx;
@@ -2071,7 +2072,18 @@ impl Solver<'_> {
         Ok(out)
     }
 
-    fn scene_items(&self, value: &Value, out: &mut Vec<SceneItem>) {
+    /// The parts, assemblies and hardware a scene's `show:` or `hide:`
+    /// names. The resolver refuses other types; a value that still gets
+    /// here (its type was unknown until solved) is a `type-mismatch`, never
+    /// dropped, and every variant is listed so a new one must be decided.
+    fn scene_items(
+        &mut self,
+        value: &Value,
+        out: &mut Vec<SceneItem>,
+        field: &str,
+        file: FileId,
+        span: Span,
+    ) -> Solved<()> {
         match value {
             Value::Part(part) => out.push(SceneItem::Part(*part)),
             Value::Parts(parts) => out.extend(parts.iter().map(|p| SceneItem::Part(*p))),
@@ -2080,11 +2092,50 @@ impl Solver<'_> {
             Value::Hardware(hardware) => out.push(SceneItem::Hardware(*hardware)),
             Value::List(items) => {
                 for item in items {
-                    self.scene_items(item, out);
+                    self.scene_items(item, out, field, file, span)?;
                 }
             }
-            _ => {}
+            Value::Length(_)
+            | Value::Angle(_)
+            | Value::Count(_)
+            | Value::Ratio(_)
+            | Value::Bool(_)
+            | Value::Text(_)
+            | Value::Region(_)
+            | Value::Regions(_)
+            | Value::Stock(_)
+            | Value::Profile(_)
+            | Value::Anchor(_)
+            | Value::Word(_)
+            | Value::Mount(_)
+            | Value::Turned(_)
+            | Value::Boards(_)
+            | Value::Splices(_)
+            | Value::Envelope(_)
+            | Value::Model(_)
+            | Value::Spacing(_)
+            | Value::Kind(_)
+            | Value::Tool(_)
+            | Value::Recipe(_)
+            | Value::Joint(_)
+            | Value::Patch(_) => {
+                return Err(self
+                    .error(
+                        Code::TypeMismatch,
+                        format!(
+                            "'{field}' needs parts, assemblies or hardware, found {}",
+                            value.description()
+                        ),
+                        file,
+                        span,
+                        format!(
+                            "name the parts, assemblies or hardware to {field}, or a list of them"
+                        ),
+                    )
+                    .into());
+            }
         }
+        Ok(())
     }
 
     fn write_scenes(&mut self, mechanisms: &[Option<AssemblyMechanism>]) -> Solved<Vec<Scene>> {
@@ -2155,7 +2206,7 @@ impl Solver<'_> {
                 Some(expr) => {
                     let value = self.eval(expr, &env)?;
                     let mut items = Vec::new();
-                    self.scene_items(&value, &mut items);
+                    self.scene_items(&value, &mut items, "show", def.decl.file, expr.span)?;
                     Some(items)
                 }
                 None => None,
@@ -2164,7 +2215,7 @@ impl Solver<'_> {
                 Some(expr) => {
                     let value = self.eval(expr, &env)?;
                     let mut items = Vec::new();
-                    self.scene_items(&value, &mut items);
+                    self.scene_items(&value, &mut items, "hide", def.decl.file, expr.span)?;
                     items
                 }
                 None => Vec::new(),
@@ -2287,5 +2338,82 @@ impl Solver<'_> {
             tools,
             methods,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use stave_lang::Code;
+    use stave_model::Model;
+    use stave_model::ids::PartId;
+    use stave_model::value::Value;
+    use stave_modules::{MemoryFiles, ModuleSet};
+
+    use crate::Solver;
+
+    const PROJECT: &str = "stave 1
+
+project \"Test\" {
+  units: mm
+}
+
+stock pine_19 { species: pine, form: solid, thickness: 19mm, max_length: 2400mm }
+
+part base : pine_19 {
+  length: 600mm
+  width:  300mm
+  place {
+    ground
+  }
+}
+";
+
+    fn model() -> Model {
+        let files = MemoryFiles::new().with("/project/project.stave", PROJECT);
+        let modules = ModuleSet::load_with(Path::new("/project"), &files).unwrap();
+        let (defs, diagnostics) = stave_model::resolve(&modules);
+        assert!(diagnostics.iter().all(|d| !d.is_error()), "{diagnostics:?}");
+        let (model, diagnostics) = stave_model::instance::instantiate(defs, modules.root);
+        assert!(diagnostics.iter().all(|d| !d.is_error()), "{diagnostics:?}");
+        model
+    }
+
+    /// A value the resolver could not type (it was unknown until solved)
+    /// and that is not a scene item is a `type-mismatch`, not an empty
+    /// scene.
+    #[test]
+    fn a_scene_shows_only_parts_assemblies_and_hardware() {
+        let model = model();
+        let project = model.defs.project(model.root).unwrap();
+        let mut solver = Solver::new(&model, project.file, project.span);
+        let (file, span) = (project.file, project.span);
+        let part = PartId::from_usize(0);
+        let mut items = Vec::new();
+        let shown = Value::List(vec![Value::Part(part), Value::Parts(vec![part])]);
+        assert!(
+            solver
+                .scene_items(&shown, &mut items, "show", file, span)
+                .is_ok()
+        );
+        assert_eq!(items.len(), 2);
+        assert!(solver.diagnostics.is_empty());
+
+        let wrong = Value::List(vec![Value::Part(part), Value::Bool(true)]);
+        assert!(
+            solver
+                .scene_items(&wrong, &mut items, "hide", file, span)
+                .is_err()
+        );
+        let [diagnostic] = solver.diagnostics.as_slice() else {
+            panic!("{:?}", solver.diagnostics);
+        };
+        assert_eq!(diagnostic.code, Code::TypeMismatch);
+        assert_eq!(
+            diagnostic.message,
+            "'hide' needs parts, assemblies or hardware, found true or false"
+        );
+        assert!(diagnostic.help.is_some());
     }
 }
