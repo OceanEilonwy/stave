@@ -1119,16 +1119,16 @@ impl Window {
 /// pending lines in the editor, the item's tools), in libadwaita's named
 /// colours so light and dark both follow the style manager.
 const STYLE: &str = r#"
-.stave-repeat-handle { padding: 3px 10px; border-radius: 999px; font-weight: 700; font-size: 13px;
+.stave-repeat-handle { padding: 3px 10px; border-radius: 999px; font-weight: 700; font-size: 0.886rem;
   background: @accent_bg_color; color: @accent_fg_color; box-shadow: 0 1px 4px alpha(black, 0.35); }
 .stave-repeat-handle.boundary { background: @window_bg_color; color: @accent_color;
   border: 2px solid @accent_bg_color; }
 .stave-item-tools > .stave-section { margin-top: 4px; }
 .stave-card > .stave-card-row.stave-item-buttons { padding-top: 2px; padding-bottom: 2px; }
-.stave-change-line { font-size: 12px; color: alpha(currentColor, 0.8); }
-.stave-change-title { font-size: 12px; font-weight: 700; }
+.stave-change-line { font-size: 0.818rem; color: alpha(currentColor, 0.8); }
+.stave-change-title { font-size: 0.818rem; font-weight: 700; }
 .stave-change-dependants { padding: 8px 12px; }
-.stave-change-dependant { font-family: monospace; font-size: 13px; }
+.stave-change-dependant { font-family: var(--monospace-font-family, monospace); font-size: 0.886rem; }
 .stave-dependants-backdrop { background: alpha(black, 0.32); }
 .stave-dependants-dialog { padding: 24px; }
 .stave-hold-from-space { margin: 0 12px 10px 12px; }
