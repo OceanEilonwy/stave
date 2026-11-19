@@ -37,7 +37,7 @@ use stave_model::solved::{
 use stave_model::value::{KindValue, Splicing, Value};
 use stave_schema::CutOperation;
 use stave_schema::kinds::RoleType;
-use stave_schema::words::StockForm;
+use stave_schema::words::{Grain, StockForm};
 
 use crate::boards::{BOARD_ID_BASE, BoardPart, Division};
 use crate::build::MadeInfo;
@@ -702,7 +702,8 @@ impl Solver<'_> {
         }
     }
 
-    /// Only a solid board can be spliced.
+    /// Only a solid board can be spliced, and only along its grain: a
+    /// splice joins pieces end to end along the part's length.
     fn check_spliceable(&mut self, part: PartId, name: &str, place: Place) -> Solved<()> {
         if self.part_profile(part)?.is_some() {
             return Err(self.fail(
@@ -710,6 +711,20 @@ impl Solver<'_> {
                 Code::TypeMismatch,
                 format!("{name} is turned, so it can't be spliced"),
                 "a turned part is made from one blank: remove lengths:, or buy a longer blank",
+            ));
+        }
+        let source = self.body_source(part)?;
+        if self
+            .part_body(source)
+            .is_some_and(|body| body.grain == Grain::Width)
+        {
+            return Err(self.fail(
+                place,
+                Code::TypeMismatch,
+                format!(
+                    "{name}'s grain runs across its width, so it can't be spliced along its length"
+                ),
+                "a splice joins boards end to end along the grain: remove lengths:, or let the grain run along the part's length with grain: length",
             ));
         }
         let stock = self.part_stock(part)?;

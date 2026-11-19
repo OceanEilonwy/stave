@@ -235,3 +235,27 @@ fn snapshot_a_dado_beside_a_lap() {
 fn snapshot_a_splice_measured_from_a_side() {
     insta::assert_snapshot!(rendered("tests/broken/splice_from_a_side"));
 }
+
+#[test]
+fn a_part_whose_grain_runs_across_it_is_not_spliced() {
+    let body = "part panel : pine_19 {
+  length:  3000mm
+  width:   200mm
+  grain:   width
+  lengths: spliced(by: lap_splice, at: 1500mm, from: left)
+  place {
+    against(base.top)
+    flush(base.left)
+    flush(base.front)
+  }
+}
+joint panel_glue : glued_face(panel, into: base)";
+    let opened = open_files_with_every_warning(&[("project.stave", &format!("{HEADER}\n{body}"))]);
+    assert_eq!(
+        diagnostics(&opened),
+        [
+            "missing-field: pine_19 doesn't say how long its boards are, so Stave can't check part lengths",
+            "type-mismatch: panel's grain runs across its width, so it can't be spliced along its length",
+        ]
+    );
+}

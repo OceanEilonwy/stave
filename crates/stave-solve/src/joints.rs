@@ -19,6 +19,7 @@ use stave_schema::CutOperation;
 use stave_schema::kinds::RoleType;
 use stave_schema::operations::Selector;
 use stave_schema::placement::AssemblyStepKind;
+use stave_schema::words::Grain;
 
 use crate::eval::{Env, KindEnv, midpoint};
 use crate::{Failure, Fault, Frame, Memo, Solved, Solver};
@@ -67,6 +68,15 @@ pub(crate) struct PartGeom {
     pub cut_box: ExactBox,
     pub reference_face: LocalFace,
     pub reference_edge: LocalFace,
+}
+
+/// The axis of a part its grain runs along: its length, or its width for
+/// `grain: width` (grammar, "part").
+pub(crate) fn grain_axis(grain: Grain) -> PartAxis {
+    match grain {
+        Grain::Length => PartAxis::Length,
+        Grain::Width => PartAxis::Width,
+    }
 }
 
 pub(crate) fn local_slot(axis: PartAxis) -> usize {
@@ -834,9 +844,10 @@ impl Solver<'_> {
         })
     }
 
-    /// A part's cut length must not be more than its stock's `max_length`
-    /// (grammar, "stock"). Mirror images are left to their source, so one
-    /// mistake is one error.
+    /// A part's cut length along its grain must not be more than its
+    /// stock's `max_length` (grammar, "stock"): its length, or its width
+    /// when its grain runs across it. Mirror images are left to their
+    /// source, so one mistake is one error.
     pub(crate) fn check_max_length(&mut self, part: PartId, geom: &PartGeom) -> Solved<()> {
         if self.mirror_source(part)?.is_some()
             || self
@@ -858,51 +869,57 @@ impl Solver<'_> {
         else {
             return Ok(());
         };
-        let slot = local_slot(PartAxis::Length);
-        let cut_length = [&geom.drawn, &geom.start, &geom.end]
-            .iter()
-            .filter_map(|sizes| sizes.get(slot).copied())
-            .try_fold(ExactLength::ZERO, |sum, size| sum.checked_add(size))
-            .ok_or(Fault::Overflow)?;
+        let grain = self
+            .part_body(part)
+            .map_or(Grain::Length, |body| body.grain);
+        let axis = grain_axis(grain);
+        let cut_length = geom.cut_size(axis)?;
         if cut_length <= max_length {
             return Ok(());
         }
         let name = self.part_name(part);
-        let stock_name = self
-            .model
-            .defs
-            .stock(stock)
-            .map(|s| s.decl.name.clone())
-            .unwrap_or_default();
-        let drawn = geom.drawn.get(slot).copied().unwrap_or(cut_length);
-        let suggestion = self.splice_suggestion(part, drawn, max_length);
-        let (file, span) = match (self.part_body(part).cloned(), self.part_env(part)) {
-            (Some(body), Some(env)) => match &body.length {
-                stave_model::defs::Size::Expr(expr) => (env.file, expr.span),
-                stave_model::defs::Size::Fit(span) => (env.file, *span),
-            },
-            _ => (self.project_file, self.project_span),
+        let stock_name = self.stock_name(stock);
+        let max = stave_model::value::format_length(max_length);
+        let (file, span) = match (self.size_span(part, axis), self.part_env(part)) {
+            (Some(span), Some(env)) => (env.file, span),
+            _ => self.part_place(part),
         };
-        Err(self.error(
-            Code::TypeMismatch,
-            format!(
-                "{name}: its cut length works out as {}, which is more than its stock's max_length of {}",
-                stave_model::value::format_length(cut_length),
-                stave_model::value::format_length(max_length)
+        let (message, help) = match grain {
+            Grain::Length => {
+                let drawn = geom
+                    .drawn
+                    .get(local_slot(axis))
+                    .copied()
+                    .unwrap_or(cut_length);
+                let help = match self.splice_suggestion(part, drawn, max_length) {
+                    Some(splice) => format!(
+                        "stock '{stock_name}' comes no longer than {max}: splice it end to end with {splice}, choosing the end joint and leaving each piece room for what its splices add, or buy longer stock"
+                    ),
+                    None => format!(
+                        "stock '{stock_name}' comes no longer than {max}: splice it end to end with lengths:, or buy longer stock"
+                    ),
+                };
+                (
+                    format!(
+                        "{name}: its cut length works out as {}, which is more than its stock's max_length of {max}",
+                        stave_model::value::format_length(cut_length)
+                    ),
+                    help,
+                )
+            }
+            Grain::Width => (
+                format!(
+                    "{name}: its grain runs across its width, and its width works out as {}, which is more than its stock's max_length of {max}",
+                    stave_model::value::format_length(cut_length)
+                ),
+                format!(
+                    "stock '{stock_name}' comes no longer than {max}, measured along the grain: make the part narrower, let its grain run along its length, or buy longer stock"
+                ),
             ),
-            file,
-            span,
-            match suggestion {
-                Some(splice) => format!(
-                    "stock '{stock_name}' comes no longer than {}: splice it end to end with {splice}, choosing the end joint and leaving each piece room for what its splices add, or buy longer stock",
-                    stave_model::value::format_length(max_length)
-                ),
-                None => format!(
-                    "stock '{stock_name}' comes no longer than {}: splice it end to end with lengths:, or buy longer stock",
-                    stave_model::value::format_length(max_length)
-                ),
-            },
-        ).into())
+        };
+        Err(self
+            .error(Code::TypeMismatch, message, file, span, help)
+            .into())
     }
 
     /// A part's cut thickness against its stock's: nothing may make a part

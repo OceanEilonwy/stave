@@ -759,7 +759,7 @@ A named value. Not a knob: it has no range and can't be passed in.
 | `diameter` | `Length` | `dowel` only, required | yes | diameter of round stock |
 | `width` | `Length` | no | yes | stock sold at a fixed width (a square blank, a strip). Parts cut from it take this width unless they write their own: narrower is ripped from it, wider is `error[type-mismatch]` at the part's `width:` (`base: its width is 150mm, but strip is sold 40mm wide`) |
 | `max_width` | `Length` | no | yes | the widest board you can get. A `solid` part wider than this is made of boards (see [Boards](#boards)); a `plywood` or `mdf` part wider than this is `error[type-mismatch]` |
-| `max_length` | `Length` | no, but see the warning below | yes | the longest board (or sheet) you can get; a part whose cut length is longer is `error[type-mismatch]`, unless its `lengths:` splices it into pieces that each fit (see [Splices](#splices)) |
+| `max_length` | `Length` | no, but see the warning below | yes | the longest board (or sheet) you can get; a part whose cut length along its grain (its length, or its width for `grain: width`) is longer is `error[type-mismatch]`, unless its `lengths:` splices it into pieces that each fit (see [Splices](#splices)) |
 
 Every size of a stock (`thickness`, `diameter`, `width`, `max_width`,
 `max_length`) must be more than 0mm, whether or not a part is cut from it:
@@ -1437,7 +1437,10 @@ bottom), choosing the end joint and leaving each piece room for what its
 splices add, or buy longer stock`. A part shorter than its stock may
 still be spliced (to use up short boards). Only `solid` board parts are
 spliced: a turned part, a sheet (`plywood`, `mdf`) or round stock with
-`lengths:` is `error[type-mismatch]`. A part a joint makes is never
+`lengths:` is `error[type-mismatch]`, and so is a part with `grain: width`
+(a splice joins boards end to end along the grain, and its grain runs
+across the part's length). A `grain: width` part longer along its grain
+than its stock's `max_length` is `error[type-mismatch]` at its `width:`. A part a joint makes is never
 spliced. Not yet supported, each `warning[not-supported]` at `lengths:`:
 a splice kind's members and `uses:` fasteners (not placed or listed), and
 a spliced part wider than its stock's `max_width` (its pieces are drawn
