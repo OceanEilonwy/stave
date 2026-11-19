@@ -935,6 +935,90 @@ pub fn touches(a: &WorldSolid, b: &WorldSolid) -> bool {
     })
 }
 
+/// Do `a` and `b` touch over an area: a face against a face, or wood in
+/// wood, rather than only along an edge or at a corner (grammar, "Fit and
+/// contact")? Two boxes touch over an area when the gap between them is
+/// within the contact tolerance and they share more than the tolerance
+/// along two axes at least. A rod touches a box with its end on a face
+/// (the disc reaching more than the tolerance into the face) or by going
+/// into it; lying along a face, it touches only along a line. Two rods
+/// on one axis touch end to end or by going into each other; rods on
+/// different axes, and prisms, count as the boxes around them. Holes are
+/// ignored, as in [`touches`].
+pub fn touches_over_area(a: &WorldSolid, b: &WorldSolid) -> bool {
+    let shapes = |solid: &WorldSolid| -> Vec<Shape> {
+        solid
+            .boxes
+            .iter()
+            .map(|b| Shape::Box(*b))
+            .chain(solid.rods.iter().map(|r| Shape::Rod(*r)))
+            .chain(
+                solid
+                    .prisms
+                    .iter()
+                    .filter_map(WorldPrism::bounds)
+                    .map(Shape::Box),
+            )
+            .collect()
+    };
+    let (a_shapes, b_shapes) = (shapes(a), shapes(b));
+    a_shapes.iter().any(|x| {
+        b_shapes
+            .iter()
+            .any(|y| area_between(x, y) && !cut_apart(a, b, x, y))
+    })
+}
+
+/// How much two ranges share: negative for the gap between them.
+fn shared(a: (f64, f64), b: (f64, f64)) -> f64 {
+    a.1.min(b.1) - a.0.max(b.0)
+}
+
+/// Do two shapes touch over an area ([`touches_over_area`])?
+fn area_between(a: &Shape, b: &Shape) -> bool {
+    let tolerance = render::nm(CONTACT_TOLERANCE);
+    match (a, b) {
+        (Shape::Box(x), Shape::Box(y)) => {
+            let along: Vec<f64> = Axis::ALL
+                .into_iter()
+                .map(|axis| shared(box_range(x, axis), box_range(y, axis)))
+                .collect();
+            along.iter().all(|s| *s >= -tolerance)
+                && along.iter().filter(|s| **s > tolerance).count() >= 2
+        }
+        (Shape::Rod(rod), Shape::Box(other)) | (Shape::Box(other), Shape::Rod(rod)) => {
+            let along = shared(
+                (render::nm(rod.start), render::nm(rod.end)),
+                box_range(other, rod.axis),
+            );
+            let axes = rod.axis.others();
+            let centre = axes.map(|axis| rod.centre_on(axis).unwrap_or(0.0));
+            let (into, _) = disc_into_rectangle(
+                centre,
+                rod.radius(),
+                axes.map(|axis| box_range(other, axis).0),
+                axes.map(|axis| box_range(other, axis).1),
+                axes,
+            );
+            along >= -tolerance && into > tolerance
+        }
+        (Shape::Rod(x), Shape::Rod(y)) if x.axis == y.axis => {
+            let along = shared(
+                (render::nm(x.start), render::nm(x.end)),
+                (render::nm(y.start), render::nm(y.end)),
+            );
+            let axes = x.axis.others();
+            let delta = axes
+                .map(|axis| x.centre_on(axis).unwrap_or(0.0) - y.centre_on(axis).unwrap_or(0.0));
+            let into = x.radius() + y.radius() - (delta[0].powi(2) + delta[1].powi(2)).sqrt();
+            along >= -tolerance && into > tolerance
+        }
+        (Shape::Rod(x), Shape::Rod(y)) => {
+            area_between(&Shape::Box(x.bounds()), &Shape::Box(y.bounds()))
+        }
+    }
+}
+
 /// Do the angled cuts take away all the wood where two boxes come within
 /// the contact tolerance of each other?
 fn cut_apart(a: &WorldSolid, b: &WorldSolid, x: &Shape, y: &Shape) -> bool {
@@ -1428,6 +1512,47 @@ mod tests {
         assert!(touches(&a, &b));
         let apart = block(point(11, 0, 0), point(20, 10, 10));
         assert!(!touches(&a, &apart));
+    }
+
+    #[test]
+    fn only_a_face_against_a_face_touches_over_an_area() {
+        let a = block(point(0, 0, 0), point(10, 10, 10));
+        // Face to face, and wood in wood.
+        assert!(touches_over_area(
+            &a,
+            &block(point(10, 0, 0), point(20, 10, 10))
+        ));
+        assert!(touches_over_area(
+            &a,
+            &block(point(5, 5, 5), point(20, 20, 20))
+        ));
+        // Along an edge, and at a corner.
+        let edge = block(point(10, 10, 0), point(20, 20, 10));
+        assert!(touches(&a, &edge));
+        assert!(!touches_over_area(&a, &edge));
+        let corner = block(point(10, 10, 10), point(20, 20, 20));
+        assert!(touches(&a, &corner));
+        assert!(!touches_over_area(&a, &corner));
+        // A rod standing on its end touches over an area; one lying along
+        // the face only along a line.
+        let floor = block(point(0, -10, 0), point(100, 0, 100));
+        let standing = WorldSolid {
+            rods: vec![rod(Axis::Up, [50, 50], 20, 0, 40)],
+            ..WorldSolid::default()
+        };
+        assert!(touches_over_area(&standing, &floor));
+        let lying = WorldSolid {
+            rods: vec![WorldRod {
+                axis: Axis::Across,
+                centre: [mm(10), mm(50)],
+                diameter: mm(20),
+                start: mm(0),
+                end: mm(100),
+            }],
+            ..WorldSolid::default()
+        };
+        assert!(touches(&lying, &floor));
+        assert!(!touches_over_area(&lying, &floor));
     }
 
     #[test]

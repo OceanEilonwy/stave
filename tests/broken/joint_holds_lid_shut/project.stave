@@ -1,0 +1,111 @@
+// expect: error[motion] stuck: lid.panel moves with lid but end_l doesn't, so the joint would hold lid shut
+stave 1
+
+// A lidded storage box: four walnut sides joined with rabbets at the
+// corners, a plywood bottom floating in a groove, and a lid on two brass
+// butt hinges. The lid is a component (lid.stave), because the hinges inside
+// a component give each instance of it a motion: the whole lid turns on its
+// hinges, and a scene can show it open.
+
+project "Box" {
+  goal:       "A small walnut keepsake box with a hinged lid"
+  units:      mm
+  resolution: 0.5mm
+  tools:      [pencil, marking_knife, square, tape, marking_gauge, awl, calipers,
+               router, straight_bit, clamps, chisel, mallet, drill, depth_stop,
+               screwdriver]
+}
+
+// ---- parameters ----
+param box_length = 300mm within 200mm..450mm        // outside, left to right
+param box_depth  = 200mm within 150mm..300mm        // outside, front to back
+param box_height = 110mm within 80mm..200mm         // the body, without the lid
+let rabbet_depth = 6mm                              // half the thickness of the ends
+let bottom_up    = 6mm                              // the bottom's groove starts this far up
+
+// ---- checks ----
+require hinge_room : lid.hinge_kind.leaf_width <= back.thickness "a hinge leaf must not stick out past the inside of the back"
+require useful     : box_height - bottom_up - ply_6.thickness >= 60mm "the box should be at least 60mm deep inside"
+
+// ---- stock ----
+stock walnut_12 { species: walnut, form: solid, thickness: 12mm, max_width: 200mm, max_length: 2400mm }
+stock ply_6     { species: birch, form: plywood, thickness: 6mm, max_length: 2440mm }
+
+// ---- the body ----
+
+/// The left end is the ground part; the other sides are placed from it.
+part end_l : walnut_12 {
+  length: box_depth
+  width:  box_height
+  place {
+    ground
+    orient(length: back, width: up)
+  }
+}
+
+part end_r : walnut_12 {
+  length: box_depth
+  width:  box_height
+  place {
+    orient(length: back, width: up)
+    against(end_l.right, gap: box_length - 2 * walnut_12.thickness)
+    flush(end_l.bottom)
+    flush(end_l.front)
+  }
+}
+
+/// The front runs between the ends; the rabbets add their depth to its length.
+part front : walnut_12 {
+  length: fit
+  width:  box_height
+  place {
+    orient(length: right, width: up)
+    center(from: end_l.right, to: end_r.left)
+    flush(end_l.bottom)
+    flush(end_l.front)
+  }
+}
+
+/// The back is the front's mirror image, about the middle of the box.
+part back = mirror(front, about: mid(end_l, deep))
+
+/// The bottom floats in a groove in all four sides, so it is not glued.
+part bottom : ply_6 {
+  length: fit                          // between the ends, plus the grooves
+  width:  fit                          // between the front and back, plus the grooves
+  place {
+    flush(end_l.bottom, inset: bottom_up)
+    center(from: end_l.right, to: end_r.left)
+    center(from: front.back, to: back.front)
+  }
+}
+
+// ---- joints ----
+joint corners       : rabbet([front, back], into: [end_l, end_r], depth: rabbet_depth)
+joint bottom_groove : groove(bottom, into: [front, back, end_l, end_r], depth: 6mm, glue: false)
+
+// ---- the lid ----
+
+/// The box seen from above: the lid covers exactly this.
+region outline = opening(
+  left:   end_l.left,
+  right:  end_r.right,
+  bottom: end_l.bottom,
+  top:    end_l.top,
+  front:  end_l.front,
+  back:   end_l.back,
+)
+
+assembly lid : Lid {
+  outline:   outline
+  hinge_on:  back
+  lid_stock: walnut_12
+}
+
+// ---- scenes ----
+scene lid_open "Lid open" {
+  pose lid = 100deg                    // a lid stay stops it just past upright
+}
+
+// The lid is glued to the box: it can't open on its hinges.
+joint stuck : glued_face(lid.panel, into: [end_l, end_r, front])
