@@ -388,7 +388,7 @@ impl TreeSidebar {
                             state.toggled.insert(*id, true);
                         }
                     }
-                    fill(&list, &state);
+                    fill(list, &state);
                     let callback = state.borrow().on_select.clone();
                     if let (Some(callback), Some(first)) = (callback, ids.first()) {
                         callback(Selection::Assembly(*first));
@@ -1405,10 +1405,13 @@ mod tests {
             let chosen = Rc::clone(&chosen);
             move |selection| chosen.borrow_mut().push(selection)
         });
-        sidebar.show_tree(stave_app::inspect::parts_tree(design));
+        sidebar.show_tree(
+            stave_app::inspect::parts_tree(design),
+            stave_app::part_joints::PartJoints::new(design),
+        );
         let part = design.parts.first().expect("a part");
         let selection = Selection::of_item(Item::Part(part.id));
-        sidebar.show_selection(Some(&selection), Vec::new());
+        sidebar.show_selection(Some(&selection));
         assert!(
             sidebar.list.selected_row().is_some(),
             "the part's row is selected"
@@ -1418,7 +1421,7 @@ mod tests {
             "the tree's own change is no choice"
         );
         // Showing it again leaves the rows as they are and syncs only.
-        sidebar.show_selection(Some(&selection), Vec::new());
+        sidebar.show_selection(Some(&selection));
         assert!(chosen.borrow().is_empty());
         let other = sidebar
             .state
