@@ -39,15 +39,6 @@ const fn stroke(width: f32, paths: &'static [&'static str]) -> Shape {
     }
 }
 
-/// Back.
-pub const BACK: Shape = stroke(1.8, &["M10 3.5L5.5 8L10 12.5"]);
-/// Forward.
-pub const FORWARD: Shape = stroke(1.8, &["M6 3.5L10.5 8L6 12.5"]);
-/// Open a project folder.
-pub const FOLDER: Shape = stroke(
-    1.5,
-    &["M1.5 4.5a1 1 0 0 1 1-1h3.5l1.5 1.5h6a1 1 0 0 1 1 1v6.5a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1z"],
-);
 /// The design: a box.
 pub const PARTS: Shape = stroke(
     1.5,

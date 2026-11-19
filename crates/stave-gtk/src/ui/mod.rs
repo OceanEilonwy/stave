@@ -29,6 +29,7 @@ mod edit_writer;
 mod editor;
 mod files;
 mod finder;
+mod floating;
 mod focus_panel;
 mod focus_stage;
 #[cfg(test)]
@@ -38,6 +39,7 @@ mod icons;
 mod inspector;
 mod new_project;
 mod option_search;
+mod output;
 mod panels;
 mod slider;
 mod style;
@@ -430,6 +432,11 @@ struct Widgets {
     pictures: Pictures,
     problem_card: ProblemCard,
     files: Rc<FilesPage>,
+    /// The Output panel: what the checks said.
+    output: output::OutputPanel,
+    /// The controls floating on the 3D view, and their docking: held so
+    /// the placing and dragging (which only hold it weakly) live on.
+    _floats: Rc<floating::Floats>,
 }
 
 impl Widgets {
@@ -569,10 +576,19 @@ impl Window {
                 Event::SelectionChanged => self.selection_changed(),
                 Event::FocusChanged => self.focus_changed(),
                 Event::HistoryChanged => {
+                    // Back and Forward are in the View menu and on
+                    // Alt+← / Alt+→; each is offered only when it can go.
                     let session = self.session.borrow();
-                    self.widgets
-                        .header
-                        .show_history(session.can_go_back(), session.can_go_forward());
+                    for (name, enabled) in [
+                        ("back", session.can_go_back()),
+                        ("forward", session.can_go_forward()),
+                    ] {
+                        if let Some(action) = self.widgets.window.lookup_action(name)
+                            && let Ok(action) = action.downcast::<gio::SimpleAction>()
+                        {
+                            action.set_enabled(enabled);
+                        }
+                    }
                 }
                 Event::SceneChanged => self.scene_changed(),
                 Event::ExplodeChanged => self.explode_changed(),
@@ -2136,6 +2152,11 @@ impl Window {
 
     /// Draws on the next frame; several requests before then draw once.
     fn request_render(self: &Rc<Self>) {
+        // The Model hidden behind an open file's tab draws nothing, so a
+        // screenshot asked for is taken without it.
+        if self.widgets.window.is_mapped() && !self.widgets.viewport.is_mapped() {
+            self.capture_if_asked();
+        }
         {
             let mut state = self.state.borrow_mut();
             if state.render_queued {
@@ -2552,6 +2573,10 @@ impl Window {
             self.widgets
                 .header
                 .show_pill(&status.pill(), session.problems().len(), &status.line());
+            self.widgets
+                .workbench
+                .show_problem_count(session.problems().len());
+            self.widgets.output.add_line(&status.line());
         }
         self.build_changed();
     }
@@ -2680,6 +2705,19 @@ impl Window {
         add("format", Box::new(move || this.widgets.files.format()));
         let this = self.clone();
         add("open", Box::new(move || this.choose_folder()));
+        let this = self.clone();
+        add(
+            "about",
+            Box::new(move || {
+                adw::AboutDialog::builder()
+                    .application_name("Stave")
+                    .comments("Woodworking design, checked like a compiler")
+                    .version(env!("CARGO_PKG_VERSION"))
+                    .license_type(gtk::License::Agpl30)
+                    .build()
+                    .present(Some(&this.widgets.window));
+            }),
+        );
         for view in View::ALL {
             let this = self.clone();
             add(
@@ -2863,9 +2901,6 @@ impl Window {
             }));
         });
         let header = &widgets.header;
-        header.back.set_action_name(Some("win.back"));
-        header.forward.set_action_name(Some("win.forward"));
-        header.open.set_action_name(Some("win.open"));
 
         let window = self.clone();
         header.switcher.connect_active_name_notify(move |group| {
@@ -3108,6 +3143,14 @@ impl Window {
             if let Some(window) = window.upgrade() {
                 window.dispatch(Command::ShowEditor(Editor::Open));
             }
+        });
+        // The open files as tabs beside the Model, wherever the Code
+        // panel is docked.
+        let page = Rc::downgrade(files);
+        tab_strip::set_page_tabs(workbench::PanelId::Code.word(), move || {
+            page.upgrade()
+                .map(|page| page.page_tabs())
+                .unwrap_or_default()
         });
         let window = Rc::downgrade(self);
         files.connect_notice(move |text| {
@@ -3478,15 +3521,70 @@ fn settle_for_screenshot() {
     }
 }
 
+/// The title bar's menus: Project, Edit, View and Help, each a submenu
+/// (the menu bar shows them side by side; a narrow window's one menu
+/// button lists them).
 fn main_menu() -> gio::Menu {
-    let menu = gio::Menu::new();
+    /// A section of `(label, action)` items.
+    fn section(items: &[(&str, &str)]) -> gio::Menu {
+        let section = gio::Menu::new();
+        for (label, action) in items {
+            section.append(Some(label), Some(action));
+        }
+        section
+    }
     let project = gio::Menu::new();
-    project.append(Some("New Project…"), Some("win.new-project"));
-    project.append(Some("Open Project…"), Some("win.open"));
-    project.append(Some("Check Again"), Some("win.check"));
-    project.append(Some("Frame Everything"), Some("win.frame"));
-    project.append(Some("Export View as glTF…"), Some("win.export-view"));
-    menu.append_section(None, &project);
+    project.append_section(
+        None,
+        &section(&[
+            ("New Project…", "win.new-project"),
+            ("Open Project…", "win.open"),
+        ]),
+    );
+    project.append_section(
+        None,
+        &section(&[
+            ("Save", "win.save"),
+            ("Check Again", "win.check"),
+            ("Build Plan", "win.build"),
+        ]),
+    );
+    project.append_section(
+        None,
+        &section(&[("Export View as glTF…", "win.export-view")]),
+    );
+    let edit = gio::Menu::new();
+    edit.append_section(
+        None,
+        &section(&[
+            ("Find…", "win.find"),
+            ("Find in the Text", "win.search"),
+            ("Format the Text", "win.format"),
+        ]),
+    );
+    edit.append_section(
+        None,
+        &section(&[
+            ("Next Problem", "win.next-problem"),
+            ("Previous Problem", "win.previous-problem"),
+        ]),
+    );
+    let view = gio::Menu::new();
+    view.append_section(
+        None,
+        &section(&[
+            ("Design", "win.view-design"),
+            ("Cut List", "win.view-cut-list"),
+        ]),
+    );
+    view.append_section(
+        None,
+        &section(&[
+            ("Back", "win.back"),
+            ("Forward", "win.forward"),
+            ("Frame Everything", "win.frame"),
+        ]),
+    );
     // Any panel can be closed; these bring it back where it was.
     let panels = gio::Menu::new();
     for id in workbench::PanelId::ALL {
@@ -3496,12 +3594,21 @@ fn main_menu() -> gio::Menu {
         );
     }
     panels.append(Some("Reset Layout"), Some("win.reset-layout"));
-    menu.append_section(Some("Panels"), &panels);
-    let style = gio::Menu::new();
-    style.append(Some("Follow System Style"), Some("win.style::system"));
-    style.append(Some("Light"), Some("win.style::light"));
-    style.append(Some("Dark"), Some("win.style::dark"));
-    menu.append_section(Some("Style"), &style);
+    view.append_section(Some("Panels"), &panels);
+    view.append_section(
+        Some("Style"),
+        &section(&[
+            ("Follow System Style", "win.style::system"),
+            ("Light", "win.style::light"),
+            ("Dark", "win.style::dark"),
+        ]),
+    );
+    let help = section(&[("About Stave", "win.about")]);
+    let menu = gio::Menu::new();
+    menu.append_submenu(Some("Project"), &project);
+    menu.append_submenu(Some("Edit"), &edit);
+    menu.append_submenu(Some("View"), &view);
+    menu.append_submenu(Some("Help"), &help);
     menu
 }
 
@@ -3559,35 +3666,6 @@ fn build_widgets(application: &adw::Application, options: &Options) -> Result<Wi
         .overflow(gtk::Overflow::Hidden)
         .css_classes(["stave-viewport", "stave-figure"])
         .build();
-    let floating: Vec<(view_layout::Floating, gtk::Widget)> = vec![
-        (view_layout::Floating::Camera, camera.root.clone().upcast()),
-        (
-            view_layout::Floating::PullSlider,
-            view_toolbar.popout.clone().upcast(),
-        ),
-        (
-            view_layout::Floating::PlanSwitch,
-            plan_switch.root.clone().upcast(),
-        ),
-        (view_layout::Floating::Scene, dock.scene.clone().upcast()),
-        (view_layout::Floating::Hint, hint_box.clone().upcast()),
-        (
-            view_layout::Floating::ContactKey,
-            contact_key.clone().upcast(),
-        ),
-        (view_layout::Floating::Moves, dock.moves.clone().upcast()),
-        (view_layout::Floating::Motion, motion.root.clone().upcast()),
-        (
-            view_layout::Floating::StepCard,
-            step_card.root.clone().upcast(),
-        ),
-        (
-            view_layout::Floating::ProblemCard,
-            problem_card.root.clone().upcast(),
-        ),
-        (view_layout::Floating::EdgePin, edge_pin.clone().upcast()),
-    ];
-    float_on(&figure, floating);
     // Hardware focus lays the view out as a page (Hinge.dc.html): a line
     // over it, three small views and the swing card under it.
     let caption = Caption::new();
@@ -3628,6 +3706,7 @@ fn build_widgets(application: &adw::Application, options: &Options) -> Result<Wi
     let files = FilesPage::new();
     let file_list = panels::FilesList::new();
     let problems = panels::ProblemsPanel::new();
+    let output = output::OutputPanel::new();
 
     // The 3D View panel: the view, with the problems pinned on the model
     // (they come later) over it.
@@ -3648,6 +3727,7 @@ fn build_widgets(application: &adw::Application, options: &Options) -> Result<Wi
             (workbench::PanelId::Edit, edit_holder.clone().upcast()),
             (workbench::PanelId::Code, files.root.clone().upcast()),
             (workbench::PanelId::Problems, problems.root.clone().upcast()),
+            (workbench::PanelId::Output, output.root.clone().upcast()),
         ],
         match &options.layout {
             Some(path) => workbench::Remember::From(path.clone()),
@@ -3655,6 +3735,64 @@ fn build_widgets(application: &adw::Application, options: &Options) -> Result<Wi
             None => workbench::Remember::Yours,
         },
     )?;
+
+    // The view's controls float on it; the tool groups dock where the
+    // layout says, and a group dragged to a new spot is remembered with
+    // the layout.
+    let floating: Vec<(view_layout::Floating, gtk::Widget)> = vec![
+        (view_layout::Floating::Camera, camera.root.clone().upcast()),
+        (
+            view_layout::Floating::PullSlider,
+            view_toolbar.popout.clone().upcast(),
+        ),
+        (
+            view_layout::Floating::PlanSwitch,
+            plan_switch.root.clone().upcast(),
+        ),
+        (view_layout::Floating::Scene, dock.scene.clone().upcast()),
+        (view_layout::Floating::Hint, hint_box.clone().upcast()),
+        (
+            view_layout::Floating::ContactKey,
+            contact_key.clone().upcast(),
+        ),
+        (view_layout::Floating::Moves, dock.moves.clone().upcast()),
+        (view_layout::Floating::Motion, motion.root.clone().upcast()),
+        (
+            view_layout::Floating::StepCard,
+            step_card.root.clone().upcast(),
+        ),
+        (
+            view_layout::Floating::ProblemCard,
+            problem_card.root.clone().upcast(),
+        ),
+        (view_layout::Floating::EdgePin, edge_pin.clone().upcast()),
+    ];
+    let orient_camera = camera.orientation_setter(&view_toolbar);
+    let orient_moves = dock.moves_orientation_setter();
+    let orient_motion = motion.orientation_setter();
+    let saver = Rc::downgrade(&workbench);
+    let floats = floating::Floats::new(
+        &figure,
+        floating,
+        workbench.tools(),
+        Box::new(move |group, orientation| match group {
+            view_layout::Group::Scene => {}
+            view_layout::Group::Camera => orient_camera(orientation),
+            view_layout::Group::Moves => orient_moves(orientation),
+            view_layout::Group::Motion => orient_motion(orientation),
+        }),
+        Box::new(move |group, spot| {
+            if let Some(workbench) = saver.upgrade() {
+                workbench.dock_tool(group, spot);
+            }
+        }),
+    );
+    let refresher = Rc::downgrade(&floats);
+    workbench.connect_tools(move || {
+        if let Some(floats) = refresher.upgrade() {
+            floats.refresh();
+        }
+    });
 
     let views = gtk::Stack::builder()
         .transition_type(gtk::StackTransitionType::Crossfade)
@@ -3694,21 +3832,24 @@ fn build_widgets(application: &adw::Application, options: &Options) -> Result<Wi
         window.set_size_request(width, height);
     }
 
-    // Narrower windows drop words first, then the finder's field (Ctrl+K
-    // still opens it), the title, the open button and forward.
-    for (width, tiny) in [(1200.0, false), (1100.0, false), (600.0, true)] {
+    // Narrower windows drop the project's name first, then the switcher's
+    // words, then fold the menu bar into one menu button. Only the last
+    // breakpoint that matches applies, so each repeats the wider ones.
+    // The side edges narrow too, so the Model keeps room.
+    for (width, level) in [(1000.0, 0), (860.0, 1), (760.0, 2), (600.0, 3)] {
         let narrow = breakpoint(width);
-        narrow.add_setter(header.subtitle(), "visible", Some(&false.to_value()));
-        if width < 1150.0 {
+        workbench.narrow_edges(&narrow);
+        if level >= 1 {
+            narrow.add_setter(&header.title, "visible", Some(&false.to_value()));
+        }
+        if level >= 2 {
             for label in header.switcher_labels() {
                 narrow.add_setter(label, "visible", Some(&false.to_value()));
             }
-            narrow.add_setter(header.find_box(), "visible", Some(&false.to_value()));
-            narrow.add_setter(&header.open, "visible", Some(&false.to_value()));
         }
-        if tiny {
-            narrow.add_setter(&header.title_box, "visible", Some(&false.to_value()));
-            narrow.add_setter(&header.forward, "visible", Some(&false.to_value()));
+        if level >= 3 {
+            narrow.add_setter(&header.menu_bar, "visible", Some(&false.to_value()));
+            narrow.add_setter(&header.menu_button, "visible", Some(&true.to_value()));
             narrow.add_setter(
                 &header.switcher,
                 "css-classes",
@@ -3755,64 +3896,9 @@ fn build_widgets(application: &adw::Application, options: &Options) -> Result<Wi
         pictures,
         problem_card,
         files,
+        output,
+        _floats: floats,
     })
-}
-
-/// Floats the controls on the 3D view, each where `view_layout` puts it
-/// for the view's size and what is showing, so none covers another.
-fn float_on(figure: &gtk::Overlay, floating: Vec<(view_layout::Floating, gtk::Widget)>) {
-    for (_, widget) in &floating {
-        // The layout gives each its exact place: no margins of its own.
-        widget.set_halign(gtk::Align::Fill);
-        widget.set_valign(gtk::Align::Fill);
-        widget.set_margin_top(0);
-        widget.set_margin_bottom(0);
-        widget.set_margin_start(0);
-        widget.set_margin_end(0);
-        figure.add_overlay(widget);
-    }
-    let measured = Measured(floating);
-    figure.connect_get_child_position(move |figure, widget| {
-        let item = measured.item_of(widget)?;
-        let placement = view_layout::place(figure.width(), figure.height(), &measured);
-        // A control left out (hidden, or no room) takes no room either,
-        // so it can't catch the pointer meant for the view.
-        let rect = placement.get(item).unwrap_or(view_layout::Rect {
-            x: 0,
-            y: 0,
-            width: 0,
-            height: 0,
-        });
-        Some(gdk::Rectangle::new(rect.x, rect.y, rect.width, rect.height))
-    });
-}
-
-/// The floating controls, measured by GTK.
-struct Measured(Vec<(view_layout::Floating, gtk::Widget)>);
-
-impl Measured {
-    fn widget(&self, item: view_layout::Floating) -> Option<&gtk::Widget> {
-        self.0.iter().find(|(i, _)| *i == item).map(|(_, w)| w)
-    }
-
-    fn item_of(&self, widget: &gtk::Widget) -> Option<view_layout::Floating> {
-        self.0.iter().find(|(_, w)| w == widget).map(|(i, _)| *i)
-    }
-}
-
-impl view_layout::Measure for Measured {
-    fn widths(&self, item: view_layout::Floating) -> Option<(i32, i32)> {
-        let widget = self.widget(item).filter(|w| w.is_visible())?;
-        let (smallest, natural, _, _) = widget.measure(gtk::Orientation::Horizontal, -1);
-        (natural > 0).then_some((smallest, natural))
-    }
-
-    fn height(&self, item: view_layout::Floating, width: i32) -> i32 {
-        self.widget(item).map_or(0, |widget| {
-            let (_, natural, _, _) = widget.measure(gtk::Orientation::Vertical, width);
-            natural
-        })
-    }
 }
 
 /// A breakpoint for windows at most `width` sp wide.

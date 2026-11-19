@@ -230,6 +230,30 @@ impl CameraToolbar {
             turn,
         }
     }
+
+    /// Lays the buttons out in a column (docked on the right edge) or a
+    /// row (docked in a corner), X-ray and Pull apart with them.
+    pub fn orientation_setter(&self, tools: &ViewToolbar) -> impl Fn(gtk::Orientation) + 'static {
+        let root = self.root.clone();
+        let section = tools.section.clone();
+        move |orientation| {
+            root.set_orientation(orientation);
+            section.set_orientation(orientation);
+            if let Some(line) = section
+                .first_child()
+                .and_then(|child| child.downcast::<gtk::Separator>().ok())
+            {
+                line.set_orientation(match orientation {
+                    gtk::Orientation::Vertical => gtk::Orientation::Horizontal,
+                    _ => gtk::Orientation::Vertical,
+                });
+            }
+            match orientation {
+                gtk::Orientation::Vertical => root.remove_css_class("flat-row"),
+                _ => root.add_css_class("flat-row"),
+            }
+        }
+    }
 }
 
 /// The key shown while a problem is posed: a red square and "Shared wood
