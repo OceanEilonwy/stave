@@ -1454,10 +1454,6 @@ mod tests {
             // GTK's tooltip window belongs to the display's one tooltip,
             // which moves from window to window: it is not the window's.
             .filter(|(path, _)| !path.contains("GtkTooltipWindow"))
-            // libadwaita keeps an `adw::Toggle`'s own child (the view
-            // switcher's icon and label) after its group has gone; a plain
-            // `adw::ToggleGroup` does it too, so it is not ours to fix.
-            .filter(|(path, _)| !path.contains("AdwToggleGroup/GtkToggleButton/"))
             .filter(|(_, widget)| widget.upgrade().is_some())
             .map(|(path, _)| path.as_str())
             .collect();
