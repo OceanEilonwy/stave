@@ -42,6 +42,7 @@ mod new_project;
 mod option_search;
 mod output;
 mod panels;
+mod relm4_shim;
 mod remember;
 mod sections;
 mod slider;

@@ -60,3 +60,17 @@ pub(crate) fn on_gtk_thread(body: impl FnOnce() + Send + 'static) -> bool {
         Err(panic) => resume_unwind(panic),
     }
 }
+
+/// Runs the GTK thread's main loop until nothing is waiting. Call it on
+/// the GTK thread, from a test body: relm4 components handle their queued
+/// messages, pass on their outputs and shut down after their controller
+/// is dropped only when the main loop runs. Stops after a bound, so a
+/// timer that is always due can't keep a test here forever.
+pub(crate) fn settle() {
+    let context = gtk::glib::MainContext::default();
+    for _ in 0..10_000 {
+        if !context.iteration(false) {
+            break;
+        }
+    }
+}
