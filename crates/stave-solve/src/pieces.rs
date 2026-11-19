@@ -42,7 +42,7 @@ use stave_schema::words::StockForm;
 use crate::boards::{BOARD_ID_BASE, BoardPart, Division};
 use crate::build::MadeInfo;
 use crate::eval::{Env, KindEnv};
-use crate::joints::{GeomTable, PairWork, PartGeom, local_slot, round_length};
+use crate::joints::{CutAt, GeomTable, PairWork, PartGeom, local_slot, round_length};
 use crate::{Failure, Fault, Solved, Solver};
 
 /// A part cut into pieces: what the solved design needs to point the
@@ -1265,8 +1265,14 @@ impl Solver<'_> {
         };
         let source = CutSource::Joint { joint, pair: 0 };
         for cut_def in &joint_def.cuts {
+            let (file, span) = self.part_place(part);
+            let at = CutAt {
+                owner: &joint_name,
+                file,
+                span,
+            };
             for (target, face, place, cut_kind) in
-                self.pair_cuts(cut_def, pair, tables.geoms, &env)?
+                self.pair_cuts(cut_def, pair, tables.geoms, &env, at)?
             {
                 piece_cuts.entry(target).or_default().push(Cut {
                     source,

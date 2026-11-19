@@ -1793,7 +1793,7 @@ like a hardware member (see [One collision model](#one-collision-model)):
 |---|---|---|---|
 | `: fastener` | a fastener kind value | no | what it is: the hardware list counts it once for every copy placed |
 | `on:` | `Patch` | yes | where it goes: `contact(a, b)`, the patch where two of the joint's parts touch |
-| `count:` | `Count` | no (default `1`) | how many copies, for each pair |
+| `count:` | `Count` | no (default `1`) | how many copies, for each pair: at least 1; `0` is `error[out-of-range]` at the joint's call (`j: it places no screws, so nothing joins its parts`) |
 | `spaced:` | `Spacing` | no (default `evenly`) | how the copies are spread along the patch's length |
 | `shape [name]:` | a shape | yes | what it is made of (see [Shapes](#shapes)) |
 
@@ -1994,6 +1994,15 @@ hardware kind's `member` and `mechanism`: `point(...)` anywhere else is
 #### Cut operations
 
 `through` as a depth means all the way through the part.
+
+Every length an operation takes (a depth, width, thickness, length,
+diameter, neck or flats; not `from_depth`) must come out more than 0mm,
+however it is worked out: a tenon 0mm thick cuts away all that the joint
+adds and joins nothing, and one 0mm long is a butt joint by another name.
+Anything else is `error[cut-size]` at the joint's call (`j: its tenon on
+apron is 0mm thick`), its help naming the kind's setting the size comes
+from when the operation reads one straight (`give j a thickness: of more
+than 0mm`).
 
 | Operation | On | Removes |
 |---|---|---|
@@ -3193,8 +3202,13 @@ or a size gets no error for being in pieces.
 
 Every part must be held: joined to the part placed with `ground`, through
 joints and hardware, or be meant to lift out. The parts a joint pair binds
-(and the parts it makes) hold each other, as do a part made of boards and
-the parts its board joints make; a piece of hardware holds the part it is
+(and the parts it makes) hold each other when the pair holds anything: it
+is glued, places a member or a `uses:` fastener, makes a part, or cuts its
+parts. A pair that does none of these (a `glued_face` with `glue: false`)
+only says the parts meet; a group it leaves loose is reported naming it:
+`<part> is loose: <joint> is not glued and cuts or places nothing to hold
+it`. A part made of boards and the parts its board joints make hold each
+other; a piece of hardware holds the part it is
 mounted on, the parts its roles name, the parts that carry its members and
 the parts its members touch. A part that nothing joins to the ground part
 this way is `warning[loose-part]` (layer 4), once for each group of parts
@@ -3246,7 +3260,7 @@ shape of their messages are fixed, because tests and AI tools match on them.
 | 2, 4 | `type-mismatch` | `'<field>' needs <a part>, found <a region>` (for a param kind `'<locked>' needs a length, an angle, a ratio or a count, found <a stock>`; for shares `'shares' needs <3> numbers, one for each piece of <drawer_bay>, found <2>` or `'shares' needs a fixed number of pieces, found a count that can change`), `split takes 'at:' or 'shares:', not both`, for a cut's shape `<joint>: the outline crosses itself between mark <n> and mark <n + 1>`, or for a kind chosen through a param that doesn't take what its declaration hands it `'<kind>' can't be the <joinery> of <Shelf>` (`'<kind>' can't be the project's <joinery>`), its reason the first note (see [Kind values](#kind-values)) |
 | 2 | `unknown-field` | `<a part> has no field '<name>'` |
 | 2 | `missing-field` | `<what> is missing '<name>'` (`solved param 'overall_width' is missing 'within'`); a warning for a stock with no `max_length`: `<stock> doesn't say how long its <boards> are, so Stave can't check part lengths` |
-| 2 | `out-of-range` | `'<param>' must be within <domain>, found <value>`, or for a size that must be positive `'<up>' must be more than <0mm>, found <value>` (`'shares' must each be more than 0, found <value>`), or for an exact value too large to keep `a size here is too large, or divided too finely, for Stave to work out exactly` |
+| 2 | `out-of-range` | `'<param>' must be within <domain>, found <value>`, or for a size that must be positive `'<up>' must be more than <0mm>, found <value>` (`'shares' must each be more than 0, found <value>`), or for an exact value too large to keep `a size here is too large, or divided too finely, for Stave to work out exactly`, or for a joint member's `count:` of 0 `<joint>: it places no <screw>s, so nothing joins its parts` |
 | 2 | `not-in-library` | `a library can't contain a <part> at the top level` |
 | 2 | `import-cycle` | `modules import each other: <a> -> <b> -> <a>` |
 | 2 | `unknown-module` | `can't find module '<source>'` |
@@ -3264,7 +3278,7 @@ shape of their messages are fixed, because tests and AI tools match on them.
 | 4 | `overlap` | `<a> and <b> overlap` |
 | 4 | `adjust` | `<hardware>: the <member> would sit <offset> off its place on the <member>; it adjusts <d>`, or for an axis no `adjust` covers `<hardware>: the <member> would sit <offset> off its place <across>; it doesn't adjust that way` |
 | 4 | `wall` | `<joint>: its <hole> in <part> breaks out of the <left end> of <part>`, `<joint>: its <bore> in <part> runs into the <bore> of <other>` (`meets` when they only touch), `<joint>: its <dado> in <part> crosses the splice between <part>.piece[1] and <part>.piece[2]`, or `<joint>: its <housing> for <other> meets the <housing> for <other> and cuts <part> in two` (`goes right across <part> and cuts it in two` for one cut); see [Cuts stay in their part](#cuts-stay-in-their-part) |
-| 4 | `cut-size` | `<joint>: its <tenon> on <part> is <25mm> <thick>, but <part> is only <19mm> <thick>`, `... is <80mm> across, but <part> is only <70mm> across at that end`, or `<joint>: its <groove> in <part> is <12mm> deep, but <part> is only <12mm> <thick> there` |
+| 4 | `cut-size` | `<joint>: its <tenon> on <part> is <0mm> <thick>` (a size not more than 0mm), `<joint>: its <tenon> on <part> is <25mm> <thick>, but <part> is only <19mm> <thick>`, `... is <80mm> across, but <part> is only <70mm> across at that end`, or `<joint>: its <groove> in <part> is <12mm> deep, but <part> is only <12mm> <thick> there` |
 | 5 | `motion` | `<a> hits <b> when <assembly> is <open>`; `<assembly>'s hardware doesn't move alike`; `<joint>: <a> moves with <assembly> but <b> doesn't, so the joint would hold <assembly> shut`; `<hardware>: <members> lock at <value>`; `<hardware>: <members> may come within 0.1mm of locking near <value>` |
 | 6 | `require` | `'<name>' fails: <message>` |
 | 6 | `require-range` | `'<name>' does not hold for every allowed value: <message>` |

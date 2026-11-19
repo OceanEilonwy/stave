@@ -13,10 +13,12 @@
 //! loose shelf, a tray: the whole group lifts out together). It is asked
 //! only of a design with no errors.
 
+use std::collections::BTreeSet;
+
 use stave_lang::placement::Axis;
 use stave_lang::{Code, Severity};
 use stave_model::defs::{PartKind, PlaceTermKind};
-use stave_model::solved::{BodyCarrier, PartId, PartOrigin, RoleValue, WorldBox};
+use stave_model::solved::{BodyCarrier, CutSource, PartId, PartOrigin, RoleValue, WorldBox};
 
 use crate::names::list;
 use crate::{Checker, Contact, Item};
@@ -132,9 +134,36 @@ impl Checker<'_> {
         };
         let count = design.parts.len();
         let mut parent: Vec<usize> = (0..count).collect();
+        // A pair holds when it is glued, places a member or a fastener,
+        // makes a part, or cuts its parts; one that does none of these (a
+        // count of 0 screws with no glue) only says the parts are joined.
+        let cut_pairs: BTreeSet<(usize, usize)> = design
+            .parts
+            .iter()
+            .flat_map(|part| &part.cuts)
+            .filter_map(|cut| match cut.source {
+                CutSource::Joint { joint, pair } => Some((joint.index(), pair)),
+                CutSource::Hardware { .. } | CutSource::Boards { .. } => None,
+            })
+            .collect();
+        // Pairs that join nothing, with their joint's name.
+        let mut idle: Vec<(Vec<PartId>, &str)> = Vec::new();
         for joint in &design.joints {
-            for pair in &joint.pairs {
+            let fastened = design
+                .fasteners
+                .iter()
+                .any(|use_| use_.joint == joint.id && use_.count > 0);
+            for (index, pair) in joint.pairs.iter().enumerate() {
                 let mut parts: Vec<PartId> = pair.roles.iter().map(|r| r.part).collect();
+                let holds = joint.glue
+                    || fastened
+                    || !pair.members.is_empty()
+                    || !pair.made_parts.is_empty()
+                    || cut_pairs.contains(&(joint.id.index(), index));
+                if !holds {
+                    idle.push((parts, &joint.name));
+                    continue;
+                }
                 parts.extend(pair.made_parts.iter().copied());
                 bind(&mut parent, &parts);
             }
@@ -211,9 +240,22 @@ impl Checker<'_> {
                 }
                 Holder::Floor(_) => "a part that stands on the floor".to_owned(),
             };
-            let message = match names.as_slice() {
-                [only] => format!("{only} is loose: no joint or hardware joins it to {to}"),
-                _ => format!(
+            let idle_joint = idle
+                .iter()
+                .find(|(pair, _)| pair.iter().any(|part| parts.contains(part)))
+                .map(|(_, joint)| *joint);
+            let message = match (names.as_slice(), idle_joint) {
+                ([only], Some(joint)) => format!(
+                    "{only} is loose: {joint} is not glued and cuts or places nothing to hold it"
+                ),
+                (_, Some(joint)) => format!(
+                    "{} are loose: {joint} is not glued and cuts or places nothing to hold them",
+                    few(&names)
+                ),
+                ([only], None) => {
+                    format!("{only} is loose: no joint or hardware joins it to {to}")
+                }
+                (_, None) => format!(
                     "{} are joined only to each other: no joint or hardware joins them to {to}",
                     few(&names)
                 ),
@@ -235,16 +277,21 @@ impl Checker<'_> {
                 }
             }
             let touching = touching.map(|(_, part, other)| (part, other));
-            let help = match touching {
-                Some((part, other)) => format!(
-                    "join {} to {}, which it touches, with a joint or hardware, or write loose: true in the part if it is meant to lift out",
-                    self.part_name(part),
-                    self.part_name(other)
+            let help = match (idle_joint, touching) {
+                (Some(joint), _) => format!(
+                    "glue {joint} (glue: true), or join the parts with a kind that cuts them or places a fastener"
                 ),
-                None => format!(
-                    "place {} against a part it should be joined to and join them with a joint or hardware, or write loose: true in the part if it is meant to lift out",
-                    self.part_name(first)
-                ),
+                (None, touching) => match touching {
+                    Some((part, other)) => format!(
+                        "join {} to {}, which it touches, with a joint or hardware, or write loose: true in the part if it is meant to lift out",
+                        self.part_name(part),
+                        self.part_name(other)
+                    ),
+                    None => format!(
+                        "place {} against a part it should be joined to and join them with a joint or hardware, or write loose: true in the part if it is meant to lift out",
+                        self.part_name(first)
+                    ),
+                },
             };
             let items: Vec<Item> = parts.iter().map(|p| Item::Part(*p)).collect();
             self.next_contact = Some(Contact::of(self.design, &items, &[]));

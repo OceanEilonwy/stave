@@ -35,7 +35,7 @@ use stave_schema::words::{Grain, StockForm};
 
 use crate::build::MadeInfo;
 use crate::eval::{Env, KindEnv};
-use crate::joints::{GeomTable, PairWork, PartGeom, local_slot, round_length};
+use crate::joints::{CutAt, GeomTable, PairWork, PartGeom, local_slot, round_length};
 use crate::{Failure, Fault, Solved, Solver};
 
 /// The first id that stands for a board rather than a part. Parts, made
@@ -931,7 +931,14 @@ impl Solver<'_> {
         };
         let owner = |id: PartId| -> PartId { if is_board(id) { part } else { id } };
         for cut_def in &joint_def.cuts {
-            for (target, face, place, cut_kind) in self.pair_cuts(cut_def, pair, geoms, &env)? {
+            let boards_name = format!("{part_name}'s boards");
+            let (file, span) = self.part_place(part);
+            let at = CutAt {
+                owner: &boards_name,
+                file,
+                span,
+            };
+            for (target, face, place, cut_kind) in self.pair_cuts(cut_def, pair, geoms, &env, at)? {
                 let place = match place {
                     CutPlace::End { toward } => CutPlace::End {
                         toward: owner(toward),

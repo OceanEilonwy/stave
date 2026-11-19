@@ -3,11 +3,11 @@
 
 use stave_lang::ast::{BaseKind, Span};
 use stave_lang::placement::{Axis, Face, PartAxis};
-use stave_lang::units::{ExactLength, Rational};
+use stave_lang::units::{ExactLength, Length, Rational};
 use stave_lang::{Code, Diagnostic, FileId, Label};
 use stave_model::defs::{
-    CutDef, DefId, JointMember, KindCallDef, MadePartDef, MadeTermKind, OperationDef, SelectorDef,
-    Size, StockField, Word,
+    CutDef, DefId, JointMember, KindCallDef, MadePartDef, MadeTermKind, OperationDef, RExprKind,
+    SelectorDef, Size, StockField, Symbol, Word,
 };
 use stave_model::ids::{JointId, KindId, PartId, RecipeId, StockId};
 use stave_model::solved::{
@@ -34,6 +34,15 @@ pub(crate) struct Binding {
     pub glue: bool,
     pub methods: Vec<RecipeId>,
     pub face: Option<Face>,
+}
+
+/// Who a cut belongs to and where to report a mistake in its sizes: a
+/// joint's name and its declaration.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct CutAt<'a> {
+    pub owner: &'a str,
+    pub file: FileId,
+    pub span: Span,
 }
 
 /// What a joint adds to one end of a part.
@@ -1331,6 +1340,110 @@ impl Solver<'_> {
         }
     }
 
+    /// Every size of a cut is more than zero (grammar, "Cut operations"):
+    /// a 0mm tenon cuts the whole extension away and joins nothing, a 0mm
+    /// long one is a butt joint by another name. `error[cut-size]` at the
+    /// joint, naming the kind's setting the size comes from when it is
+    /// one.
+    pub(crate) fn check_cut_size(
+        &mut self,
+        at: CutAt<'_>,
+        name: Option<&stave_model::defs::CutName>,
+        operation: &OperationDef,
+        kind: &CutKind,
+        part: PartId,
+    ) -> Solved<()> {
+        let length = |depth: &Depth| match depth {
+            Depth::Length(length) => Some(*length),
+            Depth::Through => None,
+        };
+        let sizes: Vec<(&str, &str, Option<Length>)> = match kind {
+            CutKind::Notch { depth } => vec![("depth", "deep", length(depth))],
+            CutKind::Slot { width, depth, .. } => vec![
+                ("width", "wide", Some(*width)),
+                ("depth", "deep", length(depth)),
+            ],
+            CutKind::Pocket {
+                width,
+                thickness,
+                depth,
+            } => vec![
+                ("width", "wide", Some(*width)),
+                ("thickness", "thick", Some(*thickness)),
+                ("depth", "deep", length(depth)),
+            ],
+            CutKind::Tenon {
+                length,
+                width,
+                thickness,
+            } => vec![
+                ("length", "long", Some(*length)),
+                ("width", "wide", Some(*width)),
+                ("thickness", "thick", Some(*thickness)),
+            ],
+            CutKind::Spigot { length, diameter } => vec![
+                ("length", "long", Some(*length)),
+                ("diameter", "across", Some(*diameter)),
+            ],
+            CutKind::Round {
+                diameter, flats, ..
+            } => vec![
+                ("diameter", "across", Some(*diameter)),
+                ("flats", "across its flats", *flats),
+            ],
+            CutKind::Drill { diameter, depth } => vec![
+                ("diameter", "across", Some(*diameter)),
+                ("depth", "deep", length(depth)),
+            ],
+            CutKind::DovetailSocket { neck, depth, .. }
+            | CutKind::DovetailTail { neck, depth, .. } => vec![
+                ("neck", "wide at its neck", Some(*neck)),
+                ("depth", "deep", Some(*depth)),
+            ],
+            CutKind::Outline { depth, .. } => vec![("depth", "deep", length(depth))],
+        };
+        let Some((argument, word, size)) = sizes.into_iter().find_map(|(argument, word, size)| {
+            size.filter(|size| *size <= Length::ZERO)
+                .map(|size| (argument, word, size))
+        }) else {
+            return Ok(());
+        };
+        let cut = name.map_or_else(|| operation.operation.word().to_owned(), |n| n.words());
+        let part_name = self.part_name(part);
+        let size = stave_model::value::format_length(size.into());
+        // The setting the size comes from, when the operation reads one of
+        // the kind's params straight.
+        let setting = operation
+            .args
+            .iter()
+            .find(|arg| arg.name == argument)
+            .and_then(|arg| match &arg.value.kind {
+                RExprKind::Symbol(Symbol::KindParam(kind, index)) => self
+                    .model
+                    .defs
+                    .kind(*kind)
+                    .and_then(|k| k.params.get(*index))
+                    .map(|param| param.decl.name.clone()),
+                _ => None,
+            });
+        let help = match setting {
+            Some(setting) => format!("give {} a {setting}: of more than 0mm", at.owner),
+            None => format!(
+                "check the settings of {}: its {cut}'s {argument} must come out more than 0mm",
+                at.owner
+            ),
+        };
+        Err(self
+            .error(
+                Code::CutSize,
+                format!("{}: its {cut} on {part_name} is {size} {word}", at.owner),
+                at.file,
+                at.span,
+                help,
+            )
+            .into())
+    }
+
     /// The cuts of one `cut selector { }` entry for one pair.
     pub(crate) fn pair_cuts(
         &mut self,
@@ -1338,6 +1451,7 @@ impl Solver<'_> {
         pair: &PairWork,
         geoms: &GeomTable,
         env: &Env<'_>,
+        at: CutAt<'_>,
     ) -> Solved<Vec<(PartId, LocalFace, CutPlace, CutKind)>> {
         // A cut on a kind's only `Parts` role is made on each of its parts
         // that meets the other part of the selector.
@@ -1365,6 +1479,7 @@ impl Solver<'_> {
                 self.selector_place(&cut.selector, pair, geoms, env.file, target)?;
             for operation in &cut.operations {
                 let kind = self.cut_kind(operation, env)?;
+                self.check_cut_size(at, cut.name.as_ref(), operation, &kind, part)?;
                 self.check_tongue(operation, &place, face, env)?;
                 out.push((part, face, place.clone(), kind));
             }

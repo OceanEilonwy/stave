@@ -25,7 +25,9 @@ use crate::hardware::{
     HardwareCut, MemberCarrier, Placed, PlacedMember, RoleBound, WorldShape, crossing_face,
     world_index, world_shape,
 };
-use crate::joints::{GeomTable, JointWork, Making, PairWork, PartGeom, local_slot, round_length};
+use crate::joints::{
+    CutAt, GeomTable, JointWork, Making, PairWork, PartGeom, local_slot, round_length,
+};
 use crate::mechanism::AssemblyMechanism;
 use crate::members::{LaidOut, WorldMemberCut};
 use crate::mirror_cuts::MirroredJoint;
@@ -883,7 +885,13 @@ impl Solver<'_> {
             }
             // Cuts.
             for cut in &joint_def.cuts {
-                for (part, face, place, cut_kind) in self.pair_cuts(cut, pair, geoms, &env)? {
+                let (file, span) = self.joint_place(joint);
+                let at = CutAt {
+                    owner: &inst.name,
+                    file,
+                    span,
+                };
+                for (part, face, place, cut_kind) in self.pair_cuts(cut, pair, geoms, &env, at)? {
                     if let Some(list) = cuts.get_mut(part.index()) {
                         list.push(Cut {
                             source: CutSource::Joint {
@@ -912,11 +920,17 @@ impl Solver<'_> {
                 ) else {
                     return Err(Fault::Internal("a part").into());
                 };
-                let kinds = cut
-                    .operations
-                    .iter()
-                    .map(|operation| self.cut_kind(operation, &env))
-                    .collect::<Solved<Vec<_>>>()?;
+                let mut kinds = Vec::new();
+                for operation in &cut.operations {
+                    let kind = self.cut_kind(operation, &env)?;
+                    let at = CutAt {
+                        owner: &inst.name,
+                        file: place.0,
+                        span: place.1,
+                    };
+                    self.check_cut_size(at, cut.name.as_ref(), operation, &kind, part)?;
+                    kinds.push(kind);
+                }
                 let Some(geom) = geoms.get(part).cloned() else {
                     return Err(Fault::Earlier.into());
                 };
