@@ -331,6 +331,10 @@ impl<'m> Solver<'m> {
             }
             RExprKind::List(items) => {
                 let mut values = Vec::new();
+                #[expect(
+                    clippy::wildcard_enum_match_arm,
+                    reason = "the variants it does not name take the general path written last"
+                )]
                 for item in items {
                     match self.eval(item, env)? {
                         Value::List(inner) => values.extend(inner),
@@ -339,6 +343,10 @@ impl<'m> Solver<'m> {
                     }
                 }
                 if !values.is_empty() && values.iter().all(|v| matches!(v, Value::Part(_))) {
+                    #[expect(
+                        clippy::wildcard_enum_match_arm,
+                        reason = "picks out only the variants it names: any other, a new one included, is not one of them"
+                    )]
                     let parts = values.iter().filter_map(|v| match v {
                         Value::Part(p) => Some(*p),
                         _ => None,
@@ -366,6 +374,10 @@ impl<'m> Solver<'m> {
         )
     }
 
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "takes only the values it names: any other, a new variant included, is a type error"
+    )]
     pub(crate) fn eval_length(&mut self, expr: &RExpr, env: &Env<'_>) -> Solved<ExactLength> {
         match self.eval(expr, env)? {
             Value::Length(length) => Ok(length),
@@ -381,6 +393,10 @@ impl<'m> Solver<'m> {
         }
     }
 
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "takes only the values it names: any other, a new variant included, is a type error"
+    )]
     pub(crate) fn eval_angle(
         &mut self,
         expr: &RExpr,
@@ -400,6 +416,10 @@ impl<'m> Solver<'m> {
         }
     }
 
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "takes only the values it names: any other, a new variant included, is a type error"
+    )]
     pub(crate) fn eval_bool(&mut self, expr: &RExpr, env: &Env<'_>) -> Solved<bool> {
         match self.eval(expr, env)? {
             Value::Bool(b) => Ok(b),
@@ -439,6 +459,10 @@ impl<'m> Solver<'m> {
         }
     }
 
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "takes only the values it names: any other, a new variant included, is a type error"
+    )]
     pub(crate) fn eval_part(&mut self, expr: &RExpr, env: &Env<'_>) -> Solved<PartId> {
         match self.eval(expr, env)? {
             Value::Part(part) => Ok(part),
@@ -453,6 +477,10 @@ impl<'m> Solver<'m> {
         }
     }
 
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "takes only the values it names: any other, a new variant included, is a type error"
+    )]
     pub(crate) fn eval_anchor(&mut self, expr: &RExpr, env: &Env<'_>) -> Solved<AnchorValue> {
         match self.eval(expr, env)? {
             Value::Anchor(anchor) => Ok(anchor),
@@ -527,7 +555,14 @@ impl<'m> Solver<'m> {
                     )
                     .into());
             }
-            _ => {}
+            DefId::Param(_)
+            | DefId::Let(_)
+            | DefId::Region(_)
+            | DefId::Part(_)
+            | DefId::Joint(_)
+            | DefId::Hardware(_)
+            | DefId::Assembly(_)
+            | DefId::Require(_) => {}
         }
         let Some(slot) = self.model.item(def, env.ctx) else {
             return Err(self
@@ -558,7 +593,11 @@ impl<'m> Solver<'m> {
                 };
                 Ok(Value::Bool(self.eval_bool(&def.condition, &env)?))
             }
-            other => slot_value(other, None).ok_or_else(|| {
+            other @ (ItemSlot::Part(_)
+            | ItemSlot::Region(_)
+            | ItemSlot::Joint(_)
+            | ItemSlot::Hardware(_)
+            | ItemSlot::Assembly(_)) => slot_value(other, None).ok_or_else(|| {
                 self.eval_error(
                     env,
                     span,
@@ -648,7 +687,8 @@ impl<'m> Solver<'m> {
                         stave_model::defs::AssemblyKind::Instance { args, .. } => {
                             args.get(index).map(|(_, e)| e).ok_or(Fault::Earlier.into())
                         }
-                        _ => Err(Fault::Earlier.into()),
+                        stave_model::defs::AssemblyKind::Mirror(_)
+                        | stave_model::defs::AssemblyKind::Invalid => Err(Fault::Earlier.into()),
                     });
                 let file = self
                     .model
@@ -1115,6 +1155,10 @@ impl<'m> Solver<'m> {
     }
 
     fn array_items(&mut self, base: &RExpr, env: &Env<'_>) -> Solved<(ArrayItems<'m>, DefId)> {
+        #[expect(
+            clippy::wildcard_enum_match_arm,
+            reason = "takes only the values it names: any other, a new variant included, is a type error"
+        )]
         let (def, ctx) = match &base.kind {
             RExprKind::Symbol(Symbol::Def(def)) => (*def, env.ctx),
             RExprKind::Member {
@@ -1383,6 +1427,10 @@ impl<'m> Solver<'m> {
         .into()
     }
 
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "takes only the values it names: any other, a new variant included, is a type error"
+    )]
     pub(crate) fn stock_length(
         &mut self,
         stock: StockId,
@@ -1481,6 +1529,10 @@ impl<'m> Solver<'m> {
             }
             BuiltinCall::Extent { items, axis, of } => {
                 let items = self.eval(items, env)?;
+                #[expect(
+                    clippy::wildcard_enum_match_arm,
+                    reason = "takes only the values it names: any other, a new variant included, is a type error"
+                )]
                 let axis = match (self.eval(axis, env)?, of) {
                     (Value::Word(Word::Axis(axis)), None) => axis,
                     // An axis of another part, or of a contact patch: the
@@ -1535,6 +1587,10 @@ impl<'m> Solver<'m> {
                 let Value::Word(Word::Axis(axis)) = self.eval(axis, env)? else {
                     return Err(Fault::Earlier.into());
                 };
+                #[expect(
+                    clippy::wildcard_enum_match_arm,
+                    reason = "takes only the values it names: any other, a new variant included, is a type error"
+                )]
                 let (bounds, owner) = match item {
                     Value::Part(part) => (self.drawn_box(part)?, AnchorOwner::Part(part)),
                     Value::Region(region) => (
@@ -1630,11 +1686,18 @@ impl<'m> Solver<'m> {
             BuiltinCall::Inset { reveal } => Ok(Value::Mount(Mount::Inset {
                 reveal: self.eval_length(reveal, env)?,
             })),
-            BuiltinCall::Turned { profile } => match self.eval(profile, env)? {
-                Value::Profile(profile) => Ok(Value::Turned(profile)),
-                _ => Err(Fault::Earlier.into()),
-            },
+            BuiltinCall::Turned { profile } => {
+                if let Value::Profile(profile) = self.eval(profile, env)? {
+                    Ok(Value::Turned(profile))
+                } else {
+                    Err(Fault::Earlier.into())
+                }
+            }
             BuiltinCall::Joined { by: expr } => {
+                #[expect(
+                    clippy::wildcard_enum_match_arm,
+                    reason = "takes only the values it names: any other, a new variant included, is a type error"
+                )]
                 let kinds = match self.eval(expr, env)? {
                     Value::Kind(kind) => vec![kind],
                     Value::List(items) => {
@@ -1686,6 +1749,10 @@ impl<'m> Solver<'m> {
                 }
             }
             BuiltinCall::Spliced { by, at, from } => {
+                #[expect(
+                    clippy::wildcard_enum_match_arm,
+                    reason = "takes only the values it names: any other, a new variant included, is a type error"
+                )]
                 let by = match self.eval(by, env)? {
                     Value::Kind(kind) => kind,
                     other => {
@@ -1698,6 +1765,10 @@ impl<'m> Solver<'m> {
                         ).into());
                     }
                 };
+                #[expect(
+                    clippy::wildcard_enum_match_arm,
+                    reason = "takes only the values it names: any other, a new variant included, is a type error"
+                )]
                 let positions = match self.eval(at, env)? {
                     Value::Length(length) => vec![length],
                     Value::List(items) => {
@@ -1746,6 +1817,10 @@ impl<'m> Solver<'m> {
                         )
                         .into());
                 };
+                #[expect(
+                    clippy::wildcard_enum_match_arm,
+                    reason = "takes only the values it names: any other, a new variant included, is a type error"
+                )]
                 let from = match self.eval(from, env)? {
                     Value::Word(Word::Face(face)) => face,
                     other => {
@@ -1786,6 +1861,10 @@ impl<'m> Solver<'m> {
                 align,
                 sha256,
             } => {
+                #[expect(
+                    clippy::wildcard_enum_match_arm,
+                    reason = "takes only the values it names: any other, a new variant included, is a type error"
+                )]
                 let source = match self.eval(source, env)? {
                     Value::Text(text) => text,
                     _ => return Err(Fault::Earlier.into()),
@@ -1794,6 +1873,10 @@ impl<'m> Solver<'m> {
                     Some(Value::Text(node)) => Some(node),
                     _ => None,
                 };
+                #[expect(
+                    clippy::wildcard_enum_match_arm,
+                    reason = "takes only the values it names: any other, a new variant included, is a type error"
+                )]
                 let sha256 = match sha256 {
                     Some(expr) => match self.eval(expr, env)? {
                         Value::Text(text) => match text.parse::<value::Sha256>() {
@@ -1931,6 +2014,10 @@ impl<'m> Solver<'m> {
         }
     }
 
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "takes only the values it names: any other, a new variant included, is a type error"
+    )]
     fn region_argument(&mut self, expr: &RExpr, env: &Env<'_>) -> Solved<RegionValue> {
         match self.eval(expr, env)? {
             Value::Region(region) => self.region_value(region),
@@ -2091,6 +2178,10 @@ impl<'m> Solver<'m> {
                 "give the array a fixed count or labels, or leave out shares: to split into equal pieces",
             ).into());
         }
+        #[expect(
+            clippy::wildcard_enum_match_arm,
+            reason = "takes only the values it names: any other, a new variant included, is a type error"
+        )]
         let items = match self.eval(expr, env)? {
             Value::List(items) => items,
             _ => return Err(Fault::Earlier.into()),
@@ -2117,10 +2208,18 @@ impl<'m> Solver<'m> {
         let mut shares = Vec::with_capacity(count);
         for (index, item) in items.into_iter().enumerate() {
             // The share as written, when the list is written out.
+            #[expect(
+                clippy::wildcard_enum_match_arm,
+                reason = "the variants it does not name take the general path written last"
+            )]
             let span = match &expr.kind {
                 RExprKind::List(written) => written.get(index).map_or(expr.span, |e| e.span),
                 _ => expr.span,
             };
+            #[expect(
+                clippy::wildcard_enum_match_arm,
+                reason = "takes only the values it names: any other, a new variant included, is a type error"
+            )]
             let share = match item {
                 Value::Count(n) | Value::Ratio(n) => n,
                 _ => return Err(Fault::Earlier.into()),
@@ -2157,7 +2256,22 @@ impl<'m> Solver<'m> {
             RExprKind::Binary { lhs, rhs, .. } => {
                 self.reads_ranged_param(lhs) || self.reads_ranged_param(rhs)
             }
-            _ => false,
+            RExprKind::Length(_)
+            | RExprKind::Angle(_)
+            | RExprKind::Number(_)
+            | RExprKind::Bool(_)
+            | RExprKind::Text(_)
+            | RExprKind::Fit
+            | RExprKind::Word(_)
+            | RExprKind::Symbol(_)
+            | RExprKind::SelfElement(_)
+            | RExprKind::Member { .. }
+            | RExprKind::Index { .. }
+            | RExprKind::Builtin(_)
+            | RExprKind::KindValue { .. }
+            | RExprKind::List(_)
+            | RExprKind::Wall(_)
+            | RExprKind::Error => false,
         }
     }
 
@@ -2253,6 +2367,10 @@ impl<'m> Solver<'m> {
     }
 
     /// A value as written in a message.
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "the variants it does not name take the general path written last"
+    )]
     pub(crate) fn describe(&self, value: &Value) -> String {
         match value {
             Value::Part(part) => self.part_name(*part),
@@ -2280,6 +2398,10 @@ pub(crate) fn midpoint(a: ExactLength, b: ExactLength) -> Option<ExactLength> {
 }
 
 /// The recipes a `methods:` value names: one recipe or a list of them.
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "picks out only the variants it names: any other, a new one included, is not one of them"
+)]
 pub(crate) fn recipes(value: &Value) -> Vec<stave_model::ids::RecipeId> {
     match value {
         Value::Recipe(recipe) => vec![*recipe],

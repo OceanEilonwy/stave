@@ -34,6 +34,10 @@ fn names(file: &File) -> Vec<&str> {
         .collect()
 }
 
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a test picks out the variant it checks, and any other is a failure or not what it counts"
+)]
 fn design(item: &Item) -> &DesignItem {
     match &item.kind {
         ItemKind::Design(design) => design,
@@ -480,6 +484,10 @@ fn contextual_words_in_their_positions() {
     let AssemblyDef::Instance { body, .. } = &assembly.def else {
         panic!()
     };
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "a test picks out the variant it checks, and any other is a failure or not what it counts"
+    )]
     let index = |key: &str| match &body.field(key).unwrap().value.kind {
         ExprKind::Index { index, .. } => index.clone(),
         other => panic!("{other:?}"),
@@ -517,6 +525,10 @@ fn members_with_bodies_shapes_and_every_mechanism_entry() {
     let ItemKind::Kind(kind) = &file.items[0].kind else {
         panic!()
     };
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "a test picks out the variant it checks, and any other is a failure or not what it counts"
+    )]
     let members: Vec<&Documented<KindMember>> = kind
         .body
         .entries
@@ -733,6 +745,10 @@ fn precedence_and_associativity() {
     let DesignItem::Let(binding) = design(&file.items[0]) else {
         panic!()
     };
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "a test picks out the variant it checks, and any other is a failure or not what it counts"
+    )]
     fn shape(expr: &Expr) -> String {
         match &expr.kind {
             ExprKind::Binary { op, lhs, rhs } => {
@@ -753,6 +769,10 @@ fn precedence_and_associativity() {
 #[test]
 fn a_slope_is_a_number_in_a_number() {
     let file = clean("stave 1\nlet a = 2 * 1 in 8\nlet b = in_ + 1\n");
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "a test picks out the variant it checks, and any other is a failure or not what it counts"
+    )]
     fn shape(expr: &Expr) -> String {
         match &expr.kind {
             ExprKind::Binary { op, lhs, rhs } => {
@@ -763,6 +783,10 @@ fn a_slope_is_a_number_in_a_number() {
             other => format!("{other:?}"),
         }
     }
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "a test picks out the variant it checks, and any other is a failure or not what it counts"
+    )]
     let shapes: Vec<String> = file
         .items
         .iter()

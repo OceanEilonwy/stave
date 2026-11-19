@@ -74,6 +74,10 @@ fn new_case_project(name: &str) -> PathBuf {
     folder
 }
 
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a test picks out the variant it checks, and any other is a failure or not what it counts"
+)]
 fn send(session: &mut Session, command: EditCommand) -> Vec<EditEvent> {
     session
         .apply(Command::Edit(command))

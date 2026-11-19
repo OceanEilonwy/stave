@@ -50,6 +50,10 @@ fn length_source(length: ExactLength) -> Option<String> {
 }
 
 /// The value of a length written as a literal (`16mm`, `-1mm`).
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "picks out only the variants it names: any other, a new one included, is not one of them"
+)]
 fn literal_length(expr: &RExpr) -> Option<ExactLength> {
     match &expr.kind {
         RExprKind::Length(length) => Some(*length),
@@ -62,6 +66,10 @@ fn literal_length(expr: &RExpr) -> Option<ExactLength> {
 }
 
 /// The literal value of an angle (`110deg`).
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "picks out only the variants it names: any other, a new one included, is not one of them"
+)]
 fn literal_angle(expr: &RExpr) -> Option<ExactAngle> {
     match &expr.kind {
         RExprKind::Angle(angle) => Some(*angle),
@@ -70,6 +78,10 @@ fn literal_angle(expr: &RExpr) -> Option<ExactAngle> {
 }
 
 /// The call, when `expr` is a call to `function`.
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "picks out only the variants it names: any other, a new one included, is not one of them"
+)]
 fn builtin_call(expr: &RExpr, function: Builtin) -> Option<&BuiltinCall> {
     match &expr.kind {
         RExprKind::Builtin(call) if call.function() == function => Some(call),
@@ -152,6 +164,10 @@ impl Checker<'_> {
                 file: def.decl.file,
             });
         }
+        #[expect(
+            clippy::wildcard_enum_match_arm,
+            reason = "picks out only the variants it names: any other, a new one included, is not one of them"
+        )]
         let mut found = defs
             .component(*component)?
             .items

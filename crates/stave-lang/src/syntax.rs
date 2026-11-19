@@ -510,6 +510,10 @@ impl SyntaxKind {
     }
 
     /// The fixed text of a punctuation token, used in "expected ..." messages.
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "SyntaxKind is a flat set of about 140 token and node tags: this tests the few it needs and treats the rest alike"
+    )]
     pub fn punctuation(self) -> Option<&'static str> {
         Some(match self {
             SyntaxKind::L_BRACE => "{",
@@ -639,6 +643,10 @@ mod tests {
         let mut listed = Vec::new();
         for kind in SyntaxKind::ALL {
             if kind.continues_line() {
+                #[expect(
+                    clippy::wildcard_enum_match_arm,
+                    reason = "SyntaxKind is a flat set of about 140 token and node tags: this tests the few it needs and treats the rest alike"
+                )]
                 let text = match kind {
                     SyntaxKind::DOC => "DOC",
                     SyntaxKind::KW_WITHIN => "within",

@@ -9,3 +9,6 @@ build = "build.rs"
 [dependencies]
 stave-lang = { path = "../stave-lang" }
 thiserror = "2"
+
+[lints]
+workspace = true

@@ -203,8 +203,6 @@ pub(crate) struct Resolver<'a> {
     /// `true` while a kind's `require` condition is lowered: the only
     /// place `wall(cut)` may be written.
     in_kind_require: bool,
-    /// Imports per file.
-    imports: HashMap<FileId, BTreeMap<String, ModuleId>>,
     /// Public items of the standard modules.
     prelude: BTreeMap<String, Entry>,
     /// Items in order per module, and per component.
@@ -313,7 +311,6 @@ impl<'a> Resolver<'a> {
             kind_names: HashMap::new(),
             kind_cut_names: HashMap::new(),
             in_kind_require: false,
-            imports: HashMap::new(),
             prelude: BTreeMap::new(),
             module_items: vec![Vec::new(); count],
             component_items: Vec::new(),
@@ -365,6 +362,10 @@ impl<'a> Resolver<'a> {
         file: FileId,
         span: Span,
     ) {
+        #[expect(
+            clippy::wildcard_enum_match_arm,
+            reason = "codes without a help of their own share the general one"
+        )]
         let help = match code {
             Code::UnitMismatch => {
                 "lengths go with lengths and angles with angles; a plain number scales them, as in 2 * 19mm"
@@ -569,10 +570,9 @@ impl<'a> Resolver<'a> {
                     file.file,
                     crate::defs::FileScope {
                         module: Some(module.id),
-                        imports: file_imports.clone(),
+                        imports: file_imports,
                     },
                 );
-                self.imports.insert(file.file, file_imports);
                 for broken in &file.broken {
                     if let Some(name) = &broken.name {
                         self.broken
@@ -696,7 +696,14 @@ impl<'a> Resolver<'a> {
                 DefId::Joint(_) => Some("joint"),
                 DefId::Hardware(_) => Some("hardware"),
                 DefId::Scene(_) => Some("scene"),
-                _ => None,
+                DefId::Param(_)
+                | DefId::Let(_)
+                | DefId::Require(_)
+                | DefId::Stock(_)
+                | DefId::Profile(_)
+                | DefId::Kind(_)
+                | DefId::Recipe(_)
+                | DefId::Component(_) => None,
             };
             if let Some(word) = not_allowed {
                 let article = if word == "assembly" { "an" } else { "a" };
@@ -754,8 +761,8 @@ impl<'a> Resolver<'a> {
     }
 
     fn collect_prelude(&mut self) {
-        let prelude = self.modules.prelude.clone();
-        for module in prelude {
+        let modules = self.modules;
+        for &module in &modules.prelude {
             let Some(names) = self.module_names.get(module.index()) else {
                 continue;
             };
@@ -858,9 +865,15 @@ impl<'a> Resolver<'a> {
         self.prelude.get(name).map(|entry| Symbol::Def(entry.def))
     }
 
+    /// A file's import names and the modules they name: kept once, in
+    /// the file's scope.
+    fn file_imports(&self, file: FileId) -> Option<&BTreeMap<String, ModuleId>> {
+        self.files.get(&file).map(|scope| &scope.imports)
+    }
+
     /// The module a name in this file imports, if it is an import name.
     pub(crate) fn import(&self, cx: &Cx, name: &str) -> Option<ModuleId> {
-        self.imports.get(&cx.file)?.get(name).copied()
+        self.file_imports(cx.file)?.get(name).copied()
     }
 
     /// A public item of a module, or `Err(true)` when it exists but is
@@ -914,7 +927,15 @@ impl<'a> Resolver<'a> {
             Syntax::Joint(j) => j.array.as_ref(),
             Syntax::Hardware(h) => h.array.as_ref(),
             Syntax::Assembly(a) => a.array.as_ref(),
-            _ => None,
+            Syntax::Param(_)
+            | Syntax::Let(_)
+            | Syntax::Require(_)
+            | Syntax::Stock(_)
+            | Syntax::Profile(_)
+            | Syntax::Kind(_)
+            | Syntax::Recipe(_)
+            | Syntax::Component(_)
+            | Syntax::Scene(_) => None,
         }?;
         Some(match array {
             ast::ArraySpec::Labels(labels) => ArrayShape::Labels(
@@ -1238,8 +1259,14 @@ impl<'a> Resolver<'a> {
     }
 
     /// Stores every component with its item list.
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "picks out only the variants it names: any other, a new one included, is not one of them"
+    )]
     fn finish_components(&mut self) {
-        for (index, items) in self.component_items.clone().into_iter().enumerate() {
+        // The last use of the item lists: each moves into its component.
+        let component_items = std::mem::take(&mut self.component_items);
+        for (index, items) in component_items.into_iter().enumerate() {
             let Some(id) = ComponentId::from_index(index) else {
                 continue;
             };
@@ -1320,7 +1347,7 @@ impl<'a> Resolver<'a> {
         if let Some(table) = self.module_names.get(cx.module.index()) {
             names.extend(table.keys().cloned());
         }
-        if let Some(imports) = self.imports.get(&cx.file) {
+        if let Some(imports) = self.file_imports(cx.file) {
             names.extend(imports.keys().cloned());
         }
         names.extend(self.prelude.keys().cloned());
@@ -1353,8 +1380,7 @@ impl<'a> Resolver<'a> {
             return name;
         }
         match self
-            .imports
-            .get(&file)
+            .file_imports(file)
             .and_then(|i| i.iter().find(|(_, m)| **m == module))
         {
             Some((alias, _)) => format!("{alias}.{name}"),

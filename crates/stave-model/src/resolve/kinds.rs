@@ -39,7 +39,15 @@ use crate::types::Ty;
 pub(crate) fn role_specs(syntax: &ast::Kind) -> Vec<(String, RoleType, Span)> {
     let declared = syntax.body.entries.iter().find_map(|entry| match entry {
         ast::KindEntry::Roles(roles) => Some(roles),
-        _ => None,
+        ast::KindEntry::Param(_)
+        | ast::KindEntry::Require(_)
+        | ast::KindEntry::Makes(_)
+        | ast::KindEntry::Member(_)
+        | ast::KindEntry::Cut(_)
+        | ast::KindEntry::Mount(_)
+        | ast::KindEntry::Mechanism(_)
+        | ast::KindEntry::Adjust(_)
+        | ast::KindEntry::Field(_) => None,
     });
     match (syntax.base.value, declared) {
         (BaseKind::Joint | BaseKind::Slide | BaseKind::Hinge | BaseKind::Pull, Some(roles)) => {
@@ -77,7 +85,15 @@ pub(crate) fn kind_params(syntax: &ast::Kind) -> Vec<&ast::Param> {
         .iter()
         .filter_map(|entry| match entry {
             ast::KindEntry::Param(param) => Some(&param.node),
-            _ => None,
+            ast::KindEntry::Require(_)
+            | ast::KindEntry::Makes(_)
+            | ast::KindEntry::Member(_)
+            | ast::KindEntry::Roles(_)
+            | ast::KindEntry::Cut(_)
+            | ast::KindEntry::Mount(_)
+            | ast::KindEntry::Mechanism(_)
+            | ast::KindEntry::Adjust(_)
+            | ast::KindEntry::Field(_) => None,
         })
         .collect()
 }
@@ -90,7 +106,15 @@ pub(crate) fn made_parts(syntax: &ast::Kind) -> Vec<&ast::MadePart> {
         .iter()
         .filter_map(|entry| match entry {
             ast::KindEntry::Makes(made) => Some(&made.node),
-            _ => None,
+            ast::KindEntry::Param(_)
+            | ast::KindEntry::Require(_)
+            | ast::KindEntry::Member(_)
+            | ast::KindEntry::Roles(_)
+            | ast::KindEntry::Cut(_)
+            | ast::KindEntry::Mount(_)
+            | ast::KindEntry::Mechanism(_)
+            | ast::KindEntry::Adjust(_)
+            | ast::KindEntry::Field(_) => None,
         })
         .collect()
 }
@@ -111,6 +135,10 @@ fn is_member_cut(cut: &ast::Cut, members: &[&str]) -> bool {
 }
 
 /// A list expression's elements, or the expression itself.
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a syntax-shape check: only the forms it names mean anything here, and every other expression is the error case"
+)]
 fn elements(expr: &ast::Expr) -> Vec<&ast::Expr> {
     match &expr.kind {
         ExprKind::List(items) => items.iter().collect(),
@@ -187,7 +215,15 @@ impl Resolver<'_> {
             .iter()
             .filter_map(|entry| match entry {
                 ast::KindEntry::Cut(cut) => cut.name.as_ref().map(|n| n.as_str().to_owned()),
-                _ => None,
+                ast::KindEntry::Param(_)
+                | ast::KindEntry::Require(_)
+                | ast::KindEntry::Makes(_)
+                | ast::KindEntry::Member(_)
+                | ast::KindEntry::Roles(_)
+                | ast::KindEntry::Mount(_)
+                | ast::KindEntry::Mechanism(_)
+                | ast::KindEntry::Adjust(_)
+                | ast::KindEntry::Field(_) => None,
             })
             .collect();
         self.kind_cut_names.insert(id, cut_names);
@@ -383,7 +419,15 @@ impl Resolver<'_> {
                         base(base_kind).entry(field.key.as_str()).is_none()
                             && !crate::suggest::closest(field.key.as_str(), [spec.name]).is_empty()
                     }
-                    _ => false,
+                    ast::KindEntry::Param(_)
+                    | ast::KindEntry::Require(_)
+                    | ast::KindEntry::Makes(_)
+                    | ast::KindEntry::Member(_)
+                    | ast::KindEntry::Roles(_)
+                    | ast::KindEntry::Cut(_)
+                    | ast::KindEntry::Mount(_)
+                    | ast::KindEntry::Mechanism(_)
+                    | ast::KindEntry::Adjust(_) => false,
                 });
                 let written = kind_fields.iter().any(|f| f.name == spec.name)
                     || params.iter().any(|p| p.decl.name == spec.name)
@@ -828,6 +872,10 @@ impl Resolver<'_> {
         }
     }
 
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "picks out only the variants it names: any other, a new one included, is not one of them"
+    )]
     fn part_axis(&mut self, cx: &Cx, expr: &ast::Expr, what: &str) -> Option<PartAxis> {
         let value = self.value(
             cx,
@@ -913,6 +961,10 @@ impl Resolver<'_> {
             }
             "uses" => {
                 for fastener in elements(&field.value) {
+                    #[expect(
+                        clippy::wildcard_enum_match_arm,
+                        reason = "a syntax-shape check: only the forms it names mean anything here, and every other expression is the error case"
+                    )]
                     let (callee, args) = match &fastener.kind {
                         ExprKind::Call { callee, args } => (&**callee, args.as_slice()),
                         _ => (fastener, &[][..]),
@@ -1249,10 +1301,10 @@ impl Resolver<'_> {
                         name.span(),
                         retired.help,
                     ),
-                    None => kept.push(arg.clone()),
+                    None => kept.push(arg),
                 }
             }
-            let parsed = self.split_args(cx, head, &kept, &names, 0);
+            let parsed = self.split_args(cx, head, kept, &names, 0);
             let mut args = Vec::new();
             let mut marks = Vec::new();
             for argument in spec.arguments {
@@ -1495,7 +1547,7 @@ impl Resolver<'_> {
             .iter()
             .filter_map(|e| match e {
                 ast::RecipeEntry::Field(f) => Some(f),
-                _ => None,
+                ast::RecipeEntry::Mark(_) | ast::RecipeEntry::Cut(_) => None,
             })
             .collect();
         let found = self.field_table(
@@ -1602,7 +1654,18 @@ impl Resolver<'_> {
         let (head, args, span) = match &need.kind {
             ExprKind::Name(ident) => (ident.as_str().to_owned(), &[][..], ident.span()),
             ExprKind::Call { callee, args } => (callee_text(callee), args.as_slice(), callee.span),
-            _ => {
+            ExprKind::Quantity(_)
+            | ExprKind::Number(_)
+            | ExprKind::String(_)
+            | ExprKind::Bool(_)
+            | ExprKind::Fit
+            | ExprKind::Member { .. }
+            | ExprKind::Index { .. }
+            | ExprKind::Unary { .. }
+            | ExprKind::Binary { .. }
+            | ExprKind::List(_)
+            | ExprKind::Paren(_)
+            | ExprKind::Range { .. } => {
                 self.error(
                     Code::TypeMismatch,
                     "'needs' needs flat_face, square_stock, before(...) or after(...)",
@@ -1721,6 +1784,10 @@ impl Resolver<'_> {
     fn passes_arg(&mut self, cx: &Cx, expr: &ast::Expr) -> Option<NonZeroU32> {
         let value = self.value(cx, expr, &Expect::ty(Ty::Count).named("passes"));
         // A negative literal is lowered as `-` applied to a number.
+        #[expect(
+            clippy::wildcard_enum_match_arm,
+            reason = "takes only the values it names: any other, a new variant included, is a type error"
+        )]
         let (found, passes) = match &value.kind {
             RExprKind::Number(number) => (
                 number.to_string(),
@@ -1734,6 +1801,10 @@ impl Resolver<'_> {
                 op: ast::UnaryOp::Neg,
                 operand,
             } if matches!(operand.kind, RExprKind::Number(_)) => {
+                #[expect(
+                    clippy::wildcard_enum_match_arm,
+                    reason = "picks out only the variants it names: any other, a new one included, is not one of them"
+                )]
                 let found = match &operand.kind {
                     RExprKind::Number(number) => format!("-{number}"),
                     _ => String::new(),
@@ -1892,6 +1963,10 @@ impl Resolver<'_> {
     }
 }
 
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a syntax-shape check: only the forms it names mean anything here, and every other expression is the error case"
+)]
 fn callee_text(callee: &ast::Expr) -> String {
     match &callee.kind {
         ExprKind::Name(ident) => ident.as_str().to_owned(),

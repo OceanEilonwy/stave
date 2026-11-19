@@ -530,7 +530,10 @@ impl EditScope<'_> {
         };
         let piece = candidate.place.first().and_then(|param| match &param.slot {
             PlaceSlot::Part(Some(part)) => Some(*part),
-            _ => None,
+            PlaceSlot::Region(_)
+            | PlaceSlot::Anchor(_)
+            | PlaceSlot::Part(_)
+            | PlaceSlot::Parts(_) => None,
         });
         let Some(piece) = piece else {
             return out;

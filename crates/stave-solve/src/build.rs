@@ -1196,7 +1196,9 @@ impl Solver<'_> {
                     .map_or("", |m| m.name.as_str());
                 format!("{module_name}.{}", decl.name)
             }
-            _ => decl.name.clone(),
+            stave_model::defs::Scope::Module(_) | stave_model::defs::Scope::Component(_) => {
+                decl.name.clone()
+            }
         }
     }
 
@@ -1365,7 +1367,9 @@ impl Solver<'_> {
                         solved::BodyCarrier::Part(part) => {
                             solved::BodyCarrier::Part(map(self, part))
                         }
-                        other => other,
+                        other @ (solved::BodyCarrier::Region(_) | solved::BodyCarrier::Link(_)) => {
+                            other
+                        }
                     };
                     let shapes = member
                         .shapes()
@@ -2035,7 +2039,32 @@ impl Solver<'_> {
                             }
                             Value::Bool(value) => solved::EntryValue::Bool(value),
                             Value::Text(text) => solved::EntryValue::Text(text),
-                            _ => return None,
+                            Value::Count(_)
+                            | Value::Ratio(_)
+                            | Value::Part(_)
+                            | Value::Parts(_)
+                            | Value::Region(_)
+                            | Value::Regions(_)
+                            | Value::Stock(_)
+                            | Value::Profile(_)
+                            | Value::Anchor(_)
+                            | Value::Word(_)
+                            | Value::Mount(_)
+                            | Value::Turned(_)
+                            | Value::Boards(_)
+                            | Value::Splices(_)
+                            | Value::Envelope(_)
+                            | Value::Model(_)
+                            | Value::Spacing(_)
+                            | Value::Kind(_)
+                            | Value::Tool(_)
+                            | Value::Recipe(_)
+                            | Value::Assembly(_)
+                            | Value::Assemblies(_)
+                            | Value::Joint(_)
+                            | Value::Hardware(_)
+                            | Value::List(_)
+                            | Value::Patch(_) => return None,
                         };
                         Some((solved::EntryName::new(&name)?, value))
                     })
@@ -2242,7 +2271,34 @@ impl Solver<'_> {
                         PoseValue::Angle(angle.to_nearest_angle().ok_or(Fault::Overflow)?)
                     }
                     Value::Length(length) => PoseValue::Travel(round_length(length)?),
-                    _ => return Err(Fault::Earlier.into()),
+                    Value::Count(_)
+                    | Value::Ratio(_)
+                    | Value::Bool(_)
+                    | Value::Text(_)
+                    | Value::Part(_)
+                    | Value::Parts(_)
+                    | Value::Region(_)
+                    | Value::Regions(_)
+                    | Value::Stock(_)
+                    | Value::Profile(_)
+                    | Value::Anchor(_)
+                    | Value::Word(_)
+                    | Value::Mount(_)
+                    | Value::Turned(_)
+                    | Value::Boards(_)
+                    | Value::Splices(_)
+                    | Value::Envelope(_)
+                    | Value::Model(_)
+                    | Value::Spacing(_)
+                    | Value::Kind(_)
+                    | Value::Tool(_)
+                    | Value::Recipe(_)
+                    | Value::Assembly(_)
+                    | Value::Assemblies(_)
+                    | Value::Joint(_)
+                    | Value::Hardware(_)
+                    | Value::List(_)
+                    | Value::Patch(_) => return Err(Fault::Earlier.into()),
                 };
                 let mechanism = mechanisms
                     .get(assembly.index())

@@ -1038,6 +1038,10 @@ fn a_dovetail_slope_is_written_1_in_n() {
 joint j : k(shelf, into: side)",
     );
     let design = design(&opened);
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "a test picks out the variant it checks, and any other is a failure or not what it counts"
+    )]
     let slopes: Vec<Slope> = part(design, "shelf")
         .cuts
         .iter()

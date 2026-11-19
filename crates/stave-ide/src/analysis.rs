@@ -322,6 +322,10 @@ impl Analysis {
     }
 
     /// What a use does, in words.
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "the variants it does not name take the general path written last"
+    )]
     fn describe(&self, kind: &UseKind, target: &Symbol) -> String {
         let name = |id: &SymbolId| self.symbol(*id).map_or("", |s| s.name.as_str());
         let kind_name = |id: &SymbolId| {
@@ -414,6 +418,10 @@ impl Analysis {
     /// nothing: a typo, or a name not declared yet. Enum words, built-in
     /// functions and fixed call heads are words of the language, not
     /// unresolved names.
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "SyntaxKind is a flat set of about 140 token and node tags: this tests the few it needs and treats the rest alike"
+    )]
     pub fn is_unresolved(&self, position: FilePosition) -> bool {
         if self.reference_at(position).is_some() {
             return false;
@@ -645,6 +653,10 @@ fn token_at(root: &SyntaxNode, offset: u32) -> Option<stave_lang::SyntaxToken> {
 }
 
 /// The breadcrumb for a node, when it is a step worth showing.
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "SyntaxKind is a flat set of about 140 token and node tags: this tests the few it needs and treats the rest alike"
+)]
 fn crumb_label(node: &SyntaxNode) -> Option<String> {
     let kind = node.kind();
     if let Some(symbol_kind) = SymbolKind::of_node(kind) {

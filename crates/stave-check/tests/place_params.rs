@@ -266,6 +266,10 @@ fn a_mirrored_region_param_is_the_region_in_the_reflected_place() {
             .iter()
             .find(|h| h.name == hardware)
             .unwrap_or_else(|| panic!("no hardware {hardware}"));
+        #[expect(
+            clippy::wildcard_enum_match_arm,
+            reason = "a test picks out the variant it checks, and any other is a failure or not what it counts"
+        )]
         let region = hardware
             .roles
             .iter()

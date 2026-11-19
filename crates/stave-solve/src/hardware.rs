@@ -931,6 +931,10 @@ impl Solver<'_> {
     }
 
     /// The roles of a piece of hardware, by name, in the kind's order.
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "takes only the values it names: any other, a new variant included, is a type error"
+    )]
     fn hardware_roles(
         &mut self,
         kind: &KindDef,
@@ -1425,6 +1429,10 @@ impl Solver<'_> {
         body(self, &env)
     }
 
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "takes only the values it names: any other, a new variant included, is a type error"
+    )]
     pub(crate) fn kind_length(&mut self, expr: &RExpr, env: &Env<'_>) -> Solved<ExactLength> {
         match self.eval(expr, env)? {
             Value::Length(length) => Ok(length),
@@ -1432,6 +1440,10 @@ impl Solver<'_> {
         }
     }
 
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "takes only the values it names: any other, a new variant included, is a type error"
+    )]
     pub(crate) fn kind_angle(&mut self, expr: &RExpr, env: &Env<'_>) -> Solved<ExactAngle> {
         match self.eval(expr, env)? {
             Value::Angle(angle) => Ok(angle),

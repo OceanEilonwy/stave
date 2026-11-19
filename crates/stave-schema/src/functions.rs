@@ -166,6 +166,10 @@ impl Builtin {
     /// The built-in a call means once its argument names are known: `box`
     /// with any of `across:`, `up:` or `deep:` is the region
     /// [`Builtin::RegionBox`]; every other built-in is itself.
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "the variants it does not name take the general path written last"
+    )]
     pub fn for_arguments<'a>(self, mut names: impl Iterator<Item = &'a str>) -> Builtin {
         match self {
             Builtin::Box | Builtin::RegionBox => {

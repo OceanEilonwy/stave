@@ -1127,7 +1127,27 @@ impl<'s, 'm> Tracer<'s, 'm> {
             RExprKind::Builtin(call) => match &**call {
                 BuiltinCall::Between { a, b } => self.between(a, b, env),
                 BuiltinCall::Extent { items, .. } => self.extent(items, env),
-                _ => Ok(Affine::other("a value that is not a number")),
+                BuiltinCall::Mid { .. }
+                | BuiltinCall::Opening(_)
+                | BuiltinCall::Split { .. }
+                | BuiltinCall::Cover { .. }
+                | BuiltinCall::Overlay { .. }
+                | BuiltinCall::Inset { .. }
+                | BuiltinCall::Turned { .. }
+                | BuiltinCall::Joined { .. }
+                | BuiltinCall::Spliced { .. }
+                | BuiltinCall::Box { .. }
+                | BuiltinCall::RegionBox { .. }
+                | BuiltinCall::Cylinder { .. }
+                | BuiltinCall::Model { .. }
+                | BuiltinCall::Node { .. }
+                | BuiltinCall::Ends { .. }
+                | BuiltinCall::Pitch { .. }
+                | BuiltinCall::Gap { .. }
+                | BuiltinCall::Contact { .. }
+                | BuiltinCall::EdgeToEdge { .. } => {
+                    Ok(Affine::other("a value that is not a number"))
+                }
             },
             RExprKind::Unary {
                 op: UnaryOp::Not, ..
@@ -1146,6 +1166,10 @@ impl<'s, 'm> Tracer<'s, 'm> {
         }
     }
 
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "takes only the values it names: any other, a new variant included, is a type error"
+    )]
     fn member(&mut self, base: &RExpr, member: &Member, env: &Env<'static>) -> Step<Affine> {
         match member {
             Member::Size(axis) => match self.value(base, env)? {
@@ -1195,6 +1219,10 @@ impl<'s, 'm> Tracer<'s, 'm> {
 
     /// `base.name` where the type of `base` is known only now: a kind's
     /// param or field, or a member of a value from a param.
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "the variants it does not name take the general path written last"
+    )]
     fn kind_entry(&mut self, base: &RExpr, name: &str, env: &Env<'static>) -> Step<Affine> {
         let value = self.value(base, env)?;
         match &value {
@@ -1269,13 +1297,52 @@ impl<'s, 'm> Tracer<'s, 'm> {
                     let (low, high) = self.item_extent(item, axis, &env)?;
                     low.plus(&high)?.half()
                 }
-                _ => Ok(Affine::other("a face")),
+                BuiltinCall::Between { .. }
+                | BuiltinCall::Extent { .. }
+                | BuiltinCall::Opening(_)
+                | BuiltinCall::Split { .. }
+                | BuiltinCall::Cover { .. }
+                | BuiltinCall::Overlay { .. }
+                | BuiltinCall::Inset { .. }
+                | BuiltinCall::Turned { .. }
+                | BuiltinCall::Joined { .. }
+                | BuiltinCall::Spliced { .. }
+                | BuiltinCall::Box { .. }
+                | BuiltinCall::RegionBox { .. }
+                | BuiltinCall::Cylinder { .. }
+                | BuiltinCall::Model { .. }
+                | BuiltinCall::Node { .. }
+                | BuiltinCall::Ends { .. }
+                | BuiltinCall::Pitch { .. }
+                | BuiltinCall::Gap { .. }
+                | BuiltinCall::Contact { .. }
+                | BuiltinCall::EdgeToEdge { .. } => Ok(Affine::other("a face")),
             },
-            _ => Ok(Affine::other("a face")),
+            RExprKind::Length(_)
+            | RExprKind::Angle(_)
+            | RExprKind::Number(_)
+            | RExprKind::Bool(_)
+            | RExprKind::Text(_)
+            | RExprKind::Fit
+            | RExprKind::Word(_)
+            | RExprKind::Symbol(_)
+            | RExprKind::SelfElement(_)
+            | RExprKind::Member { .. }
+            | RExprKind::Index { .. }
+            | RExprKind::KindValue { .. }
+            | RExprKind::Unary { .. }
+            | RExprKind::Binary { .. }
+            | RExprKind::List(_)
+            | RExprKind::Wall(_)
+            | RExprKind::Error => Ok(Affine::other("a face")),
         }
     }
 
     /// The low and high ends of a part or a region along an axis.
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "takes only the values it names: any other, a new variant included, is a type error"
+    )]
     fn item_extent(
         &mut self,
         item: &RExpr,
@@ -1318,6 +1385,10 @@ impl<'s, 'm> Tracer<'s, 'm> {
         Ok(Affine::not_linear(Reason::Measured, &refs))
     }
 
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "takes only the values it names: any other, a new variant included, is a type error"
+    )]
     fn between(&mut self, a: &RExpr, b: &RExpr, env: &Env<'static>) -> Step<Affine> {
         let mut ends = Vec::new();
         for side in [a, b] {
@@ -1581,6 +1652,10 @@ impl<'s, 'm> Tracer<'s, 'm> {
 
     /// The distance a spacing is written with, as a form.
     fn spacing(&mut self, spacing: &RExpr, env: &Env<'static>) -> Step<(Spacing, Affine)> {
+        #[expect(
+            clippy::wildcard_enum_match_arm,
+            reason = "takes only the values it names: any other, a new variant included, is a type error"
+        )]
         let value = match self.value(spacing, env)? {
             Value::Spacing(spacing) => spacing,
             Value::Word(Word::Evenly) => Spacing::Evenly,
@@ -1596,10 +1671,42 @@ impl<'s, 'm> Tracer<'s, 'm> {
                 BuiltinCall::Ends { inset: distance }
                 | BuiltinCall::Pitch { distance }
                 | BuiltinCall::Gap { distance } => self.affine(distance, &written_env)?,
-                _ => Affine::other("a spacing"),
+                BuiltinCall::Between { .. }
+                | BuiltinCall::Extent { .. }
+                | BuiltinCall::Mid { .. }
+                | BuiltinCall::Opening(_)
+                | BuiltinCall::Split { .. }
+                | BuiltinCall::Cover { .. }
+                | BuiltinCall::Overlay { .. }
+                | BuiltinCall::Inset { .. }
+                | BuiltinCall::Turned { .. }
+                | BuiltinCall::Joined { .. }
+                | BuiltinCall::Spliced { .. }
+                | BuiltinCall::Box { .. }
+                | BuiltinCall::RegionBox { .. }
+                | BuiltinCall::Cylinder { .. }
+                | BuiltinCall::Model { .. }
+                | BuiltinCall::Node { .. }
+                | BuiltinCall::Contact { .. }
+                | BuiltinCall::EdgeToEdge { .. } => Affine::other("a spacing"),
             },
             RExprKind::Word(_) => Affine::zero(),
-            _ => Affine::other("a spacing"),
+            RExprKind::Length(_)
+            | RExprKind::Angle(_)
+            | RExprKind::Number(_)
+            | RExprKind::Bool(_)
+            | RExprKind::Text(_)
+            | RExprKind::Fit
+            | RExprKind::Symbol(_)
+            | RExprKind::SelfElement(_)
+            | RExprKind::Member { .. }
+            | RExprKind::Index { .. }
+            | RExprKind::KindValue { .. }
+            | RExprKind::Unary { .. }
+            | RExprKind::Binary { .. }
+            | RExprKind::List(_)
+            | RExprKind::Wall(_)
+            | RExprKind::Error => Affine::other("a spacing"),
         };
         Ok((value, distance))
     }
@@ -1804,6 +1911,10 @@ impl<'s, 'm> Tracer<'s, 'm> {
     ) -> Step<ExactLength> {
         let (low, high) = match &term.kind {
             AxisTermKind::CenterOn { item } => {
+                #[expect(
+                    clippy::wildcard_enum_match_arm,
+                    reason = "takes only the values it names: any other, a new variant included, is a type error"
+                )]
                 let bounds = match self.value(item, env)? {
                     Value::Part(part) => self.solver.drawn_box(part).map_err(|_| Halt)?,
                     Value::Region(region) => {
@@ -1933,9 +2044,10 @@ impl<'s, 'm> Tracer<'s, 'm> {
     fn regions_of(&mut self, expr: &RExpr, env: &Env<'static>) -> Step<Vec<Bounds>> {
         let (expr, env) = self.peel(expr, *env);
         let RExprKind::Builtin(call) = &expr.kind else {
-            return match self.value(&expr, &env)? {
-                Value::Region(region) => Ok(vec![self.region(region)?]),
-                _ => Ok(vec![Bounds::other("a region")]),
+            return if let Value::Region(region) = self.value(&expr, &env)? {
+                Ok(vec![self.region(region)?])
+            } else {
+                Ok(vec![Bounds::other("a region")])
             };
         };
         match &**call {
@@ -1966,7 +2078,23 @@ impl<'s, 'm> Tracer<'s, 'm> {
                 (Affine::zero(), self.affine(deep, &env)?),
             )]),
             // Any other function makes something that is not a region.
-            _ => Ok(vec![Bounds::other("a region")]),
+            BuiltinCall::Between { .. }
+            | BuiltinCall::Extent { .. }
+            | BuiltinCall::Mid { .. }
+            | BuiltinCall::Overlay { .. }
+            | BuiltinCall::Inset { .. }
+            | BuiltinCall::Turned { .. }
+            | BuiltinCall::Joined { .. }
+            | BuiltinCall::Spliced { .. }
+            | BuiltinCall::Box { .. }
+            | BuiltinCall::Cylinder { .. }
+            | BuiltinCall::Model { .. }
+            | BuiltinCall::Node { .. }
+            | BuiltinCall::Ends { .. }
+            | BuiltinCall::Pitch { .. }
+            | BuiltinCall::Gap { .. }
+            | BuiltinCall::Contact { .. }
+            | BuiltinCall::EdgeToEdge { .. } => Ok(vec![Bounds::other("a region")]),
         }
     }
 
@@ -1980,6 +2108,10 @@ impl<'s, 'm> Tracer<'s, 'm> {
 
     /// Where the solver's region came from, for the meeting edges of a
     /// cover.
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "takes only the values it names: any other, a new variant included, is a type error"
+    )]
     fn region_origin(&mut self, expr: &RExpr, env: &Env<'static>) -> Step<RegionOrigin> {
         match self.value(expr, env)? {
             Value::Region(region) => Ok(self.solver.region_value(region).map_err(|_| Halt)?.origin),
@@ -2107,7 +2239,25 @@ impl<'s, 'm> Tracer<'s, 'm> {
                 reveal: self.affine(reveal, &written_env)?,
             }),
             // Any other function is not a mount.
-            _ => None,
+            BuiltinCall::Between { .. }
+            | BuiltinCall::Extent { .. }
+            | BuiltinCall::Mid { .. }
+            | BuiltinCall::Opening(_)
+            | BuiltinCall::Split { .. }
+            | BuiltinCall::Cover { .. }
+            | BuiltinCall::Turned { .. }
+            | BuiltinCall::Joined { .. }
+            | BuiltinCall::Spliced { .. }
+            | BuiltinCall::Box { .. }
+            | BuiltinCall::RegionBox { .. }
+            | BuiltinCall::Cylinder { .. }
+            | BuiltinCall::Model { .. }
+            | BuiltinCall::Node { .. }
+            | BuiltinCall::Ends { .. }
+            | BuiltinCall::Pitch { .. }
+            | BuiltinCall::Gap { .. }
+            | BuiltinCall::Contact { .. }
+            | BuiltinCall::EdgeToEdge { .. } => None,
         })
     }
 

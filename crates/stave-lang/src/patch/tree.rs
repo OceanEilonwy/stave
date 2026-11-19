@@ -4,6 +4,10 @@ use crate::ast::ItemTag;
 use crate::syntax::{SyntaxKind, SyntaxNode, SyntaxToken};
 
 /// The tag a patch uses for an item node, if a patch can address it.
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "SyntaxKind is a flat set of about 140 token and node tags: this tests the few it needs and treats the rest alike"
+)]
 pub(super) fn tag_of(kind: SyntaxKind) -> Option<ItemTag> {
     Some(match kind {
         SyntaxKind::KIND => ItemTag::Kind,

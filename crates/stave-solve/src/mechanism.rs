@@ -1123,6 +1123,7 @@ impl Solver<'_> {
                 });
             }
             for coupling in &def.couplings {
+                #[expect(clippy::wildcard_enum_match_arm, reason = "takes only the values it names: any other, a new variant included, is a type error")]
                 let ratio = match solver.eval(&coupling.ratio, env)? {
                     Value::Ratio(ratio) | Value::Count(ratio) => ratio,
                     _ => return Err(Fault::Earlier.into()),
@@ -1155,6 +1156,10 @@ impl Solver<'_> {
         let stop = match stop {
             None => None,
             Some((value, stop)) => {
+                #[expect(
+                    clippy::wildcard_enum_match_arm,
+                    reason = "takes only the values it names: any other, a new variant included, is a type error"
+                )]
                 let at = match value {
                     Value::Angle(angle) => StopValue::Angle(angle),
                     Value::Length(length) => StopValue::Length(length),

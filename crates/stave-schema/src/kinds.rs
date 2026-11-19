@@ -24,6 +24,10 @@ pub enum RoleType {
 impl RoleType {
     /// The role type for a type name written in a `roles { }` block:
     /// `Part`, `Parts` or `Region`.
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "picks out only the variants it names: any other, a new one included, is not one of them"
+    )]
     pub fn from_type(ty: TypeName) -> Option<RoleType> {
         match ty {
             TypeName::Part => Some(RoleType::Part),

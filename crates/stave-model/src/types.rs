@@ -192,6 +192,10 @@ impl Ty {
     }
 
     /// The type of one element, for arrays and lists.
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "picks out only the variants it names: any other, a new one included, is not one of them"
+    )]
     pub fn element(&self) -> Option<&Ty> {
         match self {
             Ty::Array(inner) | Ty::List(inner) => Some(inner),

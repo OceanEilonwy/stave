@@ -298,6 +298,10 @@ impl Resolver<'_> {
             );
             return None;
         }
+        #[expect(
+            clippy::wildcard_enum_match_arm,
+            reason = "a syntax-shape check: only the forms it names mean anything here, and every other expression is the error case"
+        )]
         let (callee, args) = match &item.kind {
             ExprKind::Call { callee, args } => (&**callee, args.as_slice()),
             _ => (item, &[][..]),
@@ -488,6 +492,10 @@ impl Resolver<'_> {
     }
 
     /// A shape's range argument: `lo..hi` or one length.
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "a syntax-shape check: only the forms it names mean anything here, and every other expression is the error case"
+    )]
     fn range(&mut self, cx: &Cx, expr: &ast::Expr, what: &str) -> RangeDef {
         match &expr.kind {
             ExprKind::Range { lo, hi } => RangeDef::Between {
@@ -534,6 +542,10 @@ impl Resolver<'_> {
 
     /// `box(...)`, `cylinder(...)`, `prism(...)` or `bar(...)`.
     fn shape(&mut self, cx: &Cx, expr: &ast::Expr) -> Option<ShapeDef> {
+        #[expect(
+            clippy::wildcard_enum_match_arm,
+            reason = "a syntax-shape check: only the forms it names mean anything here, and every other expression is the error case"
+        )]
         let shape = match &expr.kind {
             ExprKind::Call { callee, args } => match &callee.kind {
                 ExprKind::Name(head) => ShapeFunction::from_word(head.as_str()).map(|s| (s, args)),
@@ -570,6 +582,10 @@ impl Resolver<'_> {
                 let axis = match found.get("axis") {
                     None => FrameAxis::Depth,
                     Some(arg) => {
+                        #[expect(
+                            clippy::wildcard_enum_match_arm,
+                            reason = "a syntax-shape check: only the forms it names mean anything here, and every other expression is the error case"
+                        )]
                         let parsed = match &arg.value.kind {
                             ExprKind::Name(ident) => FrameAxis::from_word(ident.as_str()),
                             _ => None,
@@ -693,7 +709,7 @@ impl Resolver<'_> {
         for entry in &block.entries {
             match entry {
                 ast::MechanismEntry::Pivot { members, at, span } => {
-                    let pair = self.pair(cx, kind, bodies, members, "pivot");
+                    let pair = self.pair(cx, kind, bodies, members.each_ref(), "pivot");
                     let at = self.point(cx, at, "at");
                     match (pair, at) {
                         (Some(bodies), Some(at)) => constraints.push(ConstraintDef::Pivot {
@@ -710,7 +726,7 @@ impl Resolver<'_> {
                     to,
                     span,
                 } => {
-                    let pair = self.pair(cx, kind, bodies, members, "slot");
+                    let pair = self.pair(cx, kind, bodies, members.each_ref(), "slot");
                     let from = self.point(cx, from, "from");
                     let to = self.point(cx, to, "to");
                     match (pair, from, to) {
@@ -730,7 +746,7 @@ impl Resolver<'_> {
                     along,
                     span,
                 } => {
-                    let pair = self.pair(cx, kind, bodies, members, "rail");
+                    let pair = self.pair(cx, kind, bodies, members.each_ref(), "rail");
                     let axis = FrameAxis::from_word(along.as_str());
                     if axis.is_none() {
                         self.error_help(
@@ -756,7 +772,7 @@ impl Resolver<'_> {
                     ratio,
                     span,
                 } => {
-                    let pair = self.pair(cx, kind, bodies, &[member.clone(), to.clone()], "couple");
+                    let pair = self.pair(cx, kind, bodies, [member, to], "couple");
                     let ratio = self.value(cx, ratio, &Expect::ty(Ty::Ratio).named("couple"));
                     match pair {
                         Some([body, to]) => couplings.push(CouplingDef {
@@ -1012,7 +1028,7 @@ impl Resolver<'_> {
         cx: &Cx,
         kind: &str,
         bodies: &[BodyDef],
-        members: &[ast::Ident; 2],
+        members: [&ast::Ident; 2],
         entry: &str,
     ) -> Option<[BodyId; 2]> {
         let [a, b] = members;
@@ -1041,6 +1057,10 @@ impl Resolver<'_> {
         value: &ast::Expr,
         span: Span,
     ) -> Option<DriveDef> {
+        #[expect(
+            clippy::wildcard_enum_match_arm,
+            reason = "a syntax-shape check: only the forms it names mean anything here, and every other expression is the error case"
+        )]
         let call = match &value.kind {
             ExprKind::Call { callee, args } => match &callee.kind {
                 ExprKind::Name(head) if DRIVES.contains(&head.as_str()) => Some((head, args)),
@@ -1061,6 +1081,10 @@ impl Resolver<'_> {
         let function = head.as_str();
         let (positional, named): (Vec<&ast::Arg>, Vec<&ast::Arg>) =
             args.iter().partition(|arg| arg.name.is_none());
+        #[expect(
+            clippy::wildcard_enum_match_arm,
+            reason = "a syntax-shape check: only the forms it names mean anything here, and every other expression is the error case"
+        )]
         let member = match positional.as_slice() {
             [only] => match &only.value.kind {
                 ExprKind::Name(ident) => self.body(cx, kind, bodies, ident),

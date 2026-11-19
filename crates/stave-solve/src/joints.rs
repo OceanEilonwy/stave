@@ -208,6 +208,10 @@ impl Solver<'_> {
         what: &str,
         owner: DefId,
     ) -> Solved<Binding> {
+        #[expect(
+            clippy::wildcard_enum_match_arm,
+            reason = "takes only the values it names: any other, a new variant included, is a type error"
+        )]
         let kind_value = match self.eval(&call.kind, env)? {
             Value::Kind(kind) => kind,
             other => {
@@ -1228,6 +1232,10 @@ impl Solver<'_> {
         selector_on(selector, p, gp, q, gq)
     }
 
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "takes only the values it names: any other, a new variant included, is a type error"
+    )]
     fn depth(&mut self, value: &Value, env: &Env<'_>, span: Span) -> Solved<Depth> {
         match value {
             Value::Length(length) => Ok(Depth::Length(round_length(*length)?)),
@@ -1518,6 +1526,10 @@ impl Solver<'_> {
         let size = stave_model::value::format_length(size.into());
         // The setting the size comes from, when the operation reads one of
         // the kind's params straight.
+        #[expect(
+            clippy::wildcard_enum_match_arm,
+            reason = "picks out only the variants it names: any other, a new one included, is not one of them"
+        )]
         let setting = operation
             .args
             .iter()
@@ -1687,6 +1699,10 @@ impl Solver<'_> {
         at: (FileId, Span),
     ) -> Solved<MadeGeom> {
         let body = &made.body;
+        #[expect(
+            clippy::wildcard_enum_match_arm,
+            reason = "takes only the values it names: any other, a new variant included, is a type error"
+        )]
         let stock = match self.eval(&body.stock, env)? {
             Value::Stock(stock) => stock,
             other => {

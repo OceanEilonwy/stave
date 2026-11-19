@@ -81,6 +81,10 @@ pub enum Amount {
 
 impl Amount {
     /// The amount of a value, when it is a quantity.
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "takes only the values it names: any other, a new variant included, is a type error"
+    )]
     pub fn from_value(value: &Value) -> Option<Amount> {
         Some(match value {
             Value::Length(length) => Amount::Length(*length),

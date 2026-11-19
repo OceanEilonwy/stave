@@ -608,6 +608,10 @@ pub(crate) fn written_number(model: &Model, param: ParamId) -> Option<&RExpr> {
     is_number(expr).then_some(expr)
 }
 
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "picks out only the variants it names: any other, a new one included, is not one of them"
+)]
 fn is_number(expr: &RExpr) -> bool {
     match &expr.kind {
         RExprKind::Length(_) | RExprKind::Angle(_) | RExprKind::Number(_) => true,
@@ -655,7 +659,13 @@ fn param_named(model: &Model, instance: InstanceId, name: &str) -> Option<ParamI
                 let def = model.defs.param(inst.def)?;
                 (def.decl.name == name).then_some(*param)
             }
-            _ => None,
+            ItemSlot::Let(_)
+            | ItemSlot::Part(_)
+            | ItemSlot::Region(_)
+            | ItemSlot::Joint(_)
+            | ItemSlot::Hardware(_)
+            | ItemSlot::Assembly(_)
+            | ItemSlot::Require(_) => None,
         })
 }
 

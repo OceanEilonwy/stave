@@ -164,13 +164,15 @@ pub(crate) fn models(
         let Some(path) = &model.path else {
             continue;
         };
-        let file = files.entry(path.clone()).or_insert_with(|| {
-            read(path).ok().map(|bytes| ReadFile {
+        // The path is copied into the table only the first time it is read.
+        if !files.contains_key(path) {
+            let file = read(path).ok().map(|bytes| ReadFile {
                 digest: glb::sha256(&bytes),
                 model: glb::read(&bytes),
-            })
-        });
-        let Some(file) = file else {
+            });
+            files.insert(path.clone(), file);
+        }
+        let Some(Some(file)) = files.get(path) else {
             continue;
         };
         for mismatch in mismatches(model, file.digest, &file.model) {

@@ -177,11 +177,12 @@ impl EditScope<'_> {
             }
         };
         let defs = &self.model().defs;
-        self.in_scope(|item| match item {
-            DefId::Kind(id) => defs
-                .kind(*id)
-                .is_some_and(|kind| bases.contains(&kind.base())),
-            _ => false,
+        self.in_scope(|item| {
+            let DefId::Kind(id) = item else {
+                return false;
+            };
+            defs.kind(*id)
+                .is_some_and(|kind| bases.contains(&kind.base()))
         })
     }
 
@@ -368,7 +369,18 @@ fn is_mount(expr: &Expr) -> bool {
             matches!(&callee.kind, ExprKind::Name(name) if matches!(name.as_str(), "overlay" | "inset"))
         }
         ExprKind::Paren(inner) => is_mount(inner),
-        _ => false,
+        ExprKind::Quantity(_)
+        | ExprKind::Number(_)
+        | ExprKind::String(_)
+        | ExprKind::Bool(_)
+        | ExprKind::Fit
+        | ExprKind::Name(_)
+        | ExprKind::Member { .. }
+        | ExprKind::Index { .. }
+        | ExprKind::Unary { .. }
+        | ExprKind::Binary { .. }
+        | ExprKind::List(_)
+        | ExprKind::Range { .. } => false,
     }
 }
 

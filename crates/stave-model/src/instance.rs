@@ -468,7 +468,14 @@ impl Builder {
                     BinaryOp::Sub => a.checked_sub(b),
                     BinaryOp::Mul => a.checked_mul(b),
                     BinaryOp::Div | BinaryOp::In => a.checked_div(b),
-                    _ => None,
+                    BinaryOp::Or
+                    | BinaryOp::And
+                    | BinaryOp::Eq
+                    | BinaryOp::Ne
+                    | BinaryOp::Lt
+                    | BinaryOp::Le
+                    | BinaryOp::Gt
+                    | BinaryOp::Ge => None,
                 }
             }
             RExprKind::Symbol(Symbol::Def(def @ DefId::Param(_))) => {
@@ -511,7 +518,22 @@ impl Builder {
                 let value = &self.model.defs.let_def(*id)?.value;
                 self.const_number(value, ctx, depth + 1)
             }
-            _ => None,
+            RExprKind::Length(_)
+            | RExprKind::Angle(_)
+            | RExprKind::Bool(_)
+            | RExprKind::Text(_)
+            | RExprKind::Fit
+            | RExprKind::Word(_)
+            | RExprKind::Symbol(_)
+            | RExprKind::SelfElement(_)
+            | RExprKind::Member { .. }
+            | RExprKind::Index { .. }
+            | RExprKind::Builtin(_)
+            | RExprKind::KindValue { .. }
+            | RExprKind::Unary { .. }
+            | RExprKind::List(_)
+            | RExprKind::Wall(_)
+            | RExprKind::Error => None,
         }
     }
 
@@ -583,7 +605,13 @@ impl Builder {
             DefId::Part(id) => {
                 let sources = slot_sources(source_slot.as_ref(), |s| match s {
                     ItemSlot::Part(slot) => Some(slot.all()),
-                    _ => None,
+                    ItemSlot::Param(_)
+                    | ItemSlot::Let(_)
+                    | ItemSlot::Region(_)
+                    | ItemSlot::Joint(_)
+                    | ItemSlot::Hardware(_)
+                    | ItemSlot::Assembly(_)
+                    | ItemSlot::Require(_) => None,
                 });
                 let ids =
                     self.array_items(def, ctx, prefix, &name, |builder, element, label, index| {
@@ -603,7 +631,13 @@ impl Builder {
             DefId::Region(id) => {
                 let sources = slot_sources(source_slot.as_ref(), |s| match s {
                     ItemSlot::Region(slot) => Some(slot.all()),
-                    _ => None,
+                    ItemSlot::Param(_)
+                    | ItemSlot::Let(_)
+                    | ItemSlot::Part(_)
+                    | ItemSlot::Joint(_)
+                    | ItemSlot::Hardware(_)
+                    | ItemSlot::Assembly(_)
+                    | ItemSlot::Require(_) => None,
                 });
                 let ids =
                     self.array_items(def, ctx, prefix, &name, |builder, element, label, index| {
@@ -622,7 +656,13 @@ impl Builder {
             DefId::Joint(id) => {
                 let sources = slot_sources(source_slot.as_ref(), |s| match s {
                     ItemSlot::Joint(slot) => Some(slot.all()),
-                    _ => None,
+                    ItemSlot::Param(_)
+                    | ItemSlot::Let(_)
+                    | ItemSlot::Part(_)
+                    | ItemSlot::Region(_)
+                    | ItemSlot::Hardware(_)
+                    | ItemSlot::Assembly(_)
+                    | ItemSlot::Require(_) => None,
                 });
                 let ids =
                     self.array_items(def, ctx, prefix, &name, |builder, element, label, index| {
@@ -641,7 +681,13 @@ impl Builder {
             DefId::Hardware(id) => {
                 let sources = slot_sources(source_slot.as_ref(), |s| match s {
                     ItemSlot::Hardware(slot) => Some(slot.all()),
-                    _ => None,
+                    ItemSlot::Param(_)
+                    | ItemSlot::Let(_)
+                    | ItemSlot::Part(_)
+                    | ItemSlot::Region(_)
+                    | ItemSlot::Joint(_)
+                    | ItemSlot::Assembly(_)
+                    | ItemSlot::Require(_) => None,
                 });
                 let ids =
                     self.array_items(def, ctx, prefix, &name, |builder, element, label, index| {
@@ -661,13 +707,20 @@ impl Builder {
                 let elements = self.elements(def, ctx);
                 let sources = slot_sources(source_slot.as_ref(), |s| match s {
                     ItemSlot::Assembly(slot) => Some(slot.all()),
-                    _ => None,
+                    ItemSlot::Param(_)
+                    | ItemSlot::Let(_)
+                    | ItemSlot::Part(_)
+                    | ItemSlot::Region(_)
+                    | ItemSlot::Joint(_)
+                    | ItemSlot::Hardware(_)
+                    | ItemSlot::Require(_) => None,
                 });
                 let defs = Arc::clone(&self.model.defs);
                 match defs.assembly(id).map(|a| &a.kind) {
                     Some(AssemblyKind::Instance { component, .. }) => {
                         let component = *component;
-                        let labels = elements.clone().unwrap_or_else(|| vec![String::new()]);
+                        let single = [String::new()];
+                        let labels: &[String] = elements.as_deref().unwrap_or(&single);
                         let mut ids = Vec::new();
                         for (index, label) in labels.iter().enumerate() {
                             let element = elements.as_ref().map(|_| index);
@@ -764,20 +817,21 @@ impl Builder {
         let source_instance = mirror_of
             .and_then(|m| self.model.assemblies.get(m.index()))
             .map(|a| a.inner);
+        let prefix = format!("{name}.");
         let inner = self.new_instance(
             module,
             InstanceKind::Component {
                 component,
                 assembly: assembly_id,
             },
-            format!("{name}."),
+            prefix.clone(),
             source_instance,
         );
         self.model.assemblies.push(AssemblyInst {
             id: assembly_id,
             def,
             ctx,
-            name: name.clone(),
+            name,
             parent,
             component,
             inner,
@@ -790,13 +844,7 @@ impl Builder {
         // Params first, so arguments are attached before counts need them.
         for item in items {
             if let DefId::Param(_) = item {
-                self.instantiate_item(
-                    *item,
-                    inner,
-                    Some(assembly_id),
-                    &format!("{name}."),
-                    source_instance,
-                );
+                self.instantiate_item(*item, inner, Some(assembly_id), &prefix, source_instance);
             }
         }
         if source_instance.is_none() {
@@ -804,13 +852,7 @@ impl Builder {
         }
         for &item in items {
             if !matches!(item, DefId::Param(_)) {
-                self.instantiate_item(
-                    item,
-                    inner,
-                    Some(assembly_id),
-                    &format!("{name}."),
-                    source_instance,
-                );
+                self.instantiate_item(item, inner, Some(assembly_id), &prefix, source_instance);
             }
         }
         assembly_id
@@ -845,12 +887,23 @@ impl Builder {
 
     /// Resolves a mirror's source statically: an assembly name, possibly
     /// indexed by a label.
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "picks out only the variants it names: any other, a new one included, is not one of them"
+    )]
     fn mirror_source(&self, expr: &RExpr, ctx: Ctx) -> Option<AssemblyId> {
         match &expr.kind {
             RExprKind::Symbol(Symbol::Def(def @ DefId::Assembly(_))) => {
                 match self.model.item(*def, ctx)? {
                     ItemSlot::Assembly(Slot::One(id)) => Some(*id),
-                    _ => None,
+                    ItemSlot::Param(_)
+                    | ItemSlot::Let(_)
+                    | ItemSlot::Part(_)
+                    | ItemSlot::Region(_)
+                    | ItemSlot::Joint(_)
+                    | ItemSlot::Hardware(_)
+                    | ItemSlot::Assembly(_)
+                    | ItemSlot::Require(_) => None,
                 }
             }
             RExprKind::Index {
@@ -862,7 +915,13 @@ impl Builder {
                 };
                 match self.model.item(*def, ctx)? {
                     ItemSlot::Assembly(slot) => slot.element(*position),
-                    _ => None,
+                    ItemSlot::Param(_)
+                    | ItemSlot::Let(_)
+                    | ItemSlot::Part(_)
+                    | ItemSlot::Region(_)
+                    | ItemSlot::Joint(_)
+                    | ItemSlot::Hardware(_)
+                    | ItemSlot::Require(_) => None,
                 }
             }
             _ => None,

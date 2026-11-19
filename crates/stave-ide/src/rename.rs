@@ -207,16 +207,15 @@ impl Analysis {
                 existing: self.declaration(found),
             }
         };
-        let key = to.to_owned();
         match target.container {
             Some(container) => {
-                if let Some(found) = self.index.inner_scope.get(&(container, key.clone())) {
-                    return Err(clash(*found));
+                if let Some(found) = self.index.inner_scope.get(container, to) {
+                    return Err(clash(found));
                 }
             }
             None => {
-                if let Some(found) = self.index.module_scope.get(&(target.module, key.clone())) {
-                    return Err(clash(*found));
+                if let Some(found) = self.index.module_scope.get(target.module, to) {
+                    return Err(clash(found));
                 }
                 let module_files = self
                     .index
@@ -225,7 +224,7 @@ impl Analysis {
                     .map(|m| m.files.clone())
                     .unwrap_or_default();
                 for file in module_files {
-                    if self.index.imports.contains_key(&(file, key.clone())) {
+                    if self.index.imports.get(file, to).is_some() {
                         return Err(RenameError::Clash {
                             name: to.to_owned(),
                             what: "the name a file of the project imports a module under"
@@ -237,10 +236,10 @@ impl Analysis {
                 // A name of the prelude would be hidden everywhere in the
                 // project, changing what other uses of it mean.
                 for prelude in &self.index.prelude {
-                    if let Some(found) = self.index.module_scope.get(&(*prelude, key.clone()))
-                        && self.symbol(*found).is_some_and(|s| !s.private)
+                    if let Some(found) = self.index.module_scope.get(*prelude, to)
+                        && self.symbol(found).is_some_and(|s| !s.private)
                     {
-                        return Err(clash(*found));
+                        return Err(clash(found));
                     }
                 }
             }
@@ -255,8 +254,8 @@ impl Analysis {
                     && span.end() <= s.span.end()
                     && Some(s.id) != target.container
             }) {
-                if let Some(found) = self.index.inner_scope.get(&(body.id, key.clone())) {
-                    return Err(clash(*found));
+                if let Some(found) = self.index.inner_scope.get(body.id, to) {
+                    return Err(clash(found));
                 }
             }
         }

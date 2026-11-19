@@ -29,6 +29,10 @@ fn only(text: &str) -> Diagnostic {
     only.clone()
 }
 
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a test picks out the variant it checks, and any other is a failure or not what it counts"
+)]
 fn param(item: &Item) -> &Param {
     match &item.kind {
         ItemKind::Design(DesignItem::Param(param)) => param,
@@ -115,6 +119,10 @@ fn param_kinds_inside_components_and_kinds() {
     let ItemKind::Component(component) = &file.items[0].kind else {
         panic!()
     };
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "a test picks out the variant it checks, and any other is a failure or not what it counts"
+    )]
     let kinds: Vec<ParamKind> = component
         .items
         .iter()
@@ -131,6 +139,10 @@ fn param_kinds_inside_components_and_kinds() {
     let ItemKind::Kind(kind) = &file.items[1].kind else {
         panic!()
     };
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "a test picks out the variant it checks, and any other is a failure or not what it counts"
+    )]
     let kinds: Vec<ParamKind> = kind
         .body
         .entries

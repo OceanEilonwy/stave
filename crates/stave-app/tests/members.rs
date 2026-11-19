@@ -69,6 +69,10 @@ fn a_dowel_lays_its_pins_out_evenly_on_the_patch() {
     // Three 8mm pins on the side's 19 x 300 end: equal gaps of
     // (300 - 24) / 4 = 69mm before, between and after them, centred across
     // the 19mm, half in each part (15mm either side of the base's top).
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "a test picks out the variant it checks, and any other is a failure or not what it counts"
+    )]
     let centres: Vec<_> = pin
         .shapes()
         .iter()
@@ -173,6 +177,10 @@ fn peg_kind(layout: &str) -> String {
 /// The centres of the pegs along the patch's length (deep). A peg flush
 /// with the end of the patch has a hole that breaks out of the board
 /// (`error[wall]`), which is not what these tests are about.
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a test picks out the variant it checks, and any other is a failure or not what it counts"
+)]
 fn peg_centres(layout: &str) -> Vec<stave_lang::units::Length> {
     let opened = open(&peg_kind(layout));
     let design = common::solved(&opened);

@@ -11,3 +11,6 @@ stave-schema = { path = "../stave-schema" }
 stave-modules = { path = "../stave-modules" }
 serde = { version = "1", features = ["derive"] }
 thiserror = "2"
+
+[lints]
+workspace = true

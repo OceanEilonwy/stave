@@ -75,6 +75,10 @@ fn new_case_project(name: &str) -> PathBuf {
     folder
 }
 
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a test picks out the variant it checks, and any other is a failure or not what it counts"
+)]
 fn send(session: &mut Session, command: EditCommand) -> Vec<EditEvent> {
     session
         .apply(Command::Edit(command))
@@ -155,6 +159,10 @@ fn fit_of(options: &[SettingOption], text: &str) -> OptionFit {
         .clone()
 }
 
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a test picks out the variant it checks, and any other is a failure or not what it counts"
+)]
 fn refused_code(options: &[SettingOption], text: &str) -> Code {
     match fit_of(options, text) {
         OptionFit::Refused(refusal) => refusal.first.code,
@@ -166,6 +174,10 @@ fn by_signature(fit: &OptionFit) -> bool {
     matches!(fit, OptionFit::Refused(refusal) if refusal.by_signature())
 }
 
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a test picks out the variant it checks, and any other is a failure or not what it counts"
+)]
 fn check_options(session: &mut Session, only: Option<&str>) -> Vec<EditEvent> {
     session
         .check_setting_options(only, &AtomicBool::new(false))
@@ -517,6 +529,10 @@ fn shelf_chosen(name: &str) -> Session {
     session
 }
 
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a test picks out the variant it checks, and any other is a failure or not what it counts"
+)]
 fn refusal(options: &[SettingOption], text: &str) -> stave_app::edit::OptionRefusal {
     match fit_of(options, text) {
         OptionFit::Refused(refusal) => refusal,
@@ -525,6 +541,10 @@ fn refusal(options: &[SettingOption], text: &str) -> stave_app::edit::OptionRefu
 }
 
 #[test]
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a test picks out the variant it checks, and any other is a failure or not what it counts"
+)]
 fn glued_edge_cant_be_a_shelfs_joinery_and_says_why_in_one_sentence() {
     let mut session = shelf_chosen("shelf-joinery");
     check_options(&mut session, Some("joinery"));

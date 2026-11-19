@@ -92,7 +92,9 @@ fn libraries_that_changed_are_not_reused() {
             stave_modules::ModuleSource::Local { folder } if folder.ends_with("hardware") => {
                 Some((module, folder))
             }
-            _ => None,
+            stave_modules::ModuleSource::Local { .. } | stave_modules::ModuleSource::Std { .. } => {
+                None
+            }
         })
         .expect("the example imports its own hardware folder");
     let file = library.files.first().unwrap();

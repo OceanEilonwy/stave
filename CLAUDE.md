@@ -49,7 +49,13 @@ invalid states unrepresentable.
     fields when an invariant must hold; non-empty collections as types when
     emptiness is invalid.
   - `match` exhaustively; avoid `_ =>` on domain enums so new variants are
-    caught by the compiler.
+    caught by the compiler. `clippy::wildcard_enum_match_arm` enforces it:
+    it is in `[workspace.lints]`, and every crate but stave-gtk takes it with
+    `[lints] workspace = true`. Where a wildcard is right (a projection that
+    picks out one variant, a type check whose every other value is an error,
+    a foreign or non-exhaustive enum, the flat `SyntaxKind` tag set), put
+    `#[expect(clippy::wildcard_enum_match_arm, reason = "...")]` on the
+    narrowest statement or function, or write `if let` / `let ... else`.
 - **No panics in library code:** no `unwrap`, `expect`, `panic!`, indexing that
   can fail, or lossy `as` casts outside tests. Use `TryFrom`, checked
   arithmetic and `?`. Library crates use `thiserror`; binaries use `anyhow`.

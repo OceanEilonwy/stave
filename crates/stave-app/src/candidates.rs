@@ -192,7 +192,18 @@ impl<'a> EditScope<'a> {
                 let candidate = match *item {
                     DefId::Component(id) => self.component_candidate(id, picked, &group),
                     DefId::Kind(id) => self.kind_candidate(id, picked, &group),
-                    _ => None,
+                    DefId::Param(_)
+                    | DefId::Let(_)
+                    | DefId::Region(_)
+                    | DefId::Part(_)
+                    | DefId::Joint(_)
+                    | DefId::Hardware(_)
+                    | DefId::Assembly(_)
+                    | DefId::Require(_)
+                    | DefId::Stock(_)
+                    | DefId::Profile(_)
+                    | DefId::Recipe(_)
+                    | DefId::Scene(_) => None,
                 };
                 out.extend(candidate);
             }
@@ -525,6 +536,10 @@ impl<'a> EditScope<'a> {
 }
 
 /// The slot of a place param's type, or `None` for a setting.
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "picks out only the variants it names: any other, a new one included, is not one of them"
+)]
 fn place_slot(ty: &Ty) -> Option<PlaceSlot> {
     match ty {
         Ty::Region => Some(PlaceSlot::Region(None)),
@@ -537,6 +552,10 @@ fn place_slot(ty: &Ty) -> Option<PlaceSlot> {
 
 /// The type name that declares a setting of this type, if one does.
 fn type_name(ty: &Ty) -> Option<TypeName> {
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "the variants it does not name take the general path written last"
+    )]
     let wanted = match ty {
         Ty::Kind(kind) => Ty::Kind(stave_model::types::KindTy {
             base: kind.base,
@@ -624,7 +643,10 @@ fn bind_component(place: &mut [PlaceParam], picked: &Picked) -> bool {
                 *slot = Some(*region);
                 true
             }
-            _ => false,
+            PlaceSlot::Region(_)
+            | PlaceSlot::Anchor(_)
+            | PlaceSlot::Part(_)
+            | PlaceSlot::Parts(_) => false,
         }),
         Picked::Face(face) => {
             let anchor = fill_first(place, |slot| match slot {
@@ -632,14 +654,20 @@ fn bind_component(place: &mut [PlaceParam], picked: &Picked) -> bool {
                     *slot = Some(*face);
                     true
                 }
-                _ => false,
+                PlaceSlot::Region(_)
+                | PlaceSlot::Anchor(_)
+                | PlaceSlot::Part(_)
+                | PlaceSlot::Parts(_) => false,
             });
             let part = fill_first(place, |slot| match slot {
                 PlaceSlot::Part(slot @ None) => {
                     *slot = Some(face.part);
                     true
                 }
-                _ => false,
+                PlaceSlot::Region(_)
+                | PlaceSlot::Anchor(_)
+                | PlaceSlot::Part(_)
+                | PlaceSlot::Parts(_) => false,
             });
             anchor || part
         }
@@ -660,7 +688,9 @@ fn fill_parts(place: &mut [PlaceParam], parts: NonEmpty<stave_model::ids::PartId
             *slot = Some(parts.clone());
             true
         }
-        _ => false,
+        PlaceSlot::Region(_) | PlaceSlot::Anchor(_) | PlaceSlot::Part(_) | PlaceSlot::Parts(_) => {
+            false
+        }
     })
 }
 
@@ -681,7 +711,10 @@ fn bind_kind(place: &mut [PlaceParam], picked: &Picked) -> bool {
                     *slot = Some(*region);
                     true
                 }
-                _ => false,
+                PlaceSlot::Region(_)
+                | PlaceSlot::Anchor(_)
+                | PlaceSlot::Part(_)
+                | PlaceSlot::Parts(_) => false,
             });
         }
         Picked::Face(face) => vec![face.part],

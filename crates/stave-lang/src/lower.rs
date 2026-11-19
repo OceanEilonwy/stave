@@ -165,6 +165,10 @@ impl Lowering {
         let header = child(root, SyntaxKind::HEADER).and_then(|node| self.header(&node));
         let mut imports = Vec::new();
         let mut items = Vec::new();
+        #[expect(
+            clippy::wildcard_enum_match_arm,
+            reason = "SyntaxKind is a flat set of about 140 token and node tags: this tests the few it needs and treats the rest alike"
+        )]
         for node in root.children() {
             match node.kind() {
                 SyntaxKind::IMPORT => match self.import(&node) {
@@ -261,6 +265,10 @@ impl Lowering {
     }
 
     fn item(&mut self, node: &SyntaxNode) -> Option<Item> {
+        #[expect(
+            clippy::wildcard_enum_match_arm,
+            reason = "SyntaxKind is a flat set of about 140 token and node tags: this tests the few it needs and treats the rest alike"
+        )]
         let kind = match node.kind() {
             SyntaxKind::PROJECT => ItemKind::Project(Project {
                 title: string(&child(node, SyntaxKind::STRING)?)?,
@@ -334,6 +342,10 @@ impl Lowering {
         })
     }
 
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "SyntaxKind is a flat set of about 140 token and node tags: this tests the few it needs and treats the rest alike"
+    )]
     fn patch_op(&mut self, node: &SyntaxNode) -> Option<PatchOpKind> {
         let item_child = || node.children().find(|c| c.kind().is_item());
         let strings: Vec<SyntaxNode> = children(node, SyntaxKind::STRING).collect();
@@ -393,6 +405,10 @@ fn item_keyword(node: &SyntaxNode) -> Option<SyntaxToken> {
         .find(|token| token.kind().is_item_keyword() && !token.kind().is_item_prefix())
 }
 
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "SyntaxKind is a flat set of about 140 token and node tags: this tests the few it needs and treats the rest alike"
+)]
 fn design_item(node: &SyntaxNode) -> Option<DesignItem> {
     Some(match node.kind() {
         SyntaxKind::PARAM => DesignItem::Param(param(node)?),
@@ -489,6 +505,10 @@ fn param_mark(node: &SyntaxNode) -> Option<Spanned<ParamMark>> {
         .children_with_tokens()
         .filter_map(|element| element.into_token())
         .find(|token| token.kind().is_param_kind())?;
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "SyntaxKind is a flat set of about 140 token and node tags: this tests the few it needs and treats the rest alike"
+    )]
     let value = match token.kind() {
         SyntaxKind::KW_LOCKED => ParamMark::Locked,
         SyntaxKind::KW_SOLVED => ParamMark::Solved,
@@ -540,6 +560,10 @@ fn kind(node: &SyntaxNode) -> Option<Kind> {
     let base_word = word(&base_node)?;
     let block = child(node, SyntaxKind::BLOCK)?;
     let mut entries = Vec::new();
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "SyntaxKind is a flat set of about 140 token and node tags: this tests the few it needs and treats the rest alike"
+    )]
     for entry in block.children() {
         let documented = |entry: &SyntaxNode| -> (Docs, Span) { (docs(entry), span_of(entry)) };
         entries.push(match entry.kind() {
@@ -661,6 +685,10 @@ fn mount(entry: &SyntaxNode) -> Option<MountBlock> {
 /// A member's `{ ... }`: named shapes, `shape:` fields (unnamed shapes) and
 /// other fields.
 fn member_body(block: &SyntaxNode) -> Option<MemberBody> {
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "SyntaxKind is a flat set of about 140 token and node tags: this tests the few it needs and treats the rest alike"
+    )]
     let entries = block
         .children()
         .map(|entry| match entry.kind() {
@@ -697,6 +725,10 @@ fn mechanism(node: &SyntaxNode, block: &SyntaxNode) -> Option<MechanismBlock> {
         let mut names = children(entry, SyntaxKind::NAME);
         Some([ident(&names.next()?)?, ident(&names.next()?)?])
     };
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "SyntaxKind is a flat set of about 140 token and node tags: this tests the few it needs and treats the rest alike"
+    )]
     let entries = block
         .children()
         .map(|entry| {
@@ -772,6 +804,10 @@ fn recipe(node: &SyntaxNode) -> Option<Recipe> {
     let operation = ident(&names.next()?)?;
     let block = child(node, SyntaxKind::BLOCK)?;
     let mut entries = Vec::new();
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "SyntaxKind is a flat set of about 140 token and node tags: this tests the few it needs and treats the rest alike"
+    )]
     for entry in block.children() {
         entries.push(match entry.kind() {
             SyntaxKind::STEP_BLOCK => {
@@ -801,6 +837,10 @@ fn recipe(node: &SyntaxNode) -> Option<Recipe> {
 fn profile(node: &SyntaxNode) -> Option<Profile> {
     let block = child(node, SyntaxKind::BLOCK)?;
     let mut entries = Vec::new();
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "SyntaxKind is a flat set of about 140 token and node tags: this tests the few it needs and treats the rest alike"
+    )]
     for entry in block.children() {
         entries.push(match entry.kind() {
             SyntaxKind::STATION => {
@@ -825,6 +865,10 @@ fn profile(node: &SyntaxNode) -> Option<Profile> {
 fn scene(node: &SyntaxNode) -> Option<Scene> {
     let block = child(node, SyntaxKind::BLOCK)?;
     let mut entries = Vec::new();
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "SyntaxKind is a flat set of about 140 token and node tags: this tests the few it needs and treats the rest alike"
+    )]
     for entry in block.children() {
         entries.push(match entry.kind() {
             SyntaxKind::POSE => SceneEntry::Pose {
@@ -871,6 +915,10 @@ fn item_tag(node: &SyntaxNode) -> Option<ItemTag> {
 // Blocks, fields, calls
 // ---------------------------------------------------------------------------
 
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "SyntaxKind is a flat set of about 140 token and node tags: this tests the few it needs and treats the rest alike"
+)]
 fn field_block(block: &SyntaxNode) -> Option<FieldBlock> {
     Some(FieldBlock {
         fields: block
@@ -884,6 +932,10 @@ fn field_block(block: &SyntaxNode) -> Option<FieldBlock> {
     })
 }
 
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "SyntaxKind is a flat set of about 140 token and node tags: this tests the few it needs and treats the rest alike"
+)]
 fn part_body(block: &SyntaxNode) -> Option<PartBody> {
     Some(PartBody {
         entries: block
@@ -905,6 +957,10 @@ fn place_block(node: &SyntaxNode) -> Option<PlaceBlock> {
     })
 }
 
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "SyntaxKind is a flat set of about 140 token and node tags: this tests the few it needs and treats the rest alike"
+)]
 fn calls(block: &SyntaxNode) -> Option<Vec<Call>> {
     block
         .children()
@@ -978,6 +1034,10 @@ fn reference(node: &SyntaxNode) -> Option<Ref> {
 fn path(node: &SyntaxNode) -> Option<Path> {
     let mut nodes = node.children();
     let root = ident(&nodes.next()?)?;
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "SyntaxKind is a flat set of about 140 token and node tags: this tests the few it needs and treats the rest alike"
+    )]
     let segments = nodes
         .map(|segment| match segment.kind() {
             SyntaxKind::NAME => name(&segment).map(PathSegment::Member),
@@ -1050,6 +1110,10 @@ fn string(node: &SyntaxNode) -> Option<StringLit> {
 
 fn expr(node: &SyntaxNode) -> Option<Expr> {
     let span = span_of(node);
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "SyntaxKind is a flat set of about 140 token and node tags: this tests the few it needs and treats the rest alike"
+    )]
     let kind = match node.kind() {
         SyntaxKind::LITERAL => {
             let literal = node.first_token()?;
@@ -1082,6 +1146,10 @@ fn expr(node: &SyntaxNode) -> Option<Expr> {
             args: args(&child(node, SyntaxKind::ARG_LIST)?)?,
         },
         SyntaxKind::UNARY_EXPR => {
+            #[expect(
+                clippy::wildcard_enum_match_arm,
+                reason = "SyntaxKind is a flat set of about 140 token and node tags: this tests the few it needs and treats the rest alike"
+            )]
             let op = match node.first_token()?.kind() {
                 SyntaxKind::MINUS => UnaryOp::Neg,
                 SyntaxKind::BANG => UnaryOp::Not,
@@ -1127,6 +1195,10 @@ fn expr(node: &SyntaxNode) -> Option<Expr> {
     Some(Expr { kind, span })
 }
 
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "SyntaxKind is a flat set of about 140 token and node tags: this tests the few it needs and treats the rest alike"
+)]
 fn binary_op(kind: SyntaxKind) -> Option<BinaryOp> {
     Some(match kind {
         SyntaxKind::PIPE2 => BinaryOp::Or,

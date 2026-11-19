@@ -118,7 +118,22 @@ pub fn selection_for(
                 .iter()
                 .find(|a| wanted(&a.name))
                 .map(|a| Selection::Assembly(a.id)),
-            _ => None,
+            SymbolKind::Module
+            | SymbolKind::Component
+            | SymbolKind::Kind
+            | SymbolKind::Recipe
+            | SymbolKind::Stock
+            | SymbolKind::Profile
+            | SymbolKind::Scene
+            | SymbolKind::Param
+            | SymbolKind::Let
+            | SymbolKind::Region
+            | SymbolKind::Joint
+            | SymbolKind::Require
+            | SymbolKind::Role
+            | SymbolKind::MadePart
+            | SymbolKind::Member
+            | SymbolKind::Label => None,
         };
         if selection.is_some() {
             return selection;

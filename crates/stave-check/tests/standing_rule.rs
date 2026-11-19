@@ -39,6 +39,10 @@ const CORE: [&str; 8] = [
     "stave-scene",
 ];
 
+/// The clippy lint every crate takes against `_ =>` on its own enums
+/// (`[workspace.lints]`), skipped by the scan: its `arm` is a match's.
+const MATCH_LINT: &str = "clippy::wildcard_enum_match_arm";
+
 /// Catalogue words that are not a kind's name, member or entry in `std/`
 /// but name one family of hardware or joint all the same. (`butt` is not
 /// here: it is the contact a joint's parts make, end to face,
@@ -349,6 +353,9 @@ fn the_core_names_no_kind() {
                 if line.trim_start().starts_with("#[cfg(test)]") {
                     break;
                 }
+                // The workspace's match lint is named after a match arm, not
+                // a kind's arm.
+                let line = line.replace(MATCH_LINT, "");
                 let tokens = line
                     .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
                     .filter(|t| !t.is_empty())

@@ -49,6 +49,10 @@ fn symbol_at(
         .unwrap()
 }
 
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a test picks out the variant it checks, and any other is a failure or not what it counts"
+)]
 fn name(design: &stave_model::solved::SolvedDesign, selection: &Selection) -> String {
     match selection {
         Selection::Part(id) => design.part(*id).unwrap().name.clone(),
@@ -156,6 +160,10 @@ fn selecting_in_3d_moves_the_text_to_the_line_that_places_it() {
 fn following_the_cursor_leaves_no_history() {
     let folder = cabinet();
     let mut session = Session::new(folder.clone());
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "a test picks out the variant it checks, and any other is a failure or not what it counts"
+    )]
     let ticket = session
         .apply(Command::Check)
         .into_iter()

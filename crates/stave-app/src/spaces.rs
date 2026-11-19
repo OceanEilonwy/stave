@@ -122,6 +122,10 @@ enum Bound {
 /// The one region or assembly an expression names where it is evaluated:
 /// `bay`, `drawer_bay[same]`, `drawer_bay[top]`, `case.inside`,
 /// `divider.above`.
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "picks out only the variants it names: any other, a new one included, is not one of them"
+)]
 fn bound(model: &Model, expr: &RExpr, ctx: Ctx) -> Option<Bound> {
     match &expr.kind {
         RExprKind::Symbol(Symbol::Def(def)) => single(model.item(*def, ctx)?, None),

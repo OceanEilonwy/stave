@@ -184,6 +184,10 @@ pub(super) fn fixes(term: &SyntaxNode) -> TermFixes {
 
 /// The axis of an anchor expression: a face (`base.top`,
 /// `drawer[top].front`) or a mid-plane (`mid(base, across)`).
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "SyntaxKind is a flat set of about 140 token and node tags: this tests the few it needs and treats the rest alike"
+)]
 fn anchor_axis(anchor: &SyntaxNode) -> Option<Axis> {
     match anchor.kind() {
         SyntaxKind::MEMBER_EXPR => {

@@ -646,7 +646,18 @@ impl Runner<'_> {
             .into_iter()
             .filter_map(|event| match event {
                 Event::Edit(event) => Some(event),
-                _ => None,
+                Event::ViewChanged
+                | Event::SelectionChanged
+                | Event::FocusChanged
+                | Event::HistoryChanged
+                | Event::SceneChanged
+                | Event::ExplodeChanged
+                | Event::EditorChanged
+                | Event::CheckStatusChanged
+                | Event::BuildChanged
+                | Event::ResultChanged
+                | Event::CheckStarted(_)
+                | Event::Notice(_) => None,
             })
             .collect()
     }
@@ -784,9 +795,10 @@ impl Runner<'_> {
                 if !self.check_options_of(name, out)? {
                     return Ok(false);
                 }
-                match step {
-                    Step::Search(_, query) => search_list(self.edit()?, name, query, out)?,
-                    _ => short_list(self.edit()?, name, out)?,
+                if let Step::Search(_, query) = step {
+                    search_list(self.edit()?, name, query, out)?;
+                } else {
+                    short_list(self.edit()?, name, out)?;
                 }
                 Ok(true)
             }
@@ -921,7 +933,18 @@ impl Runner<'_> {
                     .into_iter()
                     .filter_map(|event| match event {
                         Event::Edit(event) => Some(event),
-                        _ => None,
+                        Event::ViewChanged
+                        | Event::SelectionChanged
+                        | Event::FocusChanged
+                        | Event::HistoryChanged
+                        | Event::SceneChanged
+                        | Event::ExplodeChanged
+                        | Event::EditorChanged
+                        | Event::CheckStatusChanged
+                        | Event::BuildChanged
+                        | Event::ResultChanged
+                        | Event::CheckStarted(_)
+                        | Event::Notice(_) => None,
                     })
                     .collect();
                 if let Some(failed) = rejected(&events) {
@@ -963,7 +986,11 @@ impl Runner<'_> {
                             .iter()
                             .find(|choice| choice_named(choice, name))
                             .map(|choice| choice.param),
-                        _ => None,
+                        ChangeDetail::Repeat
+                        | ChangeDetail::Mirror { .. }
+                        | ChangeDetail::Hold { .. }
+                        | ChangeDetail::Remove { .. }
+                        | ChangeDetail::Rename { .. } => None,
                     });
                 let Some(param) = choice else {
                     bail!("'{name}' is not one of the sizes the dragged grip could change");
@@ -1030,6 +1057,10 @@ impl Runner<'_> {
                     )?;
                     return Ok(true);
                 }
+                #[expect(
+                    clippy::wildcard_enum_match_arm,
+                    reason = "the variants it does not name take the general path written last"
+                )]
                 for event in &events {
                     if let EditEvent::Rejected(rejection) = event {
                         match rejection {
@@ -1121,7 +1152,18 @@ impl Runner<'_> {
             .into_iter()
             .filter_map(|event| match event {
                 Event::Edit(event) => Some(event),
-                _ => None,
+                Event::ViewChanged
+                | Event::SelectionChanged
+                | Event::FocusChanged
+                | Event::HistoryChanged
+                | Event::SceneChanged
+                | Event::ExplodeChanged
+                | Event::EditorChanged
+                | Event::CheckStatusChanged
+                | Event::BuildChanged
+                | Event::ResultChanged
+                | Event::CheckStarted(_)
+                | Event::Notice(_) => None,
             })
             .collect();
         if let Some(failed) = rejected(&events) {
@@ -1166,6 +1208,10 @@ impl Runner<'_> {
 }
 
 /// The words of the first rejection among `events`.
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "picks out only the variants it names: any other, a new one included, is not one of them"
+)]
 fn rejected(events: &[EditEvent]) -> Option<String> {
     events.iter().find_map(|event| match event {
         EditEvent::Rejected(rejection) => Some(rejection.text()),
@@ -1406,7 +1452,10 @@ fn grips_list(grips: &GripList, out: &mut String) -> Result<()> {
                     .iter()
                     .map(|f| match f.kind {
                         FollowKind::Plain => f.name.clone(),
-                        kind => format!("{} ({})", f.name, kind.words()),
+                        kind @ (FollowKind::Solved
+                        | FollowKind::Locked
+                        | FollowKind::StockSize
+                        | FollowKind::KindSize) => format!("{} ({})", f.name, kind.words()),
                     })
                     .collect();
                 if names.is_empty() {

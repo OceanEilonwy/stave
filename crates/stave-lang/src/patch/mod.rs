@@ -1156,6 +1156,10 @@ impl<'p> Applier<'p> {
 
     /// The file of the first item of the project's module that the added
     /// item refers to, in the order it is written.
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "SyntaxKind is a flat set of about 140 token and node tags: this tests the few it needs and treats the rest alike"
+    )]
     fn referenced_file(&self, span: Span) -> Option<FileKey> {
         let added = self.patch_root.descendants().find(|node| {
             node.kind().is_item()
