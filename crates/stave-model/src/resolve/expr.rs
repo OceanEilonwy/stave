@@ -1467,7 +1467,7 @@ impl Resolver<'_> {
             ),
             (Builtin::Extent, _) => (value.ty.fits(&Ty::Parts), "parts"),
             // One part each; a role of type `Parts` is one part per pair.
-            (Builtin::Contact, _) => (value.ty.fits(&Ty::Parts), "a part"),
+            (Builtin::Contact | Builtin::EdgeToEdge, _) => (value.ty.fits(&Ty::Parts), "a part"),
             (
                 Builtin::Opening
                 | Builtin::Split

@@ -1,0 +1,34 @@
+// expect: error[require] 'side_by_side' fails: a butterfly key joins two boards lying side by side, edge to edge; these meet another way
+stave 1
+
+// A case's side standing on its base, joined by a butterfly key. A chigiri
+// is let in across the seam between two boards lying side by side; at a
+// corner its sockets would be cut in the wrong faces and its key would sit
+// in the wood of both parts. The kind's rule says so, and nothing is cut.
+
+project "Butterfly key at a corner" {
+  units: mm
+}
+
+stock oak_19 { species: white_oak, form: solid, thickness: 19mm, max_length: 2700mm }
+
+part base : oak_19 {
+  length: 600mm
+  width:  180mm
+  place {
+    ground
+  }
+}
+
+part side : oak_19 {
+  length: 400mm
+  width:  180mm
+  place {
+    orient(length: up, width: back)
+    against(base.top)
+    flush(base.left)
+    flush(base.back)
+  }
+}
+
+joint corner : chigiri(side, into: base)

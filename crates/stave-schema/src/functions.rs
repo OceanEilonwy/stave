@@ -55,6 +55,11 @@ pub enum Builtin {
     Gap,
     /// `contact(a, b)`: the patch where two parts touch, a [`TypeName::Patch`].
     Contact,
+    /// `edge_to_edge(a, b)`: `true` when two parts lie side by side in one
+    /// plane and meet along an edge of each, a [`TypeName::Bool`]. The
+    /// first question asked of how two parts meet; see
+    /// [`Builtin::asks_how_parts_meet`].
+    EdgeToEdge,
     /// `wall(cut)`: the least wood left between one of a kind's named cuts
     /// and any face or other cut of the same part, a length; read only in
     /// a joint or hardware kind's `require`.
@@ -100,7 +105,7 @@ const ITEM: ValueType = ValueType::Items;
 
 impl Builtin {
     /// Every built-in, in the order the grammar lists them.
-    pub const ALL: [Builtin; 19] = [
+    pub const ALL: [Builtin; 20] = [
         Builtin::Between,
         Builtin::Extent,
         Builtin::Mid,
@@ -119,6 +124,7 @@ impl Builtin {
         Builtin::Pitch,
         Builtin::Gap,
         Builtin::Contact,
+        Builtin::EdgeToEdge,
         Builtin::Wall,
     ];
 
@@ -143,6 +149,7 @@ impl Builtin {
             Builtin::Pitch => "pitch",
             Builtin::Gap => "gap",
             Builtin::Contact => "contact",
+            Builtin::EdgeToEdge => "edge_to_edge",
             Builtin::Wall => "wall",
         }
     }
@@ -172,6 +179,36 @@ impl Builtin {
         }
     }
 
+    /// `true` for a question about how two parts meet (`edge_to_edge`).
+    /// A kind's rule that asks one is checked before its other rules, and
+    /// when it fails the joint makes nothing for that pair (grammar,
+    /// "Checks and `require`").
+    pub fn asks_how_parts_meet(self) -> bool {
+        match self {
+            Builtin::EdgeToEdge => true,
+            Builtin::Between
+            | Builtin::Extent
+            | Builtin::Mid
+            | Builtin::Opening
+            | Builtin::Split
+            | Builtin::Cover
+            | Builtin::Overlay
+            | Builtin::Inset
+            | Builtin::Turned
+            | Builtin::Joined
+            | Builtin::Spliced
+            | Builtin::Box
+            | Builtin::RegionBox
+            | Builtin::Cylinder
+            | Builtin::Model
+            | Builtin::Ends
+            | Builtin::Pitch
+            | Builtin::Gap
+            | Builtin::Contact
+            | Builtin::Wall => false,
+        }
+    }
+
     /// What it returns. `split` returns a list of regions, which only an
     /// array `region` declaration can hold.
     pub fn returns(self) -> TypeName {
@@ -189,6 +226,7 @@ impl Builtin {
             Builtin::Model => TypeName::Model,
             Builtin::Ends | Builtin::Pitch | Builtin::Gap => TypeName::Spacing,
             Builtin::Contact => TypeName::Patch,
+            Builtin::EdgeToEdge => TypeName::Bool,
         }
     }
 
@@ -311,7 +349,7 @@ impl Builtin {
                 const LIST: &[Parameter] = &[positional("distance", LENGTH)];
                 LIST
             }
-            Builtin::Contact => {
+            Builtin::Contact | Builtin::EdgeToEdge => {
                 const LIST: &[Parameter] = &[positional("a", ITEM), positional("b", ITEM)];
                 LIST
             }

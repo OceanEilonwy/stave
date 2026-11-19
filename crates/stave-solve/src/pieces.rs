@@ -914,6 +914,9 @@ impl Solver<'_> {
                 if let Some(note) = self.measures_note(&require.condition, &kind_env) {
                     diagnostic = diagnostic.with_note(note);
                 }
+                if let Some(note) = self.meeting_note(&require.condition, &kind_env) {
+                    diagnostic = diagnostic.with_note(note);
+                }
                 let help = self.require_help(&require.condition, &kind_env, "joint");
                 self.report(diagnostic.with_help(help));
             }
@@ -1001,6 +1004,7 @@ impl Solver<'_> {
                 contact,
                 env,
                 extensions,
+                making: crate::joints::Making::Made,
             },
             requires,
         })

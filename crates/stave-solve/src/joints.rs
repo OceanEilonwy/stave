@@ -172,6 +172,21 @@ pub(crate) struct PairWork {
     pub contact: Contact,
     pub env: KindEnv,
     pub extensions: Vec<stave_model::solved::Extension>,
+    /// Whether the joint makes its cuts, parts and members for this pair.
+    pub making: Making,
+}
+
+/// Whether a joint makes anything for one of its pairs (grammar, "Checks
+/// and `require`"): a pair whose parts don't meet the way one of the
+/// kind's rules asks (`edge_to_edge(piece, into)`) is not a place for the
+/// joint at all, so nothing is cut, made or added there, and that rule's
+/// error is the only one the pair gives.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Making {
+    /// The joint makes its cuts, parts and members.
+    Made,
+    /// The parts don't meet as the kind needs: nothing is made.
+    Withheld,
 }
 
 fn flip(end: End) -> End {
@@ -582,12 +597,22 @@ impl Solver<'_> {
                 joint,
                 pair: pairs.len(),
             };
-            for (index, require) in kind.requires.iter().enumerate() {
+            // A rule that asks how the parts meet comes first; when one
+            // fails, the joint is not for this pair and nothing else of
+            // it is checked or made here.
+            let mut order: Vec<(usize, &stave_model::defs::RequireDef)> =
+                kind.requires.iter().enumerate().collect();
+            order.sort_by_key(|(_, require)| {
+                !crate::meeting::asks_how_parts_meet(&require.condition)
+            });
+            let mut making = Making::Made;
+            for (index, require) in order {
                 if self.defer_wall_rule(source, binding.kind, index, require, &kind_env)? {
                     continue;
                 }
                 let holds = self.eval_bool(&require.condition, &kind_env)?;
                 let message = self.format_text(&require.message, &kind_env)?;
+                let meeting_rule = crate::meeting::asks_how_parts_meet(&require.condition);
                 if !holds {
                     let names: Vec<String> = parts.iter().map(|p| self.part_name(*p)).collect();
                     let pair = format!("{} in {name}", names.join(" and "));
@@ -606,6 +631,9 @@ impl Solver<'_> {
                         if let Some(note) = self.measures_note(&require.condition, &kind_env) {
                             diagnostic = diagnostic.with_note(note);
                         }
+                        if let Some(note) = self.meeting_note(&require.condition, &kind_env) {
+                            diagnostic = diagnostic.with_note(note);
+                        }
                         let help = self.require_help(&require.condition, &kind_env, "joint");
                         self.report(diagnostic.with_help(help));
                     }
@@ -615,11 +643,15 @@ impl Solver<'_> {
                     holds,
                     message,
                 });
+                if !holds && meeting_rule {
+                    making = Making::Withheld;
+                    break;
+                }
             }
             requires.push(results);
             // What the joint adds.
             let mut extensions = Vec::new();
-            if let Some(joint_def) = &kind.joint {
+            if let (Some(joint_def), Making::Made) = (&kind.joint, making) {
                 for extend in &joint_def.adds {
                     let by = self.eval_length(&extend.by, &kind_env)?;
                     let members: Vec<PartId> = if across {
@@ -672,6 +704,7 @@ impl Solver<'_> {
                 contact,
                 env,
                 extensions,
+                making,
             });
         }
         Ok(JointWork {
