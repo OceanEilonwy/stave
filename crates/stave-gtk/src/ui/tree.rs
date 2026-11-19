@@ -29,6 +29,18 @@
 //! select it. With no parts it says why (`stave_app::empty`), and for a
 //! library folder lists what the library defines; activating one of those
 //! opens its text.
+//!
+//! For the keyboard and screen readers the list is a tree (its role
+//! `Tree`, each row a `TreeItem` with its level: headings and folded rows
+//! 1, part rows 2, joined-to rows 3; a heading expanded, a folded row
+//! not; a row's dim text and its mark in words as its description). The
+//! arrow keys only move through the rows: a click or Enter chooses one.
+//! Right (Left, right to left) or + opens a folded row and, on an open
+//! heading, goes to its first row; Left or − folds a heading and, on a
+//! part row, goes to its heading (on a joined-to row, to its part). A new
+//! tree, new marks or a new selection update the rows in place: rows that
+//! read the same are kept and only the run that differs is replaced, so
+//! the scroll position and the row with the keyboard survive a check.
 
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet};
@@ -41,7 +53,7 @@ use stave_app::inspect::{AssemblyNode, PartsTree, Swatch, SwatchShape, TreeEntry
 use stave_app::part_joints::{
     self, Block, Chip, Density, Glyph, JoinedTo, Motion, PartJoints, Partner,
 };
-use stave_app::problems::Marks;
+use stave_app::problems::{Mark, Marks};
 use stave_app::session::{Selection, SourceLocation};
 use stave_model::solved::AssemblyId;
 use stave_scene::Item;
@@ -237,6 +249,11 @@ struct TreeState {
     tree: PartsTree,
     joints: PartJoints,
     rows: Vec<(gtk::ListBoxRow, RowKind)>,
+    /// What each row reads (`print`), to keep the rows a new fill makes
+    /// the same.
+    prints: Vec<String>,
+    /// The selection the list last showed.
+    synced: Option<Selection>,
     /// Assemblies the user opened (`true`) or folded (`false`); the
     /// others are as `PartJoints::folded_by_default` says, and open when
     /// they hold the selection.
@@ -261,8 +278,6 @@ struct TreeState {
     on_source: Option<SourceCallback>,
     on_focus: Option<FocusCallback>,
     on_hover: Option<HoverCallback>,
-    /// Ignore row selection changes made while filling or syncing.
-    syncing: bool,
 }
 
 impl TreeState {
@@ -296,6 +311,7 @@ impl TreeSidebar {
     pub fn new() -> TreeSidebar {
         install_css();
         let list = gtk::ListBox::builder()
+            .accessible_role(gtk::AccessibleRole::Tree)
             .selection_mode(gtk::SelectionMode::Single)
             .css_classes(["stave-parts"])
             .build();
@@ -376,6 +392,7 @@ impl TreeSidebar {
                         state.toggled.insert(id, !open);
                     }
                     fill(list, &state);
+                    focus_assembly(list, &state, id);
                     let callback = state.borrow().on_select.clone();
                     if let Some(callback) = callback {
                         callback(Selection::Assembly(id));
@@ -389,6 +406,9 @@ impl TreeSidebar {
                         }
                     }
                     fill(list, &state);
+                    if let Some(first) = ids.first() {
+                        focus_assembly(list, &state, *first);
+                    }
                     let callback = state.borrow().on_select.clone();
                     if let (Some(callback), Some(first)) = (callback, ids.first()) {
                         callback(Selection::Assembly(*first));
@@ -422,31 +442,43 @@ impl TreeSidebar {
                 Some(RowKind::Note) | None => {}
             }
         });
-        // Arrow keys move the row selection; follow it like a click.
+        // The arrow keys only move the row selection (a click or Enter
+        // chooses); Right, Left, + and − open, fold and walk the tree.
+        let keys = gtk::EventControllerKey::new();
         let state = self.state.clone();
-        self.list.connect_row_selected(move |_, row| {
-            let Some(row) = row else { return };
-            let (syncing, kind) = {
-                // The tree changes the rows with nothing borrowed and with
-                // `syncing` up.
-                let state = state.borrow();
-                let kind = state
-                    .rows
-                    .iter()
-                    .find(|(r, _)| r == row)
-                    .map(|(_, kind)| kind.clone());
-                (state.syncing, kind)
-            };
-            if syncing {
-                return;
+        keys.connect_key_pressed(move |keys, key, _, modifiers| {
+            use gtk::gdk::{Key, ModifierType};
+            if modifiers.intersects(
+                ModifierType::CONTROL_MASK | ModifierType::ALT_MASK | ModifierType::SUPER_MASK,
+            ) {
+                return gtk::glib::Propagation::Proceed;
             }
-            if let Some(RowKind::Entry { selection, .. }) = kind {
-                let callback = state.borrow().on_select.clone();
-                if let Some(callback) = callback {
-                    callback(selection);
-                }
+            let Some(list) = keys.widget().and_downcast::<gtk::ListBox>() else {
+                return gtk::glib::Propagation::Proceed;
+            };
+            let rtl = list.direction() == gtk::TextDirection::Rtl;
+            let (right, left) = if rtl {
+                (Step::Shut, Step::Open)
+            } else {
+                (Step::Open, Step::Shut)
+            };
+            let step = match key {
+                Key::Right | Key::KP_Right => right,
+                Key::Left | Key::KP_Left => left,
+                Key::plus | Key::KP_Add => Step::Open,
+                Key::minus | Key::KP_Subtract => Step::Shut,
+                _ => return gtk::glib::Propagation::Proceed,
+            };
+            let Some(row) = list.focus_child().and_downcast::<gtk::ListBoxRow>() else {
+                return gtk::glib::Propagation::Proceed;
+            };
+            if step_row(&list, &state, &row, step) {
+                gtk::glib::Propagation::Stop
+            } else {
+                gtk::glib::Propagation::Proceed
             }
         });
+        self.list.add_controller(keys);
     }
 
     /// Calls `callback` with what a row stands for when it is chosen.
@@ -525,13 +557,25 @@ impl TreeSidebar {
                 .next(selection, &state.joints, state.clicked.as_ref());
             let was_open = open_assemblies(&state);
             let was_listing = state.listing;
+            let changed = state.selection.as_ref() != selection;
             state.selection = selection.cloned();
             state.listing = listing;
+            if changed {
+                reveal(&mut state);
+            }
             let now_open = open_assemblies(&state);
             listing == was_listing && was_open == now_open
         };
         if same_rows {
-            sync_selection(&self.list, &self.state);
+            // The same selection again leaves the list's selection where
+            // the keyboard put it.
+            let changed = {
+                let state = self.state.borrow();
+                state.synced != state.selection
+            };
+            if changed {
+                sync_selection(&self.list, &self.state);
+            }
         } else {
             // The assembly holding it opens.
             fill(&self.list, &self.state);
@@ -587,6 +631,123 @@ impl Listing {
     }
 }
 
+/// Opens the assemblies the user folded that hold a part (or what a part
+/// carries) chosen elsewhere, so its row shows. An assembly chosen itself
+/// (its heading, a folded row) is left as the user left it.
+fn reveal(state: &mut TreeState) {
+    let selection = state.selection.clone().filter(|s| s.item().is_some());
+    let under = state.listing.under.map(Selection::of_item);
+    let mut stack: Vec<&AssemblyNode> = state.tree.assemblies.iter().collect();
+    let mut opened = Vec::new();
+    while let Some(node) = stack.pop() {
+        let folded = state.toggled.get(&node.id) == Some(&false);
+        if folded
+            && [&selection, &under]
+                .into_iter()
+                .flatten()
+                .any(|s| holds(node, s))
+        {
+            opened.push(node.id);
+        }
+        stack.extend(node.children.iter());
+    }
+    for id in opened {
+        state.toggled.insert(id, true);
+    }
+}
+
+/// What Right, Left, + or − asks of the row with the keyboard.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Step {
+    /// Open it, or go into it when it is open.
+    Open,
+    /// Fold it, or go out to the row it is under.
+    Shut,
+}
+
+/// Does `step` on `row`; `false` when it means nothing there.
+fn step_row(
+    list: &gtk::ListBox,
+    state: &Rc<RefCell<TreeState>>,
+    row: &gtk::ListBoxRow,
+    step: Step,
+) -> bool {
+    let (index, kind) = {
+        let state = state.borrow();
+        let Some(index) = state.rows.iter().position(|(r, _)| r == row) else {
+            return false;
+        };
+        (index, state.rows[index].1.clone())
+    };
+    // The nearest row above this one that `wanted` picks.
+    let above = |wanted: &dyn Fn(&RowKind) -> bool| {
+        let state = state.borrow();
+        state.rows[..index]
+            .iter()
+            .rev()
+            .find(|(_, kind)| wanted(kind))
+            .map(|(row, _)| row.clone())
+    };
+    match (kind, step) {
+        (RowKind::Heading(_), Step::Open) => {
+            let next = state
+                .borrow()
+                .rows
+                .get(index + 1)
+                .map(|(row, _)| row.clone());
+            next.is_some_and(|row| row.grab_focus())
+        }
+        (RowKind::Heading(id), Step::Shut) => {
+            state.borrow_mut().toggled.insert(id, false);
+            fill(list, state);
+            focus_assembly(list, state, id);
+            true
+        }
+        (RowKind::Folded(ids), Step::Open) => {
+            {
+                let mut state = state.borrow_mut();
+                for id in &ids {
+                    state.toggled.insert(*id, true);
+                }
+            }
+            fill(list, state);
+            if let Some(first) = ids.first() {
+                focus_assembly(list, state, *first);
+            }
+            true
+        }
+        (RowKind::Entry { .. }, Step::Shut) => {
+            above(&|kind| matches!(kind, RowKind::Heading(_))).is_some_and(|row| row.grab_focus())
+        }
+        (RowKind::Joined { .. }, Step::Shut) => {
+            above(&|kind| matches!(kind, RowKind::Entry { .. })).is_some_and(|row| row.grab_focus())
+        }
+        (RowKind::Folded(_) | RowKind::Entry { .. } | RowKind::Joined { .. }, _)
+        | (RowKind::Note | RowKind::Source(_), _) => false,
+    }
+}
+
+/// Gives the keyboard to an assembly's heading or the folded row it is
+/// in, and selects that row.
+fn focus_assembly(list: &gtk::ListBox, state: &Rc<RefCell<TreeState>>, id: AssemblyId) {
+    let row = state
+        .borrow()
+        .rows
+        .iter()
+        .find(|(_, kind)| match kind {
+            RowKind::Heading(heading) => *heading == id,
+            RowKind::Folded(ids) => ids.contains(&id),
+            RowKind::Note | RowKind::Entry { .. } | RowKind::Joined { .. } | RowKind::Source(_) => {
+                false
+            }
+        })
+        .map(|(row, _)| row.clone());
+    if let Some(row) = row {
+        list.select_row(Some(&row));
+        row.grab_focus();
+    }
+}
+
 /// The assemblies whose rows show, in tree order.
 fn open_assemblies(state: &TreeState) -> Vec<AssemblyId> {
     let mut open = Vec::new();
@@ -600,13 +761,11 @@ fn open_assemblies(state: &TreeState) -> Vec<AssemblyId> {
     open
 }
 
-/// Rebuilds the rows.
+/// Makes the rows again and puts in the list only those that read
+/// differently from the ones it has: the rows the same at the start and
+/// the end are kept, and only the run between is replaced.
 fn fill(list: &gtk::ListBox, state: &Rc<RefCell<TreeState>>) {
     let mut state_ref = state.borrow_mut();
-    state_ref.syncing = true;
-    while let Some(row) = list.row_at_index(0) {
-        list.remove(&row);
-    }
     let density = state_ref.density();
     if density.badge() {
         list.add_css_class("narrow");
@@ -676,33 +835,136 @@ fn fill(list: &gtk::ListBox, state: &Rc<RefCell<TreeState>>) {
             .margin_start(12)
             .margin_end(12)
             .build();
-        let row = gtk::ListBoxRow::builder()
+        let row = tree_row()
             .child(&label)
             .activatable(false)
             .selectable(false)
             .build();
         rows.push((row, RowKind::Note));
     }
-    for (row, _) in &rows {
-        list.append(row);
-    }
     drop(shown);
-    state_ref.rows = rows;
+    for (row, kind) in &rows {
+        row.update_property(&[gtk::accessible::Property::Level(level(kind))]);
+    }
+    let prints: Vec<String> = rows.iter().map(|(row, kind)| print(row, kind)).collect();
+    let mut kept = std::mem::take(&mut state_ref.rows);
+    let old_prints = std::mem::take(&mut state_ref.prints);
+    let start = old_prints
+        .iter()
+        .zip(&prints)
+        .take_while(|(old, new)| old == new)
+        .count();
+    let end = old_prints[start..]
+        .iter()
+        .rev()
+        .zip(prints[start..].iter().rev())
+        .take_while(|(old, new)| old == new)
+        .count();
+    let suffix = kept.split_off(kept.len() - end);
+    let replaced = kept.len() > start || rows.len() > start + end;
+    for (row, _) in kept.drain(start..) {
+        list.remove(&row);
+    }
+    let middle = rows.len() - start - end;
+    for (offset, (row, kind)) in rows.into_iter().skip(start).take(middle).enumerate() {
+        list.insert(&row, i32::try_from(start + offset).unwrap_or(-1));
+        kept.push((row, kind));
+    }
+    kept.extend(suffix);
+    state_ref.rows = kept;
+    state_ref.prints = prints;
+    let resync = replaced || state_ref.synced != state_ref.selection;
     let on_hover = state_ref.on_hover.clone();
     drop(state_ref);
-    sync_selection(list, state);
-    state.borrow_mut().syncing = false;
+    if resync {
+        sync_selection(list, state);
+    }
     // A link under the pointer may have gone with the old rows without
     // saying it was left.
-    if let Some(on_hover) = on_hover {
+    if replaced && let Some(on_hover) = on_hover {
         on_hover(Vec::new());
     }
 }
 
+/// A row of the tree: a tree item to screen readers.
+fn tree_row() -> gtk::builders::ListBoxRowBuilder {
+    gtk::ListBoxRow::builder().accessible_role(gtk::AccessibleRole::TreeItem)
+}
+
+/// A row's level in the tree, for screen readers.
+fn level(kind: &RowKind) -> i32 {
+    match kind {
+        RowKind::Note | RowKind::Heading(_) | RowKind::Folded(_) => 1,
+        RowKind::Entry { .. } | RowKind::Source(_) => 2,
+        RowKind::Joined { .. } => 3,
+    }
+}
+
+/// Names a row for screen readers and describes it (its dim text and its
+/// mark in words, since the dot is only a colour). The row's widget name
+/// keeps both, so a row whose words changed reads differently to `print`.
+fn name_row(row: &gtk::ListBoxRow, label: &str, description: &str) {
+    row.update_property(&[
+        gtk::accessible::Property::Label(label),
+        gtk::accessible::Property::Description(description),
+    ]);
+    row.set_widget_name(&format!("{label}\n{description}"));
+}
+
+/// What a screen reader hears after a row's name: its dim text and its
+/// mark in words.
+fn described(detail: Option<&str>, mark: Option<Mark>) -> String {
+    let mark = mark.map(|mark| match mark {
+        Mark::Error => "has an error",
+        Mark::Warning => "has a warning",
+        Mark::Involved => "involved in a problem",
+    });
+    [detail, mark]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Everything a row shows, as text: two rows that print the same look and
+/// act the same, so the list keeps the one it has.
+fn print(row: &gtk::ListBoxRow, kind: &RowKind) -> String {
+    let mut out = format!("{kind:?} {} {}", row.is_activatable(), row.is_selectable());
+    print_widget(row.upcast_ref(), &mut out);
+    out
+}
+
+fn print_widget(widget: &gtk::Widget, out: &mut String) {
+    use std::fmt::Write as _;
+    let _ = write!(
+        out,
+        "<{} {} {:?} {:?} {}",
+        widget.type_().name(),
+        widget.widget_name(),
+        widget.css_classes(),
+        widget.tooltip_text(),
+        widget.is_visible(),
+    );
+    if let Some(label) = widget.downcast_ref::<gtk::Label>() {
+        let _ = write!(out, " {:?} {}", label.label(), label.width_chars());
+    }
+    if let Some(icon) = widget.downcast_ref::<PathIcon>() {
+        let _ = write!(out, " {:?}", icon.shape());
+    }
+    if let Some(container) = widget.downcast_ref::<gtk::Box>() {
+        let _ = write!(out, " {:?} {}", container.halign(), container.hexpands());
+    }
+    let mut child = widget.first_child();
+    while let Some(next) = child {
+        print_widget(&next, out);
+        child = next.next_sibling();
+    }
+    out.push('>');
+}
+
 fn sync_selection(list: &gtk::ListBox, state_cell: &Rc<RefCell<TreeState>>) {
     let mut state = state_cell.borrow_mut();
-    let was = state.syncing;
-    state.syncing = true;
+    state.synced = state.selection.clone();
     let selected = state.selection.as_ref().and_then(|selection| {
         let find = |wanted: &dyn Fn(&RowKind) -> bool| {
             state
@@ -743,13 +1005,11 @@ fn sync_selection(list: &gtk::ListBox, state_cell: &Rc<RefCell<TreeState>>) {
             })
         })
     });
-    // Selecting a row calls the handler above, which borrows the state.
     drop(state);
     match selected {
         Some(row) => list.select_row(Some(&row)),
         None => list.unselect_all(),
     }
-    state_cell.borrow_mut().syncing = was;
 }
 
 /// What the rows need besides the tree itself.
@@ -779,7 +1039,7 @@ fn empty_rows(empty: &EmptyState, rows: &mut Vec<(gtk::ListBoxRow, RowKind)>) {
             .css_classes(["dim-label", "stave-sidebar-note"])
             .build();
         rows.push((
-            gtk::ListBoxRow::builder()
+            tree_row()
                 .child(&label)
                 .activatable(false)
                 .selectable(false)
@@ -827,8 +1087,12 @@ fn library_row(item: &LibraryItem) -> (gtk::ListBoxRow, RowKind) {
                 .build(),
         );
     }
-    let row = gtk::ListBoxRow::builder().child(&content).build();
-    row.update_property(&[gtk::accessible::Property::Label(&item.name)]);
+    let row = tree_row().child(&content).build();
+    name_row(
+        &row,
+        &item.name,
+        item.summary.as_deref().unwrap_or_default(),
+    );
     let kind = match &item.location {
         Some(location) => {
             row.set_tooltip_text(Some(item.summary.as_deref().unwrap_or("Open its text")));
@@ -849,7 +1113,7 @@ fn plain_heading(text: &str) -> (gtk::ListBoxRow, RowKind) {
         .css_classes(["stave-parts-heading"])
         .build();
     content.append(&gtk::Label::builder().label(text).xalign(0.0).build());
-    let row = gtk::ListBoxRow::builder()
+    let row = tree_row()
         .child(&content)
         .activatable(false)
         .selectable(false)
@@ -907,9 +1171,8 @@ fn heading_row(
                 .build(),
         );
     }
-    let row = gtk::ListBoxRow::builder().child(&content).build();
-    let label = format!("{}, {}", heading.title, heading.note);
-    row.update_property(&[gtk::accessible::Property::Label(&label)]);
+    let row = tree_row().child(&content).build();
+    name_row(&row, &heading.title, &heading.note);
     match assembly {
         Some(id) => {
             row.set_tooltip_text(Some("Fold it"));
@@ -998,11 +1261,14 @@ fn entry_row(
     let content = gtk::Box::builder()
         .css_classes(["stave-parts-entry"])
         .build();
-    content.append(&icons::swatch(
+    let swatch = icons::swatch(
         rgba(entry.swatch),
         entry.swatch.shape == SwatchShape::Round,
         9,
-    ));
+    );
+    // Its colour, for `print`: the drawing shows it nowhere else.
+    swatch.set_widget_name(&format!("{:?}", entry.swatch));
+    content.append(&swatch);
     content.append(
         &gtk::Label::builder()
             .label(label)
@@ -1021,7 +1287,7 @@ fn entry_row(
         shown.marks.entry(entry)
     };
     content.append(&super::style::mark_dot(mark));
-    let row = gtk::ListBoxRow::builder().child(&content).build();
+    let row = tree_row().child(&content).build();
     if let Some(detail) = &entry.detail {
         row.set_tooltip_text(Some(detail));
     }
@@ -1034,7 +1300,7 @@ fn entry_row(
     } else {
         format!("{label}: {}", words.join(", "))
     };
-    row.update_property(&[gtk::accessible::Property::Label(&accessible)]);
+    name_row(&row, &accessible, &described(entry.detail.as_deref(), mark));
     let first = items.first().copied().unwrap_or(*entry.items.first());
     (
         row,
@@ -1082,10 +1348,10 @@ fn joined_row(joined: &JoinedTo, shown: &Shown<'_>) -> (gtk::ListBoxRow, RowKind
         partners.append(&partner_link(partner, joined, shown));
     }
     content.append(&partners);
-    let row = gtk::ListBoxRow::builder().child(&content).build();
+    let row = tree_row().child(&content).build();
     let names: Vec<&str> = joined.partners.iter().map(|p| p.label.as_str()).collect();
     let accessible = format!("{}: {}", joined.words, names.join(", "));
-    row.update_property(&[gtk::accessible::Property::Label(&accessible)]);
+    name_row(&row, &accessible, "");
     if joined.focus.is_some() {
         row.set_tooltip_text(Some(&format!("{accessible}. Activate to focus on it")));
     }
@@ -1190,15 +1456,8 @@ fn folded_row(
     }
     let mark = ids.iter().find_map(|id| shown.marks.assembly(*id));
     content.append(&super::style::mark_dot(mark));
-    let row = gtk::ListBoxRow::builder()
-        .child(&content)
-        .tooltip_text("Open it")
-        .build();
-    let accessible = match detail {
-        Some(detail) => format!("{label}, {detail}"),
-        None => label.to_owned(),
-    };
-    row.update_property(&[gtk::accessible::Property::Label(&accessible)]);
+    let row = tree_row().child(&content).tooltip_text("Open it").build();
+    name_row(&row, label, &described(detail, mark));
     row.update_state(&[gtk::accessible::State::Expanded(Some(false))]);
     (row, RowKind::Folded(ids.to_vec()))
 }
@@ -1434,11 +1693,162 @@ mod tests {
             })
             .map(|(row, _)| row.clone())
             .expect("another part's row");
+        // The arrow keys only move the list's selection: that is no
+        // choice. Enter or a click (activating the row) is.
         sidebar.list.select_row(Some(&other));
+        assert!(
+            chosen.borrow().is_empty(),
+            "moving through the rows chooses nothing"
+        );
+        sidebar.list.emit_by_name::<()>("row-activated", &[&other]);
         assert_eq!(
             chosen.borrow().len(),
             1,
             "a row chosen by hand is passed on"
         );
+    }
+
+    fn cabinet_sidebar() -> (TreeSidebar, SolvedDesign) {
+        let design = cabinet();
+        let sidebar = TreeSidebar::new();
+        sidebar.show_tree(
+            stave_app::inspect::parts_tree(&design),
+            PartJoints::new(&design),
+        );
+        (sidebar, design)
+    }
+
+    fn list_rows(sidebar: &TreeSidebar) -> Vec<gtk::ListBoxRow> {
+        let mut rows = Vec::new();
+        let mut index = 0;
+        while let Some(row) = sidebar.list.row_at_index(index) {
+            rows.push(row);
+            index += 1;
+        }
+        rows
+    }
+
+    #[test]
+    fn a_new_result_updates_rows_in_place() {
+        crate::ui::gtk_test::on_gtk_thread(rows_update_in_place);
+    }
+
+    /// The same tree, joints or marks again keep every row; a selection
+    /// that lists a part's joined-to rows replaces only the run around
+    /// it. The list is a tree to screen readers.
+    fn rows_update_in_place() {
+        let (sidebar, design) = cabinet_sidebar();
+        assert_eq!(sidebar.list.accessible_role(), gtk::AccessibleRole::Tree);
+        let before = list_rows(&sidebar);
+        assert!(before.len() > 4);
+        assert!(
+            before
+                .iter()
+                .all(|row| row.accessible_role() == gtk::AccessibleRole::TreeItem)
+        );
+        let state_rows: Vec<gtk::ListBoxRow> = sidebar
+            .state
+            .borrow()
+            .rows
+            .iter()
+            .map(|(row, _)| row.clone())
+            .collect();
+        assert_eq!(state_rows, before);
+        sidebar.show_tree(
+            stave_app::inspect::parts_tree(&design),
+            PartJoints::new(&design),
+        );
+        sidebar.show_marks(Rc::new(Marks::default()));
+        assert_eq!(
+            list_rows(&sidebar),
+            before,
+            "an unchanged tree made rows again"
+        );
+        let side = part(&design, "side_l");
+        sidebar.show_selection(Some(&Selection::of_item(side)));
+        let after = list_rows(&sidebar);
+        assert!(
+            after.len() > before.len(),
+            "side_l lists what it is joined to"
+        );
+        let first = before.first().expect("rows");
+        let last = before.last().expect("rows");
+        assert_eq!(after.first(), Some(first), "the first row was made again");
+        assert_eq!(after.last(), Some(last), "the last row was made again");
+        let state_rows: Vec<gtk::ListBoxRow> = sidebar
+            .state
+            .borrow()
+            .rows
+            .iter()
+            .map(|(row, _)| row.clone())
+            .collect();
+        assert_eq!(state_rows, after);
+    }
+
+    #[test]
+    fn left_folds_a_heading_and_right_opens_it() {
+        crate::ui::gtk_test::on_gtk_thread(keys_fold_and_open);
+    }
+
+    /// Left (−) folds an assembly's heading, Right (+) opens the folded
+    /// row again, Left on a part row goes to its heading; none of it is a
+    /// choice.
+    fn keys_fold_and_open() {
+        let (sidebar, _design) = cabinet_sidebar();
+        let chosen = Rc::new(Cell::new(0));
+        sidebar.connect_select({
+            let chosen = Rc::clone(&chosen);
+            move |_| chosen.set(chosen.get() + 1)
+        });
+        let window = gtk::Window::builder().child(&sidebar.root).build();
+        window.present();
+        // The widget with the keyboard (`has_focus` needs the window to
+        // be the active one, which a test's window may not be).
+        let focus = || gtk::prelude::GtkWindowExt::focus(&window);
+        let find_row = |wanted: &dyn Fn(&RowKind) -> bool| {
+            sidebar
+                .state
+                .borrow()
+                .rows
+                .iter()
+                .position(|(_, kind)| wanted(kind))
+                .map(|index| (index, sidebar.state.borrow().rows[index].0.clone()))
+        };
+        let (index, heading) =
+            find_row(&|kind| matches!(kind, RowKind::Heading(_))).expect("an assembly's heading");
+        let RowKind::Heading(id) = sidebar.state.borrow().rows[index].1.clone() else {
+            unreachable!();
+        };
+        // Left on the part row after it goes up to the heading.
+        let entry = sidebar.state.borrow().rows[index + 1].0.clone();
+        assert!(matches!(
+            sidebar.state.borrow().rows[index + 1].1,
+            RowKind::Entry { .. }
+        ));
+        assert!(step_row(&sidebar.list, &sidebar.state, &entry, Step::Shut));
+        assert_eq!(focus().as_ref(), Some(heading.upcast_ref::<gtk::Widget>()));
+        // Left on the heading folds it.
+        assert!(step_row(
+            &sidebar.list,
+            &sidebar.state,
+            &heading,
+            Step::Shut
+        ));
+        let (_, folded) =
+            find_row(&|kind| matches!(kind, RowKind::Folded(ids) if ids.contains(&id)))
+                .expect("the assembly folded");
+        assert_eq!(
+            focus().as_ref(),
+            Some(folded.upcast_ref::<gtk::Widget>()),
+            "the folded row has the keyboard"
+        );
+        assert!(find_row(&|kind| matches!(kind, RowKind::Heading(h) if *h == id)).is_none());
+        // Right opens it again.
+        assert!(step_row(&sidebar.list, &sidebar.state, &folded, Step::Open));
+        let (_, heading) = find_row(&|kind| matches!(kind, RowKind::Heading(h) if *h == id))
+            .expect("the assembly opened");
+        assert_eq!(focus().as_ref(), Some(heading.upcast_ref::<gtk::Widget>()));
+        assert_eq!(chosen.get(), 0, "opening and folding chose nothing");
+        window.destroy();
     }
 }

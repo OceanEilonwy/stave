@@ -78,6 +78,7 @@ impl Header {
             .primary(true)
             .visible(false)
             .build();
+        menu_button.update_property(&[gtk::accessible::Property::Label("Main menu")]);
 
         let title = gtk::Label::builder()
             .label(folder_label)
@@ -184,6 +185,7 @@ impl Header {
             .valign(gtk::Align::Center)
             .visible(false)
             .build();
+        previous.update_property(&[gtk::accessible::Property::Label("Previous problem")]);
         let next = gtk::Button::builder()
             .icon_name("go-next-symbolic")
             .tooltip_text("Next problem (F8)")
@@ -192,6 +194,7 @@ impl Header {
             .valign(gtk::Align::Center)
             .visible(false)
             .build();
+        next.update_property(&[gtk::accessible::Property::Label("Next problem")]);
         let chip = gtk::Box::builder()
             .orientation(gtk::Orientation::Horizontal)
             .css_classes(["stave-problems-chip", "unknown"])
@@ -316,7 +319,7 @@ impl Header {
         }
         let (class, shape) = match pill.tone {
             Tone::Clean => ("clean", icons::CHECK),
-            Tone::Warnings => ("warnings", icons::ALERT),
+            Tone::Warnings => ("warnings", icons::WARNING),
             Tone::Errors => ("errors", icons::ALERT),
             Tone::Unknown => ("unknown", icons::PENDING),
         };
@@ -354,5 +357,50 @@ impl Header {
             }
         }
         self.build.set_tooltip_text(Some(tooltip));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use gtk::subclass::prelude::ObjectSubclassIsExt;
+
+    use super::*;
+
+    #[test]
+    fn every_title_bar_button_has_a_name() {
+        crate::ui::gtk_test::on_gtk_thread(title_bar_buttons_are_named);
+    }
+
+    /// Icon-only buttons (previous, next, the main menu, ...) have an
+    /// accessible name, not only a tooltip.
+    #[test]
+    fn errors_and_warnings_have_different_icons() {
+        crate::ui::gtk_test::on_gtk_thread(pill_icons_differ);
+    }
+
+    /// The pill's icon tells errors (a circle) from warnings (a
+    /// triangle) without their colour.
+    fn pill_icons_differ() {
+        let header = Header::new("shelf", &gtk::gio::Menu::new());
+        let shape = |tone| {
+            let pill = Pill {
+                tone,
+                label: String::new(),
+                activity: Activity::Idle,
+            };
+            header.show_pill(&pill, 1, "");
+            header.pill_icon.imp().shape.get()
+        };
+        assert_eq!(shape(Tone::Errors), icons::ALERT);
+        assert_eq!(shape(Tone::Warnings), icons::WARNING);
+        assert_ne!(icons::ALERT, icons::WARNING);
+    }
+
+    fn title_bar_buttons_are_named() {
+        let header = Header::new("shelf", &gtk::gio::Menu::new());
+        assert_eq!(
+            crate::ui::gtk_test::unnamed_buttons(&header.bar),
+            Vec::<String>::new()
+        );
     }
 }

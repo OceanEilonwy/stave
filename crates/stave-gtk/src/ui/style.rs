@@ -187,6 +187,8 @@ button.stave-problem-step { min-width: 28px; min-height: 28px; padding: 0; borde
 .stave-finder-hit .stave-detail { font-size: 12px; }
 .stave-finder-line { font-family: "JetBrains Mono", "Adwaita Mono", monospace; font-size: 12.5px; }
 .stave-finder-foot { padding: 10px 16px; font-size: 12px; border-spacing: 16px; border-radius: 0 0 16px 16px; }
+/* The 3D view shows when it has the keyboard (its arrow keys turn it). */
+staveviewport:focus-visible { outline: 2px solid alpha(@accent_color, 0.8); outline-offset: -2px; }
 "#;
 
 /// The colours, from libadwaita's named colours, so the light and dark

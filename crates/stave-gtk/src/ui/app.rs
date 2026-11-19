@@ -63,8 +63,25 @@ impl KeySection {
     }
 }
 
-/// An action with keys: what `set_accels_for_action` binds, and what the
-/// shortcuts dialog lists.
+/// Where an action's keys are bound.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum KeyScope {
+    /// By the application (`set_accels_for_action`): anywhere in a
+    /// window, before the focused widget sees the key.
+    Application,
+    /// By the window, after the focused widget had its turn, and never
+    /// while the keyboard is in a text field: plain letters and Escape,
+    /// which typing needs.
+    Window,
+    /// By the text editor, while the keyboard is in the text.
+    Editor,
+    /// By the 3D view, while the keyboard is in it: the arrow keys and
+    /// plus and minus, which other widgets use for themselves.
+    View,
+}
+
+/// An action with keys: what binds them (`scope`), and what the shortcuts
+/// dialog lists.
 pub(super) struct Accelerator {
     /// The action, `win.check`.
     pub(super) action: &'static str,
@@ -74,6 +91,8 @@ pub(super) struct Accelerator {
     pub(super) title: &'static str,
     /// Where it lists it.
     pub(super) section: KeySection,
+    /// What binds the keys.
+    pub(super) scope: KeyScope,
 }
 
 /// Every action that has keys.
@@ -83,126 +102,210 @@ pub(super) const ACCELERATORS: &[Accelerator] = &[
         keys: &["<Control>n"],
         title: "New project",
         section: KeySection::General,
+        scope: KeyScope::Application,
     },
     Accelerator {
         action: "win.open",
         keys: &["<Control>o"],
         title: "Open a project folder",
         section: KeySection::General,
+        scope: KeyScope::Application,
     },
     Accelerator {
         action: "win.check",
         keys: &["<Control>r"],
         title: "Check the project again",
         section: KeySection::General,
+        scope: KeyScope::Application,
     },
     Accelerator {
         action: "win.find",
         keys: &["<Control>k"],
         title: "Find a part, a problem or a name",
         section: KeySection::General,
+        scope: KeyScope::Application,
     },
     Accelerator {
         action: "win.next-problem",
         keys: &["F8"],
         title: "Next problem",
         section: KeySection::General,
+        scope: KeyScope::Application,
     },
     Accelerator {
         action: "win.previous-problem",
         keys: &["<Shift>F8"],
         title: "Previous problem",
         section: KeySection::General,
+        scope: KeyScope::Application,
     },
     Accelerator {
         action: "win.back",
         keys: &["<Alt>Left"],
         title: "Go back",
         section: KeySection::General,
+        scope: KeyScope::Application,
     },
     Accelerator {
         action: "win.forward",
         keys: &["<Alt>Right"],
         title: "Go forward",
         section: KeySection::General,
+        scope: KeyScope::Application,
     },
     Accelerator {
         action: "win.model",
         keys: &["F9"],
         title: "Show the parts",
         section: KeySection::General,
+        scope: KeyScope::Application,
     },
     Accelerator {
         action: "app.shortcuts",
         keys: &["<Control>question"],
         title: "Keyboard shortcuts",
         section: KeySection::General,
+        scope: KeyScope::Application,
     },
     Accelerator {
         action: "window.close",
         keys: &["<Control>w"],
         title: "Close the window",
         section: KeySection::General,
+        scope: KeyScope::Application,
     },
     Accelerator {
         action: "app.quit",
         keys: &["<Control>q"],
         title: "Quit",
         section: KeySection::General,
+        scope: KeyScope::Application,
     },
     Accelerator {
         action: "win.view-design",
         keys: &["<Control>1"],
         title: "Show the design",
         section: KeySection::View,
+        scope: KeyScope::Application,
+    },
+    Accelerator {
+        action: "win.frame",
+        keys: &["f"],
+        title: "Frame the selection",
+        section: KeySection::View,
+        scope: KeyScope::Window,
+    },
+    Accelerator {
+        action: "win.escape",
+        keys: &["Escape"],
+        title: "Leave focus, or clear the selection",
+        section: KeySection::View,
+        scope: KeyScope::Window,
+    },
+    Accelerator {
+        action: "view.turn-left",
+        keys: &["Left"],
+        title: "Turn the view left",
+        section: KeySection::View,
+        scope: KeyScope::View,
+    },
+    Accelerator {
+        action: "view.turn-right",
+        keys: &["Right"],
+        title: "Turn the view right",
+        section: KeySection::View,
+        scope: KeyScope::View,
+    },
+    Accelerator {
+        action: "view.look-higher",
+        keys: &["Up"],
+        title: "Look from higher up",
+        section: KeySection::View,
+        scope: KeyScope::View,
+    },
+    Accelerator {
+        action: "view.look-lower",
+        keys: &["Down"],
+        title: "Look from lower down",
+        section: KeySection::View,
+        scope: KeyScope::View,
+    },
+    Accelerator {
+        action: "view.zoom-in",
+        keys: &["plus", "equal", "KP_Add"],
+        title: "Zoom in",
+        section: KeySection::View,
+        scope: KeyScope::View,
+    },
+    Accelerator {
+        action: "view.zoom-out",
+        keys: &["minus", "KP_Subtract"],
+        title: "Zoom out",
+        section: KeySection::View,
+        scope: KeyScope::View,
     },
     Accelerator {
         action: "win.editor",
         keys: &["<Control>e"],
         title: "Open the editor",
         section: KeySection::Editor,
+        scope: KeyScope::Application,
     },
     Accelerator {
         action: "win.save",
         keys: &["<Control>s"],
         title: "Save the file",
         section: KeySection::Editor,
+        scope: KeyScope::Application,
     },
     Accelerator {
         action: "win.format",
         keys: &["<Control><Shift>i"],
         title: "Tidy the file's layout",
         section: KeySection::Editor,
+        scope: KeyScope::Application,
     },
     Accelerator {
         action: "win.search",
         keys: &["<Control>f"],
         title: "Search in the file",
         section: KeySection::Editor,
+        scope: KeyScope::Application,
+    },
+    Accelerator {
+        action: "editor.follow",
+        keys: &["F12"],
+        title: "Go to where a name is made",
+        section: KeySection::Editor,
+        scope: KeyScope::Editor,
+    },
+    Accelerator {
+        action: "editor.peek",
+        keys: &["<Alt>F12"],
+        title: "Peek at where a name is made",
+        section: KeySection::Editor,
+        scope: KeyScope::Editor,
+    },
+    Accelerator {
+        action: "editor.uses",
+        keys: &["<Shift>F12"],
+        title: "List where a name is used",
+        section: KeySection::Editor,
+        scope: KeyScope::Editor,
+    },
+    Accelerator {
+        action: "editor.show-info",
+        keys: &["<Control>i"],
+        title: "Show the card for the word at the cursor",
+        section: KeySection::Editor,
+        scope: KeyScope::Editor,
     },
 ];
 
 /// Keys that a widget handles itself, not through an action: the
 /// shortcuts dialog lists them too.
 pub(super) const OTHER_KEYS: &[(KeySection, &str, &str)] = &[
-    (KeySection::View, "Frame the selection", "f"),
-    (
-        KeySection::View,
-        "Leave focus, or clear the selection",
-        "Escape",
-    ),
     (KeySection::View, "Remove the selected piece", "Delete"),
-    (KeySection::Editor, "Go to where a name is made", "F12"),
-    (
-        KeySection::Editor,
-        "Peek at where a name is made",
-        "<Alt>F12",
-    ),
-    (
-        KeySection::Editor,
-        "List where a name is used",
-        "<Shift>F12",
-    ),
     (KeySection::Editor, "Undo", "<Control>z"),
     (KeySection::Editor, "Redo", "<Control><Shift>z"),
     (
@@ -315,7 +418,10 @@ impl Shell {
             }
         });
         application.add_action(&style);
-        for accelerator in ACCELERATORS {
+        for accelerator in ACCELERATORS
+            .iter()
+            .filter(|accelerator| accelerator.scope == KeyScope::Application)
+        {
             application.set_accels_for_action(accelerator.action, accelerator.keys);
         }
         self.refresh_recent();
@@ -577,6 +683,48 @@ impl Shell {
     }
 }
 
+/// The shortcuts for the actions bound in a scope (other than the
+/// application's): added to the window, or to the text editor, by whoever
+/// owns that scope. A shortcut does nothing, and lets the key go on, while
+/// the keyboard is in a text field (for the window's) or while its action
+/// is disabled.
+pub(super) fn shortcut_controller(scope: KeyScope) -> gtk::ShortcutController {
+    let controller = gtk::ShortcutController::new();
+    for accelerator in ACCELERATORS
+        .iter()
+        .filter(|accelerator| accelerator.scope == scope)
+    {
+        for key in accelerator.keys {
+            let Some(trigger) = gtk::ShortcutTrigger::parse_string(key) else {
+                continue;
+            };
+            let action: gtk::ShortcutAction = match scope {
+                KeyScope::Window => window_action(accelerator.action).upcast(),
+                KeyScope::Application | KeyScope::Editor | KeyScope::View => {
+                    gtk::NamedAction::new(accelerator.action).upcast()
+                }
+            };
+            controller.add_shortcut(gtk::Shortcut::new(Some(trigger), Some(action)));
+        }
+    }
+    controller
+}
+
+/// A window shortcut's action: the named action, unless the keyboard is
+/// in a text field, which keeps its plain letters and Escape.
+fn window_action(name: &'static str) -> gtk::CallbackAction {
+    gtk::CallbackAction::new(move |widget, _| {
+        let typing = widget
+            .root()
+            .and_then(|root| gtk::prelude::RootExt::focus(&root))
+            .is_some_and(|focus| focus.is::<gtk::Text>() || focus.is::<gtk::TextView>());
+        if typing || widget.activate_action(name, None).is_err() {
+            return glib::Propagation::Proceed;
+        }
+        glib::Propagation::Stop
+    })
+}
+
 /// The keys the shortcuts dialog lists in a section, in order.
 pub(super) fn keys_in(section: KeySection) -> Vec<(&'static str, String)> {
     ACCELERATORS
@@ -734,6 +882,101 @@ mod tests {
                 );
             }
         });
+    }
+
+    #[test]
+    fn keys_a_widget_handled_itself_are_now_actions() {
+        // Frame, Escape in the 3D view and the editor's F12 family run
+        // actions, which the shortcuts dialog lists from the same table.
+        for (action, key) in [
+            ("win.frame", "f"),
+            ("win.escape", "Escape"),
+            ("editor.follow", "F12"),
+            ("editor.peek", "<Alt>F12"),
+            ("editor.uses", "<Shift>F12"),
+            ("editor.show-info", "<Control>i"),
+        ] {
+            assert!(
+                ACCELERATORS
+                    .iter()
+                    .any(|a| a.action == action && a.keys.contains(&key)),
+                "{action} has no {key}"
+            );
+            let listed_twice = OTHER_KEYS.iter().any(|(section, _, keys)| {
+                *keys == key && (*section == KeySection::View) == action.starts_with("win.")
+            });
+            assert!(!listed_twice, "{key} is listed twice");
+        }
+        // A plain letter can't be an application key: it would take the
+        // letter from every text field.
+        for accelerator in ACCELERATORS {
+            if accelerator.scope == KeyScope::Application {
+                assert!(
+                    accelerator
+                        .keys
+                        .iter()
+                        .all(|key| key.contains('<') || key.starts_with('F')),
+                    "{} would take typing",
+                    accelerator.action
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn shortcuts_run_their_actions_but_leave_typing_alone() {
+        crate::ui::gtk_test::on_gtk_thread(shortcuts_run_actions);
+    }
+
+    fn shortcuts_run_actions() {
+        use std::rc::Rc;
+        let ran: Rc<RefCell<Vec<String>>> = Rc::default();
+        let group = gio::SimpleActionGroup::new();
+        for name in ["follow", "peek", "uses", "show-info", "frame", "escape"] {
+            let action = gio::SimpleAction::new(name, None);
+            let ran = Rc::clone(&ran);
+            action.connect_activate(move |action, _| ran.borrow_mut().push(action.name().into()));
+            group.add_action(&action);
+        }
+        let text = gtk::TextView::new();
+        let button = gtk::Button::with_label("a button");
+        let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        content.append(&text);
+        content.append(&button);
+        let window = gtk::Window::builder().child(&content).build();
+        text.insert_action_group("editor", Some(&group));
+        window.insert_action_group("win", Some(&group));
+        window.present();
+        let activate = |controller: &gtk::ShortcutController, widget: &gtk::Widget, key: &str| {
+            let shortcut = (0..controller.n_items())
+                .filter_map(|index| controller.item(index).and_downcast::<gtk::Shortcut>())
+                .find(|shortcut| {
+                    shortcut.trigger().is_some_and(|t| {
+                        t.to_str() == gtk::ShortcutTrigger::parse_string(key).unwrap().to_str()
+                    })
+                })
+                .unwrap_or_else(|| panic!("no shortcut for {key}"));
+            shortcut
+                .action()
+                .unwrap()
+                .activate(gtk::ShortcutActionFlags::empty(), widget, None)
+        };
+        let editor = shortcut_controller(KeyScope::Editor);
+        for key in ["F12", "<Alt>F12", "<Shift>F12", "<Control>i"] {
+            assert!(activate(&editor, text.upcast_ref(), key));
+        }
+        assert_eq!(*ran.borrow(), ["follow", "peek", "uses", "show-info"]);
+        ran.borrow_mut().clear();
+        // The window's keys: not while typing, but from a button.
+        let shortcuts = shortcut_controller(KeyScope::Window);
+        text.grab_focus();
+        assert!(!activate(&shortcuts, window.upcast_ref(), "f"));
+        assert!(ran.borrow().is_empty());
+        button.grab_focus();
+        assert!(activate(&shortcuts, window.upcast_ref(), "f"));
+        assert!(activate(&shortcuts, window.upcast_ref(), "Escape"));
+        assert_eq!(*ran.borrow(), ["frame", "escape"]);
+        window.destroy();
     }
 
     #[test]

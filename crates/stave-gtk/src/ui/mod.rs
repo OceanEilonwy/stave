@@ -742,6 +742,7 @@ impl Window {
         self.widgets
             .window
             .set_title(Some(&format!("{title} — Stave")));
+        self.describe_view();
     }
 
     fn result_changed(self: &Rc<Self>) {
@@ -1108,7 +1109,30 @@ impl Window {
         self.show_card();
         self.show_moves();
         self.grips_follow_selection();
+        self.describe_view();
         self.request_render();
+    }
+
+    /// Tells screen readers what the 3D view shows: the project, what is
+    /// selected and what the last check found.
+    fn describe_view(&self) {
+        let (name, description) = {
+            let session = self.session.borrow();
+            let selected = session.selection().and_then(|selection| match selection {
+                Selection::Problem(_) => session
+                    .selected_problem()
+                    .map(|problem| format!("The problem “{}”", problem.message)),
+                _ => session
+                    .shown()
+                    .and_then(|shown| inspect::inspect(shown, selection))
+                    .map(|inspection| inspection.title),
+            });
+            (
+                format!("3D view of {}", session.title()),
+                view_description(selected.as_deref(), &session.check_status().pill().label),
+            )
+        };
+        self.widgets.viewport.describe(&name, &description);
     }
 
     /// The Details panel always shows the selection's account; focus mode
@@ -2762,6 +2786,7 @@ impl Window {
                 .show_problem_count(session.problems().len());
             self.widgets.output.add_line(&status.line());
         }
+        self.describe_view();
         self.build_changed();
     }
 
@@ -3607,7 +3632,39 @@ impl Window {
         });
         viewport.add_controller(scroll);
 
-        // Escape and F anywhere in the window but a text field.
+        // While the view has the keyboard, the arrow keys turn it and
+        // plus and minus zoom (`view.*` actions, in the shortcuts dialog).
+        let actions = gio::SimpleActionGroup::new();
+        let camera_keys: [(&str, CameraKey); 6] = [
+            ("turn-left", CameraKey::Turn(-ORBIT_KEY_STEP, 0.0)),
+            ("turn-right", CameraKey::Turn(ORBIT_KEY_STEP, 0.0)),
+            ("look-higher", CameraKey::Turn(0.0, ORBIT_KEY_STEP)),
+            ("look-lower", CameraKey::Turn(0.0, -ORBIT_KEY_STEP)),
+            ("zoom-in", CameraKey::Zoom(1.0)),
+            ("zoom-out", CameraKey::Zoom(-1.0)),
+        ];
+        for (name, key) in camera_keys {
+            let action = gio::SimpleAction::new(name, None);
+            let window = Rc::downgrade(self);
+            action.connect_activate(move |_, _| {
+                if let Some(window) = window.upgrade() {
+                    window.update_orbit(|orbit| key.apply(orbit));
+                }
+            });
+            actions.add_action(&action);
+        }
+        viewport.insert_action_group("view", Some(&actions));
+        let view_keys = app::shortcut_controller(app::KeyScope::View);
+        view_keys.set_scope(gtk::ShortcutScope::Local);
+        viewport.add_controller(view_keys);
+
+        // F (frame) and Escape anywhere in the window but a text field,
+        // after the focused widget had its turn.
+        let shortcuts = app::shortcut_controller(app::KeyScope::Window);
+        shortcuts.set_scope(gtk::ShortcutScope::Local);
+        self.widgets.window.add_controller(shortcuts);
+
+        // Delete anywhere in the window but a text field.
         let keys = gtk::EventControllerKey::new();
         let window = Rc::downgrade(self);
         keys.connect_key_pressed(move |_, key, _, modifiers| {
@@ -3621,14 +3678,6 @@ impl Window {
                 return glib::Propagation::Proceed;
             }
             match key {
-                gdk::Key::Escape => {
-                    let _ = WidgetExt::activate_action(&window.widgets.window, "win.escape", None);
-                    glib::Propagation::Stop
-                }
-                gdk::Key::f | gdk::Key::F => {
-                    window.frame();
-                    glib::Propagation::Stop
-                }
                 // Delete removes the selection, saying first what goes.
                 gdk::Key::Delete | gdk::Key::KP_Delete if window.remove_selected() => {
                     glib::Propagation::Stop
@@ -4197,4 +4246,90 @@ fn breakpoint(width: f64) -> adw::Breakpoint {
 /// A control's `f64` value as the `f32` the scene works in.
 fn narrow(value: f64) -> f32 {
     crate::convert::f32_of(value)
+}
+
+/// How far one arrow key turns the 3D view, in the pixels of a mouse drag
+/// (about 15°).
+const ORBIT_KEY_STEP: f32 = 32.0;
+
+/// What a camera key does to the 3D view's camera.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum CameraKey {
+    /// Turns it as a drag of (dx, dy) pixels would: right turns the design
+    /// right, down looks from higher up.
+    Turn(f32, f32),
+    /// Zooms in (`> 0`) or out by this many scroll steps.
+    Zoom(f32),
+}
+
+impl CameraKey {
+    /// The camera after the key.
+    fn apply(self, orbit: Orbit) -> Orbit {
+        match self {
+            CameraKey::Turn(dx, dy) => orbit.orbited(dx, dy),
+            CameraKey::Zoom(steps) => orbit.zoomed(steps),
+        }
+    }
+}
+
+/// The 3D view's description for screen readers: what is selected, and
+/// what the last check found ("door_l selected. 1 error.").
+fn view_description(selected: Option<&str>, problems: &str) -> String {
+    match selected {
+        Some(title) => format!("{title} selected. {problems}."),
+        None => format!("Nothing selected. {problems}."),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_3d_view_says_what_is_selected_and_found() {
+        assert_eq!(
+            view_description(Some("door_l"), "1 error"),
+            "door_l selected. 1 error."
+        );
+        assert_eq!(
+            view_description(None, "No problems"),
+            "Nothing selected. No problems."
+        );
+    }
+
+    #[test]
+    fn the_arrow_keys_turn_the_view_and_plus_and_minus_zoom() {
+        let start = Orbit {
+            target: glam::Vec3::ZERO,
+            yaw: 1.0,
+            pitch: 0.3,
+            distance: 1000.0,
+            projection: stave_scene::Projection::default(),
+        };
+        let left = CameraKey::Turn(-ORBIT_KEY_STEP, 0.0).apply(start);
+        let right = CameraKey::Turn(ORBIT_KEY_STEP, 0.0).apply(start);
+        assert!(left.yaw > start.yaw && right.yaw < start.yaw);
+        let higher = CameraKey::Turn(0.0, ORBIT_KEY_STEP).apply(start);
+        assert!(higher.pitch > start.pitch);
+        assert!(CameraKey::Zoom(1.0).apply(start).distance < start.distance);
+        assert!(CameraKey::Zoom(-1.0).apply(start).distance > start.distance);
+        // Every camera key is an action in the table the shortcuts dialog
+        // lists, bound by the view.
+        for name in [
+            "turn-left",
+            "turn-right",
+            "look-higher",
+            "look-lower",
+            "zoom-in",
+            "zoom-out",
+        ] {
+            let action = format!("view.{name}");
+            assert!(
+                app::ACCELERATORS
+                    .iter()
+                    .any(|a| a.action == action && a.scope == app::KeyScope::View),
+                "{action} has no keys"
+            );
+        }
+    }
 }

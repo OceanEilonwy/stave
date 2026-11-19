@@ -238,6 +238,20 @@ fn label(text: &str, classes: &[&str]) -> gtk::Label {
 }
 
 /// `true` if two texts are the analysis's text and the buffer's.
+/// What an editor action does to the page.
+type EditorAction = fn(&Rc<FilesPage>);
+
+/// The text's right-click menu: the editor's own actions, after GTK's
+/// Cut, Copy and Paste. Each acts at the cursor.
+fn editor_menu() -> gio::Menu {
+    let menu = gio::Menu::new();
+    menu.append(Some("Go to Where It Is Made"), Some("editor.follow"));
+    menu.append(Some("Peek at Where It Is Made"), Some("editor.peek"));
+    menu.append(Some("List Where It Is Used"), Some("editor.uses"));
+    menu.append(Some("Show Card"), Some("editor.show-info"));
+    menu
+}
+
 fn same_text(analysis: &Analysis, document: &Document, text: &str) -> Option<stave_lang::FileId> {
     let file = analysis.file(document)?;
     (analysis.text(file)? == text).then_some(file)
@@ -279,6 +293,7 @@ impl FilesPage {
             .tooltip_text("Close the list of uses (Escape)")
             .css_classes(["flat", "circular"])
             .build();
+        uses_close.update_property(&[gtk::accessible::Property::Label("Close the list of uses")]);
         let uses_head = gtk::Box::builder()
             .orientation(gtk::Orientation::Horizontal)
             .css_classes(["stave-uses-head"])
@@ -762,20 +777,39 @@ impl FilesPage {
                 callback(analysis, symbol);
             }
         });
-        // Keys: F12, Alt+F12, Shift+F12, Escape; Ctrl+click follows.
+        // The editor's actions (F12, Alt+F12, Shift+F12, Ctrl+I), also in
+        // the text's right-click menu.
+        let actions = gio::SimpleActionGroup::new();
+        let editor_actions: [(&str, EditorAction); 4] = [
+            ("follow", FilesPage::follow_at_cursor),
+            ("peek", FilesPage::peek_at_cursor),
+            ("uses", FilesPage::list_uses_at_cursor),
+            ("show-info", FilesPage::show_info_at_cursor),
+        ];
+        for (name, run) in editor_actions {
+            let action = gio::SimpleAction::new(name, None);
+            let page = Rc::downgrade(self);
+            action.connect_activate(move |_, _| {
+                if let Some(page) = page.upgrade() {
+                    run(&page);
+                }
+            });
+            actions.add_action(&action);
+        }
+        view.insert_action_group("editor", Some(&actions));
+        let shortcuts = super::app::shortcut_controller(super::app::KeyScope::Editor);
+        shortcuts.set_propagation_phase(gtk::PropagationPhase::Capture);
+        view.add_controller(shortcuts);
+        view.set_extra_menu(Some(&editor_menu()));
+        // Escape closes what is open over the text; Ctrl+click follows.
         let keys = gtk::EventControllerKey::new();
         keys.set_propagation_phase(gtk::PropagationPhase::Capture);
         let page = Rc::downgrade(self);
-        keys.connect_key_pressed(move |_, key, _, modifiers| {
+        keys.connect_key_pressed(move |_, key, _, _| {
             let Some(page) = page.upgrade() else {
                 return glib::Propagation::Proceed;
             };
-            let alt = modifiers.contains(gtk::gdk::ModifierType::ALT_MASK);
-            let shift = modifiers.contains(gtk::gdk::ModifierType::SHIFT_MASK);
             match key {
-                gtk::gdk::Key::F12 if alt => page.peek_at_cursor(),
-                gtk::gdk::Key::F12 if shift => page.list_uses_at_cursor(),
-                gtk::gdk::Key::F12 => page.follow_at_cursor(),
                 gtk::gdk::Key::Escape if page.editor.has_card() => page.editor.hide_card(),
                 gtk::gdk::Key::Escape if page.editor.has_peek() => page.editor.set_peek(None),
                 gtk::gdk::Key::Escape if page.editor.has_search() => page.editor.close_search(),
@@ -1699,9 +1733,19 @@ impl FilesPage {
         }
     }
 
+    /// Ctrl+I: the card for the word at the cursor, as the pointer's
+    /// rest shows it, for people who work from the keyboard.
+    fn show_info_at_cursor(self: &Rc<Self>) {
+        self.cancel_hover_timer();
+        self.show_hover(self.cursor());
+    }
+
     fn hide_hover(&self) {
         self.state.borrow_mut().hover_span = None;
         self.editor.hide_card();
+        self.editor
+            .view
+            .reset_property(gtk::AccessibleProperty::Description);
     }
 
     /// Shows the card for the word at an offset: its problem, or what it
@@ -1721,6 +1765,9 @@ impl FilesPage {
             .width_request(280)
             .build();
         let mut anchor: Option<Span> = None;
+        // What the card says, for a screen reader: the text's description
+        // while the card shows.
+        let mut spoken: Vec<String> = Vec::new();
         let fast = analysis
             .diagnostics(file)
             .filter_map(|d| Some(Problem::new(d.primary()?.span, d)));
@@ -1739,7 +1786,9 @@ impl FilesPage {
             message.set_wrap(true);
             message.set_max_width_chars(48);
             card.append(&message);
+            spoken.push(format!("{word}: {}", problem.message));
             if let Some(help) = problem.help {
+                spoken.push(format!("Help: {help}"));
                 let help = label(&format!("Help: {help}"), &["stave-hover-help"]);
                 help.set_wrap(true);
                 help.set_max_width_chars(48);
@@ -1755,7 +1804,9 @@ impl FilesPage {
             signature.set_wrap(true);
             signature.set_max_width_chars(48);
             card.append(&signature);
+            spoken.push(format!("{}: {}", hover.kind, hover.signature));
             if let Some(docs) = &hover.docs {
+                spoken.push(docs.clone());
                 let docs = label(docs, &["stave-hover-docs"]);
                 docs.set_wrap(true);
                 docs.set_max_width_chars(48);
@@ -1773,6 +1824,9 @@ impl FilesPage {
             return;
         };
         self.state.borrow_mut().hover_span = Some(anchor);
+        self.editor
+            .view
+            .update_property(&[gtk::accessible::Property::Description(&spoken.join(". "))]);
         let lines = self.active_lines();
         let iter = super::editor::iter_at(&buffer, &lines, anchor.start());
         let rect = self.editor.view.iter_location(&iter);

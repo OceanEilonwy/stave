@@ -74,6 +74,9 @@ pub struct ProblemsPanel {
     callbacks: Rc<RefCell<ProblemCallbacks>>,
     /// Ignore selection changes made by the window itself.
     showing: std::cell::Cell<bool>,
+    /// The problems the rows show, in order, so a new check replaces only
+    /// the rows that changed.
+    shown: RefCell<Vec<Report>>,
 }
 
 #[derive(Default)]
@@ -104,6 +107,7 @@ impl ProblemsPanel {
             stale,
             callbacks: Rc::new(RefCell::new(ProblemCallbacks::default())),
             showing: std::cell::Cell::new(false),
+            shown: RefCell::new(Vec::new()),
         });
         let weak = Rc::downgrade(&panel);
         panel.list.connect_row_selected(move |_, row| {
@@ -132,12 +136,43 @@ impl ProblemsPanel {
     }
 
     /// Lists these problems in full, the `selected` one marked. `stale`
-    /// says the 3D view shows the last design that had no errors.
+    /// says the 3D view shows the last design that had no errors. Rows
+    /// for problems that are the same at the start and the end of the
+    /// list are kept; only the run between is replaced, so the scroll
+    /// position and the keyboard's row survive a check that changed
+    /// nothing, or little.
     pub fn show(&self, reports: &[Report], selected: Option<usize>, stale: bool) {
         self.showing.set(true);
-        self.list.remove_all();
-        for report in reports {
-            self.list.append(&self.report_row(report));
+        {
+            let mut shown = self.shown.borrow_mut();
+            let prefix = shown
+                .iter()
+                .zip(reports)
+                .take_while(|(old, new)| old == new)
+                .count();
+            let suffix = shown
+                .iter()
+                .skip(prefix)
+                .rev()
+                .zip(reports.iter().skip(prefix).rev())
+                .take_while(|(old, new)| old == new)
+                .count();
+            let removed = shown.len().saturating_sub(prefix).saturating_sub(suffix);
+            let at = i32::try_from(prefix).unwrap_or(i32::MAX);
+            for _ in 0..removed {
+                if let Some(row) = self.list.row_at_index(at) {
+                    self.list.remove(&row);
+                }
+            }
+            let added = reports.len().saturating_sub(prefix).saturating_sub(suffix);
+            for (offset, report) in reports.iter().skip(prefix).take(added).enumerate() {
+                let position = prefix
+                    .checked_add(offset)
+                    .and_then(|position| i32::try_from(position).ok())
+                    .unwrap_or(-1);
+                self.list.insert(&self.report_row(report), position);
+            }
+            *shown = reports.to_vec();
         }
         self.stale.set_visible(stale && !reports.is_empty());
         show_rows(&self.root, !reports.is_empty());
@@ -496,6 +531,53 @@ fn collect_stave_files(folder: &Path, into: &mut Vec<PathBuf>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn problem(message: &str) -> Report {
+        Report {
+            severity: Severity::Error,
+            code: *stave_lang::Code::ALL.first().expect("a code"),
+            message: message.to_owned(),
+            places: Vec::new(),
+            notes: Vec::new(),
+            help: None,
+        }
+    }
+
+    /// The row widgets, in order.
+    fn rows(panel: &ProblemsPanel) -> Vec<gtk::ListBoxRow> {
+        (0..)
+            .map_while(|index| panel.list.row_at_index(index))
+            .collect()
+    }
+
+    #[test]
+    fn a_new_check_replaces_only_the_problems_that_changed() {
+        crate::ui::gtk_test::on_gtk_thread(problems_update_in_place);
+    }
+
+    fn problems_update_in_place() {
+        let panel = ProblemsPanel::new();
+        let first = vec![problem("a"), problem("b"), problem("c")];
+        panel.show(&first, None, false);
+        let before = rows(&panel);
+        assert_eq!(before.len(), 3);
+        panel.show(&first, None, false);
+        assert_eq!(rows(&panel), before, "the same problems keep their rows");
+        let second = vec![problem("a"), problem("x"), problem("y"), problem("c")];
+        panel.show(&second, Some(2), false);
+        let after = rows(&panel);
+        assert_eq!(after.len(), 4);
+        assert_eq!(after.first(), before.first(), "a is kept");
+        assert_eq!(after.last(), before.last(), "c is kept");
+        assert!(!after.contains(&before[1]), "b is replaced");
+        assert_eq!(
+            panel.list.selected_row().map(|row| row.index()),
+            Some(2),
+            "the selected problem is marked"
+        );
+        panel.show(&[], None, false);
+        assert!(rows(&panel).is_empty());
+    }
 
     #[test]
     fn the_cabinet_lists_its_own_files() {

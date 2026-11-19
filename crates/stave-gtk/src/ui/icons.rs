@@ -65,7 +65,10 @@ pub const EXPANDED: Shape = stroke(2.0, &["M4 6L8 10L12 6"]);
 pub const COLLAPSED: Shape = stroke(2.0, &["M6 4L10 8L6 12"]);
 /// No problems: a tick.
 pub const CHECK: Shape = stroke(1.8, &["M3.5 8.5L6.5 11.5L12.5 4.5"]);
-/// Problems: an exclamation mark in a circle.
+/// Warnings only: an exclamation mark in a triangle, a different shape
+/// from the errors' circle so the two differ without their colour.
+pub const WARNING: Shape = stroke(1.6, &["M8 1.8L14.6 13.6H1.4z", "M8 6v3.6", "M8 11.4v0.8"]);
+/// Errors: an exclamation mark in a circle.
 pub const ALERT: Shape = stroke(
     1.8,
     &[
@@ -245,6 +248,11 @@ impl PathIcon {
         icon.imp().shape.set(shape);
         icon.imp().size.set(size);
         icon
+    }
+
+    /// The shape it draws.
+    pub fn shape(&self) -> Shape {
+        self.imp().shape.get()
     }
 
     /// Draws another shape.

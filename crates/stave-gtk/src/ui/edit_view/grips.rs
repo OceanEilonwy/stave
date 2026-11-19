@@ -1143,6 +1143,7 @@ impl Window {
             .css_classes(["flat"])
             .tooltip_text("Let the solver move this")
             .build();
+        menu.update_property(&[gtk::accessible::Property::Label("Let the solver move this")]);
         let popover = gtk::Popover::builder().child(&content).build();
         menu.set_popover(Some(&popover));
         let only = switches.len() == 1;

@@ -80,7 +80,7 @@ impl ViewToolbar {
             .valign(gtk::Align::Center)
             .build();
         play.update_property(&[gtk::accessible::Property::Label("Play pull apart")]);
-        let slider = Slider::new("How far apart", 18, 12.0, 1.5);
+        let slider = Slider::new("How far apart", 24, 12.0, 1.5);
         let ends = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         ends.append(
             &gtk::Label::builder()

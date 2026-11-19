@@ -45,14 +45,14 @@ impl StartPage {
         menu.append_section(Some("Style"), &app::style_section());
         menu.append_section(None, &app::help_section());
         let header = adw::HeaderBar::new();
-        header.pack_end(
-            &gtk::MenuButton::builder()
-                .icon_name("open-menu-symbolic")
-                .menu_model(&menu)
-                .primary(true)
-                .tooltip_text("Main Menu")
-                .build(),
-        );
+        let menu_button = gtk::MenuButton::builder()
+            .icon_name("open-menu-symbolic")
+            .menu_model(&menu)
+            .primary(true)
+            .tooltip_text("Main menu")
+            .build();
+        menu_button.update_property(&[gtk::accessible::Property::Label("Main menu")]);
+        header.pack_end(&menu_button);
 
         let open = gtk::Button::builder()
             .label("_Open Folder…")
