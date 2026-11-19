@@ -11,7 +11,8 @@ use common::{
     the_diagnostic,
 };
 use stave_lang::placement::PartAxis;
-use stave_model::solved::{Contact, CutKind, CutPlace, Depth, PartOrigin, Slope, StepKind};
+use stave_lang::units::Angle;
+use stave_model::solved::{Contact, CutKind, CutPlace, Depth, PartOrigin, Slope, StepMotion};
 
 /// A side standing at the left end of the base and a shelf against it.
 const SIDE_AND_SHELF: &str = "part side : pine_19 {
@@ -737,7 +738,7 @@ fn uses_lists_fasteners_per_pair_with_a_count() {
         .collect();
     assert_eq!(uses, [("dowel_pin", 3), ("wood_screw", 1)]);
     assert_eq!(design.fasteners[0].diameter, mm("6"));
-    assert!(design.hardware.is_empty(), "fasteners are never placed");
+    assert!(design.hardware().is_empty(), "fasteners are never placed");
     only_error(
         &open("kind k : joint {\n  uses: knob\n}"),
         "type-mismatch",
@@ -767,17 +768,47 @@ fn insert_steps_move_a_part_along_its_own_axes() {
         "kind k : joint {\n  insert: [push(piece, along: width), push(piece, along: length, by: 5mm), push(piece, along: width, angle: 45deg), rotate(piece, by: 90deg, about: length)]\n}\njoint j : k(shelf, into: side)",
     );
     let steps = &joint(design(&opened), "j").pairs[0].insert;
-    let summary: Vec<(StepKind, PartAxis)> = steps.iter().map(|s| (s.kind, s.axis)).collect();
+    let summary: Vec<(StepMotion, PartAxis)> = steps.iter().map(|s| (s.motion, s.axis)).collect();
     assert_eq!(
         summary,
         [
-            (StepKind::Push, PartAxis::Width),
-            (StepKind::Push, PartAxis::Length),
-            (StepKind::Push, PartAxis::Width),
-            (StepKind::Rotate, PartAxis::Length),
+            (
+                StepMotion::Push {
+                    by: None,
+                    angle: None
+                },
+                PartAxis::Width
+            ),
+            (
+                StepMotion::Push {
+                    by: Some(mm("5")),
+                    angle: None
+                },
+                PartAxis::Length
+            ),
+            (
+                StepMotion::Push {
+                    by: None,
+                    angle: Some(Angle::from_deg(45))
+                },
+                PartAxis::Width
+            ),
+            (
+                StepMotion::Rotate {
+                    by: Angle::from_deg(90)
+                },
+                PartAxis::Length
+            ),
         ]
     );
-    assert!(steps[1].by.is_some() && steps[2].angle.is_some());
+}
+
+#[test]
+fn a_rotate_without_by_is_reported() {
+    let opened = with_parts(
+        "kind k : joint {\n  insert: [push(piece, along: width), rotate(piece, about: length)]\n}\njoint j : k(shelf, into: side)",
+    );
+    only_error(&opened, "missing-field", "'rotate' is missing 'by'");
 }
 
 #[test]
@@ -840,7 +871,13 @@ joint keys : keyed(rail[*], into: post)",
         "{made:?}"
     );
     let key = design.made_parts().next().unwrap();
-    assert!(matches!(key.origin, PartOrigin::Made { pair: 0, .. }));
+    assert!(matches!(
+        key.origin,
+        PartOrigin::Made {
+            pair: stave_model::solved::PairIndex::FIRST,
+            ..
+        }
+    ));
     assert_eq!(key.cut.thickness, mm("6"));
 }
 
@@ -1265,7 +1302,7 @@ fn a_pull_bores_one_hole_or_two_holes_centres_apart() {
                     depth: Depth::Through,
                 },
             ) if *diameter == mm("4") => Some((
-                design.hardware[hardware.index()].name.clone(),
+                design.hardware()[hardware.index()].name.clone(),
                 stave_lang::units::Length::from_nm(
                     (footprint.min.length.nm() + footprint.max.length.nm()) / 2,
                 ),

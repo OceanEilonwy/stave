@@ -31,7 +31,7 @@ use glam::{DMat4, DVec3};
 use stave_lang::placement::{Axis, Direction, PartAxis};
 use stave_lang::units::{Angle, Length};
 use stave_model::solved::{
-    Body, JointPair, Part, PartId, Point, SolvedDesign, StepAmount, StepKind, WorldBox,
+    Body, JointPair, Part, PartId, Point, SolvedDesign, StepMotion, WorldBox,
 };
 
 use crate::collide::{
@@ -279,23 +279,20 @@ pub fn pair_steps(
                 Some((at, axis)) if at == index => axis,
                 _ => step.axis,
             };
-            let undo = match step.kind {
-                StepKind::Push | StepKind::Drive => Undo::Push {
+            let undo = match step.motion {
+                StepMotion::Push { by, angle } => Undo::Push {
                     along: orientation.direction(axis),
-                    turned: step
-                        .angle
-                        .map(|angle| (orientation.direction(next_axis(axis)), angle)),
-                    by: match step.by {
-                        Some(StepAmount::Length(length)) => Some(length),
-                        Some(StepAmount::Angle(_)) | None => None,
-                    },
+                    turned: angle.map(|angle| (orientation.direction(next_axis(axis)), angle)),
+                    by,
                 },
-                StepKind::Rotate => Undo::Rotate {
+                StepMotion::Drive => Undo::Push {
+                    along: orientation.direction(axis),
+                    turned: None,
+                    by: None,
+                },
+                StepMotion::Rotate { by } => Undo::Rotate {
                     about: orientation.direction(axis),
-                    by: match step.by {
-                        Some(StepAmount::Angle(angle)) => angle,
-                        Some(StepAmount::Length(_)) | None => return None,
-                    },
+                    by,
                 },
             };
             Some(Step { member, undo })

@@ -290,7 +290,7 @@ pub fn library(checked: &Checked) -> Option<Library> {
 /// design with parts to draw.
 pub fn of(session: &Session) -> Option<EmptyState> {
     if let Some((design, _)) = session.drawable() {
-        if design.parts.is_empty() && design.hardware.is_empty() {
+        if design.parts().is_empty() && design.hardware().is_empty() {
             return Some(EmptyState {
                 reason: Reason::NoParts,
                 title: tr("No parts yet"),

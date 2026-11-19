@@ -159,7 +159,7 @@ fn parts(design: &SolvedDesign, query: &str) -> Vec<Hit> {
         )
     };
     let mut ranked = Vec::new();
-    for assembly in &design.assemblies {
+    for assembly in design.assemblies() {
         if let Some(r) = rank_full(&assembly.name, query) {
             ranked.push(part(
                 r,
@@ -169,7 +169,7 @@ fn parts(design: &SolvedDesign, query: &str) -> Vec<Hit> {
             ));
         }
     }
-    for item in &design.parts {
+    for item in design.parts() {
         if let Some(r) = rank_full(&item.name, query) {
             ranked.push(part(
                 r,
@@ -179,7 +179,7 @@ fn parts(design: &SolvedDesign, query: &str) -> Vec<Hit> {
             ));
         }
     }
-    for hardware in &design.hardware {
+    for hardware in design.hardware() {
         if let Some(r) = rank_full(&hardware.name, query) {
             ranked.push(part(
                 r,

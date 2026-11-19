@@ -17,11 +17,11 @@
 use std::collections::BTreeMap;
 
 use stave_lang::ast::{BaseKind, Span};
-use stave_lang::placement::{Axis, PartAxis};
+use stave_lang::placement::{PartAxis, PerAxis, PerPartAxis};
 use stave_lang::units::{ExactLength, Rational};
 use stave_lang::{Code, Diagnostic, FileId, Label};
 use stave_model::defs::{DefId, StockField};
-use stave_model::ids::{JointId, KindId, PartId};
+use stave_model::ids::{JointId, KindId, PartId, SeamIndex};
 use stave_model::instance::Ctx;
 use stave_model::nonempty::NonEmpty;
 use stave_model::solved::{
@@ -35,7 +35,7 @@ use stave_schema::words::{Grain, StockForm};
 
 use crate::build::MadeInfo;
 use crate::eval::{Env, KindEnv};
-use crate::joints::{CutAt, GeomTable, PairWork, PartGeom, local_slot, round_length};
+use crate::joints::{CutAt, GeomTable, PairWork, PartGeom, round_length};
 use crate::{Failure, Fault, Solved, Solver};
 
 /// The first id that stands for a board rather than a part. Parts, made
@@ -72,9 +72,9 @@ pub(crate) struct BoardPart {
     pub orientation: Orientation,
     /// Its drawn size per local axis: its share of the part's width, the
     /// part's cut length and thickness.
-    pub drawn: [ExactLength; 3],
-    /// Its low corner per world axis (across, up, deep).
-    pub min: [ExactLength; 3],
+    pub drawn: PerPartAxis<ExactLength>,
+    /// Its low corner per world axis.
+    pub min: PerAxis<ExactLength>,
 }
 
 /// One joint kind a part's boards are joined by, bound.
@@ -96,16 +96,8 @@ struct Layout {
 /// One application of a board joint: a seam, or all the boards.
 struct Application {
     method: usize,
-    seam: Option<usize>,
+    seam: Option<SeamIndex>,
     pair: PairWork,
-}
-
-fn world_slot(axis: Axis) -> usize {
-    match axis {
-        Axis::Across => 0,
-        Axis::Up => 1,
-        Axis::Deep => 2,
-    }
 }
 
 impl Solver<'_> {
@@ -243,14 +235,14 @@ impl Solver<'_> {
         let mut applications = Vec::new();
         let mut extra: BTreeMap<PartId, [ExactLength; 2]> = BTreeMap::new();
         for (method_index, method) in methods.iter().enumerate() {
-            let plans: Vec<(Option<usize>, Vec<PartId>)> = if method.across {
+            let plans: Vec<(Option<SeamIndex>, Vec<PartId>)> = if method.across {
                 vec![(None, layout.ids.clone())]
             } else {
                 layout
                     .ids
                     .windows(2)
                     .enumerate()
-                    .map(|(seam, pair)| (Some(seam), pair.to_vec()))
+                    .map(|(seam, pair)| (Some(SeamIndex::from_usize(seam)), pair.to_vec()))
                     .collect()
             };
             for (seam, parts) in plans {
@@ -277,13 +269,8 @@ impl Solver<'_> {
             let Some(mut board_geom) = geoms.get(*board).cloned() else {
                 return Err(Fault::Internal("a board").into());
             };
-            let slot = local_slot(axis);
-            if let (Some(s), Some(e)) =
-                (board_geom.start.get_mut(slot), board_geom.end.get_mut(slot))
-            {
-                *s = *start;
-                *e = *end;
-            }
+            board_geom.start[axis] = *start;
+            board_geom.end[axis] = *end;
             let direction = board_geom.orientation.direction(axis);
             let world = direction.axis();
             let (low_add, high_add) = if direction.is_positive() {
@@ -618,14 +605,10 @@ impl Solver<'_> {
                     ))
                 }
             };
-        let mut drawn = [ExactLength::ZERO; 3];
+        let mut drawn = PerPartAxis::new(share, share, share);
         for each in PartAxis::ALL {
-            if let Some(slot) = drawn.get_mut(local_slot(each)) {
-                *slot = if each == axis {
-                    share
-                } else {
-                    geom.cut_size(each)?
-                };
+            if each != axis {
+                drawn[each] = geom.cut_size(each)?;
             }
         }
         let first = self
@@ -647,12 +630,7 @@ impl Solver<'_> {
                 .checked_add(1)
                 .and_then(BoardIndex::new)
                 .ok_or(Fault::Overflow)?;
-            let mut min = [ExactLength::ZERO; 3];
-            for each in Axis::ALL {
-                if let Some(slot) = min.get_mut(world_slot(each)) {
-                    *slot = bounds.min(each);
-                }
-            }
+            let min = PerAxis::from_fn(|each| bounds.min(each));
             self.boards.insert(
                 id,
                 BoardPart {
@@ -669,8 +647,8 @@ impl Solver<'_> {
                 PartGeom {
                     orientation: geom.orientation,
                     drawn,
-                    start: [ExactLength::ZERO; 3],
-                    end: [ExactLength::ZERO; 3],
+                    start: PerPartAxis::from_fn(|_| ExactLength::ZERO),
+                    end: PerPartAxis::from_fn(|_| ExactLength::ZERO),
                     drawn_box: bounds,
                     cut_box: bounds,
                     reference_face: geom.reference_face,
@@ -698,7 +676,7 @@ impl Solver<'_> {
         &mut self,
         part: PartId,
         method: &Method,
-        seam: Option<usize>,
+        seam: Option<SeamIndex>,
         parts: Vec<PartId>,
         axis: PartAxis,
         (file, span): (FileId, Span),
@@ -726,7 +704,7 @@ impl Solver<'_> {
         };
         let part_name = self.part_name(part);
         let prefix = match seam {
-            Some(seam) => format!("{part_name}.seam[{}]", seam.saturating_add(1)),
+            Some(seam) => format!("{part_name}.seam[{}]", seam.number()),
             None => format!("{part_name}.boards"),
         };
         for require in &kind.requires {
@@ -771,7 +749,9 @@ impl Solver<'_> {
                 let members: &[PartId] = if method.across {
                     &parts
                 } else {
-                    parts.get(extend.role).map_or(&[], std::slice::from_ref)
+                    parts
+                        .get(extend.role.index())
+                        .map_or(&[], std::slice::from_ref)
                 };
                 for board in members.iter().copied() {
                     for other in parts.iter().copied().filter(|o| *o != board) {
@@ -805,7 +785,7 @@ impl Solver<'_> {
                     }
                 }
             }
-            if !joint_def.uses.is_empty() && report && seam.is_none_or(|s| s == 0) {
+            if !joint_def.uses.is_empty() && report && seam.is_none_or(|s| s == SeamIndex::FIRST) {
                 self.report(
                     Diagnostic::warning(
                         Code::NotSupported,
@@ -825,7 +805,7 @@ impl Solver<'_> {
                 .bodies
                 .iter()
                 .any(|body| matches!(body.with, stave_model::defs::Carrier::Contact(_)));
-            if has_members && report && seam.is_none_or(|s| s == 0) {
+            if has_members && report && seam.is_none_or(|s| s == SeamIndex::FIRST) {
                 self.report(
                     Diagnostic::warning(
                         Code::NotSupported,
@@ -893,7 +873,7 @@ impl Solver<'_> {
         for made_def in &joint_def.makes {
             let id = PartId::from_usize(self.model.parts.len() + made.len());
             let name = match application.seam {
-                Some(seam) => format!("{part_name}.{}[{}]", made_def.name, seam.saturating_add(1)),
+                Some(seam) => format!("{part_name}.{}[{}]", made_def.name, seam.number()),
                 None => format!("{part_name}.{}", made_def.name),
             };
             let env = Env {

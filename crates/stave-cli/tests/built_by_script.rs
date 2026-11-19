@@ -147,7 +147,7 @@ type PartKey = (String, Length, Length, Length, usize);
 /// names compare equal.
 fn parts(design: &SolvedDesign) -> Vec<PartKey> {
     let mut parts: Vec<PartKey> = design
-        .parts
+        .parts()
         .iter()
         .map(|part| {
             (
@@ -167,7 +167,7 @@ fn parts(design: &SolvedDesign) -> Vec<PartKey> {
 /// each kind makes.
 fn joints(design: &SolvedDesign) -> BTreeMap<String, usize> {
     let mut joints = BTreeMap::new();
-    for joint in &design.joints {
+    for joint in design.joints() {
         *joints.entry(joint.kind.clone()).or_insert(0) += joint.pairs.len();
     }
     joints

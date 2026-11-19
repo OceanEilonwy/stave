@@ -7,34 +7,11 @@ use std::borrow::Cow;
 
 use stave_lang::ast::{BinaryOp, Span};
 use stave_model::defs::{DefId, Domain, RExpr, RExprKind};
+use stave_model::nonempty::NonEmpty;
 use stave_model::value::Value;
 
 use crate::Solver;
 use crate::eval::{Env, KindEnv};
-
-/// A list that holds at least one item.
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) struct NonEmpty<T> {
-    first: T,
-    rest: Vec<T>,
-}
-
-impl<T> NonEmpty<T> {
-    /// The items, or `None` when there are none.
-    fn new(items: Vec<T>) -> Option<Self> {
-        let mut items = items.into_iter();
-        let first = items.next()?;
-        Some(NonEmpty {
-            first,
-            rest: items.collect(),
-        })
-    }
-
-    /// The items in order.
-    pub(crate) fn iter(&self) -> impl Iterator<Item = &T> {
-        std::iter::once(&self.first).chain(&self.rest)
-    }
-}
 
 /// A value from one of the kind's `within` lists that makes the failed rule
 /// hold.
@@ -275,17 +252,5 @@ impl Solver<'_> {
         self.stack.truncate(stack);
         self.skipped = skipped;
         result
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_non_empty_list_keeps_its_order_and_an_empty_one_is_refused() {
-        let list = NonEmpty::new(vec![3, 1, 2]).unwrap();
-        assert_eq!(list.iter().copied().collect::<Vec<_>>(), vec![3, 1, 2]);
-        assert!(NonEmpty::<i32>::new(Vec::new()).is_none());
     }
 }

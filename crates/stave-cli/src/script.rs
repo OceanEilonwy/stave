@@ -520,7 +520,7 @@ fn hold_step(line: &str) -> Result<Step> {
 /// face of one (`apron_front.back`).
 fn measured(opened: &Opened, text: &str) -> Measured {
     let named = opened.design.as_ref().is_some_and(|design| {
-        design.part_named(text).is_some() || design.regions.iter().any(|r| r.name == text)
+        design.part_named(text).is_some() || design.regions().iter().any(|r| r.name == text)
     });
     match text.rsplit_once('.') {
         Some((item, word)) if !named => match Face::from_word(word) {
@@ -1474,7 +1474,7 @@ fn progress_line(progress: &Progress) -> String {
             1 => "fits, with 1 warning".to_owned(),
             count => format!("fits, with {count} warnings"),
         },
-        Progress::Tried(Verdict::Refused(refusal)) => match refusal.problems().count() {
+        Progress::Tried(Verdict::Refused(refusal)) => match refusal.problems().len() {
             1 => "refused: 1 error".to_owned(),
             count => format!("refused: {count} errors"),
         },

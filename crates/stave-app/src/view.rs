@@ -80,10 +80,10 @@ fn assembly_path(
 ) -> String {
     let mut names = Vec::new();
     while let Some(id) = assembly {
-        let Some(found) = design.assemblies.get(id.index()) else {
+        let Some(found) = design.assembly(id) else {
             break;
         };
-        if names.len() > design.assemblies.len() {
+        if names.len() > design.assemblies().len() {
             break;
         }
         names.push(format!("{} ({})", found.name, found.component));
@@ -173,7 +173,7 @@ pub fn describe(design: &SolvedDesign, item: Item) -> Option<Description> {
         Item::Part(id) => design.part(id).map(|part| describe_part(design, part)),
         Item::Member(member) => {
             let body = design.pair_member(member)?;
-            let joint = design.joints.get(member.joint.index())?;
+            let joint = design.joint(member.joint)?;
             let mut rows = vec![Row {
                 label: "Placed by",
                 value: format!("{} ({})", joint.name, joint.kind),
@@ -199,7 +199,7 @@ pub fn describe(design: &SolvedDesign, item: Item) -> Option<Description> {
             })
         }
         Item::Hardware(id) => {
-            let hardware = design.hardware.get(id.index())?;
+            let hardware = design.hardware_piece(id)?;
             let kind = match hardware.base {
                 HardwareBase::Slide => "Slide",
                 HardwareBase::Hinge => "Hinge",
@@ -309,11 +309,7 @@ pub fn see_into(design: &SolvedDesign, graph: &SceneGraph, shown: &[Item]) -> Op
     let parts: Vec<stave_model::solved::PartId> = shown
         .iter()
         .filter_map(|item| match item {
-            Item::Member(member) => design
-                .joints
-                .get(member.joint.index())?
-                .pairs
-                .get(member.pair),
+            Item::Member(member) => design.joint(member.joint)?.pair(member.pair),
             Item::Part(_) | Item::Hardware(_) => None,
         })
         .flat_map(|pair| pair.roles.iter().map(|role| role.part))
@@ -399,7 +395,7 @@ fn member_text(design: &SolvedDesign, hardware: &Hardware, member: &Body) -> Str
         }
         BodyCarrier::Region(region) => {
             let name = design
-                .regions
+                .regions()
                 .get(region.index())
                 .map_or("?", |r| r.name.as_str());
             format!(", fixed in {name}")

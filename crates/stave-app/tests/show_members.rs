@@ -34,10 +34,10 @@ fn member(design: &SolvedDesign, joint: &str, piece: &str) -> PairMember {
     design
         .pair_members()
         .find(|(member, _)| {
-            let found = &design.joints[member.joint.index()];
+            let found = &design.joints()[member.joint.index()];
             found.name == joint
                 && design
-                    .part(found.pairs[member.pair].roles[0].part)
+                    .part(found.pair(member.pair).unwrap().roles[0].part)
                     .unwrap()
                     .name
                     == piece

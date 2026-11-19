@@ -14,7 +14,7 @@ fn rows(example: &str, hardware: &str) -> Vec<String> {
     let opened = stave_app::open(&workspace().join("examples").join(example)).unwrap();
     let design = opened.design.as_ref().expect("the example solves");
     let found = design
-        .hardware
+        .hardware()
         .iter()
         .find(|h| h.name == hardware)
         .unwrap_or_else(|| panic!("no hardware '{hardware}'"));

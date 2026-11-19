@@ -311,7 +311,7 @@ impl Solver<'_> {
         let source = CutSource::Hardware {
             hardware: call.hardware,
         };
-        for (index, require) in kind.requires.iter().enumerate() {
+        for (index, require) in kind.indexed_requires() {
             if self.defer_wall_rule(source, binding.kind, index, require, &env)?
                 || self.eval_bool(&require.condition, &env)?
             {

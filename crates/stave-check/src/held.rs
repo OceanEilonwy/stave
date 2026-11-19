@@ -18,7 +18,9 @@ use std::collections::BTreeSet;
 use stave_lang::placement::Axis;
 use stave_lang::{Code, Severity};
 use stave_model::defs::{PartKind, PlaceTermKind};
-use stave_model::solved::{BodyCarrier, CutSource, PartId, PartOrigin, RoleValue, WorldBox};
+use stave_model::solved::{
+    BodyCarrier, CutSource, JointId, PairIndex, PartId, PartOrigin, RoleValue, WorldBox,
+};
 
 use crate::names::list;
 use crate::{Checker, Contact, Item};
@@ -132,34 +134,34 @@ impl Checker<'_> {
             (None, Some(root)) => Holder::Floor(root.bounds.min().up),
             (None, None) => return,
         };
-        let count = design.parts.len();
+        let count = design.parts().len();
         let mut parent: Vec<usize> = (0..count).collect();
         // A pair holds when it is glued, places a member or a fastener,
         // makes a part, or cuts its parts; one that does none of these (a
         // count of 0 screws with no glue) only says the parts are joined.
-        let cut_pairs: BTreeSet<(usize, usize)> = design
-            .parts
+        let cut_pairs: BTreeSet<(JointId, PairIndex)> = design
+            .parts()
             .iter()
             .flat_map(|part| &part.cuts)
             .filter_map(|cut| match cut.source {
-                CutSource::Joint { joint, pair } => Some((joint.index(), pair)),
+                CutSource::Joint { joint, pair } => Some((joint, pair)),
                 CutSource::Hardware { .. } | CutSource::Boards { .. } => None,
             })
             .collect();
         // Pairs that join nothing, with their joint's name.
         let mut idle: Vec<(Vec<PartId>, &str)> = Vec::new();
-        for joint in &design.joints {
+        for joint in design.joints() {
             let fastened = design
                 .fasteners
                 .iter()
                 .any(|use_| use_.joint == joint.id && use_.count > 0);
-            for (index, pair) in joint.pairs.iter().enumerate() {
+            for (index, pair) in joint.indexed_pairs() {
                 let mut parts: Vec<PartId> = pair.roles.iter().map(|r| r.part).collect();
                 let holds = joint.glue
                     || fastened
                     || !pair.members.is_empty()
                     || !pair.made_parts.is_empty()
-                    || cut_pairs.contains(&(joint.id.index(), index));
+                    || cut_pairs.contains(&(joint.id, index));
                 if !holds {
                     idle.push((parts, &joint.name));
                     continue;
@@ -170,12 +172,12 @@ impl Checker<'_> {
         }
         // A part a board joint makes (a spline, a butterfly key) holds the
         // part made of boards it joins.
-        for part in &design.parts {
+        for part in design.parts() {
             if let PartOrigin::Boards { part: whole, .. } = part.origin {
                 bind(&mut parent, &[whole, part.id]);
             }
         }
-        for hardware in &design.hardware {
+        for hardware in design.hardware() {
             let mut parts = vec![hardware.piece];
             for (_, value) in &hardware.roles {
                 match value {
@@ -191,7 +193,7 @@ impl Checker<'_> {
                 let bounds = member.bounds();
                 parts.extend(
                     design
-                        .parts
+                        .parts()
                         .iter()
                         .filter(|part| touch(&part.cut_box(), &bounds))
                         .map(|part| part.id),
@@ -204,7 +206,7 @@ impl Checker<'_> {
         let held: Vec<Option<usize>> = match anchor {
             Holder::Ground(ground) => vec![group_of(ground)],
             Holder::Floor(floor) => design
-                .parts
+                .parts()
                 .iter()
                 .filter(|part| part.drawn_box().min().up == floor)
                 .map(|part| group_of(part.id))
@@ -212,7 +214,7 @@ impl Checker<'_> {
         };
         let is_held = |part: PartId| held.contains(&group_of(part));
         let mut groups: Vec<(Option<usize>, Vec<PartId>)> = Vec::new();
-        for part in &design.parts {
+        for part in design.parts() {
             let group = group_of(part.id);
             if held.contains(&group) {
                 continue;
@@ -268,7 +270,7 @@ impl Checker<'_> {
                 let Some(own) = design.part(*part).map(|p| p.drawn_box()) else {
                     continue;
                 };
-                for other in design.parts.iter().filter(|o| is_held(o.id)) {
+                for other in design.parts().iter().filter(|o| is_held(o.id)) {
                     if let Some(area) = shared(&own, &other.drawn_box())
                         && touching.is_none_or(|(best, _, _)| area > best)
                     {

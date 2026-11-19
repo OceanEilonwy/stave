@@ -31,7 +31,7 @@ fn cabinet() -> (SolvedDesign, SceneGraph) {
 /// assemblies) hidden.
 fn doors_hidden(design: &SolvedDesign, graph: &SceneGraph) -> Posed {
     let doors: Vec<_> = design
-        .assemblies
+        .assemblies()
         .iter()
         .filter(|assembly| assembly.name == "door_l" || assembly.name == "door_r")
         .map(|assembly| assembly.id)
@@ -45,7 +45,7 @@ fn doors_hidden(design: &SolvedDesign, graph: &SceneGraph) -> Posed {
             .iter()
             .any(|assembly| doors.contains(assembly))
         {
-            posed.visible[id.index()] = false;
+            posed.set_shown(id, false);
         }
     }
     posed

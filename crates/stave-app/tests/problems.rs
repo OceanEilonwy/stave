@@ -180,13 +180,13 @@ fn a_motion_problem_has_its_details_and_its_card() {
     assert_eq!(details.fixes[0].location, details.location);
     let card = details.motion.expect("a motion card");
     assert_eq!(card.name, "door");
-    assert!(card.turns);
+    assert!(card.turns());
     assert_eq!(card.lead(), "Swing door");
     assert_eq!(card.start, "closed 0°");
     assert_eq!(card.blocked, "blocked from 0.6°");
     assert_eq!(card.end, "opens to 110°");
-    assert!(card.contact > 0.0 && card.contact < card.shown && card.shown < card.full);
-    assert_eq!(card.amount_text(card.full), "110°");
+    assert!(card.contact() > 0.0 && card.contact() < card.shown() && card.shown() < card.full());
+    assert_eq!(card.amount_text(card.full()), "110°");
 }
 
 #[test]

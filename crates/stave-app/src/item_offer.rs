@@ -132,19 +132,22 @@ pub fn item_base(name: &str) -> &str {
 pub fn selected_item(design: &SolvedDesign, selection: &Selection) -> Option<String> {
     let outermost = |mut id| {
         while let Some(parent) = design
-            .assemblies
+            .assemblies()
             .iter()
             .find(|assembly| assembly.id == id)
             .and_then(|assembly| assembly.parent)
         {
             id = parent;
         }
-        design.assemblies.iter().find(|assembly| assembly.id == id)
+        design
+            .assemblies()
+            .iter()
+            .find(|assembly| assembly.id == id)
     };
     let name = match selection {
         Selection::Assembly(id) => outermost(*id)?.name.clone(),
         Selection::Part(part) => match design
-            .assemblies
+            .assemblies()
             .iter()
             .find(|assembly| assembly.parent.is_none() && assembly.parts.contains(part))
         {
@@ -152,13 +155,13 @@ pub fn selected_item(design: &SolvedDesign, selection: &Selection) -> Option<Str
             None => design.part(*part)?.name.clone(),
         },
         Selection::Hardware(hardware) => match design
-            .assemblies
+            .assemblies()
             .iter()
             .find(|assembly| assembly.parent.is_none() && assembly.hardware.contains(hardware))
         {
             Some(assembly) => assembly.name.clone(),
             None => design
-                .hardware
+                .hardware()
                 .iter()
                 .find(|item| item.id == *hardware)?
                 .name
@@ -176,11 +179,11 @@ pub fn selected_item(design: &SolvedDesign, selection: &Selection) -> Option<Str
 /// or one.
 pub fn piece_count(design: &SolvedDesign, item: &str) -> usize {
     let mut names: Vec<&str> = design
-        .assemblies
+        .assemblies()
         .iter()
         .filter(|assembly| assembly.parent.is_none())
         .map(|assembly| assembly.name.as_str())
-        .chain(design.parts.iter().map(|part| part.name.as_str()))
+        .chain(design.parts().iter().map(|part| part.name.as_str()))
         .filter(|name| {
             item_base(name) == item
                 && name

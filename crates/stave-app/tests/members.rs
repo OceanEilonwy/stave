@@ -54,12 +54,18 @@ fn a_dowel_lays_its_pins_out_evenly_on_the_patch() {
         "{SIDE_ON_BASE}joint side_dowels : dowel(side, into: base, count: 3)"
     ));
     let design = design(&opened);
-    let pair = &design.joints[0].pairs[0];
+    let pair = &design.joints()[0].pairs[0];
     let [pin] = pair.members.as_slice() else {
         panic!("one member: {:?}", pair.members);
     };
     assert_eq!(pin.name, "pin");
-    assert!(matches!(pin.id.owner, BodyOwner::Joint { pair: 0, .. }));
+    assert!(matches!(
+        pin.id.owner,
+        BodyOwner::Joint {
+            pair: stave_model::solved::PairIndex::FIRST,
+            ..
+        }
+    ));
     // Three 8mm pins on the side's 19 x 300 end: equal gaps of
     // (300 - 24) / 4 = 69mm before, between and after them, centred across
     // the 19mm, half in each part (15mm either side of the base's top).
@@ -170,7 +176,7 @@ fn peg_kind(layout: &str) -> String {
 fn peg_centres(layout: &str) -> Vec<stave_lang::units::Length> {
     let opened = open(&peg_kind(layout));
     let design = common::solved(&opened);
-    design.joints[0].pairs[0].members[0]
+    design.joints()[0].pairs[0].members[0]
         .shapes()
         .iter()
         .map(|shape| match shape {
@@ -415,7 +421,7 @@ assembly post_r = mirror(post_l, about: mid(base, across))",
     );
     let design = design(&opened);
     let centre = |joint: &str| {
-        let joint = design.joints.iter().find(|j| j.name == joint).unwrap();
+        let joint = design.joints().iter().find(|j| j.name == joint).unwrap();
         let member = &joint.pairs[0].members[0];
         assert!(matches!(member.id.owner, BodyOwner::Joint { joint: id, .. } if id == joint.id));
         match member.shapes() {

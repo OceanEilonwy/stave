@@ -1364,7 +1364,7 @@ impl Renderer {
             .filter_map(|(index, _)| {
                 let index = usize::try_from(*index).ok()?;
                 let node = frame.scene.nodes.get(index)?;
-                let transform = frame.posed.transforms.get(index)?;
+                let transform = frame.posed.transforms().get(index)?;
                 Some(node.geometry.bounds.transformed(*transform))
             })
             .reduce(Aabb::union)
@@ -1430,7 +1430,7 @@ impl Renderer {
         scratch.casters.extend(casting.clone().map(|(index, _)| {
             let model = usize::try_from(index)
                 .ok()
-                .and_then(|index| frame.posed.transforms.get(index))
+                .and_then(|index| frame.posed.transforms().get(index))
                 .copied()
                 .unwrap_or(Mat4::IDENTITY);
             (index, model.to_cols_array_2d())
@@ -1869,7 +1869,7 @@ impl Renderer {
             .extend(scene.nodes.iter().enumerate().map(|(index, node)| {
                 let model = frame
                     .posed
-                    .transforms
+                    .transforms()
                     .get(index)
                     .copied()
                     .unwrap_or(Mat4::IDENTITY);
@@ -2899,9 +2899,11 @@ mod tests {
             .map(|(index, _)| usize::try_from(*index).unwrap())
             .unwrap();
         let mut moved = posed.clone();
-        if let Some(transform) = moved.transforms.get_mut(caster) {
-            *transform = Mat4::from_translation(Vec3::new(0.0, 50.0, 0.0)) * *transform;
-        }
+        let caster_node = scene.node_ids().nth(caster).unwrap();
+        moved.move_node(
+            caster_node,
+            Mat4::from_translation(Vec3::new(0.0, 50.0, 0.0)),
+        );
         let before = renderer.shadow_key.take();
         renderer.render(&frame(&scene, &moved, 0.7)).unwrap();
         assert_ne!(renderer.shadow_key, before);

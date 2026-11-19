@@ -52,8 +52,8 @@ fn symbol_at(
 fn name(design: &stave_model::solved::SolvedDesign, selection: &Selection) -> String {
     match selection {
         Selection::Part(id) => design.part(*id).unwrap().name.clone(),
-        Selection::Hardware(id) => design.hardware[id.index()].name.clone(),
-        Selection::Assembly(id) => design.assemblies[id.index()].name.clone(),
+        Selection::Hardware(id) => design.hardware()[id.index()].name.clone(),
+        Selection::Assembly(id) => design.assemblies()[id.index()].name.clone(),
         other => format!("{other:?}"),
     }
 }
@@ -96,7 +96,7 @@ fn the_cursor_on_a_name_selects_it_in_3d() {
         Some("door_l.stile[hinge]")
     );
     let door_r_panel = design
-        .parts
+        .parts()
         .iter()
         .find(|p| p.name == "door_r.panel")
         .map(|p| Selection::Part(p.id))
@@ -121,7 +121,7 @@ fn selecting_in_3d_moves_the_text_to_the_line_that_places_it() {
     let checked = checked(&folder);
     let design = checked.design().unwrap();
     let stile = design
-        .parts
+        .parts()
         .iter()
         .find(|p| p.name == "door_l.stile[hinge]")
         .map(|p| Selection::Part(p.id))
@@ -133,7 +133,7 @@ fn selecting_in_3d_moves_the_text_to_the_line_that_places_it() {
         Some("Linked to the text · door_l.stile[hinge], line 9")
     );
     let side = design
-        .parts
+        .parts()
         .iter()
         .find(|p| p.name == "side_l")
         .map(|p| Selection::Part(p.id))
@@ -167,7 +167,7 @@ fn following_the_cursor_leaves_no_history() {
     session.finish_check(ticket, check::run(&folder));
     let back_before = session.can_go_back();
     let (design, _) = session.drawable().unwrap();
-    let door = Selection::Assembly(design.assemblies[0].id);
+    let door = Selection::Assembly(design.assemblies()[0].id);
     let events = session.apply(Command::Link(Some(door.clone())));
     assert_eq!(events, vec![Event::SelectionChanged]);
     assert_eq!(session.selection(), Some(&door));

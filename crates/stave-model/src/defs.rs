@@ -6,6 +6,7 @@
 //! to items through [`Symbol`]s; which concrete item a symbol means is
 //! decided by the instance it is evaluated in.
 
+use crate::nonempty::NonEmpty;
 use stave_lang::FileId;
 use stave_lang::ast::BaseKind;
 use stave_lang::ast::{BinaryOp, Span, UnaryOp};
@@ -21,8 +22,8 @@ use stave_schema::words::{Grain, Measure, MotionWord, OutputUnit, StockForm};
 use stave_schema::{CutOperation, Operation};
 
 use crate::ids::{
-    AssemblyDefId, ComponentId, HardwareDefId, JointDefId, KindId, LetDefId, ParamDefId, PartDefId,
-    ProfileId, RecipeId, RegionDefId, RequireDefId, SceneDefId, StockId,
+    AssemblyDefId, ComponentId, HardwareDefId, JointDefId, KindId, LetDefId, MadeIndex, ParamDefId,
+    PartDefId, ProfileId, RecipeId, RegionDefId, RequireDefId, RequireIndex, SceneDefId, StockId,
 };
 use crate::types::Ty;
 
@@ -69,11 +70,11 @@ pub enum Symbol {
     /// An item of a module or a component.
     Def(DefId),
     /// A role of the kind being defined; bound per pair.
-    Role(KindId, usize),
+    Role(KindId, RoleIndex),
     /// A param of the kind being defined.
     KindParam(KindId, usize),
     /// A part the kind makes.
-    MadePart(KindId, usize),
+    MadePart(KindId, MadeIndex),
     /// `mount` in a slide, hinge or pull kind: the face of its piece the
     /// hardware is mounted on, as an anchor; bound per piece of hardware.
     Mount(KindId),
@@ -752,6 +753,26 @@ pub struct KindDef {
     pub hardware: Option<HardwareKindDef>,
 }
 
+impl KindDef {
+    /// The role at `index`.
+    pub fn role(&self, index: RoleIndex) -> Option<&RoleDef> {
+        self.roles.get(index.index())
+    }
+
+    /// The rule at `index`.
+    pub fn require(&self, index: RequireIndex) -> Option<&RequireDef> {
+        self.requires.get(index.index())
+    }
+
+    /// Each rule with its index, in order.
+    pub fn indexed_requires(&self) -> impl Iterator<Item = (RequireIndex, &RequireDef)> {
+        self.requires
+            .iter()
+            .enumerate()
+            .map(|(index, require)| (RequireIndex::from_usize(index), require))
+    }
+}
+
 /// A member with a body: its index among its kind's [`KindDef::bodies`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize)]
 pub struct BodyId(u32);
@@ -773,6 +794,9 @@ impl BodyId {
 pub struct RoleIndex(u32);
 
 impl RoleIndex {
+    /// The first role: the one the positional argument binds.
+    pub const FIRST: RoleIndex = RoleIndex(0);
+
     /// The role at `index`, if it fits.
     pub fn new(index: usize) -> Option<RoleIndex> {
         u32::try_from(index).ok().map(RoleIndex)
@@ -804,45 +828,6 @@ impl BodyName {
 impl std::fmt::Display for BodyName {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.0)
-    }
-}
-
-/// A list with at least one element.
-#[derive(Debug, Clone, PartialEq)]
-pub struct NonEmpty<T> {
-    first: T,
-    rest: Vec<T>,
-}
-
-impl<T> NonEmpty<T> {
-    /// The list, if `items` has at least one element.
-    pub fn new(items: Vec<T>) -> Option<NonEmpty<T>> {
-        let mut items = items.into_iter();
-        let first = items.next()?;
-        Some(NonEmpty {
-            first,
-            rest: items.collect(),
-        })
-    }
-
-    /// The first element.
-    pub fn first(&self) -> &T {
-        &self.first
-    }
-
-    /// Every element, in order.
-    pub fn iter(&self) -> impl Iterator<Item = &T> {
-        std::iter::once(&self.first).chain(self.rest.iter())
-    }
-
-    /// How many elements there are (at least one).
-    pub fn len(&self) -> usize {
-        1 + self.rest.len()
-    }
-
-    /// Always `false`: the list has at least one element.
-    pub fn is_empty(&self) -> bool {
-        false
     }
 }
 
@@ -1324,9 +1309,12 @@ impl KindDef {
         self.params.iter().position(|p| p.decl.name == name)
     }
 
-    /// The index of a role by name.
-    pub fn role(&self, name: &str) -> Option<usize> {
-        self.roles.iter().position(|r| r.name == name)
+    /// The role named `name`.
+    pub fn role_named(&self, name: &str) -> Option<RoleIndex> {
+        self.roles
+            .iter()
+            .position(|r| r.name == name)
+            .and_then(RoleIndex::new)
     }
 
     /// A field by name.
@@ -1341,7 +1329,7 @@ pub struct JointKindDef {
     /// `insert:`
     pub insert: Vec<StepDef>,
     /// `cut_first:` roles in order.
-    pub cut_first: Vec<usize>,
+    pub cut_first: Vec<RoleIndex>,
     /// `adds:`
     pub adds: Vec<ExtendDef>,
     /// `uses:`
@@ -1357,37 +1345,72 @@ pub struct JointKindDef {
     pub note: Option<Text>,
 }
 
+impl JointKindDef {
+    /// The part it makes at `index`.
+    pub fn made(&self, index: MadeIndex) -> Option<&MadePartDef> {
+        self.makes.get(index.index())
+    }
+}
+
 /// Who an assembly step or selector refers to: a role or a made part.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum JointMember {
     /// A role of the kind.
-    Role(usize),
+    Role(RoleIndex),
     /// A part the kind makes.
-    Made(usize),
+    Made(MadeIndex),
 }
 
 /// One step of `insert:`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct StepDef {
-    /// `push`, `rotate` or `drive`.
-    pub kind: AssemblyStepKind,
     /// The part that moves.
     pub part: JointMember,
-    /// `along:` or `about:`: an axis of the moving part.
+    /// `along:` (push, drive) or `about:` (rotate): an axis of the moving
+    /// part.
     pub axis: PartAxis,
-    /// `by:` (a length for push, an angle for rotate).
-    pub by: Option<RExpr>,
-    /// `angle:` of a push.
-    pub angle: Option<RExpr>,
+    /// What it does, with what that kind of step takes.
+    pub motion: StepMotionDef,
     /// The whole step.
     pub span: Span,
+}
+
+/// What an assembly step does: `push`, `rotate` or `drive`, each with only
+/// the arguments it takes.
+#[derive(Debug, Clone, PartialEq)]
+pub enum StepMotionDef {
+    /// `push(part, along: axis, by: length, angle: angle)`.
+    Push {
+        /// `by:`, a length, when written.
+        by: Option<RExpr>,
+        /// `angle:`, when written.
+        angle: Option<RExpr>,
+    },
+    /// `rotate(part, by: angle, about: axis)`.
+    Rotate {
+        /// `by:`, an angle; a rotate always has one.
+        by: RExpr,
+    },
+    /// `drive(part, along: axis)`.
+    Drive,
+}
+
+impl StepMotionDef {
+    /// The step's word: `push`, `rotate` or `drive`.
+    pub fn kind(&self) -> AssemblyStepKind {
+        match self {
+            StepMotionDef::Push { .. } => AssemblyStepKind::Push,
+            StepMotionDef::Rotate { .. } => AssemblyStepKind::Rotate,
+            StepMotionDef::Drive => AssemblyStepKind::Drive,
+        }
+    }
 }
 
 /// `extend(role, by: d)`
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExtendDef {
     /// The role extended.
-    pub role: usize,
+    pub role: RoleIndex,
     /// By how much.
     pub by: RExpr,
     /// The whole call.
@@ -1484,7 +1507,7 @@ pub enum MadeTermKind {
         /// The role part's axis the width runs along.
         width: PartAxis,
         /// The role.
-        of: usize,
+        of: RoleIndex,
     },
     /// `center(selector)` or `center(selector, axis)`.
     Center {

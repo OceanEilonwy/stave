@@ -1682,7 +1682,7 @@ mod tests {
         let design = cabinet();
         let joints = PartJoints::new(&design);
         let hinge = design
-            .hardware
+            .hardware()
             .iter()
             .find(|h| h.name == "door_l.hinges[lower]")
             .expect("the hinge exists");
@@ -1815,7 +1815,7 @@ mod tests {
             stave_app::inspect::parts_tree(&design),
             stave_app::part_joints::PartJoints::new(&design),
         );
-        let part = design.parts.first().expect("a part");
+        let part = design.parts().first().expect("a part");
         let selection = Selection::of_item(Item::Part(part.id));
         sidebar.show_selection(Some(&selection));
         settle();
@@ -1949,7 +1949,7 @@ mod tests {
             PartJoints::new(&design),
         );
         sidebar.show_marks(Rc::default());
-        let part = design.parts.first().expect("a part");
+        let part = design.parts().first().expect("a part");
         sidebar.show_selection(Some(&Selection::of_item(Item::Part(part.id))));
         settle();
         assert!(sidebar.bridge.model().rows.len() > 1, "the parts have rows");

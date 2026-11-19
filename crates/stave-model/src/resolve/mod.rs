@@ -34,12 +34,12 @@ use stave_schema::kinds::RoleType;
 
 use crate::defs::{
     AssemblyDef, ComponentDef, DefId, Defs, HardwareDef, JointDef, KindDef, LetDef, ModuleDefs,
-    ParamDef, PartDef, ProfileDef, RExpr, RecipeDef, RegionDef, RequireDef, SceneDef, Scope,
-    StockDef, Symbol,
+    ParamDef, PartDef, ProfileDef, RExpr, RecipeDef, RegionDef, RequireDef, RoleIndex, SceneDef,
+    Scope, StockDef, Symbol,
 };
 use crate::ids::{
-    AssemblyDefId, ComponentId, HardwareDefId, JointDefId, KindId, LetDefId, ParamDefId, PartDefId,
-    ProfileId, RecipeId, RegionDefId, RequireDefId, SceneDefId, StockId,
+    AssemblyDefId, ComponentId, HardwareDefId, JointDefId, KindId, LetDefId, MadeIndex, ParamDefId,
+    PartDefId, ProfileId, RecipeId, RegionDefId, RequireDefId, SceneDefId, StockId,
 };
 use crate::types::{KindTy, Ty};
 
@@ -955,7 +955,7 @@ impl<'a> Resolver<'a> {
             Symbol::Role(kind, index) => {
                 let role = self
                     .kind_roles(kind)
-                    .and_then(|roles| roles.get(index).copied());
+                    .and_then(|roles| roles.get(index.index()).copied());
                 match role {
                     Some(RoleType::Region) => Ty::Region,
                     Some(RoleType::Part | RoleType::Parts) | None => Ty::Part,
@@ -1175,7 +1175,9 @@ impl<'a> Resolver<'a> {
         }
         let mut names = BTreeMap::new();
         for (index, (name, _, _)) in kinds::role_specs(syntax).into_iter().enumerate() {
-            names.entry(name).or_insert(Symbol::Role(kind, index));
+            if let Some(index) = RoleIndex::new(index) {
+                names.entry(name).or_insert(Symbol::Role(kind, index));
+            }
         }
         for (index, param) in kinds::kind_params(syntax).into_iter().enumerate() {
             names
@@ -1185,7 +1187,7 @@ impl<'a> Resolver<'a> {
         for (index, made) in kinds::made_parts(syntax).into_iter().enumerate() {
             names
                 .entry(made.name.as_str().to_owned())
-                .or_insert(Symbol::MadePart(kind, index));
+                .or_insert(Symbol::MadePart(kind, MadeIndex::from_usize(index)));
         }
         if syntax.base.value.is_mounted_hardware() {
             // `mount`: the mount face, as an anchor (grammar, "Adjustment").

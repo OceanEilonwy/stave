@@ -27,6 +27,7 @@ use crate::i18n::{fill_in, ntr, tr};
 use std::collections::{BTreeMap, BTreeSet};
 
 use stave_model::mechanism::DriveValue;
+use stave_model::nonempty::NonEmpty;
 use stave_model::solved::{
     AssemblyId, CutKind, CutSource, Hardware, HardwareBase, Joint, PartId, RoleValue, SolvedDesign,
 };
@@ -34,7 +35,7 @@ use stave_scene::Item;
 
 use crate::focus::Target;
 use crate::inspect::{
-    self, AssemblyNode, NonEmpty, PartsTree, TreeEntry, group_label, relative, split_index,
+    self, AssemblyNode, PartsTree, TreeEntry, group_label, relative, split_index,
 };
 use crate::session::Selection;
 
@@ -318,10 +319,10 @@ fn joint_glyph<'d>(joint: &Joint, cuts: impl Iterator<Item = &'d CutKind>) -> Gl
 
 /// Whether `assembly` is `outer` or inside it.
 fn inside(design: &SolvedDesign, mut assembly: Option<AssemblyId>, outer: AssemblyId) -> bool {
-    for _ in 0..=design.assemblies.len() {
+    for _ in 0..=design.assemblies().len() {
         match assembly {
             Some(found) if found == outer => return true,
-            Some(found) => assembly = design.assemblies.get(found.index()).and_then(|a| a.parent),
+            Some(found) => assembly = design.assembly(found).and_then(|a| a.parent),
             None => return false,
         }
     }
@@ -361,7 +362,7 @@ impl PartJoints {
     pub fn new(design: &SolvedDesign) -> PartJoints {
         // The cuts each joint makes, by joint index.
         let mut cuts: BTreeMap<usize, Vec<&CutKind>> = BTreeMap::new();
-        for part in &design.parts {
+        for part in design.parts() {
             for cut in &part.cuts {
                 if let CutSource::Joint { joint, .. } = cut.source {
                     cuts.entry(joint.index()).or_default().push(&cut.kind);
@@ -369,7 +370,7 @@ impl PartJoints {
             }
         }
         let glyphs: Vec<Glyph> = design
-            .joints
+            .joints()
             .iter()
             .map(|joint| {
                 joint_glyph(
@@ -380,11 +381,11 @@ impl PartJoints {
             .collect();
         let mut found = PartJoints::default();
         found.part_chips(design, &glyphs);
-        for part in &design.parts {
+        for part in design.parts() {
             let rows = joined_to(design, &glyphs, part.id);
             found.joined.insert(part.id, rows);
         }
-        for hardware in &design.hardware {
+        for hardware in design.hardware() {
             found
                 .homes
                 .insert(Item::Hardware(hardware.id), hardware.piece);
@@ -392,10 +393,9 @@ impl PartJoints {
         for (member, body) in design.pair_members() {
             let home = body.carried_by().or_else(|| {
                 design
-                    .joints
+                    .joints()
                     .get(member.joint.index())?
-                    .pairs
-                    .get(member.pair)?
+                    .pair(member.pair)?
                     .roles
                     .first()
                     .map(|role| role.part)
@@ -405,7 +405,7 @@ impl PartJoints {
             }
         }
         found.headings.insert(None, carcass_heading(design));
-        for assembly in &design.assemblies {
+        for assembly in design.assemblies() {
             found
                 .headings
                 .insert(Some(assembly.id), assembly_heading(design, assembly.id));
@@ -414,7 +414,7 @@ impl PartJoints {
                 .insert(assembly.id, folded_chips(design, &glyphs, assembly.id));
             let mirror_of = assembly
                 .mirror_of
-                .and_then(|source| design.assemblies.get(source.index()))
+                .and_then(|source| design.assembly(source))
                 .map(|source| fill_in(&tr("mirror of {name}"), &[("name", &source.name)]));
             let (base, index) = split_index(&assembly.name);
             found.folds.insert(
@@ -431,7 +431,7 @@ impl PartJoints {
     }
 
     fn part_chips(&mut self, design: &SolvedDesign, glyphs: &[Glyph]) {
-        for (joint, glyph) in design.joints.iter().zip(glyphs) {
+        for (joint, glyph) in design.joints().iter().zip(glyphs) {
             let words = joint_words(joint);
             for pair in &joint.pairs {
                 let pieces: u32 = pair.members.iter().map(|body| body.copies()).sum();
@@ -459,7 +459,7 @@ impl PartJoints {
                 }
             }
         }
-        for hardware in &design.hardware {
+        for hardware in design.hardware() {
             add_chip(
                 self.chips.entry(hardware.piece).or_default(),
                 Chip {
@@ -623,11 +623,11 @@ fn joined_to(design: &SolvedDesign, glyphs: &[Glyph], id: PartId) -> Vec<JoinedT
     };
     let label = |name: &str| relative(design, name, part.assembly).to_owned();
     let mut rows = Vec::new();
-    for (joint, glyph) in design.joints.iter().zip(glyphs) {
+    for (joint, glyph) in design.joints().iter().zip(glyphs) {
         let mut partners = Vec::new();
         let mut stands_for = Vec::new();
         let mut focus = None;
-        for (index, pair) in joint.pairs.iter().enumerate() {
+        for (index, pair) in joint.indexed_pairs() {
             let in_pair = pair.roles.iter().any(|r| r.part == id) || pair.made_parts.contains(&id);
             if !in_pair {
                 continue;
@@ -674,7 +674,7 @@ fn joined_to(design: &SolvedDesign, glyphs: &[Glyph], id: PartId) -> Vec<JoinedT
     // elsewhere that names it (a hinge's other leaf), by kind.
     let mut fitted: Vec<(String, Glyph, String, Vec<&Hardware>)> = Vec::new();
     let mut naming: Vec<(String, Glyph, Vec<&Hardware>)> = Vec::new();
-    for hardware in &design.hardware {
+    for hardware in design.hardware() {
         let kind = kind_words(&hardware.kind);
         if hardware.piece == id {
             let face = hardware.mount_face.word().to_owned();
@@ -771,7 +771,7 @@ fn moves_on(
     piece: Option<PartId>,
 ) -> Option<(Motion, Vec<Outside>)> {
     let id = assembly?;
-    let mechanism = design.assemblies.get(id.index())?.mechanism.as_ref()?;
+    let mechanism = design.assembly(id)?.mechanism.as_ref()?;
     let motion = match mechanism.drive().extent() {
         DriveValue::Turn(_) => Motion::Turn,
         DriveValue::Travel(_) => Motion::Travel,
@@ -781,7 +781,7 @@ fn moves_on(
     for hardware in mechanism
         .hardware()
         .iter()
-        .filter_map(|h| design.hardware.get(h.index()))
+        .filter_map(|h| design.hardware_piece(*h))
         .filter(|h| piece.is_none_or(|p| h.piece == p))
     {
         any = true;
@@ -792,7 +792,7 @@ fn moves_on(
                     .filter(|p| !inside(design, p.assembly, id))
                     .map(|p| (p.name.clone(), Some(Item::Part(p.id)))),
                 RoleValue::Region(region) => design
-                    .regions
+                    .regions()
                     .get(region.index())
                     .filter(|r| !inside(design, r.assembly, id))
                     .map(|r| (r.name.clone(), None)),
@@ -808,9 +808,13 @@ fn moves_on(
 }
 
 fn carcass_heading(design: &SolvedDesign) -> Heading {
-    let parts = design.parts.iter().filter(|p| p.assembly.is_none()).count();
+    let parts = design
+        .parts()
+        .iter()
+        .filter(|p| p.assembly.is_none())
+        .count();
     let joints = design
-        .joints
+        .joints()
         .iter()
         .filter(|j| j.assembly.is_none())
         .count();
@@ -839,21 +843,21 @@ fn counts_note(parts: usize, joints: usize) -> String {
 
 fn assembly_heading(design: &SolvedDesign, id: AssemblyId) -> Heading {
     let name = design
-        .assemblies
+        .assemblies()
         .get(id.index())
         .map_or_else(String::new, |a| a.name.clone());
     let parts = design
-        .parts
+        .parts()
         .iter()
         .filter(|p| p.assembly == Some(id))
         .count();
     let joints = design
-        .joints
+        .joints()
         .iter()
         .filter(|j| j.assembly == Some(id))
         .count();
     let extent = design
-        .assemblies
+        .assemblies()
         .get(id.index())
         .and_then(|a| a.mechanism.as_ref())
         .map(|m| m.drive().extent());
@@ -903,7 +907,7 @@ fn assembly_heading(design: &SolvedDesign, id: AssemblyId) -> Heading {
 
 fn folded_chips(design: &SolvedDesign, glyphs: &[Glyph], id: AssemblyId) -> Vec<Chip> {
     let mut chips = Vec::new();
-    for (joint, glyph) in design.joints.iter().zip(glyphs) {
+    for (joint, glyph) in design.joints().iter().zip(glyphs) {
         if !inside(design, joint.assembly, id) {
             continue;
         }
@@ -927,7 +931,7 @@ fn folded_chips(design: &SolvedDesign, glyphs: &[Glyph], id: AssemblyId) -> Vec<
         }
     }
     for hardware in design
-        .hardware
+        .hardware()
         .iter()
         .filter(|h| inside(design, h.assembly, id))
     {
@@ -1132,7 +1136,10 @@ mod tests {
         // A frame joint opens focus mode on its first pair.
         assert!(matches!(
             rows.first().and_then(|r| r.focus),
-            Some(Target::Joint { pair: 0, .. })
+            Some(Target::Joint {
+                pair: stave_model::solved::PairIndex::FIRST,
+                ..
+            })
         ));
     }
 
@@ -1176,7 +1183,7 @@ mod tests {
         let design = cabinet();
         let joints = PartJoints::new(design);
         let hinge = design
-            .hardware
+            .hardware()
             .iter()
             .find(|h| h.name == "door_l.hinges[upper]")
             .expect("the hinge exists");
@@ -1203,7 +1210,7 @@ mod tests {
         assert_eq!(carcass.note, "12 parts · 6 joints");
         assert_eq!(carcass.motion, None);
         let door = design
-            .assemblies
+            .assemblies()
             .iter()
             .find(|a| a.name == "door_l")
             .expect("door_l");
@@ -1273,7 +1280,7 @@ mod tests {
         );
         // Opened, a drawer is a heading of its own and its twin stays a row.
         let top = design
-            .assemblies
+            .assemblies()
             .iter()
             .find(|a| a.name == "drawer[top]")
             .expect("drawer[top]");

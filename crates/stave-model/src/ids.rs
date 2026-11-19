@@ -97,4 +97,31 @@ ids! {
     RequireId;
     /// A scene of the project.
     SceneId;
+    /// A pair of a joint: its index among the joint's
+    /// [`pairs`](crate::solved::Joint::pairs).
+    PairIndex;
+    /// A seam of a part made of boards: its index among the part's
+    /// [`seams`](crate::solved::Boards::seams).
+    SeamIndex;
+    /// A part a joint kind makes: its index among the kind's
+    /// [`makes`](crate::defs::JointKindDef::makes).
+    MadeIndex;
+    /// A rule of a kind: its index among the kind's
+    /// [`requires`](crate::defs::KindDef::requires).
+    RequireIndex;
+}
+
+impl PairIndex {
+    /// The first pair.
+    pub const FIRST: PairIndex = PairIndex(0);
+}
+
+impl SeamIndex {
+    /// The first seam, nearest the reference edge.
+    pub const FIRST: SeamIndex = SeamIndex(0);
+
+    /// Its number from 1, as the source writes it (`top.seam[1]`).
+    pub fn number(self) -> u32 {
+        self.0.saturating_add(1)
+    }
 }

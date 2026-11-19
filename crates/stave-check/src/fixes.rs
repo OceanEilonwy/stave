@@ -207,7 +207,7 @@ impl Checker<'_> {
         let defs = &self.model.defs;
         let mechanism = self
             .design
-            .assemblies
+            .assemblies()
             .get(assembly.index())?
             .mechanism
             .as_ref()?;
@@ -221,7 +221,7 @@ impl Checker<'_> {
         let mut operations: Vec<String> = Vec::new();
         let mut value = None;
         for hardware in mechanism.hardware() {
-            let found = self.design.hardware.get(hardware.index())?;
+            let found = self.design.hardware_piece(*hardware)?;
             let kind = defs.kind(found.kind_id)?;
             let to = match kind.mechanism.as_ref()?.drive.as_ref() {
                 Some(DriveDef::Turn { to, .. }) => to,

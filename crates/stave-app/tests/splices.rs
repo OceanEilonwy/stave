@@ -52,9 +52,9 @@ fn a_spliced_seat_is_two_pieces_and_a_lap_splice() {
     assert!(matches!(second.origin, PartOrigin::Piece { part, .. } if part == first.id));
     let pieces = first.pieces.as_ref().expect("the first piece lists them");
     assert_eq!(pieces.name, "seat");
-    assert_eq!(pieces.parts.count(), 2);
+    assert_eq!(pieces.parts.len(), 2);
     let splice = design
-        .joints
+        .joints()
         .iter()
         .find(|j| j.name == "seat.splice[1]")
         .unwrap();
@@ -74,7 +74,7 @@ fn a_spliced_seat_is_two_pieces_and_a_lap_splice() {
     assert_eq!((laps(first), laps(second)), (1, 1));
     // The legs' dowels land on the piece above each leg.
     let dowels = design
-        .joints
+        .joints()
         .iter()
         .find(|j| j.name == "leg_dowels")
         .unwrap();

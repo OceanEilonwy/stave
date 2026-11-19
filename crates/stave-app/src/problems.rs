@@ -18,12 +18,15 @@ use crate::i18n::{fill_in, ntr, tr};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
+use stave_geom::render;
+use stave_lang::units::{Angle, Length};
 use stave_lang::{Code, Diagnostic, Severity, place_label, render_diagnostic};
+use stave_model::nonempty::NonEmpty;
 use stave_model::solved::{AssemblyId, SolvedDesign};
-use stave_scene::Item;
+use stave_scene::{Item, MotionRange};
 
 use crate::check::Checked;
-use crate::inspect::{self, AssemblyNode, NonEmpty, PartsTree, TreeEntry};
+use crate::inspect::{self, AssemblyNode, PartsTree, TreeEntry};
 use crate::session::{LineNumber, ProblemIndex, Selection, SourceLocation};
 use crate::{Contact, ContactItem};
 
@@ -368,7 +371,7 @@ fn item_of(contact_item: ContactItem) -> Item {
 pub(crate) fn inside(design: &SolvedDesign, item: Item, assembly: AssemblyId) -> bool {
     let mut current = match item {
         Item::Part(id) => design.part(id).and_then(|p| p.assembly),
-        Item::Hardware(id) => design.hardware.get(id.index()).and_then(|h| h.assembly),
+        Item::Hardware(id) => design.hardware_piece(id).and_then(|h| h.assembly),
         Item::Member(member) => design
             .pair_member(member)
             .and_then(|body| design.part(body.carried_by()?))
@@ -380,10 +383,10 @@ pub(crate) fn inside(design: &SolvedDesign, item: Item, assembly: AssemblyId) ->
             return true;
         }
         steps += 1;
-        if steps > design.assemblies.len() {
+        if steps > design.assemblies().len() {
             return false;
         }
-        current = design.assemblies.get(id.index()).and_then(|a| a.parent);
+        current = design.assembly(id).and_then(|a| a.parent);
     }
     false
 }
@@ -533,7 +536,7 @@ pub fn marks(checked: &Checked) -> Marks {
         for (items, mark) in [(&about, severity_mark), (&involved, Mark::Involved)] {
             for item in items {
                 Marks::add(&mut marks.items, *item, mark);
-                for assembly in &design.assemblies {
+                for assembly in design.assemblies() {
                     if inside(design, *item, assembly.id) {
                         Marks::add(&mut marks.assemblies, assembly.id, mark);
                     }
@@ -721,14 +724,9 @@ pub struct MotionCard {
     pub assembly: AssemblyId,
     /// Its name: `door`.
     pub name: String,
-    /// `true` for a door (degrees), `false` for a drawer (millimetres).
-    pub turns: bool,
-    /// Fully open: radians or millimetres.
-    pub full: f32,
-    /// Where it first touches: radians or millimetres.
-    pub contact: f32,
-    /// Where the shared wood is measured, a little past the contact.
-    pub shown: f32,
+    /// How far it moves, where it first touches and where the shared
+    /// wood is measured, exact, in the unit of its motion.
+    pub travel: MotionTravel,
     /// "closed 0°".
     pub start: String,
     /// "blocked from 0.6°".
@@ -737,10 +735,69 @@ pub struct MotionCard {
     pub end: String,
 }
 
+/// The amounts on a motion card, exact. The variant carries the unit, so a
+/// door's angles can't be read as a drawer's lengths.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MotionTravel {
+    /// A door that swings.
+    Swing {
+        /// Fully open.
+        full: Angle,
+        /// Where it first touches.
+        contact: Angle,
+        /// Where the shared wood is measured, a little past the contact.
+        shown: Angle,
+    },
+    /// A drawer that slides.
+    Slide {
+        /// Fully out.
+        full: Length,
+        /// Where it first touches.
+        contact: Length,
+        /// Where the shared wood is measured, a little past the contact.
+        shown: Length,
+    },
+}
+
 impl MotionCard {
+    /// `true` for a door, whose render amounts are radians; `false` for a
+    /// drawer, whose render amounts are millimetres.
+    pub fn turns(&self) -> bool {
+        match self.travel {
+            MotionTravel::Swing { .. } => true,
+            MotionTravel::Slide { .. } => false,
+        }
+    }
+
+    /// Fully open, as a render amount (radians or millimetres).
+    pub fn full(&self) -> f32 {
+        match self.travel {
+            MotionTravel::Swing { full, .. } => render::radians(full),
+            MotionTravel::Slide { full, .. } => render::mm(full),
+        }
+    }
+
+    /// Where it first touches, as a render amount (radians or
+    /// millimetres).
+    pub fn contact(&self) -> f32 {
+        match self.travel {
+            MotionTravel::Swing { contact, .. } => render::radians(contact),
+            MotionTravel::Slide { contact, .. } => render::mm(contact),
+        }
+    }
+
+    /// Where the shared wood is measured, as a render amount (radians or
+    /// millimetres).
+    pub fn shown(&self) -> f32 {
+        match self.travel {
+            MotionTravel::Swing { shown, .. } => render::radians(shown),
+            MotionTravel::Slide { shown, .. } => render::mm(shown),
+        }
+    }
+
     /// The card's lead: "Swing door", "Slide drawer[top]".
     pub fn lead(&self) -> String {
-        let template = if self.turns {
+        let template = if self.turns() {
             tr("Swing {name}")
         } else {
             tr("Slide {name}")
@@ -748,15 +805,32 @@ impl MotionCard {
         fill_in(&template, &[("name", &self.name)])
     }
 
-    /// An amount (radians or millimetres) as the card writes it: `90.1°`,
-    /// `312 mm`.
+    /// A render amount (radians for a door, millimetres for a drawer, as
+    /// the scrubber gives) as the card writes it: `90.1°`, `312 mm`.
     pub fn amount_text(&self, amount: f32) -> String {
-        if self.turns {
+        if self.turns() {
             format!("{}°", tenths(f64::from(amount).to_degrees()))
         } else {
             format!("{} mm", tenths(f64::from(amount)))
         }
     }
+
+    /// An exact amount on this card as the card writes it.
+    fn exact_text(amount: MotionAmount) -> String {
+        match amount {
+            MotionAmount::Angle(angle) => {
+                format!("{}°", tenths(angle.to_radians_f64().to_degrees()))
+            }
+            MotionAmount::Length(length) => format!("{} mm", tenths(length.to_mm_f64())),
+        }
+    }
+}
+
+/// One exact amount of a motion card, for its words.
+#[derive(Debug, Clone, Copy)]
+enum MotionAmount {
+    Angle(Angle),
+    Length(Length),
 }
 
 /// A number to the nearest tenth, without a trailing `.0`.
@@ -1040,7 +1114,7 @@ fn specific_title(
     match category {
         Category::Motion => {
             let motion = contact.motion?;
-            let name = &design.assemblies.get(motion.assembly.index())?.name;
+            let name = &design.assembly(motion.assembly)?.name;
             let mut hits: Vec<String> = Vec::new();
             for item in contact.items.iter().copied().map(item_of) {
                 if inside(design, item, motion.assembly) {
@@ -1048,7 +1122,7 @@ fn specific_title(
                 }
                 let found = match item {
                     Item::Part(id) => design.part(id).map(|p| p.name.clone()),
-                    Item::Hardware(id) => design.hardware.get(id.index()).map(|h| h.name.clone()),
+                    Item::Hardware(id) => design.hardware_piece(id).map(|h| h.name.clone()),
                     Item::Member(member) => design.pair_member_name(member),
                 };
                 if let Some(found) = found
@@ -1064,7 +1138,7 @@ fn specific_title(
                 .scene
                 .as_ref()
                 .and_then(|graph| graph.motion_range(motion.assembly))
-                .is_none_or(|range| range.turns);
+                .is_none_or(|range| range.turns());
             let template = if turns {
                 tr("{name} hits {things} as it opens")
             } else {
@@ -1095,33 +1169,55 @@ fn motion_card(checked: &Checked, contact: &Contact) -> Option<MotionCard> {
     let motion = contact.motion?;
     let (design, graph) = checked.drawable()?;
     let range = graph.motion_range(motion.assembly)?;
-    let name = design.assemblies.get(motion.assembly.index())?.name.clone();
-    let mut card = MotionCard {
+    let name = design.assembly(motion.assembly)?.name.clone();
+    let (travel, closed, contact_at, full) = match range {
+        MotionRange::Swing { full } => {
+            let contact = range.angle(motion.at)?;
+            let shown = range.angle(motion.shown)?;
+            (
+                MotionTravel::Swing {
+                    full,
+                    contact,
+                    shown,
+                },
+                MotionAmount::Angle(Angle::ZERO),
+                MotionAmount::Angle(contact),
+                MotionAmount::Angle(full),
+            )
+        }
+        MotionRange::Slide { full } => {
+            let contact = range.travel(motion.at)?;
+            let shown = range.travel(motion.shown)?;
+            (
+                MotionTravel::Slide {
+                    full,
+                    contact,
+                    shown,
+                },
+                MotionAmount::Length(Length::ZERO),
+                MotionAmount::Length(contact),
+                MotionAmount::Length(full),
+            )
+        }
+    };
+    let end = match travel {
+        MotionTravel::Swing { .. } => tr("opens to {amount}"),
+        MotionTravel::Slide { .. } => tr("slides out {amount}"),
+    };
+    Some(MotionCard {
         assembly: motion.assembly,
         name,
-        turns: range.turns,
-        full: range.full,
-        contact: graph.amount(motion.assembly, motion.at)?,
-        shown: graph.amount(motion.assembly, motion.shown)?,
-        start: String::new(),
-        blocked: String::new(),
-        end: String::new(),
-    };
-    card.start = fill_in(
-        &tr("closed {amount}"),
-        &[("amount", &card.amount_text(0.0))],
-    );
-    card.blocked = fill_in(
-        &tr("blocked from {amount}"),
-        &[("amount", &card.amount_text(card.contact))],
-    );
-    let end = if card.turns {
-        tr("opens to {amount}")
-    } else {
-        tr("slides out {amount}")
-    };
-    card.end = fill_in(&end, &[("amount", &card.amount_text(card.full))]);
-    Some(card)
+        travel,
+        start: fill_in(
+            &tr("closed {amount}"),
+            &[("amount", &MotionCard::exact_text(closed))],
+        ),
+        blocked: fill_in(
+            &tr("blocked from {amount}"),
+            &[("amount", &MotionCard::exact_text(contact_at))],
+        ),
+        end: fill_in(&end, &[("amount", &MotionCard::exact_text(full))]),
+    })
 }
 
 // ---------------------------------------------------------------------------

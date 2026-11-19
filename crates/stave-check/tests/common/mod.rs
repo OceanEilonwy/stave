@@ -77,7 +77,7 @@ pub fn drawn(design: &SolvedDesign, name: &str) -> WorldBox {
 /// A region's box.
 pub fn region(design: &SolvedDesign, name: &str) -> WorldBox {
     design
-        .regions
+        .regions()
         .iter()
         .find(|r| r.name == name)
         .unwrap_or_else(|| panic!("no region {name}"))
@@ -87,7 +87,7 @@ pub fn region(design: &SolvedDesign, name: &str) -> WorldBox {
 /// The parts each pair of a joint binds, by name, in role order.
 pub fn pairs(design: &SolvedDesign, joint: &str) -> Vec<Vec<String>> {
     let joint = design
-        .joints
+        .joints()
         .iter()
         .find(|j| j.name == joint)
         .unwrap_or_else(|| panic!("no joint {joint}"));

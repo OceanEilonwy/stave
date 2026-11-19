@@ -362,13 +362,19 @@ fn rays_enter_boxes() {
 // ---------------------------------------------------------------------------
 
 use stave_model::solved::{
-    Cut, CutKind, CutPlace, CutSource, Depth, LocalBox, LocalPoint, ProjectInfo, SolvedDesign,
+    Cut, CutKind, CutPlace, CutSource, Depth, DesignDraft, LocalBox, LocalPoint, ProjectInfo,
+    SolvedDesign,
 };
 use stave_schema::words::OutputUnit;
 
 /// A design holding only `part`, for the parts a cut is measured against.
 fn design_of(part: &Part) -> SolvedDesign {
-    SolvedDesign {
+    design_of_all(vec![part.clone()])
+}
+
+/// A design holding `parts`, each at its id.
+fn design_of_all(parts: Vec<Part>) -> SolvedDesign {
+    let draft = DesignDraft {
         project: ProjectInfo {
             title: "test".into(),
             goal: None,
@@ -378,7 +384,7 @@ fn design_of(part: &Part) -> SolvedDesign {
             tools: None,
             methods: Vec::new(),
         },
-        parts: vec![part.clone()],
+        parts,
         hardware: Vec::new(),
         fasteners: Vec::new(),
         joints: Vec::new(),
@@ -388,6 +394,10 @@ fn design_of(part: &Part) -> SolvedDesign {
         requires: Vec::new(),
         overruns: Vec::new(),
         wall_rules: Vec::new(),
+    };
+    match SolvedDesign::new(draft) {
+        Ok(design) => design,
+        Err(error) => panic!("{error}"),
     }
 }
 
@@ -586,6 +596,29 @@ fn sampled_area(w: f64, h: f64, inside: impl Fn(f64, f64) -> bool) -> f64 {
 }
 
 #[test]
+fn a_design_with_a_part_out_of_place_is_refused() {
+    let board = part(
+        frame(Direction::Right, Direction::Back),
+        point(0, 0, 0),
+        size(100, 50, 20),
+        Shape::Board,
+    );
+    let mut stray = board.clone();
+    stray.id = PartId::from_usize(2);
+    let draft = design_of_all(vec![board]).into_draft();
+    let mut parts = draft.parts.clone();
+    parts.push(stray);
+    let error = SolvedDesign::new(DesignDraft { parts, ..draft });
+    assert_eq!(
+        error,
+        Err(stave_model::solved::DesignError {
+            table: "parts",
+            index: 1,
+        })
+    );
+}
+
+#[test]
 fn an_angled_slot_is_cut() {
     // A 100 × 50 × 20 board, and a stick standing through its middle; a
     // slot 10mm wide runs from the middle out on the diagonal, through.
@@ -622,8 +655,7 @@ fn an_angled_slot_is_cut() {
             from_centre: true,
         },
     }];
-    let mut design = design_of(&board);
-    design.parts.push(stick);
+    let design = design_of_all(vec![board.clone(), stick]);
     for orientation in [
         frame(Direction::Right, Direction::Back),
         frame(Direction::Right, Direction::Back).mirrored(Axis::Across),
@@ -684,8 +716,7 @@ fn a_round_section_keeps_its_flats() {
             flats_angle: stave_lang::units::Angle::from_deg(45),
         },
     }];
-    let mut design = design_of(&stick);
-    design.parts.push(other);
+    let design = design_of_all(vec![stick.clone(), other]);
     let solid = solid::Solid::of(&stick, &design);
     let geometry = cut_part(&stick, &solid);
     assert_outward(&geometry.mesh);
@@ -780,10 +811,9 @@ fn dovetail_pair_sloped(
             slope: tail,
         },
     }];
-    let mut design = design_of(&beam_a);
-    design.parts.push(beam_b);
+    let design = design_of_all(vec![beam_a.clone(), beam_b]);
     let solids = design
-        .parts
+        .parts()
         .iter()
         .map(|p| solid::Solid::of(p, &design))
         .collect::<Vec<_>>();
@@ -792,7 +822,7 @@ fn dovetail_pair_sloped(
 }
 
 fn world(design: &SolvedDesign, index: usize, solid: &solid::Solid) -> collide::WorldSolid {
-    collide::WorldSolid::of_part(&design.parts[index], solid)
+    collide::WorldSolid::of_part(&design.parts()[index], solid)
 }
 
 #[test]
@@ -815,7 +845,7 @@ fn a_dovetail_tail_fills_its_socket_exactly() {
     let uncut = solid::Solid::of(
         &Part {
             cuts: Vec::new(),
-            ..design.parts[0].clone()
+            ..design.parts()[0].clone()
         },
         &design,
     );
@@ -833,7 +863,7 @@ fn a_dovetail_tail_fills_its_socket_exactly() {
         (0, &socket, 100.0 * 60.0 * 40.0 - trapezoid),
         (1, &tail, 100.0 * 60.0 * 40.0 + trapezoid),
     ] {
-        let geometry = cut_part(&design.parts[index], solid);
+        let geometry = cut_part(&design.parts()[index], solid);
         assert_outward(&geometry.mesh);
         let open = open_edges(&geometry.mesh);
         assert!(

@@ -148,15 +148,15 @@ fn cut_kind(kind: &CutKind) -> String {
 /// `<joint>'s <member>`.
 fn member_name(design: &SolvedDesign, member: BodyRef) -> String {
     let (owner, members) = match member.owner {
-        BodyOwner::Hardware { hardware } => match design.hardware.get(hardware.index()) {
+        BodyOwner::Hardware { hardware } => match design.hardware_piece(hardware) {
             Some(hardware) => (hardware.name.as_str(), &hardware.members),
             None => return String::new(),
         },
         BodyOwner::Joint { joint, pair } => {
             match design
-                .joints
+                .joints()
                 .get(joint.index())
-                .and_then(|j| Some((j.name.as_str(), &j.pairs.get(pair)?.members)))
+                .and_then(|j| Some((j.name.as_str(), &j.pair(pair)?.members)))
             {
                 Some(found) => found,
                 None => return String::new(),
@@ -280,7 +280,7 @@ fn motion(design: &SolvedDesign, mechanism: &Mechanism) -> String {
             let low = mechanism
                 .hardware()
                 .first()
-                .and_then(|id| design.hardware.get(id.index()))
+                .and_then(|id| design.hardware_piece(*id))
                 .and_then(|hardware| design.part(hardware.piece))
                 .map(|part| part.drawn_box().min().get(line.axis));
             let through = match low {
@@ -379,13 +379,13 @@ pub fn table(design: &SolvedDesign, model: Option<&Model>) -> String {
         "all lengths in mm; boxes are drawn boxes as across, up, deep ranges from the ground part's left-bottom-front corner"
     );
     let _ = writeln!(out);
-    let _ = writeln!(out, "PARTS ({})", design.parts.len());
+    let _ = writeln!(out, "PARTS ({})", design.parts().len());
     let _ = writeln!(
         out,
         "{:<28} {:<14} {:<26} {:<20} {:<20} {:<20} length/width/thickness",
         "part", "stock", "cut L x W x T", "across", "up", "deep"
     );
-    for part in &design.parts {
+    for part in design.parts() {
         let size = format!(
             "{} x {} x {}",
             mm(part.cut.length),
@@ -468,8 +468,8 @@ pub fn table(design: &SolvedDesign, model: Option<&Model>) -> String {
         }
     }
     let _ = writeln!(out);
-    let _ = writeln!(out, "HARDWARE ({})", design.hardware.len());
-    for hardware in &design.hardware {
+    let _ = writeln!(out, "HARDWARE ({})", design.hardware().len());
+    for hardware in design.hardware() {
         let _ = writeln!(
             out,
             "{:<28} {:<16} on {} ({} face)",
@@ -508,8 +508,8 @@ pub fn table(design: &SolvedDesign, model: Option<&Model>) -> String {
         }
     }
     let _ = writeln!(out);
-    let _ = writeln!(out, "JOINTS ({})", design.joints.len());
-    for joint in &design.joints {
+    let _ = writeln!(out, "JOINTS ({})", design.joints().len());
+    for joint in design.joints() {
         let _ = writeln!(
             out,
             "{:<28} {}{}",
@@ -584,7 +584,7 @@ pub fn table(design: &SolvedDesign, model: Option<&Model>) -> String {
         let _ = writeln!(out, "FASTENERS");
         for fastener in &design.fasteners {
             let joint = design
-                .joints
+                .joints()
                 .get(fastener.joint.index())
                 .map_or("", |j| j.name.as_str());
             let _ = writeln!(
@@ -599,20 +599,20 @@ pub fn table(design: &SolvedDesign, model: Option<&Model>) -> String {
         }
     }
     let _ = writeln!(out);
-    let _ = writeln!(out, "REGIONS ({})", design.regions.len());
-    for region in &design.regions {
+    let _ = writeln!(out, "REGIONS ({})", design.regions().len());
+    for region in design.regions() {
         let _ = writeln!(out, "{:<28} {}", region.name, extent(&region.bounds));
     }
     let _ = writeln!(out);
-    let _ = writeln!(out, "ASSEMBLIES ({})", design.assemblies.len());
-    for assembly in &design.assemblies {
+    let _ = writeln!(out, "ASSEMBLIES ({})", design.assemblies().len());
+    for assembly in design.assemblies() {
         let motion = match &assembly.mechanism {
             Some(mechanism) => motion(design, mechanism),
             None => "fixed".into(),
         };
         let mirror = assembly
             .mirror_of
-            .and_then(|m| design.assemblies.get(m.index()))
+            .and_then(|m| design.assembly(m))
             .map(|m| format!(", mirror of {}", m.name))
             .unwrap_or_default();
         let _ = writeln!(
@@ -641,7 +641,7 @@ pub fn table(design: &SolvedDesign, model: Option<&Model>) -> String {
             .iter()
             .map(|p| {
                 let assembly = design
-                    .assemblies
+                    .assemblies()
                     .get(p.assembly.index())
                     .map_or("", |a| a.name.as_str());
                 let value = match p.value {

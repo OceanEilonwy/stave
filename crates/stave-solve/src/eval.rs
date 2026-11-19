@@ -143,15 +143,15 @@ pub(crate) struct Env<'e> {
 }
 
 /// An array's elements, from an indexed name.
-enum ArrayItems {
-    Parts(Vec<PartId>),
-    Regions(Vec<stave_model::ids::RegionId>),
-    Assemblies(Vec<stave_model::ids::AssemblyId>),
-    Joints(Vec<stave_model::ids::JointId>),
-    Hardware(Vec<stave_model::ids::HardwareId>),
+enum ArrayItems<'m> {
+    Parts(&'m [PartId]),
+    Regions(&'m [stave_model::ids::RegionId]),
+    Assemblies(&'m [stave_model::ids::AssemblyId]),
+    Joints(&'m [stave_model::ids::JointId]),
+    Hardware(&'m [stave_model::ids::HardwareId]),
 }
 
-impl ArrayItems {
+impl ArrayItems<'_> {
     fn len(&self) -> usize {
         match self {
             ArrayItems::Parts(v) => v.len(),
@@ -174,11 +174,13 @@ impl ArrayItems {
 
     fn all(self) -> Value {
         match self {
-            ArrayItems::Parts(v) => Value::Parts(v),
-            ArrayItems::Regions(v) => Value::List(v.into_iter().map(Value::Region).collect()),
-            ArrayItems::Assemblies(v) => Value::Assemblies(v),
-            ArrayItems::Joints(v) => Value::List(v.into_iter().map(Value::Joint).collect()),
-            ArrayItems::Hardware(v) => Value::List(v.into_iter().map(Value::Hardware).collect()),
+            ArrayItems::Parts(v) => Value::Parts(v.to_vec()),
+            ArrayItems::Regions(v) => Value::List(v.iter().copied().map(Value::Region).collect()),
+            ArrayItems::Assemblies(v) => Value::Assemblies(v.to_vec()),
+            ArrayItems::Joints(v) => Value::List(v.iter().copied().map(Value::Joint).collect()),
+            ArrayItems::Hardware(v) => {
+                Value::List(v.iter().copied().map(Value::Hardware).collect())
+            }
         }
     }
 }
@@ -207,7 +209,7 @@ fn slot_value(slot: &ItemSlot, element: Option<usize>) -> Option<Value> {
     })
 }
 
-impl Solver<'_> {
+impl<'m> Solver<'m> {
     pub(crate) fn module_ctx(&self, def: DefId) -> Option<Ctx> {
         let scope = self.model.defs.decl(def)?.scope;
         let instance = self.model.scope_instance(
@@ -466,7 +468,7 @@ impl Solver<'_> {
             Symbol::Def(def) => self.def_value(def, env, span),
             Symbol::Role(_, index) => env
                 .kind
-                .and_then(|k| k.roles.get(index).cloned())
+                .and_then(|k| k.roles.get(index.index()).cloned())
                 .ok_or_else(|| self.eval_error(env, span, "a role has no part here", "roles are only bound where the kind is used in a joint or hardware declaration").into()),
             Symbol::KindParam(_, index) => match env.kind {
                 Some(kind_env) => self.kind_param(kind_env, index, env.file, span),
@@ -474,7 +476,7 @@ impl Solver<'_> {
             },
             Symbol::MadePart(_, index) => env
                 .kind
-                .and_then(|k| k.made.get(index).copied())
+                .and_then(|k| k.made.get(index.index()).copied())
                 .map(Value::Part)
                 .ok_or_else(|| self.eval_error(env, span, "the made part doesn't exist yet here", "refer to made parts only in cuts and assembly steps").into()),
             Symbol::Mount(_) => env
@@ -1062,7 +1064,7 @@ impl Solver<'_> {
         }
     }
 
-    fn array_items(&mut self, base: &RExpr, env: &Env<'_>) -> Solved<(ArrayItems, DefId)> {
+    fn array_items(&mut self, base: &RExpr, env: &Env<'_>) -> Solved<(ArrayItems<'m>, DefId)> {
         let (def, ctx) = match &base.kind {
             RExprKind::Symbol(Symbol::Def(def)) => (*def, env.ctx),
             RExprKind::Member {
@@ -1095,15 +1097,16 @@ impl Solver<'_> {
                     .into());
             }
         };
-        let Some(slot) = self.model.item(def, ctx) else {
+        let model = self.model;
+        let Some(slot) = model.item(def, ctx) else {
             return Err(Fault::Internal("an item").into());
         };
         let items = match slot {
-            ItemSlot::Part(slot) => ArrayItems::Parts(slot.all()),
-            ItemSlot::Region(slot) => ArrayItems::Regions(slot.all()),
-            ItemSlot::Assembly(slot) => ArrayItems::Assemblies(slot.all()),
-            ItemSlot::Joint(slot) => ArrayItems::Joints(slot.all()),
-            ItemSlot::Hardware(slot) => ArrayItems::Hardware(slot.all()),
+            ItemSlot::Part(slot) => ArrayItems::Parts(slot.as_slice()),
+            ItemSlot::Region(slot) => ArrayItems::Regions(slot.as_slice()),
+            ItemSlot::Assembly(slot) => ArrayItems::Assemblies(slot.as_slice()),
+            ItemSlot::Joint(slot) => ArrayItems::Joints(slot.as_slice()),
+            ItemSlot::Hardware(slot) => ArrayItems::Hardware(slot.as_slice()),
             ItemSlot::Param(_) | ItemSlot::Let(_) | ItemSlot::Require(_) => {
                 return Err(Fault::Earlier.into());
             }
@@ -1113,11 +1116,11 @@ impl Solver<'_> {
 
     pub(crate) fn array_len(&self, def: DefId, ctx: Ctx) -> usize {
         match self.model.item(def, ctx) {
-            Some(ItemSlot::Part(slot)) => slot.all().len(),
-            Some(ItemSlot::Region(slot)) => slot.all().len(),
-            Some(ItemSlot::Assembly(slot)) => slot.all().len(),
-            Some(ItemSlot::Joint(slot)) => slot.all().len(),
-            Some(ItemSlot::Hardware(slot)) => slot.all().len(),
+            Some(ItemSlot::Part(slot)) => slot.as_slice().len(),
+            Some(ItemSlot::Region(slot)) => slot.as_slice().len(),
+            Some(ItemSlot::Assembly(slot)) => slot.as_slice().len(),
+            Some(ItemSlot::Joint(slot)) => slot.as_slice().len(),
+            Some(ItemSlot::Hardware(slot)) => slot.as_slice().len(),
             _ => match self.model.defs.array(def) {
                 Some(ArrayDef::Labels(labels)) => labels.len(),
                 _ => 0,

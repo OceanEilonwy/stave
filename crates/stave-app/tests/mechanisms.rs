@@ -22,7 +22,7 @@ fn workspace() -> &'static Path {
 /// The mechanism of the one assembly named `name`.
 fn mechanism<'d>(design: &'d SolvedDesign, name: &str) -> &'d Mechanism {
     design
-        .assemblies
+        .assemblies()
         .iter()
         .find(|a| a.name == name)
         .and_then(|a| a.mechanism.as_ref())
@@ -57,7 +57,7 @@ fn a_lid_stay_follows_its_lid_and_stops_it() {
     let names: Vec<&str> = lid
         .hardware()
         .iter()
-        .map(|id| design.hardware[id.index()].name.as_str())
+        .map(|id| design.hardware()[id.index()].name.as_str())
         .collect();
     assert_eq!(names, ["lid.hinges[left]", "lid.hinges[right]", "lid.stay"]);
     assert_eq!(lid.drive().extent(), DriveValue::Turn(Angle::from_deg(90)));

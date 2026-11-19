@@ -62,7 +62,7 @@ enum Mismatch {
 fn fits_role(wanted: RoleType, value: &Value) -> bool {
     match wanted {
         RoleType::Part => matches!(value, Value::Part(_)),
-        RoleType::Parts => value.parts().is_some(),
+        RoleType::Parts => value.is_parts(),
         RoleType::Region => matches!(value, Value::Region(_)),
     }
 }
@@ -70,7 +70,7 @@ fn fits_role(wanted: RoleType, value: &Value) -> bool {
 /// Whether a value is handed as a role (parts or a region) rather than
 /// as a setting.
 fn is_role_value(value: &Value) -> bool {
-    value.parts().is_some() || matches!(value, Value::Region(_) | Value::Regions(_))
+    value.is_parts() || matches!(value, Value::Region(_) | Value::Regions(_))
 }
 
 /// The settings every kind of a base takes besides its params.
@@ -99,8 +99,8 @@ fn mismatch(kind: &KindDef, handed: &Handed) -> Option<Mismatch> {
         *slot = Some((value, *span));
     }
     for (name, value, name_span, value_span) in &handed.named {
-        if let Some(index) = kind.role(name) {
-            if let Some(slot) = given.get_mut(index) {
+        if let Some(index) = kind.role_named(name) {
+            if let Some(slot) = given.get_mut(index.index()) {
                 *slot = Some((value, *value_span));
             }
             continue;

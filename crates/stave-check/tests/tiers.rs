@@ -221,7 +221,7 @@ fn the_examples_have_no_box_overlaps() {
 fn related(design: &SolvedDesign, a: ContactItem, b: ContactItem) -> bool {
     let joined = |x: PartId, y: PartId| {
         design
-            .joints
+            .joints()
             .iter()
             .flat_map(|joint| &joint.pairs)
             .any(|pair| {

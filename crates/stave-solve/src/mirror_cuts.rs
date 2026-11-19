@@ -12,14 +12,14 @@
 use std::collections::HashMap;
 
 use stave_lang::Code;
-use stave_lang::placement::{Axis, PartAxis};
+use stave_lang::placement::{Axis, PartAxis, PerPartAxis};
 use stave_lang::units::{Angle, ExactLength, Length};
 use stave_model::ids::{AssemblyId, JointId, PartId};
 use stave_model::solved::{
     Cut, CutKind, CutPlace, CutSource, End, LocalBox, LocalFace, LocalPoint, Orientation,
 };
 
-use crate::joints::{GeomTable, local_slot, round_length};
+use crate::joints::{GeomTable, round_length};
 use crate::{Fault, Solved, Solver};
 
 /// One mirrored joint: the joint, its source, and the plane its assembly
@@ -43,8 +43,8 @@ pub(crate) struct MirroredJoint<'a> {
 /// along it runs the other way in the part in the reflected place. `None`
 /// when that part is turned so that a local axis lies along another world
 /// axis than the reflected source's.
-fn flips(source: &Orientation, target: &Orientation, mirror: Axis) -> Option<[bool; 3]> {
-    let mut out = [false; 3];
+fn flips(source: &Orientation, target: &Orientation, mirror: Axis) -> Option<PerPartAxis<bool>> {
+    let mut out = PerPartAxis::<bool>::default();
     for axis in PartAxis::ALL {
         let from = source.direction(axis);
         let reflected = if from.axis() == mirror {
@@ -56,9 +56,7 @@ fn flips(source: &Orientation, target: &Orientation, mirror: Axis) -> Option<[bo
         if to.axis() != reflected.axis() {
             return None;
         }
-        if let Some(slot) = out.get_mut(local_slot(axis)) {
-            *slot = to != reflected;
-        }
+        out[axis] = to != reflected;
     }
     Some(out)
 }
@@ -67,14 +65,14 @@ fn flips(source: &Orientation, target: &Orientation, mirror: Axis) -> Option<[bo
 /// reflected place.
 struct Reframe {
     /// Per local axis: whether coordinates along it run the other way.
-    flipped: [bool; 3],
+    flipped: PerPartAxis<bool>,
     /// The target part's cut size per local axis.
-    size: [Length; 3],
+    size: PerPartAxis<Length>,
 }
 
 impl Reframe {
     fn flipped(&self, axis: PartAxis) -> bool {
-        self.flipped.get(local_slot(axis)).copied().unwrap_or(false)
+        self.flipped[axis]
     }
 
     fn end(&self, axis: PartAxis, end: End) -> End {
@@ -98,7 +96,7 @@ impl Reframe {
         if !self.flipped(axis) {
             return Some((low, high));
         }
-        let size = *self.size.get(local_slot(axis))?;
+        let size = self.size[axis];
         Some((size.checked_sub(high)?, size.checked_sub(low)?))
     }
 
@@ -260,12 +258,7 @@ impl Solver<'_> {
             mirrored.axis,
         )
         .ok_or(Fault::Internal("how a cut is mirrored"))?;
-        let mut size = [Length::ZERO; 3];
-        for axis in PartAxis::ALL {
-            if let Some(slot) = size.get_mut(local_slot(axis)) {
-                *slot = round_length(target_geom.cut_size(axis)?)?;
-            }
-        }
+        let size = PerPartAxis::try_from_fn(|axis| round_length(target_geom.cut_size(axis)?))?;
         let reframe = Reframe { flipped, size };
         let place = match &cut.place {
             CutPlace::End { toward } => CutPlace::End {
@@ -322,8 +315,14 @@ mod tests {
         // A leg standing up, mirrored front to back onto a leg turned the
         // same way: only its thickness (which runs back) runs the other way.
         let leg = frame(Direction::Up, Direction::Right);
-        assert_eq!(flips(&leg, &leg, Axis::Deep), Some([false, false, true]));
-        assert_eq!(flips(&leg, &leg, Axis::Across), Some([false, true, false]));
+        assert_eq!(
+            flips(&leg, &leg, Axis::Deep),
+            Some(PerPartAxis::new(false, false, true))
+        );
+        assert_eq!(
+            flips(&leg, &leg, Axis::Across),
+            Some(PerPartAxis::new(false, true, false))
+        );
     }
 
     #[test]
@@ -332,7 +331,7 @@ mod tests {
         let right = frame(Direction::Up, Direction::Left);
         assert_eq!(
             flips(&left, &right, Axis::Across),
-            Some([false, false, false])
+            Some(PerPartAxis::new(false, false, false))
         );
     }
 

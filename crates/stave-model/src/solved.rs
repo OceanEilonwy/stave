@@ -70,7 +70,10 @@ use std::collections::BTreeMap;
 
 pub use crate::defs::{BodyId, CutName};
 
-pub use crate::ids::{AssemblyId, HardwareId, JointId, KindId, PartId, RegionId, SceneId};
+pub use crate::ids::{
+    AssemblyId, HardwareId, JointId, KindId, PairIndex, PartId, RegionId, RequireIndex, SceneId,
+    SeamIndex,
+};
 pub use crate::mechanism::{Mechanism, MemberIndex};
 pub use crate::nonempty::NonEmpty;
 
@@ -407,9 +410,10 @@ pub struct LocalBox {
 // The design
 // ---------------------------------------------------------------------------
 
-/// A fully placed design.
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct SolvedDesign {
+/// A design as the solver writes it out, before [`SolvedDesign::new`]
+/// checks that every table is indexed by its ids.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DesignDraft {
     /// Title, units, tools.
     pub project: ProjectInfo,
     /// Every part: declared parts, mirror images, parts of mirrored
@@ -439,7 +443,187 @@ pub struct SolvedDesign {
     pub wall_rules: Vec<WallRule>,
 }
 
+/// A fully placed design. Its parts, hardware, joints, regions and
+/// assemblies are each indexed by their ids; the tables are private so
+/// that holds, and are read through [`SolvedDesign::parts`] and the like.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct SolvedDesign {
+    /// Title, units, tools.
+    pub project: ProjectInfo,
+    /// Every part: declared parts, mirror images, parts of mirrored
+    /// assemblies and parts joints make. Indexed by [`PartId`].
+    parts: Vec<Part>,
+    /// Every piece of mounted hardware. Indexed by [`HardwareId`].
+    hardware: Vec<Hardware>,
+    /// Fasteners the joints use (never placed).
+    pub fasteners: Vec<FastenerUse>,
+    /// Every joint. Indexed by [`JointId`].
+    joints: Vec<Joint>,
+    /// Every region. Indexed by [`RegionId`].
+    regions: Vec<Region>,
+    /// Every assembly. Indexed by [`AssemblyId`].
+    assemblies: Vec<Assembly>,
+    /// The scenes; the first is always the built-in `rest`.
+    pub scenes: Vec<Scene>,
+    /// Every `require` of the project and its components, at the current
+    /// values.
+    pub requires: Vec<RequireResult>,
+    /// Elements spaced with `pitch` or `gap` that run past their `to`
+    /// anchor (the fit check reports them as `overlap`).
+    pub overruns: Vec<Overrun>,
+    /// The kinds' rules that read `wall(cut)`, for every pair or piece of
+    /// hardware: measured by the fit check once every cut is made
+    /// (grammar, "Walls").
+    pub wall_rules: Vec<WallRule>,
+}
+
+impl DesignDraft {
+    /// The part with an id.
+    pub fn part(&self, id: PartId) -> Option<&Part> {
+        self.parts.get(id.index())
+    }
+}
+
+/// A table of a [`DesignDraft`] whose entries are not at their ids.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("the solved design's {table} table has an entry at {index} whose id is not {index}")]
+pub struct DesignError {
+    /// The table: `parts`, `hardware`, `joints`, `regions` or `assemblies`.
+    pub table: &'static str,
+    /// The first entry out of place.
+    pub index: usize,
+}
+
+/// `Ok` when every entry of `table` sits at its id's index.
+fn indexed<T>(
+    table: &'static str,
+    entries: &[T],
+    index_of: impl Fn(&T) -> usize,
+) -> Result<(), DesignError> {
+    match entries
+        .iter()
+        .enumerate()
+        .find(|(index, entry)| index_of(entry) != *index)
+    {
+        Some((index, _)) => Err(DesignError { table, index }),
+        None => Ok(()),
+    }
+}
+
 impl SolvedDesign {
+    /// The design a draft describes, once each table is checked to be
+    /// indexed by its ids.
+    pub fn new(draft: DesignDraft) -> Result<SolvedDesign, DesignError> {
+        indexed("parts", &draft.parts, |part| part.id.index())?;
+        indexed("hardware", &draft.hardware, |hardware| hardware.id.index())?;
+        indexed("joints", &draft.joints, |joint| joint.id.index())?;
+        indexed("regions", &draft.regions, |region| region.id.index())?;
+        indexed("assemblies", &draft.assemblies, |assembly| {
+            assembly.id.index()
+        })?;
+        let DesignDraft {
+            project,
+            parts,
+            hardware,
+            fasteners,
+            joints,
+            regions,
+            assemblies,
+            scenes,
+            requires,
+            overruns,
+            wall_rules,
+        } = draft;
+        Ok(SolvedDesign {
+            project,
+            parts,
+            hardware,
+            fasteners,
+            joints,
+            regions,
+            assemblies,
+            scenes,
+            requires,
+            overruns,
+            wall_rules,
+        })
+    }
+
+    /// Back to a draft, to change and check again.
+    pub fn into_draft(self) -> DesignDraft {
+        let SolvedDesign {
+            project,
+            parts,
+            hardware,
+            fasteners,
+            joints,
+            regions,
+            assemblies,
+            scenes,
+            requires,
+            overruns,
+            wall_rules,
+        } = self;
+        DesignDraft {
+            project,
+            parts,
+            hardware,
+            fasteners,
+            joints,
+            regions,
+            assemblies,
+            scenes,
+            requires,
+            overruns,
+            wall_rules,
+        }
+    }
+
+    /// Every part, in [`PartId`] order.
+    pub fn parts(&self) -> &[Part] {
+        &self.parts
+    }
+
+    /// Every piece of mounted hardware, in [`HardwareId`] order.
+    pub fn hardware(&self) -> &[Hardware] {
+        &self.hardware
+    }
+
+    /// The piece of hardware with an id.
+    pub fn hardware_piece(&self, id: HardwareId) -> Option<&Hardware> {
+        self.hardware.get(id.index())
+    }
+
+    /// Every joint, in [`JointId`] order.
+    pub fn joints(&self) -> &[Joint] {
+        &self.joints
+    }
+
+    /// The joint with an id.
+    pub fn joint(&self, id: JointId) -> Option<&Joint> {
+        self.joints.get(id.index())
+    }
+
+    /// Every region, in [`RegionId`] order.
+    pub fn regions(&self) -> &[Region] {
+        &self.regions
+    }
+
+    /// The region with an id.
+    pub fn region(&self, id: RegionId) -> Option<&Region> {
+        self.regions.get(id.index())
+    }
+
+    /// Every assembly, in [`AssemblyId`] order.
+    pub fn assemblies(&self) -> &[Assembly] {
+        &self.assemblies
+    }
+
+    /// The assembly with an id.
+    pub fn assembly(&self, id: AssemblyId) -> Option<&Assembly> {
+        self.assemblies.get(id.index())
+    }
+
     /// The part with an id.
     pub fn part(&self, id: PartId) -> Option<&Part> {
         self.parts.get(id.index())
@@ -479,8 +663,7 @@ impl SolvedDesign {
     pub fn pair_member(&self, member: PairMember) -> Option<&Body> {
         self.joints
             .get(member.joint.index())?
-            .pairs
-            .get(member.pair)?
+            .pair(member.pair)?
             .members
             .iter()
             .find(|body| body.id.body == member.body)
@@ -495,8 +678,7 @@ impl SolvedDesign {
         let between = match joint.pairs.as_slice() {
             [_, _, ..] => {
                 let parts: Vec<&str> = joint
-                    .pairs
-                    .get(member.pair)?
+                    .pair(member.pair)?
                     .roles
                     .iter()
                     .filter_map(|role| self.part(role.part).map(|p| p.name.as_str()))
@@ -522,22 +704,18 @@ impl SolvedDesign {
     /// Every joint pair's members, in joint, pair and member order.
     pub fn pair_members(&self) -> impl Iterator<Item = (PairMember, &Body)> {
         self.joints.iter().flat_map(|joint| {
-            joint
-                .pairs
-                .iter()
-                .enumerate()
-                .flat_map(move |(pair, found)| {
-                    found.members.iter().map(move |body| {
-                        (
-                            PairMember {
-                                joint: joint.id,
-                                pair,
-                                body: body.id.body,
-                            },
-                            body,
-                        )
-                    })
+            joint.indexed_pairs().flat_map(move |(pair, found)| {
+                found.members.iter().map(move |body| {
+                    (
+                        PairMember {
+                            joint: joint.id,
+                            pair,
+                            body: body.id.body,
+                        },
+                        body,
+                    )
                 })
+            })
         })
     }
 }
@@ -616,8 +794,8 @@ pub enum PartOrigin {
     Made {
         /// The joint.
         joint: JointId,
-        /// The pair (index into [`Joint::pairs`]).
-        pair: usize,
+        /// The pair.
+        pair: PairIndex,
     },
     /// A piece of a spliced part after its first (grammar, "Splices"):
     /// the first piece keeps the part's own id and origin, and its
@@ -633,9 +811,8 @@ pub enum PartOrigin {
     Boards {
         /// The part made of boards.
         part: PartId,
-        /// The seam (index into [`Boards::seams`]); `None` for a kind
-        /// across all of the part's boards.
-        seam: Option<usize>,
+        /// The seam; `None` for a kind across all of the part's boards.
+        seam: Option<SeamIndex>,
     },
 }
 
@@ -795,6 +972,13 @@ pub struct Boards {
     pub requires: Vec<RequireResult>,
 }
 
+impl Boards {
+    /// The seam at `index`.
+    pub fn seam(&self, index: SeamIndex) -> Option<&Seam> {
+        self.seams.get(index.index())
+    }
+}
+
 /// One board of a part.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Board {
@@ -852,7 +1036,7 @@ pub enum CutSource {
         /// The joint.
         joint: JointId,
         /// The pair.
-        pair: usize,
+        pair: PairIndex,
     },
     /// A `cut` of a hardware kind, for one piece of hardware.
     Hardware {
@@ -863,9 +1047,8 @@ pub enum CutSource {
     Boards {
         /// The part made of boards.
         part: PartId,
-        /// The seam (index into [`Boards::seams`]); `None` for a kind
-        /// across all of the part's boards.
-        seam: Option<usize>,
+        /// The seam; `None` for a kind across all of the part's boards.
+        seam: Option<SeamIndex>,
     },
 }
 
@@ -1173,42 +1356,60 @@ pub struct Extension {
     pub by: Length,
 }
 
-/// How far an assembly step moves.
+/// What an assembly step does, with what each kind of step takes: a push
+/// may say how far and at what angle, a rotate always says how far it
+/// turns, a drive says neither.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum StepAmount {
-    /// A distance (push).
-    Length(Length),
-    /// An angle (rotate).
-    Angle(Angle),
-}
-
-/// What an assembly step does.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum StepKind {
-    /// Move along an axis until seated (or exactly `by`).
-    Push,
-    /// Turn about an axis.
-    Rotate,
-    /// Knock in a part the joint makes.
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum StepMotion {
+    /// Move along the axis until seated, or exactly `by`.
+    Push {
+        /// `by:`: how far, when written.
+        by: Option<Length>,
+        /// `angle:`: the push's tilt off the axis, when written.
+        angle: Option<Angle>,
+    },
+    /// Turn about the axis.
+    Rotate {
+        /// `by:`: how far it turns.
+        by: Angle,
+    },
+    /// Knock in a part the joint makes, along the axis.
     Drive,
 }
 
 /// One step of `insert:`, bound to parts.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct AssemblyStep {
-    /// What it does.
-    pub kind: StepKind,
     /// The part that moves.
     pub part: PartId,
-    /// The moving part's own axis, as placed in the finished joint.
+    /// The moving part's own axis, as placed in the finished joint: what a
+    /// push or drive moves along, or what a rotate turns about.
     #[serde(serialize_with = "serialize_part_axis")]
     pub axis: PartAxis,
-    /// `by:`
-    pub by: Option<StepAmount>,
-    /// `angle:` of a push.
-    pub angle: Option<Angle>,
+    /// What it does.
+    #[serde(flatten)]
+    pub motion: StepMotion,
+}
+
+impl AssemblyStep {
+    /// The step as the source writes it, with `part` naming the moving
+    /// part and `axis` the axis it moves along or turns about:
+    /// `push(rail, along: width)`.
+    pub fn source_text(&self, part: &str, axis: PartAxis) -> String {
+        let axis = axis.word();
+        match self.motion {
+            StepMotion::Push { by, angle } => {
+                let by = by.map(|by| format!(", by: {by}")).unwrap_or_default();
+                let angle = angle
+                    .map(|angle| format!(", angle: {angle}"))
+                    .unwrap_or_default();
+                format!("push({part}, along: {axis}{by}{angle})")
+            }
+            StepMotion::Drive => format!("drive({part}, along: {axis})"),
+            StepMotion::Rotate { by } => format!("rotate({part}, by: {by}, about: {axis})"),
+        }
+    }
 }
 
 /// A `require` evaluated at the current values.
@@ -1279,7 +1480,7 @@ pub struct WallRule {
     #[serde(skip)]
     pub kind: KindId,
     /// The rule, in the kind's list of requires.
-    pub require: usize,
+    pub require: RequireIndex,
     /// The rule's name.
     pub name: String,
     /// Its message, with values filled in.
@@ -1359,6 +1560,21 @@ pub struct Joint {
     pub note: Option<String>,
     /// Where it comes from: a `joint` declaration, or a part's `lengths:`.
     pub origin: JointOrigin,
+}
+
+impl Joint {
+    /// The pair at `index`.
+    pub fn pair(&self, index: PairIndex) -> Option<&JointPair> {
+        self.pairs.get(index.index())
+    }
+
+    /// Each pair with its index, in order.
+    pub fn indexed_pairs(&self) -> impl Iterator<Item = (PairIndex, &JointPair)> {
+        self.pairs
+            .iter()
+            .enumerate()
+            .map(|(index, pair)| (PairIndex::from_usize(index), pair))
+    }
 }
 
 /// Where a joint comes from.
@@ -1578,8 +1794,8 @@ pub enum BodyOwner {
     Joint {
         /// The joint.
         joint: JointId,
-        /// The pair (index into [`Joint::pairs`]).
-        pair: usize,
+        /// The pair.
+        pair: PairIndex,
     },
 }
 
@@ -1601,8 +1817,8 @@ impl BodyOwner {
 pub struct PairMember {
     /// The joint.
     pub joint: JointId,
-    /// The pair (index into [`Joint::pairs`]).
-    pub pair: usize,
+    /// The pair.
+    pub pair: PairIndex,
     /// The member, among its kind's members with a body.
     pub body: BodyId,
 }

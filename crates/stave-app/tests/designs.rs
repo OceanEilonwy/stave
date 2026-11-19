@@ -70,7 +70,7 @@ fn unglued_top_is_three_boards_in_tongue_and_groove_held_by_battens() {
     assert_eq!(methods, [("tongue_and_groove", false)]);
     // Nothing in the panel is glued: not the seams, not the battens.
     let screws = design
-        .joints
+        .joints()
         .iter()
         .find(|j| j.name == "batten_screws")
         .unwrap();

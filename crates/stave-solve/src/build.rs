@@ -4,18 +4,20 @@
 use std::collections::{BTreeMap, HashMap};
 
 use stave_lang::ast::Span;
-use stave_lang::placement::{Axis, PartAxis};
+use stave_lang::placement::{Axis, PartAxis, PerPartAxis};
 use stave_lang::units::{ExactLength, Length};
 use stave_lang::{Code, Diagnostic, FileId, Label};
 use stave_model::defs::{BodyId, DefId, StockField, Word};
-use stave_model::ids::{AssemblyId, HardwareId, JointId, PartId, RegionId, SceneId, StockId};
+use stave_model::ids::{
+    AssemblyId, HardwareId, JointId, PairIndex, PartId, RegionId, SceneId, StockId,
+};
 use stave_model::instance::Ctx;
 use stave_model::mechanism::MemberIndex;
 use stave_model::solved::{
-    self, Assembly, BodyOwner, Cut, CutPlace, CutSource, FastenerUse, Hardware, HardwareBase,
-    Joint, JointOrigin, JointPair, LocalBox, LocalPoint, PartOrigin, Point, PoseValue, ProjectInfo,
-    Region, RequireResult, RoleBinding, Scene, SceneItem, ScenePose, Shape, Size3, SolvedDesign,
-    Station, Stock, Tool,
+    self, Assembly, BodyOwner, Cut, CutPlace, CutSource, DesignDraft, FastenerUse, Hardware,
+    HardwareBase, Joint, JointOrigin, JointPair, LocalBox, LocalPoint, PartOrigin, Point,
+    PoseValue, ProjectInfo, Region, RequireResult, RoleBinding, Scene, SceneItem, ScenePose, Shape,
+    Size3, SolvedDesign, Station, Stock, Tool,
 };
 use stave_model::value::{ExactBox, Value};
 use stave_schema::words::{Grain, MotionWord, StockForm};
@@ -25,14 +27,12 @@ use crate::hardware::{
     HardwareCut, MemberCarrier, Placed, PlacedMember, RoleBound, WorldShape, crossing_face,
     world_index, world_shape,
 };
-use crate::joints::{
-    CutAt, GeomTable, JointWork, Making, PairWork, PartGeom, local_slot, round_length,
-};
+use crate::joints::{CutAt, GeomTable, JointWork, Making, PairWork, PartGeom, round_length};
 use crate::mechanism::AssemblyMechanism;
 use crate::members::{LaidOut, WorldMemberCut};
 use crate::mirror_cuts::MirroredJoint;
 use crate::place::reflect;
-use crate::{Fault, Solved, Solver};
+use crate::{Failure, Fault, Solved, Solver};
 
 /// A part a joint made.
 pub(crate) struct MadeInfo {
@@ -657,7 +657,7 @@ pub(crate) fn build(solver: &mut Solver<'_>) -> Option<SolvedDesign> {
     {
         return None;
     }
-    let mut design = SolvedDesign {
+    let mut draft = DesignDraft {
         project,
         parts,
         hardware,
@@ -675,8 +675,10 @@ pub(crate) fn build(solver: &mut Solver<'_>) -> Option<SolvedDesign> {
         },
         wall_rules: std::mem::take(&mut solver.wall_rules),
     };
-    solver.rebind_pieces(&mut design, splits);
-    Some(design)
+    solver.rebind_pieces(&mut draft, splits);
+    let design = SolvedDesign::new(draft)
+        .map_err(|_| Failure::Fault(Fault::Internal("a solved design's tables")));
+    solver.settled(design, file, span)
 }
 
 /// Which part each of a joint's roles names in one pair.
@@ -748,7 +750,7 @@ fn member_cut(geom: &PartGeom, cut: MemberCut<'_>) -> Solved<Cut> {
         region = region.with(axis, low, high.max(low));
     }
     let local_box = |world: &ExactBox| -> Solved<LocalBox> {
-        let [length, width, thickness] = geom.local_box(world)?;
+        let [length, width, thickness] = geom.local_box(world)?.into_array();
         let corner = |pick: fn(&(ExactLength, ExactLength)) -> ExactLength| -> Solved<LocalPoint> {
             Ok(LocalPoint {
                 length: round_length(pick(&length))?,
@@ -832,6 +834,7 @@ impl Solver<'_> {
         let mut note = None;
         let mut fastener_totals: Vec<(stave_model::ids::KindId, Length, Length, u32)> = Vec::new();
         for (pair_index, pair) in work.pairs.iter_mut().enumerate() {
+            let pair_index = PairIndex::from_usize(pair_index);
             if pair.making == Making::Withheld {
                 // The parts don't meet as the kind needs: its rule has
                 // said so, and nothing is cut, made or placed here.
@@ -849,7 +852,11 @@ impl Solver<'_> {
                     cut_order: Vec::new(),
                     insert: Vec::new(),
                     made_parts: Vec::new(),
-                    requires: work.requires.get(pair_index).cloned().unwrap_or_default(),
+                    requires: work
+                        .requires
+                        .get(pair_index.index())
+                        .cloned()
+                        .unwrap_or_default(),
                     members: Vec::new(),
                 });
                 continue;
@@ -1029,7 +1036,7 @@ impl Solver<'_> {
             let mut cut_order = Vec::new();
             if !joint_def.cut_first.is_empty() {
                 for role in &joint_def.cut_first {
-                    if let Some(part) = pair.parts.get(*role)
+                    if let Some(part) = pair.parts.get(role.index())
                         && !cut_order.contains(part)
                     {
                         cut_order.push(*part);
@@ -1096,7 +1103,11 @@ impl Solver<'_> {
                 cut_order,
                 insert,
                 made_parts: made_ids,
-                requires: work.requires.get(pair_index).cloned().unwrap_or_default(),
+                requires: work
+                    .requires
+                    .get(pair_index.index())
+                    .cloned()
+                    .unwrap_or_default(),
                 members,
             });
         }
@@ -1339,6 +1350,7 @@ impl Solver<'_> {
             };
             let mut unreflected = false;
             for (pair_index, pair) in copy.pairs.iter_mut().enumerate() {
+                let pair_index = PairIndex::from_usize(pair_index);
                 // The members are reflected and belong to the copy.
                 let mut members = Vec::with_capacity(pair.members.len());
                 for member in &pair.members {
@@ -1876,20 +1888,15 @@ impl Solver<'_> {
                     )
                 };
             let stock = self.write_stock(stock)?;
-            let size = |values: [ExactLength; 3]| -> Solved<Size3> {
-                let [length, width, thickness] = values;
+            let size = |values: PerPartAxis<ExactLength>| -> Solved<Size3> {
+                let [length, width, thickness] = values.into_array();
                 Ok(Size3 {
                     length: round_length(length)?,
                     width: round_length(width)?,
                     thickness: round_length(thickness)?,
                 })
             };
-            let mut cut_values = [ExactLength::ZERO; 3];
-            for axis in PartAxis::ALL {
-                if let Some(slot) = cut_values.get_mut(local_slot(axis)) {
-                    *slot = geom.cut_size(axis)?;
-                }
-            }
+            let cut_values = PerPartAxis::try_from_fn(|axis| geom.cut_size(axis))?;
             let mut origin_values = [ExactLength::ZERO; 3];
             for axis in PartAxis::ALL {
                 let direction = geom.orientation.direction(axis);

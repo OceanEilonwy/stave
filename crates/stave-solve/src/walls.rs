@@ -8,7 +8,7 @@
 
 use stave_lang::ast::BinaryOp;
 use stave_model::defs::{CutName, RExpr, RExprKind, RequireDef};
-use stave_model::ids::KindId;
+use stave_model::ids::{KindId, RequireIndex};
 use stave_model::solved::{CutSource, WallCompare, WallRule};
 
 use crate::eval::Env;
@@ -61,7 +61,7 @@ impl Solver<'_> {
         &mut self,
         source: CutSource,
         kind: KindId,
-        index: usize,
+        index: RequireIndex,
         require: &RequireDef,
         env: &Env<'_>,
     ) -> Solved<bool> {

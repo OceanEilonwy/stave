@@ -262,7 +262,7 @@ fn a_mirrored_region_param_is_the_region_in_the_reflected_place() {
     let design = checked.clean();
     let space = |hardware: &str| {
         let hardware = design
-            .hardware
+            .hardware()
             .iter()
             .find(|h| h.name == hardware)
             .unwrap_or_else(|| panic!("no hardware {hardware}"));
@@ -274,7 +274,7 @@ fn a_mirrored_region_param_is_the_region_in_the_reflected_place() {
                 _ => None,
             })
             .expect("an in: role");
-        design.regions[region.index()].name.clone()
+        design.regions()[region.index()].name.clone()
     };
     assert_eq!(space("runner_l.slide"), "bay_l");
     assert_eq!(space("runner_r.slide"), "bay_r");

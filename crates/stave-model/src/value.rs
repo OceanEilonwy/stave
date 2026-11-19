@@ -11,7 +11,7 @@ use std::cmp::Ordering;
 use std::fmt;
 
 use stave_lang::ast::{BinaryOp, UnaryOp};
-use stave_lang::placement::{Axis, Direction, Face, PartAxis};
+use stave_lang::placement::{Axis, Direction, Face, PartAxis, PerAxis};
 use stave_lang::units::{ExactAngle, ExactLength, Rational};
 use stave_schema::functions::PatchSize;
 
@@ -23,16 +23,8 @@ use crate::ids::{
 /// An axis-aligned box in world coordinates, exact.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ExactBox {
-    min: [ExactLength; 3],
-    max: [ExactLength; 3],
-}
-
-fn slot(axis: Axis) -> usize {
-    match axis {
-        Axis::Across => 0,
-        Axis::Up => 1,
-        Axis::Deep => 2,
-    }
+    min: PerAxis<ExactLength>,
+    max: PerAxis<ExactLength>,
 }
 
 impl ExactBox {
@@ -45,19 +37,27 @@ impl ExactBox {
         let sorted = |(a, b): (ExactLength, ExactLength)| if a <= b { (a, b) } else { (b, a) };
         let (across, up, deep) = (sorted(across), sorted(up), sorted(deep));
         ExactBox {
-            min: [across.0, up.0, deep.0],
-            max: [across.1, up.1, deep.1],
+            min: PerAxis {
+                across: across.0,
+                up: up.0,
+                deep: deep.0,
+            },
+            max: PerAxis {
+                across: across.1,
+                up: up.1,
+                deep: deep.1,
+            },
         }
     }
 
     /// The low end along an axis (left, bottom or front).
     pub fn min(&self, axis: Axis) -> ExactLength {
-        self.min[slot(axis)]
+        self.min[axis]
     }
 
     /// The high end along an axis (right, top or back).
     pub fn max(&self, axis: Axis) -> ExactLength {
-        self.max[slot(axis)]
+        self.max[axis]
     }
 
     /// The extent along an axis; `None` on overflow.
@@ -81,8 +81,8 @@ impl ExactBox {
         } else {
             (high, low)
         };
-        self.min[slot(axis)] = low;
-        self.max[slot(axis)] = high;
+        self.min[axis] = low;
+        self.max[axis] = high;
         self
     }
 
@@ -587,6 +587,27 @@ impl Value {
     pub fn number(&self) -> Option<Rational> {
         match self {
             Value::Count(n) | Value::Ratio(n) => Some(*n),
+            _ => None,
+        }
+    }
+
+    /// `true` when the value is a part, parts, or a list of them: what
+    /// [`Value::parts`] would give, without collecting it.
+    pub fn is_parts(&self) -> bool {
+        match self {
+            Value::Part(_) | Value::Parts(_) => true,
+            Value::List(items) => items.iter().all(Value::is_parts),
+            _ => false,
+        }
+    }
+
+    /// Every part in the value, borrowed when it is already a list of
+    /// parts and collected only when it is one part or a nested list.
+    pub fn part_list(&self) -> Option<std::borrow::Cow<'_, [PartId]>> {
+        match self {
+            Value::Part(part) => Some(std::borrow::Cow::Borrowed(std::slice::from_ref(part))),
+            Value::Parts(parts) => Some(std::borrow::Cow::Borrowed(parts)),
+            Value::List(_) => self.parts().map(std::borrow::Cow::Owned),
             _ => None,
         }
     }

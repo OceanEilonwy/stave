@@ -494,7 +494,7 @@ impl Window {
                 .drawable()
                 .map(|(design, graph)| {
                     design
-                        .assemblies
+                        .assemblies()
                         .iter()
                         .filter(|a| a.parent.is_none() && graph.motion_range(a.id).is_some())
                         .map(|a| (a.id, a.name.clone(), state.marks.assembly(a.id)))
@@ -535,7 +535,7 @@ impl Window {
                 let focus = focus::open(&shown.opened, design, graph, target)?;
                 let name = focus
                     .motion()
-                    .and_then(|(assembly, _)| design.assemblies.get(assembly.index()))
+                    .and_then(|(assembly, _)| design.assembly(assembly))
                     .map(|assembly| assembly.name.clone());
                 Some((focus, name))
             })
@@ -639,7 +639,7 @@ impl Window {
         if let Some((_, range)) = swing {
             widgets
                 .swing_card
-                .show_name(moving_name.unwrap_or("it"), range.turns);
+                .show_name(moving_name.unwrap_or("it"), range.turns());
         }
         widgets.caption.root.set_visible(page);
         widgets.pictures.root.set_visible(false);
@@ -712,7 +712,7 @@ impl Window {
                 .swing_card
                 .show_value(&stave_scene::focus::amount_text(
                     range,
-                    focus.progress * range.full,
+                    focus.progress * range.full(),
                 ));
         }
         let nearest = focus
@@ -937,7 +937,7 @@ impl Window {
             assembly.and_then(|id| {
                 let (design, graph) = session.drawable()?;
                 let range = graph.motion_range(id)?;
-                let name = design.assemblies.get(id.index())?.name.clone();
+                let name = design.assembly(id)?.name.clone();
                 Some((id, range, name))
             })
         };
@@ -953,22 +953,22 @@ impl Window {
                 found.as_ref().map(|(id, range, _)| Opening {
                     assembly: *id,
                     amount: 0.0,
-                    turns: range.turns,
+                    turns: range.turns(),
                 })
             });
             state.opening.map_or(0.0, |o| o.amount)
         };
         match &found {
             Some((_, range, name)) => {
-                let (full, value, end) = if range.turns {
-                    let degrees = range.full.to_degrees();
+                let (full, value, end) = if range.turns() {
+                    let degrees = range.full().to_degrees();
                     (
                         degrees,
                         amount.to_degrees(),
                         format!("{}°", degrees.round()),
                     )
                 } else {
-                    (range.full, amount, format!("{} mm", range.full.round()))
+                    (range.full(), amount, format!("{} mm", range.full().round()))
                 };
                 self.show_motion(Some(MotionShown {
                     name: name.clone(),
@@ -1069,7 +1069,7 @@ impl Window {
             return;
         };
         let shared = !highlight.volumes.is_empty();
-        let turns = card.as_ref().is_none_or(|c| c.turns);
+        let turns = card.as_ref().is_none_or(|c| c.turns());
         {
             let state = &mut self.state;
             state.opening = None;
@@ -1098,8 +1098,8 @@ impl Window {
         }
         match &card {
             Some(card) => {
-                self.show_problem_controls(Some((card, card.shown, shared)));
-                self.show_posed_status(card, card.shown);
+                self.show_problem_controls(Some((card, card.shown(), shared)));
+                self.show_posed_status(card, card.shown());
             }
             None => {
                 self.widgets.problem_card.show(None, 0.0);
@@ -1234,12 +1234,12 @@ mod tests {
             .drawable()
             .map(|(design, _)| {
                 design
-                    .joints
+                    .joints()
                     .iter()
                     .filter(|joint| !joint.pairs.is_empty())
                     .map(|joint| Target::Joint {
                         joint: joint.id,
-                        pair: 0,
+                        pair: stave_model::solved::PairIndex::FIRST,
                     })
                     .collect()
             })

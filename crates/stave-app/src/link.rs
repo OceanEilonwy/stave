@@ -23,7 +23,7 @@ fn names(name: &str, base: &str) -> bool {
 fn assemblies_around(design: &SolvedDesign, selection: Option<&Selection>) -> Vec<AssemblyId> {
     let mut assembly = match selection {
         Some(Selection::Part(id)) => design.part(*id).and_then(|p| p.assembly),
-        Some(Selection::Hardware(id)) => design.hardware.get(id.index()).and_then(|h| h.assembly),
+        Some(Selection::Hardware(id)) => design.hardware_piece(*id).and_then(|h| h.assembly),
         Some(Selection::Assembly(id)) => Some(*id),
         Some(Selection::Member(member)) => design
             .pair_member(*member)
@@ -35,11 +35,11 @@ fn assemblies_around(design: &SolvedDesign, selection: Option<&Selection>) -> Ve
     };
     let mut out = Vec::new();
     while let Some(id) = assembly {
-        if out.contains(&id) || out.len() > design.assemblies.len() {
+        if out.contains(&id) || out.len() > design.assemblies().len() {
             break;
         }
         out.push(id);
-        assembly = design.assemblies.get(id.index()).and_then(|a| a.parent);
+        assembly = design.assembly(id).and_then(|a| a.parent);
     }
     out
 }
@@ -73,7 +73,7 @@ pub fn selection_for(
         None => return None,
         Some(component) => {
             let of_component = |id: &AssemblyId| {
-                design.assemblies.get(id.index()).is_some_and(|a| {
+                design.assembly(*id).is_some_and(|a| {
                     a.component.rsplit('.').next() == Some(component.name.as_str())
                 })
             };
@@ -82,7 +82,7 @@ pub fn selection_for(
                 .filter(of_component)
                 .collect();
             let mut rest: Vec<&stave_model::solved::Assembly> = design
-                .assemblies
+                .assemblies()
                 .iter()
                 .filter(|a| of_component(&a.id) && !order.contains(&a.id))
                 .collect();
@@ -91,7 +91,7 @@ pub fn selection_for(
             order.extend(rest.into_iter().map(|a| a.id));
             order
                 .into_iter()
-                .filter_map(|id| design.assemblies.get(id.index()))
+                .filter_map(|id| design.assembly(id))
                 .map(|a| format!("{}.", a.name))
                 .collect()
         }
@@ -104,17 +104,17 @@ pub fn selection_for(
         };
         let selection = match found.kind {
             SymbolKind::Part => design
-                .parts
+                .parts()
                 .iter()
                 .find(|p| wanted(&p.name))
                 .map(|p| Selection::Part(p.id)),
             SymbolKind::Hardware => design
-                .hardware
+                .hardware()
                 .iter()
                 .find(|h| wanted(&h.name))
                 .map(|h| Selection::Hardware(h.id)),
             SymbolKind::Assembly => design
-                .assemblies
+                .assemblies()
                 .iter()
                 .find(|a| wanted(&a.name))
                 .map(|a| Selection::Assembly(a.id)),
@@ -133,20 +133,20 @@ pub fn selection_for(
 /// `--select`.
 pub fn selection_named(design: &SolvedDesign, name: &str) -> Option<Selection> {
     design
-        .parts
+        .parts()
         .iter()
         .find(|p| p.name == name)
         .map(|p| Selection::Part(p.id))
         .or_else(|| {
             design
-                .hardware
+                .hardware()
                 .iter()
                 .find(|h| h.name == name)
                 .map(|h| Selection::Hardware(h.id))
         })
         .or_else(|| {
             design
-                .assemblies
+                .assemblies()
                 .iter()
                 .find(|a| a.name == name)
                 .map(|a| Selection::Assembly(a.id))
@@ -186,11 +186,11 @@ pub fn chip(
 ) -> Option<String> {
     let name = match selection {
         Selection::Part(id) => design.part(*id).map(|p| p.name.as_str()),
-        Selection::Hardware(id) => design.hardware.get(id.index()).map(|h| h.name.as_str()),
-        Selection::Assembly(id) => design.assemblies.get(id.index()).map(|a| a.name.as_str()),
-        Selection::Joint { joint, .. } => design.joints.get(joint.index()).map(|j| j.name.as_str()),
+        Selection::Hardware(id) => design.hardware_piece(*id).map(|h| h.name.as_str()),
+        Selection::Assembly(id) => design.assembly(*id).map(|a| a.name.as_str()),
+        Selection::Joint { joint, .. } => design.joint(*joint).map(|j| j.name.as_str()),
         Selection::Member(member) => design
-            .joints
+            .joints()
             .get(member.joint.index())
             .map(|j| j.name.as_str()),
         Selection::Location(_) | Selection::Problem(_) => None,

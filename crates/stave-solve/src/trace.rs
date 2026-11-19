@@ -26,7 +26,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use stave_lang::ast::{BinaryOp, ParamKind, Span, UnaryOp};
-use stave_lang::placement::{Axis, Face, PartAxis};
+use stave_lang::placement::{Axis, Face, PartAxis, PerAxis};
 use stave_lang::units::{ExactLength, Rational};
 use stave_model::Model;
 use stave_model::defs::{
@@ -513,24 +513,21 @@ impl Affine {
 
 /// The low and high ends of a box along each axis, as linear forms.
 #[derive(Debug, Clone, PartialEq)]
-struct Bounds([(Affine, Affine); 3]);
-
-fn slot(axis: Axis) -> usize {
-    match axis {
-        Axis::Across => 0,
-        Axis::Up => 1,
-        Axis::Deep => 2,
-    }
-}
+struct Bounds(PerAxis<(Affine, Affine)>);
 
 impl Bounds {
+    fn new(across: (Affine, Affine), up: (Affine, Affine), deep: (Affine, Affine)) -> Bounds {
+        Bounds(PerAxis { across, up, deep })
+    }
+
     fn other(what: &str) -> Bounds {
-        let one = || (Affine::other(what), Affine::other(what));
-        Bounds([one(), one(), one()])
+        Bounds(PerAxis::from_fn(|_| {
+            (Affine::other(what), Affine::other(what))
+        }))
     }
 
     fn get(&self, axis: Axis) -> Step<&(Affine, Affine)> {
-        self.0.get(slot(axis)).ok_or(Halt)
+        Ok(&self.0[axis])
     }
 
     fn low(&self, axis: Axis) -> Step<Affine> {
@@ -556,9 +553,7 @@ impl Bounds {
 
     fn with(&self, axis: Axis, low: Affine, high: Affine) -> Bounds {
         let mut bounds = self.clone();
-        if let Some(entry) = bounds.0.get_mut(slot(axis)) {
-            *entry = (low, high);
-        }
+        bounds.0[axis] = (low, high);
         bounds
     }
 }
@@ -1651,11 +1646,11 @@ impl<'s, 'm> Tracer<'s, 'm> {
         let inst = model.parts.get(part.index()).ok_or(Halt)?;
         let index = inst.ctx.element.unwrap_or(0);
         let siblings = match model.item(DefId::Part(inst.def), inst.ctx) {
-            Some(ItemSlot::Part(slot)) => slot.all(),
-            _ => vec![part],
+            Some(ItemSlot::Part(slot)) => slot.as_slice(),
+            _ => std::slice::from_ref(&part),
         };
-        let mut sizes = Vec::new();
-        for sibling in siblings {
+        let mut sizes = Vec::with_capacity(siblings.len());
+        for &sibling in siblings {
             sizes.push(self.size_along(sibling, axis)?);
         }
         let n = sizes.len();
@@ -1727,9 +1722,9 @@ impl<'s, 'm> Tracer<'s, 'm> {
             let Some(first) = binding.roles.first() else {
                 continue;
             };
-            if first.parts().is_some_and(|parts| parts.contains(&part)) {
+            if first.part_list().is_some_and(|parts| parts.contains(&part)) {
                 for other in binding.roles.iter().skip(1) {
-                    for candidate in other.parts().unwrap_or_default() {
+                    for &candidate in other.part_list().as_deref().unwrap_or_default() {
                         if candidate != part && !partners.contains(&candidate) {
                             partners.push(candidate);
                         }
@@ -1968,11 +1963,11 @@ impl<'s, 'm> Tracer<'s, 'm> {
                 }
                 let mut planes = planes.into_iter();
                 let mut next = || planes.next().ok_or(Halt);
-                Ok(vec![Bounds([
+                Ok(vec![Bounds::new(
                     (next()?, next()?),
                     (next()?, next()?),
                     (next()?, next()?),
-                ])])
+                )])
             }
             Builtin::Split => self.split(args, &env),
             Builtin::Cover => self.cover(args, &env),
@@ -1989,7 +1984,7 @@ impl<'s, 'm> Tracer<'s, 'm> {
                 }
                 let mut ends = ends.into_iter();
                 let mut next = || ends.next().ok_or(Halt);
-                Ok(vec![Bounds([next()?, next()?, next()?])])
+                Ok(vec![Bounds::new(next()?, next()?, next()?)])
             }
             // Any other function makes something that is not a region.
             _ => Ok(vec![Bounds::other("a region")]),
@@ -2168,7 +2163,7 @@ impl<'s, 'm> Tracer<'s, 'm> {
                     Some(m) if shared(axis, low_side) => m.clone(),
                     _ => value,
                 };
-                Bounds([
+                Bounds::new(
                     (
                         b.low(Axis::Across)?
                             .minus(&pick(left, Axis::Across, true))?,
@@ -2180,9 +2175,9 @@ impl<'s, 'm> Tracer<'s, 'm> {
                         b.high(Axis::Up)?.plus(&pick(top, Axis::Up, false))?,
                     ),
                     (front.minus(&thickness)?, front),
-                ])
+                )
             }
-            MountForm::Inset { reveal } => Bounds([
+            MountForm::Inset { reveal } => Bounds::new(
                 (
                     b.low(Axis::Across)?.plus(&reveal)?,
                     b.high(Axis::Across)?.minus(&reveal)?,
@@ -2192,7 +2187,7 @@ impl<'s, 'm> Tracer<'s, 'm> {
                     b.high(Axis::Up)?.minus(&reveal)?,
                 ),
                 (front.clone(), front.plus(&thickness)?),
-            ]),
+            ),
         };
         Ok(vec![bounds])
     }

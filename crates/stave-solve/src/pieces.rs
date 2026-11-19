@@ -24,15 +24,15 @@
 use std::collections::BTreeMap;
 
 use stave_lang::ast::{BaseKind, Span};
-use stave_lang::placement::{Axis, Face, PartAxis};
+use stave_lang::placement::{Axis, Face, PartAxis, PerAxis};
 use stave_lang::units::{ExactLength, Length};
 use stave_lang::{Code, Diagnostic, FileId, Label};
 use stave_model::defs::{DefId, StockField};
-use stave_model::ids::{JointId, PartId, StockId};
+use stave_model::ids::{JointId, PairIndex, PartId, StockId};
 use stave_model::nonempty::NonEmpty;
 use stave_model::solved::{
-    self, BoardIndex, BodyCarrier, Contact, Cut, CutKind, CutPlace, CutSource, Depth, End, Joint,
-    JointOrigin, JointPair, PartOrigin, PieceIndex, RoleBinding, SolvedDesign, WorldBox,
+    self, BoardIndex, BodyCarrier, Contact, Cut, CutKind, CutPlace, CutSource, Depth, DesignDraft,
+    End, Joint, JointOrigin, JointPair, PartOrigin, PieceIndex, RoleBinding, WorldBox,
 };
 use stave_model::value::{KindValue, Splicing, Value};
 use stave_schema::CutOperation;
@@ -42,7 +42,7 @@ use stave_schema::words::{Grain, StockForm};
 use crate::boards::{BOARD_ID_BASE, BoardPart, Division};
 use crate::build::MadeInfo;
 use crate::eval::{Env, KindEnv};
-use crate::joints::{CutAt, GeomTable, PairWork, PartGeom, local_slot, round_length};
+use crate::joints::{CutAt, GeomTable, PairWork, PartGeom, round_length};
 use crate::{Failure, Fault, Solved, Solver};
 
 /// A part cut into pieces: what the solved design needs to point the
@@ -92,14 +92,6 @@ struct Place {
     span: Span,
     /// `false` for a mirror image: its source reports.
     report: bool,
-}
-
-fn axis_slot(axis: Axis) -> usize {
-    match axis {
-        Axis::Across => 0,
-        Axis::Up => 1,
-        Axis::Deep => 2,
-    }
 }
 
 /// A cut's name in messages: its kind's name for it, or its operation's
@@ -522,17 +514,8 @@ impl Solver<'_> {
             ));
         }
         let from_start = splicing.from.is_positive() != direction.is_positive();
-        let slot = local_slot(PartAxis::Length);
-        let drawn = geom
-            .drawn
-            .get(slot)
-            .copied()
-            .ok_or(Fault::Internal("a part's length"))?;
-        let start = geom
-            .start
-            .get(slot)
-            .copied()
-            .ok_or(Fault::Internal("a part's length"))?;
+        let drawn = geom.drawn[PartAxis::Length];
+        let start = geom.start[PartAxis::Length];
         let total = geom.cut_size(PartAxis::Length)?;
         let mut positions: Vec<ExactLength> = splicing.at.iter().copied().collect();
         positions.sort();
@@ -600,12 +583,10 @@ impl Solver<'_> {
             let Some(mut piece_geom) = tables.geoms.get(piece.stand_in).cloned() else {
                 return Err(Fault::Internal("a piece of a spliced part").into());
             };
-            if let (Some(s), Some(e)) =
-                (piece_geom.start.get_mut(slot), piece_geom.end.get_mut(slot))
-            {
-                *s = s.checked_add(low_add).ok_or(Fault::Overflow)?;
-                *e = e.checked_add(high_add).ok_or(Fault::Overflow)?;
-            }
+            let s = &mut piece_geom.start[PartAxis::Length];
+            *s = s.checked_add(low_add).ok_or(Fault::Overflow)?;
+            let e = &mut piece_geom.end[PartAxis::Length];
+            *e = e.checked_add(high_add).ok_or(Fault::Overflow)?;
             piece.low = piece.low.checked_sub(low_add).ok_or(Fault::Overflow)?;
             piece.high = piece.high.checked_add(high_add).ok_or(Fault::Overflow)?;
             let (world_low, world_high) = to_world(&geom, piece.low, piece.high)?;
@@ -902,14 +883,9 @@ impl Solver<'_> {
         boundaries: &[ExactLength],
         geoms: &mut GeomTable,
     ) -> Solved<Vec<Piece>> {
-        let slot = local_slot(PartAxis::Length);
-        let drawn_start = geom
-            .start
-            .get(slot)
-            .copied()
-            .ok_or(Fault::Internal("a part's length"))?;
+        let drawn_start = geom.start[PartAxis::Length];
         let drawn_end = drawn_start
-            .checked_add(geom.drawn.get(slot).copied().ok_or(Fault::Overflow)?)
+            .checked_add(geom.drawn[PartAxis::Length])
             .ok_or(Fault::Overflow)?;
         let world = geom.orientation.direction(PartAxis::Length).axis();
         let first = self
@@ -927,15 +903,12 @@ impl Solver<'_> {
             let drawn_low = low.max(drawn_start);
             let drawn_high = high.min(drawn_end);
             let mut piece_geom = geom.clone();
-            if let (Some(d), Some(s), Some(e)) = (
-                piece_geom.drawn.get_mut(slot),
-                piece_geom.start.get_mut(slot),
-                piece_geom.end.get_mut(slot),
-            ) {
-                *d = drawn_high.checked_sub(drawn_low).ok_or(Fault::Overflow)?;
-                *s = drawn_low.checked_sub(low).ok_or(Fault::Overflow)?;
-                *e = high.checked_sub(drawn_high).ok_or(Fault::Overflow)?;
-            }
+            piece_geom.drawn[PartAxis::Length] =
+                drawn_high.checked_sub(drawn_low).ok_or(Fault::Overflow)?;
+            piece_geom.start[PartAxis::Length] =
+                drawn_low.checked_sub(low).ok_or(Fault::Overflow)?;
+            piece_geom.end[PartAxis::Length] =
+                high.checked_sub(drawn_high).ok_or(Fault::Overflow)?;
             let (cut_low, cut_high) = to_world(geom, low, high)?;
             let (seen_low, seen_high) = to_world(geom, drawn_low, drawn_high)?;
             piece_geom.cut_box = geom.cut_box.with(world, cut_low, cut_high);
@@ -948,12 +921,7 @@ impl Solver<'_> {
                 .checked_add(1)
                 .and_then(BoardIndex::new)
                 .ok_or(Fault::Overflow)?;
-            let mut min = [ExactLength::ZERO; 3];
-            for each in Axis::ALL {
-                if let Some(slot) = min.get_mut(axis_slot(each)) {
-                    *slot = piece_geom.drawn_box.min(each);
-                }
-            }
+            let min = PerAxis::from_fn(|each| piece_geom.drawn_box.min(each));
             self.boards.insert(
                 id,
                 BoardPart {
@@ -1003,10 +971,13 @@ impl Solver<'_> {
             array: None,
         };
         let joint_name = format!("{name}.splice[{}]", splice + 1);
-        let source = CutSource::Joint { joint, pair: 0 };
+        let source = CutSource::Joint {
+            joint,
+            pair: PairIndex::FIRST,
+        };
         let mut requires = Vec::new();
         let mut failure: Option<Failure> = None;
-        for (index, require) in kind.requires.iter().enumerate() {
+        for (index, require) in kind.indexed_requires() {
             if self.defer_wall_rule(source, kind_id, index, require, &kind_env)? {
                 continue;
             }
@@ -1048,7 +1019,7 @@ impl Solver<'_> {
         if let Some(joint_def) = &kind.joint {
             for extend in &joint_def.adds {
                 let by = self.eval_length(&extend.by, &kind_env)?;
-                let Some(piece) = parts.get(extend.role).copied() else {
+                let Some(piece) = parts.get(extend.role.index()).copied() else {
                     continue;
                 };
                 for other in parts.iter().copied().filter(|o| *o != piece) {
@@ -1339,7 +1310,10 @@ impl Solver<'_> {
                 list.push(joint);
             }
             tables.made.push(MadeInfo {
-                origin: PartOrigin::Made { joint, pair: 0 },
+                origin: PartOrigin::Made {
+                    joint,
+                    pair: PairIndex::FIRST,
+                },
                 assembly,
                 name: made_name,
                 stock: placed.stock,
@@ -1354,7 +1328,10 @@ impl Solver<'_> {
             kind: Some(&pair.env),
             array: None,
         };
-        let source = CutSource::Joint { joint, pair: 0 };
+        let source = CutSource::Joint {
+            joint,
+            pair: PairIndex::FIRST,
+        };
         for cut_def in &joint_def.cuts {
             let (file, span) = self.part_place(part);
             let at = CutAt {
@@ -1378,7 +1355,7 @@ impl Solver<'_> {
         let mut cut_order = Vec::new();
         if !joint_def.cut_first.is_empty() {
             for role in &joint_def.cut_first {
-                if let Some(part) = pair.parts.get(*role)
+                if let Some(part) = pair.parts.get(role.index())
                     && !cut_order.contains(part)
                 {
                     cut_order.push(*part);
@@ -1565,14 +1542,14 @@ impl Solver<'_> {
     /// cuts of other parts that name it, the assemblies and scenes that
     /// list it. The first piece is renamed `<part>.piece[1]` and lists the
     /// pieces.
-    pub(crate) fn rebind_pieces(&self, design: &mut SolvedDesign, splits: Vec<Split>) {
+    pub(crate) fn rebind_pieces(&self, design: &mut DesignDraft, splits: Vec<Split>) {
         for split in splits {
             rebind_split(design, split);
         }
     }
 }
 
-fn rebind_split(design: &mut SolvedDesign, split: Split) {
+fn rebind_split(design: &mut DesignDraft, split: Split) {
     let whole = split.whole;
     let boxes: Vec<(PartId, WorldBox)> = split
         .pieces
@@ -1580,7 +1557,7 @@ fn rebind_split(design: &mut SolvedDesign, split: Split) {
         .filter_map(|id| design.part(*id).map(|p| (*id, p.cut_box())))
         .collect();
     // The piece that holds a cut from `source`, if any.
-    let piece_with = |design: &SolvedDesign, source: CutSource| -> Option<PartId> {
+    let piece_with = |design: &DesignDraft, source: CutSource| -> Option<PartId> {
         split.pieces.iter().copied().find(|id| {
             design
                 .part(*id)
@@ -1623,7 +1600,7 @@ fn rebind_split(design: &mut SolvedDesign, split: Split) {
             lows.iter().max().map_or(whole, |(_, id)| *id),
         )
     };
-    let mut chosen: BTreeMap<(JointId, usize), PartId> = BTreeMap::new();
+    let mut chosen: BTreeMap<(JointId, PairIndex), PartId> = BTreeMap::new();
     for joint_index in 0..design.joints.len() {
         let Some(joint) = design.joints.get(joint_index) else {
             continue;
@@ -1632,11 +1609,11 @@ fn rebind_split(design: &mut SolvedDesign, split: Split) {
             continue;
         }
         let id = joint.id;
-        for pair_index in 0..joint.pairs.len() {
+        for pair_index in (0..joint.pairs.len()).map(PairIndex::from_usize) {
             let Some(pair) = design
                 .joints
                 .get(joint_index)
-                .and_then(|j| j.pairs.get(pair_index))
+                .and_then(|j| j.pair(pair_index))
             else {
                 continue;
             };
@@ -1661,7 +1638,7 @@ fn rebind_split(design: &mut SolvedDesign, split: Split) {
             let Some(pair) = design
                 .joints
                 .get_mut(joint_index)
-                .and_then(|j| j.pairs.get_mut(pair_index))
+                .and_then(|j| j.pairs.get_mut(pair_index.index()))
             else {
                 continue;
             };

@@ -63,9 +63,9 @@ pub fn filled_spaces(model: &Model, item: &str) -> Vec<RegionId> {
         return Vec::new();
     };
     let found: Option<Vec<RegionId>> = slot
-        .all()
-        .into_iter()
-        .map(|assembly| space_of(model, assembly))
+        .as_slice()
+        .iter()
+        .map(|assembly| space_of(model, *assembly))
         .collect();
     found.unwrap_or_default()
 }
@@ -240,7 +240,7 @@ pub fn split_boundaries(
     };
     let size = |id: RegionId, axis: Axis| {
         design
-            .regions
+            .regions()
             .iter()
             .find(|r| r.id == id)
             .map(|r| r.bounds.size(axis))
@@ -350,7 +350,7 @@ assembly drawer[bottom, top] : casework.Drawer {
             ids.iter()
                 .map(|id| {
                     design
-                        .regions
+                        .regions()
                         .iter()
                         .find(|r| r.id == *id)
                         .map(|r| r.name.clone())

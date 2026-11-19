@@ -55,7 +55,7 @@ impl Checker<'_> {
     /// The piece of hardware with a drive that gives an assembly its
     /// motion (the first, when several move it alike).
     fn motion_hardware(&self, assembly: AssemblyId) -> Option<stave_model::solved::HardwareId> {
-        let found = self.design.assemblies.get(assembly.index())?;
+        let found = self.design.assembly(assembly)?;
         found.mechanism.as_ref()?.hardware().first().copied()
     }
 
@@ -71,7 +71,7 @@ impl Checker<'_> {
             }
         }
         // Hardware no assembly moves is still run through its own range.
-        for hardware in &self.design.hardware {
+        for hardware in self.design.hardware() {
             let Some(own) = &hardware.own_mechanism else {
                 continue;
             };
@@ -87,7 +87,7 @@ impl Checker<'_> {
         }
         let mut kinds: BTreeSet<String> = BTreeSet::new();
         for (hardware, error) in errors {
-            let Some(found) = self.design.hardware.get(hardware.index()) else {
+            let Some(found) = self.design.hardware_piece(hardware) else {
                 continue;
             };
             let (hardware_name, kind) = (found.name.clone(), found.kind.clone());
@@ -134,7 +134,7 @@ impl Checker<'_> {
         &self,
         hardware: stave_model::solved::HardwareId,
     ) -> Option<(stave_lang::FileId, stave_lang::ast::Span)> {
-        let kind_id = self.design.hardware.get(hardware.index())?.kind_id;
+        let kind_id = self.design.hardware_piece(hardware)?.kind_id;
         let kind = self.model.defs.kind(kind_id)?;
         Some((kind.decl.file, kind.mechanism.as_ref()?.span))
     }
@@ -151,7 +151,7 @@ impl Checker<'_> {
                     .copied()
                     .filter(|assembly| {
                         self.design
-                            .assemblies
+                            .assemblies()
                             .get(assembly.index())
                             .is_some_and(|found| found.mechanism.is_some())
                     })
@@ -168,7 +168,7 @@ impl Checker<'_> {
     /// scene and sweep checks: one mistake, one error.
     pub(crate) fn joint_motions(&mut self) {
         let mut found = Vec::new();
-        for joint in &self.design.joints {
+        for joint in self.design.joints() {
             let mut crossing: Vec<(PartId, PartId)> = Vec::new();
             for pair in &joint.pairs {
                 let parts: Vec<PartId> = pair.roles.iter().map(|role| role.part).collect();
@@ -251,7 +251,7 @@ impl Checker<'_> {
     /// is read before each motion and each scene of it.
     pub(crate) fn sweeps(&mut self, stopped: &dyn Fn() -> bool) {
         let mut found = Vec::new();
-        for assembly in &self.design.assemblies {
+        for assembly in self.design.assemblies() {
             if stopped() {
                 return;
             }
@@ -263,7 +263,7 @@ impl Checker<'_> {
             let mut parent = assembly.parent;
             let mut nested = false;
             while let Some(id) = parent {
-                let Some(outer) = self.design.assemblies.get(id.index()) else {
+                let Some(outer) = self.design.assembly(id) else {
                     break;
                 };
                 nested |= self.path(id).is_some();
@@ -739,9 +739,9 @@ impl Checker<'_> {
 /// for one nothing moves, or whose mechanism can't move), and the
 /// mechanisms that can't.
 pub(crate) fn mechanism_paths(design: &SolvedDesign) -> crate::Mechanisms {
-    let mut paths = Vec::with_capacity(design.assemblies.len());
+    let mut paths = Vec::with_capacity(design.assemblies().len());
     let mut broken = Vec::new();
-    for assembly in &design.assemblies {
+    for assembly in design.assemblies() {
         paths.push(match &assembly.mechanism {
             Some(mechanism) => match Path::new(mechanism) {
                 Ok(path) => Some(path),

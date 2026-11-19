@@ -382,7 +382,7 @@ impl Lister<'_, '_, '_> {
             .ok_or(GripsError::NotInDesign)?;
         let solved = self
             .design
-            .assemblies
+            .assemblies()
             .iter()
             .find(|a| a.id == assembly)
             .ok_or(GripsError::NotInDesign)?;
@@ -606,14 +606,14 @@ impl Lister<'_, '_, '_> {
         };
         let region = self
             .design
-            .regions
+            .regions()
             .iter()
             .filter(|r| r.assembly != Some(assembly))
             .find(|r| r.bounds.face(face) == from_at && overlaps(&r.bounds))
             .map(|r| FaceOf::Region(r.id));
         let owner = region.or_else(|| {
             self.design
-                .parts
+                .parts()
                 .iter()
                 .filter(|p| p.assembly != Some(assembly))
                 .find(|p| p.drawn_box().face(face) == from_at && overlaps(&p.drawn_box()))
@@ -803,7 +803,7 @@ pub fn split_grips(
         .collect();
     let bounds = |id: RegionId| {
         design
-            .regions
+            .regions()
             .iter()
             .find(|r| r.id == id)
             .map(|r| (r.bounds, r.name.clone()))

@@ -45,7 +45,7 @@ type PartKey = (String, Length, Length, Length, usize);
 /// names compare equal.
 fn parts(design: &SolvedDesign) -> Vec<PartKey> {
     let mut parts: Vec<PartKey> = design
-        .parts
+        .parts()
         .iter()
         .map(|part| {
             (
@@ -67,7 +67,7 @@ fn parts(design: &SolvedDesign) -> Vec<PartKey> {
 /// not declarations.
 fn joints(design: &SolvedDesign) -> BTreeMap<String, usize> {
     let mut joints = BTreeMap::new();
-    for joint in &design.joints {
+    for joint in design.joints() {
         *joints.entry(joint.kind.clone()).or_insert(0) += joint.pairs.len();
     }
     joints
@@ -88,7 +88,7 @@ fn fasteners(design: &SolvedDesign) -> BTreeMap<(String, Length, Length), u32> {
 /// what the member is, how many copies there are in all.
 fn members(design: &SolvedDesign) -> BTreeMap<(String, String, Option<String>), u32> {
     let mut members = BTreeMap::new();
-    for joint in &design.joints {
+    for joint in design.joints() {
         for pair in &joint.pairs {
             for member in &pair.members {
                 let item = member.item.as_ref().map(|item| item.kind.clone());
@@ -107,7 +107,7 @@ fn the_table_from_a_box_checks_clean() {
     let design = solved(&opened);
     // Every piece is in an assembly; nothing is a loose part.
     let loose: Vec<&str> = design
-        .parts
+        .parts()
         .iter()
         .filter(|part| part.assembly.is_none())
         .map(|part| part.name.as_str())
@@ -117,7 +117,7 @@ fn the_table_from_a_box_checks_clean() {
     for name in ["apron_back", "apron_right", "cleat_back", "stretcher_back"] {
         assert!(
             design
-                .assemblies
+                .assemblies()
                 .iter()
                 .any(|assembly| assembly.name == name),
             "no assembly {name}"
@@ -157,7 +157,7 @@ fn the_mirrored_rails_cut_their_mortises_in_the_back_legs() {
     let design = solved(&opened);
     let cuts = |name: &str| {
         design
-            .parts
+            .parts()
             .iter()
             .find(|part| part.name == name)
             .map(|part| part.cuts.len())

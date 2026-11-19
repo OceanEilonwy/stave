@@ -49,7 +49,7 @@ pub(crate) struct LaidOut {
 /// mirrored assembly can make it again, reflected.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct WorldMemberCut {
-    pub pair: usize,
+    pub pair: stave_model::ids::PairIndex,
     pub part: stave_model::ids::PartId,
     pub body: BodyId,
     pub name: Option<stave_model::defs::CutName>,

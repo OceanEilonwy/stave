@@ -423,7 +423,11 @@ fn a_165_degree_hinge_is_only_a_kind() {
         render_diagnostics(&opened.sources, &opened.diagnostics)
     );
     let design = common::design(&opened);
-    let door = design.assemblies.iter().find(|a| a.name == "door").unwrap();
+    let door = design
+        .assemblies()
+        .iter()
+        .find(|a| a.name == "door")
+        .unwrap();
     let mechanism = door.mechanism.as_ref().unwrap();
     // Both hinges move the door alike, on the kind's linkage, to 165deg.
     assert_eq!(mechanism.hardware().len(), 2);
@@ -440,7 +444,7 @@ fn a_165_degree_hinge_is_only_a_kind() {
     let inside =
         |part_assembly: Option<stave_model::solved::AssemblyId>| part_assembly == Some(door.id);
     let mut checked = 0;
-    for hardware in &design.hardware {
+    for hardware in design.hardware() {
         for member in &hardware.members {
             let mover = match member.carrier {
                 BodyCarrier::Link(link) => Mover::Member(&path, link),
@@ -450,7 +454,7 @@ fn a_165_degree_hinge_is_only_a_kind() {
                 BodyCarrier::Part(_) | BodyCarrier::Region(_) => Mover::Fixed(Placement::REST),
             };
             let steel = WorldSolid::of_body(member);
-            for part in &design.parts {
+            for part in design.parts() {
                 let wood = WorldSolid::of_part(part, &Solid::of(part, design));
                 let part_mover = if inside(part.assembly) {
                     Mover::Rigid(&path)
@@ -578,7 +582,7 @@ fn every_motion_of_the_examples_is_clear_through_its_travel() {
         let opened = example(folder);
         let design = common::design(&opened);
         assert!(
-            design.assemblies.iter().any(|a| a.mechanism.is_some()),
+            design.assemblies().iter().any(|a| a.mechanism.is_some()),
             "{folder}"
         );
         assert!(opened.diagnostics.is_empty(), "{folder}");

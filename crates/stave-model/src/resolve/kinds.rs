@@ -22,7 +22,8 @@ use super::{Body, Cx, Origin, Resolver};
 use crate::defs::{
     CutDef, CutName, CutStepDef, DefId, ExtendDef, HardwareKindDef, JointKindDef, JointMember,
     KindDef, MadePartDef, MadeTerm, MadeTermKind, MarkStepDef, Need, OperationDef, ParamDef, RExpr,
-    RExprKind, RecipeDef, RequireDef, RoleDef, SelectorDef, Setting, StepDef, Symbol, UseDef, Word,
+    RExprKind, RecipeDef, RequireDef, RoleDef, RoleIndex, SelectorDef, Setting, StepDef,
+    StepMotionDef, Symbol, UseDef, Word,
 };
 use crate::ids::KindId;
 use crate::types::Ty;
@@ -780,7 +781,7 @@ impl Resolver<'_> {
         }
     }
 
-    fn role_index(&mut self, cx: &Cx, expr: &ast::Expr, what: &str) -> Option<usize> {
+    fn role_index(&mut self, cx: &Cx, expr: &ast::Expr, what: &str) -> Option<RoleIndex> {
         match self.joint_member(cx, expr, what)? {
             JointMember::Role(index) => Some(index),
             JointMember::Made(_) => {
@@ -982,26 +983,30 @@ impl Resolver<'_> {
             return None;
         };
         let axis = self.part_axis(cx, axis_expr, axis_name)?;
-        let by = parsed.get("by").map(|e| {
-            let ty = if kind == AssemblyStepKind::Rotate {
-                Ty::Angle
-            } else {
-                Ty::Length
-            };
-            self.value(cx, e, &Expect::ty(ty).named("by"))
-        });
-        if kind == AssemblyStepKind::Rotate && by.is_none() {
-            self.missing_argument(cx, &head, "by:", step.span);
-        }
-        let angle = parsed
-            .get("angle")
-            .map(|e| self.value(cx, e, &Expect::ty(Ty::Angle).named("angle")));
+        let motion = match kind {
+            AssemblyStepKind::Push => StepMotionDef::Push {
+                by: parsed
+                    .get("by")
+                    .map(|e| self.value(cx, e, &Expect::ty(Ty::Length).named("by"))),
+                angle: parsed
+                    .get("angle")
+                    .map(|e| self.value(cx, e, &Expect::ty(Ty::Angle).named("angle"))),
+            },
+            AssemblyStepKind::Rotate => {
+                let Some(by) = parsed.get("by") else {
+                    self.missing_argument(cx, &head, "by:", step.span);
+                    return None;
+                };
+                StepMotionDef::Rotate {
+                    by: self.value(cx, by, &Expect::ty(Ty::Angle).named("by")),
+                }
+            }
+            AssemblyStepKind::Drive => StepMotionDef::Drive,
+        };
         Some(StepDef {
-            kind,
             part,
             axis,
-            by,
-            angle,
+            motion,
             span: step.span,
         })
     }

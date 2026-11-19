@@ -41,7 +41,7 @@ fn started(events: &[Event]) -> Option<stave_app::session::CheckTicket> {
 fn part(session: &Session, name: &str) -> Selection {
     let (design, _) = session.drawable().expect("the design solves");
     let found = design
-        .parts
+        .parts()
         .iter()
         .find(|p| p.name == name)
         .unwrap_or_else(|| panic!("no part '{name}'"));
@@ -141,7 +141,7 @@ fn focus_mode_is_a_place_in_the_history() {
     let mut session = checked_session(example("clothing_cabinet"));
     let (design, _) = session.drawable().unwrap();
     let hinge = design
-        .hardware
+        .hardware()
         .iter()
         .find(|h| h.name == "door_l.hinges[upper]")
         .unwrap()

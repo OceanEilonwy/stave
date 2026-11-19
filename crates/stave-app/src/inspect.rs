@@ -11,9 +11,10 @@ use stave_lang::{SourceMap, SyntaxKind};
 use stave_model::Model;
 use stave_model::defs::Decl;
 use stave_model::mechanism::{DriveValue, Mechanism};
+use stave_model::nonempty::NonEmpty;
 use stave_model::solved::{
-    AssemblyId, Body, CutSource, HardwareBase, HardwareId, PairMember, Part, PartId, PartOrigin,
-    RegionId, RoleValue, Shape, SolvedDesign,
+    AssemblyId, Body, CutSource, HardwareBase, HardwareId, PairIndex, PairMember, Part, PartId,
+    PartOrigin, RegionId, RoleValue, Shape, SolvedDesign,
 };
 use stave_scene::Item;
 use stave_schema::species::Srgb;
@@ -49,47 +50,6 @@ pub enum SwatchShape {
     Board,
     /// Round or turned wood, or hardware: a circle.
     Round,
-}
-
-/// A list that is never empty.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct NonEmpty<T> {
-    first: T,
-    rest: Vec<T>,
-}
-
-impl<T> NonEmpty<T> {
-    /// A list of one.
-    pub fn one(first: T) -> NonEmpty<T> {
-        NonEmpty {
-            first,
-            rest: Vec::new(),
-        }
-    }
-
-    /// The first element.
-    pub fn first(&self) -> &T {
-        &self.first
-    }
-
-    /// Every element, in order.
-    pub fn iter(&self) -> impl Iterator<Item = &T> {
-        std::iter::once(&self.first).chain(self.rest.iter())
-    }
-
-    /// How many.
-    pub fn len(&self) -> usize {
-        self.rest.len().saturating_add(1)
-    }
-
-    /// Never: here for completeness next to [`NonEmpty::len`].
-    pub fn is_empty(&self) -> bool {
-        false
-    }
-
-    pub(crate) fn push(&mut self, item: T) {
-        self.rest.push(item);
-    }
 }
 
 /// One row of the parts tree: a part or piece of hardware, or a few that
@@ -237,7 +197,7 @@ pub(crate) fn relative<'a>(
     assembly: Option<AssemblyId>,
 ) -> &'a str {
     assembly
-        .and_then(|id| design.assemblies.get(id.index()))
+        .and_then(|id| design.assembly(id))
         .and_then(|a| name.strip_prefix(a.name.as_str()))
         .and_then(|rest| rest.strip_prefix('.'))
         .unwrap_or(name)
@@ -410,10 +370,15 @@ pub(crate) fn group_label(labels: &[String]) -> String {
 pub fn items_in(design: &SolvedDesign, selection: &Selection) -> Vec<Item> {
     match selection {
         Selection::Assembly(id) => design
-            .parts
+            .parts()
             .iter()
             .map(|part| Item::Part(part.id))
-            .chain(design.hardware.iter().map(|piece| Item::Hardware(piece.id)))
+            .chain(
+                design
+                    .hardware()
+                    .iter()
+                    .map(|piece| Item::Hardware(piece.id)),
+            )
             .filter(|item| crate::problems::inside(design, *item, *id))
             .collect(),
         other => other.item().into_iter().collect(),
@@ -424,7 +389,7 @@ pub fn items_in(design: &SolvedDesign, selection: &Selection) -> Vec<Item> {
 pub fn parts_tree(design: &SolvedDesign) -> PartsTree {
     let singles_in = |assembly: Option<AssemblyId>| -> Vec<Single> {
         let parts = design
-            .parts
+            .parts()
             .iter()
             .filter(|p| p.assembly == assembly)
             .map(|part| {
@@ -457,7 +422,7 @@ pub fn parts_tree(design: &SolvedDesign) -> PartsTree {
                 }
             });
         let hardware = design
-            .hardware
+            .hardware()
             .iter()
             .filter(|h| h.assembly == assembly)
             .map(|hardware| {
@@ -487,7 +452,7 @@ pub fn parts_tree(design: &SolvedDesign) -> PartsTree {
                     .is_some_and(|part| part.assembly == assembly)
             })
             .filter_map(|(member, body)| {
-                let joint = design.joints.get(member.joint.index())?;
+                let joint = design.joint(member.joint)?;
                 let base = format!(
                     "{}'s {}",
                     relative(design, &joint.name, assembly),
@@ -531,10 +496,10 @@ pub fn parts_tree(design: &SolvedDesign) -> PartsTree {
         depth: usize,
         singles_in: &dyn Fn(Option<AssemblyId>) -> Vec<Single>,
     ) -> Option<AssemblyNode> {
-        let assembly = design.assemblies.get(id.index())?;
+        let assembly = design.assembly(id)?;
         let parent_name = assembly
             .parent
-            .and_then(|p| design.assemblies.get(p.index()))
+            .and_then(|p| design.assembly(p))
             .map(|p| p.name.as_str());
         let label = parent_name
             .and_then(|p| assembly.name.strip_prefix(p))
@@ -543,18 +508,18 @@ pub fn parts_tree(design: &SolvedDesign) -> PartsTree {
             .to_owned();
         let detail = match (assembly.mirror_of, &assembly.mechanism) {
             (Some(source), _) => design
-                .assemblies
+                .assemblies()
                 .get(source.index())
                 .map(|s| fill_in(&tr("mirror of {name}"), &[("name", &s.name)])),
             (None, Some(motion)) => Some(motion_words(motion)),
             (None, None) => Some(assembly.component.clone()),
         };
         // Assemblies nest only as deep as there are assemblies.
-        let children = if depth > design.assemblies.len() {
+        let children = if depth > design.assemblies().len() {
             Vec::new()
         } else {
             design
-                .assemblies
+                .assemblies()
                 .iter()
                 .filter(|a| a.parent == Some(id))
                 .filter_map(|a| node(design, a.id, depth.saturating_add(1), singles_in))
@@ -571,7 +536,7 @@ pub fn parts_tree(design: &SolvedDesign) -> PartsTree {
     PartsTree {
         carcass: group(singles_in(None)),
         assemblies: design
-            .assemblies
+            .assemblies()
             .iter()
             .filter(|a| a.parent.is_none())
             .filter_map(|a| node(design, a.id, 0, &singles_in))
@@ -753,12 +718,12 @@ fn docs(decl: &Decl) -> Option<String> {
 fn moving(design: &SolvedDesign, mut assembly: Option<AssemblyId>) -> Option<AssemblyId> {
     let mut steps = 0;
     while let Some(id) = assembly {
-        let found = design.assemblies.get(id.index())?;
+        let found = design.assembly(id)?;
         if found.mechanism.is_some() {
             return Some(id);
         }
         steps += 1;
-        if steps > design.assemblies.len() {
+        if steps > design.assemblies().len() {
             return None;
         }
         assembly = found.parent;
@@ -768,7 +733,7 @@ fn moving(design: &SolvedDesign, mut assembly: Option<AssemblyId>) -> Option<Ass
 
 /// "with door_l, turns 110°".
 fn moves_row(design: &SolvedDesign, moving: Option<AssemblyId>) -> Option<Row> {
-    let assembly = design.assemblies.get(moving?.index())?;
+    let assembly = design.assemblies().get(moving?.index())?;
     let motion = assembly.mechanism.as_ref()?;
     Some(Row {
         label: tr_noop("Moves"),
@@ -800,13 +765,13 @@ fn kind_title(kind: &str) -> String {
 /// The name of the assembly something sits in.
 fn within(design: &SolvedDesign, assembly: Option<AssemblyId>) -> Option<String> {
     assembly
-        .and_then(|id| design.assemblies.get(id.index()))
+        .and_then(|id| design.assembly(id))
         .map(|found| found.name.clone())
 }
 
 /// "PART · IN door_l".
 fn eyebrow(design: &SolvedDesign, kind: &str, assembly: Option<AssemblyId>) -> String {
-    match assembly.and_then(|id| design.assemblies.get(id.index())) {
+    match assembly.and_then(|id| design.assembly(id)) {
         Some(found) => format!("{kind} · IN {}", found.name),
         None => kind.to_owned(),
     }
@@ -1021,7 +986,7 @@ fn part_link(design: &SolvedDesign, id: PartId, assembly: Option<AssemblyId>) ->
 /// A link to a piece of hardware, named relative to `assembly`.
 fn hardware_link(design: &SolvedDesign, id: HardwareId, assembly: Option<AssemblyId>) -> NameLink {
     let name = design
-        .hardware
+        .hardware()
         .get(id.index())
         .map_or_else(String::new, |h| {
             relative(design, &h.name, assembly).to_owned()
@@ -1035,7 +1000,7 @@ fn hardware_link(design: &SolvedDesign, id: HardwareId, assembly: Option<Assembl
 /// A link to a space of the design, by its name; `None` when the design
 /// has no space of that name.
 pub fn space_link(design: &SolvedDesign, name: &str) -> Option<NameLink> {
-    let region = design.regions.iter().find(|r| r.name == name)?;
+    let region = design.regions().iter().find(|r| r.name == name)?;
     Some(NameLink {
         name: name.to_owned(),
         target: LinkTarget::Space(region.id),
@@ -1097,7 +1062,7 @@ fn hardware_on(design: &SolvedDesign, part: &Part) -> Vec<Connection> {
     let mut groups: Vec<(String, String, Vec<HardwareId>)> = Vec::new();
     let mut hinged_on: Vec<NameLink> = Vec::new();
     let mut first_hinge = None;
-    for hardware in design.hardware.iter().filter(|h| h.piece == part.id) {
+    for hardware in design.hardware().iter().filter(|h| h.piece == part.id) {
         let kind = hardware
             .kind
             .rsplit('.')
@@ -1267,14 +1232,14 @@ fn inspect_part(checked: &Checked, design: &SolvedDesign, id: PartId) -> Option<
     }
     let mut connections = Vec::new();
     // One row per joint: its kind and the other parts in it.
-    for joint in design.joints.iter().filter(|j| {
+    for joint in design.joints().iter().filter(|j| {
         j.pairs
             .iter()
             .any(|p| p.roles.iter().any(|r| r.part == id) || p.made_parts.contains(&id))
     }) {
         let mut others: Vec<NameLink> = Vec::new();
         let mut first_pair = None;
-        for (index, pair) in joint.pairs.iter().enumerate() {
+        for (index, pair) in joint.indexed_pairs() {
             if !(pair.roles.iter().any(|r| r.part == id) || pair.made_parts.contains(&id)) {
                 continue;
             }
@@ -1313,10 +1278,10 @@ fn inspect_part(checked: &Checked, design: &SolvedDesign, id: PartId) -> Option<
         let CutSource::Hardware { hardware } = cut.source else {
             continue;
         };
-        if design.hardware.get(hardware.index()).is_none() {
+        if design.hardware_piece(hardware).is_none() {
             continue;
         }
-        let row = focus::cut_row("", &cut.kind);
+        let row = focus::cut_row(&cut.kind);
         // The name the kind gives the cut (`cut bore: ...`), or else what
         // the cut is.
         let what = match &cut.name {
@@ -1380,7 +1345,7 @@ fn inspect_hardware(
     design: &SolvedDesign,
     id: stave_model::solved::HardwareId,
 ) -> Option<Inspection> {
-    let hardware = design.hardware.get(id.index())?;
+    let hardware = design.hardware_piece(id)?;
     let model = checked.opened.model.as_ref();
     let description = model
         .and_then(|m| m.defs.kind(hardware.kind_id))
@@ -1438,7 +1403,7 @@ fn inspect_assembly(
     design: &SolvedDesign,
     id: AssemblyId,
 ) -> Option<Inspection> {
-    let assembly = design.assemblies.get(id.index())?;
+    let assembly = design.assembly(id)?;
     let model = checked.opened.model.as_ref();
     let instance = model.and_then(|m| m.assemblies.get(id.index()).filter(|a| a.id == id));
     let description = model
@@ -1456,10 +1421,7 @@ fn inspect_assembly(
         });
     }
     let mut rows: Vec<Field> = rows.into_iter().map(Field::from).collect();
-    if let Some(source) = assembly
-        .mirror_of
-        .and_then(|s| design.assemblies.get(s.index()))
-    {
+    if let Some(source) = assembly.mirror_of.and_then(|s| design.assembly(s)) {
         rows.push(Field {
             label: tr_noop("Mirror of"),
             value: source.name.clone(),
@@ -1533,7 +1495,7 @@ fn inspect_member(
     design: &SolvedDesign,
     member: PairMember,
 ) -> Option<Inspection> {
-    let joint = design.joints.get(member.joint.index())?;
+    let joint = design.joint(member.joint)?;
     let body = design.pair_member(member)?;
     let model = checked.opened.model.as_ref();
     // The member's own doc comment in its kind (`/// The pins: ...`).
@@ -1616,9 +1578,9 @@ fn inspect_joint(
     checked: &Checked,
     design: &SolvedDesign,
     id: stave_model::solved::JointId,
-    pair: usize,
+    pair: PairIndex,
 ) -> Option<Inspection> {
-    let joint = design.joints.get(id.index())?;
+    let joint = design.joint(id)?;
     let model = checked.opened.model.as_ref();
     let description = model
         .and_then(|m| m.defs.kind(joint.kind_id))

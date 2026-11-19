@@ -250,7 +250,7 @@ impl Window {
         let session = &self.session;
         let (design, _) = session.drawable().ok_or("nothing is drawn yet")?;
         design
-            .parts
+            .parts()
             .iter()
             .find(|part| part.name == name)
             .map(|part| part.id)
