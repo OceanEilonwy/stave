@@ -392,7 +392,7 @@ pub enum Remember {
 }
 
 /// What is told a short line (a failure to save).
-type Told = Box<dyn Fn(&str)>;
+type Told = Rc<dyn Fn(&str)>;
 
 /// The dock and its panels.
 pub struct Workbench {
@@ -659,8 +659,10 @@ impl Workbench {
             .and_then(|()| std::fs::write(&path, layout.to_text()));
         if let Err(error) = written {
             eprintln!("warning: can't write '{}': {error}", path.display());
+            // Cloned out so that `told` may set a new handler.
+            let told = self.on_save_failed.borrow().clone();
             if !self.save_failed.replace(true)
-                && let Some(told) = self.on_save_failed.borrow().as_ref()
+                && let Some(told) = told
             {
                 told(&format!(
                     "Stave couldn't save the panel layout for next time: {error}"
@@ -671,7 +673,7 @@ impl Workbench {
 
     /// Tells `told` when the layout can't be written (once).
     pub fn connect_save_failed(&self, told: impl Fn(&str) + 'static) {
-        self.on_save_failed.replace(Some(Box::new(told)));
+        self.on_save_failed.replace(Some(Rc::new(told)));
     }
 
     /// Board B again.

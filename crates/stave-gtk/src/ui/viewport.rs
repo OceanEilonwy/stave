@@ -4,6 +4,7 @@
 //! HiDPI screen too.
 
 use std::cell::{Cell, RefCell};
+use std::rc::Rc;
 
 use gtk::glib;
 use gtk::prelude::*;
@@ -13,7 +14,7 @@ mod imp {
     use super::*;
 
     /// Called with the new size in device pixels.
-    pub type ResizeHandler = Box<dyn Fn(u32, u32)>;
+    pub type ResizeHandler = Rc<dyn Fn(u32, u32)>;
 
     #[derive(Default)]
     pub struct Viewport {
@@ -42,7 +43,10 @@ mod imp {
     impl Viewport {
         fn report_size(&self) {
             let (width, height) = self.obj().device_size();
-            if let Some(handler) = self.on_resize.borrow().as_ref() {
+            // Cloned out so that the handler may set a new one, or come
+            // back here through a synchronous allocation.
+            let handler = self.on_resize.borrow().clone();
+            if let Some(handler) = handler {
                 handler(width, height);
             }
         }
@@ -196,6 +200,6 @@ impl Viewport {
     /// Calls `handler` with the size in device pixels whenever it may have
     /// changed (on every allocation and change of scale).
     pub fn connect_resized(&self, handler: impl Fn(u32, u32) + 'static) {
-        self.imp().on_resize.replace(Some(Box::new(handler)));
+        self.imp().on_resize.replace(Some(Rc::new(handler)));
     }
 }
