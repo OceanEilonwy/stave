@@ -757,7 +757,7 @@ A named value. Not a knob: it has no range and can't be passed in.
 | `form` | `solid` \| `plywood` \| `mdf` \| `dowel` | yes | yes | what you buy |
 | `thickness` | `Length` | yes, except `dowel` | yes | finished thickness |
 | `diameter` | `Length` | `dowel` only, required | yes | diameter of round stock |
-| `width` | `Length` | no | yes | stock sold at a fixed width (a square blank, a strip). Parts cut from it take this width |
+| `width` | `Length` | no | yes | stock sold at a fixed width (a square blank, a strip). Parts cut from it take this width unless they write their own: narrower is ripped from it, wider is `error[type-mismatch]` at the part's `width:` (`base: its width is 150mm, but strip is sold 40mm wide`) |
 | `max_width` | `Length` | no | yes | the widest board you can get. A `solid` part wider than this is made of boards (see [Boards](#boards)); a `plywood` or `mdf` part wider than this is `error[type-mismatch]` |
 | `max_length` | `Length` | no, but see the warning below | yes | the longest board (or sheet) you can get; a part whose cut length is longer is `error[type-mismatch]`, unless its `lengths:` splices it into pieces that each fit (see [Splices](#splices)) |
 
@@ -782,7 +782,7 @@ limits. Round stock (`dowel`) is left out.
 |---|---|---|---|---|
 | `length` | `Length` or `fit` | yes | yes | along the grain, by default |
 | `width` | `Length` or `fit` | yes, unless the stock has `width:` or is a `dowel` | yes | |
-| `thickness` | `Length` | no (default: the stock's) | yes | thinner than the stock; the cut list notes the planing. Thicker than the stock is `error[type-mismatch]`, and so is a cut thickness (with what joints add) over the stock's |
+| `thickness` | `Length` | no (default: the stock's) | yes | thinner than the stock; the cut list notes the planing. Thicker than the stock is `error[type-mismatch]`, and so is a cut thickness (with what joints add) over the stock's. A sheet (`plywood`, `mdf`) can't be planed: a part cut from one that writes any other thickness is `error[type-mismatch]` (`panel: its thickness is 10mm, but plywood can't be planed; ply_18 is 18mm thick`) |
 | `grain` | `length` \| `width` | no (default `length`) | no | which way the grain runs |
 | `shape` | `Shape` | no | no | `turned(profile)`; the part's length is then the profile's: write `length: fit` (any other length is `error[type-mismatch]`). Its `width:` and `thickness:` are then the **blank** it is turned from (each the stock's unless written); the profile must fit inside the blank at its widest, or it is `error[type-mismatch]` at `shape:` (`leg: its profile is 60mm across at its widest, but its blank of ash_45_sq is only 45mm square`) |
 | `face_side` | face word | no | no | the reference face; see [Faces to cut](#faces-to-cut) |

@@ -1068,8 +1068,16 @@ impl Solver<'_> {
                     return Ok(largest);
                 }
                 match &body.width {
-                    Some(Size::Expr(expr)) => self.eval_length(expr, &env),
-                    Some(Size::Fit(span)) => self.fit(part, PartAxis::Width, *span),
+                    Some(Size::Expr(expr)) => {
+                        let width = self.eval_length(expr, &env)?;
+                        self.check_fixed_width(part, width, env.file, expr.span)?;
+                        Ok(width)
+                    }
+                    Some(Size::Fit(span)) => {
+                        let width = self.fit(part, PartAxis::Width, *span)?;
+                        self.check_fixed_width(part, width, env.file, *span)?;
+                        Ok(width)
+                    }
                     None => {
                         let stock = self.part_stock(part)?;
                         match self.stock_length(stock, StockField::Width)? {
@@ -1107,8 +1115,65 @@ impl Solver<'_> {
         }
     }
 
+    /// The name a stock is declared with.
+    pub(crate) fn stock_name(&self, stock: StockId) -> String {
+        self.model
+            .defs
+            .stock(stock)
+            .map(|s| s.decl.name.clone())
+            .unwrap_or_default()
+    }
+
+    /// A part's width against stock sold at a fixed `width:` (grammar,
+    /// "stock"): narrower is ripped from it, wider is an error at `span`.
+    pub(crate) fn check_fixed_width(
+        &mut self,
+        part: PartId,
+        width: ExactLength,
+        file: FileId,
+        span: Span,
+    ) -> Solved<()> {
+        let stock = self.part_stock(part)?;
+        let fixed = self
+            .model
+            .defs
+            .stock(stock)
+            .is_some_and(|def| def.width.is_some());
+        if !fixed {
+            return Ok(());
+        }
+        let Some(stock_width) = self.stock_length(stock, StockField::Width)? else {
+            return Ok(());
+        };
+        if width <= stock_width {
+            return Ok(());
+        }
+        let name = self.part_name(part);
+        let stock_name = self.stock_name(stock);
+        let reason = format!(
+            "its width is {}, but {stock_name} is sold {} wide",
+            stave_model::value::format_length(width),
+            stave_model::value::format_length(stock_width)
+        );
+        if self.noted_with_earlier_part(Code::TypeMismatch, file, span, &reason, &name) {
+            return Err(self.skip().into());
+        }
+        Err(self
+            .error(
+                Code::TypeMismatch,
+                format!("{name}: {reason}"),
+                file,
+                span,
+                format!(
+                    "leave width out to use the width of {stock_name}, write a narrower width to rip it, or cut the part from wider stock"
+                ),
+            )
+            .into())
+    }
+
     /// A part's written `thickness:`, which may be planed thinner than its
-    /// stock but never thicker (grammar, "part").
+    /// stock but never thicker (grammar, "part"). A sheet (plywood, MDF)
+    /// can't be planed: its parts are the sheet's thickness.
     fn written_thickness(
         &mut self,
         part: PartId,
@@ -1117,6 +1182,48 @@ impl Solver<'_> {
     ) -> Solved<ExactLength> {
         let thickness = self.eval_length(expr, env)?;
         let stock = self.part_stock(part)?;
+        let form = self
+            .model
+            .defs
+            .stock(stock)
+            .map(|def| def.form)
+            .ok_or(Fault::Internal("a stock's declaration"))?;
+        let sheet = match form {
+            StockForm::Plywood | StockForm::Mdf => true,
+            StockForm::Solid | StockForm::Dowel => false,
+        };
+        if sheet
+            && let Some(stock_thickness) = self.stock_length(stock, StockField::Thickness)?
+            && thickness != stock_thickness
+        {
+            let name = self.part_name(part);
+            let stock_name = self.stock_name(stock);
+            let sheet_word = match form {
+                StockForm::Mdf => "MDF",
+                StockForm::Plywood | StockForm::Solid | StockForm::Dowel => "plywood",
+            };
+            let reason = format!(
+                "its thickness is {}, but {sheet_word} can't be planed; {stock_name} is {} thick",
+                stave_model::value::format_length(thickness),
+                stave_model::value::format_length(stock_thickness)
+            );
+            if self.noted_with_earlier_part(Code::TypeMismatch, env.file, expr.span, &reason, &name)
+            {
+                return Err(self.skip().into());
+            }
+            return Err(self
+                .error(
+                    Code::TypeMismatch,
+                    format!("{name}: {reason}"),
+                    env.file,
+                    expr.span,
+                    format!(
+                        "leave thickness out to use the sheet's, or declare a {} sheet stock and cut the part from it",
+                        stave_model::value::format_length(thickness)
+                    ),
+                )
+                .into());
+        }
         if let Some(stock_thickness) = self.stock_length(stock, StockField::Thickness)?
             && thickness > stock_thickness
         {
@@ -1209,7 +1316,11 @@ impl Solver<'_> {
             None => self.stock_length(stock, StockField::Thickness)?,
         };
         let width = match &body.width {
-            Some(Size::Expr(expr)) => Some(self.eval_length(expr, &env)?),
+            Some(Size::Expr(expr)) => {
+                let width = self.eval_length(expr, &env)?;
+                self.check_fixed_width(part, width, env.file, expr.span)?;
+                Some(width)
+            }
             // A blank's width can't be fitted between other parts; the
             // turned part's box is its profile, so there is nothing to
             // measure the profile against.

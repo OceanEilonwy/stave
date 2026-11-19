@@ -702,14 +702,6 @@ impl Solver<'_> {
         }
     }
 
-    fn stock_name(&self, stock: stave_model::ids::StockId) -> String {
-        self.model
-            .defs
-            .stock(stock)
-            .map(|s| s.decl.name.clone())
-            .unwrap_or_default()
-    }
-
     /// Only a solid board can be spliced.
     fn check_spliceable(&mut self, part: PartId, name: &str, place: Place) -> Solved<()> {
         if self.part_profile(part)?.is_some() {
