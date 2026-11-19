@@ -38,6 +38,7 @@ mod hardware;
 mod help;
 mod joints;
 mod mechanism;
+mod meeting;
 mod members;
 mod mirror_cuts;
 mod models;

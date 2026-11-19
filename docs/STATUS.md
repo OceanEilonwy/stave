@@ -48,7 +48,13 @@ a line and a concrete help line for every problem:
    kind gives it (`cut groove: ...`), whatever its operation; an unnamed
    cut in a kind is the warning `unnamed-cut`, two cuts of one kind with
    one name are `duplicate-name`, and every cut in `std/` and `examples/`
-   is named. A joint's parts that don't touch are `no-contact`; a spacing
+   is named. A joint's parts that don't touch are `no-contact`. A kind's
+   rule can ask how its parts meet with `edge_to_edge(a, b)` (side by
+   side in one plane, an edge of each together; exact, from the parts'
+   poses): `glued_edge`, `tongue_and_groove`, `splined_edge` and `chigiri`
+   ask it, so used at a corner (a case's side on its base) each is refused
+   by that rule alone, with a note saying how the parts do meet and
+   nothing cut, while every part made of boards still checks. A spacing
    that runs past `to` is `overlap`; a kind's catalogue rules are its own
    `require`s and `adjust`s (a slide's gap, how far a cup hinge's arm can
    be set on its plate). Every shape of every hardware member is a

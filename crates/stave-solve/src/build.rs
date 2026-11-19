@@ -24,7 +24,7 @@ use crate::hardware::{
     HardwareCut, MemberCarrier, Placed, PlacedMember, RoleBound, WorldShape, crossing_face,
     world_index, world_shape,
 };
-use crate::joints::{GeomTable, JointWork, PartGeom, local_slot, round_length};
+use crate::joints::{GeomTable, JointWork, Making, PairWork, PartGeom, local_slot, round_length};
 use crate::mechanism::AssemblyMechanism;
 use crate::members::{LaidOut, WorldMemberCut};
 use crate::mirror_cuts::MirroredJoint;
@@ -607,6 +607,34 @@ pub(crate) fn build(solver: &mut Solver<'_>) -> Option<SolvedDesign> {
     Some(design)
 }
 
+/// Which part each of a joint's roles names in one pair.
+fn pair_roles(kind: &stave_model::defs::KindDef, pair: &PairWork) -> Vec<RoleBinding> {
+    if pair.across {
+        // One `Parts` role: every part is bound to it.
+        let name = kind
+            .roles
+            .first()
+            .map(|r| r.name.clone())
+            .unwrap_or_default();
+        pair.parts
+            .iter()
+            .map(|part| RoleBinding {
+                role: name.clone(),
+                part: *part,
+            })
+            .collect()
+    } else {
+        kind.roles
+            .iter()
+            .zip(&pair.parts)
+            .map(|(role, part)| RoleBinding {
+                role: role.name.clone(),
+                part: *part,
+            })
+            .collect()
+    }
+}
+
 /// A cut a piece of hardware makes: its member's shape where it meets the
 /// part, from the face the solver chose.
 fn hardware_cut(geom: &PartGeom, cut: &HardwareCut, hardware: HardwareId) -> Solved<Cut> {
@@ -731,6 +759,28 @@ impl Solver<'_> {
         let mut note = None;
         let mut fastener_totals: Vec<(String, Length, Length, u32)> = Vec::new();
         for (pair_index, pair) in work.pairs.iter_mut().enumerate() {
+            if pair.making == Making::Withheld {
+                // The parts don't meet as the kind needs: its rule has
+                // said so, and nothing is cut, made or placed here.
+                for part in &pair.parts {
+                    if let Some(list) = memberships.get_mut(part.index())
+                        && !list.contains(&joint)
+                    {
+                        list.push(joint);
+                    }
+                }
+                pairs.push(JointPair {
+                    roles: pair_roles(&kind, pair),
+                    contact: pair.contact,
+                    extensions: Vec::new(),
+                    cut_order: Vec::new(),
+                    insert: Vec::new(),
+                    made_parts: Vec::new(),
+                    requires: work.requires.get(pair_index).cloned().unwrap_or_default(),
+                    members: Vec::new(),
+                });
+                continue;
+            }
             // Made parts.
             let mut made_ids = Vec::new();
             for made_def in &joint_def.makes {
@@ -959,32 +1009,8 @@ impl Solver<'_> {
             {
                 note = Some(self.format_text(text, &env)?);
             }
-            let roles = if pair.across {
-                // One `Parts` role: every part is bound to it.
-                let name = kind
-                    .roles
-                    .first()
-                    .map(|r| r.name.clone())
-                    .unwrap_or_default();
-                pair.parts
-                    .iter()
-                    .map(|part| RoleBinding {
-                        role: name.clone(),
-                        part: *part,
-                    })
-                    .collect()
-            } else {
-                kind.roles
-                    .iter()
-                    .zip(&pair.parts)
-                    .map(|(role, part)| RoleBinding {
-                        role: role.name.clone(),
-                        part: *part,
-                    })
-                    .collect()
-            };
             pairs.push(JointPair {
-                roles,
+                roles: pair_roles(&kind, pair),
                 contact: pair.contact,
                 extensions: pair.extensions.clone(),
                 cut_order,

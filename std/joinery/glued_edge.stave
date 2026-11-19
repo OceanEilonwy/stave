@@ -5,6 +5,7 @@ stave 1
 /// from narrow boards, and the way a part's boards are joined unless its
 /// `boards:` says otherwise.
 kind glued_edge : joint {
+  require side_by_side   : edge_to_edge(piece, into) "an edge joint glues two boards lying side by side, edge to edge; these meet another way"
   require same_thickness : piece.thickness == into.thickness "boards glued edge to edge need the same thickness"
 
   insert: [push(piece, along: width)]

@@ -10,6 +10,7 @@ kind splined_edge : joint {
   param thickness = piece.thickness / 3
   /// What the spline is cut from.
   param spline_stock : Stock = piece.stock
+  require side_by_side   : edge_to_edge(piece, into) "a spline joins two boards lying side by side, edge to edge; these meet another way"
   require same_thickness : piece.thickness == into.thickness "boards joined by a spline need the same thickness"
   require walls_stand    : thickness <= piece.thickness / 2 "the spline is too thick: the grooves' walls would be thinner than a quarter of the board"
 

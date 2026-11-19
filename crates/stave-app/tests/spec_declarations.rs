@@ -409,7 +409,7 @@ fn a_list_combines_edge_joints() {
     // each of the five seams, and a middle board has a spline groove at
     // each of its two seams.
     let names: Vec<&str> = boards.requires.iter().map(|r| r.name.as_str()).collect();
-    assert_eq!(names.len(), 15);
+    assert_eq!(names.len(), 25);
     assert!(names.contains(&"p.seam[5].same_thickness"));
     assert!(names.contains(&"p.seam[5].walls_stand"));
     let middle = boards.boards.get(2).unwrap();
@@ -450,8 +450,8 @@ fn tongue_and_groove_needs_no_glue() {
         [CutOperation::Tenon]
     );
     assert!(boards.requires.iter().all(|r| r.holds));
-    assert_eq!(boards.requires.len(), 10);
-    assert_eq!(boards.requires[0].name, "p.seam[1].same_thickness");
+    assert_eq!(boards.requires.len(), 15);
+    assert_eq!(boards.requires[0].name, "p.seam[1].side_by_side");
     // The part is still one part: its cut size is what was drawn.
     assert_eq!(part(design, "p").cut.width, mm("300"));
 }

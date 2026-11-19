@@ -1404,10 +1404,11 @@ impl Solver<'_> {
                 let (Some(a), Some(b)) = (Self::arg(args, "a"), Self::arg(args, "b")) else {
                     return Err(Reported);
                 };
-                let a = self.contact_part(a, env)?;
-                let b = self.contact_part(b, env)?;
+                let a = self.one_part(Builtin::Contact, a, env)?;
+                let b = self.one_part(Builtin::Contact, b, env)?;
                 self.contact(a, b, env, span).map(Value::Patch)
             }
+            Builtin::EdgeToEdge => self.eval_meeting(Builtin::EdgeToEdge, args, env),
             Builtin::Split => self.split(args, env, span),
             Builtin::Cover => self.cover(args, env, span),
             Builtin::Overlay => {

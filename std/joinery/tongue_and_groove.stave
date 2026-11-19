@@ -9,6 +9,7 @@ kind tongue_and_groove : joint {
   param depth = piece.thickness / 3
   /// The tongue's thickness, which is the groove's width.
   param thickness = piece.thickness / 3
+  require side_by_side   : edge_to_edge(piece, into) "a tongue and groove joins two boards lying side by side, edge to edge; these meet another way"
   require same_thickness : piece.thickness == into.thickness "boards joined by a tongue and groove need the same thickness"
   require walls_stand    : thickness <= into.thickness / 2 "the tongue is too thick: the groove's walls would be thinner than a quarter of the board"
 

@@ -1312,6 +1312,8 @@ the last three need no glue), applied as for a joint between parts:
   pairs"), so the battens of `suitsuki_zan` are as long as the part is wide.
 - Requires are checked for every seam; a failing one is an error on the
   `boards:` line (on the part, when the default is used), naming the boards.
+  Neighbouring boards are always `edge_to_edge`, so an edge joint's rule
+  that asks it holds at every seam.
 - `adds:` widens a board toward its neighbour (the tongue of a tongue and
   groove), and the cut list shows each board's width with it.
 - Cuts are made on the boards. Parts the kind makes (a spline) appear in the
@@ -2690,6 +2692,7 @@ These are looked up when a bare name is called (see [Names](#names), rule 3).
 | `model(source, align:, sha256:)` | `Model` | a `.glb` model; optional `align: node("name")` and `sha256: "<hex>"` (see [Hardware](#hardware)) |
 | `ends(inset:)`, `pitch(d)`, `gap(d)` | `Spacing` | used by `spaced`, with the bare words `evenly` and `ends` |
 | `contact(a, b)` | `Patch` | the patch where two parts touch, read as `.length` (its longer side) and `.width` (its shorter side); see below |
+| `edge_to_edge(a, b)` | `Bool` | `true` when two parts lie side by side in one plane and meet along an edge of each; see below |
 | `wall(cut)` | `Length` | the least wood between one of the kind's named cuts and any face or other cut of the same part, read only in a kind's `require`; see [Walls](#walls) |
 
 **`contact(a, b)`** is where two parts touch: a flat patch, measured on
@@ -2711,6 +2714,50 @@ sits on:
 require seat_wide : contact(piece, into).width >= diameter + 2 * wall "the parts overlap too little for these dowels"
 require seat_long : contact(piece, into).length >= count * (diameter + wall) + wall "too many dowels for this joint"
 ```
+
+**`edge_to_edge(a, b)`** is `true` when two parts lie side by side in one
+plane and meet along an edge of each, as the boards of a glued-up top do.
+Of a part's six surfaces, the two square to its thickness are its
+**faces**, the two square to its width its **edges** and the two square to
+its length its **ends** (for a part with `grain: width`, whose length runs
+across the grain, the two square to its length are its edges and the two
+square to its width its ends: edges always run along the grain). Two parts
+are edge to edge when all three hold:
+
+1. their thicknesses run along the same world axis once placed;
+2. they touch: their drawn boxes meet over an area without sharing wood
+   (parts that cross, as in a half lap, are not edge to edge);
+3. where they touch is an edge of `a` and an edge of `b`.
+
+Boards of different thickness still count; a kind that needs the same
+thickness says so in a rule of its own. An edge against an end (a
+breadboard end) is not edge to edge, nor is an end against a face (a
+case's side standing on its base), nor are two edges meeting at right
+angles. It is worked out on the parts' drawn boxes and orientations,
+exactly, as `contact` is, before joints lengthen the parts (a tongue in
+its groove doesn't make two boards cross). Parts that don't touch are not
+edge to edge: the answer is `false`, not an error of its own. (A joint's
+pairs are only parts that meet, and a listed part that meets none is
+`error[no-contact]`; see [Roles and pairs](#roles-and-pairs).)
+
+`a` and `b` are one part each, as for `contact` (anything else is
+`error[type-mismatch]`); a role of type `Parts` is one part in each pair
+the joint joins. It may be written wherever `contact` may: in a
+project's or a component's `require` naming two parts, and in a joint or
+hardware kind's `require`, reading its roles. A bare
+call is a whole condition, since a condition is any `Bool`; it combines
+with `&&`, `||` and `!` like any other. The standard edge joints
+(`glued_edge`, `tongue_and_groove`, `splined_edge`, `chigiri`) use it to
+say how their boards must meet:
+
+```
+require side_by_side : edge_to_edge(piece, into) "a butterfly key joins two boards lying side by side, edge to edge; these meet another way"
+```
+
+The boards of a part (see [Boards](#boards)) are always edge to edge, so
+the rule holds at every seam of a part made of boards. A kind's rule that
+asks how its parts meet is checked before its other rules; see
+[Checks](#checks-and-require) for what a failure of it does.
 
 Inside a hardware kind's `member` and `mechanism` only, written in the
 [kind's frame](#the-kinds-frame) (anywhere else, `point(...)` is
@@ -2868,6 +2915,24 @@ error[require]: 'seat_wide' fails: the parts overlap too little for these dowels
    = note: the rule measures 5.5mm and needs at least 16mm
    = note: the same for side_r and top in top_dowels
    = help: top covers only 5.5mm of side_l's 19mm end; move or resize top so it covers the whole end
+```
+
+**A rule that asks how the parts meet comes first.** A joint kind's
+`require` whose condition reads `edge_to_edge(a, b)` is checked for each
+pair before the kind's other rules. When it fails, the joint is not one
+for that pair: the kind's other rules are not checked there, and nothing
+is cut, made, added or placed for that pair, so the rule's
+`error[require]` is the only error the pair gives (not also a tongue, a
+key or a spline that can't be cut where it would go). Its note says how
+the parts do meet, and its help is to choose another kind:
+
+```
+error[require]: 'side_by_side' fails: a butterfly key joins two boards lying side by side, edge to edge; these meet another way
+  --> case.stave:49:23
+   = note: for case.side[left] and case.base in case.base_joints
+   = note: case.side[left]'s end meets case.base's face at right angles
+   = note: the same for case.side[right] and case.base in case.base_joints
+   = help: choose another joint kind, one made for parts that meet the way these do, or place the parts as the rule says
 ```
 
 Requires are what an AI patch or a smart edit is judged against: a change that
@@ -3434,7 +3499,7 @@ The complete list of types. A `param` may name any of them.
 | `Angle` | `110deg` |
 | `Ratio` | `0.5`, `2 / 3`, `1 in 8` |
 | `Count` | `4` |
-| `Bool` | `true`, `false`, comparisons |
+| `Bool` | `true`, `false`, comparisons, `edge_to_edge(a, b)` |
 | `Text` | `"..."` |
 | `Part` | one part |
 | `Parts` | one part or a list of parts |
