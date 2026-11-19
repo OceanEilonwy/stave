@@ -27,6 +27,15 @@ pub(crate) fn on_gtk_thread(body: impl FnOnce() + Send + 'static) -> bool {
             if !up {
                 return;
             }
+            // The simple input method, not the desktop's: on Wayland,
+            // GTK's text-input listener looks up the focused entry's
+            // display, and an event still queued for an entry whose window
+            // an earlier test destroyed reaches a freed widget in the next
+            // test's main loop (SIGSEGV in `gtk_widget_get_display`). No
+            // test exercises an input method, so none is listened to.
+            if let Some(settings) = gtk::Settings::default() {
+                settings.set_gtk_im_module(Some("gtk-im-context-simple"));
+            }
             for (job, done) in received {
                 let _ = done.send(catch_unwind(AssertUnwindSafe(job)));
             }
