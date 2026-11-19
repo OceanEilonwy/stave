@@ -200,11 +200,11 @@ impl From<EditingInput> for WindowInput {
     }
 }
 
-/// Puts the editing widgets over the 3D view and wires them (and the
-/// Details panel's links) to [`EditingInput`]s.
+/// Puts the editing widgets over the 3D view and wires them to
+/// [`EditingInput`]s. The Details panel's links come as the inspector's
+/// outputs (`update/selection.rs`).
 pub(in crate::ui) fn wire(window: &mut Window) {
     window.connect_editing();
-    window.connect_links(&window.widgets.inspector.links);
 }
 
 impl Window {

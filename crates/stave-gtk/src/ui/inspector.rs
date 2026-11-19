@@ -87,9 +87,9 @@ impl Page {
 
 /// The inspector's state.
 pub struct InspectorComponent {
-    /// Where the name links it draws report clicks and hovers. The links
-    /// are built by `sections`, which isn't a component yet.
-    links: LinkHandlers,
+    /// Where the name links it draws report clicks and hovers: its own
+    /// input.
+    links: LinkHandlers<InspectorInput>,
     /// The page showing.
     page: Page,
     /// What to say when there is nothing to select.
@@ -103,8 +103,6 @@ pub struct InspectorComponent {
 pub struct InspectorInit {
     /// Focus mode's panel, shown on the focus page.
     pub focus: gtk::Box,
-    /// Where the name links it draws report clicks and hovers.
-    pub links: LinkHandlers,
 }
 
 /// What the inspector is told.
@@ -126,6 +124,8 @@ pub enum InspectorInput {
     SourceClicked(SourceLocation),
     /// People clicked something that selects or lights a target.
     Click(LinkTarget),
+    /// The pointer entered a name link (`Some`) or left it.
+    Hover(Option<LinkTarget>),
 }
 
 /// What the inspector tells its owner.
@@ -137,6 +137,9 @@ pub enum InspectorOutput {
     Source(SourceLocation),
     /// Select or light this target, as a link does.
     Link(LinkTarget),
+    /// The pointer is on a name link that names this (`Some`), or left
+    /// it: light what it names.
+    Hover(Option<LinkTarget>),
 }
 
 #[relm4::component(pub)]
@@ -202,12 +205,16 @@ impl Component for InspectorComponent {
     fn init(
         init: Self::Init,
         root: Self::Root,
-        _sender: ComponentSender<Self>,
+        sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
         sections::install_style();
-        let InspectorInit { focus, links } = init;
+        let InspectorInit { focus } = init;
         let model = InspectorComponent {
-            links,
+            links: LinkHandlers::new(
+                sender.input_sender().clone(),
+                InspectorInput::Click,
+                InspectorInput::Hover,
+            ),
             page: Page::Empty,
             idle: None,
             unsaved: BTreeSet::new(),
@@ -260,6 +267,7 @@ impl Component for InspectorComponent {
             InspectorInput::FocusAsked(target) => Some(InspectorOutput::Focus(target)),
             InspectorInput::SourceClicked(location) => Some(InspectorOutput::Source(location)),
             InspectorInput::Click(target) => Some(InspectorOutput::Link(target)),
+            InspectorInput::Hover(target) => Some(InspectorOutput::Hover(target)),
         };
         if let Some(output) = output {
             // Nobody listening is not a mistake: the owner may not want
@@ -330,9 +338,9 @@ fn fill_note(container: &gtk::Box, note: &Note) {
 }
 
 /// Draws an inspection's details. Its buttons only send the inspector
-/// messages; its name links report to the link handlers.
+/// messages, and so do its name links.
 struct Drawer<'a> {
-    links: &'a LinkHandlers,
+    links: &'a LinkHandlers<InspectorInput>,
     sender: &'a ComponentSender<InspectorComponent>,
     unsaved: &'a BTreeSet<PathBuf>,
 }
@@ -628,8 +636,6 @@ pub struct Inspector {
     pub root: gtk::Stack,
     /// Focus mode's panel.
     pub focus: FocusPanel,
-    /// Where the links it draws report clicks and hovers.
-    pub links: LinkHandlers,
     bridge: Bridge<InspectorComponent>,
 }
 
@@ -637,15 +643,12 @@ impl Inspector {
     /// An empty inspector.
     pub fn new() -> Inspector {
         let focus = FocusPanel::new();
-        let links = LinkHandlers::default();
         let bridge = Bridge::<InspectorComponent>::launch(InspectorInit {
             focus: focus.root.clone(),
-            links: links.clone(),
         });
         Inspector {
             root: bridge.widget().clone(),
             focus,
-            links,
             bridge,
         }
     }
@@ -863,6 +866,61 @@ mod tests {
             *heard.borrow(),
             vec![(9, false), (9, true)],
             "each output after its update, the inner click after the first"
+        );
+    }
+
+    #[test]
+    fn a_name_links_click_and_hover_are_the_inspectors_outputs() {
+        on_gtk_thread(name_links_report);
+    }
+
+    /// A name link the inspector draws sends its click and the pointer's
+    /// entering and leaving to the inspector, which tells its owner:
+    /// `Link` for the click, `Hover` for the pointer.
+    fn name_links_report() {
+        let inspector = Inspector::new();
+        let heard: Rc<RefCell<Vec<InspectorOutput>>> = Rc::default();
+        let log = Rc::clone(&heard);
+        inspector.connect_outputs(move |output| log.borrow_mut().push(output));
+        let target = LinkTarget::Select(Selection::Problem(stave_app::session::ProblemIndex(0)));
+        let mut shown = inspection().expect("an inspection");
+        shown.rows.push(Field {
+            label: "Joined to",
+            value: "rail[top]".to_owned(),
+            links: vec![stave_app::inspect::NameLink {
+                name: "rail[top]".to_owned(),
+                target: target.clone(),
+            }],
+        });
+        inspector.show(Some(&shown));
+        settle();
+        let details = inspector.root.upcast_ref::<gtk::Widget>().clone();
+        let Some(link) = buttons(&details)
+            .into_iter()
+            .find(|button| button.has_css_class("stave-name-link"))
+        else {
+            panic!("the row's value is a name link");
+        };
+        let Some(motion) = link
+            .observe_controllers()
+            .into_iter()
+            .filter_map(Result::ok)
+            .find_map(|controller| controller.downcast::<gtk::EventControllerMotion>().ok())
+        else {
+            panic!("the link watches the pointer");
+        };
+        motion.emit_by_name::<()>("enter", &[&1.0_f64, &1.0_f64]);
+        link.emit_clicked();
+        motion.emit_by_name::<()>("leave", &[]);
+        assert!(heard.borrow().is_empty(), "only queued");
+        settle();
+        assert_eq!(
+            *heard.borrow(),
+            vec![
+                InspectorOutput::Hover(Some(target.clone())),
+                InspectorOutput::Link(target),
+                InspectorOutput::Hover(None),
+            ]
         );
     }
 }
