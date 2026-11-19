@@ -1378,14 +1378,6 @@ impl Workbench {
     }
 
     /// `true` while a panel is open (in a frame, shown or not).
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the window's part choice (update/project.rs) is to call it: \
-                      Code comes forward only while it is open"
-        )
-    )]
     pub fn is_open(&self, id: PanelId) -> bool {
         self.yard.is_open(id)
     }

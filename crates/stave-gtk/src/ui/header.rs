@@ -577,6 +577,13 @@ pub struct Header {
     pub menu_button: gtk::MenuButton,
     /// The project's name, its folder under it; in the middle of the bar
     /// while the switcher is hidden.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "it shortens itself in a narrow window; tests read it"
+        )
+    )]
     pub title: adw::WindowTitle,
     /// Design / Cut list.
     pub switcher: adw::ToggleGroup,

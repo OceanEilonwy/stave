@@ -288,8 +288,17 @@ pub(in crate::ui) fn wire(window: &mut Window) {
         actions.add_action(&action);
     }
     viewport.insert_action_group("view", Some(&actions));
+    let view_keys = app::shortcut_controller(app::KeyScope::View);
+    view_keys.set_scope(gtk::ShortcutScope::Local);
+    viewport.add_controller(view_keys);
 
-    // Escape, F and Delete anywhere in the window but a text field.
+    // F (frame) and Escape anywhere in the window but a text field,
+    // after the focused widget had its turn.
+    let shortcuts = app::shortcut_controller(app::KeyScope::Window);
+    shortcuts.set_scope(gtk::ShortcutScope::Local);
+    root.add_controller(shortcuts);
+
+    // Delete anywhere in the window but a text field.
     let keys = gtk::EventControllerKey::new();
     let sender = input.clone();
     keys.connect_key_pressed(move |controller, key, _, modifiers| {
@@ -306,14 +315,6 @@ pub(in crate::ui) fn wire(window: &mut Window) {
             return glib::Propagation::Proceed;
         }
         match key {
-            gdk::Key::Escape => {
-                sender.emit(SelectionInput::Escape.into());
-                glib::Propagation::Stop
-            }
-            gdk::Key::f | gdk::Key::F => {
-                sender.emit(RenderingInput::Frame.into());
-                glib::Propagation::Stop
-            }
             // Delete removes the selection, saying first what goes.
             gdk::Key::Delete | gdk::Key::KP_Delete => {
                 sender.emit(EditingInput::RemoveSelected.into());
@@ -1383,5 +1384,14 @@ mod tests {
                 "zoom-out",
             ]
         );
+        for (name, _) in CAMERA_KEYS {
+            let action = format!("view.{name}");
+            assert!(
+                app::ACCELERATORS
+                    .iter()
+                    .any(|a| a.action == action && a.scope == app::KeyScope::View),
+                "{action} has no keys"
+            );
+        }
     }
 }

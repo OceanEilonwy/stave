@@ -699,12 +699,14 @@ impl Window {
             // A part, assembly or piece of hardware chosen anywhere opens
             // the file that places it, at that line, in the Code panel
             // (forward unless it would cover the 3D view; the keyboard
-            // stays where it is).
+            // stays where it is). A closed Code panel stays closed: a
+            // first launch doesn't show code until it is asked for.
             (Some(_), Some(placed)) if !self.state.linking => {
                 files.reveal(&placed);
-                self.widgets
-                    .workbench
-                    .bring_forward_beside_view(workbench::PanelId::Code);
+                let workbench = &self.widgets.workbench;
+                if workbench.is_open(workbench::PanelId::Code) {
+                    workbench.bring_forward_beside_view(workbench::PanelId::Code);
+                }
             }
             _ => {}
         }
