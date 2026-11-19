@@ -288,7 +288,17 @@ window after the focused widget and never while typing in a text field
 (F frames, Escape leaves focus or clears the selection), or the text
 editor (`editor.follow` F12, `editor.peek` Alt+F12, `editor.uses`
 Shift+F12, `editor.show-info` Ctrl+I, also in the text's right-click
-menu).
+menu), or the 3D view while it has the keyboard (`view.turn-left` and
+`view.turn-right` on Left and Right, `view.look-higher` and
+`view.look-lower` on Up and Down, about 15° a press; `view.zoom-in` on
+plus, equals or keypad plus and `view.zoom-out` on minus or keypad
+minus, a scroll step each).
+
+To a screen reader the 3D view is a picture named "3D view of <project
+title>", its description what is selected and what the last check found
+("door_l selected. 1 error."), kept up to date as either changes. It is
+outlined in the accent colour while it has the keyboard
+(`staveviewport:focus-visible`).
 
 Stave remembers the window's size, whether it was maximised and the
 style chosen in the menu, in `~/.config/stave/window` (a GLib key file,

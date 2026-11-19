@@ -75,6 +75,9 @@ pub(super) enum KeyScope {
     Window,
     /// By the text editor, while the keyboard is in the text.
     Editor,
+    /// By the 3D view, while the keyboard is in it: the arrow keys and
+    /// plus and minus, which other widgets use for themselves.
+    View,
 }
 
 /// An action with keys: what binds them (`scope`), and what the shortcuts
@@ -198,6 +201,48 @@ pub(super) const ACCELERATORS: &[Accelerator] = &[
         title: "Leave focus, or clear the selection",
         section: KeySection::View,
         scope: KeyScope::Window,
+    },
+    Accelerator {
+        action: "view.turn-left",
+        keys: &["Left"],
+        title: "Turn the view left",
+        section: KeySection::View,
+        scope: KeyScope::View,
+    },
+    Accelerator {
+        action: "view.turn-right",
+        keys: &["Right"],
+        title: "Turn the view right",
+        section: KeySection::View,
+        scope: KeyScope::View,
+    },
+    Accelerator {
+        action: "view.look-higher",
+        keys: &["Up"],
+        title: "Look from higher up",
+        section: KeySection::View,
+        scope: KeyScope::View,
+    },
+    Accelerator {
+        action: "view.look-lower",
+        keys: &["Down"],
+        title: "Look from lower down",
+        section: KeySection::View,
+        scope: KeyScope::View,
+    },
+    Accelerator {
+        action: "view.zoom-in",
+        keys: &["plus", "equal", "KP_Add"],
+        title: "Zoom in",
+        section: KeySection::View,
+        scope: KeyScope::View,
+    },
+    Accelerator {
+        action: "view.zoom-out",
+        keys: &["minus", "KP_Subtract"],
+        title: "Zoom out",
+        section: KeySection::View,
+        scope: KeyScope::View,
     },
     Accelerator {
         action: "win.editor",
@@ -626,7 +671,7 @@ pub(super) fn shortcut_controller(scope: KeyScope) -> gtk::ShortcutController {
             };
             let action: gtk::ShortcutAction = match scope {
                 KeyScope::Window => window_action(accelerator.action).upcast(),
-                KeyScope::Application | KeyScope::Editor => {
+                KeyScope::Application | KeyScope::Editor | KeyScope::View => {
                     gtk::NamedAction::new(accelerator.action).upcast()
                 }
             };

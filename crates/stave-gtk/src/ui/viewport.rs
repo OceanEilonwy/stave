@@ -2,6 +2,11 @@
 //! reports its size in device pixels when it changes. Frames are rendered
 //! at that size, so they are drawn one texel to a device pixel, sharp on a
 //! HiDPI screen too.
+//!
+//! To a screen reader it is a picture: its name says what it shows ("3D
+//! view of Wall shelf") and its description what is selected and what the
+//! last check found. Its CSS node is `staveviewport`, outlined while it
+//! has the keyboard.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -28,6 +33,11 @@ mod imp {
         const NAME: &'static str = "StaveViewport";
         type Type = super::Viewport;
         type ParentType = gtk::Widget;
+
+        fn class_init(class: &mut Self::Class) {
+            class.set_css_name("staveviewport");
+            class.set_accessible_role(gtk::AccessibleRole::Img);
+        }
     }
 
     impl ObjectImpl for Viewport {
@@ -195,6 +205,15 @@ impl Viewport {
         );
         self.show_frame(texture.upcast());
         true
+    }
+
+    /// Says what it shows to screen readers: `name` ("3D view of Wall
+    /// shelf") and `description` ("door_l selected. 1 error.").
+    pub fn describe(&self, name: &str, description: &str) {
+        self.update_property(&[
+            gtk::accessible::Property::Label(name),
+            gtk::accessible::Property::Description(description),
+        ]);
     }
 
     /// Calls `handler` with the size in device pixels whenever it may have
