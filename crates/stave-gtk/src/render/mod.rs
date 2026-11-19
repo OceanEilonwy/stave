@@ -1246,16 +1246,43 @@ impl Renderer {
                 .unwrap_or(Look::Normal)
         };
         let ranges = self.meshes.ranges();
-        let visible: Vec<(u32, MeshRange)> = frame
+        // How far a shown node's centre is from the eye, where it is now.
+        let eye = frame.orbit.eye();
+        let distance = |id: NodeId, transform: Mat4| {
+            frame.scene.node(id).map_or(f32::MAX, |node| {
+                node.geometry
+                    .bounds
+                    .transformed(transform)
+                    .centre()
+                    .distance(eye)
+            })
+        };
+        // Solid parts, nearest first: the wood in front is drawn before
+        // what it hides, so the depth test spares the hidden fragments
+        // their shading.
+        let mut visible: Vec<(f32, u32, MeshRange)> = frame
             .scene
             .node_ids()
             .zip(ranges.iter().copied())
-            .filter(|(id, _)| frame.posed.shown(*id).is_some() && look(*id) == Look::Normal)
-            .filter_map(|(id, mesh)| Some((u32::try_from(id.index()).ok()?, mesh)))
+            .filter_map(|(id, mesh)| {
+                let transform = frame.posed.shown(id)?;
+                if look(id) != Look::Normal {
+                    return None;
+                }
+                Some((
+                    distance(id, transform),
+                    u32::try_from(id.index()).ok()?,
+                    mesh,
+                ))
+            })
+            .collect();
+        visible.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let visible: Vec<(u32, MeshRange)> = visible
+            .into_iter()
+            .map(|(_, index, mesh)| (index, mesh))
             .collect();
         // Ghosts and see-through parts, farthest first so they blend in
         // order.
-        let eye = frame.orbit.eye();
         let mut translucent: Vec<(f32, Look, u32, MeshRange)> = frame
             .scene
             .node_ids()
@@ -1266,15 +1293,8 @@ impl Renderer {
                 if look == Look::Normal {
                     return None;
                 }
-                let centre = frame
-                    .scene
-                    .node(id)?
-                    .geometry
-                    .bounds
-                    .transformed(transform)
-                    .centre();
                 Some((
-                    centre.distance(eye),
+                    distance(id, transform),
                     look,
                     u32::try_from(id.index()).ok()?,
                     mesh,

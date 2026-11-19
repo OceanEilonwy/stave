@@ -122,14 +122,17 @@ fn key_light(world: vec3<f32>, normal: vec3<f32>) -> f32 {
     let facing = max(dot(normal, globals.key_direction.xyz), 0.0);
     let bias = 0.0015 + 0.003 * (1.0 - facing);
     let texel = 1.0 / 2048.0;
+    // Nine taps two texels apart. The sampler filters each compare over
+    // the four texels around it, so the taps tile without gaps into a soft
+    // edge about as wide as 25 taps a texel and a half apart gave.
     var lit = 0.0;
-    for (var x = -2; x <= 2; x += 1) {
-        for (var y = -2; y <= 2; y += 1) {
-            let offset = vec2<f32>(f32(x), f32(y)) * texel * 1.5;
+    for (var x = -1; x <= 1; x += 1) {
+        for (var y = -1; y <= 1; y += 1) {
+            let offset = vec2<f32>(f32(x), f32(y)) * texel * 2.0;
             lit += textureSampleCompareLevel(shadow_map, shadow_sampler, uv + offset, ndc.z - bias);
         }
     }
-    lit = lit / 25.0;
+    lit = lit / 9.0;
     let inside = all(uv >= vec2<f32>(0.0)) && all(uv <= vec2<f32>(1.0)) && ndc.z <= 1.0;
     return select(1.0, lit, inside);
 }
@@ -190,10 +193,14 @@ fn mesh_fragment(in: MeshOut, @builtin(front_facing) front: bool) -> @location(0
     let is_metal = node.params.w > 0.5;
     let radius = ring_radius(in.grain, node.params);
     let blur = fwidth(radius);
-    var albedo = wood(node.colour.rgb, in.grain, node.params, node.colour.a, radius, blur);
+    // The rings' radius and its derivative are worked out for metal too
+    // (a derivative needs every pixel around); the rest of the wood only
+    // for wood.
+    var albedo: vec3<f32>;
     if (is_metal) {
         albedo = metal(node.colour.rgb, in.grain);
     } else {
+        albedo = wood(node.colour.rgb, in.grain, node.params, node.colour.a, radius, blur);
         // Faces a cut made are tinted darker, so the joinery reads.
         albedo = albedo * (1.0 - clamp(CUT_TINT * node.style.z * in.cut, 0.0, 0.8));
     }
@@ -371,10 +378,13 @@ fn floor_vertex(@builtin(vertex_index) index: u32) -> FloorOut {
 
 @fragment
 fn floor_fragment(in: FloorOut) -> @location(0) vec4<f32> {
-    let shadow = 1.0 - key_light(in.world, vec3<f32>(0.0, 1.0, 0.0));
-    // Fade out toward the edge of the floor.
+    // Fade out toward the edge of the floor; past it, nothing to shade.
     let away = length(in.world.xz - globals.floor.xz) / globals.floor.w;
     let fade = 1.0 - smoothstep(0.5, 1.0, away);
+    if (fade <= 0.0) {
+        discard;
+    }
+    let shadow = 1.0 - key_light(in.world, vec3<f32>(0.0, 1.0, 0.0));
     return vec4<f32>(globals.shadow.rgb, shadow * globals.shadow.a * fade);
 }
 
