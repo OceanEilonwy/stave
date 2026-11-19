@@ -4,6 +4,7 @@
 
 use std::path::Path;
 
+use stave_model::solved::SolvedDesign;
 use stave_scene::{Posed, SceneGraph};
 
 /// Why the view couldn't be saved.
@@ -30,4 +31,18 @@ pub fn save_glb(graph: &SceneGraph, posed: &Posed, path: &Path) -> Result<(), Sa
         path: path.display().to_string(),
         source,
     })
+}
+
+/// The file name the save dialog offers: the project's title in lower
+/// case with every character that is not a letter or a digit made an
+/// underscore, then `_view.glb` ("Hall Bench" becomes
+/// `hall_bench_view.glb`); `design_view.glb` when nothing is shown.
+pub fn default_file_name(design: Option<&SolvedDesign>) -> String {
+    let title = design.map_or("design", |design| design.project.title.as_str());
+    let slug: String = title
+        .to_lowercase()
+        .chars()
+        .map(|c| if c.is_alphanumeric() { c } else { '_' })
+        .collect();
+    format!("{slug}_view.glb")
 }

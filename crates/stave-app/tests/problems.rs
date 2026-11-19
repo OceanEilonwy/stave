@@ -256,3 +256,42 @@ fn a_report_holds_everything_stave_check_prints() {
     // One report per problem, in `stave check` order.
     assert_eq!(problems::reports(&checked), vec![report]);
 }
+
+#[test]
+fn pins_go_to_errors_and_warnings_whose_place_is_known() {
+    let checked = several();
+    let pinned = problems::pins(&checked.problems, None, problems::PIN_LIMIT);
+    assert!(
+        !pinned.is_empty(),
+        "several_problems has a problem with a place"
+    );
+    for pin in &pinned {
+        let problem = checked.problems.get(pin.index.0).expect("a problem");
+        assert!(problem.contact.is_some());
+        assert_ne!(problem.severity, Severity::Note);
+        assert_eq!(problems::Mark::of(problem.severity), Some(pin.mark));
+    }
+    assert!(problems::pins(&checked.problems, None, 1).len() <= 1);
+    let first = pinned.first().expect("a pin").index;
+    assert_eq!(
+        problems::pins(&checked.problems, Some(first), problems::PIN_LIMIT)
+            .iter()
+            .map(|pin| pin.index)
+            .collect::<Vec<_>>(),
+        vec![first],
+        "a posed problem shows only its own pin"
+    );
+}
+
+#[test]
+fn the_edge_chip_names_the_first_problem_off_screen() {
+    use problems::{Mark, off_screen_text};
+    assert_eq!(
+        off_screen_text(Mark::Warning, "The shelf sags", 0),
+        "Off screen: warning · The shelf sags"
+    );
+    assert_eq!(
+        off_screen_text(Mark::Error, "The door hits the side", 2),
+        "Off screen: error · The door hits the side · 2 more"
+    );
+}

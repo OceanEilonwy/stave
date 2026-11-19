@@ -994,7 +994,7 @@ fn hardware_focus(
                 gap: gap_mark,
             })
         }
-        None => Play::Fixed(anchors.clone()),
+        None => Play::Fixed(anchors),
     };
     // The base's words; the kind's doc comment, shown under it, says which
     // hinge, slide or pull it is.

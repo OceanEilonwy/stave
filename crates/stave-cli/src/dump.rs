@@ -301,7 +301,7 @@ fn motion(design: &SolvedDesign, mechanism: &Mechanism) -> String {
                 mechanism
                     .members()
                     .get(index.index())
-                    .map_or_else(|| "?".to_owned(), |m| m.name.clone())
+                    .map_or("?", |m| m.name.as_str())
             };
             let entries: Vec<String> = mechanism
                 .entries()
@@ -657,7 +657,7 @@ pub fn table(design: &SolvedDesign, model: Option<&Model>) -> String {
             out,
             "{:<28} {}{}",
             scene.name,
-            scene.title.clone().unwrap_or_default(),
+            scene.title.as_deref().unwrap_or_default(),
             if poses.is_empty() {
                 String::new()
             } else {

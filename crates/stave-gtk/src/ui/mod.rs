@@ -51,7 +51,7 @@ mod view_tools;
 mod viewport;
 mod workbench;
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::Duration;
@@ -65,7 +65,7 @@ use stave_app::finder::{self as finding, Goal};
 use stave_app::focus::{self, Focus, Target};
 use stave_app::inspect;
 use stave_app::link;
-use stave_app::problems::{Mark, Marks};
+use stave_app::problems::{self, Mark, Marks};
 use stave_app::session::{
     Build, Command, Editor, Event, Explode, LineNumber, ProblemIndex, Selection, Session,
     SourceLocation, View,
@@ -102,6 +102,9 @@ const MOUSE_FORWARD: u32 = 9;
 /// How fast focus mode plays: the whole way in 2.5 seconds.
 const PLAY_PER_SECOND: f64 = 0.4;
 
+/// What one of the window's own actions does, given the window.
+type ActionHandler = Box<dyn Fn(&Rc<Window>)>;
+
 /// How fast pulling apart plays: the whole way in 3 seconds.
 const EXPLODE_PER_SECOND: f64 = 1.0 / 3.0;
 
@@ -111,9 +114,6 @@ const FRONT_PITCH: f32 = 0.12;
 /// How long hardware focus's small views wait for their size to settle
 /// before rendering again at it.
 const PICTURES_DELAY: Duration = Duration::from_millis(150);
-
-/// The most problems pinned on the model at once.
-const PIN_LIMIT: usize = 12;
 
 /// How much room a chosen part is framed with: the camera stands this many
 /// times farther back than the tightest fit, so what is round it shows.
@@ -442,7 +442,7 @@ struct State {
     /// X-ray: everything but the selection see-through.
     xray: bool,
     /// The latest check's marks, when its ids are the shown design's.
-    marks: Marks,
+    marks: Rc<Marks>,
     /// Editing steps to run once the design is drawn (`--edit-script`).
     edit_script: Option<PathBuf>,
 }
@@ -577,7 +577,7 @@ impl Window {
                 hold_checks: false,
                 linking: false,
                 xray: false,
-                marks: Marks::default(),
+                marks: Rc::default(),
                 edit_script: None,
             }),
             pins: RefCell::new(Pins::default()),
@@ -735,7 +735,7 @@ impl Window {
         };
         self.show_title();
         let widgets = &self.widgets;
-        widgets.files.show_result(latest.as_deref());
+        widgets.files.show_result(latest.clone());
         {
             let session = self.session.borrow();
             let selected = match session.selection() {
@@ -750,17 +750,16 @@ impl Window {
         }
         // The dots: by file always; by part only when the latest result is
         // the one shown (its ids are the tree's).
-        let marks = latest
-            .as_deref()
-            .map(stave_app::problems::marks)
-            .unwrap_or_default();
-        widgets.files.show_marks(marks.clone());
-        let tree_marks = if showing_older {
-            Marks::default()
-        } else {
-            marks
-        };
-        self.state.borrow_mut().marks = tree_marks.clone();
+        // Read-only from here on, so the three holders share one copy.
+        let marks = Rc::new(
+            latest
+                .as_deref()
+                .map(stave_app::problems::marks)
+                .unwrap_or_default(),
+        );
+        widgets.files.show_marks(Rc::clone(&marks));
+        let tree_marks = if showing_older { Rc::default() } else { marks };
+        self.state.borrow_mut().marks = Rc::clone(&tree_marks);
         widgets.tree.show_marks(tree_marks);
         let empty = edit_view::empty_state(&self.session.borrow());
         if let Some(empty) = empty {
@@ -890,25 +889,13 @@ impl Window {
             self.dispatch(Command::ShowEditor(Editor::Open));
         }
         if let Some(file) = &wanted.file {
-            let folder = self.session.borrow().folder().to_path_buf();
-            let (path, line) = match file.rsplit_once(':') {
-                Some((path, line)) => match line.parse::<u32>() {
-                    Ok(line) => (path, line),
-                    Err(_) => (file.as_str(), 1),
-                },
-                None => (file.as_str(), 1),
-            };
-            let path = if path.starts_with("std/") {
-                path.to_owned()
-            } else {
-                folder.join(path).display().to_string()
-            };
-            if let Some(line) = LineNumber::new(line) {
-                self.dispatch(Command::GoToSource(SourceLocation { path, line }));
+            let location = SourceLocation::parse(self.session.borrow().folder(), file);
+            if let Some(location) = location {
+                self.dispatch(Command::GoToSource(location));
             }
         }
         if wanted.wish != Wish::default() {
-            self.widgets.files.wish(wanted.wish.clone());
+            self.widgets.files.wish(wanted.wish);
         }
         if wanted.checking || wanted.building {
             self.state.borrow_mut().hold_checks = true;
@@ -1385,10 +1372,9 @@ impl Window {
     /// The scrub moved, or a toggle changed: poses again.
     fn update_focus(self: &Rc<Self>, change: impl FnOnce(&mut FocusState)) {
         {
-            // Busy: the window itself is setting the controls.
-            let Ok(mut state) = self.state.try_borrow_mut() else {
-                return;
-            };
+            // The window sets the controls with nothing borrowed and with
+            // `updating_controls` up; a borrow held here would be a bug.
+            let mut state = self.state.borrow_mut();
             if state.updating_controls {
                 return;
             }
@@ -1408,9 +1394,7 @@ impl Window {
     /// at the end), or pauses.
     fn toggle_play_focus(self: &Rc<Self>) {
         let playing = {
-            let Ok(mut state) = self.state.try_borrow_mut() else {
-                return;
-            };
+            let mut state = self.state.borrow_mut();
             let Some(focus) = state.focus.as_mut() else {
                 return;
             };
@@ -1424,9 +1408,12 @@ impl Window {
         if !playing {
             return;
         }
-        let window = self.clone();
+        let window = Rc::downgrade(self);
         let last: std::cell::Cell<Option<i64>> = std::cell::Cell::new(None);
         self.widgets.viewport.add_tick_callback(move |_, clock| {
+            let Some(window) = window.upgrade() else {
+                return glib::ControlFlow::Break;
+            };
             let now = clock.frame_time();
             let seconds = last.get().map_or(0.0, |before| {
                 f64::from(i32::try_from(now - before).unwrap_or(0)) / 1e6
@@ -1612,38 +1599,9 @@ impl Window {
         let Some((design, graph)) = session.drawable() else {
             return Vec::new();
         };
-        let items: Vec<stave_scene::Item> = match session.selection() {
-            Some(Selection::Assembly(id)) => {
-                let inside = |mut assembly: Option<AssemblyId>| {
-                    for _ in 0..=design.assemblies.len() {
-                        match assembly {
-                            Some(found) if found == *id => return true,
-                            Some(found) => {
-                                assembly =
-                                    design.assemblies.get(found.index()).and_then(|a| a.parent);
-                            }
-                            None => return false,
-                        }
-                    }
-                    false
-                };
-                design
-                    .parts
-                    .iter()
-                    .filter(|p| inside(p.assembly))
-                    .map(|p| stave_scene::Item::Part(p.id))
-                    .chain(
-                        design
-                            .hardware
-                            .iter()
-                            .filter(|h| inside(h.assembly))
-                            .map(|h| stave_scene::Item::Hardware(h.id)),
-                    )
-                    .collect()
-            }
-            Some(selection) => selection.item().into_iter().collect(),
-            None => Vec::new(),
-        };
+        let items = session
+            .selection()
+            .map_or_else(Vec::new, |selection| inspect::items_in(design, selection));
         items
             .into_iter()
             .flat_map(|item| graph.nodes_of(item).into_iter().take(1))
@@ -1800,9 +1758,7 @@ impl Window {
     /// The motion bar moved: the selection opening.
     fn motion_moved(self: &Rc<Self>, value: f64) {
         {
-            let Ok(mut state) = self.state.try_borrow_mut() else {
-                return;
-            };
+            let mut state = self.state.borrow_mut();
             if state.updating_controls {
                 return;
             }
@@ -1822,9 +1778,7 @@ impl Window {
     /// The problem card's slider moved: swings the problem's motion.
     fn problem_moved(self: &Rc<Self>, value: f64) {
         let shown = {
-            let Ok(mut state) = self.state.try_borrow_mut() else {
-                return;
-            };
+            let mut state = self.state.borrow_mut();
             let Some(problem) = state.problem.as_mut() else {
                 return;
             };
@@ -1971,9 +1925,7 @@ impl Window {
     /// "Pull apart" switched on (all the way apart) or off (together).
     fn pull_apart(self: &Rc<Self>, on: bool) {
         {
-            let Ok(mut state) = self.state.try_borrow_mut() else {
-                return;
-            };
+            let mut state = self.state.borrow_mut();
             if state.updating_controls || state.pull_apart == on {
                 return;
             }
@@ -2016,9 +1968,12 @@ impl Window {
         if !playing {
             return;
         }
-        let window = self.clone();
+        let window = Rc::downgrade(self);
         let last: std::cell::Cell<Option<i64>> = std::cell::Cell::new(None);
         self.widgets.viewport.add_tick_callback(move |_, clock| {
+            let Some(window) = window.upgrade() else {
+                return glib::ControlFlow::Break;
+            };
             if !window.state.borrow().exploding {
                 return glib::ControlFlow::Break;
             }
@@ -2045,18 +2000,9 @@ impl Window {
 
     /// Saves the view as posed as a glTF file, asking where.
     fn export_view(self: &Rc<Self>) {
-        let name = {
-            let session = self.session.borrow();
-            let title = session
-                .drawable()
-                .map_or_else(|| "design".to_owned(), |(d, _)| d.project.title.clone());
-            let slug: String = title
-                .to_lowercase()
-                .chars()
-                .map(|c| if c.is_alphanumeric() { c } else { '_' })
-                .collect();
-            format!("{slug}_view.glb")
-        };
+        let name = stave_app::export_view::default_file_name(
+            self.session.borrow().drawable().map(|(design, _)| design),
+        );
         let dialog = gtk::FileDialog::builder()
             .title("Export View as glTF")
             .initial_name(name)
@@ -2563,22 +2509,18 @@ impl Window {
             let Some((_, graph)) = session.drawable() else {
                 return;
             };
-            session
-                .problems()
-                .iter()
-                .enumerate()
-                .filter(|(index, _)| key.posed_problem.is_none_or(|p| p.0 == *index))
-                .filter_map(|(index, problem)| {
-                    let contact = problem.contact.as_ref()?;
-                    let mark = Mark::of(problem.severity)?;
-                    let highlight = view::highlight(graph, contact);
+            let problems = session.problems();
+            problems::pins(problems, key.posed_problem, problems::PIN_LIMIT)
+                .into_iter()
+                .filter_map(|pinned| {
+                    let problem = problems.get(pinned.index.0)?;
+                    let highlight = view::highlight(graph, problem.contact.as_ref()?);
                     let anchor = match highlight.volumes.first() {
                         Some(volume) => PinAnchor::Volume(volume.centre()),
                         None => PinAnchor::Nodes(highlight.nodes),
                     };
-                    Some((ProblemIndex(index), mark, problem.message.clone(), anchor))
+                    Some((pinned.index, pinned.mark, problem.message.clone(), anchor))
                 })
-                .take(PIN_LIMIT)
                 .collect()
         };
         let pins: Vec<Pin> = found
@@ -2660,17 +2602,7 @@ impl Window {
             self.widgets.edge_pin.set_visible(false);
             return;
         };
-        let more = off_count.saturating_sub(1);
-        let words = match pin.mark {
-            Mark::Warning => "warning",
-            Mark::Error | Mark::Involved => "error",
-        };
-        let message = &pin.message;
-        let text = if more == 0 {
-            format!("Off screen: {words} · {message}")
-        } else {
-            format!("Off screen: {words} · {message} · {more} more")
-        };
+        let text = problems::off_screen_text(pin.mark, &pin.message, off_count.saturating_sub(1));
         self.widgets.edge_label.set_label(&text);
         self.widgets.edge_pin.set_visible(true);
         self.widgets
@@ -2806,42 +2738,41 @@ impl Window {
 
     fn install_actions(self: &Rc<Self>) {
         let window = &self.widgets.window;
-        let add = |name: &str, handler: Box<dyn Fn()>| {
+        // The window's own action holds it weakly: a closed window is freed.
+        let add = |name: &str, handler: ActionHandler| {
             let action = gio::SimpleAction::new(name, None);
-            action.connect_activate(move |_, _| handler());
+            let this = Rc::downgrade(self);
+            action.connect_activate(move |_, _| {
+                if let Some(this) = this.upgrade() {
+                    handler(&this);
+                }
+            });
             window.add_action(&action);
         };
-        let this = self.clone();
-        add("new-project", Box::new(move || this.ask_new_project()));
-        let this = self.clone();
-        add("back", Box::new(move || this.dispatch(Command::Back)));
-        let this = self.clone();
-        add("forward", Box::new(move || this.dispatch(Command::Forward)));
-        let this = self.clone();
-        add("check", Box::new(move || this.dispatch(Command::Check)));
-        let this = self.clone();
-        add("frame", Box::new(move || this.frame()));
-        let this = self.clone();
-        add("export-view", Box::new(move || this.export_view()));
-        let this = self.clone();
+        add("new-project", Box::new(move |this| this.ask_new_project()));
+        add("back", Box::new(move |this| this.dispatch(Command::Back)));
+        add(
+            "forward",
+            Box::new(move |this| this.dispatch(Command::Forward)),
+        );
+        add("check", Box::new(move |this| this.dispatch(Command::Check)));
+        add("frame", Box::new(move |this| this.frame()));
+        add("export-view", Box::new(move |this| this.export_view()));
         add(
             "next-problem",
-            Box::new(move || this.dispatch(Command::NextProblem)),
+            Box::new(move |this| this.dispatch(Command::NextProblem)),
         );
-        let this = self.clone();
         add(
             "previous-problem",
-            Box::new(move || this.dispatch(Command::PreviousProblem)),
+            Box::new(move |this| this.dispatch(Command::PreviousProblem)),
         );
-        let this = self.clone();
         add(
             "find",
-            Box::new(move || this.widgets.finder.present(&this.widgets.window, "")),
+            Box::new(move |this| this.widgets.finder.present(&this.widgets.window, "")),
         );
-        let this = self.clone();
         add(
             "search",
-            Box::new(move || {
+            Box::new(move |this| {
                 // In the text, its own search bar; anywhere else, the
                 // finder.
                 if !this.widgets.files.focus_search() {
@@ -2849,12 +2780,11 @@ impl Window {
                 }
             }),
         );
-        let this = self.clone();
         add(
             "editor",
             // Shows the Code panel wherever it is docked, with the keyboard
             // in the text.
-            Box::new(move || {
+            Box::new(move |this| {
                 if this.session.borrow().editor() == Editor::Open {
                     this.widgets.workbench.present(workbench::PanelId::Code);
                     this.widgets.files.focus_text();
@@ -2864,8 +2794,11 @@ impl Window {
             }),
         );
         let show_panel = gio::SimpleAction::new("show-panel", Some(glib::VariantTy::STRING));
-        let this = self.clone();
+        let this = Rc::downgrade(self);
         show_panel.connect_activate(move |_, word| {
+            let Some(this) = this.upgrade() else {
+                return;
+            };
             let id = word
                 .and_then(glib::Variant::str)
                 .and_then(workbench::PanelId::from_word);
@@ -2880,8 +2813,11 @@ impl Window {
         self.widgets.window.add_action(&show_panel);
         // "code:end": move the Code panel to the right edge.
         let move_panel = gio::SimpleAction::new("move-panel", Some(glib::VariantTy::STRING));
-        let this = self.clone();
+        let this = Rc::downgrade(self);
         move_panel.connect_activate(move |_, target| {
+            let Some(this) = this.upgrade() else {
+                return;
+            };
             let Some((id, side)) = target
                 .and_then(glib::Variant::str)
                 .and_then(|t| t.split_once(':'))
@@ -2896,33 +2832,26 @@ impl Window {
             }
         });
         self.widgets.window.add_action(&move_panel);
-        let this = self.clone();
         add(
             "reset-layout",
-            Box::new(move || this.widgets.workbench.reset()),
+            Box::new(move |this| this.widgets.workbench.reset()),
         );
-        let this = self.clone();
         add(
             "model",
-            Box::new(move || this.widgets.workbench.present(workbench::PanelId::Parts)),
+            Box::new(move |this| this.widgets.workbench.present(workbench::PanelId::Parts)),
         );
-        let this = self.clone();
-        add("save", Box::new(move || this.widgets.files.save()));
-        let this = self.clone();
-        add("format", Box::new(move || this.widgets.files.format()));
-        let this = self.clone();
-        add("open", Box::new(move || this.choose_folder()));
+        add("save", Box::new(move |this| this.widgets.files.save()));
+        add("format", Box::new(move |this| this.widgets.files.format()));
+        add("open", Box::new(move |this| this.choose_folder()));
         for view in View::ALL.into_iter().filter(|view| header::ready(*view)) {
-            let this = self.clone();
             add(
                 &format!("view-{}", view.word()),
-                Box::new(move || this.dispatch(Command::ShowView(view))),
+                Box::new(move |this| this.dispatch(Command::ShowView(view))),
             );
         }
-        let this = self.clone();
         add(
             "escape",
-            Box::new(move || {
+            Box::new(move |this| {
                 if this.cancel_edit() {
                     return;
                 }
@@ -2936,8 +2865,11 @@ impl Window {
         );
         // The chip at the view's edge names a problem off screen.
         let off_screen = gio::SimpleAction::new("show-problem", Some(glib::VariantTy::UINT64));
-        let this = self.clone();
+        let this = Rc::downgrade(self);
         off_screen.connect_activate(move |_, parameter| {
+            let Some(this) = this.upgrade() else {
+                return;
+            };
             let Some(index) = parameter
                 .and_then(|p| p.get::<u64>())
                 .and_then(|index| usize::try_from(index).ok())
@@ -2951,8 +2883,11 @@ impl Window {
         window.add_action(&off_screen);
         // Open Recent: a folder named in the menu.
         let recent = gio::SimpleAction::new("open-recent", Some(glib::VariantTy::STRING));
-        let this = self.clone();
+        let this = Rc::downgrade(self);
         recent.connect_activate(move |_, parameter| {
+            let Some(this) = this.upgrade() else {
+                return;
+            };
             if let Some(path) = parameter.and_then(glib::Variant::str) {
                 this.go_to_folder(PathBuf::from(path));
             }
@@ -3036,14 +2971,14 @@ impl Window {
         dialog.set_response_appearance("discard", adw::ResponseAppearance::Destructive);
         dialog.set_response_appearance("save", adw::ResponseAppearance::Suggested);
         let window = self.clone();
-        let then = RefCell::new(Some(then));
+        let then = Cell::new(Some(then));
         dialog.connect_response(None, move |_, response| {
             let go_on = match response {
                 "save" => window.widgets.files.save_all(),
                 "discard" => true,
                 _ => false,
             };
-            if go_on && let Some(then) = then.borrow_mut().take() {
+            if go_on && let Some(then) = then.take() {
                 then();
             }
         });
@@ -3103,8 +3038,11 @@ impl Window {
         header.forward.set_action_name(Some("win.forward"));
         header.open.set_action_name(Some("win.open"));
 
-        let window = self.clone();
+        let window = Rc::downgrade(self);
         header.switcher.connect_active_name_notify(move |group| {
+            let Some(window) = window.upgrade() else {
+                return;
+            };
             let Some(view) = group.active_name().and_then(|name| View::from_word(&name)) else {
                 return;
             };
@@ -3113,8 +3051,11 @@ impl Window {
             }
         });
 
-        let window = self.clone();
+        let window = Rc::downgrade(self);
         header.scenes.connect_row_activated(move |_, row| {
+            let Some(window) = window.upgrade() else {
+                return;
+            };
             let name = {
                 let session = window.session.borrow();
                 usize::try_from(row.index())
@@ -3151,8 +3092,11 @@ impl Window {
                 window.dispatch(Command::Select(Some(Selection::Assembly(assembly))));
             }
         });
-        let window = self.clone();
+        let window = Rc::downgrade(self);
         widgets.view_toolbar.xray.connect_toggled(move |button| {
+            let Some(window) = window.upgrade() else {
+                return;
+            };
             window.state.borrow_mut().xray = button.is_active();
             window.request_render();
         });
@@ -3169,18 +3113,23 @@ impl Window {
                 window.dispatch(Command::GoToSource(location));
             }
         });
-        let window = self.clone();
-        widgets
-            .motion
-            .scale
-            .connect_value_changed(move |scale| window.motion_moved(scale.value()));
+        let window = Rc::downgrade(self);
+        widgets.motion.scale.connect_value_changed(move |scale| {
+            let Some(window) = window.upgrade() else {
+                return;
+            };
+            window.motion_moved(scale.value())
+        });
 
         // Focus mode's panel and its controls in the 3D view's area.
         let focus_panel = &widgets.inspector.focus;
-        let window = self.clone();
-        focus_panel
-            .done
-            .connect_clicked(move |_| window.dispatch(Command::LeaveFocus));
+        let window = Rc::downgrade(self);
+        focus_panel.done.connect_clicked(move |_| {
+            let Some(window) = window.upgrade() else {
+                return;
+            };
+            window.dispatch(Command::LeaveFocus)
+        });
         let window = Rc::downgrade(self);
         focus_panel.connect_source(move |location| {
             if let Some(window) = window.upgrade() {
@@ -3201,29 +3150,46 @@ impl Window {
             });
         }
         for play in [&widgets.step_card.play, &widgets.swing_card.play] {
-            let window = self.clone();
-            play.connect_clicked(move |_| window.toggle_play_focus());
+            let window = Rc::downgrade(self);
+            play.connect_clicked(move |_| {
+                let Some(window) = window.upgrade() else {
+                    return;
+                };
+                window.toggle_play_focus()
+            });
         }
-        let window = self.clone();
+        let window = Rc::downgrade(self);
         focus_panel.xray.connect_active_notify(move |check| {
+            let Some(window) = window.upgrade() else {
+                return;
+            };
             let on = check.is_active();
             window.update_focus(|focus| focus.options.xray = on);
         });
-        let window = self.clone();
+        let window = Rc::downgrade(self);
         focus_panel.tint.connect_active_notify(move |check| {
+            let Some(window) = window.upgrade() else {
+                return;
+            };
             let on = check.is_active();
             window.update_focus(|focus| focus.options.tint_cut_faces = on);
         });
-        let window = self.clone();
+        let window = Rc::downgrade(self);
         focus_panel.fade.connect_active_notify(move |check| {
+            let Some(window) = window.upgrade() else {
+                return;
+            };
             let on = check.is_active();
             window.update_focus(|focus| focus.options.fade_others = on);
         });
-        let window = self.clone();
+        let window = Rc::downgrade(self);
         widgets
             .plan_switch
             .from_above
             .connect_toggled(move |button| {
+                let Some(window) = window.upgrade() else {
+                    return;
+                };
                 let on = button.is_active();
                 window.update_focus(|focus| focus.plan = on);
             });
@@ -3238,15 +3204,21 @@ impl Window {
 
         // The view toolbar: Pull apart, its play button and its slider.
         let toolbar = &widgets.view_toolbar;
-        let window = self.clone();
+        let window = Rc::downgrade(self);
         toolbar.pull.connect_toggled(move |button| {
+            let Some(window) = window.upgrade() else {
+                return;
+            };
             let on = button.is_active();
             window.pull_apart(on);
         });
-        let window = self.clone();
-        toolbar
-            .play
-            .connect_clicked(move |_| window.toggle_play_explode());
+        let window = Rc::downgrade(self);
+        toolbar.play.connect_clicked(move |_| {
+            let Some(window) = window.upgrade() else {
+                return;
+            };
+            window.toggle_play_explode()
+        });
         let window = Rc::downgrade(self);
         toolbar.slider.connect_changed(move |value| {
             if let Some(window) = window.upgrade() {
@@ -3258,12 +3230,18 @@ impl Window {
         // The camera buttons.
         let camera = &widgets.camera;
         camera.fit.set_action_name(Some("win.frame"));
-        let window = self.clone();
-        camera
-            .front
-            .connect_clicked(move |_| window.look_from(0.0, FRONT_PITCH));
-        let window = self.clone();
+        let window = Rc::downgrade(self);
+        camera.front.connect_clicked(move |_| {
+            let Some(window) = window.upgrade() else {
+                return;
+            };
+            window.look_from(0.0, FRONT_PITCH)
+        });
+        let window = Rc::downgrade(self);
         camera.turn.connect_clicked(move |_| {
+            let Some(window) = window.upgrade() else {
+                return;
+            };
             let (yaw, pitch) = window
                 .state
                 .borrow()
@@ -3454,8 +3432,11 @@ impl Window {
             }
         });
         let viewport = &self.widgets.viewport;
-        let window = self.clone();
+        let window = Rc::downgrade(self);
         viewport.connect_resized(move |width, height| {
+            let Some(window) = window.upgrade() else {
+                return;
+            };
             let changed = {
                 let mut state = window.state.borrow_mut();
                 let changed = state.size != (width, height);
@@ -3488,18 +3469,27 @@ impl Window {
         let orbit_drag = gtk::GestureDrag::builder()
             .button(gdk::BUTTON_PRIMARY)
             .build();
-        let window = self.clone();
+        let window = Rc::downgrade(self);
         orbit_drag.connect_drag_begin(move |_, _, _| {
+            let Some(window) = window.upgrade() else {
+                return;
+            };
             window.state.borrow_mut().drag_applied = (0.0, 0.0);
             window.widgets.viewport.grab_focus();
         });
-        let window = self.clone();
+        let window = Rc::downgrade(self);
         orbit_drag.connect_drag_update(move |_, x, y| {
+            let Some(window) = window.upgrade() else {
+                return;
+            };
             let (dx, dy) = window.drag_step(x, y);
             window.update_orbit(|orbit| orbit.orbited(dx, dy));
         });
-        let window = self.clone();
+        let window = Rc::downgrade(self);
         orbit_drag.connect_drag_end(move |gesture, x, y| {
+            let Some(window) = window.upgrade() else {
+                return;
+            };
             if x.hypot(y) < CLICK_SLOP
                 && let Some((start_x, start_y)) = gesture.start_point()
             {
@@ -3511,12 +3501,18 @@ impl Window {
         // Right or middle drag moves the view sideways.
         for button in [gdk::BUTTON_SECONDARY, gdk::BUTTON_MIDDLE] {
             let pan_drag = gtk::GestureDrag::builder().button(button).build();
-            let window = self.clone();
+            let window = Rc::downgrade(self);
             pan_drag.connect_drag_begin(move |_, _, _| {
+                let Some(window) = window.upgrade() else {
+                    return;
+                };
                 window.state.borrow_mut().drag_applied = (0.0, 0.0);
             });
-            let window = self.clone();
+            let window = Rc::downgrade(self);
             pan_drag.connect_drag_update(move |_, x, y| {
+                let Some(window) = window.upgrade() else {
+                    return;
+                };
                 let (dx, dy) = window.drag_step(x, y);
                 let height = crate::convert::f32_of_int(window.widgets.viewport.height());
                 window.update_orbit(|orbit| orbit.panned(dx, dy, height));
@@ -3525,8 +3521,11 @@ impl Window {
         }
 
         let scroll = gtk::EventControllerScroll::new(gtk::EventControllerScrollFlags::VERTICAL);
-        let window = self.clone();
+        let window = Rc::downgrade(self);
         scroll.connect_scroll(move |_, _, dy| {
+            let Some(window) = window.upgrade() else {
+                return glib::Propagation::Proceed;
+            };
             window.update_orbit(|orbit| orbit.zoomed(crate::convert::f32_of(-dy)));
             glib::Propagation::Stop
         });
@@ -3534,8 +3533,11 @@ impl Window {
 
         // Escape and F anywhere in the window but a text field.
         let keys = gtk::EventControllerKey::new();
-        let window = self.clone();
+        let window = Rc::downgrade(self);
         keys.connect_key_pressed(move |_, key, _, modifiers| {
+            let Some(window) = window.upgrade() else {
+                return glib::Propagation::Proceed;
+            };
             if !modifiers.is_empty()
                 || gtk::prelude::GtkWindowExt::focus(&window.widgets.window)
                     .is_some_and(|w| w.is::<gtk::Text>() || w.is::<gtk::TextView>())
@@ -3566,8 +3568,11 @@ impl Window {
             .button(0)
             .propagation_phase(gtk::PropagationPhase::Capture)
             .build();
-        let window = self.clone();
+        let window = Rc::downgrade(self);
         history.connect_pressed(move |gesture, _, _, _| {
+            let Some(window) = window.upgrade() else {
+                return;
+            };
             let action = match gesture.current_button() {
                 MOUSE_BACK => "win.back",
                 MOUSE_FORWARD => "win.forward",
