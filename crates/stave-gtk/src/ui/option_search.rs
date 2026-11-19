@@ -14,9 +14,16 @@
 //! rather than an `AdwDialog`: the window's screenshot doesn't draw an
 //! `AdwDialog` opened by an edit script (as the removal's dialog found),
 //! and the search has to be recorded.
+//!
+//! It is not a relm4 component yet (docs/relm4-migration.md): the edit
+//! view, and its search test, rely on [`OptionSearch::present`],
+//! [`OptionSearch::choose_selected`] and the arrow keys taking effect at
+//! once, which queued messages would break. It moves when the edit view
+//! does. Until then its state is in cells, shared out and never borrowed
+//! across a GTK call or a callback.
 
 use stave_app::i18n::{fill_in, ntr, tr};
-use std::cell::{Cell, RefCell};
+use std::cell::Cell;
 use std::rc::Rc;
 
 use adw::prelude::*;
@@ -24,6 +31,7 @@ use stave_app::choices::{SearchGroup, SearchHit};
 use stave_app::edit::OptionFit;
 
 use super::edit_card::fit_words;
+use super::editor::current;
 
 type SearchCallback = Rc<dyn Fn(&str) -> Vec<SearchGroup>>;
 type ChosenCallback = Rc<dyn Fn(String, String)>;
@@ -37,16 +45,18 @@ pub struct OptionSearch {
     entry: gtk::SearchEntry,
     list: gtk::ListBox,
     count: gtk::Label,
-    /// Each row that is an option, with its hit.
-    rows: RefCell<Vec<(gtk::ListBoxRow, SearchHit)>>,
+    /// Each row that is an option, with its hit: shared out of the cell
+    /// (see [`current`]), never borrowed while GTK is called.
+    rows: Cell<Rc<[OptionRow]>>,
     /// The setting it searches, while open.
-    setting: RefCell<Option<String>>,
-    on_search: RefCell<Option<SearchCallback>>,
-    on_chosen: RefCell<Option<ChosenCallback>>,
-    on_closed: RefCell<Option<Rc<dyn Fn()>>>,
-    /// Ignore selection changes made while filling.
-    filling: Cell<bool>,
+    setting: Cell<Option<String>>,
+    on_search: Cell<Option<SearchCallback>>,
+    on_chosen: Cell<Option<ChosenCallback>>,
+    on_closed: Cell<Option<Rc<dyn Fn()>>>,
 }
+
+/// A row that is an option, and the option.
+type OptionRow = (gtk::ListBoxRow, SearchHit);
 
 impl OptionSearch {
     /// A closed dialog.
@@ -129,12 +139,11 @@ impl OptionSearch {
             entry,
             list,
             count,
-            rows: RefCell::new(Vec::new()),
-            setting: RefCell::new(None),
-            on_search: RefCell::new(None),
-            on_chosen: RefCell::new(None),
-            on_closed: RefCell::new(None),
-            filling: Cell::new(false),
+            rows: Cell::new(Rc::from([])),
+            setting: Cell::new(None),
+            on_search: Cell::new(None),
+            on_chosen: Cell::new(None),
+            on_closed: Cell::new(None),
         });
         search.connect();
         let weak = Rc::downgrade(&search);
@@ -150,8 +159,8 @@ impl OptionSearch {
     /// before).
     pub fn close(&self) {
         self.root.set_visible(false);
-        self.setting.replace(None);
-        let callback = self.on_closed.borrow().clone();
+        self.setting.set(None);
+        let callback = current(&self.on_closed);
         if let Some(callback) = callback {
             callback();
         }
@@ -159,23 +168,23 @@ impl OptionSearch {
 
     /// Calls `callback` each time it closes, to give the keyboard back.
     pub fn connect_closed(&self, callback: impl Fn() + 'static) {
-        self.on_closed.replace(Some(Rc::new(callback)));
+        self.on_closed.set(Some(Rc::new(callback)));
     }
 
     /// Calls `callback` with the query to list the options it matches.
     pub fn connect_search(&self, callback: impl Fn(&str) -> Vec<SearchGroup> + 'static) {
-        self.on_search.replace(Some(Rc::new(callback)));
+        self.on_search.set(Some(Rc::new(callback)));
     }
 
     /// Calls `callback` with the setting and the option chosen (its text),
     /// once the dialog has closed.
     pub fn connect_chosen(&self, callback: impl Fn(String, String) + 'static) {
-        self.on_chosen.replace(Some(Rc::new(callback)));
+        self.on_chosen.set(Some(Rc::new(callback)));
     }
 
     /// Opens the search for a setting, with `query` typed.
     pub fn present(self: &Rc<Self>, setting: &str, query: &str) {
-        self.setting.replace(Some(setting.to_owned()));
+        self.setting.set(Some(setting.to_owned()));
         let words = fill_in(
             &tr("Choose {setting}"),
             &[("setting", &setting.replace('_', " "))],
@@ -193,7 +202,7 @@ impl OptionSearch {
 
     /// The setting it searches, while it is open.
     pub fn setting(&self) -> Option<String> {
-        self.setting.borrow().clone()
+        current(&self.setting)
     }
 
     fn connect(self: &Rc<Self>) {
@@ -242,22 +251,19 @@ impl OptionSearch {
     /// found), keeping the selection on the option it was on.
     pub fn refresh(&self) {
         let query = self.entry.text().to_string();
-        let callback = self.on_search.borrow().clone();
+        let callback = current(&self.on_search);
         let groups = callback.map(|search| search(&query)).unwrap_or_default();
         let selected = self.selected_hit().map(|hit| hit.option.text);
         self.fill(&groups, &query);
-        let rows = self.rows.borrow().clone();
+        let rows = current(&self.rows);
         let again = selected
             .and_then(|text| rows.iter().find(|(_, hit)| hit.option.text == text))
             .or_else(|| rows.iter().find(|(_, hit)| hit.choosable()))
             .or_else(|| rows.first());
-        self.filling.set(true);
         self.list.select_row(again.map(|(row, _)| row));
-        self.filling.set(false);
     }
 
     fn fill(&self, groups: &[SearchGroup], query: &str) {
-        self.filling.set(true);
         while let Some(row) = self.list.row_at_index(0) {
             self.list.remove(&row);
         }
@@ -335,13 +341,12 @@ impl OptionSearch {
                 ),
             ],
         ));
-        self.rows.replace(rows);
-        self.filling.set(false);
+        self.rows.set(Rc::from(rows));
     }
 
     /// Moves the selection by `by` options.
     fn step(&self, by: i32) {
-        let rows = self.rows.borrow();
+        let rows = current(&self.rows);
         if rows.is_empty() {
             return;
         }
@@ -368,8 +373,7 @@ impl OptionSearch {
     /// The hit the selection is on.
     fn selected_hit(&self) -> Option<SearchHit> {
         let selected = self.list.selected_row()?;
-        self.rows
-            .borrow()
+        current(&self.rows)
             .iter()
             .find(|(row, _)| *row == selected)
             .map(|(_, hit)| hit.clone())
@@ -392,7 +396,7 @@ impl OptionSearch {
             return;
         };
         self.close();
-        let callback = self.on_chosen.borrow().clone();
+        let callback = current(&self.on_chosen);
         if let Some(callback) = callback {
             callback(setting, hit.option.text);
         }
@@ -408,8 +412,7 @@ impl OptionSearch {
     /// Each option row with its text (for tests).
     #[cfg(test)]
     pub fn rows(&self) -> Vec<(gtk::ListBoxRow, String)> {
-        self.rows
-            .borrow()
+        current(&self.rows)
             .iter()
             .map(|(row, hit)| (row.clone(), hit.option.text.clone()))
             .collect()

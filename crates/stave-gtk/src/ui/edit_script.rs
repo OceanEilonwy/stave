@@ -26,8 +26,6 @@
 //! `#` starts a comment. A step that can't be done is said on standard
 //! error with its line, and the steps after it are skipped.
 
-use std::rc::Rc;
-
 use gtk::prelude::ButtonExt;
 
 use stave_app::edit::{FacingPair, PartFace, Picked};
@@ -41,8 +39,8 @@ use super::Window;
 impl Window {
     /// Runs the edit script the command line gave, once. `true` when it
     /// ran (the window draws again before any screenshot is taken).
-    pub(super) fn run_edit_script(self: &Rc<Self>) -> bool {
-        let Some(path) = self.state.borrow_mut().edit_script.take() else {
+    pub(super) fn run_edit_script(&mut self) -> bool {
+        let Some(path) = self.state.edit_script.take() else {
             return false;
         };
         let text = match std::fs::read_to_string(&path) {
@@ -70,7 +68,7 @@ impl Window {
     }
 
     /// Does one step of an edit script.
-    fn edit_step(self: &Rc<Self>, step: &str) -> Result<(), String> {
+    fn edit_step(&mut self, step: &str) -> Result<(), String> {
         let (word, rest) = step
             .split_once(char::is_whitespace)
             .map_or((step, ""), |(word, rest)| (word, rest.trim()));
@@ -83,7 +81,7 @@ impl Window {
                 let picked = self.picked_named(rest)?;
                 let point = self.point_of(self.volume_of(&picked));
                 self.start_edit(picked, point);
-                if self.session.borrow().edit().is_none() {
+                if self.session.edit().is_none() {
                     return Err(format!("no edit started from '{rest}'"));
                 }
                 self.check_menu_now();
@@ -99,7 +97,6 @@ impl Window {
             "choose" => {
                 let index = self
                     .session
-                    .borrow()
                     .edit()
                     .ok_or("nothing is selected to choose from")?
                     .menu()
@@ -211,7 +208,7 @@ impl Window {
                     }
                 };
                 {
-                    let mut state = self.state.borrow_mut();
+                    let state = &mut self.state;
                     let orbit = state.orbit.as_mut().ok_or("nothing is drawn yet")?;
                     orbit.yaw = (orbit.yaw + turn.to_radians()).rem_euclid(std::f32::consts::TAU);
                     if let Some(pitch) = pitch {
@@ -238,7 +235,7 @@ impl Window {
 
     /// A region of the design shown, by its name.
     fn region_named(&self, name: &str) -> Result<RegionId, String> {
-        let session = self.session.borrow();
+        let session = &self.session;
         let (_, graph) = session.drawable().ok_or("nothing is drawn yet")?;
         graph
             .regions()
@@ -250,7 +247,7 @@ impl Window {
 
     /// A part of the design shown, by its name.
     fn part_named(&self, name: &str) -> Result<PartId, String> {
-        let session = self.session.borrow();
+        let session = &self.session;
         let (design, _) = session.drawable().ok_or("nothing is drawn yet")?;
         design
             .parts
@@ -290,8 +287,8 @@ impl Window {
     /// Where the middle of a part's face shows in the 3D view, a hair
     /// inside the part so a click there lands on that face.
     fn face_point(&self, face: PartFace) -> Option<(f64, f64)> {
-        let session = self.session.borrow();
-        let state = self.state.borrow();
+        let session = &self.session;
+        let state = &self.state;
         let (_, graph) = session.drawable()?;
         let nodes = graph.nodes_of(Item::Part(face.part));
         let bounds = graph.bounds_of(state.posed.as_ref()?, &nodes)?;
@@ -306,14 +303,14 @@ impl Window {
             Face::Back => glam::Vec3::NEG_Z,
         };
         let point = centre + outward * (half.dot(outward.abs()) - 0.5);
-        let (x, y) = self.project(&state, point)?;
+        let (x, y) = self.project(state, point)?;
         Some((f64::from(x), f64::from(y)))
     }
 
     /// Where a selection is in the scene, to open its menu beside.
     fn volume_of(&self, picked: &Picked) -> Option<Aabb> {
-        let session = self.session.borrow();
-        let state = self.state.borrow();
+        let session = &self.session;
+        let state = &self.state;
         let (_, graph) = session.drawable()?;
         let posed = state.posed.as_ref()?;
         let parts: Vec<PartId> = match picked {

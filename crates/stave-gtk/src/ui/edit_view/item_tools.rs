@@ -6,6 +6,13 @@
 //! finder calls the same method of the window, which sends the session's
 //! command: one path for the mouse and the keyboard.
 //!
+//! The count stepper and the item's tools are relm4 components
+//! ([`RepeatRowComponent`], [`ItemToolsComponent`]) following
+//! `docs/relm4-migration.md`; [`RepeatRow`] and [`ItemTools`] keep the
+//! older API in front of them while the window (`impl Window`) is old
+//! code. "Repeat…" ([`RepeatFoldRow`]) stays plain widgets: scripts press
+//! it and read whether it opened in one step.
+//!
 //! ```text
 //! ▾ Change                          drawer   (a section of the Inspector)
 //! Name        [drawer          ]
@@ -15,10 +22,12 @@
 //! ```
 
 use stave_app::i18n::{fill_in, tr, tr_noop};
-use std::cell::{Cell, RefCell};
+use std::cell::Cell;
 use std::rc::Rc;
 
+use crate::ui::update::editing::EditingInput;
 use adw::prelude::*;
+use relm4::{Component, ComponentParts, ComponentSender};
 use stave_app::change::ChangeRequest;
 use stave_app::editing::{EditCommand, parse_name};
 use stave_app::hold::Measured;
@@ -30,6 +39,7 @@ use stave_lang::placement::Axis;
 use stave_model::solved::SolvedDesign;
 
 use super::super::Window;
+use super::super::relm4_shim::Bridge;
 use super::super::sections;
 
 /// The axes a repeat can split along, in the order the list shows them,
@@ -73,62 +83,275 @@ pub(in crate::ui) fn candidate_repeat(
     RepeatCount::new(count).map(|count| stave_app::candidates::Repeat { count, axis })
 }
 
-/// A count stepper with the axis to split along: on a candidate's card
-/// and on a selected item's.
+/// The words for the axes, translated, in the order the list shows them.
+fn axis_words() -> gtk::StringList {
+    AXES.iter().map(|(_, words)| tr(words)).collect()
+}
+
+/// A count stepper with the axis to split along, on a candidate's card and
+/// on a selected item's, as a relm4 component: its model is the count and
+/// axis shown, and only what people do sends [`RepeatRowOutput::Changed`];
+/// [`RepeatRowInput::Show`] fills it in with its handlers blocked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::ui) struct RepeatRowComponent {
+    /// The count shown, within the stepper's range.
+    count: usize,
+    axis: Axis,
+    /// The smallest count the stepper offers.
+    least: usize,
+    /// How many [`RepeatRowInput::Show`] messages it has handled, so its
+    /// owner can tell a change people made before the last one it sent.
+    shows: u64,
+    /// Whether the axis list shows (only while the count can choose it).
+    axis_shown: bool,
+    /// Whether it says "×" in place of "How many".
+    short: bool,
+}
+
+impl RepeatRowComponent {
+    /// The count, as the stepper holds it.
+    fn count_value(&self) -> f64 {
+        f64::from(u32::try_from(self.count).unwrap_or(1))
+    }
+
+    /// The axis's place in the list.
+    fn axis_index(&self) -> u32 {
+        AXES.iter()
+            .position(|(each, _)| *each == self.axis)
+            .and_then(|index| u32::try_from(index).ok())
+            .unwrap_or(0)
+    }
+}
+
+/// `count` as the stepper clamps it, to `least..=MOST` (GTK takes the
+/// upper bound first, then the lower, and so does this).
+fn clamp_count(count: usize, least: usize) -> usize {
+    count.min(MOST).max(least)
+}
+
+/// The axis at a place in the list (stacked up when out of it).
+fn axis_at(index: u32) -> Axis {
+    usize::try_from(index)
+        .ok()
+        .and_then(|index| AXES.get(index))
+        .map_or(Axis::Up, |(axis, _)| *axis)
+}
+
+/// What a count stepper is told.
+#[derive(Debug)]
+pub(in crate::ui) enum RepeatRowInput {
+    /// Show a count and an axis without reporting them; the axis list
+    /// shows only while the count can still choose it.
+    Show {
+        /// The count.
+        count: usize,
+        /// The axis.
+        axis: Axis,
+        /// Whether the axis list shows.
+        axis_shown: bool,
+    },
+    /// Say "×" in place of "How many".
+    Shorten,
+    /// People set the count.
+    CountChanged(usize),
+    /// People chose the axis at this place in the list.
+    AxisChosen(u32),
+}
+
+/// What a count stepper tells its owner.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::ui) enum RepeatRowOutput {
+    /// People changed the count or the axis.
+    Changed {
+        /// The count.
+        count: usize,
+        /// The axis.
+        axis: Axis,
+        /// How many [`RepeatRowInput::Show`] messages the row had handled
+        /// when people made the change: fewer than its owner sent means a
+        /// later `Show` replaced it.
+        shows: u64,
+    },
+}
+
+#[relm4::component(pub(in crate::ui))]
+impl Component for RepeatRowComponent {
+    /// The smallest count it offers.
+    type Init = usize;
+    type Input = RepeatRowInput;
+    type Output = RepeatRowOutput;
+    type CommandOutput = ();
+
+    view! {
+        gtk::Box {
+            set_spacing: 8,
+            add_css_class: "stave-card-row",
+            add_css_class: "stave-repeat-row",
+
+            gtk::Label {
+                set_xalign: 0.0,
+                add_css_class: "stave-key",
+                #[watch]
+                set_label: &if model.short { "×".to_owned() } else { tr("How many") },
+                #[watch]
+                set_tooltip_text: model
+                    .short
+                    .then(|| tr("How many pieces fill the space, each the same size"))
+                    .as_deref(),
+            },
+
+            #[name = "count"]
+            gtk::SpinButton {
+                set_adjustment: &gtk::Adjustment::new(
+                    1.0,
+                    f64::from(u32::try_from(least).unwrap_or(1)),
+                    f64::from(u32::try_from(MOST).unwrap_or(12)),
+                    1.0,
+                    1.0,
+                    0.0,
+                ),
+                set_digits: 0,
+                set_width_chars: 2,
+                set_numeric: true,
+                set_tooltip_text: Some(&tr("How many pieces fill the space, each the same size")),
+                update_property: &[gtk::accessible::Property::Label(&tr("How many"))],
+                #[watch]
+                #[block_signal(count_changed)]
+                set_value: model.count_value(),
+                connect_value_changed[sender] => move |count| {
+                    let count = usize::try_from(count.value_as_int()).unwrap_or(1);
+                    sender.input_sender().emit(RepeatRowInput::CountChanged(count));
+                } @count_changed,
+            },
+
+            #[name = "axis"]
+            gtk::DropDown::new(Some(axis_words()), gtk::Expression::NONE) -> gtk::DropDown {
+                set_tooltip_text: Some(&tr("Which way the pieces are split")),
+                update_property: &[gtk::accessible::Property::Label(&tr("Which way"))],
+                #[watch]
+                set_visible: model.axis_shown,
+                #[watch]
+                #[block_signal(axis_chosen)]
+                set_selected: model.axis_index(),
+                connect_selected_notify[sender] => move |axis| {
+                    sender.input_sender().emit(RepeatRowInput::AxisChosen(axis.selected()));
+                } @axis_chosen,
+            },
+        }
+    }
+
+    fn init(least: usize, root: Self::Root, sender: ComponentSender<Self>) -> ComponentParts<Self> {
+        let model = RepeatRowComponent {
+            count: clamp_count(1, least),
+            axis: Axis::Up,
+            least,
+            shows: 0,
+            axis_shown: true,
+            short: false,
+        };
+        let widgets = view_output!();
+        ComponentParts { model, widgets }
+    }
+
+    fn update(
+        &mut self,
+        message: RepeatRowInput,
+        sender: ComponentSender<Self>,
+        root: &Self::Root,
+    ) {
+        let changed = match message {
+            RepeatRowInput::Show {
+                count,
+                axis,
+                axis_shown,
+            } => {
+                self.count = clamp_count(count, self.least);
+                self.axis = axis;
+                self.axis_shown = axis_shown;
+                self.shows = self.shows.wrapping_add(1);
+                false
+            }
+            RepeatRowInput::Shorten => {
+                self.short = true;
+                root.add_css_class("stave-repeat-short");
+                false
+            }
+            RepeatRowInput::CountChanged(count) => {
+                let count = clamp_count(count, self.least);
+                let changed = count != self.count;
+                self.count = count;
+                changed
+            }
+            RepeatRowInput::AxisChosen(index) => {
+                let axis = axis_at(index);
+                let changed = axis != self.axis;
+                self.axis = axis;
+                changed
+            }
+        };
+        if changed {
+            // Nobody listening is not a mistake.
+            let _ = sender.output(RepeatRowOutput::Changed {
+                count: self.count,
+                axis: self.axis,
+                shows: self.shows,
+            });
+        }
+    }
+}
+
+/// What a [`RepeatRow`] says it shows, at once: the count and axis `show`
+/// last set or people last chose, while the stepper itself follows when the
+/// main loop next runs. Edit scripts read it between steps of one turn of
+/// the loop, as the old row's stepper was read.
+#[derive(Debug)]
+struct RepeatShown {
+    /// The count (within the stepper's range) and the axis.
+    value: Cell<(usize, Axis)>,
+    /// How many `show` calls were sent to the component.
+    shows: Cell<u64>,
+}
+
+impl RepeatShown {
+    /// Takes a change people made, unless a `show` sent after it has
+    /// replaced it (the component handled fewer shows than were sent).
+    fn take_change(&self, count: usize, axis: Axis, shows: u64) {
+        if shows == self.shows.get() {
+            self.value.set((count, axis));
+        }
+    }
+}
+
+/// A count stepper, behind the callback API the window still uses: it owns
+/// the component and passes its setters on as [`RepeatRowInput`] messages.
 pub(in crate::ui) struct RepeatRow {
-    /// The row.
+    /// The row; its owner shows and hides it.
     pub(in crate::ui) root: gtk::Box,
-    label: gtk::Label,
-    count: gtk::SpinButton,
-    axis: gtk::DropDown,
-    /// Set while the row is filled from the session, so it reports nothing.
-    filling: Rc<Cell<bool>>,
+    bridge: Bridge<RepeatRowComponent>,
+    /// The smallest count it offers.
+    least: usize,
+    /// What it shows, readable at once (plain values: no cycle).
+    shown: Rc<RepeatShown>,
 }
 
 impl RepeatRow {
     /// A row starting at one piece, stacked up; the smallest count it
     /// offers is `least`.
     pub(in crate::ui) fn new(least: usize) -> RepeatRow {
-        let root = gtk::Box::builder()
-            .spacing(8)
-            .css_classes(["stave-card-row", "stave-repeat-row"])
-            .build();
-        let label = gtk::Label::builder()
-            .label(tr("How many"))
-            .xalign(0.0)
-            .css_classes(["stave-key"])
-            .build();
-        root.append(&label);
-        let adjustment = gtk::Adjustment::new(
-            1.0,
-            f64::from(u32::try_from(least).unwrap_or(1)),
-            f64::from(u32::try_from(MOST).unwrap_or(12)),
-            1.0,
-            1.0,
-            0.0,
-        );
-        let count = gtk::SpinButton::builder()
-            .adjustment(&adjustment)
-            .digits(0)
-            .width_chars(2)
-            .numeric(true)
-            .tooltip_text(tr("How many pieces fill the space, each the same size"))
-            .build();
-        count.update_property(&[gtk::accessible::Property::Label(&tr("How many"))]);
-        root.append(&count);
-        let words: Vec<String> = AXES.iter().map(|(_, words)| tr(words)).collect();
-        let axis =
-            gtk::DropDown::from_strings(&words.iter().map(String::as_str).collect::<Vec<_>>());
-        axis.set_tooltip_text(Some(&tr("Which way the pieces are split")));
-        axis.update_property(&[gtk::accessible::Property::Label(&tr("Which way"))]);
-        root.append(&axis);
-        RepeatRow {
-            root,
-            label,
-            count,
-            axis,
-            filling: Rc::new(Cell::new(false)),
-        }
+        let bridge = Bridge::<RepeatRowComponent>::launch(least);
+        let shown = Rc::new(RepeatShown {
+            value: Cell::new((clamp_count(1, least), Axis::Up)),
+            shows: Cell::new(0),
+        });
+        let row = RepeatRow {
+            root: bridge.widget().clone(),
+            bridge,
+            least,
+            shown,
+        };
+        // Until a callback is connected, people's changes are still taken.
+        row.connect_changed(|_, _| {});
+        row
     }
 
     /// Says "×" in place of "How many" (in full in the stepper's tooltip
@@ -136,70 +359,63 @@ impl RepeatRow {
     /// the default layout, where the docked area would otherwise widen to
     /// hold it.
     pub(in crate::ui) fn shorten(&self) {
-        self.label.set_label("×");
-        self.label.set_tooltip_text(Some(&tr(
-            "How many pieces fill the space, each the same size",
-        )));
-        self.root.add_css_class("stave-repeat-short");
+        self.bridge.send(RepeatRowInput::Shorten);
     }
 
     /// Shows a count and an axis without reporting them; the axis list
     /// shows only while the count can still choose it.
     pub(in crate::ui) fn show(&self, count: usize, axis: Axis, axis_shown: bool) {
-        self.filling.set(true);
-        self.count
-            .set_value(f64::from(u32::try_from(count).unwrap_or(1)));
-        if let Some(index) = AXES.iter().position(|(each, _)| *each == axis) {
-            self.axis.set_selected(u32::try_from(index).unwrap_or(0));
-        }
-        self.axis.set_visible(axis_shown);
-        self.filling.set(false);
+        self.shown.value.set((clamp_count(count, self.least), axis));
+        self.shown.shows.set(self.shown.shows.get().wrapping_add(1));
+        self.bridge.send(RepeatRowInput::Show {
+            count,
+            axis,
+            axis_shown,
+        });
     }
 
-    /// The count shown.
+    /// The count shown: what [`RepeatRow::show`] last set (clamped as the
+    /// stepper clamps it) or people last chose, at once, though the stepper
+    /// itself follows when the main loop next runs.
     pub(in crate::ui) fn count(&self) -> usize {
-        usize::try_from(self.count.value_as_int()).unwrap_or(1)
+        self.shown.value.get().0
     }
 
-    /// The axis chosen.
+    /// The axis chosen: what [`RepeatRow::show`] last set or people last
+    /// chose, at once.
     pub(in crate::ui) fn axis(&self) -> Axis {
-        usize::try_from(self.axis.selected())
-            .ok()
-            .and_then(|index| AXES.get(index))
-            .map_or(Axis::Up, |(axis, _)| *axis)
+        self.shown.value.get().1
     }
 
     /// Calls `callback` with the count and axis when the user changes
-    /// either.
+    /// either; [`RepeatRow::count`] and [`RepeatRow::axis`] already say
+    /// them when it runs.
     pub(in crate::ui) fn connect_changed(&self, callback: impl Fn(usize, Axis) + 'static) {
-        let callback = Rc::new(callback);
-        {
-            let callback = callback.clone();
-            let filling = self.filling.clone();
-            let axis = self.axis.clone();
-            self.count.connect_value_changed(move |count| {
-                if filling.get() {
-                    return;
-                }
-                let chosen = usize::try_from(axis.selected())
-                    .ok()
-                    .and_then(|index| AXES.get(index))
-                    .map_or(Axis::Up, |(axis, _)| *axis);
-                callback(usize::try_from(count.value_as_int()).unwrap_or(1), chosen);
-            });
-        }
-        let filling = self.filling.clone();
-        let count = self.count.clone();
-        self.axis.connect_selected_notify(move |axis| {
-            if filling.get() {
-                return;
+        let shown = Rc::clone(&self.shown);
+        self.bridge.connect(move |output| match output {
+            RepeatRowOutput::Changed { count, axis, shows } => {
+                shown.take_change(count, axis, shows);
+                callback(count, axis);
             }
-            let chosen = usize::try_from(axis.selected())
-                .ok()
-                .and_then(|index| AXES.get(index))
-                .map_or(Axis::Up, |(axis, _)| *axis);
-            callback(usize::try_from(count.value_as_int()).unwrap_or(1), chosen);
         });
+    }
+
+    /// The stepper and the axis list, to use them as people do, for a test.
+    #[cfg(test)]
+    fn controls(&self) -> Option<(gtk::SpinButton, gtk::DropDown)> {
+        let mut spin = None;
+        let mut list = None;
+        let mut child = self.root.first_child();
+        while let Some(widget) = child {
+            if let Some(found) = widget.downcast_ref::<gtk::SpinButton>() {
+                spin = Some(found.clone());
+            }
+            if let Some(found) = widget.downcast_ref::<gtk::DropDown>() {
+                list = Some(found.clone());
+            }
+            child = widget.next_sibling();
+        }
+        spin.zip(list)
     }
 }
 
@@ -309,24 +525,229 @@ impl RepeatFoldRow {
     }
 }
 
-/// The changes a selected item's card offers.
-pub(in crate::ui) struct ItemTools {
-    /// The panel, at the bottom of the part's card.
-    pub(in crate::ui) root: gtk::Box,
-    title: gtk::Label,
-    name: gtk::EditableLabel,
-    repeat: RepeatFoldRow,
-    mirror_row: gtk::Box,
-    mirror_words: gtk::Label,
-    mirror: gtk::Switch,
-    hold: gtk::Button,
-    remove: gtk::Button,
-    /// The item shown, and the result it was worked out for.
-    shown: RefCell<Option<Shown>>,
-    filling: Rc<Cell<bool>>,
+/// What a selected item's tools show, worked out by the window from the
+/// session (`Window::update_item_tools`).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(in crate::ui) struct ItemToolsShown {
+    /// The item, by name.
+    pub(in crate::ui) item: String,
+    /// What "And the other side" does, in words; `None` when the session
+    /// offers no other side.
+    pub(in crate::ui) mirror: Option<String>,
+    /// Why no distance can be held from it, if none can.
+    pub(in crate::ui) unmeasurable: Option<String>,
 }
 
-/// What the panel was last filled with.
+/// The changes a selected item's card offers, as a relm4 component: its
+/// model is what it shows ([`ItemToolsShown`]); its name field, Mirror
+/// switch and buttons only send [`ItemToolsInput`] messages. Showing it
+/// fills in the name and turns Mirror off with their handlers blocked, so
+/// only people's renames and switches are reported. The repeat controls on
+/// it ([`RepeatFoldRow`]) are its owner's, placed among its rows at launch.
+#[derive(Debug)]
+pub(in crate::ui) struct ItemToolsComponent {
+    shown: ItemToolsShown,
+    /// Set for the update a [`ItemToolsInput::Show`] makes: the name and
+    /// Mirror are filled in again.
+    refill: bool,
+    /// The section's note, where the item's name shows (outside the rows).
+    title: gtk::Label,
+}
+
+/// What a selected item's tools are made with.
+#[derive(Debug)]
+pub(in crate::ui) struct ItemToolsInit {
+    /// The section's note, for the item's name.
+    pub(in crate::ui) title: gtk::Label,
+    /// The repeat controls' row, put after the name.
+    pub(in crate::ui) repeat: gtk::Box,
+}
+
+/// What a selected item's tools are told.
+#[derive(Debug)]
+pub(in crate::ui) enum ItemToolsInput {
+    /// Show these.
+    Show(ItemToolsShown),
+    /// Put the keyboard in the name, ready to retype it.
+    StartEditing,
+    /// People finished retyping the name: this is in it.
+    Renamed(String),
+    /// People switched "And the other side" on.
+    MirrorOn,
+    /// People pressed "Hold a distance…".
+    Hold,
+    /// People pressed "Remove…".
+    Remove,
+}
+
+/// What a selected item's tools tell their owner.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(in crate::ui) enum ItemToolsOutput {
+    /// Rename the item to this.
+    Rename(String),
+    /// Add its other side.
+    Mirror,
+    /// Hold a distance from it.
+    Hold,
+    /// Remove it.
+    Remove,
+}
+
+#[relm4::component(pub(in crate::ui))]
+impl Component for ItemToolsComponent {
+    type Init = ItemToolsInit;
+    type Input = ItemToolsInput;
+    type Output = ItemToolsOutput;
+    type CommandOutput = ();
+
+    view! {
+        gtk::Box {
+            set_orientation: gtk::Orientation::Vertical,
+            add_css_class: "stave-card",
+            add_css_class: "stave-edit-rows",
+
+            gtk::Box {
+                set_spacing: 6,
+                add_css_class: "stave-card-row",
+                add_css_class: "stave-edit-row",
+                append: &sections::row_label(&tr("Name")),
+
+                #[name = "name"]
+                gtk::EditableLabel {
+                    set_hexpand: true,
+                    add_css_class: "stave-edit-name",
+                    add_css_class: "stave-name-field",
+                    set_tooltip_text: Some(&tr("Click to retype the name: it changes everywhere it is used")),
+                    update_property: &[gtk::accessible::Property::Label(&tr("Name"))],
+                    #[track(model.refill)]
+                    #[block_signal(name_editing)]
+                    set_text: &model.shown.item,
+                    // When the retyping ends, what is in it.
+                    connect_editing_notify[sender] => move |label| {
+                        if !label.is_editing() {
+                            let text = label.text().trim().to_owned();
+                            sender.input_sender().emit(ItemToolsInput::Renamed(text));
+                        }
+                    } @name_editing,
+                },
+            },
+
+            append: &repeat,
+
+            gtk::Box {
+                set_spacing: 10,
+                add_css_class: "stave-card-row",
+                add_css_class: "stave-edit-row",
+                #[watch]
+                set_visible: model.shown.mirror.is_some(),
+
+                gtk::Label {
+                    set_xalign: 0.0,
+                    set_hexpand: true,
+                    set_wrap: true,
+                    #[watch]
+                    set_label: model.shown.mirror.as_deref().unwrap_or_default(),
+                },
+                gtk::Switch {
+                    set_valign: gtk::Align::Center,
+                    set_tooltip_text: Some(&tr("Add its mirror image on the other side")),
+                    update_property: &[gtk::accessible::Property::Label(&tr("And the other side"))],
+                    #[track(model.refill)]
+                    #[block_signal(mirror_switched)]
+                    set_active: false,
+                    connect_active_notify[sender] => move |switch| {
+                        if switch.is_active() {
+                            sender.input_sender().emit(ItemToolsInput::MirrorOn);
+                        }
+                    } @mirror_switched,
+                },
+            },
+
+            gtk::Box {
+                set_spacing: 8,
+                add_css_class: "stave-card-row",
+                add_css_class: "stave-edit-row",
+                add_css_class: "stave-item-buttons",
+
+                gtk::Button {
+                    set_label: &tr("Hold a distance…"),
+                    // After the label, which adds GTK's `text-button`:
+                    // these replace it, so the row keeps its width.
+                    set_css_classes: &["flat"],
+                    set_hexpand: true,
+                    #[watch]
+                    set_sensitive: model.shown.unmeasurable.is_none(),
+                    #[watch]
+                    set_tooltip_text: Some(&model.shown.unmeasurable.clone().unwrap_or_else(|| {
+                        tr("Pick a second part or space and keep the distance to it")
+                    })),
+                    connect_clicked[sender] => move |_| {
+                        sender.input_sender().emit(ItemToolsInput::Hold);
+                    },
+                },
+                gtk::Button {
+                    set_label: &tr("Remove…"),
+                    set_css_classes: &["flat", "error"],
+                    set_hexpand: true,
+                    set_tooltip_text: Some(&tr("Take it out of the design (Delete)")),
+                    connect_clicked[sender] => move |_| {
+                        sender.input_sender().emit(ItemToolsInput::Remove);
+                    },
+                },
+            },
+        }
+    }
+
+    fn init(
+        init: ItemToolsInit,
+        root: Self::Root,
+        sender: ComponentSender<Self>,
+    ) -> ComponentParts<Self> {
+        let ItemToolsInit { title, repeat } = init;
+        let model = ItemToolsComponent {
+            shown: ItemToolsShown::default(),
+            refill: false,
+            title,
+        };
+        let widgets = view_output!();
+        ComponentParts { model, widgets }
+    }
+
+    fn update_with_view(
+        &mut self,
+        widgets: &mut Self::Widgets,
+        message: ItemToolsInput,
+        sender: ComponentSender<Self>,
+        _root: &Self::Root,
+    ) {
+        self.refill = false;
+        let output = match message {
+            ItemToolsInput::Show(shown) => {
+                self.title.set_label(&shown.item);
+                self.title.set_visible(true);
+                self.shown = shown;
+                self.refill = true;
+                None
+            }
+            ItemToolsInput::StartEditing => {
+                widgets.name.start_editing();
+                None
+            }
+            ItemToolsInput::Renamed(text) => Some(ItemToolsOutput::Rename(text)),
+            ItemToolsInput::MirrorOn => Some(ItemToolsOutput::Mirror),
+            ItemToolsInput::Hold => Some(ItemToolsOutput::Hold),
+            ItemToolsInput::Remove => Some(ItemToolsOutput::Remove),
+        };
+        self.update_view(widgets, sender.clone());
+        if let Some(output) = output {
+            // Nobody listening is not a mistake.
+            let _ = sender.output(output);
+        }
+    }
+}
+
+/// What the tools were last worked out for, so the offer (which reads the
+/// project) is worked out once per item and result.
 #[derive(Debug, Clone, PartialEq)]
 struct Shown {
     item: String,
@@ -337,6 +758,19 @@ struct Shown {
     offer: Option<ItemOffer>,
 }
 
+/// The changes a selected item's card offers, behind the API the window
+/// still uses: the section it sits in (its owner shows and hides it), the
+/// component that draws it, and the repeat controls placed on it.
+pub(in crate::ui) struct ItemTools {
+    /// The panel, at the bottom of the part's card.
+    pub(in crate::ui) root: gtk::Box,
+    repeat: RepeatFoldRow,
+    bridge: Bridge<ItemToolsComponent>,
+    /// The owner's cache of the offer for the item shown, kept by
+    /// `Window::update_item_tools`.
+    shown: Option<Shown>,
+}
+
 impl ItemTools {
     /// The panel, hidden.
     pub(in crate::ui) fn new() -> ItemTools {
@@ -345,85 +779,22 @@ impl ItemTools {
         root.add_css_class("stave-item-tools");
         root.add_css_class("stave-edit-card");
         root.set_visible(false);
-        let rows = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
-            .css_classes(["stave-card", "stave-edit-rows"])
-            .build();
-        body.append(&rows);
-        let name_row = gtk::Box::builder()
-            .spacing(6)
-            .css_classes(["stave-card-row", "stave-edit-row"])
-            .build();
-        name_row.append(&sections::row_label(&tr("Name")));
-        let name = gtk::EditableLabel::builder()
-            .hexpand(true)
-            .css_classes(["stave-edit-name", "stave-name-field"])
-            .tooltip_text(tr(
-                "Click to retype the name: it changes everywhere it is used",
-            ))
-            .build();
-        name.update_property(&[gtk::accessible::Property::Label(&tr("Name"))]);
-        name_row.append(&name);
-        rows.append(&name_row);
         let repeat = RepeatFoldRow::new(1);
         repeat.root.add_css_class("stave-card-row");
         repeat.root.add_css_class("stave-edit-row");
-        rows.append(&repeat.root);
-        let mirror_row = gtk::Box::builder()
-            .spacing(10)
-            .css_classes(["stave-card-row", "stave-edit-row"])
-            .build();
-        let mirror_words = gtk::Label::builder()
-            .xalign(0.0)
-            .hexpand(true)
-            .wrap(true)
-            .build();
-        let mirror = gtk::Switch::builder()
-            .valign(gtk::Align::Center)
-            .tooltip_text(tr("Add its mirror image on the other side"))
-            .build();
-        mirror.update_property(&[gtk::accessible::Property::Label(&tr("And the other side"))]);
-        mirror_row.append(&mirror_words);
-        mirror_row.append(&mirror);
-        rows.append(&mirror_row);
-        let buttons = gtk::Box::builder()
-            .spacing(8)
-            .css_classes(["stave-card-row", "stave-edit-row", "stave-item-buttons"])
-            .build();
-        let hold = gtk::Button::builder()
-            .label(tr("Hold a distance…"))
-            .css_classes(["flat"])
-            .hexpand(true)
-            .tooltip_text(tr(
-                "Pick a second part or space and keep the distance to it",
-            ))
-            .build();
-        let remove = gtk::Button::builder()
-            .label(tr("Remove…"))
-            .css_classes(["flat", "error"])
-            .hexpand(true)
-            .tooltip_text(tr("Take it out of the design (Delete)"))
-            .build();
-        buttons.append(&hold);
-        buttons.append(&remove);
-        rows.append(&buttons);
+        let bridge = Bridge::<ItemToolsComponent>::launch(ItemToolsInit {
+            title,
+            repeat: repeat.root.clone(),
+        });
+        body.append(bridge.widget());
         ItemTools {
             root,
-            title,
-            name,
             repeat,
-            mirror_row,
-            mirror_words,
-            mirror,
-            hold,
-            remove,
-            shown: RefCell::new(None),
-            filling: Rc::new(Cell::new(false)),
+            bridge,
+            shown: None,
         }
     }
-}
 
-impl ItemTools {
     /// Its count stepper.
     pub(in crate::ui) fn repeat_row(&self) -> &RepeatRow {
         &self.repeat.row
@@ -433,75 +804,65 @@ impl ItemTools {
     pub(in crate::ui) fn repeat_fold(&self) -> &RepeatFoldRow {
         &self.repeat
     }
+
+    /// Calls `callback` with each change people ask for on it.
+    pub(in crate::ui) fn connect(&self, callback: impl Fn(ItemToolsOutput) + 'static) {
+        self.bridge.connect(callback);
+    }
+
+    /// Shows these when the main loop next runs.
+    fn show(&self, shown: ItemToolsShown) {
+        self.bridge.send(ItemToolsInput::Show(shown));
+    }
+
+    /// Puts the keyboard in the name when the main loop next runs.
+    fn start_editing(&self) {
+        self.bridge.send(ItemToolsInput::StartEditing);
+    }
 }
 
 impl Window {
     /// Puts the item's changes in the Details panel, under the
     /// selection's account, and connects them.
-    pub(in crate::ui) fn connect_item_tools(self: &Rc<Self>) {
+    pub(in crate::ui) fn connect_item_tools(&self) {
         let tools = &self.editing.tools;
         self.widgets.details.append(&tools.root);
-        let window = Rc::downgrade(self);
-        let filling = tools.filling.clone();
-        tools.name.connect_editing_notify(move |label| {
-            if label.is_editing() || filling.get() {
-                return;
-            }
-            let Some(window) = window.upgrade() else {
-                return;
-            };
-            let text = label.text().trim().to_owned();
-            window.rename_selected(&text);
-        });
-        let window = Rc::downgrade(self);
-        tools.repeat.connect_unfold(move || {
-            if let Some(window) = window.upgrade() {
-                window.update_item_tools();
-            }
-        });
-        let window = Rc::downgrade(self);
+        let input = self.input();
+        tools.connect(move |output| input.emit(EditingInput::ItemTools(output).into()));
+        let input = self.input();
+        tools
+            .repeat
+            .connect_unfold(move || input.emit(EditingInput::ItemRepeatUnfolded.into()));
+        let input = self.input();
         tools.repeat.row.connect_changed(move |count, axis| {
-            if let Some(window) = window.upgrade() {
-                window.repeat_selected(count, Some(axis));
-            }
+            input.emit(EditingInput::RepeatChanged { count, axis }.into());
         });
-        let window = Rc::downgrade(self);
-        let filling = tools.filling.clone();
-        tools.mirror.connect_active_notify(move |switch| {
-            if filling.get() || !switch.is_active() {
-                return;
+    }
+
+    /// The item's tools asked for something.
+    pub(in crate::ui) fn item_tools_asked(&mut self, output: ItemToolsOutput) {
+        match output {
+            ItemToolsOutput::Rename(text) => self.rename_selected(&text),
+            ItemToolsOutput::Mirror => self.mirror_selected(),
+            ItemToolsOutput::Hold => self.hold_from_selected(),
+            ItemToolsOutput::Remove => {
+                self.remove_selected();
             }
-            if let Some(window) = window.upgrade() {
-                window.mirror_selected();
-            }
-        });
-        let window = Rc::downgrade(self);
-        tools.hold.connect_clicked(move |_| {
-            if let Some(window) = window.upgrade() {
-                window.hold_from_selected();
-            }
-        });
-        let window = Rc::downgrade(self);
-        tools.remove.connect_clicked(move |_| {
-            if let Some(window) = window.upgrade() {
-                window.remove_selected();
-            }
-        });
+        }
     }
 
     /// The item of the project the selection belongs to, by name.
     pub(in crate::ui) fn selected_item(&self) -> Option<String> {
-        let session = self.session.borrow();
+        let session = &self.session;
         let (design, _) = session.drawable()?;
         selected_item(design, session.selection()?)
     }
 
     /// Shows the item's changes on its card when the selection is a part,
     /// a piece of hardware or an assembly and nothing is being edited.
-    pub(in crate::ui) fn update_item_tools(&self) {
-        let tools = &self.editing.tools;
+    pub(in crate::ui) fn update_item_tools(&mut self) {
         let found = {
-            let session = self.session.borrow();
+            let session = &self.session;
             session.drawable().and_then(|(design, _)| {
                 let selection = session.selection()?;
                 let item = selected_item(design, selection)?;
@@ -513,70 +874,60 @@ impl Window {
         let Some((item, unmeasurable, address)) =
             found.filter(|_| !self.edit_open() && self.gestures_allowed())
         else {
-            tools.root.set_visible(false);
+            self.editing.tools.root.set_visible(false);
             return;
         };
-        let stale = tools
-            .shown
-            .borrow()
-            .as_ref()
-            .is_none_or(|shown| shown.item != item || shown.design != address);
+        let (stale, another_item) =
+            self.editing
+                .tools
+                .shown
+                .as_ref()
+                .map_or((true, true), |shown| {
+                    (
+                        shown.item != item || shown.design != address,
+                        shown.item != item,
+                    )
+                });
         if stale {
             // Another item: "Repeat…" is asked for again.
-            if tools
-                .shown
-                .borrow()
-                .as_ref()
-                .is_none_or(|shown| shown.item != item)
-            {
-                tools.repeat.forget();
+            if another_item {
+                self.editing.tools.repeat.forget();
             }
             // The offer reads the project, so it is worked out once per
             // item and result.
-            let offer = self.session.borrow().item_offer(&item);
-            tools.shown.replace(Some(Shown {
+            let offer = self.session.item_offer(&item);
+            self.editing.tools.shown = Some(Shown {
                 item: item.clone(),
                 design: address,
                 offer,
-            }));
+            });
         }
-        let Some(offer) = tools
-            .shown
-            .borrow()
-            .as_ref()
-            .and_then(|shown| shown.offer.clone())
-        else {
+        let tools = &self.editing.tools;
+        let offer = tools.shown.as_ref().and_then(|shown| shown.offer.clone());
+        let Some(offer) = offer else {
             tools.root.set_visible(false);
             return;
         };
         let count = offer.pieces;
-        tools.filling.set(true);
-        tools.title.set_label(&item);
-        tools.title.set_visible(true);
-        tools.name.set_text(&item);
         tools
             .repeat
             .row
             .show(count, tools.repeat.row.axis(), count < 2);
         tools.repeat.show(offer.repeat_fold(tools.repeat.asked()));
-        tools.mirror.set_active(false);
-        tools.mirror_row.set_visible(offer.mirror.is_some());
-        match &offer.mirror {
-            Some(MirrorGesture::Image(image)) => tools.mirror_words.set_label(&fill_in(
+        let mirror = offer.mirror.as_ref().map(|gesture| match gesture {
+            MirrorGesture::Image(image) => fill_in(
                 &tr("And the other side · adds {image}"),
                 &[("image", &image.image.as_str())],
-            )),
-            Some(MirrorGesture::Split(_)) => tools.mirror_words.set_label(&tr(
-                "And the other side · splits its space across into a mirrored pair",
-            )),
-            None => {}
-        }
-        tools.hold.set_sensitive(unmeasurable.is_none());
-        tools.hold.set_tooltip_text(Some(&match unmeasurable {
-            Some(why) => why,
-            None => tr("Pick a second part or space and keep the distance to it"),
-        }));
-        tools.filling.set(false);
+            ),
+            MirrorGesture::Split(_) => {
+                tr("And the other side · splits its space across into a mirrored pair")
+            }
+        });
+        tools.show(ItemToolsShown {
+            item,
+            mirror,
+            unmeasurable,
+        });
         tools.root.set_visible(true);
     }
 
@@ -584,7 +935,7 @@ impl Window {
     pub(in crate::ui) fn focus_item_name(&self) {
         let tools = &self.editing.tools;
         if tools.root.is_visible() {
-            tools.name.start_editing();
+            tools.start_editing();
         } else {
             self.edit_toast(&tr("Select a part or an assembly first, then rename it"));
         }
@@ -594,7 +945,7 @@ impl Window {
 
     /// Renames the selected item everywhere it is used: the change is
     /// tried and shown on its card.
-    pub(in crate::ui) fn rename_selected(self: &Rc<Self>, to: &str) {
+    pub(in crate::ui) fn rename_selected(&mut self, to: &str) {
         let Some(item) = self.selected_item() else {
             return;
         };
@@ -617,10 +968,9 @@ impl Window {
     /// Makes the selected item `count` pieces filling its space, split
     /// along `axis` (a first repeat needs it); on the chosen candidate's
     /// card, the candidate instead.
-    pub(in crate::ui) fn repeat_selected(self: &Rc<Self>, count: usize, axis: Option<Axis>) {
+    pub(in crate::ui) fn repeat_selected(&mut self, count: usize, axis: Option<Axis>) {
         let chosen = self
             .session
-            .borrow()
             .edit()
             .is_some_and(|edit| edit.chosen().is_some());
         if chosen {
@@ -645,13 +995,12 @@ impl Window {
     /// Does what the session offers for the selected item's other side
     /// ([`stave_app::item_offer::MirrorGesture`]): adds its mirror image,
     /// or makes a handed piece filling a space a mirrored pair.
-    pub(in crate::ui) fn mirror_selected(self: &Rc<Self>) {
+    pub(in crate::ui) fn mirror_selected(&mut self) {
         let Some(item) = self.change_target() else {
             return;
         };
         let Some(gesture) = self
             .session
-            .borrow()
             .item_offer(&item)
             .and_then(|offer| offer.mirror)
         else {
@@ -670,7 +1019,7 @@ impl Window {
     /// Removes the selected item: the session lists what uses it, and the
     /// card (and its dialog) say what would go before anything does.
     /// `false` when nothing is selected that can be removed.
-    pub(in crate::ui) fn remove_selected(self: &Rc<Self>) -> bool {
+    pub(in crate::ui) fn remove_selected(&mut self) -> bool {
         if !self.gestures_allowed() {
             self.edit_toast(&self.parse_block_line().unwrap_or_default());
             return true;
@@ -690,30 +1039,29 @@ impl Window {
     fn change_target(&self) -> Option<String> {
         self.selected_item().or_else(|| {
             self.session
-                .borrow()
                 .change()
                 .and_then(|change| super::changes::change_item(change.request()))
         })
     }
 
     /// Starts a change of the design, reading the editor's unsaved text.
-    pub(in crate::ui) fn start_change(self: &Rc<Self>, command: EditCommand) {
+    pub(in crate::ui) fn start_change(&mut self, command: EditCommand) {
         if !self.gestures_allowed() {
             self.edit_toast(&self.parse_block_line().unwrap_or_default());
             return;
         }
         {
-            let mut session = self.session.borrow_mut();
+            let session = &mut self.session;
             session.set_edit_files(std::sync::Arc::new(self.widgets.files.edit_files()));
         }
-        self.editing.state.borrow_mut().select_after = None;
+        self.editing.state.select_after = None;
         self.send_edit_later(command);
     }
 
     /// The name of the item a commit of the change in progress leaves to
     /// select: the renamed or mirrored item by its new name.
     pub(in crate::ui) fn change_selects_after(&self) -> Option<String> {
-        let session = self.session.borrow();
+        let session = &self.session;
         let change = session.change()?;
         match change.request() {
             ChangeRequest::Rename { to, .. } => Some(to.as_str().to_owned()),
@@ -738,6 +1086,8 @@ impl Window {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::RefCell;
+
     use super::*;
 
     #[test]
@@ -746,5 +1096,275 @@ mod tests {
         let two = candidate_repeat(2, Axis::Across).unwrap();
         assert_eq!(two.count.get(), 2);
         assert_eq!(two.axis, Axis::Across);
+    }
+
+    use crate::ui::gtk_test::{on_gtk_thread, settle};
+
+    /// Every widget of type `T` under `widget`, in order.
+    fn descendants<T: IsA<gtk::Widget>>(widget: &gtk::Widget) -> Vec<T> {
+        let mut found = Vec::new();
+        let mut stack = vec![widget.clone()];
+        while let Some(widget) = stack.pop() {
+            if let Ok(typed) = widget.clone().downcast::<T>() {
+                found.push(typed);
+            }
+            let mut child = widget.last_child();
+            while let Some(next) = child {
+                child = next.prev_sibling();
+                stack.push(next);
+            }
+        }
+        found
+    }
+
+    #[test]
+    fn a_dropped_repeat_row_is_freed() {
+        on_gtk_thread(repeat_row_is_freed);
+    }
+
+    /// Dropping the row drops its controller: the widget, the model and
+    /// the callback are freed once the main loop runs.
+    fn repeat_row_is_freed() {
+        let row = RepeatRow::new(1);
+        let token = Rc::new(());
+        let held = Rc::clone(&token);
+        row.connect_changed(move |_, _| {
+            let _ = &held;
+        });
+        let callback = Rc::downgrade(&token);
+        drop(token);
+        settle();
+        let root = row.root.downgrade();
+        let input = row.bridge.sender().clone();
+        drop(row);
+        settle();
+        assert!(root.upgrade().is_none(), "the row is freed");
+        assert!(
+            input.send(RepeatRowInput::Shorten).is_err(),
+            "the component's runtime, and with it the model, is gone"
+        );
+        assert!(callback.upgrade().is_none(), "the callback is freed");
+    }
+
+    #[test]
+    fn showing_a_count_reports_nothing() {
+        on_gtk_thread(showing_a_count_reports_nothing_body);
+    }
+
+    /// The old row set a `filling` flag around its own setters; now its
+    /// handlers are blocked while the view follows the model.
+    fn showing_a_count_reports_nothing_body() {
+        let row = RepeatRow::new(1);
+        let heard: Rc<RefCell<Vec<(usize, Axis)>>> = Rc::default();
+        let log = Rc::clone(&heard);
+        row.connect_changed(move |count, axis| log.borrow_mut().push((count, axis)));
+        row.show(3, Axis::Deep, false);
+        row.shorten();
+        settle();
+        assert_eq!((row.count(), row.axis()), (3, Axis::Deep));
+        let Some((spin, list)) = row.controls() else {
+            panic!("the row has a stepper and an axis list");
+        };
+        assert_eq!(spin.value_as_int(), 3);
+        assert_eq!(list.selected(), 2);
+        assert!(!list.is_visible(), "the axis list follows the model");
+        assert!(heard.borrow().is_empty(), "showing it reports nothing");
+    }
+
+    #[test]
+    fn a_shown_count_and_axis_read_back_at_once() {
+        on_gtk_thread(shown_reads_back_at_once);
+    }
+
+    /// Edit scripts run their steps in one turn of the main loop and read
+    /// the row between them (`repeat 2 deep`, then `repeat 3` keeps the
+    /// axis), as the old row's stepper was read: what `show` set reads back
+    /// before the component has handled it, clamped as the stepper clamps.
+    fn shown_reads_back_at_once() {
+        let row = RepeatRow::new(2);
+        assert_eq!((row.count(), row.axis()), (2, Axis::Up), "starts at least");
+        row.show(3, Axis::Deep, true);
+        assert_eq!((row.count(), row.axis()), (3, Axis::Deep), "no settle");
+        row.show(40, Axis::Deep, true);
+        assert_eq!(row.count(), MOST, "clamped to the most");
+        row.show(0, Axis::Across, true);
+        assert_eq!((row.count(), row.axis()), (2, Axis::Across), "clamped up");
+        settle();
+        let Some((spin, list)) = row.controls() else {
+            panic!("the row has a stepper and an axis list");
+        };
+        assert_eq!(spin.value_as_int(), 2, "the stepper agrees");
+        assert_eq!(list.selected(), 1);
+        assert_eq!((row.count(), row.axis()), (2, Axis::Across));
+    }
+
+    #[test]
+    fn a_change_people_made_before_a_show_does_not_outlive_it() {
+        on_gtk_thread(show_replaces_an_earlier_change);
+    }
+
+    /// People change the count, and the window shows another before the
+    /// main loop runs: the callback still hears the change (the old row
+    /// called it before the show), but the show is what the row says and
+    /// what the stepper holds.
+    fn show_replaces_an_earlier_change() {
+        let row = RepeatRow::new(1);
+        let heard: Rc<RefCell<Vec<(usize, Axis)>>> = Rc::default();
+        let log = Rc::clone(&heard);
+        row.connect_changed(move |count, axis| log.borrow_mut().push((count, axis)));
+        let Some((spin, _)) = row.controls() else {
+            panic!("the row has a stepper and an axis list");
+        };
+        spin.set_value(5.0);
+        row.show(3, Axis::Deep, true);
+        settle();
+        assert_eq!(*heard.borrow(), vec![(5, Axis::Up)]);
+        assert_eq!((row.count(), row.axis()), (3, Axis::Deep));
+        assert_eq!(spin.value_as_int(), 3);
+        // A change after the show is taken again.
+        spin.set_value(6.0);
+        settle();
+        assert_eq!((row.count(), row.axis()), (6, Axis::Deep));
+    }
+
+    #[test]
+    fn a_count_set_while_a_count_is_handled_is_queued() {
+        on_gtk_thread(counts_are_queued);
+    }
+
+    /// The old row called back from inside the stepper's own signal. Now
+    /// people's change only queues a message; it reaches the callback after
+    /// the row's update has returned, and a change made from inside the
+    /// callback waits its turn.
+    fn counts_are_queued() {
+        let row = Rc::new(RepeatRow::new(1));
+        let Some((spin, list)) = row.controls() else {
+            panic!("the row has a stepper and an axis list");
+        };
+        let heard: Rc<RefCell<Vec<(usize, Axis)>>> = Rc::default();
+        let log = Rc::clone(&heard);
+        let weak = Rc::downgrade(&row);
+        row.connect_changed(move |count, axis| {
+            let Some(row) = weak.upgrade() else {
+                return;
+            };
+            let first = log.borrow().is_empty();
+            log.borrow_mut().push((count, axis));
+            // The model is free to read: the update has returned.
+            assert_eq!(row.count(), count);
+            if first {
+                list.set_selected(1);
+                assert_eq!(log.borrow().len(), 1, "nothing ran under the callback");
+            }
+        });
+        spin.set_value(4.0);
+        assert!(heard.borrow().is_empty(), "the change is only queued");
+        settle();
+        assert_eq!(*heard.borrow(), vec![(4, Axis::Up), (4, Axis::Across)]);
+    }
+
+    #[test]
+    fn dropped_item_tools_are_freed() {
+        on_gtk_thread(item_tools_are_freed);
+    }
+
+    fn item_tools_are_freed() {
+        let tools = ItemTools::new();
+        let token = Rc::new(());
+        let held = Rc::clone(&token);
+        tools.connect(move |_| {
+            let _ = &held;
+        });
+        let callback = Rc::downgrade(&token);
+        drop(token);
+        tools.show(ItemToolsShown {
+            item: "drawer".to_owned(),
+            mirror: None,
+            unmeasurable: None,
+        });
+        settle();
+        let rows = tools.bridge.widget().downgrade();
+        let input = tools.bridge.sender().clone();
+        drop(tools);
+        settle();
+        assert!(rows.upgrade().is_none(), "the rows are freed");
+        assert!(
+            input.send(ItemToolsInput::Hold).is_err(),
+            "the component's runtime, and with it the model, is gone"
+        );
+        assert!(callback.upgrade().is_none(), "the callback is freed");
+    }
+
+    #[test]
+    fn showing_item_tools_reports_nothing_and_a_switch_made_in_a_callback_is_queued() {
+        on_gtk_thread(item_tools_are_queued);
+    }
+
+    /// The old tools kept a `filling` flag so filling them in reported
+    /// nothing. Now showing them blocks their handlers, and people's input
+    /// only queues a message: the callback runs after the update, and
+    /// Mirror switched on from inside it waits its turn.
+    fn item_tools_are_queued() {
+        let tools = Rc::new(ItemTools::new());
+        let heard: Rc<RefCell<Vec<ItemToolsOutput>>> = Rc::default();
+        let log = Rc::clone(&heard);
+        let rows: gtk::Widget = tools.bridge.widget().clone().upcast();
+        let Some(mirror) = descendants::<gtk::Switch>(&rows).first().cloned() else {
+            panic!("the tools have a Mirror switch");
+        };
+        let shown = ItemToolsShown {
+            item: "door".to_owned(),
+            mirror: Some("And the other side · adds door_right".to_owned()),
+            unmeasurable: Some("pick one of its parts to measure from".to_owned()),
+        };
+        mirror.set_active(true);
+        settle();
+        heard.borrow_mut().clear();
+        let weak = Rc::downgrade(&tools);
+        let again = shown.clone();
+        let inner = mirror.clone();
+        tools.connect(move |output| {
+            let Some(tools) = weak.upgrade() else {
+                return;
+            };
+            let first = log.borrow().is_empty();
+            log.borrow_mut().push(output);
+            if first {
+                tools.show(again.clone());
+                inner.set_active(true);
+                assert_eq!(log.borrow().len(), 1, "nothing ran under the callback");
+            }
+        });
+        tools.show(shown.clone());
+        settle();
+        assert!(!mirror.is_active(), "showing turns Mirror off");
+        let names = descendants::<gtk::EditableLabel>(&rows);
+        assert_eq!(
+            names.first().map(|name| name.text().to_string()).as_deref(),
+            Some("door")
+        );
+        let buttons = descendants::<gtk::Button>(&rows);
+        let hold = buttons
+            .iter()
+            .find(|button| button.label().as_deref() == Some("Hold a distance…"));
+        assert!(
+            hold.is_some_and(|hold| !hold.is_sensitive()),
+            "nothing to hold from"
+        );
+        assert!(heard.borrow().is_empty(), "showing reports nothing");
+        let Some(remove) = buttons
+            .iter()
+            .find(|button| button.label().as_deref() == Some("Remove…"))
+        else {
+            panic!("the tools have Remove");
+        };
+        remove.emit_clicked();
+        assert!(heard.borrow().is_empty(), "the press is only queued");
+        settle();
+        assert_eq!(
+            *heard.borrow(),
+            vec![ItemToolsOutput::Remove, ItemToolsOutput::Mirror],
+            "the switch made in the callback came after it"
+        );
     }
 }

@@ -18,8 +18,6 @@
 //! do <text>                            Ctrl+K, the text, Enter: the first verb listed is run
 //! ```
 
-use std::rc::Rc;
-
 use stave_lang::placement::Axis;
 
 use super::super::Window;
@@ -48,23 +46,19 @@ fn hold_fields(rest: &str) -> Result<(bool, Option<String>, String), String> {
 impl Window {
     /// Does a step of an edit script that changes the design, or says the
     /// word isn't a step.
-    pub(in crate::ui) fn change_step(
-        self: &Rc<Self>,
-        word: &str,
-        rest: &str,
-    ) -> Result<(), String> {
+    pub(in crate::ui) fn change_step(&mut self, word: &str, rest: &str) -> Result<(), String> {
         // Each command is sent at once, so the next step sees it done.
-        self.editing.immediate.set(true);
+        self.editing.immediate = true;
         let done = self.change_step_now(word, rest);
-        self.editing.immediate.set(false);
+        self.editing.immediate = false;
         done
     }
 
-    fn change_step_now(self: &Rc<Self>, word: &str, rest: &str) -> Result<(), String> {
+    fn change_step_now(&mut self, word: &str, rest: &str) -> Result<(), String> {
         match word {
             "pick" => {
                 let selection = {
-                    let session = self.session.borrow();
+                    let session = &self.session;
                     let (design, _) = session.drawable().ok_or("nothing is drawn yet")?;
                     stave_app::link::selection_named(design, rest)
                         .ok_or_else(|| format!("the design has nothing called '{rest}'"))?
@@ -156,7 +150,7 @@ impl Window {
             "do" => {
                 let verb = parse_verb(rest).ok_or_else(|| format!("'{rest}' names no verb"))?;
                 let _ = self.finder_actions(rest);
-                let run = self.editing.verbs.borrow().first().cloned();
+                let run = self.editing.verbs.first().cloned();
                 match run {
                     Some(run) => self.run_verb(run),
                     None => self.run_verb(Run::Other(verb)),

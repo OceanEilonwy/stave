@@ -19,7 +19,6 @@
 //! Grips are numbered from 1 in the listing's order, as `stave edit`
 //! numbers them.
 
-use std::rc::Rc;
 use std::sync::atomic::AtomicBool;
 
 use stave_app::change::ChangeDetail;
@@ -33,7 +32,7 @@ use crate::ui::Window;
 impl Window {
     /// Does a grip step of an edit script; `None` when `word` isn't one.
     pub(in crate::ui) fn grip_step(
-        self: &Rc<Self>,
+        &mut self,
         word: &str,
         rest: &str,
     ) -> Option<Result<(), String>> {
@@ -41,7 +40,7 @@ impl Window {
             "grips" => self.grips_step(rest),
             "stops" => {
                 let never = AtomicBool::new(false);
-                let events = self.session.borrow_mut().find_grip_stops(None, &never);
+                let events = self.session.find_grip_stops(None, &never);
                 self.handle(events);
                 Ok(())
             }
@@ -76,20 +75,19 @@ impl Window {
     /// Whether a follows grip's list of sizes waits for a pick.
     pub(in crate::ui) fn grip_choice_waits(&self) -> bool {
         self.session
-            .borrow()
             .change()
             .is_some_and(|change| {
                 matches!(change.detail(), ChangeDetail::Grip(detail) if !detail.choices.is_empty())
             })
     }
 
-    fn grips_step(self: &Rc<Self>, rest: &str) -> Result<(), String> {
+    fn grips_step(&mut self, rest: &str) -> Result<(), String> {
         let words: Vec<&str> = rest.split_whitespace().collect();
         let selection = match words.as_slice() {
             ["envelope"] => GripSelection::Envelope,
             ["assembly", name] => {
                 let id = {
-                    let session = self.session.borrow();
+                    let session = &self.session;
                     let (design, _) = session.drawable().ok_or("nothing is drawn yet")?;
                     design
                         .assemblies
@@ -100,13 +98,13 @@ impl Window {
                 };
                 // Selected as a click in the tree does (unless the command
                 // line selected it already, keeping its camera).
-                if self.session.borrow().selection() != Some(&Selection::Assembly(id)) {
+                if self.session.selection() != Some(&Selection::Assembly(id)) {
                     self.dispatch(Command::Select(Some(Selection::Assembly(id))));
                 }
                 GripSelection::Assembly(id)
             }
             ["split", piece] => {
-                let session = self.session.borrow();
+                let session = &self.session;
                 let (_, graph) = session.drawable().ok_or("nothing is drawn yet")?;
                 let region = graph
                     .regions()
@@ -124,7 +122,7 @@ impl Window {
             }
         };
         self.show_grips(Some(selection));
-        if self.session.borrow().grips().is_none() {
+        if self.session.grips().is_none() {
             return Err(format!("'{rest}' has no grips"));
         }
         Ok(())
@@ -146,10 +144,9 @@ impl Window {
         Ok((index, value.trim()))
     }
 
-    fn pick_step(self: &Rc<Self>, name: &str) -> Result<(), String> {
+    fn pick_step(&mut self, name: &str) -> Result<(), String> {
         let param = self
             .session
-            .borrow()
             .change()
             .and_then(|change| match change.detail() {
                 ChangeDetail::Grip(detail) => detail
@@ -172,7 +169,7 @@ impl Window {
         Ok(())
     }
 
-    fn solver_step(self: &Rc<Self>, rest: &str, solved: bool) -> Result<(), String> {
+    fn solver_step(&mut self, rest: &str, solved: bool) -> Result<(), String> {
         let words: Vec<&str> = rest.split_whitespace().collect();
         let number = words.first().ok_or("write the grip's number")?;
         let (index, _) = self.numbered(&format!("{number} -"))?;

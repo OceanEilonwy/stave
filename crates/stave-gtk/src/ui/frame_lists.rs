@@ -143,19 +143,15 @@ impl FrameLists {
 impl Window {
     /// Brings the kept frame lists up to date, working them out again only
     /// when something they depend on changed since the last frame.
-    pub(super) fn refresh_frame_lists(&self) {
-        self.with_link_hover(|link_hover| self.refresh_frame_lists_with(link_hover));
-    }
-
-    fn refresh_frame_lists_with(&self, link_hover: Option<&Hovered>) {
-        let session = self.session.borrow();
-        let state = self.state.borrow();
+    pub(super) fn refresh_frame_lists(&mut self) {
+        let session = &self.session;
+        let state = &self.state;
         let now = ListsNow {
             shown: session.shown(),
             latest: session.latest(),
             selection: session.selection(),
             hovered: &state.hovered,
-            link_hover,
+            link_hover: self.editing.link_hover(),
             xray: state.xray,
             focused: state.focus.is_some(),
             problem_nodes: state
@@ -163,7 +159,7 @@ impl Window {
                 .as_ref()
                 .map(|problem| problem.highlight.nodes.as_slice()),
         };
-        let mut lists = self.frame_lists.borrow_mut();
+        let lists = &mut self.frame_lists;
         if lists.made_for.as_ref().is_some_and(|key| key.same(&now)) {
             return;
         }

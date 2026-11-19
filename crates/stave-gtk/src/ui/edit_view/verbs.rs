@@ -5,7 +5,6 @@
 //! runs the same method of the window as the mouse: one path for both.
 
 use stave_app::i18n::{fill_in, tr};
-use std::rc::Rc;
 
 use stave_app::edit::{Declaration, Picked};
 use stave_app::session::Selection;
@@ -113,31 +112,14 @@ pub(in crate::ui) enum Run {
 }
 
 impl Window {
-    /// The finder lists the verbs a query names and runs the one chosen.
-    pub(in crate::ui) fn connect_verbs(self: &Rc<Self>) {
-        let window = Rc::downgrade(self);
-        self.widgets.finder.connect_actions(move |query| {
-            window
-                .upgrade()
-                .map(|window| window.finder_actions(query))
-                .unwrap_or_default()
-        });
-        let window = Rc::downgrade(self);
-        self.widgets.finder.connect_action(move |index| {
-            if let Some(window) = window.upgrade() {
-                window.run_finder_action(index);
-            }
-        });
-    }
-
     /// The verbs a query names, as the finder lists them; what each does
     /// is kept until one is chosen.
-    pub(in crate::ui) fn finder_actions(&self, query: &str) -> Vec<Action> {
+    pub(in crate::ui) fn finder_actions(&mut self, query: &str) -> Vec<Action> {
         let Some(verb) = parse_verb(query) else {
-            self.editing.verbs.replace(Vec::new());
+            self.editing.verbs = Vec::new();
             return Vec::new();
         };
-        let session = self.session.borrow();
+        let session = &self.session;
         let item = self.selected_item();
         let mut found: Vec<(Action, Run)> = Vec::new();
         match &verb {
@@ -159,7 +141,7 @@ impl Window {
                             ));
                         }
                     }
-                } else if let Some(picked) = self.picked_for_verb(&session) {
+                } else if let Some(picked) = self.picked_for_verb(session) {
                     let label = if words.is_empty() {
                         tr("Add something")
                     } else {
@@ -264,11 +246,11 @@ impl Window {
                 },
                 Run::Other(Verb::Hold),
             ));
-            self.editing.verbs.replace(Vec::new());
+            self.editing.verbs = Vec::new();
             return found.into_iter().map(|(action, _)| action).collect();
         }
         let (actions, runs): (Vec<Action>, Vec<Run>) = found.into_iter().unzip();
-        self.editing.verbs.replace(runs);
+        self.editing.verbs = runs;
         actions
     }
 
@@ -278,7 +260,7 @@ impl Window {
         let Some(Selection::Part(part)) = session.selection() else {
             return None;
         };
-        let face = self.editing.state.borrow().face;
+        let face = self.editing.state.face;
         Some(match face {
             Some(face) if face.part == *part => Picked::Face(face),
             _ => Picked::Group(NonEmpty::new(vec![*part])?),
@@ -286,15 +268,15 @@ impl Window {
     }
 
     /// Runs the verb the finder listed at `index`.
-    pub(in crate::ui) fn run_finder_action(self: &Rc<Self>, index: usize) {
-        let run = self.editing.verbs.borrow().get(index).cloned();
+    pub(in crate::ui) fn run_finder_action(&mut self, index: usize) {
+        let run = self.editing.verbs.get(index).cloned();
         if let Some(run) = run {
             self.run_verb(run);
         }
     }
 
     /// Runs a verb: the same methods the menu, the cards and the keys call.
-    pub(in crate::ui) fn run_verb(self: &Rc<Self>, run: Run) {
+    pub(in crate::ui) fn run_verb(&mut self, run: Run) {
         if !self.gestures_allowed() {
             self.edit_toast(&self.parse_block_line().unwrap_or_default());
             return;
@@ -304,7 +286,7 @@ impl Window {
             Run::StartThenChoose(picked, words) => {
                 let point = self.point_of(None);
                 self.start_edit(picked, point);
-                let declaration = self.session.borrow().edit().and_then(|edit| {
+                let declaration = self.session.edit().and_then(|edit| {
                     edit.menu()
                         .iter()
                         .find(|candidate| {
