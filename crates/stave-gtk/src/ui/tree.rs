@@ -29,12 +29,23 @@
 //! select it. With no parts it says why (`stave_app::empty`), and for a
 //! library folder lists what the library defines; activating one of those
 //! opens its text.
+//!
+//! The panel is a relm4 component, [`TreeComponent`] (the pattern is in
+//! docs/relm4-migration.md): its model is the only state, only its update
+//! changes it, and the rows' and the list's handlers only send
+//! [`TreeInput`] messages. The rows themselves are plain widgets the update
+//! builds, not components of their own. When the update selects a row
+//! itself (filling the list, showing the window's selection) it blocks the
+//! list's `row-selected` handler, so only a row people choose is passed
+//! on. [`TreeSidebar`] keeps the older callback API in front of it until
+//! the window moves to relm4 too.
 
-use std::cell::{Cell, RefCell};
+use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 use adw::prelude::*;
+use relm4::{Component, ComponentParts, ComponentSender};
 use stave_app::empty::{EmptyState, LibraryItem};
 use stave_app::focus::Target;
 use stave_app::inspect::{AssemblyNode, PartsTree, Swatch, SwatchShape, TreeEntry};
@@ -47,15 +58,7 @@ use stave_model::solved::AssemblyId;
 use stave_scene::Item;
 
 use super::icons::{self, Paint, PathIcon, Shape};
-
-/// Called with what a row stands for when it is activated.
-type SelectCallback = Rc<dyn Fn(Selection)>;
-/// Called with where a library's item is written when it is activated.
-type SourceCallback = Rc<dyn Fn(SourceLocation)>;
-/// Called with a joint to focus on when its row is activated.
-type FocusCallback = Rc<dyn Fn(Target)>;
-/// Called with what the pointer is over (empty when it leaves).
-type HoverCallback = Rc<dyn Fn(Vec<Item>)>;
+use super::relm4_shim::Bridge;
 
 /// The panel's own look: sizes, the chips' colours (light, and dark under
 /// the window's `stave-dark`) and the partner links.
@@ -224,18 +227,14 @@ enum RowKind {
     Source(SourceLocation),
 }
 
-/// The Parts panel.
-pub struct TreeSidebar {
-    /// The panel's content.
-    pub root: gtk::Box,
-    list: gtk::ListBox,
-    state: Rc<RefCell<TreeState>>,
-}
-
+/// The Parts panel's state: the tree it shows, its rows and what is
+/// folded, selected and listed. Only [`TreeComponent::update_with_view`]
+/// changes it.
 #[derive(Default)]
-struct TreeState {
+pub struct TreeComponent {
     tree: PartsTree,
     joints: PartJoints,
+    /// The rows on show, in order, with what each stands for.
     rows: Vec<(gtk::ListBoxRow, RowKind)>,
     /// Assemblies the user opened (`true`) or folded (`false`); the
     /// others are as `PartJoints::folded_by_default` says, and open when
@@ -246,9 +245,10 @@ struct TreeState {
     marks: Rc<Marks>,
     /// The part whose joined-to rows show under it.
     listing: Listing,
-    /// The joined-to row being activated (or whose partner is clicked),
-    /// while its callback runs: the selection it makes keeps the rows
-    /// listed where it was clicked.
+    /// What people last chose from a joined-to row (activating it, or
+    /// clicking one of its partners), until the window next shows a
+    /// selection: the selection that choice makes keeps the rows listed
+    /// where it was chosen.
     clicked: Option<Selection>,
     /// How much the rows show at the panel's width.
     density: Option<Density>,
@@ -257,15 +257,58 @@ struct TreeState {
     /// What an empty tree says instead of "Nothing to show yet" (a new
     /// project's envelope: where to click).
     placeholder: Option<String>,
-    on_select: Option<SelectCallback>,
-    on_source: Option<SourceCallback>,
-    on_focus: Option<FocusCallback>,
-    on_hover: Option<HoverCallback>,
-    /// Ignore row selection changes made while filling or syncing.
-    syncing: bool,
 }
 
-impl TreeState {
+/// What the Parts panel is told: what to show by the window, and what
+/// people did by its own widgets.
+#[derive(Debug)]
+pub enum TreeInput {
+    /// Show a new tree and its joints, keeping what is folded.
+    ShowTree {
+        /// The parts, by assembly.
+        tree: PartsTree,
+        /// What each part is joined to.
+        joints: PartJoints,
+    },
+    /// Show why there are no parts; for a library, what it defines.
+    ShowEmpty(EmptyState),
+    /// What the tree says while it has no rows: `None` for "Nothing to
+    /// show yet".
+    SetPlaceholder(Option<String>),
+    /// The latest check's marks, for the dots.
+    ShowMarks(Rc<Marks>),
+    /// Highlight the selection's row and list what the selected part is
+    /// joined to under it. Never passed back as a choice.
+    ShowSelection(Option<Selection>),
+    /// People activated a row (clicked it, or pressed Enter on it).
+    Activated(gtk::ListBoxRow),
+    /// People moved the row selection to this row (arrow keys, a click).
+    Selected(gtk::ListBoxRow),
+    /// People clicked a partner link that selects this.
+    PartnerClicked(Selection),
+    /// The pointer went onto a partner link standing for these (empty: it
+    /// left).
+    Hovered(Vec<Item>),
+    /// The panel is now this many pixels wide.
+    Resized(i32),
+}
+
+/// What the Parts panel tells its owner.
+#[derive(Clone, Debug, PartialEq)]
+pub enum TreeOutput {
+    /// People chose a row (or a partner link) standing for this.
+    Select(Selection),
+    /// People chose something a library defines: where it is written.
+    Source(SourceLocation),
+    /// People activated a joined-to row: focus mode on this joint or piece
+    /// of hardware.
+    Focus(Target),
+    /// What the pointer is over in the panel (empty when it leaves, or
+    /// when the rows are rebuilt under it).
+    Hover(Vec<Item>),
+}
+
+impl TreeComponent {
     fn density(&self) -> Density {
         self.density.unwrap_or(Density::Full)
     }
@@ -279,6 +322,265 @@ impl TreeState {
             self.selection.as_ref(),
             self.listing.under,
         )
+    }
+
+    /// What a row on show stands for; `None` for a row that has gone (a
+    /// message about it queued before the rows were rebuilt).
+    fn kind_of(&self, row: &gtk::ListBoxRow) -> Option<RowKind> {
+        self.rows
+            .iter()
+            .find(|(shown, _)| shown == row)
+            .map(|(_, kind)| kind.clone())
+    }
+
+    /// Acts on a row people activated.
+    fn activate(
+        &mut self,
+        row: &gtk::ListBoxRow,
+        widgets: &TreeComponentWidgets,
+        sender: &ComponentSender<Self>,
+    ) {
+        let output = match self.kind_of(row) {
+            Some(RowKind::Entry { selection, .. }) => Some(TreeOutput::Select(selection)),
+            Some(RowKind::Heading(id)) => {
+                let open = find(&self.tree.assemblies, id).is_some_and(|node| self.is_open(node));
+                self.toggled.insert(id, !open);
+                self.fill(widgets, sender);
+                Some(TreeOutput::Select(Selection::Assembly(id)))
+            }
+            Some(RowKind::Folded(ids)) => {
+                for id in &ids {
+                    self.toggled.insert(*id, true);
+                }
+                self.fill(widgets, sender);
+                ids.first()
+                    .map(|first| TreeOutput::Select(Selection::Assembly(*first)))
+            }
+            Some(RowKind::Joined {
+                focus, selection, ..
+            }) => match (focus, selection) {
+                (Some(target), _) => {
+                    self.clicked = Some(Selection::of_target(target));
+                    Some(TreeOutput::Focus(target))
+                }
+                (None, Some(selection)) => Some(TreeOutput::Select(selection)),
+                (None, None) => None,
+            },
+            Some(RowKind::Source(location)) => Some(TreeOutput::Source(location)),
+            Some(RowKind::Note) | None => None,
+        };
+        if let Some(output) = output {
+            // Nobody listening is not a mistake: the owner may not want
+            // to hear.
+            let _ = sender.output(output);
+        }
+    }
+}
+
+#[relm4::component(pub)]
+impl Component for TreeComponent {
+    type Init = ();
+    type Input = TreeInput;
+    type Output = TreeOutput;
+    type CommandOutput = ();
+
+    view! {
+        gtk::Box {
+            set_orientation: gtk::Orientation::Vertical,
+            add_css_class: "stave-model",
+
+            #[name = "overlay"]
+            gtk::Overlay {
+                // `External`: the panel may be narrower than its rows ask,
+                // so the width watcher below sees the real width and the
+                // rows show less.
+                #[wrap(Some)]
+                set_child = &gtk::ScrolledWindow {
+                    set_hscrollbar_policy: gtk::PolicyType::External,
+                    set_vexpand: true,
+
+                    #[wrap(Some)]
+                    #[name = "list"]
+                    set_child = &gtk::ListBox {
+                        set_selection_mode: gtk::SelectionMode::Single,
+                        add_css_class: "stave-parts",
+                        update_property: &[gtk::accessible::Property::Label("Parts")],
+
+                        connect_row_activated[sender] => move |_, row| {
+                            sender.input_sender().emit(TreeInput::Activated(row.clone()));
+                        },
+                        // Arrow keys move the row selection; follow it
+                        // like a click. Blocked while the update selects
+                        // rows itself.
+                        connect_row_selected[sender] => move |_, row| {
+                            if let Some(row) = row {
+                                sender.input_sender().emit(TreeInput::Selected(row.clone()));
+                            }
+                        } @row_selected,
+                    },
+                },
+
+                // Watches the panel's width without taking part in its
+                // size.
+                #[name = "watcher"]
+                add_overlay = &gtk::DrawingArea {
+                    set_can_target: false,
+                    set_can_focus: false,
+                    connect_resize[sender] => move |_, width, _| {
+                        sender.input_sender().emit(TreeInput::Resized(width));
+                    },
+                },
+            },
+        }
+    }
+
+    fn init(_: (), root: Self::Root, sender: ComponentSender<Self>) -> ComponentParts<Self> {
+        install_css();
+        let model = TreeComponent::default();
+        let widgets = view_output!();
+        widgets.overlay.set_measure_overlay(&widgets.watcher, false);
+        ComponentParts { model, widgets }
+    }
+
+    fn update_with_view(
+        &mut self,
+        widgets: &mut Self::Widgets,
+        message: TreeInput,
+        sender: ComponentSender<Self>,
+        _root: &Self::Root,
+    ) {
+        match message {
+            TreeInput::ShowTree { tree, joints } => {
+                self.tree = tree;
+                self.joints = joints;
+                self.empty = None;
+                self.fill(widgets, &sender);
+            }
+            TreeInput::ShowEmpty(empty) => {
+                self.tree = PartsTree::default();
+                self.joints = PartJoints::default();
+                self.empty = Some(empty);
+                self.fill(widgets, &sender);
+            }
+            TreeInput::SetPlaceholder(placeholder) => {
+                if self.placeholder != placeholder {
+                    self.placeholder = placeholder;
+                    self.fill(widgets, &sender);
+                }
+            }
+            TreeInput::ShowMarks(marks) => {
+                self.marks = marks;
+                self.fill(widgets, &sender);
+            }
+            TreeInput::ShowSelection(selection) => {
+                // Choosing one of the listed rows keeps them listed under
+                // the same part, and then the rows are left as they are,
+                // so nothing folds and the list does not move.
+                let clicked = self.clicked.take();
+                let listing = self
+                    .listing
+                    .next(selection.as_ref(), &self.joints, clicked.as_ref());
+                let was_open = self.open_assemblies();
+                let was_listing = self.listing;
+                self.selection = selection;
+                self.listing = listing;
+                if listing == was_listing && was_open == self.open_assemblies() {
+                    self.sync_selection(widgets);
+                } else {
+                    // The assembly holding it opens.
+                    self.fill(widgets, &sender);
+                }
+            }
+            TreeInput::Activated(row) => self.activate(&row, widgets, &sender),
+            TreeInput::Selected(row) => {
+                if let Some(RowKind::Entry { selection, .. }) = self.kind_of(&row) {
+                    let _ = sender.output(TreeOutput::Select(selection));
+                }
+            }
+            TreeInput::PartnerClicked(selection) => {
+                // A piece of hardware chosen here keeps the rows where
+                // they are, as if its row were activated.
+                self.clicked = Some(selection.clone());
+                let _ = sender.output(TreeOutput::Select(selection));
+            }
+            TreeInput::Hovered(items) => {
+                let _ = sender.output(TreeOutput::Hover(items));
+            }
+            TreeInput::Resized(width) => {
+                let density = Density::for_width(width);
+                if self.density != Some(density) {
+                    self.density = Some(density);
+                    self.fill(widgets, &sender);
+                }
+            }
+        }
+        self.update_view(widgets, sender);
+    }
+}
+
+/// The Parts panel, behind the callback API the window still uses: it
+/// owns the component (dropping it shuts the component down), passes its
+/// setters on as [`TreeInput`] messages and each [`TreeOutput`] to the
+/// callback connected for it.
+///
+/// Setters are queued: they take effect when the main loop next runs,
+/// after whatever called them has returned. Callbacks run from the main
+/// loop after the panel's update has finished, never from inside it.
+pub struct TreeSidebar {
+    /// The panel's content.
+    pub root: gtk::Box,
+    bridge: Bridge<TreeComponent>,
+    callbacks: Rc<TreeCallbacks>,
+}
+
+/// A callback the window connects.
+type Callback<T> = Rc<dyn Fn(T)>;
+
+/// One callback the window connected, if any. It sits in a [`Cell`] and
+/// is cloned out before it is called, so it may connect another.
+struct Slot<T> {
+    callback: Cell<Option<Callback<T>>>,
+}
+
+impl<T> Default for Slot<T> {
+    fn default() -> Self {
+        Slot {
+            callback: Cell::new(None),
+        }
+    }
+}
+
+impl<T> Slot<T> {
+    fn set(&self, callback: impl Fn(T) + 'static) {
+        self.callback.set(Some(Rc::new(callback)));
+    }
+
+    fn call(&self, value: T) {
+        let callback = self.callback.take();
+        self.callback.set(callback.clone());
+        if let Some(callback) = callback {
+            callback(value);
+        }
+    }
+}
+
+/// Where each [`TreeOutput`] goes.
+#[derive(Default)]
+struct TreeCallbacks {
+    select: Slot<Selection>,
+    source: Slot<SourceLocation>,
+    focus: Slot<Target>,
+    hover: Slot<Vec<Item>>,
+}
+
+impl TreeCallbacks {
+    fn deliver(&self, output: TreeOutput) {
+        match output {
+            TreeOutput::Select(selection) => self.select.call(selection),
+            TreeOutput::Source(location) => self.source.call(location),
+            TreeOutput::Focus(target) => self.focus.call(target),
+            TreeOutput::Hover(items) => self.hover.call(items),
+        }
     }
 }
 
@@ -294,223 +596,59 @@ fn rgba(swatch: Swatch) -> gtk::gdk::RGBA {
 impl TreeSidebar {
     /// An empty panel.
     pub fn new() -> TreeSidebar {
-        install_css();
-        let list = gtk::ListBox::builder()
-            .selection_mode(gtk::SelectionMode::Single)
-            .css_classes(["stave-parts"])
-            .build();
-        list.update_property(&[gtk::accessible::Property::Label("Parts")]);
-        // `External`: the panel may be narrower than its rows ask, so the
-        // width watcher below sees the real width and the rows show less.
-        let scrolled = gtk::ScrolledWindow::builder()
-            .hscrollbar_policy(gtk::PolicyType::External)
-            .vexpand(true)
-            .child(&list)
-            .build();
-        // Watches the panel's width without taking part in its size.
-        let watcher = gtk::DrawingArea::builder()
-            .can_target(false)
-            .can_focus(false)
-            .build();
-        let overlay = gtk::Overlay::builder().child(&scrolled).build();
-        overlay.add_overlay(&watcher);
-        overlay.set_measure_overlay(&watcher, false);
-        let root = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
-            .css_classes(["stave-model"])
-            .build();
-        root.append(&overlay);
-        let sidebar = TreeSidebar {
-            root,
-            list,
-            state: Rc::new(RefCell::new(TreeState::default())),
-        };
-        sidebar.connect();
-        let state = sidebar.state.clone();
-        let list = sidebar.list.clone();
-        watcher.connect_resize(move |_, width, _| {
-            let density = Density::for_width(width);
-            let changed = {
-                let Ok(mut state) = state.try_borrow_mut() else {
-                    return;
-                };
-                let changed = state.density != Some(density);
-                state.density = Some(density);
-                changed
-            };
-            if changed {
-                // Not while the panel is being laid out.
-                let state = state.clone();
-                let list = list.clone();
-                gtk::glib::idle_add_local_once(move || fill(&list, &state));
-            }
-        });
-        sidebar
-    }
-
-    fn connect(&self) {
-        let state = self.state.clone();
-        // The list the signal passes, not a captured one: the list keeps
-        // its handlers, so a capture would keep it forever.
-        self.list.connect_row_activated(move |list, row| {
-            let kind = {
-                let state = state.borrow();
-                state
-                    .rows
-                    .iter()
-                    .find(|(r, _)| r == row)
-                    .map(|(_, kind)| kind.clone())
-            };
-            match kind {
-                Some(RowKind::Entry { selection, .. }) => {
-                    let callback = state.borrow().on_select.clone();
-                    if let Some(callback) = callback {
-                        callback(selection);
-                    }
-                }
-                Some(RowKind::Heading(id)) => {
-                    {
-                        let mut state = state.borrow_mut();
-                        let open = find(&state.tree.assemblies, id)
-                            .is_some_and(|node| state.is_open(node));
-                        state.toggled.insert(id, !open);
-                    }
-                    fill(list, &state);
-                    let callback = state.borrow().on_select.clone();
-                    if let Some(callback) = callback {
-                        callback(Selection::Assembly(id));
-                    }
-                }
-                Some(RowKind::Folded(ids)) => {
-                    {
-                        let mut state = state.borrow_mut();
-                        for id in &ids {
-                            state.toggled.insert(*id, true);
-                        }
-                    }
-                    fill(list, &state);
-                    let callback = state.borrow().on_select.clone();
-                    if let (Some(callback), Some(first)) = (callback, ids.first()) {
-                        callback(Selection::Assembly(*first));
-                    }
-                }
-                Some(RowKind::Joined {
-                    focus, selection, ..
-                }) => match (focus, selection) {
-                    (Some(target), _) => {
-                        let callback = state.borrow().on_focus.clone();
-                        if let Some(callback) = callback {
-                            state.borrow_mut().clicked = Some(Selection::of_target(target));
-                            callback(target);
-                            state.borrow_mut().clicked = None;
-                        }
-                    }
-                    (None, Some(selection)) => {
-                        let callback = state.borrow().on_select.clone();
-                        if let Some(callback) = callback {
-                            callback(selection);
-                        }
-                    }
-                    (None, None) => {}
-                },
-                Some(RowKind::Source(location)) => {
-                    let callback = state.borrow().on_source.clone();
-                    if let Some(callback) = callback {
-                        callback(location);
-                    }
-                }
-                Some(RowKind::Note) | None => {}
-            }
-        });
-        // Arrow keys move the row selection; follow it like a click.
-        let state = self.state.clone();
-        self.list.connect_row_selected(move |_, row| {
-            let Some(row) = row else { return };
-            let (syncing, kind) = {
-                // The tree changes the rows with nothing borrowed and with
-                // `syncing` up.
-                let state = state.borrow();
-                let kind = state
-                    .rows
-                    .iter()
-                    .find(|(r, _)| r == row)
-                    .map(|(_, kind)| kind.clone());
-                (state.syncing, kind)
-            };
-            if syncing {
-                return;
-            }
-            if let Some(RowKind::Entry { selection, .. }) = kind {
-                let callback = state.borrow().on_select.clone();
-                if let Some(callback) = callback {
-                    callback(selection);
-                }
-            }
-        });
+        let bridge = Bridge::<TreeComponent>::launch(());
+        let callbacks = Rc::new(TreeCallbacks::default());
+        let routed = Rc::clone(&callbacks);
+        bridge.connect(move |output| routed.deliver(output));
+        TreeSidebar {
+            root: bridge.widget().clone(),
+            bridge,
+            callbacks,
+        }
     }
 
     /// Calls `callback` with what a row stands for when it is chosen.
     pub fn connect_select(&self, callback: impl Fn(Selection) + 'static) {
-        self.state.borrow_mut().on_select = Some(Rc::new(callback));
+        self.callbacks.select.set(callback);
     }
 
     /// Calls `callback` with where a library's item is written when its
     /// row is chosen.
     pub fn connect_source(&self, callback: impl Fn(SourceLocation) + 'static) {
-        self.state.borrow_mut().on_source = Some(Rc::new(callback));
+        self.callbacks.source.set(callback);
     }
 
     /// Calls `callback` with a joint to focus on when its row is chosen.
     pub fn connect_focus(&self, callback: impl Fn(Target) + 'static) {
-        self.state.borrow_mut().on_focus = Some(Rc::new(callback));
+        self.callbacks.focus.set(callback);
     }
 
     /// Calls `callback` with what a partner link stands for while the
     /// pointer is over it, and with nothing when it leaves.
     pub fn connect_hover(&self, callback: impl Fn(Vec<Item>) + 'static) {
-        self.state.borrow_mut().on_hover = Some(Rc::new(callback));
+        self.callbacks.hover.set(callback);
     }
 
     /// Shows a new tree and its joints, keeping what is folded.
     pub fn show_tree(&self, tree: PartsTree, joints: PartJoints) {
-        {
-            let mut state = self.state.borrow_mut();
-            state.tree = tree;
-            state.joints = joints;
-            state.empty = None;
-        }
-        fill(&self.list, &self.state);
+        self.bridge.send(TreeInput::ShowTree { tree, joints });
     }
 
     /// Shows why there are no parts; for a library, what it defines.
     pub fn show_empty(&self, empty: EmptyState) {
-        {
-            let mut state = self.state.borrow_mut();
-            state.tree = PartsTree::default();
-            state.joints = PartJoints::default();
-            state.empty = Some(empty);
-        }
-        fill(&self.list, &self.state);
+        self.bridge.send(TreeInput::ShowEmpty(empty));
     }
 
     /// What the tree says while it has no rows: `None` for "Nothing to
     /// show yet".
     pub fn set_placeholder(&self, placeholder: Option<&str>) {
-        let changed = {
-            let mut state = self.state.borrow_mut();
-            let changed = state.placeholder.as_deref() != placeholder;
-            state.placeholder = placeholder.map(str::to_owned);
-            changed
-        };
-        if changed {
-            fill(&self.list, &self.state);
-        }
+        self.bridge
+            .send(TreeInput::SetPlaceholder(placeholder.map(str::to_owned)));
     }
 
     /// Takes the latest check's marks for the dots.
     pub fn show_marks(&self, marks: Rc<Marks>) {
-        self.state.borrow_mut().marks = marks;
-        fill(&self.list, &self.state);
+        self.bridge.send(TreeInput::ShowMarks(marks));
     }
 
     /// Highlights the selection's row and lists what the selected part is
@@ -518,24 +656,8 @@ impl TreeSidebar {
     /// under the same part, and then the rows are left as they are, so
     /// nothing folds and the list does not move.
     pub fn show_selection(&self, selection: Option<&Selection>) {
-        let same_rows = {
-            let mut state = self.state.borrow_mut();
-            let listing = state
-                .listing
-                .next(selection, &state.joints, state.clicked.as_ref());
-            let was_open = open_assemblies(&state);
-            let was_listing = state.listing;
-            state.selection = selection.cloned();
-            state.listing = listing;
-            let now_open = open_assemblies(&state);
-            listing == was_listing && was_open == now_open
-        };
-        if same_rows {
-            sync_selection(&self.list, &self.state);
-        } else {
-            // The assembly holding it opens.
-            fill(&self.list, &self.state);
-        }
+        self.bridge
+            .send(TreeInput::ShowSelection(selection.cloned()));
     }
 }
 
@@ -587,169 +709,172 @@ impl Listing {
     }
 }
 
-/// The assemblies whose rows show, in tree order.
-fn open_assemblies(state: &TreeState) -> Vec<AssemblyId> {
-    let mut open = Vec::new();
-    let mut stack: Vec<&AssemblyNode> = state.tree.assemblies.iter().rev().collect();
-    while let Some(node) = stack.pop() {
-        if state.is_open(node) {
-            open.push(node.id);
-            stack.extend(node.children.iter().rev());
+impl TreeComponent {
+    /// The assemblies whose rows show, in tree order.
+    fn open_assemblies(&self) -> Vec<AssemblyId> {
+        let mut open = Vec::new();
+        let mut stack: Vec<&AssemblyNode> = self.tree.assemblies.iter().rev().collect();
+        while let Some(node) = stack.pop() {
+            if self.is_open(node) {
+                open.push(node.id);
+                stack.extend(node.children.iter().rev());
+            }
         }
+        open
     }
-    open
-}
 
-/// Rebuilds the rows.
-fn fill(list: &gtk::ListBox, state: &Rc<RefCell<TreeState>>) {
-    let mut state_ref = state.borrow_mut();
-    state_ref.syncing = true;
-    while let Some(row) = list.row_at_index(0) {
-        list.remove(&row);
+    /// Rebuilds the rows. The list's `row-selected` handler is blocked
+    /// meanwhile: removing the selected row and selecting the selection's
+    /// row again are the panel's own changes, not people's.
+    fn fill(&mut self, widgets: &TreeComponentWidgets, sender: &ComponentSender<Self>) {
+        let list = &widgets.list;
+        list.block_signal(&widgets.row_selected);
+        while let Some(row) = list.row_at_index(0) {
+            list.remove(&row);
+        }
+        let density = self.density();
+        if density.badge() {
+            list.add_css_class("narrow");
+        } else {
+            list.remove_css_class("narrow");
+        }
+        let rows = self.rows(density, sender);
+        for (row, _) in &rows {
+            list.append(row);
+        }
+        self.rows = rows;
+        self.sync_selection(widgets);
+        list.unblock_signal(&widgets.row_selected);
+        // A link under the pointer may have gone with the old rows without
+        // saying it was left.
+        let _ = sender.output(TreeOutput::Hover(Vec::new()));
     }
-    let density = state_ref.density();
-    if density.badge() {
-        list.add_css_class("narrow");
-    } else {
-        list.remove_css_class("narrow");
-    }
-    let open = |id: AssemblyId| {
-        find(&state_ref.tree.assemblies, id).is_some_and(|node| state_ref.is_open(node))
-    };
-    let blocks = state_ref.joints.blocks(&state_ref.tree, &open);
-    let joined: &[JoinedTo] = match state_ref.listing.under {
-        Some(Item::Part(part)) => state_ref.joints.joined_to(part),
-        Some(Item::Hardware(_) | Item::Member(_)) | None => &[],
-    };
-    // The parts the selection is joined to, for their rows' blue edge.
-    let partners: BTreeSet<Item> = joined
-        .iter()
-        .flat_map(|row| row.partners.iter().flat_map(|p| p.items.iter().copied()))
-        .collect();
-    let shown = Shown {
-        joints: &state_ref.joints,
-        marks: &state_ref.marks,
-        under: state_ref.listing.under,
-        joined,
-        partners: &partners,
-        density,
-        on_select: state_ref.on_select.clone(),
-        on_hover: state_ref.on_hover.clone(),
-        clicked: state.clone(),
-    };
-    let mut rows = Vec::new();
-    for block in &blocks {
-        match block {
-            Block::Heading { assembly, entries } => {
-                rows.push(heading_row(&state_ref.joints, *assembly, density));
-                for entry in entries {
-                    entry_rows(entry, &shown, &mut rows);
+
+    /// The rows for the tree as it is now.
+    fn rows(
+        &self,
+        density: Density,
+        sender: &ComponentSender<Self>,
+    ) -> Vec<(gtk::ListBoxRow, RowKind)> {
+        let open =
+            |id: AssemblyId| find(&self.tree.assemblies, id).is_some_and(|node| self.is_open(node));
+        let blocks = self.joints.blocks(&self.tree, &open);
+        let joined: &[JoinedTo] = match self.listing.under {
+            Some(Item::Part(part)) => self.joints.joined_to(part),
+            Some(Item::Hardware(_) | Item::Member(_)) | None => &[],
+        };
+        // The parts the selection is joined to, for their rows' blue edge.
+        let partners: BTreeSet<Item> = joined
+            .iter()
+            .flat_map(|row| row.partners.iter().flat_map(|p| p.items.iter().copied()))
+            .collect();
+        let shown = Shown {
+            joints: &self.joints,
+            marks: &self.marks,
+            under: self.listing.under,
+            joined,
+            partners: &partners,
+            density,
+            sender,
+        };
+        let mut rows = Vec::new();
+        for block in &blocks {
+            match block {
+                Block::Heading { assembly, entries } => {
+                    rows.push(heading_row(&self.joints, *assembly, density));
+                    for entry in entries {
+                        entry_rows(entry, &shown, &mut rows);
+                    }
+                }
+                Block::Folded {
+                    assemblies,
+                    label,
+                    detail,
+                } => {
+                    let ids: Vec<AssemblyId> = assemblies.iter().copied().collect();
+                    rows.push(folded_row(&ids, label, detail.as_deref(), &shown));
                 }
             }
-            Block::Folded {
-                assemblies,
-                label,
-                detail,
-            } => {
-                let ids: Vec<AssemblyId> = assemblies.iter().copied().collect();
-                rows.push(folded_row(&ids, label, detail.as_deref(), &shown));
-            }
         }
+        if rows.is_empty()
+            && let Some(empty) = &self.empty
+        {
+            empty_rows(empty, &mut rows);
+        }
+        if rows.is_empty() {
+            let label = gtk::Label::builder()
+                .label(self.placeholder.as_deref().unwrap_or("Nothing to show yet"))
+                .css_classes(["dim-label"])
+                .wrap(true)
+                .justify(gtk::Justification::Center)
+                .margin_top(12)
+                .margin_start(12)
+                .margin_end(12)
+                .build();
+            let row = gtk::ListBoxRow::builder()
+                .child(&label)
+                .activatable(false)
+                .selectable(false)
+                .build();
+            rows.push((row, RowKind::Note));
+        }
+        rows
     }
-    if rows.is_empty()
-        && let Some(empty) = &state_ref.empty
-    {
-        empty_rows(empty, &mut rows);
-    }
-    if rows.is_empty() {
-        let label = gtk::Label::builder()
-            .label(
-                state_ref
-                    .placeholder
-                    .as_deref()
-                    .unwrap_or("Nothing to show yet"),
-            )
-            .css_classes(["dim-label"])
-            .wrap(true)
-            .justify(gtk::Justification::Center)
-            .margin_top(12)
-            .margin_start(12)
-            .margin_end(12)
-            .build();
-        let row = gtk::ListBoxRow::builder()
-            .child(&label)
-            .activatable(false)
-            .selectable(false)
-            .build();
-        rows.push((row, RowKind::Note));
-    }
-    for (row, _) in &rows {
-        list.append(row);
-    }
-    drop(shown);
-    state_ref.rows = rows;
-    let on_hover = state_ref.on_hover.clone();
-    drop(state_ref);
-    sync_selection(list, state);
-    state.borrow_mut().syncing = false;
-    // A link under the pointer may have gone with the old rows without
-    // saying it was left.
-    if let Some(on_hover) = on_hover {
-        on_hover(Vec::new());
-    }
-}
 
-fn sync_selection(list: &gtk::ListBox, state_cell: &Rc<RefCell<TreeState>>) {
-    let mut state = state_cell.borrow_mut();
-    let was = state.syncing;
-    state.syncing = true;
-    let selected = state.selection.as_ref().and_then(|selection| {
-        let find = |wanted: &dyn Fn(&RowKind) -> bool| {
-            state
-                .rows
-                .iter()
-                .find(|(_, kind)| wanted(kind))
-                .map(|(row, _)| row.clone())
-        };
-        // A part's own row; else the joined-to row that stands for it (a
-        // piece of hardware, a joint pair or its pins); else an
-        // assembly's heading or folded row, or a library's item.
-        find(&|kind| match kind {
-            RowKind::Entry { items, .. } => {
-                selection.item().is_some_and(|item| items.contains(&item))
-            }
-            RowKind::Note
-            | RowKind::Heading(_)
-            | RowKind::Folded(_)
-            | RowKind::Joined { .. }
-            | RowKind::Source(_) => false,
-        })
-        .or_else(|| {
+    /// Selects the selection's row, with the list's `row-selected` handler
+    /// blocked: it is the panel's own change, not a choice.
+    fn sync_selection(&self, widgets: &TreeComponentWidgets) {
+        let selected = self.selection.as_ref().and_then(|selection| {
+            let find = |wanted: &dyn Fn(&RowKind) -> bool| {
+                self.rows
+                    .iter()
+                    .find(|(_, kind)| wanted(kind))
+                    .map(|(row, _)| row)
+            };
+            // A part's own row; else the joined-to row that stands for it (a
+            // piece of hardware, a joint pair or its pins); else an
+            // assembly's heading or folded row, or a library's item.
             find(&|kind| match kind {
-                RowKind::Joined { stands_for, .. } => stands_for.contains(selection),
+                RowKind::Entry { items, .. } => {
+                    selection.item().is_some_and(|item| items.contains(&item))
+                }
                 RowKind::Note
                 | RowKind::Heading(_)
                 | RowKind::Folded(_)
-                | RowKind::Entry { .. }
+                | RowKind::Joined { .. }
                 | RowKind::Source(_) => false,
             })
-        })
-        .or_else(|| {
-            find(&|kind| match kind {
-                RowKind::Heading(id) => *selection == Selection::Assembly(*id),
-                RowKind::Folded(ids) => ids.iter().any(|id| *selection == Selection::Assembly(*id)),
-                RowKind::Source(location) => *selection == Selection::Location(location.clone()),
-                RowKind::Note | RowKind::Entry { .. } | RowKind::Joined { .. } => false,
+            .or_else(|| {
+                find(&|kind| match kind {
+                    RowKind::Joined { stands_for, .. } => stands_for.contains(selection),
+                    RowKind::Note
+                    | RowKind::Heading(_)
+                    | RowKind::Folded(_)
+                    | RowKind::Entry { .. }
+                    | RowKind::Source(_) => false,
+                })
             })
-        })
-    });
-    // Selecting a row calls the handler above, which borrows the state.
-    drop(state);
-    match selected {
-        Some(row) => list.select_row(Some(&row)),
-        None => list.unselect_all(),
+            .or_else(|| {
+                find(&|kind| match kind {
+                    RowKind::Heading(id) => *selection == Selection::Assembly(*id),
+                    RowKind::Folded(ids) => {
+                        ids.iter().any(|id| *selection == Selection::Assembly(*id))
+                    }
+                    RowKind::Source(location) => {
+                        *selection == Selection::Location(location.clone())
+                    }
+                    RowKind::Note | RowKind::Entry { .. } | RowKind::Joined { .. } => false,
+                })
+            })
+        });
+        let list = &widgets.list;
+        list.block_signal(&widgets.row_selected);
+        match selected {
+            Some(row) => list.select_row(Some(row)),
+            None => list.unselect_all(),
+        }
+        list.unblock_signal(&widgets.row_selected);
     }
-    state_cell.borrow_mut().syncing = was;
 }
 
 /// What the rows need besides the tree itself.
@@ -761,11 +886,8 @@ struct Shown<'a> {
     joined: &'a [JoinedTo],
     partners: &'a BTreeSet<Item>,
     density: Density,
-    on_select: Option<SelectCallback>,
-    on_hover: Option<HoverCallback>,
-    /// The panel's state, to say which joined-to row a partner link was
-    /// clicked in.
-    clicked: Rc<RefCell<TreeState>>,
+    /// Where the partner links send what people do.
+    sender: &'a ComponentSender<TreeComponent>,
 }
 
 /// The rows that say why there are no parts: a line, then for a library
@@ -1079,7 +1201,7 @@ fn joined_row(joined: &JoinedTo, shown: &Shown<'_>) -> (gtk::ListBoxRow, RowKind
         .hexpand(!shown.density.joined_words())
         .build();
     for partner in &joined.partners {
-        partners.append(&partner_link(partner, joined, shown));
+        partners.append(&partner_link(partner, shown));
     }
     content.append(&partners);
     let row = gtk::ListBoxRow::builder().child(&content).build();
@@ -1104,7 +1226,7 @@ fn joined_row(joined: &JoinedTo, shown: &Shown<'_>) -> (gtk::ListBoxRow, RowKind
 
 /// A partner's name as a link: clicking selects it, hovering lights it in
 /// the 3D view. A space, which can't be selected, is plain text.
-fn partner_link(partner: &Partner, joined: &JoinedTo, shown: &Shown<'_>) -> gtk::Widget {
+fn partner_link(partner: &Partner, shown: &Shown<'_>) -> gtk::Widget {
     // The name keeps up to a few characters before the joint's words give
     // way, then is cut short itself.
     let keeps = partner
@@ -1127,29 +1249,15 @@ fn partner_link(partner: &Partner, joined: &JoinedTo, shown: &Shown<'_>) -> gtk:
         .valign(gtk::Align::Center)
         .tooltip_text(format!("Select {}", partner.label))
         .build();
-    let on_select = shown.on_select.clone();
-    let state = shown.clicked.clone();
-    let row_selection = joined.stands_for.first().cloned();
-    button.connect_clicked(move |_| {
-        if let Some(callback) = &on_select {
-            // A piece of hardware chosen here keeps the rows where they
-            // are, as if its row were activated.
-            state.borrow_mut().clicked = row_selection
-                .clone()
-                .filter(|row| *row == selection)
-                .or_else(|| Some(selection.clone()));
-            callback(selection.clone());
-            state.borrow_mut().clicked = None;
-        }
-    });
-    if let Some(on_hover) = shown.on_hover.clone() {
-        let motion = gtk::EventControllerMotion::new();
-        let items = partner.items.clone();
-        let entered = on_hover.clone();
-        motion.connect_enter(move |_, _, _| entered(items.clone()));
-        motion.connect_leave(move |_| on_hover(Vec::new()));
-        button.add_controller(motion);
-    }
+    let input = shown.sender.input_sender().clone();
+    button.connect_clicked(move |_| input.emit(TreeInput::PartnerClicked(selection.clone())));
+    let motion = gtk::EventControllerMotion::new();
+    let items = partner.items.clone();
+    let input = shown.sender.input_sender().clone();
+    motion.connect_enter(move |_, _, _| input.emit(TreeInput::Hovered(items.clone())));
+    let input = shown.sender.input_sender().clone();
+    motion.connect_leave(move |_| input.emit(TreeInput::Hovered(Vec::new())));
+    button.add_controller(motion);
     button.upcast()
 }
 
@@ -1245,9 +1353,12 @@ fn holds(node: &AssemblyNode, selection: &Selection) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use stave_model::solved::SolvedDesign;
+    use std::cell::RefCell;
     use std::path::Path;
+
+    use super::*;
+    use crate::ui::gtk_test::{on_gtk_thread, settle};
+    use stave_model::solved::SolvedDesign;
 
     fn cabinet() -> SolvedDesign {
         let folder = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/clothing_cabinet");
@@ -1389,56 +1500,291 @@ mod tests {
 
     #[test]
     fn the_tree_selecting_a_row_itself_is_not_a_choice() {
-        crate::ui::gtk_test::on_gtk_thread(tree_selects_rows_quietly);
+        on_gtk_thread(tree_selects_rows_quietly);
     }
 
-    /// Showing the selection selects its row with nothing borrowed, and
-    /// the row handler hears that as the tree's own change, not a click;
-    /// a row chosen by hand is still passed on.
+    /// Showing the selection selects its row with the row handler
+    /// blocked, so it is the tree's own change, not a click; a row chosen
+    /// by hand is still passed on.
     fn tree_selects_rows_quietly() {
-        let folder = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/stool");
-        let opened = stave_app::open(&folder).expect("the stool opens");
-        let design = opened.design.as_ref().expect("the stool solves");
+        let design = stool();
         let sidebar = TreeSidebar::new();
+        let list = list_of(&sidebar);
         let chosen = Rc::new(RefCell::new(Vec::new()));
         sidebar.connect_select({
             let chosen = Rc::clone(&chosen);
             move |selection| chosen.borrow_mut().push(selection)
         });
         sidebar.show_tree(
-            stave_app::inspect::parts_tree(design),
-            stave_app::part_joints::PartJoints::new(design),
+            stave_app::inspect::parts_tree(&design),
+            stave_app::part_joints::PartJoints::new(&design),
         );
         let part = design.parts.first().expect("a part");
         let selection = Selection::of_item(Item::Part(part.id));
         sidebar.show_selection(Some(&selection));
-        assert!(
-            sidebar.list.selected_row().is_some(),
-            "the part's row is selected"
-        );
+        settle();
+        assert!(list.selected_row().is_some(), "the part's row is selected");
         assert!(
             chosen.borrow().is_empty(),
             "the tree's own change is no choice"
         );
         // Showing it again leaves the rows as they are and syncs only.
         sidebar.show_selection(Some(&selection));
+        settle();
         assert!(chosen.borrow().is_empty());
         let other = sidebar
-            .state
-            .borrow()
+            .bridge
+            .model()
             .rows
             .iter()
             .find(|(row, kind)| {
-                matches!(kind, RowKind::Entry { .. })
-                    && Some(row) != sidebar.list.selected_row().as_ref()
+                matches!(kind, RowKind::Entry { .. }) && Some(row) != list.selected_row().as_ref()
             })
             .map(|(row, _)| row.clone())
             .expect("another part's row");
-        sidebar.list.select_row(Some(&other));
+        list.select_row(Some(&other));
+        settle();
         assert_eq!(
             chosen.borrow().len(),
             1,
             "a row chosen by hand is passed on"
         );
+    }
+
+    #[test]
+    fn a_dropped_tree_is_freed() {
+        on_gtk_thread(tree_is_freed);
+    }
+
+    /// The old panel's partner links held its state, which held the rows
+    /// the links sit in: a cycle, so a dropped panel was never freed. Now
+    /// the links hold only the component's sender, and dropping the panel
+    /// shuts the component down when the main loop next runs: the widget,
+    /// its rows and links, the model (and the input channel the runtime
+    /// held) and the callbacks are all freed.
+    fn tree_is_freed() {
+        let design = cabinet();
+        let sidebar = TreeSidebar::new();
+        let token = Rc::new(());
+        let held = Rc::clone(&token);
+        sidebar.connect_select(move |_| {
+            let _ = &held;
+        });
+        let held = Rc::clone(&token);
+        sidebar.connect_source(move |_| {
+            let _ = &held;
+        });
+        let held = Rc::clone(&token);
+        sidebar.connect_focus(move |_| {
+            let _ = &held;
+        });
+        let held = Rc::clone(&token);
+        sidebar.connect_hover(move |_| {
+            let _ = &held;
+        });
+        let callbacks = Rc::downgrade(&token);
+        drop(token);
+        sidebar.show_tree(
+            stave_app::inspect::parts_tree(&design),
+            PartJoints::new(&design),
+        );
+        // side_l lists what it is joined to, with partner links.
+        sidebar.show_selection(Some(&Selection::of_item(part(&design, "side_l"))));
+        settle();
+        let link = descendants(sidebar.root.upcast_ref())
+            .into_iter()
+            .find(|widget| widget.has_css_class("stave-partner"))
+            .expect("side_l's joined-to rows have partner links")
+            .downgrade();
+        let row = sidebar
+            .bridge
+            .model()
+            .rows
+            .first()
+            .map(|(row, _)| row.downgrade())
+            .expect("the panel has rows");
+        let root = sidebar.root.downgrade();
+        let input = sidebar.bridge.sender().clone();
+        assert!(root.upgrade().is_some(), "the widget lives while held");
+        drop(sidebar);
+        settle();
+        assert!(root.upgrade().is_none(), "the widget is freed");
+        assert!(row.upgrade().is_none(), "its rows are freed");
+        assert!(link.upgrade().is_none(), "its partner links are freed");
+        assert!(
+            input.send(TreeInput::ShowSelection(None)).is_err(),
+            "the component's runtime, and with it the model, is gone"
+        );
+        assert!(callbacks.upgrade().is_none(), "the callbacks are freed");
+    }
+
+    #[test]
+    fn setters_fill_the_rows_without_choosing() {
+        on_gtk_thread(setters_do_not_choose);
+    }
+
+    /// The window's setters change the panel and are never heard back as
+    /// a choice; rebuilding the rows says only that nothing is hovered.
+    fn setters_do_not_choose() {
+        let design = stool();
+        let sidebar = TreeSidebar::new();
+        let heard: Rc<RefCell<Vec<TreeOutput>>> = Rc::default();
+        let log = Rc::clone(&heard);
+        sidebar
+            .connect_select(move |selection| log.borrow_mut().push(TreeOutput::Select(selection)));
+        let log = Rc::clone(&heard);
+        sidebar.connect_focus(move |target| log.borrow_mut().push(TreeOutput::Focus(target)));
+        let log = Rc::clone(&heard);
+        sidebar.connect_source(move |location| log.borrow_mut().push(TreeOutput::Source(location)));
+        sidebar.set_placeholder(Some("No parts yet"));
+        settle();
+        assert_eq!(
+            sidebar.bridge.model().placeholder.as_deref(),
+            Some("No parts yet")
+        );
+        let words = descendants(sidebar.root.upcast_ref())
+            .into_iter()
+            .filter_map(|widget| widget.downcast::<gtk::Label>().ok())
+            .map(|label| label.label().to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            words,
+            vec!["No parts yet".to_owned()],
+            "the placeholder shows"
+        );
+        sidebar.show_tree(
+            stave_app::inspect::parts_tree(&design),
+            PartJoints::new(&design),
+        );
+        sidebar.show_marks(Rc::default());
+        let part = design.parts.first().expect("a part");
+        sidebar.show_selection(Some(&Selection::of_item(Item::Part(part.id))));
+        settle();
+        assert!(sidebar.bridge.model().rows.len() > 1, "the parts have rows");
+        assert!(heard.borrow().is_empty(), "setters never choose");
+    }
+
+    #[test]
+    fn a_choice_made_while_handling_one_is_queued_not_re_entered() {
+        on_gtk_thread(choices_are_queued);
+    }
+
+    /// The old panel called the window from inside GTK's `row-selected`
+    /// signal, and the window showed the selection back into the panel
+    /// from there, re-entering it (hence its `syncing` flag and
+    /// `try_borrow_mut`). Now a choice only queues a message; the callback
+    /// runs after the update has returned (reading the model there would
+    /// panic if it had not), and what it does to the panel, showing the
+    /// selection or GTK selecting another row, is queued too.
+    fn choices_are_queued() {
+        let design = stool();
+        let sidebar = Rc::new(TreeSidebar::new());
+        let list = list_of(&sidebar);
+        sidebar.show_tree(
+            stave_app::inspect::parts_tree(&design),
+            PartJoints::new(&design),
+        );
+        settle();
+        let entries: Vec<(gtk::ListBoxRow, Selection)> = sidebar
+            .bridge
+            .model()
+            .rows
+            .iter()
+            .filter_map(|(row, kind)| match kind {
+                RowKind::Entry { selection, .. } => Some((row.clone(), selection.clone())),
+                RowKind::Note
+                | RowKind::Heading(_)
+                | RowKind::Folded(_)
+                | RowKind::Joined { .. }
+                | RowKind::Source(_) => None,
+            })
+            .collect();
+        let [(first_row, first), (second_row, second), ..] = entries.as_slice() else {
+            panic!("the stool has two parts' rows");
+        };
+        let heard: Rc<RefCell<Vec<Selection>>> = Rc::default();
+        let log = Rc::clone(&heard);
+        let weak = Rc::downgrade(&sidebar);
+        let inner = list.clone();
+        let then = second_row.clone();
+        sidebar.connect_select(move |selection| {
+            let Some(sidebar) = weak.upgrade() else {
+                return;
+            };
+            // Reading the model would panic were its update still running.
+            let _ = sidebar.bridge.model().rows.len();
+            let first = log.borrow().is_empty();
+            log.borrow_mut().push(selection.clone());
+            if first {
+                // GTK selecting another row from in here only queues a
+                // message: nothing is heard under us.
+                inner.select_row(Some(&then));
+                assert_eq!(log.borrow().len(), 1, "the inner choice is queued");
+            }
+            // As the window does: show what was chosen. Queued too.
+            sidebar.show_selection(Some(&selection));
+        });
+
+        list.select_row(Some(first_row));
+        assert!(heard.borrow().is_empty(), "nothing has run yet");
+        assert_eq!(
+            sidebar.bridge.model().selection,
+            None,
+            "the choice is only queued"
+        );
+
+        settle();
+        assert_eq!(
+            *heard.borrow(),
+            vec![first.clone(), second.clone()],
+            "each choice after its update, the inner one after the first"
+        );
+        let model = sidebar.bridge.model();
+        assert_eq!(
+            model.selection.as_ref(),
+            Some(second),
+            "the inner choice came last"
+        );
+        let shown = model
+            .rows
+            .iter()
+            .find(|(row, _)| Some(row) == list.selected_row().as_ref())
+            .map(|(_, kind)| kind);
+        assert!(
+            matches!(shown, Some(RowKind::Entry { selection, .. }) if selection == second),
+            "the second part's row is selected"
+        );
+    }
+
+    /// The stool, solved.
+    fn stool() -> SolvedDesign {
+        let folder = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/stool");
+        stave_app::open(&folder)
+            .expect("the stool opens")
+            .design
+            .expect("the stool solves")
+    }
+
+    /// `root` and every widget inside it.
+    fn descendants(root: &gtk::Widget) -> Vec<gtk::Widget> {
+        let mut found = Vec::new();
+        let mut stack = vec![root.clone()];
+        while let Some(widget) = stack.pop() {
+            let mut child = widget.first_child();
+            while let Some(next) = child {
+                child = next.next_sibling();
+                stack.push(next);
+            }
+            found.push(widget);
+        }
+        found
+    }
+
+    /// The panel's list, to choose rows in as people would.
+    fn list_of(sidebar: &TreeSidebar) -> gtk::ListBox {
+        descendants(sidebar.root.upcast_ref())
+            .into_iter()
+            .find_map(|widget| widget.downcast::<gtk::ListBox>().ok())
+            .expect("the panel has a list")
     }
 }
