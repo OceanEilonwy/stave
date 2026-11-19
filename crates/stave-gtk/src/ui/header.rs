@@ -70,7 +70,7 @@ impl Header {
         menu_bar.add_css_class("stave-menu-bar");
         menu_bar.set_valign(gtk::Align::Center);
         let menu_button = gtk::MenuButton::builder()
-            .child(&PathIcon::new(icons::MENU, 16))
+            .icon_name("open-menu-symbolic")
             .menu_model(menus)
             .tooltip_text("Main Menu")
             .css_classes(["flat", "stave-icon-button"])
@@ -394,6 +394,18 @@ mod tests {
         assert_eq!(shape(Tone::Errors), icons::ALERT);
         assert_eq!(shape(Tone::Warnings), icons::WARNING);
         assert_ne!(icons::ALERT, icons::WARNING);
+    }
+
+    /// The main menu uses the theme's symbolic icon, not a drawn one.
+    #[test]
+    fn the_main_menu_uses_the_theme_icon() {
+        crate::ui::gtk_test::on_gtk_thread(|| {
+            let header = Header::new("shelf", &gtk::gio::Menu::new());
+            assert_eq!(
+                header.menu_button.icon_name().as_deref(),
+                Some("open-menu-symbolic")
+            );
+        });
     }
 
     fn title_bar_buttons_are_named() {

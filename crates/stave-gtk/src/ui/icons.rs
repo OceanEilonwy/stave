@@ -1,6 +1,12 @@
-//! The window's icons, drawn from SVG path data in the widget's text
+//! The window's own icons, drawn from SVG path data in the widget's text
 //! colour, so they match the design exactly on every icon theme and follow
-//! light and dark styles.
+//! the light, dark and high-contrast styles. Where the icon theme has the
+//! same symbol (the main menu, back and forward, previous and next,
+//! search, close) the buttons use the theme's `-symbolic` icon by name
+//! instead, so it follows the theme and picks its right-to-left variant.
+//! A shape here that points along the reading direction (a closed row's
+//! chevron, play) is marked `directional` and drawn mirrored in a
+//! right-to-left locale, as a theme's `-rtl` icon would be.
 
 use std::cell::Cell;
 
@@ -28,6 +34,9 @@ pub struct Shape {
     pub paths: &'static [&'static str],
     /// Turned 45° about the centre, shrunk a little (the hammer).
     pub tilted: bool,
+    /// Points along the reading direction: drawn mirrored left to right
+    /// when the widget's text runs right to left.
+    pub directional: bool,
 }
 
 const fn stroke(width: f32, paths: &'static [&'static str]) -> Shape {
@@ -36,6 +45,7 @@ const fn stroke(width: f32, paths: &'static [&'static str]) -> Shape {
         paint: Paint::Stroke(width),
         paths,
         tilted: false,
+        directional: false,
     }
 }
 
@@ -61,8 +71,11 @@ pub const SCENE: Shape = stroke(
 pub const CHEVRON_DOWN: Shape = stroke(2.2, &["M4 6L8 10L12 6"]);
 /// An open tree row's chevron.
 pub const EXPANDED: Shape = stroke(2.0, &["M4 6L8 10L12 6"]);
-/// A closed tree row's chevron.
-pub const COLLAPSED: Shape = stroke(2.0, &["M6 4L10 8L6 12"]);
+/// A closed tree row's chevron: it points the way the text reads.
+pub const COLLAPSED: Shape = Shape {
+    directional: true,
+    ..stroke(2.0, &["M6 4L10 8L6 12"])
+};
 /// No problems: a tick.
 pub const CHECK: Shape = stroke(1.8, &["M3.5 8.5L6.5 11.5L12.5 4.5"]);
 /// Warnings only: an exclamation mark in a triangle, a different shape
@@ -79,8 +92,6 @@ pub const ALERT: Shape = stroke(
 );
 /// Not checked yet: a dot in a circle.
 pub const PENDING: Shape = stroke(1.6, &["M14 8a6 6 0 1 1-12 0a6 6 0 1 1 12 0z"]);
-/// The main menu.
-pub const MENU: Shape = stroke(1.5, &["M2.5 4h11M2.5 8h11M2.5 12h11"]);
 /// The build plan: a hammer.
 pub const HAMMER: Shape = Shape {
     view_box: 24.0,
@@ -90,6 +101,7 @@ pub const HAMMER: Shape = Shape {
         "M12 9.3a1.6 1.6 0 0 1 1.6 1.6v8.8a1.6 1.6 0 0 1-3.2 0v-8.8a1.6 1.6 0 0 1 1.6-1.6z",
     ],
     tilted: true,
+    directional: false,
 };
 
 /// Pull apart: arrows out from the middle.
@@ -112,12 +124,13 @@ pub const XRAY: Shape = stroke(
         "M2.5 5.5l3-3M10.5 5.5l3-3M10.5 13.5l3-3M2.5 13.5l3-3",
     ],
 );
-/// Play: a triangle.
+/// Play: a triangle, pointing the way the text reads.
 pub const PLAY: Shape = Shape {
     view_box: 16.0,
     paint: Paint::Fill,
     paths: &["M4 2.5v11l9-5.5z"],
     tilted: false,
+    directional: true,
 };
 /// Pause: two bars.
 pub const PAUSE: Shape = Shape {
@@ -125,6 +138,7 @@ pub const PAUSE: Shape = Shape {
     paint: Paint::Fill,
     paths: &["M4 2.5h3v11h-3z", "M9 2.5h3v11h-3z"],
     tilted: false,
+    directional: false,
 };
 /// Fit to view: four corners.
 pub const FIT: Shape = stroke(
@@ -165,7 +179,7 @@ mod imp {
     impl Default for PathIcon {
         fn default() -> Self {
             PathIcon {
-                shape: Cell::new(MENU),
+                shape: Cell::new(PENDING),
                 size: Cell::new(16),
             }
         }
@@ -203,6 +217,10 @@ mod imp {
             snapshot.save();
             snapshot.translate(&gtk::graphene::Point::new(left, top));
             snapshot.scale(scale, scale);
+            if widget.mirrored() {
+                snapshot.translate(&gtk::graphene::Point::new(shape.view_box, 0.0));
+                snapshot.scale(-1.0, 1.0);
+            }
             if shape.tilted {
                 let centre = shape.view_box / 2.0;
                 snapshot.translate(&gtk::graphene::Point::new(centre, centre));
@@ -253,6 +271,12 @@ impl PathIcon {
     /// The shape it draws.
     pub fn shape(&self) -> Shape {
         self.imp().shape.get()
+    }
+
+    /// Whether it draws mirrored: a directional shape in a widget whose
+    /// text runs right to left.
+    pub fn mirrored(&self) -> bool {
+        self.imp().shape.get().directional && self.direction() == gtk::TextDirection::Rtl
     }
 
     /// Draws another shape.
@@ -314,4 +338,30 @@ pub fn swatch(colour: gtk::gdk::RGBA, round: bool, size: i32) -> gtk::DrawingAre
         let _ = context.fill();
     });
     area
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A chevron or play triangle points the other way right to left;
+    /// a symmetric shape doesn't change.
+    #[test]
+    fn directional_shapes_mirror_right_to_left() {
+        crate::ui::gtk_test::on_gtk_thread(|| {
+            let chevron = PathIcon::new(COLLAPSED, 12);
+            let check = PathIcon::new(CHECK, 12);
+            assert!(!chevron.mirrored());
+            chevron.set_direction(gtk::TextDirection::Rtl);
+            check.set_direction(gtk::TextDirection::Rtl);
+            assert!(chevron.mirrored());
+            assert!(!check.mirrored());
+            let play = PathIcon::new(PLAY, 12);
+            let pause = PathIcon::new(PAUSE, 12);
+            play.set_direction(gtk::TextDirection::Rtl);
+            pause.set_direction(gtk::TextDirection::Rtl);
+            assert!(play.mirrored());
+            assert!(!pause.mirrored());
+        });
+    }
 }
