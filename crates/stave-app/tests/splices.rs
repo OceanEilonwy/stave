@@ -52,7 +52,7 @@ fn a_spliced_seat_is_two_pieces_and_a_lap_splice() {
     assert!(matches!(second.origin, PartOrigin::Piece { part, .. } if part == first.id));
     let pieces = first.pieces.as_ref().expect("the first piece lists them");
     assert_eq!(pieces.name, "seat");
-    assert_eq!(pieces.parts.count(), 2);
+    assert_eq!(pieces.parts.len(), 2);
     let splice = design
         .joints
         .iter()

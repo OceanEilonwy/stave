@@ -296,7 +296,7 @@ fn a_wider_part_than_max_width_is_planned_as_a_glue_up() {
     let p = part(design, "p");
     let boards = boards_of(design, "p");
     assert_eq!(boards.axis, PartAxis::Width);
-    assert_eq!(boards.boards.count(), 6);
+    assert_eq!(boards.boards.len(), 6);
     let numbers: Vec<u32> = boards.boards.iter().map(|b| b.index.get()).collect();
     assert_eq!(numbers, [1, 2, 3, 4, 5, 6]);
     assert!(boards.boards.iter().all(|b| b.width == mm("50")));
@@ -321,7 +321,7 @@ fn a_wider_part_than_max_width_is_planned_as_a_glue_up() {
     // boards of 48.333...mm.
     let opened = open(&wide_part("").replace("300mm", "290mm"));
     let boards = boards_of(common::design(&opened), "p");
-    assert_eq!(boards.boards.count(), 6);
+    assert_eq!(boards.boards.len(), 6);
     assert!(boards.boards.iter().all(|b| b.width == mm("48.333333")));
     // A part no wider than max_width is one board, as written.
     let opened = open(&wide_part("").replace("300mm", "50mm"));

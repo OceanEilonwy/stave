@@ -250,7 +250,7 @@ pub(crate) fn fit_of(progress: &Progress) -> OptionFit {
             let problems = refusal.problems();
             OptionFit::Refused(OptionRefusal {
                 first: problems.first().diagnostic().clone(),
-                more: problems.count().saturating_sub(1),
+                more: problems.len().saturating_sub(1),
             })
         }
         Progress::Tried(Verdict::Checking) => OptionFit::NotChecked,

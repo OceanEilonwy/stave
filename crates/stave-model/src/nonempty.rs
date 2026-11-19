@@ -41,8 +41,19 @@ impl<T> NonEmpty<T> {
     }
 
     /// How many elements there are (at least one).
-    pub fn count(&self) -> usize {
+    pub fn len(&self) -> usize {
         self.tail.len().saturating_add(1)
+    }
+
+    /// Always `false`: the list has at least one element. Here because a
+    /// type with [`NonEmpty::len`] is expected to have it.
+    pub fn is_empty(&self) -> bool {
+        false
+    }
+
+    /// Adds `item` at the end.
+    pub fn push(&mut self, item: T) {
+        self.tail.push(item);
     }
 
     /// The element at `index` (0 is the first).
@@ -69,10 +80,14 @@ mod tests {
         assert_eq!(NonEmpty::<u8>::new(Vec::new()), None);
         let list = NonEmpty::new(vec![3, 4]).unwrap();
         assert_eq!(*list.first(), 3);
-        assert_eq!(list.count(), 2);
+        assert_eq!(list.len(), 2);
+        assert!(!list.is_empty());
         assert_eq!(list.get(1), Some(&4));
         assert_eq!(list.get(2), None);
         assert_eq!(list.iter().copied().collect::<Vec<_>>(), [3, 4]);
-        assert_eq!(NonEmpty::one(7).count(), 1);
+        assert_eq!(NonEmpty::one(7).len(), 1);
+        let mut grown = NonEmpty::one(1);
+        grown.push(2);
+        assert_eq!(grown.iter().copied().collect::<Vec<_>>(), [1, 2]);
     }
 }

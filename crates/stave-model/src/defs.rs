@@ -6,6 +6,7 @@
 //! to items through [`Symbol`]s; which concrete item a symbol means is
 //! decided by the instance it is evaluated in.
 
+use crate::nonempty::NonEmpty;
 use stave_lang::FileId;
 use stave_lang::ast::BaseKind;
 use stave_lang::ast::{BinaryOp, Span, UnaryOp};
@@ -804,45 +805,6 @@ impl BodyName {
 impl std::fmt::Display for BodyName {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.0)
-    }
-}
-
-/// A list with at least one element.
-#[derive(Debug, Clone, PartialEq)]
-pub struct NonEmpty<T> {
-    first: T,
-    rest: Vec<T>,
-}
-
-impl<T> NonEmpty<T> {
-    /// The list, if `items` has at least one element.
-    pub fn new(items: Vec<T>) -> Option<NonEmpty<T>> {
-        let mut items = items.into_iter();
-        let first = items.next()?;
-        Some(NonEmpty {
-            first,
-            rest: items.collect(),
-        })
-    }
-
-    /// The first element.
-    pub fn first(&self) -> &T {
-        &self.first
-    }
-
-    /// Every element, in order.
-    pub fn iter(&self) -> impl Iterator<Item = &T> {
-        std::iter::once(&self.first).chain(self.rest.iter())
-    }
-
-    /// How many elements there are (at least one).
-    pub fn len(&self) -> usize {
-        1 + self.rest.len()
-    }
-
-    /// Always `false`: the list has at least one element.
-    pub fn is_empty(&self) -> bool {
-        false
     }
 }
 

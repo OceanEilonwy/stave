@@ -1474,7 +1474,7 @@ fn progress_line(progress: &Progress) -> String {
             1 => "fits, with 1 warning".to_owned(),
             count => format!("fits, with {count} warnings"),
         },
-        Progress::Tried(Verdict::Refused(refusal)) => match refusal.problems().count() {
+        Progress::Tried(Verdict::Refused(refusal)) => match refusal.problems().len() {
             1 => "refused: 1 error".to_owned(),
             count => format!("refused: {count} errors"),
         },

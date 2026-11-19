@@ -18,9 +18,10 @@ use super::expr::Expect;
 use super::{Cx, Resolver};
 use crate::defs::{
     AdjustDef, BodyDef, BodyId, BodyName, Carrier, ConstraintDef, CouplingDef, DriveDef, FrameAxis,
-    KindPoint, LayoutDef, MechanismDef, NamedShape, NonEmpty, RExpr, RExprKind, RangeDef, RoleDef,
-    RoleIndex, ShapeDef, StopDef,
+    KindPoint, LayoutDef, MechanismDef, NamedShape, RExpr, RExprKind, RangeDef, RoleDef, RoleIndex,
+    ShapeDef, StopDef,
 };
+use crate::nonempty::NonEmpty;
 use crate::types::Ty;
 
 /// The fields of a joint's member that say where it goes.

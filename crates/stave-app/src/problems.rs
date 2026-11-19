@@ -19,11 +19,12 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use stave_lang::{Code, Diagnostic, Severity, place_label, render_diagnostic};
+use stave_model::nonempty::NonEmpty;
 use stave_model::solved::{AssemblyId, SolvedDesign};
 use stave_scene::Item;
 
 use crate::check::Checked;
-use crate::inspect::{self, AssemblyNode, NonEmpty, PartsTree, TreeEntry};
+use crate::inspect::{self, AssemblyNode, PartsTree, TreeEntry};
 use crate::session::{LineNumber, ProblemIndex, Selection, SourceLocation};
 use crate::{Contact, ContactItem};
 

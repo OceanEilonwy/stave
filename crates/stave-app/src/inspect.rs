@@ -11,6 +11,7 @@ use stave_lang::{SourceMap, SyntaxKind};
 use stave_model::Model;
 use stave_model::defs::Decl;
 use stave_model::mechanism::{DriveValue, Mechanism};
+use stave_model::nonempty::NonEmpty;
 use stave_model::solved::{
     AssemblyId, Body, CutSource, HardwareBase, HardwareId, PairMember, Part, PartId, PartOrigin,
     RegionId, RoleValue, Shape, SolvedDesign,
@@ -49,47 +50,6 @@ pub enum SwatchShape {
     Board,
     /// Round or turned wood, or hardware: a circle.
     Round,
-}
-
-/// A list that is never empty.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct NonEmpty<T> {
-    first: T,
-    rest: Vec<T>,
-}
-
-impl<T> NonEmpty<T> {
-    /// A list of one.
-    pub fn one(first: T) -> NonEmpty<T> {
-        NonEmpty {
-            first,
-            rest: Vec::new(),
-        }
-    }
-
-    /// The first element.
-    pub fn first(&self) -> &T {
-        &self.first
-    }
-
-    /// Every element, in order.
-    pub fn iter(&self) -> impl Iterator<Item = &T> {
-        std::iter::once(&self.first).chain(self.rest.iter())
-    }
-
-    /// How many.
-    pub fn len(&self) -> usize {
-        self.rest.len().saturating_add(1)
-    }
-
-    /// Never: here for completeness next to [`NonEmpty::len`].
-    pub fn is_empty(&self) -> bool {
-        false
-    }
-
-    pub(crate) fn push(&mut self, item: T) {
-        self.rest.push(item);
-    }
 }
 
 /// One row of the parts tree: a part or piece of hardware, or a few that

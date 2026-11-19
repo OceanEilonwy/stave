@@ -611,7 +611,7 @@ fn typing_glued_edge_on_a_shelf_blames_the_joinery_and_offers_the_way_back() {
         panic!("{:?}", progress(&session));
     };
     let problems = refused.problems();
-    assert_eq!(problems.count(), 1);
+    assert_eq!(problems.len(), 1);
     let diagnostic = problems.first().diagnostic();
     assert_eq!(diagnostic.code, Code::TypeMismatch);
     assert_eq!(

@@ -27,6 +27,7 @@ use crate::i18n::{fill_in, ntr, tr};
 use std::collections::{BTreeMap, BTreeSet};
 
 use stave_model::mechanism::DriveValue;
+use stave_model::nonempty::NonEmpty;
 use stave_model::solved::{
     AssemblyId, CutKind, CutSource, Hardware, HardwareBase, Joint, PartId, RoleValue, SolvedDesign,
 };
@@ -34,7 +35,7 @@ use stave_scene::Item;
 
 use crate::focus::Target;
 use crate::inspect::{
-    self, AssemblyNode, NonEmpty, PartsTree, TreeEntry, group_label, relative, split_index,
+    self, AssemblyNode, PartsTree, TreeEntry, group_label, relative, split_index,
 };
 use crate::session::Selection;
 
